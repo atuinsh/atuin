@@ -13,6 +13,7 @@ use atuin_domain::record::{
     Host, HostId, Record, RecordId, RecordIdx, RecordStatus, RecordTag, RecordVersion,
 };
 use eyre::{Result, eyre};
+use futures::TryStreamExt;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 use tracing::instrument;
@@ -108,35 +109,9 @@ impl SqliteStore {
         Ok(Self { sqlite, table })
     }
 
-    #[instrument(level = "trace", skip_all, fields(id = ?r.id, idx = r.idx, host = ?r.host.id, tag = ?r.tag), err)]
-    async fn save_raw(
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-        r: &Record<paseto_v4::EncryptedData>,
-    ) -> Result<()> {
-        // In sqlite, we are "limited" to i64. But that is still fine, until 2262.
-        sqlx::query(
-            "insert or ignore into store(id, idx, host, tag, timestamp, version, data, cek)
-                values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        )
-        .bind(r.id.0.as_hyphenated().to_string())
-        .bind(r.idx as i64)
-        .bind(r.host.id.0.as_hyphenated().to_string())
-        .bind(r.tag.as_str())
-        .bind(r.timestamp as i64)
-        .bind(r.version.as_str())
-        .bind(r.data.raw.as_str())
-        .bind(r.data.cek.as_str())
-        .execute(&mut **tx)
-        .await?;
-
-        Ok(())
-    }
-
     #[instrument(level = "trace", skip_all, err)]
     async fn load_all(&self) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
-        let res = sqlx::query_as::<_, StoreRecord>("select * from store ")
-            .fetch_all(self.sqlite.pool())
-            .await?;
+        let res: Vec<StoreRecord> = self.table.all().try_collect().await?;
 
         Ok(res.into_iter().map(Into::into).collect())
     }
@@ -159,12 +134,11 @@ impl SqliteStore {
 
     #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
     pub async fn get(&self, id: RecordId) -> Result<Record<paseto_v4::EncryptedData>> {
-        let res = sqlx::query_as::<_, StoreRecord>("select * from store where store.id = ?1")
-            .bind(id.0.as_hyphenated().to_string())
-            .fetch_one(self.sqlite.pool())
-            .await?;
-
-        Ok(res.into())
+        self.table
+            .get(id.0.as_hyphenated().to_string())
+            .await?
+            .map(Into::into)
+            .ok_or_else(|| eyre!("record not found: {id:?}"))
     }
 
     #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
@@ -380,17 +354,13 @@ impl SqliteStore {
 
         let mut tx = self.sqlite.pool().begin().await?;
 
-        let res = sqlx::query("delete from store").execute(&mut *tx).await?;
-
-        let rows = res.rows_affected();
+        let rows = self.table.delete_all_tx(&mut tx).await?;
         debug!("deleted {rows} rows");
 
-        // don't call push_batch, as it will start its own transaction
-        // call the underlying save_raw
-
-        for record in re_encrypted {
-            Self::save_raw(&mut tx, &record).await?;
-        }
+        // Reinsert inside the same transaction (don't use `push_batch`, which
+        // would start its own).
+        let records: Vec<StoreRecord> = re_encrypted.into_iter().map(StoreRecord).collect();
+        self.table.insert_bulk_tx(&mut tx, &records).await?;
 
         tx.commit().await?;
 

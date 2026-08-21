@@ -4,7 +4,6 @@ use std::time::Duration;
 use atuin_common::sqlite::{Sqlite, TableView};
 use atuin_common::table;
 use sqlx::Result;
-use tracing::debug;
 
 use crate::store::entry::KvEntry;
 
@@ -21,15 +20,11 @@ table!(KvEntry {
 
 #[derive(Debug, Clone)]
 pub struct Database {
-    sqlite: Sqlite,
     table: TableView<KvEntry>,
 }
 
 impl Database {
     pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> eyre::Result<Self> {
-        let path = path.as_ref();
-        debug!("opening KV sqlite database at {:?}", path);
-
         let sqlite = Sqlite::builder()
             .file(path)
             .timeout(timeout)
@@ -37,8 +32,8 @@ impl Database {
             .open()
             .await?;
 
-        let table = TableView::new(sqlite.clone());
-        Ok(Self { sqlite, table })
+        let table = TableView::new(sqlite);
+        Ok(Self { table })
     }
 
     pub async fn in_memory(timeout: Duration) -> eyre::Result<Self> {
@@ -49,45 +44,39 @@ impl Database {
             .open()
             .await?;
 
-        let table = TableView::new(sqlite.clone());
-        Ok(Self { sqlite, table })
+        let table = TableView::new(sqlite);
+        Ok(Self { table })
     }
 
     pub async fn save(&self, e: &KvEntry) -> Result<()> {
-        debug!("saving kv entry to sqlite");
         self.table.insert_one(e).await
     }
 
     pub async fn delete(&self, namespace: &str, key: &str) -> Result<()> {
-        debug!("deleting kv entry {namespace}/{key}");
         self.table.delete((namespace, key)).await
     }
 
     pub async fn load(&self, namespace: &str, key: &str) -> Result<Option<KvEntry>> {
-        debug!("loading kv entry {namespace}.{key}");
         self.table.get((namespace, key)).await
     }
 
-    pub async fn list(&self, namespace: Option<&str>) -> Result<Vec<KvEntry>> {
-        debug!("listing kv entries");
+    /// Stream the entries in a single namespace, ordered by key.
+    pub fn list<'a>(
+        &'a self,
+        namespace: &'a str,
+    ) -> impl futures::Stream<Item = Result<KvEntry>> + Send + 'a {
+        self.table.filter(namespace)
+    }
 
-        let res = if let Some(namespace) = namespace {
-            sqlx::query_as::<_, KvEntry>("select * from kv where namespace = ?1 order by key asc")
-                .bind(namespace)
-                .fetch_all(self.sqlite.pool())
-                .await?
-        } else {
-            sqlx::query_as::<_, KvEntry>("select * from kv order by namespace, key asc")
-                .fetch_all(self.sqlite.pool())
-                .await?
-        };
-
-        Ok(res)
+    /// Stream every entry, ordered by namespace then key.
+    pub fn list_all(&self) -> impl futures::Stream<Item = Result<KvEntry>> + Send + '_ {
+        self.table.all_ordered()
     }
 }
 
 #[cfg(test)]
 mod test {
+    use futures::TryStreamExt;
     use rstest::*;
 
     use super::*;
@@ -111,12 +100,12 @@ mod test {
     async fn test_list(#[future] db: Database, entry: KvEntry) {
         let db = db.await;
 
-        let scripts = db.list(None).await.unwrap();
+        let scripts: Vec<KvEntry> = db.list_all().try_collect().await.unwrap();
         assert_eq!(scripts.len(), 0);
 
         db.save(&entry).await.unwrap();
 
-        let entries = db.list(None).await.unwrap();
+        let entries: Vec<KvEntry> = db.list_all().try_collect().await.unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].namespace, "test");
         assert_eq!(entries[0].key, "test");
@@ -142,10 +131,10 @@ mod test {
 
         db.save(&entry).await.unwrap();
 
-        assert_eq!(db.list(None).await.unwrap().len(), 1);
+        assert_eq!(db.list_all().try_collect::<Vec<_>>().await.unwrap().len(), 1);
         db.delete(&entry.namespace, &entry.key).await.unwrap();
 
-        let loaded = db.list(None).await.unwrap();
+        let loaded: Vec<KvEntry> = db.list_all().try_collect().await.unwrap();
         assert_eq!(loaded.len(), 0);
     }
 

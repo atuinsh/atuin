@@ -5,6 +5,7 @@ use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx, RecordTag, RecordVersion};
 use entry::KvEntry;
 use eyre::{Result, eyre};
+use futures::TryStreamExt;
 use record::KvRecord;
 
 use crate::database::Database;
@@ -75,10 +76,17 @@ impl KvStore {
         Ok(())
     }
 
-    pub async fn list(&self, namespace: Option<&str>) -> Result<Vec<KvEntry>> {
-        let entries = self.kv_db.list(namespace).await?;
+    /// Stream the entries in a single namespace, ordered by key.
+    pub fn list<'a>(
+        &'a self,
+        namespace: &'a str,
+    ) -> impl futures::Stream<Item = sqlx::Result<KvEntry>> + Send + 'a {
+        self.kv_db.list(namespace)
+    }
 
-        Ok(entries)
+    /// Stream every entry, ordered by namespace then key.
+    pub fn list_all(&self) -> impl futures::Stream<Item = sqlx::Result<KvEntry>> + Send + '_ {
+        self.kv_db.list_all()
     }
 
     async fn push_record(&self, record: KvRecord) -> Result<(RecordId, RecordIdx)> {
@@ -105,7 +113,7 @@ impl KvStore {
         let mut tagged = self.record_store.all_tagged(&RecordTag::Kv).await?;
         tagged.reverse();
 
-        let cached = self.kv_db.list(None).await?;
+        let cached: Vec<KvEntry> = self.kv_db.list_all().try_collect().await?;
 
         let mut visited = HashSet::new();
         let mut skipped = 0;
@@ -195,7 +203,7 @@ mod tests {
         let records = store.record_store.all_tagged(&RecordTag::Kv).await?;
         assert_eq!(records.len(), 1);
 
-        let list = store.list(Some("test")).await.unwrap();
+        let list: Vec<KvEntry> = store.list("test").try_collect().await.unwrap();
         let expected = vec![KvEntry {
             namespace: "test".to_string(),
             key: "key".to_string(),
@@ -203,7 +211,7 @@ mod tests {
         }];
         assert_eq!(list, expected);
 
-        let ns_list = store.list(None).await.unwrap();
+        let ns_list: Vec<KvEntry> = store.list_all().try_collect().await.unwrap();
         assert_eq!(ns_list, expected);
 
         store.delete("test", &["key".to_string()]).await.unwrap();

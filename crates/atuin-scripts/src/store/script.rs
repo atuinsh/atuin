@@ -41,8 +41,9 @@ pub struct Script {
 ///
 /// Local to this crate so `Table` can be implemented on it directly (the
 /// orphan rule forbids implementing it on a foreign tuple type).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ScriptTag {
+    #[sqlx(try_from = "String")]
     pub script_id: Uuid,
     pub tag: String,
 }

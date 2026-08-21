@@ -30,6 +30,7 @@ typed-builder = { workspace = true }
 pretty_assertions = { workspace = true }
 sql-builder = { workspace = true }
 sqlx = { workspace = true }
+futures = "0.3"
 tempfile = { workspace = true }
 minijinja = { workspace = true }
 serde_json = { workspace = true }

@@ -43,3 +43,33 @@ impl Measure {
         }
     }
 }
+
+/// Const-time membership test: is `name` one of `candidates`?
+///
+/// A `const fn` stand-in for `candidates.contains(&name)`, which is unavailable
+/// in const context (slice/str equality and iterators are not yet const), so
+/// the comparison is spelled out byte by byte.
+#[must_use]
+pub const fn is_one_of(name: &str, candidates: &[&str]) -> bool {
+    let name = name.as_bytes();
+    let mut i = 0;
+    while i < candidates.len() {
+        let c = candidates[i].as_bytes();
+        if c.len() == name.len() {
+            let mut j = 0;
+            let mut eq = true;
+            while j < name.len() {
+                if name[j] != c[j] {
+                    eq = false;
+                    break;
+                }
+                j += 1;
+            }
+            if eq {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}

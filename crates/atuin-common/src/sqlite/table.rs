@@ -1,10 +1,17 @@
+//! Utility crate for defining ORM-like accessors
+//!
 use std::marker::PhantomData;
 
+use sqlx::query::QueryAs;
+use sqlx::sqlite::SqliteArguments;
 use sqlx::{Encode, QueryBuilder, Sqlite as SqliteDb, Type};
+use tracing::instrument;
 
 use super::Sqlite;
 
+/// Handles conflicts on inserts/upserts.
 pub enum Conflict {
+    ///
     Ignore,
     Replace,
     Upsert,
@@ -15,9 +22,41 @@ pub enum ColKind {
     Expr(&'static str),
 }
 
+/// Represents a single database column.
+///
+/// You should not need to directly use this. Please see [`table!`].
 pub struct Col {
+    /// The name of the column.
     pub name: &'static str,
+    /// Whether this column is a parimary key.
+    ///
+    /// If this is set to `true`, the following effects are had:
+    ///
+    /// - The column will be a conflict target, eg:
+    ///
+    ///   ```sql
+    ///   ON CONFLICT (<all columns marked with key=true>)
+    ///   ```
+    ///
+    /// - The key becomes the search target for the [`TableView::get`] and [`TableView::delete`]
+    ///   functions.
     pub key: bool,
+
+    /// Controls whether this column's bindings are to be done as an expression or as a
+    /// [`sqlx::bind`] call.
+    ///
+    /// Within the [`table!`] macro, you can specify either
+    ///
+    /// ```txt
+    /// table!(Kv3 {
+    ///     columns: {
+    ///         v  => |e| e.v.as_str(),            // Bind
+    ///         at => sql("strftime('%s','now')"), // Expr
+    ///     },
+    /// });
+    /// ```
+    ///
+    /// Using the [`ColKind::Expr`], you can specify an arbitrary SQL expression here.
     pub kind: ColKind,
 }
 
@@ -48,17 +87,25 @@ impl Col {
     }
 }
 
+/// Defines the schema of a table.
+///
+/// You should not need to directly use this. Please see [`table!`].
 pub struct Schema {
+    /// The table name.
     pub name: &'static str,
+    /// The columns the table contains.
     pub columns: &'static [Col],
+    /// What to do on conflict. See [`Conflict`].
     pub conflict: Conflict,
 }
 
 impl Schema {
+    /// Total number of columns.
     pub const fn col_count(&self) -> usize {
         self.columns.len()
     }
 
+    /// Total number of columns that have variables which can be bound.
     pub const fn bind_col_count(&self) -> usize {
         let mut n = 0;
         let mut i = 0;
@@ -72,43 +119,19 @@ impl Schema {
     }
 }
 
+/// Represents a table as defined by the [`table!`] macro.
+///
+/// See [`table!`]. You probably shouldn't construct this directly.
 pub trait Table {
     const SCHEMA: Schema;
     fn bind_row(&self, sep: &mut sqlx::query_builder::Separated<'_, SqliteDb, &'static str>);
 }
 
-/// Const-time membership test: is `name` one of `keys`?
+/// Define a new Sqlite table and get some ORM-like accessors.
 ///
-/// Used by the [`table!`] macro to resolve each column's `key` flag against the
-/// declared `key:` list at macro-expansion time, so the column ordering at the
-/// macro surface is irrelevant. Kept `const` so it can run inside the `SCHEMA`
-/// associated-const initializer.
-#[must_use]
-pub const fn is_key(name: &str, keys: &[&str]) -> bool {
-    let name = name.as_bytes();
-    let mut i = 0;
-    while i < keys.len() {
-        let k = keys[i].as_bytes();
-        if k.len() == name.len() {
-            let mut j = 0;
-            let mut eq = true;
-            while j < name.len() {
-                if name[j] != k[j] {
-                    eq = false;
-                    break;
-                }
-                j += 1;
-            }
-            if eq {
-                return true;
-            }
-        }
-        i += 1;
-    }
-    false
-}
-
-/// Emit an `impl $crate::sqlite::Table for T` from a compact declaration.
+/// This is **not** an ORM facility.
+///
+/// You can use this macro as follows:
 ///
 /// ```ignore
 /// table!(Kv3 {
@@ -124,14 +147,15 @@ pub const fn is_key(name: &str, keys: &[&str]) -> bool {
 /// });
 /// ```
 ///
-/// Column names are idents (stringified for the schema/SQL). A column's `key`
-/// flag is `true` iff its name appears in the `key:` list (resolved by name via
-/// [`is_key`], so surface order does not matter). Every path the macro emits is
-/// fully qualified (`$crate::sqlite::*`, `sqlx::*`) so it expands in crates that
-/// import nothing.
+/// This will generate a new type [`TableView<Kv3>`] which will give you some useful facilities:
+///
+///   - [`TableView::get`] will fetch rows given keys.
+///   - [`TableView::delete`] will delete rows given keys.
+///   - [`TableView::delete_all`] will delete all rows.
+///   - [`TableView::insert_bulk`] will insert multiple records.
+///   - [`TableView::insert_one`] will insert a record into the table.
 #[macro_export]
 macro_rules! table {
-    // ---- public entry point -------------------------------------------------
     (
         $ty:ty {
             name: $name:literal,
@@ -156,62 +180,49 @@ macro_rules! table {
         }
     };
 
-    // ---- conflict variant ---------------------------------------------------
     (@conflict ignore) => { $crate::sqlite::Conflict::Ignore };
     (@conflict replace) => { $crate::sqlite::Conflict::Replace };
     (@conflict upsert) => { $crate::sqlite::Conflict::Upsert };
 
-    // ---- key list -> `&[&str]` ----------------------------------------------
     (@keys [ $($k:literal),* $(,)? ]) => { &[ $($k),* ] };
     (@keys $k:literal) => { &[ $k ] };
 
-    // ---- columns -> `&[Col]` ------------------------------------------------
-    // Accumulator muncher: each column is folded into `[$($acc),*]`, then the
-    // whole array is emitted at once (a macro in expression position must expand
-    // to a single expression, so we cannot emit `Col, Col` piecewise).
     (@cols_array $key:tt; $($cols:tt)*) => {
         $crate::table!(@cols_acc $key; []; $($cols)*)
     };
 
-    // done
     (@cols_acc $key:tt; [$($acc:expr),* $(,)?]; ) => {
         &[ $($acc),* ]
     };
-    // Expr column (optional trailing rest)
     (@cols_acc $key:tt; [$($acc:expr),* $(,)?]; $cname:ident => sql($sql:literal) $(, $($rest:tt)*)? ) => {
         $crate::table!(@cols_acc $key;
             [ $($acc,)* $crate::sqlite::Col::expr(stringify!($cname), $sql) ];
             $($($rest)*)?
         )
     };
-    // Bind column (optional trailing rest)
     (@cols_acc $key:tt; [$($acc:expr),* $(,)?]; $cname:ident => | $arg:ident | $body:expr $(, $($rest:tt)*)? ) => {
         $crate::table!(@cols_acc $key;
             [ $($acc,)* $crate::sqlite::Col {
                 name: stringify!($cname),
-                key: $crate::sqlite::is_key(stringify!($cname), $crate::table!(@keys $key)),
+                key: $crate::string::is_one_of(stringify!($cname), $crate::table!(@keys $key)),
                 kind: $crate::sqlite::ColKind::Bind,
             } ];
             $($($rest)*)?
         )
     };
 
-    // ---- columns -> bind_row body -------------------------------------------
-    // Recursive muncher in statement position (a macro-as-statement may expand
-    // to several statements, so piecewise emission is fine here).
     (@bind_each $this:expr, $sep:ident; ) => { };
-    // Expr column: push the literal SQL, no bind.
     (@bind_each $this:expr, $sep:ident; $cname:ident => sql($sql:literal) $(, $($rest:tt)*)? ) => {
         $sep.push($sql);
         $crate::table!(@bind_each $this, $sep; $($($rest)*)?)
     };
-    // Bind column: evaluate the accessor against `self` and bind it.
     (@bind_each $this:expr, $sep:ident; $cname:ident => | $arg:ident | $body:expr $(, $($rest:tt)*)? ) => {
         $sep.push_bind({ let $arg: &Self = $this; $body });
         $crate::table!(@bind_each $this, $sep; $($($rest)*)?)
     };
 }
 
+/// An accessor into a Sqlite table. See [`table!`].
 #[derive(Debug, Clone)]
 pub struct TableView<T> {
     sqlite: Sqlite,
@@ -219,6 +230,7 @@ pub struct TableView<T> {
 }
 
 impl<T> TableView<T> {
+    /// You should not need to directly use this. Please see [`table!`].
     pub fn new(sqlite: Sqlite) -> Self {
         Self {
             sqlite,
@@ -226,19 +238,13 @@ impl<T> TableView<T> {
         }
     }
 
+    /// Grab a handle to the [`Sqlite`] database.
     pub fn sqlite(&self) -> &Sqlite {
         &self.sqlite
     }
 }
 
 /// Types that can appear as a single key column value bound via `push_bind`.
-///
-/// This is a sealed, closed set of concrete scalar types (rather than a
-/// blanket impl over `Encode + Type`) so that the single-value [`KeyBind`]
-/// impl below does not coherence-conflict (E0119) with the tuple impls:
-/// rustc cannot rule out that `sqlx` might implement `Encode`/`Type` for
-/// tuples in a future version, but it *can* see that this sealed trait is
-/// only ever implemented for the scalar types listed here.
 mod sealed {
     pub trait KeyScalar {}
 }
@@ -253,41 +259,90 @@ macro_rules! impl_key_scalar {
 impl_key_scalar!(&str, String, i64, i32, u32, u64, bool);
 
 /// Push `col0 = ? and col1 = ? …`, binding the key values in order.
+///
+/// Implemented for a single scalar key and for tuples of 2 to 8 columns; the
+/// tuple arity must match the number of key columns.
 pub trait KeyBind {
+    /// Number of leading key columns this binds.
+    const ARITY: usize;
+
+    /// Push `col = ?` fragments onto a borrowed builder, for the awaited query
+    /// paths (`get`/`delete`/`delete_tx`).
     fn push_where(self, qb: &mut QueryBuilder<SqliteDb>, cols: &[&str]);
+
+    /// Bind the key values, in order, onto an owned query — for streaming reads,
+    /// where a borrowed `QueryBuilder` cannot escape into the returned stream.
+    fn bind_prefix<'q, O>(
+        self,
+        query: QueryAs<'q, SqliteDb, O, SqliteArguments>,
+    ) -> QueryAs<'q, SqliteDb, O, SqliteArguments>
+    where
+        Self: 'q;
 }
 
 impl<A> KeyBind for A
 where
     A: KeyScalar + for<'a> Encode<'a, SqliteDb> + Type<SqliteDb> + Send,
 {
+    const ARITY: usize = 1;
+
     fn push_where(self, qb: &mut QueryBuilder<SqliteDb>, cols: &[&str]) {
         qb.push(cols[0]).push(" = ").push_bind(self);
     }
-}
 
-impl<A, B> KeyBind for (A, B)
-where
-    A: for<'a> Encode<'a, SqliteDb> + Type<SqliteDb> + Send,
-    B: for<'a> Encode<'a, SqliteDb> + Type<SqliteDb> + Send,
-{
-    fn push_where(self, qb: &mut QueryBuilder<SqliteDb>, cols: &[&str]) {
-        qb.push(cols[0]).push(" = ").push_bind(self.0);
-        qb.push(" and ").push(cols[1]).push(" = ").push_bind(self.1);
+    fn bind_prefix<'q, O>(
+        self,
+        query: QueryAs<'q, SqliteDb, O, SqliteArguments>,
+    ) -> QueryAs<'q, SqliteDb, O, SqliteArguments>
+    where
+        Self: 'q,
+    {
+        query.bind(self)
     }
 }
 
-impl<A, B, C> KeyBind for (A, B, C)
-where
-    A: for<'a> Encode<'a, SqliteDb> + Type<SqliteDb> + Send,
-    B: for<'a> Encode<'a, SqliteDb> + Type<SqliteDb> + Send,
-    C: for<'a> Encode<'a, SqliteDb> + Type<SqliteDb> + Send,
-{
-    fn push_where(self, qb: &mut QueryBuilder<SqliteDb>, cols: &[&str]) {
-        qb.push(cols[0]).push(" = ").push_bind(self.0);
-        qb.push(" and ").push(cols[1]).push(" = ").push_bind(self.1);
-        qb.push(" and ").push(cols[2]).push(" = ").push_bind(self.2);
-    }
+// Composite-key impls for tuples of arity 2..=8. Each column pushes
+// `<sep>col = ?` and binds its value, with the leading column omitting the
+// ` and ` separator.
+macro_rules! impl_key_bind_tuple {
+    ($( ($t0:ident $i0:tt $(, $t:ident $i:tt)*) ),+ $(,)?) => {
+        $(
+            impl<$t0 $(, $t)*> KeyBind for ($t0, $($t,)*)
+            where
+                $t0: for<'a> Encode<'a, SqliteDb> + Type<SqliteDb> + Send,
+                $($t: for<'a> Encode<'a, SqliteDb> + Type<SqliteDb> + Send,)*
+            {
+                const ARITY: usize = [$i0 $(, $i)*].len();
+
+                fn push_where(self, qb: &mut QueryBuilder<SqliteDb>, cols: &[&str]) {
+                    qb.push(cols[$i0]).push(" = ").push_bind(self.$i0);
+                    $(
+                        qb.push(" and ").push(cols[$i]).push(" = ").push_bind(self.$i);
+                    )*
+                }
+
+                fn bind_prefix<'q, O>(
+                    self,
+                    query: QueryAs<'q, SqliteDb, O, SqliteArguments>,
+                ) -> QueryAs<'q, SqliteDb, O, SqliteArguments>
+                where
+                    Self: 'q,
+                {
+                    query.bind(self.$i0) $(.bind(self.$i))*
+                }
+            }
+        )+
+    };
+}
+
+impl_key_bind_tuple! {
+    (A 0, B 1),
+    (A 0, B 1, C 2),
+    (A 0, B 1, C 2, D 3),
+    (A 0, B 1, C 2, D 3, E 4),
+    (A 0, B 1, C 2, D 3, E 4, F 5),
+    (A 0, B 1, C 2, D 3, E 4, F 5, G 6),
+    (A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7),
 }
 
 fn insert_prefix<T: Table>() -> String {
@@ -315,6 +370,10 @@ fn upsert_suffix<T: Table>() -> String {
 }
 
 impl<T: Table> TableView<T> {
+    /// Insert multiple `items` into the table.
+    ///
+    /// **Does not commit the transaction.**
+    #[instrument(level = "trace", skip_all)]
     pub async fn insert_bulk_tx<'a>(
         &self,
         tx: &mut sqlx::Transaction<'_, SqliteDb>,
@@ -351,6 +410,10 @@ impl<T: Table> TableView<T> {
         Ok(())
     }
 
+    /// Insert multiple `item`s into the table.
+    ///
+    /// This function will start a new transaction for you.
+    #[instrument(level = "trace", skip_all)]
     pub async fn insert_bulk<'a>(&self, items: impl IntoIterator<Item = &'a T>) -> sqlx::Result<()>
     where
         T: 'a,
@@ -360,14 +423,20 @@ impl<T: Table> TableView<T> {
         tx.commit().await
     }
 
+    /// Insert one `item` into the table.
+    ///
+    /// **If you are trying to insert multiple rows, do NOT use this function.** See
+    /// [`Self::insert_bulk`].
+    #[instrument(level = "trace", skip_all)]
     pub async fn insert_one(&self, item: &T) -> sqlx::Result<()> {
         self.insert_bulk(std::iter::once(item)).await
     }
 
-    fn key_cols() -> Vec<&'static str> {
-        T::SCHEMA.columns.iter().filter(|c| c.key).map(|c| c.name).collect()
-    }
-
+    /// Delete rows matching `key`.
+    ///
+    /// `key` may be a full key (deletes at most one row) or a leading prefix of
+    /// it (deletes every row sharing that prefix).
+    #[instrument(level = "trace", skip_all)]
     pub async fn delete<K: KeyBind>(&self, key: K) -> sqlx::Result<()> {
         let mut qb =
             sqlx::QueryBuilder::<SqliteDb>::new(format!("delete from {} where ", T::SCHEMA.name));
@@ -376,11 +445,44 @@ impl<T: Table> TableView<T> {
         Ok(())
     }
 
+    /// Drop all rows from this database.
+    #[instrument(level = "trace", skip_all)]
     pub async fn delete_all(&self) -> sqlx::Result<()> {
         sqlx::query(sqlx::AssertSqlSafe(format!("delete from {}", T::SCHEMA.name)))
             .execute(self.sqlite.pool())
             .await?;
         Ok(())
+    }
+
+    /// Like [`Self::delete_all`], but inside an existing transaction; returns the
+    /// number of rows deleted.
+    #[instrument(level = "trace", skip_all)]
+    pub async fn delete_all_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, SqliteDb>,
+    ) -> sqlx::Result<u64> {
+        let result = sqlx::query(sqlx::AssertSqlSafe(format!("delete from {}", T::SCHEMA.name)))
+            .execute(&mut **tx)
+            .await?;
+        Ok(result.rows_affected())
+    }
+
+    /// Like [`Self::delete`], but runs inside an existing transaction.
+    #[instrument(level = "trace", skip_all)]
+    pub async fn delete_tx<K: KeyBind>(
+        &self,
+        tx: &mut sqlx::Transaction<'_, SqliteDb>,
+        key: K,
+    ) -> sqlx::Result<()> {
+        let mut qb =
+            sqlx::QueryBuilder::<SqliteDb>::new(format!("delete from {} where ", T::SCHEMA.name));
+        key.push_where(&mut qb, &Self::key_cols());
+        qb.build().execute(&mut **tx).await?;
+        Ok(())
+    }
+
+    fn key_cols() -> Vec<&'static str> {
+        T::SCHEMA.columns.iter().filter(|c| c.key).map(|c| c.name).collect()
     }
 }
 
@@ -388,6 +490,8 @@ impl<T> TableView<T>
 where
     T: Table + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> + Send + Unpin,
 {
+    /// Get the table row given the key.
+    #[instrument(level = "trace", skip_all)]
     pub async fn get<K: KeyBind>(&self, key: K) -> sqlx::Result<Option<T>> {
         let mut qb =
             sqlx::QueryBuilder::<SqliteDb>::new(format!("select * from {} where ", T::SCHEMA.name));
@@ -395,10 +499,50 @@ where
         qb.build_query_as::<T>().fetch_optional(self.sqlite.pool()).await
     }
 
-    /// Stream all rows. Holds one pooled connection for the stream's
-    /// lifetime; callers `.try_collect()` if they want a `Vec`.
+    /// Stream all rows.
+    ///
+    /// If you want a [`Vec`] out of this, call `.try_collect()`.
     pub fn all(&self) -> impl futures::Stream<Item = sqlx::Result<T>> + Send + '_ {
         sqlx::query_as(sqlx::AssertSqlSafe(format!("select * from {}", T::SCHEMA.name)))
+            .fetch(self.sqlite.pool())
+    }
+
+    /// Stream all rows, ordered by key.
+    ///
+    /// If you want a [`Vec`], call `.try_collect()`.
+    pub fn all_ordered(&self) -> impl futures::Stream<Item = sqlx::Result<T>> + Send + '_ {
+        sqlx::query_as::<_, T>(sqlx::AssertSqlSafe(format!(
+            "select * from {} order by {}",
+            T::SCHEMA.name,
+            Self::key_cols().join(", "),
+        )))
+        .fetch(self.sqlite.pool())
+    }
+
+    /// Stream the rows whose leading key column(s) match `prefix`, ordered by key.
+    ///
+    /// A streaming, key-prefix counterpart to [`Self::get`]: where `get` matches
+    /// the full key and returns one row, this matches a leading prefix of it.
+    /// `prefix` may be a single value or a tuple of the leading key columns. If
+    /// you want a [`Vec`], call `.try_collect()`.
+    pub fn filter<'a, K>(
+        &'a self,
+        prefix: K,
+    ) -> impl futures::Stream<Item = sqlx::Result<T>> + Send + 'a
+    where
+        K: KeyBind + 'a,
+    {
+        let cols = Self::key_cols();
+        let predicate =
+            cols[..K::ARITY].iter().map(|c| format!("{c} = ?")).collect::<Vec<_>>().join(" and ");
+        let sql = format!(
+            "select * from {} where {} order by {}",
+            T::SCHEMA.name,
+            predicate,
+            cols.join(", "),
+        );
+        prefix
+            .bind_prefix(sqlx::query_as::<_, T>(sqlx::AssertSqlSafe(sql)))
             .fetch(self.sqlite.pool())
     }
 }
@@ -812,6 +956,96 @@ mod tests {
         assert!(view.get("zzz").await.unwrap().is_none());
         view.delete("a").await.unwrap();
         assert!(view.get("a").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn filter_and_delete() {
+        use futures::TryStreamExt;
+        struct Ev {
+            host: String,
+            id: String,
+            val: String,
+        }
+        impl Table for Ev {
+            const SCHEMA: Schema = Schema {
+                name: "ev",
+                columns: &[Col::key("host"), Col::key("id"), Col::col("val")],
+                conflict: Conflict::Upsert,
+            };
+            fn bind_row(
+                &self,
+                sep: &mut sqlx::query_builder::Separated<'_, SqliteDb, &'static str>,
+            ) {
+                sep.push_bind(self.host.as_str())
+                    .push_bind(self.id.as_str())
+                    .push_bind(self.val.as_str());
+            }
+        }
+        impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for Ev {
+            fn from_row(row: &'r sqlx::sqlite::SqliteRow) -> sqlx::Result<Self> {
+                use sqlx::Row;
+                Ok(Self {
+                    host: row.try_get("host")?,
+                    id: row.try_get("id")?,
+                    val: row.try_get("val")?,
+                })
+            }
+        }
+
+        let sqlite = crate::sqlite::Sqlite::builder().memory().open().await.unwrap();
+        sqlx::query("create table ev(host text, id text, val text, primary key(host, id))")
+            .execute(sqlite.pool())
+            .await
+            .unwrap();
+        let view = TableView::<Ev>::new(sqlite.clone());
+        view.insert_bulk([
+            &Ev {
+                host: "h1".into(),
+                id: "b".into(),
+                val: "1".into(),
+            },
+            &Ev {
+                host: "h1".into(),
+                id: "a".into(),
+                val: "2".into(),
+            },
+            &Ev {
+                host: "h2".into(),
+                id: "a".into(),
+                val: "3".into(),
+            },
+        ])
+        .await
+        .unwrap();
+
+        // all_ordered: sorted by (host, id)
+        let all: Vec<(String, String)> =
+            view.all_ordered().map_ok(|e| (e.host, e.id)).try_collect().await.unwrap();
+        assert_eq!(all, vec![
+            ("h1".to_string(), "a".to_string()),
+            ("h1".to_string(), "b".to_string()),
+            ("h2".to_string(), "a".to_string()),
+        ]);
+
+        // filter by a 1-column prefix (host), ordered by key
+        let h1: Vec<String> = view.filter("h1").map_ok(|e| e.id).try_collect().await.unwrap();
+        assert_eq!(h1, vec!["a".to_string(), "b".to_string()]);
+
+        // filter by the full 2-column key (tuple prefix) => one row
+        let one: Vec<String> =
+            view.filter(("h1", "a")).map_ok(|e| e.val).try_collect().await.unwrap();
+        assert_eq!(one, vec!["2".to_string()]);
+
+        // delete by a host prefix removes both h1 rows
+        view.delete("h1").await.unwrap();
+        let hosts: Vec<String> = view.all_ordered().map_ok(|e| e.host).try_collect().await.unwrap();
+        assert_eq!(hosts, vec!["h2".to_string()]);
+
+        // delete_tx by the full key, inside a transaction
+        let mut tx = sqlite.pool().begin().await.unwrap();
+        view.delete_tx(&mut tx, ("h2", "a")).await.unwrap();
+        tx.commit().await.unwrap();
+        assert!(view.all_ordered().try_collect::<Vec<Ev>>().await.unwrap().is_empty());
     }
 
     #[tokio::test]

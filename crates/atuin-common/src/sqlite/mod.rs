@@ -10,7 +10,7 @@ use std::time::Duration;
 pub use builder::{SqliteBuilder, SqliteBuilderRoot};
 pub use info::{Info, VersionError};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
-pub use table::{Col, ColKind, Conflict, KeyBind, Schema, Table, TableView, is_key};
+pub use table::{Col, ColKind, Conflict, KeyBind, Schema, Table, TableView};
 use thiserror::Error;
 
 use crate::sync::EagerFutureCell;

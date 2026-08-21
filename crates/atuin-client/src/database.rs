@@ -343,9 +343,9 @@ impl Sqlite {
         self.sqlite.close().await;
     }
 
-    #[instrument(level = "trace", skip_all, err)]
-    pub async fn sqlite_version(&self) -> Result<String> {
-        sqlx::query_scalar("SELECT sqlite_version()").fetch_one(self.sqlite.pool()).await
+    /// Database metadata (SQLite version, bind-parameter limit), queried once at open.
+    pub async fn info(&self) -> &atuin_common::sqlite::Info {
+        self.sqlite.info().await
     }
 
     #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]

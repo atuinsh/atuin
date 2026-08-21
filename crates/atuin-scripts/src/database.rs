@@ -3,9 +3,9 @@ use std::time::Duration;
 
 use atuin_common::sqlite::{Sqlite, TableView};
 use atuin_common::table;
-use sqlx::sqlite::SqliteRow;
-use sqlx::{Result, Row};
-use tracing::{debug, instrument};
+use futures::TryStreamExt;
+use sqlx::Result;
+use tracing::instrument;
 
 use crate::store::script::{Script, ScriptTag};
 
@@ -41,11 +41,8 @@ pub struct Database {
 
 impl Database {
     pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> eyre::Result<Self> {
-        let path = path.as_ref();
-        debug!("opening script sqlite database at {:?}", path);
-
         let sqlite = Sqlite::builder()
-            .file(path)
+            .file(path.as_ref())
             .timeout(timeout)
             .with_migrations(sqlx::migrate!("./migrations"))
             .open()
@@ -78,21 +75,24 @@ impl Database {
     }
 
     pub async fn save(&self, s: &Script) -> Result<()> {
-        debug!("saving script to sqlite");
         self.save_bulk(std::slice::from_ref(s)).await
     }
 
-    #[instrument(level = "debug", skip(self, s), fields(count = s.len()))]
-    pub async fn save_bulk(&self, s: &[Script]) -> Result<()> {
-        if s.is_empty() {
+    #[instrument(level = "debug", skip_all, fields(count = tracing::field::Empty))]
+    pub async fn save_bulk<'a>(&self, s: impl IntoIterator<Item = &'a Script>) -> Result<()> {
+        // Collected once because we make two passes: one to insert the scripts
+        // and one to derive their tag rows.
+        let scripts: Vec<&Script> = s.into_iter().collect();
+        tracing::Span::current().record("count", scripts.len());
+        if scripts.is_empty() {
             return Ok(());
         }
 
         let mut tx = self.sqlite.pool().begin().await?;
 
-        self.scripts.insert_bulk_tx(&mut tx, s).await?;
+        self.scripts.insert_bulk_tx(&mut tx, scripts.iter().copied()).await?;
 
-        let tag_rows: Vec<ScriptTag> = s
+        let tag_rows: Vec<ScriptTag> = scripts
             .iter()
             .flat_map(|script| {
                 script.tags.iter().map(|tag| ScriptTag {
@@ -108,28 +108,13 @@ impl Database {
         Ok(())
     }
 
-    fn query_script_tags(row: &SqliteRow) -> String {
-        row.get("tag")
-    }
-
-    #[allow(dead_code)]
+    #[cfg(test)]
     async fn load(&self, id: &str) -> Result<Option<Script>> {
-        debug!("loading script item {}", id);
-
-        let res = sqlx::query_as::<_, Script>("select * from scripts where id = ?1")
-            .bind(id)
-            .fetch_optional(self.sqlite.pool())
-            .await?;
+        let res = self.scripts.get(id).await?;
 
         // intentionally not joining, don't want to duplicate the script data in memory a whole bunch.
         if let Some(mut script) = res {
-            let tags = sqlx::query("select tag from script_tags where script_id = ?1")
-                .bind(id)
-                .map(|row| Self::query_script_tags(&row))
-                .fetch_all(self.sqlite.pool())
-                .await?;
-
-            script.tags = tags;
+            script.tags = self.tags.filter(id).map_ok(|t| t.tag).try_collect().await?;
             Ok(Some(script))
         } else {
             Ok(None)
@@ -137,53 +122,29 @@ impl Database {
     }
 
     pub async fn list(&self) -> Result<Vec<Script>> {
-        debug!("listing scripts");
+        let mut res: Vec<Script> = self.scripts.all().try_collect().await?;
 
-        let mut res = sqlx::query_as::<_, Script>("select * from scripts")
-            .fetch_all(self.sqlite.pool())
-            .await?;
-
-        // Fetch all the tags for each script
         for script in &mut res {
-            let tags = sqlx::query("select tag from script_tags where script_id = ?1")
-                .bind(script.id.to_string())
-                .map(|row| Self::query_script_tags(&row))
-                .fetch_all(self.sqlite.pool())
-                .await?;
-
-            script.tags = tags;
+            script.tags =
+                self.tags.filter(script.id.to_string()).map_ok(|t| t.tag).try_collect().await?;
         }
 
         Ok(res)
     }
 
     pub async fn clear(&self) -> Result<()> {
-        debug!("clearing all scripts from sqlite");
-
         self.tags.delete_all().await?;
         self.scripts.delete_all().await?;
-
         Ok(())
     }
 
     pub async fn delete(&self, id: &str) -> Result<()> {
-        debug!("deleting script {}", id);
-
         self.scripts.delete(id).await?;
-
-        // delete all the tags for the script (delete-by-FK, not by PK, so this
-        // stays a bespoke query rather than `TableView::delete`)
-        sqlx::query("delete from script_tags where script_id = ?1")
-            .bind(id)
-            .execute(self.tags.sqlite().pool())
-            .await?;
-
+        self.tags.delete(id).await?;
         Ok(())
     }
 
     pub async fn update(&self, s: &Script) -> Result<()> {
-        debug!("updating script {:?}", s);
-
         let mut tx = self.sqlite.pool().begin().await?;
 
         // Update the script's base fields
@@ -200,22 +161,18 @@ impl Database {
         .await?;
 
         // Delete all existing tags for this script
-        sqlx::query("delete from script_tags where script_id = ?1")
-            .bind(s.id.to_string())
-            .execute(&mut *tx)
-            .await?;
+        self.tags.delete_tx(&mut tx, s.id.to_string()).await?;
 
         // Insert new tags
-        for tag in &s.tags {
-            sqlx::query(
-                "insert or ignore into script_tags(script_id, tag)
-                values(?1, ?2)",
-            )
-            .bind(s.id.to_string())
-            .bind(tag)
-            .execute(&mut *tx)
-            .await?;
-        }
+        let tag_rows: Vec<ScriptTag> = s
+            .tags
+            .iter()
+            .map(|tag| ScriptTag {
+                script_id: s.id,
+                tag: tag.clone(),
+            })
+            .collect();
+        self.tags.insert_bulk_tx(&mut tx, &tag_rows).await?;
 
         tx.commit().await?;
 
@@ -229,13 +186,8 @@ impl Database {
             .await?;
 
         let script = if let Some(mut script) = res {
-            let tags = sqlx::query("select tag from script_tags where script_id = ?1")
-                .bind(script.id.to_string())
-                .map(|row| Self::query_script_tags(&row))
-                .fetch_all(self.sqlite.pool())
-                .await?;
-
-            script.tags = tags;
+            script.tags =
+                self.tags.filter(script.id.to_string()).map_ok(|t| t.tag).try_collect().await?;
             Some(script)
         } else {
             None
