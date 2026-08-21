@@ -516,7 +516,7 @@ impl Client {
                 progress += len;
                 yield page;
 
-                // Something shat the bed, let's finish serially.
+                // The server returned a short page; finish serially from here.
                 if len < width {
                     short_page = true;
                     break;
@@ -856,8 +856,10 @@ mod records_stream_tests {
         let addr: Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        let idxs =
-            collect_idxs(client.records(&RecordSeriesKey::new(host, RecordTag::History), (0..5).tiled(nz(2)))).await;
+        let idxs = collect_idxs(
+            client.records(&RecordSeriesKey::new(host, RecordTag::History), (0..5).tiled(nz(2))),
+        )
+        .await;
         assert_eq!(idxs, vec![0, 1, 2, 3, 4]);
     }
 
@@ -877,8 +879,10 @@ mod records_stream_tests {
         let addr: Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        let idxs =
-            collect_idxs(client.records(&RecordSeriesKey::new(host, RecordTag::History), (0..6).tiled(nz(4)))).await;
+        let idxs = collect_idxs(
+            client.records(&RecordSeriesKey::new(host, RecordTag::History), (0..6).tiled(nz(4))),
+        )
+        .await;
         assert_eq!(idxs, vec![0, 1, 2, 3, 4, 5], "a short mid-stream page must not skip records");
     }
 
@@ -898,8 +902,10 @@ mod records_stream_tests {
         let addr: Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        let idxs =
-            collect_idxs(client.records(&RecordSeriesKey::new(host, RecordTag::History), (0..10).tiled(nz(4)))).await;
+        let idxs = collect_idxs(
+            client.records(&RecordSeriesKey::new(host, RecordTag::History), (0..10).tiled(nz(4))),
+        )
+        .await;
         assert!(idxs.is_empty(), "an empty server must yield no records");
     }
 }

@@ -420,8 +420,7 @@ impl Keyed<'_> {
             self.download_packfile_pages(series, first_missing_local, expected, page_size, &pb)
                 .await?
         } else {
-            self.download_loose_pages(series, first_missing_local, expected, page_size, &pb)
-                .await?
+            self.download_loose_pages(series, first_missing_local, expected, page_size, &pb).await?
         };
 
         pb.finish_with_message("Downloaded records");
@@ -429,12 +428,7 @@ impl Keyed<'_> {
         Ok(ret)
     }
 
-    /// Download a run of packfile-manifest pages, expanding each manifest's history into the local
-    /// store *before* persisting the manifest (so a stored manifest always has its history). That
-    /// per-page ordering and the per-manifest permanent-failure handling keep the expansion strictly
-    /// serial across pages; [`Client::records`] may prefetch the manifest *pages* themselves, but
-    /// each page is fully expanded and persisted before the next is processed. Returns the record
-    /// ids touched (expanded history plus persisted manifests).
+    /// Download a run of packfile record pages.
     async fn download_packfile_pages(
         &self,
         series: &RecordSeriesKey,
@@ -450,7 +444,8 @@ impl Keyed<'_> {
 
         let pages = client.records(
             series,
-            (first_missing_local..first_missing_local + expected).tiled(page_size_or_min(page_size)),
+            (first_missing_local..first_missing_local + expected)
+                .tiled(page_size_or_min(page_size)),
         );
         futures::pin_mut!(pages);
         while let Some(page) = pages.next().await {
@@ -491,9 +486,7 @@ impl Keyed<'_> {
         Ok(ret)
     }
 
-    /// Download a run of loose (non-packfile) record pages. [`Client::records`] owns the pagination
-    /// -- predicting offsets, pipelining fetches against these local `push_batch` writes, and
-    /// recovering from a short mid-stream page -- so this loop just persists each page as it arrives.
+    /// Download a run of non-packfile record pages.
     async fn download_loose_pages(
         &self,
         series: &RecordSeriesKey,
@@ -509,7 +502,8 @@ impl Keyed<'_> {
 
         let pages = client.records(
             series,
-            (first_missing_local..first_missing_local + expected).tiled(page_size_or_min(page_size)),
+            (first_missing_local..first_missing_local + expected)
+                .tiled(page_size_or_min(page_size)),
         );
         futures::pin_mut!(pages);
         while let Some(page) = pages.next().await {
@@ -668,11 +662,14 @@ mod tests {
 
         assert_eq!(operations.len(), 1);
 
-        assert_eq!(operations[0], Operation::Upload {
-            series: RecordSeriesKey::new(record.host.id, record.tag.clone()),
-            local: record.idx,
-            remote: None,
-        });
+        assert_eq!(
+            operations[0],
+            Operation::Upload {
+                series: RecordSeriesKey::new(record.host.id, record.tag.clone()),
+                local: record.idx,
+                remote: None,
+            }
+        );
     }
 
     #[rstest]
@@ -696,19 +693,22 @@ mod tests {
 
         assert_eq!(operations.len(), 2);
 
-        assert_eq!(operations, vec![
-            // Or in otherwords, local is ahead by one
-            Operation::Upload {
-                series: RecordSeriesKey::new(local_ahead.host.id, local_ahead.tag.clone()),
-                local: 1,
-                remote: Some(0),
-            },
-            // Or in other words, remote knows of a record in an entirely new store (tag)
-            Operation::Download {
-                series: RecordSeriesKey::new(remote_ahead.host.id, remote_ahead.tag.clone()),
-                remote: 0,
-            },
-        ]);
+        assert_eq!(
+            operations,
+            vec![
+                // Or in otherwords, local is ahead by one
+                Operation::Upload {
+                    series: RecordSeriesKey::new(local_ahead.host.id, local_ahead.tag.clone()),
+                    local: 1,
+                    remote: Some(0),
+                },
+                // Or in other words, remote knows of a record in an entirely new store (tag)
+                Operation::Download {
+                    series: RecordSeriesKey::new(remote_ahead.host.id, remote_ahead.tag.clone()),
+                    remote: 0,
+                },
+            ]
+        );
     }
 
     #[rstest]
@@ -1696,10 +1696,13 @@ mod packfile_capability_tests {
             .await
             .keyed(&key)
             .sync_remote(
-                vec![packfile_download_op(host, 3), Operation::Download {
-                    remote: 3,
-                    series: RecordSeriesKey::new(host, RecordTag::History),
-                }],
+                vec![
+                    packfile_download_op(host, 3),
+                    Operation::Download {
+                        remote: 3,
+                        series: RecordSeriesKey::new(host, RecordTag::History),
+                    },
+                ],
                 100,
             )
             .await
