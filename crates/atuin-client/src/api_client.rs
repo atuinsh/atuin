@@ -773,8 +773,6 @@ mod tests {
 
 #[cfg(test)]
 mod records_stream_tests {
-    use std::num::NonZeroU64;
-
     use atuin_common::range::RangeTiledExt;
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordSeriesKey, RecordTag};
@@ -783,10 +781,6 @@ mod records_stream_tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
-
-    fn nz(n: u64) -> NonZeroU64 {
-        NonZeroU64::new(n).unwrap()
-    }
 
     fn history_record(host: HostId, idx: u64) -> Record<EncryptedData> {
         Record::builder()
@@ -857,7 +851,7 @@ mod records_stream_tests {
         let client = mock_client(&addr);
 
         let idxs = collect_idxs(
-            client.records(&RecordSeriesKey::new(host, RecordTag::History), (0..5).tiled(nz(2))),
+            client.records(&RecordSeriesKey::new(host, RecordTag::History), (0..5).tiled(2)),
         )
         .await;
         assert_eq!(idxs, vec![0, 1, 2, 3, 4]);
@@ -880,7 +874,7 @@ mod records_stream_tests {
         let client = mock_client(&addr);
 
         let idxs = collect_idxs(
-            client.records(&RecordSeriesKey::new(host, RecordTag::History), (0..6).tiled(nz(4))),
+            client.records(&RecordSeriesKey::new(host, RecordTag::History), (0..6).tiled(4)),
         )
         .await;
         assert_eq!(idxs, vec![0, 1, 2, 3, 4, 5], "a short mid-stream page must not skip records");
@@ -903,7 +897,7 @@ mod records_stream_tests {
         let client = mock_client(&addr);
 
         let idxs = collect_idxs(
-            client.records(&RecordSeriesKey::new(host, RecordTag::History), (0..10).tiled(nz(4))),
+            client.records(&RecordSeriesKey::new(host, RecordTag::History), (0..10).tiled(4)),
         )
         .await;
         assert!(idxs.is_empty(), "an empty server must yield no records");

@@ -8,7 +8,6 @@
 //! > do a sync :O
 use std::cmp::Ordering;
 use std::fmt::Write;
-use std::num::NonZeroU64;
 
 use atuin_common::encryption::paseto_v4;
 use atuin_common::range::RangeTiledExt;
@@ -33,11 +32,6 @@ pub use builder::{ClientSource, SyncEngineBuilder, SyncEngineInit};
 /// How many packfile blobs to download concurrently within a single page. (Uploads are batched by
 /// [`Client::upload_packfiles`](crate::api_client::Client::upload_packfiles).)
 const MAX_CONCURRENT_PACKFILE_TRANSFERS: usize = 16;
-
-/// A page size of 0 is a misconfiguration; fall back to one record per page rather than panicking.
-fn page_size_or_min(page_size: u64) -> NonZeroU64 {
-    NonZeroU64::new(page_size).unwrap_or(NonZeroU64::MIN)
-}
 
 #[derive(Error, Debug, Clone)]
 pub enum SyncError {
@@ -151,7 +145,7 @@ impl SyncEngine {
 
         let series = sample?;
 
-        let pages = self.client.records(&series, (0..1).tiled(NonZeroU64::MIN));
+        let pages = self.client.records(&series, (0..1).tiled(1));
         futures::pin_mut!(pages);
         let record = match pages.next().await {
             Some(Ok(page)) => page.into_iter().next()?,
@@ -444,8 +438,7 @@ impl Keyed<'_> {
 
         let pages = client.records(
             series,
-            (first_missing_local..first_missing_local + expected)
-                .tiled(page_size_or_min(page_size)),
+            (first_missing_local..first_missing_local + expected).tiled(page_size),
         );
         futures::pin_mut!(pages);
         while let Some(page) = pages.next().await {
@@ -502,8 +495,7 @@ impl Keyed<'_> {
 
         let pages = client.records(
             series,
-            (first_missing_local..first_missing_local + expected)
-                .tiled(page_size_or_min(page_size)),
+            (first_missing_local..first_missing_local + expected).tiled(page_size),
         );
         futures::pin_mut!(pages);
         while let Some(page) = pages.next().await {
@@ -662,14 +654,11 @@ mod tests {
 
         assert_eq!(operations.len(), 1);
 
-        assert_eq!(
-            operations[0],
-            Operation::Upload {
-                series: RecordSeriesKey::new(record.host.id, record.tag.clone()),
-                local: record.idx,
-                remote: None,
-            }
-        );
+        assert_eq!(operations[0], Operation::Upload {
+            series: RecordSeriesKey::new(record.host.id, record.tag.clone()),
+            local: record.idx,
+            remote: None,
+        });
     }
 
     #[rstest]
@@ -693,22 +682,19 @@ mod tests {
 
         assert_eq!(operations.len(), 2);
 
-        assert_eq!(
-            operations,
-            vec![
-                // Or in otherwords, local is ahead by one
-                Operation::Upload {
-                    series: RecordSeriesKey::new(local_ahead.host.id, local_ahead.tag.clone()),
-                    local: 1,
-                    remote: Some(0),
-                },
-                // Or in other words, remote knows of a record in an entirely new store (tag)
-                Operation::Download {
-                    series: RecordSeriesKey::new(remote_ahead.host.id, remote_ahead.tag.clone()),
-                    remote: 0,
-                },
-            ]
-        );
+        assert_eq!(operations, vec![
+            // Or in otherwords, local is ahead by one
+            Operation::Upload {
+                series: RecordSeriesKey::new(local_ahead.host.id, local_ahead.tag.clone()),
+                local: 1,
+                remote: Some(0),
+            },
+            // Or in other words, remote knows of a record in an entirely new store (tag)
+            Operation::Download {
+                series: RecordSeriesKey::new(remote_ahead.host.id, remote_ahead.tag.clone()),
+                remote: 0,
+            },
+        ]);
     }
 
     #[rstest]
@@ -1696,13 +1682,10 @@ mod packfile_capability_tests {
             .await
             .keyed(&key)
             .sync_remote(
-                vec![
-                    packfile_download_op(host, 3),
-                    Operation::Download {
-                        remote: 3,
-                        series: RecordSeriesKey::new(host, RecordTag::History),
-                    },
-                ],
+                vec![packfile_download_op(host, 3), Operation::Download {
+                    remote: 3,
+                    series: RecordSeriesKey::new(host, RecordTag::History),
+                }],
                 100,
             )
             .await
