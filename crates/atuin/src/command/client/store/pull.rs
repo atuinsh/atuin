@@ -53,11 +53,11 @@ impl Pull {
             .await?;
 
         let keyed = engine.keyed(&key);
-        let (diff, _remote_index) = engine.diff().await?;
+        let (diff, remote_index) = engine.diff().await?;
 
         // Skip on --force: local was already wiped above, mismatch is the user's call.
         if !self.force
-            && let Some(err) = keyed.key_valid().await
+            && let Some(err) = keyed.key_valid_against(&remote_index).await
         {
             return Err(crate::print_error::format_sync_error(err));
         }

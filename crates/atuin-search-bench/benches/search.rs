@@ -187,11 +187,11 @@ fn index(scale: usize) -> Arc<SearchIndex> {
     eprintln!("index ready: {} unique commands", index.command_count());
 
     for query in QUERIES {
-        let n = index.search(query, IndexFilterMode::Global, LIMIT).count();
+        let n = index.search(query, &IndexFilterMode::Global, LIMIT).count();
         eprintln!("  {query:?}: {n} results (limit {LIMIT})");
     }
     let dir = filter_dir();
-    let n = index.search("git", IndexFilterMode::Directory(dir.clone()), LIMIT).count();
+    let n = index.search("git", &IndexFilterMode::Directory(dir.clone()), LIMIT).count();
     eprintln!("  \"git\" in {dir:?}: {n} results (limit {LIMIT})");
     assert!(n > 0, "directory filter matched nothing; filter is broken");
 
@@ -208,5 +208,5 @@ fn daemon_search(bencher: divan::Bencher, case: &Case) {
     } else {
         IndexFilterMode::Global
     };
-    bencher.bench(|| index.search(case.query, filter.clone(), LIMIT).count());
+    bencher.bench(|| index.search(case.query, &filter, LIMIT).count());
 }

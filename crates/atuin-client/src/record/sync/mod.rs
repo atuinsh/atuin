@@ -10,7 +10,7 @@ use std::cmp::Ordering;
 use std::fmt::Write;
 
 use atuin_common::encryption::paseto_v4;
-use atuin_common::sync::EagerFutureCell;
+use atuin_common::sync::MutEagerFutureCell;
 use atuin_domain::caps::PackfileCap;
 use atuin_domain::record::{Diff, RecordId, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag};
 use eyre::Result;
@@ -93,8 +93,8 @@ pub struct SyncEngine {
 pub struct Keyed<'k> {
     engine: &'k SyncEngine,
     key: &'k paseto_v4::Key,
-    /// The result of verifying `key` against the remote. Read via [`Self::key_valid`].
-    key_check: EagerFutureCell<Option<SyncError>>,
+    /// The result of verifying `key` against the remote.
+    key_check: MutEagerFutureCell<Option<SyncError>>,
 }
 
 impl SyncEngine {
@@ -102,7 +102,7 @@ impl SyncEngine {
     pub fn keyed<'k>(&'k self, key: &'k paseto_v4::Key) -> Keyed<'k> {
         let engine = self.clone();
         let key_for_check = key.clone();
-        let key_check = EagerFutureCell::new(
+        let key_check = MutEagerFutureCell::new(
             async move { engine.check_encryption_key(&key_for_check).await },
             &Handle::current(),
         );
@@ -505,18 +505,28 @@ impl Keyed<'_> {
         Ok((uploaded, downloaded))
     }
 
-    /// The verdict of verifying this `Keyed`'s key against the remote.
+    /// Check whether the key can decrypt the synced data.
     pub async fn key_valid(&self) -> Option<SyncError> {
-        self.key_check.get().await.clone()
+        self.key_check.get().await
+    }
+
+    /// Verify the key against an already-fetched `remote_index`.
+    ///
+    /// Subsequent calls to [`Self::key_valid`] will return whether the key is valid against this
+    /// new `remote_index`.
+    pub async fn key_valid_against(&self, remote_index: &RecordStatus) -> Option<SyncError> {
+        let verdict = self.engine.check_key_against_index(self.key, remote_index).await;
+        self.key_check.overwrite(verdict.clone());
+        verdict
     }
 
     /// Run a full sync: diff local against remote, verify the key can read the remote, resolve the
     /// diff into operations, then apply them.
     #[instrument(level = "trace", skip_all, err)]
     pub async fn sync(&self) -> Result<(u64, Vec<RecordId>), SyncError> {
-        let (diff, _remote_index) = self.engine.diff().await?;
+        let (diff, remote_index) = self.engine.diff().await?;
 
-        if let Some(err) = self.key_valid().await {
+        if let Some(err) = self.key_valid_against(&remote_index).await {
             return Err(err);
         }
 
