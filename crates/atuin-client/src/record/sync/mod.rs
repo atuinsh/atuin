@@ -93,8 +93,7 @@ pub struct SyncEngine {
 pub struct Keyed<'k> {
     engine: &'k SyncEngine,
     key: &'k paseto_v4::Key,
-    /// The result of verifying `key` against the remote. Read via [`Self::key_valid`], or replaced
-    /// with a snapshot-consistent verdict via [`Self::key_valid_against`].
+    /// The result of verifying `key` against the remote.
     key_check: MutEagerFutureCell<Option<SyncError>>,
 }
 
@@ -506,19 +505,15 @@ impl Keyed<'_> {
         Ok((uploaded, downloaded))
     }
 
-    /// The verdict of verifying this `Keyed`'s key against the remote, from the eager check kicked
-    /// off at [`SyncEngine::keyed`] time.
+    /// Check whether the key can decrypt the synced data.
     pub async fn key_valid(&self) -> Option<SyncError> {
         self.key_check.get().await
     }
 
-    /// Verify the key against an already-fetched `remote_index` (e.g. the one `diff` just fetched),
-    /// caching that verdict and cancelling the eager check.
+    /// Verify the key against an already-fetched `remote_index`.
     ///
-    /// The eager [`key_valid`](Self::key_valid) verdict is from the snapshot taken at `keyed()`
-    /// time, which predates `diff`. Using it to authorize a `diff`-derived download risks waving
-    /// through a record the remote gained in between. Re-checking against `diff`'s own snapshot
-    /// keeps the verdict and the operations consistent.
+    /// Subsequent calls to [`Self::key_valid`] will return whether the key is valid against this
+    /// new `remote_index`.
     pub async fn key_valid_against(&self, remote_index: &RecordStatus) -> Option<SyncError> {
         let verdict = self.engine.check_key_against_index(self.key, remote_index).await;
         self.key_check.emplace_cancelling(verdict.clone());
@@ -531,8 +526,6 @@ impl Keyed<'_> {
     pub async fn sync(&self) -> Result<(u64, Vec<RecordId>), SyncError> {
         let (diff, remote_index) = self.engine.diff().await?;
 
-        // Verify against diff's own snapshot -- not the eager verdict, which predates it -- so the
-        // key check and the operations we're about to apply describe the same remote state.
         if let Some(err) = self.key_valid_against(&remote_index).await {
             return Err(err);
         }

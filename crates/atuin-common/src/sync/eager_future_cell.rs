@@ -5,29 +5,39 @@ use tokio::runtime::Handle;
 use tokio::sync::{Notify, OnceCell};
 use tokio::task::AbortHandle;
 
-/// The storage backing an [`EagerFuture`]: a slot that starts empty and later holds the future's
-/// output. Implemented for [`OnceCell<T>`] (write-once) and [`Mutex<Option<T>>`] (overwritable).
-pub trait ResultCell: Send + Sync + 'static {
-    /// The value the cell holds.
+/// A cell whose value is seeded with a task scheduled at [`EagerFutureCell::new`], in the
+/// background.
+///
+/// [`EagerFuture::new`] accepts a future which is executed in the background. [`EagerFuture::get`]
+/// either waits for the future to produce the value, or returns the already-stored value.
+pub type EagerFutureCell<T> = EagerFuture<OnceCell<T>>;
+
+/// A cell whose value is seeded with a task scheduled at [`MutEagerFutureCell::new`], in the
+/// background. Unlike the [`EagerFutureCell`] one-shot dual, [`MutEagerFutureCell`] allows you to
+/// emplace any arbitrary value into the cell, via the [`MutEagerFutureCell::emplace_cancelling`]
+/// call.
+pub type MutEagerFutureCell<T> = EagerFuture<Mutex<Option<T>>>;
+
+impl<T: Clone + Send + Sync + 'static> MutEagerFutureCell<T> {
+    /// Force `value` into the cell, aborting the background future so its (now-superseded) result is
+    /// discarded. Any current or future [`get`](EagerFuture::get) observes `value`.
+    pub fn emplace_cancelling(&self, value: T) {
+        self.abort.abort();
+        *self.inner.cell.lock().unwrap() = Some(value);
+        self.inner.ready.notify_waiters();
+    }
+}
+
+#[doc(hidden)]
+pub trait ResultCell: Default + Send + Sync + 'static {
     type Value: Clone + Send + Sync + 'static;
 
-    /// A fresh, empty slot.
-    fn empty() -> Self;
-
-    /// Store the value produced by the eager future. A slot that already holds a value keeps it --
-    /// that is what lets [`EagerFuture::emplace_cancelling`] win the race against a finishing future.
     fn fill(&self, value: Self::Value);
-
-    /// A clone of the stored value, if the slot has been filled.
     fn peek(&self) -> Option<Self::Value>;
 }
 
-impl<T: Clone + Send + Sync + 'static> ResultCell for OnceCell<T> {
+impl<T: Default + Clone + Send + Sync + 'static> ResultCell for OnceCell<T> {
     type Value = T;
-
-    fn empty() -> Self {
-        Self::new()
-    }
 
     fn fill(&self, value: T) {
         let _ = self.set(value);
@@ -38,12 +48,8 @@ impl<T: Clone + Send + Sync + 'static> ResultCell for OnceCell<T> {
     }
 }
 
-impl<T: Clone + Send + Sync + 'static> ResultCell for Mutex<Option<T>> {
+impl<T: Default + Clone + Send + Sync + 'static> ResultCell for Mutex<Option<T>> {
     type Value = T;
-
-    fn empty() -> Self {
-        Self::new(None)
-    }
 
     fn fill(&self, value: T) {
         let mut slot = self.lock().unwrap();
@@ -58,33 +64,18 @@ impl<T: Clone + Send + Sync + 'static> ResultCell for Mutex<Option<T>> {
     }
 }
 
+#[doc(hidden)]
 #[derive(Debug)]
 struct Inner<C> {
-    /// The computed value, once it is ready.
     cell: C,
-    /// Notified once [`Self::cell`] is ready, waking anything waiting in [`EagerFuture::get`].
     ready: Notify,
 }
 
-/// A cell whose value is produced exactly once, eagerly, in the background, over pluggable storage
-/// `C` (see [`ResultCell`]).
-///
-/// [`EagerFuture::new`] accepts a future which is executed in the background. [`EagerFuture::get`]
-/// either waits for the future to produce the value, or returns the already-stored value.
-///
-/// Use the [`EagerFutureCell`] alias for a write-once slot, or [`MutEagerFutureCell`] for one that
-/// additionally supports [`EagerFuture::emplace_cancelling`].
+#[doc(hidden)]
 pub struct EagerFuture<C> {
     inner: Arc<Inner<C>>,
-    /// Aborts the background task, used by [`EagerFuture::emplace_cancelling`].
     abort: AbortHandle,
 }
-
-/// A write-once [`EagerFuture`]: the background future's value is the only value it ever holds.
-pub type EagerFutureCell<T> = EagerFuture<OnceCell<T>>;
-
-/// An [`EagerFuture`] whose value can be overwritten via [`EagerFuture::emplace_cancelling`].
-pub type MutEagerFutureCell<T> = EagerFuture<Mutex<Option<T>>>;
 
 impl<C> Clone for EagerFuture<C> {
     fn clone(&self) -> Self {
@@ -143,18 +134,6 @@ impl<C: ResultCell> EagerFuture<C> {
 
             notified.await;
         }
-    }
-}
-
-impl<T: Clone + Send + Sync + 'static> MutEagerFutureCell<T> {
-    /// Force `value` into the cell, aborting the background future so its (now-superseded) result is
-    /// discarded. Any current or future [`get`](EagerFuture::get) observes `value`.
-    pub fn emplace_cancelling(&self, value: T) {
-        // Abort first so a task sitting between `work.await` and `fill` cannot re-fill afterwards;
-        // even if it does slip in, `fill` keeps our value because the slot is already `Some`.
-        self.abort.abort();
-        *self.inner.cell.lock().unwrap() = Some(value);
-        self.inner.ready.notify_waiters();
     }
 }
 
