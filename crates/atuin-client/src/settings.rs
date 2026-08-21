@@ -1664,7 +1664,7 @@ impl Settings {
     /// environment — without the side-effects of full `Settings` construction
     /// (meta store init, path expansion, etc.).
     pub fn get_config_value(key: &str) -> Result<String> {
-        use config::{Value, ValueKind};
+        use config::Value;
 
         #[cfg_attr(not(unix), allow(unused_mut))]
         let mut config = Self::build_config()?;
@@ -1677,9 +1677,9 @@ impl Settings {
         if (key == "daemon" || key == "daemon.socket_path")
             && let Ok(daemon) = config.get::<Daemon>("daemon")
             && daemon.socket_path.is_none()
-            && let ValueKind::Table(root_map) = &mut config.cache.kind
+            && let config::ValueKind::Table(root_map) = &mut config.cache.kind
             && let Some(daemon_value) = root_map.get_mut("daemon")
-            && let ValueKind::Table(daemon_map) = &mut daemon_value.kind
+            && let config::ValueKind::Table(daemon_map) = &mut daemon_value.kind
         {
             daemon_map.insert(
                 "socket_path".into(),
