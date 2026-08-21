@@ -11,8 +11,9 @@ pub mod interpolate;
 mod walker;
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use parking_lot::{Mutex, MutexGuard};
 pub use walker::global_context_path;
 
 /// A fully resolved user context, ready to include in an API request.
@@ -88,11 +89,8 @@ impl UserContextCache {
         slot.contexts.as_ref().map(|ctxs| !ctxs.is_empty())
     }
 
-    /// A poisoned lock means another thread panicked while holding it, but
-    /// the cached value is only ever replaced wholesale — it can't be torn.
-    /// Recover with the inner value rather than propagating the panic.
-    fn lock(&self) -> std::sync::MutexGuard<'_, CacheSlot> {
-        self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    fn lock(&self) -> MutexGuard<'_, CacheSlot> {
+        self.inner.lock()
     }
 }
 

@@ -18,6 +18,7 @@ vendored-tls = ["tokio-tungstenite/native-tls-vendored"]
 # Only what the unconditional modules (`error`, the `run_share` stubs) need;
 # everything else is unix-only, matching the `cfg(unix)` module tree.
 [dependencies]
+parking_lot = { workspace = true }
 thiserror = { workspace = true }
 url = { workspace = true }
 

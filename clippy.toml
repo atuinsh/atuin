@@ -29,3 +29,35 @@ reason = "can panic; `use atuin_common::ansi::Vt100ParserExt as _` and use `Pars
 [[disallowed-methods]]
 path = "vt100::Screen::set_size"
 reason = "can panic; `use atuin_common::ansi::Vt100ScreenExt as _` and use `Screen::set_size_safe`"
+
+[[disallowed-types]]
+path = "std::sync::Mutex"
+reason = "use parking_lot::Mutex which is faster"
+
+[[disallowed-types]]
+path = "std::sync::MutexGuard"
+reason = "use parking_lot::MutexGuard which is faster"
+
+[[disallowed-types]]
+path = "std::sync::RwLock"
+reason = "use parking_lot::RwLock which is faster"
+
+[[disallowed-types]]
+path = "std::sync::RwLockReadGuard"
+reason = "use parking_lot::RwLockReadGuard which is faster"
+
+[[disallowed-types]]
+path = "std::sync::RwLockWriteGuard"
+reason = "use parking_lot::RwLockWriteGuard which is faster"
+
+[[disallowed-types]]
+path = "std::sync::Condvar"
+reason = "use parking_lot::Condvar which is faster"
+
+[[disallowed-types]]
+path = "std::sync::Once"
+reason = "use parking_lot::Once which is faster"
+
+[[disallowed-types]]
+path = "std::sync::ReentrantLock"
+reason = "use parking_lot::ReentrantMutex which is faster"

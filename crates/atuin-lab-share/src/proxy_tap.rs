@@ -32,12 +32,13 @@ use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, mpsc as std_mpsc};
+use std::sync::{Arc, mpsc as std_mpsc};
 use std::time::Duration;
 
 use atuin_pty_proxy::protocol::{
     self, FRAME_END, FRAME_HELLO, FRAME_KEYFRAME, FRAME_OUTPUT, FRAME_RESIZE, MAGIC, Snapshot,
 };
+use parking_lot::Mutex;
 
 use crate::render::WriteMode;
 use crate::source::{ReadEvent, SessionSource, SourceParts, SourceReader};
@@ -262,9 +263,7 @@ impl SessionSource for ProxyTap {
             // its read. The user's shell never notices.
             stop: Box::new(move || {
                 stop_shared.stopped.store(true, Ordering::SeqCst);
-                if let Ok(stream) = stop_shared.stream.lock() {
-                    let _ = stream.shutdown(Shutdown::Both);
-                }
+                let _ = stop_shared.stream.lock().shutdown(Shutdown::Both);
             }),
             // Tap end is EOF, not an exit code: there is no child of ours to
             // report on, so the answer is always 0.
@@ -426,9 +425,7 @@ impl TapReader {
             let Ok(read_clone) = stream.try_clone() else {
                 continue;
             };
-            if let Ok(mut current) = self.shared.stream.lock() {
-                *current = stream;
-            }
+            *self.shared.stream.lock() = stream;
             // `stop` may have fired between the check at the top and the
             // swap above — it would have shut down the OLD stream to no
             // effect. Re-check now that the swap is visible, and close the
@@ -508,10 +505,7 @@ struct TapWriter {
 
 impl Write for TapWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let stream = match self.shared.stream.lock() {
-            Ok(current) => current.try_clone(),
-            Err(_) => return Ok(buf.len()),
-        };
+        let stream = self.shared.stream.lock().try_clone();
         if let Ok(mut stream) = stream {
             // Chunked so no input, however large a viewer's paste, can
             // exceed the protocol's frame cap (which would panic).

@@ -18,6 +18,7 @@ atuin-client = { workspace = true }
 atuin-common = { workspace = true }
 atuin-daemon = { workspace = true }
 divan = { version = "5.0.1", package = "codspeed-divan-compat" }
+parking_lot = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
 
