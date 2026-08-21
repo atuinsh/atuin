@@ -1,6 +1,7 @@
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use parking_lot::Mutex;
 use tokio::runtime::Handle;
 use tokio::sync::{Notify, OnceCell};
 use tokio::task::AbortHandle;
@@ -23,12 +24,12 @@ impl<T: Clone + Send + Sync + 'static> MutEagerFutureCell<T> {
     /// discarded. Any current or future [`get`](EagerFuture::get) observes `value`.
     pub fn emplace_cancelling(&self, value: T) {
         self.abort.abort();
-        *self.inner.cell.lock().unwrap() = Some(value);
+        *self.inner.cell.lock() = Some(value);
         self.inner.ready.notify_waiters();
     }
 }
 
-#[doc(hidden)]
+/// Internal detail to the [`EagerFutureCell`].
 pub trait ResultCell: Default + Send + Sync + 'static {
     type Value: Clone + Send + Sync + 'static;
 
@@ -52,7 +53,7 @@ impl<T: Default + Clone + Send + Sync + 'static> ResultCell for Mutex<Option<T>>
     type Value = T;
 
     fn fill(&self, value: T) {
-        let mut slot = self.lock().unwrap();
+        let mut slot = self.lock();
         // Keep an existing value: an `emplace_cancelling` may have already won.
         if slot.is_none() {
             *slot = Some(value);
@@ -60,7 +61,7 @@ impl<T: Default + Clone + Send + Sync + 'static> ResultCell for Mutex<Option<T>>
     }
 
     fn peek(&self) -> Option<T> {
-        self.lock().unwrap().clone()
+        self.lock().clone()
     }
 }
 
