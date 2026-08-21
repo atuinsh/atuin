@@ -549,13 +549,14 @@ where
 
 #[cfg(test)]
 mod tests {
+    use futures::TryStreamExt;
+    use rstest::{fixture, rstest};
+
     use super::*;
 
-    // NOTE: this block deliberately does NOT `use` any of the sqlite types
-    // (`Table`/`Schema`/`Col`/`Conflict`/`ColKind`). It relies purely on the
-    // fully-qualified paths the macro emits (`$crate::sqlite::*`, `sqlx::*`),
-    // so a missing qualification inside `table!` fails to compile here.
     mod macro_hygiene {
+        use rstest::rstest;
+
         struct Kv3 {
             ns: String,
             k: String,
@@ -572,7 +573,6 @@ mod tests {
             },
         });
 
-        // A table with a composite key AND an Expr column, defined via the macro.
         struct Event {
             host: String,
             id: String,
@@ -580,7 +580,7 @@ mod tests {
         }
         crate::table!(Event {
             name: "events",
-            key: ["host", "id"],
+            key: ["id", "host"],
             conflict: ignore,
             columns: {
                 host    => |e| e.host.as_str(),
@@ -590,7 +590,6 @@ mod tests {
             },
         });
 
-        // A single (non-list) key with `replace` conflict.
         struct Single {
             id: String,
             val: String,
@@ -606,361 +605,243 @@ mod tests {
         });
 
         #[test]
-        fn macro_builds_schema() {
-            use crate::sqlite::{Conflict, Table};
+        fn schema_shape() {
+            use crate::sqlite::{ColKind, Conflict, Table};
             assert_eq!(Kv3::SCHEMA.name, "kv3");
             assert_eq!(Kv3::SCHEMA.col_count(), 3);
-            assert_eq!(Kv3::SCHEMA.columns[0].name, "ns");
-            assert!(Kv3::SCHEMA.columns[0].key);
-            assert!(Kv3::SCHEMA.columns[1].key);
-            assert!(!Kv3::SCHEMA.columns[2].key);
             assert!(matches!(Kv3::SCHEMA.conflict, Conflict::Upsert));
-        }
-
-        #[test]
-        fn macro_composite_key_and_expr_col() {
-            use crate::sqlite::{ColKind, Conflict, Table};
-            assert_eq!(Event::SCHEMA.name, "events");
-            assert_eq!(Event::SCHEMA.col_count(), 4);
-            // composite key membership resolved by column name, order-independent
-            assert!(Event::SCHEMA.columns[0].key); // host
-            assert!(Event::SCHEMA.columns[1].key); // id
-            assert!(!Event::SCHEMA.columns[2].key); // body
-            assert!(!Event::SCHEMA.columns[3].key); // created (expr, never key)
-            // only the three Bind columns count toward bind params
+            assert!(matches!(Single::SCHEMA.conflict, Conflict::Replace));
+            assert!(matches!(Event::SCHEMA.conflict, Conflict::Ignore));
+            // The Expr column is never a bind param and is never a key.
             assert_eq!(Event::SCHEMA.bind_col_count(), 3);
             assert!(matches!(Event::SCHEMA.columns[3].kind, ColKind::Expr("strftime('%s','now')")));
-            assert!(matches!(Event::SCHEMA.conflict, Conflict::Ignore));
         }
 
-        #[test]
-        fn macro_single_key() {
-            use crate::sqlite::{Conflict, Table};
-            assert_eq!(Single::SCHEMA.name, "single");
-            assert!(Single::SCHEMA.columns[0].key);
-            assert!(!Single::SCHEMA.columns[1].key);
-            assert!(matches!(Single::SCHEMA.conflict, Conflict::Replace));
+        #[rstest]
+        #[case("host", true)]
+        #[case("id", true)]
+        #[case("body", false)]
+        #[case("created", false)] // an Expr column can never be a key
+        fn key_flag_resolved_by_name(#[case] name: &str, #[case] is_key: bool) {
+            use crate::sqlite::Table;
+            let col = Event::SCHEMA.columns.iter().find(|c| c.name == name).unwrap();
+            assert_eq!(col.key, is_key);
         }
     }
 
-    struct Toy;
-    impl Table for Toy {
-        const SCHEMA: Schema = Schema {
-            name: "toy",
-            columns: &[
-                Col {
-                    name: "id",
-                    key: true,
-                    kind: ColKind::Bind,
-                },
-                Col {
-                    name: "body",
-                    key: false,
-                    kind: ColKind::Bind,
-                },
-                Col {
-                    name: "at",
-                    key: false,
-                    kind: ColKind::Expr("strftime('%s','now')"),
-                },
-            ],
-            conflict: Conflict::Upsert,
-        };
-        fn bind_row(&self, sep: &mut sqlx::query_builder::Separated<'_, SqliteDb, &'static str>) {
-            sep.push_bind("x"); // id
-            sep.push_bind("y"); // body
-            sep.push("strftime('%s','now')"); // at (expr)
-        }
+    #[rstest]
+    #[case(<&str as KeyBind>::ARITY, 1)]
+    #[case(<(&str, &str) as KeyBind>::ARITY, 2)]
+    #[case(<(i64, i64, i64) as KeyBind>::ARITY, 3)]
+    fn keybind_arity(#[case] actual: usize, #[case] expected: usize) {
+        assert_eq!(actual, expected);
     }
 
     #[test]
-    fn schema_counts() {
+    fn keybind_binds_only_leading_columns() {
+        use sqlx::QueryBuilder;
+
+        let mut qb: QueryBuilder<sqlx::Sqlite> = QueryBuilder::new("");
+        "x".push_where(&mut qb, &["a", "b"]);
+        assert_eq!(qb.sql(), "a = ?");
+
+        let mut qb: QueryBuilder<sqlx::Sqlite> = QueryBuilder::new("");
+        ("x", "y").push_where(&mut qb, &["a", "b"]);
+        assert_eq!(qb.sql(), "a = ? and b = ?");
+    }
+
+    #[test]
+    fn bind_col_count_excludes_expr_columns() {
+        struct Toy;
+        impl Table for Toy {
+            const SCHEMA: Schema = Schema {
+                name: "toy",
+                columns: &[
+                    Col::key("id"),
+                    Col::col("body"),
+                    Col::expr("at", "strftime('%s','now')"),
+                ],
+                conflict: Conflict::Upsert,
+            };
+            fn bind_row(
+                &self,
+                sep: &mut sqlx::query_builder::Separated<'_, SqliteDb, &'static str>,
+            ) {
+                sep.push_bind("x").push_bind("y").push("strftime('%s','now')");
+            }
+        }
         assert_eq!(Toy::SCHEMA.col_count(), 3);
-        assert_eq!(Toy::SCHEMA.bind_col_count(), 2); // Expr excluded
+        assert_eq!(Toy::SCHEMA.bind_col_count(), 2);
         assert!(Toy::SCHEMA.columns[0].key);
         assert!(!Toy::SCHEMA.columns[1].key);
     }
 
-    #[test]
-    fn keybind_builds_where() {
-        use sqlx::QueryBuilder;
-        let mut qb: QueryBuilder<sqlx::Sqlite> = QueryBuilder::new("select 1 where ");
-        ("ns", "k").push_where(&mut qb, &["namespace", "key"]);
-        assert_eq!(qb.sql(), "select 1 where namespace = ? and key = ?");
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+    struct Kv {
+        id: String,
+        val: String,
     }
-
-    #[tokio::test]
-    async fn insert_bulk_ignore_and_upsert() {
-        // Toy2: 2 bind cols + conflict Upsert on `id`
-        struct Kv {
-            id: String,
-            val: String,
-        }
-        impl Table for Kv {
-            const SCHEMA: Schema = Schema {
-                name: "kv2",
-                columns: &[Col::key("id"), Col::col("val")],
-                conflict: Conflict::Upsert,
-            };
-            fn bind_row(
-                &self,
-                sep: &mut sqlx::query_builder::Separated<'_, SqliteDb, &'static str>,
-            ) {
-                sep.push_bind(self.id.as_str()).push_bind(self.val.as_str());
+    impl Kv {
+        fn new(id: &str, val: &str) -> Self {
+            Self {
+                id: id.into(),
+                val: val.into(),
             }
         }
-
-        let sqlite = crate::sqlite::Sqlite::builder().memory().open().await.unwrap();
-        sqlx::query("create table kv2(id text primary key, val text)")
-            .execute(sqlite.pool())
-            .await
-            .unwrap();
-
-        let view = TableView::<Kv>::new(sqlite.clone());
-        view.insert_bulk([
-            &Kv {
-                id: "a".into(),
-                val: "1".into(),
-            },
-            &Kv {
-                id: "b".into(),
-                val: "2".into(),
-            },
-        ])
-        .await
-        .unwrap();
-        view.insert_one(&Kv {
-            id: "a".into(),
-            val: "updated".into(),
-        })
-        .await
-        .unwrap(); // upsert
-
-        let n: i64 =
-            sqlx::query_scalar("select count(*) from kv2").fetch_one(sqlite.pool()).await.unwrap();
-        assert_eq!(n, 2);
-        let v: String = sqlx::query_scalar("select val from kv2 where id='a'")
-            .fetch_one(sqlite.pool())
-            .await
-            .unwrap();
-        assert_eq!(v, "updated");
     }
-
-    #[tokio::test]
-    async fn insert_bulk_ignore_keeps_original_value() {
-        struct Kv {
-            id: String,
-            val: String,
+    impl Table for Kv {
+        const SCHEMA: Schema = Schema {
+            name: "kv",
+            columns: &[Col::key("id"), Col::col("val")],
+            conflict: Conflict::Upsert,
+        };
+        fn bind_row(&self, sep: &mut sqlx::query_builder::Separated<'_, SqliteDb, &'static str>) {
+            sep.push_bind(self.id.as_str()).push_bind(self.val.as_str());
         }
-        impl Table for Kv {
-            const SCHEMA: Schema = Schema {
-                name: "kv_ignore",
-                columns: &[Col::key("id"), Col::col("val")],
-                conflict: Conflict::Ignore,
-            };
-            fn bind_row(
-                &self,
-                sep: &mut sqlx::query_builder::Separated<'_, SqliteDb, &'static str>,
-            ) {
-                sep.push_bind(self.id.as_str()).push_bind(self.val.as_str());
-            }
-        }
-
-        let sqlite = crate::sqlite::Sqlite::builder().memory().open().await.unwrap();
-        sqlx::query("create table kv_ignore(id text primary key, val text)")
-            .execute(sqlite.pool())
-            .await
-            .unwrap();
-
-        let view = TableView::<Kv>::new(sqlite.clone());
-        view.insert_bulk([&Kv {
-            id: "a".into(),
-            val: "original".into(),
-        }])
-        .await
-        .unwrap();
-
-        // Same key, different value: `insert or ignore` must not error and must not
-        // overwrite the existing row.
-        view.insert_bulk([
-            &Kv {
-                id: "a".into(),
-                val: "clobbered".into(),
-            },
-            &Kv {
-                id: "b".into(),
-                val: "1".into(),
-            },
-        ])
-        .await
-        .unwrap();
-
-        let n: i64 = sqlx::query_scalar("select count(*) from kv_ignore")
-            .fetch_one(sqlite.pool())
-            .await
-            .unwrap();
-        assert_eq!(n, 2);
-        let v: String = sqlx::query_scalar("select val from kv_ignore where id='a'")
-            .fetch_one(sqlite.pool())
-            .await
-            .unwrap();
-        assert_eq!(v, "original");
     }
-
-    #[tokio::test]
-    async fn insert_bulk_replace_overwrites_value() {
-        struct Kv {
-            id: String,
-            val: String,
-        }
-        impl Table for Kv {
-            const SCHEMA: Schema = Schema {
-                name: "kv_replace",
-                columns: &[Col::key("id"), Col::col("val")],
-                conflict: Conflict::Replace,
-            };
-            fn bind_row(
-                &self,
-                sep: &mut sqlx::query_builder::Separated<'_, SqliteDb, &'static str>,
-            ) {
-                sep.push_bind(self.id.as_str()).push_bind(self.val.as_str());
-            }
-        }
-
-        let sqlite = crate::sqlite::Sqlite::builder().memory().open().await.unwrap();
-        sqlx::query("create table kv_replace(id text primary key, val text)")
-            .execute(sqlite.pool())
-            .await
-            .unwrap();
-
-        let view = TableView::<Kv>::new(sqlite.clone());
-        view.insert_bulk([&Kv {
-            id: "a".into(),
-            val: "original".into(),
-        }])
-        .await
-        .unwrap();
-        view.insert_bulk([&Kv {
-            id: "a".into(),
-            val: "replaced".into(),
-        }])
-        .await
-        .unwrap();
-
-        let n: i64 = sqlx::query_scalar("select count(*) from kv_replace")
-            .fetch_one(sqlite.pool())
-            .await
-            .unwrap();
-        assert_eq!(n, 1);
-        let v: String = sqlx::query_scalar("select val from kv_replace where id='a'")
-            .fetch_one(sqlite.pool())
-            .await
-            .unwrap();
-        assert_eq!(v, "replaced");
-    }
-
-    #[tokio::test]
-    async fn insert_bulk_forces_multiple_chunks() {
-        // Single Bind column so `bind_col_count() == 1`: the chunk size (`per`)
-        // equals the raw `variable_number_limit`, so we need to insert more than
-        // `variable_number_limit` rows to force `insert_bulk_tx`'s `while` loop
-        // to run more than once. We read the real, driver-reported limit (never
-        // weaken it) and size the row count off of it, so this is deterministic
-        // regardless of the sqlite build's actual `SQLITE_LIMIT_VARIABLE_NUMBER`.
-        struct OneCol {
-            id: String,
-        }
-        impl Table for OneCol {
-            const SCHEMA: Schema = Schema {
-                name: "onecol",
-                columns: &[Col::key("id")],
-                conflict: Conflict::Ignore,
-            };
-            fn bind_row(
-                &self,
-                sep: &mut sqlx::query_builder::Separated<'_, SqliteDb, &'static str>,
-            ) {
-                sep.push_bind(self.id.as_str());
-            }
-        }
-        assert_eq!(OneCol::SCHEMA.bind_col_count(), 1);
-
-        let sqlite = crate::sqlite::Sqlite::builder().memory().open().await.unwrap();
-        sqlx::query("create table onecol(id text primary key)")
-            .execute(sqlite.pool())
-            .await
-            .unwrap();
-
-        let limit = sqlite.info().await.variable_number_limit;
-        // Comfortably more than 2 full chunks' worth of rows.
-        let n_rows = limit * 2 + 137;
-
-        let view = TableView::<OneCol>::new(sqlite.clone());
-        let rows: Vec<OneCol> = (0..n_rows)
-            .map(|i| OneCol {
-                id: format!("id-{i}"),
+    impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for Kv {
+        fn from_row(row: &'r sqlx::sqlite::SqliteRow) -> sqlx::Result<Self> {
+            use sqlx::Row;
+            Ok(Self {
+                id: row.try_get("id")?,
+                val: row.try_get("val")?,
             })
-            .collect();
-        view.insert_bulk(rows.iter()).await.unwrap();
-
-        let n: i64 = sqlx::query_scalar("select count(*) from onecol")
-            .fetch_one(sqlite.pool())
-            .await
-            .unwrap();
-        assert_eq!(n as usize, n_rows);
+        }
     }
 
-    #[tokio::test]
-    async fn get_and_delete() {
-        struct Kv {
-            id: String,
-            val: String,
-        }
-        impl Table for Kv {
-            const SCHEMA: Schema = Schema {
-                name: "kv2",
-                columns: &[Col::key("id"), Col::col("val")],
-                conflict: Conflict::Upsert,
-            };
-            fn bind_row(
-                &self,
-                sep: &mut sqlx::query_builder::Separated<'_, SqliteDb, &'static str>,
-            ) {
-                sep.push_bind(self.id.as_str()).push_bind(self.val.as_str());
-            }
-        }
-        impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for Kv {
-            fn from_row(row: &'r sqlx::sqlite::SqliteRow) -> sqlx::Result<Self> {
-                use sqlx::Row;
-                Ok(Self {
-                    id: row.try_get("id")?,
-                    val: row.try_get("val")?,
-                })
-            }
-        }
-
+    #[fixture]
+    async fn store() -> TableView<Kv> {
         let sqlite = crate::sqlite::Sqlite::builder().memory().open().await.unwrap();
-        sqlx::query("create table kv2(id text primary key, val text)")
+        sqlx::query("create table kv(id text primary key, val text)")
             .execute(sqlite.pool())
             .await
             .unwrap();
-        let view = TableView::<Kv>::new(sqlite.clone());
-        view.insert_one(&Kv {
-            id: "a".into(),
-            val: "1".into(),
-        })
-        .await
-        .unwrap();
-
-        assert_eq!(view.get("a").await.unwrap().unwrap().val, "1");
-        assert!(view.get("zzz").await.unwrap().is_none());
-        view.delete("a").await.unwrap();
-        assert!(view.get("a").await.unwrap().is_none());
+        TableView::new(sqlite)
     }
 
+    /// The `id`s currently in the store, sorted (`all()` is unordered).
+    async fn ids(store: &TableView<Kv>) -> Vec<String> {
+        let mut rows: Vec<Kv> = store.all().try_collect().await.unwrap();
+        rows.sort();
+        rows.into_iter().map(|r| r.id).collect()
+    }
+
+    #[rstest]
     #[tokio::test]
-    async fn filter_and_delete() {
-        use futures::TryStreamExt;
+    async fn get_insert_delete(#[future(awt)] store: TableView<Kv>) {
+        // Empty table, and deleting a missing key, are both no-ops (not errors).
+        assert!(store.get("a").await.unwrap().is_none());
+        store.delete("a").await.unwrap();
+
+        store.insert_one(&Kv::new("a", "1")).await.unwrap();
+        assert_eq!(store.get("a").await.unwrap().unwrap(), Kv::new("a", "1"));
+
+        // Deleting an unrelated key leaves the row intact.
+        store.delete("b").await.unwrap();
+        assert!(store.get("a").await.unwrap().is_some());
+
+        store.delete("a").await.unwrap();
+        assert!(store.get("a").await.unwrap().is_none());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn insert_bulk_empty_is_noop(#[future(awt)] store: TableView<Kv>) {
+        store.insert_bulk(std::iter::empty::<&Kv>()).await.unwrap();
+        assert!(ids(&store).await.is_empty());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn all_and_delete_all(#[future(awt)] store: TableView<Kv>) {
+        assert!(ids(&store).await.is_empty());
+        store.insert_bulk([&Kv::new("b", "2"), &Kv::new("a", "1")]).await.unwrap();
+        assert_eq!(ids(&store).await, ["a", "b"].map(String::from));
+        store.delete_all().await.unwrap();
+        assert!(ids(&store).await.is_empty());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn delete_all_tx_reports_count(#[future(awt)] store: TableView<Kv>) {
+        store.insert_bulk([&Kv::new("a", "1"), &Kv::new("b", "2")]).await.unwrap();
+        let mut tx = store.sqlite().pool().begin().await.unwrap();
+        let deleted = store.delete_all_tx(&mut tx).await.unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(deleted, 2);
+        assert!(ids(&store).await.is_empty());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn insert_bulk_spans_multiple_chunks(#[future(awt)] store: TableView<Kv>) {
+        // Size the row count off the real, driver-reported bind-variable limit
+        // (never weaken it) so `insert_bulk_tx`'s `while` loop is forced to run
+        // several times regardless of the sqlite build.
+        let limit = store.sqlite().info().await.variable_number_limit;
+        let n = limit * 2 + 137;
+        let rows: Vec<Kv> = (0..n).map(|i| Kv::new(&format!("id-{i}"), "v")).collect();
+        store.insert_bulk(rows.iter()).await.unwrap();
+        assert_eq!(ids(&store).await.len(), n);
+    }
+
+    macro_rules! conflict_test {
+        ($test:ident, $ty:ident, $table:literal, $conflict:ident, $final_a:literal) => {
+            #[tokio::test]
+            async fn $test() {
+                struct $ty {
+                    id: String,
+                    val: String,
+                }
+                impl Table for $ty {
+                    const SCHEMA: Schema = Schema {
+                        name: $table,
+                        columns: &[Col::key("id"), Col::col("val")],
+                        conflict: Conflict::$conflict,
+                    };
+                    fn bind_row(
+                        &self,
+                        sep: &mut sqlx::query_builder::Separated<'_, SqliteDb, &'static str>,
+                    ) {
+                        sep.push_bind(self.id.as_str()).push_bind(self.val.as_str());
+                    }
+                }
+                let row = |id: &str, val: &str| $ty {
+                    id: id.into(),
+                    val: val.into(),
+                };
+
+                let sqlite = crate::sqlite::Sqlite::builder().memory().open().await.unwrap();
+                sqlx::query(concat!("create table ", $table, "(id text primary key, val text)"))
+                    .execute(sqlite.pool())
+                    .await
+                    .unwrap();
+                let view = TableView::<$ty>::new(sqlite);
+
+                view.insert_one(&row("a", "first")).await.unwrap();
+                view.insert_bulk([&row("a", "second"), &row("b", "x")]).await.unwrap();
+
+                let count: i64 = sqlx::query_scalar(concat!("select count(*) from ", $table))
+                    .fetch_one(view.sqlite().pool())
+                    .await
+                    .unwrap();
+                assert_eq!(count, 2, "`b` lands regardless of the conflict on `a`");
+
+                let a: String =
+                    sqlx::query_scalar(concat!("select val from ", $table, " where id = 'a'"))
+                        .fetch_one(view.sqlite().pool())
+                        .await
+                        .unwrap();
+                assert_eq!(a, $final_a);
+            }
+        };
+    }
+    conflict_test!(upsert_overwrites, KvUpsert, "c_upsert", Upsert, "second");
+    conflict_test!(ignore_keeps_first, KvIgnore, "c_ignore", Ignore, "first");
+    conflict_test!(replace_overwrites, KvReplace, "c_replace", Replace, "second");
+
+    #[tokio::test]
+    async fn filter_ordered_and_prefix_delete() {
         struct Ev {
             host: String,
             id: String,
@@ -991,161 +872,56 @@ mod tests {
                 })
             }
         }
+        let row = |host: &str, id: &str, val: &str| Ev {
+            host: host.into(),
+            id: id.into(),
+            val: val.into(),
+        };
 
         let sqlite = crate::sqlite::Sqlite::builder().memory().open().await.unwrap();
         sqlx::query("create table ev(host text, id text, val text, primary key(host, id))")
             .execute(sqlite.pool())
             .await
             .unwrap();
-        let view = TableView::<Ev>::new(sqlite.clone());
-        view.insert_bulk([
-            &Ev {
-                host: "h1".into(),
-                id: "b".into(),
-                val: "1".into(),
-            },
-            &Ev {
-                host: "h1".into(),
-                id: "a".into(),
-                val: "2".into(),
-            },
-            &Ev {
-                host: "h2".into(),
-                id: "a".into(),
-                val: "3".into(),
-            },
-        ])
-        .await
-        .unwrap();
+        let view = TableView::<Ev>::new(sqlite);
 
-        // all_ordered: sorted by (host, id)
+        // Empty table: both streams are empty.
+        assert!(view.all_ordered().try_collect::<Vec<Ev>>().await.unwrap().is_empty());
+        assert!(view.filter("h1").try_collect::<Vec<Ev>>().await.unwrap().is_empty());
+
+        // Insert out of key order to prove the ordering comes from the query.
+        view.insert_bulk([&row("h1", "b", "1"), &row("h1", "a", "2"), &row("h2", "a", "3")])
+            .await
+            .unwrap();
+
         let all: Vec<(String, String)> =
             view.all_ordered().map_ok(|e| (e.host, e.id)).try_collect().await.unwrap();
-        assert_eq!(all, vec![
-            ("h1".to_string(), "a".to_string()),
-            ("h1".to_string(), "b".to_string()),
-            ("h2".to_string(), "a".to_string()),
-        ]);
+        assert_eq!(
+            all,
+            [("h1", "a"), ("h1", "b"), ("h2", "a")].map(|(h, i)| (h.to_string(), i.to_string()))
+        );
 
-        // filter by a 1-column prefix (host), ordered by key
+        // Scalar prefix (leading key column), ordered by key.
         let h1: Vec<String> = view.filter("h1").map_ok(|e| e.id).try_collect().await.unwrap();
-        assert_eq!(h1, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(h1, ["a", "b"].map(String::from));
 
-        // filter by the full 2-column key (tuple prefix) => one row
+        // A prefix that matches nothing yields an empty stream.
+        assert!(view.filter("nope").try_collect::<Vec<Ev>>().await.unwrap().is_empty());
+
+        // Full 2-column key (tuple prefix) selects the single row.
         let one: Vec<String> =
             view.filter(("h1", "a")).map_ok(|e| e.val).try_collect().await.unwrap();
-        assert_eq!(one, vec!["2".to_string()]);
+        assert_eq!(one, ["2".to_string()]);
 
-        // delete by a host prefix removes both h1 rows
+        // `delete` with a scalar prefix removes every `h1` row.
         view.delete("h1").await.unwrap();
         let hosts: Vec<String> = view.all_ordered().map_ok(|e| e.host).try_collect().await.unwrap();
-        assert_eq!(hosts, vec!["h2".to_string()]);
+        assert_eq!(hosts, ["h2".to_string()]);
 
-        // delete_tx by the full key, inside a transaction
-        let mut tx = sqlite.pool().begin().await.unwrap();
+        // `delete_tx` with the full key, committed in a transaction.
+        let mut tx = view.sqlite().pool().begin().await.unwrap();
         view.delete_tx(&mut tx, ("h2", "a")).await.unwrap();
         tx.commit().await.unwrap();
         assert!(view.all_ordered().try_collect::<Vec<Ev>>().await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn all_streams_rows() {
-        use futures::TryStreamExt;
-        struct Kv {
-            id: String,
-            val: String,
-        }
-        impl Table for Kv {
-            const SCHEMA: Schema = Schema {
-                name: "kv2",
-                columns: &[Col::key("id"), Col::col("val")],
-                conflict: Conflict::Upsert,
-            };
-            fn bind_row(
-                &self,
-                sep: &mut sqlx::query_builder::Separated<'_, SqliteDb, &'static str>,
-            ) {
-                sep.push_bind(self.id.as_str()).push_bind(self.val.as_str());
-            }
-        }
-        impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for Kv {
-            fn from_row(row: &'r sqlx::sqlite::SqliteRow) -> sqlx::Result<Self> {
-                use sqlx::Row;
-                Ok(Self {
-                    id: row.try_get("id")?,
-                    val: row.try_get("val")?,
-                })
-            }
-        }
-
-        let sqlite = crate::sqlite::Sqlite::builder().memory().open().await.unwrap();
-        sqlx::query("create table kv2(id text primary key, val text)")
-            .execute(sqlite.pool())
-            .await
-            .unwrap();
-        let view = TableView::<Kv>::new(sqlite.clone());
-        view.insert_bulk([
-            &Kv {
-                id: "a".into(),
-                val: "1".into(),
-            },
-            &Kv {
-                id: "b".into(),
-                val: "2".into(),
-            },
-        ])
-        .await
-        .unwrap();
-
-        let rows: Vec<Kv> = view.all().try_collect().await.unwrap();
-        assert_eq!(rows.len(), 2);
-    }
-
-    #[tokio::test]
-    async fn delete_all_removes_everything() {
-        struct Kv {
-            id: String,
-            val: String,
-        }
-        impl Table for Kv {
-            const SCHEMA: Schema = Schema {
-                name: "kv_delete_all",
-                columns: &[Col::key("id"), Col::col("val")],
-                conflict: Conflict::Upsert,
-            };
-            fn bind_row(
-                &self,
-                sep: &mut sqlx::query_builder::Separated<'_, SqliteDb, &'static str>,
-            ) {
-                sep.push_bind(self.id.as_str()).push_bind(self.val.as_str());
-            }
-        }
-
-        let sqlite = crate::sqlite::Sqlite::builder().memory().open().await.unwrap();
-        sqlx::query("create table kv_delete_all(id text primary key, val text)")
-            .execute(sqlite.pool())
-            .await
-            .unwrap();
-        let view = TableView::<Kv>::new(sqlite.clone());
-        view.insert_bulk([
-            &Kv {
-                id: "a".into(),
-                val: "1".into(),
-            },
-            &Kv {
-                id: "b".into(),
-                val: "2".into(),
-            },
-        ])
-        .await
-        .unwrap();
-
-        view.delete_all().await.unwrap();
-
-        let n: i64 = sqlx::query_scalar("select count(*) from kv_delete_all")
-            .fetch_one(sqlite.pool())
-            .await
-            .unwrap();
-        assert_eq!(n, 0);
     }
 }
