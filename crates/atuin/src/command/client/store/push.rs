@@ -73,7 +73,8 @@ impl Push {
             })
             .build()
             .connect()
-            .await?;
+            .await?
+            .with_page_size(self.page);
 
         let keyed = engine.keyed(&key);
         let (diff, _remote_index) = engine.diff().await?;
