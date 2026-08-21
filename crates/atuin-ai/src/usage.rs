@@ -92,7 +92,7 @@ pub fn cache_key(token: &str) -> String {
 pub async fn fetch_usage(endpoint: &reqwest::Url, token: &str) -> Result<UsageSnapshot> {
     let url = endpoint.append_path("api/cli/usage")?;
 
-    let response = reqwest::Client::new()
+    let response = atuin_domain::http::client()
         .get(url)
         .header(USER_AGENT, crate::stream::APP_USER_AGENT)
         .bearer_auth(token)

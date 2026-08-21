@@ -5,7 +5,8 @@
 //! Where `atuin-common` is a grab-bag of utility helpers, this crate holds the
 //! types that make up Atuin's domain: the sync [`record`] types, the HTTP
 //! [`api`] request/response types, and the [`caps`] capability types. These are
-//! shared across the client, the daemon, and the server.
+//! shared across the client, the daemon, and the server. It also owns
+//! [`http`], the constructor for Atuin's outbound HTTP clients.
 
 /// Defines a new UUID type wrapper
 macro_rules! new_uuid {
@@ -66,4 +67,5 @@ macro_rules! new_uuid {
 
 pub mod api;
 pub mod caps;
+pub mod http;
 pub mod record;
