@@ -82,8 +82,6 @@ impl Database {
 
     #[instrument(level = "debug", skip_all, fields(count = tracing::field::Empty))]
     pub async fn save_bulk<'a>(&self, s: impl IntoIterator<Item = &'a Script>) -> Result<()> {
-        // Collected once because we make two passes: one to insert the scripts
-        // and one to derive their tag rows.
         let scripts: Vec<&Script> = s.into_iter().collect();
         tracing::Span::current().record("count", scripts.len());
         if scripts.is_empty() {
