@@ -1,2 +1,6 @@
 ./target
 Dockerfile
+**/.venv
+**/__pycache__
+**/node_modules
+**/.pytest_cache
