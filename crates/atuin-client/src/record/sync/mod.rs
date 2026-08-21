@@ -350,16 +350,6 @@ impl Keyed<'_> {
             }
 
             if series.tag == RecordTag::Packfile {
-                // Pack every manifest in this page up front (local compress + encrypt), then hand
-                // the owned blobs to the client, which batches the transfers. Collecting eagerly
-                // keeps the pack futures a short-lived local temporary rather than a stream handed
-                // across an await, so the whole sync stays `Send` when it runs on a spawned,
-                // multi-threaded task (e.g. the daemon). Capture only `store`/`key` (both `Send`)
-                // in the pack futures -- not `self` (`&Keyed` holds a non-`Sync` cell).
-                // Each pack future OWNS its store/key clones (cheap `Arc`/key bumps) so it carries no
-                // borrow tied to the daemon's lifetime -- otherwise `buffered`'s concurrent futures
-                // make the whole sync `Send` only for a specific lifetime and the daemon's
-                // `tokio::spawn(sync_loop(..))` fails to compile.
                 let key = self.key.clone();
                 let store = store.clone();
                 let packed: Vec<_> = stream::iter(page.iter().cloned())
@@ -729,11 +719,14 @@ mod tests {
 
         assert_eq!(operations.len(), 1);
 
-        assert_eq!(operations[0], Operation::Upload {
-            series: RecordSeriesKey::new(record.host.id, record.tag.clone()),
-            local: record.idx,
-            remote: None,
-        });
+        assert_eq!(
+            operations[0],
+            Operation::Upload {
+                series: RecordSeriesKey::new(record.host.id, record.tag.clone()),
+                local: record.idx,
+                remote: None,
+            }
+        );
     }
 
     #[rstest]
@@ -757,19 +750,22 @@ mod tests {
 
         assert_eq!(operations.len(), 2);
 
-        assert_eq!(operations, vec![
-            // Or in otherwords, local is ahead by one
-            Operation::Upload {
-                series: RecordSeriesKey::new(local_ahead.host.id, local_ahead.tag.clone()),
-                local: 1,
-                remote: Some(0),
-            },
-            // Or in other words, remote knows of a record in an entirely new store (tag)
-            Operation::Download {
-                series: RecordSeriesKey::new(remote_ahead.host.id, remote_ahead.tag.clone()),
-                remote: 0,
-            },
-        ]);
+        assert_eq!(
+            operations,
+            vec![
+                // Or in otherwords, local is ahead by one
+                Operation::Upload {
+                    series: RecordSeriesKey::new(local_ahead.host.id, local_ahead.tag.clone()),
+                    local: 1,
+                    remote: Some(0),
+                },
+                // Or in other words, remote knows of a record in an entirely new store (tag)
+                Operation::Download {
+                    series: RecordSeriesKey::new(remote_ahead.host.id, remote_ahead.tag.clone()),
+                    remote: 0,
+                },
+            ]
+        );
     }
 
     #[rstest]
@@ -2041,10 +2037,13 @@ mod packfile_capability_tests {
         build_engine(client, down.clone())
             .await
             .keyed(&key)
-            .sync_remote(vec![packfile_download_op(host, 3), Operation::Download {
-                remote: 3,
-                series: RecordSeriesKey::new(host, RecordTag::History),
-            }])
+            .sync_remote(vec![
+                packfile_download_op(host, 3),
+                Operation::Download {
+                    remote: 3,
+                    series: RecordSeriesKey::new(host, RecordTag::History),
+                },
+            ])
             .await
             .unwrap();
 
