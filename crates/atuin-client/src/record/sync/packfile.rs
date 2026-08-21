@@ -141,7 +141,7 @@ mod tests {
 
     /// A [`Client`] pointed at a wiremock server, authenticated with a dummy token.
     fn mock_client(addr: &url::Url) -> Client {
-        let caps = caps_client(addr, &HashMap::new()).unwrap();
+        let caps = caps_client(addr, None, &HashMap::new()).unwrap();
         Client::new(addr.clone(), &AuthToken::Token("t".into()), 30, 30, &HashMap::new(), caps)
             .unwrap()
     }
@@ -367,7 +367,7 @@ mod tests {
 
         // No server needed: the skip must happen before any network call.
         let sync_addr: url::Url = "http://127.0.0.1:1/".parse().unwrap();
-        let caps = caps_client(&sync_addr, &HashMap::new()).unwrap();
+        let caps = caps_client(&sync_addr, None, &HashMap::new()).unwrap();
         let client = Client::new(
             sync_addr.clone(),
             &AuthToken::Token("t".into()),
@@ -521,7 +521,7 @@ mod tests {
         // A client pointed at a dead address with short timeouts: the packfile GET fails with a
         // transport error (connection refused), which is TRANSIENT and must propagate.
         let sync_addr: url::Url = "http://127.0.0.1:1/".parse().unwrap();
-        let caps = caps_client(&sync_addr, &HashMap::new()).unwrap();
+        let caps = caps_client(&sync_addr, None, &HashMap::new()).unwrap();
         let client = Client::new(
             sync_addr.clone(),
             &AuthToken::Token("t".into()),

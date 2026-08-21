@@ -75,8 +75,12 @@ async fn run(settings: &Settings, force: bool, db: &Sqlite, store: SqliteStore) 
     let host_id = Settings::host_id().await?;
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key.clone());
 
-    let caps =
-        atuin_client::api_client::caps_client(&settings.sync_address, &settings.extra_headers)?;
+    let auth = settings.sync_auth_token().await.ok();
+    let caps = atuin_client::api_client::caps_client(
+        &settings.sync_address,
+        auth.as_ref(),
+        &settings.extra_headers,
+    )?;
 
     // Build the engine once and reuse it for both sync passes below. It owns a clone of the store
     // (a shared pool), so the second pass sees whatever the store-init writes locally.

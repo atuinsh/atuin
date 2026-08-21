@@ -782,7 +782,7 @@ mod packfile_download_tests {
 
     /// A [`Client`] pointed at a wiremock server, authenticated with a dummy token.
     pub(super) fn mock_client(addr: &url::Url) -> Client {
-        let caps = caps_client(addr, &HashMap::new()).unwrap();
+        let caps = caps_client(addr, None, &HashMap::new()).unwrap();
         Client::new(addr.clone(), &AuthToken::Token("t".into()), 30, 30, &HashMap::new(), caps)
             .unwrap()
     }

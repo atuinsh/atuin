@@ -254,12 +254,21 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
 }
 
 /// Build the capability reader for a sync server.
+///
+/// When `auth` is given, the capabilities fetch carries the same Authorization
+/// header as the sync client, letting the server scope the advertised
+/// capability document to the authenticated user (per-user feature rollout).
+/// Servers that treat capabilities as global simply ignore the header.
 #[instrument(level = "trace", skip_all, err)]
 pub fn caps_client(
     sync_addr: &Url,
+    auth: Option<&AuthToken>,
     extra_headers: &HashMap<String, String>,
 ) -> Result<Arc<CapClient>> {
     let mut headers = extra_headers_map(extra_headers)?;
+    if let Some(auth) = auth {
+        headers.insert(AUTHORIZATION, auth.to_header_value().parse()?);
+    }
     headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
     headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
 
@@ -642,7 +651,7 @@ mod tests {
             .await;
 
         let addr: Url = server.uri().parse().unwrap();
-        let caps = caps_client(&addr, &HashMap::new()).unwrap();
+        let caps = caps_client(&addr, None, &HashMap::new()).unwrap();
         let client =
             Client::new(addr, &AuthToken::Token("t".into()), 30, 30, &HashMap::new(), caps)
                 .unwrap();
