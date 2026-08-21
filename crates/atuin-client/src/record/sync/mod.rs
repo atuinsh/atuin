@@ -23,10 +23,9 @@ use thiserror::Error;
 use tokio::runtime::Handle;
 use tracing::instrument;
 
-use self::packfile::pack;
 use super::sqlite_store::SqliteStore;
 use crate::api_client::Client;
-use crate::packfile::PackManifestRecordView;
+use crate::packfile::record::{PackManifestRecordView, ParsingError, UnpackError};
 
 mod builder;
 mod packfile;
@@ -35,6 +34,9 @@ pub use builder::{ClientSource, SyncEngineBuilder, SyncEngineInit};
 /// How many packfile blobs to download concurrently within a single page. (Uploads are batched by
 /// [`Client::upload_packfiles`](crate::api_client::Client::upload_packfiles).)
 const MAX_CONCURRENT_PACKFILE_TRANSFERS: usize = 16;
+
+/// How many packfile manifests to pack concurrently before handing a page's blobs to the client.
+const MAX_CONCURRENT_PACKS: usize = 16;
 
 #[derive(Error, Debug, Clone)]
 pub enum SyncError {
@@ -68,6 +70,32 @@ pub enum SyncError {
          machine with the value from the other machine"
     )]
     WrongKey,
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum PackfileDownloadError {
+    #[error("failed to load the packfile manifest: {0}")]
+    PackManifest(#[from] ParsingError),
+
+    #[error("packfile download failed: {0}")]
+    Api(eyre::Report),
+
+    #[error(transparent)]
+    Unpack(#[from] UnpackError),
+
+    #[error("failed to store the unpacked history: {0}")]
+    Store(eyre::Report),
+}
+
+impl PackfileDownloadError {
+    /// Whether repeating the same download operation would definitively fail.
+    fn is_permanent(&self) -> bool {
+        match self {
+            Self::PackManifest(_) => true,
+            Self::Unpack(_) => true,
+            Self::Api(_) | Self::Store(_) => false,
+        }
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -317,7 +345,12 @@ impl Keyed<'_> {
                 // across an await, so the whole sync stays `Send` when it runs on a spawned,
                 // multi-threaded task (e.g. the daemon).
                 let packed: Vec<_> = stream::iter(&page)
-                    .then(|manifest| pack(manifest, store, self.key))
+                    .map(|manifest| async move {
+                        let view = PackManifestRecordView::new(manifest)?;
+                        let (blob, ids) = view.pack_records(store, self.key.clone()).await?;
+                        Ok::<_, eyre::Report>((view.record.id, ids, blob))
+                    })
+                    .buffered(MAX_CONCURRENT_PACKS)
                     .try_collect()
                     .await
                     .map_err(|e| {
@@ -430,9 +463,7 @@ impl Keyed<'_> {
     pub(super) async fn download_packed(
         &self,
         manifest: &Record<EncryptedData>,
-    ) -> Result<Vec<RecordId>, packfile::DownloadError> {
-        use packfile::DownloadError;
-
+    ) -> Result<Vec<RecordId>, PackfileDownloadError> {
         let view = PackManifestRecordView::new(manifest)?;
         let store = &self.engine.store;
 
@@ -440,7 +471,7 @@ impl Keyed<'_> {
         let head = store
             .last(&RecordSeriesKey::new(view.record.host.id, RecordTag::History))
             .await
-            .map_err(DownloadError::Store)?;
+            .map_err(PackfileDownloadError::Store)?;
         if let Some(head) = head
             && head.idx >= view.range().end - 1
         {
@@ -448,7 +479,7 @@ impl Keyed<'_> {
             let existing = view
                 .load_encrypted_packed_records(store)
                 .await
-                .map_err(|e| DownloadError::Store(e.into()))?;
+                .map_err(|e| PackfileDownloadError::Store(e.into()))?;
             return Ok(existing.iter().map(|r| r.id).collect());
         }
 
@@ -457,12 +488,12 @@ impl Keyed<'_> {
             .client
             .download_packfile(view.record.id)
             .await
-            .map_err(DownloadError::Api)?;
+            .map_err(PackfileDownloadError::Api)?;
 
         let records = view.unpack_records(blob, self.key.clone()).await?;
         let ids: Vec<RecordId> = records.iter().map(|record| record.id).collect();
 
-        store.push_batch(records.iter()).await.map_err(DownloadError::Store)?;
+        store.push_batch(records.iter()).await.map_err(PackfileDownloadError::Store)?;
 
         Ok(ids)
     }

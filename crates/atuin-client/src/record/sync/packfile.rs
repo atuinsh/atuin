@@ -20,41 +20,10 @@
 //! lower-level packing machinery stays in [`crate::packfile`]; this is only the sync integration
 //! (fetch/store/upload through the engine's client and store).
 
-use atuin_common::encryption::paseto_v4;
-use atuin_domain::record::{EncryptedData, Record, RecordId, RecordSeriesKey, RecordTag};
+use atuin_domain::record::{EncryptedData, RecordSeriesKey, RecordTag};
 use thiserror::Error;
-use tracing::instrument;
 
-use crate::packfile::record::{PackManifestRecordView, PackingError, ParsingError, UnpackError};
-use crate::record::sqlite_store::SqliteStore;
-
-#[derive(Debug, Error)]
-pub(super) enum PackError {
-    #[error("failed to load the packfile manifest: {0}")]
-    PackManifest(#[from] ParsingError),
-
-    #[error(transparent)]
-    Pack(#[from] PackingError),
-}
-
-/// Pack a single `packfile` manifest record into the blob to ship: its manifest id, the record ids
-/// it covers, and the compressed+encrypted bytes. The transfer itself is done by
-/// [`Client::upload_packfiles`](crate::api_client::Client::upload_packfiles), so the uploads across
-/// a page can be batched.
-///
-/// This is a free function rather than a [`Keyed`] method so `sync_upload` can drive it from a
-/// stream of owned handles (cheap `SqliteStore`/`Key` clones) that stays `Send` when the whole sync
-/// runs on a spawned, multi-threaded task (e.g. the daemon).
-#[instrument(level = "trace", skip_all, fields(id = ?manifest.id), err)]
-pub(super) async fn pack(
-    manifest: &Record<EncryptedData>,
-    store: &SqliteStore,
-    key: &paseto_v4::Key,
-) -> Result<(RecordId, Vec<RecordId>, Vec<u8>), PackError> {
-    let view = PackManifestRecordView::new(manifest)?;
-    let (blob, ids) = view.pack_records(store, key.clone()).await?;
-    Ok((view.record.id, ids, blob))
-}
+use crate::packfile::record::{ParsingError, UnpackError};
 
 #[derive(Debug, Error)]
 pub(crate) enum DownloadError {
@@ -241,7 +210,9 @@ mod tests {
         // `.expect(1)` on all three mocks verifies create_packfile + put_packfile +
         // confirm_packfile each fired exactly once.
         let engine = build_engine(client.clone(), store).await;
-        let packed = pack(&manifest, &engine.store, &key).await.unwrap();
+        let view = PackManifestRecordView::new(&manifest).unwrap();
+        let (blob, ids) = view.pack_records(&engine.store, key.clone()).await.unwrap();
+        let packed = (view.record.id, ids, blob);
         client
             .upload_packfiles(futures::stream::iter([Ok::<_, eyre::Report>(packed)]))
             .await
@@ -291,23 +262,6 @@ mod tests {
             ]))
             .await
             .unwrap();
-    }
-
-    #[tokio::test]
-    async fn upload_packfiles_surfaces_an_input_error() {
-        // An `Err` item (e.g. a packing failure) short-circuits without any upload attempt.
-        let server = MockServer::start().await;
-        let addr: url::Url = server.uri().parse().unwrap();
-        let client = mock_client(&addr);
-
-        let result = client
-            .upload_packfiles(futures::stream::iter([Err::<
-                (RecordId, Vec<RecordId>, Vec<u8>),
-                eyre::Report,
-            >(eyre::eyre!("pack failed"))]))
-            .await;
-
-        assert!(result.is_err(), "an input error must propagate");
     }
 
     #[rstest]
