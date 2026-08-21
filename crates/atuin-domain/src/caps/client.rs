@@ -139,8 +139,16 @@ impl CapClient {
 
     /// Fetch and decode the server's capabilities document.
     async fn fetch_server_caps(&self) -> reqwest::Result<ServerCaps> {
-        let resp: CapabilitiesResponse =
-            self.http.get(self.capabilities_url.clone()).send().await?.json().await?;
+        let resp: CapabilitiesResponse = self
+            .http
+            .get(self.capabilities_url.clone())
+            .send()
+            .await?
+            // Surface auth/server rejections (e.g. a 401 on an authenticated
+            // fetch) as their status instead of an opaque JSON decode error.
+            .error_for_status()?
+            .json()
+            .await?;
         Ok(ServerCaps::from(resp))
     }
 

@@ -535,17 +535,11 @@ async fn handle_end(
     if settings.should_sync().await? {
         #[cfg(feature = "sync")]
         {
-            let auth = settings.sync_auth_token().await.ok();
-            let caps = atuin_client::api_client::caps_client(
-                &settings.sync_address,
-                auth.as_ref(),
-                &settings.extra_headers,
-            )?;
             let engine = record::sync::SyncEngine::builder()
                 .store(store.clone())
                 .client_source(record::sync::ClientSource::FromSettings {
                     settings,
-                    caps: Some(caps),
+                    caps: None,
                 })
                 .build()
                 .connect()

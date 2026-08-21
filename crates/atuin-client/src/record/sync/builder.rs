@@ -15,6 +15,10 @@ pub enum ClientSource<'a> {
     /// Wrap an already-built [`Client`].
     FromClient(Client),
     /// Build from settings, fetching capabilities during `connect`, unless supplied here.
+    ///
+    /// Pass `Some` only to share an already-warmed reader between engines (the
+    /// daemon does this so one warmer serves every sync tick); `connect` builds
+    /// an authenticated reader itself on the `None` path.
     FromSettings {
         settings: &'a Settings,
         caps: Option<Arc<CapClient>>,
