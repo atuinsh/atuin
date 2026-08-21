@@ -10,12 +10,14 @@ use std::cmp::Ordering;
 use std::fmt::Write;
 
 use atuin_common::encryption::paseto_v4;
-use atuin_common::range::RangeTiledExt;
+use atuin_common::range::{RangeTiledExt, Tiled};
 use atuin_common::sync::EagerFutureCell;
 use atuin_domain::caps::PackfileCap;
-use atuin_domain::record::{Diff, RecordId, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag};
+use atuin_domain::record::{
+    Diff, EncryptedData, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
+};
 use eyre::Result;
-use futures::{StreamExt, stream};
+use futures::{StreamExt, TryStreamExt, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use thiserror::Error;
 use tokio::runtime::Handle;
@@ -306,16 +308,18 @@ impl Keyed<'_> {
 
             if series.tag == RecordTag::Packfile {
                 // Pack every manifest in this page up front (local compress + encrypt), then hand
-                // the owned blobs to the client, which batches the transfers. Packing eagerly keeps
-                // the futures free of borrows, so the whole sync stays `Send` when it runs on a
-                // spawned, multi-threaded task (e.g. the daemon).
-                let mut packed = Vec::with_capacity(page.len());
-                for manifest in &page {
-                    packed.push(pack(manifest, store, self.key).await.map_err(|e| {
+                // the owned blobs to the client, which batches the transfers. Collecting eagerly
+                // keeps the pack futures a short-lived local temporary rather than a stream handed
+                // across an await, so the whole sync stays `Send` when it runs on a spawned,
+                // multi-threaded task (e.g. the daemon).
+                let packed: Vec<_> = stream::iter(&page)
+                    .then(|manifest| pack(manifest, store, self.key))
+                    .try_collect()
+                    .await
+                    .map_err(|e| {
                         error!("failed to pack packfile: {e}");
                         SyncError::RemoteRequestError { msg: e.to_string() }
-                    })?);
-                }
+                    })?;
                 client
                     .upload_packfiles(stream::iter(packed.into_iter().map(Ok::<_, eyre::Report>)))
                     .await
@@ -410,66 +414,38 @@ impl Keyed<'_> {
             .progress_chars("#>-"),
         );
 
-        let ret = if series.tag == RecordTag::Packfile {
-            self.download_packfile_pages(series, first_missing_local, expected, page_size, &pb)
-                .await?
-        } else {
-            self.download_loose_pages(series, first_missing_local, expected, page_size, &pb).await?
-        };
+        let plan = (first_missing_local..first_missing_local + expected).tiled(page_size);
+        let ret = self.download_pages(series, plan, &pb).await?;
 
         pb.finish_with_message("Downloaded records");
 
         Ok(ret)
     }
 
-    /// Download a run of packfile record pages.
-    async fn download_packfile_pages(
+    /// Download the record pages the `plan` covers into the local store, expanding any packfile
+    /// manifests along the way. Returns every record id touched -- expanded history plus the
+    /// persisted page records -- for the caller's history.db re-index.
+    async fn download_pages(
         &self,
         series: &RecordSeriesKey,
-        first_missing_local: RecordIdx,
-        expected: u64,
-        page_size: u64,
+        plan: Tiled<RecordIdx>,
         pb: &ProgressBar,
     ) -> Result<Vec<RecordId>, SyncError> {
-        let store = &self.engine.store;
-        let client = &self.engine.client;
         let mut ret = Vec::new();
         let mut progress = 0u64;
 
-        let pages = client.records(
-            series,
-            (first_missing_local..first_missing_local + expected).tiled(page_size),
-        );
+        let pages = self.engine.client.records(series, plan);
         futures::pin_mut!(pages);
         while let Some(page) = pages.next().await {
             let page = page.map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
 
-            let mut downloads = stream::iter(0..page.len())
-                .map(|i| self.download_packed(&page[i]))
-                .buffered(MAX_CONCURRENT_PACKFILE_TRANSFERS)
-                .enumerate();
-
-            while let Some((i, result)) = downloads.next().await {
-                match result {
-                    Ok(expanded) => ret.extend(expanded),
-                    Err(e) if e.is_permanent() => error!(
-                        manifest_id = %page[i].id,
-                        host = %page[i].host.id,
-                        idx = page[i].idx,
-                        "skipping unexpandable packfile manifest: {e}. you have lost data."
-                    ),
-                    Err(e) => {
-                        error!("failed to download packfile: {e:?}");
-                        return Err(SyncError::RemoteRequestError { msg: e.to_string() });
-                    }
-                }
+            // A packfile manifest's history must land in the store *before* the manifest itself, so
+            // a stored manifest always has its records. Loose pages have no such step.
+            if series.tag == RecordTag::Packfile {
+                ret.extend(self.expand_manifests(&page).await?);
             }
 
-            store
-                .push_batch(page.iter())
-                .await
-                .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
-
+            self.persist_page(&page).await?;
             ret.extend(page.iter().map(|f| f.id));
 
             progress += page.len() as u64;
@@ -479,39 +455,46 @@ impl Keyed<'_> {
         Ok(ret)
     }
 
-    /// Download a run of non-packfile record pages.
-    async fn download_loose_pages(
+    /// Expand every packfile manifest in `page`, committing the history it covers into the local
+    /// store. A manifest that can never expand (a permanent failure) is logged and skipped; a
+    /// transient failure aborts the page. Returns the ids of the history records touched.
+    async fn expand_manifests(
         &self,
-        series: &RecordSeriesKey,
-        first_missing_local: RecordIdx,
-        expected: u64,
-        page_size: u64,
-        pb: &ProgressBar,
+        page: &[Record<EncryptedData>],
     ) -> Result<Vec<RecordId>, SyncError> {
-        let store = &self.engine.store;
-        let client = &self.engine.client;
-        let mut ret = Vec::new();
-        let mut progress = 0u64;
+        let mut ids = Vec::new();
 
-        let pages = client.records(
-            series,
-            (first_missing_local..first_missing_local + expected).tiled(page_size),
-        );
-        futures::pin_mut!(pages);
-        while let Some(page) = pages.next().await {
-            let page = page.map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
+        let mut downloads = stream::iter(0..page.len())
+            .map(|i| self.download_packed(&page[i]))
+            .buffered(MAX_CONCURRENT_PACKFILE_TRANSFERS)
+            .enumerate();
 
-            store
-                .push_batch(page.iter())
-                .await
-                .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
-
-            ret.extend(page.iter().map(|f| f.id));
-            progress += page.len() as u64;
-            pb.set_position(progress);
+        while let Some((i, result)) = downloads.next().await {
+            match result {
+                Ok(expanded) => ids.extend(expanded),
+                Err(e) if e.is_permanent() => error!(
+                    manifest_id = %page[i].id,
+                    host = %page[i].host.id,
+                    idx = page[i].idx,
+                    "skipping unexpandable packfile manifest: {e}. you have lost data."
+                ),
+                Err(e) => {
+                    error!("failed to download packfile: {e:?}");
+                    return Err(SyncError::RemoteRequestError { msg: e.to_string() });
+                }
+            }
         }
 
-        Ok(ret)
+        Ok(ids)
+    }
+
+    /// Persist a page's own records into the local store.
+    async fn persist_page(&self, page: &[Record<EncryptedData>]) -> Result<(), SyncError> {
+        self.engine
+            .store
+            .push_batch(page.iter())
+            .await
+            .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })
     }
 
     #[instrument(level = "trace", skip_all, fields(page_size), err)]
