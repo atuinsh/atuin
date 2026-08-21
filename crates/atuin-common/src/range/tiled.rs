@@ -55,6 +55,14 @@ impl_tile_idx!(
 /// Iterator of fixed-`size` sub-ranges tiling a [`Range`], the last clamped to the range end.
 ///
 /// Build one with [`RangeTiledExt::tiled`].
+///
+/// ```
+/// use atuin_common::range::RangeTiledExt;
+///
+/// // Tile 0..10 into width-4 chunks; the final chunk is clamped to the end.
+/// let tiles: Vec<_> = (0u64..10).tiled(4).collect();
+/// assert_eq!(tiles, vec![0..4, 4..8, 8..10]);
+/// ```
 #[derive(Debug, Copy, Clone)]
 pub struct Tiled<T: TileIdx> {
     cursor: T,
