@@ -99,7 +99,7 @@ impl<C: ResultCell> EagerFuture<C> {
         Fut: Future<Output = C::Value> + Send + 'static,
     {
         let inner = Arc::new(Inner {
-            cell: C::empty(),
+            cell: C::default(),
             ready: Notify::new(),
         });
 
