@@ -159,18 +159,8 @@ impl Database {
     pub async fn update(&self, s: &Script) -> Result<()> {
         let mut tx = self.sqlite.pool().begin().await?;
 
-        // Update the script's base fields
-        sqlx::query(
-            "update scripts set name = ?1, description = ?2, shebang = ?3, script = ?4 where id = \
-             ?5",
-        )
-        .bind(s.name.as_str())
-        .bind(s.description.as_str())
-        .bind(s.shebang.as_str())
-        .bind(s.script.as_str())
-        .bind(s.id.to_string())
-        .execute(&mut *tx)
-        .await?;
+        // Update the script's base fields.
+        self.scripts.update_tx(&mut tx, s).await?;
 
         // Delete all existing tags for this script
         self.tags.delete_tx(&mut tx, s.id.to_string()).await?;
