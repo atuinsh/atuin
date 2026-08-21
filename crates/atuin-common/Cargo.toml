@@ -49,6 +49,7 @@ itertools = { workspace = true }
 rusty_paseto = { workspace = true }
 rusty_paserk = { workspace = true }
 tokio = { workspace = true }
+parking_lot = { workspace = true }
 futures = "0.3"
 serde_json = { workspace = true }
 zeroize = { workspace = true }

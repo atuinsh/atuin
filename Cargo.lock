@@ -452,6 +452,7 @@ dependencies = [
  "futures",
  "getrandom 0.4.3",
  "itertools 0.15.0",
+ "parking_lot",
  "pretty_assertions",
  "proptest",
  "rmp",
