@@ -25,7 +25,6 @@ use atuin_domain::record::{EncryptedData, Record, RecordId, RecordSeriesKey, Rec
 use thiserror::Error;
 use tracing::instrument;
 
-use super::Keyed;
 use crate::packfile::record::{PackManifestRecordView, PackingError, ParsingError, UnpackError};
 use crate::record::sqlite_store::SqliteStore;
 
@@ -58,7 +57,7 @@ pub(super) async fn pack(
 }
 
 #[derive(Debug, Error)]
-pub(super) enum DownloadError {
+pub(crate) enum DownloadError {
     #[error("failed to load the packfile manifest: {0}")]
     PackManifest(#[from] ParsingError),
 
@@ -80,51 +79,6 @@ impl DownloadError {
             Self::Unpack(_) => true,
             Self::Api(_) | Self::Store(_) => false,
         }
-    }
-}
-
-impl Keyed<'_> {
-    /// Fetch, unpack, and locally store the history covered by a single `packfile` manifest.
-    ///
-    /// Returns the ids of the history records the manifest's range covers, whether they were just
-    /// inserted or were already present locally.
-    #[instrument(level = "trace", skip_all, fields(id = ?manifest.id), err)]
-    pub(super) async fn download_packed(
-        &self,
-        manifest: &Record<EncryptedData>,
-    ) -> Result<Vec<RecordId>, DownloadError> {
-        let view = PackManifestRecordView::new(manifest)?;
-        let store = &self.engine.store;
-
-        // Skip if we already have the whole range (history is contiguous, packfiles are prefixes).
-        let head = store
-            .last(&RecordSeriesKey::new(view.record.host.id, RecordTag::History))
-            .await
-            .map_err(DownloadError::Store)?;
-        if let Some(head) = head
-            && head.idx >= view.range().end - 1
-        {
-            // Range already available locally. Return the IDs.
-            let existing = view
-                .load_encrypted_packed_records(store)
-                .await
-                .map_err(|e| DownloadError::Store(e.into()))?;
-            return Ok(existing.iter().map(|r| r.id).collect());
-        }
-
-        let blob = self
-            .engine
-            .client
-            .download_packfile(view.record.id)
-            .await
-            .map_err(DownloadError::Api)?;
-
-        let records = view.unpack_records(blob, self.key.clone()).await?;
-        let ids: Vec<RecordId> = records.iter().map(|record| record.id).collect();
-
-        store.push_batch(records.iter()).await.map_err(DownloadError::Store)?;
-
-        Ok(ids)
     }
 }
 

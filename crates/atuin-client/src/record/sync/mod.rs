@@ -26,6 +26,7 @@ use tracing::instrument;
 use self::packfile::pack;
 use super::sqlite_store::SqliteStore;
 use crate::api_client::Client;
+use crate::packfile::PackManifestRecordView;
 
 mod builder;
 mod packfile;
@@ -147,12 +148,10 @@ impl SyncEngine {
 
         let series = sample?;
 
-        let pages = self.client.records(&series, (0..1).tiled(1));
-        futures::pin_mut!(pages);
-        let record = match pages.next().await {
-            Some(Ok(page)) => page.into_iter().next()?,
-            Some(Err(e)) => return Some(SyncError::RemoteRequestError { msg: e.to_string() }),
-            None => return None,
+        let record = match self.client.records(&series).one().await {
+            Ok(Some(record)) => record,
+            Ok(None) => return None,
+            Err(e) => return Some(SyncError::RemoteRequestError { msg: e.to_string() }),
         };
 
         record.decrypt(key).err().map(|_| SyncError::WrongKey)
@@ -363,22 +362,22 @@ impl Keyed<'_> {
         page_size: u64,
     ) -> Result<Vec<RecordId>, SyncError> {
         let store = &self.engine.store;
-        // Scan the database to find the first missing local index, rather than assuming it's one more
-        // than the highest local index. A prior packfile op for this host may have expanded a pack
-        // whose history landed ABOVE a still-missing index; keying off the highest index would never
-        // fetch the hole before it. Start from the actual missing index; records already present above
-        // it will be "unnecessarily" redownloaded, but this is a no-op.
+        // Scan the database to find the first missing local index, rather than assuming it's one
+        // more than the highest local index. A prior packfile op for this host may have expanded a
+        // pack whose history landed ABOVE a still-missing index; keying off the highest index would
+        // never fetch the hole before it. Start from the actual missing index; records already
+        // present above it will be "unnecessarily" redownloaded, but this is a no-op.
         let first_missing_local = store
             .first_gap(series)
             .await
             .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
 
-        // One higher than the latest record index we have locally. The case described above where we
-        // have a hole in the sequence of record indices should not happen in practice; this variable is
-        // used to detect that situation so we can print a warning.
+        // One higher than the latest record index we have locally. The case described above where
+        // we have a hole in the sequence of record indices should not happen in practice; this
+        // variable is used to detect that situation so we can print a warning.
         //
-        // TODO: This adds a slight runtime cost, but while the packfile feature is new, let's err on
-        // the side of catching potential problems.
+        // TODO: This adds a slight runtime cost, but while the packfile feature is new, let's err
+        // on the side of catching potential problems.
         let latest = store
             .last(series)
             .await
@@ -419,27 +418,68 @@ impl Keyed<'_> {
             .progress_chars("#>-"),
         );
 
-        let plan = (first_missing_local..first_missing_local + expected).tiled(page_size);
-        let ret = self.download_pages(series, plan, &pb).await?;
+        let tiles = (first_missing_local..first_missing_local + expected).tiled(page_size);
+        let ret = self.download_pages(series, tiles, &pb).await?;
 
         pb.finish_with_message("Downloaded records");
 
         Ok(ret)
     }
 
-    /// Download the record pages the `plan` covers into the local store, expanding any packfile
-    /// manifests along the way. Returns every record id touched -- expanded history plus the
-    /// persisted page records -- for the caller's history.db re-index.
+    #[instrument(level = "trace", skip_all, fields(id = ?manifest.id), err)]
+    pub(super) async fn download_packed(
+        &self,
+        manifest: &Record<EncryptedData>,
+    ) -> Result<Vec<RecordId>, packfile::DownloadError> {
+        use packfile::DownloadError;
+
+        let view = PackManifestRecordView::new(manifest)?;
+        let store = &self.engine.store;
+
+        // Skip if we already have the whole range (history is contiguous, packfiles are prefixes).
+        let head = store
+            .last(&RecordSeriesKey::new(view.record.host.id, RecordTag::History))
+            .await
+            .map_err(DownloadError::Store)?;
+        if let Some(head) = head
+            && head.idx >= view.range().end - 1
+        {
+            // Range already available locally. Return the IDs.
+            let existing = view
+                .load_encrypted_packed_records(store)
+                .await
+                .map_err(|e| DownloadError::Store(e.into()))?;
+            return Ok(existing.iter().map(|r| r.id).collect());
+        }
+
+        let blob = self
+            .engine
+            .client
+            .download_packfile(view.record.id)
+            .await
+            .map_err(DownloadError::Api)?;
+
+        let records = view.unpack_records(blob, self.key.clone()).await?;
+        let ids: Vec<RecordId> = records.iter().map(|record| record.id).collect();
+
+        store.push_batch(records.iter()).await.map_err(DownloadError::Store)?;
+
+        Ok(ids)
+    }
+
+    /// Download the record pages the `tiles` cover into the local store, gracefully handling any
+    /// packfiles along the way.
+    #[instrument(level = "trace", skip_all, err)]
     async fn download_pages(
         &self,
         series: &RecordSeriesKey,
-        plan: Tiled<RecordIdx>,
+        tiles: Tiled<RecordIdx>,
         pb: &ProgressBar,
     ) -> Result<Vec<RecordId>, SyncError> {
         let mut ret = Vec::new();
         let mut progress = 0u64;
 
-        let pages = self.engine.client.records(series, plan);
+        let pages = self.engine.client.records(series).stream(tiles);
         futures::pin_mut!(pages);
         while let Some(page) = pages.next().await {
             let page = page.map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
@@ -450,7 +490,12 @@ impl Keyed<'_> {
                 ret.extend(self.expand_manifests(&page).await?);
             }
 
-            self.persist_page(&page).await?;
+            self.engine
+                .store
+                .push_batch(page.iter())
+                .await
+                .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
+
             ret.extend(page.iter().map(|f| f.id));
 
             progress += page.len() as u64;
@@ -461,8 +506,8 @@ impl Keyed<'_> {
     }
 
     /// Expand every packfile manifest in `page`, committing the history it covers into the local
-    /// store. A manifest that can never expand (a permanent failure) is logged and skipped; a
-    /// transient failure aborts the page. Returns the ids of the history records touched.
+    /// store. A manifest that can never expand is logged and skipped.
+    #[instrument(level = "trace", skip_all, fields(count = page.len()), err)]
     async fn expand_manifests(
         &self,
         page: &[Record<EncryptedData>],
@@ -491,15 +536,6 @@ impl Keyed<'_> {
         }
 
         Ok(ids)
-    }
-
-    /// Persist a page's own records into the local store.
-    async fn persist_page(&self, page: &[Record<EncryptedData>]) -> Result<(), SyncError> {
-        self.engine
-            .store
-            .push_batch(page.iter())
-            .await
-            .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })
     }
 
     #[instrument(level = "trace", skip_all, fields(page_size), err)]

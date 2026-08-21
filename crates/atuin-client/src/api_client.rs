@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_stream::try_stream;
-use atuin_common::range::Tiled;
+use atuin_common::range::{RangeTiledExt, Tiled};
 use atuin_common::url::UrlAppendExt;
 use atuin_domain::api::{
     ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION, ChangePasswordRequest, ErrorResponse,
@@ -278,6 +278,120 @@ pub fn caps_client(
     Ok(CapClient::new(sync_addr.append_path("api/v0/capabilities")?, http))
 }
 
+/// A pending records download for one series, produced by [`Client::records`].
+///
+/// Owns a cheap [`Client`] clone and the [`RecordSeriesKey`] so the streams it produces are
+/// `'static` (spawnable). Choose [`Self::one`] to fetch just the first record, or [`Self::stream`]
+/// to stream the pages a plan covers.
+#[must_use]
+pub struct RecordsRequest {
+    client: Client,
+    series: RecordSeriesKey,
+}
+
+impl RecordsRequest {
+    /// Fetch the first record of the series, if it has any.
+    pub async fn one(self) -> Result<Option<Record<EncryptedData>>> {
+        let pages = self.stream((0..1).tiled(1));
+        futures::pin_mut!(pages);
+        match pages.next().await {
+            Some(page) => Ok(page?.into_iter().next()),
+            None => Ok(None),
+        }
+    }
+
+    /// Stream the record pages the `chunks` plan covers for this series.
+    ///
+    /// The plan lets us prefetch several pages in parallel at predictable offsets; if the server
+    /// returns a short page mid-stream we fall back to a serial finish from real progress so no
+    /// records are skipped.
+    pub fn stream(
+        self,
+        chunks: Tiled<RecordIdx>,
+    ) -> impl Stream<Item = Result<Vec<Record<EncryptedData>>>> + 'static {
+        try_stream! {
+            // Download the pages in parallel.
+            let mut fetches = stream::iter(chunks).map(|p| self.page(p))
+                .buffered(MAX_RECORDS_CONCURRENT_DOWNLOAD);
+
+            // Consume the stream and yield the values up.
+            let mut progress = 0u64;
+            let mut short_page = false;
+            while let Some(result) = fetches.next().await {
+                let (width, page) = result?;
+                if page.is_empty() {
+                    return;
+                }
+
+                let len = page.len() as u64;
+                progress += len;
+                yield page;
+
+                // The server returned a short page; finish serially from here.
+                if len < width {
+                    short_page = true;
+                    break;
+                }
+            }
+            drop(fetches);
+
+            // Download pages in series.
+            //
+            // A server could misbehave and return less data than we requested in the "parallel"
+            // path.
+            //
+            // If it does, then we fall back to the serialized path, on the first misbehavior.
+            let recovery = stream::unfold(
+                (chunks.start() + progress, self),
+                move |(cursor, this)| async move {
+                    if cursor >= chunks.end() {
+                        return None;
+                    }
+                    let stop = (cursor + chunks.size().get()).min(chunks.end());
+                    match this.page(cursor..stop).await {
+                        Ok((_, page)) if page.is_empty() => None,
+                        Ok((_, page)) => {
+                            let next = cursor + page.len() as u64;
+                            Some((Ok(page), (next, this)))
+                        }
+                        Err(e) => Some((Err(e), (chunks.end(), this))),
+                    }
+                },
+            );
+
+            if short_page {
+                futures::pin_mut!(recovery);
+                while let Some(p) = recovery.next().await {
+                    yield p?;
+                }
+            }
+        }
+    }
+
+    /// Fetch one page of `series`' records: `page.end - page.start` records starting at
+    /// `page.start`.
+    #[instrument(level = "trace", skip(self), err)]
+    async fn page(&self, page: Range<RecordIdx>) -> Result<(u64, Vec<Record<EncryptedData>>)> {
+        let base_url = self.client.sync_addr.append_path("api/v0/record/next")?;
+        let width = page.end - page.start;
+        let resp = self
+            .client
+            .client
+            .get(base_url)
+            .query(&[
+                ("host", self.series.host_id.to_string()),
+                ("tag", self.series.tag.as_str().to_owned()),
+                ("start", page.start.to_string()),
+                ("count", width.to_string()),
+            ])
+            .send()
+            .await?;
+        let resp = handle_resp_error(resp).await?;
+        let records = resp.json::<Vec<Record<EncryptedData>>>().await?;
+        Ok((width, records))
+    }
+}
+
 impl Client {
     #[instrument(level = "trace", skip_all, fields(connect_timeout, timeout), err)]
     pub fn new(
@@ -363,9 +477,6 @@ impl Client {
         &self,
         packfiles: impl Stream<Item = Result<(RecordId, Vec<RecordId>, Vec<u8>)>>,
     ) -> Result<()> {
-        // Each upload future owns a client clone (a cheap Arc bump) rather than borrowing `&self`,
-        // so the stream stays `Send` for all lifetimes -- required when the whole sync runs on a
-        // spawned, multi-threaded task (e.g. the daemon).
         let client = self.clone();
         packfiles
             .map(move |packfile| {
@@ -456,97 +567,11 @@ impl Client {
         Ok(resp.bytes().await?.to_vec())
     }
 
-    /// Fetch one page of records: `page.end - page.start` records starting at `page.start`.
-    #[instrument(level = "trace", skip(self, base_url, series), err)]
-    async fn fetch_record_page(
-        &self,
-        base_url: &Url,
-        series: &RecordSeriesKey,
-        page: Range<RecordIdx>,
-    ) -> Result<(u64, Vec<Record<EncryptedData>>)> {
-        let width = page.end - page.start;
-        let resp = self
-            .client
-            .get(base_url.clone())
-            .query(&[
-                ("host", series.host_id.to_string()),
-                ("tag", series.tag.as_str().to_owned()),
-                ("start", page.start.to_string()),
-                ("count", width.to_string()),
-            ])
-            .send()
-            .await?;
-        let resp = handle_resp_error(resp).await?;
-        let records = resp.json::<Vec<Record<EncryptedData>>>().await?;
-        Ok((width, records))
-    }
-
-    /// Get records from the server for the given `series`, of `chunks` length/gait.
-    pub fn records(
-        &self,
-        series: &RecordSeriesKey,
-        chunks: Tiled<RecordIdx>,
-    ) -> impl Stream<Item = Result<Vec<Record<EncryptedData>>>> + 'static {
-        let client = self.clone();
-        let series = series.clone();
-
-        try_stream! {
-            let base_url = client.sync_addr.append_path("api/v0/record/next")?;
-
-            let fetch_page = |page: Range<RecordIdx>| client.fetch_record_page(&base_url, &series, page);
-
-            // Download the pages in parallel.
-            let mut fetches = stream::iter(chunks).map(fetch_page)
-                .buffered(MAX_RECORDS_CONCURRENT_DOWNLOAD);
-
-            // Consume the stream and yield the values up.
-            let mut progress = 0u64;
-            let mut short_page = false;
-            while let Some(result) = fetches.next().await {
-                let (width, page) = result?;
-                if page.is_empty() {
-                    return;
-                }
-
-                let len = page.len() as u64;
-                progress += len;
-                yield page;
-
-                // The server returned a short page; finish serially from here.
-                if len < width {
-                    short_page = true;
-                    break;
-                }
-            }
-            drop(fetches);
-
-            // Download pages in series.
-            //
-            // A server could misbehave and return less data than we requested in the "parallel"
-            // path.
-            //
-            // If it does, then we fall back to the serialized path, on the first misbehavior.
-            let recovery = stream::unfold(chunks.start() + progress, move |cursor| async move {
-                if cursor >= chunks.end(){
-                    return None;
-                }
-                let stop = (cursor + chunks.size().get()).min(chunks.end());
-                match fetch_page(cursor..stop).await {
-                    Ok((_, page)) if page.is_empty() => None,
-                    Ok((_, page)) => {
-                        let next = cursor + page.len() as u64;
-                        Some((Ok(page), next))
-                    }
-                    Err(e) => Some((Err(e), chunks.end())),
-                }
-            });
-
-            if short_page {
-                futures::pin_mut!(recovery);
-                while let Some(p) = recovery.next().await {
-                    yield p?;
-                }
-            }
+    /// Build a records request for `series`.
+    pub fn records(&self, series: &RecordSeriesKey) -> RecordsRequest {
+        RecordsRequest {
+            client: self.clone(),
+            series: series.clone(),
         }
     }
 
@@ -849,7 +874,7 @@ mod records_stream_tests {
         let client = mock_client(&addr);
 
         let idxs = collect_idxs(
-            client.records(&RecordSeriesKey::new(host, RecordTag::History), (0..5).tiled(2)),
+            client.records(&RecordSeriesKey::new(host, RecordTag::History)).stream((0..5).tiled(2)),
         )
         .await;
         assert_eq!(idxs, vec![0, 1, 2, 3, 4]);
@@ -872,7 +897,7 @@ mod records_stream_tests {
         let client = mock_client(&addr);
 
         let idxs = collect_idxs(
-            client.records(&RecordSeriesKey::new(host, RecordTag::History), (0..6).tiled(4)),
+            client.records(&RecordSeriesKey::new(host, RecordTag::History)).stream((0..6).tiled(4)),
         )
         .await;
         assert_eq!(idxs, vec![0, 1, 2, 3, 4, 5], "a short mid-stream page must not skip records");
@@ -895,7 +920,9 @@ mod records_stream_tests {
         let client = mock_client(&addr);
 
         let idxs = collect_idxs(
-            client.records(&RecordSeriesKey::new(host, RecordTag::History), (0..10).tiled(4)),
+            client
+                .records(&RecordSeriesKey::new(host, RecordTag::History))
+                .stream((0..10).tiled(4)),
         )
         .await;
         assert!(idxs.is_empty(), "an empty server must yield no records");
