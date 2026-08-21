@@ -457,41 +457,33 @@ impl Client {
     }
 
     /// Fetch one page of records: `page.end - page.start` records starting at `page.start`.
-    ///
-    /// Returns `(count_requested, records)` so the caller can tell a legitimately short tail
-    /// (got exactly what its chunk asked for) from a suspicious short page (got fewer).
-    #[instrument(level = "trace", skip_all, fields(start = page.start, width = page.end - page.start), err)]
+    #[instrument(level = "trace", skip(self, base_url), err)]
     async fn fetch_record_page(
         &self,
         base_url: &Url,
         page: Range<RecordIdx>,
     ) -> Result<(u64, Vec<Record<EncryptedData>>)> {
         let width = page.end - page.start;
-        let mut url = base_url.clone();
-        url.query_pairs_mut()
-            .append_pair("start", &page.start.to_string())
-            .append_pair("count", &width.to_string());
-        let resp = self.client.get(url).send().await?;
+        let resp = self
+            .client
+            .get(base_url.clone())
+            .query(&[("start", page.start), ("count", width)])
+            .send()
+            .await?;
         let resp = handle_resp_error(resp).await?;
         let records = resp.json::<Vec<Record<EncryptedData>>>().await?;
         Ok((width, records))
     }
 
-    /// Stream the records the `chunks` plan covers for one series (`host`, `tag`).
-    ///
-    /// The plan lets us prefetch several pages in parallel at predictable offsets; if the server
-    /// returns a short page mid-stream we fall back to a serial finish from real progress so no
-    /// records are skipped.
+    /// Get records from the server for the given `series`, of `chunks` length/gait.
     pub fn records(
         &self,
         series: &RecordSeriesKey,
         chunks: Tiled<RecordIdx>,
     ) -> impl Stream<Item = Result<Vec<Record<EncryptedData>>>> + 'static {
-        // Own everything the stream needs (the client clone is a cheap Arc bump) so the returned
-        // stream borrows nothing external. That keeps it `Send` for all lifetimes -- required when
-        // the whole sync runs on a spawned, multi-threaded task (e.g. the daemon).
         let client = self.clone();
         let series = series.clone();
+
         try_stream! {
             let mut base_url = client.sync_addr.append_path("api/v0/record/next")?;
             base_url
@@ -501,13 +493,11 @@ impl Client {
 
             let fetch_page = |page: Range<RecordIdx>| client.fetch_record_page(&base_url, page);
 
-            // Download multiple pages in parallel.
-            //
-            // Normally we can query many pages in parallel. The `chunks` field contains
-            // information on how many chunks there are, and what their sizes are, so we can make
-            // parallel requests and start fetching data ahead of time.
-            let mut fetches = stream::iter(chunks).map(fetch_page).buffered(MAX_RECORDS_CONCURRENT_DOWNLOAD);
+            // Download the pages in parallel.
+            let mut fetches = stream::iter(chunks).map(fetch_page)
+                .buffered(MAX_RECORDS_CONCURRENT_DOWNLOAD);
 
+            // Consume the stream and yield the values up.
             let mut progress = 0u64;
             let mut short_page = false;
             while let Some(result) = fetches.next().await {
@@ -530,8 +520,10 @@ impl Client {
 
             // Download pages in series.
             //
-            // A server could misbehave and return less data than we requested. If it does, then we
-            // fall back to the serialized path, on the first misbehavior.
+            // A server could misbehave and return less data than we requested in the "parallel"
+            // path.
+            //
+            // If it does, then we fall back to the serialized path, on the first misbehavior.
             let recovery = stream::unfold(chunks.start() + progress, move |cursor| async move {
                 if cursor >= chunks.end(){
                     return None;

@@ -71,7 +71,7 @@ rusty_paserk = { version = "0.5.0", default-features = false, features = [
 
 # sync
 reqwest = { workspace = true, optional = true }
-reqwest-middleware = { workspace = true, optional = true, features = ["json"] }
+reqwest-middleware = { workspace = true, optional = true, features = ["json", "query"] }
 indicatif = "0.18.0"
 tiny-bip39 = { workspace = true }
 
