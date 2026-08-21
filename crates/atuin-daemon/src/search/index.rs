@@ -10,7 +10,7 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use atuin_client::history::History;
 use atuin_client::settings::Search;
@@ -18,6 +18,7 @@ use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
 use dashmap::DashMap;
 use lasso::{Spur, ThreadedRodeo};
+use parking_lot::RwLock;
 use time::OffsetDateTime;
 use tracing::{Level, instrument};
 use uuid::Uuid;
@@ -383,7 +384,7 @@ impl SearchIndex {
             // Existing command - just update invocations
             entry.add_invocation(history, &self.interner);
         } else {
-            let mut haystack = self.haystack.write().unwrap();
+            let mut haystack = self.haystack.write();
             match self.commands.entry(Arc::from(command)) {
                 dashmap::Entry::Occupied(mut entry) => {
                     entry.get_mut().add_invocation(history, &self.interner);
@@ -425,14 +426,14 @@ impl SearchIndex {
         limit: u32,
     ) -> impl Iterator<Item = [u8; 16]> {
         // Get precomputed frecency map (may be None if not yet computed)
-        let frecency_map = self.frecency_map.read().unwrap().clone();
+        let frecency_map = self.frecency_map.read().clone();
 
         let query = super::truncate_query(query);
         // Match accent-insensitively: the haystack side is normalized in
         // add_history, so an accented query must be normalized too
         let query = normalize_diacritics(query);
 
-        let haystack = self.haystack.read().unwrap();
+        let haystack = self.haystack.read();
         let filter = filter_mode.compile(&self.interner);
 
         // Filter pre-pass: collect the candidate commands for this filter mode. This is sorted
@@ -549,7 +550,7 @@ impl SearchIndex {
 
         // Aligned with `haystack` by index; see FrecencyMap
         let frecencies: Vec<u32> = {
-            let haystack = self.haystack.read().unwrap();
+            let haystack = self.haystack.read();
             haystack
                 .iter()
                 .map(|hay| {
@@ -563,7 +564,7 @@ impl SearchIndex {
                 .collect()
         };
 
-        *self.frecency_map.write().unwrap() = Some(Arc::new(frecencies));
+        *self.frecency_map.write() = Some(Arc::new(frecencies));
     }
 }
 
