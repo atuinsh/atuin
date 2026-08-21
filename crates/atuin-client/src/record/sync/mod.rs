@@ -38,7 +38,7 @@ const MAX_CONCURRENT_PACKFILE_TRANSFERS: usize = 16;
 const MAX_CONCURRENT_PACKS: usize = 16;
 
 /// Records requested per sync page unless overridden with [`SyncEngine::with_page_size`].
-const DEFAULT_PAGE_SIZE: u64 = 100;
+pub const DEFAULT_PAGE_SIZE: u64 = 100;
 
 #[derive(Error, Debug, Clone)]
 pub enum SyncError {
