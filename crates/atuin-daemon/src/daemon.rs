@@ -463,6 +463,13 @@ impl DaemonBuilder {
         let auth = self.settings.sync_auth_token().await.ok();
         let caps =
             caps_client(&self.settings.sync_address, auth.as_ref(), &self.settings.extra_headers)
+                .or_else(|e| {
+                    // A stored token the HTTP layer rejects must not take down local
+                    // history/search: fall back to an anonymous reader, like a
+                    // logged-out daemon.
+                    tracing::warn!("failed to build an authenticated capability reader: {e}");
+                    caps_client(&self.settings.sync_address, None, &self.settings.extra_headers)
+                })
                 .context("failed to build the capability reader")?;
 
         // Create the shared state
