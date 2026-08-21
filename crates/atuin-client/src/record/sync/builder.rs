@@ -15,6 +15,10 @@ pub enum ClientSource<'a> {
     /// Wrap an already-built [`Client`].
     FromClient(Client),
     /// Build from settings, fetching capabilities during `connect`, unless supplied here.
+    ///
+    /// Pass `Some` only to share an already-warmed reader between engines (the
+    /// daemon does this so one warmer serves every sync tick); `connect` builds
+    /// an authenticated reader itself on the `None` path.
     FromSettings {
         settings: &'a Settings,
         caps: Option<Arc<CapClient>>,
@@ -36,18 +40,22 @@ impl SyncEngineInit<'_> {
         let client = match self.client_source {
             ClientSource::FromClient(client) => client,
             ClientSource::FromSettings { settings, caps } => {
+                let auth = settings
+                    .sync_auth_token()
+                    .await
+                    .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
+
                 let caps = match caps {
                     Some(caps) => caps,
-                    None => caps_client(&settings.sync_address, &settings.extra_headers)
-                        .map_err(|e| SyncError::OperationalError { msg: e.to_string() })?,
+                    None => {
+                        caps_client(&settings.sync_address, Some(&auth), &settings.extra_headers)
+                            .map_err(|e| SyncError::OperationalError { msg: e.to_string() })?
+                    }
                 };
 
                 Client::new(
                     settings.sync_address.clone(),
-                    &settings
-                        .sync_auth_token()
-                        .await
-                        .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?,
+                    &auth,
                     settings.network_connect_timeout,
                     settings.network_timeout,
                     &settings.extra_headers,
