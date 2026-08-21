@@ -6,7 +6,7 @@ use atuin_common::rmp::decode::{self, Bytes, DecodeError};
 use atuin_common::rmp::encode::{self, ByteBuf, EncodeError};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils::{normalize_optional_string, uuid_v7};
-use atuin_domain::record::{CmdOrigin, DecryptedData};
+use atuin_domain::record::{CmdOrigin, DecryptedData, UNKNOWN_USER};
 use eyre::{Result, bail};
 use time::OffsetDateTime;
 
@@ -16,7 +16,8 @@ use crate::settings::Settings;
 pub(crate) mod builder;
 pub mod store;
 
-/// Known AI agent author values. Used when matching against [`AuthorPattern::AllAgent`] and
+/// Known AI agent author values. Used by [`History::is_agent`] to guess who ran a command when the
+/// entry does not state it, and so when matching against [`AuthorPattern::AllAgent`] and
 /// [`AuthorPattern::AllUser`].
 pub const KNOWN_AGENTS: &[&str] = &["claude-code", "codex", "copilot", "opencode", "pi"];
 
@@ -30,15 +31,47 @@ pub fn is_known_agent(author: &str) -> bool {
     KNOWN_AGENTS.contains(&author)
 }
 
+/// Who wrote a history entry, as declared by whatever captured it.
+///
+/// This is stored as a small integer, both on the wire and in the database, and is optional: an
+/// entry captured before this field existed, or by an integration that does not set it, has no
+/// kind, and [`History::is_agent`] falls back to inspecting the author name. A stored value we
+/// don't recognise (written by a future version with more kinds) decodes as "not stated" too:
+/// [`Self::from_repr`] returns `None` rather than an error.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, clap::ValueEnum, strum_macros::FromRepr)]
+#[repr(u8)]
+pub enum AuthorKind {
+    /// A human ran this command.
+    User = 1,
+    /// An AI agent ran this command.
+    Agent = 2,
+}
+
+impl AuthorKind {
+    /// Every recognised kind. The SQL author filter derives its recognised-value list from this,
+    /// so it stays in lockstep with [`Self::from_repr`] (a test pins the two together).
+    pub const VARIANTS: [Self; 2] = [Self::User, Self::Agent];
+
+    pub const fn as_u8(self) -> u8 {
+        self as u8
+    }
+
+    /// The kind stated by the invoking integration's environment (`ATUIN_HISTORY_AUTHOR_KIND`).
+    pub fn probe_current() -> Option<Self> {
+        let value = env::var(HISTORY_AUTHOR_KIND_ENV).ok()?;
+        clap::ValueEnum::from_str(&value, true).ok()
+    }
+}
+
 /// An element of an author filter.
 ///
 /// In addition to a plain string, this type can also be the special pattern `AllUser` or
-/// `AllAgent`, which matches known agents or all authors than are not a known agent.
+/// `AllAgent`, which matches agent-run commands or everything that is not one.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum AuthorPattern {
-    /// Matches every author that is not a known agent.
+    /// Matches every entry that is not an agent's (see [`History::is_agent`]).
     AllUser,
-    /// Matches every author that is a known agent (see [`KNOWN_AGENTS`]).
+    /// Matches every entry that is an agent's (see [`History::is_agent`]).
     AllAgent,
     /// Matches exactly one author name.
     Name(String),
@@ -75,7 +108,13 @@ pub fn all_user_author_filter() -> OrFilter<&'static [AuthorPattern]> {
 }
 
 const HISTORY_AUTHOR_ENV: &str = "ATUIN_HISTORY_AUTHOR";
+const HISTORY_AUTHOR_KIND_ENV: &str = "ATUIN_HISTORY_AUTHOR_KIND";
 const HISTORY_INTENT_ENV: &str = "ATUIN_HISTORY_INTENT";
+
+/// The author identity exported by the invoking integration (`ATUIN_HISTORY_AUTHOR`).
+pub fn probe_author() -> Option<String> {
+    normalize_optional_string(env::var(HISTORY_AUTHOR_ENV).ok())
+}
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, derive_more::Display)]
 #[display("{}", self.name())]
@@ -128,6 +167,19 @@ impl Version {
     }
 }
 
+/// Number of fields [`History::serialize`] writes.
+///
+/// This is deliberately not [`Version::min_fields`]: fields appended to the latest version grow
+/// this count, while `min_fields` stays at the 12 fields V2 launched with so that entries written
+/// before the new fields existed still decode.
+const LATEST_SERIALIZED_FIELDS: u32 = 13;
+
+/// A V2 record contains `author_kind` iff it has at least this many fields.
+///
+/// Frozen forever at the position `author_kind` was appended at; do not grow it alongside
+/// [`LATEST_SERIALIZED_FIELDS`].
+const V2_AUTHOR_KIND_FIELD_NUMBER: u32 = 13;
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, derive_more::Display, derive_more::From)]
 #[display("{_0}")]
 pub struct HistoryId(pub String);
@@ -173,6 +225,10 @@ pub struct History {
     pub deleted_at: Option<OffsetDateTime>,
     /// The shell used to run the command.
     pub shell: Option<String>,
+    /// Whether a human or an agent wrote this command, if whatever captured it said so.
+    ///
+    /// When this is `None`, [`History::is_agent`] guesses from the author name.
+    pub author_kind: Option<AuthorKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,6 +265,7 @@ impl History {
         intent: Option<String>,
         deleted_at: Option<OffsetDateTime>,
         shell: Option<String>,
+        author_kind: Option<AuthorKind>,
     ) -> Self {
         let session = session
             .or_else(|| env::var("ATUIN_SESSION").ok())
@@ -234,6 +291,33 @@ impl History {
             intent,
             deleted_at,
             shell,
+            author_kind,
+        }
+    }
+
+    /// Whether an AI agent, rather than a human, ran this command.
+    ///
+    /// [`Self::author_kind`] is authoritative when the integration that captured the entry set it.
+    /// Otherwise we guess: a known agent name identifies an agent, unless it is also the username
+    /// recorded in the entry's origin, in which case the author is just the default it fell back
+    /// to and tells us nothing. That exception is what stops a user called `pi` from looking like
+    /// the `pi` agent.
+    pub fn is_agent(&self) -> bool {
+        match self.author_kind {
+            Some(kind) => kind == AuthorKind::Agent,
+            None => {
+                // The username the author would have defaulted to. `CmdOrigin::parse_lenient`
+                // maps a legacy colonless hostname to a placeholder user ("unknown-user"), but
+                // old writers defaulted the author to the whole hostname there — as does the SQL
+                // author filter's user expression — so compare against the host in that case.
+                let user = self.cmd_origin.user();
+                let defaulted = if user.as_ref() == UNKNOWN_USER {
+                    self.cmd_origin.host().into_inner()
+                } else {
+                    user.into_inner()
+                };
+                is_known_agent(&self.author) && self.author != defaulted
+            }
         }
     }
 
@@ -252,7 +336,7 @@ impl History {
 
         // write the version
         encode::write_u16(&mut output, Version::LATEST.as_int())?;
-        encode::write_array_len(&mut output, Version::LATEST.min_fields())?;
+        encode::write_array_len(&mut output, LATEST_SERIALIZED_FIELDS)?;
 
         encode::write_str(&mut output, &self.id.0)?;
         encode::write_u64(&mut output, self.timestamp.unix_timestamp_nanos() as u64)?;
@@ -271,6 +355,11 @@ impl History {
         encode::write_str(&mut output, self.author.as_str())?;
         encode::write_optional(&mut output, self.intent.as_deref(), encode::write_str)?;
         encode::write_optional(&mut output, self.shell.as_deref(), encode::write_str)?;
+        encode::write_optional(
+            &mut output,
+            self.author_kind.map(AuthorKind::as_u8),
+            |output, kind| encode::write_uint8(output, kind).map(|_marker| ()),
+        )?;
         Ok(DecryptedData(output.into_vec()))
     }
 
@@ -326,6 +415,13 @@ impl History {
             None
         };
 
+        let author_kind = if version >= Version::Two && nfields >= V2_AUTHOR_KIND_FIELD_NUMBER {
+            decode::read_optional(&mut bytes, decode::read_int::<u8, _>)?
+                .and_then(AuthorKind::from_repr)
+        } else {
+            None
+        };
+
         if version < Version::Two && !bytes.remaining_slice().is_empty() {
             bail!("trailing bytes in encoded history. malformed");
         }
@@ -343,6 +439,7 @@ impl History {
             intent,
             deleted_at: deleted_at.map(OffsetDateTime::from_unix_nanos_u64),
             shell,
+            author_kind,
         })
     }
 
@@ -515,22 +612,34 @@ mod tests {
     use rstest::*;
     use time::macros::datetime;
 
-    use super::{AuthorPattern, History, all_user_author_filter, is_known_agent};
+    use super::{AuthorKind, AuthorPattern, History, all_user_author_filter, is_known_agent};
     use crate::history::Version;
     use crate::settings::Settings;
 
-    /// Whether an author filter permits `author`, mirroring the SQL that
+    /// Whether an author filter permits `history`, mirroring the SQL that
     /// [`apply_author_filter`](crate::database::OptFilters::authors) builds.
     ///
     /// There are only three ways a filter can admit an author, so each is one binary search rather
     /// than a scan that reinterprets every element in turn. No guard against an author *named*
     /// `$all-agent` is needed: such an author is an [`AuthorPattern::Name`], a different value from
     /// [`AuthorPattern::AllAgent`].
-    fn author_matches_filters(author: &str, filters: OrFilter<&[AuthorPattern]>) -> bool {
+    fn author_matches_filters(history: &History, filters: OrFilter<&[AuthorPattern]>) -> bool {
         // `contains` is true for an "all" filter, so that case needs no separate check.
-        filters.contains(&AuthorPattern::Name(author.to_owned()))
-            || (filters.contains(&AuthorPattern::AllUser) && !is_known_agent(author))
-            || (filters.contains(&AuthorPattern::AllAgent) && is_known_agent(author))
+        filters.contains(&AuthorPattern::Name(history.author.clone()))
+            || (filters.contains(&AuthorPattern::AllUser) && !history.is_agent())
+            || (filters.contains(&AuthorPattern::AllAgent) && history.is_agent())
+    }
+
+    fn entry(author: &str, origin: &str, author_kind: Option<AuthorKind>) -> History {
+        #[allow(deprecated, reason = "the bare-hostname test case has no `:` separator")]
+        History::import()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command("git status")
+            .cmd_origin(CmdOrigin::parse_lenient(origin))
+            .author(author)
+            .author_kind(author_kind)
+            .build()
+            .into()
     }
 
     #[fixture]
@@ -565,29 +674,105 @@ mod tests {
         assert_eq!(history.should_save(&settings), expected);
     }
 
+    /// The SQL author filter derives its recognised-kind list from [`AuthorKind::VARIANTS`] while
+    /// Rust decoding goes through [`AuthorKind::from_repr`]; a value present in one but not the
+    /// other would split the two classifiers, so pin them to agree over the whole u8 range.
+    #[test]
+    fn author_kind_variants_and_from_repr_agree() {
+        for value in 0..=u8::MAX {
+            assert_eq!(
+                AuthorKind::from_repr(value),
+                AuthorKind::VARIANTS.iter().copied().find(|kind| kind.as_u8() == value),
+                "{value}"
+            );
+        }
+    }
+
+    /// The capture path treats an explicitly stated author as an authorship claim: a known agent
+    /// name there marks the entry as an agent's — unless it is also the current username, which
+    /// is what a human's author defaults to and so says nothing (the same exception
+    /// [`History::is_agent`] applies). An explicit kind still wins over the inference.
+    #[rstest]
+    #[case::known_agent_name("pi", "raspberry:ellie", None, Some(AuthorKind::Agent))]
+    #[case::agent_name_is_the_username("pi", "raspberry:pi", None, None)]
+    #[case::human_name("ellie", "raspberry:ellie", None, None)]
+    #[case::explicit_kind_wins(
+        "pi",
+        "raspberry:pi",
+        Some(AuthorKind::Agent),
+        Some(AuthorKind::Agent)
+    )]
+    fn capture_infers_agent_kind_from_an_explicit_author(
+        #[case] author: &str,
+        #[case] origin: &str,
+        #[case] stated_kind: Option<AuthorKind>,
+        #[case] expected: Option<AuthorKind>,
+    ) {
+        let history: History = History::capture()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command("git status")
+            .cwd("/")
+            .author(author)
+            .cmd_origin(CmdOrigin::try_from(origin.to_owned()).unwrap())
+            .author_kind_opt(stated_kind)
+            .build()
+            .into();
+        assert_eq!(history.author_kind, expected);
+    }
+
     #[rstest]
     fn known_agents_include_pi() {
         let agents = OrFilter::from_list(vec![AuthorPattern::AllAgent]).unwrap();
         let users = OrFilter::from_list(vec![AuthorPattern::AllUser]).unwrap();
+        let pi = entry("pi", "raspberry:ellie", None);
+        let ellie = entry("ellie", "raspberry:ellie", None);
 
         assert!(is_known_agent("pi"));
-        assert!(author_matches_filters("pi", agents.as_slice_filter()));
-        assert!(!author_matches_filters("pi", users.as_slice_filter()));
-        assert!(!author_matches_filters("ellie", agents.as_slice_filter()));
-        assert!(author_matches_filters("ellie", users.as_slice_filter()));
+        assert!(author_matches_filters(&pi, agents.as_slice_filter()));
+        assert!(!author_matches_filters(&pi, users.as_slice_filter()));
+        assert!(!author_matches_filters(&ellie, agents.as_slice_filter()));
+        assert!(author_matches_filters(&ellie, users.as_slice_filter()));
     }
 
     #[test]
     fn an_all_author_filter_matches_everyone() {
         let all = OrFilter::all();
-        assert!(author_matches_filters("pi", all));
-        assert!(author_matches_filters("ellie", all));
+        assert!(author_matches_filters(&entry("pi", "raspberry:ellie", None), all));
+        assert!(author_matches_filters(&entry("ellie", "raspberry:ellie", None), all));
     }
 
     #[test]
     fn the_all_user_filter_excludes_agents() {
-        assert!(!author_matches_filters("pi", all_user_author_filter()));
-        assert!(author_matches_filters("ellie", all_user_author_filter()));
+        let filter = all_user_author_filter();
+        assert!(!author_matches_filters(&entry("pi", "raspberry:ellie", None), filter));
+        assert!(author_matches_filters(&entry("ellie", "raspberry:ellie", None), filter));
+    }
+
+    /// An agent name is only evidence of an agent when it is not also the username: a user called
+    /// `pi` gets `pi` as their author by default, and is not the `pi` agent.
+    #[rstest]
+    #[case::agent_name_on_another_users_machine("pi", "raspberry:ellie", None, true)]
+    #[case::agent_name_is_the_username("pi", "raspberry:pi", None, false)]
+    #[case::plain_user("ellie", "raspberry:ellie", None, false)]
+    #[case::hostname_without_a_username("pi", "raspberry", None, true)]
+    #[case::colonless_hostname_is_the_agent_name("pi", "pi", None, false)]
+    // A stated kind is authoritative, which is the only way to tell the `pi` agent apart from the
+    // `pi` user on their own machine.
+    #[case::stated_agent("pi", "raspberry:pi", Some(AuthorKind::Agent), true)]
+    #[case::stated_user("pi", "raspberry:ellie", Some(AuthorKind::User), false)]
+    #[case::stated_agent_with_a_human_name(
+        "ellie",
+        "raspberry:ellie",
+        Some(AuthorKind::Agent),
+        true
+    )]
+    fn is_agent_uses_the_username_when_no_kind_was_stated(
+        #[case] author: &str,
+        #[case] origin: &str,
+        #[case] author_kind: Option<AuthorKind>,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(entry(author, origin, author_kind).is_agent(), expected);
     }
 
     #[rstest]
@@ -621,6 +806,7 @@ mod tests {
         intent: None,
         deleted_at: None,
         shell: None,
+        author_kind: None,
     })]
     #[case::deleted(History {
         id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
@@ -635,6 +821,7 @@ mod tests {
         intent: None,
         deleted_at: Some(datetime!(2023-11-19 20:18 +00:00)),
         shell: Some("bash".into()),
+        author_kind: Some(AuthorKind::User),
     })]
     #[case::with_author_and_intent(History {
         id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
@@ -649,6 +836,7 @@ mod tests {
         intent: Some("check repository status".to_owned()),
         deleted_at: None,
         shell: Some("fish".into()),
+        author_kind: Some(AuthorKind::Agent),
     })]
     fn serialize_deserialize_roundtrip(#[case] history: History) {
         let serialized = history.serialize().expect("failed to serialize history");
@@ -699,6 +887,7 @@ mod tests {
             intent: Some("sample intent".to_owned()),
             deleted_at: Some(time::OffsetDateTime::from_unix_timestamp(1784080673).unwrap()),
             shell: Some("zsh".into()),
+            author_kind: None,
         }
     }
 
@@ -715,6 +904,27 @@ mod tests {
             deleted_at: None,
             ..expected_v1()
         }
+    }
+
+    /// A V2 record from before `author_kind` was appended: same version, one field short. New
+    /// fields are only read when the encoded array is long enough to hold them, so this must still
+    /// decode rather than error or misread the missing field.
+    #[test]
+    fn deserialize_v2_written_without_author_kind() {
+        let history = History {
+            author_kind: Some(AuthorKind::Agent),
+            ..expected_v2()
+        };
+        let mut bytes = history.serialize().unwrap().0;
+
+        assert_eq!(bytes[3], 0x90 | 13, "v2 should encode 13 fields");
+        bytes[3] = 0x90 | 12;
+        bytes.pop();
+
+        assert_eq!(History::deserialize(&bytes, Version::Two.name()).unwrap(), History {
+            author_kind: None,
+            ..history
+        });
     }
 
     #[rstest]

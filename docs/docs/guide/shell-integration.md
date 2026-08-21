@@ -28,7 +28,8 @@ When Atuin initializes, it sets several environment variables:
 | `ATUIN_SESSION` | Unique identifier for this shell session |
 | `ATUIN_SHLVL` | Tracks shell nesting level |
 | `ATUIN_HISTORY_ID` | Temporary ID for the currently executing command |
-| `ATUIN_HISTORY_AUTHOR` | Optional command author identity (for example `ellie`, `claude`, `copilot`) |
+| `ATUIN_HISTORY_AUTHOR` | Optional command author identity (for example `ellie`, `claude`, `copilot`). A known agent name here marks entries as agent-run, unless it's also the local username |
+| `ATUIN_HISTORY_AUTHOR_KIND` | Optional: `user` or `agent`, overriding the classification inferred from the author name. Only applies when an author is stated |
 | `ATUIN_HISTORY_INTENT` | Optional command intent/rationale text |
 
 Atuin uses these variables internally to track command execution and associate commands with sessions.

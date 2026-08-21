@@ -12,7 +12,7 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 
-use atuin_client::history::{History, is_known_agent};
+use atuin_client::history::History;
 use atuin_client::settings::Search;
 use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
@@ -369,7 +369,7 @@ impl SearchIndex {
     /// If the command already exists, updates its invocation data.
     /// If it's a new command, adds it to both the map and Nucleo.
     pub fn add_history(&self, history: &History) {
-        if is_known_agent(&history.author) {
+        if history.is_agent() {
             return;
         }
         if !self.shells.contains(history.shell.as_deref().unwrap_or_default()) {

@@ -3,8 +3,8 @@ use std::io::{self, IsTerminal, Write};
 use std::time::Duration;
 
 use atuin_client::database::{Sqlite, current_context};
-use atuin_client::history::History;
 use atuin_client::history::store::HistoryStore;
+use atuin_client::history::{AuthorKind, History, probe_author};
 #[cfg(feature = "sync")]
 use atuin_client::record;
 use atuin_client::record::sqlite_store::SqliteStore;
@@ -15,7 +15,6 @@ use atuin_common::logs::LogConfig;
 use atuin_common::string::{EscapeNonPrintablePosixExt as _, NonNulStr};
 use atuin_common::time::{DurationExt, OffsetDateTimeExt, UtcOffsetSpec};
 use atuin_common::utils;
-#[cfg(feature = "daemon")]
 use atuin_common::utils::normalize_optional_string;
 #[cfg(feature = "daemon")]
 use atuin_daemon::history::{HistoryEventKind, TailHistoryReply};
@@ -48,6 +47,12 @@ pub enum Cmd {
         /// Author of this command, eg `ellie`, `claude`, or `copilot`
         #[arg(long)]
         author: Option<String>,
+
+        /// Whether a human or an AI agent ran this command
+        ///
+        /// [`Option::None`] will cause us to perform a best-guess effort.
+        #[arg(long, value_enum)]
+        author_kind: Option<AuthorKind>,
 
         /// Optional intent/rationale for running this command
         #[arg(long)]
@@ -393,6 +398,7 @@ fn make_starting_history(
     settings: &Settings,
     command: &str,
     author: Option<&str>,
+    author_kind: Option<AuthorKind>,
     intent: Option<&str>,
 ) -> Option<History> {
     // It's better for atuin to silently fail here and attempt to
@@ -408,11 +414,20 @@ fn make_starting_history(
         return None;
     }
 
+    // When the flags didn't state an identity, fall back to the one the invoking integration
+    // exported to the environment. The env kind only qualifies a stated author: a stray
+    // ATUIN_HISTORY_AUTHOR_KIND inherited by a nested interactive shell must not stamp the
+    // human's own commands.
+    let author = normalize_optional_string(author.map(String::from)).or_else(probe_author);
+    let author_kind =
+        author_kind.or_else(|| author.is_some().then(AuthorKind::probe_current).flatten());
+
     let h: History = History::capture()
         .timestamp(OffsetDateTime::now_utc())
         .command(command)
         .cwd(cwd)
-        .author_opt(author.map(String::from))
+        .author_opt(author)
+        .author_kind_opt(author_kind)
         .intent_opt(intent.map(String::from))
         .shell_opt(std::env::var("ATUIN_SHELL").ok())
         .build()
@@ -427,9 +442,10 @@ async fn handle_start(
     settings: &Settings,
     command: &str,
     author: Option<&str>,
+    author_kind: Option<AuthorKind>,
     intent: Option<&str>,
 ) -> Result<Option<String>> {
-    let Some(h) = make_starting_history(settings, command, author, intent) else {
+    let Some(h) = make_starting_history(settings, command, author, author_kind, intent) else {
         return Ok(None);
     };
 
@@ -448,9 +464,10 @@ async fn handle_daemon_start(
     settings: &Settings,
     command: &str,
     author: Option<&str>,
+    author_kind: Option<AuthorKind>,
     intent: Option<&str>,
 ) -> Result<Option<String>> {
-    let Some(h) = make_starting_history(settings, command, author, intent) else {
+    let Some(h) = make_starting_history(settings, command, author, author_kind, intent) else {
         return Ok(None);
     };
 
@@ -568,16 +585,17 @@ pub(super) async fn start_history_entry(
     settings: &Settings,
     command: &str,
     author: Option<&str>,
+    author_kind: Option<AuthorKind>,
     intent: Option<&str>,
 ) -> Result<Option<String>> {
     #[cfg(feature = "daemon")]
     if settings.daemon.enabled {
-        return handle_daemon_start(settings, command, author, intent).await;
+        return handle_daemon_start(settings, command, author, author_kind, intent).await;
     }
 
     let db_path = &settings.db_path;
     let db = Sqlite::new(db_path, settings.local_timeout).await?;
-    handle_start(&db, settings, command, author, intent).await
+    handle_start(&db, settings, command, author, author_kind, intent).await
 }
 
 #[instrument(level = "trace", skip_all, fields(id = %id, exit, duration = ?duration), err)]
@@ -661,6 +679,7 @@ impl TailEvent {
             .history
             .ok_or_else(|| eyre::eyre!("daemon sent a history tail event without history"))?;
         let timestamp = OffsetDateTime::from_unix_nanos_u64(history.timestamp);
+        let author_kind = history.author_kind();
         let kind = match HistoryEventKind::try_from(reply.kind)
             .unwrap_or(HistoryEventKind::Unspecified)
         {
@@ -685,6 +704,7 @@ impl TailEvent {
                 intent: normalize_optional_string(history.intent),
                 shell: normalize_optional_string(history.shell),
                 deleted_at: None,
+                author_kind: author_kind.into(),
             },
         })
     }
@@ -1060,6 +1080,7 @@ impl Cmd {
             Self::Start {
                 cmd_env,
                 author,
+                author_kind,
                 intent,
                 command,
                 ..
@@ -1070,9 +1091,14 @@ impl Cmd {
                     command.join(" ")
                 };
 
-                if let Some(id) =
-                    start_history_entry(settings, &command, author.as_deref(), intent.as_deref())
-                        .await?
+                if let Some(id) = start_history_entry(
+                    settings,
+                    &command,
+                    author.as_deref(),
+                    author_kind,
+                    intent.as_deref(),
+                )
+                .await?
                 {
                     println!("{id}");
                 }
@@ -1237,7 +1263,7 @@ mod tests {
             ..Settings::utc()
         };
 
-        handle_start(&db, &settings, "ls   \t", None, None).await.unwrap();
+        handle_start(&db, &settings, "ls   \t", None, None, None).await.unwrap();
 
         let history = db
             .before(OffsetDateTime::now_utc() + time::Duration::SECOND, 1)
@@ -1255,7 +1281,7 @@ mod tests {
 
         // A command containing a NUL byte can never have been executed by a shell;
         // it should be dropped rather than committed to history.
-        let id = handle_start(&db, &settings, "hello\0world", None, None).await.unwrap();
+        let id = handle_start(&db, &settings, "hello\0world", None, None, None).await.unwrap();
         assert!(id.is_none());
 
         let stored =
@@ -1290,6 +1316,7 @@ mod tests {
                 intent: Some("inspect repository state".to_owned()),
                 deleted_at: None,
                 shell: Some("zsh".into()),
+                author_kind: Some(AuthorKind::Agent),
             },
         }
     }

@@ -75,15 +75,14 @@ impl Push {
             .connect()
             .await?;
 
-        let (diff, remote_index) = engine.diff().await?;
+        let keyed = engine.keyed(&key);
+        let (diff, _remote_index) = engine.diff().await?;
 
         // Skip on --force: that path intentionally replaces remote with local.
-        if !self.force {
-            engine
-                .keyed(&key)
-                .check_encryption_key(&remote_index)
-                .await
-                .map_err(crate::print_error::format_sync_error)?;
+        if !self.force
+            && let Some(err) = keyed.key_valid().await
+        {
+            return Err(crate::print_error::format_sync_error(err));
         }
 
         let operations = SyncEngine::operations(diff)?;
@@ -119,7 +118,7 @@ impl Push {
             })
             .collect();
 
-        let (uploaded, _) = engine.keyed(&key).sync_remote(operations, self.page).await?;
+        let (uploaded, _) = keyed.sync_remote(operations, self.page).await?;
 
         println!("Uploaded {uploaded} records");
 
