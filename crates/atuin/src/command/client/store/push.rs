@@ -100,10 +100,10 @@ impl Push {
                     }
 
                     if let Some(h) = self.host {
-                        if HostId(h) != series.host {
+                        if HostId(h) != series.host_id {
                             return false;
                         }
-                    } else if series.host != host_id {
+                    } else if series.host_id != host_id {
                         return false;
                     }
 

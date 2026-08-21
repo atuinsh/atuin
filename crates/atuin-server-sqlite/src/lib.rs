@@ -199,7 +199,7 @@ impl Database for Sqlite {
         start: Option<RecordIdx>,
         count: u64,
     ) -> DbResult<Vec<Record<EncryptedData>>> {
-        tracing::debug!("{:?} - {:?} - {:?}", series.host, series.tag, start);
+        tracing::debug!("{:?} - {:?} - {:?}", series.host_id, series.tag, start);
         let start = start.unwrap_or(0);
 
         let records: Result<Vec<DbRecord>, DbError> = sqlx::query_as(
@@ -213,7 +213,7 @@ impl Database for Sqlite {
         )
         .bind(user.id)
         .bind(series.tag.as_str())
-        .bind(series.host)
+        .bind(series.host_id)
         .bind(start as i64)
         .bind(count as i64)
         .fetch_all(&self.pool)
@@ -233,7 +233,7 @@ impl Database for Sqlite {
                 records
             }
             Err(DbError::NotFound) => {
-                tracing::debug!("no records found in store: {:?}/{}", series.host, series.tag);
+                tracing::debug!("no records found in store: {:?}/{}", series.host_id, series.tag);
                 return Ok(vec![]);
             }
             Err(e) => return Err(e),

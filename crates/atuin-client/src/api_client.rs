@@ -456,6 +456,27 @@ impl Client {
         Ok(resp.bytes().await?.to_vec())
     }
 
+    /// Fetch one page of records: `page.end - page.start` records starting at `page.start`.
+    ///
+    /// Returns `(count_requested, records)` so the caller can tell a legitimately short tail
+    /// (got exactly what its chunk asked for) from a suspicious short page (got fewer).
+    #[instrument(level = "trace", skip_all, fields(start = page.start, width = page.end - page.start), err)]
+    async fn fetch_record_page(
+        &self,
+        base_url: &Url,
+        page: Range<RecordIdx>,
+    ) -> Result<(u64, Vec<Record<EncryptedData>>)> {
+        let width = page.end - page.start;
+        let mut url = base_url.clone();
+        url.query_pairs_mut()
+            .append_pair("start", &page.start.to_string())
+            .append_pair("count", &width.to_string());
+        let resp = self.client.get(url).send().await?;
+        let resp = handle_resp_error(resp).await?;
+        let records = resp.json::<Vec<Record<EncryptedData>>>().await?;
+        Ok((width, records))
+    }
+
     /// Stream the records the `chunks` plan covers for one series (`host`, `tag`).
     ///
     /// The plan lets us prefetch several pages in parallel at predictable offsets; if the server
@@ -470,32 +491,15 @@ impl Client {
         // stream borrows nothing external. That keeps it `Send` for all lifetimes -- required when
         // the whole sync runs on a spawned, multi-threaded task (e.g. the daemon).
         let client = self.clone();
-        let host = series.host;
-        let tag = series.tag.clone();
+        let series = series.clone();
         try_stream! {
             let mut base_url = client.sync_addr.append_path("api/v0/record/next")?;
             base_url
                 .query_pairs_mut()
-                .append_pair("host", &host.0.to_string())
-                .append_pair("tag", tag.as_str());
+                .append_pair("host", &series.host_id.to_string())
+                .append_pair("tag", series.tag.as_str());
 
-            // Returns `(count_requested, records)` so the caller can tell a legitimately short tail
-            // (got exactly what its chunk asked for) from a suspicious short page (got fewer).
-            let fetch_page = |page: Range<RecordIdx>| {
-                debug!("fetching records [{}, {}) from {}/{}", page.start, page.end, host.0, tag);
-                let width = page.end - page.start;
-                let mut url = base_url.clone();
-                url.query_pairs_mut()
-                    .append_pair("start", &page.start.to_string())
-                    .append_pair("count", &width.to_string());
-                let client = client.clone();
-                async move {
-                    let resp = client.client.get(url).send().await?;
-                    let resp = handle_resp_error(resp).await?;
-                    let records = resp.json::<Vec<Record<EncryptedData>>>().await?;
-                    Ok::<_, eyre::Report>((width, records))
-                }
-            };
+            let fetch_page = |page: Range<RecordIdx>| client.fetch_record_page(&base_url, page);
 
             // Download multiple pages in parallel.
             //

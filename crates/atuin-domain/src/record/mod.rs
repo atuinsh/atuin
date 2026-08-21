@@ -73,14 +73,14 @@ pub type RecordIdx = u64;
 /// The composite key identifying record WAL journal uniqueness.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RecordSeriesKey {
-    pub host: HostId,
+    pub host_id: HostId,
     pub tag: RecordTag,
 }
 
 impl RecordSeriesKey {
     #[must_use]
     pub fn new(host: HostId, tag: RecordTag) -> Self {
-        Self { host, tag }
+        Self { host_id: host, tag }
     }
 }
 
@@ -120,7 +120,7 @@ impl<Data> Record<Data> {
     #[must_use]
     pub fn series_key(&self) -> RecordSeriesKey {
         RecordSeriesKey {
-            host: self.host.id,
+            host_id: self.host.id,
             tag: self.tag.clone(),
         }
     }
@@ -230,12 +230,12 @@ impl RecordStatus {
     }
 
     pub fn set_raw(&mut self, series: RecordSeriesKey, tail_id: RecordIdx) {
-        self.hosts.entry(series.host).or_default().insert(series.tag, tail_id);
+        self.hosts.entry(series.host_id).or_default().insert(series.tag, tail_id);
     }
 
     #[must_use]
     pub fn get(&self, series: &RecordSeriesKey) -> Option<RecordIdx> {
-        self.hosts.get(&series.host).and_then(|v| v.get(&series.tag)).copied()
+        self.hosts.get(&series.host_id).and_then(|v| v.get(&series.tag)).copied()
     }
 
     /// Diff this index with another, likely remote index.
@@ -487,9 +487,9 @@ mod tests {
         // both diffs should be ALMOST the same. They will agree on which hosts and tags
         // require updating, but the "other" value will not be the same.
         let smol_diff_1: Vec<(HostId, RecordTag)> =
-            diff1.iter().map(|v| (v.series.host, v.series.tag.clone())).collect();
+            diff1.iter().map(|v| (v.series.host_id, v.series.tag.clone())).collect();
         let smol_diff_2: Vec<(HostId, RecordTag)> =
-            diff1.iter().map(|v| (v.series.host, v.series.tag.clone())).collect();
+            diff1.iter().map(|v| (v.series.host_id, v.series.tag.clone())).collect();
 
         assert_eq!(smol_diff_1, smol_diff_2);
 

@@ -237,8 +237,8 @@ impl SyncEngine {
         // We can sort by ID so long as we continue to use UUIDv7 or something
         // with the same properties
         operations.sort_by_key(|op| match op {
-            Operation::Noop { series } => (0u8, series.host, 0u8, series.tag.clone()),
-            Operation::Upload { series, .. } => (1u8, series.host, 0u8, series.tag.clone()),
+            Operation::Noop { series } => (0u8, series.host_id, 0u8, series.tag.clone()),
+            Operation::Upload { series, .. } => (1u8, series.host_id, 0u8, series.tag.clone()),
             Operation::Download { series, .. } => {
                 // Packfile manifests must expand before the history download runs, as that
                 // `sync_download` will dedupe will have a chance at avoiding unnecessary downloads.
@@ -247,7 +247,7 @@ impl SyncEngine {
                 } else {
                     1u8
                 };
-                (2u8, series.host, tag_priority, series.tag.clone())
+                (2u8, series.host_id, tag_priority, series.tag.clone())
             }
         });
 
@@ -260,7 +260,7 @@ impl Keyed<'_> {
     #[instrument(
         level = "trace",
         skip_all,
-        fields(host = ?series.host, tag = ?series.tag, local, remote = ?remote, page_size),
+        fields(host = ?series.host_id, tag = ?series.tag, local, remote = ?remote, page_size),
         err
     )]
     async fn sync_upload(
@@ -290,7 +290,12 @@ impl Keyed<'_> {
             .progress_chars("#>-"),
         );
 
-        println!("Uploading {} records to {}/{}", expected, series.host.0.as_simple(), series.tag);
+        println!(
+            "Uploading {} records to {}/{}",
+            expected,
+            series.host_id.0.as_simple(),
+            series.tag
+        );
 
         while progress < expected {
             let page = store
@@ -348,7 +353,7 @@ impl Keyed<'_> {
     #[instrument(
         level = "trace",
         skip_all,
-        fields(host = ?series.host, tag = ?series.tag, remote = ?remote, page_size),
+        fields(host = ?series.host_id, tag = ?series.tag, remote = ?remote, page_size),
         err
     )]
     async fn sync_download(
@@ -397,7 +402,7 @@ impl Keyed<'_> {
         println!(
             "Downloading {} records from {}/{}",
             expected,
-            series.host.0.as_simple(),
+            series.host_id.0.as_simple(),
             series.tag
         );
 
@@ -809,11 +814,11 @@ mod tests {
         ];
 
         result_ops.sort_by_key(|op| match op {
-            Operation::Noop { series } => (0, series.host, series.tag.clone()),
+            Operation::Noop { series } => (0, series.host_id, series.tag.clone()),
 
-            Operation::Upload { series, .. } => (1, series.host, series.tag.clone()),
+            Operation::Upload { series, .. } => (1, series.host_id, series.tag.clone()),
 
-            Operation::Download { series, .. } => (2, series.host, series.tag.clone()),
+            Operation::Download { series, .. } => (2, series.host_id, series.tag.clone()),
         });
 
         assert_eq!(result_ops, operations);
