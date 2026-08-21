@@ -15,25 +15,27 @@ pub type EagerFutureCell<T> = EagerFuture<OnceCell<T>>;
 
 /// A cell whose value is seeded with a task scheduled at [`MutEagerFutureCell::new`], in the
 /// background. Unlike the [`EagerFutureCell`] one-shot dual, [`MutEagerFutureCell`] allows you to
-/// emplace any arbitrary value into the cell, via the [`MutEagerFutureCell::emplace_cancelling`]
-/// call.
+/// emplace any arbitrary value into the cell, via the `overwrite` call.
 pub type MutEagerFutureCell<T> = EagerFuture<Mutex<Option<T>>>;
 
 impl<T: Clone + Send + Sync + 'static> MutEagerFutureCell<T> {
     /// Force `value` into the cell, aborting the background future so its (now-superseded) result is
     /// discarded. Any current or future [`get`](EagerFuture::get) observes `value`.
-    pub fn emplace_cancelling(&self, value: T) {
+    pub fn overwrite(&self, value: T) {
         self.abort.abort();
         *self.inner.cell.lock() = Some(value);
         self.inner.ready.notify_waiters();
     }
 }
 
-/// Internal detail to the [`EagerFutureCell`].
+/// Acts as a storage backend to [`EagerFutureCell`].
 pub trait ResultCell: Default + Send + Sync + 'static {
     type Value: Clone + Send + Sync + 'static;
 
+    /// Place the value into the cell.
     fn fill(&self, value: Self::Value);
+
+    /// Read the value from the cell.
     fn peek(&self) -> Option<Self::Value>;
 }
 
@@ -54,7 +56,7 @@ impl<T: Default + Clone + Send + Sync + 'static> ResultCell for Mutex<Option<T>>
 
     fn fill(&self, value: T) {
         let mut slot = self.lock();
-        // Keep an existing value: an `emplace_cancelling` may have already won.
+        // Keep an existing value: an `overwrite` may have already won.
         if slot.is_none() {
             *slot = Some(value);
         }
@@ -72,7 +74,10 @@ struct Inner<C> {
     ready: Notify,
 }
 
-#[doc(hidden)]
+/// A cell whose value is seeded with a task scheduled at [`EagerFutureCell::new`], in the
+/// background.
+///
+/// Use [`EagerFutureCell`] or [`MutEagerFutureCell`].
 pub struct EagerFuture<C> {
     inner: Arc<Inner<C>>,
     abort: AbortHandle,
@@ -191,12 +196,12 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn emplace_cancelling_supersedes_a_slow_future() {
+    async fn overwrite_supersedes_a_slow_future() {
         let ran = Arc::new(AtomicUsize::new(0));
         let counter = ran.clone();
         let cell: MutEagerFutureCell<usize> = MutEagerFutureCell::new(
             async move {
-                // Long enough that `emplace_cancelling` below wins the race.
+                // Long enough that the `overwrite` below wins the race.
                 tokio::time::sleep(Duration::from_secs(30)).await;
                 counter.fetch_add(1, Ordering::SeqCst);
                 1
@@ -204,7 +209,7 @@ mod tests {
             &tokio::runtime::Handle::current(),
         );
 
-        cell.emplace_cancelling(2);
+        cell.overwrite(2);
 
         // The emplaced value is observed, and the aborted future never ran to completion.
         assert_eq!(cell.get().await, 2);
@@ -213,13 +218,13 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn emplace_cancelling_overrides_an_already_completed_future() {
+    async fn overwrite_replaces_an_already_completed_future() {
         let cell: MutEagerFutureCell<usize> =
             MutEagerFutureCell::new(async move { 1 }, &tokio::runtime::Handle::current());
 
         // Let the eager future resolve first, then overwrite it.
         assert_eq!(cell.get().await, 1);
-        cell.emplace_cancelling(2);
+        cell.overwrite(2);
         assert_eq!(cell.get().await, 2);
     }
 }

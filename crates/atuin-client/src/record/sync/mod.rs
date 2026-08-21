@@ -516,7 +516,7 @@ impl Keyed<'_> {
     /// new `remote_index`.
     pub async fn key_valid_against(&self, remote_index: &RecordStatus) -> Option<SyncError> {
         let verdict = self.engine.check_key_against_index(self.key, remote_index).await;
-        self.key_check.emplace_cancelling(verdict.clone());
+        self.key_check.overwrite(verdict.clone());
         verdict
     }
 
