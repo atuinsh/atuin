@@ -457,17 +457,23 @@ impl Client {
     }
 
     /// Fetch one page of records: `page.end - page.start` records starting at `page.start`.
-    #[instrument(level = "trace", skip(self, base_url), err)]
+    #[instrument(level = "trace", skip(self, base_url, series), err)]
     async fn fetch_record_page(
         &self,
         base_url: &Url,
+        series: &RecordSeriesKey,
         page: Range<RecordIdx>,
     ) -> Result<(u64, Vec<Record<EncryptedData>>)> {
         let width = page.end - page.start;
         let resp = self
             .client
             .get(base_url.clone())
-            .query(&[("start", page.start), ("count", width)])
+            .query(&[
+                ("host", series.host_id.to_string()),
+                ("tag", series.tag.as_str().to_owned()),
+                ("start", page.start.to_string()),
+                ("count", width.to_string()),
+            ])
             .send()
             .await?;
         let resp = handle_resp_error(resp).await?;
@@ -485,13 +491,9 @@ impl Client {
         let series = series.clone();
 
         try_stream! {
-            let mut base_url = client.sync_addr.append_path("api/v0/record/next")?;
-            base_url
-                .query_pairs_mut()
-                .append_pair("host", &series.host_id.to_string())
-                .append_pair("tag", series.tag.as_str());
+            let base_url = client.sync_addr.append_path("api/v0/record/next")?;
 
-            let fetch_page = |page: Range<RecordIdx>| client.fetch_record_page(&base_url, page);
+            let fetch_page = |page: Range<RecordIdx>| client.fetch_record_page(&base_url, &series, page);
 
             // Download the pages in parallel.
             let mut fetches = stream::iter(chunks).map(fetch_page)
