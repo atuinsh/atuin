@@ -9,22 +9,20 @@ use tracing::instrument;
 
 use super::Sqlite;
 
-/// Handles conflicts on inserts/upserts.
+#[doc(hidden)]
 pub enum Conflict {
-    ///
     Ignore,
     Replace,
     Upsert,
 }
 
+#[doc(hidden)]
 pub enum ColKind {
     Bind,
     Expr(&'static str),
 }
 
-/// Represents a single database column.
-///
-/// You should not need to directly use this. Please see [`table!`].
+#[doc(hidden)]
 pub struct Col {
     /// The name of the column.
     pub name: &'static str,
@@ -87,9 +85,7 @@ impl Col {
     }
 }
 
-/// Defines the schema of a table.
-///
-/// You should not need to directly use this. Please see [`table!`].
+#[doc(hidden)]
 pub struct Schema {
     /// The table name.
     pub name: &'static str,
@@ -119,9 +115,7 @@ impl Schema {
     }
 }
 
-/// Represents a table as defined by the [`table!`] macro.
-///
-/// See [`table!`]. You probably shouldn't construct this directly.
+#[doc(hidden)]
 pub trait Table {
     const SCHEMA: Schema;
     fn bind_row(&self, sep: &mut sqlx::query_builder::Separated<'_, SqliteDb, &'static str>);
