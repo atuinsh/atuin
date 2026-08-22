@@ -412,29 +412,7 @@ impl Sqlite {
 
     #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
     pub async fn update(&self, h: &History) -> Result<()> {
-        debug!("updating sqlite history");
-
-        sqlx::query(
-            "update history
-                set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = \
-             ?7, hostname = ?8, author = ?9, intent = ?10, deleted_at = ?11
-                where id = ?1",
-        )
-        .bind(h.id.0.as_str())
-        .bind(h.timestamp.unix_timestamp_nanos() as i64)
-        .bind(h.duration)
-        .bind(h.exit)
-        .bind(h.command.as_str())
-        .bind(h.cwd.as_str())
-        .bind(h.session.as_str())
-        .bind(h.cmd_origin.as_str())
-        .bind(h.author.as_str())
-        .bind(h.intent.as_deref())
-        .bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
-        .execute(self.sqlite.pool())
-        .await?;
-
-        Ok(())
+        self.table.update_one(h).await
     }
 
     // make a unique list, that only shows the *newest* version of things
@@ -547,14 +525,16 @@ impl Sqlite {
 
     #[instrument(level = "trace", skip_all, fields(include_deleted), err)]
     pub async fn history_count(&self, include_deleted: bool) -> Result<i64> {
-        let query = if include_deleted {
-            "select count(1) from history"
-        } else {
-            "select count(1) from history where deleted_at is null"
-        };
+        if include_deleted {
+            return Ok(self.table.count().await? as i64);
+        }
 
-        let res: (i64,) = sqlx::query_as(query).fetch_one(self.sqlite.pool()).await?;
-        Ok(res.0)
+        // The non-key `deleted_at is null` filter keeps this branch bespoke.
+        let (count,): (i64,) =
+            sqlx::query_as("select count(1) from history where deleted_at is null")
+                .fetch_one(self.sqlite.pool())
+                .await?;
+        Ok(count)
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -768,9 +748,7 @@ impl Sqlite {
 
     #[instrument(level = "trace", skip_all, err)]
     pub async fn delete_rows(&self, ids: impl IntoIterator<Item = HistoryId>) -> Result<()> {
-        for id in ids {
-            self.table.delete(id.0.as_str()).await?;
-        }
+        self.table.delete_many(ids.into_iter().map(|id| id.0)).await?;
 
         Ok(())
     }

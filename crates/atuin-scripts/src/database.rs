@@ -199,7 +199,7 @@ impl Database {
 
 #[cfg(test)]
 mod test {
-    use rstest::*;
+    use rstest::{fixture, rstest};
 
     use super::*;
 
@@ -208,123 +208,78 @@ mod test {
         Database::in_memory(Duration::from_secs(1)).await.unwrap()
     }
 
-    #[fixture]
-    fn script(
-        #[default("test")] name: impl Into<String>,
-        #[default("test")] description: impl Into<String>,
-        #[default("test")] shebang: impl Into<String>,
-        #[default("test")] script_body: impl Into<String>,
-    ) -> Script {
+    /// Distinct per-field values, so a column/`FromRow` mix-up fails the test.
+    fn script(name: &str, tags: &[&str]) -> Script {
         Script::builder()
-            .name(name.into())
-            .description(description.into())
-            .shebang(shebang.into())
-            .script(script_body.into())
+            .name(name.to_string())
+            .description(format!("{name} desc"))
+            .shebang(format!("#!{name}"))
+            .script(format!("echo {name}"))
+            .tags(tags.iter().map(|t| t.to_string()).collect())
             .build()
     }
 
+    fn sorted(tags: &[String]) -> Vec<String> {
+        let mut v = tags.to_vec();
+        v.sort();
+        v
+    }
+
+    // Tags are the one thing this layer adds over `TableView` (the `script_tags`
+    // side table); vary the set to cover none / one / many-unsorted in one place.
     #[rstest]
+    #[case(&[])]
+    #[case(&["only"])]
+    #[case(&["b", "a", "c"])]
     #[tokio::test]
-    async fn test_list(#[future] db: Database, script: Script) {
-        let db = db.await;
+    async fn load_roundtrips_fields_and_tags(#[future(awt)] db: Database, #[case] tags: &[&str]) {
+        let s = script("s", tags);
+        db.save(&s).await.unwrap();
 
-        let scripts = db.list().await.unwrap();
-        assert_eq!(scripts.len(), 0);
-
-        db.save(&script).await.unwrap();
-
-        let scripts = db.list().await.unwrap();
-        assert_eq!(scripts.len(), 1);
-        assert_eq!(scripts[0].name, "test");
+        let loaded = db.load(&s.id.to_string()).await.unwrap().unwrap();
+        assert_eq!(loaded.name, "s");
+        assert_eq!(loaded.description, "s desc");
+        let want: Vec<String> = tags.iter().map(|t| t.to_string()).collect();
+        assert_eq!(sorted(&loaded.tags), sorted(&want));
     }
 
     #[rstest]
     #[tokio::test]
-    async fn test_save_load(
-        #[future] db: Database,
-        #[with("test name", "test description", "test shebang", "test script")] script: Script,
-    ) {
-        let db = db.await;
+    async fn save_bulk_persists_every_row_with_its_tags(#[future(awt)] db: Database) {
+        db.save_bulk(&[script("a", &["x", "y"]), script("b", &[])]).await.unwrap();
 
-        db.save(&script).await.unwrap();
-
-        let loaded = db.load(&script.id.to_string()).await.unwrap().unwrap();
-
-        assert_eq!(loaded, script);
+        let mut loaded = db.list().await.unwrap();
+        loaded.sort_by(|l, r| l.name.cmp(&r.name)); // `list` order is unspecified
+        assert_eq!(loaded.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+        assert_eq!(sorted(&loaded[0].tags), ["x", "y"].map(String::from));
+        assert!(loaded[1].tags.is_empty());
     }
 
     #[rstest]
     #[tokio::test]
-    async fn test_save_bulk(#[future] db: Database) {
-        let db = db.await;
+    async fn delete_removes_the_script_and_its_tags(#[future(awt)] db: Database) {
+        let s = script("s", &["a", "b"]);
+        db.save(&s).await.unwrap();
 
-        let scripts = vec![
-            Script::builder()
-                .name("test name".to_string())
-                .description("test description".to_string())
-                .shebang("test shebang".to_string())
-                .script("test script".to_string())
-                .build(),
-            Script::builder()
-                .name("test name 2".to_string())
-                .description("test description 2".to_string())
-                .shebang("test shebang 2".to_string())
-                .script("test script 2".to_string())
-                .build(),
-        ];
+        db.delete(&s.id.to_string()).await.unwrap();
 
-        db.save_bulk(&scripts).await.unwrap();
-
-        let loaded = db.list().await.unwrap();
-        assert_eq!(loaded.len(), 2);
-        assert_eq!(loaded[0].name, "test name");
-        assert_eq!(loaded[1].name, "test name 2");
+        assert!(db.load(&s.id.to_string()).await.unwrap().is_none());
+        // the `script_tags` rows must go too — this is why `delete` touches both tables
+        assert!(db.tags.all().try_collect::<Vec<_>>().await.unwrap().is_empty());
     }
 
     #[rstest]
     #[tokio::test]
-    async fn test_save_bulk_with_tags(#[future] db: Database) {
-        let db = db.await;
+    async fn update_replaces_base_fields_and_tags(#[future(awt)] db: Database) {
+        let mut s = script("before", &["a", "b"]);
+        db.save(&s).await.unwrap();
 
-        let scripts = vec![
-            Script::builder()
-                .name("tagged one".to_string())
-                .description("test description".to_string())
-                .shebang("test shebang".to_string())
-                .script("test script".to_string())
-                .tags(vec!["a".to_string(), "b".to_string()])
-                .build(),
-            Script::builder()
-                .name("tagged two".to_string())
-                .description("test description 2".to_string())
-                .shebang("test shebang 2".to_string())
-                .script("test script 2".to_string())
-                .tags(vec!["c".to_string()])
-                .build(),
-        ];
+        s.name = "after".into();
+        s.tags = vec!["c".into()];
+        db.update(&s).await.unwrap();
 
-        db.save_bulk(&scripts).await.unwrap();
-
-        let loaded = db.list().await.unwrap();
-        assert_eq!(loaded.len(), 2);
-
-        let mut first_tags = loaded[0].tags.clone();
-        first_tags.sort();
-        assert_eq!(first_tags, vec!["a".to_string(), "b".to_string()]);
-        assert_eq!(loaded[1].tags, vec!["c".to_string()]);
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn test_delete(#[future] db: Database, script: Script) {
-        let db = db.await;
-
-        db.save(&script).await.unwrap();
-
-        assert_eq!(db.list().await.unwrap().len(), 1);
-        db.delete(&script.id.to_string()).await.unwrap();
-
-        let loaded = db.list().await.unwrap();
-        assert_eq!(loaded.len(), 0);
+        let loaded = db.load(&s.id.to_string()).await.unwrap().unwrap();
+        assert_eq!(loaded.name, "after");
+        assert_eq!(loaded.tags, ["c".to_string()]); // old tags gone, new tag present
     }
 }
