@@ -110,3 +110,4 @@ pub(crate) mod record;
 pub use packer::{PackingError, try_pack};
 #[cfg(test)]
 pub(crate) use record::PackManifestRecordView;
+pub use record::PackedPackfile;

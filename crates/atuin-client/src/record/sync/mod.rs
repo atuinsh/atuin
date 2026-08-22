@@ -1,6 +1,12 @@
 //! The core sync engine that Atuin uses.
 //!
-//! This is the library that handles syncing records between a client and a server.
+//! The role of sync is to sync records between a remote server and a local client. There are two
+//! core terms important to note:
+//!
+//! - Packfiles -- A packfile is a "bundle" of [`Record`]s.
+//! - Loose pages -- Servers offer pagination of [`Record`]s and [`Record`]s. In effect, the server
+//!   has an RPC call to query for N records. This query returns a page of "loose" records, where
+//!   loose refers to the fact that these records are not packed into packfiles.
 //!
 //! TODO(markovejnovic): Migrate this outside of `record/`, since it handles a lot more than just
 //!                      records.
@@ -11,7 +17,7 @@ use std::fmt::Write;
 use std::num::NonZeroU64;
 
 use atuin_common::encryption::paseto_v4;
-use atuin_common::range::{RangeTiledExt, Tiled};
+use atuin_common::range::{Chunks, RangeExt};
 use atuin_common::sync::MutEagerFutureCell;
 use atuin_domain::caps::PackfileCap;
 use atuin_domain::record::{
@@ -26,6 +32,7 @@ use tracing::instrument;
 
 use super::sqlite_store::SqliteStore;
 use crate::api_client::Client;
+use crate::packfile::PackedPackfile;
 use crate::packfile::record::{PackManifestRecordView, ParsingError, UnpackError};
 
 mod builder;
@@ -359,7 +366,11 @@ impl Keyed<'_> {
                         async move {
                             let view = PackManifestRecordView::new(&manifest)?;
                             let (blob, ids) = view.pack_records(&store, key).await?;
-                            Ok::<_, eyre::Report>((view.record.id, ids, blob))
+                            Ok::<_, eyre::Report>(PackedPackfile {
+                                manifest_id: view.record.id,
+                                records: ids,
+                                blob,
+                            })
                         }
                     })
                     .buffered(MAX_CONCURRENT_PACKS)
@@ -463,8 +474,8 @@ impl Keyed<'_> {
             .progress_chars("#>-"),
         );
 
-        let tiles = (first_missing_local..first_missing_local + expected).tiled(page_size);
-        let ret = self.download_pages(series, tiles, &pb).await?;
+        let chunks = (first_missing_local..first_missing_local + expected).chunks(page_size);
+        let ret = self.download_pages(series, chunks, &pb).await?;
 
         pb.finish_with_message("Downloaded records");
 
@@ -472,7 +483,7 @@ impl Keyed<'_> {
     }
 
     #[instrument(level = "trace", skip_all, fields(id = ?manifest.id), err)]
-    pub(super) async fn download_packed(
+    async fn download_packed(
         &self,
         manifest: &Record<EncryptedData>,
     ) -> Result<Vec<RecordId>, PackfileDownloadError> {
@@ -510,19 +521,19 @@ impl Keyed<'_> {
         Ok(ids)
     }
 
-    /// Download the record pages the `tiles` cover into the local store, gracefully handling any
+    /// Download the record pages the `chunks` cover into the local store, gracefully handling any
     /// packfiles along the way.
     #[instrument(level = "trace", skip_all, err)]
     async fn download_pages(
         &self,
         series: &RecordSeriesKey,
-        tiles: Tiled<RecordIdx>,
+        chunks: Chunks<RecordIdx>,
         pb: &ProgressBar,
     ) -> Result<Vec<RecordId>, SyncError> {
         let mut ret = Vec::new();
         let mut progress = 0u64;
 
-        let pages = self.engine.client.records(series).stream(tiles);
+        let pages = self.engine.client.records(series).stream(chunks);
         futures::pin_mut!(pages);
         while let Some(page) = pages.next().await {
             let page = page.map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
@@ -1449,8 +1460,12 @@ mod packfile_sync_tests {
 
     /// A synthetic prepared-blob item; `upload_packfiles` never inspects the contents, only ships
     /// them, so real packing isn't needed to exercise the batching.
-    fn packed_item() -> (RecordId, Vec<RecordId>, Vec<u8>) {
-        (RecordId(uuid_v7()), vec![RecordId(uuid_v7())], vec![1, 2, 3])
+    fn packed_item() -> PackedPackfile {
+        PackedPackfile {
+            manifest_id: RecordId(uuid_v7()),
+            records: vec![RecordId(uuid_v7())],
+            blob: vec![1, 2, 3],
+        }
     }
 
     /// A client pointed at a dead address with short timeouts, for the paths that must not reach the
@@ -1532,11 +1547,11 @@ mod packfile_sync_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
         client
-            .upload_packfiles(futures::stream::iter([Ok::<_, eyre::Report>((
-                manifest.id,
-                ids,
+            .upload_packfiles(futures::stream::iter([Ok::<_, eyre::Report>(PackedPackfile {
+                manifest_id: manifest.id,
+                records: ids,
                 blob,
-            ))]))
+            })]))
             .await
             .unwrap();
     }

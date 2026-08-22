@@ -16,6 +16,12 @@ use uuid::Uuid;
 
 use crate::record::sqlite_store::SqliteStore;
 
+pub struct PackedPackfile {
+    pub manifest_id: RecordId,
+    pub records: Vec<RecordId>,
+    pub blob: Vec<u8>,
+}
+
 fn read_uuid<'a, R>(reader: &mut R) -> Result<Uuid, DecodeError<'a, R::Error>>
 where
     R: RmpRead,

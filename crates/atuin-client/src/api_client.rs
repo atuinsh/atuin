@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_stream::try_stream;
-use atuin_common::range::{RangeTiledExt, Tiled};
+use atuin_common::range::{Chunks, RangeExt};
 use atuin_common::url::UrlAppendExt;
 use atuin_domain::api::{
     ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION, ChangePasswordRequest, ErrorResponse,
@@ -23,6 +23,8 @@ use reqwest::{Response, StatusCode, Url};
 use reqwest_middleware::ClientWithMiddleware;
 use semver::Version;
 use tracing::{Instrument, instrument};
+
+use crate::packfile::PackedPackfile;
 
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 
@@ -292,7 +294,7 @@ pub struct RecordsRequest {
 impl RecordsRequest {
     /// Fetch the first record of the series, if it has any.
     pub async fn one(self) -> Result<Option<Record<EncryptedData>>> {
-        let pages = self.stream((0..1).tiled(1));
+        let pages = self.stream((0..1).chunks(1));
         futures::pin_mut!(pages);
         match pages.next().await {
             Some(page) => Ok(page?.into_iter().next()),
@@ -307,11 +309,16 @@ impl RecordsRequest {
     /// records are skipped.
     pub fn stream(
         self,
-        chunks: Tiled<RecordIdx>,
+        chunks: Chunks<RecordIdx>,
     ) -> impl Stream<Item = Result<Vec<Record<EncryptedData>>>> + 'static {
         try_stream! {
             // Download the pages in parallel.
-            let mut fetches = stream::iter(chunks).map(|p| self.page(p))
+            let mut fetches = stream::iter(chunks)
+                .map(|p| {
+                    let width = p.end - p.start;
+                    let fut = self.page(p);
+                    async move { fut.await.map(|page| (width, page)) }
+                })
                 .buffered(MAX_RECORDS_CONCURRENT_DOWNLOAD);
 
             // Consume the stream and yield the values up.
@@ -350,8 +357,8 @@ impl RecordsRequest {
                         }
                         let stop = (cursor + chunks.size().get()).min(chunks.end());
                         match this.page(cursor..stop).await {
-                            Ok((_, page)) if page.is_empty() => None,
-                            Ok((_, page)) => {
+                            Ok(page) if page.is_empty() => None,
+                            Ok(page) => {
                                 let next = cursor + page.len() as u64;
                                 Some((Ok(page), (next, this)))
                             }
@@ -370,7 +377,7 @@ impl RecordsRequest {
     /// Fetch one page of `series`' records: `page.end - page.start` records starting at
     /// `page.start`.
     #[instrument(level = "trace", skip(self), err)]
-    async fn page(&self, page: Range<RecordIdx>) -> Result<(u64, Vec<Record<EncryptedData>>)> {
+    async fn page(&self, page: Range<RecordIdx>) -> Result<Vec<Record<EncryptedData>>> {
         let base_url = self.client.sync_addr.append_path("api/v0/record/next")?;
         let width = page.end - page.start;
         let resp = self
@@ -387,7 +394,7 @@ impl RecordsRequest {
             .await?;
         let resp = handle_resp_error(resp).await?;
         let records = resp.json::<Vec<Record<EncryptedData>>>().await?;
-        Ok((width, records))
+        Ok(records)
     }
 }
 
@@ -474,19 +481,23 @@ impl Client {
     #[instrument(level = "trace", skip_all, err)]
     pub async fn upload_packfiles(
         &self,
-        packfiles: impl Stream<Item = Result<(RecordId, Vec<RecordId>, Vec<u8>)>>,
+        packfiles: impl Stream<Item = Result<PackedPackfile>>,
     ) -> Result<()> {
         let client = self.clone();
         packfiles
             .map(move |packfile| {
                 let client = client.clone();
                 async move {
-                    let (manifest_id, record_ids, blob) = packfile?;
-                    client.upload_packfile(manifest_id, &record_ids, blob).await
+                    let PackedPackfile {
+                        manifest_id,
+                        records,
+                        blob,
+                    } = packfile?;
+                    client.upload_packfile(manifest_id, &records, blob).await
                 }
             })
             .buffered(MAX_CONCURRENT_PACKFILE_UPLOADS)
-            .try_for_each(|()| async { Ok(()) })
+            .try_collect::<()>()
             .await
     }
 
@@ -795,7 +806,7 @@ mod tests {
 
 #[cfg(test)]
 mod records_stream_tests {
-    use atuin_common::range::RangeTiledExt;
+    use atuin_common::range::RangeExt;
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordSeriesKey, RecordTag};
     use futures::TryStreamExt;
@@ -873,7 +884,9 @@ mod records_stream_tests {
         let client = mock_client(&addr);
 
         let idxs = collect_idxs(
-            client.records(&RecordSeriesKey::new(host, RecordTag::History)).stream((0..5).tiled(2)),
+            client
+                .records(&RecordSeriesKey::new(host, RecordTag::History))
+                .stream((0..5).chunks(2)),
         )
         .await;
         assert_eq!(idxs, vec![0, 1, 2, 3, 4]);
@@ -896,7 +909,9 @@ mod records_stream_tests {
         let client = mock_client(&addr);
 
         let idxs = collect_idxs(
-            client.records(&RecordSeriesKey::new(host, RecordTag::History)).stream((0..6).tiled(4)),
+            client
+                .records(&RecordSeriesKey::new(host, RecordTag::History))
+                .stream((0..6).chunks(4)),
         )
         .await;
         assert_eq!(idxs, vec![0, 1, 2, 3, 4, 5], "a short mid-stream page must not skip records");
@@ -921,7 +936,7 @@ mod records_stream_tests {
         let idxs = collect_idxs(
             client
                 .records(&RecordSeriesKey::new(host, RecordTag::History))
-                .stream((0..10).tiled(4)),
+                .stream((0..10).chunks(4)),
         )
         .await;
         assert!(idxs.is_empty(), "an empty server must yield no records");
