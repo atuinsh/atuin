@@ -17,7 +17,7 @@ const BIND_UP_ARROW: &str = r"$env.config = (
     $env.config | upsert keybindings (
         $env.config.keybindings
         | append {
-            name: atuin
+            name: atuin_up_arrow
             modifier: none
             keycode: up
             mode: [emacs, vi_normal, vi_insert]
@@ -42,5 +42,19 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
         if options.enable_up_arrow {
             println!("{BIND_UP_ARROW}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::{BIND_CTRL_R, BIND_UP_ARROW};
+
+    #[rstest]
+    #[case(BIND_CTRL_R, "atuin")]
+    #[case(BIND_UP_ARROW, "atuin_up_arrow")]
+    fn keybinding_has_unique_name(#[case] binding: &str, #[case] expected_name: &str) {
+        assert!(binding.contains(&format!("name: {expected_name}")));
     }
 }
