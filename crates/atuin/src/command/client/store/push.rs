@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use atuin_client::api_client::Client;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync::{ClientSource, Operation, SyncEngine};
@@ -29,7 +31,7 @@ pub struct Push {
     ///
     /// How many records to upload at once. Defaults to 100
     #[arg(long, default_value = "100")]
-    pub page: u64,
+    pub page: NonZeroU64,
 }
 
 impl Push {

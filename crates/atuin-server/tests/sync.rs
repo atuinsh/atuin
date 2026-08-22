@@ -162,7 +162,7 @@ async fn download(
         .connect()
         .await
         .unwrap()
-        .with_page_size(page_size);
+        .with_page_size(std::num::NonZeroU64::new(page_size).unwrap());
     let (diff, _) = engine.diff().await.unwrap();
     let operations = SyncEngine::operations(diff).unwrap();
     let (_, downloaded) = engine.keyed(&key).sync_remote(operations).await.unwrap();
@@ -229,7 +229,7 @@ async fn upload(
         .connect()
         .await
         .unwrap()
-        .with_page_size(page_size);
+        .with_page_size(std::num::NonZeroU64::new(page_size).unwrap());
     let (diff, _) = engine.diff().await.unwrap();
     let operations = SyncEngine::operations(diff).unwrap();
     let (uploaded, _) = engine.keyed(&key).sync_remote(operations).await.unwrap();

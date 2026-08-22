@@ -128,20 +128,9 @@ split-debuginfo = "packed"
 lto = false
 codegen-units = 256
 
-# Same as `profiling`, but with the trace/debug `tracing` events compiled back
-# in. `profiling` inherits release (debug assertions off), so tracing's
-# `release_max_level_info` ceiling strips anything below info -- including the
-# `#[instrument(level = "trace")]` spans. Turning debug assertions on flips
-# tracing to its (permissive) `max_level_*` ceiling, so those spans compile in.
-# Emit them at runtime with `ATUIN_OTEL=1` (exports to Jaeger) or `ATUIN_LOG=trace`.
-# Build with: cargo build --profile profiling-traced
 [profile.profiling-traced]
-inherits = "profiling"
+inherits = "dist"
 debug-assertions = true
-
-# For local development against a local eye-declare, uncomment below
-#eye_declare = { path = "../eye_declare/crates/eye_declare" }
-#eye_declare_engine = { path = "../eye_declare/crates/eye_declare_engine" }
 
 [patch.crates-io]
 # axoasset (axoupdater's HTTP layer) hardcodes reqwest's "default-tls" feature,

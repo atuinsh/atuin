@@ -110,7 +110,6 @@ impl SqliteStore {
         Ok(())
     }
 
-    #[instrument(level = "trace", skip_all, fields(id = ?r.id, idx = r.idx, host = ?r.host.id, tag = ?r.tag), err)]
     async fn save_raw(
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         r: &Record<paseto_v4::EncryptedData>,

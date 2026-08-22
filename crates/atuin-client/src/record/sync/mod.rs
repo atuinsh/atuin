@@ -8,6 +8,7 @@
 //! > do a sync :O
 use std::cmp::Ordering;
 use std::fmt::Write;
+use std::num::NonZeroU64;
 
 use atuin_common::encryption::paseto_v4;
 use atuin_common::range::{RangeTiledExt, Tiled};
@@ -38,7 +39,7 @@ const MAX_CONCURRENT_PACKFILE_TRANSFERS: usize = 16;
 const MAX_CONCURRENT_PACKS: usize = 16;
 
 /// Records requested per sync page unless overridden with [`SyncEngine::with_page_size`].
-pub const DEFAULT_PAGE_SIZE: u64 = 100;
+pub const DEFAULT_PAGE_SIZE: NonZeroU64 = NonZeroU64::new(100).unwrap();
 
 #[derive(Error, Debug, Clone)]
 pub enum SyncError {
@@ -123,7 +124,7 @@ pub struct SyncEngine {
     client: Client,
     store: SqliteStore,
     /// How many records each sync page requests. Set via [`Self::with_page_size`].
-    page_size: u64,
+    page_size: NonZeroU64,
 }
 
 /// A [`SyncEngine`] paired with an encryption key, for the operations that encrypt or decrypt.
@@ -138,7 +139,7 @@ pub struct Keyed<'k> {
 impl SyncEngine {
     /// Set how many records each sync page requests (default [`DEFAULT_PAGE_SIZE`]).
     #[must_use]
-    pub fn with_page_size(mut self, page_size: u64) -> Self {
+    pub fn with_page_size(mut self, page_size: NonZeroU64) -> Self {
         self.page_size = page_size;
         self
     }
@@ -298,7 +299,7 @@ impl Keyed<'_> {
     #[instrument(
         level = "trace",
         skip_all,
-        fields(host = ?series.host_id, tag = ?series.tag, local, remote = ?remote, page_size = self.engine.page_size),
+        fields(host = ?series.host_id, tag = ?series.tag, local, remote = ?remote, page_size = self.engine.page_size.get()),
         err
     )]
     async fn sync_upload(
@@ -307,7 +308,7 @@ impl Keyed<'_> {
         local: RecordIdx,
         remote: Option<RecordIdx>,
     ) -> Result<u64, SyncError> {
-        let page_size = self.engine.page_size;
+        let page_size = self.engine.page_size.get();
         let store = &self.engine.store;
         let client = &self.engine.client;
         // The first record the remote *doesn't* have.
@@ -396,7 +397,7 @@ impl Keyed<'_> {
     #[instrument(
         level = "trace",
         skip_all,
-        fields(host = ?series.host_id, tag = ?series.tag, remote = ?remote, page_size = self.engine.page_size),
+        fields(host = ?series.host_id, tag = ?series.tag, remote = ?remote, page_size = self.engine.page_size.get()),
         err
     )]
     async fn sync_download(
@@ -404,7 +405,7 @@ impl Keyed<'_> {
         series: &RecordSeriesKey,
         remote: RecordIdx,
     ) -> Result<Vec<RecordId>, SyncError> {
-        let page_size = self.engine.page_size;
+        let page_size = self.engine.page_size.get();
         let store = &self.engine.store;
         // Scan the database to find the first missing local index, rather than assuming it's one
         // more than the highest local index. A prior packfile op for this host may have expanded a
@@ -580,7 +581,7 @@ impl Keyed<'_> {
         Ok(ids)
     }
 
-    #[instrument(level = "trace", skip_all, fields(page_size = self.engine.page_size), err)]
+    #[instrument(level = "trace", skip_all, fields(page_size = self.engine.page_size.get()), err)]
     pub async fn sync_remote(
         &self,
         operations: Vec<Operation>,
@@ -1289,7 +1290,7 @@ mod packfile_sync_tests {
 
         let returned = build_engine(client, down.clone())
             .await
-            .with_page_size(page_size)
+            .with_page_size(NonZeroU64::new(page_size).unwrap())
             .keyed(&key)
             .sync_download(&RecordSeriesKey::new(host, RecordTag::History), remote)
             .await

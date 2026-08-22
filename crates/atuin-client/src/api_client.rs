@@ -341,25 +341,24 @@ impl RecordsRequest {
             // path.
             //
             // If it does, then we fall back to the serialized path, on the first misbehavior.
-            let recovery = stream::unfold(
-                (chunks.start() + progress, self),
-                move |(cursor, this)| async move {
-                    if cursor >= chunks.end() {
-                        return None;
-                    }
-                    let stop = (cursor + chunks.size().get()).min(chunks.end());
-                    match this.page(cursor..stop).await {
-                        Ok((_, page)) if page.is_empty() => None,
-                        Ok((_, page)) => {
-                            let next = cursor + page.len() as u64;
-                            Some((Ok(page), (next, this)))
-                        }
-                        Err(e) => Some((Err(e), (chunks.end(), this))),
-                    }
-                },
-            );
-
             if short_page {
+                let recovery = stream::unfold(
+                    (chunks.start() + progress, self),
+                    move |(cursor, this)| async move {
+                        if cursor >= chunks.end() {
+                            return None;
+                        }
+                        let stop = (cursor + chunks.size().get()).min(chunks.end());
+                        match this.page(cursor..stop).await {
+                            Ok((_, page)) if page.is_empty() => None,
+                            Ok((_, page)) => {
+                                let next = cursor + page.len() as u64;
+                                Some((Ok(page), (next, this)))
+                            }
+                            Err(e) => Some((Err(e), (chunks.end(), this))),
+                        }
+                    },
+                );
                 futures::pin_mut!(recovery);
                 while let Some(p) = recovery.next().await {
                     yield p?;
