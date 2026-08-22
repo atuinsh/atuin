@@ -36,7 +36,7 @@ pub async fn try_pack(
     };
 
     let last_pack = store
-        .last(&RecordSeriesKey::new(series.host, RecordTag::Packfile))
+        .last(&RecordSeriesKey::new(series.host_id, RecordTag::Packfile))
         .await
         .map_err(PackingError::Store)?;
 
@@ -70,13 +70,13 @@ pub async fn try_pack(
         };
 
         let manifest = PackManifestDataV1 {
-            host: series.host,
+            host: series.host_id,
             tag: series.tag.clone(),
             start_idx: cursor,
             end_idx: end,
         };
         let record = Record::builder()
-            .host(Host::new(series.host))
+            .host(Host::new(series.host_id))
             .version(RecordVersion::V1)
             .tag(RecordTag::Packfile)
             .idx(pack_idx)

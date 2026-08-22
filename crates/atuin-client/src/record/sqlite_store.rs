@@ -110,7 +110,6 @@ impl SqliteStore {
         Ok(())
     }
 
-    #[instrument(level = "trace", skip_all, fields(id = ?r.id, idx = r.idx, host = ?r.host.id, tag = ?r.tag), err)]
     async fn save_raw(
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         r: &Record<paseto_v4::EncryptedData>,
@@ -120,9 +119,9 @@ impl SqliteStore {
             "insert or ignore into store(id, idx, host, tag, timestamp, version, data, cek)
                 values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
-        .bind(r.id.0.as_hyphenated().to_string())
+        .bind(r.id.as_hyphenated().to_string())
         .bind(r.idx as i64)
-        .bind(r.host.id.0.as_hyphenated().to_string())
+        .bind(r.host.id.as_hyphenated().to_string())
         .bind(r.tag.as_str())
         .bind(r.timestamp as i64)
         .bind(r.version.as_str())
@@ -166,7 +165,7 @@ impl SqliteStore {
     #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
     pub async fn get(&self, id: RecordId) -> Result<Record<paseto_v4::EncryptedData>> {
         let res = sqlx::query_as::<_, DbRecord>("select * from store where store.id = ?1")
-            .bind(id.0.as_hyphenated().to_string())
+            .bind(id.as_hyphenated().to_string())
             .fetch_one(&self.pool)
             .await?;
 
@@ -176,7 +175,7 @@ impl SqliteStore {
     #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
     pub async fn delete(&self, id: RecordId) -> Result<()> {
         sqlx::query("delete from store where id = ?1")
-            .bind(id.0.as_hyphenated().to_string())
+            .bind(id.as_hyphenated().to_string())
             .execute(&self.pool)
             .await?;
 
@@ -190,7 +189,7 @@ impl SqliteStore {
         Ok(())
     }
 
-    #[instrument(level = "trace", skip_all, fields(host = ?series.host, tag = ?series.tag), err)]
+    #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag), err)]
     pub async fn last(
         &self,
         series: &RecordSeriesKey,
@@ -198,7 +197,7 @@ impl SqliteStore {
         let res = sqlx::query_as::<_, DbRecord>(
             "select * from store where host=?1 and tag=?2 order by idx desc limit 1",
         )
-        .bind(series.host.0.as_hyphenated().to_string())
+        .bind(series.host_id.as_hyphenated().to_string())
         .bind(series.tag.as_str())
         .fetch_one(&self.pool)
         .await;
@@ -210,7 +209,7 @@ impl SqliteStore {
         }
     }
 
-    #[instrument(level = "trace", skip_all, fields(host = ?series.host, tag = ?series.tag), err)]
+    #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag), err)]
     pub async fn first(
         &self,
         series: &RecordSeriesKey,
@@ -241,7 +240,7 @@ impl SqliteStore {
         }
     }
 
-    #[instrument(level = "trace", skip_all, fields(host = ?series.host, tag = ?series.tag), err)]
+    #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag), err)]
     pub async fn len(&self, series: &RecordSeriesKey) -> Result<u64> {
         let last = self.last(series).await?;
 
@@ -254,7 +253,7 @@ impl SqliteStore {
 
     /// The smallest `idx >= 0` with no record for `(host, tag)`: Unlike `last().idx + 1`, this
     /// points at an interior hole when one exists.
-    #[instrument(level = "trace", skip_all, fields(host = ?series.host, tag = ?series.tag), err)]
+    #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag), err)]
     pub async fn first_gap(&self, series: &RecordSeriesKey) -> Result<RecordIdx> {
         let gap: Option<i64> = sqlx::query_scalar(
             "select min(idx) from (
@@ -264,7 +263,7 @@ impl SqliteStore {
              ) as candidates
              where idx not in (select idx from store where host = ?1 and tag = ?2)",
         )
-        .bind(series.host.0.as_hyphenated().to_string())
+        .bind(series.host_id.as_hyphenated().to_string())
         .bind(series.tag.as_str())
         .fetch_one(&self.pool)
         .await?;
@@ -272,7 +271,7 @@ impl SqliteStore {
         Ok(gap.unwrap_or(0) as u64)
     }
 
-    #[instrument(level = "trace", skip_all, fields(host = ?series.host, tag = ?series.tag, idx, limit), err)]
+    #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag, idx, limit), err)]
     pub async fn next(
         &self,
         series: &RecordSeriesKey,
@@ -284,7 +283,7 @@ impl SqliteStore {
              limit ?4",
         )
         .bind(idx as i64)
-        .bind(series.host.0.as_hyphenated().to_string())
+        .bind(series.host_id.as_hyphenated().to_string())
         .bind(series.tag.as_str())
         .bind(limit as i64)
         .fetch_all(&self.pool)
@@ -293,7 +292,7 @@ impl SqliteStore {
         Ok(res.into_iter().map(Into::into).collect())
     }
 
-    #[instrument(level = "trace", skip_all, fields(host = ?series.host, tag = ?series.tag, idx), err)]
+    #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag, idx), err)]
     pub async fn idx(
         &self,
         series: &RecordSeriesKey,
@@ -303,7 +302,7 @@ impl SqliteStore {
             "select * from store where idx = ?1 and host = ?2 and tag = ?3",
         )
         .bind(idx as i64)
-        .bind(series.host.0.as_hyphenated().to_string())
+        .bind(series.host_id.as_hyphenated().to_string())
         .bind(series.tag.as_str())
         .fetch_one(&self.pool)
         .await;
@@ -423,7 +422,7 @@ impl SqliteStore {
             match record.clone().decrypt(key) {
                 Ok(_) => continue,
                 Err(_) => {
-                    println!("Failed to decrypt {}, deleting", record.id.0.as_hyphenated());
+                    println!("Failed to decrypt {}, deleting", record.id.as_hyphenated());
 
                     self.delete(record.id).await?;
                 }

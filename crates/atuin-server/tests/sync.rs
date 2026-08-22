@@ -161,10 +161,11 @@ async fn download(
         .build()
         .connect()
         .await
-        .unwrap();
+        .unwrap()
+        .with_page_size(std::num::NonZeroU64::new(page_size).unwrap());
     let (diff, _) = engine.diff().await.unwrap();
     let operations = SyncEngine::operations(diff).unwrap();
-    let (_, downloaded) = engine.keyed(&key).sync_remote(operations, page_size).await.unwrap();
+    let (_, downloaded) = engine.keyed(&key).sync_remote(operations).await.unwrap();
 
     let status = store.status().await.unwrap();
     let local_idx = *status.hosts.get(&host).unwrap().get(&tag).unwrap();
@@ -227,10 +228,11 @@ async fn upload(
         .build()
         .connect()
         .await
-        .unwrap();
+        .unwrap()
+        .with_page_size(std::num::NonZeroU64::new(page_size).unwrap());
     let (diff, _) = engine.diff().await.unwrap();
     let operations = SyncEngine::operations(diff).unwrap();
-    let (uploaded, _) = engine.keyed(&key).sync_remote(operations, page_size).await.unwrap();
+    let (uploaded, _) = engine.keyed(&key).sync_remote(operations).await.unwrap();
 
     let status = engine.record_status().await.unwrap();
     let remote_idx = *status.hosts.get(&host).unwrap().get(&tag).unwrap();

@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use atuin_client::api_client::Client;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync::{ClientSource, Operation, SyncEngine};
@@ -29,7 +31,7 @@ pub struct Push {
     ///
     /// How many records to upload at once. Defaults to 100
     #[arg(long, default_value = "100")]
-    pub page: u64,
+    pub page: NonZeroU64,
 }
 
 impl Push {
@@ -73,7 +75,8 @@ impl Push {
             })
             .build()
             .connect()
-            .await?;
+            .await?
+            .with_page_size(self.page);
 
         let keyed = engine.keyed(&key);
         let (diff, remote_index) = engine.diff().await?;
@@ -100,10 +103,10 @@ impl Push {
                     }
 
                     if let Some(h) = self.host {
-                        if HostId(h) != series.host {
+                        if HostId(h) != series.host_id {
                             return false;
                         }
-                    } else if series.host != host_id {
+                    } else if series.host_id != host_id {
                         return false;
                     }
 
@@ -118,7 +121,7 @@ impl Push {
             })
             .collect();
 
-        let (uploaded, _) = keyed.sync_remote(operations, self.page).await?;
+        let (uploaded, _) = keyed.sync_remote(operations).await?;
 
         println!("Uploaded {uploaded} records");
 

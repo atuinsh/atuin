@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync::{ClientSource, Operation, SyncEngine};
@@ -23,7 +25,7 @@ pub struct Pull {
     ///
     /// How many records to download at once. Defaults to 100
     #[arg(long, default_value = "100")]
-    pub page: u64,
+    pub page: NonZeroU64,
 }
 
 impl Pull {
@@ -50,7 +52,8 @@ impl Pull {
             })
             .build()
             .connect()
-            .await?;
+            .await?
+            .with_page_size(self.page);
 
         let keyed = engine.keyed(&key);
         let (diff, remote_index) = engine.diff().await?;
@@ -87,7 +90,7 @@ impl Pull {
             })
             .collect();
 
-        let (_, downloaded) = keyed.sync_remote(operations, self.page).await?;
+        let (_, downloaded) = keyed.sync_remote(operations).await?;
 
         println!("Downloaded {} records", downloaded.len());
 

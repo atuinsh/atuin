@@ -58,6 +58,7 @@ tokio = { workspace = true }
 semver = { workspace = true }
 thiserror = { workspace = true }
 futures = "0.3"
+async-stream = "0.3"
 notify = "8"
 serde_with = "3.8.1"
 
@@ -70,7 +71,7 @@ rusty_paserk = { version = "0.5.0", default-features = false, features = [
 
 # sync
 reqwest = { workspace = true, optional = true }
-reqwest-middleware = { workspace = true, optional = true, features = ["json"] }
+reqwest-middleware = { workspace = true, optional = true, features = ["json", "query"] }
 indicatif = "0.18.0"
 tiny-bip39 = { workspace = true }
 
