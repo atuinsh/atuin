@@ -49,7 +49,7 @@ eventsource-stream = "0.2"
 pulldown-cmark = "0.13.0"
 async-stream = "0.3"
 uuid = { workspace = true }
-tui-textarea-2 = "0.10.2"
+tui-textarea-2 = "0.12.1"
 unicode-width = "0.2"
 # Path dependency until eye_declare 0.6.0 publishes; then just a version.
 eye_declare = "0.6.4"
