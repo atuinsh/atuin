@@ -26,7 +26,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 
 use atuin_client::history::History;
 use atuin_client::settings::Search as SearchSettings;
@@ -34,6 +34,7 @@ use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
 use atuin_daemon::search::{IndexFilterMode, SearchIndex};
 use atuin_search_bench::corpus;
+use parking_lot::Mutex;
 use time::OffsetDateTime;
 
 fn main() {
@@ -165,10 +166,7 @@ fn filter_dir() -> String {
 /// fast run.
 fn index(scale: usize) -> Arc<SearchIndex> {
     static INDEXES: OnceLock<Mutex<HashMap<usize, Arc<SearchIndex>>>> = OnceLock::new();
-    let mut indexes = INDEXES
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .expect("index cache lock poisoned");
+    let mut indexes = INDEXES.get_or_init(|| Mutex::new(HashMap::new())).lock();
     if let Some(index) = indexes.get(&scale) {
         return Arc::clone(index);
     }
@@ -189,11 +187,11 @@ fn index(scale: usize) -> Arc<SearchIndex> {
     eprintln!("index ready: {} unique commands", index.command_count());
 
     for query in QUERIES {
-        let n = index.search(query, IndexFilterMode::Global, LIMIT).count();
+        let n = index.search(query, &IndexFilterMode::Global, LIMIT).count();
         eprintln!("  {query:?}: {n} results (limit {LIMIT})");
     }
     let dir = filter_dir();
-    let n = index.search("git", IndexFilterMode::Directory(dir.clone()), LIMIT).count();
+    let n = index.search("git", &IndexFilterMode::Directory(dir.clone()), LIMIT).count();
     eprintln!("  \"git\" in {dir:?}: {n} results (limit {LIMIT})");
     assert!(n > 0, "directory filter matched nothing; filter is broken");
 
@@ -210,5 +208,5 @@ fn daemon_search(bencher: divan::Bencher, case: &Case) {
     } else {
         IndexFilterMode::Global
     };
-    bencher.bench(|| index.search(case.query, filter.clone(), LIMIT).count());
+    bencher.bench(|| index.search(case.query, &filter, LIMIT).count());
 }

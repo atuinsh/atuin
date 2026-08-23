@@ -1,5 +1,7 @@
 use atuin_common::utils::{crypto_random_string, uuid_v7};
-use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordIdx, RecordTag};
+use atuin_domain::record::{
+    EncryptedData, Host, HostId, Record, RecordIdx, RecordSeriesKey, RecordTag,
+};
 use atuin_server_database::models::{NewSession, NewUser, User};
 use atuin_server_database::{Database, DbSettings, DbType};
 use atuin_server_postgres::Postgres;
@@ -110,20 +112,26 @@ async fn run_the_test<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
     assert_eq!(status.hosts.get(&host_b.id).unwrap().get(&RecordTag::History).unwrap().clone(), 2);
 
     // Get 3 records from the beginning
-    let recs = db.next_records(&user, host_a.id, RecordTag::History, None, 3).await?;
+    let recs = db
+        .next_records(&user, &RecordSeriesKey::new(host_a.id, RecordTag::History), None, 3)
+        .await?;
     assert_eq!(recs.len(), 3);
     assert_eq!(recs[0].idx, 1);
     assert_eq!(recs.last().unwrap().idx, 3);
 
     // Get from the end, for host a. Get more than exists
-    let recs = db.next_records(&user, host_a.id, RecordTag::History, Some(4), 10).await?;
+    let recs = db
+        .next_records(&user, &RecordSeriesKey::new(host_a.id, RecordTag::History), Some(4), 10)
+        .await?;
     assert_eq!(recs.len(), 3);
     assert_eq!(recs[0].idx, 4); // check the head record is idx 4
     assert_eq!(recs.last().unwrap().idx, 6);
 
     // delete_store
     db.delete_store(&user).await?;
-    let recs = db.next_records(&user, host_a.id, RecordTag::History, Some(4), 10).await?;
+    let recs = db
+        .next_records(&user, &RecordSeriesKey::new(host_a.id, RecordTag::History), Some(4), 10)
+        .await?;
     assert_eq!(recs.len(), 0);
 
     Ok(())

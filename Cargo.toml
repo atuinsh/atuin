@@ -7,7 +7,7 @@ exclude = ["ui/backend"]
 [workspace.package]
 version = "18.20.0-beta.3"
 authors = ["Ellie Huxtable <ellie@atuin.sh>"]
-rust-version = "1.97.0"
+rust-version = "1.98.0"
 license = "MIT"
 homepage = "https://atuin.sh"
 repository = "https://github.com/atuinsh/atuin"
@@ -64,7 +64,11 @@ rstest = "0.26.1"
 thiserror = "2"
 rustix = { version = "1.1.4", features = ["process", "fs"] }
 tower = "0.5"
-tracing = "0.1"
+# `release_max_level_info` compiles out trace/debug events in any build with
+# debug assertions off (release, dist, profiling). Builds that want the
+# `#[instrument(level = "trace")]` spans back must turn debug assertions on --
+# see the `profiling-traced` profile below.
+tracing = { version = "0.1", features = ["release_max_level_info"] }
 tree-sitter = "0.26.8"
 tree-sitter-bash = "0.25.1"
 crypto_secretbox = "0.1.1"
@@ -124,9 +128,9 @@ split-debuginfo = "packed"
 lto = false
 codegen-units = 256
 
-# For local development against a local eye-declare, uncomment below
-#eye_declare = { path = "../eye_declare/crates/eye_declare" }
-#eye_declare_engine = { path = "../eye_declare/crates/eye_declare_engine" }
+[profile.profiling-traced]
+inherits = "dist"
+debug-assertions = true
 
 [patch.crates-io]
 # axoasset (axoupdater's HTTP layer) hardcodes reqwest's "default-tls" feature,

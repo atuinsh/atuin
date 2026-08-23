@@ -2,7 +2,7 @@ use std::io::{self, IsTerminal};
 
 use atuin_client::auth::{self, AuthClient, AuthResponse};
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::record::sync::{self, SyncError};
+use atuin_client::record::sync::{ClientSource, SyncEngine, SyncError};
 use atuin_client::settings::{Settings, SyncAuth};
 use atuin_common::encryption::paseto_v4;
 use clap::Parser;
@@ -271,21 +271,24 @@ async fn verify_key_against_remote(
     let mut key = paseto_v4::Key::try_load_from_path(&settings.key_path)
         .context("could not load encryption key for verification")?;
 
-    let client = sync::build_client(settings).await?;
-    let remote_index = match client.record_status().await {
-        Ok(idx) => idx,
-        Err(e) => {
-            tracing::warn!("could not fetch remote status to verify key: {e}");
-            return Ok(());
-        }
-    };
-
+    // Build the engine once (this hits the network). The key can change between retries below, so
+    // each iteration re-keys the shared engine rather than reconnecting.
+    let engine = SyncEngine::builder()
+        .store(store.clone())
+        .client_source(ClientSource::FromSettings {
+            settings,
+            caps: None,
+        })
+        .build()
+        .connect()
+        .await?;
     loop {
-        match sync::check_encryption_key(&client, &remote_index, &key).await {
+        let check = engine.keyed(&key).key_valid().await;
+        match check {
             // Only persist a key the server has confirmed can read the data, so
             // that cancelling out of a retry leaves the local store as it was.
-            Ok(()) => return store_key(settings, store, &key).await,
-            Err(SyncError::WrongKey) => {
+            None => return store_key(settings, store, &key).await,
+            Some(SyncError::WrongKey) => {
                 if !interactive {
                     logout_wrong_key().await;
                 }
@@ -310,7 +313,7 @@ async fn verify_key_against_remote(
                     _ => logout_wrong_key().await,
                 }
             }
-            Err(e) => {
+            Some(e) => {
                 // Non-key error (e.g. transient network issue). Don't fail the
                 // login — the user is authenticated and can sync later when the
                 // network recovers.

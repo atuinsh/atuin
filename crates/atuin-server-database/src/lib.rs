@@ -5,7 +5,7 @@ pub mod models;
 use std::fmt::Debug;
 
 use async_trait::async_trait;
-use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus, RecordTag};
+use atuin_domain::record::{EncryptedData, Record, RecordIdx, RecordSeriesKey, RecordStatus};
 use serde::{Deserialize, Serialize};
 
 use self::models::{NewSession, NewUser, Session, User};
@@ -105,8 +105,7 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
     async fn next_records(
         &self,
         user: &User,
-        host: HostId,
-        tag: RecordTag,
+        series: &RecordSeriesKey,
         start: Option<RecordIdx>,
         count: u64,
     ) -> DbResult<Vec<Record<EncryptedData>>>;

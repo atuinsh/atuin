@@ -2,11 +2,13 @@ use std::ffi::OsString;
 use std::io::Read;
 use std::path::PathBuf;
 
+use atuin_client::history::AuthorKind;
 use atuin_client::settings::Settings;
 use atuin_common::utils::home_dir;
 use clap::{Parser, Subcommand};
 use eyre::{Result, bail};
 use serde_json::Value;
+use tracing::instrument;
 
 use super::history;
 
@@ -155,6 +157,7 @@ pub struct Cmd {
 }
 
 impl Cmd {
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(self, settings: &Settings) -> Result<()> {
         match (self.action, self.agent) {
             (Some(Action::Install { agent }), None) => install(&agent),
@@ -200,6 +203,7 @@ async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
                 settings,
                 &command,
                 Some(agent.actor_name()),
+                Some(AuthorKind::Agent),
                 intent.as_deref(),
             )
             .await?

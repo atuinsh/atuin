@@ -951,7 +951,9 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
+
+    use parking_lot::Mutex;
 
     use super::*;
 
@@ -1001,7 +1003,7 @@ mod tests {
         let task = SessionTask {
             screen: ScreenState::new(physical),
             child_tx,
-            resizer: Box::new(move |size| sink.lock().expect("resizer lock").push(size)),
+            resizer: Box::new(move |size| sink.lock().push(size)),
             out_tx,
             write: WriteMode::from_flag(false),
             answer_queries: false,
@@ -1040,7 +1042,7 @@ mod tests {
                 task.child
             );
             assert_eq!(
-                applied.lock().expect("resizer lock").as_slice(),
+                applied.lock().as_slice(),
                 [task.child],
                 "the source is resized to the clamped geometry, once"
             );
@@ -1117,8 +1119,10 @@ mod tests {
     }
 
     mod mock_source {
-        use std::sync::{Arc, Mutex, mpsc as std_mpsc};
+        use std::sync::{Arc, mpsc as std_mpsc};
         use std::time::Duration;
+
+        use parking_lot::Mutex;
 
         use super::*;
 
@@ -1141,7 +1145,7 @@ mod tests {
 
         impl Write for SharedWriter {
             fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().expect("writer lock").extend_from_slice(buf);
+                self.0.lock().extend_from_slice(buf);
                 Ok(buf.len())
             }
 
@@ -1239,7 +1243,7 @@ mod tests {
             // detached pty-writer thread; poll until it lands.
             in_tx.send(Inbound::Input(b"typed".to_vec())).expect("session alive");
             let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-            while sink.lock().expect("writer lock").as_slice() != b"typed" {
+            while sink.lock().as_slice() != b"typed" {
                 assert!(
                     tokio::time::Instant::now() < deadline,
                     "viewer input never reached the source's writer"
@@ -1318,7 +1322,7 @@ mod tests {
                 in_rx,
                 host: None,
                 url_sink: Some(Box::new(move |url| {
-                    urls_sink.lock().expect("url lock").push(url.to_string());
+                    urls_sink.lock().push(url.to_string());
                 })),
             };
             let run = tokio::spawn(session.run());
@@ -1344,14 +1348,14 @@ mod tests {
                 })
                 .expect("session alive");
             let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-            while urls.lock().expect("url lock").len() < 2 {
+            while urls.lock().len() < 2 {
                 assert!(
                     tokio::time::Instant::now() < deadline,
                     "Connected URLs never reached the sink"
                 );
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
-            assert_eq!(urls.lock().expect("url lock").as_slice(), [
+            assert_eq!(urls.lock().as_slice(), [
                 "https://hub.example/s/one#key".to_string(),
                 "https://hub.example/s/two#key".to_string(),
             ]);

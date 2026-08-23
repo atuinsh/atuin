@@ -6,7 +6,7 @@ use std::time::Duration;
 use atuin_common::filter::{self, OrFilter};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils;
-use atuin_domain::record::CmdOrigin;
+use atuin_domain::record::{CmdOrigin, UNKNOWN_USER};
 use fs_err as fs;
 use itertools::Itertools;
 use sql_builder::bind::Bind;
@@ -17,12 +17,13 @@ use sqlx::sqlite::{
 };
 use sqlx::{Result, Row};
 use time::OffsetDateTime;
+use tracing::instrument;
 use uuid::Uuid;
 
 use super::history::History;
 use super::ordering;
 use super::settings::{FilterMode, SearchMode, Settings};
-use crate::history::{AuthorPattern, HistoryId, HistoryStats, KNOWN_AGENTS};
+use crate::history::{AuthorKind, AuthorPattern, HistoryId, HistoryStats, KNOWN_AGENTS};
 
 #[derive(Clone)]
 pub struct Context {
@@ -60,6 +61,7 @@ pub struct OptFilters<'a> {
 /// Outside of an atuin-hooked shell (e.g. when running as an MCP server),
 /// `ATUIN_SESSION` is unset; the session is left empty so session-scoped
 /// filters simply match nothing.
+#[instrument(level = "trace", skip_all, err)]
 pub async fn query_context() -> eyre::Result<Context> {
     let session = env::var("ATUIN_SESSION").unwrap_or_default();
     let cmd_origin = CmdOrigin::probe_current();
@@ -76,6 +78,7 @@ pub async fn query_context() -> eyre::Result<Context> {
     })
 }
 
+#[instrument(level = "trace", skip_all, err)]
 pub async fn current_context() -> eyre::Result<Context> {
     if env::var("ATUIN_SESSION").is_err() {
         return Err(eyre::eyre!(
@@ -99,28 +102,47 @@ impl Context {
     }
 }
 
-/// Each entry is OR'd: [`AuthorPattern::AllUser`] → NOT IN agents, [`AuthorPattern::AllAgent`] →
-/// IN agents, [`AuthorPattern::Name`] → exact match.
+/// Each entry is OR'd: [`AuthorPattern::AllUser`] → not an agent, [`AuthorPattern::AllAgent`] → an
+/// agent, [`AuthorPattern::Name`] → exact match.
 fn apply_author_filter(sql: &mut SqlBuilder, authors: OrFilter<&[AuthorPattern]>) {
     let authors = match authors.items() {
         filter::Items::All => return,
         filter::Items::Some(a) => a,
     };
 
-    let author_expr = "CASE WHEN author IS NULL OR trim(author) = '' THEN CASE WHEN \
-                       instr(hostname, ':') > 0 THEN substr(hostname, instr(hostname, ':') + 1) \
-                       ELSE hostname END ELSE author END";
+    // The username half of `hostname`, which is what `author` falls back to when nothing set it.
+    let user_expr = "CASE WHEN instr(hostname, ':') > 0 THEN substr(hostname, instr(hostname, \
+                     ':') + 1) ELSE hostname END";
 
-    let mut agent_list: Option<String> = None;
-    let get_agent_list = || KNOWN_AGENTS.iter().map(quote).join(", ");
+    let author_expr = std::fmt::from_fn(|f| {
+        write!(f, "CASE WHEN author IS NULL OR trim(author) = '' THEN {user_expr} ELSE author END")
+    });
+
+    let defaulted_expr = format!(
+        "CASE WHEN instr(hostname, ':') = 0 THEN hostname WHEN substr(hostname, instr(hostname, \
+         ':') + 1) = {unknown} THEN substr(hostname, 1, instr(hostname, ':') - 1) ELSE \
+         substr(hostname, instr(hostname, ':') + 1) END",
+        unknown = quote(UNKNOWN_USER),
+    );
+
+    // Mirrors [`History::is_agent`]: a recorded kind wins, and without one a known agent name means
+    // an agent, unless the author is only the name it defaulted to — a NULL/blank author *is* only
+    // that name, so it is never an agent. A kind we don't recognise (written by a newer version)
+    // falls through to the name heuristic, exactly like [`AuthorKind::from_repr`] mapping it to
+    // `None` — and so does a NULL kind, because `NULL IN (...)` is not true.
+    let is_agent = || {
+        format!(
+            "CASE WHEN author_kind IN ({kinds}) THEN author_kind = {agent} WHEN author IS NULL OR \
+             trim(author) = '' THEN 0 ELSE author IN ({names}) AND author <> {defaulted_expr} END",
+            kinds = AuthorKind::VARIANTS.iter().map(|kind| kind.as_u8()).join(", "),
+            agent = AuthorKind::Agent.as_u8(),
+            names = KNOWN_AGENTS.iter().map(quote).join(", "),
+        )
+    };
 
     let mut conditions = authors.iter().map(|author| match author {
-        AuthorPattern::AllUser => {
-            format!("{author_expr} NOT IN ({})", agent_list.get_or_insert_with(get_agent_list))
-        }
-        AuthorPattern::AllAgent => {
-            format!("{author_expr} IN ({})", agent_list.get_or_insert_with(get_agent_list))
-        }
+        AuthorPattern::AllUser => format!("NOT ({})", is_agent()),
+        AuthorPattern::AllAgent => is_agent(),
         AuthorPattern::Name(name) => {
             format!("{author_expr} = {}", quote(name))
         }
@@ -159,13 +181,13 @@ fn apply_shell_filter(sql: &mut SqlBuilder, shells: OrFilter<&[String]>) {
 }
 
 fn get_session_start_time(session_id: &str) -> Option<i64> {
-    if let Ok(uuid) = Uuid::parse_str(session_id)
-        && let Some(timestamp) = uuid.get_timestamp()
-    {
-        let (seconds, nanos) = timestamp.to_unix();
-        return Some(seconds as i64 * 1_000_000_000 + i64::from(nanos));
-    }
-    None
+    // A session id is not guaranteed to be one of our UUIDv7s: ATUIN_SESSION comes from the
+    // environment, and a stray value whose version nibble reads as v1/v6/v7 can carry a timestamp
+    // far outside the unix-nanos range. Treat such a session as having no start time rather than
+    // overflowing.
+    let uuid = Uuid::parse_str(session_id).ok()?;
+    let (seconds, nanos) = uuid.get_timestamp()?.to_unix();
+    i64::try_from(seconds).ok()?.checked_mul(1_000_000_000)?.checked_add(i64::from(nanos))
 }
 
 /// SQL predicate to match for a [`CmdOrigin`].
@@ -244,7 +266,52 @@ pub struct Sqlite {
     pub pool: SqlitePool,
 }
 
+impl<'r> ::sqlx::FromRow<'r, SqliteRow> for History {
+    fn from_row(row: &'r SqliteRow) -> ::sqlx::Result<Self> {
+        let deleted_at: Option<i64> = row.try_get("deleted_at")?;
+        let hostname: String = row.try_get("hostname")?;
+        let author: Option<String> = row.try_get("author").ok().flatten();
+        let author = author.filter(|author| !author.trim().is_empty()).unwrap_or_else(|| {
+            CmdOrigin::try_from(hostname.clone())
+                .map_or_else(|err| err.0, |origin| origin.user().into_inner().to_owned())
+        });
+        let intent: Option<String> = row.try_get("intent").ok().flatten();
+        let intent = intent.filter(|intent| !intent.trim().is_empty());
+        let shell: Option<String> = row.try_get("shell").ok().flatten();
+        let author_kind: Option<i64> = row.try_get("author_kind").ok().flatten();
+        let author_kind =
+            author_kind.and_then(|kind| u8::try_from(kind).ok()).and_then(AuthorKind::from_repr);
+
+        Ok(Self::from_db()
+            .id(row.try_get("id")?)
+            .timestamp(OffsetDateTime::from_unix_nanos_i64(row.try_get("timestamp")?))
+            .duration(row.try_get("duration")?)
+            .exit(row.try_get("exit")?)
+            .command(row.try_get("command")?)
+            .cwd(row.try_get("cwd")?)
+            .session(row.try_get("session")?)
+            .hostname(hostname)
+            .author(author)
+            .intent(intent)
+            .deleted_at(deleted_at.map(OffsetDateTime::from_unix_nanos_i64))
+            .shell(shell)
+            .author_kind(author_kind)
+            .build()
+            .into())
+    }
+}
+
+/// A grouped history row plus its aggregate `count(*)`, used by the deduplicated
+/// list/search query. `#[sqlx(flatten)]` reuses `History`'s `FromRow` impl.
+#[derive(sqlx::FromRow)]
+struct HistoryWithCount {
+    #[sqlx(flatten)]
+    history: History,
+    count: i32,
+}
+
 impl Sqlite {
+    #[instrument(level = "trace", skip_all, fields(timeout), err)]
     pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
         let path = path.as_ref();
         debug!("opening sqlite database at {path:?}");
@@ -281,10 +348,12 @@ impl Sqlite {
         Ok(Self { pool })
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn sqlite_version(&self) -> Result<String> {
         sqlx::query_scalar("SELECT sqlite_version()").fetch_one(&self.pool).await
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     async fn setup_db(pool: &SqlitePool) -> Result<()> {
         debug!("running sqlite database setup");
 
@@ -293,12 +362,13 @@ impl Sqlite {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
     async fn save_raw(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, h: &History) -> Result<()> {
         sqlx::query(
             "insert or ignore into history(
                 id, timestamp, duration, exit, command, cwd, session, hostname, author, intent,
-                deleted_at, shell
-            ) values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                deleted_at, shell, author_kind
+            ) values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         )
         .bind(h.id.0.as_str())
         .bind(h.timestamp.unix_timestamp_nanos() as i64)
@@ -312,12 +382,14 @@ impl Sqlite {
         .bind(h.intent.as_deref())
         .bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
         .bind(h.shell.as_deref())
+        .bind(h.author_kind.map(|kind| i64::from(kind.as_u8())))
         .execute(&mut **tx)
         .await?;
 
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
     async fn delete_row_raw(
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         id: HistoryId,
@@ -330,35 +402,7 @@ impl Sqlite {
         Ok(())
     }
 
-    fn row_to_history(row: &SqliteRow) -> History {
-        let deleted_at: Option<i64> = row.get("deleted_at");
-        let hostname: String = row.get("hostname");
-        let author: Option<String> = row.try_get("author").ok().flatten();
-        let author = author.filter(|author| !author.trim().is_empty()).unwrap_or_else(|| {
-            CmdOrigin::try_from(hostname.clone())
-                .map_or_else(|err| err.0, |origin| origin.user().into_inner().to_owned())
-        });
-        let intent: Option<String> = row.try_get("intent").ok().flatten();
-        let intent = intent.filter(|intent| !intent.trim().is_empty());
-        let shell: Option<String> = row.try_get("shell").ok().flatten();
-
-        History::from_db()
-            .id(row.get("id"))
-            .timestamp(OffsetDateTime::from_unix_nanos_i64(row.get("timestamp")))
-            .duration(row.get("duration"))
-            .exit(row.get("exit"))
-            .command(row.get("command"))
-            .cwd(row.get("cwd"))
-            .session(row.get("session"))
-            .hostname(hostname)
-            .author(author)
-            .intent(intent)
-            .deleted_at(deleted_at.map(OffsetDateTime::from_unix_nanos_i64))
-            .shell(shell)
-            .build()
-            .into()
-    }
-
+    #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
     pub async fn save(&self, h: &History) -> Result<()> {
         debug!("saving history to sqlite");
         let mut tx = self.pool.begin().await?;
@@ -368,6 +412,7 @@ impl Sqlite {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn save_bulk<'a>(&self, h: impl IntoIterator<Item = &'a History>) -> Result<()> {
         let mut h = h.into_iter().peekable();
         if h.peek().is_none() {
@@ -387,18 +432,19 @@ impl Sqlite {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
     pub async fn load(&self, id: &str) -> Result<Option<History>> {
         debug!("loading history item {}", id);
 
-        let res = sqlx::query("select * from history where id = ?1")
+        let res = sqlx::query_as::<_, History>("select * from history where id = ?1")
             .bind(id)
-            .map(|row| Self::row_to_history(&row))
             .fetch_optional(&self.pool)
             .await?;
 
         Ok(res)
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn load_active(
         &self,
         ids: impl IntoIterator<Item = HistoryId>,
@@ -435,25 +481,26 @@ impl Sqlite {
                 "select * from history where id in ({placeholders}) and deleted_at is null"
             );
 
-            let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+            let mut query = sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(sql));
             for id in &chunk {
                 query = query.bind(id.0.as_str());
             }
 
-            let rows = query.map(|row| Self::row_to_history(&row)).fetch_all(&self.pool).await?;
+            let rows = query.fetch_all(&self.pool).await?;
             out.extend(rows);
         }
 
         Ok(out)
     }
 
+    #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
     pub async fn update(&self, h: &History) -> Result<()> {
         debug!("updating sqlite history");
 
         sqlx::query(
             "update history
                 set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = \
-             ?7, hostname = ?8, author = ?9, intent = ?10, deleted_at = ?11
+             ?7, hostname = ?8, author = ?9, intent = ?10, deleted_at = ?11, author_kind = ?12
                 where id = ?1",
         )
         .bind(h.id.0.as_str())
@@ -467,6 +514,7 @@ impl Sqlite {
         .bind(h.author.as_str())
         .bind(h.intent.as_deref())
         .bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
+        .bind(h.author_kind.map(|kind| i64::from(kind.as_u8())))
         .execute(&self.pool)
         .await?;
 
@@ -474,6 +522,7 @@ impl Sqlite {
     }
 
     // make a unique list, that only shows the *newest* version of things
+    #[instrument(level = "trace", skip_all, fields(unique, include_deleted), err)]
     pub async fn list(
         &self,
         filters: impl IntoIterator<Item = FilterMode>,
@@ -533,54 +582,53 @@ impl Sqlite {
 
         let query = query.sql().expect("bug in list query. please report");
 
-        let res = sqlx::query(sqlx::AssertSqlSafe(query))
-            .map(|row| Self::row_to_history(&row))
-            .fetch_all(&self.pool)
-            .await?;
+        let res =
+            sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(query)).fetch_all(&self.pool).await?;
 
         Ok(res)
     }
 
+    #[instrument(level = "trace", skip_all, fields(from = ?from, to = ?to), err)]
     pub async fn range(&self, from: OffsetDateTime, to: OffsetDateTime) -> Result<Vec<History>> {
         debug!("listing history from {:?} to {:?}", from, to);
 
-        let res = sqlx::query(
+        let res = sqlx::query_as::<_, History>(
             "select * from history where timestamp >= ?1 and timestamp <= ?2 order by timestamp \
              asc",
         )
         .bind(from.unix_timestamp_nanos() as i64)
         .bind(to.unix_timestamp_nanos() as i64)
-        .map(|row| Self::row_to_history(&row))
         .fetch_all(&self.pool)
         .await?;
 
         Ok(res)
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn last(&self) -> Result<Option<History>> {
-        let res = sqlx::query(
+        let res = sqlx::query_as::<_, History>(
             "select * from history where duration >= 0 order by timestamp desc limit 1",
         )
-        .map(|row| Self::row_to_history(&row))
         .fetch_optional(&self.pool)
         .await?;
 
         Ok(res)
     }
 
+    #[instrument(level = "trace", skip_all, fields(count), err)]
     pub async fn before(&self, timestamp: OffsetDateTime, count: i64) -> Result<Vec<History>> {
-        let res = sqlx::query(
+        let res = sqlx::query_as::<_, History>(
             "select * from history where timestamp < ?1 order by timestamp desc limit ?2",
         )
         .bind(timestamp.unix_timestamp_nanos() as i64)
         .bind(count)
-        .map(|row| Self::row_to_history(&row))
         .fetch_all(&self.pool)
         .await?;
 
         Ok(res)
     }
 
+    #[instrument(level = "trace", skip_all, fields(include_deleted), err)]
     pub async fn history_count(&self, include_deleted: bool) -> Result<i64> {
         let query = if include_deleted {
             "select count(1) from history"
@@ -592,6 +640,7 @@ impl Sqlite {
         Ok(res.0)
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn search(
         &self,
         search_mode: DbSearchMode,
@@ -759,10 +808,8 @@ impl Sqlite {
             )
         };
 
-        let res = sqlx::query(sqlx::AssertSqlSafe(query))
-            .map(|row| Self::row_to_history(&row))
-            .fetch_all(&self.pool)
-            .await?;
+        let res =
+            sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(query)).fetch_all(&self.pool).await?;
 
         // Rank against the same characters SQL matched: drop spaces, operators and negated terms.
         let reorder_query: String = QueryTokenizer::new(orig_query)
@@ -778,15 +825,15 @@ impl Sqlite {
         Ok(ordering::reorder_fuzzy(search_mode, &reorder_query, res))
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn query_history(&self, query: &str) -> Result<Vec<History>> {
-        let res = sqlx::query(sqlx::AssertSqlSafe(query))
-            .map(|row| Self::row_to_history(&row))
-            .fetch_all(&self.pool)
-            .await?;
+        let res =
+            sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(query)).fetch_all(&self.pool).await?;
 
         Ok(res)
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn all_with_count(&self) -> Result<Vec<(History, i32)>> {
         debug!("listing history");
 
@@ -802,6 +849,7 @@ impl Sqlite {
                 "deleted_at",
                 "null as author",
                 "null as intent",
+                "null as author_kind",
                 "group_concat(cwd, ':') as cwd",
                 "group_concat(session) as session",
                 "group_concat(hostname, ',') as hostname",
@@ -814,15 +862,11 @@ impl Sqlite {
 
         let query = query.sql().expect("bug in list query. please report");
 
-        let res = sqlx::query(sqlx::AssertSqlSafe(query))
-            .map(|row: SqliteRow| {
-                let count: i32 = row.get("count");
-                (Self::row_to_history(&row), count)
-            })
+        let res = sqlx::query_as::<_, HistoryWithCount>(sqlx::AssertSqlSafe(query))
             .fetch_all(&self.pool)
             .await?;
 
-        Ok(res)
+        Ok(res.into_iter().map(|r| (r.history, r.count)).collect())
     }
 
     pub fn all_paged(&self, page_size: usize, include_deleted: bool, unique: bool) -> Paged {
@@ -834,10 +878,12 @@ impl Sqlite {
     // instead (HistoryRecord::Delete), and the only remaining caller deletes entries
     // that were never pushed to the store - so just delete the row.
     // deleted_at is still read to keep tombstones from older versions working.
+    #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
     pub async fn delete(&self, h: History) -> Result<()> {
         self.delete_rows([h.id]).await
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn delete_rows(&self, ids: impl IntoIterator<Item = HistoryId>) -> Result<()> {
         let mut ids = ids.into_iter().peekable();
         if ids.peek().is_none() {
@@ -855,6 +901,7 @@ impl Sqlite {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
     pub async fn stats(&self, h: &History) -> Result<HistoryStats> {
         // We select the previous in the session by time. Excluding deleted
         // history matches every other read path, and lets the query use the
@@ -928,15 +975,13 @@ impl Sqlite {
             Vec<(String, i64)>,
             Vec<(String, f64)>,
         ) = tokio::try_join!(
-            sqlx::query(sqlx::AssertSqlSafe(prev))
+            sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(prev))
                 .bind(h.timestamp.unix_timestamp_nanos() as i64)
                 .bind(&h.session)
-                .map(|row| Self::row_to_history(&row))
                 .fetch_optional(&self.pool),
-            sqlx::query(sqlx::AssertSqlSafe(next))
+            sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(next))
                 .bind(h.timestamp.unix_timestamp_nanos() as i64)
                 .bind(&h.session)
-                .map(|row| Self::row_to_history(&row))
                 .fetch_optional(&self.pool),
             sqlx::query_as(sqlx::AssertSqlSafe(total)).bind(&h.command).fetch_one(&self.pool),
             sqlx::query_as(sqlx::AssertSqlSafe(average)).bind(&h.command).fetch_one(&self.pool),
@@ -961,8 +1006,9 @@ impl Sqlite {
         })
     }
 
+    #[instrument(level = "trace", skip_all, fields(before, dupkeep), err)]
     pub async fn get_dups(&self, before: i64, dupkeep: u32) -> Result<Vec<History>> {
-        let res = sqlx::query(
+        let res = sqlx::query_as::<_, History>(
             "SELECT * FROM (
                 SELECT *, ROW_NUMBER()
                   OVER (PARTITION BY command, cwd, hostname ORDER BY timestamp DESC)
@@ -974,7 +1020,6 @@ impl Sqlite {
         )
         .bind(dupkeep)
         .bind(before)
-        .map(|row| Self::row_to_history(&row))
         .fetch_all(&self.pool)
         .await?;
 
@@ -1001,6 +1046,7 @@ impl Paged {
         }
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn next(&mut self) -> Result<Option<Vec<History>>> {
         let mut query = SqlBuilder::select_from(SqlName::new("history").alias("h").baquoted());
 
@@ -1176,6 +1222,20 @@ mod test {
 
     use super::*;
     use crate::settings::test_local_timeout;
+
+    /// `ATUIN_SESSION` comes from the environment: a stray value whose version nibble reads as a
+    /// timestamped UUID can carry a timestamp far outside the unix-nanos range, which must mean
+    /// "no start time" rather than an overflow.
+    #[rstest]
+    #[case::a_real_v7_session(atuin_common::utils::uuid_v7().to_string(), true)]
+    #[case::not_a_uuid("not-a-uuid".to_string(), false)]
+    #[case::out_of_range_timestamp("ffffffff-ffff-1fff-bfff-ffffffffffff".to_string(), false)]
+    fn session_start_time_tolerates_hostile_session_ids(
+        #[case] session_id: String,
+        #[case] has_start: bool,
+    ) {
+        assert_eq!(get_session_start_time(&session_id).is_some(), has_start);
+    }
 
     fn new_context() -> Context {
         Context {
@@ -1938,6 +1998,195 @@ mod test {
             .unwrap();
 
         assert_eq!(results.len(), expected_count, "{results:?}");
+    }
+
+    /// An author_kind value this version doesn't recognise (written by a newer one) must fall
+    /// through to the name heuristic in SQL, exactly like [`AuthorKind::from_repr`] returning `None`
+    /// does in [`History::is_agent`] — otherwise the two classifiers disagree on the same row.
+    #[tokio::test(flavor = "multi_thread")]
+    #[rstest]
+    async fn author_filter_treats_an_unknown_kind_as_unstated() {
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+
+        let history: History = History::import()
+            .timestamp(OffsetDateTime::now_utc())
+            .command("echo hello")
+            .cwd("/tmp")
+            .cmd_origin(CmdOrigin::try_from("mac:ellie".to_owned()).unwrap())
+            .author("claude-code")
+            .build()
+            .into();
+        db.save(&history).await.unwrap();
+
+        // A kind from the future: one past the largest value any AuthorKind variant maps to, so
+        // it stays unknown even if more variants are added.
+        let unknown = AuthorKind::VARIANTS.iter().map(|kind| kind.as_u8()).max().unwrap() + 1;
+        sqlx::query("update history set author_kind = ?1")
+            .bind(i64::from(unknown))
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let context = Context {
+            cmd_origin: CmdOrigin::try_from("mac:ellie".to_owned()).unwrap(),
+            session: "session".into(),
+            cwd: "/tmp".into(),
+            host_id: "host".into(),
+            git_root: None,
+        };
+
+        for (pattern, expected) in [(AuthorPattern::AllAgent, 1), (AuthorPattern::AllUser, 0)] {
+            let authors = OrFilter::from_list(vec![pattern]).unwrap();
+            let filters = OptFilters {
+                authors: authors.as_slice_filter(),
+                ..Default::default()
+            };
+            let results = db
+                .search(DbSearchMode::FullText, FilterMode::Global, &context, "echo", filters)
+                .await
+                .unwrap();
+            assert_eq!(results.len(), expected, "{authors:?}");
+        }
+    }
+
+    /// A legacy row whose colonless hostname IS a known agent name (e.g. a machine hostnamed
+    /// `pi`, imported before hostnames were `host:user`): the author defaulted to the whole
+    /// hostname, so it tells us nothing — human on both the SQL and [`History::is_agent`] sides.
+    #[tokio::test(flavor = "multi_thread")]
+    #[rstest]
+    async fn author_filter_treats_a_colonless_agent_hostname_as_human() {
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+
+        let history: History = History::import()
+            .timestamp(OffsetDateTime::now_utc())
+            .command("echo hello")
+            .cwd("/tmp")
+            .author("pi")
+            .build()
+            .into();
+        db.save(&history).await.unwrap();
+        // `CmdOrigin` cannot represent a colonless hostname (parse_lenient rewrites it), so plant
+        // the legacy shape directly.
+        sqlx::query("update history set hostname = 'pi'").execute(&db.pool).await.unwrap();
+
+        let loaded = db.load(history.id.0.as_str()).await.unwrap().unwrap();
+        assert!(!loaded.is_agent());
+
+        let context = Context {
+            cmd_origin: CmdOrigin::try_from("pi:unknown-user".to_owned()).unwrap(),
+            session: "session".into(),
+            cwd: "/tmp".into(),
+            host_id: "host".into(),
+            git_root: None,
+        };
+        for (pattern, expected) in [(AuthorPattern::AllUser, 1), (AuthorPattern::AllAgent, 0)] {
+            let authors = OrFilter::from_list(vec![pattern]).unwrap();
+            let filters = OptFilters {
+                authors: authors.as_slice_filter(),
+                ..Default::default()
+            };
+            let results = db
+                .search(DbSearchMode::FullText, FilterMode::Global, &context, "echo", filters)
+                .await
+                .unwrap();
+            assert_eq!(results.len(), expected, "{authors:?}");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[rstest]
+    async fn author_filter_treats_a_placeholder_user_agent_hostname_as_human() {
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+
+        let history: History = History::import()
+            .timestamp(OffsetDateTime::now_utc())
+            .command("echo hello")
+            .cwd("/tmp")
+            .cmd_origin(CmdOrigin::try_from("pi:unknown-user".to_owned()).unwrap())
+            .author("pi")
+            .build()
+            .into();
+        db.save(&history).await.unwrap();
+
+        let loaded = db.load(history.id.0.as_str()).await.unwrap().unwrap();
+        assert!(!loaded.is_agent());
+
+        let context = Context {
+            cmd_origin: CmdOrigin::try_from("pi:unknown-user".to_owned()).unwrap(),
+            session: "session".into(),
+            cwd: "/tmp".into(),
+            host_id: "host".into(),
+            git_root: None,
+        };
+        for (pattern, expected) in [(AuthorPattern::AllUser, 1), (AuthorPattern::AllAgent, 0)] {
+            let authors = OrFilter::from_list(vec![pattern]).unwrap();
+            let filters = OptFilters {
+                authors: authors.as_slice_filter(),
+                ..Default::default()
+            };
+            let results = db
+                .search(DbSearchMode::FullText, FilterMode::Global, &context, "echo", filters)
+                .await
+                .unwrap();
+            assert_eq!(results.len(), expected, "{authors:?}");
+        }
+    }
+
+    /// A user called `pi` shares a name with the `pi` agent, so on their machine the author name
+    /// alone cannot say who ran a command: only an entry that states its kind is an agent's.
+    #[tokio::test(flavor = "multi_thread")]
+    #[rstest]
+    #[case::all_user(["$all-user"], &["echo pi-human"])]
+    #[case::all_agent(["$all-agent"], &["echo pi-agent", "echo claude"])]
+    #[case::by_name(["pi"], &["echo pi-agent", "echo pi-human"])]
+    async fn test_search_authors_when_the_user_is_named_after_an_agent<const N: usize>(
+        #[case] authors: [&str; N],
+        #[case] expected: &[&str],
+    ) {
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+
+        for (command, author, author_kind) in [
+            ("echo pi-agent", "pi", Some(AuthorKind::Agent)),
+            ("echo pi-human", "pi", None),
+            ("echo claude", "claude-code", None),
+        ] {
+            let history = History::import()
+                .timestamp(OffsetDateTime::now_utc())
+                .command(command)
+                .cwd("/tmp")
+                .cmd_origin(CmdOrigin::try_from("raspberry:pi".to_owned()).unwrap())
+                .author(author)
+                .author_kind(author_kind)
+                .build()
+                .into();
+            db.save(&history).await.unwrap();
+        }
+
+        let context = Context {
+            cmd_origin: CmdOrigin::try_from("raspberry:pi".to_owned()).unwrap(),
+            session: "session".into(),
+            cwd: "/tmp".into(),
+            host_id: "host".into(),
+            git_root: None,
+        };
+
+        let authors =
+            OrFilter::from_list(authors.map(AuthorPattern::from).to_vec()).unwrap_or_default();
+        let filters = OptFilters {
+            authors: authors.as_slice_filter(),
+            ..Default::default()
+        };
+
+        let results = db
+            .search(DbSearchMode::FullText, FilterMode::Global, &context, "echo", filters)
+            .await
+            .unwrap();
+
+        let mut commands: Vec<&str> = results.iter().map(|h| h.command.as_str()).collect();
+        commands.sort_unstable();
+        let mut expected = expected.to_vec();
+        expected.sort_unstable();
+        assert_eq!(commands, expected);
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -13,6 +13,7 @@ use atuin_common::string::EscapeNonPrintablePosixExt as _;
 use atuin_common::utils;
 use clap::Parser;
 use eyre::Result;
+use tracing::instrument;
 
 use super::history::ListMode;
 
@@ -170,6 +171,7 @@ impl Cmd {
     // clippy: now it has too many lines
     // me: I'll do it later OKAY
     #[allow(clippy::too_many_lines)]
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(
         self,
         db: Sqlite,

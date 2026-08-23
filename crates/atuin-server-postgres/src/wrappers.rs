@@ -1,36 +1,9 @@
-use ::sqlx::{FromRow, Result};
 use atuin_domain::record::{EncryptedData, Host, Record, RecordTag, RecordVersion};
-use atuin_server_database::models::{Session, User};
 use sqlx::Row;
 use sqlx::postgres::PgRow;
 
 #[derive(derive_more::Into)]
-pub struct DbUser(pub User);
-#[derive(derive_more::Into)]
-pub struct DbSession(pub Session);
-#[derive(derive_more::Into)]
 pub struct DbRecord(pub Record<EncryptedData>);
-
-impl<'a> FromRow<'a, PgRow> for DbUser {
-    fn from_row(row: &'a PgRow) -> Result<Self> {
-        Ok(Self(User {
-            id: row.try_get("id")?,
-            username: row.try_get("username")?,
-            email: row.try_get("email")?,
-            password: row.try_get("password")?,
-        }))
-    }
-}
-
-impl<'a> ::sqlx::FromRow<'a, PgRow> for DbSession {
-    fn from_row(row: &'a PgRow) -> ::sqlx::Result<Self> {
-        Ok(Self(Session {
-            id: row.try_get("id")?,
-            user_id: row.try_get("user_id")?,
-            token: row.try_get("token")?,
-        }))
-    }
-}
 
 impl<'a> ::sqlx::FromRow<'a, PgRow> for DbRecord {
     fn from_row(row: &'a PgRow) -> ::sqlx::Result<Self> {

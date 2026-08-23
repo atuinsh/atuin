@@ -1,6 +1,8 @@
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4;
-use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx, RecordTag, RecordVersion};
+use atuin_domain::record::{
+    Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag, RecordVersion,
+};
 use eyre::{Result, eyre};
 use record::ScriptRecord;
 use script::Script;
@@ -28,7 +30,11 @@ impl ScriptStore {
 
     async fn push_record(&self, record: ScriptRecord) -> Result<(RecordId, RecordIdx)> {
         let bytes = record.serialize()?;
-        let idx = self.store.last(self.host_id, &RecordTag::Script).await?.map_or(0, |p| p.idx + 1);
+        let idx = self
+            .store
+            .last(&RecordSeriesKey::new(self.host_id, RecordTag::Script))
+            .await?
+            .map_or(0, |p| p.idx + 1);
 
         let record = Record::builder()
             .host(Host::new(self.host_id))

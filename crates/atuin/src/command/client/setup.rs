@@ -4,7 +4,9 @@ use atuin_client::settings::Settings;
 use colored::Colorize;
 use eyre::Result;
 use toml_edit::{DocumentMut, value};
+use tracing::instrument;
 
+#[instrument(level = "trace", skip_all, err)]
 pub async fn run(_settings: &Settings) -> Result<()> {
     let enable_ai = prompt(
         "Atuin AI",
