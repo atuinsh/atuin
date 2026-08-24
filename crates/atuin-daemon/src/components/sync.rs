@@ -210,6 +210,10 @@ async fn do_sync_tick(
         }
     };
 
+    if let Err(e) = handle.caps().refresh().await {
+        tracing::debug!("capability refresh failed, keeping cached document: {e}");
+    }
+
     if !logged_in {
         tracing::debug!("not logged in, skipping sync tick");
         return SyncState::Idle;

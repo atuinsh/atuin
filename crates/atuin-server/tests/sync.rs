@@ -42,7 +42,7 @@ impl TestServer {
             5,
             30,
             &Default::default(),
-            api_client::caps_client(&self.address, &Default::default()).unwrap(),
+            api_client::caps_client_anonymous(&self.address, &Default::default()).unwrap(),
         )
         .unwrap()
     }

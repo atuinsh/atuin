@@ -948,7 +948,7 @@ mod packfile_sync_tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
-    use crate::api_client::{AuthToken, Client, caps_client};
+    use crate::api_client::{AuthToken, Client, caps_client_anonymous};
     use crate::packfile::record::PackManifestDataV1;
     use crate::packfile::{PackManifestRecordView, try_pack};
     use crate::record::sqlite_store::SqliteStore;
@@ -968,7 +968,7 @@ mod packfile_sync_tests {
 
     /// A [`Client`] pointed at a wiremock server, authenticated with a dummy token.
     pub(super) fn mock_client(addr: &url::Url) -> Client {
-        let caps = caps_client(addr, &HashMap::new()).unwrap();
+        let caps = caps_client_anonymous(addr, &HashMap::new()).unwrap();
         Client::new(addr.clone(), &AuthToken::Token("t".into()), 30, 30, &HashMap::new(), caps)
             .unwrap()
     }
@@ -1489,7 +1489,7 @@ mod packfile_sync_tests {
     /// network (already-local skips, parse failures) or that exercise a transport fault.
     fn dead_client() -> Client {
         let addr: url::Url = "http://127.0.0.1:1/".parse().unwrap();
-        let caps = caps_client(&addr, &HashMap::new()).unwrap();
+        let caps = caps_client_anonymous(&addr, &HashMap::new()).unwrap();
         Client::new(addr, &AuthToken::Token("t".into()), 1, 1, &HashMap::new(), caps).unwrap()
     }
 

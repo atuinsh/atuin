@@ -36,18 +36,20 @@ impl SyncEngineInit<'_> {
         let client = match self.client_source {
             ClientSource::FromClient(client) => client,
             ClientSource::FromSettings { settings, caps } => {
+                let auth = settings
+                    .sync_auth_token()
+                    .await
+                    .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
+
                 let caps = match caps {
                     Some(caps) => caps,
-                    None => caps_client(&settings.sync_address, &settings.extra_headers)
+                    None => caps_client(settings)
                         .map_err(|e| SyncError::OperationalError { msg: e.to_string() })?,
                 };
 
                 Client::new(
                     settings.sync_address.clone(),
-                    &settings
-                        .sync_auth_token()
-                        .await
-                        .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?,
+                    &auth,
                     settings.network_connect_timeout,
                     settings.network_timeout,
                     &settings.extra_headers,
