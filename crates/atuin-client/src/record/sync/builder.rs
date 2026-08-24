@@ -1,8 +1,10 @@
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
+use atuin_common::sync::MutEagerFutureCell;
 use atuin_domain::caps::{CapClient, PageSizeCap};
 use eyre::Result;
+use tokio::runtime::Handle;
 use tracing::instrument;
 use typed_builder::TypedBuilder;
 
@@ -58,7 +60,11 @@ impl SyncEngineInit<'_> {
             }
         };
 
-        let page_size = negotiate_page_size(client.caps()).await;
+        let caps = client.caps().clone();
+        let page_size = MutEagerFutureCell::new(
+            async move { negotiate_page_size(&caps).await },
+            &Handle::current(),
+        );
 
         Ok(SyncEngine {
             client,

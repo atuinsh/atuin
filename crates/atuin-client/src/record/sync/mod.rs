@@ -131,7 +131,7 @@ pub struct SyncEngine {
     client: Client,
     store: SqliteStore,
     /// How many records each sync page requests. Set via [`Self::with_page_size`].
-    page_size: NonZeroU64,
+    page_size: MutEagerFutureCell<NonZeroU64>,
 }
 
 /// A [`SyncEngine`] paired with an encryption key, for the operations that encrypt or decrypt.
@@ -146,8 +146,8 @@ pub struct Keyed<'k> {
 impl SyncEngine {
     /// Set how many records each sync page requests (default [`DEFAULT_PAGE_SIZE`]).
     #[must_use]
-    pub fn with_page_size(mut self, page_size: NonZeroU64) -> Self {
-        self.page_size = page_size;
+    pub fn with_page_size(self, page_size: NonZeroU64) -> Self {
+        self.page_size.overwrite(page_size);
         self
     }
 
@@ -306,7 +306,7 @@ impl Keyed<'_> {
     #[instrument(
         level = "trace",
         skip_all,
-        fields(host = ?series.host_id, tag = ?series.tag, local, remote = ?remote, page_size = self.engine.page_size.get()),
+        fields(host = ?series.host_id, tag = ?series.tag, local, remote = ?remote),
         err
     )]
     async fn sync_upload(
@@ -315,7 +315,7 @@ impl Keyed<'_> {
         local: RecordIdx,
         remote: Option<RecordIdx>,
     ) -> Result<u64, SyncError> {
-        let page_size = self.engine.page_size.get();
+        let page_size = self.engine.page_size.get().await.get();
         let store = &self.engine.store;
         let client = &self.engine.client;
         // The first record the remote *doesn't* have.
@@ -408,7 +408,7 @@ impl Keyed<'_> {
     #[instrument(
         level = "trace",
         skip_all,
-        fields(host = ?series.host_id, tag = ?series.tag, remote = ?remote, page_size = self.engine.page_size.get()),
+        fields(host = ?series.host_id, tag = ?series.tag, remote = ?remote),
         err
     )]
     async fn sync_download(
@@ -416,7 +416,7 @@ impl Keyed<'_> {
         series: &RecordSeriesKey,
         remote: RecordIdx,
     ) -> Result<Vec<RecordId>, SyncError> {
-        let page_size = self.engine.page_size.get();
+        let page_size = self.engine.page_size.get().await.get();
         let store = &self.engine.store;
         // Scan the database to find the first missing local index, rather than assuming it's one
         // more than the highest local index. A prior packfile op for this host may have expanded a
@@ -592,7 +592,7 @@ impl Keyed<'_> {
         Ok(ids)
     }
 
-    #[instrument(level = "trace", skip_all, fields(page_size = self.engine.page_size.get()), err)]
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn sync_remote(
         &self,
         operations: Vec<Operation>,
