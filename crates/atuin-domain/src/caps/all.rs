@@ -49,3 +49,23 @@ impl Capability for PackfileCap {
         serde_json::to_value(self)
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PageSizeCap {
+    pub version: u32,
+    pub page_size: u64,
+}
+
+impl Capability for PageSizeCap {
+    fn static_name() -> &'static str {
+        "sh.atuin.server/records.page_size"
+    }
+
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
+    fn json(&self) -> Result<serde_json::Value, serde_json::Error> {
+        serde_json::to_value(self)
+    }
+}
