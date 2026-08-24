@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use atuin_domain::api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ErrorResponse};
 use atuin_domain::caps::axum::{CapabilitiesRouterExt, get as capabilities_endpoint};
-use atuin_domain::caps::{CapServer, CapabilitiesCap};
+use atuin_domain::caps::{CapServer, CapabilitiesCap, PageSizeCap};
 use atuin_server_database::models::User;
 use atuin_server_database::{Database, DbError};
 use axum::Router;
@@ -104,14 +104,21 @@ pub struct AppState<DB: Database> {
     pub settings: Settings,
 }
 
+fn capabilities() -> CapServer {
+    CapServer::new()
+        .add(CapabilitiesCap { version: 1 })
+        .expect("CapabilitiesCap is registered exactly once")
+        .add(PageSizeCap {
+            version: 1,
+            page_size: 100,
+        })
+        .expect("PageSizeCap is registered exactly once")
+}
+
 pub fn router<DB: Database>(database: DB, settings: Settings) -> Router {
     // Advertise the self-referential capabilities capability, so every server that speaks the
     // protocol carries at least one concrete capability a client can observe.
-    let caps = Arc::new(
-        CapServer::new()
-            .add(CapabilitiesCap { version: 1 })
-            .expect("the capabilities capability is the only one registered"),
-    );
+    let caps = Arc::new(capabilities());
 
     let negotiated = Router::new()
         .route("/", get(handlers::index))
@@ -148,4 +155,23 @@ pub fn router<DB: Database>(database: DB, settings: Settings) -> Router {
             .layer(axum::middleware::from_fn(metrics::track_metrics))
             .layer(axum::middleware::from_fn(semver)),
     )
+}
+
+#[cfg(test)]
+mod capabilities_tests {
+    use atuin_domain::caps::PageSizeCap;
+
+    use super::capabilities;
+
+    #[test]
+    fn advertises_page_size_of_100() {
+        let caps = capabilities();
+        assert_eq!(
+            caps.caps().get::<PageSizeCap>(),
+            Some(PageSizeCap {
+                version: 1,
+                page_size: 100,
+            })
+        );
+    }
 }
