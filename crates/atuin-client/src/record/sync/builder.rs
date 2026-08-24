@@ -15,10 +15,6 @@ pub enum ClientSource<'a> {
     /// Wrap an already-built [`Client`].
     FromClient(Client),
     /// Build from settings, fetching capabilities during `connect`, unless supplied here.
-    ///
-    /// Pass `Some` only to share an already-warmed reader between engines (the
-    /// daemon does this so one warmer serves every sync tick); `connect` builds
-    /// an authenticated reader itself on the `None` path.
     FromSettings {
         settings: &'a Settings,
         caps: Option<Arc<CapClient>>,
@@ -47,10 +43,8 @@ impl SyncEngineInit<'_> {
 
                 let caps = match caps {
                     Some(caps) => caps,
-                    None => {
-                        caps_client(&settings.sync_address, Some(&auth), &settings.extra_headers)
-                            .map_err(|e| SyncError::OperationalError { msg: e.to_string() })?
-                    }
+                    None => caps_client(settings)
+                        .map_err(|e| SyncError::OperationalError { msg: e.to_string() })?,
                 };
 
                 Client::new(

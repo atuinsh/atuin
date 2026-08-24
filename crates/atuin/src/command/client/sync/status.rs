@@ -10,12 +10,10 @@ pub async fn run(settings: &Settings) -> Result<()> {
         bail!("You are not logged in to a sync server - cannot show sync status");
     }
 
-    let auth = settings.sync_auth_token().await?;
-    let caps =
-        api_client::caps_client(&settings.sync_address, Some(&auth), &settings.extra_headers)?;
+    let caps = api_client::caps_client(settings)?;
     let client = api_client::Client::new(
         settings.sync_address.clone(),
-        &auth,
+        &settings.sync_auth_token().await?,
         settings.network_connect_timeout,
         settings.network_timeout,
         &settings.extra_headers,
