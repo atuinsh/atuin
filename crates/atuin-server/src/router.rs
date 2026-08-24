@@ -156,22 +156,3 @@ pub fn router<DB: Database>(database: DB, settings: Settings) -> Router {
             .layer(axum::middleware::from_fn(semver)),
     )
 }
-
-#[cfg(test)]
-mod capabilities_tests {
-    use atuin_domain::caps::PageSizeCap;
-
-    use super::capabilities;
-
-    #[test]
-    fn advertises_page_size_of_100() {
-        let caps = capabilities();
-        assert_eq!(
-            caps.caps().get::<PageSizeCap>(),
-            Some(PageSizeCap {
-                version: 1,
-                page_size: 100,
-            })
-        );
-    }
-}

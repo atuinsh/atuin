@@ -95,6 +95,7 @@ mod page_size_negotiation_tests {
     use std::num::NonZeroU64;
 
     use atuin_domain::caps::{CapClient, CapServer, CapabilitiesCap, PageSizeCap};
+    use rstest::rstest;
     use url::Url;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -114,41 +115,23 @@ mod page_size_negotiation_tests {
         client
     }
 
+    #[rstest]
+    #[case::advertised(Some(250), NonZeroU64::new(250).unwrap())]
+    #[case::absent(None, DEFAULT_PAGE_SIZE)]
+    #[case::zero_falls_back(Some(0), DEFAULT_PAGE_SIZE)]
     #[tokio::test]
-    async fn uses_the_advertised_page_size() {
-        let caps = CapServer::new()
-            .add(CapabilitiesCap { version: 1 })
-            .unwrap()
-            .add(PageSizeCap {
-                version: 1,
-                page_size: 250,
-            })
-            .unwrap();
+    async fn negotiates_page_size(#[case] advertised: Option<u64>, #[case] expected: NonZeroU64) {
+        let mut caps = CapServer::new().add(CapabilitiesCap { version: 1 }).unwrap();
+        if let Some(page_size) = advertised {
+            caps = caps
+                .add(PageSizeCap {
+                    version: 1,
+                    page_size,
+                })
+                .unwrap();
+        }
         let client = cap_client_serving(caps.body().to_owned()).await;
 
-        assert_eq!(negotiate_page_size(&client).await, NonZeroU64::new(250).unwrap());
-    }
-
-    #[tokio::test]
-    async fn falls_back_when_cap_absent() {
-        let caps = CapServer::new().add(CapabilitiesCap { version: 1 }).unwrap();
-        let client = cap_client_serving(caps.body().to_owned()).await;
-
-        assert_eq!(negotiate_page_size(&client).await, DEFAULT_PAGE_SIZE);
-    }
-
-    #[tokio::test]
-    async fn falls_back_when_page_size_is_zero() {
-        let caps = CapServer::new()
-            .add(CapabilitiesCap { version: 1 })
-            .unwrap()
-            .add(PageSizeCap {
-                version: 1,
-                page_size: 0,
-            })
-            .unwrap();
-        let client = cap_client_serving(caps.body().to_owned()).await;
-
-        assert_eq!(negotiate_page_size(&client).await, DEFAULT_PAGE_SIZE);
+        assert_eq!(negotiate_page_size(&client).await, expected);
     }
 }
