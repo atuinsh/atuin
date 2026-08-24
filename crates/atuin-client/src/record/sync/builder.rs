@@ -1,6 +1,7 @@
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
-use atuin_domain::caps::CapClient;
+use atuin_domain::caps::{CapClient, PageSizeCap};
 use eyre::Result;
 use tracing::instrument;
 use typed_builder::TypedBuilder;
@@ -57,10 +58,12 @@ impl SyncEngineInit<'_> {
             }
         };
 
+        let page_size = negotiate_page_size(client.caps()).await;
+
         Ok(SyncEngine {
             client,
             store: self.store,
-            page_size: DEFAULT_PAGE_SIZE,
+            page_size,
         })
     }
 }
@@ -69,5 +72,78 @@ impl SyncEngine {
     /// Start building a [`SyncEngine`]. See [`SyncEngineInit`] for the construction paths.
     pub fn builder<'a>() -> SyncEngineBuilder<'a, ((), ())> {
         SyncEngineInit::builder()
+    }
+}
+
+async fn negotiate_page_size(caps: &CapClient) -> NonZeroU64 {
+    caps.get_server::<PageSizeCap>()
+        .await
+        .ok()
+        .flatten()
+        .and_then(|cap| NonZeroU64::new(cap.page_size))
+        .unwrap_or(DEFAULT_PAGE_SIZE)
+}
+
+#[cfg(test)]
+mod page_size_negotiation_tests {
+    use std::num::NonZeroU64;
+
+    use atuin_domain::caps::{CapClient, CapServer, CapabilitiesCap, PageSizeCap};
+    use url::Url;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::{DEFAULT_PAGE_SIZE, negotiate_page_size};
+
+    async fn cap_client_serving(body: String) -> std::sync::Arc<CapClient> {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v0/capabilities"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+        let caps_url: Url = format!("{}/api/v0/capabilities", server.uri()).parse().unwrap();
+        let client = CapClient::new(caps_url, reqwest::Client::new());
+        // Leak the mock server so it outlives the test body's awaits on the client.
+        Box::leak(Box::new(server));
+        client
+    }
+
+    #[tokio::test]
+    async fn uses_the_advertised_page_size() {
+        let caps = CapServer::new()
+            .add(CapabilitiesCap { version: 1 })
+            .unwrap()
+            .add(PageSizeCap {
+                version: 1,
+                page_size: 250,
+            })
+            .unwrap();
+        let client = cap_client_serving(caps.body().to_owned()).await;
+
+        assert_eq!(negotiate_page_size(&client).await, NonZeroU64::new(250).unwrap());
+    }
+
+    #[tokio::test]
+    async fn falls_back_when_cap_absent() {
+        let caps = CapServer::new().add(CapabilitiesCap { version: 1 }).unwrap();
+        let client = cap_client_serving(caps.body().to_owned()).await;
+
+        assert_eq!(negotiate_page_size(&client).await, DEFAULT_PAGE_SIZE);
+    }
+
+    #[tokio::test]
+    async fn falls_back_when_page_size_is_zero() {
+        let caps = CapServer::new()
+            .add(CapabilitiesCap { version: 1 })
+            .unwrap()
+            .add(PageSizeCap {
+                version: 1,
+                page_size: 0,
+            })
+            .unwrap();
+        let client = cap_client_serving(caps.body().to_owned()).await;
+
+        assert_eq!(negotiate_page_size(&client).await, DEFAULT_PAGE_SIZE);
     }
 }
