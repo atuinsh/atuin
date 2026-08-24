@@ -107,6 +107,12 @@ impl SqliteStore {
         Ok(Self { pool })
     }
 
+    /// The underlying connection pool, for maintenance tasks (e.g. periodic WAL
+    /// checkpointing) that need to act on it outside of `SqliteStore`'s own query methods.
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
     #[instrument(level = "trace", skip_all, err)]
     async fn setup_db(pool: &SqlitePool) -> Result<()> {
         debug!("running sqlite database setup");

@@ -48,7 +48,7 @@ frizbee = { workspace = true }
 [dependencies.atuin-common]
 path = "../atuin-common"
 version = "18.20.0-beta.3"
-features = ["os"]
+features = ["os", "sqlite"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 listenfd = "1.0.1"

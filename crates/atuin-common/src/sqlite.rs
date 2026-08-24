@@ -6,8 +6,13 @@
 //! connection pool on every hook invocation; on a machine running many concurrent shells,
 //! there's rarely a gap with zero active readers, so the WAL can grow unbounded (observed in
 //! the wild: a 23 MB WAL next to a 1.8 MB database).
+//!
+//! Called from two places: once per pool-open (covers the CLI, which opens a fresh pool per
+//! hook invocation), and periodically by the daemon (which opens its pools once and holds them
+//! for the process lifetime, so a pool-open check alone would only ever fire at daemon boot).
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use sqlx::SqlitePool;
 use tracing::{debug, instrument};
@@ -17,15 +22,24 @@ use tracing::{debug, instrument};
 /// real reader-starvation growth.
 pub const DEFAULT_WAL_CHECKPOINT_THRESHOLD_BYTES: u64 = 16 * 1024 * 1024;
 
+/// Cap on how long a single checkpoint attempt may block a caller. A `TRUNCATE` checkpoint
+/// waits on SQLite's busy handler for as long as any reader holds the WAL open, which is
+/// exactly the condition this module exists to recover from -- so on the CLI's hot
+/// `history start`/`end` path this must never be allowed to block unboundedly. A timed-out
+/// attempt is not a failure: the WAL is untouched and the next pool-open or daemon tick tries
+/// again.
+const CHECKPOINT_TIMEOUT: Duration = Duration::from_millis(500);
+
 /// Checkpoint and truncate the WAL file back to disk if it has grown past `threshold_bytes`.
 ///
-/// Meant to be called once per pool-open. The common case (WAL under threshold) costs one
-/// `stat()`; the occasional blocking `TRUNCATE` only runs when the file is actually oversized,
-/// so this self-throttles rather than adding cost to every invocation.
+/// The common case (WAL under threshold) costs one `stat()`; the occasional `TRUNCATE`, capped
+/// at [`CHECKPOINT_TIMEOUT`], only runs when the file is actually oversized, so this
+/// self-throttles rather than adding cost to every invocation.
 ///
 /// Never fails: a missing WAL file, a `stat()` error, or a checkpoint that can't fully
-/// complete (e.g. another reader is active right now) are all treated as "try again next
-/// time" -- this is best-effort maintenance and must never break a caller's `new()`.
+/// complete (e.g. another reader is active right now, or it didn't finish within the timeout)
+/// are all treated as "try again next time" -- this is best-effort maintenance and must never
+/// break a caller's `new()`.
 #[instrument(level = "trace", skip(pool))]
 pub async fn checkpoint_wal_if_needed(pool: &SqlitePool, db_path: &Path, threshold_bytes: u64) {
     let wal_path = wal_sidecar_path(db_path);
@@ -41,8 +55,11 @@ pub async fn checkpoint_wal_if_needed(pool: &SqlitePool, db_path: &Path, thresho
 
     debug!(size, threshold_bytes, ?wal_path, "wal file over threshold, checkpointing");
 
-    if let Err(error) = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)").execute(pool).await {
-        debug!(%error, ?wal_path, "wal checkpoint failed, will retry on next open");
+    let checkpoint = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)").execute(pool);
+    match tokio::time::timeout(CHECKPOINT_TIMEOUT, checkpoint).await {
+        Ok(Err(error)) => debug!(%error, ?wal_path, "wal checkpoint failed, will retry later"),
+        Err(_elapsed) => debug!(?wal_path, "wal checkpoint timed out, will retry later"),
+        Ok(Ok(_)) => {}
     }
 }
 
