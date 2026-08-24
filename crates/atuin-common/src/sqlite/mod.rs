@@ -8,9 +8,13 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 pub use builder::{SqliteBuilder, SqliteBuilderRoot};
+#[doc(hidden)]
+pub use const_format::concatcp;
 pub use info::{Info, VersionError};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
-pub use table::{Col, ColKind, Conflict, KeyBind, Schema, Table, TableView, TxView};
+pub use table::{Col, ColKind, ColRef, Conflict, KeyBind, Schema, Table, TableView, TxView};
+#[doc(hidden)]
+pub use table::{SEP_AND, SEP_COMMA, insert_verb, is_sql_ident, keep, keys_in_column_order};
 use thiserror::Error;
 
 use crate::sync::EagerFutureCell;

@@ -114,7 +114,12 @@ impl Database {
 
         // intentionally not joining, don't want to duplicate the script data in memory a whole bunch.
         if let Some(mut script) = res {
-            script.tags = self.tags.filter(id).map_ok(|t| t.tag).try_collect().await?;
+            script.tags = self
+                .tags
+                .filter_by(ScriptTag::script_id, id)
+                .map_ok(|t| t.tag)
+                .try_collect()
+                .await?;
             Ok(Some(script))
         } else {
             Ok(None)
@@ -150,7 +155,7 @@ impl Database {
 
     pub async fn delete(&self, id: &str) -> Result<()> {
         self.scripts.delete(id).await?;
-        self.tags.delete(id).await?;
+        self.tags.delete_by(ScriptTag::script_id, id).await?;
         Ok(())
     }
 
@@ -161,7 +166,7 @@ impl Database {
         self.scripts.on(&mut tx).update_one(s).await?;
 
         // Delete all existing tags for this script
-        self.tags.on(&mut tx).delete(s.id.to_string()).await?;
+        self.tags.on(&mut tx).delete_by(ScriptTag::script_id, s.id.to_string()).await?;
 
         // Insert new tags
         let tag_rows: Vec<ScriptTag> = s
@@ -186,8 +191,12 @@ impl Database {
             .await?;
 
         let script = if let Some(mut script) = res {
-            script.tags =
-                self.tags.filter(script.id.to_string()).map_ok(|t| t.tag).try_collect().await?;
+            script.tags = self
+                .tags
+                .filter_by(ScriptTag::script_id, script.id.to_string())
+                .map_ok(|t| t.tag)
+                .try_collect()
+                .await?;
             Some(script)
         } else {
             None

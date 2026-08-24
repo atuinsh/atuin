@@ -73,3 +73,50 @@ pub const fn is_one_of(name: &str, candidates: &[&str]) -> bool {
     }
     false
 }
+
+/// Const-time string equality: are `a` and `b` byte-for-byte equal?
+///
+/// A `const fn` stand-in for `a == b`, which is unavailable in const context
+/// (`str`/slice `PartialEq` is not yet const), so the comparison is spelled out
+/// byte by byte.
+#[must_use]
+pub const fn str_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// Return `s` without its last `n` bytes.
+///
+/// A `const fn` helper for building a list with a trailing separator, then
+/// dropping it (`String::truncate` and slicing are not available in const
+/// context). Panics (a compile error, in the const context this is used from)
+/// if `n` exceeds the length of `s` or the cut lands inside a UTF-8 sequence -
+/// both signal a mismatch between an emitted separator and the count passed
+/// here, which must never ship.
+#[must_use]
+pub const fn strip_tail(s: &str, n: usize) -> &str {
+    let b = s.as_bytes();
+    // An empty string is the "no elements" case (a list that contributed no
+    // items): there is no trailing separator to drop.
+    if b.is_empty() {
+        return "";
+    }
+    // A non-empty string always ends with a full separator, so it can never be
+    // shorter than one. If it is, the count here disagrees with the separator
+    // that was emitted - a bug that must not ship.
+    assert!(b.len() >= n, "strip_tail: n exceeds the length of a non-empty string");
+    match core::str::from_utf8(b.split_at(b.len() - n).0) {
+        Ok(h) => h,
+        Err(_) => panic!("strip_tail: cut lands inside a UTF-8 sequence"),
+    }
+}

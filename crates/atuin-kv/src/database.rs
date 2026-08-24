@@ -65,7 +65,7 @@ impl Database {
         &'a self,
         namespace: &'a str,
     ) -> impl futures::Stream<Item = Result<KvEntry>> + Send + 'a {
-        self.table.filter(namespace)
+        self.table.filter_by(KvEntry::namespace, namespace)
     }
 
     /// Stream every entry, ordered by namespace then key.
