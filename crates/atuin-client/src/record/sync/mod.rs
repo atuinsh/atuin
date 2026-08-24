@@ -152,9 +152,7 @@ impl SyncEngine {
         self
     }
 
-    /// How many records each sync page requests: the [`with_page_size`](Self::with_page_size)
-    /// override if set, otherwise the value negotiated from the server's capabilities, falling
-    /// back to [`DEFAULT_PAGE_SIZE`] when the server does not advertise one.
+    /// How many records each sync page requests.
     async fn get_page_size(&self) -> NonZeroU64 {
         match self.page_size_override {
             Some(page_size) => page_size,
