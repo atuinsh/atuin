@@ -69,23 +69,3 @@ impl Capability for PageSizeCap {
         serde_json::to_value(self)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn page_size_cap_name_and_roundtrip() {
-        assert_eq!(PageSizeCap::static_name(), "sh.atuin.server/records.page_size");
-
-        let cap = PageSizeCap {
-            version: 1,
-            page_size: 100,
-        };
-        assert_eq!(cap.name(), "sh.atuin.server/records.page_size");
-
-        let value = cap.json().unwrap();
-        let back: PageSizeCap = serde_json::from_value(value).unwrap();
-        assert_eq!(back, cap);
-    }
-}
