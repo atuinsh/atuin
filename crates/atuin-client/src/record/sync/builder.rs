@@ -104,7 +104,6 @@ mod page_size_negotiation_tests {
             .await;
         let caps_url: Url = format!("{}/api/v0/capabilities", server.uri()).parse().unwrap();
         let client = CapClient::new(caps_url, reqwest::Client::new());
-        // Leak the mock server so it outlives the test body's awaits on the client.
         Box::leak(Box::new(server));
         client
     }
