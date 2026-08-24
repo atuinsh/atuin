@@ -90,7 +90,7 @@ impl Database {
 
         let mut tx = self.sqlite.pool().begin().await?;
 
-        self.scripts.insert_bulk_tx(&mut tx, scripts.iter().copied()).await?;
+        self.scripts.on(&mut tx).insert_bulk(scripts.iter().copied()).await?;
 
         let tag_rows: Vec<ScriptTag> = scripts
             .iter()
@@ -101,7 +101,7 @@ impl Database {
                 })
             })
             .collect();
-        self.tags.insert_bulk_tx(&mut tx, &tag_rows).await?;
+        self.tags.on(&mut tx).insert_bulk(&tag_rows).await?;
 
         tx.commit().await?;
 
@@ -158,10 +158,10 @@ impl Database {
         let mut tx = self.sqlite.pool().begin().await?;
 
         // Update the script's base fields.
-        self.scripts.update_tx(&mut tx, s).await?;
+        self.scripts.on(&mut tx).update_one(s).await?;
 
         // Delete all existing tags for this script
-        self.tags.delete_tx(&mut tx, s.id.to_string()).await?;
+        self.tags.on(&mut tx).delete(s.id.to_string()).await?;
 
         // Insert new tags
         let tag_rows: Vec<ScriptTag> = s
@@ -172,7 +172,7 @@ impl Database {
                 tag: tag.clone(),
             })
             .collect();
-        self.tags.insert_bulk_tx(&mut tx, &tag_rows).await?;
+        self.tags.on(&mut tx).insert_bulk(&tag_rows).await?;
 
         tx.commit().await?;
 

@@ -25,7 +25,7 @@ ansi = ["dep:vt100"]
 # Enables OS-specific utilities.
 os = ["dep:rustix"]
 # The `sqlite` module: an atuin-specific wrapper around a bundled SQLite pool.
-sqlite = ["dep:sqlx", "dep:libsqlite3-sys"]
+sqlite = ["dep:sqlx", "dep:libsqlite3-sys", "dep:async-stream", "dep:const_format"]
 
 [dependencies]
 derive_more = { workspace = true }
@@ -52,6 +52,8 @@ rusty_paseto = { workspace = true }
 rusty_paserk = { workspace = true }
 tokio = { workspace = true }
 futures = "0.3"
+async-stream = { version = "0.3", optional = true }
+const_format = { workspace = true, optional = true }
 serde_json = { workspace = true }
 zeroize = { workspace = true }
 rmp = { workspace = true }

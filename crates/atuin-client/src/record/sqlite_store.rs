@@ -354,13 +354,13 @@ impl SqliteStore {
 
         let mut tx = self.sqlite.pool().begin().await?;
 
-        let rows = self.table.delete_all_tx(&mut tx).await?;
+        let rows = self.table.on(&mut tx).delete_all().await?;
         debug!("deleted {rows} rows");
 
         // Reinsert inside the same transaction (don't use `push_batch`, which
         // would start its own).
         let records: Vec<StoreRecord> = re_encrypted.into_iter().map(StoreRecord).collect();
-        self.table.insert_bulk_tx(&mut tx, &records).await?;
+        self.table.on(&mut tx).insert_bulk(&records).await?;
 
         tx.commit().await?;
 

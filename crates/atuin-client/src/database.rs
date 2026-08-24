@@ -7,6 +7,7 @@ use atuin_common::sqlite::{Sqlite as CommonSqlite, TableView};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::{table, utils};
 use atuin_domain::record::CmdOrigin;
+use futures::TryStreamExt;
 use itertools::Itertools;
 use sql_builder::bind::Bind;
 use sql_builder::{SqlBuilder, SqlName, esc, quote};
@@ -363,51 +364,13 @@ impl Sqlite {
     #[instrument(level = "trace", skip_all, err)]
     pub async fn load_active(
         &self,
-        ids: impl IntoIterator<Item = HistoryId>,
+        ids: impl IntoIterator<Item = HistoryId, IntoIter: Send> + Send,
     ) -> Result<Vec<History>> {
-        let mut iter_ids = ids.into_iter();
-        let size_hint = iter_ids.size_hint();
-
-        // Each id binds a single parameter, so a chunk can be as large as SQLite
-        // allows in one statement.
-        let chunk_size = self.sqlite.info().await.variable_number_limit;
-
-        if let Some(upper) = size_hint.1
-            && size_hint.0 == upper
-        {
-            debug!("loading {} history items", size_hint.0);
-        } else {
-            debug!("loading somewhere around {} history items", size_hint.0);
-        }
-
-        let mut out = Vec::with_capacity(size_hint.0);
-
-        // Buffer reused across chunks to avoid reallocating; only reserve what we
-        // expect to load so small lookups don't allocate a full chunk up front.
-        let mut chunk: Vec<HistoryId> = Vec::with_capacity(size_hint.0.min(chunk_size));
-
-        loop {
-            chunk.clear();
-            chunk.extend(iter_ids.by_ref().take(chunk_size));
-            if chunk.is_empty() {
-                break;
-            }
-
-            let placeholders = ["?"].repeat(chunk.len()).join(",");
-            let sql = format!(
-                "select * from history where id in ({placeholders}) and deleted_at is null"
-            );
-
-            let mut query = sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(sql));
-            for id in &chunk {
-                query = query.bind(id.0.as_str());
-            }
-
-            let rows = query.fetch_all(self.sqlite.pool()).await?;
-            out.extend(rows);
-        }
-
-        Ok(out)
+        self.table
+            .get_many(ids.into_iter().map(|id| id.0))
+            .try_filter(|h| std::future::ready(h.deleted_at.is_none()))
+            .try_collect()
+            .await
     }
 
     #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]

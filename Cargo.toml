@@ -38,6 +38,7 @@ time = { version = "0.3.47", features = [
 ] }
 clap = { version = "4.5.7", features = ["derive"] }
 config = { version = "0.15.8", default-features = false, features = ["toml"] }
+const_format = "0.2"
 derive_more = { version = "2", features = ["as_ref", "deref", "display", "error", "from", "into", "debug"] }
 directories = "6.0.0"
 eyre = "0.6"

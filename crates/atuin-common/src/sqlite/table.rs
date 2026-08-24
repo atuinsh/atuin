@@ -53,20 +53,20 @@
 //!
 //!   - [`TableView::insert_one`] will insert a single record into the table.
 //!   - [`TableView::insert_bulk`] will insert multiple records in a new transaction.
-//!   - [`TableView::insert_bulk_tx`] is [`TableView::insert_bulk`] within an existing transaction
-//!     (does not commit).
 //!   - [`TableView::get`] will fetch a single row given keys.
 //!   - [`TableView::all`] streams all rows.
 //!   - [`TableView::all_ordered`] streams all rows, ordered by key.
 //!   - [`TableView::filter`] streams rows matching a leading key prefix.
 //!   - [`TableView::count`] returns the number of rows in the table.
 //!   - [`TableView::update_one`] will update a single record.
-//!   - [`TableView::update_tx`] is [`TableView::update_one`] within an existing transaction.
 //!   - [`TableView::delete`] will delete rows given a full key or a leading prefix.
 //!   - [`TableView::delete_many`] will delete rows matching any of several keys.
 //!   - [`TableView::delete_all`] will delete all rows.
-//!   - [`TableView::delete_tx`] is [`TableView::delete`] within an existing transaction.
-//!   - [`TableView::delete_all_tx`] is [`TableView::delete_all`] within an existing transaction.
+//!
+//! To run writes inside a caller-owned transaction (optionally spanning several
+//! tables), call [`TableView::on`] to get a [`TxView`] and use its
+//! [`insert_bulk`](TxView::insert_bulk), [`update_one`](TxView::update_one),
+//! [`delete`](TxView::delete), and [`delete_all`](TxView::delete_all) methods.
 //!
 //! In the case of the given example, the rough SQL statement that would be generated for
 //! [`TableView::get`] is something like:
@@ -113,45 +113,46 @@
 //!     },
 //! });
 //!
-//! # tokio::runtime::Runtime::new().unwrap().block_on(async {
-//! let sqlite = Sqlite::builder().memory().open().await.unwrap();
+//! #[tokio::main]
+//! async fn main() {
+//!     let sqlite = Sqlite::builder().memory().open().await.unwrap();
 //!
-//! // `table!` does not create the table — your migrations do. We create it inline
-//! // here so the example is self-contained; the columns must match the schema above.
-//! sqlx::query(
-//!     "create table kv3 (ns text not null, k integer not null, v text not null, primary key (ns, k))",
-//! )
-//! .execute(sqlite.pool())
-//! .await
-//! .unwrap();
+//!     // `table!` does not create the table — your migrations do. We create it inline
+//!     // here so the example is self-contained; the columns must match the schema above.
+//!     sqlx::query(
+//!         "create table kv3 (ns text not null, k integer not null, v text not null, primary key (ns, k))",
+//!     )
+//!     .execute(sqlite.pool())
+//!     .await
+//!     .unwrap();
 //!
-//! let table = TableView::<Kv3>::new(sqlite);
+//!     let table = TableView::<Kv3>::new(sqlite);
 //!
-//! // Insert a single row, then a batch (in one transaction).
-//! table.insert_one(&Kv3 { ns: "app".into(), k: 1, v: "hello".into() }).await.unwrap();
-//! table.insert_bulk([
-//!     &Kv3 { ns: "app".into(), k: 2, v: "world".into() },
-//!     &Kv3 { ns: "app".into(), k: 3, v: "!".into() },
-//! ]).await.unwrap();
+//!     // Insert a single row, then a batch (in one transaction).
+//!     table.insert_one(&Kv3 { ns: "app".into(), k: 1, v: "hello".into() }).await.unwrap();
+//!     table.insert_bulk([
+//!         &Kv3 { ns: "app".into(), k: 2, v: "world".into() },
+//!         &Kv3 { ns: "app".into(), k: 3, v: "!".into() },
+//!     ]).await.unwrap();
 //!
-//! // Fetch a single row by its composite key.
-//! let row: Option<Kv3> = table.get(("app", 1)).await.unwrap();
-//! assert_eq!(row.unwrap().v, "hello");
+//!     // Fetch a single row by its composite key.
+//!     let row: Option<Kv3> = table.get(("app", 1)).await.unwrap();
+//!     assert_eq!(row.unwrap().v, "hello");
 //!
-//! // Update a row (matched on its key), then count the table.
-//! table.update_one(&Kv3 { ns: "app".into(), k: 1, v: "hi".into() }).await.unwrap();
-//! assert_eq!(table.count().await.unwrap(), 3);
+//!     // Update a row (matched on its key), then count the table.
+//!     table.update_one(&Kv3 { ns: "app".into(), k: 1, v: "hi".into() }).await.unwrap();
+//!     assert_eq!(table.count().await.unwrap(), 3);
 //!
-//! // Delete a single row, then everything.
-//! table.delete(("app", 3)).await.unwrap();
-//! table.delete_all().await.unwrap();
-//! # });
+//!     // Delete a single row, then everything.
+//!     table.delete(("app", 3)).await.unwrap();
+//!     table.delete_all().await.unwrap();
+//! }
 //! ```
 use std::marker::PhantomData;
 
 use sqlx::query::{Query, QueryAs};
 use sqlx::sqlite::SqliteArguments;
-use sqlx::{Encode, QueryBuilder, Sqlite as SqliteDb, Type};
+use sqlx::{Encode, QueryBuilder, Sqlite as SqliteDb, Transaction, Type};
 use tracing::instrument;
 
 use super::Sqlite;
@@ -232,7 +233,7 @@ impl Col {
     }
 }
 
-#[doc(hidden)]
+/// Defines the table schema.
 pub struct Schema {
     /// The table name.
     pub name: &'static str,
@@ -364,7 +365,6 @@ macro_rules! table {
         $crate::table!(@bind_each $this, $sep; $($($rest)*)?)
     };
 
-    // ---- SET binds: non-key `Bind` columns, in column order --------------------
     (@bind_update_set $this:expr, $q:ident, $key:tt; ) => { };
     (@bind_update_set $this:expr, $q:ident, $key:tt; $cname:ident => raw(|$arg:tt| $body:expr) $(, $($rest:tt)*)? ) => {
         $crate::table!(@bind_update_set $this, $q, $key; $($($rest)*)?)
@@ -376,7 +376,6 @@ macro_rules! table {
         $crate::table!(@bind_update_set $this, $q, $key; $($($rest)*)?)
     };
 
-    // ---- WHERE binds: key columns, in column order -----------------------------
     (@bind_update_where $this:expr, $q:ident, $key:tt; ) => { };
     (@bind_update_where $this:expr, $q:ident, $key:tt; $cname:ident => raw(|$arg:tt| $body:expr) $(, $($rest:tt)*)? ) => {
         $crate::table!(@bind_update_where $this, $q, $key; $($($rest)*)?)
@@ -434,8 +433,24 @@ pub trait KeyBind {
     const ARITY: usize;
 
     /// Push `col = ?` fragments onto a borrowed builder, for the awaited query
-    /// paths (`get`/`delete`/`delete_tx`).
+    /// paths (`get`/`delete`).
     fn push_where(self, qb: &mut QueryBuilder<SqliteDb>, cols: &[&str]);
+
+    /// Push this key as one element of an `in` value list: `?` for a scalar
+    /// key, `(?, …)` for a composite key. Paired with [`KeyBind::in_lhs`], this
+    /// builds `lhs in (row, row, …)` — a flat list that, unlike an `or`-chain of
+    /// predicates, does not grow SQLite's expression-tree depth per key.
+    fn push_row(self, qb: &mut QueryBuilder<SqliteDb>);
+
+    /// The left-hand side of an `in` test over these key columns: `col` for a
+    /// scalar key, `(col, …)` for a composite key.
+    fn in_lhs(cols: &[&str]) -> String {
+        if Self::ARITY == 1 {
+            cols[0].to_string()
+        } else {
+            format!("({})", cols[..Self::ARITY].join(", "))
+        }
+    }
 
     /// Bind the key values, in order, onto an owned query — for streaming reads,
     /// where a borrowed `QueryBuilder` cannot escape into the returned stream.
@@ -455,6 +470,10 @@ where
 
     fn push_where(self, qb: &mut QueryBuilder<SqliteDb>, cols: &[&str]) {
         qb.push(cols[0]).push(" = ").push_bind(self);
+    }
+
+    fn push_row(self, qb: &mut QueryBuilder<SqliteDb>) {
+        qb.push_bind(self);
     }
 
     fn bind_prefix<'q, O>(
@@ -486,6 +505,14 @@ macro_rules! impl_key_bind_tuple {
                     $(
                         qb.push(" and ").push(cols[$i]).push(" = ").push_bind(self.$i);
                     )*
+                }
+
+                fn push_row(self, qb: &mut QueryBuilder<SqliteDb>) {
+                    qb.push("(").push_bind(self.$i0);
+                    $(
+                        qb.push(", ").push_bind(self.$i);
+                    )*
+                    qb.push(")");
                 }
 
                 fn bind_prefix<'q, O>(
@@ -536,18 +563,23 @@ fn upsert_suffix<T: Table>() -> String {
     format!(" on conflict ({keys}) do update set {sets}")
 }
 
-impl<T: Table> TableView<T> {
-    /// Insert multiple `items` into the table.
-    ///
-    /// **Does not commit the transaction.**
+/// A view into a table scoped to a caller-owned transaction, created by
+/// [`TableView::on`]. Every operation runs on the borrowed transaction; commit
+/// or roll back the transaction yourself.
+pub struct TxView<'a, 'c, T: Table> {
+    view: &'a TableView<T>,
+    tx: &'a mut Transaction<'c, SqliteDb>,
+}
+
+impl<T: Table> TxView<'_, '_, T> {
+    /// Like [`TableView::insert_bulk`], but on the borrowed transaction.
     #[instrument(level = "trace", skip_all)]
-    pub async fn insert_bulk_tx<'a>(
-        &self,
-        tx: &mut sqlx::Transaction<'_, SqliteDb>,
-        items: impl IntoIterator<Item = &'a T>,
+    pub async fn insert_bulk<'i>(
+        &mut self,
+        items: impl IntoIterator<Item = &'i T>,
     ) -> sqlx::Result<()>
     where
-        T: 'a,
+        T: 'i,
     {
         let mut it = items.into_iter().peekable();
         if it.peek().is_none() {
@@ -555,12 +587,7 @@ impl<T: Table> TableView<T> {
         }
 
         let bind_cols = T::SCHEMA.bind_col_count();
-        debug_assert!(
-            bind_cols > 0,
-            "Table::SCHEMA for {} has no Bind columns; insert_bulk_tx cannot compute a chunk size",
-            T::SCHEMA.name
-        );
-        let per = (self.sqlite.info().await.variable_number_limit / bind_cols.max(1)).max(1);
+        let per = (self.view.sqlite.info().await.variable_number_limit / bind_cols.max(1)).max(1);
         let prefix = insert_prefix::<T>();
         let suffix = matches!(T::SCHEMA.conflict, Conflict::Upsert).then(upsert_suffix::<T>);
 
@@ -572,9 +599,98 @@ impl<T: Table> TableView<T> {
             if let Some(suf) = &suffix {
                 qb.push(suf);
             }
-            qb.build().execute(&mut **tx).await?;
+            qb.build().execute(&mut **self.tx).await?;
         }
         Ok(())
+    }
+
+    /// Like [`TableView::delete_all`], but on the borrowed transaction; returns
+    /// the number of rows deleted.
+    #[instrument(level = "trace", skip_all)]
+    pub async fn delete_all(&mut self) -> sqlx::Result<u64> {
+        self.exec().delete_all().await
+    }
+
+    /// Like [`TableView::delete`], but on the borrowed transaction.
+    #[instrument(level = "trace", skip_all)]
+    pub async fn delete<K: KeyBind>(&mut self, key: K) -> sqlx::Result<()> {
+        self.exec().delete(key).await
+    }
+
+    /// Like [`TableView::update_one`], but on the borrowed transaction.
+    #[instrument(level = "trace", skip_all)]
+    pub async fn update_one(&mut self, row: &T) -> sqlx::Result<()> {
+        self.exec().update_one(row).await
+    }
+
+    /// A single-statement [`ExecView`] over this transaction's connection.
+    fn exec(&mut self) -> ExecView<&mut sqlx::sqlite::SqliteConnection, T> {
+        ExecView {
+            exec: &mut **self.tx,
+            _t: PhantomData,
+        }
+    }
+}
+
+/// A generic view over a "transaction provider".
+///
+/// A "transaction provider" is either [`sqlx::Transaction`] or a [`sqlx::Pool`].
+struct ExecView<E, T> {
+    exec: E,
+    _t: PhantomData<T>,
+}
+
+impl<E, T: Table> ExecView<E, T> {
+    async fn delete<'e, K: KeyBind>(self, key: K) -> sqlx::Result<()>
+    where
+        E: sqlx::Executor<'e, Database = SqliteDb>,
+    {
+        let mut qb =
+            sqlx::QueryBuilder::<SqliteDb>::new(format!("delete from {} where ", T::SCHEMA.name));
+        key.push_where(&mut qb, &TableView::<T>::key_cols());
+        qb.build().execute(self.exec).await?;
+        Ok(())
+    }
+
+    async fn delete_all<'e>(self) -> sqlx::Result<u64>
+    where
+        E: sqlx::Executor<'e, Database = SqliteDb>,
+    {
+        let result = sqlx::QueryBuilder::<SqliteDb>::new(format!("delete from {}", T::SCHEMA.name))
+            .build()
+            .execute(self.exec)
+            .await?;
+        Ok(result.rows_affected())
+    }
+
+    async fn update_one<'e>(self, row: &T) -> sqlx::Result<()>
+    where
+        E: sqlx::Executor<'e, Database = SqliteDb>,
+    {
+        let mut qb = sqlx::QueryBuilder::<SqliteDb>::new(TableView::<T>::update_sql());
+        row.bind_update(qb.build()).execute(self.exec).await?;
+        Ok(())
+    }
+
+    async fn count<'e>(self) -> sqlx::Result<u64>
+    where
+        E: sqlx::Executor<'e, Database = SqliteDb>,
+    {
+        let (n,): (i64,) =
+            sqlx::QueryBuilder::<SqliteDb>::new(format!("select count(*) from {}", T::SCHEMA.name))
+                .build_query_as::<(i64,)>()
+                .fetch_one(self.exec)
+                .await?;
+        Ok(n as u64)
+    }
+}
+
+impl<T: Table> TableView<T> {
+    /// Scope this table's write operations to a caller-owned `tx`, returning a
+    /// [`TxView`]. Thread one transaction across several tables by calling `on`
+    /// on each, then commit or roll back `tx` yourself.
+    pub fn on<'b, 'c>(&'b self, tx: &'b mut Transaction<'c, SqliteDb>) -> TxView<'b, 'c, T> {
+        TxView { view: self, tx }
     }
 
     /// Insert multiple `item`s into the table.
@@ -586,7 +702,7 @@ impl<T: Table> TableView<T> {
         T: 'a,
     {
         let mut tx = self.sqlite.pool().begin().await?;
-        self.insert_bulk_tx(&mut tx, items).await?;
+        self.on(&mut tx).insert_bulk(items).await?;
         tx.commit().await
     }
 
@@ -605,48 +721,13 @@ impl<T: Table> TableView<T> {
     /// it (deletes every row sharing that prefix).
     #[instrument(level = "trace", skip_all)]
     pub async fn delete<K: KeyBind>(&self, key: K) -> sqlx::Result<()> {
-        let mut qb =
-            sqlx::QueryBuilder::<SqliteDb>::new(format!("delete from {} where ", T::SCHEMA.name));
-        key.push_where(&mut qb, &Self::key_cols());
-        qb.build().execute(self.sqlite.pool()).await?;
-        Ok(())
+        self.exec().delete(key).await
     }
 
     /// Drop all rows from this database.
     #[instrument(level = "trace", skip_all)]
     pub async fn delete_all(&self) -> sqlx::Result<()> {
-        sqlx::QueryBuilder::<SqliteDb>::new(format!("delete from {}", T::SCHEMA.name))
-            .build()
-            .execute(self.sqlite.pool())
-            .await?;
-        Ok(())
-    }
-
-    /// Like [`Self::delete_all`], but inside an existing transaction; returns the
-    /// number of rows deleted.
-    #[instrument(level = "trace", skip_all)]
-    pub async fn delete_all_tx(
-        &self,
-        tx: &mut sqlx::Transaction<'_, SqliteDb>,
-    ) -> sqlx::Result<u64> {
-        let result = sqlx::QueryBuilder::<SqliteDb>::new(format!("delete from {}", T::SCHEMA.name))
-            .build()
-            .execute(&mut **tx)
-            .await?;
-        Ok(result.rows_affected())
-    }
-
-    /// Like [`Self::delete`], but runs inside an existing transaction.
-    #[instrument(level = "trace", skip_all)]
-    pub async fn delete_tx<K: KeyBind>(
-        &self,
-        tx: &mut sqlx::Transaction<'_, SqliteDb>,
-        key: K,
-    ) -> sqlx::Result<()> {
-        let mut qb =
-            sqlx::QueryBuilder::<SqliteDb>::new(format!("delete from {} where ", T::SCHEMA.name));
-        key.push_where(&mut qb, &Self::key_cols());
-        qb.build().execute(&mut **tx).await?;
+        self.exec().delete_all().await?;
         Ok(())
     }
 
@@ -666,22 +747,23 @@ impl<T: Table> TableView<T> {
         // Each key binds `K::ARITY` values, so keep a chunk within the limit.
         let per_chunk = (self.sqlite.info().await.variable_number_limit / K::ARITY.max(1)).max(1);
 
+        let lhs = K::in_lhs(&cols);
+
         let mut keys = keys.into_iter().peekable();
         while keys.peek().is_some() {
             let mut qb = sqlx::QueryBuilder::<SqliteDb>::new(format!(
-                "delete from {} where ",
+                "delete from {} where {lhs} in (",
                 T::SCHEMA.name,
             ));
             let mut first = true;
             for key in keys.by_ref().take(per_chunk) {
                 if !first {
-                    qb.push(" or ");
+                    qb.push(", ");
                 }
                 first = false;
-                qb.push("(");
-                key.push_where(&mut qb, &cols);
-                qb.push(")");
+                key.push_row(&mut qb);
             }
+            qb.push(")");
             qb.build().execute(self.sqlite.pool()).await?;
         }
         Ok(())
@@ -690,12 +772,7 @@ impl<T: Table> TableView<T> {
     /// Number of rows in the table (`select count(*)`).
     #[instrument(level = "trace", skip_all)]
     pub async fn count(&self) -> sqlx::Result<u64> {
-        let (n,): (i64,) =
-            sqlx::QueryBuilder::<SqliteDb>::new(format!("select count(*) from {}", T::SCHEMA.name))
-                .build_query_as::<(i64,)>()
-                .fetch_one(self.sqlite.pool())
-                .await?;
-        Ok(n as u64)
+        self.exec().count().await
     }
 
     /// Update a full row in place, matched by its key: sets every non-key
@@ -707,21 +784,7 @@ impl<T: Table> TableView<T> {
     /// nothing to set).
     #[instrument(level = "trace", skip_all)]
     pub async fn update_one(&self, row: &T) -> sqlx::Result<()> {
-        let mut qb = sqlx::QueryBuilder::<SqliteDb>::new(Self::update_sql());
-        row.bind_update(qb.build()).execute(self.sqlite.pool()).await?;
-        Ok(())
-    }
-
-    /// Like [`Self::update_one`], but inside an existing transaction.
-    #[instrument(level = "trace", skip_all)]
-    pub async fn update_tx(
-        &self,
-        tx: &mut sqlx::Transaction<'_, SqliteDb>,
-        row: &T,
-    ) -> sqlx::Result<()> {
-        let mut qb = sqlx::QueryBuilder::<SqliteDb>::new(Self::update_sql());
-        row.bind_update(qb.build()).execute(&mut **tx).await?;
-        Ok(())
+        self.exec().update_one(row).await
     }
 
     /// `update <table> set <non-key cols> = ?/<expr> where <key cols> = ?`.
@@ -747,6 +810,14 @@ impl<T: Table> TableView<T> {
     fn key_cols() -> Vec<&'static str> {
         T::SCHEMA.columns.iter().filter(|c| c.key).map(|c| c.name).collect()
     }
+
+    /// A single-statement [`ExecView`] over this table's connection pool.
+    fn exec(&self) -> ExecView<&sqlx::sqlite::SqlitePool, T> {
+        ExecView {
+            exec: self.sqlite.pool(),
+            _t: PhantomData,
+        }
+    }
 }
 
 impl<T> TableView<T>
@@ -760,6 +831,45 @@ where
             sqlx::QueryBuilder::<SqliteDb>::new(format!("select * from {} where ", T::SCHEMA.name));
         key.push_where(&mut qb, &Self::key_cols());
         qb.build_query_as::<T>().fetch_optional(self.sqlite.pool()).await
+    }
+
+    pub fn get_many<'a, K, I>(
+        &'a self,
+        keys: I,
+    ) -> impl futures::Stream<Item = sqlx::Result<T>> + Send + 'a
+    where
+        K: KeyBind + Send + 'a,
+        I: IntoIterator<Item = K> + Send + 'a,
+        I::IntoIter: Send,
+    {
+        use futures::TryStreamExt;
+        // Capture the pieces the stream needs (not `&self`), so the generator is
+        // `Send` without requiring `T: Sync`.
+        let sqlite = &self.sqlite;
+        let name = T::SCHEMA.name;
+        let cols = Self::key_cols();
+        let lhs = K::in_lhs(&cols);
+        async_stream::try_stream! {
+            let per_chunk = (sqlite.info().await.variable_number_limit / K::ARITY.max(1)).max(1);
+
+            let mut keys = keys.into_iter().peekable();
+            while keys.peek().is_some() {
+                let mut qb = sqlx::QueryBuilder::<SqliteDb>::new(format!("select * from {name} where {lhs} in ("));
+                let mut first = true;
+                for key in keys.by_ref().take(per_chunk) {
+                    if !first {
+                        qb.push(", ");
+                    }
+                    first = false;
+                    key.push_row(&mut qb);
+                }
+                qb.push(")");
+                let mut rows = qb.build_query_as::<T>().fetch(sqlite.pool());
+                while let Some(row) = rows.try_next().await? {
+                    yield row;
+                }
+            }
+        }
     }
 
     /// Stream all rows.
@@ -1139,10 +1249,25 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn get_many_fetches_requested_keys(#[future(awt)] store: TableView<Kv>) {
+        let empty: Vec<Kv> =
+            store.get_many(std::iter::empty::<&str>()).try_collect().await.unwrap();
+        assert!(empty.is_empty());
+
+        let rows: Vec<Kv> = ["a", "b", "c"].into_iter().map(|id| Kv::new(id, "v")).collect();
+        store.insert_bulk(rows.iter()).await.unwrap();
+
+        let mut got: Vec<Kv> = store.get_many(["a", "c", "missing"]).try_collect().await.unwrap();
+        got.sort();
+        assert_eq!(got, vec![Kv::new("a", "v"), Kv::new("c", "v")]);
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn delete_all_tx_reports_count(#[future(awt)] store: TableView<Kv>) {
         store.insert_bulk([&Kv::new("a", "1"), &Kv::new("b", "2")]).await.unwrap();
         let mut tx = store.sqlite().pool().begin().await.unwrap();
-        let deleted = store.delete_all_tx(&mut tx).await.unwrap();
+        let deleted = store.on(&mut tx).delete_all().await.unwrap();
         tx.commit().await.unwrap();
         assert_eq!(deleted, 2);
         assert!(ids(&store).await.is_empty());
@@ -1152,7 +1277,7 @@ mod tests {
     #[tokio::test]
     async fn insert_bulk_spans_multiple_chunks(#[future(awt)] store: TableView<Kv>) {
         // Size the row count off the real, driver-reported bind-variable limit
-        // (never weaken it) so `insert_bulk_tx`'s `while` loop is forced to run
+        // (never weaken it) so `insert_bulk`'s `while` loop is forced to run
         // several times regardless of the sqlite build.
         let limit = store.sqlite().info().await.variable_number_limit;
         let n = limit * 2 + 137;
@@ -1294,9 +1419,9 @@ mod tests {
         let hosts: Vec<String> = view.all_ordered().map_ok(|e| e.host).try_collect().await.unwrap();
         assert_eq!(hosts, ["h2".to_string()]);
 
-        // `delete_tx` with the full key, committed in a transaction.
+        // `delete` on a transaction with the full key, committed.
         let mut tx = view.sqlite().pool().begin().await.unwrap();
-        view.delete_tx(&mut tx, ("h2", "a")).await.unwrap();
+        view.on(&mut tx).delete(("h2", "a")).await.unwrap();
         tx.commit().await.unwrap();
         assert!(view.all_ordered().try_collect::<Vec<Ev>>().await.unwrap().is_empty());
     }
