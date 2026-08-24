@@ -5,7 +5,7 @@ use eyre::Result;
 use tracing::instrument;
 use typed_builder::TypedBuilder;
 
-use super::{DEFAULT_PAGE_SIZE, SyncEngine, SyncError};
+use super::{SyncEngine, SyncError};
 use crate::api_client::{Client, caps_client};
 use crate::record::sqlite_store::SqliteStore;
 use crate::settings::Settings;
@@ -60,7 +60,7 @@ impl SyncEngineInit<'_> {
         Ok(SyncEngine {
             client,
             store: self.store,
-            page_size: DEFAULT_PAGE_SIZE,
+            page_size_override: None,
         })
     }
 }
