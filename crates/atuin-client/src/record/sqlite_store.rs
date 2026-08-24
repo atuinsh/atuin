@@ -7,7 +7,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use atuin_common::encryption::paseto_v4;
-use atuin_common::utils;
+use atuin_common::{sqlite, utils};
 use atuin_domain::record::{
     Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
     RecordVersion,
@@ -97,6 +97,12 @@ impl SqliteStore {
             .await?;
 
         Self::setup_db(&pool).await?;
+        sqlite::checkpoint_wal_if_needed(
+            &pool,
+            path,
+            sqlite::DEFAULT_WAL_CHECKPOINT_THRESHOLD_BYTES,
+        )
+        .await;
 
         Ok(Self { pool })
     }

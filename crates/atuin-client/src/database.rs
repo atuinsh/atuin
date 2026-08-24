@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use atuin_common::filter::{self, OrFilter};
 use atuin_common::time::OffsetDateTimeExt;
-use atuin_common::utils;
+use atuin_common::{sqlite, utils};
 use atuin_domain::record::{CmdOrigin, UNKNOWN_USER};
 use fs_err as fs;
 use itertools::Itertools;
@@ -345,6 +345,12 @@ impl Sqlite {
             .await?;
 
         Self::setup_db(&pool).await?;
+        sqlite::checkpoint_wal_if_needed(
+            &pool,
+            path,
+            sqlite::DEFAULT_WAL_CHECKPOINT_THRESHOLD_BYTES,
+        )
+        .await;
         Ok(Self { pool })
     }
 

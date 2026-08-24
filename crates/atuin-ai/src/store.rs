@@ -2,6 +2,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 
+use atuin_common::sqlite;
 use eyre::{Result, eyre};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
 use time::OffsetDateTime;
@@ -68,6 +69,15 @@ impl AiSessionStore {
             .await?;
 
         sqlx::migrate!("./migrations").run(&pool).await?;
+
+        if !is_memory {
+            sqlite::checkpoint_wal_if_needed(
+                &pool,
+                path,
+                sqlite::DEFAULT_WAL_CHECKPOINT_THRESHOLD_BYTES,
+            )
+            .await;
+        }
 
         #[cfg(unix)]
         if !is_memory {

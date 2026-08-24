@@ -24,6 +24,10 @@ unicode = ["dep:unicode-width", "dep:unicode-segmentation"]
 ansi = ["dep:vt100"]
 # Enables OS-specific utilities.
 os = ["dep:rustix"]
+# The `sqlite` module: shared WAL-checkpoint maintenance for the client-side
+# SQLite stores. Compiled only when enabled, so crates that don't touch sqlite
+# don't pull sqlx in.
+sqlite = ["dep:sqlx"]
 
 [dependencies]
 derive_more = { workspace = true }
@@ -55,6 +59,7 @@ serde_json = { workspace = true }
 zeroize = { workspace = true }
 rmp = { workspace = true }
 fs-err = { workspace = true }
+sqlx = { workspace = true, optional = true, features = ["sqlite"] }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, optional = true }

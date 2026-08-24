@@ -465,6 +465,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+ "sqlx",
  "sysinfo",
  "tempfile",
  "thiserror 2.0.19",
