@@ -272,7 +272,7 @@ impl AuthClient for HubAuthClient {
         totp_code: Option<&str>,
     ) -> Result<AuthResponse> {
         let url = self.address.append_path("api/v0/login")?;
-        let client = reqwest::Client::new();
+        let client = atuin_domain::http::client();
 
         let mut body = serde_json::json!({
             "username": username,
@@ -319,7 +319,7 @@ impl AuthClient for HubAuthClient {
 
     async fn register(&self, username: &str, email: &str, password: &str) -> Result<AuthResponse> {
         let url = self.address.append_path("api/v0/register")?;
-        let client = reqwest::Client::new();
+        let client = atuin_domain::http::client();
 
         let resp = client
             .post(url)
@@ -369,7 +369,7 @@ impl AuthClient for HubAuthClient {
         }
 
         let url = self.address.append_path("api/v0/account/password")?;
-        let client = reqwest::Client::new();
+        let client = atuin_domain::http::client();
 
         let mut body = serde_json::json!({
             "current_password": current_password,
@@ -437,7 +437,7 @@ impl AuthClient for HubAuthClient {
         }
 
         let url = self.address.append_path("api/v0/account")?;
-        let client = reqwest::Client::new();
+        let client = atuin_domain::http::client();
 
         let mut body = serde_json::json!({
             "password": password,

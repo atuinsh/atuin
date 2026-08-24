@@ -161,7 +161,7 @@ pub fn create_chat_stream(
             request_body["session_id"] = serde_json::json!(sid);
         }
 
-        let client = reqwest::Client::new();
+        let client = atuin_domain::http::client();
         let mut request_builder = client
             .post(endpoint.clone())
             .header("Accept", "text/event-stream")

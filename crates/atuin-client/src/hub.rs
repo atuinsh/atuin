@@ -228,7 +228,7 @@ pub async fn link_account(hub_address: &Url, cli_token: &str) -> Result<()> {
 
     debug!("Linking CLI account to Hub at {}", hub_address);
 
-    let client = reqwest::Client::new();
+    let client = atuin_domain::http::client();
 
     let resp = client
         .post(url)
@@ -269,7 +269,7 @@ async fn handle_resp_error(resp: reqwest::Response) -> Result<reqwest::Response,
 /// Request a CLI auth code from the Atuin Hub
 async fn request_code(address: &Url) -> Result<CliCodeResponse, HubError> {
     let url = address.append_path("auth/cli/code")?;
-    let client = reqwest::Client::new();
+    let client = atuin_domain::http::client();
 
     debug!("Requesting code from Hub at {url}");
 
@@ -288,7 +288,7 @@ async fn request_code(address: &Url) -> Result<CliCodeResponse, HubError> {
 /// Poll to verify the CLI auth code and get the session token
 async fn verify_code(address: &Url, code: &str) -> Result<CliVerifyResponse, HubError> {
     let mut url = address.append_path("auth/cli/verify")?;
-    let client = reqwest::Client::new();
+    let client = atuin_domain::http::client();
 
     // Logged before the code is appended, so the secret stays out of the logs.
     debug!("Verifying code with Hub at {url}");
