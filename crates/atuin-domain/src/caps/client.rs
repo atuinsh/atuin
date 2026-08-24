@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -8,6 +10,33 @@ use url::Url;
 
 use super::{CapKey, Capability, CapsBundle, DuplicateCapability};
 use crate::api::CapabilitiesResponse;
+
+/// The future an [`AuthHeaderProvider`] resolves an Authorization header with.
+pub type AuthHeaderFuture = Pin<Box<dyn Future<Output = Option<String>> + Send>>;
+
+/// Resolves the `Authorization` header value for each capability fetch.
+///
+/// Returning `None` fetches anonymously. Auth is resolved per fetch, not at
+/// construction, so a long-lived reader (e.g. the daemon's) follows login,
+/// logout, and token rotation without a rebuild.
+#[derive(Clone)]
+pub struct AuthHeaderProvider(Arc<dyn Fn() -> AuthHeaderFuture + Send + Sync>);
+
+impl AuthHeaderProvider {
+    pub fn new(f: impl Fn() -> AuthHeaderFuture + Send + Sync + 'static) -> Self {
+        Self(Arc::new(f))
+    }
+
+    async fn resolve(&self) -> Option<String> {
+        (self.0)().await
+    }
+}
+
+impl std::fmt::Debug for AuthHeaderProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AuthHeaderProvider")
+    }
+}
 
 /// Client-side capability set: advertises its own capabilities and can read the server's.
 ///
@@ -29,6 +58,8 @@ pub struct CapClient {
     capabilities_url: Url,
     /// Bare client used to fetch `capabilities_url`.
     http: reqwest::Client,
+    /// Per-fetch Authorization resolution; `None` always fetches anonymously.
+    auth: Option<AuthHeaderProvider>,
     warmed: tokio::sync::watch::Receiver<bool>,
 }
 
@@ -73,7 +104,20 @@ pub enum ServerSupportError {
 
 impl CapClient {
     /// Create a client that will negotiate against the given capabilities endpoint.
+    ///
+    /// Fetches anonymously; see [`CapClient::new_with_auth`] for per-user documents.
     pub fn new(capabilities_url: Url, http: reqwest::Client) -> Arc<Self> {
+        Self::new_with_auth(capabilities_url, http, None)
+    }
+
+    /// Like [`CapClient::new`], but each capability fetch carries the
+    /// `Authorization` header the provider resolves at fetch time, letting the
+    /// server scope the advertised document to the current user.
+    pub fn new_with_auth(
+        capabilities_url: Url,
+        http: reqwest::Client,
+        auth: Option<AuthHeaderProvider>,
+    ) -> Arc<Self> {
         let (tx, rx) = tokio::sync::watch::channel(false);
         let new = Arc::new(Self {
             own: CapsBundle::default(),
@@ -81,6 +125,7 @@ impl CapClient {
             fetching: tokio::sync::Mutex::new(()),
             capabilities_url,
             http,
+            auth,
             warmed: rx,
         });
 
@@ -139,8 +184,21 @@ impl CapClient {
 
     /// Fetch and decode the server's capabilities document.
     async fn fetch_server_caps(&self) -> reqwest::Result<ServerCaps> {
-        let resp: CapabilitiesResponse =
-            self.http.get(self.capabilities_url.clone()).send().await?.json().await?;
+        let mut req = self.http.get(self.capabilities_url.clone());
+        if let Some(auth) = &self.auth
+            && let Some(header) = auth.resolve().await
+        {
+            req = req.header(reqwest::header::AUTHORIZATION, header);
+        }
+
+        let resp: CapabilitiesResponse = req
+            .send()
+            .await?
+            // Surface auth/server rejections (e.g. a 401 on an authenticated
+            // fetch) as their status instead of an opaque JSON decode error.
+            .error_for_status()?
+            .json()
+            .await?;
         Ok(ServerCaps::from(resp))
     }
 

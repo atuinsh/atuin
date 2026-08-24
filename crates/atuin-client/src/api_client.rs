@@ -12,7 +12,7 @@ use atuin_domain::api::{
     LoginRequest, LoginResponse, MeResponse, PackfileDownloadResponse, PackfileResponse,
     RegisterResponse,
 };
-use atuin_domain::caps::{CapClient, CapMismatch, CapabilitiesExt};
+use atuin_domain::caps::{AuthHeaderProvider, CapClient, CapMismatch, CapabilitiesExt};
 use atuin_domain::record::{
     EncryptedData, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus,
 };
@@ -25,6 +25,7 @@ use semver::Version;
 use tracing::{Instrument, instrument};
 
 use crate::packfile::PackedPackfile;
+use crate::settings::Settings;
 
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 
@@ -267,17 +268,36 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
 
 /// Build the capability reader for a sync server.
 #[instrument(level = "trace", skip_all, err)]
-pub fn caps_client(
+pub fn caps_client(settings: &Settings) -> Result<Arc<CapClient>> {
+    let auth_settings = Arc::new(settings.clone());
+
+    let auth = AuthHeaderProvider::new(move || {
+        let settings = auth_settings.clone();
+        Box::pin(async move { settings.sync_auth_token().await.ok().map(|t| t.to_header_value()) })
+    });
+
+    Ok(CapClient::new_with_auth(
+        settings.sync_address.append_path("api/v0/capabilities")?,
+        caps_http(&settings.extra_headers)?,
+        Some(auth),
+    ))
+}
+
+/// Build an anonymous capability reader: every fetch sees the server-global
+/// document. For contexts with no user auth in play (tests, tooling).
+pub fn caps_client_anonymous(
     sync_addr: &Url,
     extra_headers: &HashMap<String, String>,
 ) -> Result<Arc<CapClient>> {
+    Ok(CapClient::new(sync_addr.append_path("api/v0/capabilities")?, caps_http(extra_headers)?))
+}
+
+fn caps_http(extra_headers: &HashMap<String, String>) -> Result<reqwest::Client> {
     let mut headers = extra_headers_map(extra_headers)?;
     headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
     headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
 
-    let http = client_builder(extra_headers).default_headers(headers).build()?;
-
-    Ok(CapClient::new(sync_addr.append_path("api/v0/capabilities")?, http))
+    Ok(client_builder(extra_headers).default_headers(headers).build()?)
 }
 
 /// A pending records download for one series, produced by [`Client::records`].
@@ -780,7 +800,7 @@ mod tests {
             .await;
 
         let addr: Url = server.uri().parse().unwrap();
-        let caps = caps_client(&addr, &HashMap::new()).unwrap();
+        let caps = caps_client_anonymous(&addr, &HashMap::new()).unwrap();
         let client =
             Client::new(addr, &AuthToken::Token("t".into()), 30, 30, &HashMap::new(), caps)
                 .unwrap();
@@ -829,7 +849,7 @@ mod records_stream_tests {
     }
 
     fn mock_client(addr: &Url) -> Client {
-        let caps = caps_client(addr, &HashMap::new()).unwrap();
+        let caps = caps_client_anonymous(addr, &HashMap::new()).unwrap();
         Client::new(addr.clone(), &AuthToken::Token("t".into()), 30, 30, &HashMap::new(), caps)
             .unwrap()
     }
