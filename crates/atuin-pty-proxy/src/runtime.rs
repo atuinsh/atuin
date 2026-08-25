@@ -10,7 +10,7 @@ use crate::debug::{Osc133DebugHighlighter, RESET};
 use crate::pty_proxy::RuntimeOptions;
 use crate::screen::{self, Msg};
 
-pub(crate) fn main(options: RuntimeOptions) {
+pub fn main(options: RuntimeOptions) {
     if let Err(e) = run(options) {
         let _ = terminal::disable_raw_mode();
         eprintln!("atuin pty-proxy: {e:#}");

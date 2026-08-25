@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Receiver, SyncSender};
 use atuin_common::ansi::{Vt100ParserExt as _, Vt100ScreenExt as _};
 use atuin_common::os::unix::{NamedTempDirError, create_named_temp_dir};
 
-pub(crate) enum Msg {
+pub enum Msg {
     Data(Vec<u8>),
     Resize {
         rows: u16,
@@ -15,21 +15,20 @@ pub(crate) enum Msg {
     ScreenRequest(mpsc::Sender<Vec<u8>>),
 }
 
-pub(crate) fn socket_path() -> Result<PathBuf, NamedTempDirError> {
+pub fn socket_path() -> Result<PathBuf, NamedTempDirError> {
     let uid = atuin_common::os::unix::uid();
     let dir = atuin_common::os::unix::tmp_dir().join(format!("atuin-{uid}"));
     let dir = create_named_temp_dir(dir)?;
     Ok(dir.join(format!("atuin-pty-proxy-{}.sock", std::process::id())))
 }
 
-pub(crate) fn spawn_parser_thread(rows: u16, cols: u16, msg_rx: Receiver<Msg>) {
+pub fn spawn_parser_thread(rows: u16, cols: u16, msg_rx: Receiver<Msg>) {
     std::thread::spawn(move || {
         let mut parser = vt100::Parser::new_safe(rows, cols, 0);
 
         loop {
-            let first = match msg_rx.recv() {
-                Ok(msg) => msg,
-                Err(_) => break,
+            let Ok(first) = msg_rx.recv() else {
+                break;
             };
 
             handle_parser_msg(&mut parser, first);
@@ -41,7 +40,7 @@ pub(crate) fn spawn_parser_thread(rows: u16, cols: u16, msg_rx: Receiver<Msg>) {
     });
 }
 
-pub(crate) fn spawn_socket_server(sock_path: PathBuf, screen_tx: SyncSender<Msg>) {
+pub fn spawn_socket_server(sock_path: PathBuf, screen_tx: SyncSender<Msg>) {
     std::thread::spawn(move || {
         let listener = match UnixListener::bind(&sock_path) {
             Ok(l) => l,
@@ -52,9 +51,8 @@ pub(crate) fn spawn_socket_server(sock_path: PathBuf, screen_tx: SyncSender<Msg>
         };
 
         for stream in listener.incoming() {
-            let mut stream = match stream {
-                Ok(s) => s,
-                Err(_) => break,
+            let Ok(mut stream) = stream else {
+                break;
             };
 
             let (reply_tx, reply_rx) = mpsc::channel();
