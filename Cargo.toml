@@ -109,6 +109,11 @@ default-features = false
 version = "0.9"
 features = ["runtime-tokio", "time", "uuid"]
 
+# Version range mirrors sqlx-sqlite's so cargo unifies both to a single
+# `links = "sqlite3"` package (one bundled SQLite).
+[workspace.dependencies.libsqlite3-sys]
+version = ">=0.30.1, <0.38.0"
+
 # The profile that 'cargo dist' will build with
 [profile.dist]
 inherits = "release"
