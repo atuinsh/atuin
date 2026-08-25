@@ -36,7 +36,7 @@ impl Info {
     /// # Panics
     ///
     /// Panics if there is no active [`tokio::runtime::Handle`].
-    pub fn eager_future(pool: SqlitePool) -> EagerFutureCell<Self> {
+    pub fn new_eager_future(pool: SqlitePool) -> EagerFutureCell<Self> {
         EagerFutureCell::new(
             async move {
                 // Please note that `query_variable_number_limit` will take a lock on the database

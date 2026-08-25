@@ -61,7 +61,7 @@ impl Sqlite {
             .map_err(SqliteOpenOrCreateError::PoolCreateError)?;
 
         Ok(Self {
-            info: Info::eager_future(pool.clone()),
+            info: Info::new_eager_future(pool.clone()),
             pool,
         })
     }
