@@ -36,7 +36,7 @@ pub fn tmp_dir() -> PathBuf {
     crate::utils::env_nonempty("TMPDIR").map_or_else(|| "/tmp".into(), Into::into)
 }
 
-/// Error returned by [`create_named_temp_dir`].
+/// Error returned by [`create_secure_temp_dir`].
 #[derive(Debug, thiserror::Error)]
 pub enum SecureTempDirError {
     #[error("{} is not a directory", .0.display())]
