@@ -108,13 +108,13 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
 
                     if let Some(highlighter) = highlighter.as_mut() {
                         let rendered = highlighter.render(&buf[..n]);
-                        let _ = msg_tx.try_send(Msg::Data(rendered.clone()));
+                        let _ = msg_tx.send(Msg::Data(rendered.clone()));
 
                         if stdout.write_all(&rendered).is_err() {
                             break;
                         }
                     } else {
-                        let _ = msg_tx.try_send(Msg::Data(buf[..n].to_vec()));
+                        let _ = msg_tx.send(Msg::Data(buf[..n].to_vec()));
 
                         if stdout.write_all(&buf[..n]).is_err() {
                             break;
@@ -177,7 +177,7 @@ fn spawn_resize_handler(
                     pixel_width: 0,
                     pixel_height: 0,
                 });
-                let _ = resize_tx.try_send(Msg::Resize { rows, cols });
+                let _ = resize_tx.send(Msg::Resize { rows, cols });
             }
         }
     });
