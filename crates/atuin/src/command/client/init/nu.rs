@@ -47,14 +47,23 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use rstest::rstest;
 
-    use super::{BIND_CTRL_R, BIND_UP_ARROW};
+    use super::*;
 
     #[rstest]
-    #[case(BIND_CTRL_R, "atuin")]
-    #[case(BIND_UP_ARROW, "atuin_up_arrow")]
-    fn keybinding_has_unique_name(#[case] binding: &str, #[case] expected_name: &str) {
-        assert!(binding.contains(&format!("name: {expected_name}")));
+    fn keybindings_have_unique_names() {
+        let re = regex::Regex::new(r"\<name:\s*(\w+)").unwrap();
+        let mut names = HashSet::new();
+        for name in [BIND_CTRL_R, BIND_UP_ARROW]
+            .into_iter()
+            .map(|s| re.captures(s).unwrap().get(1).unwrap().as_str().to_owned())
+        {
+            if let Some(existing) = names.replace(name) {
+                panic!("duplicate binding name: {existing}");
+            }
+        }
     }
 }
