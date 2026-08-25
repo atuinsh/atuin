@@ -19,7 +19,7 @@ pub fn socket_path() -> Result<PathBuf, SecureTempDirError> {
     let uid = atuin_common::os::unix::uid();
     let dir = atuin_common::os::unix::tmp_dir().join(format!("atuin-{uid}"));
     let dir = create_secure_temp_dir(dir)?;
-    Ok(dir.join(format!("atuin-pty-proxy-{}.sock", std::process::id())))
+    Ok(dir.join(format!("pty-proxy-{}.sock", std::process::id())))
 }
 
 pub fn spawn_parser_thread(rows: u16, cols: u16, msg_rx: Receiver<Msg>) {
