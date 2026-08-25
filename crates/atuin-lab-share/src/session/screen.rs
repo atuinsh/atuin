@@ -64,9 +64,9 @@ impl ScreenState {
     ///
     /// The size is floored at [`crate::MIN_COLS`] x [`crate::MIN_CHILD_ROWS`]
     /// before it reaches `vt100`. Every caller already clamps or refuses
-    /// upstream (`host_size_from`, `clamp_host_size`, `clamp_child`,
-    /// `proxy_tap::clamp_tap_size`); this is the last of those gates and the
-    /// only one that sits directly on the library that panics.
+    /// upstream (`host_size_from`, `clamp_host_size`, `clamp_child`); this is
+    /// the last of those gates and the only one that sits directly on the
+    /// library that panics.
     pub(super) fn new(size: Size) -> Self {
         let size = clamp(size);
         Self {
