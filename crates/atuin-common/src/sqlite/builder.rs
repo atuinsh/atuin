@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -12,13 +12,13 @@ pub struct SqliteBuilderRoot;
 #[allow(clippy::unused_self)]
 impl SqliteBuilderRoot {
     #[must_use]
-    pub fn file(self, path: impl AsRef<Path>) -> SqliteBuilder {
-        SqliteBuilder::new(path.as_ref().to_path_buf())
+    pub fn file<P: AsRef<Path>>(self, path: P) -> SqliteBuilder<P> {
+        SqliteBuilder::new(path)
     }
 }
 
-pub struct SqliteBuilder {
-    path: PathBuf,
+pub struct SqliteBuilder<P> {
+    path: P,
     timeout: Duration,
     journal: SqliteJournalMode,
     synchronous: SqliteSynchronous,
@@ -27,8 +27,8 @@ pub struct SqliteBuilder {
     regexp: bool,
 }
 
-impl SqliteBuilder {
-    fn new(path: PathBuf) -> Self {
+impl<P: AsRef<Path>> SqliteBuilder<P> {
+    fn new(path: P) -> Self {
         Self {
             path,
             timeout: Duration::from_secs(5),
@@ -77,19 +77,21 @@ impl SqliteBuilder {
     }
 
     pub async fn open(self) -> Result<Sqlite, SqliteOpenOrCreateError> {
-        if self.path.is_dangling_symlink() {
-            return Err(SqliteOpenOrCreateError::BadSymlink(self.path.clone()));
+        let path = self.path.as_ref();
+
+        if path.is_dangling_symlink() {
+            return Err(SqliteOpenOrCreateError::BadSymlink(path.to_path_buf()));
         }
 
-        if !self.path.exists()
-            && let Some(dir) = self.path.parent()
+        if !path.exists()
+            && let Some(dir) = path.parent()
         {
             std::fs::create_dir_all(dir).map_err(SqliteOpenOrCreateError::FailedToCreateDir)?;
         }
 
-        let path_str = self.path.to_str().ok_or_else(|| {
+        let path_str = path.to_str().ok_or_else(|| {
             SqliteOpenOrCreateError::ConenctOptionsParsing(sqlx::Error::Configuration(
-                format!("database path is not valid UTF-8: {:?}", self.path).into(),
+                format!("database path is not valid UTF-8: {path:?}").into(),
             ))
         })?;
 
@@ -108,9 +110,9 @@ impl SqliteBuilder {
         let sqlite = Sqlite::connect(opts, self.timeout).await?;
 
         #[cfg(unix)]
-        if self.restrict_permissions && self.path.exists() {
+        if self.restrict_permissions && path.exists() {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(0o600))
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
                 .map_err(SqliteOpenOrCreateError::FailedToSetPermissions)?;
         }
 
