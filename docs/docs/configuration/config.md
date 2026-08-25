@@ -92,7 +92,7 @@ sync_address = "https://api.atuin.sh"
 
 ### `sync_frequency`
 
-Default: `1h`
+Default: `5m`
 
 How often to automatically sync with the server. This can be given in a
 "human-readable" format. For example, `10s`, `20m`, `1h`, etc.
@@ -101,7 +101,7 @@ If set to `0`, Atuin will sync after every command. Some servers may rate limit
 frequent syncs, but this won't cause any issues.
 
 ```toml
-sync_frequency = "1h"
+sync_frequency = "5m"
 ```
 
 ### `search_mode`
