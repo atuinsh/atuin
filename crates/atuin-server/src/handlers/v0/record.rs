@@ -1,4 +1,6 @@
-use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus, RecordTag};
+use atuin_domain::record::{
+    EncryptedData, HostId, Record, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
+};
 use atuin_server_database::Database;
 use axum::Json;
 use axum::extract::{Query, State};
@@ -83,11 +85,9 @@ pub async fn next<DB: Database>(
 ) -> Result<Json<Vec<Record<EncryptedData>>>, ErrorResponseStatus<'static>> {
     let State(AppState { database, .. }) = state;
     let params = params.0;
+    let series = RecordSeriesKey::new(params.host, params.tag);
 
-    let records = match database
-        .next_records(&user, params.host, params.tag, params.start, params.count)
-        .await
-    {
+    let records = match database.next_records(&user, &series, params.start, params.count).await {
         Ok(records) => records,
         Err(e) => {
             error!("failed to get record index: {}", e);

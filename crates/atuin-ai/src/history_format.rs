@@ -1,4 +1,4 @@
-use atuin_client::history::{History, is_known_agent};
+use atuin_client::history::History;
 use atuin_common::time::{DurationExt, OffsetDateTimeExt};
 use time::UtcOffset;
 
@@ -37,11 +37,11 @@ fn format_history_metadata(history: &History, local_offset: UtcOffset) -> String
 }
 
 /// Attribution for agent-run commands: which agent, and its stated intent.
-/// A stated intent marks a command as agent-run even when the agent is not in
-/// KNOWN_AGENTS, so its author is still named. User-run commands (no intent,
-/// author not a known agent) get nothing.
+/// A stated intent marks a command as agent-run even when the entry is not
+/// recognised as one, so its author is still named. User-run commands (no
+/// intent, not an agent) get nothing.
 fn format_attribution(history: &History) -> String {
-    match (is_known_agent(&history.author), &history.intent) {
+    match (history.is_agent(), &history.intent) {
         (true, Some(intent)) => format!(" — {}: {intent}", history.author),
         (true, None) => format!(" — {}", history.author),
         (false, Some(intent)) if !history.author.is_empty() => {
@@ -87,6 +87,7 @@ mod tests {
             intent: None,
             deleted_at: None,
             shell: Some("zsh".into()),
+            author_kind: None,
         }
     }
 

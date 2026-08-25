@@ -203,8 +203,10 @@ cargo build-traced
 With this, you can run Jaeger, like so, in one terminal:
 
 ```bash
-docker run --rm -d --name jaeger -p 16686:16686 -p 4318:4318 \
-    jaegertracing/all-in-one:latest
+docker run --rm --name jaeger \
+  -p 16686:16686 \
+  -p 4318:4318 \
+  jaegertracing/jaeger:latest
 ```
 
 You can then, in another terminal, run the `daemon`:
@@ -218,6 +220,16 @@ Finally, you can run the client:
 ```bash
 ATUIN_OTEL=http://localhost:4318 ./target/profiling-traced/atuin sync
 ```
+
+> [!NOTE]
+>
+> You may need to tweak your exporting rate with the following env values:
+>
+> ```bash
+> OTEL_BSP_MAX_QUEUE_SIZE=262144      # max span count in the queue
+> OTEL_BSP_MAX_EXPORT_BATCH_SIZE=8192 # how many spans to push a time
+> OTEL_BSP_SCHEDULE_DELAY=500         # how often to publish spans
+> ```
 
 You can navigate to `http://localhost:16686` in your local browser and you
 should see your traces.

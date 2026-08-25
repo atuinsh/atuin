@@ -1,7 +1,8 @@
+use atuin_common::utils::normalize_optional_string;
 use atuin_domain::record::CmdOrigin;
 use typed_builder::TypedBuilder;
 
-use super::History;
+use super::{AuthorKind, History, is_known_agent};
 
 /// Builder for a history entry that is imported from shell history.
 ///
@@ -27,6 +28,8 @@ pub struct HistoryImported {
     intent: Option<String>,
     #[builder(default, setter(strip_option, into))]
     shell: Option<String>,
+    #[builder(default)]
+    author_kind: Option<AuthorKind>,
 }
 
 impl HistoryImported {
@@ -48,6 +51,7 @@ impl From<HistoryImported> for History {
             imported.intent,
             None,
             imported.shell,
+            imported.author_kind,
         )
     }
 }
@@ -68,13 +72,32 @@ pub struct HistoryCaptured {
     #[builder(default, setter(into))]
     author: Option<String>,
     #[builder(default, setter(into))]
+    cmd_origin: Option<CmdOrigin>,
+    #[builder(default, setter(into))]
     intent: Option<String>,
     #[builder(default, setter(into))]
     shell: Option<String>,
+    #[builder(default)]
+    author_kind: Option<AuthorKind>,
 }
 
 impl From<HistoryCaptured> for History {
     fn from(captured: HistoryCaptured) -> Self {
+        // Only agent integrations state an author; humans never do. That makes a stated
+        // known-agent name a far stronger signal that an agent ran this than anything we can
+        // infer after the fact — unless it is also the current username, which says nothing
+        // (see [`History::is_agent`]). An explicit kind still wins.
+        let author = normalize_optional_string(captured.author);
+        let cmd_origin = captured.cmd_origin.unwrap_or_else(CmdOrigin::probe_current);
+        let author_kind = captured.author_kind.or_else(|| {
+            author
+                .as_deref()
+                .is_some_and(|author| {
+                    is_known_agent(author) && author != cmd_origin.user().into_inner()
+                })
+                .then_some(AuthorKind::Agent)
+        });
+
         Self::new(
             captured.timestamp,
             captured.command,
@@ -82,11 +105,12 @@ impl From<HistoryCaptured> for History {
             -1,
             -1,
             None,
-            None,
-            captured.author,
+            Some(cmd_origin),
+            author,
             captured.intent,
             None,
             captured.shell,
+            author_kind,
         )
     }
 }
@@ -108,6 +132,7 @@ pub struct HistoryFromDb {
     intent: Option<String>,
     deleted_at: Option<time::OffsetDateTime>,
     shell: Option<String>,
+    author_kind: Option<AuthorKind>,
 }
 
 impl From<HistoryFromDb> for History {
@@ -127,6 +152,7 @@ impl From<HistoryFromDb> for History {
             intent: from_db.intent,
             deleted_at: from_db.deleted_at,
             shell: from_db.shell,
+            author_kind: from_db.author_kind,
         }
     }
 }
@@ -153,6 +179,8 @@ pub struct HistoryDaemonCapture {
     intent: Option<String>,
     #[builder(default, setter(strip_option, into))]
     shell: Option<String>,
+    #[builder(default)]
+    author_kind: Option<AuthorKind>,
 }
 
 impl From<HistoryDaemonCapture> for History {
@@ -169,6 +197,7 @@ impl From<HistoryDaemonCapture> for History {
             captured.intent,
             None,
             captured.shell,
+            captured.author_kind,
         )
     }
 }

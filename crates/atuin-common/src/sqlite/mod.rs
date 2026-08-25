@@ -82,7 +82,7 @@ impl Sqlite {
 
     /// Get metadata on the database.
     #[must_use]
-    pub async fn info(&self) -> &Info {
+    pub async fn info(&self) -> Info {
         self.info.get().await
     }
 

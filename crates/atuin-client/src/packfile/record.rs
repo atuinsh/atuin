@@ -6,8 +6,8 @@ use atuin_common::encryption::paseto_v4;
 use atuin_common::rmp::decode::{self, Bytes, DecodeError, RmpRead};
 use atuin_common::rmp::encode::{self, ByteBuf, EncodeError, RmpWrite, TryEncodeError};
 use atuin_domain::record::{
-    DecryptedData, EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag,
-    RecordVersion,
+    DecryptedData, EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey,
+    RecordTag, RecordVersion,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -15,6 +15,12 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::record::sqlite_store::SqliteStore;
+
+pub struct PackedPackfile {
+    pub manifest_id: RecordId,
+    pub records: Vec<RecordId>,
+    pub blob: Vec<u8>,
+}
 
 fn read_uuid<'a, R>(reader: &mut R) -> Result<Uuid, DecodeError<'a, R::Error>>
 where
@@ -191,8 +197,6 @@ pub enum PackError {
     Decrypt(eyre::Report),
     #[error("failed to serialize the records: {0}")]
     Serialize(#[from] EncodeError),
-    #[error("the record run yielded a different number of records than it reported")]
-    BadLength,
     #[error("failed to compress the packfile: {0}")]
     Compress(#[from] std::io::Error),
     #[error("failed to encrypt the packfile: {0}")]
@@ -290,7 +294,11 @@ impl<'a> PackManifestRecordView<'a> {
         let count = range.end - range.start;
 
         let run = store
-            .next(self.record.host.id, &RecordTag::History, range.start, count)
+            .next(
+                &RecordSeriesKey::new(self.record.host.id, RecordTag::History),
+                range.start,
+                count,
+            )
             .await
             .map_err(RecordLoadingError::StoreError)?;
 

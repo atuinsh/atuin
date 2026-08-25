@@ -19,7 +19,14 @@ pub struct SqliteBuilderRoot;
 impl SqliteBuilderRoot {
     #[must_use]
     pub fn file(self, path: impl AsRef<Path>) -> SqliteBuilder {
-        SqliteBuilder::new(SqliteLocation::File(path.as_ref().to_path_buf()))
+        let path = path.as_ref();
+        // `:memory:` (and the `sqlite::memory:` URI form) is SQLite's in-memory sentinel, not a real
+        // filename; route it through the memory path so pooled connections share one database (a
+        // filename would give each connection its own empty db, or worse, a real on-disk file).
+        if matches!(path.to_str(), Some(":memory:" | "sqlite::memory:")) {
+            return SqliteBuilder::new(SqliteLocation::Memory);
+        }
+        SqliteBuilder::new(SqliteLocation::File(path.to_path_buf()))
     }
 
     #[must_use]

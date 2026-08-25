@@ -57,8 +57,8 @@ mod client;
 mod middleware;
 mod server;
 
-pub use all::{CapabilitiesCap, PackfileCap};
-pub use client::{CapClient, ServerSupportError};
+pub use all::{CapabilitiesCap, PackfileCap, PageSizeCap};
+pub use client::{AuthHeaderProvider, CapClient, ServerSupportError};
 pub use middleware::{CapMiddleware, CapMismatch, CapabilitiesExt};
 pub use server::{CapServer, Negotiation};
 

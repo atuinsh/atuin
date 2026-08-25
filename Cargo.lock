@@ -342,6 +342,7 @@ dependencies = [
  "futures",
  "glob-match",
  "imara-diff",
+ "parking_lot",
  "pretty_assertions",
  "pulldown-cmark",
  "ratatui",
@@ -380,6 +381,7 @@ dependencies = [
 name = "atuin-client"
 version = "18.20.0-beta.3"
 dependencies = [
+ "async-stream",
  "async-trait",
  "atuin-common",
  "atuin-domain",
@@ -456,6 +458,7 @@ dependencies = [
  "getrandom 0.4.3",
  "itertools 0.15.0",
  "libsqlite3-sys",
+ "parking_lot",
  "pretty_assertions",
  "proptest",
  "rmp",
@@ -502,6 +505,7 @@ dependencies = [
  "hyper-util",
  "lasso",
  "listenfd",
+ "parking_lot",
  "prost",
  "prost-types",
  "protox",
@@ -622,6 +626,7 @@ dependencies = [
  "fs4",
  "futures-util",
  "hex",
+ "parking_lot",
  "portable-pty",
  "serde_json",
  "tempfile",
@@ -685,6 +690,7 @@ dependencies = [
  "atuin-common",
  "atuin-daemon",
  "codspeed-divan-compat",
+ "parking_lot",
  "time",
  "tokio",
 ]
@@ -4638,6 +4644,7 @@ dependencies = [
  "rustls-pki-types",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-native-tls",

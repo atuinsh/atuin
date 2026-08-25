@@ -19,6 +19,7 @@ tree-sitter = ["dep:tree-sitter", "dep:tree-sitter-bash", "dep:tree-sitter-fish"
 
 [dependencies]
 enum_dispatch = { workspace = true }
+parking_lot = { workspace = true }
 async-trait = { workspace = true }
 atuin-client = { workspace = true }
 atuin-domain = { workspace = true }

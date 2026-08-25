@@ -7,7 +7,9 @@ use atuin_common::encryption::paseto_v4;
 // While we will support a range of shell config, I'd rather have a larger number of small records
 // + stores, rather than one mega config store.
 use atuin_common::utils::unquote;
-use atuin_domain::record::{DecryptedData, Host, HostId, RecordTag, RecordVersion};
+use atuin_domain::record::{
+    DecryptedData, Host, HostId, RecordSeriesKey, RecordTag, RecordVersion,
+};
 use eyre::{Result, bail, ensure, eyre};
 
 use crate::shell::Alias;
@@ -225,7 +227,7 @@ impl AliasStore {
 
         let idx = self
             .store
-            .last(self.host_id, &RecordTag::ConfigShellAlias)
+            .last(&RecordSeriesKey::new(self.host_id, RecordTag::ConfigShellAlias))
             .await?
             .map_or(0, |entry| entry.idx + 1);
 
@@ -259,7 +261,7 @@ impl AliasStore {
 
         let idx = self
             .store
-            .last(self.host_id, &RecordTag::ConfigShellAlias)
+            .last(&RecordSeriesKey::new(self.host_id, RecordTag::ConfigShellAlias))
             .await?
             .map_or(0, |entry| entry.idx + 1);
 

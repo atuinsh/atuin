@@ -7,7 +7,8 @@ use atuin_common::encryption::paseto_v4;
 use atuin_common::futures::stream::chunk_by_bounded;
 use atuin_common::rmp::decode::Bytes;
 use atuin_domain::record::{
-    DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag, RecordVersion,
+    DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag,
+    RecordVersion,
 };
 use eyre::{Result, bail, eyre};
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
@@ -142,8 +143,11 @@ impl HistoryStore {
     #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     async fn push_record(&self, record: HistoryRecord) -> Result<(RecordId, RecordIdx)> {
         let bytes = record.serialize()?;
-        let idx =
-            self.store.last(self.host_id, &RecordTag::History).await?.map_or(0, |p| p.idx + 1);
+        let idx = self
+            .store
+            .last(&RecordSeriesKey::new(self.host_id, RecordTag::History))
+            .await?
+            .map_or(0, |p| p.idx + 1);
 
         let record = Record::builder()
             .host(Host::new(self.host_id))
@@ -164,8 +168,11 @@ impl HistoryStore {
     async fn push_batch(&self, records: impl Iterator<Item = HistoryRecord>) -> Result<()> {
         let mut ret = Vec::new();
 
-        let idx =
-            self.store.last(self.host_id, &RecordTag::History).await?.map_or(0, |p| p.idx + 1);
+        let idx = self
+            .store
+            .last(&RecordSeriesKey::new(self.host_id, RecordTag::History))
+            .await?
+            .map_or(0, |p| p.idx + 1);
 
         // Could probably _also_ do this as an iterator, but let's see how this is for now.
         // optimizing for minimal sqlite transactions, this code can be optimised later
@@ -482,6 +489,7 @@ mod tests {
             intent: None,
             deleted_at: None,
             shell: None,
+            author_kind: None,
         }
     }
 
@@ -529,9 +537,10 @@ mod tests {
             intent: None,
             deleted_at: None,
             shell: Some("bash".to_owned()),
+            author_kind: None,
         }),
         vec![
-            204, 0, 196, 153, 205, 0, 2, 156, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 56, 49,
+            204, 0, 196, 154, 205, 0, 2, 157, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 56, 49,
             55, 53, 55, 99, 100, 50, 97, 101, 101, 54, 53, 99, 100, 55, 56, 54, 49, 102, 57, 99,
             56, 49, 207, 23, 166, 251, 212, 181, 82, 0, 0, 100, 0, 162, 108, 115, 217, 41, 47, 85,
             115, 101, 114, 115, 47, 101, 108, 108, 105, 101, 47, 115, 114, 99, 47, 103, 105, 116,
@@ -539,7 +548,7 @@ mod tests {
             105, 110, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 97, 100, 56, 57, 55, 53, 57, 55,
             56, 53, 50, 53, 50, 55, 97, 51, 49, 99, 57, 57, 56, 48, 53, 57, 170, 98, 111, 111, 112,
             58, 101, 108, 108, 105, 101, 192, 165, 101, 108, 108, 105, 101, 192, 164, 98, 97, 115,
-            104,
+            104, 192,
         ]
     )]
     #[case::delete(

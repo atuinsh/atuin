@@ -1,6 +1,7 @@
 //! Utilities for capturing logs emitted by [`tracing`].
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
+use parking_lot::{Mutex, MutexGuard};
 use tracing::field::{Field, Visit};
 use tracing::subscriber::DefaultGuard;
 use tracing::{Event, Level, Subscriber};
@@ -34,7 +35,7 @@ pub struct CapturedLogs {
 impl CapturedLogs {
     /// Get the captured logs.
     pub fn get(&self) -> MutexGuard<'_, Vec<LogItem>> {
-        self.logs.lock().unwrap()
+        self.logs.lock()
     }
 }
 
@@ -59,7 +60,7 @@ impl<S: Subscriber> Layer<S> for CaptureLayer {
         let mut visitor = Visitor(None);
         event.record(&mut visitor);
         if let Some(message) = visitor.0 {
-            self.logs.lock().unwrap().push(LogItem {
+            self.logs.lock().push(LogItem {
                 level: *event.metadata().level(),
                 message,
             });

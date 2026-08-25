@@ -1,8 +1,9 @@
 //! The child shell: a process attached to a PTY sized to the negotiated child
 //! dimensions (the host's terminal minus the row reserved for the warning bar).
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use parking_lot::Mutex;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use crate::source::{ByteReader, SessionSource, SourceParts};
@@ -44,14 +45,12 @@ impl PtyResizer {
     /// Resize the child PTY. Best-effort: a failed `TIOCSWINSZ` (e.g. the
     /// child already exited) is not worth tearing the session down for.
     pub(crate) fn resize(&self, size: Size) {
-        if let Ok(master) = self.0.lock() {
-            let _ = master.resize(PtySize {
-                rows: size.rows,
-                cols: size.cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            });
-        }
+        let _ = self.0.lock().resize(PtySize {
+            rows: size.rows,
+            cols: size.cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
     }
 }
 
@@ -116,7 +115,7 @@ impl SessionSource for Subshell {
     /// spawned subshell, which is the only caller.
     fn into_parts(self) -> crate::Result<SourceParts> {
         let (reader, writer) = {
-            let master = self.master.lock().expect("master lock");
+            let master = self.master.lock();
             (
                 master.try_clone_reader().expect("clone pty reader"),
                 master.take_writer().expect("take pty writer"),

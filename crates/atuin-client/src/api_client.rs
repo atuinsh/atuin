@@ -1,26 +1,39 @@
 use std::collections::HashMap;
 use std::env;
+use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_stream::try_stream;
+use atuin_common::range::{Chunks, RangeExt};
 use atuin_common::url::UrlAppendExt;
 use atuin_domain::api::{
     ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION, ChangePasswordRequest, ErrorResponse,
     LoginRequest, LoginResponse, MeResponse, PackfileDownloadResponse, PackfileResponse,
     RegisterResponse,
 };
-use atuin_domain::caps::{CapClient, CapMismatch, CapabilitiesExt};
+use atuin_domain::caps::{AuthHeaderProvider, CapClient, CapMismatch, CapabilitiesExt};
 use atuin_domain::record::{
-    EncryptedData, HostId, Record, RecordId, RecordIdx, RecordStatus, RecordTag,
+    EncryptedData, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus,
 };
 use eyre::{Result, bail};
+use futures::{Stream, StreamExt, TryStreamExt, stream};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use reqwest::{Response, StatusCode, Url};
 use reqwest_middleware::ClientWithMiddleware;
 use semver::Version;
 use tracing::{Instrument, instrument};
 
+use crate::packfile::PackedPackfile;
+use crate::settings::Settings;
+
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
+
+/// How many record pages to download in parallel. See [`Client::records`].
+const MAX_RECORDS_CONCURRENT_DOWNLOAD: usize = 8;
+
+/// How many packfile blobs [`Client::upload_packfiles`] transfers concurrently.
+const MAX_CONCURRENT_PACKFILE_UPLOADS: usize = 16;
 
 /// Authentication token for sync API requests.
 ///
@@ -48,6 +61,7 @@ impl AuthToken {
     }
 }
 
+#[derive(Clone)]
 pub struct Client {
     sync_addr: Arc<Url>,
     client: ClientWithMiddleware,
@@ -254,17 +268,154 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
 
 /// Build the capability reader for a sync server.
 #[instrument(level = "trace", skip_all, err)]
-pub fn caps_client(
+pub fn caps_client(settings: &Settings) -> Result<Arc<CapClient>> {
+    let auth_settings = Arc::new(settings.clone());
+
+    let auth = AuthHeaderProvider::new(move || {
+        let settings = auth_settings.clone();
+        Box::pin(async move { settings.sync_auth_token().await.ok().map(|t| t.to_header_value()) })
+    });
+
+    Ok(CapClient::new_with_auth(
+        settings.sync_address.append_path("api/v0/capabilities")?,
+        caps_http(&settings.extra_headers)?,
+        Some(auth),
+    ))
+}
+
+/// Build an anonymous capability reader: every fetch sees the server-global
+/// document. For contexts with no user auth in play (tests, tooling).
+pub fn caps_client_anonymous(
     sync_addr: &Url,
     extra_headers: &HashMap<String, String>,
 ) -> Result<Arc<CapClient>> {
+    Ok(CapClient::new(sync_addr.append_path("api/v0/capabilities")?, caps_http(extra_headers)?))
+}
+
+fn caps_http(extra_headers: &HashMap<String, String>) -> Result<reqwest::Client> {
     let mut headers = extra_headers_map(extra_headers)?;
     headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
     headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
 
-    let http = client_builder(extra_headers).default_headers(headers).build()?;
+    Ok(client_builder(extra_headers).default_headers(headers).build()?)
+}
 
-    Ok(CapClient::new(sync_addr.append_path("api/v0/capabilities")?, http))
+/// A pending records download for one series, produced by [`Client::records`].
+///
+/// Owns a cheap [`Client`] clone and the [`RecordSeriesKey`] so the streams it produces are
+/// `'static` (spawnable). Choose [`Self::one`] to fetch just the first record, or [`Self::stream`]
+/// to stream the pages a plan covers.
+#[must_use]
+pub struct RecordsRequest {
+    client: Client,
+    series: RecordSeriesKey,
+}
+
+impl RecordsRequest {
+    /// Fetch the first record of the series, if it has any.
+    pub async fn one(self) -> Result<Option<Record<EncryptedData>>> {
+        let pages = self.stream((0..1).chunks(1));
+        futures::pin_mut!(pages);
+        match pages.next().await {
+            Some(page) => Ok(page?.into_iter().next()),
+            None => Ok(None),
+        }
+    }
+
+    /// Stream the record pages the `chunks` plan covers for this series.
+    ///
+    /// The plan lets us prefetch several pages in parallel at predictable offsets; if the server
+    /// returns a short page mid-stream we fall back to a serial finish from real progress so no
+    /// records are skipped.
+    pub fn stream(
+        self,
+        chunks: Chunks<RecordIdx>,
+    ) -> impl Stream<Item = Result<Vec<Record<EncryptedData>>>> + 'static {
+        try_stream! {
+            // Download the pages in parallel.
+            let mut fetches = stream::iter(chunks)
+                .map(|p| {
+                    let width = p.end - p.start;
+                    let fut = self.page(p);
+                    async move { fut.await.map(|page| (width, page)) }
+                })
+                .buffered(MAX_RECORDS_CONCURRENT_DOWNLOAD);
+
+            // Consume the stream and yield the values up.
+            let mut progress = 0u64;
+            let mut short_page = false;
+            while let Some(result) = fetches.next().await {
+                let (width, page) = result?;
+                if page.is_empty() {
+                    return;
+                }
+
+                let len = page.len() as u64;
+                progress += len;
+                yield page;
+
+                // The server returned a short page; finish serially from here.
+                if len < width {
+                    short_page = true;
+                    break;
+                }
+            }
+            drop(fetches);
+
+            // Download pages in series.
+            //
+            // A server could misbehave and return less data than we requested in the "parallel"
+            // path.
+            //
+            // If it does, then we fall back to the serialized path, on the first misbehavior.
+            if short_page {
+                let recovery = stream::unfold(
+                    (chunks.start() + progress, self),
+                    move |(cursor, this)| async move {
+                        if cursor >= chunks.end() {
+                            return None;
+                        }
+                        let stop = (cursor + chunks.size().get()).min(chunks.end());
+                        match this.page(cursor..stop).await {
+                            Ok(page) if page.is_empty() => None,
+                            Ok(page) => {
+                                let next = cursor + page.len() as u64;
+                                Some((Ok(page), (next, this)))
+                            }
+                            Err(e) => Some((Err(e), (chunks.end(), this))),
+                        }
+                    },
+                );
+                futures::pin_mut!(recovery);
+                while let Some(p) = recovery.next().await {
+                    yield p?;
+                }
+            }
+        }
+    }
+
+    /// Fetch one page of `series`' records: `page.end - page.start` records starting at
+    /// `page.start`.
+    #[instrument(level = "trace", skip(self), err)]
+    async fn page(&self, page: Range<RecordIdx>) -> Result<Vec<Record<EncryptedData>>> {
+        let base_url = self.client.sync_addr.append_path("api/v0/record/next")?;
+        let width = page.end - page.start;
+        let resp = self
+            .client
+            .client
+            .get(base_url)
+            .query(&[
+                ("host", self.series.host_id.to_string()),
+                ("tag", self.series.tag.as_str().to_owned()),
+                ("start", page.start.to_string()),
+                ("count", width.to_string()),
+            ])
+            .send()
+            .await?;
+        let resp = handle_resp_error(resp).await?;
+        let records = resp.json::<Vec<Record<EncryptedData>>>().await?;
+        Ok(records)
+    }
 }
 
 impl Client {
@@ -346,9 +497,33 @@ impl Client {
         Ok(())
     }
 
-    /// Upload the given packfile.
+    /// Upload a stream of packfile blobs, transferring several concurrently.
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn upload_packfiles(
+        &self,
+        packfiles: impl Stream<Item = Result<PackedPackfile>>,
+    ) -> Result<()> {
+        let client = self.clone();
+        packfiles
+            .map(move |packfile| {
+                let client = client.clone();
+                async move {
+                    let PackedPackfile {
+                        manifest_id,
+                        records,
+                        blob,
+                    } = packfile?;
+                    client.upload_packfile(manifest_id, &records, blob).await
+                }
+            })
+            .buffered(MAX_CONCURRENT_PACKFILE_UPLOADS)
+            .try_collect::<()>()
+            .await
+    }
+
+    /// Upload a single prepared packfile blob.
     #[instrument(level = "trace", skip_all, fields(id = ?manifest_id, count = record_ids.len()), err)]
-    pub async fn upload_packfile(
+    async fn upload_packfile(
         &self,
         manifest_id: RecordId,
         record_ids: &[RecordId],
@@ -422,29 +597,12 @@ impl Client {
         Ok(resp.bytes().await?.to_vec())
     }
 
-    #[instrument(level = "trace", skip_all, fields(host = ?host, tag = ?tag, start = ?start, count), err)]
-    pub async fn next_records(
-        &self,
-        host: HostId,
-        tag: RecordTag,
-        start: RecordIdx,
-        count: u64,
-    ) -> Result<Vec<Record<EncryptedData>>> {
-        debug!("fetching record/s from host {}/{}/{}", host.0, tag, start);
-
-        let mut url = self.sync_addr.append_path("api/v0/record/next")?;
-        url.query_pairs_mut()
-            .append_pair("host", &host.0.to_string())
-            .append_pair("tag", tag.as_str())
-            .append_pair("count", &count.to_string())
-            .append_pair("start", &start.to_string());
-
-        let resp = self.client.get(url).send().await?;
-        let resp = handle_resp_error(resp).await?;
-
-        let records = resp.json::<Vec<Record<EncryptedData>>>().await?;
-
-        Ok(records)
+    /// Build a records request for `series`.
+    pub fn records(&self, series: &RecordSeriesKey) -> RecordsRequest {
+        RecordsRequest {
+            client: self.clone(),
+            series: series.clone(),
+        }
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -642,7 +800,7 @@ mod tests {
             .await;
 
         let addr: Url = server.uri().parse().unwrap();
-        let caps = caps_client(&addr, &HashMap::new()).unwrap();
+        let caps = caps_client_anonymous(&addr, &HashMap::new()).unwrap();
         let client =
             Client::new(addr, &AuthToken::Token("t".into()), 30, 30, &HashMap::new(), caps)
                 .unwrap();
@@ -663,5 +821,144 @@ mod tests {
                 record_count: 500,
             })
         );
+    }
+}
+
+#[cfg(test)]
+mod records_stream_tests {
+    use atuin_common::range::RangeExt;
+    use atuin_common::utils::uuid_v7;
+    use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordSeriesKey, RecordTag};
+    use futures::TryStreamExt;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::*;
+
+    fn history_record(host: HostId, idx: u64) -> Record<EncryptedData> {
+        Record::builder()
+            .host(Host::new(host))
+            .version("v1".into())
+            .tag(RecordTag::History)
+            .idx(idx)
+            .data(EncryptedData {
+                raw: format!("r{idx}"),
+                cek: String::new(),
+            })
+            .build()
+    }
+
+    fn mock_client(addr: &Url) -> Client {
+        let caps = caps_client_anonymous(addr, &HashMap::new()).unwrap();
+        Client::new(addr.clone(), &AuthToken::Token("t".into()), 30, 30, &HashMap::new(), caps)
+            .unwrap()
+    }
+
+    /// Serve `records` in pages of `serve_size`, keyed on the `start` query param
+    /// (`idx >= start ORDER BY idx ASC LIMIT count`, dense). `serve_size` may be smaller than the
+    /// client's page size to emulate a server that clamps `count`. Any `start` past the end -> empty.
+    async fn mount_paged(
+        server: &MockServer,
+        records: &[Record<EncryptedData>],
+        serve_size: usize,
+    ) {
+        for start in (0..records.len()).step_by(serve_size) {
+            let end = (start + serve_size).min(records.len());
+            Mock::given(method("GET"))
+                .and(path("/api/v0/record/next"))
+                .and(query_param("start", start.to_string()))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(records[start..end].to_vec()),
+                )
+                .mount(server)
+                .await;
+        }
+        Mock::given(method("GET"))
+            .and(path("/api/v0/record/next"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(Vec::<Record<EncryptedData>>::new()),
+            )
+            .mount(server)
+            .await;
+    }
+
+    async fn collect_idxs(
+        stream: impl Stream<Item = Result<Vec<Record<EncryptedData>>>>,
+    ) -> Vec<u64> {
+        let pages: Vec<Vec<Record<EncryptedData>>> = stream.try_collect().await.unwrap();
+        pages.into_iter().flatten().map(|r| r.idx).collect()
+    }
+
+    /// The fast path predicts offsets (`start + i * page_size`) and pipelines the fetches; every
+    /// page must still be reassembled in idx order.
+    #[tokio::test]
+    async fn records_reassembles_pages_in_order() {
+        let host = HostId(uuid_v7());
+        let all: Vec<_> = (0..5).map(|i| history_record(host, i)).collect();
+
+        let server = MockServer::start().await;
+        // page_size 2 -> offsets 0, 2, 4; the last page (idx 4) is a short tail.
+        mount_paged(&server, &all, 2).await;
+
+        let addr: Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        let idxs = collect_idxs(
+            client
+                .records(&RecordSeriesKey::new(host, RecordTag::History))
+                .stream((0..5).chunks(2)),
+        )
+        .await;
+        assert_eq!(idxs, vec![0, 1, 2, 3, 4]);
+    }
+
+    /// GUARD: a server that clamps `count` below the client's `page_size` returns a short page
+    /// *mid-stream*. The predicted offsets past it would skip records, so the stream must detect the
+    /// short page and finish serially from the real progress -- losing nothing.
+    #[tokio::test]
+    async fn records_recovers_from_a_short_midstream_page() {
+        let host = HostId(uuid_v7());
+        let all: Vec<_> = (0..6).map(|i| history_record(host, i)).collect();
+
+        let server = MockServer::start().await;
+        // Client asks for page_size 4, but the server only ever returns 2 (a clamp). Predicted
+        // offsets would be 0 and 4, skipping idx 2..4 -- the guard must recover them.
+        mount_paged(&server, &all, 2).await;
+
+        let addr: Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        let idxs = collect_idxs(
+            client
+                .records(&RecordSeriesKey::new(host, RecordTag::History))
+                .stream((0..6).chunks(4)),
+        )
+        .await;
+        assert_eq!(idxs, vec![0, 1, 2, 3, 4, 5], "a short mid-stream page must not skip records");
+    }
+
+    #[tokio::test]
+    async fn records_yields_nothing_when_server_is_empty() {
+        let host = HostId(uuid_v7());
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v0/record/next"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(Vec::<Record<EncryptedData>>::new()),
+            )
+            .mount(&server)
+            .await;
+
+        let addr: Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        let idxs = collect_idxs(
+            client
+                .records(&RecordSeriesKey::new(host, RecordTag::History))
+                .stream((0..10).chunks(4)),
+        )
+        .await;
+        assert!(idxs.is_empty(), "an empty server must yield no records");
     }
 }

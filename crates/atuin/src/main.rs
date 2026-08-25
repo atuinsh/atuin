@@ -1,5 +1,6 @@
 #![warn(clippy::pedantic, clippy::nursery)]
 #![allow(clippy::use_self, clippy::missing_const_for_fn)] // not 100% reliable
+#![recursion_limit = "256"] // deeply-nested sync/record async futures exceed the default 128
 
 use clap::Parser;
 use clap::builder::Styles;
