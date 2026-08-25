@@ -201,7 +201,7 @@ enter_accept = true
 # extra_headers = { "CF-Access-Client-Id" = "...", "CF-Access-Client-Secret" = "..." }
 
 ## Timeout (in seconds) for acquiring a local database connection (sqlite)
-# local_timeout = 5
+# local_timeout = 2
 
 ## Set this to true and Atuin will minimize motion in the UI - timers will not update live, etc.
 ## Alternatively, set env NO_MOTION=true
