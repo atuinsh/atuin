@@ -80,13 +80,7 @@ impl ServerHandler for AtuinMcp {
 /// stdout carries only JSON-RPC messages; anything else (logs, errors) must
 /// go to stderr or it will corrupt the protocol stream.
 pub async fn run(db: &Sqlite) -> Result<()> {
-    let server = AtuinMcp {
-        db: Sqlite {
-            pool: db.pool.clone(),
-        },
-    }
-    .serve(rmcp::transport::stdio())
-    .await?;
+    let server = AtuinMcp { db: db.clone() }.serve(rmcp::transport::stdio()).await?;
     server.waiting().await?;
     Ok(())
 }

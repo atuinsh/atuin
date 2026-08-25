@@ -614,7 +614,7 @@ mod tests {
     }
 
     async fn memory_db() -> Sqlite {
-        Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap()
+        Sqlite::new(":memory:", test_local_timeout()).await.unwrap()
     }
 
     fn history_n(n: usize) -> History {
@@ -769,7 +769,7 @@ mod tests {
         let (record_id, _) = history_store.push(history).await.unwrap();
 
         let db = memory_db().await;
-        db.pool.close().await;
+        db.close().await;
 
         assert!(history_store.build_all(&db, &[record_id]).await.is_err());
     }

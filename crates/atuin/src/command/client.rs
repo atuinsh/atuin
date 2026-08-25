@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use atuin_client::database::Sqlite;
 use atuin_client::logs::FromSettings;
 use atuin_client::record::sqlite_store::SqliteStore;
@@ -246,8 +248,12 @@ impl Cmd {
         let db_path = &settings.db_path;
         let record_store_path = &settings.record_store_path;
 
-        let db = Sqlite::new(db_path, settings.local_timeout).await?;
-        let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
+        let db = Sqlite::new(db_path, Duration::try_from_secs_f64(settings.local_timeout)?).await?;
+        let sqlite_store = SqliteStore::new(
+            record_store_path,
+            Duration::try_from_secs_f64(settings.local_timeout)?,
+        )
+        .await?;
 
         let theme_name = settings.theme.name.clone();
         let theme = theme_manager.load_theme(theme_name.as_str(), settings.theme.max_depth);

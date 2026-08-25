@@ -29,7 +29,11 @@ pub async fn build(
 
     let downloaded = downloaded.unwrap_or(&[]);
 
-    let kv_db = atuin_kv::database::Database::new(settings.kv.db_path.clone(), 1.0).await?;
+    let kv_db = atuin_kv::database::Database::new(
+        settings.kv.db_path.clone(),
+        std::time::Duration::from_secs(1),
+    )
+    .await?;
 
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key.clone());
     let alias_store = AliasStore::new(store.clone(), host_id, encryption_key.clone());
@@ -55,8 +59,11 @@ pub async fn build(
         eprintln!("Warning: failed to build kv: {e}");
     }
 
-    let script_db =
-        atuin_scripts::database::Database::new(settings.scripts.db_path.clone(), 1.0).await?;
+    let script_db = atuin_scripts::database::Database::new(
+        settings.scripts.db_path.clone(),
+        std::time::Duration::from_secs(1),
+    )
+    .await?;
 
     if let Err(e) = script_store.build(script_db).await {
         eprintln!("Warning: failed to build scripts: {e}");

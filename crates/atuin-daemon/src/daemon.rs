@@ -459,8 +459,7 @@ impl DaemonBuilder {
         // One capability reader for the whole daemon: shared by the history component's packing
         // path and injected into every sync tick's client, so the server is only polled by one
         // warmer.
-        let caps = caps_client(&self.settings.sync_address, &self.settings.extra_headers)
-            .context("failed to build the capability reader")?;
+        let caps = caps_client(&self.settings).context("failed to build the capability reader")?;
 
         // Create the shared state
         let state = Arc::new(DaemonState {

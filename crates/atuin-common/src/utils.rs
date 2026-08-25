@@ -154,11 +154,6 @@ pub fn get_current_dir() -> String {
     }
 }
 
-pub fn broken_symlink<P: Into<PathBuf>>(path: P) -> bool {
-    let path = path.into();
-    path.is_symlink() && !path.exists()
-}
-
 pub fn unquote(s: &str) -> Result<String> {
     if s.chars().count() < 2 {
         return Err(eyre!("not enough chars"));

@@ -125,7 +125,7 @@ fn highlight_powershell(node: tree_sitter::Node, src: &[u8], meanings: &mut [Mea
     static HIGHLIGHTS_QUERY: std::sync::LazyLock<tree_sitter::Query> =
         std::sync::LazyLock::new(|| {
             let language: tree_sitter::Language = tree_sitter_powershell::LANGUAGE.into();
-            tree_sitter::Query::new(&language, tree_sitter_powershell::HIGHLIGHTS_QUERY)
+            tree_sitter::Query::new(&language, include_str!("highlights/powershell.scm"))
                 .expect("invalid PowerShell highlights query")
         });
 
@@ -139,12 +139,14 @@ fn highlight_powershell(node: tree_sitter::Node, src: &[u8], meanings: &mut [Mea
         let capture_name = HIGHLIGHTS_QUERY.capture_names()[capture.index as usize];
 
         let meaning = match capture_name {
-            "comment" => Meaning::SyntaxComment,
-            "function" => Meaning::SyntaxCommand,
+            "base" => Meaning::Base,
+            "command" => Meaning::SyntaxCommand,
+            "flag" => Meaning::SyntaxFlag,
             "string" => Meaning::SyntaxString,
-            "operator" | "delimiter" | "keyword" => Meaning::SyntaxOperator,
-            "variable" | "type" | "property" => Meaning::SyntaxVariable,
-            _ => continue, // ignored: array, assignvalue, number
+            "variable" | "keyword" => Meaning::SyntaxVariable,
+            "operator" => Meaning::SyntaxOperator,
+            "comment" => Meaning::SyntaxComment,
+            _ => continue, // currently ignored: number
         };
 
         if let Some(range) = meanings.get_mut(capture.node.byte_range()) {
@@ -190,7 +192,7 @@ mod tests {
     #[case::fish_set("set -x PATH $PATH", Some("fish"), "cccaffaaaaaavvvvv")]
     #[case::fish_subshell("echo (date) | grep foo", Some("fish"), "ccccaoccccoaoaccccaaaa")]
     #[case::fish_string(r#"echo "hi $name""#, Some("fish"), "ccccassssvvvvvs")]
-    #[case::powershell("$v = rg -i 'foo' $f", Some("powershell"), "vvaaaccaaaasssssavv")]
+    #[case::powershell("$v = rg -i 'foo' $f", Some("powershell"), "vvaoaccaffasssssavv")]
     #[case::zsh_uses_bash("ls -la", Some("zsh"), "ccafff")]
     #[case::nu_plain("ls -la", Some("nu"), "aaaaaa")]
     fn classify_renders(#[case] cmd: &str, #[case] shell: Option<&str>, #[case] expected: &str) {

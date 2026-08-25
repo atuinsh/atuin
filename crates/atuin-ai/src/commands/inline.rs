@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use atuin_client::database::Sqlite;
 use eyre::{Context as _, Result, bail};
 use tracing::{debug, info};
@@ -56,9 +58,10 @@ pub async fn run(
     };
 
     let history_db_path = &settings.db_path;
-    let history_db = Sqlite::new(history_db_path, settings.local_timeout)
-        .await
-        .context("failed to open history database for AI")?;
+    let history_db =
+        Sqlite::new(history_db_path, Duration::try_from_secs_f64(settings.local_timeout)?)
+            .await
+            .context("failed to open history database for AI")?;
 
     // Support both legacy [ai] send_cwd and new [ai.opening] send_cwd
     let send_cwd =
@@ -162,9 +165,12 @@ async fn run_inline_tui(
     let client_ctx = ClientContext::detect();
 
     // Open the session service and check for a resumable session
-    let service = LocalSessionService::open(&settings.ai.db_path, settings.local_timeout)
-        .await
-        .context("failed to open AI session database")?;
+    let service = LocalSessionService::open(
+        &settings.ai.db_path,
+        Duration::try_from_secs_f64(settings.local_timeout)?,
+    )
+    .await
+    .context("failed to open AI session database")?;
 
     // Cached usage renders immediately; a background fetch (spawned below,
     // once the event channel exists) replaces it unless it's fresh. OSS

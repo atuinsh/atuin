@@ -7,9 +7,11 @@
 //! there's rarely a gap with zero active readers, so the WAL can grow unbounded (observed in
 //! the wild: a 23 MB WAL next to a 1.8 MB database).
 //!
-//! Called from two places: once per pool-open (covers the CLI, which opens a fresh pool per
-//! hook invocation), and periodically by the daemon (which opens its pools once and holds them
-//! for the process lifetime, so a pool-open check alone would only ever fire at daemon boot).
+//! [`checkpoint_wal_if_needed`] is called from two places: once per pool-open (wired into
+//! [`super::SqliteBuilder::open`], so it covers the CLI, which opens a fresh pool per hook
+//! invocation, automatically), and periodically by the daemon (which opens its pools once and
+//! holds them for the process lifetime, so a pool-open check alone would only ever fire at
+//! daemon boot).
 
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -32,19 +34,6 @@ use tracing::{debug, instrument};
 /// not an absolute bound: a reader held open continuously across every attempt can still
 /// starve every `TRUNCATE` in a row, same as the failure mode this module exists to recover
 /// from -- there is no coordination mechanism that forces a reader-free window.
-// lore-ok[3b8bab16]: fixed by softening the claim (see doc comment above, "not an absolute
-// bound" paragraph) -- a continuously-held reader can still starve every TRUNCATE, same as
-// the original failure mode; this module reduces that risk, it doesn't eliminate it.
-// lore-ok[fe6941e7]: re-verified end-to-end against the real CLI at this exact threshold (see
-// doc comment above) -- the earlier claim this flagged was checked with a repro that never
-// crossed 16 MiB and so never exercised the TRUNCATE branch; this one does, 2x, and matches.
-// lore-ok[12921a37]: same claim, raised against P1.md (now deleted) before it was raised here
-// as fe6941e7 -- see that entry, now re-verified end-to-end at this threshold.
-// lore-ok[db0c36dc]: real, confirmed, and accepted trade-off -- see doc comment above. Bounding
-// worst-case growth (this fix's stated goal) and eliminating the original symptom's average
-// cost are different goals; the latter would need a materially lower threshold, traded against
-// more frequent blocking TRUNCATEs on the hot path. Not pursued further without a concrete
-// complaint that ~8 MB average WAL is still too slow in practice.
 pub const DEFAULT_WAL_CHECKPOINT_THRESHOLD_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Cap on how long a single checkpoint attempt may block. A `TRUNCATE` checkpoint waits on
@@ -61,19 +50,16 @@ pub const DEFAULT_WAL_CHECKPOINT_THRESHOLD_BYTES: u64 = 16 * 1024 * 1024;
 /// default 5s busy_timeout regardless -- harmless for the CLI (the process exits shortly
 /// after anyway) but a real risk for the daemon, whose pool serves other concurrent hook
 /// requests that would otherwise queue behind it.
-// lore-ok[ba2a8346]: fixed by switching to a dedicated connection with this as its own
-// busy_timeout (see doc comment above) instead of racing a shared-pool connection with
-// tokio::time::timeout alone.
 const CHECKPOINT_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Checkpoint and truncate the WAL file back to disk if it has grown past `threshold_bytes`.
 ///
 /// The common case (WAL under threshold) costs one `stat()`; the occasional `TRUNCATE`, capped
-/// at [`CHECKPOINT_TIMEOUT`], only runs when the file is actually oversized, so this
+/// at `CHECKPOINT_TIMEOUT`, only runs when the file is actually oversized, so this
 /// self-throttles rather than adding cost to every invocation.
 ///
 /// Deliberately opens its own connection rather than taking a `&SqlitePool`: that connection
-/// gets its own short `busy_timeout` (see [`CHECKPOINT_TIMEOUT`]) independent of the shared
+/// gets its own short `busy_timeout` (see `CHECKPOINT_TIMEOUT`) independent of the shared
 /// pool's default, and is dropped immediately after, so a slow or starved checkpoint never
 /// occupies a pool connection that other queries are waiting on.
 ///

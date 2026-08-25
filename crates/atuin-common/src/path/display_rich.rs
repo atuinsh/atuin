@@ -89,7 +89,7 @@ impl<'a> RichDisplay<'a> {
 
 impl fmt::Display for RichDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let maybe_write_terminal_slash = |f: &mut fmt::Formatter<'_>, p: &Path| {
+        let maybe_write_terminal_slash = |f: &mut fmt::Formatter<'_>, p: &Path| -> fmt::Result {
             if self.trailing_slash
                 && p.as_os_str().as_encoded_bytes().last() != Some(&(MAIN_SEPARATOR as u8))
             {
