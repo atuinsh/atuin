@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::{borrow::Cow, path::Path};
 
 #[cfg(unix)]
-use atuin_common::os::unix::{NamedTempDirError, create_named_temp_dir};
+use atuin_common::os::unix::{SecureTempDirError, create_secure_temp_dir};
 use serde::{Deserialize, Serialize};
 
 #[cfg(unix)]
@@ -192,12 +192,12 @@ impl<'a> SocketPath<'a> {
     ///
     /// This only applies to the default socket path: the directory holding a user-specified path
     /// from config.toml is the user's to create, and `$XDG_RUNTIME_DIR` is created for us.
-    pub fn create_default_dir_if_needed(&self) -> Result<(), NamedTempDirError> {
+    pub fn create_default_dir_if_needed(&self) -> Result<(), SecureTempDirError> {
         let Self::Default(path) = self else {
             return Ok(());
         };
         let dir = path.parent().expect("default socket path always has a parent");
-        create_named_temp_dir(dir)?;
+        create_secure_temp_dir(dir)?;
         Ok(())
     }
 
@@ -425,7 +425,7 @@ mod unix_tests {
         default_socket.path().create_default_dir_if_needed().unwrap();
         fs_err::set_permissions(&default_socket.dir, Permissions::from_mode(mode)).unwrap();
 
-        let Err(NamedTempDirError::WrongPermissions { permissions, .. }) =
+        let Err(SecureTempDirError::WrongPermissions { permissions, .. }) =
             default_socket.path().create_default_dir_if_needed()
         else {
             panic!("a socket directory with mode {mode:03o} must be rejected");
@@ -439,7 +439,7 @@ mod unix_tests {
 
         assert!(matches!(
             default_socket.path().create_default_dir_if_needed(),
-            Err(NamedTempDirError::NotADirectory(_))
+            Err(SecureTempDirError::NotADirectory(_))
         ));
     }
 }

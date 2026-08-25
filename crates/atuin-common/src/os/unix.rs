@@ -38,7 +38,7 @@ pub fn tmp_dir() -> PathBuf {
 
 /// Error returned by [`create_named_temp_dir`].
 #[derive(Debug, thiserror::Error)]
-pub enum NamedTempDirError {
+pub enum SecureTempDirError {
     #[error("{} is not a directory", .0.display())]
     NotADirectory(PathBuf),
     #[error(
@@ -59,7 +59,7 @@ pub enum NamedTempDirError {
     Io(#[from] std::io::Error),
 }
 
-/// Create a named temporary directory with the given path.
+/// Create a secure temporary directory with the given path.
 ///
 /// Generally, `path` will be a subdirectory of `/tmp`.
 ///
@@ -71,7 +71,7 @@ pub enum NamedTempDirError {
 /// socket file to connect to it.
 ///
 /// On success, returns `path`. This may allow resources to be reused if `P` is an owned type.
-pub fn create_named_temp_dir<P>(path: P) -> Result<P, NamedTempDirError>
+pub fn create_secure_temp_dir<P>(path: P) -> Result<P, SecureTempDirError>
 where
     P: AsRef<Path> + Into<PathBuf>,
 {
@@ -91,14 +91,14 @@ where
     if !meta.is_dir() {
         // This importantly rejects symlinks; a symlink could point to a directory owned by
         // another user, who could then access our files.
-        return Err(NamedTempDirError::NotADirectory(path.into()));
+        return Err(SecureTempDirError::NotADirectory(path.into()));
     }
 
     let expected_uid = uid();
     let actual_uid = meta.uid();
     if !std::ffi::c_uint::try_from(actual_uid).is_ok_and(|actual| actual == expected_uid) {
         // Reject the directory if it's owned by another user.
-        return Err(NamedTempDirError::WrongOwner {
+        return Err(SecureTempDirError::WrongOwner {
             path: path.into(),
             expected_uid,
             actual_uid,
@@ -110,7 +110,7 @@ where
         // Reject the directory if it is accessible by others. On some systems, if a socket gets
         // created in the directory, even read permission on the directory could allow another user
         // to connect to the socket, who could then interfere with our connection.
-        return Err(NamedTempDirError::WrongPermissions {
+        return Err(SecureTempDirError::WrongPermissions {
             path: path.into(),
             permissions,
         });
