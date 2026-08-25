@@ -1,5 +1,12 @@
 //! Subscriber protocol for the pty-proxy Unix socket.
 //!
+//! This is the wire definition itself, owned here because `atuin-pty-proxy`
+//! does not expose one: [`proxy_tap`](crate::proxy_tap) is the only client of
+//! it in the workspace. It is deliberately kept whole — both directions,
+//! including the server-side encoders that only this crate's tests (acting as
+//! a fake proxy) call — because a half-copy of a wire format is the kind of
+//! thing that drifts silently. Hence the `dead_code` allow below.
+//!
 //! The proxy serves two kinds of client on the same socket:
 //!
 //! * **Legacy one-shot** (the search popup): the client connects, writes
@@ -56,6 +63,8 @@
 //! users, against the socket path leaking into logs or environment dumps,
 //! and against accidental cross-user access — not against malware already
 //! running as the user.
+
+#![allow(dead_code)]
 
 use std::io::{self, Read, Write as _};
 

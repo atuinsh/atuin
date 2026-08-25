@@ -2,7 +2,7 @@
 //!
 //! The proxy owns the PTY master of the user's shell from startup, keeps a
 //! live vt100 model of its screen, and serves the framed subscriber protocol
-//! on `$ATUIN_PTY_PROXY_SOCKET` (see [`atuin_pty_proxy::protocol`]). The tap
+//! on `$ATUIN_PTY_PROXY_SOCKET` (see [`crate::proxy_protocol`]). The tap
 //! connects, subscribes, and adapts that feed to the session's
 //! [`SourceParts`] shape:
 //!
@@ -35,11 +35,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc as std_mpsc};
 use std::time::Duration;
 
-use atuin_pty_proxy::protocol::{
-    self, FRAME_END, FRAME_HELLO, FRAME_KEYFRAME, FRAME_OUTPUT, FRAME_RESIZE, MAGIC, Snapshot,
-};
 use parking_lot::Mutex;
 
+use crate::proxy_protocol::{
+    self as protocol, FRAME_END, FRAME_HELLO, FRAME_KEYFRAME, FRAME_OUTPUT, FRAME_RESIZE, MAGIC,
+    Snapshot,
+};
 use crate::render::WriteMode;
 use crate::source::{ReadEvent, SessionSource, SourceParts, SourceReader};
 use crate::{Error, Size};

@@ -634,7 +634,6 @@ version = "18.20.0-beta.3"
 dependencies = [
  "aes-gcm",
  "atuin-common",
- "atuin-pty-proxy",
  "base64",
  "crossterm",
  "daemonize",
@@ -662,12 +661,9 @@ dependencies = [
  "clap",
  "crossterm",
  "eyre",
- "nix 0.29.0",
  "portable-pty",
- "rand 0.8.7",
  "rstest",
  "signal-hook",
- "tempfile",
  "vt100",
 ]
 

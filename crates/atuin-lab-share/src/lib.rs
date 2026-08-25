@@ -33,7 +33,7 @@
 //!   parts the session's task topology needs via `SessionSource`.
 //! * `proxy_tap` — the `--active` source: a subscriber tap on a running
 //!   `atuin pty-proxy`, speaking the framed protocol from
-//!   `atuin_pty_proxy::protocol`, behind the same `SessionSource` seam.
+//!   [`proxy_protocol`], behind the same `SessionSource` seam.
 //! * [`lifecycle`] — the backgrounded `--active` session's coordination
 //!   files: the pidfile whose exclusive lock means "a share is running", the
 //!   URL file `--url` reprints, and the pre-runtime daemonize step (public:
@@ -70,6 +70,8 @@ mod error;
 pub mod lifecycle;
 #[cfg(unix)]
 mod protocol;
+#[cfg(unix)]
+mod proxy_protocol;
 #[cfg(unix)]
 mod proxy_tap;
 #[cfg(unix)]
@@ -210,7 +212,7 @@ pub struct ShareOptions {
 /// origin mode on, and `contents_formatted()` can emit `\x1b[?25l` (cursor
 /// hidden). Restoring only raw mode would hand the user a broken terminal, so
 /// reset DECSTBM, origin mode, cursor visibility and SGR too. Precedent:
-/// `atuin-pty-proxy`'s `runtime.rs` does the same on teardown.
+/// The pty-proxy's runtime does the same on teardown.
 #[cfg(unix)]
 struct TermGuard;
 

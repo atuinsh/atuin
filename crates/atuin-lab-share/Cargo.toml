@@ -30,10 +30,7 @@ base64 = { workspace = true }
 # child. Both follow the atuin daemon's precedent, which pins these versions.
 fs4 = "0.13.1"
 daemonize = "0.5.0"
-atuin-common = { workspace = true, features = ["unicode"] }
-# The `--active` tap speaks the proxy's subscriber protocol; no cycle —
-# atuin-pty-proxy depends only on atuin-common.
-atuin-pty-proxy = { path = "../atuin-pty-proxy", version = "18.20.0-beta.3" }
+atuin-common = { workspace = true, features = ["unicode", "ansi"] }
 vt100 = { workspace = true }
 crossterm = { workspace = true }
 # `features = ["full"]` at the workspace level includes `signal` and `time`;

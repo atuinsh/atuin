@@ -86,7 +86,7 @@ impl ScreenState {
 
     /// Run a `vt100` operation, absorbing any panic inside the library.
     ///
-    /// Defence in depth, mirroring `atuin_pty_proxy::screen::ParserState`'s
+    /// Defence in depth, mirroring the pty-proxy parser thread's
     /// guard of the same name and for the same reason: `vt100` 0.16.2 has
     /// panic paths beyond the degenerate-geometry ones the clamps remove, and
     /// this parser has no supervisor. It is owned by the session's central
