@@ -36,6 +36,8 @@ impl MetaStore {
         let path = path.as_ref();
         debug!("opening meta sqlite database at {path:?}");
 
+        let is_memory = path.to_str().is_some_and(|p| p.contains(":memory:"));
+
         let sqlite = Sqlite::builder()
             .file(path)
             .timeout(timeout)
@@ -52,26 +54,11 @@ impl MetaStore {
             cached_host_id: OnceCell::const_new(),
         };
 
-        store.migrate_files().await?;
+        if !is_memory {
+            store.migrate_files().await?;
+        }
 
         Ok(store)
-    }
-
-    pub async fn in_memory(timeout: Duration) -> Result<Self> {
-        let sqlite = Sqlite::builder()
-            .memory()
-            .timeout(timeout)
-            .journal(SqliteJournalMode::Delete)
-            .foreign_keys(false)
-            .open()
-            .await?;
-
-        sqlx::migrate!("./meta-migrations").run(sqlite.pool()).await?;
-
-        Ok(Self {
-            sqlite,
-            cached_host_id: OnceCell::const_new(),
-        })
     }
 
     // Generic key-value operations
@@ -284,7 +271,7 @@ mod tests {
 
     #[fixture]
     async fn store() -> MetaStore {
-        MetaStore::in_memory(Duration::from_secs(2)).await.unwrap()
+        MetaStore::new(":memory:", Duration::from_secs(2)).await.unwrap()
     }
 
     #[rstest]

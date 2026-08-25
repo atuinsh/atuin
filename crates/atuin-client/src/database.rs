@@ -325,15 +325,6 @@ impl Sqlite {
         Ok(Self { sqlite })
     }
 
-    /// Open a transient, in-memory history database. Intended for tests and one-off probes.
-    pub async fn in_memory(timeout: Duration) -> eyre::Result<Self> {
-        let sqlite = CommonSqlite::builder().memory().timeout(timeout).regexp().open().await?;
-
-        Self::setup_db(sqlite.pool()).await?;
-
-        Ok(Self { sqlite })
-    }
-
     /// Close the underlying connection pool. Test-only: used to force query errors.
     #[cfg(test)]
     pub(crate) async fn close(&self) {
@@ -391,12 +382,6 @@ impl Sqlite {
     ) -> Result<()> {
         let mut h = h.into_iter().peekable();
 
-        // Stream fixed-size chunks straight into a multi-row INSERT: `QueryBuilder`
-        // writes the `values (..),(..)` and binds each row in a single pass, so we
-        // never materialise the input. `take` bounds each statement under SQLite's
-        // parameter limit (`rows_per_insert` rows * HISTORY_INSERT_COLUMNS params);
-        // the outer `peek` guard guarantees every chunk is non-empty, which
-        // `push_values` requires.
         while h.peek().is_some() {
             let mut builder = sqlx::QueryBuilder::new(
                 "insert or ignore into history(

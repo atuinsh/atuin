@@ -346,7 +346,7 @@ impl AtuinInfo {
             None
         };
 
-        let sqlite_version = match Sqlite::in_memory(Duration::from_millis(100)).await {
+        let sqlite_version = match Sqlite::new(":memory:", Duration::from_millis(100)).await {
             Ok(db) => db.sqlite_version().await.unwrap_or_else(|_| "unknown".to_string()),
             Err(_) => "error".to_string(),
         };

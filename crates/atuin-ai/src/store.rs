@@ -54,15 +54,6 @@ impl AiSessionStore {
         Ok(Self { sqlite })
     }
 
-    #[cfg(test)]
-    pub async fn in_memory(timeout: Duration) -> Result<Self> {
-        let sqlite = Sqlite::builder().memory().timeout(timeout).foreign_keys(false).open().await?;
-
-        sqlx::migrate!("./migrations").run(sqlite.pool()).await?;
-
-        Ok(Self { sqlite })
-    }
-
     pub async fn create_session(
         &self,
         id: &str,
@@ -296,7 +287,7 @@ mod tests {
 
     #[fixture]
     async fn store() -> AiSessionStore {
-        AiSessionStore::in_memory(Duration::from_secs(2)).await.unwrap()
+        AiSessionStore::new(":memory:", Duration::from_secs(2)).await.unwrap()
     }
 
     #[fixture]

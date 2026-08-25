@@ -82,12 +82,6 @@ impl LocalSessionService {
         let store = AiSessionStore::new(path, timeout).await?;
         Ok(Self { store })
     }
-
-    #[cfg(test)]
-    pub async fn in_memory(timeout: Duration) -> Result<Self> {
-        let store = AiSessionStore::in_memory(timeout).await?;
-        Ok(Self { store })
-    }
 }
 
 #[async_trait]
@@ -350,7 +344,7 @@ mod tests {
 
     #[fixture]
     async fn service() -> Box<dyn SessionService> {
-        Box::new(LocalSessionService::in_memory(Duration::from_secs(2)).await.unwrap())
+        Box::new(LocalSessionService::open(":memory:", Duration::from_secs(2)).await.unwrap())
     }
 
     #[rstest]

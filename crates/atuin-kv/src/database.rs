@@ -31,21 +31,6 @@ impl Database {
         Ok(Self { sqlite })
     }
 
-    /// Open a transient, in-memory KV database. Intended for tests.
-    pub async fn in_memory(timeout: Duration) -> Result<Self> {
-        let sqlite = Sqlite::builder()
-            .memory()
-            .timeout(timeout)
-            .regexp()
-            .open()
-            .await
-            .map_err(|e| sqlx::Error::Configuration(Box::new(e)))?;
-
-        Self::setup_db(sqlite.pool()).await?;
-
-        Ok(Self { sqlite })
-    }
-
     pub async fn sqlite_version(&self) -> Result<String> {
         sqlx::query_scalar("SELECT sqlite_version()").fetch_one(self.sqlite.pool()).await
     }
@@ -147,7 +132,7 @@ mod test {
 
     #[fixture]
     async fn db() -> Database {
-        Database::in_memory(Duration::from_secs(1)).await.unwrap()
+        Database::new(":memory:", Duration::from_secs(1)).await.unwrap()
     }
 
     #[fixture]

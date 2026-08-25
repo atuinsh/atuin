@@ -1230,7 +1230,7 @@ mod tests {
 
     #[fixture]
     async fn db() -> Sqlite {
-        Sqlite::in_memory(Duration::from_secs(2)).await.unwrap()
+        Sqlite::new(":memory:", Duration::from_secs(2)).await.unwrap()
     }
 
     #[fixture]

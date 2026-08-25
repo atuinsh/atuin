@@ -7,35 +7,18 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous};
 use super::{Sqlite, SqliteOpenOrCreateError};
 use crate::path::PathExt;
 
-enum SqliteLocation {
-    File(PathBuf),
-    Memory,
-}
-
 pub struct SqliteBuilderRoot;
 
 #[allow(clippy::unused_self)]
 impl SqliteBuilderRoot {
     #[must_use]
     pub fn file(self, path: impl AsRef<Path>) -> SqliteBuilder {
-        let path = path.as_ref();
-        // `:memory:` (and the `sqlite::memory:` URI form) is SQLite's in-memory sentinel, not a real
-        // filename; route it through the memory path so pooled connections share one database (a
-        // filename would give each connection its own empty db, or worse, a real on-disk file).
-        if matches!(path.to_str(), Some(":memory:" | "sqlite::memory:")) {
-            return SqliteBuilder::new(SqliteLocation::Memory);
-        }
-        SqliteBuilder::new(SqliteLocation::File(path.to_path_buf()))
-    }
-
-    #[must_use]
-    pub fn memory(self) -> SqliteBuilder {
-        SqliteBuilder::new(SqliteLocation::Memory)
+        SqliteBuilder::new(path.as_ref().to_path_buf())
     }
 }
 
 pub struct SqliteBuilder {
-    location: SqliteLocation,
+    path: PathBuf,
     timeout: Duration,
     journal: SqliteJournalMode,
     synchronous: SqliteSynchronous,
@@ -45,9 +28,9 @@ pub struct SqliteBuilder {
 }
 
 impl SqliteBuilder {
-    fn new(location: SqliteLocation) -> Self {
+    fn new(path: PathBuf) -> Self {
         Self {
-            location,
+            path,
             timeout: Duration::from_secs(5),
             journal: SqliteJournalMode::Wal,
             synchronous: SqliteSynchronous::Normal,
@@ -94,26 +77,24 @@ impl SqliteBuilder {
     }
 
     pub async fn open(self) -> Result<Sqlite, SqliteOpenOrCreateError> {
-        let opts = match &self.location {
-            SqliteLocation::File(path) => {
-                if path.is_dangling_symlink() {
-                    return Err(SqliteOpenOrCreateError::BadSymlink(path.clone()));
-                }
+        if self.path.is_dangling_symlink() {
+            return Err(SqliteOpenOrCreateError::BadSymlink(self.path.clone()));
+        }
 
-                if !path.exists()
-                    && let Some(dir) = path.parent()
-                {
-                    std::fs::create_dir_all(dir)
-                        .map_err(SqliteOpenOrCreateError::FailedToCreateDir)?;
-                }
+        if !self.path.exists()
+            && let Some(dir) = self.path.parent()
+        {
+            std::fs::create_dir_all(dir).map_err(SqliteOpenOrCreateError::FailedToCreateDir)?;
+        }
 
-                SqliteConnectOptions::new().filename(path)
-            }
-            SqliteLocation::Memory => SqliteConnectOptions::from_str(":memory:")
-                .map_err(SqliteOpenOrCreateError::ConenctOptionsParsing)?,
-        };
+        let path_str = self.path.to_str().ok_or_else(|| {
+            SqliteOpenOrCreateError::ConenctOptionsParsing(sqlx::Error::Configuration(
+                format!("database path is not valid UTF-8: {:?}", self.path).into(),
+            ))
+        })?;
 
-        let mut opts = opts
+        let mut opts = SqliteConnectOptions::from_str(path_str)
+            .map_err(SqliteOpenOrCreateError::ConenctOptionsParsing)?
             .journal_mode(self.journal)
             .optimize_on_close(true, None)
             .synchronous(self.synchronous)
@@ -127,11 +108,9 @@ impl SqliteBuilder {
         let sqlite = Sqlite::connect(opts, self.timeout).await?;
 
         #[cfg(unix)]
-        if self.restrict_permissions
-            && let SqliteLocation::File(path) = &self.location
-        {
+        if self.restrict_permissions && self.path.exists() {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(0o600))
                 .map_err(SqliteOpenOrCreateError::FailedToSetPermissions)?;
         }
 

@@ -73,15 +73,6 @@ impl SqliteStore {
         Ok(Self { sqlite })
     }
 
-    /// Open a transient, in-memory record store. Intended for tests.
-    pub async fn in_memory(timeout: Duration) -> Result<Self> {
-        let sqlite = Sqlite::builder().memory().timeout(timeout).open().await?;
-
-        Self::setup_db(sqlite.pool()).await?;
-
-        Ok(Self { sqlite })
-    }
-
     #[instrument(level = "trace", skip_all, err)]
     async fn setup_db(pool: &SqlitePool) -> Result<()> {
         debug!("running sqlite database setup");
@@ -142,10 +133,6 @@ impl SqliteStore {
         let mut records = records.peekable();
         let mut tx = self.sqlite.pool().begin().await?;
 
-        // Stream fixed-size chunks straight into a multi-row INSERT: `QueryBuilder`
-        // writes the `values (..),(..)` and binds each row in a single pass, so we
-        // never materialise the input. The `peek` guard keeps each chunk non-empty,
-        // which `push_values` requires.
         while records.peek().is_some() {
             let mut builder = sqlx::QueryBuilder::new(
                 "insert or ignore into store(id, idx, host, tag, timestamp, version, data, cek) ",
@@ -455,7 +442,7 @@ mod tests {
 
     #[fixture]
     async fn store() -> SqliteStore {
-        SqliteStore::in_memory(test_local_timeout()).await.unwrap()
+        SqliteStore::new(":memory:", test_local_timeout()).await.unwrap()
     }
 
     #[fixture]
