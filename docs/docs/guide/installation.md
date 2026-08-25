@@ -42,6 +42,8 @@ Write-Output 'atuin init powershell | Out-String | Invoke-Expression' >> $PROFIL
 
 Note that the `$PROFILE` path may depend on your PowerShell version.
 
+You may also want to try the `default-powershell` [theme](theming.md), which uses the default PowerShell syntax colors.
+
 [**Set up sync** - Move on to the next step.](sync.md)
 
 ## Manual installation
