@@ -3,6 +3,8 @@ use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 
+use atuin_common::ansi::{Vt100ParserExt as _, Vt100ScreenExt as _};
+
 pub(crate) enum Msg {
     Data(Vec<u8>),
     Resize {
@@ -19,7 +21,7 @@ pub(crate) fn socket_path() -> PathBuf {
 
 pub(crate) fn spawn_parser_thread(rows: u16, cols: u16, msg_rx: Receiver<Msg>) {
     std::thread::spawn(move || {
-        let mut parser = vt100::Parser::new(rows, cols, 0);
+        let mut parser = vt100::Parser::new_safe(rows, cols, 0);
 
         loop {
             let first = match msg_rx.recv() {
@@ -99,9 +101,50 @@ fn encode_screen(parser: &vt100::Parser) -> Vec<u8> {
 fn handle_parser_msg(parser: &mut vt100::Parser, msg: Msg) {
     match msg {
         Msg::Data(data) => parser.process(&data),
-        Msg::Resize { rows, cols } => parser.screen_mut().set_size(rows, cols),
+        Msg::Resize { rows, cols } => parser.screen_mut().set_size_safe(rows, cols),
         Msg::ScreenRequest(reply_tx) => {
             let _ = reply_tx.send(encode_screen(parser));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    /// Get the `rows` and `cols` values from an [`encode_screen`] blob.
+    fn size_of(blob: &[u8]) -> (u16, u16) {
+        (u16::from_be_bytes([blob[0], blob[1]]), u16::from_be_bytes([blob[2], blob[3]]))
+    }
+
+    /// vt100 can panic when `rows` or `cols` is less than 2 (doy/vt100-rust#37>). Make sure we
+    /// clamp the dimensions to avoid panics.
+    #[rstest]
+    fn init_small_and_wrap(#[values(0, 1, 2, 3)] rows: u16, #[values(0, 1, 2, 3)] cols: u16) {
+        let (msg_tx, msg_rx) = mpsc::sync_channel(8);
+        spawn_parser_thread(rows, cols, msg_rx);
+        msg_tx.send(Msg::Data(b"hello world".to_vec())).expect("parser thread alive");
+
+        let (reply_tx, reply_rx) = mpsc::channel();
+        msg_tx.send(Msg::ScreenRequest(reply_tx)).expect("parser thread alive");
+        let blob = reply_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("parser thread still answering");
+
+        // Dimensions are clamped to (2, 2) to avoid panics in vt100.
+        assert_eq!(size_of(&blob), (rows.max(2), cols.max(2)));
+    }
+
+    /// Same test as `init_small_and_wrap`, but for resizes.
+    #[rstest]
+    fn resize_small_and_wrap(#[values(0, 1, 2, 3)] rows: u16, #[values(0, 1, 2, 3)] cols: u16) {
+        let mut parser = vt100::Parser::new_safe(24, 80, 0);
+        handle_parser_msg(&mut parser, Msg::Resize { rows, cols });
+        handle_parser_msg(&mut parser, Msg::Data(b"hello world".to_vec()));
+
+        // Dimensions are clamped to (2, 2) to avoid panics in vt100.
+        assert_eq!(size_of(&encode_screen(&parser)), (rows.max(2), cols.max(2)));
     }
 }
