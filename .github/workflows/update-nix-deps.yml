@@ -4,6 +4,10 @@ on:
   schedule:
     - cron: '0 0 1 * *' # runs monthly on the first day of the month at 00:00
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   lockfile:
     runs-on: depot-ubuntu-24.04

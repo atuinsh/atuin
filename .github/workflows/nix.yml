@@ -12,6 +12,9 @@ on:
     paths-ignore:
       - 'ui/**'
 
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: depot-ubuntu-24.04
