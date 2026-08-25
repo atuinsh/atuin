@@ -39,7 +39,7 @@ pub trait ResultCell: Default + Send + Sync + 'static {
     fn peek(&self) -> Option<Self::Value>;
 }
 
-impl<T: Default + Clone + Send + Sync + 'static> ResultCell for OnceCell<T> {
+impl<T: Clone + Send + Sync + 'static> ResultCell for OnceCell<T> {
     type Value = T;
 
     fn fill(&self, value: T) {
@@ -51,7 +51,7 @@ impl<T: Default + Clone + Send + Sync + 'static> ResultCell for OnceCell<T> {
     }
 }
 
-impl<T: Default + Clone + Send + Sync + 'static> ResultCell for Mutex<Option<T>> {
+impl<T: Clone + Send + Sync + 'static> ResultCell for Mutex<Option<T>> {
     type Value = T;
 
     fn fill(&self, value: T) {

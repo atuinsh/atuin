@@ -1,62 +1,32 @@
 use std::path::Path;
-use std::str::FromStr;
 use std::time::Duration;
 
-use atuin_common::utils;
+use atuin_common::sqlite::Sqlite;
 use sqlx::Result;
-use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
-};
-use tokio::fs;
+use sqlx::sqlite::SqlitePool;
 use tracing::debug;
 
 use crate::store::entry::KvEntry;
 
 #[derive(Debug, Clone)]
 pub struct Database {
-    pub pool: SqlitePool,
+    sqlite: Sqlite,
 }
 
 impl Database {
-    pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
+    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> eyre::Result<Self> {
         let path = path.as_ref();
         debug!("opening KV sqlite database at {:?}", path);
 
-        if utils::broken_symlink(path) {
-            eprintln!(
-                "Atuin: KV sqlite db path ({path:?}) is a broken symlink. Unable to read or \
-                 create replacement."
-            );
-            std::process::exit(1);
-        }
+        let sqlite = Sqlite::builder(path).timeout(timeout).regexp().open().await?;
 
-        if !path.exists()
-            && let Some(dir) = path.parent()
-        {
-            fs::create_dir_all(dir).await?;
-        }
+        Self::setup_db(sqlite.pool()).await?;
 
-        let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
-            .journal_mode(SqliteJournalMode::Wal)
-            .optimize_on_close(true, None)
-            .synchronous(SqliteSynchronous::Normal)
-            .with_regexp()
-            .foreign_keys(true)
-            .create_if_missing(true);
-
-        let pool = SqlitePoolOptions::new()
-            .acquire_timeout(Duration::try_from_secs_f64(timeout).map_err(|e| {
-                sqlx::Error::Decode(format!("invalid db timeout {timeout}: {e}").into())
-            })?)
-            .connect_with(opts)
-            .await?;
-
-        Self::setup_db(&pool).await?;
-        Ok(Self { pool })
+        Ok(Self { sqlite })
     }
 
     pub async fn sqlite_version(&self) -> Result<String> {
-        sqlx::query_scalar("SELECT sqlite_version()").fetch_one(&self.pool).await
+        sqlx::query_scalar("SELECT sqlite_version()").fetch_one(self.sqlite.pool()).await
     }
 
     async fn setup_db(pool: &SqlitePool) -> Result<()> {
@@ -100,7 +70,7 @@ impl Database {
 
     pub async fn save(&self, e: &KvEntry) -> Result<()> {
         debug!("saving kv entry to sqlite");
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.sqlite.pool().begin().await?;
         Self::save_raw(&mut tx, e).await?;
         tx.commit().await?;
 
@@ -110,7 +80,7 @@ impl Database {
     pub async fn delete(&self, namespace: &str, key: &str) -> Result<()> {
         debug!("deleting kv entry {namespace}/{key}");
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.sqlite.pool().begin().await?;
         Self::delete_raw(&mut tx, namespace, key).await?;
         tx.commit().await?;
 
@@ -124,7 +94,7 @@ impl Database {
             sqlx::query_as::<_, KvEntry>("select * from kv where namespace = ?1 and key = ?2")
                 .bind(namespace)
                 .bind(key)
-                .fetch_optional(&self.pool)
+                .fetch_optional(self.sqlite.pool())
                 .await?;
 
         Ok(res)
@@ -136,11 +106,11 @@ impl Database {
         let res = if let Some(namespace) = namespace {
             sqlx::query_as::<_, KvEntry>("select * from kv where namespace = ?1 order by key asc")
                 .bind(namespace)
-                .fetch_all(&self.pool)
+                .fetch_all(self.sqlite.pool())
                 .await?
         } else {
             sqlx::query_as::<_, KvEntry>("select * from kv order by namespace, key asc")
-                .fetch_all(&self.pool)
+                .fetch_all(self.sqlite.pool())
                 .await?
         };
 
@@ -156,7 +126,7 @@ mod test {
 
     #[fixture]
     async fn db() -> Database {
-        Database::new("sqlite::memory:", 1.0).await.unwrap()
+        Database::new(":memory:", Duration::from_secs(1)).await.unwrap()
     }
 
     #[fixture]

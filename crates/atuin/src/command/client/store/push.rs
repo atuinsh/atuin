@@ -42,10 +42,7 @@ impl Push {
             println!("Forcing remote store overwrite!");
             println!("Clearing remote store");
 
-            let caps = atuin_client::api_client::caps_client(
-                &settings.sync_address,
-                &settings.extra_headers,
-            )?;
+            let caps = atuin_client::api_client::caps_client(settings)?;
             let client = Client::new(
                 settings.sync_address.clone(),
                 &settings.sync_auth_token().await?,

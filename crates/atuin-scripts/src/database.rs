@@ -1,63 +1,32 @@
 use std::path::Path;
-use std::str::FromStr;
 use std::time::Duration;
 
-use atuin_common::utils;
-use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
-    SqliteSynchronous,
-};
+use atuin_common::sqlite::Sqlite;
+use sqlx::sqlite::{SqlitePool, SqliteRow};
 use sqlx::{Result, Row};
-use tokio::fs;
 use tracing::{debug, instrument};
 
 use crate::store::script::Script;
 
 #[derive(Debug, Clone)]
 pub struct Database {
-    pub pool: SqlitePool,
+    sqlite: Sqlite,
 }
 
 impl Database {
-    pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
+    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> eyre::Result<Self> {
         let path = path.as_ref();
         debug!("opening script sqlite database at {:?}", path);
 
-        if utils::broken_symlink(path) {
-            eprintln!(
-                "Atuin: Script sqlite db path ({path:?}) is a broken symlink. Unable to read or \
-                 create replacement."
-            );
-            std::process::exit(1);
-        }
+        let sqlite = Sqlite::builder(path).timeout(timeout).regexp().open().await?;
 
-        if !path.exists()
-            && let Some(dir) = path.parent()
-        {
-            fs::create_dir_all(dir).await?;
-        }
+        Self::setup_db(sqlite.pool()).await?;
 
-        let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
-            .journal_mode(SqliteJournalMode::Wal)
-            .optimize_on_close(true, None)
-            .synchronous(SqliteSynchronous::Normal)
-            .with_regexp()
-            .foreign_keys(true)
-            .create_if_missing(true);
-
-        let pool = SqlitePoolOptions::new()
-            .acquire_timeout(Duration::try_from_secs_f64(timeout).map_err(|e| {
-                sqlx::Error::Decode(format!("invalid db timeout {timeout}: {e}").into())
-            })?)
-            .connect_with(opts)
-            .await?;
-
-        Self::setup_db(&pool).await?;
-        Ok(Self { pool })
+        Ok(Self { sqlite })
     }
 
     pub async fn sqlite_version(&self) -> Result<String> {
-        sqlx::query_scalar("SELECT sqlite_version()").fetch_one(&self.pool).await
+        sqlx::query_scalar("SELECT sqlite_version()").fetch_one(self.sqlite.pool()).await
     }
 
     async fn setup_db(pool: &SqlitePool) -> Result<()> {
@@ -97,7 +66,7 @@ impl Database {
 
     pub async fn save(&self, s: &Script) -> Result<()> {
         debug!("saving script to sqlite");
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.sqlite.pool().begin().await?;
         Self::save_raw(&mut tx, s).await?;
         tx.commit().await?;
 
@@ -110,7 +79,7 @@ impl Database {
             return Ok(());
         }
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.sqlite.pool().begin().await?;
 
         for i in s {
             Self::save_raw(&mut tx, i).await?;
@@ -131,7 +100,7 @@ impl Database {
 
         let res = sqlx::query_as::<_, Script>("select * from scripts where id = ?1")
             .bind(id)
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.sqlite.pool())
             .await?;
 
         // intentionally not joining, don't want to duplicate the script data in memory a whole bunch.
@@ -139,7 +108,7 @@ impl Database {
             let tags = sqlx::query("select tag from script_tags where script_id = ?1")
                 .bind(id)
                 .map(|row| Self::query_script_tags(&row))
-                .fetch_all(&self.pool)
+                .fetch_all(self.sqlite.pool())
                 .await?;
 
             script.tags = tags;
@@ -152,15 +121,16 @@ impl Database {
     pub async fn list(&self) -> Result<Vec<Script>> {
         debug!("listing scripts");
 
-        let mut res =
-            sqlx::query_as::<_, Script>("select * from scripts").fetch_all(&self.pool).await?;
+        let mut res = sqlx::query_as::<_, Script>("select * from scripts")
+            .fetch_all(self.sqlite.pool())
+            .await?;
 
         // Fetch all the tags for each script
         for script in &mut res {
             let tags = sqlx::query("select tag from script_tags where script_id = ?1")
                 .bind(script.id.to_string())
                 .map(|row| Self::query_script_tags(&row))
-                .fetch_all(&self.pool)
+                .fetch_all(self.sqlite.pool())
                 .await?;
 
             script.tags = tags;
@@ -172,8 +142,8 @@ impl Database {
     pub async fn clear(&self) -> Result<()> {
         debug!("clearing all scripts from sqlite");
 
-        sqlx::query("delete from script_tags").execute(&self.pool).await?;
-        sqlx::query("delete from scripts").execute(&self.pool).await?;
+        sqlx::query("delete from script_tags").execute(self.sqlite.pool()).await?;
+        sqlx::query("delete from scripts").execute(self.sqlite.pool()).await?;
 
         Ok(())
     }
@@ -181,12 +151,15 @@ impl Database {
     pub async fn delete(&self, id: &str) -> Result<()> {
         debug!("deleting script {}", id);
 
-        sqlx::query("delete from scripts where id = ?1").bind(id).execute(&self.pool).await?;
+        sqlx::query("delete from scripts where id = ?1")
+            .bind(id)
+            .execute(self.sqlite.pool())
+            .await?;
 
         // delete all the tags for the script
         sqlx::query("delete from script_tags where script_id = ?1")
             .bind(id)
-            .execute(&self.pool)
+            .execute(self.sqlite.pool())
             .await?;
 
         Ok(())
@@ -195,7 +168,7 @@ impl Database {
     pub async fn update(&self, s: &Script) -> Result<()> {
         debug!("updating script {:?}", s);
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.sqlite.pool().begin().await?;
 
         // Update the script's base fields
         sqlx::query(
@@ -236,14 +209,14 @@ impl Database {
     pub async fn get_by_name(&self, name: &str) -> Result<Option<Script>> {
         let res = sqlx::query_as::<_, Script>("select * from scripts where name = ?1")
             .bind(name)
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.sqlite.pool())
             .await?;
 
         let script = if let Some(mut script) = res {
             let tags = sqlx::query("select tag from script_tags where script_id = ?1")
                 .bind(script.id.to_string())
                 .map(|row| Self::query_script_tags(&row))
-                .fetch_all(&self.pool)
+                .fetch_all(self.sqlite.pool())
                 .await?;
 
             script.tags = tags;
@@ -264,7 +237,7 @@ mod test {
 
     #[fixture]
     async fn db() -> Database {
-        Database::new("sqlite::memory:", 1.0).await.unwrap()
+        Database::new(":memory:", Duration::from_secs(1)).await.unwrap()
     }
 
     #[fixture]

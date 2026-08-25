@@ -535,15 +535,11 @@ async fn handle_end(
     if settings.should_sync().await? {
         #[cfg(feature = "sync")]
         {
-            let caps = atuin_client::api_client::caps_client(
-                &settings.sync_address,
-                &settings.extra_headers,
-            )?;
             let engine = record::sync::SyncEngine::builder()
                 .store(store.clone())
                 .client_source(record::sync::ClientSource::FromSettings {
                     settings,
-                    caps: Some(caps),
+                    caps: None,
                 })
                 .build()
                 .connect()
@@ -594,7 +590,7 @@ pub(super) async fn start_history_entry(
     }
 
     let db_path = &settings.db_path;
-    let db = Sqlite::new(db_path, settings.local_timeout).await?;
+    let db = Sqlite::new(db_path, Duration::try_from_secs_f64(settings.local_timeout)?).await?;
     handle_start(&db, settings, command, author, author_kind, intent).await
 }
 
@@ -613,8 +609,10 @@ pub(super) async fn end_history_entry(
     let db_path = &settings.db_path;
     let record_store_path = &settings.record_store_path;
 
-    let db = Sqlite::new(db_path, settings.local_timeout).await?;
-    let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
+    let db = Sqlite::new(db_path, Duration::try_from_secs_f64(settings.local_timeout)?).await?;
+    let store =
+        SqliteStore::new(record_store_path, Duration::try_from_secs_f64(settings.local_timeout)?)
+            .await?;
 
     let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
         .context("could not load encryption key")?;
@@ -1123,8 +1121,13 @@ impl Cmd {
                 let db_path = &settings.db_path;
                 let record_store_path = &settings.record_store_path;
 
-                let db = Sqlite::new(db_path, settings.local_timeout).await?;
-                let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
+                let db = Sqlite::new(db_path, Duration::try_from_secs_f64(settings.local_timeout)?)
+                    .await?;
+                let store = SqliteStore::new(
+                    record_store_path,
+                    Duration::try_from_secs_f64(settings.local_timeout)?,
+                )
+                .await?;
 
                 let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
                     .context("could not load encryption key")?;
@@ -1227,7 +1230,7 @@ mod tests {
 
     #[fixture]
     async fn db() -> Sqlite {
-        Sqlite::new("sqlite::memory:", 2.0).await.unwrap()
+        Sqlite::new(":memory:", Duration::from_secs(2)).await.unwrap()
     }
 
     #[fixture]
