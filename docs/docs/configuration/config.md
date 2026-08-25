@@ -499,12 +499,12 @@ extra_headers = { "CF-Access-Client-Id" = "...", "CF-Access-Client-Secret" = "..
 
 ### `local_timeout`
 
-Default: `5`
+Default: `2`
 
 Timeout (in seconds) for acquiring a local database connection (SQLite).
 
 ```toml
-local_timeout = 5
+local_timeout = 2
 ```
 
 ### `command_chaining`
