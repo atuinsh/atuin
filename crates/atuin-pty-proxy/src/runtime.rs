@@ -31,8 +31,19 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
         })
         .map_err(|e| eyre::eyre!("{e:#}"))?;
 
-    let sock_path = screen::socket_path();
-    let _ = std::fs::remove_file(&sock_path);
+    let sock_path = match screen::socket_path() {
+        Ok(path) => {
+            let _ = std::fs::remove_file(&path);
+            Some(path)
+        }
+        Err(e) => {
+            // If creating the socket fails, print the error and continue rather than returning it,
+            // so the user still gets a shell. This is the same behavior as when binding the socket
+            // fails in `screen::spawn_socket_server`.
+            eprintln!("atuin pty-proxy: failed to create socket: {e}");
+            None
+        }
+    };
 
     let mut cmd = match options.shell {
         Some(ref path) => CommandBuilder::new(path),
@@ -46,7 +57,11 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     if let Some(ref path) = options.shell {
         cmd.env("SHELL", path);
     }
-    cmd.env("ATUIN_PTY_PROXY_SOCKET", sock_path.as_os_str());
+    if let Some(path) = &sock_path {
+        cmd.env("ATUIN_PTY_PROXY_SOCKET", path);
+    } else {
+        cmd.env_remove("ATUIN_PTY_PROXY_SOCKET");
+    }
     cmd.env("ATUIN_PTY_PROXY_ACTIVE", "1");
     // Atuin sets a restrictive process-wide umask on startup to protect the
     // files it creates. The shell must not inherit it (#3695) — restore the
@@ -67,7 +82,9 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     let current_cols = Arc::new(AtomicU16::new(cols.max(1)));
 
     screen::spawn_parser_thread(rows, cols, msg_rx);
-    screen::spawn_socket_server(sock_path.clone(), msg_tx.clone());
+    if let Some(path) = &sock_path {
+        screen::spawn_socket_server(path.clone(), msg_tx.clone());
+    }
     spawn_resize_handler(pair.master, msg_tx.clone(), current_cols.clone())?;
 
     terminal::enable_raw_mode()?;
@@ -133,7 +150,9 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     let _ = stdout_thread.join();
 
     let _ = terminal::disable_raw_mode();
-    let _ = std::fs::remove_file(&sock_path);
+    if let Some(path) = &sock_path {
+        let _ = std::fs::remove_file(path);
+    }
 
     std::process::exit(process_exit_code(status.exit_code()));
 }

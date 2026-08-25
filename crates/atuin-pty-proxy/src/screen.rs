@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 
 use atuin_common::ansi::{Vt100ParserExt as _, Vt100ScreenExt as _};
+use atuin_common::os::unix::{NamedTempDirError, create_named_temp_dir};
 
 pub(crate) enum Msg {
     Data(Vec<u8>),
@@ -14,9 +15,11 @@ pub(crate) enum Msg {
     ScreenRequest(mpsc::Sender<Vec<u8>>),
 }
 
-pub(crate) fn socket_path() -> PathBuf {
-    let dir = std::env::temp_dir();
-    dir.join(format!("atuin-pty-proxy-{}.sock", std::process::id()))
+pub(crate) fn socket_path() -> Result<PathBuf, NamedTempDirError> {
+    let uid = atuin_common::os::unix::uid();
+    let dir = atuin_common::os::unix::tmp_dir().join(format!("atuin-{uid}"));
+    let dir = create_named_temp_dir(dir)?;
+    Ok(dir.join(format!("atuin-pty-proxy-{}.sock", std::process::id())))
 }
 
 pub(crate) fn spawn_parser_thread(rows: u16, cols: u16, msg_rx: Receiver<Msg>) {
