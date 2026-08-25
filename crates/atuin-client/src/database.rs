@@ -372,46 +372,6 @@ impl Sqlite {
         Ok(())
     }
 
-    /// Columns bound per row by [`Self::save_raw_many`]'s multi-row INSERT.
-    const HISTORY_INSERT_COLUMNS: usize = 13;
-
-    async fn save_raw_many<'a>(
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-        h: impl IntoIterator<Item = &'a History>,
-        rows_per_insert: usize,
-    ) -> Result<()> {
-        let mut h = h.into_iter().peekable();
-
-        while h.peek().is_some() {
-            let mut builder = sqlx::QueryBuilder::new(
-                "insert or ignore into history(
-                    id, timestamp, duration, exit, command, cwd, session, hostname, author, intent,
-                    deleted_at, shell, author_kind
-                ) ",
-            );
-
-            builder.push_values(h.by_ref().take(rows_per_insert), |mut b, h| {
-                b.push_bind(h.id.0.as_str())
-                    .push_bind(h.timestamp.unix_timestamp_nanos() as i64)
-                    .push_bind(h.duration)
-                    .push_bind(h.exit)
-                    .push_bind(h.command.as_str())
-                    .push_bind(h.cwd.as_str())
-                    .push_bind(h.session.as_str())
-                    .push_bind(h.cmd_origin.as_str())
-                    .push_bind(h.author.as_str())
-                    .push_bind(h.intent.as_deref())
-                    .push_bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
-                    .push_bind(h.shell.as_deref())
-                    .push_bind(h.author_kind.map(|kind| i64::from(kind.as_u8())));
-            });
-
-            builder.build().execute(&mut **tx).await?;
-        }
-
-        Ok(())
-    }
-
     #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
     async fn delete_row_raw(
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -444,11 +404,39 @@ impl Sqlite {
 
         debug!("saving history to sqlite");
 
+        const HISTORY_INSERT_COLUMNS: usize = 13;
         let rows_per_insert =
-            (self.sqlite.info().await.variable_number_limit / Self::HISTORY_INSERT_COLUMNS).max(1);
+            (self.sqlite.info().await.variable_number_limit / HISTORY_INSERT_COLUMNS).max(1);
 
         let mut tx = self.sqlite.pool().begin().await?;
-        Self::save_raw_many(&mut tx, h, rows_per_insert).await?;
+
+        while h.peek().is_some() {
+            let mut builder = sqlx::QueryBuilder::new(
+                "insert or ignore into history(
+                    id, timestamp, duration, exit, command, cwd, session, hostname, author, intent,
+                    deleted_at, shell, author_kind
+                ) ",
+            );
+
+            builder.push_values(h.by_ref().take(rows_per_insert), |mut b, h| {
+                b.push_bind(h.id.0.as_str())
+                    .push_bind(h.timestamp.unix_timestamp_nanos() as i64)
+                    .push_bind(h.duration)
+                    .push_bind(h.exit)
+                    .push_bind(h.command.as_str())
+                    .push_bind(h.cwd.as_str())
+                    .push_bind(h.session.as_str())
+                    .push_bind(h.cmd_origin.as_str())
+                    .push_bind(h.author.as_str())
+                    .push_bind(h.intent.as_deref())
+                    .push_bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
+                    .push_bind(h.shell.as_deref())
+                    .push_bind(h.author_kind.map(|kind| i64::from(kind.as_u8())));
+            });
+
+            builder.build().execute(&mut *tx).await?;
+        }
+
         tx.commit().await?;
 
         Ok(())
