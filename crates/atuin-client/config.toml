@@ -7,17 +7,12 @@
 ## where to store your database, default is your system data directory
 ## linux/mac: ~/.local/share/atuin/history.db
 ## windows: %USERPROFILE%/.local/share/atuin/history.db
-# db_path = "~/.history.db"
+# db_path = "~/.local/share/atuin/history.db"
 
 ## where to store your encryption key, default is your system data directory
 ## linux/mac: ~/.local/share/atuin/key
 ## windows: %USERPROFILE%/.local/share/atuin/key
-# key_path = "~/.key"
-
-## where to store your auth session token, default is your system data directory
-## linux/mac: ~/.local/share/atuin/session
-## windows: %USERPROFILE%/.local/share/atuin/session
-# session_path = "~/.session"
+# key_path = "~/.local/share/atuin/key"
 
 ## date format used, either "us" or "uk"
 # dialect = "us"
