@@ -26,16 +26,6 @@ The path to the Atuin encryption key.
 key_path = "~/.atuin-key"
 ```
 
-### `session_path`
-
-Default: `~/.local/share/atuin/session`
-
-The path to the Atuin server session file. This is essentially just an API token
-
-```
-session_path = "~/.atuin-session"
-```
-
 ### `dialect`
 
 Default: `us`
