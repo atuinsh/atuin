@@ -34,6 +34,8 @@ Write-Output 'atuin init powershell | Out-String | Invoke-Expression' >> $PROFIL
 
 Note that the `$PROFILE` path may depend on your PowerShell version.
 
+You may also want to try the `default-powershell` [theme](https://docs.atuin.sh/guide/theming/index.md), which uses the default PowerShell syntax colors.
+
 [**Set up sync** - Move on to the next step.](https://docs.atuin.sh/guide/sync/index.md)
 
 ## Manual installation
