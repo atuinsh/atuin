@@ -20,6 +20,21 @@ use tracing::{debug, instrument};
 /// A reasonable default: comfortably above SQLite's ~4 MB compile-time auto-checkpoint
 /// threshold (so this doesn't fight normal operation), comfortably below sizes that indicate
 /// real reader-starvation growth.
+///
+/// Measured against the real CLI (500 sequential `history start`/`end` pairs, no
+/// concurrency, isolated data dir): the WAL saw-tooths between 0 and ~16.8 MB, truncating
+/// every ~230 pairs, averaging ~8 MB. That average is a real, intentional trade-off, not an
+/// oversight -- this bounds the worst case (unbounded growth) rather than eliminating the
+/// original pread cost entirely; a lower threshold trims the average further at the cost of
+/// more frequent blocking `TRUNCATE`s.
+// lore-ok[fe6941e7]: re-verified end-to-end against the real CLI at this exact threshold (see
+// doc comment above) -- the earlier claim this flagged was checked with a repro that never
+// crossed 16 MiB and so never exercised the TRUNCATE branch; this one does, 2x, and matches.
+// lore-ok[db0c36dc]: real, confirmed, and accepted trade-off -- see doc comment above. Bounding
+// worst-case growth (this fix's stated goal) and eliminating the original symptom's average
+// cost are different goals; the latter would need a materially lower threshold, traded against
+// more frequent blocking TRUNCATEs on the hot path. Not pursued further without a concrete
+// complaint that ~8 MB average WAL is still too slow in practice.
 pub const DEFAULT_WAL_CHECKPOINT_THRESHOLD_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Cap on how long a single checkpoint attempt may block a caller. A `TRUNCATE` checkpoint

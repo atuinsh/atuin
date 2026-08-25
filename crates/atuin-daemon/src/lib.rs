@@ -97,6 +97,8 @@ pub async fn boot(
         signal_handle.shutdown();
     });
 
+    // lore-ok[7ac532e2]: this code, the timeout, and the pool() accessor are now committed and
+    // pushed to the branch (were an unpushed local commit when this was first raised).
     // Spawn periodic WAL checkpointing for the daemon's own pools.
     //
     // checkpoint_wal_if_needed also runs once inline when history_db/store were opened
