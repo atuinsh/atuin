@@ -14,11 +14,6 @@
 ## windows: %USERPROFILE%/.local/share/atuin/key
 # key_path = "~/.key"
 
-## where to store your auth session token, default is your system data directory
-## linux/mac: ~/.local/share/atuin/session
-## windows: %USERPROFILE%/.local/share/atuin/session
-# session_path = "~/.session"
-
 ## date format used, either "us" or "uk"
 # dialect = "us"
 
