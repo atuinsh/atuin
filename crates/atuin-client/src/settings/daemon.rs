@@ -2,6 +2,8 @@ use std::path::PathBuf;
 #[cfg(unix)]
 use std::{borrow::Cow, path::Path};
 
+#[cfg(unix)]
+use atuin_common::os::unix::{SecureTempDirError, create_secure_temp_dir};
 use serde::{Deserialize, Serialize};
 
 #[cfg(unix)]
@@ -142,7 +144,7 @@ impl Daemon {
 #[cfg(unix)]
 trait SocketCtx: Copy + Sized {
     fn tmp_dir(&self) -> PathBuf {
-        atuin_common::utils::env_nonempty("TMPDIR").map_or_else(|| "/tmp".into(), Into::into)
+        atuin_common::os::unix::tmp_dir()
     }
 
     fn runtime_dir(&self) -> Option<PathBuf> {
@@ -184,81 +186,18 @@ pub enum SocketPath<'a> {
     Default(PathBuf),
 }
 
-/// Error returned by [`SocketPath::create_default_dir_if_needed`].
-#[cfg(unix)]
-#[derive(Debug, thiserror::Error)]
-pub enum CreateSocketDirError {
-    #[error("{} is not a directory", .0.display())]
-    NotADirectory(PathBuf),
-    #[error(
-        "{} is not owned by the current user (expected uid {expected_uid}, got {actual_uid})",
-        .path.display(),
-    )]
-    WrongOwner {
-        path: PathBuf,
-        expected_uid: std::ffi::c_uint,
-        actual_uid: u32,
-    },
-    #[error("{} has incorrect permissions (expected 700, got {permissions:03o})", .path.display())]
-    WrongPermissions {
-        path: PathBuf,
-        permissions: u32,
-    },
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-}
-
 #[cfg(unix)]
 impl<'a> SocketPath<'a> {
     /// Create the default socket directory if needed.
     ///
     /// This only applies to the default socket path: the directory holding a user-specified path
     /// from config.toml is the user's to create, and `$XDG_RUNTIME_DIR` is created for us.
-    pub fn create_default_dir_if_needed(&self) -> Result<(), CreateSocketDirError> {
-        use std::io::ErrorKind;
-        use std::os::unix::fs::{DirBuilderExt, MetadataExt};
-
+    pub fn create_default_dir_if_needed(&self) -> Result<(), SecureTempDirError> {
         let Self::Default(path) = self else {
             return Ok(());
         };
-
         let dir = path.parent().expect("default socket path always has a parent");
-        match std::fs::DirBuilder::new().mode(0o700).create(dir) {
-            Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
-            result => return result.map_err(Into::into),
-        }
-
-        // Make sure we own the directory with the appropriate permissions. Otherwise, another user
-        // on the system could hijack our socket.
-
-        let meta = fs_err::symlink_metadata(dir)?;
-        if !meta.is_dir() {
-            // This importantly rejects symlinks; a symlink could point to a directory owned by
-            // another user, who could then hijack our socket.
-            return Err(CreateSocketDirError::NotADirectory(dir.into()));
-        }
-
-        let expected_uid = atuin_common::os::unix::uid();
-        let actual_uid = meta.uid();
-        if !std::ffi::c_uint::try_from(actual_uid).is_ok_and(|actual| actual == expected_uid) {
-            // Reject the directory if it's owned by another user.
-            return Err(CreateSocketDirError::WrongOwner {
-                path: dir.into(),
-                expected_uid,
-                actual_uid,
-            });
-        }
-
-        let permissions = meta.mode() & 0o777;
-        if permissions & 0o077 != 0 {
-            // Reject the directory if it is accessible by others. On some systems, even read
-            // permission on the directory could allow another user to connect to the socket, who
-            // could then interfere with our connection.
-            return Err(CreateSocketDirError::WrongPermissions {
-                path: dir.into(),
-                permissions,
-            });
-        }
+        create_secure_temp_dir(dir)?;
         Ok(())
     }
 
@@ -486,7 +425,7 @@ mod unix_tests {
         default_socket.path().create_default_dir_if_needed().unwrap();
         fs_err::set_permissions(&default_socket.dir, Permissions::from_mode(mode)).unwrap();
 
-        let Err(CreateSocketDirError::WrongPermissions { permissions, .. }) =
+        let Err(SecureTempDirError::WrongPermissions { permissions, .. }) =
             default_socket.path().create_default_dir_if_needed()
         else {
             panic!("a socket directory with mode {mode:03o} must be rejected");
@@ -500,7 +439,7 @@ mod unix_tests {
 
         assert!(matches!(
             default_socket.path().create_default_dir_if_needed(),
-            Err(CreateSocketDirError::NotADirectory(_))
+            Err(SecureTempDirError::NotADirectory(_))
         ));
     }
 }

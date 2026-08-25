@@ -14,22 +14,15 @@ repository = { workspace = true }
 clap = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-atuin-common = { workspace = true, features = ["ansi"] }
+atuin-common = { workspace = true, features = ["ansi", "os"] }
 crossterm = { workspace = true }
 eyre = { workspace = true }
-nix = { version = "0.29", features = ["socket", "user"] }
 portable-pty = "0.9"
-rand = { workspace = true }
 signal-hook = "0.3"
 vt100 = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }
-
-[target.'cfg(unix)'.dev-dependencies]
-# `resource` is for the fd-pressure integration test's setrlimit only.
-nix = { version = "0.29", features = ["socket", "user", "resource", "term"] }
-tempfile = { workspace = true }
 
 [lints]
 workspace = true

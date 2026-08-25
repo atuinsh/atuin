@@ -634,17 +634,13 @@ version = "18.20.0-beta.3"
 dependencies = [
  "aes-gcm",
  "atuin-common",
- "atuin-pty-proxy",
  "base64",
  "crossterm",
- "daemonize",
- "fs4",
  "futures-util",
  "hex",
  "parking_lot",
  "portable-pty",
  "serde_json",
- "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "tokio-tungstenite",
@@ -662,12 +658,9 @@ dependencies = [
  "clap",
  "crossterm",
  "eyre",
- "nix 0.29.0",
  "portable-pty",
- "rand 0.8.7",
  "rstest",
  "signal-hook",
- "tempfile",
  "vt100",
 ]
 
@@ -2182,16 +2175,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b91aa448ca50d7e79433bdf3ee8d99215430d2ec02ade5aefab2a073a1822e8a"
 dependencies = [
  "autocfg",
-]
-
-[[package]]
-name = "fs4"
-version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8640e34b88f7652208ce9e88b1a37a2ae95227d84abec377ccd3c5cfeb141ed4"
-dependencies = [
- "rustix",
- "windows-sys 0.59.0",
 ]
 
 [[package]]

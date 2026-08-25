@@ -20,8 +20,8 @@
 //!
 //! # Module map
 //!
-//! Everything below [`run_share`] except [`crypto`] and [`lifecycle`] is
-//! crate-private; the modules split along the session's data flow:
+//! Everything below [`run_share`] except [`crypto`] is crate-private; the
+//! modules split along the session's data flow:
 //!
 //! * [`crypto`] — end-to-end encryption: the per-session AES-256-GCM key, the
 //!   sealed-blob wire format, and the URL-fragment key encoding (public: it
@@ -31,13 +31,6 @@
 //!   same loop over any byte-faithful source.
 //! * `subshell` — the child shell on its PTY (`portable-pty`), split into the
 //!   parts the session's task topology needs via `SessionSource`.
-//! * `proxy_tap` — the `--active` source: a subscriber tap on a running
-//!   `atuin pty-proxy`, speaking the framed protocol from
-//!   `atuin_pty_proxy::protocol`, behind the same `SessionSource` seam.
-//! * [`lifecycle`] — the backgrounded `--active` session's coordination
-//!   files: the pidfile whose exclusive lock means "a share is running", the
-//!   URL file `--url` reprints, and the pre-runtime daemonize step (public:
-//!   the CLI's spawning parent, `--stop`, and `--url` flows consume it).
 //! * `session` — the heart of the crate: one central `select!` task owning all
 //!   session state, plus the four bridged threads covering the blocking edges
 //!   (PTY read and write, raw-mode stdin, terminal write). `session::screen`
@@ -67,11 +60,7 @@ mod backpressure;
 pub mod crypto;
 mod error;
 #[cfg(unix)]
-pub mod lifecycle;
-#[cfg(unix)]
 mod protocol;
-#[cfg(unix)]
-mod proxy_tap;
 #[cfg(unix)]
 mod query;
 #[cfg(unix)]
@@ -180,24 +169,6 @@ pub struct ShareOptions {
     /// Skip the confirmation prompt (the `--yes` flag). The warning lines are
     /// still printed; only the `Continue? [y/N]` question is skipped.
     pub yes: bool,
-    /// Share the session already running in this terminal (the `--active`
-    /// flag) by attaching to the PTY owner that was interposed at shell
-    /// startup (`atuin pty-proxy`), instead of spawning a fresh subshell.
-    /// Never spawns anything: without a cooperating owner it refuses.
-    pub active: bool,
-    /// Run the `--active` session attached to this terminal (the hidden
-    /// `--foreground` debug flag): the join URL goes to stderr and Ctrl-C
-    /// stops sharing. No daemonize, no pidfile, no URL file — the default
-    /// `--active` path re-execs a daemonized child (`internal_daemon`)
-    /// instead.
-    pub foreground: bool,
-    /// Run as the re-exec'd daemonized child of `--active` (the hidden
-    /// `--internal-daemon` flag): hold the [`lifecycle`] pidfile lock for
-    /// the session's lifetime and persist the join URL to the URL file —
-    /// rewriting it whenever a reconnect mints a fresh session — instead of
-    /// printing it. The CLI already forked this process into the background
-    /// before its runtime was built.
-    pub internal_daemon: bool,
     /// Base URL of the share hub (from settings, or `ATUIN_LAB_HUB_URL`).
     pub hub_url: Url,
     /// The Hub API token authenticating the WebSocket connection.
@@ -210,7 +181,7 @@ pub struct ShareOptions {
 /// origin mode on, and `contents_formatted()` can emit `\x1b[?25l` (cursor
 /// hidden). Restoring only raw mode would hand the user a broken terminal, so
 /// reset DECSTBM, origin mode, cursor visibility and SGR too. Precedent:
-/// `atuin-pty-proxy`'s `runtime.rs` does the same on teardown.
+/// The pty-proxy's runtime does the same on teardown.
 #[cfg(unix)]
 struct TermGuard;
 
@@ -249,9 +220,6 @@ impl Drop for TermGuard {
 /// modes.
 #[cfg(unix)]
 pub async fn run_share(opts: ShareOptions) -> Result<()> {
-    if opts.active {
-        return run_share_active(opts).await;
-    }
     check_terminal()?;
 
     // `--write` is a bool at the CLI boundary; convert it exactly once, here,
@@ -262,7 +230,7 @@ pub async fn run_share(opts: ShareOptions) -> Result<()> {
     // read, the session key is minted, or the hub hears from us: declining
     // leaves nothing minted anywhere and exits 0. It also runs before raw mode,
     // so the prompt reads a cooked-mode line from the tty.
-    if !confirm_share(false, write, opts.yes)? {
+    if !confirm_share(write, opts.yes)? {
         return Ok(());
     }
 
@@ -329,144 +297,6 @@ pub async fn run_share(opts: ShareOptions) -> Result<()> {
     Ok(())
 }
 
-/// Entry point for `atuin lab share --active`: attach to the PTY owner of
-/// the session already running in this terminal and share it headlessly.
-/// Never spawns anything — the detection ladder either finds a cooperating
-/// owner or refuses with the OS truth.
-///
-/// Differences from the subshell path, all consequences of not owning the
-/// terminal: no raw mode and no `TermGuard` (the terminal belongs to the
-/// user's shell, untouched), no terminal requirement beyond the confirmation
-/// prompt's (which `--yes` lifts), and the session runs with `host: None` —
-/// the host-facing threads and compositor are absent, so this future can run
-/// under a daemonized process with null stdio.
-///
-/// The join URL is delivered through the session's `url_sink` on every
-/// `Connected`, including the rewrite when a reconnect mints a fresh session:
-/// stderr for the foreground debug run, the [`lifecycle`] URL file for the
-/// daemonized child (`--url` reprints it; the spawning parent polls it).
-///
-/// The exit code is always 0 on a clean end: a tap has no child of ours to
-/// report on (the tap's `wait` answers 0), so unlike `run_share` there is no
-/// `std::process::exit` here.
-///
-/// # Errors
-///
-/// Returns an error if no cooperating PTY owner is found
-/// ([`Error::ActiveShareUnsupported`], the full refusal copy), if the
-/// confirmation prompt cannot be read, if the attach handshake fails (see
-/// [`proxy_tap::ProxyTap::attach`]), or if the hub cannot be reached.
-#[cfg(unix)]
-async fn run_share_active(opts: ShareOptions) -> Result<()> {
-    let write = render::WriteMode::from_flag(opts.write);
-
-    // The ladder runs before the confirmation prompt: a user who cannot
-    // attach at all should hear that first, not after saying yes.
-    let socket_path = detect_active_source()?;
-
-    // Same gate as the subshell path, with the active line added: viewers
-    // will see what is ALREADY on this screen. Declining leaves nothing
-    // minted anywhere. The daemonized child never prompts: the CLI confirmed
-    // in the foreground parent and re-exec'd this process with `--yes`.
-    if !confirm_share(true, write, opts.yes)? {
-        return Ok(());
-    }
-
-    // The daemonized child claims being THE active share before touching the
-    // proxy or the hub: colliding with a running share must fail fast, not
-    // after minting a session. The guard holds the lock — the aliveness
-    // signal `--stop`/`--url` and the spawning parent probe — until this
-    // function returns and the session is fully torn down.
-    let _pidfile = if opts.internal_daemon {
-        let guard = lifecycle::PidfileGuard::acquire(&lifecycle::pidfile_path()).await?;
-        // Stale-URL cleanup belongs HERE, behind the lock just won: the
-        // child is the only writer of the URL file, so only the lock holder
-        // may decide a leftover file (a previous session that died
-        // uncleanly) is stale. A lock-free cleanup in the spawning parent
-        // could race a concurrent launch and delete the winning session's
-        // freshly written URL out from under it.
-        lifecycle::remove_url_file(&lifecycle::url_file_path());
-        Some(guard)
-    } else {
-        None
-    };
-
-    let tap = proxy_tap::ProxyTap::attach(&socket_path, write)?;
-    // The tap's geometry comes from the proxy's keyframe header — the full
-    // terminal size, no bar row to reserve (headless sessions draw no bar).
-    let physical = tap.size();
-
-    // The per-session E2EE key, minted only after the user confirmed and the
-    // tap attached. Same custody as `run_share`: it moves into the transport
-    // and reaches viewers solely as the URL fragment.
-    //
-    // The E2EE session key is deliberately per-process and never persisted.
-    // Viewer-input replay protection is a process-lifetime nonce ledger
-    // (transport::AcceptedNonces); persisting or reusing this key across
-    // processes would make every blob captured before the restart replayable
-    // again, reopening the input-replay defect in full. Note this path is the
-    // long-lived one (`--active` attaches to a shell that may already have been
-    // running for hours), so it is the likelier place for someone to "helpfully"
-    // cache a key across restarts. Do not.
-    let key = crypto::SessionKey::generate();
-
-    let (out_tx, out_rx) = tokio::sync::mpsc::unbounded_channel::<session::Outbound>();
-    let (in_tx, in_rx) = tokio::sync::mpsc::unbounded_channel::<session::Inbound>();
-
-    // The returned URL is deliberately unused: the session's `Connected`
-    // handler announces it through the sink below — the steady-state writer,
-    // which also re-announces a fresh session's replacement link.
-    let (_join_url, transport) = connect_to_hub(&opts, write, key, out_rx, in_tx).await?;
-
-    // Where the join URL goes on every `Connected`, including the rewrite
-    // when a reconnect mints a fresh session: the foreground debug run
-    // prints to stderr; the daemonized child persists it for `--url` and for
-    // the spawning parent's startup poll — tagged with the spawn id the
-    // parent passed down, so the parent only ever accepts a URL written by
-    // the child IT spawned (never a stale file's, never a racing winner's).
-    // That write is best-effort — losing the URL file must not kill a
-    // healthy session.
-    let url_sink: session::UrlSink = if opts.internal_daemon {
-        let url_file = lifecycle::url_file_path();
-        let owner = std::env::var(lifecycle::SPAWN_ID_ENV).ok();
-        Box::new(move |url: &str| {
-            let _ = lifecycle::write_url_file(&url_file, url, owner.as_deref());
-        })
-    } else {
-        Box::new(|url: &str| {
-            eprintln!("Sharing this session at: {url}");
-        })
-    };
-
-    use source::SessionSource as _;
-    let session = session::Session {
-        parts: tap.into_parts()?,
-        physical,
-        write,
-        out_tx,
-        in_rx,
-        host: None,
-        url_sink: Some(url_sink),
-    };
-    // Runs until tap EOF (shell exit, proxy death, `--stop`'s SIGTERM) or,
-    // in the foreground debug run, Ctrl-C. The tap's exit code is always 0;
-    // nothing to propagate.
-    let run_result = session.run().await;
-    // The session's teardown queued `Outbound::End`; wait — bounded — for
-    // the transport to actually push it before this process exits, so
-    // `--stop` invalidates the hub link now, not after the hub's disconnect
-    // grace period (see `flush_end`).
-    flush_end(transport).await;
-    // Cleanup before surfacing any error: a dead session must not leave a
-    // URL file advertising it. (`--stop` also removes it, as a backstop;
-    // the owner cleans first — still holding the pidfile lock.)
-    if opts.internal_daemon {
-        lifecycle::remove_url_file(&lifecycle::url_file_path());
-    }
-    let _code = run_result?;
-    Ok(())
-}
-
 /// Wait — bounded by `END_FLUSH_TIMEOUT` — for the transport task to
 /// finish after the session ends.
 ///
@@ -489,55 +319,6 @@ async fn flush_end(transport: tokio::task::JoinHandle<()>) {
     let _ = tokio::time::timeout(END_FLUSH_TIMEOUT, transport).await;
 }
 
-/// The parent half of the backgrounded `--active` flow: run the detection
-/// ladder and the confirmation prompt on the caller's (interactive)
-/// terminal, without attaching to the proxy or connecting to anything.
-///
-/// The re-exec'd daemon child has null stdio, so the CLI runs this preflight
-/// first and then spawns the child with `--yes`; the child re-runs the
-/// ladder in its own environment but never prompts. Returns `Ok(false)` when
-/// the user declined: nothing was spawned or minted, exit 0.
-///
-/// # Errors
-///
-/// [`Error::ActiveShareUnsupported`] when no ladder rung matches, and
-/// [`Error::ConfirmationRequired`] on a non-interactive stdin without `yes`.
-#[cfg(unix)]
-pub fn preflight_active_share(write: bool, yes: bool) -> Result<bool> {
-    detect_active_source()?;
-    confirm_share(true, render::WriteMode::from_flag(write), yes)
-}
-
-/// The `--active` detection ladder: find a cooperating PTY owner for the
-/// running session, or refuse with the OS truth.
-///
-/// One rung today: an `atuin pty-proxy` advertising a live subscriber socket
-/// via `$ATUIN_PTY_PROXY_SOCKET` (set and connectable). The probe connection
-/// is dropped without a greeting; the proxy's greeting sniff times out and
-/// serves it as a harmless legacy snapshot request.
-///
-/// Extension point — the tmux rung: `$TMUX` set and
-/// `tmux display-message -p '#{pane_id}'` succeeding would attach through a
-/// tmux-backed `SessionSource` (`pipe-pane -O` for the delta, `capture-pane`
-/// for bootstrap). Out of scope for v1; slot it between the proxy rung and
-/// the refusal.
-///
-/// # Errors
-///
-/// [`Error::ActiveShareUnsupported`] — the full refusal copy, stating both
-/// the works-right-now path and the rc change that makes `--active` work for
-/// future sessions — when no rung matches.
-#[cfg(unix)]
-fn detect_active_source() -> Result<std::path::PathBuf> {
-    if let Ok(socket) = std::env::var("ATUIN_PTY_PROXY_SOCKET") {
-        let path = std::path::PathBuf::from(socket);
-        if std::os::unix::net::UnixStream::connect(&path).is_ok() {
-            return Ok(path);
-        }
-    }
-    Err(Error::ActiveShareUnsupported)
-}
-
 /// Validate phase: raw mode needs a real terminal on stdin, and the composited
 /// frames need one on stdout.
 #[cfg(unix)]
@@ -550,22 +331,14 @@ fn check_terminal() -> Result<()> {
 
 /// The warning shown before every share, pure ASCII, no trailing newline.
 ///
-/// Pure so the exact copy is pinned by unit tests: `active` adds the
-/// current-screen-contents line (`--active` attaches to a terminal with
-/// history already on it), `write` adds the remote-execution line. Order is
-/// fixed — active line, then write line.
+/// Pure so the exact copy is pinned by unit tests: `write` adds the
+/// remote-execution line.
 #[cfg(unix)]
-fn warning_copy(active: bool, write: render::WriteMode) -> String {
+fn warning_copy(write: render::WriteMode) -> String {
     let mut copy = String::from(
         "!! Terminal sharing is experimental.\n  Everything shown here -- including secrets you \
          type -- is visible to anyone with the link.",
     );
-    if active {
-        copy.push_str(
-            "\n  Viewers will see the CURRENT contents of this terminal, including anything \
-             already on screen.",
-        );
-    }
     if write.is_write_enabled() {
         copy.push_str("\n  WRITE MODE: they can run commands on your machine.");
     }
@@ -593,8 +366,8 @@ fn is_affirmative(answer: &str) -> bool {
 /// [`Error::ConfirmationRequired`] if stdin is not a terminal and `yes` is
 /// false: there is no one to ask, and sharing must never start unconfirmed.
 #[cfg(unix)]
-fn confirm_share(active: bool, write: render::WriteMode, yes: bool) -> Result<bool> {
-    eprintln!("{}", warning_copy(active, write));
+fn confirm_share(write: render::WriteMode, yes: bool) -> Result<bool> {
+    eprintln!("{}", warning_copy(write));
     if yes {
         return Ok(true);
     }
@@ -710,12 +483,12 @@ mod tests {
     use super::*;
     use crate::render::WriteMode;
 
-    /// The warning copy is user-visible and byte-frozen once shipped: pin all
-    /// four (active, write) combinations exactly.
+    /// The warning copy is user-visible and byte-frozen once shipped: pin
+    /// both write modes exactly.
     #[test]
     fn warning_copy_read_only() {
         assert_eq!(
-            warning_copy(false, WriteMode::ReadOnly),
+            warning_copy(WriteMode::ReadOnly),
             "!! Terminal sharing is experimental.\n  Everything shown here -- including secrets \
              you type -- is visible to anyone with the link."
         );
@@ -724,42 +497,18 @@ mod tests {
     #[test]
     fn warning_copy_write() {
         assert_eq!(
-            warning_copy(false, WriteMode::ReadWrite),
+            warning_copy(WriteMode::ReadWrite),
             "!! Terminal sharing is experimental.\n  Everything shown here -- including secrets \
              you type -- is visible to anyone with the link.\n  WRITE MODE: they can run commands \
              on your machine."
         );
     }
 
-    #[test]
-    fn warning_copy_active_read_only() {
-        assert_eq!(
-            warning_copy(true, WriteMode::ReadOnly),
-            "!! Terminal sharing is experimental.\n  Everything shown here -- including secrets \
-             you type -- is visible to anyone with the link.\n  Viewers will see the CURRENT \
-             contents of this terminal, including anything already on screen."
-        );
-    }
-
-    /// Both extra lines, in fixed order: active line first, write line last.
-    #[test]
-    fn warning_copy_active_write() {
-        assert_eq!(
-            warning_copy(true, WriteMode::ReadWrite),
-            "!! Terminal sharing is experimental.\n  Everything shown here -- including secrets \
-             you type -- is visible to anyone with the link.\n  Viewers will see the CURRENT \
-             contents of this terminal, including anything already on screen.\n  WRITE MODE: they \
-             can run commands on your machine."
-        );
-    }
-
     /// The copy the prompt shows must stay pure ASCII on every path.
     #[test]
     fn warning_copy_is_pure_ascii() {
-        for active in [false, true] {
-            for write in [WriteMode::ReadOnly, WriteMode::ReadWrite] {
-                assert!(warning_copy(active, write).is_ascii());
-            }
+        for write in [WriteMode::ReadOnly, WriteMode::ReadWrite] {
+            assert!(warning_copy(write).is_ascii());
         }
     }
 
@@ -785,36 +534,6 @@ mod tests {
         assert_eq!(
             Error::ConfirmationRequired.to_string(),
             "cannot confirm on a non-interactive stdin; pass --yes to share without a prompt"
-        );
-    }
-
-    /// The one-active-share-per-user refusal, shown by both the daemonized
-    /// child and the spawning parent: byte-pin it.
-    #[test]
-    fn share_already_running_display() {
-        assert_eq!(Error::ShareAlreadyRunning.to_string(), "an active share is already running");
-    }
-
-    /// A silent proxy is transient: the copy must say retry and point at
-    /// whatever holds the socket — and must never suggest starting a new
-    /// shell, which is [`Error::ProxyTooOld`]'s remedy, not this one's. It
-    /// must also not *diagnose*: "busy serving another client" is one of
-    /// several possible causes and, since connections moved onto their own
-    /// threads, no longer the likeliest. Byte-pin it, and keep it pure ASCII.
-    #[test]
-    fn proxy_unresponsive_display() {
-        let copy = Error::ProxyUnresponsive.to_string();
-        assert_eq!(
-            copy,
-            "the atuin pty-proxy socket accepted the connection but did not answer in time -- \
-             wait a moment and retry; if it persists, check what is holding the socket with `lsof \
-             $ATUIN_PTY_PROXY_SOCKET`"
-        );
-        assert!(copy.is_ascii());
-        assert!(!copy.contains("new shell"));
-        assert!(
-            !copy.contains("another client"),
-            "the copy must not assert a cause it cannot know"
         );
     }
 
@@ -883,37 +602,6 @@ mod tests {
              for the shell plus 1 reserved for the warning bar) -- resize the window, or if this \
              is a non-interactive invocation such as `script -q /dev/null ...`, give it a real \
              terminal size"
-        );
-        assert!(copy.is_ascii());
-    }
-
-    #[test]
-    fn daemonize_display() {
-        assert_eq!(
-            Error::Daemonize("boom".into()).to_string(),
-            "failed to daemonize process: boom"
-        );
-    }
-
-    /// The `--active` refusal is a first-class UX surface (the feasibility
-    /// report's section-4 copy, minus the `error:` prefix the CLI reporter
-    /// adds): byte-pin it, and keep it pure ASCII.
-    #[test]
-    fn active_refusal_copy() {
-        let copy = Error::ActiveShareUnsupported.to_string();
-        assert_eq!(
-            copy,
-            "--active can only share a session whose terminal atuin already controls.\n\
-             \n\
-             This shell is not running under atuin pty-proxy (ATUIN_PTY_PROXY_SOCKET is not\n\
-             set) or tmux. No tool can retroactively tap a terminal it does not own -- this\n\
-             is an operating-system boundary, not a missing atuin feature.\n\
-             \n\
-             To share right now:\n\
-             \x20   atuin lab share        # starts a shareable subshell; type exit when done\n\
-             \n\
-             To make --active work for future sessions, add to your ~/.zshrc:\n\
-             \x20   eval \"$(atuin pty-proxy init zsh)\""
         );
         assert!(copy.is_ascii());
     }

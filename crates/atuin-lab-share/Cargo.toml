@@ -25,15 +25,7 @@ url = { workspace = true }
 [target.'cfg(unix)'.dependencies]
 serde_json = { workspace = true }
 base64 = { workspace = true }
-# The backgrounded `--active` lifecycle (`lifecycle` module): the pidfile
-# lock that means "a share is running", and the fork step of the re-exec'd
-# child. Both follow the atuin daemon's precedent, which pins these versions.
-fs4 = "0.13.1"
-daemonize = "0.5.0"
 atuin-common = { workspace = true, features = ["unicode"] }
-# The `--active` tap speaks the proxy's subscriber protocol; no cycle —
-# atuin-pty-proxy depends only on atuin-common.
-atuin-pty-proxy = { path = "../atuin-pty-proxy", version = "18.20.0-beta.3" }
 vt100 = { workspace = true }
 crossterm = { workspace = true }
 # `features = ["full"]` at the workspace level includes `signal` and `time`;
@@ -52,9 +44,6 @@ zeroize = { version = "1", features = ["derive"] }                              
 
 [dev-dependencies]
 hex = "0.4" # frozen interop-vector literals in crypto tests
-
-[target.'cfg(unix)'.dev-dependencies]
-tempfile = { workspace = true } # a real socket path for the tap resync test
 
 [lints.clippy]
 redundant_clone = "warn"

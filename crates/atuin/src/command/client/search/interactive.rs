@@ -1503,6 +1503,10 @@ fn fetch_screen_state(socket_path: &str) -> Option<SavedScreen> {
     use std::os::unix::net::UnixStream;
 
     let mut stream = UnixStream::connect(socket_path).ok()?;
+    // We only read from this socket, but an older version of the PTY proxy might be waiting up to
+    // 100ms for us to send a magic byte we never do; shut down the write end of the socket
+    // immediately to cancel the timeout.
+    let _ = stream.shutdown(std::net::Shutdown::Write);
     stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
 
     let mut data = Vec::new();

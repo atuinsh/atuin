@@ -173,18 +173,6 @@ impl Cmd {
             daemon::daemonize_current_process()?;
         }
 
-        // Same rule for the re-exec'd `atuin lab share --active
-        // --internal-daemon` child: it must fork before the runtime exists.
-        // (`daemon::daemonize_current_process` lives behind the `daemon`
-        // feature and lab share ships in `client`-only builds, so the share's
-        // daemonize step lives in atuin-lab-share's `lifecycle`.)
-        #[cfg(unix)]
-        if let Self::Lab(ref cmd) = self
-            && cmd.should_daemonize()
-        {
-            atuin_lab_share::lifecycle::daemonize_current_process()?;
-        }
-
         #[cfg(feature = "ai")]
         let mut runtime = if matches!(&self, Self::Ai(_)) {
             tokio::runtime::Builder::new_multi_thread()
