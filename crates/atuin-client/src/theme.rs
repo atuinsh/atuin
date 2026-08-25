@@ -335,30 +335,12 @@ static BUILTIN_THEMES: LazyLock<HashMap<&'static str, Theme>> = LazyLock::new(||
             // This is the default theme with default PowerShell syntax highlighting colors.
             "default-powershell",
             HashMap::from([
-                (
-                    Meaning::SyntaxCommand,
-                    StyleFactory::from_fg_color(Color::Yellow),
-                ),
-                (
-                    Meaning::SyntaxFlag,
-                    StyleFactory::from_fg_color(Color::DarkGrey),
-                ),
-                (
-                    Meaning::SyntaxString,
-                    StyleFactory::from_fg_color(Color::DarkCyan),
-                ),
-                (
-                    Meaning::SyntaxVariable,
-                    StyleFactory::from_fg_color(Color::Green),
-                ),
-                (
-                    Meaning::SyntaxOperator,
-                    StyleFactory::from_fg_color(Color::DarkGrey),
-                ),
-                (
-                    Meaning::SyntaxComment,
-                    StyleFactory::from_fg_color(Color::DarkGreen),
-                ),
+                (Meaning::SyntaxCommand, StyleFactory::from_fg_color(Color::Yellow)),
+                (Meaning::SyntaxFlag, StyleFactory::from_fg_color(Color::DarkGrey)),
+                (Meaning::SyntaxString, StyleFactory::from_fg_color(Color::DarkCyan)),
+                (Meaning::SyntaxVariable, StyleFactory::from_fg_color(Color::Green)),
+                (Meaning::SyntaxOperator, StyleFactory::from_fg_color(Color::DarkGrey)),
+                (Meaning::SyntaxComment, StyleFactory::from_fg_color(Color::DarkGreen)),
             ]),
         ),
     ])
