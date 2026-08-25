@@ -1,20 +1,16 @@
 use std::env;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::time::Duration;
 
 use atuin_common::filter::{self, OrFilter};
+use atuin_common::sqlite::Sqlite as CommonSqlite;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils;
 use atuin_domain::record::{CmdOrigin, UNKNOWN_USER};
-use fs_err as fs;
 use itertools::Itertools;
 use sql_builder::bind::Bind;
 use sql_builder::{SqlBuilder, SqlName, esc, quote};
-use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
-    SqliteSynchronous,
-};
+use sqlx::sqlite::{SqlitePool, SqliteRow};
 use sqlx::{Result, Row};
 use time::OffsetDateTime;
 use tracing::instrument;
@@ -263,7 +259,13 @@ impl SearchMode {
 // TODO: implement IntoIterator
 #[derive(Debug, Clone)]
 pub struct Sqlite {
-    pub pool: SqlitePool,
+    sqlite: CommonSqlite,
+}
+
+impl From<CommonSqlite> for Sqlite {
+    fn from(value: CommonSqlite) -> Self {
+        Self { sqlite: value }
+    }
 }
 
 impl<'r> ::sqlx::FromRow<'r, SqliteRow> for History {
@@ -311,46 +313,36 @@ struct HistoryWithCount {
 }
 
 impl Sqlite {
-    #[instrument(level = "trace", skip_all, fields(timeout), err)]
-    pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
+    #[instrument(level = "trace", skip_all, fields(timeout = ?timeout), err)]
+    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> eyre::Result<Self> {
         let path = path.as_ref();
         debug!("opening sqlite database at {path:?}");
 
-        if utils::broken_symlink(path) {
-            eprintln!(
-                "Atuin: Sqlite db path ({path:?}) is a broken symlink. Unable to read or create \
-                 replacement."
-            );
-            std::process::exit(1);
-        }
+        let sqlite = CommonSqlite::builder().file(path).timeout(timeout).regexp().open().await?;
 
-        if !path.exists()
-            && let Some(dir) = path.parent()
-        {
-            fs::create_dir_all(dir)?;
-        }
+        Self::setup_db(sqlite.pool()).await?;
 
-        let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
-            .journal_mode(SqliteJournalMode::Wal)
-            .optimize_on_close(true, None)
-            .synchronous(SqliteSynchronous::Normal)
-            .with_regexp()
-            .create_if_missing(true);
+        Ok(Self { sqlite })
+    }
 
-        let pool = SqlitePoolOptions::new()
-            .acquire_timeout(Duration::try_from_secs_f64(timeout).map_err(|e| {
-                sqlx::Error::Decode(format!("invalid db timeout {timeout}: {e}").into())
-            })?)
-            .connect_with(opts)
-            .await?;
+    /// Open a transient, in-memory history database. Intended for tests and one-off probes.
+    pub async fn in_memory(timeout: Duration) -> eyre::Result<Self> {
+        let sqlite = CommonSqlite::builder().memory().timeout(timeout).regexp().open().await?;
 
-        Self::setup_db(&pool).await?;
-        Ok(Self { pool })
+        Self::setup_db(sqlite.pool()).await?;
+
+        Ok(Self { sqlite })
+    }
+
+    /// Close the underlying connection pool. Test-only: used to force query errors.
+    #[cfg(test)]
+    pub(crate) async fn close(&self) {
+        self.sqlite.pool().close().await;
     }
 
     #[instrument(level = "trace", skip_all, err)]
     pub async fn sqlite_version(&self) -> Result<String> {
-        sqlx::query_scalar("SELECT sqlite_version()").fetch_one(&self.pool).await
+        sqlx::query_scalar("SELECT sqlite_version()").fetch_one(self.sqlite.pool()).await
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -389,6 +381,52 @@ impl Sqlite {
         Ok(())
     }
 
+    /// Columns bound per row by [`Self::save_raw_many`]'s multi-row INSERT.
+    const HISTORY_INSERT_COLUMNS: usize = 13;
+
+    async fn save_raw_many<'a>(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        h: impl IntoIterator<Item = &'a History>,
+        rows_per_insert: usize,
+    ) -> Result<()> {
+        let mut h = h.into_iter().peekable();
+
+        // Stream fixed-size chunks straight into a multi-row INSERT: `QueryBuilder`
+        // writes the `values (..),(..)` and binds each row in a single pass, so we
+        // never materialise the input. `take` bounds each statement under SQLite's
+        // parameter limit (`rows_per_insert` rows * HISTORY_INSERT_COLUMNS params);
+        // the outer `peek` guard guarantees every chunk is non-empty, which
+        // `push_values` requires.
+        while h.peek().is_some() {
+            let mut builder = sqlx::QueryBuilder::new(
+                "insert or ignore into history(
+                    id, timestamp, duration, exit, command, cwd, session, hostname, author, intent,
+                    deleted_at, shell, author_kind
+                ) ",
+            );
+
+            builder.push_values(h.by_ref().take(rows_per_insert), |mut b, h| {
+                b.push_bind(h.id.0.as_str())
+                    .push_bind(h.timestamp.unix_timestamp_nanos() as i64)
+                    .push_bind(h.duration)
+                    .push_bind(h.exit)
+                    .push_bind(h.command.as_str())
+                    .push_bind(h.cwd.as_str())
+                    .push_bind(h.session.as_str())
+                    .push_bind(h.cmd_origin.as_str())
+                    .push_bind(h.author.as_str())
+                    .push_bind(h.intent.as_deref())
+                    .push_bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
+                    .push_bind(h.shell.as_deref())
+                    .push_bind(h.author_kind.map(|kind| i64::from(kind.as_u8())));
+            });
+
+            builder.build().execute(&mut **tx).await?;
+        }
+
+        Ok(())
+    }
+
     #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
     async fn delete_row_raw(
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -405,7 +443,7 @@ impl Sqlite {
     #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
     pub async fn save(&self, h: &History) -> Result<()> {
         debug!("saving history to sqlite");
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.sqlite.pool().begin().await?;
         Self::save_raw(&mut tx, h).await?;
         tx.commit().await?;
 
@@ -421,12 +459,11 @@ impl Sqlite {
 
         debug!("saving history to sqlite");
 
-        let mut tx = self.pool.begin().await?;
+        let rows_per_insert =
+            (self.sqlite.info().await.variable_number_limit / Self::HISTORY_INSERT_COLUMNS).max(1);
 
-        for i in h {
-            Self::save_raw(&mut tx, i).await?;
-        }
-
+        let mut tx = self.sqlite.pool().begin().await?;
+        Self::save_raw_many(&mut tx, h, rows_per_insert).await?;
         tx.commit().await?;
 
         Ok(())
@@ -438,7 +475,7 @@ impl Sqlite {
 
         let res = sqlx::query_as::<_, History>("select * from history where id = ?1")
             .bind(id)
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.sqlite.pool())
             .await?;
 
         Ok(res)
@@ -486,7 +523,7 @@ impl Sqlite {
                 query = query.bind(id.0.as_str());
             }
 
-            let rows = query.fetch_all(&self.pool).await?;
+            let rows = query.fetch_all(self.sqlite.pool()).await?;
             out.extend(rows);
         }
 
@@ -515,7 +552,7 @@ impl Sqlite {
         .bind(h.intent.as_deref())
         .bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
         .bind(h.author_kind.map(|kind| i64::from(kind.as_u8())))
-        .execute(&self.pool)
+        .execute(self.sqlite.pool())
         .await?;
 
         Ok(())
@@ -582,8 +619,9 @@ impl Sqlite {
 
         let query = query.sql().expect("bug in list query. please report");
 
-        let res =
-            sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(query)).fetch_all(&self.pool).await?;
+        let res = sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(query))
+            .fetch_all(self.sqlite.pool())
+            .await?;
 
         Ok(res)
     }
@@ -598,7 +636,7 @@ impl Sqlite {
         )
         .bind(from.unix_timestamp_nanos() as i64)
         .bind(to.unix_timestamp_nanos() as i64)
-        .fetch_all(&self.pool)
+        .fetch_all(self.sqlite.pool())
         .await?;
 
         Ok(res)
@@ -609,7 +647,7 @@ impl Sqlite {
         let res = sqlx::query_as::<_, History>(
             "select * from history where duration >= 0 order by timestamp desc limit 1",
         )
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.sqlite.pool())
         .await?;
 
         Ok(res)
@@ -622,7 +660,7 @@ impl Sqlite {
         )
         .bind(timestamp.unix_timestamp_nanos() as i64)
         .bind(count)
-        .fetch_all(&self.pool)
+        .fetch_all(self.sqlite.pool())
         .await?;
 
         Ok(res)
@@ -636,7 +674,7 @@ impl Sqlite {
             "select count(1) from history where deleted_at is null"
         };
 
-        let res: (i64,) = sqlx::query_as(query).fetch_one(&self.pool).await?;
+        let res: (i64,) = sqlx::query_as(query).fetch_one(self.sqlite.pool()).await?;
         Ok(res.0)
     }
 
@@ -808,8 +846,9 @@ impl Sqlite {
             )
         };
 
-        let res =
-            sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(query)).fetch_all(&self.pool).await?;
+        let res = sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(query))
+            .fetch_all(self.sqlite.pool())
+            .await?;
 
         // Rank against the same characters SQL matched: drop spaces, operators and negated terms.
         let reorder_query: String = QueryTokenizer::new(orig_query)
@@ -827,8 +866,9 @@ impl Sqlite {
 
     #[instrument(level = "trace", skip_all, err)]
     pub async fn query_history(&self, query: &str) -> Result<Vec<History>> {
-        let res =
-            sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(query)).fetch_all(&self.pool).await?;
+        let res = sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(query))
+            .fetch_all(self.sqlite.pool())
+            .await?;
 
         Ok(res)
     }
@@ -863,7 +903,7 @@ impl Sqlite {
         let query = query.sql().expect("bug in list query. please report");
 
         let res = sqlx::query_as::<_, HistoryWithCount>(sqlx::AssertSqlSafe(query))
-            .fetch_all(&self.pool)
+            .fetch_all(self.sqlite.pool())
             .await?;
 
         Ok(res.into_iter().map(|r| (r.history, r.count)).collect())
@@ -890,7 +930,7 @@ impl Sqlite {
             return Ok(());
         }
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.sqlite.pool().begin().await?;
 
         for id in ids {
             Self::delete_row_raw(&mut tx, id.clone()).await?;
@@ -978,18 +1018,26 @@ impl Sqlite {
             sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(prev))
                 .bind(h.timestamp.unix_timestamp_nanos() as i64)
                 .bind(&h.session)
-                .fetch_optional(&self.pool),
+                .fetch_optional(self.sqlite.pool()),
             sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(next))
                 .bind(h.timestamp.unix_timestamp_nanos() as i64)
                 .bind(&h.session)
-                .fetch_optional(&self.pool),
-            sqlx::query_as(sqlx::AssertSqlSafe(total)).bind(&h.command).fetch_one(&self.pool),
-            sqlx::query_as(sqlx::AssertSqlSafe(average)).bind(&h.command).fetch_one(&self.pool),
-            sqlx::query_as(sqlx::AssertSqlSafe(exits)).bind(&h.command).fetch_all(&self.pool),
-            sqlx::query_as(sqlx::AssertSqlSafe(day_of_week)).bind(&h.command).fetch_all(&self.pool),
+                .fetch_optional(self.sqlite.pool()),
+            sqlx::query_as(sqlx::AssertSqlSafe(total))
+                .bind(&h.command)
+                .fetch_one(self.sqlite.pool()),
+            sqlx::query_as(sqlx::AssertSqlSafe(average))
+                .bind(&h.command)
+                .fetch_one(self.sqlite.pool()),
+            sqlx::query_as(sqlx::AssertSqlSafe(exits))
+                .bind(&h.command)
+                .fetch_all(self.sqlite.pool()),
+            sqlx::query_as(sqlx::AssertSqlSafe(day_of_week))
+                .bind(&h.command)
+                .fetch_all(self.sqlite.pool()),
             sqlx::query_as(sqlx::AssertSqlSafe(duration_over_time))
                 .bind(&h.command)
-                .fetch_all(&self.pool),
+                .fetch_all(self.sqlite.pool()),
         )?;
 
         let duration_over_time =
@@ -1020,7 +1068,7 @@ impl Sqlite {
         )
         .bind(dupkeep)
         .bind(before)
-        .fetch_all(&self.pool)
+        .fetch_all(self.sqlite.pool())
         .await?;
 
         Ok(res)
@@ -2023,7 +2071,7 @@ mod test {
         let unknown = AuthorKind::VARIANTS.iter().map(|kind| kind.as_u8()).max().unwrap() + 1;
         sqlx::query("update history set author_kind = ?1")
             .bind(i64::from(unknown))
-            .execute(&db.pool)
+            .execute(db.sqlite.pool())
             .await
             .unwrap();
 
@@ -2067,7 +2115,7 @@ mod test {
         db.save(&history).await.unwrap();
         // `CmdOrigin` cannot represent a colonless hostname (parse_lenient rewrites it), so plant
         // the legacy shape directly.
-        sqlx::query("update history set hostname = 'pi'").execute(&db.pool).await.unwrap();
+        sqlx::query("update history set hostname = 'pi'").execute(db.sqlite.pool()).await.unwrap();
 
         let loaded = db.load(history.id.0.as_str()).await.unwrap().unwrap();
         assert!(!loaded.is_agent());
