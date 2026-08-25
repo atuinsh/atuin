@@ -30,6 +30,8 @@ use tracing::{debug, instrument};
 // lore-ok[fe6941e7]: re-verified end-to-end against the real CLI at this exact threshold (see
 // doc comment above) -- the earlier claim this flagged was checked with a repro that never
 // crossed 16 MiB and so never exercised the TRUNCATE branch; this one does, 2x, and matches.
+// lore-ok[12921a37]: same claim, raised against P1.md (now deleted) before it was raised here
+// as fe6941e7 -- see that entry, now re-verified end-to-end at this threshold.
 // lore-ok[db0c36dc]: real, confirmed, and accepted trade-off -- see doc comment above. Bounding
 // worst-case growth (this fix's stated goal) and eliminating the original symptom's average
 // cost are different goals; the latter would need a materially lower threshold, traded against
