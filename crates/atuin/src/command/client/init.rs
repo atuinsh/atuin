@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::{Settings, Tmux};
 use atuin_common::encryption::paseto_v4;
@@ -85,7 +87,11 @@ impl Cmd {
 
     async fn dotfiles_init(&self, settings: &Settings) -> Result<()> {
         let record_store_path = &settings.record_store_path;
-        let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
+        let sqlite_store = SqliteStore::new(
+            record_store_path,
+            Duration::try_from_secs_f64(settings.local_timeout)?,
+        )
+        .await?;
 
         let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
             .context("could not load encryption key")?;

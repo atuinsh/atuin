@@ -71,7 +71,11 @@ impl Cmd {
 
         let host_id = Settings::host_id().await?;
 
-        let kv_db = atuin_kv::database::Database::new(settings.kv.db_path.clone(), 1.0).await?;
+        let kv_db = atuin_kv::database::Database::new(
+            settings.kv.db_path.clone(),
+            std::time::Duration::from_secs(1),
+        )
+        .await?;
         let kv_store = KvStore::new(store.clone(), kv_db, host_id, encryption_key);
 
         match self {

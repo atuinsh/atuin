@@ -183,8 +183,9 @@ mod tests {
 
     #[fixture]
     async fn store() -> KvStore {
-        let record_store = SqliteStore::new("sqlite::memory:", 1.0).await.unwrap();
-        let kv_db = Database::new("sqlite::memory:", 1.0).await.unwrap();
+        let record_store =
+            SqliteStore::new(":memory:", std::time::Duration::from_secs(1)).await.unwrap();
+        let kv_db = Database::new(":memory:", std::time::Duration::from_secs(1)).await.unwrap();
         let host_id = atuin_domain::record::HostId(atuin_common::utils::uuid_v7());
         let encryption_key = paseto_v4::Key::from([0; 32]);
         KvStore::new(record_store, kv_db, host_id, encryption_key)

@@ -2,11 +2,12 @@ use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 use std::str::FromStr;
+use std::time::Duration;
 
 use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
+use atuin_common::path::PathExt;
 use atuin_common::shell::{Shell, shell_name};
-use atuin_common::utils;
 use colored::Colorize;
 use eyre::Result;
 use serde::Serialize;
@@ -308,7 +309,7 @@ impl SettingPaths {
         ];
 
         for (path_env_var, path) in paths {
-            if utils::broken_symlink(path.as_path()) {
+            if path.as_path().is_dangling_symlink() {
                 eprintln!(
                     "{} (${path_env_var}) is a broken symlink. This may cause issues with Atuin.",
                     path.display()
@@ -345,7 +346,7 @@ impl AtuinInfo {
             None
         };
 
-        let sqlite_version = match Sqlite::new("sqlite::memory:", 0.1).await {
+        let sqlite_version = match Sqlite::new(":memory:", Duration::from_millis(100)).await {
             Ok(db) => db.sqlite_version().await.unwrap_or_else(|_| "unknown".to_string()),
             Err(_) => "error".to_string(),
         };

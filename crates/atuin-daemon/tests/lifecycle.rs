@@ -53,8 +53,8 @@ mod unix {
             .expect("could not deserialize settings");
 
         // Create databases
-        let history_db = Sqlite::new(&db_path, 5.0).await.unwrap();
-        let store = SqliteStore::new(&record_path, 5.0).await.unwrap();
+        let history_db = Sqlite::new(&db_path, Duration::from_secs(5)).await.unwrap();
+        let store = SqliteStore::new(&record_path, Duration::from_secs(5)).await.unwrap();
 
         // Create the history component and get its gRPC service
         let history_component = HistoryComponent::new();
