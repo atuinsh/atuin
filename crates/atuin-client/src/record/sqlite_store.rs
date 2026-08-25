@@ -66,7 +66,7 @@ impl SqliteStore {
 
         debug!("opening sqlite database at {path:?}");
 
-        let sqlite = Sqlite::builder().file(path).timeout(timeout).open().await?;
+        let sqlite = Sqlite::builder(path).timeout(timeout).open().await?;
 
         Self::setup_db(sqlite.pool()).await?;
 

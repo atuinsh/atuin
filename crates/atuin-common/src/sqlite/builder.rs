@@ -7,16 +7,6 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous};
 use super::{Sqlite, SqliteOpenOrCreateError};
 use crate::path::PathExt;
 
-pub struct SqliteBuilderRoot;
-
-#[allow(clippy::unused_self)]
-impl SqliteBuilderRoot {
-    #[must_use]
-    pub fn file<P: AsRef<Path>>(self, path: P) -> SqliteBuilder<P> {
-        SqliteBuilder::new(path)
-    }
-}
-
 pub struct SqliteBuilder<P> {
     path: P,
     timeout: Duration,
@@ -28,7 +18,7 @@ pub struct SqliteBuilder<P> {
 }
 
 impl<P: AsRef<Path>> SqliteBuilder<P> {
-    fn new(path: P) -> Self {
+    pub(super) fn new(path: P) -> Self {
         Self {
             path,
             timeout: Duration::from_secs(5),

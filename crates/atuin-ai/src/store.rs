@@ -41,8 +41,7 @@ pub struct AiSessionStore {
 
 impl AiSessionStore {
     pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> Result<Self> {
-        let sqlite = Sqlite::builder()
-            .file(path)
+        let sqlite = Sqlite::builder(path)
             .timeout(timeout)
             .foreign_keys(false)
             .restrict_permissions()

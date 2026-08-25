@@ -38,8 +38,7 @@ impl MetaStore {
 
         let is_memory = path.to_str().is_some_and(|p| p.contains(":memory:"));
 
-        let sqlite = Sqlite::builder()
-            .file(path)
+        let sqlite = Sqlite::builder(path)
             .timeout(timeout)
             .journal(SqliteJournalMode::Delete)
             .foreign_keys(false)

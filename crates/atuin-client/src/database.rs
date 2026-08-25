@@ -318,7 +318,7 @@ impl Sqlite {
         let path = path.as_ref();
         debug!("opening sqlite database at {path:?}");
 
-        let sqlite = CommonSqlite::builder().file(path).timeout(timeout).regexp().open().await?;
+        let sqlite = CommonSqlite::builder(path).timeout(timeout).regexp().open().await?;
 
         Self::setup_db(sqlite.pool()).await?;
 

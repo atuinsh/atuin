@@ -18,8 +18,7 @@ impl Database {
         let path = path.as_ref();
         debug!("opening KV sqlite database at {:?}", path);
 
-        let sqlite = Sqlite::builder()
-            .file(path)
+        let sqlite = Sqlite::builder(path)
             .timeout(timeout)
             .regexp()
             .open()

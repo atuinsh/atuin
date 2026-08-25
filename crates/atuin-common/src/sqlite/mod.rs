@@ -3,10 +3,10 @@
 mod builder;
 mod info;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub use builder::{SqliteBuilder, SqliteBuilderRoot};
+pub use builder::SqliteBuilder;
 pub use info::{Info, VersionError};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use thiserror::Error;
@@ -46,8 +46,8 @@ pub enum SqliteOpenOrCreateError {
 
 impl Sqlite {
     #[must_use]
-    pub fn builder() -> SqliteBuilderRoot {
-        SqliteBuilderRoot
+    pub fn builder<P: AsRef<Path>>(path: P) -> SqliteBuilder<P> {
+        SqliteBuilder::new(path)
     }
 
     async fn connect(
