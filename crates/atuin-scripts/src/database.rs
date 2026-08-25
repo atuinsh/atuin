@@ -14,16 +14,11 @@ pub struct Database {
 }
 
 impl Database {
-    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> Result<Self> {
+    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> eyre::Result<Self> {
         let path = path.as_ref();
         debug!("opening script sqlite database at {:?}", path);
 
-        let sqlite = Sqlite::builder(path)
-            .timeout(timeout)
-            .regexp()
-            .open()
-            .await
-            .map_err(|e| sqlx::Error::Configuration(Box::new(e)))?;
+        let sqlite = Sqlite::builder(path).timeout(timeout).regexp().open().await?;
 
         Self::setup_db(sqlite.pool()).await?;
 
