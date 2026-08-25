@@ -97,20 +97,10 @@ impl SqliteStore {
             .await?;
 
         Self::setup_db(&pool).await?;
-        sqlite::checkpoint_wal_if_needed(
-            &pool,
-            path,
-            sqlite::DEFAULT_WAL_CHECKPOINT_THRESHOLD_BYTES,
-        )
-        .await;
+        sqlite::checkpoint_wal_if_needed(path, sqlite::DEFAULT_WAL_CHECKPOINT_THRESHOLD_BYTES)
+            .await;
 
         Ok(Self { pool })
-    }
-
-    /// The underlying connection pool, for maintenance tasks (e.g. periodic WAL
-    /// checkpointing) that need to act on it outside of `SqliteStore`'s own query methods.
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
     }
 
     #[instrument(level = "trace", skip_all, err)]

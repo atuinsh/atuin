@@ -97,8 +97,13 @@ pub async fn boot(
         signal_handle.shutdown();
     });
 
-    // lore-ok[7ac532e2]: this code, the timeout, and the pool() accessor are now committed and
-    // pushed to the branch (were an unpushed local commit when this was first raised).
+    // lore-ok[7ac532e2]: this code and the timeout are now committed and pushed to the branch
+    // (were an unpushed local commit when this was first raised).
+    // lore-ok[3aece060]: fixed by capturing these paths once, here, from the same `settings`
+    // value the caller used to open history_db/store, instead of re-reading live settings on
+    // every tick -- see the comment below.
+    // lore-ok[ebfc3070]: same fix as 3aece060, same reasoning.
+    //
     // Spawn periodic WAL checkpointing for the daemon's own pools.
     //
     // checkpoint_wal_if_needed also runs once inline when history_db/store were opened
@@ -106,7 +111,15 @@ pub async fn boot(
     // entire lifetime rather than opening a fresh one per hook like the CLI does -- so
     // without this, the WAL would only ever be truncated once, at daemon startup, and then
     // grow unbounded for as long as the daemon keeps running.
-    let checkpoint_handle = handle.clone();
+    //
+    // Deliberately captures these two paths once, now, rather than re-reading
+    // `handle.settings()` on every tick: history_db/store are fixed pools for the daemon's
+    // whole lifetime (a config reload swaps the `Settings` value but never reopens them, see
+    // `DaemonHandle::apply_settings`), so the paths worth checkpointing are the ones that were
+    // true when those pools were opened -- i.e. these, not whatever `db_path`/
+    // `record_store_path` happen to be after a later reload.
+    let history_db_path = settings.db_path.clone();
+    let record_store_path = settings.record_store_path.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(WAL_CHECKPOINT_INTERVAL);
         interval.tick().await; // first tick fires immediately; skip it, boot already checked
@@ -114,19 +127,12 @@ pub async fn boot(
         loop {
             interval.tick().await;
 
-            let settings = checkpoint_handle.settings().await;
-            let history_db_path = settings.db_path.clone();
-            let record_store_path = settings.record_store_path.clone();
-            drop(settings);
-
             atuin_common::sqlite::checkpoint_wal_if_needed(
-                &checkpoint_handle.history_db().pool,
                 &history_db_path,
                 atuin_common::sqlite::DEFAULT_WAL_CHECKPOINT_THRESHOLD_BYTES,
             )
             .await;
             atuin_common::sqlite::checkpoint_wal_if_needed(
-                checkpoint_handle.store().pool(),
                 &record_store_path,
                 atuin_common::sqlite::DEFAULT_WAL_CHECKPOINT_THRESHOLD_BYTES,
             )

@@ -345,12 +345,8 @@ impl Sqlite {
             .await?;
 
         Self::setup_db(&pool).await?;
-        sqlite::checkpoint_wal_if_needed(
-            &pool,
-            path,
-            sqlite::DEFAULT_WAL_CHECKPOINT_THRESHOLD_BYTES,
-        )
-        .await;
+        sqlite::checkpoint_wal_if_needed(path, sqlite::DEFAULT_WAL_CHECKPOINT_THRESHOLD_BYTES)
+            .await;
         Ok(Self { pool })
     }
 

@@ -71,12 +71,8 @@ impl AiSessionStore {
         sqlx::migrate!("./migrations").run(&pool).await?;
 
         if !is_memory {
-            sqlite::checkpoint_wal_if_needed(
-                &pool,
-                path,
-                sqlite::DEFAULT_WAL_CHECKPOINT_THRESHOLD_BYTES,
-            )
-            .await;
+            sqlite::checkpoint_wal_if_needed(path, sqlite::DEFAULT_WAL_CHECKPOINT_THRESHOLD_BYTES)
+                .await;
         }
 
         #[cfg(unix)]
