@@ -15,7 +15,7 @@ readme.workspace = true
 
 [dependencies]
 atuin-client = { path = "../atuin-client", version = "18.20.0-beta.3" }
-atuin-common = { path = "../atuin-common", version = "18.20.0-beta.3" }
+atuin-common = { path = "../atuin-common", version = "18.20.0-beta.3", features = ["sqlite"] }
 atuin-domain = { path = "../atuin-domain", version = "18.20.0-beta.3" }
 derive_more = { workspace = true }
 
@@ -30,6 +30,7 @@ typed-builder = { workspace = true }
 pretty_assertions = { workspace = true }
 sql-builder = { workspace = true }
 sqlx = { workspace = true }
+futures = "0.3"
 tempfile = { workspace = true }
 minijinja = { workspace = true }
 serde_json = { workspace = true }

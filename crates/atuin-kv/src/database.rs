@@ -1,213 +1,125 @@
 use std::path::Path;
-use std::str::FromStr;
 use std::time::Duration;
 
-use atuin_common::utils;
+use atuin_common::sqlite::{Sqlite, TableView};
+use atuin_common::table;
 use sqlx::Result;
-use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
-};
-use tokio::fs;
-use tracing::debug;
 
 use crate::store::entry::KvEntry;
 
+table!(KvEntry {
+    name: "kv",
+    key: ["namespace", "key"],
+    conflict: upsert,
+    columns: {
+        namespace => |e| e.namespace.as_str(),
+        key       => |e| e.key.as_str(),
+        value     => |e| e.value.as_str(),
+    },
+});
+
 #[derive(Debug, Clone)]
 pub struct Database {
-    pub pool: SqlitePool,
+    table: TableView<KvEntry>,
 }
 
 impl Database {
-    pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
-        let path = path.as_ref();
-        debug!("opening KV sqlite database at {:?}", path);
-
-        if utils::broken_symlink(path) {
-            eprintln!(
-                "Atuin: KV sqlite db path ({path:?}) is a broken symlink. Unable to read or \
-                 create replacement."
-            );
-            std::process::exit(1);
-        }
-
-        if !path.exists()
-            && let Some(dir) = path.parent()
-        {
-            fs::create_dir_all(dir).await?;
-        }
-
-        let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
-            .journal_mode(SqliteJournalMode::Wal)
-            .optimize_on_close(true, None)
-            .synchronous(SqliteSynchronous::Normal)
-            .with_regexp()
-            .foreign_keys(true)
-            .create_if_missing(true);
-
-        let pool = SqlitePoolOptions::new()
-            .acquire_timeout(Duration::try_from_secs_f64(timeout).map_err(|e| {
-                sqlx::Error::Decode(format!("invalid db timeout {timeout}: {e}").into())
-            })?)
-            .connect_with(opts)
+    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> eyre::Result<Self> {
+        let sqlite = Sqlite::builder()
+            .file(path)
+            .timeout(timeout)
+            .with_migrations(sqlx::migrate!("./migrations"))
+            .open()
             .await?;
 
-        Self::setup_db(&pool).await?;
-        Ok(Self { pool })
+        let table = TableView::new(sqlite);
+        Ok(Self { table })
     }
 
-    pub async fn sqlite_version(&self) -> Result<String> {
-        sqlx::query_scalar("SELECT sqlite_version()").fetch_one(&self.pool).await
-    }
-
-    async fn setup_db(pool: &SqlitePool) -> Result<()> {
-        debug!("running sqlite database setup");
-
-        sqlx::migrate!("./migrations").run(pool).await?;
-
-        Ok(())
-    }
-
-    async fn save_raw(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, e: &KvEntry) -> Result<()> {
-        sqlx::query(
-            "insert into kv(namespace, key, value)
-                values(?1, ?2, ?3)
-                on conflict(namespace, key) do update set
-                    namespace = excluded.namespace,
-                    key = excluded.key,
-                    value = excluded.value",
-        )
-        .bind(e.namespace.as_str())
-        .bind(e.key.as_str())
-        .bind(e.value.as_str())
-        .execute(&mut **tx)
-        .await?;
-
-        Ok(())
-    }
-
-    async fn delete_raw(
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-        namespace: &str,
-        key: &str,
-    ) -> Result<()> {
-        sqlx::query("delete from kv where namespace = ?1 and key = ?2")
-            .bind(namespace)
-            .bind(key)
-            .execute(&mut **tx)
+    pub async fn in_memory(timeout: Duration) -> eyre::Result<Self> {
+        let sqlite = Sqlite::builder()
+            .memory()
+            .timeout(timeout)
+            .with_migrations(sqlx::migrate!("./migrations"))
+            .open()
             .await?;
-        Ok(())
+
+        let table = TableView::new(sqlite);
+        Ok(Self { table })
     }
 
     pub async fn save(&self, e: &KvEntry) -> Result<()> {
-        debug!("saving kv entry to sqlite");
-        let mut tx = self.pool.begin().await?;
-        Self::save_raw(&mut tx, e).await?;
-        tx.commit().await?;
-
-        Ok(())
+        self.table.insert_one(e).await
     }
 
     pub async fn delete(&self, namespace: &str, key: &str) -> Result<()> {
-        debug!("deleting kv entry {namespace}/{key}");
-
-        let mut tx = self.pool.begin().await?;
-        Self::delete_raw(&mut tx, namespace, key).await?;
-        tx.commit().await?;
-
-        Ok(())
+        self.table.delete((namespace, key)).await
     }
 
     pub async fn load(&self, namespace: &str, key: &str) -> Result<Option<KvEntry>> {
-        debug!("loading kv entry {namespace}.{key}");
-
-        let res =
-            sqlx::query_as::<_, KvEntry>("select * from kv where namespace = ?1 and key = ?2")
-                .bind(namespace)
-                .bind(key)
-                .fetch_optional(&self.pool)
-                .await?;
-
-        Ok(res)
+        self.table.get((namespace, key)).await
     }
 
-    pub async fn list(&self, namespace: Option<&str>) -> Result<Vec<KvEntry>> {
-        debug!("listing kv entries");
+    /// Stream the entries in a single namespace, ordered by key.
+    pub fn list<'a>(
+        &'a self,
+        namespace: &'a str,
+    ) -> impl futures::Stream<Item = Result<KvEntry>> + Send + 'a {
+        self.table.filter_by(KvEntry::namespace, namespace)
+    }
 
-        let res = if let Some(namespace) = namespace {
-            sqlx::query_as::<_, KvEntry>("select * from kv where namespace = ?1 order by key asc")
-                .bind(namespace)
-                .fetch_all(&self.pool)
-                .await?
-        } else {
-            sqlx::query_as::<_, KvEntry>("select * from kv order by namespace, key asc")
-                .fetch_all(&self.pool)
-                .await?
-        };
-
-        Ok(res)
+    /// Stream every entry, ordered by namespace then key.
+    pub fn list_all(&self) -> impl futures::Stream<Item = Result<KvEntry>> + Send + '_ {
+        self.table.all_ordered()
     }
 }
 
 #[cfg(test)]
 mod test {
+    use futures::TryStreamExt;
     use rstest::*;
 
     use super::*;
 
     #[fixture]
     async fn db() -> Database {
-        Database::new("sqlite::memory:", 1.0).await.unwrap()
+        Database::in_memory(Duration::from_secs(1)).await.unwrap()
     }
 
-    #[fixture]
-    fn entry() -> KvEntry {
+    fn kv(namespace: &str, key: &str, value: &str) -> KvEntry {
         KvEntry {
-            namespace: "test".to_string(),
-            key: "test".to_string(),
-            value: "test".to_string(),
+            namespace: namespace.into(),
+            key: key.into(),
+            value: value.into(),
         }
     }
 
+    /// The only thing this layer adds over `TableView` (exhaustively tested in
+    /// `atuin-common`) is the wiring, which those tests can't reach: the real
+    /// migration DDL must match the `table!(KvEntry)` schema, `FromRow` must map
+    /// each column correctly, and the wrapper must pass the composite
+    /// `(namespace, key)` in the right order. Distinct per-column values catch a
+    /// column/`FromRow` drift; two entries sharing a namespace exercise the
+    /// composite key and `list` filtering.
     #[rstest]
     #[tokio::test]
-    async fn test_list(#[future] db: Database, entry: KvEntry) {
-        let db = db.await;
+    async fn kventry_roundtrips_through_real_schema(#[future(awt)] db: Database) {
+        db.save(&kv("ns", "a", "va")).await.unwrap();
+        db.save(&kv("ns", "b", "vb")).await.unwrap();
+        db.save(&kv("other", "a", "vo")).await.unwrap();
 
-        let scripts = db.list(None).await.unwrap();
-        assert_eq!(scripts.len(), 0);
+        // The full composite key disambiguates same-key/different-namespace rows.
+        assert_eq!(db.load("ns", "a").await.unwrap().unwrap(), kv("ns", "a", "va"));
 
-        db.save(&entry).await.unwrap();
+        // `list(namespace)` filters to one namespace, ordered by key.
+        let ns: Vec<KvEntry> = db.list("ns").try_collect().await.unwrap();
+        assert_eq!(ns.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(), ["a", "b"]);
 
-        let entries = db.list(None).await.unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].namespace, "test");
-        assert_eq!(entries[0].key, "test");
-        assert_eq!(entries[0].value, "test");
-    }
+        // `list_all` streams every namespace.
+        assert_eq!(db.list_all().try_collect::<Vec<_>>().await.unwrap().len(), 3);
 
-    #[rstest]
-    #[tokio::test]
-    async fn test_save_load(#[future] db: Database, entry: KvEntry) {
-        let db = db.await;
-
-        db.save(&entry).await.unwrap();
-
-        let loaded = db.load(&entry.namespace, &entry.key).await.unwrap().unwrap();
-
-        assert_eq!(loaded, entry);
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn test_delete(#[future] db: Database, entry: KvEntry) {
-        let db = db.await;
-
-        db.save(&entry).await.unwrap();
-
-        assert_eq!(db.list(None).await.unwrap().len(), 1);
-        db.delete(&entry.namespace, &entry.key).await.unwrap();
-
-        let loaded = db.list(None).await.unwrap();
-        assert_eq!(loaded.len(), 0);
+        db.delete("ns", "a").await.unwrap();
+        assert!(db.load("ns", "a").await.unwrap().is_none());
+        assert_eq!(db.list_all().try_collect::<Vec<_>>().await.unwrap().len(), 2);
     }
 }

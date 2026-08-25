@@ -43,3 +43,60 @@ impl Measure {
         }
     }
 }
+
+/// Const-time membership test: is `name` one of `candidates`?
+#[must_use]
+pub const fn is_one_of(name: &str, candidates: &[&str]) -> bool {
+    let name = name.as_bytes();
+    let mut i = 0;
+    while i < candidates.len() {
+        let c = candidates[i].as_bytes();
+        if c.len() == name.len() {
+            let mut j = 0;
+            let mut eq = true;
+            while j < name.len() {
+                if name[j] != c[j] {
+                    eq = false;
+                    break;
+                }
+                j += 1;
+            }
+            if eq {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Const-time string equality: are `a` and `b` byte-for-byte equal?
+#[must_use]
+pub const fn str_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// Return `s` without its last `n` bytes.
+#[must_use]
+pub const fn strip_tail(s: &str, n: usize) -> &str {
+    let b = s.as_bytes();
+    if b.is_empty() {
+        return "";
+    }
+    assert!(b.len() >= n, "strip_tail: n exceeds the length of a non-empty string");
+    match core::str::from_utf8(b.split_at(b.len() - n).0) {
+        Ok(h) => h,
+        Err(_) => panic!("strip_tail: cut lands inside a UTF-8 sequence"),
+    }
+}

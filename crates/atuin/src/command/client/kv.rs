@@ -6,6 +6,7 @@ use atuin_common::encryption::paseto_v4;
 use atuin_kv::store::KvStore;
 use clap::Subcommand;
 use eyre::{Context, Result, eyre};
+use futures_util::{StreamExt, TryStreamExt};
 use tracing::instrument;
 
 #[derive(Subcommand, Debug)]
@@ -71,7 +72,11 @@ impl Cmd {
 
         let host_id = Settings::host_id().await?;
 
-        let kv_db = atuin_kv::database::Database::new(settings.kv.db_path.clone(), 1.0).await?;
+        let kv_db = atuin_kv::database::Database::new(
+            settings.kv.db_path.clone(),
+            std::time::Duration::from_secs(1),
+        )
+        .await?;
         let kv_store = KvStore::new(store.clone(), kv_db, host_id, encryption_key);
 
         match self {
@@ -115,13 +120,13 @@ impl Cmd {
                 namespace,
                 all_namespaces,
             } => {
-                let entries = if *all_namespaces {
-                    kv_store.list(None).await?
+                let mut entries = if *all_namespaces {
+                    kv_store.list_all().boxed()
                 } else {
-                    kv_store.list(Some(namespace)).await?
+                    kv_store.list(namespace).boxed()
                 };
 
-                for entry in entries {
+                while let Some(entry) = entries.try_next().await? {
                     if *all_namespaces {
                         println!("{}.{}", entry.namespace, entry.key);
                     } else {

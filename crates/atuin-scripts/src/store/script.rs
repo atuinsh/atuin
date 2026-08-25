@@ -37,6 +37,17 @@ pub struct Script {
     pub script: String,
 }
 
+/// A single `(script_id, tag)` row from the `script_tags` child table.
+///
+/// Local to this crate so `Table` can be implemented on it directly (the
+/// orphan rule forbids implementing it on a foreign tuple type).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ScriptTag {
+    #[sqlx(try_from = "String")]
+    pub script_id: Uuid,
+    pub tag: String,
+}
+
 impl Script {
     pub fn serialize(&self) -> Result<DecryptedData> {
         // sort the tags first, to ensure consistent ordering

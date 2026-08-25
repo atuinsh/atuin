@@ -2,9 +2,10 @@ use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 
+use atuin_common::sqlite::Sqlite;
 use atuin_domain::record::HostId;
 use eyre::{Result, eyre};
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::SqliteJournalMode;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio::sync::OnceCell;
@@ -26,61 +27,49 @@ const KEY_HUB_SESSION: &str = "hub_session";
 const KEY_FILES_MIGRATED: &str = "files_migrated";
 
 pub struct MetaStore {
-    pool: SqlitePool,
+    sqlite: Sqlite,
     cached_host_id: OnceCell<HostId>,
 }
 
 impl MetaStore {
-    pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
+    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> Result<Self> {
         let path = path.as_ref();
-        let path_str = path
-            .as_os_str()
-            .to_str()
-            .ok_or_else(|| eyre!("meta database path is not valid UTF-8: {path:?}"))?;
         debug!("opening meta sqlite database at {path:?}");
 
-        let is_memory = path_str.contains(":memory:");
-
-        if !is_memory
-            && !path.exists()
-            && let Some(dir) = path.parent()
-        {
-            fs_err::create_dir_all(dir)?;
-        }
-
-        // Use DELETE journal mode instead of WAL. This is a small, infrequently-
-        // written KV store — WAL's concurrency benefits aren't needed, and DELETE
-        // mode avoids creating auxiliary -wal/-shm files that complicate
-        // permission handling.
-        let opts = SqliteConnectOptions::from_str(path_str)?
-            .journal_mode(SqliteJournalMode::Delete)
-            .optimize_on_close(true, None)
-            .create_if_missing(true);
-
-        let pool = SqlitePoolOptions::new()
-            .acquire_timeout(Duration::try_from_secs_f64(timeout)?)
-            .connect_with(opts)
+        let sqlite = Sqlite::builder()
+            .file(path)
+            .timeout(timeout)
+            .journal(SqliteJournalMode::Delete)
+            .foreign_keys(false)
+            .restrict_permissions()
+            .with_migrations(sqlx::migrate!("./meta-migrations"))
+            .open()
             .await?;
 
-        sqlx::migrate!("./meta-migrations").run(&pool).await?;
-
-        // Session tokens are stored in this database, so restrict permissions.
-        #[cfg(unix)]
-        if !is_memory {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-        }
-
         let store = Self {
-            pool,
+            sqlite,
             cached_host_id: OnceCell::const_new(),
         };
 
-        if !is_memory {
-            store.migrate_files().await?;
-        }
+        store.migrate_files().await?;
 
         Ok(store)
+    }
+
+    pub async fn in_memory(timeout: Duration) -> Result<Self> {
+        let sqlite = Sqlite::builder()
+            .memory()
+            .timeout(timeout)
+            .journal(SqliteJournalMode::Delete)
+            .foreign_keys(false)
+            .with_migrations(sqlx::migrate!("./meta-migrations"))
+            .open()
+            .await?;
+
+        Ok(Self {
+            sqlite,
+            cached_host_id: OnceCell::const_new(),
+        })
     }
 
     // Generic key-value operations
@@ -88,7 +77,7 @@ impl MetaStore {
     pub async fn get(&self, key: &str) -> Result<Option<String>> {
         let row: Option<(String,)> = sqlx::query_as("SELECT value FROM meta WHERE key = ?1")
             .bind(key)
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.sqlite.pool())
             .await?;
 
         Ok(row.map(|r| r.0))
@@ -101,14 +90,17 @@ impl MetaStore {
         )
         .bind(key)
         .bind(value)
-        .execute(&self.pool)
+        .execute(self.sqlite.pool())
         .await?;
 
         Ok(())
     }
 
     pub async fn delete(&self, key: &str) -> Result<()> {
-        sqlx::query("DELETE FROM meta WHERE key = ?1").bind(key).execute(&self.pool).await?;
+        sqlx::query("DELETE FROM meta WHERE key = ?1")
+            .bind(key)
+            .execute(self.sqlite.pool())
+            .await?;
 
         Ok(())
     }
@@ -290,7 +282,7 @@ mod tests {
 
     #[fixture]
     async fn store() -> MetaStore {
-        MetaStore::new("sqlite::memory:", 2.0).await.unwrap()
+        MetaStore::in_memory(Duration::from_secs(2)).await.unwrap()
     }
 
     #[rstest]

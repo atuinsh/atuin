@@ -7,33 +7,43 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use atuin_common::encryption::paseto_v4;
-use atuin_common::utils;
+use atuin_common::sqlite::{Sqlite, TableView};
+use atuin_common::table;
 use atuin_domain::record::{
     Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
     RecordVersion,
 };
 use eyre::{Result, eyre};
-use fs_err as fs;
+use futures::TryStreamExt;
 use sqlx::Row;
-use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
-    SqliteSynchronous,
-};
+use sqlx::sqlite::SqliteRow;
 use tracing::instrument;
 use uuid::Uuid;
 
-#[derive(Debug, Clone)]
-pub struct SqliteStore {
-    pool: SqlitePool,
-}
+/// The row type is `Record<EncryptedData>`, defined in `atuin-domain`: foreign
+/// to this crate, so the orphan rule blocks implementing foreign traits
+/// (`Table`, `sqlx::FromRow`) on it directly here. This newtype is local, so
+/// the impls below are legal; unwrap back to the inner record with `.into()`.
+#[derive(Debug, Clone, derive_more::From, derive_more::Into)]
+struct StoreRecord(Record<paseto_v4::EncryptedData>);
 
-/// Newtype over the foreign `Record<EncryptedData>` so we can `impl FromRow` for
-/// it locally (the orphan rule blocks implementing it on `Record` here). Unwrap
-/// back to the inner record with `.into()`.
-#[derive(derive_more::Into)]
-struct DbRecord(Record<paseto_v4::EncryptedData>);
+table!(StoreRecord {
+    name: "store",
+    key: "id",
+    conflict: ignore,
+    columns: {
+        id        => |r| r.0.id.0.as_hyphenated().to_string(),
+        idx       => |r| r.0.idx as i64,
+        host      => |r| r.0.host.id.0.as_hyphenated().to_string(),
+        tag       => |r| r.0.tag.as_str(),
+        timestamp => |r| r.0.timestamp as i64,
+        version   => |r| r.0.version.as_str(),
+        data      => |r| r.0.data.raw.as_str(),
+        cek       => |r| r.0.data.cek.as_str(),
+    },
+});
 
-impl<'r> ::sqlx::FromRow<'r, SqliteRow> for DbRecord {
+impl<'r> ::sqlx::FromRow<'r, SqliteRow> for StoreRecord {
     fn from_row(row: &'r SqliteRow) -> ::sqlx::Result<Self> {
         let idx: i64 = row.try_get("idx")?;
         let timestamp: i64 = row.try_get("timestamp")?;
@@ -63,80 +73,46 @@ impl<'r> ::sqlx::FromRow<'r, SqliteRow> for DbRecord {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct SqliteStore {
+    sqlite: Sqlite,
+    table: TableView<StoreRecord>,
+}
+
 impl SqliteStore {
     #[instrument(level = "trace", skip_all, fields(timeout), err)]
-    pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
+    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> Result<Self> {
         let path = path.as_ref();
 
         debug!("opening sqlite database at {path:?}");
 
-        if utils::broken_symlink(path) {
-            eprintln!(
-                "Atuin: Sqlite db path ({path:?}) is a broken symlink. Unable to read or create \
-                 replacement."
-            );
-            std::process::exit(1);
-        }
-
-        if !path.exists()
-            && let Some(dir) = path.parent()
-        {
-            fs::create_dir_all(dir)?;
-        }
-
-        let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
-            .journal_mode(SqliteJournalMode::Wal)
-            .optimize_on_close(true, None)
-            .synchronous(SqliteSynchronous::Normal)
-            .foreign_keys(true)
-            .create_if_missing(true);
-
-        let pool = SqlitePoolOptions::new()
-            .acquire_timeout(Duration::try_from_secs_f64(timeout)?)
-            .connect_with(opts)
+        let sqlite = Sqlite::builder()
+            .file(path)
+            .timeout(timeout)
+            .with_migrations(sqlx::migrate!("./record-migrations"))
+            .open()
             .await?;
 
-        Self::setup_db(&pool).await?;
-
-        Ok(Self { pool })
+        let table = TableView::new(sqlite.clone());
+        Ok(Self { sqlite, table })
     }
 
-    #[instrument(level = "trace", skip_all, err)]
-    async fn setup_db(pool: &SqlitePool) -> Result<()> {
-        debug!("running sqlite database setup");
+    /// Open a transient, in-memory record store. Intended for tests.
+    pub async fn in_memory(timeout: Duration) -> Result<Self> {
+        let sqlite = Sqlite::builder()
+            .memory()
+            .timeout(timeout)
+            .with_migrations(sqlx::migrate!("./record-migrations"))
+            .open()
+            .await?;
 
-        sqlx::migrate!("./record-migrations").run(pool).await?;
-
-        Ok(())
-    }
-
-    async fn save_raw(
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-        r: &Record<paseto_v4::EncryptedData>,
-    ) -> Result<()> {
-        // In sqlite, we are "limited" to i64. But that is still fine, until 2262.
-        sqlx::query(
-            "insert or ignore into store(id, idx, host, tag, timestamp, version, data, cek)
-                values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        )
-        .bind(r.id.as_hyphenated().to_string())
-        .bind(r.idx as i64)
-        .bind(r.host.id.as_hyphenated().to_string())
-        .bind(r.tag.as_str())
-        .bind(r.timestamp as i64)
-        .bind(r.version.as_str())
-        .bind(r.data.raw.as_str())
-        .bind(r.data.cek.as_str())
-        .execute(&mut **tx)
-        .await?;
-
-        Ok(())
+        let table = TableView::new(sqlite.clone());
+        Ok(Self { sqlite, table })
     }
 
     #[instrument(level = "trace", skip_all, err)]
     async fn load_all(&self) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
-        let res =
-            sqlx::query_as::<_, DbRecord>("select * from store ").fetch_all(&self.pool).await?;
+        let res: Vec<StoreRecord> = self.table.all().try_collect().await?;
 
         Ok(res.into_iter().map(Into::into).collect())
     }
@@ -151,40 +127,31 @@ impl SqliteStore {
         &self,
         records: impl Iterator<Item = &Record<paseto_v4::EncryptedData>> + Send + Sync,
     ) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
-
-        for record in records {
-            Self::save_raw(&mut tx, record).await?;
-        }
-
-        tx.commit().await?;
+        let records: Vec<StoreRecord> = records.cloned().map(StoreRecord).collect();
+        self.table.insert_bulk(&records).await?;
 
         Ok(())
     }
 
     #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
     pub async fn get(&self, id: RecordId) -> Result<Record<paseto_v4::EncryptedData>> {
-        let res = sqlx::query_as::<_, DbRecord>("select * from store where store.id = ?1")
-            .bind(id.as_hyphenated().to_string())
-            .fetch_one(&self.pool)
-            .await?;
-
-        Ok(res.into())
+        self.table
+            .get(id.0.as_hyphenated().to_string())
+            .await?
+            .map(Into::into)
+            .ok_or_else(|| eyre!("record not found: {id:?}"))
     }
 
     #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
     pub async fn delete(&self, id: RecordId) -> Result<()> {
-        sqlx::query("delete from store where id = ?1")
-            .bind(id.as_hyphenated().to_string())
-            .execute(&self.pool)
-            .await?;
+        self.table.delete(id.0.as_hyphenated().to_string()).await?;
 
         Ok(())
     }
 
     #[instrument(level = "trace", skip_all, err)]
     pub async fn delete_all(&self) -> Result<()> {
-        sqlx::query("delete from store").execute(&self.pool).await?;
+        self.table.delete_all().await?;
 
         Ok(())
     }
@@ -194,12 +161,12 @@ impl SqliteStore {
         &self,
         series: &RecordSeriesKey,
     ) -> Result<Option<Record<paseto_v4::EncryptedData>>> {
-        let res = sqlx::query_as::<_, DbRecord>(
+        let res = sqlx::query_as::<_, StoreRecord>(
             "select * from store where host=?1 and tag=?2 order by idx desc limit 1",
         )
         .bind(series.host_id.as_hyphenated().to_string())
         .bind(series.tag.as_str())
-        .fetch_one(&self.pool)
+        .fetch_one(self.sqlite.pool())
         .await;
 
         match res {
@@ -220,7 +187,7 @@ impl SqliteStore {
     #[instrument(level = "trace", skip_all, err)]
     pub async fn len_all(&self) -> Result<u64> {
         let res: Result<(i64,), sqlx::Error> =
-            sqlx::query_as("select count(*) from store").fetch_one(&self.pool).await;
+            sqlx::query_as("select count(*) from store").fetch_one(self.sqlite.pool()).await;
         match res {
             Err(e) => Err(eyre!("failed to fetch local store len: {}", e)),
             Ok(v) => Ok(v.0 as u64),
@@ -232,7 +199,7 @@ impl SqliteStore {
         let res: Result<(i64,), sqlx::Error> =
             sqlx::query_as("select count(*) from store where tag=?1")
                 .bind(tag.as_str())
-                .fetch_one(&self.pool)
+                .fetch_one(self.sqlite.pool())
                 .await;
         match res {
             Err(e) => Err(eyre!("failed to fetch local store len: {}", e)),
@@ -265,7 +232,7 @@ impl SqliteStore {
         )
         .bind(series.host_id.as_hyphenated().to_string())
         .bind(series.tag.as_str())
-        .fetch_one(&self.pool)
+        .fetch_one(self.sqlite.pool())
         .await?;
 
         Ok(gap.unwrap_or(0) as u64)
@@ -278,7 +245,7 @@ impl SqliteStore {
         idx: RecordIdx,
         limit: u64,
     ) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
-        let res = sqlx::query_as::<_, DbRecord>(
+        let res = sqlx::query_as::<_, StoreRecord>(
             "select * from store where idx >= ?1 and host = ?2 and tag = ?3 order by idx asc \
              limit ?4",
         )
@@ -286,7 +253,7 @@ impl SqliteStore {
         .bind(series.host_id.as_hyphenated().to_string())
         .bind(series.tag.as_str())
         .bind(limit as i64)
-        .fetch_all(&self.pool)
+        .fetch_all(self.sqlite.pool())
         .await?;
 
         Ok(res.into_iter().map(Into::into).collect())
@@ -298,13 +265,13 @@ impl SqliteStore {
         series: &RecordSeriesKey,
         idx: RecordIdx,
     ) -> Result<Option<Record<paseto_v4::EncryptedData>>> {
-        let res = sqlx::query_as::<_, DbRecord>(
+        let res = sqlx::query_as::<_, StoreRecord>(
             "select * from store where idx = ?1 and host = ?2 and tag = ?3",
         )
         .bind(idx as i64)
         .bind(series.host_id.as_hyphenated().to_string())
         .bind(series.tag.as_str())
-        .fetch_one(&self.pool)
+        .fetch_one(self.sqlite.pool())
         .await;
 
         match res {
@@ -320,7 +287,7 @@ impl SqliteStore {
 
         let res: Result<Vec<(String, String, i64)>, sqlx::Error> =
             sqlx::query_as("select host, tag, max(idx) from store group by host, tag")
-                .fetch_all(&self.pool)
+                .fetch_all(self.sqlite.pool())
                 .await;
 
         let res = match res {
@@ -344,11 +311,11 @@ impl SqliteStore {
         &self,
         tag: &RecordTag,
     ) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
-        let res = sqlx::query_as::<_, DbRecord>(
+        let res = sqlx::query_as::<_, StoreRecord>(
             "select * from store where tag = ?1 order by timestamp asc",
         )
         .bind(tag.as_str())
-        .fetch_all(&self.pool)
+        .fetch_all(self.sqlite.pool())
         .await?;
 
         Ok(res.into_iter().map(Into::into).collect())
@@ -382,19 +349,15 @@ impl SqliteStore {
         // next up, we delete all the old data and reinsert the new stuff
         // do it in one transaction, so if anything fails we rollback OK
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.sqlite.pool().begin().await?;
 
-        let res = sqlx::query("delete from store").execute(&mut *tx).await?;
-
-        let rows = res.rows_affected();
+        let rows = self.table.on(&mut tx).delete_all().await?;
         debug!("deleted {rows} rows");
 
-        // don't call push_batch, as it will start its own transaction
-        // call the underlying save_raw
-
-        for record in re_encrypted {
-            Self::save_raw(&mut tx, &record).await?;
-        }
+        // Reinsert inside the same transaction (don't use `push_batch`, which
+        // would start its own).
+        let records: Vec<StoreRecord> = re_encrypted.into_iter().map(StoreRecord).collect();
+        self.table.on(&mut tx).insert_bulk(&records).await?;
 
         tx.commit().await?;
 
@@ -447,7 +410,7 @@ mod tests {
 
     #[fixture]
     async fn store() -> SqliteStore {
-        SqliteStore::new(":memory:", test_local_timeout()).await.unwrap()
+        SqliteStore::in_memory(test_local_timeout()).await.unwrap()
     }
 
     #[fixture]

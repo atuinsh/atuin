@@ -558,8 +558,11 @@ impl Cmd {
         let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
 
         let script_store = ScriptStore::new(store, host_id, encryption_key);
-        let script_db =
-            atuin_scripts::database::Database::new(settings.scripts.db_path.clone(), 1.0).await?;
+        let script_db = atuin_scripts::database::Database::new(
+            settings.scripts.db_path.clone(),
+            std::time::Duration::from_secs(1),
+        )
+        .await?;
 
         match self {
             Self::New(new_script) => {

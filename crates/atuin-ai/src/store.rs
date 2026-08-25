@@ -1,9 +1,8 @@
 use std::path::Path;
-use std::str::FromStr;
 use std::time::Duration;
 
-use eyre::{Result, eyre};
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
+use atuin_common::sqlite::Sqlite;
+use eyre::Result;
 use time::OffsetDateTime;
 
 use crate::session::CachedUsageSnapshot;
@@ -37,45 +36,34 @@ pub struct StoredEvent {
 }
 
 pub struct AiSessionStore {
-    pool: SqlitePool,
+    sqlite: Sqlite,
 }
 
 impl AiSessionStore {
-    pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
-        let path = path.as_ref();
-        let path_str = path
-            .as_os_str()
-            .to_str()
-            .ok_or_else(|| eyre!("AI session database path is not valid UTF-8: {path:?}"))?;
-
-        let is_memory = path_str.contains(":memory:");
-
-        if !is_memory
-            && !path.exists()
-            && let Some(dir) = path.parent()
-        {
-            fs_err::create_dir_all(dir)?;
-        }
-
-        let opts = SqliteConnectOptions::from_str(path_str)?
-            .journal_mode(SqliteJournalMode::Wal)
-            .optimize_on_close(true, None)
-            .create_if_missing(true);
-
-        let pool = SqlitePoolOptions::new()
-            .acquire_timeout(Duration::try_from_secs_f64(timeout)?)
-            .connect_with(opts)
+    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> Result<Self> {
+        let sqlite = Sqlite::builder()
+            .file(path)
+            .timeout(timeout)
+            .foreign_keys(false)
+            .restrict_permissions()
+            .with_migrations(sqlx::migrate!("./migrations"))
+            .open()
             .await?;
 
-        sqlx::migrate!("./migrations").run(&pool).await?;
+        Ok(Self { sqlite })
+    }
 
-        #[cfg(unix)]
-        if !is_memory {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-        }
+    #[cfg(test)]
+    pub async fn in_memory(timeout: Duration) -> Result<Self> {
+        let sqlite = Sqlite::builder()
+            .memory()
+            .timeout(timeout)
+            .foreign_keys(false)
+            .with_migrations(sqlx::migrate!("./migrations"))
+            .open()
+            .await?;
 
-        Ok(Self { pool })
+        Ok(Self { sqlite })
     }
 
     pub async fn create_session(
@@ -94,7 +82,7 @@ impl AiSessionStore {
         .bind(directory)
         .bind(git_root)
         .bind(now)
-        .execute(&self.pool)
+        .execute(self.sqlite.pool())
         .await?;
 
         Ok(StoredSession {
@@ -117,7 +105,7 @@ impl AiSessionStore {
              FROM sessions WHERE id = ?1",
         )
         .bind(id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.sqlite.pool())
         .await?;
 
         Ok(session)
@@ -146,7 +134,7 @@ impl AiSessionStore {
         .bind(cutoff)
         .bind(directory)
         .bind(git_root)
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.sqlite.pool())
         .await?;
 
         Ok(session)
@@ -164,7 +152,7 @@ impl AiSessionStore {
     ) -> Result<()> {
         let now = OffsetDateTime::now_utc().unix_timestamp();
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.sqlite.pool().begin().await?;
 
         sqlx::query(
             "INSERT INTO session_events (id, session_id, parent_id, invocation_id, event_type, \
@@ -201,7 +189,7 @@ impl AiSessionStore {
                  ORDER BY created_at ASC, rowid ASC",
         )
         .bind(session_id)
-        .fetch_all(&self.pool)
+        .fetch_all(self.sqlite.pool())
         .await?;
 
         Ok(events)
@@ -215,7 +203,7 @@ impl AiSessionStore {
         sqlx::query("UPDATE sessions SET server_session_id = ?1 WHERE id = ?2")
             .bind(server_session_id)
             .bind(session_id)
-            .execute(&self.pool)
+            .execute(self.sqlite.pool())
             .await?;
         Ok(())
     }
@@ -225,7 +213,7 @@ impl AiSessionStore {
         sqlx::query("UPDATE sessions SET archived_at = ?1 WHERE id = ?2")
             .bind(now)
             .bind(session_id)
-            .execute(&self.pool)
+            .execute(self.sqlite.pool())
             .await?;
         Ok(())
     }
@@ -239,7 +227,7 @@ impl AiSessionStore {
             sqlx::query_as("SELECT value FROM session_metadata WHERE session_id = ?1 AND key = ?2")
                 .bind(session_id)
                 .bind(key)
-                .fetch_optional(&self.pool)
+                .fetch_optional(self.sqlite.pool())
                 .await?;
 
         Ok(row.map(|(v,)| v))
@@ -257,7 +245,7 @@ impl AiSessionStore {
         .bind(key)
         .bind(value)
         .bind(now)
-        .execute(&self.pool)
+        .execute(self.sqlite.pool())
         .await?;
         Ok(())
     }
@@ -270,7 +258,7 @@ impl AiSessionStore {
         let row: Option<(String, i64)> =
             sqlx::query_as("SELECT snapshot, updated_at FROM usage WHERE user_key = ?1")
                 .bind(user_key)
-                .fetch_optional(&self.pool)
+                .fetch_optional(self.sqlite.pool())
                 .await?;
 
         let Some((snapshot, written_at)) = row else {
@@ -296,7 +284,7 @@ impl AiSessionStore {
         .bind(user_key)
         .bind(snapshot_json)
         .bind(now)
-        .execute(&self.pool)
+        .execute(self.sqlite.pool())
         .await?;
         Ok(())
     }
@@ -311,7 +299,7 @@ mod tests {
 
     #[fixture]
     async fn store() -> AiSessionStore {
-        AiSessionStore::new("sqlite::memory:", 2.0).await.unwrap()
+        AiSessionStore::in_memory(Duration::from_secs(2)).await.unwrap()
     }
 
     #[fixture]
