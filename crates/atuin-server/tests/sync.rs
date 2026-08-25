@@ -149,7 +149,7 @@ async fn download(
 
     client.post_records(&records).await.unwrap();
 
-    let store = SqliteStore::new(":memory:", 2.0).await.unwrap();
+    let store = SqliteStore::new(":memory:", Duration::from_secs(2)).await.unwrap();
     if let Some(local_max) = local_max {
         store.push_batch(records.iter().take(local_max as usize + 1)).await.unwrap();
     }
@@ -214,7 +214,7 @@ async fn upload(
     let records: Vec<Record<EncryptedData>> =
         (0..=local_max).map(|idx| record(host, &tag, idx)).collect();
 
-    let store = SqliteStore::new(":memory:", 2.0).await.unwrap();
+    let store = SqliteStore::new(":memory:", Duration::from_secs(2)).await.unwrap();
     store.push_batch(records.iter()).await.unwrap();
 
     if let Some(remote_max) = remote_max {

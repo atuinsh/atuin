@@ -47,6 +47,7 @@ itertools = { workspace = true }
 rand = { workspace = true }
 shellexpand = { workspace = true }
 sqlx = { workspace = true, features = ["sqlite", "regexp"] }
+libsqlite3-sys = { workspace = true }
 minspan = "0.1.5"
 regex = { workspace = true }
 serde_regex = "1.1.0"
@@ -88,7 +89,7 @@ serde_bytes = "0.11"
 [dependencies.atuin-common]
 path = "../atuin-common"
 version = "18.20.0-beta.3"
-features = ["os"]
+features = ["os", "sqlite"]
 
 [dependencies.atuin-domain]
 path = "../atuin-domain"

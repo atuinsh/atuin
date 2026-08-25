@@ -7,24 +7,20 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use atuin_common::encryption::paseto_v4;
-use atuin_common::utils;
+use atuin_common::sqlite::Sqlite;
 use atuin_domain::record::{
     Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
     RecordVersion,
 };
 use eyre::{Result, eyre};
-use fs_err as fs;
 use sqlx::Row;
-use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
-    SqliteSynchronous,
-};
+use sqlx::sqlite::{SqlitePool, SqliteRow};
 use tracing::instrument;
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct SqliteStore {
-    pool: SqlitePool,
+    sqlite: Sqlite,
 }
 
 /// Newtype over the foreign `Record<EncryptedData>` so we can `impl FromRow` for
@@ -64,41 +60,17 @@ impl<'r> ::sqlx::FromRow<'r, SqliteRow> for DbRecord {
 }
 
 impl SqliteStore {
-    #[instrument(level = "trace", skip_all, fields(timeout), err)]
-    pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
+    #[instrument(level = "trace", skip_all, fields(timeout = ?timeout), err)]
+    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> Result<Self> {
         let path = path.as_ref();
 
         debug!("opening sqlite database at {path:?}");
 
-        if utils::broken_symlink(path) {
-            eprintln!(
-                "Atuin: Sqlite db path ({path:?}) is a broken symlink. Unable to read or create \
-                 replacement."
-            );
-            std::process::exit(1);
-        }
+        let sqlite = Sqlite::builder(path).timeout(timeout).open().await?;
 
-        if !path.exists()
-            && let Some(dir) = path.parent()
-        {
-            fs::create_dir_all(dir)?;
-        }
+        Self::setup_db(sqlite.pool()).await?;
 
-        let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
-            .journal_mode(SqliteJournalMode::Wal)
-            .optimize_on_close(true, None)
-            .synchronous(SqliteSynchronous::Normal)
-            .foreign_keys(true)
-            .create_if_missing(true);
-
-        let pool = SqlitePoolOptions::new()
-            .acquire_timeout(Duration::try_from_secs_f64(timeout)?)
-            .connect_with(opts)
-            .await?;
-
-        Self::setup_db(&pool).await?;
-
-        Ok(Self { pool })
+        Ok(Self { sqlite })
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -135,8 +107,9 @@ impl SqliteStore {
 
     #[instrument(level = "trace", skip_all, err)]
     async fn load_all(&self) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
-        let res =
-            sqlx::query_as::<_, DbRecord>("select * from store ").fetch_all(&self.pool).await?;
+        let res = sqlx::query_as::<_, DbRecord>("select * from store ")
+            .fetch_all(self.sqlite.pool())
+            .await?;
 
         Ok(res.into_iter().map(Into::into).collect())
     }
@@ -151,10 +124,32 @@ impl SqliteStore {
         &self,
         records: impl Iterator<Item = &Record<paseto_v4::EncryptedData>> + Send + Sync,
     ) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
+        // `store` has 8 columns, so each row binds 8 parameters; keep a full chunk
+        // within the bind-parameter limit. `max(1)` keeps the chunk non-empty on any
+        // (implausible) tiny limit.
+        const COLUMNS: usize = 8;
+        let rows_per_insert = (self.sqlite.info().await.variable_number_limit / COLUMNS).max(1);
 
-        for record in records {
-            Self::save_raw(&mut tx, record).await?;
+        let mut records = records.peekable();
+        let mut tx = self.sqlite.pool().begin().await?;
+
+        while records.peek().is_some() {
+            let mut builder = sqlx::QueryBuilder::new(
+                "insert or ignore into store(id, idx, host, tag, timestamp, version, data, cek) ",
+            );
+
+            builder.push_values(records.by_ref().take(rows_per_insert), |mut b, r| {
+                b.push_bind(r.id.0.as_hyphenated().to_string())
+                    .push_bind(r.idx as i64)
+                    .push_bind(r.host.id.0.as_hyphenated().to_string())
+                    .push_bind(r.tag.as_str())
+                    .push_bind(r.timestamp as i64)
+                    .push_bind(r.version.as_str())
+                    .push_bind(r.data.raw.as_str())
+                    .push_bind(r.data.cek.as_str());
+            });
+
+            builder.build().execute(&mut *tx).await?;
         }
 
         tx.commit().await?;
@@ -166,7 +161,7 @@ impl SqliteStore {
     pub async fn get(&self, id: RecordId) -> Result<Record<paseto_v4::EncryptedData>> {
         let res = sqlx::query_as::<_, DbRecord>("select * from store where store.id = ?1")
             .bind(id.as_hyphenated().to_string())
-            .fetch_one(&self.pool)
+            .fetch_one(self.sqlite.pool())
             .await?;
 
         Ok(res.into())
@@ -176,7 +171,7 @@ impl SqliteStore {
     pub async fn delete(&self, id: RecordId) -> Result<()> {
         sqlx::query("delete from store where id = ?1")
             .bind(id.as_hyphenated().to_string())
-            .execute(&self.pool)
+            .execute(self.sqlite.pool())
             .await?;
 
         Ok(())
@@ -184,7 +179,7 @@ impl SqliteStore {
 
     #[instrument(level = "trace", skip_all, err)]
     pub async fn delete_all(&self) -> Result<()> {
-        sqlx::query("delete from store").execute(&self.pool).await?;
+        sqlx::query("delete from store").execute(self.sqlite.pool()).await?;
 
         Ok(())
     }
@@ -199,7 +194,7 @@ impl SqliteStore {
         )
         .bind(series.host_id.as_hyphenated().to_string())
         .bind(series.tag.as_str())
-        .fetch_one(&self.pool)
+        .fetch_one(self.sqlite.pool())
         .await;
 
         match res {
@@ -220,7 +215,7 @@ impl SqliteStore {
     #[instrument(level = "trace", skip_all, err)]
     pub async fn len_all(&self) -> Result<u64> {
         let res: Result<(i64,), sqlx::Error> =
-            sqlx::query_as("select count(*) from store").fetch_one(&self.pool).await;
+            sqlx::query_as("select count(*) from store").fetch_one(self.sqlite.pool()).await;
         match res {
             Err(e) => Err(eyre!("failed to fetch local store len: {}", e)),
             Ok(v) => Ok(v.0 as u64),
@@ -232,7 +227,7 @@ impl SqliteStore {
         let res: Result<(i64,), sqlx::Error> =
             sqlx::query_as("select count(*) from store where tag=?1")
                 .bind(tag.as_str())
-                .fetch_one(&self.pool)
+                .fetch_one(self.sqlite.pool())
                 .await;
         match res {
             Err(e) => Err(eyre!("failed to fetch local store len: {}", e)),
@@ -265,7 +260,7 @@ impl SqliteStore {
         )
         .bind(series.host_id.as_hyphenated().to_string())
         .bind(series.tag.as_str())
-        .fetch_one(&self.pool)
+        .fetch_one(self.sqlite.pool())
         .await?;
 
         Ok(gap.unwrap_or(0) as u64)
@@ -286,7 +281,7 @@ impl SqliteStore {
         .bind(series.host_id.as_hyphenated().to_string())
         .bind(series.tag.as_str())
         .bind(limit as i64)
-        .fetch_all(&self.pool)
+        .fetch_all(self.sqlite.pool())
         .await?;
 
         Ok(res.into_iter().map(Into::into).collect())
@@ -304,7 +299,7 @@ impl SqliteStore {
         .bind(idx as i64)
         .bind(series.host_id.as_hyphenated().to_string())
         .bind(series.tag.as_str())
-        .fetch_one(&self.pool)
+        .fetch_one(self.sqlite.pool())
         .await;
 
         match res {
@@ -320,7 +315,7 @@ impl SqliteStore {
 
         let res: Result<Vec<(String, String, i64)>, sqlx::Error> =
             sqlx::query_as("select host, tag, max(idx) from store group by host, tag")
-                .fetch_all(&self.pool)
+                .fetch_all(self.sqlite.pool())
                 .await;
 
         let res = match res {
@@ -348,7 +343,7 @@ impl SqliteStore {
             "select * from store where tag = ?1 order by timestamp asc",
         )
         .bind(tag.as_str())
-        .fetch_all(&self.pool)
+        .fetch_all(self.sqlite.pool())
         .await?;
 
         Ok(res.into_iter().map(Into::into).collect())
@@ -382,7 +377,7 @@ impl SqliteStore {
         // next up, we delete all the old data and reinsert the new stuff
         // do it in one transaction, so if anything fails we rollback OK
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.sqlite.pool().begin().await?;
 
         let res = sqlx::query("delete from store").execute(&mut *tx).await?;
 
