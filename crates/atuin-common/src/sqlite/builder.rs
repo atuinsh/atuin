@@ -120,6 +120,7 @@ impl<P: AsRef<Path>> SqliteBuilder<P> {
                 opts = opts
                     .journal_mode(SqliteJournalMode::Wal)
                     .pragma("journal_size_limit", max_size_hint.to_string())
+                    .pragma("auto_vacuum", "INCREMENTAL")
             }
             Some(Journaling::Delete) => {
                 opts = opts.journal_mode(SqliteJournalMode::Delete);
@@ -148,5 +149,25 @@ impl<P: AsRef<Path>> SqliteBuilder<P> {
         }
 
         Ok(sqlite)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::sqlite::Sqlite;
+
+    #[tokio::test]
+    async fn new_wal_db_is_created_in_incremental_auto_vacuum() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+
+        let sqlite = Sqlite::builder(&path).open().await.unwrap();
+
+        let mode: i64 = sqlx::query_scalar("PRAGMA auto_vacuum")
+            .fetch_one(sqlite.pool())
+            .await
+            .unwrap();
+
+        assert_eq!(mode, 2, "new WAL database should be auto_vacuum=INCREMENTAL");
     }
 }
