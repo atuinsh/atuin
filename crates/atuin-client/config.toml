@@ -185,11 +185,6 @@ enter_accept = true
 ## mode in the Atuin search is forced to be the specified one.
 # keymap_mode = "emacs"
 
-## the keymap mode used when Atuin is invoked from a shell up-key binding.
-## "auto" follows the shell's own keymap; otherwise the accepted values are
-## identical to those of "keymap_mode"
-# keymap_mode_shell = "auto"
-
 ## disable mouse capture in the interactive search TUI, so the terminal keeps
 ## its native selection and scrolling behaviour
 # no_mouse = false
