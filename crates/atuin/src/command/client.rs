@@ -31,7 +31,6 @@ mod info;
 mod init;
 mod internal;
 mod kv;
-mod lab;
 mod scripts;
 mod search;
 mod setup;
@@ -133,10 +132,6 @@ pub enum Cmd {
     #[command()]
     Mcp,
 
-    /// Experimental laboratory features
-    #[command(subcommand, hide = true)]
-    Lab(lab::Cmd),
-
     /// Internal subcommands, not for direct use by users.
     #[command(
         subcommand,
@@ -224,7 +219,6 @@ impl Cmd {
             #[cfg(feature = "self-update")]
             Self::Update(update) => return update.run(&settings).await,
             Self::Config(config) => return config.run(&settings).await,
-            Self::Lab(cmd) => return cmd.run(&settings).await,
             Self::Internal(cmd) => return cmd.run(&settings).await,
             Self::InternalDecoy => {
                 eprintln!("error: this command is not meant to be accessed directly");
@@ -286,7 +280,6 @@ impl Cmd {
             | Self::Init(_)
             | Self::Doctor
             | Self::Config(_)
-            | Self::Lab(_)
             | Self::Internal(_)
             | Self::InternalDecoy => {
                 unreachable!()
