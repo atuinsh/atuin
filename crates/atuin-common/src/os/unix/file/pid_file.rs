@@ -129,6 +129,7 @@ impl PidFile {
 /// - Other processes can read/write to the file, however, they cannot lock the file.
 /// - The file is unlocked on [`Drop`].
 /// - The locked pid file is periodically touched in the background while it is locked.
+#[derive(Debug)]
 pub struct LockedPidFile {
     file: LockedExclusiveFile,
 }
