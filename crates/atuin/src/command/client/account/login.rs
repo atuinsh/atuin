@@ -120,7 +120,8 @@ impl Cmd {
         } else {
             // Interactive login via browser OAuth flow.
             if self.from_registration {
-                paseto_v4::Key::try_load_from_path(&settings.key_path)?;
+                paseto_v4::Key::try_load_or_generate(&settings.key_path)
+                    .context("could not load or generate encryption key")?;
             } else {
                 self.prompt_and_store_key(settings, store).await?;
             }
