@@ -14,7 +14,7 @@ use crate::sqlite::Info;
 use crate::sync::EagerFutureCell;
 
 #[derive(Debug, Error)]
-enum WalCompactionError {
+enum MaintenanceError {
     #[error("failed to compact the WAL due to a sqlx error: {0}")]
     Sqlx(#[from] sqlx::Error),
     #[error("failed to compact the WAL due to an IO error: {0}")]
@@ -22,11 +22,11 @@ enum WalCompactionError {
 }
 
 #[derive(Debug, Clone)]
-struct ActiveCompactor {
+struct ActiveMaintenanceTask {
     _task: Arc<AbortOnDropHandle<()>>,
 }
 
-impl ActiveCompactor {
+impl ActiveMaintenanceTask {
     // How many bytes does the WAL need to reach before it is force-compacted.
     // Normally, SQLite will try to keep its WAL around 4MB.
     //
@@ -85,7 +85,7 @@ impl ActiveCompactor {
     async fn compact_wal(
         conn: &mut SqliteConnection,
         wal: &tokio::fs::File,
-    ) -> Result<(), WalCompactionError> {
+    ) -> Result<(), MaintenanceError> {
         let meta = wal.metadata().await?;
         if meta.len() < Self::THRESHOLD_BYTES {
             return Ok(());
@@ -102,7 +102,7 @@ impl ActiveCompactor {
         Ok(())
     }
 
-    async fn connect(opts: SqliteConnectOptions) -> Result<SqliteConnection, WalCompactionError> {
+    async fn connect(opts: SqliteConnectOptions) -> Result<SqliteConnection, MaintenanceError> {
         let conn = SqliteConnection::connect_with(&opts.busy_timeout(Self::MAX_TIMEOUT)).await?;
 
         Ok(conn)
@@ -110,9 +110,9 @@ impl ActiveCompactor {
 }
 
 #[derive(Debug, Clone)]
-enum CompactorInner {
+enum MaintenanceTaskInner {
     Active {
-        _compactor: ActiveCompactor,
+        _compactor: ActiveMaintenanceTask,
     },
     Inactive,
 }
@@ -126,19 +126,19 @@ enum CompactorInner {
 ///
 /// This seems to be generally present in high parallel uses of AI agents.
 #[derive(Debug, Clone)]
-pub(super) struct Compactor {
-    _inner: CompactorInner,
+pub(super) struct MaintenanceTask {
+    _inner: MaintenanceTaskInner,
 }
 
-impl Compactor {
+impl MaintenanceTask {
     pub(super) async fn spawn_active(
         opts: SqliteConnectOptions,
         info: EagerFutureCell<Info>,
     ) -> Self {
-        match ActiveCompactor::connect(opts).await {
+        match ActiveMaintenanceTask::connect(opts).await {
             Ok(conn) => Self {
-                _inner: CompactorInner::Active {
-                    _compactor: ActiveCompactor::spawn(conn, info),
+                _inner: MaintenanceTaskInner::Active {
+                    _compactor: ActiveMaintenanceTask::spawn(conn, info),
                 },
             },
             Err(error) => {
@@ -150,7 +150,7 @@ impl Compactor {
 
     pub(super) fn inactive() -> Self {
         Self {
-            _inner: CompactorInner::Inactive,
+            _inner: MaintenanceTaskInner::Inactive,
         }
     }
 }

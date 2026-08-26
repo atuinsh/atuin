@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous};
 
-use super::compactor::Compactor;
+use super::maintenance_task::MaintenanceTask;
 use super::{Sqlite, SqliteOpenOrCreateError};
 use crate::path::PathExt;
 
@@ -17,7 +17,7 @@ pub enum Journaling {
         /// The maximum size of the journal before sqlite is configured to automatically sweep it.
         ///
         /// Do note that this is a suggestion for Sqlite and under heavy concurrent reads will not
-        /// be respected. See [`Compactor`] for a strict maximum size.
+        /// be respected. See [`MaintenanceTask`] for a strict maximum size.
         #[allow(rustdoc::private_intra_doc_links)]
         max_size_hint: u64,
     },
@@ -136,7 +136,8 @@ impl<P: AsRef<Path>> SqliteBuilder<P> {
         let mut sqlite = Sqlite::connect(opts.clone(), self.timeout).await?;
 
         if matches!(self.journal, Some(Journaling::Wal { .. })) {
-            sqlite.compactor = Compactor::spawn_active(opts, sqlite.info.clone()).await;
+            sqlite.maintenance_task =
+                MaintenanceTask::spawn_active(opts, sqlite.info.clone()).await;
         }
 
         #[cfg(unix)]
