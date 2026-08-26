@@ -1,9 +1,7 @@
-use std::{
-    ffi::CStr,
-    path::{Path, PathBuf},
-    str::Utf8Error,
-    sync::Arc,
-};
+use std::ffi::CStr;
+use std::path::{Path, PathBuf};
+use std::str::Utf8Error;
+use std::sync::Arc;
 
 use sqlx::sqlite::{LockedSqliteHandle, SqlitePool};
 use thiserror::Error;
@@ -52,15 +50,15 @@ struct FfiInfo {
 }
 
 impl FfiInfo {
-    async fn query(pool: &SqlitePool) -> FfiInfo {
+    async fn query(pool: &SqlitePool) -> Self {
         let mut conn = match pool.acquire().await {
             Ok(conn) => conn,
-            Err(err) => return FfiInfo::unavailable(err),
+            Err(err) => return Self::unavailable(err),
         };
 
         let mut handle = match conn.lock_handle().await {
             Ok(handle) => handle,
-            Err(err) => return FfiInfo::unavailable(err),
+            Err(err) => return Self::unavailable(err),
         };
 
         let vnl = Self::query_variable_number_limit(&mut handle);
@@ -68,14 +66,14 @@ impl FfiInfo {
 
         drop(handle);
 
-        FfiInfo {
+        Self {
             variable_number_limit: vnl,
             wal_path,
         }
     }
 
-    fn unavailable(err: sqlx::Error) -> FfiInfo {
-        FfiInfo {
+    fn unavailable(err: sqlx::Error) -> Self {
+        Self {
             variable_number_limit: None,
             wal_path: Err(SqlitePathError::Acquire(Arc::new(err))),
         }
@@ -92,8 +90,6 @@ impl FfiInfo {
                 -1,
             )
         };
-
-        drop(handle);
 
         match usize::try_from(limit) {
             Ok(l) => Some(l),
@@ -169,9 +165,7 @@ impl Info {
 
     /// Get the maximum number of `?` binds a SQL query can have.
     pub fn variable_number_limit(&self) -> usize {
-        self.ffi_info
-            .variable_number_limit
-            .unwrap_or(Self::MAX_BIND_PARAMS_FALLBACK)
+        self.ffi_info.variable_number_limit.unwrap_or(Self::MAX_BIND_PARAMS_FALLBACK)
     }
 
     /// Get the path to the WAL database.

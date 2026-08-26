@@ -406,7 +406,7 @@ impl Sqlite {
 
         const HISTORY_INSERT_COLUMNS: usize = 13;
         let rows_per_insert =
-            (self.sqlite.info().await.variable_number_limit / HISTORY_INSERT_COLUMNS).max(1);
+            (self.sqlite.info().await.variable_number_limit() / HISTORY_INSERT_COLUMNS).max(1);
 
         let mut tx = self.sqlite.pool().begin().await?;
 

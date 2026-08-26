@@ -1,18 +1,13 @@
-use std::ffi::CStr;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time::Duration;
 
-use sqlx::Connection;
-use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteConnection, SqliteJournalMode, SqlitePool, SqliteSynchronous,
-};
-use tracing::{debug, instrument};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous};
+use tracing::warn;
 
+use super::compactor::Compactor;
 use super::{Sqlite, SqliteOpenOrCreateError};
 use crate::path::PathExt;
-use crate::sync::PeriodicTask;
 
 /// Enum which controls what kind of WAL journaling mode is enabled.
 ///
@@ -26,6 +21,7 @@ pub enum Journaling {
         /// be respected. See [`Compactor`] for a strict maximum size.
         max_size_hint: u64,
     },
+    Delete,
 }
 
 pub struct SqliteBuilder<P> {
@@ -125,6 +121,9 @@ impl<P: AsRef<Path>> SqliteBuilder<P> {
                     .journal_mode(SqliteJournalMode::Wal)
                     .pragma("journal_size_limit", max_size_hint.to_string())
             }
+            Some(Journaling::Delete) => {
+                opts = opts.journal_mode(SqliteJournalMode::Delete);
+            }
             None => {
                 opts = opts.journal_mode(SqliteJournalMode::Off);
             }
@@ -134,31 +133,17 @@ impl<P: AsRef<Path>> SqliteBuilder<P> {
             opts = opts.with_regexp();
         }
 
-        let mut sqlite = Sqlite::connect(opts, self.timeout).await?;
+        let mut sqlite = Sqlite::connect(opts.clone(), self.timeout).await?;
 
-        // Only WAL-mode databases can accumulate an unbounded `-wal` sidecar; anything else
-        // has no such file, and the checkpoint's own `stat()` would just be wasted work.
-        if self.journal == SqliteJournalMode::Wal
-            && let Some(wal_path) = wal_path(sqlite.pool()).await
-        {
-            checkpoint_wal_if_needed(&wal_path, path, DEFAULT_WAL_CHECKPOINT_THRESHOLD_BYTES).await;
-
-            let db_path = path.to_path_buf();
-            sqlite._checkpoint_task = Some(Arc::new(PeriodicTask::spawn_later(
-                DEFAULT_WAL_CHECKPOINT_INTERVAL,
-                move || {
-                    let wal_path = wal_path.clone();
-                    let db_path = db_path.clone();
-                    async move {
-                        checkpoint_wal_if_needed(
-                            &wal_path,
-                            &db_path,
-                            DEFAULT_WAL_CHECKPOINT_THRESHOLD_BYTES,
-                        )
-                        .await;
-                    }
-                },
-            )));
+        if matches!(self.journal, Some(Journaling::Wal { .. })) {
+            match sqlite.info().await.wal_path().map(Path::to_path_buf) {
+                Ok(wal_path) => {
+                    sqlite.compactor = Compactor::spawn_active(opts, wal_path).await;
+                }
+                Err(error) => {
+                    warn!(%error, "could not resolve the WAL path; WAL compactor disabled");
+                }
+            }
         }
 
         #[cfg(unix)]

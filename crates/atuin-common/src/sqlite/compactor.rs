@@ -1,6 +1,7 @@
 //! Utility which compacts a SQLite database.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::sqlite::SqliteConnectOptions;
@@ -8,9 +9,6 @@ use sqlx::{Connection, SqliteConnection};
 use thiserror::Error;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::warn;
-
-use crate::sqlite::Info;
-use crate::sync::EagerFutureCell;
 
 #[derive(Debug, Error)]
 enum WalCompactionError {
@@ -22,7 +20,7 @@ enum WalCompactionError {
 
 #[derive(Debug)]
 struct ActiveCompactor {
-    task: AbortOnDropHandle<()>,
+    _task: AbortOnDropHandle<()>,
 }
 
 impl ActiveCompactor {
@@ -84,13 +82,16 @@ impl ActiveCompactor {
         });
 
         Self {
-            task: AbortOnDropHandle::new(task),
+            _task: AbortOnDropHandle::new(task),
         }
     }
 }
 
+#[derive(Debug)]
 enum CompactorInner {
-    Active(ActiveCompactor),
+    Active {
+        _compactor: ActiveCompactor,
+    },
     Inactive,
 }
 
@@ -102,16 +103,29 @@ enum CompactorInner {
 /// from ever getting compacted.
 ///
 /// This seems to be generally present in high parallel uses of AI agents.
+#[derive(Debug, Clone)]
 pub(super) struct Compactor {
-    inner: CompactorInner,
+    _inner: Arc<CompactorInner>,
 }
 
 impl Compactor {
-    pub fn spawn_active(info: EagerFutureCell<Info>) -> Self {}
+    pub(super) async fn spawn_active(opts: SqliteConnectOptions, wal_path: PathBuf) -> Self {
+        let inner = match ActiveCompactor::new(opts, wal_path).await {
+            Ok(active) => CompactorInner::Active { _compactor: active },
+            Err(error) => {
+                warn!(%error, "failed to start the WAL compactor; the WAL may grow unbounded");
+                CompactorInner::Inactive
+            }
+        };
 
-    pub fn inactive() -> Self {
         Self {
-            inner: CompactorInner::Inactive,
+            _inner: Arc::new(inner),
+        }
+    }
+
+    pub(super) fn inactive() -> Self {
+        Self {
+            _inner: Arc::new(CompactorInner::Inactive),
         }
     }
 }

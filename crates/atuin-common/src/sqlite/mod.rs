@@ -4,14 +4,16 @@ mod builder;
 mod compactor;
 mod info;
 
-use crate::sync::EagerFutureCell;
-pub use builder::SqliteBuilder;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+pub use builder::{Journaling, SqliteBuilder};
 use compactor::Compactor;
 pub use info::{Info, VersionError};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
-use std::path::{Path, PathBuf};
-use std::time::Duration;
 use thiserror::Error;
+
+use crate::sync::EagerFutureCell;
 
 /// An atuin-specific wrapper around Sqlite.
 ///
@@ -66,7 +68,7 @@ impl Sqlite {
         Ok(Self {
             info: Info::new_eager_future(pool.clone()),
             pool,
-            _wal_compactor: None,
+            compactor: Compactor::inactive(),
         })
     }
 
