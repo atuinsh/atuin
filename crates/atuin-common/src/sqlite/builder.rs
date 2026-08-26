@@ -18,6 +18,7 @@ pub enum Journaling {
         ///
         /// Do note that this is a suggestion for Sqlite and under heavy concurrent reads will not
         /// be respected. See [`Compactor`] for a strict maximum size.
+        #[allow(rustdoc::private_intra_doc_links)]
         max_size_hint: u64,
     },
     Delete,
