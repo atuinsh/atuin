@@ -1,12 +1,14 @@
 //! Sqlite-related utilities.
 
 mod builder;
+mod compactor;
 mod info;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub use builder::SqliteBuilder;
+pub use builder::{Journaling, SqliteBuilder};
+use compactor::Compactor;
 pub use info::{Info, VersionError};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use thiserror::Error;
@@ -24,6 +26,9 @@ pub struct Sqlite {
     ///
     /// This value represents that.
     info: EagerFutureCell<Info>,
+
+    /// A periodic task which compacts the WAL if necessary.
+    compactor: Compactor,
 }
 
 #[derive(Debug, Error)]
@@ -63,6 +68,7 @@ impl Sqlite {
         Ok(Self {
             info: Info::new_eager_future(pool.clone()),
             pool,
+            compactor: Compactor::inactive(),
         })
     }
 

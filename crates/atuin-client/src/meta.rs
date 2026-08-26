@@ -2,10 +2,9 @@ use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 
-use atuin_common::sqlite::Sqlite;
+use atuin_common::sqlite::{Journaling, Sqlite};
 use atuin_domain::record::HostId;
 use eyre::{Result, eyre};
-use sqlx::sqlite::SqliteJournalMode;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio::sync::OnceCell;
@@ -40,7 +39,7 @@ impl MetaStore {
 
         let sqlite = Sqlite::builder(path)
             .timeout(timeout)
-            .journal(SqliteJournalMode::Delete)
+            .journal(Some(Journaling::Delete))
             .foreign_keys(false)
             .restrict_permissions()
             .open()

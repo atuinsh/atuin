@@ -128,7 +128,7 @@ impl SqliteStore {
         // within the bind-parameter limit. `max(1)` keeps the chunk non-empty on any
         // (implausible) tiny limit.
         const COLUMNS: usize = 8;
-        let rows_per_insert = (self.sqlite.info().await.variable_number_limit / COLUMNS).max(1);
+        let rows_per_insert = (self.sqlite.info().await.variable_number_limit() / COLUMNS).max(1);
 
         let mut records = records.peekable();
         let mut tx = self.sqlite.pool().begin().await?;

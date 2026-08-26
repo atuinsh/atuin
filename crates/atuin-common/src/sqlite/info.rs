@@ -1,6 +1,9 @@
+use std::ffi::CStr;
+use std::path::{Path, PathBuf};
+use std::str::Utf8Error;
 use std::sync::Arc;
 
-use sqlx::sqlite::SqlitePool;
+use sqlx::sqlite::{LockedSqliteHandle, SqlitePool};
 use thiserror::Error;
 use tracing::warn;
 
@@ -14,17 +17,117 @@ pub enum VersionError {
     Query(#[from] sqlx::Error),
 }
 
+#[derive(Debug, Clone, Error)]
+pub enum SqlitePathError {
+    #[error("the path reported by sqlite is NULL.")]
+    NullPath,
+
+    #[error("the path reported by sqlite is not a utf8 path")]
+    NonUtf8Path(#[from] Utf8Error),
+
+    #[error("failed to acquire a connection to query the sqlite path: {0}")]
+    Acquire(#[from] Arc<sqlx::Error>),
+}
+
 /// Metadata which is queried on startup, and never again.
 #[derive(Debug, Clone)]
 pub struct Info {
-    /// The best-effort estimate of the maximum parameters that this sqlite can bind to.
-    pub variable_number_limit: usize,
+    // Info returned by FFI calls.
+    ffi_info: FfiInfo,
 
     /// The version of the currently active database.
     ///
     /// Note that the error is behind an Arc. Annoyingly, [`VersionError`] cannot be [`Clone`], so
     /// we have to wrap it in an [`Arc`]. It's the cold path anyways.
     pub version: Result<semver::Version, Arc<VersionError>>,
+}
+
+/// Data which can only be queried through raw FFI cals.
+#[derive(Debug, Clone)]
+struct FfiInfo {
+    variable_number_limit: Option<usize>,
+    wal_path: Result<PathBuf, SqlitePathError>,
+}
+
+impl FfiInfo {
+    async fn query(pool: &SqlitePool) -> Self {
+        let mut conn = match pool.acquire().await {
+            Ok(conn) => conn,
+            Err(err) => return Self::unavailable(err),
+        };
+
+        let mut handle = match conn.lock_handle().await {
+            Ok(handle) => handle,
+            Err(err) => return Self::unavailable(err),
+        };
+
+        let vnl = Self::query_variable_number_limit(&mut handle);
+        let wal_path = Self::query_wal_path(&mut handle);
+
+        drop(handle);
+
+        Self {
+            variable_number_limit: vnl,
+            wal_path,
+        }
+    }
+
+    fn unavailable(err: sqlx::Error) -> Self {
+        Self {
+            variable_number_limit: None,
+            wal_path: Err(SqlitePathError::Acquire(Arc::new(err))),
+        }
+    }
+
+    fn query_variable_number_limit(handle: &mut LockedSqliteHandle<'_>) -> Option<usize> {
+        let raw_handle = handle.as_raw_handle();
+
+        #[allow(unsafe_code, reason = "FFI call to read SQLITE_LIMIT_VARIABLE_NUMBER")]
+        let limit = unsafe {
+            libsqlite3_sys::sqlite3_limit(
+                raw_handle.as_ptr(),
+                libsqlite3_sys::SQLITE_LIMIT_VARIABLE_NUMBER,
+                -1,
+            )
+        };
+
+        match usize::try_from(limit) {
+            Ok(l) => Some(l),
+            Err(err) => {
+                warn!(
+                    "failed to convert {limit} to a number to compute bind param count: {err}. \
+                     performance could be degraded."
+                );
+                None
+            }
+        }
+    }
+
+    fn query_wal_path(handle: &mut LockedSqliteHandle<'_>) -> Result<PathBuf, SqlitePathError> {
+        #[allow(unsafe_code)]
+        let db_filename = unsafe {
+            libsqlite3_sys::sqlite3_db_filename(handle.as_raw_handle().as_ptr(), c"main".as_ptr())
+        };
+
+        if db_filename.is_null() {
+            return Err(SqlitePathError::NullPath);
+        }
+
+        // Worth noting here that you have to be careful -- sqlite docs explicitly specify that the
+        // path you give this function **must** be the return pointer coming from
+        // `sqlite3_db_filename`.
+        #[allow(unsafe_code)]
+        let wal_filename = unsafe { libsqlite3_sys::sqlite3_filename_wal(db_filename) };
+
+        if wal_filename.is_null() {
+            return Err(SqlitePathError::NullPath);
+        }
+
+        #[allow(unsafe_code)]
+        let file_cstr = unsafe { CStr::from_ptr(wal_filename).to_bytes() };
+
+        Ok(PathBuf::from(std::str::from_utf8(file_cstr)?))
+    }
 }
 
 impl Info {
@@ -47,12 +150,9 @@ impl Info {
                 let version = Self::query_version(&pool).await.map_err(Arc::new);
 
                 // Finally, we do the things that need that nasty lock.
-                let variable_number_limit = Self::query_variable_number_limit(&pool).await;
+                let ffi_info = FfiInfo::query(&pool).await;
 
-                Self {
-                    variable_number_limit,
-                    version,
-                }
+                Self { ffi_info, version }
             },
             &tokio::runtime::Handle::current(),
         )
@@ -63,52 +163,13 @@ impl Info {
         Ok(semver::Version::parse(&str)?)
     }
 
-    /// Queries the database for the maximum number of bind parameters.
-    async fn query_variable_number_limit(pool: &SqlitePool) -> usize {
-        let mut conn = match pool.acquire().await {
-            Ok(c) => c,
-            Err(err) => {
-                warn!(
-                    "failed to grab a connection to query bind param count: {err}. performance \
-                     could be degraded."
-                );
-                return Self::MAX_BIND_PARAMS_FALLBACK;
-            }
-        };
+    /// Get the maximum number of `?` binds a SQL query can have.
+    pub fn variable_number_limit(&self) -> usize {
+        self.ffi_info.variable_number_limit.unwrap_or(Self::MAX_BIND_PARAMS_FALLBACK)
+    }
 
-        let mut handle = match conn.lock_handle().await {
-            Ok(h) => h,
-            Err(err) => {
-                warn!(
-                    "failed to lock the connection to query bind param count: {err}. performance \
-                     could be degraded."
-                );
-                return Self::MAX_BIND_PARAMS_FALLBACK;
-            }
-        };
-
-        let raw_handle = handle.as_raw_handle();
-
-        #[allow(unsafe_code, reason = "FFI call to read SQLITE_LIMIT_VARIABLE_NUMBER")]
-        let limit = unsafe {
-            libsqlite3_sys::sqlite3_limit(
-                raw_handle.as_ptr(),
-                libsqlite3_sys::SQLITE_LIMIT_VARIABLE_NUMBER,
-                -1,
-            )
-        };
-
-        drop(handle);
-
-        match usize::try_from(limit) {
-            Ok(l) => l,
-            Err(err) => {
-                warn!(
-                    "failed to convert {limit} to a number to compute bind param count: {err}. \
-                     performance could be degraded."
-                );
-                Self::MAX_BIND_PARAMS_FALLBACK
-            }
-        }
+    /// Get the path to the WAL database.
+    pub fn wal_path(&self) -> Result<&Path, SqlitePathError> {
+        self.ffi_info.wal_path.as_deref().map_err(Clone::clone)
     }
 }
