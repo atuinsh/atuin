@@ -1,9 +1,9 @@
 use std::io::Write;
+use std::num::NonZeroU16;
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 
-use atuin_common::ansi::{Vt100ParserExt as _, Vt100ScreenExt as _};
 use atuin_common::os::unix::{SecureTempDirError, create_secure_temp_dir};
 
 pub enum Msg {
@@ -24,7 +24,9 @@ pub fn socket_path() -> Result<PathBuf, SecureTempDirError> {
 
 pub fn spawn_parser_thread(rows: u16, cols: u16, msg_rx: Receiver<Msg>) {
     std::thread::spawn(move || {
-        let mut parser = vt100::Parser::new_safe(rows, cols, 0);
+        let rows = NonZeroU16::new(rows).unwrap_or(NonZeroU16::MIN);
+        let cols = NonZeroU16::new(cols).unwrap_or(NonZeroU16::MIN);
+        let mut parser = vt100::Parser::new(rows, cols, 0);
 
         loop {
             let Ok(first) = msg_rx.recv() else {
@@ -84,16 +86,16 @@ fn encode_screen(parser: &vt100::Parser) -> Vec<u8> {
     let (rows, cols) = screen.size();
     let (cursor_row, cursor_col) = screen.cursor_position();
 
-    let mut buf: Vec<u8> = Vec::with_capacity(256 + (rows as usize * cols as usize));
+    let mut buf = Vec::with_capacity(256 + (usize::from(rows) * usize::from(cols)));
     buf.extend_from_slice(&rows.to_be_bytes());
     buf.extend_from_slice(&cols.to_be_bytes());
     buf.extend_from_slice(&cursor_row.to_be_bytes());
     buf.extend_from_slice(&cursor_col.to_be_bytes());
 
-    for row_bytes in screen.rows_formatted(0, cols) {
-        let len = row_bytes.len() as u32;
+    for row_data in screen.rows_formatted(0, cols) {
+        let len = row_data.len() as u32;
         buf.extend_from_slice(&len.to_be_bytes());
-        buf.extend_from_slice(&row_bytes);
+        buf.extend_from_slice(row_data.as_bytes());
     }
 
     buf
@@ -102,7 +104,11 @@ fn encode_screen(parser: &vt100::Parser) -> Vec<u8> {
 fn handle_parser_msg(parser: &mut vt100::Parser, msg: Msg) {
     match msg {
         Msg::Data(data) => parser.process(&data),
-        Msg::Resize { rows, cols } => parser.screen_mut().set_size_safe(rows, cols),
+        Msg::Resize { rows, cols } => {
+            let rows = NonZeroU16::new(rows).unwrap_or(NonZeroU16::MIN);
+            let cols = NonZeroU16::new(cols).unwrap_or(NonZeroU16::MIN);
+            parser.screen_mut().set_size(rows, cols);
+        }
         Msg::ScreenRequest(reply_tx) => {
             let _ = reply_tx.send(encode_screen(parser));
         }
@@ -120,8 +126,6 @@ mod tests {
         (u16::from_be_bytes([blob[0], blob[1]]), u16::from_be_bytes([blob[2], blob[3]]))
     }
 
-    /// vt100 can panic when `rows` or `cols` is less than 2 (doy/vt100-rust#37>). Make sure we
-    /// clamp the dimensions to avoid panics.
     #[rstest]
     fn init_small_and_wrap(#[values(0, 1, 2, 3)] rows: u16, #[values(0, 1, 2, 3)] cols: u16) {
         let (msg_tx, msg_rx) = mpsc::sync_channel(8);
@@ -134,18 +138,17 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("parser thread still answering");
 
-        // Dimensions are clamped to (2, 2) to avoid panics in vt100.
-        assert_eq!(size_of(&blob), (rows.max(2), cols.max(2)));
+        // Dimensions are clamped to (1, 1) because vt100 dimensions must be positive.
+        assert_eq!(size_of(&blob), (rows.max(1), cols.max(1)));
     }
 
-    /// Same test as `init_small_and_wrap`, but for resizes.
     #[rstest]
     fn resize_small_and_wrap(#[values(0, 1, 2, 3)] rows: u16, #[values(0, 1, 2, 3)] cols: u16) {
-        let mut parser = vt100::Parser::new_safe(24, 80, 0);
+        let mut parser = vt100::Parser::default();
         handle_parser_msg(&mut parser, Msg::Resize { rows, cols });
         handle_parser_msg(&mut parser, Msg::Data(b"hello world".to_vec()));
 
-        // Dimensions are clamped to (2, 2) to avoid panics in vt100.
-        assert_eq!(size_of(&encode_screen(&parser)), (rows.max(2), cols.max(2)));
+        // Dimensions are clamped to (1, 1) because vt100 dimensions must be positive.
+        assert_eq!(size_of(&encode_screen(&parser)), (rows.max(1), cols.max(1)));
     }
 }

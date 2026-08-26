@@ -15,11 +15,11 @@ clap = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 atuin-common = { workspace = true, features = ["ansi", "os"] }
+atuin-vt100 = { workspace = true }
 crossterm = { workspace = true }
 eyre = { workspace = true }
 portable-pty = "0.9"
 signal-hook = "0.3"
-vt100 = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }

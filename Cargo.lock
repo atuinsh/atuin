@@ -317,6 +317,7 @@ dependencies = [
  "atuin-common",
  "atuin-daemon",
  "atuin-domain",
+ "atuin-vt100",
  "chrono",
  "chrono-humanize",
  "clap",
@@ -362,7 +363,6 @@ dependencies = [
  "typed-builder",
  "unicode-width 0.2.2",
  "uuid",
- "vt100",
  "xxhash-rust",
  "yaml-rust2",
 ]
@@ -436,6 +436,7 @@ dependencies = [
 name = "atuin-common"
 version = "18.20.0"
 dependencies = [
+ "atuin-vt100",
  "base64",
  "crypto_secretbox",
  "derive_more",
@@ -471,7 +472,6 @@ dependencies = [
  "unicode-width 0.2.2",
  "url",
  "uuid",
- "vt100",
  "zeroize",
 ]
 
@@ -605,13 +605,13 @@ name = "atuin-pty-proxy"
 version = "18.20.0"
 dependencies = [
  "atuin-common",
+ "atuin-vt100",
  "clap",
  "crossterm",
  "eyre",
  "portable-pty",
  "rstest",
  "signal-hook",
- "vt100",
 ]
 
 [[package]]
@@ -735,6 +735,17 @@ dependencies = [
  "time",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "atuin-vt100"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f1f37e21bb3cc6e1244deb0e7999c0a18da5e3e58caf92befc19ce53f6367e6"
+dependencies = [
+ "itoa",
+ "unicode-width 0.2.2",
+ "vte",
 ]
 
 [[package]]
@@ -6445,17 +6456,6 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-
-[[package]]
-name = "vt100"
-version = "0.16.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "054ff75fb8fa83e609e685106df4faeffdf3a735d3c74ebce97ec557d5d36fd9"
-dependencies = [
- "itoa",
- "unicode-width 0.2.2",
- "vte",
-]
 
 [[package]]
 name = "vte"
