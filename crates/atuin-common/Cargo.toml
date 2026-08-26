@@ -26,7 +26,7 @@ ansi = ["dep:vt100"]
 os = ["dep:rustix"]
 # The `sqlite` module: an atuin-specific wrapper around a bundled SQLite pool,
 # including shared WAL-checkpoint maintenance for the client-side SQLite stores.
-sqlite = ["dep:sqlx", "dep:libsqlite3-sys"]
+sqlite = ["dep:sqlx", "dep:libsqlite3-sys", "dep:tokio-util"]
 
 [dependencies]
 derive_more = { workspace = true }
@@ -52,6 +52,7 @@ itertools = { workspace = true }
 rusty_paseto = { workspace = true }
 rusty_paserk = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true, optional = true }
 parking_lot = { workspace = true }
 futures = "0.3"
 serde_json = { workspace = true }

@@ -1,16 +1,37 @@
-use std::path::Path;
+use std::ffi::CStr;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous};
+use sqlx::Connection;
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteConnection, SqliteJournalMode, SqlitePool, SqliteSynchronous,
+};
+use tracing::{debug, instrument};
 
 use super::{Sqlite, SqliteOpenOrCreateError};
 use crate::path::PathExt;
+use crate::sync::PeriodicTask;
+
+/// Enum which controls what kind of WAL journaling mode is enabled.
+///
+/// Currently, this is an atuin-specific subset of [`SqliteJournalMode`].
+#[derive(Debug, Clone, Copy)]
+pub enum Journaling {
+    Wal {
+        /// The maximum size of the journal before sqlite is configured to automatically sweep it.
+        ///
+        /// Do note that this is a suggestion for Sqlite and under heavy concurrent reads will not
+        /// be respected. See [`Compactor`] for a strict maximum size.
+        max_size_hint: u64,
+    },
+}
 
 pub struct SqliteBuilder<P> {
     path: P,
     timeout: Duration,
-    journal: SqliteJournalMode,
+    journal: Option<Journaling>,
     synchronous: SqliteSynchronous,
     foreign_keys: bool,
     restrict_permissions: bool,
@@ -18,11 +39,17 @@ pub struct SqliteBuilder<P> {
 }
 
 impl<P: AsRef<Path>> SqliteBuilder<P> {
+    /// When using the WAL, we set a journal limit in sqlite, which will cause sqlite to aim to have
+    /// the WAL fit within that size.
+    const DEFAULT_MAX_WAL_SIZE: u64 = 4 * 1024 * 1024;
+
     pub(super) fn new(path: P) -> Self {
         Self {
             path,
             timeout: Duration::from_secs(5),
-            journal: SqliteJournalMode::Wal,
+            journal: Some(Journaling::Wal {
+                max_size_hint: Self::DEFAULT_MAX_WAL_SIZE,
+            }),
             synchronous: SqliteSynchronous::Normal,
             foreign_keys: true,
             restrict_permissions: false,
@@ -37,7 +64,7 @@ impl<P: AsRef<Path>> SqliteBuilder<P> {
     }
 
     #[must_use]
-    pub fn journal(mut self, journal: SqliteJournalMode) -> Self {
+    pub fn journal(mut self, journal: Option<Journaling>) -> Self {
         self.journal = journal;
         self
     }
@@ -87,26 +114,51 @@ impl<P: AsRef<Path>> SqliteBuilder<P> {
 
         let mut opts = SqliteConnectOptions::from_str(path_str)
             .map_err(SqliteOpenOrCreateError::ConenctOptionsParsing)?
-            .journal_mode(self.journal)
             .optimize_on_close(true, None)
             .synchronous(self.synchronous)
             .foreign_keys(self.foreign_keys)
             .create_if_missing(true);
 
+        match self.journal {
+            Some(Journaling::Wal { max_size_hint }) => {
+                opts = opts
+                    .journal_mode(SqliteJournalMode::Wal)
+                    .pragma("journal_size_limit", max_size_hint.to_string())
+            }
+            None => {
+                opts = opts.journal_mode(SqliteJournalMode::Off);
+            }
+        };
+
         if self.regexp {
             opts = opts.with_regexp();
         }
 
-        let sqlite = Sqlite::connect(opts, self.timeout).await?;
+        let mut sqlite = Sqlite::connect(opts, self.timeout).await?;
 
         // Only WAL-mode databases can accumulate an unbounded `-wal` sidecar; anything else
         // has no such file, and the checkpoint's own `stat()` would just be wasted work.
-        if self.journal == SqliteJournalMode::Wal {
-            super::checkpoint::checkpoint_wal_if_needed(
-                path,
-                super::checkpoint::DEFAULT_WAL_CHECKPOINT_THRESHOLD_BYTES,
-            )
-            .await;
+        if self.journal == SqliteJournalMode::Wal
+            && let Some(wal_path) = wal_path(sqlite.pool()).await
+        {
+            checkpoint_wal_if_needed(&wal_path, path, DEFAULT_WAL_CHECKPOINT_THRESHOLD_BYTES).await;
+
+            let db_path = path.to_path_buf();
+            sqlite._checkpoint_task = Some(Arc::new(PeriodicTask::spawn_later(
+                DEFAULT_WAL_CHECKPOINT_INTERVAL,
+                move || {
+                    let wal_path = wal_path.clone();
+                    let db_path = db_path.clone();
+                    async move {
+                        checkpoint_wal_if_needed(
+                            &wal_path,
+                            &db_path,
+                            DEFAULT_WAL_CHECKPOINT_THRESHOLD_BYTES,
+                        )
+                        .await;
+                    }
+                },
+            )));
         }
 
         #[cfg(unix)]

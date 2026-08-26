@@ -493,6 +493,7 @@ dependencies = [
  "time",
  "tiny-bip39",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "unicode-segmentation",
@@ -6022,6 +6023,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

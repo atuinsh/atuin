@@ -1,19 +1,17 @@
 //! Sqlite-related utilities.
 
 mod builder;
-pub mod checkpoint;
+mod compactor;
 mod info;
 
-use std::path::{Path, PathBuf};
-use std::time::Duration;
-
+use crate::sync::EagerFutureCell;
 pub use builder::SqliteBuilder;
-pub use checkpoint::{DEFAULT_WAL_CHECKPOINT_THRESHOLD_BYTES, checkpoint_wal_if_needed};
+use compactor::Compactor;
 pub use info::{Info, VersionError};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 use thiserror::Error;
-
-use crate::sync::EagerFutureCell;
 
 /// An atuin-specific wrapper around Sqlite.
 ///
@@ -26,6 +24,9 @@ pub struct Sqlite {
     ///
     /// This value represents that.
     info: EagerFutureCell<Info>,
+
+    /// A periodic task which compacts the WAL if necessary.
+    compactor: Compactor,
 }
 
 #[derive(Debug, Error)]
@@ -65,6 +66,7 @@ impl Sqlite {
         Ok(Self {
             info: Info::new_eager_future(pool.clone()),
             pool,
+            _wal_compactor: None,
         })
     }
 

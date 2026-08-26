@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use atuin_client::database::Sqlite as HistoryDatabase;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
@@ -23,11 +21,6 @@ pub use client::{ControlClient, SemanticClient, emit_event, emit_event_with_sett
 pub use components::{HistoryComponent, SearchComponent, SemanticComponent, SyncComponent};
 pub use daemon::{AnyComponent, Daemon, DaemonBuilder, DaemonHandle};
 pub use events::DaemonEvent;
-
-/// How often the daemon re-checks its own pools' WAL size. The daemon holds its pools open
-/// for its entire lifetime, unlike the CLI which checks once per (short-lived) pool-open, so
-/// this is the only thing that bounds WAL growth for as long as the daemon keeps running.
-const WAL_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 /// Boot the daemon using the new component-based architecture.
 ///
@@ -95,49 +88,6 @@ pub async fn boot(
         shutdown_signal().await;
         tracing::info!("received shutdown signal");
         signal_handle.shutdown();
-    });
-
-    // lore-ok[7ac532e2]: this code and the timeout are now committed and pushed to the branch
-    // (were an unpushed local commit when this was first raised).
-    // lore-ok[3aece060]: fixed by capturing these paths once, here, from the same `settings`
-    // value the caller used to open history_db/store, instead of re-reading live settings on
-    // every tick -- see the comment below.
-    // lore-ok[ebfc3070]: same fix as 3aece060, same reasoning.
-    //
-    // Spawn periodic WAL checkpointing for the daemon's own pools.
-    //
-    // checkpoint_wal_if_needed also runs once inline when history_db/store were opened
-    // (before boot() was called), but the daemon then holds those same pools open for its
-    // entire lifetime rather than opening a fresh one per hook like the CLI does -- so
-    // without this, the WAL would only ever be truncated once, at daemon startup, and then
-    // grow unbounded for as long as the daemon keeps running.
-    //
-    // Deliberately captures these two paths once, now, rather than re-reading
-    // `handle.settings()` on every tick: history_db/store are fixed pools for the daemon's
-    // whole lifetime (a config reload swaps the `Settings` value but never reopens them, see
-    // `DaemonHandle::apply_settings`), so the paths worth checkpointing are the ones that were
-    // true when those pools were opened -- i.e. these, not whatever `db_path`/
-    // `record_store_path` happen to be after a later reload.
-    let history_db_path = settings.db_path.clone();
-    let record_store_path = settings.record_store_path.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(WAL_CHECKPOINT_INTERVAL);
-        interval.tick().await; // first tick fires immediately; skip it, boot already checked
-
-        loop {
-            interval.tick().await;
-
-            atuin_common::sqlite::checkpoint_wal_if_needed(
-                &history_db_path,
-                atuin_common::sqlite::DEFAULT_WAL_CHECKPOINT_THRESHOLD_BYTES,
-            )
-            .await;
-            atuin_common::sqlite::checkpoint_wal_if_needed(
-                &record_store_path,
-                atuin_common::sqlite::DEFAULT_WAL_CHECKPOINT_THRESHOLD_BYTES,
-            )
-            .await;
-        }
     });
 
     // Start the gRPC server in the background
