@@ -1,5 +1,9 @@
 //! Unix-specific utilities.
 
+pub mod file;
+pub mod socket;
+use std::os::fd::OwnedFd;
+use std::path::Path;
 use std::path::{Path, PathBuf};
 
 use rustix::fs;
