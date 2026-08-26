@@ -13,19 +13,10 @@ repository = { workspace = true }
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-# Enables the `test_utils` module.
 test-utils = ["dep:tracing-subscriber"]
-# The `string::ellipsis` module: budget-aware, grapheme/display-width-correct
-# string truncation. The module is compiled only when this feature is enabled.
 unicode = ["dep:unicode-width", "dep:unicode-segmentation"]
-# The `ansi` module: renders raw terminal byte streams (ANSI/ECMA-48 escape
-# sequences, backspaces, carriage returns, cursor motion) into clean plain text
-# via a `vt100` terminal emulator. Compiled only when enabled.
 ansi = ["dep:vt100"]
-# Enables OS-specific utilities.
 os = ["dep:rustix"]
-# The `sqlite` module: an atuin-specific wrapper around a bundled SQLite pool,
-# including shared WAL-checkpoint maintenance for the client-side SQLite stores.
 sqlite = ["dep:sqlx", "dep:libsqlite3-sys", "dep:tokio-util"]
 
 [dependencies]

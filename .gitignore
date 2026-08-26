@@ -10,10 +10,6 @@ publish.sh
 .planning/
 .antigravitycli/
 
-# Local MCP server config can carry live credentials (e.g. bearer tokens) --
-# never committed, even by accident.
-.mcp.json
-
 ui/backend/target
 ui/backend/gen
 
