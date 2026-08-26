@@ -25,8 +25,27 @@ pub enum Journaling {
 }
 
 enum SqliteLocation<'a> {
-    Memory,
+    Memory(&'a Path),
     Path(&'a Path),
+}
+
+impl<'a> SqliteLocation<'a> {
+    fn path(&self) -> &'a Path {
+        match *self {
+            Self::Memory(path) | Self::Path(path) => path,
+        }
+    }
+
+    fn fs_path(&self) -> Option<&'a Path> {
+        match *self {
+            Self::Path(path) => Some(path),
+            Self::Memory(_) => None,
+        }
+    }
+
+    fn is_memory(&self) -> bool {
+        matches!(self, Self::Memory(_))
+    }
 }
 
 pub struct SqliteBuilder<'a> {
@@ -44,18 +63,21 @@ impl<'a> SqliteBuilder<'a> {
     /// the WAL fit within that size.
     const DEFAULT_MAX_WAL_SIZE: u64 = 4 * 1024 * 1024;
 
-    pub(super) fn new<P: AsRef<Path> + ?Sized>(path: &'a P) -> Self {
-        let path = path.as_ref();
-
+    pub(super) fn new(path: &'a Path) -> Self {
         if Self::path_is_memory(path) {
-            return Self::memory();
+            return Self::with_location(SqliteLocation::Memory(path));
         }
 
         Self::with_location(SqliteLocation::Path(path))
     }
 
     pub(super) fn memory() -> Self {
-        Self::with_location(SqliteLocation::Memory)
+        Self::with_location(SqliteLocation::Memory(Path::new(":memory:")))
+    }
+
+    #[must_use]
+    pub fn is_memory(&self) -> bool {
+        self.location.is_memory()
     }
 
     fn with_location(location: SqliteLocation<'a>) -> Self {
@@ -109,19 +131,18 @@ impl<'a> SqliteBuilder<'a> {
     }
 
     pub async fn open(self) -> Result<Sqlite, SqliteOpenOrCreateError> {
-        let path: &Path = match &self.location {
-            SqliteLocation::Path(p) => p,
-            SqliteLocation::Memory => Path::new(":memory:"),
-        };
+        let path = self.location.path();
 
-        if path.is_dangling_symlink() {
-            return Err(SqliteOpenOrCreateError::BadSymlink(path.to_path_buf()));
-        }
+        if let Some(fs_path) = self.location.fs_path() {
+            if fs_path.is_dangling_symlink() {
+                return Err(SqliteOpenOrCreateError::BadSymlink(fs_path.to_path_buf()));
+            }
 
-        if !path.exists()
-            && let Some(dir) = path.parent()
-        {
-            std::fs::create_dir_all(dir).map_err(SqliteOpenOrCreateError::FailedToCreateDir)?;
+            if !fs_path.exists()
+                && let Some(dir) = fs_path.parent()
+            {
+                std::fs::create_dir_all(dir).map_err(SqliteOpenOrCreateError::FailedToCreateDir)?;
+            }
         }
 
         let path_str = path.to_str().ok_or_else(|| {
@@ -157,16 +178,17 @@ impl<'a> SqliteBuilder<'a> {
 
         let mut sqlite = Sqlite::connect(opts.clone(), self.timeout).await?;
 
-        if matches!(self.journal, Some(Journaling::Wal { .. }))
-            && !matches!(self.location, SqliteLocation::Memory)
-        {
+        if matches!(self.journal, Some(Journaling::Wal { .. })) && !self.location.is_memory() {
             sqlite.compactor = Compactor::spawn_active(opts, sqlite.info.clone()).await;
         }
 
         #[cfg(unix)]
-        if self.restrict_permissions && path.exists() {
+        if self.restrict_permissions
+            && let Some(fs_path) = self.location.fs_path()
+            && fs_path.exists()
+        {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            std::fs::set_permissions(fs_path, std::fs::Permissions::from_mode(0o600))
                 .map_err(SqliteOpenOrCreateError::FailedToSetPermissions)?;
         }
 

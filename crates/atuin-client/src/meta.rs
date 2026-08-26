@@ -35,8 +35,14 @@ impl MetaStore {
         let path = path.as_ref();
         debug!("opening meta sqlite database at {path:?}");
 
-        let store = Self::from_builder(Sqlite::builder(path), timeout).await?;
-        store.migrate_files().await?;
+        let builder = Sqlite::builder(path);
+        let ephemeral = builder.is_memory();
+
+        let store = Self::from_builder(builder, timeout).await?;
+
+        if !ephemeral {
+            store.migrate_files().await?;
+        }
 
         Ok(store)
     }
@@ -342,5 +348,12 @@ mod tests {
 
         store.save_latest_version("1.2.3").await.unwrap();
         assert_eq!(store.latest_version().await.unwrap(), Some("1.2.3".to_string()));
+    }
+
+    #[tokio::test]
+    async fn memory_store_skips_file_migration() {
+        let store = MetaStore::new(":memory:", Duration::from_secs(2)).await.unwrap();
+
+        assert_eq!(store.get(KEY_FILES_MIGRATED).await.unwrap(), None);
     }
 }
