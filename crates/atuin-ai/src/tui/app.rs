@@ -115,7 +115,7 @@ pub struct AiApp {
     permission_prompt_for: Option<String>,
     /// Cursor for the /model picker, reset whenever the picker closes.
     model_select: SelectState,
-    /// Controls the scope of "always allow" (e.g., git root vs current directory).
+    /// Controls the scope of "always allow" (e.g., repository root vs current directory).
     project_scope: ProjectScope,
     /// Submitted by `init` as if typed (the `atuin ai "question"` path).
     initial_prompt: Option<String>,
@@ -175,7 +175,7 @@ impl AiApp {
         settings: impl Into<Arc<Settings>>,
     ) -> Self {
         Self {
-            project_scope: ProjectScope::detect(io.app_ctx.git_root.as_deref()),
+            project_scope: ProjectScope::detect(io.app_ctx.vcs_root.as_deref()),
             io: Some(io),
             usage,
             initial_prompt,
@@ -444,7 +444,7 @@ impl AiApp {
                         PermissionTarget::Project => {
                             let project_root = io
                                 .app_ctx
-                                .git_root
+                                .vcs_root
                                 .clone()
                                 .or_else(|| std::env::current_dir().ok())
                                 .unwrap_or_else(|| PathBuf::from("."));

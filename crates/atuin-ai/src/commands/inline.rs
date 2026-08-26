@@ -79,8 +79,8 @@ pub async fn run(
         None
     };
 
-    let git_root =
-        std::env::current_dir().ok().and_then(|cwd| atuin_common::utils::in_git_repo(&cwd));
+    let vcs_root =
+        std::env::current_dir().ok().and_then(|cwd| atuin_common::utils::in_vcs_repo(&cwd));
 
     let ctx = AppContext {
         endpoint,
@@ -90,7 +90,7 @@ pub async fn run(
         send_cwd,
         last_command,
         history_db: Arc::new(history_db),
-        git_root,
+        vcs_root,
         capabilities: settings.ai.capabilities.clone(),
         daemon_enabled: settings.daemon.enabled,
         yolo: settings.ai.yolo,
@@ -230,12 +230,12 @@ async fn run_inline_tui(
     };
 
     let cwd = std::env::current_dir().ok().map(|p| p.to_string_lossy().into_owned());
-    let git_root_str = ctx.git_root.as_ref().map(|p| p.to_string_lossy().into_owned());
+    let vcs_root_str = ctx.vcs_root.as_ref().map(|p| p.to_string_lossy().into_owned());
 
     let resumable = service
         .find_resumable(
             cwd.as_deref(),
-            git_root_str.as_deref(),
+            vcs_root_str.as_deref(),
             settings.ai.session_continue_minutes,
         )
         .await?;
@@ -295,7 +295,7 @@ async fn run_inline_tui(
     } else {
         debug!("creating new AI session");
         let mgr =
-            SessionManager::create_new(Box::new(service), cwd.as_deref(), git_root_str.as_deref());
+            SessionManager::create_new(Box::new(service), cwd.as_deref(), vcs_root_str.as_deref());
         let invocation_id = uuid::Uuid::now_v7().to_string();
         let caps = ctx.capabilities_as_strings();
         let fsm = AgentFsm::new(caps, invocation_id);
@@ -312,7 +312,7 @@ async fn run_inline_tui(
     let snapshot_store = crate::snapshots::SnapshotStore::open(snapshot_dir).ok();
 
     // ─── Discover skills ───────────────────────────────────────
-    let project_root = ctx.git_root.clone().or_else(|| std::env::current_dir().ok());
+    let project_root = ctx.vcs_root.clone().or_else(|| std::env::current_dir().ok());
     let skill_registry = crate::skills::SkillRegistry::discover(project_root.as_deref()).await;
 
     // ─── Resume notice (frozen at startup) ──────────────────────

@@ -155,7 +155,7 @@ impl CommandData {
         self.directories.contains(&dir)
     }
 
-    /// Check if any invocation matches a directory prefix (workspace/git root).
+    /// Check if any invocation matches a directory prefix (workspace/repo root).
     /// O(n) where n = number of unique directories for this command.
     pub fn has_invocation_in_workspace(&self, prefix: &str, interner: &ThreadedRodeo) -> bool {
         self.directories.iter().any(|&spur| interner.resolve(&spur).starts_with(prefix))
