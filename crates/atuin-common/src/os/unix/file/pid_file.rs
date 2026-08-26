@@ -5,7 +5,7 @@
 //! In our case, this is encoded by the [`PidMeta`] structure.
 
 use std::fs::{File, OpenOptions, Permissions};
-use std::io::{Read, Seek, Write};
+use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
@@ -17,7 +17,7 @@ use crate::os::unix::file::locked_exclusive_file::LockingError;
 pub trait IsCodecError: std::error::Error + Send + Sync + Sized + 'static {}
 
 /// Defines the contents stored within a PID file.
-trait IsPidfileBody {
+trait IsPidfileBody: Sized {
     type CodecError: IsCodecError;
 
     /// The PID which owns this pid file.
@@ -59,7 +59,7 @@ pub struct PidFile {
     file: File,
 }
 
-impl<B: IsPidfileBody> PidFile {
+impl PidFile {
     /// Attempt to lock the given file to create a [`LockedPidFile`].
     ///
     /// A locked PID file has the following semantics:
@@ -70,35 +70,36 @@ impl<B: IsPidfileBody> PidFile {
     ///
     /// This function requires you provide the metadata identifying the active process. This can be
     /// any structure you wish, and it will be written into the PID file.
-    pub fn try_lock(self, meta: &B) -> Result<LockedPidFile, PidfileLockingError<B::CodecError>> {
+    pub fn try_lock<B: IsPidfileBody>(
+        self,
+        meta: &B,
+    ) -> Result<LockedPidFile, PidfileLockingError<B::CodecError>> {
         let encoded = meta.to_bytes().map_err(PidfileLockingError::EncodingError)?;
 
-        let locked = match LockedExclusiveFile::try_from(self.file) {
+        let mut locked = match LockedExclusiveFile::try_from(self.file) {
             Ok(f) => f,
-            Err(err) => match err.1 {
-                LockingError::AlreadyLocked(err) => {
-                    // Awesome, well we know that some other process is holding the file hostage,
-                    // and there's not much we can do about it.
-                    //
-                    // Let's get more info and abort.
-                    let mut buf = Vec::new();
-                    (&self.file).read_to_end(&mut buf)?;
+            Err((file, LockingError::AlreadyLocked(_))) => {
+                // Awesome, well we know that some other process is holding the file hostage,
+                // and there's not much we can do about it.
+                //
+                // Let's get more info and abort.
+                let mut buf = Vec::new();
+                (&file).read_to_end(&mut buf)?;
 
-                    let body = B::from_bytes(&buf).map_err(PidfileLockingError::DecodingError)?;
+                let body = B::from_bytes(&buf).map_err(PidfileLockingError::DecodingError)?;
 
-                    return Err(PidfileLockingError::OwnedByAnotherPid(body.owner()));
-                }
-                LockingError::Io(err) => {
-                    // Seems like there was an error attempting to lock this file, there's not
-                    // really much we can do, as this is completely unexpected. Let's just abort.
-                    return Err(PidfileLockingError::LockingIo(err));
-                }
-            },
+                return Err(PidfileLockingError::OwnedByAnotherPid(body.owner()));
+            }
+            Err((_file, LockingError::Io(err))) => {
+                // Seems like there was an error attempting to lock this file, there's not
+                // really much we can do, as this is completely unexpected. Let's just abort.
+                return Err(PidfileLockingError::LockingIo(err));
+            }
         };
 
-        self.file.set_len(0)?;
-        self.file.write_all(&encoded).map_err(PidfileLockingError::Stamping)?;
-        self.file.rewind();
+        let file = locked.file_mut();
+        file.set_len(0)?;
+        file.write_all(&encoded).map_err(PidfileLockingError::Stamping)?;
 
         Ok(LockedPidFile { file: locked })
     }
