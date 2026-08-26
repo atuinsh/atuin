@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use atuin_common::sqlite::Sqlite;
+use atuin_common::sqlite::{Sqlite, SqliteBuilder};
 use sqlx::Result;
 use sqlx::sqlite::SqlitePool;
 use tracing::debug;
@@ -18,7 +18,15 @@ impl Database {
         let path = path.as_ref();
         debug!("opening KV sqlite database at {:?}", path);
 
-        let sqlite = Sqlite::builder(path).timeout(timeout).regexp().open().await?;
+        Self::from_builder(Sqlite::builder(path), timeout).await
+    }
+
+    pub async fn in_memory(timeout: Duration) -> eyre::Result<Self> {
+        Self::from_builder(Sqlite::builder_in_memory(), timeout).await
+    }
+
+    async fn from_builder(builder: SqliteBuilder<'_>, timeout: Duration) -> eyre::Result<Self> {
+        let sqlite = builder.timeout(timeout).regexp().open().await?;
 
         Self::setup_db(sqlite.pool()).await?;
 
@@ -126,7 +134,7 @@ mod test {
 
     #[fixture]
     async fn db() -> Database {
-        Database::new(":memory:", Duration::from_secs(1)).await.unwrap()
+        Database::in_memory(Duration::from_secs(1)).await.unwrap()
     }
 
     #[fixture]

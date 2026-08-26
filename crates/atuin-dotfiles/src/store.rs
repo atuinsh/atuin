@@ -354,7 +354,7 @@ mod tests {
 
     #[fixture]
     async fn alias_store() -> (AliasStore, SqliteStore) {
-        let store = SqliteStore::new(":memory:", test_local_timeout()).await.unwrap();
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
         let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
         let host_id = atuin_domain::record::HostId(atuin_common::utils::uuid_v7());
 

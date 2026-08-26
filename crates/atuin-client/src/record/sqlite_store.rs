@@ -7,7 +7,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use atuin_common::encryption::paseto_v4;
-use atuin_common::sqlite::Sqlite;
+use atuin_common::sqlite::{Sqlite, SqliteBuilder};
 use atuin_domain::record::{
     Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
     RecordVersion,
@@ -66,7 +66,15 @@ impl SqliteStore {
 
         debug!("opening sqlite database at {path:?}");
 
-        let sqlite = Sqlite::builder(path).timeout(timeout).open().await?;
+        Self::from_builder(Sqlite::builder(path), timeout).await
+    }
+
+    pub async fn in_memory(timeout: Duration) -> Result<Self> {
+        Self::from_builder(Sqlite::builder_in_memory(), timeout).await
+    }
+
+    async fn from_builder(builder: SqliteBuilder<'_>, timeout: Duration) -> Result<Self> {
+        let sqlite = builder.timeout(timeout).open().await?;
 
         Self::setup_db(sqlite.pool()).await?;
 
@@ -442,7 +450,7 @@ mod tests {
 
     #[fixture]
     async fn store() -> SqliteStore {
-        SqliteStore::new(":memory:", test_local_timeout()).await.unwrap()
+        SqliteStore::in_memory(test_local_timeout()).await.unwrap()
     }
 
     #[fixture]

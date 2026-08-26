@@ -51,8 +51,13 @@ pub enum SqliteOpenOrCreateError {
 
 impl Sqlite {
     #[must_use]
-    pub fn builder<P: AsRef<Path>>(path: P) -> SqliteBuilder<P> {
+    pub fn builder<P: AsRef<Path> + ?Sized>(path: &P) -> SqliteBuilder<'_> {
         SqliteBuilder::new(path)
+    }
+
+    #[must_use]
+    pub fn builder_in_memory() -> SqliteBuilder<'static> {
+        SqliteBuilder::memory()
     }
 
     async fn connect(

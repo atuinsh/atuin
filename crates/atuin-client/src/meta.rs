@@ -2,7 +2,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 
-use atuin_common::sqlite::{Journaling, Sqlite};
+use atuin_common::sqlite::{Journaling, Sqlite, SqliteBuilder};
 use atuin_domain::record::HostId;
 use eyre::{Result, eyre};
 use time::OffsetDateTime;
@@ -35,9 +35,18 @@ impl MetaStore {
         let path = path.as_ref();
         debug!("opening meta sqlite database at {path:?}");
 
-        let is_memory = path.to_str().is_some_and(|p| p.contains(":memory:"));
+        let store = Self::from_builder(Sqlite::builder(path), timeout).await?;
+        store.migrate_files().await?;
 
-        let sqlite = Sqlite::builder(path)
+        Ok(store)
+    }
+
+    pub async fn in_memory(timeout: Duration) -> Result<Self> {
+        Self::from_builder(Sqlite::builder_in_memory(), timeout).await
+    }
+
+    async fn from_builder(builder: SqliteBuilder<'_>, timeout: Duration) -> Result<Self> {
+        let sqlite = builder
             .timeout(timeout)
             .journal(Some(Journaling::Delete))
             .foreign_keys(false)
@@ -47,16 +56,10 @@ impl MetaStore {
 
         sqlx::migrate!("./meta-migrations").run(sqlite.pool()).await?;
 
-        let store = Self {
+        Ok(Self {
             sqlite,
             cached_host_id: OnceCell::const_new(),
-        };
-
-        if !is_memory {
-            store.migrate_files().await?;
-        }
-
-        Ok(store)
+        })
     }
 
     // Generic key-value operations
@@ -269,7 +272,7 @@ mod tests {
 
     #[fixture]
     async fn store() -> MetaStore {
-        MetaStore::new(":memory:", Duration::from_secs(2)).await.unwrap()
+        MetaStore::in_memory(Duration::from_secs(2)).await.unwrap()
     }
 
     #[rstest]

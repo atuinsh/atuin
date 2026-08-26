@@ -24,8 +24,13 @@ pub enum Journaling {
     Delete,
 }
 
-pub struct SqliteBuilder<P> {
-    path: P,
+enum SqliteLocation<'a> {
+    Memory,
+    Path(&'a Path),
+}
+
+pub struct SqliteBuilder<'a> {
+    location: SqliteLocation<'a>,
     timeout: Duration,
     journal: Option<Journaling>,
     synchronous: SqliteSynchronous,
@@ -34,14 +39,28 @@ pub struct SqliteBuilder<P> {
     regexp: bool,
 }
 
-impl<P: AsRef<Path>> SqliteBuilder<P> {
+impl<'a> SqliteBuilder<'a> {
     /// When using the WAL, we set a journal limit in sqlite, which will cause sqlite to aim to have
     /// the WAL fit within that size.
     const DEFAULT_MAX_WAL_SIZE: u64 = 4 * 1024 * 1024;
 
-    pub(super) fn new(path: P) -> Self {
+    pub(super) fn new<P: AsRef<Path> + ?Sized>(path: &'a P) -> Self {
+        let path = path.as_ref();
+
+        if Self::path_is_memory(path) {
+            return Self::memory();
+        }
+
+        Self::with_location(SqliteLocation::Path(path))
+    }
+
+    pub(super) fn memory() -> Self {
+        Self::with_location(SqliteLocation::Memory)
+    }
+
+    fn with_location(location: SqliteLocation<'a>) -> Self {
         Self {
-            path,
+            location,
             timeout: Duration::from_secs(5),
             journal: Some(Journaling::Wal {
                 max_size_hint: Self::DEFAULT_MAX_WAL_SIZE,
@@ -90,7 +109,10 @@ impl<P: AsRef<Path>> SqliteBuilder<P> {
     }
 
     pub async fn open(self) -> Result<Sqlite, SqliteOpenOrCreateError> {
-        let path = self.path.as_ref();
+        let path: &Path = match &self.location {
+            SqliteLocation::Path(p) => p,
+            SqliteLocation::Memory => Path::new(":memory:"),
+        };
 
         if path.is_dangling_symlink() {
             return Err(SqliteOpenOrCreateError::BadSymlink(path.to_path_buf()));
@@ -135,7 +157,9 @@ impl<P: AsRef<Path>> SqliteBuilder<P> {
 
         let mut sqlite = Sqlite::connect(opts.clone(), self.timeout).await?;
 
-        if matches!(self.journal, Some(Journaling::Wal { .. })) {
+        if matches!(self.journal, Some(Journaling::Wal { .. }))
+            && !matches!(self.location, SqliteLocation::Memory)
+        {
             sqlite.compactor = Compactor::spawn_active(opts, sqlite.info.clone()).await;
         }
 
@@ -147,5 +171,27 @@ impl<P: AsRef<Path>> SqliteBuilder<P> {
         }
 
         Ok(sqlite)
+    }
+
+    /// Test whether a given "path" is actually a sqlite memory specification.
+    fn path_is_memory(path: &Path) -> bool {
+        let Some(raw) = path.to_str() else {
+            return false;
+        };
+
+        let stripped = raw
+            .strip_prefix("sqlite://")
+            .or_else(|| raw.strip_prefix("sqlite:"))
+            .or_else(|| raw.strip_prefix("file://"))
+            .or_else(|| raw.strip_prefix("file:"))
+            .unwrap_or(raw);
+
+        let (database, params) = match stripped.split_once('?') {
+            Some((database, params)) => (database, Some(params)),
+            None => (stripped, None),
+        };
+
+        database == ":memory:"
+            || params.is_some_and(|params| params.split('&').any(|pair| pair == "mode=memory"))
     }
 }
