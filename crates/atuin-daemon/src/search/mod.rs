@@ -1,6 +1,7 @@
 //! Search module for the daemon gRPC search service.
 //!
 //! This module provides fuzzy search over command history using frizbee.
+#![allow(clippy::must_use_candidate, reason = "prost-generated proto code")]
 
 use std::borrow::Cow;
 

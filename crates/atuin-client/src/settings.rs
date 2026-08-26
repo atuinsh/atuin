@@ -1289,6 +1289,7 @@ impl Settings {
     /// the correct auth strategy. Also performs cleanup of mis-stored tokens
     /// (e.g. a CLI token incorrectly saved in the Hub session slot).
     #[cfg(feature = "sync")]
+    #[must_use]
     pub async fn resolve_sync_auth(&self) -> SyncAuth {
         let meta = match Self::meta_store().await {
             Ok(m) => m,

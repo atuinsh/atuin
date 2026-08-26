@@ -86,6 +86,7 @@ impl Search {
         }
     }
 
+    #[must_use]
     fn next_query_id(&mut self) -> u64 {
         self.query_id += 1;
         self.query_id

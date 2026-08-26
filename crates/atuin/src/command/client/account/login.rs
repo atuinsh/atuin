@@ -340,10 +340,12 @@ async fn logout_wrong_key() -> ! {
     std::process::exit(1);
 }
 
+#[must_use]
 pub(super) fn or_user_input(value: Option<String>, name: &'static str) -> String {
     value.unwrap_or_else(|| read_user_input(name).unwrap_or_default())
 }
 
+#[must_use]
 pub(super) fn read_user_password() -> String {
     let password = prompt_password("Please enter password: ");
     password.expect("Failed to read from input")

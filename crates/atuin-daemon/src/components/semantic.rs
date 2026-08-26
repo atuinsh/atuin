@@ -137,6 +137,7 @@ impl Component for SemanticComponent {
 }
 
 impl SemanticComponentInner {
+    #[must_use]
     async fn record_capture(&self, capture: CommandCapture) -> bool {
         let mut state = self.state.lock().await;
         state.record_capture(capture)
@@ -154,6 +155,7 @@ impl SemanticComponentInner {
 }
 
 impl SemanticState {
+    #[must_use]
     fn record_capture(&mut self, mut capture: CommandCapture) -> bool {
         let Some(history_id) = history_id_from_str(capture.history_id.as_deref()) else {
             tracing::debug!(
@@ -335,6 +337,7 @@ impl SemanticState {
 }
 
 impl SessionCaptures {
+    #[must_use]
     fn push(
         &mut self,
         history_id: HistoryId,
@@ -343,6 +346,7 @@ impl SessionCaptures {
         self.push_with_limits(history_id, record, MAX_COMMANDS_PER_SESSION, MAX_BYTES_PER_SESSION)
     }
 
+    #[must_use]
     fn push_with_limits(
         &mut self,
         history_id: HistoryId,
@@ -364,6 +368,7 @@ impl SessionCaptures {
         (capture_id, self.evict_to_limits(max_commands, max_output_bytes))
     }
 
+    #[must_use]
     fn evict_to_limits(
         &mut self,
         max_commands: usize,

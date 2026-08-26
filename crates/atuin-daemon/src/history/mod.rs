@@ -1,6 +1,7 @@
 //! History module for the daemon gRPC history service.
 //!
 //! This module contains the proto-generated types for the history gRPC service.
+#![allow(clippy::must_use_candidate, reason = "prost-generated code")]
 
 // Include the generated proto code
 tonic::include_proto!("history");

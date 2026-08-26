@@ -302,6 +302,7 @@ impl ReadToolCall {
         }
     }
 
+    #[must_use]
     pub fn execute(&self) -> ToolOutcome {
         let path = self.resolved_path();
 
@@ -443,6 +444,7 @@ impl EditToolCall {
     ///
     /// Callers should snapshot the file before calling this method and
     /// update the file tracker after a successful return.
+    #[must_use]
     pub fn execute(
         &self,
         resolved_path: &Path,
@@ -628,6 +630,7 @@ impl WriteToolCall {
     ///
     /// Creates a new file or overwrites an existing one (if `overwrite` is set).
     /// Returns the outcome and the written bytes (for tracker updates).
+    #[must_use]
     pub fn execute(&self, resolved_path: &Path) -> (ToolOutcome, Option<Vec<u8>>) {
         if resolved_path.is_dir() {
             return (

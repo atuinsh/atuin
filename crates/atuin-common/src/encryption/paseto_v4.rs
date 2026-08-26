@@ -145,6 +145,7 @@ impl Key {
     }
 
     /// Generate a new key with the XSalsa20Poly1305 algorithm.
+    #[must_use]
     pub fn generate() -> Self {
         <[u8; 32]>::from(XSalsa20Poly1305::generate_key(&mut aead::OsRng)).into()
     }

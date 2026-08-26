@@ -471,6 +471,7 @@ impl ThemeManager {
 
     // Check if the requested theme is loaded and, if not, then attempt to get it
     // from the builtins or, if not there, from file
+    #[must_use]
     pub fn load_theme(&mut self, name: &str, max_depth: Option<u8>) -> &Theme {
         if self.loaded_themes.contains_key(name) {
             return self.loaded_themes.get(name).unwrap();
