@@ -95,7 +95,7 @@ impl ActiveCompactor {
             sqlx::query_as("PRAGMA wal_checkpoint(PASSIVE)").fetch_one(&mut *conn).await?;
 
         if busy != 0 || checkpointed < log {
-            // This query risks causing reader starvation, but this is the intent. In order
+            // This query risks causing reader starvation, but this is the intent.
             sqlx::query("PRAGMA wal_checkpoint(RESTART)").execute(conn).await?;
         }
 
