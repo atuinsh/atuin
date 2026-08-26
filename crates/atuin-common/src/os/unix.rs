@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use rustix::fs;
 
 /// Get the current UID.
+#[must_use]
 pub fn uid() -> std::ffi::c_uint {
     rustix::process::getuid().as_raw()
 }

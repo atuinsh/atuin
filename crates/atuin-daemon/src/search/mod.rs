@@ -19,6 +19,7 @@ const MAX_QUERY_LEN: usize = 512;
 /// Truncate a query to the longest length frizbee can score without panicking in
 /// [`frizbee::Matcher::from_query`]. Anything that hands a query to frizbee (including
 /// client-side highlighting) must apply this.
+#[must_use]
 pub fn truncate_query(query: &str) -> &str {
     // O(1) happy path -- query cannot exceed `MAX_QUERY_LEN` chars if it doesn't even have that
     // many bytes.

@@ -72,18 +72,22 @@ pub struct Theme {
 // theme-related boilerplate minimal, the convenience functions give a color.
 impl Theme {
     // This is the base "default" color, for general text
+    #[must_use]
     pub fn get_base(&self) -> ContentStyle {
         self.styles[&Meaning::Base]
     }
 
+    #[must_use]
     pub fn get_info(&self) -> ContentStyle {
         self.get_alert(tracing::Level::INFO)
     }
 
+    #[must_use]
     pub fn get_warning(&self) -> ContentStyle {
         self.get_alert(tracing::Level::WARN)
     }
 
+    #[must_use]
     pub fn get_error(&self) -> ContentStyle {
         self.get_alert(tracing::Level::ERROR)
     }
@@ -94,6 +98,7 @@ impl Theme {
         self.styles[ALERT_TYPES.get(&severity).unwrap()]
     }
 
+    #[must_use]
     pub fn new(
         name: String,
         parent: Option<String>,
@@ -117,6 +122,7 @@ impl Theme {
     }
 
     // General access - if you have a meaning, this will give you a (crossterm) style
+    #[must_use]
     pub fn as_style(&self, meaning: Meaning) -> ContentStyle {
         self.styles[self.closest_meaning(&meaning)]
     }
@@ -126,6 +132,7 @@ impl Theme {
     // but we do not have this on in general, as it could print unfiltered text to the terminal
     // from a theme TOML file. However, it will always return a theme, falling back to
     // defaults on error, so that a TOML file does not break loading
+    #[must_use]
     pub fn from_foreground_colors(
         name: String,
         parent: Option<&Self>,
@@ -358,6 +365,7 @@ pub struct ThemeManager {
 
 // Theme-loading logic
 impl ThemeManager {
+    #[must_use]
     pub fn new(debug: Option<bool>, theme_dir: Option<String>) -> Self {
         Self {
             loaded_themes: HashMap::new(),

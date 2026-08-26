@@ -8,6 +8,7 @@ pub struct OfficialPlugin {
 }
 
 impl OfficialPlugin {
+    #[must_use]
     pub fn new(name: &str, description: &str, install_message: &str) -> Self {
         Self {
             name: name.to_string(),
@@ -22,6 +23,7 @@ pub struct OfficialPluginRegistry {
 }
 
 impl OfficialPluginRegistry {
+    #[must_use]
     pub fn new() -> Self {
         let mut registry = Self {
             plugins: HashMap::new(),
@@ -47,14 +49,17 @@ impl OfficialPluginRegistry {
         );
     }
 
+    #[must_use]
     pub fn get_plugin(&self, name: &str) -> Option<&OfficialPlugin> {
         self.plugins.get(name)
     }
 
+    #[must_use]
     pub fn is_official_plugin(&self, name: &str) -> bool {
         self.plugins.contains_key(name)
     }
 
+    #[must_use]
     pub fn get_install_message(&self, name: &str) -> Option<&str> {
         self.plugins.get(name).map(|plugin| plugin.install_message.as_str())
     }
@@ -72,6 +77,7 @@ pub struct PluginContext {
 }
 
 impl PluginContext {
+    #[must_use]
     pub fn new(_subcommand: &str) -> Self {
         Self {
             #[cfg(windows)]

@@ -69,6 +69,7 @@ pub async fn var_config(store: &VarStore) -> String {
     cached_vars(vars, store).await
 }
 
+#[must_use]
 pub fn format_alias(alias: &Alias) -> String {
     // Set-Alias doesn't support adding implicit arguments, so use a function.
     // See https://github.com/PowerShell/PowerShell/issues/12962
@@ -89,6 +90,7 @@ pub fn format_alias(alias: &Alias) -> String {
     result
 }
 
+#[must_use]
 pub fn format_var(var: &Var) -> String {
     secure_command(&format!(
         "${}{} = '{}'",

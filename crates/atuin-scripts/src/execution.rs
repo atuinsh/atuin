@@ -11,6 +11,7 @@ use tracing::debug;
 use crate::store::script::Script;
 
 // Helper function to build a complete script with shebang
+#[must_use]
 pub fn build_executable_script(script: &str, shebang: &str) -> String {
     if shebang.is_empty() {
         // Default to bash if no shebang is provided

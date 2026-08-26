@@ -82,6 +82,7 @@ struct SemanticCommandRecord {
 }
 
 impl SemanticComponent {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             inner: Arc::new(SemanticComponentInner {
@@ -90,6 +91,7 @@ impl SemanticComponent {
         }
     }
 
+    #[must_use]
     pub fn grpc_service(&self) -> SemanticServer<SemanticGrpcService> {
         SemanticServer::new(SemanticGrpcService {
             inner: self.inner.clone(),

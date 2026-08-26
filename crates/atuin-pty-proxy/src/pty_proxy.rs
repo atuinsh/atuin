@@ -151,6 +151,7 @@ fn env_flag(name: &str) -> bool {
 /// lets `atuin init` embed the preamble (via the `pty_proxy.enabled` setting)
 /// without conflicting with an existing standalone `atuin pty-proxy init`
 /// line in shell config.
+#[must_use]
 pub fn init_script(shell: Shell) -> &'static str {
     render_init(shell)
 }

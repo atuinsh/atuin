@@ -139,6 +139,7 @@ impl Info {
     /// # Panics
     ///
     /// Panics if there is no active [`tokio::runtime::Handle`].
+    #[must_use]
     pub fn new_eager_future(pool: SqlitePool) -> EagerFutureCell<Self> {
         EagerFutureCell::new(
             async move {
@@ -164,6 +165,7 @@ impl Info {
     }
 
     /// Get the maximum number of `?` binds a SQL query can have.
+    #[must_use]
     pub fn variable_number_limit(&self) -> usize {
         self.ffi_info.variable_number_limit.unwrap_or(Self::MAX_BIND_PARAMS_FALLBACK)
     }

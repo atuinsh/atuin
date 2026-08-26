@@ -31,6 +31,7 @@ pub struct OrFilter<L> {
 
 impl<L: FilterStorage> OrFilter<L> {
     /// Create an "all" filter (i.e., allow all items).
+    #[must_use]
     pub const fn all() -> Self {
         Self { inner: L::EMPTY }
     }
