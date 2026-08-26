@@ -12,7 +12,7 @@ use atuin_scripts::execution::{
 use atuin_scripts::store::ScriptStore;
 use atuin_scripts::store::script::Script;
 use clap::{Parser, Subcommand};
-use eyre::{OptionExt, Result, bail};
+use eyre::{Context as _, OptionExt, Result, bail};
 use tempfile::NamedTempFile;
 use tracing::{debug, instrument};
 
@@ -555,7 +555,8 @@ impl Cmd {
         history_db: &Sqlite,
     ) -> Result<()> {
         let host_id = Settings::host_id().await?;
-        let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
+        let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+            .context("could not load or generate encryption key")?;
 
         let script_store = ScriptStore::new(store, host_id, encryption_key);
         let script_db = atuin_scripts::database::Database::new(
