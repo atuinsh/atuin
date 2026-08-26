@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## 18.20.1
+
+### Bug Fixes
+
+- *(client)* Bound WAL growth with journal_size_limit + a periodic compactor ([#3994](https://github.com/atuinsh/atuin/issues/3994))
+- *(docs)* Correct sync_frequency default ([#3984](https://github.com/atuinsh/atuin/issues/3984))
+- *(nu)* Use unique keybinding names ([#3975](https://github.com/atuinsh/atuin/issues/3975))
+- Correct documented local_timeout default ([#3983](https://github.com/atuinsh/atuin/issues/3983))
+- Drop nonexistent session_path and correct path defaults ([#3985](https://github.com/atuinsh/atuin/issues/3985))
+- Auto-generate encryption key if it doesn't exist ([#3998](https://github.com/atuinsh/atuin/issues/3998))
+
+
+### Features
+
+- Switch terminal emulation to `atuin-vt100` ([#3995](https://github.com/atuinsh/atuin/issues/3995))
+
+
+### Miscellaneous Tasks
+
+- *(release)* Include all crates in publish order
+
+
+### Refactor
+
+- *(deps)* Bump uuid from 1.23.2 to 1.25.0 ([#3886](https://github.com/atuinsh/atuin/issues/3886))
+- Remove atuin-lab-share crate ([#3993](https://github.com/atuinsh/atuin/issues/3993))
+
 ## 18.20.0
 
 ### Bug Fixes
