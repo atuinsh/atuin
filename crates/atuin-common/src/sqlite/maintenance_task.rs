@@ -92,12 +92,30 @@ impl ActiveMaintenanceTask {
             }
         };
 
-        let mut ticker = tokio::time::interval(Self::PERIOD);
-        ticker.tick().await;
+        let mut compaction_ticker = tokio::time::interval(Self::PERIOD);
+        // Consume the immediate first tick so the first WAL check happens after one PERIOD,
+        // preserving the previous behavior.
+        compaction_ticker.tick().await;
+
+        // Fire the first vacuum check after an initial delay (never during startup), then
+        // every VACUUM_PERIOD. interval_at's first tick lands at the deadline, not immediately.
+        let mut vacuum_ticker = tokio::time::interval_at(
+            tokio::time::Instant::now() + Self::VACUUM_INITIAL_DELAY,
+            Self::VACUUM_PERIOD,
+        );
+
         loop {
-            ticker.tick().await;
-            if let Err(error) = Self::compact_wal(&mut conn, &wal).await {
-                warn!(%error, "failed to compact the WAL");
+            tokio::select! {
+                _ = compaction_ticker.tick() => {
+                    if let Err(error) = Self::compact_wal(&mut conn, &wal).await {
+                        warn!(%error, "failed to compact the WAL");
+                    }
+                }
+                _ = vacuum_ticker.tick() => {
+                    if let Err(error) = Self::maintain_vacuum(&mut conn).await {
+                        warn!(%error, "failed to vacuum the database");
+                    }
+                }
             }
         }
     }
