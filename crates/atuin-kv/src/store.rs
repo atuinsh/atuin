@@ -23,6 +23,7 @@ pub struct KvStore {
 }
 
 impl KvStore {
+    #[must_use]
     pub fn new(
         record_store: SqliteStore,
         kv_db: Database,

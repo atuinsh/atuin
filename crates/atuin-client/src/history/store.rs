@@ -132,6 +132,7 @@ const BUILD_BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(5000).unwrap();
 const DECODE_CONCURRENCY: usize = 4;
 
 impl HistoryStore {
+    #[must_use]
     pub fn new(store: SqliteStore, host_id: HostId, encryption_key: paseto_v4::Key) -> Self {
         Self {
             store,

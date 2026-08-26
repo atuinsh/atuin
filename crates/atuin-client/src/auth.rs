@@ -109,6 +109,7 @@ pub struct LegacyAuthClient {
 }
 
 impl LegacyAuthClient {
+    #[must_use]
     pub fn new(
         address: &Url,
         session_token: Option<String>,
@@ -248,6 +249,7 @@ pub struct HubAuthClient {
 }
 
 impl HubAuthClient {
+    #[must_use]
     pub fn new(address: &Url, hub_token: Option<String>) -> Self {
         Self {
             address: address.clone(),

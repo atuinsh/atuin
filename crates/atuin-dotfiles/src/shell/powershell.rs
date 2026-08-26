@@ -39,6 +39,7 @@ async fn cached_vars(path: PathBuf, store: &VarStore) -> String {
 /// In the worst case, Atuin should not function but the shell should start correctly.
 ///
 /// While currently this only returns aliases, it will be extended to also return other synced dotfiles
+#[must_use]
 pub async fn alias_config(store: &AliasStore) -> String {
     // First try to read the cached config
     let aliases = atuin_common::utils::dotfiles_cache_dir().join("aliases.ps1");
@@ -54,6 +55,7 @@ pub async fn alias_config(store: &AliasStore) -> String {
     cached_aliases(aliases, store).await
 }
 
+#[must_use]
 pub async fn var_config(store: &VarStore) -> String {
     // First try to read the cached config
     let vars = atuin_common::utils::dotfiles_cache_dir().join("vars.ps1");
@@ -69,6 +71,7 @@ pub async fn var_config(store: &VarStore) -> String {
     cached_vars(vars, store).await
 }
 
+#[must_use]
 pub fn format_alias(alias: &Alias) -> String {
     // Set-Alias doesn't support adding implicit arguments, so use a function.
     // See https://github.com/PowerShell/PowerShell/issues/12962
@@ -89,6 +92,7 @@ pub fn format_alias(alias: &Alias) -> String {
     result
 }
 
+#[must_use]
 pub fn format_var(var: &Var) -> String {
     secure_command(&format!(
         "${}{} = '{}'",

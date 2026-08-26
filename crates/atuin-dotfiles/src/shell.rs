@@ -75,6 +75,7 @@ impl Var {
     }
 }
 
+#[must_use]
 pub fn parse_alias(line: &str) -> Option<Alias> {
     // consider the fact we might be importing a fish alias
     // 'alias' output

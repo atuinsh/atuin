@@ -27,6 +27,7 @@ pub const AUTHOR_FILTER_ALL_USER: &str = "$all-user";
 /// The spelling of [`AuthorPattern::AllAgent`] on the command line and in the MCP tool schema.
 pub const AUTHOR_FILTER_ALL_AGENT: &str = "$all-agent";
 
+#[must_use]
 pub fn is_known_agent(author: &str) -> bool {
     KNOWN_AGENTS.contains(&author)
 }
@@ -52,11 +53,13 @@ impl AuthorKind {
     /// so it stays in lockstep with [`Self::from_repr`] (a test pins the two together).
     pub const VARIANTS: [Self; 2] = [Self::User, Self::Agent];
 
+    #[must_use]
     pub const fn as_u8(self) -> u8 {
         self as u8
     }
 
     /// The kind stated by the invoking integration's environment (`ATUIN_HISTORY_AUTHOR_KIND`).
+    #[must_use]
     pub fn probe_current() -> Option<Self> {
         let value = env::var(HISTORY_AUTHOR_KIND_ENV).ok()?;
         clap::ValueEnum::from_str(&value, true).ok()
@@ -112,6 +115,7 @@ const HISTORY_AUTHOR_KIND_ENV: &str = "ATUIN_HISTORY_AUTHOR_KIND";
 const HISTORY_INTENT_ENV: &str = "ATUIN_HISTORY_INTENT";
 
 /// The author identity exported by the invoking integration (`ATUIN_HISTORY_AUTHOR`).
+#[must_use]
 pub fn probe_author() -> Option<String> {
     normalize_optional_string(env::var(HISTORY_AUTHOR_ENV).ok())
 }
@@ -129,6 +133,7 @@ impl Version {
     pub const VARIANTS: [Self; 3] = [Self::Zero, Self::One, Self::Two];
     pub const LATEST: Self = Self::Two;
 
+    #[must_use]
     pub fn from_name(s: &str) -> Option<Self> {
         match s {
             "v0" => Some(Self::Zero),
@@ -138,6 +143,7 @@ impl Version {
         }
     }
 
+    #[must_use]
     pub const fn name(&self) -> &'static str {
         match self {
             Self::Zero => "v0",
@@ -146,10 +152,12 @@ impl Version {
         }
     }
 
+    #[must_use]
     pub const fn as_int(&self) -> u16 {
         *self as u16
     }
 
+    #[must_use]
     pub fn min_fields(&self) -> u32 {
         match self {
             Self::Zero => 9,
@@ -158,6 +166,7 @@ impl Version {
         }
     }
 
+    #[must_use]
     pub fn max_fields(&self) -> Option<u32> {
         match self {
             Self::Zero => Some(9),
@@ -302,6 +311,7 @@ impl History {
     /// recorded in the entry's origin, in which case the author is just the default it fell back
     /// to and tells us nothing. That exception is what stops a user called `pi` from looking like
     /// the `pi` agent.
+    #[must_use]
     pub fn is_agent(&self) -> bool {
         match self.author_kind {
             Some(kind) => kind == AuthorKind::Agent,
@@ -591,6 +601,7 @@ impl History {
         builder::HistoryFromDb::builder()
     }
 
+    #[must_use]
     pub fn success(&self) -> bool {
         self.exit == 0 || self.duration == -1
     }

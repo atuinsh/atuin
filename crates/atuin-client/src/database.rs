@@ -87,6 +87,7 @@ pub async fn current_context() -> eyre::Result<Context> {
 }
 
 impl Context {
+    #[must_use]
     pub fn from_history(entry: &History) -> Self {
         Self {
             session: entry.session.to_string(),
@@ -246,6 +247,7 @@ impl SearchMode {
     ///
     /// This maps [`SearchMode::DaemonFuzzy`], which is interactive-only, to
     /// [`DbSearchMode::Fuzzy`].
+    #[must_use]
     pub fn closest_db_mode(self) -> DbSearchMode {
         match self {
             Self::Prefix => DbSearchMode::Prefix,
@@ -882,6 +884,7 @@ impl Sqlite {
         Ok(res.into_iter().map(|r| (r.history, r.count)).collect())
     }
 
+    #[must_use]
     pub fn all_paged(&self, page_size: usize, include_deleted: bool, unique: bool) -> Paged {
         Paged::new(self.clone(), page_size, include_deleted, unique)
     }
@@ -1057,6 +1060,7 @@ pub struct Paged {
 }
 
 impl Paged {
+    #[must_use]
     pub fn new(database: Sqlite, page_size: usize, include_deleted: bool, unique: bool) -> Self {
         Self {
             database,
@@ -1167,6 +1171,7 @@ impl QueryToken<'_> {
         }
     }
 
+    #[must_use]
     pub fn is_inverse(&self) -> bool {
         match self {
             Self::Match(_, inv)
@@ -1179,6 +1184,7 @@ impl QueryToken<'_> {
 }
 
 impl<'a> QueryTokenizer<'a> {
+    #[must_use]
     pub fn new(query: &'a str) -> Self {
         Self { query, last_pos: 0 }
     }

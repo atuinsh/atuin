@@ -13,6 +13,7 @@ impl Osc133DebugHighlighter {
         }
     }
 
+    #[must_use]
     pub(crate) fn render(&mut self, data: &[u8]) -> Vec<u8> {
         let mut events = Vec::new();
         self.parser.push_located(data, |located| events.push(located));

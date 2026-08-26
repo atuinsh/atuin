@@ -458,6 +458,7 @@ impl Client {
 
     /// The capability reader this client negotiates against, for capability-gated features to
     /// consult (e.g. `client.caps().get_server::<SomeCap>()`).
+    #[must_use]
     pub fn caps(&self) -> &Arc<CapClient> {
         &self.caps
     }

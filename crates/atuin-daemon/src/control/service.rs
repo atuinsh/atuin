@@ -23,11 +23,13 @@ pub struct ControlService {
 
 impl ControlService {
     /// Create a new control service with the given daemon handle.
+    #[must_use]
     pub fn new(handle: DaemonHandle) -> Self {
         Self { handle }
     }
 
     /// Get a tonic server for this service.
+    #[must_use]
     pub fn into_server(self) -> ControlServer<Self> {
         ControlServer::new(self)
     }

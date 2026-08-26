@@ -879,6 +879,7 @@ impl AiApp {
         Some((name, args))
     }
 
+    #[must_use]
     fn resolve_slash_command(&self, command: &str) -> String {
         match command.trim() {
             "/reload" => {

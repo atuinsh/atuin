@@ -6,6 +6,7 @@ type ScoredHistory = (f64, History);
 // This sorting should be applicable to all search modes, and solve the more "obvious" issues
 // first.
 // Later on, we can pass in context and do some boosts there too.
+#[must_use]
 pub fn sort(query: &str, input: Vec<History>) -> Vec<History> {
     // This can totally be extended. We need to be _careful_ that it's not slow.
     // We also need to balance sorting db-side with sorting here. SQLite can do a lot,

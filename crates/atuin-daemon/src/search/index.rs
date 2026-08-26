@@ -355,6 +355,7 @@ pub struct SearchIndex {
 
 impl SearchIndex {
     /// Create a new empty search index.
+    #[must_use]
     pub fn new(shells: OrFilter<Vec<String>>) -> Self {
         Self {
             commands: Arc::new(DashMap::new()),

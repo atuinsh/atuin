@@ -11,6 +11,7 @@ use atuin_client::theme::Meaning;
 /// Rows are re-classified on every redraw while typing or scrolling, so
 /// results are memoized; repeat frames cost a hash lookup, not a parse.
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "illumos"))]
+#[must_use]
 pub fn classify(cmd: &str, shell: Option<&str>) -> Vec<Meaning> {
     use std::cell::RefCell;
     use std::collections::HashMap;

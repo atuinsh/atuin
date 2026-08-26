@@ -3,7 +3,12 @@
 //! This module contains the proto-generated types for the history gRPC service.
 
 // Include the generated proto code
-tonic::include_proto!("history");
+mod proto {
+    #![allow(clippy::must_use_candidate, reason = "prost-generated code")]
+
+    tonic::include_proto!("history");
+}
+pub use proto::*;
 
 impl From<Option<atuin_client::history::AuthorKind>> for AuthorKind {
     fn from(kind: Option<atuin_client::history::AuthorKind>) -> Self {

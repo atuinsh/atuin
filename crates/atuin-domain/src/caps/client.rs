@@ -106,6 +106,7 @@ impl CapClient {
     /// Create a client that will negotiate against the given capabilities endpoint.
     ///
     /// Fetches anonymously; see [`CapClient::new_with_auth`] for per-user documents.
+    #[must_use]
     pub fn new(capabilities_url: Url, http: reqwest::Client) -> Arc<Self> {
         Self::new_with_auth(capabilities_url, http, None)
     }
@@ -113,6 +114,7 @@ impl CapClient {
     /// Like [`CapClient::new`], but each capability fetch carries the
     /// `Authorization` header the provider resolves at fetch time, letting the
     /// server scope the advertised document to the current user.
+    #[must_use]
     pub fn new_with_auth(
         capabilities_url: Url,
         http: reqwest::Client,

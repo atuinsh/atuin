@@ -29,6 +29,7 @@ pub struct CapServer {
 impl CapServer {
     /// Create an empty capability server. It advertises nothing until you [`add`](Self::add) to it,
     /// but still carries a stable token for the empty set.
+    #[must_use]
     pub fn new() -> Self {
         let mut server = Self {
             token: String::new(),

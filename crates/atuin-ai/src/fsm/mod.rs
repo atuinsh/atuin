@@ -163,6 +163,7 @@ pub struct AgentContext {
 }
 
 impl AgentContext {
+    #[must_use]
     fn next_timeout_id(&mut self) -> u64 {
         let id = self.next_timeout_id;
         self.next_timeout_id += 1;
@@ -244,6 +245,7 @@ impl AgentFsm {
     }
 
     /// Handle an event, returning effects to execute.
+    #[must_use]
     pub fn handle(&mut self, event: Event) -> Vec<Effect> {
         // From all states: if the session ID arrives and isn't set, set it, then continue as normal.
         // This event fires from the stream response headers, rather than having to wait until the end
