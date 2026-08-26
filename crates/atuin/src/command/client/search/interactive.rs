@@ -1977,7 +1977,7 @@ pub async fn history(
     let default_filter_mode = settings
         .filter_mode_shell_up_key_binding
         .filter(|_| settings.shell_up_key_binding)
-        .unwrap_or_else(|| settings.default_filter_mode(initial_context.git_root.is_some()));
+        .unwrap_or_else(|| settings.default_filter_mode(initial_context.vcs_root.is_some()));
 
     let mut app = State {
         history_count: None,
@@ -2479,7 +2479,7 @@ mod tests {
                     cwd: String::new(),
                     cmd_origin: atuin_domain::record::CmdOrigin::default(),
                     host_id: String::new(),
-                    git_root: None,
+                    vcs_root: None,
                 },
                 custom_context: None,
                 shells: Shells::all(),

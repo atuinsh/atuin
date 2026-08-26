@@ -982,7 +982,7 @@ impl Cmd {
             (true, true) => [Session, Directory],
             (true, false) => [Session, Global],
             (false, true) => [Global, Directory],
-            (false, false) => [settings.default_filter_mode(context.git_root.is_some()), Global],
+            (false, false) => [settings.default_filter_mode(context.vcs_root.is_some()), Global],
         };
 
         let history = db.list(filters, &context, None, false, include_deleted, None).await?;
