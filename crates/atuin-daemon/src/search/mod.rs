@@ -1,7 +1,6 @@
 //! Search module for the daemon gRPC search service.
 //!
 //! This module provides fuzzy search over command history using frizbee.
-#![allow(clippy::must_use_candidate, reason = "prost-generated proto code")]
 
 use std::borrow::Cow;
 
@@ -10,7 +9,12 @@ mod index;
 mod normalize;
 
 // Include the generated proto code
-tonic::include_proto!("search");
+mod proto {
+    #![allow(clippy::must_use_candidate, reason = "prost-generated proto code")]
+
+    tonic::include_proto!("search");
+}
+pub use proto::*;
 
 /// Longest query the fuzzy matcher will see. Frizbee's `u16` scores overflow (and panic) somewhere
 /// past ~2700 needle chars; no real query is anywhere near either limit, so longer input is
