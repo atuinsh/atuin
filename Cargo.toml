@@ -1,5 +1,3 @@
-# lore-ok[704edc91]: pure-Rust Cargo workspace, no JS toolchain anywhere in this repo -- there
-# is no package.json to install, and npm/tsc/eslint checks are not applicable.
 [workspace]
 members = ["crates/*"]
 
