@@ -1,5 +1,6 @@
 use std::env;
-use std::path::{Path, PathBuf};
+use std::ffi::OsStr;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use atuin_common::filter::{self, OrFilter};
@@ -316,7 +317,7 @@ struct HistoryWithCount {
 
 impl Sqlite {
     #[instrument(level = "trace", skip_all, fields(timeout = ?timeout), err)]
-    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> eyre::Result<Self> {
+    pub async fn new(path: impl AsRef<OsStr>, timeout: Duration) -> eyre::Result<Self> {
         let path = path.as_ref();
         debug!("opening sqlite database at {path:?}");
 

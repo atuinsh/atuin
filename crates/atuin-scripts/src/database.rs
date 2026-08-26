@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::ffi::OsStr;
 use std::time::Duration;
 
 use atuin_common::sqlite::{Sqlite, SqliteBuilder};
@@ -14,7 +14,7 @@ pub struct Database {
 }
 
 impl Database {
-    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> eyre::Result<Self> {
+    pub async fn new(path: impl AsRef<OsStr>, timeout: Duration) -> eyre::Result<Self> {
         let path = path.as_ref();
         debug!("opening script sqlite database at {:?}", path);
 

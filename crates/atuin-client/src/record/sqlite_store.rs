@@ -2,7 +2,7 @@
 // Multiple stores of multiple types are all stored in one chonky table (for now), and we just index
 // by tag/host
 
-use std::path::Path;
+use std::ffi::OsStr;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -61,7 +61,7 @@ impl<'r> ::sqlx::FromRow<'r, SqliteRow> for DbRecord {
 
 impl SqliteStore {
     #[instrument(level = "trace", skip_all, fields(timeout = ?timeout), err)]
-    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> Result<Self> {
+    pub async fn new(path: impl AsRef<OsStr>, timeout: Duration) -> Result<Self> {
         let path = path.as_ref();
 
         debug!("opening sqlite database at {path:?}");

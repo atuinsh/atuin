@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::ffi::OsStr;
 use std::time::Duration;
 
 use atuin_common::sqlite::{Sqlite, SqliteBuilder};
@@ -40,7 +40,7 @@ pub struct AiSessionStore {
 }
 
 impl AiSessionStore {
-    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> Result<Self> {
+    pub async fn new(path: impl AsRef<OsStr>, timeout: Duration) -> Result<Self> {
         Self::from_builder(Sqlite::builder(path.as_ref()), timeout).await
     }
 

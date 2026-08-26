@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::ffi::OsStr;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -24,32 +24,8 @@ pub enum Journaling {
     Delete,
 }
 
-enum SqliteLocation<'a> {
-    Memory(&'a Path),
-    Path(&'a Path),
-}
-
-impl<'a> SqliteLocation<'a> {
-    fn path(&self) -> &'a Path {
-        match *self {
-            Self::Memory(path) | Self::Path(path) => path,
-        }
-    }
-
-    fn fs_path(&self) -> Option<&'a Path> {
-        match *self {
-            Self::Path(path) => Some(path),
-            Self::Memory(_) => None,
-        }
-    }
-
-    fn is_memory(&self) -> bool {
-        matches!(self, Self::Memory(_))
-    }
-}
-
 pub struct SqliteBuilder<'a> {
-    location: SqliteLocation<'a>,
+    input: &'a OsStr,
     timeout: Duration,
     journal: Option<Journaling>,
     synchronous: SqliteSynchronous,
@@ -63,26 +39,40 @@ impl<'a> SqliteBuilder<'a> {
     /// the WAL fit within that size.
     const DEFAULT_MAX_WAL_SIZE: u64 = 4 * 1024 * 1024;
 
-    pub(super) fn new(path: &'a Path) -> Self {
-        if Self::path_is_memory(path) {
-            return Self::with_location(SqliteLocation::Memory(path));
-        }
-
-        Self::with_location(SqliteLocation::Path(path))
+    pub(super) fn new(input: &'a OsStr) -> Self {
+        Self::with_input(input)
     }
 
     pub(super) fn memory() -> Self {
-        Self::with_location(SqliteLocation::Memory(Path::new(":memory:")))
+        Self::with_input(OsStr::new(":memory:"))
     }
 
     #[must_use]
     pub fn is_memory(&self) -> bool {
-        self.location.is_memory()
+        let path = self.input;
+        let Some(raw) = path.to_str() else {
+            return false;
+        };
+
+        let stripped = raw
+            .strip_prefix("sqlite://")
+            .or_else(|| raw.strip_prefix("sqlite:"))
+            .or_else(|| raw.strip_prefix("file://"))
+            .or_else(|| raw.strip_prefix("file:"))
+            .unwrap_or(raw);
+
+        let (database, params) = match stripped.split_once('?') {
+            Some((database, params)) => (database, Some(params)),
+            None => (stripped, None),
+        };
+
+        database == ":memory:"
+            || params.is_some_and(|params| params.split('&').any(|pair| pair == "mode=memory"))
     }
 
-    fn with_location(location: SqliteLocation<'a>) -> Self {
+    fn with_input(input: &'a OsStr) -> Self {
         Self {
-            location,
+            input,
             timeout: Duration::from_secs(5),
             journal: Some(Journaling::Wal {
                 max_size_hint: Self::DEFAULT_MAX_WAL_SIZE,
@@ -131,19 +121,7 @@ impl<'a> SqliteBuilder<'a> {
     }
 
     pub async fn open(self) -> Result<Sqlite, SqliteOpenOrCreateError> {
-        let path = self.location.path();
-
-        if let Some(fs_path) = self.location.fs_path() {
-            if fs_path.is_dangling_symlink() {
-                return Err(SqliteOpenOrCreateError::BadSymlink(fs_path.to_path_buf()));
-            }
-
-            if !fs_path.exists()
-                && let Some(dir) = fs_path.parent()
-            {
-                std::fs::create_dir_all(dir).map_err(SqliteOpenOrCreateError::FailedToCreateDir)?;
-            }
-        }
+        let path = self.input;
 
         let path_str = path.to_str().ok_or_else(|| {
             SqliteOpenOrCreateError::ConenctOptionsParsing(sqlx::Error::Configuration(
@@ -176,15 +154,30 @@ impl<'a> SqliteBuilder<'a> {
             opts = opts.with_regexp();
         }
 
+        let is_memory = self.is_memory();
+        let on_disk = (!is_memory).then(|| opts.get_filename().to_path_buf());
+
+        if let Some(fs_path) = &on_disk {
+            if fs_path.is_dangling_symlink() {
+                return Err(SqliteOpenOrCreateError::BadSymlink(fs_path.clone()));
+            }
+
+            if !fs_path.exists()
+                && let Some(dir) = fs_path.parent()
+            {
+                std::fs::create_dir_all(dir).map_err(SqliteOpenOrCreateError::FailedToCreateDir)?;
+            }
+        }
+
         let mut sqlite = Sqlite::connect(opts.clone(), self.timeout).await?;
 
-        if matches!(self.journal, Some(Journaling::Wal { .. })) && !self.location.is_memory() {
+        if matches!(self.journal, Some(Journaling::Wal { .. })) && !is_memory {
             sqlite.compactor = Compactor::spawn_active(opts, sqlite.info.clone()).await;
         }
 
         #[cfg(unix)]
         if self.restrict_permissions
-            && let Some(fs_path) = self.location.fs_path()
+            && let Some(fs_path) = &on_disk
             && fs_path.exists()
         {
             use std::os::unix::fs::PermissionsExt;
@@ -193,27 +186,5 @@ impl<'a> SqliteBuilder<'a> {
         }
 
         Ok(sqlite)
-    }
-
-    /// Test whether a given "path" is actually a sqlite memory specification.
-    fn path_is_memory(path: &Path) -> bool {
-        let Some(raw) = path.to_str() else {
-            return false;
-        };
-
-        let stripped = raw
-            .strip_prefix("sqlite://")
-            .or_else(|| raw.strip_prefix("sqlite:"))
-            .or_else(|| raw.strip_prefix("file://"))
-            .or_else(|| raw.strip_prefix("file:"))
-            .unwrap_or(raw);
-
-        let (database, params) = match stripped.split_once('?') {
-            Some((database, params)) => (database, Some(params)),
-            None => (stripped, None),
-        };
-
-        database == ":memory:"
-            || params.is_some_and(|params| params.split('&').any(|pair| pair == "mode=memory"))
     }
 }

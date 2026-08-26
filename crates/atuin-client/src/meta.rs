@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::ffi::OsStr;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -31,7 +31,7 @@ pub struct MetaStore {
 }
 
 impl MetaStore {
-    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> Result<Self> {
+    pub async fn new(path: impl AsRef<OsStr>, timeout: Duration) -> Result<Self> {
         let path = path.as_ref();
         debug!("opening meta sqlite database at {path:?}");
 

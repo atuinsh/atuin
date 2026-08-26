@@ -78,7 +78,7 @@ pub struct LocalSessionService {
 }
 
 impl LocalSessionService {
-    pub async fn open(path: impl AsRef<std::path::Path>, timeout: Duration) -> Result<Self> {
+    pub async fn open(path: impl AsRef<std::ffi::OsStr>, timeout: Duration) -> Result<Self> {
         let store = AiSessionStore::new(path, timeout).await?;
         Ok(Self { store })
     }
