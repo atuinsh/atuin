@@ -340,8 +340,8 @@ impl Sqlite {
     }
 
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn sqlite_version(&self) -> Result<String> {
-        sqlx::query_scalar("SELECT sqlite_version()").fetch_one(self.sqlite.pool()).await
+    pub async fn sqlite_version(&self) -> eyre::Result<semver::Version> {
+        Ok(self.sqlite.info().await.version?)
     }
 
     #[instrument(level = "trace", skip_all, err)]
