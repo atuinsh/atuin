@@ -28,6 +28,7 @@ atuin-server = { path = "crates/atuin-server", version = "18.20.0" }
 atuin-server-database = { path = "crates/atuin-server-database", version = "18.20.0" }
 atuin-server-postgres = { path = "crates/atuin-server-postgres", version = "18.20.0" }
 atuin-server-sqlite = { path = "crates/atuin-server-sqlite", version = "18.20.0" }
+atuin-vt100 = "0.17"
 frizbee = "0.12.0"
 base64 = "0.22"
 crossterm = "0.29.0"
@@ -83,7 +84,6 @@ minijinja = "2.9.0"
 glob-match = "0.2.1"
 imara-diff = "0.2"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
-vt100 = "0.16"
 regex = "1.10.5"
 toml_edit = "0.25.4"
 url = { version = "2.5", features = ["serde"] }

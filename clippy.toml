@@ -22,14 +22,6 @@ path = "time::UtcDateTime::from_unix_timestamp_nanos"
 reason = """same truncation bug as OffsetDateTime (time-rs/time#802); range-check the full i128 \
     before converting"""
 
-[[disallowed-methods]]
-path = "vt100::Parser::new"
-reason = "can panic; `use atuin_common::ansi::Vt100ParserExt as _` and use `Parser::new_safe`"
-
-[[disallowed-methods]]
-path = "vt100::Screen::set_size"
-reason = "can panic; `use atuin_common::ansi::Vt100ScreenExt as _` and use `Screen::set_size_safe`"
-
 [[disallowed-types]]
 path = "std::sync::Mutex"
 reason = "use parking_lot::Mutex which is faster"
