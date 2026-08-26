@@ -135,7 +135,7 @@ impl<P: AsRef<Path>> SqliteBuilder<P> {
         let mut sqlite = Sqlite::connect(opts.clone(), self.timeout).await?;
 
         if matches!(self.journal, Some(Journaling::Wal { .. })) {
-            sqlite.compactor = Compactor::spawn_active(opts, sqlite.info.clone());
+            sqlite.compactor = Compactor::spawn_active(opts, sqlite.info.clone()).await;
         }
 
         #[cfg(unix)]

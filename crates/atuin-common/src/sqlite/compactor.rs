@@ -40,15 +40,15 @@ impl ActiveCompactor {
     // What is the maximum acceptable period to compact the WAL?
     const MAX_TIMEOUT: Duration = Duration::from_millis(500);
 
-    fn spawn(opts: SqliteConnectOptions, info: EagerFutureCell<Info>) -> Self {
-        let task = tokio::spawn(Self::run(opts, info));
+    fn spawn(conn: SqliteConnection, info: EagerFutureCell<Info>) -> Self {
+        let task = tokio::spawn(Self::run(conn, info));
 
         Self {
             _task: Arc::new(AbortOnDropHandle::new(task)),
         }
     }
 
-    async fn run(opts: SqliteConnectOptions, info: EagerFutureCell<Info>) {
+    async fn run(mut conn: SqliteConnection, info: EagerFutureCell<Info>) {
         let wal_path = match info.get().await.wal_path().map(Path::to_path_buf) {
             Ok(wal_path) => wal_path,
             Err(error) => {
@@ -57,10 +57,10 @@ impl ActiveCompactor {
             }
         };
 
-        let (mut conn, wal) = match Self::open(opts, &wal_path).await {
-            Ok(handles) => handles,
+        let wal = match tokio::fs::File::open(&wal_path).await {
+            Ok(wal) => wal,
             Err(error) => {
-                warn!(%error, "failed to start the WAL compactor; the WAL may grow unbounded");
+                warn!(%error, "could not open the WAL file; WAL compactor disabled");
                 return;
             }
         };
@@ -97,14 +97,10 @@ impl ActiveCompactor {
         Ok(())
     }
 
-    async fn open(
-        opts: SqliteConnectOptions,
-        wal_path: impl AsRef<Path>,
-    ) -> Result<(SqliteConnection, tokio::fs::File), WalCompactionError> {
+    async fn connect(opts: SqliteConnectOptions) -> Result<SqliteConnection, WalCompactionError> {
         let conn = SqliteConnection::connect_with(&opts.busy_timeout(Self::MAX_TIMEOUT)).await?;
-        let wal = tokio::fs::File::open(wal_path).await?;
 
-        Ok((conn, wal))
+        Ok(conn)
     }
 }
 
@@ -130,11 +126,20 @@ pub(super) struct Compactor {
 }
 
 impl Compactor {
-    pub(super) fn spawn_active(opts: SqliteConnectOptions, info: EagerFutureCell<Info>) -> Self {
-        Self {
-            _inner: CompactorInner::Active {
-                _compactor: ActiveCompactor::spawn(opts, info),
+    pub(super) async fn spawn_active(
+        opts: SqliteConnectOptions,
+        info: EagerFutureCell<Info>,
+    ) -> Self {
+        match ActiveCompactor::connect(opts).await {
+            Ok(conn) => Self {
+                _inner: CompactorInner::Active {
+                    _compactor: ActiveCompactor::spawn(conn, info),
+                },
             },
+            Err(error) => {
+                warn!(%error, "failed to open the WAL compactor connection; WAL compactor disabled");
+                Self::inactive()
+            }
         }
     }
 
