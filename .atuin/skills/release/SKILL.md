@@ -322,21 +322,25 @@ out immediately. That is the whole point of the label.
 
 **If this is a stable release**, ask the user whether to publish.
 
-If yes, publish each crate **in dependency order** using `--no-verify`
+If yes, publish **every** crate in the workspace using `--no-verify`
 (the code already passed CI, and verification fails when crates.io
-hasn't indexed a freshly-published dependency yet):
+hasn't indexed a freshly-published dependency yet).
 
-```
-atuin-common, atuin-client, atuin-ai, atuin-dotfiles, atuin-history,
-atuin-daemon, atuin-kv, atuin-scripts, atuin-server-database,
-atuin-server-postgres, atuin-server-sqlite, atuin-server,
-atuin-pty-proxy, atuin
+Do not keep a hardcoded list of crates — discover them dynamically so new
+crates are never missed:
+
+```bash
+ls crates/
 ```
 
-For each crate, run from `crates/<name>`:
+Publish each one from `crates/<name>`:
 ```bash
 cargo publish --no-verify 2>&1
 ```
+
+Publish in dependency order: if a publish fails because a dependency isn't
+on crates.io yet (e.g. "failed to select a version for the requirement"),
+publish that dependency first, then retry the failed crate.
 
 If it fails with "already uploaded", report it as a skip (not an error) —
 some crates are versioned independently and may already be published at

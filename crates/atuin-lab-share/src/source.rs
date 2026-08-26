@@ -25,13 +25,20 @@ pub(crate) const READ_BUF: usize = 8192;
 /// width, and the mis-wrapped grid would then be minted into keyframes viewers
 /// replay. A spawned subshell never emits `Resize` (every resize it
 /// experiences is one the session applied *to* it); a source that mirrors a
-/// terminal owned by someone else (a tapped proxy) reports the owner's
-/// geometry changes here, at their exact position in the stream.
+/// terminal owned by someone else would report the owner's geometry changes
+/// here, at their exact position in the stream.
 pub(crate) enum ReadEvent {
     /// Raw source output bytes, never empty.
     Output(Vec<u8>),
     /// The source's terminal changed size at exactly this point in the
     /// output stream.
+    ///
+    /// No shipping source constructs this today — the subshell is the only
+    /// one, and it never resizes itself. It stays because it is what makes
+    /// the ordering guarantee above a property of the *seam* rather than of
+    /// the one source that happens to implement it, and because the session
+    /// side of it is exercised by `session::tests::mock_source`.
+    #[allow(dead_code)]
     Resize(Size),
 }
 
