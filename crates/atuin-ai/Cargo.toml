@@ -18,14 +18,15 @@ daemon = []
 tree-sitter = ["dep:tree-sitter", "dep:tree-sitter-bash", "dep:tree-sitter-fish"]
 
 [dependencies]
+atuin-client = { workspace = true }
+atuin-domain = { workspace = true }
+atuin-common = { workspace = true, features = ["unicode", "ansi", "sqlite"] }
+atuin-daemon = { workspace = true }
+atuin-vt100 = { workspace = true }
 enum_dispatch = { workspace = true }
 parking_lot = { workspace = true }
 async-trait = { workspace = true }
-atuin-client = { workspace = true }
-atuin-domain = { workspace = true }
 derive_more = { workspace = true }
-atuin-common = { workspace = true, features = ["unicode", "ansi", "sqlite"] }
-atuin-daemon = { workspace = true }
 tokio = { workspace = true }
 eyre = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
@@ -70,7 +71,6 @@ typed-builder = { workspace = true }
 shellexpand = { workspace = true }
 imara-diff = { workspace = true }
 xxhash-rust = { workspace = true }
-vt100 = { workspace = true }
 yaml-rust2 = "0.11"
 tempfile = { workspace = true }
 chrono = "0.4"

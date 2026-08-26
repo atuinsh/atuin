@@ -27,17 +27,6 @@ The path to the Atuin encryption key.
 key_path = "~/.atuin-key"
 ```
 
-### `session_path`
-
-Default: `~/.local/share/atuin/session`
-
-The path to the Atuin server session file.
-This is essentially just an API token
-
-```toml
-session_path = "~/.atuin-session"
-```
-
 ### `dialect`
 
 Default: `us`
@@ -92,7 +81,7 @@ sync_address = "https://api.atuin.sh"
 
 ### `sync_frequency`
 
-Default: `1h`
+Default: `5m`
 
 How often to automatically sync with the server. This can be given in a
 "human-readable" format. For example, `10s`, `20m`, `1h`, etc.
@@ -101,7 +90,7 @@ If set to `0`, Atuin will sync after every command. Some servers may rate limit
 frequent syncs, but this won't cause any issues.
 
 ```toml
-sync_frequency = "1h"
+sync_frequency = "5m"
 ```
 
 ### `search_mode`
@@ -499,12 +488,12 @@ extra_headers = { "CF-Access-Client-Id" = "...", "CF-Access-Client-Secret" = "..
 
 ### `local_timeout`
 
-Default: `5`
+Default: `2`
 
 Timeout (in seconds) for acquiring a local database connection (SQLite).
 
 ```toml
-local_timeout = 5
+local_timeout = 2
 ```
 
 ### `command_chaining`

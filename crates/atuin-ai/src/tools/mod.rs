@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use atuin_client::history::AuthorPattern;
-use atuin_common::ansi::{self, Vt100ParserExt as _};
+use atuin_common::ansi;
 use atuin_common::filter::OrFilter;
 use atuin_common::time::UtcOffsetExt;
 use enum_dispatch::enum_dispatch;
@@ -782,10 +782,10 @@ impl PermissibleToolCall for ShellToolCall {
 }
 
 /// Preview viewport height for VT100 emulation.
-const PREVIEW_HEIGHT: u16 = 10;
+const PREVIEW_HEIGHT: NonZeroU16 = NonZeroU16::new(10).unwrap();
 
 /// Default terminal width for VT100 emulation.
-const PREVIEW_WIDTH: u16 = 120;
+const PREVIEW_WIDTH: NonZeroU16 = NonZeroU16::new(120).unwrap();
 
 /// Extract plain text lines from a VT100 screen buffer.
 ///
@@ -849,7 +849,7 @@ pub async fn execute_shell_command_streaming(
     let stderr = child.stderr.take().expect("stderr was piped");
 
     // VT100 emulator for the live preview (viewport-sized)
-    let mut parser = vt100::Parser::new_safe(PREVIEW_HEIGHT, PREVIEW_WIDTH, 0);
+    let mut parser = vt100::Parser::new(PREVIEW_HEIGHT, PREVIEW_WIDTH, 0);
 
     let mut stdout_reader = tokio::io::BufReader::new(stdout);
     let mut stderr_reader = tokio::io::BufReader::new(stderr);
@@ -941,7 +941,7 @@ pub async fn execute_shell_command_streaming(
 
     // Strip ANSI escape sequences for clean LLM output by running
     // the raw bytes through a VT100 parser and extracting plain text.
-    let cols = NonZeroU16::new(PREVIEW_WIDTH).expect("PREVIEW_WIDTH is nonzero");
+    let cols = PREVIEW_WIDTH;
     let stdout_text = ansi::to_plain_text(&full_stdout, cols);
     let stderr_text = ansi::to_plain_text(&full_stderr, cols);
 

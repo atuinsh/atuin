@@ -2,9 +2,10 @@
 //! plus the bridged threads that cover the blocking edges tokio cannot — the
 //! PTY read and write always, and with a host terminal ([`HostUi`]) the
 //! raw-mode stdin read and the terminal write too. Headless mode
-//! (`host: None`, the `--active` tap) runs the same loop with the host-facing
-//! pieces absent — not idle: a daemonized session has null stdio, and a
-//! parked thread on it would never exit.
+//! (`host: None`) runs the same loop with the host-facing pieces absent — not
+//! idle: a session with null stdio would never see a parked thread on it
+//! exit. No shipping caller runs headless today; the mode is what the
+//! session's own tests drive it through.
 
 mod screen;
 

@@ -64,9 +64,9 @@ impl ScreenState {
     ///
     /// The size is floored at [`crate::MIN_COLS`] x [`crate::MIN_CHILD_ROWS`]
     /// before it reaches `vt100`. Every caller already clamps or refuses
-    /// upstream (`host_size_from`, `clamp_host_size`, `clamp_child`,
-    /// `proxy_tap::clamp_tap_size`); this is the last of those gates and the
-    /// only one that sits directly on the library that panics.
+    /// upstream (`host_size_from`, `clamp_host_size`, `clamp_child`); this is
+    /// the last of those gates and the only one that sits directly on the
+    /// library that panics.
     pub(super) fn new(size: Size) -> Self {
         let size = clamp(size);
         Self {
@@ -86,7 +86,7 @@ impl ScreenState {
 
     /// Run a `vt100` operation, absorbing any panic inside the library.
     ///
-    /// Defence in depth, mirroring `atuin_pty_proxy::screen::ParserState`'s
+    /// Defence in depth, mirroring the pty-proxy parser thread's
     /// guard of the same name and for the same reason: `vt100` 0.16.2 has
     /// panic paths beyond the degenerate-geometry ones the clamps remove, and
     /// this parser has no supervisor. It is owned by the session's central
