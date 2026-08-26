@@ -3,7 +3,6 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous};
-use tracing::warn;
 
 use super::compactor::Compactor;
 use super::{Sqlite, SqliteOpenOrCreateError};
@@ -136,14 +135,7 @@ impl<P: AsRef<Path>> SqliteBuilder<P> {
         let mut sqlite = Sqlite::connect(opts.clone(), self.timeout).await?;
 
         if matches!(self.journal, Some(Journaling::Wal { .. })) {
-            match sqlite.info().await.wal_path().map(Path::to_path_buf) {
-                Ok(wal_path) => {
-                    sqlite.compactor = Compactor::spawn_active(opts, wal_path).await;
-                }
-                Err(error) => {
-                    warn!(%error, "could not resolve the WAL path; WAL compactor disabled");
-                }
-            }
+            sqlite.compactor = Compactor::spawn_active(opts, sqlite.info.clone());
         }
 
         #[cfg(unix)]
