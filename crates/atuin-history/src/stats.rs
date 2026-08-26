@@ -238,6 +238,7 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
     println!("Unique commands:  {}", stats.unique_commands);
 }
 
+#[must_use]
 pub fn compute(
     settings: &Settings,
     history: &[History],

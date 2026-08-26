@@ -614,8 +614,8 @@ pub(super) async fn end_history_entry(
         SqliteStore::new(record_store_path, Duration::try_from_secs_f64(settings.local_timeout)?)
             .await?;
 
-    let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
-        .context("could not load encryption key")?;
+    let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+        .context("could not load or generate encryption key")?;
     let host_id = Settings::host_id().await?;
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
@@ -995,8 +995,8 @@ impl Cmd {
                 settings.timezone,
             );
         } else {
-            let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
-                .context("could not load encryption key")?;
+            let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+                .context("could not load or generate encryption key")?;
             let host_id = Settings::host_id().await?;
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
@@ -1050,8 +1050,8 @@ impl Cmd {
                 settings.timezone,
             );
         } else {
-            let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
-                .context("could not load encryption key")?;
+            let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+                .context("could not load or generate encryption key")?;
             let host_id = Settings::host_id().await?;
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
@@ -1129,8 +1129,8 @@ impl Cmd {
                 )
                 .await?;
 
-                let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
-                    .context("could not load encryption key")?;
+                let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+                    .context("could not load or generate encryption key")?;
 
                 let host_id = Settings::host_id().await?;
                 let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);

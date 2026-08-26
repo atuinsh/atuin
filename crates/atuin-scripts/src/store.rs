@@ -20,6 +20,7 @@ pub struct ScriptStore {
 }
 
 impl ScriptStore {
+    #[must_use]
     pub fn new(store: SqliteStore, host_id: HostId, encryption_key: paseto_v4::Key) -> Self {
         Self {
             store,

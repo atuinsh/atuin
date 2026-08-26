@@ -160,8 +160,8 @@ impl Cmd {
             return Ok(());
         }
 
-        let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
-            .context("could not load encryption key")?;
+        let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+            .context("could not load or generate encryption key")?;
         let host_id = Settings::host_id().await?;
 
         let alias_store = AliasStore::new(store, host_id, encryption_key);

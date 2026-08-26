@@ -52,6 +52,7 @@ pub struct SyncComponent {
 
 impl SyncComponent {
     /// Create a new sync component.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             task_handle: None,

@@ -36,6 +36,7 @@ pub enum ShellError {
 }
 
 impl Shell {
+    #[must_use]
     pub fn current() -> Self {
         let sys = System::new_all();
 
@@ -53,11 +54,13 @@ impl Shell {
         Self::from_string(shell)
     }
 
+    #[must_use]
     pub fn from_env() -> Self {
         std::env::var("ATUIN_SHELL")
             .map_or(Self::Unknown, |shell| Self::from_string(&shell.trim().to_lowercase()))
     }
 
+    #[must_use]
     pub fn config_file(&self) -> Option<std::path::PathBuf> {
         let mut path = directories::BaseDirs::new()?.home_dir().to_owned();
 
@@ -102,6 +105,7 @@ impl Shell {
         Ok(Self::from_string(&shell.unwrap().to_string_lossy()))
     }
 
+    #[must_use]
     pub fn from_string(name: &str) -> Self {
         match name {
             "bash" => Self::Bash,
@@ -119,6 +123,7 @@ impl Shell {
     /// Returns true if the shell is posix-like
     /// Note that while fish is not posix compliant, it behaves well enough for our current
     /// featureset that this does not matter.
+    #[must_use]
     pub fn is_posixish(&self) -> bool {
         matches!(self, Self::Bash | Self::Fish | Self::Zsh)
     }
@@ -146,6 +151,7 @@ impl Shell {
     }
 }
 
+#[must_use]
 pub fn shell_name(parent: Option<&Process>) -> String {
     let sys = System::new_all();
 

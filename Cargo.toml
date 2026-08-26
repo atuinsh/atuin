@@ -5,7 +5,7 @@ resolver = "2"
 exclude = ["ui/backend"]
 
 [workspace.package]
-version = "18.20.0"
+version = "18.20.1"
 authors = ["Ellie Huxtable <ellie@atuin.sh>"]
 rust-version = "1.98.0"
 license = "MIT"
@@ -16,18 +16,18 @@ readme = "README.md"
 [workspace.dependencies]
 async-trait = "0.1.58"
 enum_dispatch = "0.3"
-atuin-client = { path = "crates/atuin-client", version = "18.20.0" }
-atuin-common = { path = "crates/atuin-common", version = "18.20.0" }
-atuin-daemon = { path = "crates/atuin-daemon", version = "18.20.0" }
-atuin-domain = { path = "crates/atuin-domain", version = "18.20.0" }
-atuin-dotfiles = { path = "crates/atuin-dotfiles", version = "18.20.0" }
-atuin-history = { path = "crates/atuin-history", version = "18.20.0" }
-atuin-kv = { path = "crates/atuin-kv", version = "18.20.0" }
-atuin-scripts = { path = "crates/atuin-scripts", version = "18.20.0" }
-atuin-server = { path = "crates/atuin-server", version = "18.20.0" }
-atuin-server-database = { path = "crates/atuin-server-database", version = "18.20.0" }
-atuin-server-postgres = { path = "crates/atuin-server-postgres", version = "18.20.0" }
-atuin-server-sqlite = { path = "crates/atuin-server-sqlite", version = "18.20.0" }
+atuin-client = { path = "crates/atuin-client", version = "18.20.1" }
+atuin-common = { path = "crates/atuin-common", version = "18.20.1" }
+atuin-daemon = { path = "crates/atuin-daemon", version = "18.20.1" }
+atuin-domain = { path = "crates/atuin-domain", version = "18.20.1" }
+atuin-dotfiles = { path = "crates/atuin-dotfiles", version = "18.20.1" }
+atuin-history = { path = "crates/atuin-history", version = "18.20.1" }
+atuin-kv = { path = "crates/atuin-kv", version = "18.20.1" }
+atuin-scripts = { path = "crates/atuin-scripts", version = "18.20.1" }
+atuin-server = { path = "crates/atuin-server", version = "18.20.1" }
+atuin-server-database = { path = "crates/atuin-server-database", version = "18.20.1" }
+atuin-server-postgres = { path = "crates/atuin-server-postgres", version = "18.20.1" }
+atuin-server-sqlite = { path = "crates/atuin-server-sqlite", version = "18.20.1" }
 atuin-vt100 = "0.17"
 frizbee = "0.12.0"
 base64 = "0.22"
@@ -165,6 +165,7 @@ manual_instant_elapsed = "warn"
 manual_is_power_of_two = "warn"
 manual_is_variant_and = "warn"
 manual_let_else = "warn"
+must_use_candidate = "warn"
 needless_collect = "warn"
 needless_pass_by_ref_mut = "warn"
 needless_pass_by_value = "warn"

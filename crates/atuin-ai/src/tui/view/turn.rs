@@ -287,6 +287,7 @@ impl<'a> TurnBuilder<'a> {
         }
     }
 
+    #[must_use]
     pub(crate) fn build(&mut self) -> Vec<UiTurn> {
         self.commit_turn();
 

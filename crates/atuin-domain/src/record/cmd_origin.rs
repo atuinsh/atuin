@@ -98,11 +98,13 @@ impl CmdOrigin {
         }
     }
 
+    #[must_use]
     pub fn probe_current() -> Self {
         Self::new(&CmdHost::probe_current(), &CmdUser::probe_current())
     }
 
     /// The host portion, as a zero-copy view.
+    #[must_use]
     pub fn host(&self) -> CmdHost<&str> {
         CmdHost(&self.raw[..self.sep])
     }
@@ -111,16 +113,19 @@ impl CmdOrigin {
     ///
     /// May be `""` if [`CmdOrigin`] was created through [`CmdOrigin::parse_lenient`] and no user was
     /// found in the string.
+    #[must_use]
     pub fn user(&self) -> CmdUser<&str> {
         CmdUser(self.raw.get(self.sep + 1..).unwrap_or(""))
     }
 
     /// The whole `host:user` string, borrowed.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.raw
     }
 
     /// Consume into the owned `host:user` string, without copying.
+    #[must_use]
     pub fn into_string(self) -> String {
         self.raw
     }

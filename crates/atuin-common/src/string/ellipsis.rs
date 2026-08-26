@@ -33,6 +33,7 @@ impl<'a> Indicator<'a> {
     pub const UNICODE: Self = Self("…");
 
     /// Wrap an arbitrary marker string.
+    #[must_use]
     pub const fn new(marker: &'a str) -> Self {
         Self(marker)
     }
@@ -162,6 +163,7 @@ impl<'a> Ellipsized<'a> {
 
     /// Map a byte offset in the output back to its byte offset in the source,
     /// or `None` if it lands on the spliced indicator.
+    #[must_use]
     pub fn source_index(self, output_byte: usize) -> Option<usize> {
         match self.0 {
             Repr::Contiguous { source_offset, .. } => Some(output_byte + source_offset),

@@ -36,6 +36,7 @@ pub struct Host {
 }
 
 impl Host {
+    #[must_use]
     pub fn new(id: HostId) -> Self {
         Self { id, _name: "" }
     }
@@ -176,6 +177,7 @@ impl<Data> Record<Data> {
 }
 
 impl Record<DecryptedData> {
+    #[must_use]
     pub fn encrypt(&self, key: &paseto_v4::Key) -> Record<paseto_v4::EncryptedData> {
         let ad = serde_json::to_string(&AdditionalData::from(self))
             .expect("could not serialize implicit assertions");
@@ -218,6 +220,7 @@ impl Extend<(RecordSeriesKey, RecordIdx)> for RecordStatus {
 }
 
 impl RecordStatus {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             hosts: HashMap::new(),
@@ -245,6 +248,7 @@ impl RecordStatus {
     /// then we need to do some downloading. If it is smaller, then we need to do some uploading
     /// Note that we cannot upload if we are not the owner of the record store - hosts can only
     /// write to their own store.
+    #[must_use]
     pub fn diff(&self, other: &Self) -> Vec<Diff> {
         let mut ret = Vec::new();
 

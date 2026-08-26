@@ -53,6 +53,7 @@ impl Default for Daemon {
 #[cfg(unix)]
 impl Daemon {
     /// The socket path we should use when creating a new socket.
+    #[must_use]
     pub fn socket_path(&self) -> SocketPath<'_> {
         self.socket_path_ctx(DefaultSocketCtx)
     }
@@ -61,6 +62,7 @@ impl Daemon {
     ///
     /// This is the first path in [`Self::potential_socket_paths`] that exists, or if none exist,
     /// the first path.
+    #[must_use]
     pub fn existing_socket_path(&self) -> Cow<'_, Path> {
         self.existing_socket_path_ctx(DefaultSocketCtx)
     }
@@ -201,6 +203,7 @@ impl<'a> SocketPath<'a> {
         Ok(())
     }
 
+    #[must_use]
     pub fn as_path(&self) -> &Path {
         match self {
             Self::UserDefined(path) => path,
@@ -208,6 +211,7 @@ impl<'a> SocketPath<'a> {
         }
     }
 
+    #[must_use]
     pub fn into_cow(self) -> Cow<'a, Path> {
         match self {
             Self::UserDefined(path) => path.into(),
@@ -215,6 +219,7 @@ impl<'a> SocketPath<'a> {
         }
     }
 
+    #[must_use]
     pub fn into_owned(self) -> PathBuf {
         self.into_cow().into_owned()
     }

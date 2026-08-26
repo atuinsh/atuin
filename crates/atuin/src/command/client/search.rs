@@ -12,7 +12,7 @@ use atuin_common::filter::OrFilter;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
 use atuin_common::utils;
 use clap::Parser;
-use eyre::Result;
+use eyre::{Context as _, Result};
 use tracing::instrument;
 
 use super::history::ListMode;
@@ -235,7 +235,8 @@ impl Cmd {
         };
         settings.keymap_mode_shell = self.keymap_mode;
 
-        let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
+        let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+            .context("could not load or generate encryption key")?;
 
         let host_id = Settings::host_id().await?;
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);

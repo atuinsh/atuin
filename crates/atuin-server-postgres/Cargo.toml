@@ -10,9 +10,9 @@ homepage = { workspace = true }
 repository = { workspace = true }
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.20.0" }
-atuin-domain = { path = "../atuin-domain", version = "18.20.0" }
-atuin-server-database = { path = "../atuin-server-database", version = "18.20.0" }
+atuin-common = { path = "../atuin-common", version = "18.20.1" }
+atuin-domain = { path = "../atuin-domain", version = "18.20.1" }
+atuin-server-database = { path = "../atuin-server-database", version = "18.20.1" }
 derive_more = { workspace = true }
 
 eyre = { workspace = true }

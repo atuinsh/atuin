@@ -78,6 +78,7 @@ impl Sqlite {
     }
 
     /// Get the pool of this structure.
+    #[must_use]
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }

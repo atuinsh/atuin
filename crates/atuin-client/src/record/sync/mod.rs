@@ -169,6 +169,7 @@ impl SyncEngine {
     }
 
     /// Pair this engine with an encryption `key` to run the crypto-touching sync operations.
+    #[must_use]
     pub fn keyed<'k>(&'k self, key: &'k paseto_v4::Key) -> Keyed<'k> {
         let engine = self.clone();
         let key_for_check = key.clone();

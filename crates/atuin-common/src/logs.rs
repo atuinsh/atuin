@@ -16,6 +16,7 @@ pub enum LogLevel {
 }
 
 impl LogLevel {
+    #[must_use]
     pub fn to_tracing(&self) -> tracing::Level {
         use tracing::Level;
         match self {
@@ -36,10 +37,12 @@ pub struct FileConfig {
 }
 
 impl FileConfig {
+    #[must_use]
     pub fn directory(&self) -> &Path {
         self.path.parent().unwrap_or_else(|| Path::new(""))
     }
 
+    #[must_use]
     pub fn name(&self) -> &OsStr {
         self.path.file_name().unwrap_or_else(|| OsStr::new(""))
     }
@@ -52,6 +55,7 @@ pub struct StderrConfig {
 }
 
 impl StderrConfig {
+    #[must_use]
     pub fn verbose() -> Self {
         Self {
             show_time: true,
@@ -67,6 +71,7 @@ pub struct LogConfig {
 }
 
 impl LogConfig {
+    #[must_use]
     pub fn file_only(file: FileConfig) -> Self {
         Self {
             file: Some(file),
@@ -74,6 +79,7 @@ impl LogConfig {
         }
     }
 
+    #[must_use]
     pub fn stderr_only() -> Self {
         Self {
             file: None,
