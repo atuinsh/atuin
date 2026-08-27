@@ -60,7 +60,7 @@ impl Handle {
         let _ = self.send_ctrl_break();
 
         let exited = crate::os::process::EXIT_BACKOFF
-            .retry_blocking(
+            .retry_sync(
                 || {
                     if self.is_alive() {
                         ControlFlow::Continue(())

@@ -197,7 +197,7 @@ async fn wait_for_lock(path: &Path, timeout: Duration) -> Result<File> {
     let file = open_lock_file(path)?;
 
     let outcome = Backoff::Linear(LOCK_POLL)
-        .retry_blocking(
+        .retry_sync(
             || match file.try_lock() {
                 Ok(()) => ControlFlow::Break(Ok(())),
                 Err(TryLockError::WouldBlock) => ControlFlow::Continue(()),
@@ -704,9 +704,9 @@ async fn force_cleanup(settings: &Settings) {
             && let Ok(pid) = pid_str.parse::<u32>()
             && let Err(e) =
                 atuin_common::os::process::force_terminate(pid, Duration::from_secs(2)).await
-            {
-                tracing::warn!("could not terminate existing daemon (pid {pid}): {e}");
-            }
+        {
+            tracing::warn!("could not terminate existing daemon (pid {pid}): {e}");
+        }
 
         // Remove the pidfile
         if let Err(e) = fs::remove_file(pidfile_path)

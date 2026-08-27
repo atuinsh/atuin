@@ -42,15 +42,19 @@ impl Backoff {
     /// [`Err`] carrying the most recent [`ControlFlow::Continue`] value, or [`None`] if no poll
     /// produced one before the timeout.
     ///
+    /// **Be warned**: This function can possibly wait for longer than `timeout`, since it will
+    /// unconditionally await the first call.
+    ///
     /// # Panics
     ///
     /// Panics if called outside the context of a Tokio runtime with a time driver enabled.
-    pub async fn retry<B, C, Fut, F>(self, fxn: F, timeout: Duration) -> Result<B, Option<C>>
+    pub async fn retry<B, C, Fut, F>(self, mut fxn: F, timeout: Duration) -> Result<B, C>
     where
-        F: Fn() -> Fut,
+        F: FnMut() -> Fut,
         Fut: Future<Output = ControlFlow<B, C>>,
     {
-        let jittered = |delay: Duration| -> Duration {
+        #[must_use]
+        fn jittered(delay: Duration) -> Duration {
             let Ok(random) = getrandom::u64() else {
                 return delay;
             };
@@ -58,16 +62,19 @@ impl Backoff {
             let magnitude = nanos / 10;
             let offset = random % magnitude.saturating_mul(2).saturating_add(1);
             Duration::from_nanos(nanos.saturating_sub(magnitude).saturating_add(offset))
-        };
+        }
 
-        let mut last = None;
+        let mut last = match fxn().await {
+            ControlFlow::Break(value) => return Ok(value),
+            ControlFlow::Continue(reason) => reason,
+        };
 
         tokio::time::timeout(timeout, async {
             match self {
                 Self::Linear(period) => loop {
                     match fxn().await {
                         ControlFlow::Break(value) => return value,
-                        ControlFlow::Continue(reason) => last = Some(reason),
+                        ControlFlow::Continue(reason) => last = reason,
                     }
                     tokio::time::sleep(jittered(period)).await;
                 },
@@ -80,7 +87,7 @@ impl Backoff {
                     loop {
                         match fxn().await {
                             ControlFlow::Break(value) => return value,
-                            ControlFlow::Continue(reason) => last = Some(reason),
+                            ControlFlow::Continue(reason) => last = reason,
                         }
                         tokio::time::sleep(jittered(backoff).min(max)).await;
                         backoff = backoff.saturating_mul(factor.get()).min(max);
@@ -94,9 +101,9 @@ impl Backoff {
 
     /// Equivalent to [`Self::retry`], except the given function is synchronous rather than
     /// returning a future.
-    pub async fn retry_blocking<B, C, F>(self, fxn: F, timeout: Duration) -> Result<B, Option<C>>
+    pub async fn retry_sync<B, C, F>(self, mut fxn: F, timeout: Duration) -> Result<B, C>
     where
-        F: Fn() -> ControlFlow<B, C>,
+        F: FnMut() -> ControlFlow<B, C>,
     {
         self.retry(|| std::future::ready(fxn()), timeout).await
     }

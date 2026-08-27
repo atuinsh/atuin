@@ -17,7 +17,7 @@ pub async fn force_terminate(pid: Pid, timeout: Duration) -> Result<(), std::io:
     }
 
     let exited = crate::os::process::EXIT_BACKOFF
-        .retry_blocking(
+        .retry_sync(
             || {
                 if is_alive(pid) {
                     ControlFlow::Continue(())

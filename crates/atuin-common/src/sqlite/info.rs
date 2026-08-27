@@ -119,8 +119,7 @@ impl FfiInfo {
                 },
                 TIMEOUT,
             )
-            .await
-            .unwrap_or_else(|last| Err(last.unwrap_or(sqlx::Error::PoolTimedOut)))
+            .await?
     }
 
     fn query_variable_number_limit(handle: &mut LockedSqliteHandle<'_>) -> Option<usize> {
