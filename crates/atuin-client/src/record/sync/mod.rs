@@ -737,10 +737,10 @@ mod tests {
         local_records: Vec<Record<EncryptedData>>,
         remote_records: Vec<Record<EncryptedData>>,
     ) -> (SqliteStore, Vec<Diff>) {
-        let local_store = SqliteStore::new(":memory:", test_local_timeout())
+        let local_store = SqliteStore::in_memory(test_local_timeout())
             .await
             .expect("failed to open in memory sqlite");
-        let remote_store = SqliteStore::new(":memory:", test_local_timeout())
+        let remote_store = SqliteStore::in_memory(test_local_timeout())
             .await
             .expect("failed to open in memory sqlite"); // "remote"
 
@@ -976,7 +976,7 @@ mod packfile_sync_tests {
 
     /// A fresh in-memory record store.
     pub(super) async fn memory_store() -> SqliteStore {
-        SqliteStore::new(":memory:", test_local_timeout()).await.unwrap()
+        SqliteStore::in_memory(test_local_timeout()).await.unwrap()
     }
 
     /// Wrap a prebuilt client in a [`SyncEngine`] for tests.

@@ -1,7 +1,7 @@
-use std::path::Path;
+use std::ffi::OsStr;
 use std::time::Duration;
 
-use atuin_common::sqlite::Sqlite;
+use atuin_common::sqlite::{Sqlite, SqliteBuilder};
 use eyre::Result;
 use time::OffsetDateTime;
 
@@ -40,13 +40,18 @@ pub struct AiSessionStore {
 }
 
 impl AiSessionStore {
-    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> Result<Self> {
-        let sqlite = Sqlite::builder(path)
-            .timeout(timeout)
-            .foreign_keys(false)
-            .restrict_permissions()
-            .open()
-            .await?;
+    pub async fn new(path: impl AsRef<OsStr>, timeout: Duration) -> Result<Self> {
+        Self::from_builder(Sqlite::builder(path.as_ref()), timeout).await
+    }
+
+    #[cfg(test)]
+    pub async fn in_memory(timeout: Duration) -> Result<Self> {
+        Self::from_builder(Sqlite::builder_in_memory(), timeout).await
+    }
+
+    async fn from_builder(builder: SqliteBuilder<'_>, timeout: Duration) -> Result<Self> {
+        let sqlite =
+            builder.timeout(timeout).foreign_keys(false).restrict_permissions().open().await?;
 
         sqlx::migrate!("./migrations").run(sqlite.pool()).await?;
 
@@ -286,7 +291,7 @@ mod tests {
 
     #[fixture]
     async fn store() -> AiSessionStore {
-        AiSessionStore::new(":memory:", Duration::from_secs(2)).await.unwrap()
+        AiSessionStore::in_memory(Duration::from_secs(2)).await.unwrap()
     }
 
     #[fixture]
