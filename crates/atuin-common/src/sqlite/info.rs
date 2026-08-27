@@ -1,4 +1,6 @@
 use std::ffi::{CStr, c_int};
+use std::num::NonZeroU32;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::str::Utf8Error;
 use std::sync::Arc;
@@ -11,6 +13,7 @@ use sqlx::sqlite::{LockedSqliteHandle, SqlitePool};
 use thiserror::Error;
 use tracing::warn;
 
+use crate::futures::Backoff;
 use crate::sync::EagerFutureCell;
 
 #[derive(Debug, Error)]
@@ -88,33 +91,35 @@ impl FfiInfo {
         }
     }
 
-    async fn acquire_retrying(pool: &SqlitePool) -> Result<PoolConnection<Sqlite>, sqlx::Error> {
-        // TODO(markovejnovic): This could be exponential back-off, but I'd like to do that after we
-        // have a nice utility for it.
-        const MAX_ATTEMPTS: u32 = 25;
-        const RETRY_DELAY: Duration = Duration::from_millis(20);
+    fn err_is_locked(err: &sqlx::Error) -> bool {
+        err.as_database_error()
+            .and_then(DatabaseError::code)
+            .and_then(|code| code.parse::<c_int>().ok())
+            .is_some_and(|code| {
+                let primary = code & 0xff;
+                primary == libsqlite3_sys::SQLITE_BUSY || primary == libsqlite3_sys::SQLITE_LOCKED
+            })
+    }
 
-        let err_is_locked = |err: &sqlx::Error| {
-            err.as_database_error()
-                .and_then(DatabaseError::code)
-                .and_then(|code| code.parse::<c_int>().ok())
-                .is_some_and(|code| {
-                    let primary = code & 0xff;
-                    primary == libsqlite3_sys::SQLITE_BUSY
-                        || primary == libsqlite3_sys::SQLITE_LOCKED
-                })
+    async fn acquire_retrying(pool: &SqlitePool) -> Result<PoolConnection<Sqlite>, sqlx::Error> {
+        const TIMEOUT: Duration = Duration::from_millis(500);
+        const BACKOFF: Backoff = Backoff::Exponential {
+            initial: Duration::from_millis(20),
+            max: Duration::from_millis(200),
+            factor: NonZeroU32::new(2).unwrap(),
         };
 
-        let mut attempt = 1;
-        loop {
-            match pool.acquire().await {
-                Err(err) if attempt < MAX_ATTEMPTS && err_is_locked(&err) => {
-                    attempt += 1;
-                    tokio::time::sleep(RETRY_DELAY).await;
-                }
-                result => return result,
-            }
-        }
+        BACKOFF
+            .retry(
+                || async move {
+                    match pool.acquire().await {
+                        Err(err) if Self::err_is_locked(&err) => ControlFlow::Continue(err),
+                        result => ControlFlow::Break(result),
+                    }
+                },
+                TIMEOUT,
+            )
+            .await?
     }
 
     fn query_variable_number_limit(handle: &mut LockedSqliteHandle<'_>) -> Option<usize> {

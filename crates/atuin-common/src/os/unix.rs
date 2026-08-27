@@ -1,5 +1,7 @@
 //! Unix-specific utilities.
 
+pub mod process;
+
 use std::path::{Path, PathBuf};
 
 use rustix::fs;
