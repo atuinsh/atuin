@@ -8,13 +8,15 @@
 //! a sync session (for history sync) and a hub session (for Hub-specific features
 //! like AI).
 
+use std::ops::ControlFlow;
 use std::time::Duration;
 
+use atuin_common::futures::Backoff;
 use atuin_common::url::UrlAppendExt;
 use atuin_domain::api::{
     ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, CliCodeResponse, CliVerifyResponse, ErrorResponse,
 };
-use eyre::{Context, Result, bail};
+use eyre::{Context, Result};
 use reqwest::header::USER_AGENT;
 use reqwest::{StatusCode, Url};
 use thiserror::Error;
@@ -148,26 +150,27 @@ impl HubAuthSession {
         timeout: Duration,
         poll_interval: Duration,
     ) -> Result<String> {
-        let start = std::time::Instant::now();
-
         debug!("Polling for Hub authentication completion...");
 
-        loop {
-            if start.elapsed() > timeout {
+        Backoff::Linear(poll_interval)
+            .retry(
+                || async move {
+                    match self.poll().await {
+                        Ok(HubAuthStatus::Complete(token)) => ControlFlow::Break(Ok(token)),
+                        Ok(HubAuthStatus::Failed(error)) => {
+                            ControlFlow::Break(Err(eyre::eyre!("Authentication failed: {error}")))
+                        }
+                        Ok(HubAuthStatus::Pending) => ControlFlow::Continue(()),
+                        Err(err) => ControlFlow::Break(Err(err)),
+                    }
+                },
+                timeout,
+            )
+            .await
+            .unwrap_or_else(|_| {
                 warn!("Authentication loop exited due to timeout");
-                bail!("Authentication timed out. Please try again.");
-            }
-
-            match self.poll().await? {
-                HubAuthStatus::Complete(token) => return Ok(token),
-                HubAuthStatus::Failed(error) => {
-                    bail!("Authentication failed: {}", error);
-                }
-                HubAuthStatus::Pending => {
-                    tokio::time::sleep(poll_interval).await;
-                }
-            }
-        }
+                Err(eyre::eyre!("Authentication timed out. Please try again."))
+            })
     }
 }
 

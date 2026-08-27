@@ -75,7 +75,7 @@ profiling-traced = [
 [dependencies]
 atuin-ai = { path = "../atuin-ai", version = "18.20.1", optional = true, default-features = false }
 atuin-client = { path = "../atuin-client", version = "18.20.1", optional = true, default-features = false }
-atuin-common = { workspace = true, features = ["unicode"] }
+atuin-common = { workspace = true, features = ["unicode", "os"] }
 atuin-domain = { workspace = true }
 atuin-dotfiles = { workspace = true }
 atuin-history = { workspace = true }
