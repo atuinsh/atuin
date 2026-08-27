@@ -8,42 +8,39 @@ use sqlx::{Acquire, Connection, Database, FromRow, SqlSafeStr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BannedPattern {
-    SelectStar,
+    StarGlob,
     Alter,
 }
 
 impl BannedPattern {
+    fn test(sql: &str) -> Option<Self> {
+        sql.split_whitespace().find_map(|raw| {
+            let token = raw.trim_matches(|c: char| matches!(c, ',' | '(' | ')' | ';'));
+            let upper = token.to_ascii_uppercase();
+
+            if upper == "ALTER" {
+                Some(Self::Alter)
+            } else if token == "*" || upper.ends_with(".*") {
+                Some(Self::StarGlob)
+            } else {
+                None
+            }
+        })
+    }
+
     fn reason(self) -> &'static str {
         match self {
-            Self::SelectStar => {
-                "`SELECT *` is banned; list columns explicitly so a statement's column count stays \
-                 stable when a migration adds a column"
-            }
-            Self::Alter => "`ALTER` is banned in queries; schema changes belong in a migration",
+            Self::StarGlob => "`*` is banned in queries due to being a footgun. be explicit.",
+            Self::Alter => "`ALTER` is banned in queries due to being a footgun. use migrations.",
         }
     }
-}
-
-fn banned_pattern(sql: &str) -> Option<BannedPattern> {
-    sql.split_whitespace().find_map(|raw| {
-        let token = raw.trim_matches(|c: char| matches!(c, ',' | '(' | ')' | ';'));
-        let upper = token.to_ascii_uppercase();
-
-        if upper == "ALTER" {
-            Some(BannedPattern::Alter)
-        } else if token == "*" || upper.ends_with(".*") {
-            Some(BannedPattern::SelectStar)
-        } else {
-            None
-        }
-    })
 }
 
 /// Utility designed to prevent foot-gunny SQL queries.
 #[track_caller]
 fn debug_sanity_check_query(sql: &str) {
     if cfg!(debug_assertions)
-        && let Some(pattern) = banned_pattern(sql)
+        && let Some(pattern) = BannedPattern::test(sql)
     {
         panic!("{}.\n  query: {sql}", pattern.reason());
     }
@@ -86,6 +83,7 @@ where
     sqlx::query_scalar(sql)
 }
 
+/// Run the migrator against the given
 pub async fn run_migrator<DB>(pool: &Pool<DB>, migrator: Migrator) -> Result<(), MigrateError>
 where
     DB: Database + HasStatementCache,
@@ -120,9 +118,12 @@ mod tests {
     use crate::sqlite::Sqlite as AtuinSqlite;
 
     #[rstest]
-    #[case::bare_star("select * from history", Some(BannedPattern::SelectStar))]
-    #[case::qualified_star("select h.* from history h", Some(BannedPattern::SelectStar))]
-    #[case::star_amongst_columns("select id, * from history", Some(BannedPattern::SelectStar))]
+    #[case::bare_star("select * from history", Some(BannedPattern::StarGlob))]
+    #[case::many_spaces_star("select      *  from history", Some(BannedPattern::StarGlob))]
+    #[case::tab_star("select\t*\tfrom history", Some(BannedPattern::StarGlob))]
+    #[case::newline_star("select\n  *\n  from history", Some(BannedPattern::StarGlob))]
+    #[case::qualified_star("select h.* from history h", Some(BannedPattern::StarGlob))]
+    #[case::star_amongst_columns("select id, * from history", Some(BannedPattern::StarGlob))]
     #[case::alter("alter table history add column x integer", Some(BannedPattern::Alter))]
     #[case::alter_upper("ALTER TABLE history ADD COLUMN x integer", Some(BannedPattern::Alter))]
     #[case::explicit("select id, timestamp, command from history", None)]
@@ -132,14 +133,14 @@ mod tests {
     #[case::insert("insert into t (a, b) values (?1, ?2)", None)]
     #[case::migration_only_add("add column shell text", None)]
     fn banned_pattern_classifies(#[case] sql: &str, #[case] expected: Option<BannedPattern>) {
-        assert_eq!(banned_pattern(sql), expected);
+        assert_eq!(BannedPattern::test(sql), expected);
     }
 
     proptest! {
         #[test]
         fn explicit_column_lists_are_allowed(cols in prop::collection::vec("[b-z][a-z0-9_]{0,7}", 1..8)) {
             let sql = format!("select {} from t", cols.join(", "));
-            prop_assert_eq!(banned_pattern(&sql), None);
+            prop_assert_eq!(BannedPattern::test(&sql), None);
         }
 
         #[test]
@@ -147,13 +148,13 @@ mod tests {
             let mut fields = lead;
             fields.push("*".to_owned());
             let sql = format!("select {} from t", fields.join(", "));
-            prop_assert_eq!(banned_pattern(&sql), Some(BannedPattern::SelectStar));
+            prop_assert_eq!(BannedPattern::test(&sql), Some(BannedPattern::StarGlob));
         }
 
         #[test]
         fn a_qualified_star_is_always_rejected(alias in "[b-z][a-z0-9_]{0,7}") {
             let sql = format!("select {alias}.* from t {alias}");
-            prop_assert_eq!(banned_pattern(&sql), Some(BannedPattern::SelectStar));
+            prop_assert_eq!(BannedPattern::test(&sql), Some(BannedPattern::StarGlob));
         }
     }
 
