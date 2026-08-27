@@ -1,6 +1,6 @@
 create table sessions (
-  id int auto_increment primary key,
-	user_id integer,
+  id bigint auto_increment primary key,
+	user_id bigint,
 	token varchar(256) unique not null
 );
 

@@ -3,7 +3,7 @@ create table store_idx_cache(
   user_id bigint,
 
   host VARBINARY(16),
-  tag varchar(256),
+  tag varchar(256) character set utf8mb4 collate utf8mb4_bin,
   idx bigint
 );
 

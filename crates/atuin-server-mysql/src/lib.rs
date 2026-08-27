@@ -216,9 +216,10 @@ impl Database for MySql {
             let id = atuin_common::utils::uuid_v7();
 
             let result = sqlx::query(
-                "insert ignore into store
+                "insert into store
                     (id, client_id, host, idx, timestamp, version, tag, data, cek, user_id)
                 values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                on duplicate key update id = id
                 ",
             )
             .bind(id)
@@ -354,7 +355,7 @@ impl Database for MySql {
 
         let mut status = RecordStatus::new();
 
-        for i in res.iter() {
+        for i in &res {
             let host_uuid = Uuid::from_slice(&i.0).map_err(|e| DbError::Other(e.into()))?;
             status.set_raw(
                 RecordSeriesKey::new(HostId(host_uuid), RecordTag::from(i.1.clone())),
