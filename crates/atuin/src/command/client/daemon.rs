@@ -701,16 +701,11 @@ async fn force_cleanup(settings: &Settings) {
             && let Some(pid_str) = contents.lines().next()
             && let Ok(pid) = pid_str.parse::<u32>()
         {
-            if let Err(e) = atuin_common::os::process::force_terminate(
-                pid.cast_signed(),
-                Duration::from_secs(2),
-            )
-            .await
+            if let Err(e) =
+                atuin_common::os::process::force_terminate(pid, Duration::from_secs(2)).await
             {
                 tracing::warn!("could not terminate existing daemon (pid {pid}): {e}");
             }
-            // Give it a moment to release resources
-            std::thread::sleep(Duration::from_millis(100));
         }
 
         // Remove the pidfile

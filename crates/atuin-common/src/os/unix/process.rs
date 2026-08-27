@@ -2,18 +2,16 @@
 
 use std::time::Duration;
 
-use nix::errno::Errno;
-use nix::sys::signal;
-use nix::sys::signal::Signal as NixSignal;
-use nix::unistd::Pid;
+use rustix::io::Errno;
+use rustix::process::{self, Pid, Signal};
 
 /// Gracefully terminate the process via `SIGTERM`.
 ///
 /// If the process does not gracefully terminate, it is forcefully killed via `SIGKILL`.
 pub async fn force_terminate(pid: Pid, timeout: Duration) -> Result<(), std::io::Error> {
-    match signal::kill(pid, NixSignal::SIGTERM) {
+    match process::kill_process(pid, Signal::TERM) {
         Ok(()) => {}
-        Err(Errno::ESRCH) => return Ok(()),
+        Err(Errno::SRCH) => return Ok(()),
         Err(errno) => return Err(errno.into()),
     }
 
@@ -22,11 +20,11 @@ pub async fn force_terminate(pid: Pid, timeout: Duration) -> Result<(), std::io:
         return Ok(());
     }
 
-    match signal::kill(pid, NixSignal::SIGKILL) {
+    match process::kill_process(pid, Signal::KILL) {
         Ok(()) => {}
-        Err(Errno::ESRCH) => return Ok(()),
+        Err(Errno::SRCH) => return Ok(()),
         Err(errno) => return Err(errno.into()),
-    };
+    }
 
     Ok(())
 }
@@ -34,5 +32,5 @@ pub async fn force_terminate(pid: Pid, timeout: Duration) -> Result<(), std::io:
 /// Check whether the given pid is alive.
 #[must_use]
 pub fn is_alive(pid: Pid) -> bool {
-    !matches!(nix::sys::signal::kill(pid, None::<NixSignal>), Err(Errno::ESRCH))
+    !matches!(process::test_kill_process(pid), Err(Errno::SRCH))
 }

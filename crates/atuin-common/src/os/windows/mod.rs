@@ -1,5 +1,8 @@
 //! Windows-specific utilities.
-#![allow(unsafe_code)]
+//!
+//! There are some crates that could handle this for us, such as `winsafe`, but they're large
+//! dependencies for a relatively small problem.
+#![allow(unsafe_code, reason = "win32 API calls all require unsafe.")]
 
 use windows_sys::Win32::Foundation::GetLastError;
 

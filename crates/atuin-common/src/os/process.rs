@@ -9,15 +9,18 @@ use crate::os::unix;
 use crate::os::windows;
 
 /// Gracefully (and then forcefully) terminate the process.
-pub async fn force_terminate(pid: i32, timeout: Duration) -> Result<(), std::io::Error> {
+pub async fn force_terminate(pid: u32, timeout: Duration) -> Result<(), std::io::Error> {
     #[cfg(unix)]
     {
-        unix::process::force_terminate(nix::unistd::Pid::from_raw(pid), timeout).await
+        let Some(pid) = rustix::process::Pid::from_raw(pid.cast_signed()) else {
+            return Ok(());
+        };
+        unix::process::force_terminate(pid, timeout).await
     }
 
     #[cfg(windows)]
     {
-        windows::process::Handle::open(pid as u32, PROCESS_TERMINATE | PROCESS_SYNCHRONIZE)?
+        windows::process::Handle::open(pid, PROCESS_TERMINATE | PROCESS_SYNCHRONIZE)?
             .force_stop(timeout)
             .await
     }

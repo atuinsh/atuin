@@ -1,4 +1,4 @@
-#![allow(unsafe_code)]
+#![allow(unsafe_code, reason = "win32 API calls all require unsafe.")]
 
 use std::time::Duration;
 
