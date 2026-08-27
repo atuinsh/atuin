@@ -1,12 +1,15 @@
 use std::ffi::OsStr;
 use std::time::Duration;
 
-use atuin_common::sqlite::{Sqlite, SqliteBuilder};
+use atuin_common::db;
+use atuin_common::db::sqlite::{Sqlite, SqliteBuilder};
 use sqlx::Result;
 use sqlx::sqlite::SqlitePool;
 use tracing::debug;
 
 use crate::store::entry::KvEntry;
+
+const KV_COLUMNS: &str = "namespace, key, value";
 
 #[derive(Debug, Clone)]
 pub struct Database {
@@ -40,13 +43,13 @@ impl Database {
     async fn setup_db(pool: &SqlitePool) -> Result<()> {
         debug!("running sqlite database setup");
 
-        sqlx::migrate!("./migrations").run(pool).await?;
+        db::migrate!(pool, "./migrations").await?;
 
         Ok(())
     }
 
     async fn save_raw(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, e: &KvEntry) -> Result<()> {
-        sqlx::query(
+        db::query(
             "insert into kv(namespace, key, value)
                 values(?1, ?2, ?3)
                 on conflict(namespace, key) do update set
@@ -68,7 +71,7 @@ impl Database {
         namespace: &str,
         key: &str,
     ) -> Result<()> {
-        sqlx::query("delete from kv where namespace = ?1 and key = ?2")
+        db::query("delete from kv where namespace = ?1 and key = ?2")
             .bind(namespace)
             .bind(key)
             .execute(&mut **tx)
@@ -98,12 +101,13 @@ impl Database {
     pub async fn load(&self, namespace: &str, key: &str) -> Result<Option<KvEntry>> {
         debug!("loading kv entry {namespace}.{key}");
 
-        let res =
-            sqlx::query_as::<_, KvEntry>("select * from kv where namespace = ?1 and key = ?2")
-                .bind(namespace)
-                .bind(key)
-                .fetch_optional(self.sqlite.pool())
-                .await?;
+        let res = db::query_as::<_, KvEntry>(sqlx::AssertSqlSafe(format!(
+            "select {KV_COLUMNS} from kv where namespace = ?1 and key = ?2"
+        )))
+        .bind(namespace)
+        .bind(key)
+        .fetch_optional(self.sqlite.pool())
+        .await?;
 
         Ok(res)
     }
@@ -112,14 +116,18 @@ impl Database {
         debug!("listing kv entries");
 
         let res = if let Some(namespace) = namespace {
-            sqlx::query_as::<_, KvEntry>("select * from kv where namespace = ?1 order by key asc")
-                .bind(namespace)
-                .fetch_all(self.sqlite.pool())
-                .await?
+            db::query_as::<_, KvEntry>(sqlx::AssertSqlSafe(format!(
+                "select {KV_COLUMNS} from kv where namespace = ?1 order by key asc"
+            )))
+            .bind(namespace)
+            .fetch_all(self.sqlite.pool())
+            .await?
         } else {
-            sqlx::query_as::<_, KvEntry>("select * from kv order by namespace, key asc")
-                .fetch_all(self.sqlite.pool())
-                .await?
+            db::query_as::<_, KvEntry>(sqlx::AssertSqlSafe(format!(
+                "select {KV_COLUMNS} from kv order by namespace, key asc"
+            )))
+            .fetch_all(self.sqlite.pool())
+            .await?
         };
 
         Ok(res)

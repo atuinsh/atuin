@@ -1,7 +1,8 @@
 use std::ffi::OsStr;
 use std::time::Duration;
 
-use atuin_common::sqlite::{Sqlite, SqliteBuilder};
+use atuin_common::db;
+use atuin_common::db::sqlite::{Sqlite, SqliteBuilder};
 use eyre::Result;
 use time::OffsetDateTime;
 
@@ -53,7 +54,7 @@ impl AiSessionStore {
         let sqlite =
             builder.timeout(timeout).foreign_keys(false).restrict_permissions().open().await?;
 
-        sqlx::migrate!("./migrations").run(sqlite.pool()).await?;
+        db::migrate!(sqlite.pool(), "./migrations").await?;
 
         Ok(Self { sqlite })
     }
@@ -66,7 +67,7 @@ impl AiSessionStore {
     ) -> Result<StoredSession> {
         let now = OffsetDateTime::now_utc().unix_timestamp();
 
-        sqlx::query(
+        db::query(
             "INSERT INTO sessions (id, directory, git_root, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?4)",
         )
@@ -91,7 +92,7 @@ impl AiSessionStore {
 
     #[allow(dead_code)] // used in tests; will be used by daemon service
     pub async fn get_session(&self, id: &str) -> Result<Option<StoredSession>> {
-        let session = sqlx::query_as::<_, StoredSession>(
+        let session = db::query_as::<_, StoredSession>(
             "SELECT id, head_id, server_session_id, directory, git_root,
                     created_at, updated_at, archived_at
              FROM sessions WHERE id = ?1",
@@ -113,7 +114,7 @@ impl AiSessionStore {
     ) -> Result<Option<StoredSession>> {
         let cutoff = OffsetDateTime::now_utc().unix_timestamp() - max_age_secs;
 
-        let session = sqlx::query_as::<_, StoredSession>(
+        let session = db::query_as::<_, StoredSession>(
             "SELECT id, head_id, server_session_id, directory, git_root,
                     created_at, updated_at, archived_at
              FROM sessions
@@ -146,7 +147,7 @@ impl AiSessionStore {
 
         let mut tx = self.sqlite.pool().begin().await?;
 
-        sqlx::query(
+        db::query(
             "INSERT INTO session_events (id, session_id, parent_id, invocation_id, event_type, \
              event_data, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -161,7 +162,7 @@ impl AiSessionStore {
         .execute(&mut *tx)
         .await?;
 
-        sqlx::query("UPDATE sessions SET head_id = ?1, updated_at = ?2 WHERE id = ?3")
+        db::query("UPDATE sessions SET head_id = ?1, updated_at = ?2 WHERE id = ?3")
             .bind(event_id)
             .bind(now)
             .bind(session_id)
@@ -174,7 +175,7 @@ impl AiSessionStore {
 
     /// Load all events for a session, ordered chronologically.
     pub async fn load_events(&self, session_id: &str) -> Result<Vec<StoredEvent>> {
-        let events = sqlx::query_as::<_, StoredEvent>(
+        let events = db::query_as::<_, StoredEvent>(
             "SELECT id, session_id, parent_id, invocation_id, event_type, event_data, created_at
                  FROM session_events
                  WHERE session_id = ?1
@@ -192,7 +193,7 @@ impl AiSessionStore {
         session_id: &str,
         server_session_id: &str,
     ) -> Result<()> {
-        sqlx::query("UPDATE sessions SET server_session_id = ?1 WHERE id = ?2")
+        db::query("UPDATE sessions SET server_session_id = ?1 WHERE id = ?2")
             .bind(server_session_id)
             .bind(session_id)
             .execute(self.sqlite.pool())
@@ -202,7 +203,7 @@ impl AiSessionStore {
 
     pub async fn archive_session(&self, session_id: &str) -> Result<()> {
         let now = OffsetDateTime::now_utc().unix_timestamp();
-        sqlx::query("UPDATE sessions SET archived_at = ?1 WHERE id = ?2")
+        db::query("UPDATE sessions SET archived_at = ?1 WHERE id = ?2")
             .bind(now)
             .bind(session_id)
             .execute(self.sqlite.pool())
@@ -216,7 +217,7 @@ impl AiSessionStore {
     /// exist or the session hasn't been persisted yet.
     pub async fn get_metadata(&self, session_id: &str, key: &str) -> Result<Option<String>> {
         let row: Option<(String,)> =
-            sqlx::query_as("SELECT value FROM session_metadata WHERE session_id = ?1 AND key = ?2")
+            db::query_as("SELECT value FROM session_metadata WHERE session_id = ?1 AND key = ?2")
                 .bind(session_id)
                 .bind(key)
                 .fetch_optional(self.sqlite.pool())
@@ -228,7 +229,7 @@ impl AiSessionStore {
     /// Write a metadata value for a session (upsert).
     pub async fn set_metadata(&self, session_id: &str, key: &str, value: &str) -> Result<()> {
         let now = OffsetDateTime::now_utc().unix_timestamp();
-        sqlx::query(
+        db::query(
             "INSERT INTO session_metadata (session_id, key, value, updated_at)
              VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT (session_id, key) DO UPDATE SET value = ?3, updated_at = ?4",
@@ -248,7 +249,7 @@ impl AiSessionStore {
     /// JSON and the unix timestamp it was written at.
     pub async fn get_usage(&self, user_key: &str) -> Result<Option<CachedUsageSnapshot>> {
         let row: Option<(String, i64)> =
-            sqlx::query_as("SELECT snapshot, updated_at FROM usage WHERE user_key = ?1")
+            db::query_as("SELECT snapshot, updated_at FROM usage WHERE user_key = ?1")
                 .bind(user_key)
                 .fetch_optional(self.sqlite.pool())
                 .await?;
@@ -268,7 +269,7 @@ impl AiSessionStore {
     pub async fn set_usage(&self, user_key: &str, snapshot: &UsageSnapshot) -> Result<()> {
         let snapshot_json = serde_json::to_string(snapshot)?;
         let now = OffsetDateTime::now_utc().unix_timestamp();
-        sqlx::query(
+        db::query(
             "INSERT INTO usage (user_key, snapshot, updated_at)
              VALUES (?1, ?2, ?3)
              ON CONFLICT (user_key) DO UPDATE SET snapshot = ?2, updated_at = ?3",
