@@ -18,16 +18,8 @@ use tokio::time::sleep;
 
 #[derive(clap::Args, Debug)]
 pub struct Cmd {
-    /// Internal flag for daemonization
-    #[arg(long, hide = true)]
-    daemonize: bool,
-
-    /// Also write daemon logs to the console (useful for debugging)
-    #[arg(long)]
-    show_logs: bool,
-
     #[command(subcommand)]
-    subcmd: Option<SubCmd>,
+    subcmd: SubCmd,
 }
 
 #[derive(Subcommand, Debug)]
@@ -63,8 +55,7 @@ impl Cmd {
     #[cfg(unix)]
     pub fn should_daemonize(&self) -> bool {
         match &self.subcmd {
-            Some(SubCmd::Start { daemonize, .. }) => *daemonize,
-            None => self.daemonize,
+            SubCmd::Start { daemonize, .. } => *daemonize,
             _ => false,
         }
     }
@@ -72,8 +63,7 @@ impl Cmd {
     /// Returns `true` when logs should also be written to the console.
     pub fn show_logs(&self) -> bool {
         match &self.subcmd {
-            Some(SubCmd::Start { show_logs, .. }) => *show_logs,
-            None => self.show_logs,
+            SubCmd::Start { show_logs, .. } => *show_logs,
             _ => false,
         }
     }
@@ -85,14 +75,10 @@ impl Cmd {
         history_db: Sqlite,
     ) -> Result<()> {
         match self.subcmd {
-            None => {
-                eprintln!("Warning: `atuin daemon` is deprecated, use `atuin daemon start`");
-                run(settings, store, history_db, false).await
-            }
-            Some(SubCmd::Start { force, .. }) => run(settings, store, history_db, force).await,
-            Some(SubCmd::Status) => status_cmd(&settings).await,
-            Some(SubCmd::Stop) => stop_cmd(&settings).await,
-            Some(SubCmd::Restart) => restart_cmd(&settings).await,
+            SubCmd::Start { force, .. } => run(settings, store, history_db, force).await,
+            SubCmd::Status => status_cmd(&settings).await,
+            SubCmd::Stop => stop_cmd(&settings).await,
+            SubCmd::Restart => restart_cmd(&settings).await,
         }
     }
 }
