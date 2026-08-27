@@ -11,7 +11,7 @@
 use std::ops::ControlFlow;
 use std::time::Duration;
 
-use atuin_common::futures::{Backoff, retry};
+use atuin_common::futures::Backoff;
 use atuin_common::url::UrlAppendExt;
 use atuin_domain::api::{
     ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, CliCodeResponse, CliVerifyResponse, ErrorResponse,
@@ -152,25 +152,25 @@ impl HubAuthSession {
     ) -> Result<String> {
         debug!("Polling for Hub authentication completion...");
 
-        retry(
-            || async move {
-                match self.poll().await {
-                    Ok(HubAuthStatus::Complete(token)) => ControlFlow::Break(Ok(token)),
-                    Ok(HubAuthStatus::Failed(error)) => {
-                        ControlFlow::Break(Err(eyre::eyre!("Authentication failed: {error}")))
+        Backoff::Linear(poll_interval)
+            .retry(
+                || async move {
+                    match self.poll().await {
+                        Ok(HubAuthStatus::Complete(token)) => ControlFlow::Break(Ok(token)),
+                        Ok(HubAuthStatus::Failed(error)) => {
+                            ControlFlow::Break(Err(eyre::eyre!("Authentication failed: {error}")))
+                        }
+                        Ok(HubAuthStatus::Pending) => ControlFlow::Continue(()),
+                        Err(err) => ControlFlow::Break(Err(err)),
                     }
-                    Ok(HubAuthStatus::Pending) => ControlFlow::Continue(()),
-                    Err(err) => ControlFlow::Break(Err(err)),
-                }
-            },
-            Backoff::Linear(poll_interval),
-            timeout,
-        )
-        .await
-        .unwrap_or_else(|_| {
-            warn!("Authentication loop exited due to timeout");
-            Err(eyre::eyre!("Authentication timed out. Please try again."))
-        })
+                },
+                timeout,
+            )
+            .await
+            .unwrap_or_else(|_| {
+                warn!("Authentication loop exited due to timeout");
+                Err(eyre::eyre!("Authentication timed out. Please try again."))
+            })
     }
 }
 

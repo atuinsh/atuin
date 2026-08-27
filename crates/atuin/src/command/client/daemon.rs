@@ -11,7 +11,7 @@ use atuin_client::database::Sqlite;
 use atuin_client::history::History;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
-use atuin_common::futures::{Backoff, retry, retry_blocking};
+use atuin_common::futures::Backoff;
 use atuin_daemon::DaemonEvent;
 use atuin_daemon::client::{ControlClient, DaemonClientErrorKind, HistoryClient, classify_error};
 use clap::Subcommand;
@@ -196,18 +196,18 @@ fn open_lock_file(path: &Path) -> Result<File> {
 async fn wait_for_lock(path: &Path, timeout: Duration) -> Result<File> {
     let file = open_lock_file(path)?;
 
-    let outcome = retry_blocking(
-        || match file.try_lock() {
-            Ok(()) => ControlFlow::Break(Ok(())),
-            Err(TryLockError::WouldBlock) => ControlFlow::Continue(()),
-            Err(TryLockError::Error(err)) => {
-                ControlFlow::Break(Err(eyre!("could not lock {}: {err}", path.display())))
-            }
-        },
-        Backoff::Linear(LOCK_POLL),
-        timeout,
-    )
-    .await;
+    let outcome = Backoff::Linear(LOCK_POLL)
+        .retry_blocking(
+            || match file.try_lock() {
+                Ok(()) => ControlFlow::Break(Ok(())),
+                Err(TryLockError::WouldBlock) => ControlFlow::Continue(()),
+                Err(TryLockError::Error(err)) => {
+                    ControlFlow::Break(Err(eyre!("could not lock {}: {err}", path.display())))
+                }
+            },
+            timeout,
+        )
+        .await;
 
     match outcome {
         Ok(Ok(())) => Ok(file),
@@ -328,31 +328,31 @@ fn remove_stale_socket_if_present(settings: &Settings) -> Result<(), RemoveSocke
 }
 
 async fn wait_until_ready(settings: &Settings, timeout: Duration) -> Result<HistoryClient> {
-    retry(
-        || async move {
-            match probe(settings).await {
-                Probe::Ready(client) => ControlFlow::Break(Ok(client)),
-                Probe::NeedsRestart(reason) => ControlFlow::Continue(eyre!(reason)),
-                Probe::Unreachable(err) => {
-                    if is_legacy_daemon_error(&err) {
-                        ControlFlow::Break(Err(err.wrap_err(LEGACY_DAEMON_RESTART_MESSAGE)))
-                    } else {
-                        ControlFlow::Continue(err)
+    Backoff::Linear(STARTUP_POLL)
+        .retry(
+            || async move {
+                match probe(settings).await {
+                    Probe::Ready(client) => ControlFlow::Break(Ok(client)),
+                    Probe::NeedsRestart(reason) => ControlFlow::Continue(eyre!(reason)),
+                    Probe::Unreachable(err) => {
+                        if is_legacy_daemon_error(&err) {
+                            ControlFlow::Break(Err(err.wrap_err(LEGACY_DAEMON_RESTART_MESSAGE)))
+                        } else {
+                            ControlFlow::Continue(err)
+                        }
                     }
                 }
-            }
-        },
-        Backoff::Linear(STARTUP_POLL),
-        timeout,
-    )
-    .await
-    .unwrap_or_else(|last| {
-        let last_error = last.unwrap_or_else(|| eyre!("daemon did not become ready"));
-        Err(last_error.wrap_err(format!(
-            "timed out waiting for daemon startup after {}ms",
-            timeout.as_millis()
-        )))
-    })
+            },
+            timeout,
+        )
+        .await
+        .unwrap_or_else(|last| {
+            let last_error = last.unwrap_or_else(|| eyre!("daemon did not become ready"));
+            Err(last_error.wrap_err(format!(
+                "timed out waiting for daemon startup after {}ms",
+                timeout.as_millis()
+            )))
+        })
 }
 
 #[allow(clippy::unnecessary_wraps)]
@@ -702,13 +702,11 @@ async fn force_cleanup(settings: &Settings) {
         if let Ok(contents) = fs::read_to_string(pidfile_path)
             && let Some(pid_str) = contents.lines().next()
             && let Ok(pid) = pid_str.parse::<u32>()
-        {
-            if let Err(e) =
+            && let Err(e) =
                 atuin_common::os::process::force_terminate(pid, Duration::from_secs(2)).await
             {
                 tracing::warn!("could not terminate existing daemon (pid {pid}): {e}");
             }
-        }
 
         // Remove the pidfile
         if let Err(e) = fs::remove_file(pidfile_path)

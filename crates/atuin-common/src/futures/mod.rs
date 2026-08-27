@@ -32,71 +32,72 @@ pub enum Backoff {
     },
 }
 
-/// Poll the given function repeatedly, with a delay specified by `delay` and with a maximum timeout
-/// specified by `timeout`.
-///
-/// The function must return a [`ControlFlow`], which, if it returns [`ControlFlow::Break`], will
-/// exit out of the polling and return the value as [`Some`]. If `timeout` elapses first, returns
-/// [`None`].
-///
-/// # Panics
-///
-/// Panics if called outside the context of a Tokio runtime with a time driver enabled.
-pub async fn retry<B, C, Fut, F>(fxn: F, delay: Backoff, timeout: Duration) -> Result<B, Option<C>>
-where
-    F: Fn() -> Fut,
-    Fut: Future<Output = ControlFlow<B, C>>,
-{
-    let jittered = |delay: Duration| -> Duration {
-        let Ok(random) = getrandom::u64() else {
-            return delay;
+impl Backoff {
+    /// Poll the given function repeatedly, with a delay specified by `delay` and with a maximum
+    /// timeout specified by `timeout`.
+    ///
+    /// Each call returns a [`ControlFlow`]. [`ControlFlow::Break`] stops the polling and returns
+    /// its value as [`Ok`]. [`ControlFlow::Continue`] schedules another poll after the backoff
+    /// delay, retaining its value as the reason for retrying. If `timeout` elapses first, returns
+    /// [`Err`] carrying the most recent [`ControlFlow::Continue`] value, or [`None`] if no poll
+    /// produced one before the timeout.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called outside the context of a Tokio runtime with a time driver enabled.
+    pub async fn retry<B, C, Fut, F>(self, fxn: F, timeout: Duration) -> Result<B, Option<C>>
+    where
+        F: Fn() -> Fut,
+        Fut: Future<Output = ControlFlow<B, C>>,
+    {
+        let jittered = |delay: Duration| -> Duration {
+            let Ok(random) = getrandom::u64() else {
+                return delay;
+            };
+            let nanos = u64::try_from(delay.as_nanos()).unwrap_or(u64::MAX);
+            let magnitude = nanos / 10;
+            let offset = random % magnitude.saturating_mul(2).saturating_add(1);
+            Duration::from_nanos(nanos.saturating_sub(magnitude).saturating_add(offset))
         };
-        let nanos = u64::try_from(delay.as_nanos()).unwrap_or(u64::MAX);
-        let magnitude = nanos / 10;
-        let offset = random % magnitude.saturating_mul(2).saturating_add(1);
-        Duration::from_nanos(nanos.saturating_sub(magnitude).saturating_add(offset))
-    };
 
-    let mut last = None;
+        let mut last = None;
 
-    tokio::time::timeout(timeout, async {
-        match delay {
-            Backoff::Linear(period) => loop {
-                match fxn().await {
-                    ControlFlow::Break(value) => return value,
-                    ControlFlow::Continue(reason) => last = Some(reason),
-                }
-                tokio::time::sleep(jittered(period)).await;
-            },
-            Backoff::Exponential {
-                initial,
-                max,
-                factor,
-            } => {
-                let mut backoff = initial.min(max);
-                loop {
+        tokio::time::timeout(timeout, async {
+            match self {
+                Self::Linear(period) => loop {
                     match fxn().await {
                         ControlFlow::Break(value) => return value,
                         ControlFlow::Continue(reason) => last = Some(reason),
                     }
-                    tokio::time::sleep(jittered(backoff).min(max)).await;
-                    backoff = backoff.saturating_mul(factor.get()).min(max);
+                    tokio::time::sleep(jittered(period)).await;
+                },
+                Self::Exponential {
+                    initial,
+                    max,
+                    factor,
+                } => {
+                    let mut backoff = initial.min(max);
+                    loop {
+                        match fxn().await {
+                            ControlFlow::Break(value) => return value,
+                            ControlFlow::Continue(reason) => last = Some(reason),
+                        }
+                        tokio::time::sleep(jittered(backoff).min(max)).await;
+                        backoff = backoff.saturating_mul(factor.get()).min(max);
+                    }
                 }
             }
-        }
-    })
-    .await
-    .map_err(|_| last)
-}
+        })
+        .await
+        .map_err(|_| last)
+    }
 
-/// Equivalent to [`retry`], except the given function is not an [`AsyncFn`].
-pub async fn retry_blocking<B, C, F>(
-    fxn: F,
-    delay: Backoff,
-    timeout: Duration,
-) -> Result<B, Option<C>>
-where
-    F: Fn() -> ControlFlow<B, C>,
-{
-    retry(|| std::future::ready(fxn()), delay, timeout).await
+    /// Equivalent to [`Self::retry`], except the given function is synchronous rather than
+    /// returning a future.
+    pub async fn retry_blocking<B, C, F>(self, fxn: F, timeout: Duration) -> Result<B, Option<C>>
+    where
+        F: Fn() -> ControlFlow<B, C>,
+    {
+        self.retry(|| std::future::ready(fxn()), timeout).await
+    }
 }

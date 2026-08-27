@@ -8,7 +8,6 @@ use windows_sys::Win32::System::Console::{CTRL_BREAK_EVENT, GenerateConsoleCtrlE
 use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, WaitForSingleObject};
 
 use super::{fallible_do, get_last_error};
-use crate::futures::retry_blocking;
 
 /// RAII-safe operations on windows [`HANDLE`] types.
 pub struct Handle {
@@ -60,18 +59,18 @@ impl Handle {
     pub async fn force_stop(&self, timeout: Duration) -> Result<(), std::io::Error> {
         let _ = self.send_ctrl_break();
 
-        let exited = retry_blocking(
-            || {
-                if self.is_alive() {
-                    ControlFlow::Continue(())
-                } else {
-                    ControlFlow::Break(())
-                }
-            },
-            crate::os::process::EXIT_BACKOFF,
-            timeout,
-        )
-        .await;
+        let exited = crate::os::process::EXIT_BACKOFF
+            .retry_blocking(
+                || {
+                    if self.is_alive() {
+                        ControlFlow::Continue(())
+                    } else {
+                        ControlFlow::Break(())
+                    }
+                },
+                timeout,
+            )
+            .await;
 
         if exited.is_ok() {
             return Ok(());

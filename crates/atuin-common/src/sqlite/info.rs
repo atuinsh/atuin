@@ -13,7 +13,7 @@ use sqlx::sqlite::{LockedSqliteHandle, SqlitePool};
 use thiserror::Error;
 use tracing::warn;
 
-use crate::futures::{Backoff, retry};
+use crate::futures::Backoff;
 use crate::sync::EagerFutureCell;
 
 #[derive(Debug, Error)]
@@ -109,18 +109,18 @@ impl FfiInfo {
             factor: NonZeroU32::new(2).unwrap(),
         };
 
-        retry(
-            || async move {
-                match pool.acquire().await {
-                    Err(err) if Self::err_is_locked(&err) => ControlFlow::Continue(err),
-                    result => ControlFlow::Break(result),
-                }
-            },
-            BACKOFF,
-            TIMEOUT,
-        )
-        .await
-        .unwrap_or_else(|last| Err(last.unwrap_or(sqlx::Error::PoolTimedOut)))
+        BACKOFF
+            .retry(
+                || async move {
+                    match pool.acquire().await {
+                        Err(err) if Self::err_is_locked(&err) => ControlFlow::Continue(err),
+                        result => ControlFlow::Break(result),
+                    }
+                },
+                TIMEOUT,
+            )
+            .await
+            .unwrap_or_else(|last| Err(last.unwrap_or(sqlx::Error::PoolTimedOut)))
     }
 
     fn query_variable_number_limit(handle: &mut LockedSqliteHandle<'_>) -> Option<usize> {

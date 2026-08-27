@@ -6,8 +6,6 @@ use std::time::Duration;
 use rustix::io::Errno;
 use rustix::process::{self, Pid, Signal};
 
-use crate::futures::retry_blocking;
-
 /// Gracefully terminate the process via `SIGTERM`.
 ///
 /// If the process does not gracefully terminate, it is forcefully killed via `SIGKILL`.
@@ -18,18 +16,18 @@ pub async fn force_terminate(pid: Pid, timeout: Duration) -> Result<(), std::io:
         Err(errno) => return Err(errno.into()),
     }
 
-    let exited = retry_blocking(
-        || {
-            if is_alive(pid) {
-                ControlFlow::Continue(())
-            } else {
-                ControlFlow::Break(())
-            }
-        },
-        crate::os::process::EXIT_BACKOFF,
-        timeout,
-    )
-    .await;
+    let exited = crate::os::process::EXIT_BACKOFF
+        .retry_blocking(
+            || {
+                if is_alive(pid) {
+                    ControlFlow::Continue(())
+                } else {
+                    ControlFlow::Break(())
+                }
+            },
+            timeout,
+        )
+        .await;
 
     if exited.is_ok() {
         return Ok(());
