@@ -78,6 +78,7 @@ tiny-bip39 = "2"
 tree-sitter-fish = "3.6.0"
 tree-sitter-powershell = "0.26.4"
 rmp = "0.8.14"
+postcard = { version = "1", default-features = false, features = ["use-std"] }
 ratatui = "0.30.0"
 sql-builder = "3"
 tempfile = { version = "3.19" }

@@ -3,6 +3,8 @@ mod capture;
 #[cfg(unix)]
 mod debug;
 #[cfg(unix)]
+mod ipc;
+#[cfg(unix)]
 mod osc133;
 #[cfg(unix)]
 mod pty_proxy;

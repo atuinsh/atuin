@@ -7,6 +7,7 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use crate::capture::CommandCaptureTracker;
 use crate::debug::{Osc133DebugHighlighter, RESET};
+use crate::ipc::{IpcController, IpcServer};
 use crate::pty_proxy::RuntimeOptions;
 use crate::screen::{self, Msg};
 
@@ -82,9 +83,7 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     let current_cols = Arc::new(AtomicU16::new(cols.max(1)));
 
     screen::spawn_parser_thread(rows, cols, msg_rx);
-    if let Some(path) = &sock_path {
-        screen::spawn_socket_server(path.clone(), msg_tx.clone());
-    }
+    let ipc_server = sock_path.map(|path| IpcServer::spawn(&path, IpcController::new(msg_tx)));
     spawn_resize_handler(pair.master, msg_tx.clone(), current_cols.clone())?;
 
     terminal::enable_raw_mode()?;
