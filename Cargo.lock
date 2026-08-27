@@ -613,6 +613,7 @@ dependencies = [
  "eyre",
  "portable-pty",
  "postcard",
+ "proptest",
  "rstest",
  "serde",
  "signal-hook",

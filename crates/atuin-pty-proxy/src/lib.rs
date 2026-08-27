@@ -1,28 +1,28 @@
-#[cfg(unix)]
+#[cfg(all(unix, feature = "server"))]
 mod capture;
-#[cfg(unix)]
+#[cfg(all(unix, feature = "server"))]
 mod debug;
-#[cfg(unix)]
+#[cfg(all(unix, any(feature = "client", feature = "server")))]
 mod ipc;
-#[cfg(unix)]
+#[cfg(all(unix, feature = "server"))]
 mod osc133;
-#[cfg(unix)]
+#[cfg(all(unix, feature = "server"))]
 mod pty_proxy;
-#[cfg(unix)]
+#[cfg(all(unix, feature = "server"))]
 mod runtime;
-#[cfg(unix)]
+#[cfg(all(unix, any(feature = "client", feature = "server")))]
 mod screen;
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "server"))]
 pub use capture::{CommandCapture, CommandCaptureSink};
-#[cfg(unix)]
+#[cfg(all(unix, feature = "client"))]
 pub use ipc::{IpcClient, IpcConnection, IpcError};
-#[cfg(unix)]
+#[cfg(all(unix, feature = "server"))]
 pub use pty_proxy::{PtyProxy, Shell, init_script};
-#[cfg(unix)]
+#[cfg(all(unix, any(feature = "client", feature = "server")))]
 pub use screen::ScreenSnapshot;
 
-#[cfg(not(unix))]
+#[cfg(all(not(unix), feature = "server"))]
 #[allow(dead_code)]
 mod unsupported {
     use clap::{Args, Subcommand};

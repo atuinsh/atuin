@@ -1,10 +1,15 @@
+#[cfg(feature = "server")]
 use std::num::NonZeroU16;
+#[cfg(feature = "server")]
 use std::path::PathBuf;
+#[cfg(feature = "server")]
 use std::sync::mpsc::{self, Receiver};
 
+#[cfg(feature = "server")]
 use atuin_common::os::unix::{SecureTempDirError, create_secure_temp_dir};
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "server")]
 pub enum Msg {
     Data(Vec<u8>),
     Resize {
@@ -14,6 +19,7 @@ pub enum Msg {
     ScreenRequest(mpsc::Sender<ScreenSnapshot>),
 }
 
+#[cfg(feature = "server")]
 pub fn socket_path() -> Result<PathBuf, SecureTempDirError> {
     let uid = atuin_common::os::unix::uid();
     let dir = atuin_common::os::unix::tmp_dir().join(format!("atuin-{uid}"));
@@ -21,6 +27,7 @@ pub fn socket_path() -> Result<PathBuf, SecureTempDirError> {
     Ok(dir.join(format!("pty-proxy-{}.sock", std::process::id())))
 }
 
+#[cfg(feature = "server")]
 pub fn spawn_parser_thread(rows: u16, cols: u16, msg_rx: Receiver<Msg>) {
     std::thread::spawn(move || {
         let rows = NonZeroU16::new(rows).unwrap_or(NonZeroU16::MIN);
@@ -75,6 +82,7 @@ impl ScreenSnapshot {
     }
 }
 
+#[cfg(feature = "server")]
 fn handle_parser_msg(parser: &mut vt100::Parser, msg: Msg) {
     match msg {
         Msg::Data(data) => parser.process(&data),

@@ -1,3 +1,4 @@
+//! Utility library for interacting with the `pty-proxy` over its native IPC channel.
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -48,7 +49,7 @@ pub struct IpcClient {
 }
 
 impl IpcClient {
-    const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
+    const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_millis(100);
     const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 
     pub fn new(sock_path: impl Into<PathBuf>) -> Self {
@@ -197,119 +198,139 @@ impl Op for GoodbyeReq {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod tests {
     use std::io::{Read as _, Write as _};
     use std::os::unix::net::UnixListener as StdUnixListener;
     use std::path::Path;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::mpsc::sync_channel;
+    use std::thread::JoinHandle;
+
+    use rstest::{fixture, rstest};
 
     use super::*;
     use crate::ipc::controller::IpcController;
     use crate::ipc::server::IpcServer;
     use crate::screen::{self, Msg};
 
-    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    struct TempSock(PathBuf);
 
-    fn temp_sock() -> PathBuf {
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!("atuin-ipc-test-{}-{n}.sock", std::process::id()))
-    }
-
-    async fn wait_for(path: &Path) {
-        for _ in 0..200 {
-            if path.exists() {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
+    impl TempSock {
+        fn path(&self) -> &Path {
+            &self.0
         }
     }
 
-    /// Spawn the real parser thread seeded with `seed`, then the real IPC server bound to `path`.
-    fn spawn_real_server(path: &Path, rows: u16, cols: u16, seed: &[u8]) -> IpcServer {
+    impl Drop for TempSock {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[fixture]
+    fn sock() -> TempSock {
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        TempSock(
+            std::env::temp_dir().join(format!("atuin-ipc-test-{}-{n}.sock", std::process::id())),
+        )
+    }
+
+    fn serve(sock: &Path, rows: u16, cols: u16, seed: &[u8]) {
         let (msg_tx, msg_rx) = sync_channel::<Msg>(64);
         screen::spawn_parser_thread(rows, cols, msg_rx);
         msg_tx.send(Msg::Data(seed.to_vec())).unwrap();
-        IpcServer::spawn(path, IpcController::new(msg_tx)).unwrap()
+        IpcServer::spawn(sock, IpcController::new(msg_tx)).unwrap();
     }
 
-    #[tokio::test]
-    async fn dump_screen_round_trips_through_real_parser() {
-        let path = temp_sock();
-        let _server = spawn_real_server(&path, 24, 80, b"hello world");
-        wait_for(&path).await;
-
-        let mut conn = IpcClient::new(&path).connect().await.expect("connect");
-        let snap = conn.dump_screen().await.expect("dump_screen");
-
-        assert_eq!(snap.col_count(), 80);
-        assert_eq!(snap.row_count(), 24);
-        assert!(
-            snap.formatted_rows().iter().any(|row| row.contains("hello world")),
-            "screen did not contain seeded text: {:?}",
-            snap.formatted_rows()
-        );
-
-        conn.close().await.expect("close");
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[tokio::test]
-    async fn server_serves_sequential_clients_after_drop() {
-        let path = temp_sock();
-        let _server = spawn_real_server(&path, 10, 40, b"first");
-        wait_for(&path).await;
-
-        let mut first = IpcClient::new(&path).connect().await.expect("connect 1");
-        let snap1 = first.dump_screen().await.expect("dump 1");
-        drop(first); // Drop closes the fd; server should see EOF and serve the next client.
-
-        let mut second = IpcClient::new(&path).connect().await.expect("connect 2");
-        let snap2 = second.dump_screen().await.expect("dump 2");
-
-        assert_eq!(snap1.col_count(), snap2.col_count());
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[tokio::test]
-    async fn connect_rejects_version_mismatch() {
-        let path = temp_sock();
-        let _ = std::fs::remove_file(&path);
-        let listener = StdUnixListener::bind(&path).unwrap();
-
-        let handle = std::thread::spawn(move || {
+    fn canned_server(sock: &Path, rep: Rep) -> JoinHandle<()> {
+        let listener = StdUnixListener::bind(sock).unwrap();
+        std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let mut len_bytes = [0u8; wire::LEN_PREFIX_BYTES];
             stream.read_exact(&mut len_bytes).unwrap();
             let len = wire::parse_len(len_bytes).unwrap();
             let mut body = vec![0u8; len];
             stream.read_exact(&mut body).unwrap();
-            let _req: Req = wire::decode_body(&body).unwrap();
-
-            let framed = wire::encode_frame(&Rep::Hello(HelloRep {
-                version: PROTOCOL_VERSION + 1,
-            }))
-            .unwrap();
-            stream.write_all(&framed).unwrap();
+            let _: Req = wire::decode_body(&body).unwrap();
+            stream.write_all(&wire::encode_frame(&rep).unwrap()).unwrap();
             stream.flush().unwrap();
-        });
-
-        let err = IpcClient::new(&path).connect().await.unwrap_err();
-        assert!(
-            matches!(err, IpcError::ProtocolMismatch { ours, theirs }
-                if ours == PROTOCOL_VERSION && theirs == PROTOCOL_VERSION + 1),
-            "unexpected error: {err:?}"
-        );
-
-        handle.join().unwrap();
-        let _ = std::fs::remove_file(&path);
+        })
     }
 
+    #[rstest]
+    #[case(24, 80, "hello world")]
+    #[case(10, 40, "another line")]
+    #[case(1, 200, "single wide row")]
     #[tokio::test]
-    async fn connect_fails_without_server() {
-        let path = temp_sock();
-        let err = IpcClient::new(&path).connect().await.unwrap_err();
+    async fn dump_screen_reflects_live_screen(
+        sock: TempSock,
+        #[case] rows: u16,
+        #[case] cols: u16,
+        #[case] seed: &str,
+    ) {
+        serve(sock.path(), rows, cols, seed.as_bytes());
+
+        let mut conn = IpcClient::new(sock.path()).connect().await.expect("connect");
+        let snap = conn.dump_screen().await.expect("dump_screen");
+
+        assert_eq!((snap.row_count(), snap.col_count()), (rows, cols));
+        assert_eq!((snap.cursor_row(), usize::from(snap.cursor_col())), (0, seed.len()));
+        assert!(
+            snap.formatted_rows().iter().any(|row| row.contains(seed)),
+            "screen missing seeded text {seed:?}: {:?}",
+            snap.formatted_rows()
+        );
+
+        conn.close().await.expect("close");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn drop_lets_server_serve_the_next_client(sock: TempSock) {
+        serve(sock.path(), 10, 40, b"screen");
+
+        let mut first = IpcClient::new(sock.path()).connect().await.expect("connect 1");
+        first.dump_screen().await.expect("dump 1");
+        drop(first);
+
+        let mut second = IpcClient::new(sock.path()).connect().await.expect("connect 2");
+        assert_eq!(second.dump_screen().await.expect("dump 2").col_count(), 40);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn connect_rejects_version_mismatch(sock: TempSock) {
+        let theirs = PROTOCOL_VERSION + 1;
+        let server = canned_server(sock.path(), Rep::Hello(HelloRep { version: theirs }));
+
+        let err = IpcClient::new(sock.path()).connect().await.unwrap_err();
+
+        assert!(
+            matches!(err, IpcError::ProtocolMismatch { ours, theirs: got }
+                if ours == PROTOCOL_VERSION && got == theirs),
+            "unexpected error: {err:?}"
+        );
+        server.join().unwrap();
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn connect_rejects_wrong_reply_variant(sock: TempSock) {
+        let reply = Rep::DumpScreenRep(DumpScreenRep { screen: ScreenSnapshot::default() });
+        let server = canned_server(sock.path(), reply);
+
+        let err = IpcClient::new(sock.path()).connect().await.unwrap_err();
+
+        assert!(matches!(err, IpcError::UnexpectedReply), "unexpected error: {err:?}");
+        server.join().unwrap();
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn connect_fails_without_server(sock: TempSock) {
+        let err = IpcClient::new(sock.path()).connect().await.unwrap_err();
         assert!(matches!(err, IpcError::Connect { .. }), "unexpected error: {err:?}");
     }
 }

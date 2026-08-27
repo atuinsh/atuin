@@ -10,8 +10,6 @@ use crate::ipc::controller::IpcController;
 use crate::ipc::domain::{Rep, Req};
 use crate::ipc::wire::{self, FrameError};
 
-pub struct IpcServer;
-
 #[derive(Debug, Error)]
 pub enum IpcSpawnError {
     #[error("unexpected io error: {0}")]
@@ -47,6 +45,8 @@ enum StreamServiceError {
     #[error("unexpected io error: {0}")]
     Io(std::io::Error),
 }
+
+pub struct IpcServer;
 
 impl IpcServer {
     /// Spawn the IPC server on a separate thread.
