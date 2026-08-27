@@ -36,6 +36,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use atuin_common::db;
 use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
 use directories::UserDirs;
@@ -91,7 +92,7 @@ async fn hist_from_db_conn(pool: Pool<sqlx::Sqlite>) -> Result<Vec<HistDbEntry>>
         ORDER BY history.start_time
     ";
     let histdb_vec: Vec<HistDbEntry> =
-        sqlx::query_as::<_, HistDbEntry>(query).fetch_all(&pool).await?;
+        db::query_as::<_, HistDbEntry>(query).fetch_all(&pool).await?;
     Ok(histdb_vec)
 }
 
@@ -261,7 +262,7 @@ mod test {
         CREATE INDEX history_command_place on history(command_id, place_id);
         COMMIT; ";
 
-        sqlx::query(db_sql).execute(&pool).await.unwrap();
+        db::query(db_sql).execute(&pool).await.unwrap();
 
         // test histdb iterator
         let histdb_vec = hist_from_db_conn(pool).await.unwrap();

@@ -93,11 +93,11 @@ impl ActiveCompactor {
         }
 
         let (busy, log, checkpointed): (i64, i64, i64) =
-            sqlx::query_as("PRAGMA wal_checkpoint(PASSIVE)").fetch_one(&mut *conn).await?;
+            crate::db::query_as("PRAGMA wal_checkpoint(PASSIVE)").fetch_one(&mut *conn).await?;
 
         if busy != 0 || checkpointed < log {
             // This query risks causing reader starvation, but this is the intent.
-            sqlx::query("PRAGMA wal_checkpoint(RESTART)").execute(conn).await?;
+            crate::db::query("PRAGMA wal_checkpoint(RESTART)").execute(conn).await?;
         }
 
         Ok(())

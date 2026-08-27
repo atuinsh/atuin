@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use atuin_common::db;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
 use directories::BaseDirs;
@@ -79,7 +80,7 @@ async fn hist_from_db_conn(pool: Pool<sqlx::Sqlite>) -> Result<Vec<HistDbEntry>>
         ORDER BY start_timestamp
     ";
     let histdb_vec: Vec<HistDbEntry> =
-        sqlx::query_as::<_, HistDbEntry>(query).fetch_all(&pool).await?;
+        db::query_as::<_, HistDbEntry>(query).fetch_all(&pool).await?;
     Ok(histdb_vec)
 }
 

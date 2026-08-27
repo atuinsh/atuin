@@ -1959,7 +1959,8 @@ pub async fn history(
                                 // Query the DB for ALL entries with this command and delete them
                                 let all_matching = db.query_history(
                                     &format!(
-                                        "select * from history where command = '{}' and deleted_at is null",
+                                        "select {} from history where command = '{}' and deleted_at is null",
+                                        atuin_client::database::HISTORY_COLUMNS,
                                         command.replace('\'', "''")
                                     )
                                 ).await?;
