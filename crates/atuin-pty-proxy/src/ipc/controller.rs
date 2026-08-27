@@ -1,12 +1,10 @@
-use std::sync::mpsc::{self, SendError, SyncSender};
+use std::sync::mpsc::{self, SyncSender};
 
-use crate::{
-    ipc::domain::*,
-    screen::{Msg, ScreenSnapshot},
-};
+use crate::ipc::domain::*;
+use crate::screen::{Msg, ScreenSnapshot};
 
 /// This trait must be implemented by a controller which services each of these messages.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct IpcController {
     /// TODO(markovejnovic): World's biggest debt.
     screen_tx: SyncSender<Msg>,
@@ -17,23 +15,29 @@ impl IpcController {
         Self { screen_tx }
     }
 
-    pub fn hello(&mut self, _req: HelloReq) -> HelloRep {
-        HelloRep {}
+    pub fn hello(_req: HelloReq) -> HelloRep {
+        HelloRep {
+            version: PROTOCOL_VERSION,
+        }
     }
 
-    pub fn dump_screen(&mut self, req: DumpScreenReq) -> DumpScreenRep {
-        self.get_screen();
+    pub fn dump_screen(&self, _req: DumpScreenReq) -> DumpScreenRep {
+        DumpScreenRep {
+            screen: self.get_screen(),
+        }
     }
 
-    pub fn goodbye(&mut self, _req: GoodbyeReq) -> GoodbyeRep {
+    pub fn goodbye(_req: GoodbyeReq) -> GoodbyeRep {
         GoodbyeRep {}
     }
 
-    fn get_screen(&self) -> Result<ScreenSnapshot, SendError<Msg>> {
+    fn get_screen(&self) -> ScreenSnapshot {
         let (reply_tx, reply_rx) = mpsc::channel();
 
-        self.screen_tx.send(Msg::ScreenRequest(reply_tx))?;
+        if self.screen_tx.send(Msg::ScreenRequest(reply_tx)).is_err() {
+            return ScreenSnapshot::default();
+        }
 
-        Ok(reply_rx.recv())
+        reply_rx.recv().unwrap_or_default()
     }
 }

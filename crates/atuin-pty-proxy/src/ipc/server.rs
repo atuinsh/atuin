@@ -1,20 +1,16 @@
-use std::{
-    io::{ErrorKind, Read, Write},
-    os::unix::net::{UnixListener, UnixStream},
-    path::Path,
-    thread::JoinHandle,
-    time::Duration,
-};
+use std::io::{ErrorKind, Read, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::Path;
+use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::{error, warn};
 
-use crate::{ipc::controller::IpcController, screen::ScreenSnapshot};
+use crate::ipc::controller::IpcController;
+use crate::ipc::domain::{Rep, Req};
+use crate::ipc::wire::{self, FrameError};
 
-pub struct IpcServer {
-    join_handle: JoinHandle<Result<(), IpcServerError>>,
-}
+pub struct IpcServer;
 
 #[derive(Debug, Error)]
 pub enum IpcSpawnError {
@@ -57,18 +53,9 @@ impl IpcServer {
     pub fn spawn(sock_path: &Path, ctrl: IpcController) -> Result<Self, IpcSpawnError> {
         let listener = UnixListener::bind(sock_path)?;
 
-        let handle = std::thread::spawn(move || IpcServerWorker::new(ctrl).work(listener));
+        std::thread::spawn(move || IpcServerWorker::new(ctrl).work(&listener));
 
-        Ok(Self {
-            join_handle: handle,
-        })
-    }
-
-    pub fn join(self) -> Result<(), IpcServerError> {
-        match self.join_handle.join() {
-            Ok(result) => result,
-            Err(_) => Ok(()),
-        }
+        Ok(Self)
     }
 }
 
@@ -77,14 +64,13 @@ struct IpcServerWorker {
     controller: IpcController,
 }
 
-impl IpcServerWorker<C> {
+impl IpcServerWorker {
     /// Clients after this timeout are considered corrupt and we no longer talk to them.
     const HEARTBEAT_TIMEOUT: Duration = Duration::from_millis(200);
     const READ_TIMEOUT: Duration = Duration::from_millis(100);
     const WRITE_TIMEOUT: Duration = Duration::from_millis(100);
-    const MAX_MSG_LEN: u32 = 128 * 1024 * 1024;
 
-    fn new(ctrl: C) -> Self {
+    fn new(ctrl: IpcController) -> Self {
         debug_assert!(Self::WRITE_TIMEOUT + Self::READ_TIMEOUT >= Self::HEARTBEAT_TIMEOUT);
 
         Self {
@@ -93,7 +79,7 @@ impl IpcServerWorker<C> {
         }
     }
 
-    fn work(mut self, listener: UnixListener) -> Result<(), IpcServerError> {
+    fn work(mut self, listener: &UnixListener) -> Result<(), IpcServerError> {
         for stream in listener.incoming() {
             let mut stream = match stream {
                 Ok(stream) => stream,
@@ -142,12 +128,12 @@ impl IpcServerWorker<C> {
             };
 
             let rep = match req {
-                Req::Hello(req) => Rep::Hello(self.controller.hello(req)),
+                Req::Hello(req) => Rep::Hello(IpcController::hello(req)),
                 Req::DumpScreen(req) => Rep::DumpScreenRep(self.controller.dump_screen(req)),
-                Req::Goodbye(req) => Rep::Goodbye(self.controller.goodbye(req)),
+                Req::Goodbye(req) => Rep::Goodbye(IpcController::goodbye(req)),
             };
 
-            Self::write_reply(stream, rep)?;
+            Self::write_reply(stream, &rep)?;
 
             if matches!(req, Req::Goodbye(_)) {
                 return Ok(());
@@ -162,7 +148,7 @@ impl IpcServerWorker<C> {
         stream: &mut UnixStream,
         scratch: &mut Vec<u8>,
     ) -> Result<Option<Req>, StreamServiceError> {
-        let mut len_bytes = [0u8; 4];
+        let mut len_bytes = [0u8; wire::LEN_PREFIX_BYTES];
         if let Err(err) = stream.read_exact(&mut len_bytes) {
             return match err.kind() {
                 ErrorKind::UnexpectedEof => Ok(None),
@@ -170,32 +156,33 @@ impl IpcServerWorker<C> {
             };
         }
 
-        let len = u32::from_be_bytes(len_bytes);
-        if len > Self::MAX_MSG_LEN {
-            return Err(StreamServiceError::TooLarge(len as usize));
-        }
-
-        let len = len as usize;
+        let len = wire::parse_len(len_bytes)?;
         if scratch.len() < len {
             scratch.resize(len, 0);
         }
         let buf = &mut scratch[..len];
         stream.read_exact(buf)?;
 
-        let req = postcard::from_bytes::<Req>(buf).map_err(StreamServiceError::Decode)?;
+        let req = wire::decode_body::<Req>(buf)?;
         Ok(Some(req))
     }
 
-    fn write_reply(stream: &mut UnixStream, rep: Rep) -> Result<(), StreamServiceError> {
-        let body = postcard::to_stdvec(&rep).map_err(StreamServiceError::Encode)?;
-        let len =
-            u32::try_from(body.len()).map_err(|_| StreamServiceError::TooLarge(body.len()))?;
-
-        stream.write_all(&len.to_be_bytes())?;
-        stream.write_all(&body)?;
+    fn write_reply(stream: &mut UnixStream, rep: &Rep) -> Result<(), StreamServiceError> {
+        let framed = wire::encode_frame(rep)?;
+        stream.write_all(&framed)?;
         stream.flush()?;
 
         Ok(())
+    }
+}
+
+impl From<FrameError> for StreamServiceError {
+    fn from(err: FrameError) -> Self {
+        match err {
+            FrameError::TooLarge(len) => Self::TooLarge(len),
+            FrameError::Encode(err) => Self::Encode(err),
+            FrameError::Decode(err) => Self::Decode(err),
+        }
     }
 }
 

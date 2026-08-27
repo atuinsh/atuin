@@ -3,7 +3,8 @@ mod client;
 mod controller;
 pub mod domain;
 mod server;
+mod wire;
 
-pub use client::IpcClient;
+pub use client::{IpcClient, IpcConnection, IpcError};
 pub use controller::IpcController;
-pub(crate) use server::{IpcServer, IpcServerError, IpcSpawnError};
+pub use server::IpcServer;

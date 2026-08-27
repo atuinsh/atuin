@@ -41,11 +41,38 @@ pub fn spawn_parser_thread(rows: u16, cols: u16, msg_rx: Receiver<Msg>) {
     });
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ScreenSnapshot {
     screen_dims: (u16, u16),
     cursor_pos: (u16, u16),
     rows: Vec<String>,
+}
+
+impl ScreenSnapshot {
+    #[must_use]
+    pub fn row_count(&self) -> u16 {
+        self.screen_dims.0
+    }
+
+    #[must_use]
+    pub fn col_count(&self) -> u16 {
+        self.screen_dims.1
+    }
+
+    #[must_use]
+    pub fn cursor_row(&self) -> u16 {
+        self.cursor_pos.0
+    }
+
+    #[must_use]
+    pub fn cursor_col(&self) -> u16 {
+        self.cursor_pos.1
+    }
+
+    #[must_use]
+    pub fn formatted_rows(&self) -> &[String] {
+        &self.rows
+    }
 }
 
 fn handle_parser_msg(parser: &mut vt100::Parser, msg: Msg) {

@@ -617,6 +617,7 @@ dependencies = [
  "serde",
  "signal-hook",
  "thiserror 2.0.19",
+ "tokio",
  "tracing",
 ]
 

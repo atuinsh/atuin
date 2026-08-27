@@ -23,6 +23,7 @@ postcard = { workspace = true }
 serde = { workspace = true }
 signal-hook = "0.3"
 thiserror = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
