@@ -212,7 +212,7 @@ async fn wait_for_lock(path: &Path, timeout: Duration) -> Result<File> {
     match outcome {
         Ok(Ok(())) => Ok(file),
         Ok(Err(err)) => Err(err),
-        Err(_) => bail!("timed out waiting for lock at {}", path.display()),
+        Err(()) => bail!("timed out waiting for lock at {}", path.display()),
     }
 }
 
@@ -347,8 +347,7 @@ async fn wait_until_ready(settings: &Settings, timeout: Duration) -> Result<Hist
         )
         .await
         .unwrap_or_else(|last| {
-            let last_error = last.unwrap_or_else(|| eyre!("daemon did not become ready"));
-            Err(last_error.wrap_err(format!(
+            Err(last.wrap_err(format!(
                 "timed out waiting for daemon startup after {}ms",
                 timeout.as_millis()
             )))
