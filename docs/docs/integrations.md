@@ -10,7 +10,7 @@ If you'd like to override this, add your own config after `"$(atuin init zsh)"` 
 
 ## zsh-vi-mode
 
-If you are using [Zsh Vi Mode](https://github.com/jeffreytse/zsh-vi-mode), you may want to add the following to your `.zshrc` to prevent overriding the default atuin binds:
+If you're using [Zsh Vi Mode](https://github.com/jeffreytse/zsh-vi-mode), you may want to add the following to your `.zshrc` to prevent overriding the default Atuin binds:
 
 ```shell
 # Append a command directly (after sourcing zvm)
@@ -19,13 +19,13 @@ zvm_after_init_commands+=(
 )
 ```
 
-## ble.sh auto-complete (Bash)
+## ble.sh autocomplete (Bash)
 
-If ble.sh is available when Atuin's integration is loaded in Bash, Atuin automatically defines and registers an auto-complete source for the autosuggestion feature of ble.sh.
+If ble.sh is available when Atuin's integration is loaded in Bash, Atuin automatically defines and registers an autocomplete source for the autosuggestion feature of ble.sh.
 
 If you'd like to change the behavior, please overwrite the shell function `ble/complete/auto-complete/source:atuin-history` after `eval "$(atuin init bash)"` in your `.bashrc`.
 
-If you would not like Atuin's auto-complete source, please add the following setting after `eval "$(atuin init bash)"` in your `.bashrc`:
+If you would not like Atuin's autocomplete source, please add the following setting after `eval "$(atuin init bash)"` in your `.bashrc`:
 
 ```shell
 # bashrc (after eval "$(atuin init bash)")
@@ -36,6 +36,6 @@ ble/util/import/eval-after-load core-complete '
 
 ## Embedded Terminals and IDEs
 
-Atuin may not work out of the box in embedded terminals found in IDEs (PyCharm, VS Code, etc.) or AI coding assistants (Claude Code, etc.). This is because these tools often start non-interactive shells that don't source your shell configuration.
+Atuin may not work out of the box in embedded terminals found in IDEs (JetBrains' RustRover or PyCharm, VS Code, etc.) or AI coding assistants (Claude Code, etc.). This is because these tools often start non-interactive shells that don't source your shell configuration.
 
 For solutions and workarounds, see [Shell Integration and Interoperability](guide/shell-integration.md).

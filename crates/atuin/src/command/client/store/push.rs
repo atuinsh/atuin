@@ -1,36 +1,37 @@
-use atuin_common::record::HostId;
-use clap::Args;
-use eyre::Result;
-use uuid::Uuid;
+use std::num::NonZeroU64;
 
-use atuin_client::{
-    api_client::Client,
-    encryption::load_key,
-    record::sync::Operation,
-    record::{sqlite_store::SqliteStore, sync},
-    settings::Settings,
-};
+use atuin_client::api_client::Client;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::record::sync::{ClientSource, Operation, SyncEngine};
+use atuin_client::settings::Settings;
+use atuin_common::encryption::paseto_v4;
+use atuin_domain::record::{HostId, RecordTag};
+use clap::Args;
+use eyre::{Context as _, Result};
+use uuid::Uuid;
 
 #[derive(Args, Debug)]
 pub struct Push {
     /// The tag to push (eg, 'history'). Defaults to all tags
     #[arg(long, short)]
-    pub tag: Option<String>,
+    pub tag: Option<RecordTag>,
 
     /// The host to push, in the form of a UUID host ID. Defaults to the current host.
     #[arg(long)]
     pub host: Option<Uuid>,
 
     /// Force push records
+    ///
     /// This will override both host and tag, to be all hosts and all tags. First clear the remote store, then upload all of the
     /// local store
     #[arg(long, default_value = "false")]
     pub force: bool,
 
     /// Page Size
+    ///
     /// How many records to upload at once. Defaults to 100
     #[arg(long, default_value = "100")]
-    pub page: u64,
+    pub page: NonZeroU64,
 }
 
 impl Push {
@@ -41,12 +42,15 @@ impl Push {
             println!("Forcing remote store overwrite!");
             println!("Clearing remote store");
 
+            let caps = atuin_client::api_client::caps_client(settings)?;
             let client = Client::new(
-                &settings.sync_address,
-                settings.sync_auth_token().await?,
+                settings.sync_address.clone(),
+                &settings.sync_auth_token().await?,
                 settings.network_connect_timeout,
                 settings.network_timeout * 10, // we may be deleting a lot of data... so up the
-                                               // timeout
+                // timeout
+                &settings.extra_headers,
+                caps,
             )
             .expect("failed to create client");
 
@@ -59,18 +63,30 @@ impl Push {
         // 3. Filter operations by
         //  a) are they an upload op?
         //  b) are they for the host/tag we are pushing here?
-        let client = sync::build_client(settings).await?;
-        let (diff, remote_index) = sync::diff(&client, &store).await?;
+        let key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+            .context("could not load encryption key")?;
+        let engine = SyncEngine::builder()
+            .store(store)
+            .client_source(ClientSource::FromSettings {
+                settings,
+                caps: None,
+            })
+            .build()
+            .connect()
+            .await?
+            .with_page_size(self.page);
+
+        let keyed = engine.keyed(&key);
+        let (diff, remote_index) = engine.diff().await?;
 
         // Skip on --force: that path intentionally replaces remote with local.
-        if !self.force {
-            let key: [u8; 32] = load_key(settings)?.into();
-            sync::check_encryption_key(&client, &remote_index, &key)
-                .await
-                .map_err(crate::print_error::format_sync_error)?;
+        if !self.force
+            && let Some(err) = keyed.key_valid_against(&remote_index).await
+        {
+            return Err(crate::print_error::format_sync_error(err));
         }
 
-        let operations = sync::operations(diff, &store).await?;
+        let operations = SyncEngine::operations(diff)?;
 
         let operations = operations
             .into_iter()
@@ -79,21 +95,21 @@ impl Push {
                 Operation::Noop { .. } | Operation::Download { .. } => false,
 
                 // push, so yes plz to uploads!
-                Operation::Upload { host, tag, .. } => {
+                Operation::Upload { series, .. } => {
                     if self.force {
                         return true;
                     }
 
                     if let Some(h) = self.host {
-                        if HostId(h) != *host {
+                        if HostId(h) != series.host_id {
                             return false;
                         }
-                    } else if *host != host_id {
+                    } else if series.host_id != host_id {
                         return false;
                     }
 
                     if let Some(t) = self.tag.clone()
-                        && t != *tag
+                        && t != series.tag
                     {
                         return false;
                     }
@@ -103,7 +119,7 @@ impl Push {
             })
             .collect();
 
-        let (uploaded, _) = sync::sync_remote(&client, operations, &store, self.page).await?;
+        let (uploaded, _) = keyed.sync_remote(operations).await?;
 
         println!("Uploaded {uploaded} records");
 

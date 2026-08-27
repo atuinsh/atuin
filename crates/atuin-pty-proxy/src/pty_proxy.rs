@@ -35,7 +35,7 @@ pub struct Init {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 #[value(rename_all = "lower")]
 #[allow(clippy::enum_variant_names, clippy::doc_markdown)]
-enum Shell {
+pub enum Shell {
     /// Zsh setup
     Zsh,
     /// Bash setup
@@ -46,10 +46,11 @@ enum Shell {
     Nu,
 }
 
-pub(crate) struct RuntimeOptions {
+pub struct RuntimeOptions {
     pub(crate) debug_osc133: bool,
     pub(crate) shell: Option<PathBuf>,
     pub(crate) command_capture_sink: Option<CommandCaptureSink>,
+    pub(crate) child_umask: Option<u32>,
 }
 
 impl RuntimeOptions {
@@ -57,17 +58,22 @@ impl RuntimeOptions {
         debug_osc133: bool,
         shell: Option<PathBuf>,
         command_capture_sink: Option<CommandCaptureSink>,
+        child_umask: Option<u32>,
     ) -> Self {
         Self {
             debug_osc133: debug_osc133 || env_flag("ATUIN_PTY_PROXY_DEBUG"),
             shell,
             command_capture_sink,
+            child_umask,
         }
     }
 }
 
 impl PtyProxy {
-    pub fn run(self, command_capture_sink: Option<CommandCaptureSink>) {
+    /// `child_umask` is the umask to restore in the spawned shell. Atuin sets
+    /// a restrictive process-wide umask early in startup, which the shell
+    /// would otherwise inherit (#3695).
+    pub fn run(self, command_capture_sink: Option<CommandCaptureSink>, child_umask: Option<u32>) {
         if self.cmd.is_some() && self.shell.is_some() {
             eprintln!("atuin pty-proxy: --shell only applies when no subcommand is given");
             std::process::exit(2);
@@ -83,6 +89,7 @@ impl PtyProxy {
                 self.debug_osc133,
                 self.shell,
                 command_capture_sink,
+                child_umask,
             )),
         }
     }
@@ -114,20 +121,13 @@ fn detect_shell(cli_shell: Option<Shell>) -> Result<Shell, String> {
         return Ok(shell);
     }
 
-    Err(
-        "could not detect a supported shell. Please specify one explicitly: bash, zsh, fish, or nu"
-            .to_string(),
-    )
+    Err("could not detect a supported shell. Please specify one explicitly: bash, zsh, fish, or nu"
+        .to_string())
 }
 
 fn shell_from_name(name: &str) -> Option<Shell> {
-    let shell = name
-        .trim()
-        .rsplit('/')
-        .next()
-        .unwrap_or(name)
-        .trim_start_matches('-')
-        .to_ascii_lowercase();
+    let shell =
+        name.trim().rsplit('/').next().unwrap_or(name).trim_start_matches('-').to_ascii_lowercase();
 
     match shell.as_str() {
         "bash" => Some(Shell::Bash),
@@ -140,11 +140,20 @@ fn shell_from_name(name: &str) -> Option<Shell> {
 
 fn env_flag(name: &str) -> bool {
     std::env::var(name).is_ok_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
+        matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
     })
+}
+
+/// Shell code that re-execs the current shell inside `atuin pty-proxy`.
+///
+/// Guarded by `ATUIN_PTY_PROXY_ACTIVE`, so it is safe to emit more than once
+/// per shell startup: whichever copy runs first wins and the rest no-op. This
+/// lets `atuin init` embed the preamble (via the `pty_proxy.enabled` setting)
+/// without conflicting with an existing standalone `atuin pty-proxy init`
+/// line in shell config.
+#[must_use]
+pub fn init_script(shell: Shell) -> &'static str {
+    render_init(shell)
 }
 
 fn render_init(shell: Shell) -> &'static str {
@@ -224,31 +233,40 @@ end
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::{Shell, render_init, shell_from_name};
 
-    #[test]
-    fn shell_from_name_handles_paths() {
-        assert_eq!(shell_from_name("/bin/zsh"), Some(Shell::Zsh));
-        assert_eq!(shell_from_name("/usr/local/bin/bash"), Some(Shell::Bash));
-        assert_eq!(shell_from_name("fish"), Some(Shell::Fish));
-        assert_eq!(shell_from_name("nu"), Some(Shell::Nu));
+    #[rstest]
+    #[case::zsh_abs_path("/bin/zsh", Shell::Zsh)]
+    #[case::bash_abs_path("/usr/local/bin/bash", Shell::Bash)]
+    #[case::fish_bare("fish", Shell::Fish)]
+    #[case::nu_bare("nu", Shell::Nu)]
+    fn shell_from_name_maps(#[case] input: &str, #[case] expected: Shell) {
+        assert_eq!(shell_from_name(input), Some(expected));
     }
 
-    #[test]
+    #[rstest]
+    fn every_init_execs_pty_proxy(
+        #[values(Shell::Zsh, Shell::Bash, Shell::Fish, Shell::Nu)] shell: Shell,
+    ) {
+        assert!(render_init(shell).contains("exec atuin pty-proxy"));
+    }
+
+    #[rstest]
     fn posix_init_uses_exec_and_tmux_guard() {
         let script = render_init(Shell::Bash);
-        assert!(script.contains("exec atuin pty-proxy"));
         assert!(script.contains("ATUIN_PTY_PROXY_TMUX"));
         assert!(!script.contains("eval \"$(atuin init bash)\""));
     }
 
-    #[test]
+    #[rstest]
     fn posix_init_has_no_double_braces() {
         let script = render_init(Shell::Bash);
         assert!(!script.contains("${{"), "double braces in bash init script");
     }
 
-    #[test]
+    #[rstest]
     fn init_scripts_forward_shell_path() {
         let posix = render_init(Shell::Bash);
         assert!(posix.contains(r#"exec atuin pty-proxy --shell "$BASH""#));
@@ -264,17 +282,15 @@ mod tests {
         assert!(nu.contains("exec atuin pty-proxy --shell $nu.current-exe"));
     }
 
-    #[test]
+    #[rstest]
     fn fish_init_uses_source() {
         let script = render_init(Shell::Fish);
-        assert!(script.contains("exec atuin pty-proxy"));
         assert!(!script.contains("atuin init fish | source"));
     }
 
-    #[test]
+    #[rstest]
     fn nu_init_uses_exec_and_tty_guard() {
         let script = render_init(Shell::Nu);
-        assert!(script.contains("exec atuin pty-proxy"));
         assert!(script.contains("ATUIN_PTY_PROXY_TMUX"));
         assert!(script.contains("is-terminal --stdin"));
         assert!(script.contains("is-terminal --stdout"));

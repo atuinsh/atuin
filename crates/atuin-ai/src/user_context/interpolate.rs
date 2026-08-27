@@ -1,4 +1,4 @@
-//! Parse `.atuin/ai-context.md` files and execute embedded commands.
+//! Parse `.atuin/TERMINAL.md` files and execute embedded commands.
 //!
 //! Two interpolation syntaxes are supported:
 //!
@@ -87,7 +87,7 @@ fn parse_commands(source: &str) -> Vec<Command> {
 ///
 /// Commands are executed in parallel. Failed commands are replaced with an
 /// error marker so the AI has visibility into what went wrong.
-pub(crate) async fn interpolate(source: &str, shell: &str) -> String {
+pub async fn interpolate(source: &str, shell: &str) -> String {
     let commands = parse_commands(source);
     if commands.is_empty() {
         return source.to_string();
@@ -98,9 +98,7 @@ pub(crate) async fn interpolate(source: &str, shell: &str) -> String {
     for cmd in &commands {
         let shell = shell.to_string();
         let body = cmd.body.clone();
-        handles.push(tokio::spawn(
-            async move { run_command(&shell, &body).await },
-        ));
+        handles.push(tokio::spawn(async move { run_command(&shell, &body).await }));
     }
 
     // Collect results.
@@ -137,10 +135,7 @@ pub(crate) async fn interpolate(source: &str, shell: &str) -> String {
 async fn run_command(shell: &str, body: &str) -> String {
     let result = tokio::time::timeout(
         COMMAND_TIMEOUT,
-        tokio::process::Command::new(shell)
-            .arg("-c")
-            .arg(body)
-            .output(),
+        tokio::process::Command::new(shell).arg("-c").arg(body).output(),
     )
     .await;
 
@@ -164,15 +159,14 @@ async fn run_command(shell: &str, body: &str) -> String {
             }
         }
         Ok(Err(e)) => format!("[error: {e}]"),
-        Err(_) => format!(
-            "[error: command timed out after {}s]",
-            COMMAND_TIMEOUT.as_secs()
-        ),
+        Err(_) => format!("[error: command timed out after {}s]", COMMAND_TIMEOUT.as_secs()),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     #[test]
@@ -181,46 +175,19 @@ mod tests {
         let cmds = parse_commands(source);
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].body, "git branch --show-current");
-        assert_eq!(
-            &source[cmds[0].range.clone()],
-            "!`git branch --show-current`"
-        );
+        assert_eq!(&source[cmds[0].range.clone()], "!`git branch --show-current`");
     }
 
-    #[test]
-    fn parse_inline_double_backtick() {
-        let source = r#"Host: !``echo `hostname` ``"#;
-        let cmds = parse_commands(source);
-        assert_eq!(cmds.len(), 1);
-        assert_eq!(cmds[0].body, "echo `hostname` ");
-    }
-
-    #[test]
-    fn parse_block_command() {
-        let source = "Before\n\n```!\necho hello\npython3 --version\n```\n\nAfter";
-        let cmds = parse_commands(source);
-        assert_eq!(cmds.len(), 1);
-        assert_eq!(cmds[0].body, "echo hello\npython3 --version");
-    }
-
-    #[test]
-    fn regular_code_not_matched() {
-        let source = "Normal `code span` and ```bash\necho hi\n```";
-        let cmds = parse_commands(source);
-        assert_eq!(cmds.len(), 0);
-    }
-
-    #[test]
-    fn bang_not_adjacent_not_matched() {
-        let source = "Exclaim! Then `code` here.";
-        let cmds = parse_commands(source);
-        // The `!` and backtick are separated by " Then ", not adjacent.
-        assert_eq!(cmds.len(), 0);
-    }
-
-    #[test]
-    fn mixed_content() {
-        let source = "\
+    #[rstest]
+    #[case::double_backtick(r"Host: !``echo `hostname` ``", &["echo `hostname` "])]
+    #[case::block(
+        "Before\n\n```!\necho hello\npython3 --version\n```\n\nAfter",
+        &["echo hello\npython3 --version"]
+    )]
+    #[case::regular_ignored("Normal `code span` and ```bash\necho hi\n```", &[])]
+    #[case::bang_not_adjacent("Exclaim! Then `code` here.", &[])]
+    #[case::mixed(
+        "\
 # Project Context
 
 Branch: !`git branch --show-current`
@@ -235,32 +202,32 @@ echo $VIRTUAL_ENV
 echo not interpolated
 ```
 
-End.";
+End.",
+        &["git branch --show-current", "echo $VIRTUAL_ENV"]
+    )]
+    fn parse_commands_cases(#[case] source: &str, #[case] expected_bodies: &[&str]) {
         let cmds = parse_commands(source);
-        assert_eq!(cmds.len(), 2);
-        assert_eq!(cmds[0].body, "git branch --show-current");
-        assert_eq!(cmds[1].body, "echo $VIRTUAL_ENV");
+        assert_eq!(cmds.len(), expected_bodies.len());
+        for (cmd, b) in cmds.iter().zip(expected_bodies) {
+            assert_eq!(&cmd.body, b);
+        }
     }
 
+    #[rstest]
+    #[case::inline("Branch: !`echo main`", "Branch: main")]
+    #[case::block(
+        "Before\n\n```!\necho hello world\n```\n\nAfter",
+        "Before\n\nhello world\n\nAfter"
+    )]
+    #[case::preserves_plain(
+        "Just plain markdown with `code` and no bangs.",
+        "Just plain markdown with `code` and no bangs."
+    )]
+    #[case::multiple("A: !`echo one` B: !`echo two`", "A: one B: two")]
     #[tokio::test]
-    async fn interpolate_replaces_inline_command() {
-        let source = "Branch: !`echo main`";
-        let result = interpolate(source, "sh").await;
-        assert_eq!(result, "Branch: main");
-    }
-
-    #[tokio::test]
-    async fn interpolate_replaces_block_command() {
-        let source = "Before\n\n```!\necho hello world\n```\n\nAfter";
-        let result = interpolate(source, "sh").await;
-        assert_eq!(result, "Before\n\nhello world\n\nAfter");
-    }
-
-    #[tokio::test]
-    async fn interpolate_preserves_non_command_content() {
-        let source = "Just plain markdown with `code` and no bangs.";
-        let result = interpolate(source, "sh").await;
-        assert_eq!(result, source);
+    #[cfg(not(target_os = "windows"))]
+    async fn interpolate_cases(#[case] source: &str, #[case] expected: &str) {
+        assert_eq!(interpolate(source, "sh").await, expected);
     }
 
     #[tokio::test]
@@ -268,12 +235,5 @@ End.";
         let source = "Result: !`exit 1`";
         let result = interpolate(source, "sh").await;
         assert!(result.starts_with("Result: [error:"));
-    }
-
-    #[tokio::test]
-    async fn interpolate_multiple_commands() {
-        let source = "A: !`echo one` B: !`echo two`";
-        let result = interpolate(source, "sh").await;
-        assert_eq!(result, "A: one B: two");
     }
 }

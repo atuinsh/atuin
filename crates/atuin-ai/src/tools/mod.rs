@@ -1,16 +1,20 @@
-use std::{
-    io::BufRead,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::io::BufRead;
+use std::num::NonZeroU16;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use atuin_client::history::AuthorPattern;
+use atuin_common::ansi;
+use atuin_common::filter::OrFilter;
+use atuin_common::time::UtcOffsetExt;
+use enum_dispatch::enum_dispatch;
 use eyre::Result;
 use uuid::Uuid;
 
 const DEFAULT_FILE_READ_LINES: u64 = 100;
 const MAX_FILE_READ_LINES: u64 = 1000;
 
-pub(crate) mod descriptor;
+pub mod descriptor;
 
 use crate::permissions::rule::Rule;
 
@@ -21,9 +25,7 @@ use crate::permissions::rule::Rule;
 /// `?`, and `[...]` via `glob_match`.
 fn path_matches_scope(path: &Path, scope: &str) -> bool {
     let path = if path.is_relative() {
-        std::env::current_dir()
-            .map(|cwd| cwd.join(path))
-            .unwrap_or_else(|_| path.to_path_buf())
+        std::env::current_dir().map(|cwd| cwd.join(path)).unwrap_or_else(|_| path.to_path_buf())
     } else {
         path.to_path_buf()
     };
@@ -60,7 +62,7 @@ fn path_matches_scope(path: &Path, scope: &str) -> bool {
 
 /// Result of executing a client-side tool.
 #[derive(Debug, Clone)]
-pub(crate) enum ToolOutcome {
+pub enum ToolOutcome {
     /// Simple success with a text result (used by Read, AtuinHistory).
     Success(String),
     /// Error with a message.
@@ -85,9 +87,9 @@ impl ToolOutcome {
         interrupt_reason: Option<&crate::fsm::tools::InterruptReason>,
     ) -> String {
         match self {
-            ToolOutcome::Success(s) => s.clone(),
-            ToolOutcome::Error(e) => e.clone(),
-            ToolOutcome::Structured {
+            Self::Success(s) => s.clone(),
+            Self::Error(e) => e.clone(),
+            Self::Structured {
                 stdout,
                 stderr,
                 exit_code,
@@ -133,8 +135,8 @@ impl ToolOutcome {
     /// Whether this outcome represents an error.
     pub fn is_error(&self) -> bool {
         match self {
-            ToolOutcome::Error(_) => true,
-            ToolOutcome::Structured {
+            Self::Error(_) => true,
+            Self::Structured {
                 exit_code: Some(code),
                 ..
             } if *code != 0 => true,
@@ -145,7 +147,7 @@ impl ToolOutcome {
 
 /// Cached VT100 preview data for a shell tool call.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ToolPreview {
+pub struct ToolPreview {
     pub lines: Vec<String>,
     pub exit_code: Option<i32>,
     pub interrupted: Option<crate::fsm::tools::InterruptReason>,
@@ -153,7 +155,8 @@ pub(crate) struct ToolPreview {
 
 /// A tool call from the server, with parsed input parameters.
 #[derive(Debug, Clone)]
-pub(crate) enum ClientToolCall {
+#[enum_dispatch(PermissibleToolCall)]
+pub enum ClientToolCall {
     Read(ReadToolCall),
     Edit(EditToolCall),
     Write(WriteToolCall),
@@ -168,19 +171,13 @@ impl TryFrom<(&str, &serde_json::Value)> for ClientToolCall {
 
     fn try_from((name, input): (&str, &serde_json::Value)) -> Result<Self, Self::Error> {
         match name {
-            "read_file" => Ok(ClientToolCall::Read(ReadToolCall::try_from(input)?)),
-            "edit_file" => Ok(ClientToolCall::Edit(EditToolCall::try_from(input)?)),
-            "write_file" => Ok(ClientToolCall::Write(WriteToolCall::try_from(input)?)),
-            "execute_shell_command" => Ok(ClientToolCall::Shell(ShellToolCall::try_from(input)?)),
-            "atuin_history" => Ok(ClientToolCall::AtuinHistory(
-                AtuinHistoryToolCall::try_from(input)?,
-            )),
-            "atuin_output" => Ok(ClientToolCall::AtuinOutput(AtuinOutputToolCall::try_from(
-                input,
-            )?)),
-            "load_skill" => Ok(ClientToolCall::LoadSkill(LoadSkillToolCall::try_from(
-                input,
-            )?)),
+            "read_file" => Ok(Self::Read(ReadToolCall::try_from(input)?)),
+            "edit_file" => Ok(Self::Edit(EditToolCall::try_from(input)?)),
+            "write_file" => Ok(Self::Write(WriteToolCall::try_from(input)?)),
+            "execute_shell_command" => Ok(Self::Shell(ShellToolCall::try_from(input)?)),
+            "atuin_history" => Ok(Self::AtuinHistory(AtuinHistoryToolCall::try_from(input)?)),
+            "atuin_output" => Ok(Self::AtuinOutput(AtuinOutputToolCall::try_from(input)?)),
+            "load_skill" => Ok(Self::LoadSkill(LoadSkillToolCall::try_from(input)?)),
             _ => Err(eyre::eyre!("Unknown tool call: {name}")),
         }
     }
@@ -189,13 +186,13 @@ impl TryFrom<(&str, &serde_json::Value)> for ClientToolCall {
 impl ClientToolCall {
     pub(crate) fn descriptor(&self) -> &'static descriptor::ToolDescriptor {
         match self {
-            ClientToolCall::Read(_) => descriptor::READ,
-            ClientToolCall::Edit(_) => descriptor::EDIT,
-            ClientToolCall::Write(_) => descriptor::WRITE,
-            ClientToolCall::Shell(_) => descriptor::SHELL,
-            ClientToolCall::AtuinHistory(_) => descriptor::ATUIN_HISTORY,
-            ClientToolCall::AtuinOutput(_) => descriptor::ATUIN_OUTPUT,
-            ClientToolCall::LoadSkill(_) => descriptor::LOAD_SKILL,
+            Self::Read(_) => descriptor::READ,
+            Self::Edit(_) => descriptor::EDIT,
+            Self::Write(_) => descriptor::WRITE,
+            Self::Shell(_) => descriptor::SHELL,
+            Self::AtuinHistory(_) => descriptor::ATUIN_HISTORY,
+            Self::AtuinOutput(_) => descriptor::ATUIN_OUTPUT,
+            Self::LoadSkill(_) => descriptor::LOAD_SKILL,
         }
     }
 
@@ -206,13 +203,13 @@ impl ClientToolCall {
     /// implies Read (checked in `ReadToolCall::matches_rule`).
     pub(crate) fn rule_name(&self) -> &'static str {
         match self {
-            ClientToolCall::Read(_) => "Read",
-            ClientToolCall::Edit(_) => "Write",
-            ClientToolCall::Write(_) => "Write",
-            ClientToolCall::Shell(_) => "Shell",
-            ClientToolCall::AtuinHistory(_) => "AtuinHistory",
-            ClientToolCall::AtuinOutput(_) => "AtuinOutput",
-            ClientToolCall::LoadSkill(_) => "LoadSkill",
+            Self::Read(_) => "Read",
+            Self::Edit(_) => "Write",
+            Self::Write(_) => "Write",
+            Self::Shell(_) => "Shell",
+            Self::AtuinHistory(_) => "AtuinHistory",
+            Self::AtuinOutput(_) => "AtuinOutput",
+            Self::LoadSkill(_) => "LoadSkill",
         }
     }
 
@@ -220,43 +217,19 @@ impl ClientToolCall {
     /// Used to build scoped permission rules like `Write(/abs/path/to/file)`.
     pub(crate) fn resolved_file_path(&self) -> Option<PathBuf> {
         match self {
-            ClientToolCall::Read(tool) => Some(tool.resolved_path()),
-            ClientToolCall::Edit(tool) => Some(tool.resolved_path()),
-            ClientToolCall::Write(tool) => Some(tool.resolved_path()),
-            ClientToolCall::Shell(_)
-            | ClientToolCall::AtuinHistory(_)
-            | ClientToolCall::AtuinOutput(_)
-            | ClientToolCall::LoadSkill(_) => None,
-        }
-    }
-
-    pub(crate) fn matches_rule(&self, rule: &Rule) -> bool {
-        match self {
-            ClientToolCall::Read(tool) => tool.matches_rule(rule),
-            ClientToolCall::Edit(tool) => tool.matches_rule(rule),
-            ClientToolCall::Write(tool) => tool.matches_rule(rule),
-            ClientToolCall::Shell(tool) => tool.matches_rule(rule),
-            ClientToolCall::AtuinHistory(tool) => tool.matches_rule(rule),
-            ClientToolCall::AtuinOutput(tool) => tool.matches_rule(rule),
-            ClientToolCall::LoadSkill(tool) => tool.matches_rule(rule),
-        }
-    }
-
-    pub(crate) fn target_dir(&self) -> Option<&Path> {
-        match self {
-            ClientToolCall::Read(tool) => tool.target_dir(),
-            ClientToolCall::Edit(tool) => tool.target_dir(),
-            ClientToolCall::Write(tool) => tool.target_dir(),
-            ClientToolCall::Shell(tool) => tool.target_dir(),
-            ClientToolCall::AtuinHistory(tool) => tool.target_dir(),
-            ClientToolCall::AtuinOutput(tool) => tool.target_dir(),
-            ClientToolCall::LoadSkill(tool) => tool.target_dir(),
+            Self::Read(tool) => Some(tool.resolved_path()),
+            Self::Edit(tool) => Some(tool.resolved_path()),
+            Self::Write(tool) => Some(tool.resolved_path()),
+            Self::Shell(_) | Self::AtuinHistory(_) | Self::AtuinOutput(_) | Self::LoadSkill(_) => {
+                None
+            }
         }
     }
 }
 
 /// A trait for tool calls that can be checked against permission rules.
-pub(crate) trait PermissibleToolCall {
+#[enum_dispatch]
+pub trait PermissibleToolCall {
     /// Checks if this tool call matches the given permission rule.
     fn matches_rule(&self, rule: &Rule) -> bool;
 
@@ -274,28 +247,10 @@ pub(crate) trait PermissibleToolCall {
     }
 }
 
-impl PermissibleToolCall for ClientToolCall {
-    fn matches_rule(&self, rule: &Rule) -> bool {
-        self.matches_rule(rule)
-    }
-
-    fn all_covered_by(&self, rules: &[Rule]) -> bool {
-        match self {
-            ClientToolCall::Shell(tool) => tool.all_covered_by(rules),
-            // LoadSkill is always auto-approved, but support rules for completeness
-            _ => rules.iter().any(|r| self.matches_rule(r)),
-        }
-    }
-
-    fn target_dir(&self) -> Option<&Path> {
-        self.target_dir()
-    }
-}
-
 /// Returns true if this tool call should bypass the permission system entirely.
 impl ClientToolCall {
     pub(crate) fn is_auto_approved(&self) -> bool {
-        matches!(self, ClientToolCall::LoadSkill(_))
+        matches!(self, Self::LoadSkill(_))
     }
 }
 
@@ -308,7 +263,7 @@ fn expand_path(path: &str) -> PathBuf {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ReadToolCall {
+pub struct ReadToolCall {
     pub path: PathBuf,
     pub offset: u64,
     pub limit: u64,
@@ -318,10 +273,8 @@ impl TryFrom<&serde_json::Value> for ReadToolCall {
     type Error = eyre::Error;
 
     fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
-        let path = value
-            .get("file_path")
-            .and_then(|v| v.as_str())
-            .ok_or(eyre::eyre!("Missing path"))?;
+        let path =
+            value.get("file_path").and_then(|v| v.as_str()).ok_or(eyre::eyre!("Missing path"))?;
 
         let offset = value.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
         let limit = value
@@ -330,7 +283,7 @@ impl TryFrom<&serde_json::Value> for ReadToolCall {
             .unwrap_or(DEFAULT_FILE_READ_LINES)
             .min(MAX_FILE_READ_LINES);
 
-        Ok(ReadToolCall {
+        Ok(Self {
             path: expand_path(path),
             offset,
             limit,
@@ -349,6 +302,7 @@ impl ReadToolCall {
         }
     }
 
+    #[must_use]
     pub fn execute(&self) -> ToolOutcome {
         let path = self.resolved_path();
 
@@ -400,7 +354,8 @@ impl ReadToolCall {
 
                 if numbered.len() > 100_000 {
                     ToolOutcome::Error(format!(
-                        "Error: file is too large to read ({} bytes in {} lines); use view_range to read a subset of the file",
+                        "Error: file is too large to read ({} bytes in {} lines); use view_range \
+                         to read a subset of the file",
                         numbered.len(),
                         lines.len()
                     ))
@@ -432,7 +387,7 @@ impl PermissibleToolCall for ReadToolCall {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct EditToolCall {
+pub struct EditToolCall {
     pub path: PathBuf,
     pub old_string: String,
     pub new_string: String,
@@ -458,12 +413,9 @@ impl TryFrom<&serde_json::Value> for EditToolCall {
             .and_then(|v| v.as_str())
             .ok_or(eyre::eyre!("Missing new_string"))?;
 
-        let replace_all = value
-            .get("replace_all")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let replace_all = value.get("replace_all").and_then(|v| v.as_bool()).unwrap_or(false);
 
-        Ok(EditToolCall {
+        Ok(Self {
             path: expand_path(path),
             old_string: old_string.to_string(),
             new_string: new_string.to_string(),
@@ -492,6 +444,7 @@ impl EditToolCall {
     ///
     /// Callers should snapshot the file before calling this method and
     /// update the file tracker after a successful return.
+    #[must_use]
     pub fn execute(
         &self,
         resolved_path: &Path,
@@ -541,16 +494,15 @@ impl EditToolCall {
             Ok(FreshnessCheck::Stale) => {
                 return (
                     ToolOutcome::Error(
-                        "File has been modified since read, either by the user or by a linter. Read it again before attempting to edit it.".to_string(),
+                        "File has been modified since read, either by the user or by a linter. \
+                         Read it again before attempting to edit it."
+                            .to_string(),
                     ),
                     None,
                 );
             }
             Err(e) => {
-                return (
-                    ToolOutcome::Error(format!("Error checking file state: {e}")),
-                    None,
-                );
+                return (ToolOutcome::Error(format!("Error checking file state: {e}")), None);
             }
             Ok(FreshnessCheck::Fresh) => {}
         }
@@ -567,7 +519,8 @@ impl EditToolCall {
         if match_count == 0 {
             return (
                 ToolOutcome::Error(format!(
-                    "old_string not found in {}. Make sure it matches exactly, including whitespace and indentation.",
+                    "old_string not found in {}. Make sure it matches exactly, including \
+                     whitespace and indentation.",
                     resolved_path.display()
                 )),
                 None,
@@ -577,7 +530,9 @@ impl EditToolCall {
         if match_count > 1 && !self.replace_all {
             return (
                 ToolOutcome::Error(format!(
-                    "Found {match_count} matches of old_string in {}, but replace_all is false. Either provide more context to make the match unique, or set replace_all to true.",
+                    "Found {match_count} matches of old_string in {}, but replace_all is false. \
+                     Either provide more context to make the match unique, or set replace_all to \
+                     true.",
                     resolved_path.display()
                 )),
                 None,
@@ -631,7 +586,7 @@ impl PermissibleToolCall for EditToolCall {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct WriteToolCall {
+pub struct WriteToolCall {
     pub path: PathBuf,
     pub content: String,
     pub overwrite: bool,
@@ -646,17 +601,12 @@ impl TryFrom<&serde_json::Value> for WriteToolCall {
             .and_then(|v| v.as_str())
             .ok_or(eyre::eyre!("Missing file_path"))?;
 
-        let content = value
-            .get("content")
-            .and_then(|v| v.as_str())
-            .ok_or(eyre::eyre!("Missing content"))?;
+        let content =
+            value.get("content").and_then(|v| v.as_str()).ok_or(eyre::eyre!("Missing content"))?;
 
-        let overwrite = value
-            .get("overwrite")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let overwrite = value.get("overwrite").and_then(|v| v.as_bool()).unwrap_or(false);
 
-        Ok(WriteToolCall {
+        Ok(Self {
             path: expand_path(path),
             content: content.to_string(),
             overwrite,
@@ -680,6 +630,7 @@ impl WriteToolCall {
     ///
     /// Creates a new file or overwrites an existing one (if `overwrite` is set).
     /// Returns the outcome and the written bytes (for tracker updates).
+    #[must_use]
     pub fn execute(&self, resolved_path: &Path) -> (ToolOutcome, Option<Vec<u8>>) {
         if resolved_path.is_dir() {
             return (
@@ -693,7 +644,8 @@ impl WriteToolCall {
         if resolved_path.exists() && !self.overwrite {
             return (
                 ToolOutcome::Error(format!(
-                    "File already exists: {}. Set overwrite to true to replace it, or use edit_file to make targeted changes.",
+                    "File already exists: {}. Set overwrite to true to replace it, or use \
+                     edit_file to make targeted changes.",
                     resolved_path.display()
                 )),
                 None,
@@ -710,7 +662,11 @@ impl WriteToolCall {
         }
 
         let line_count = self.content.lines().count();
-        let verb = if existed { "Overwrote" } else { "Created" };
+        let verb = if existed {
+            "Overwrote"
+        } else {
+            "Created"
+        };
         (
             ToolOutcome::Success(format!(
                 "{verb} {} ({line_count} lines).",
@@ -739,7 +695,7 @@ impl PermissibleToolCall for WriteToolCall {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ShellToolCall {
+pub struct ShellToolCall {
     pub dir: Option<PathBuf>,
     pub command: String,
     pub shell: String,
@@ -756,30 +712,17 @@ impl TryFrom<&serde_json::Value> for ShellToolCall {
     fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
         let dir = value.get("dir").and_then(|v| v.as_str());
 
-        let command = value
-            .get("command")
-            .and_then(|v| v.as_str())
-            .ok_or(eyre::eyre!("Missing command"))?;
+        let command =
+            value.get("command").and_then(|v| v.as_str()).ok_or(eyre::eyre!("Missing command"))?;
 
-        let shell = value
-            .get("shell")
-            .and_then(|v| v.as_str())
-            .unwrap_or("bash")
-            .to_string();
+        let shell = value.get("shell").and_then(|v| v.as_str()).unwrap_or("bash").to_string();
 
-        let timeout_secs = value
-            .get("timeout")
-            .and_then(|v| v.as_u64())
-            .filter(|&v| v > 0)
-            .unwrap_or(30)
-            .min(600);
+        let timeout_secs =
+            value.get("timeout").and_then(|v| v.as_u64()).filter(|&v| v > 0).unwrap_or(30).min(600);
 
-        let description = value
-            .get("description")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        let description = value.get("description").and_then(|v| v.as_str()).map(|s| s.to_string());
 
-        Ok(ShellToolCall {
+        Ok(Self {
             dir: dir.map(expand_path),
             command: command.to_string(),
             shell,
@@ -842,31 +785,10 @@ impl PermissibleToolCall for ShellToolCall {
 }
 
 /// Preview viewport height for VT100 emulation.
-const PREVIEW_HEIGHT: u16 = 10;
+const PREVIEW_HEIGHT: NonZeroU16 = NonZeroU16::new(10).unwrap();
 
 /// Default terminal width for VT100 emulation.
-const PREVIEW_WIDTH: u16 = 120;
-
-/// Normalize newlines for VT100 processing.
-///
-/// When subprocess output is captured via pipes (no PTY), bare `\n` (LF) bytes
-/// are not translated to `\r\n` (CR+LF) the way a kernel terminal driver would
-/// with the `ONLCR` flag. In VT100, LF only moves the cursor down without
-/// returning to column 0. This causes lines to start at progressively higher
-/// column offsets and eventually wrap, producing garbled output.
-///
-/// This function inserts `\r` before any `\n` that isn't already preceded by
-/// `\r`, mimicking the terminal driver's ONLCR behavior.
-fn normalize_newlines_for_vt100(data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(data.len() + data.len() / 8);
-    for (i, &b) in data.iter().enumerate() {
-        if b == b'\n' && (i == 0 || data[i - 1] != b'\r') {
-            out.push(b'\r');
-        }
-        out.push(b);
-    }
-    out
-}
+const PREVIEW_WIDTH: NonZeroU16 = NonZeroU16::new(120).unwrap();
 
 /// Extract plain text lines from a VT100 screen buffer.
 ///
@@ -893,32 +815,6 @@ fn vt100_screen_lines(screen: &vt100::Screen) -> Vec<String> {
     lines
 }
 
-/// Strip ANSI escape sequences from raw bytes using a VT100 parser.
-///
-/// Uses a large virtual screen so scrollback is preserved, then extracts
-/// the plain text contents. This handles all escape sequences (colors,
-/// cursor movement, progress bars, etc.) not just simple SGR codes.
-fn strip_ansi_via_vt100(raw: &[u8]) -> String {
-    if raw.is_empty() {
-        return String::new();
-    }
-    // Normalize bare LF to CR+LF so lines start at column 0 in the VT100 screen.
-    let normalized = normalize_newlines_for_vt100(raw);
-    // Feed bytes into a VT100 parser large enough to hold all output, then
-    // read back the plain text. We estimate rows from the number of newlines
-    // (not total byte length) because real output typically has short lines
-    // that would be severely under-counted by a bytes÷width estimate.
-    let newline_count = normalized.iter().filter(|&&b| b == b'\n').count();
-    let wrap_estimate = normalized.len() / PREVIEW_WIDTH as usize;
-    let estimated_rows = (newline_count + wrap_estimate + 1).min(10_000) as u16;
-    let mut parser = vt100::Parser::new(estimated_rows, PREVIEW_WIDTH, 0);
-    parser.process(&normalized);
-    let screen = parser.screen();
-    // screen.contents() returns the full plain-text content with trailing
-    // whitespace trimmed per line and trailing blank lines removed.
-    screen.contents()
-}
-
 /// Execute a shell command with VT100 emulation and streaming output.
 ///
 /// Feeds stdout+stderr into a `vt100::Parser` so that ANSI escape sequences,
@@ -928,7 +824,7 @@ fn strip_ansi_via_vt100(raw: &[u8]) -> String {
 ///
 /// Captures the FULL stdout and stderr separately for the tool result sent to the LLM.
 /// Returns a `ToolOutcome::Structured` with full output, exit code, and duration.
-pub(crate) async fn execute_shell_command_streaming(
+pub async fn execute_shell_command_streaming(
     shell_call: &ShellToolCall,
     output_tx: tokio::sync::mpsc::Sender<Vec<String>>,
     mut interrupt_rx: tokio::sync::oneshot::Receiver<()>,
@@ -994,7 +890,7 @@ pub(crate) async fn execute_shell_command_streaming(
                     Ok(0) => stdout_done = true,
                     Ok(n) => {
                         full_stdout.extend_from_slice(&stdout_buf[..n]);
-                        let normalized = normalize_newlines_for_vt100(&stdout_buf[..n]);
+                        let normalized = ansi::onlcr(&stdout_buf[..n]).collect::<Vec<u8>>();
                         parser.process(&normalized);
                     }
                     Err(_) => stdout_done = true,
@@ -1008,7 +904,7 @@ pub(crate) async fn execute_shell_command_streaming(
                     Ok(n) => {
                         full_stderr.extend_from_slice(&stderr_buf[..n]);
                         // Feed stderr to the preview parser too, so it shows in the VT100 screen
-                        let normalized = normalize_newlines_for_vt100(&stderr_buf[..n]);
+                        let normalized = ansi::onlcr(&stderr_buf[..n]).collect::<Vec<u8>>();
                         parser.process(&normalized);
                     }
                     Err(_) => stderr_done = true,
@@ -1048,8 +944,9 @@ pub(crate) async fn execute_shell_command_streaming(
 
     // Strip ANSI escape sequences for clean LLM output by running
     // the raw bytes through a VT100 parser and extracting plain text.
-    let stdout_text = strip_ansi_via_vt100(&full_stdout);
-    let stderr_text = strip_ansi_via_vt100(&full_stderr);
+    let cols = PREVIEW_WIDTH;
+    let stdout_text = ansi::to_plain_text(&full_stdout, cols);
+    let stderr_text = ansi::to_plain_text(&full_stderr, cols);
 
     ToolOutcome::Structured {
         stdout: stdout_text,
@@ -1061,14 +958,16 @@ pub(crate) async fn execute_shell_command_streaming(
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct AtuinHistoryToolCall {
+pub struct AtuinHistoryToolCall {
     pub filter_modes: Vec<HistorySearchFilterMode>,
     pub query: String,
     pub limit: i64,
+    pub only_failed: bool,
+    pub authors: OrFilter<Vec<AuthorPattern>>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum HistorySearchFilterMode {
+pub enum HistorySearchFilterMode {
     Global,
     Host,
     Session,
@@ -1112,21 +1011,35 @@ impl TryFrom<&serde_json::Value> for AtuinHistoryToolCall {
             })
             .collect::<Result<Vec<HistorySearchFilterMode>>>()?;
 
-        let query = value
-            .get("query")
-            .and_then(|v| v.as_str())
-            .ok_or(eyre::eyre!("Missing query"))?;
+        let query =
+            value.get("query").and_then(|v| v.as_str()).ok_or(eyre::eyre!("Missing query"))?;
 
-        let limit = value
-            .get("limit")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(10)
-            .clamp(1, 50);
+        let limit = value.get("limit").and_then(|v| v.as_i64()).unwrap_or(10).clamp(1, 50);
 
-        Ok(AtuinHistoryToolCall {
+        let only_failed = value.get("only_failed").and_then(|v| v.as_bool()).unwrap_or(false);
+
+        let authors = match value.get("authors") {
+            Some(authors) => authors
+                .as_array()
+                .ok_or(eyre::eyre!("authors must be an array of strings"))?
+                .iter()
+                .map(|v| {
+                    v.as_str()
+                        .map(AuthorPattern::from)
+                        .ok_or(eyre::eyre!("authors entries must be strings"))
+                })
+                .collect::<Result<Vec<AuthorPattern>>>()?,
+            None => Vec::new(),
+        };
+        // An omitted or empty `authors` array means no author filtering.
+        let authors = OrFilter::from_list(authors).unwrap_or_default();
+
+        Ok(Self {
             filter_modes,
             query: query.to_string(),
             limit,
+            only_failed,
+            authors,
         })
     }
 }
@@ -1143,10 +1056,11 @@ impl PermissibleToolCall for AtuinHistoryToolCall {
 
 impl AtuinHistoryToolCall {
     pub(crate) async fn execute(&self, db: &atuin_client::database::Sqlite) -> ToolOutcome {
-        use atuin_client::database::{self, Database as _, OptFilters};
-        use atuin_client::settings::SearchMode;
+        use atuin_client::database::{self, DbSearchMode, OptFilters};
 
-        let context = match database::current_context().await {
+        // query_context rather than current_context: when running outside an
+        // atuin-hooked shell (e.g. as an MCP server) there is no ATUIN_SESSION.
+        let context = match database::query_context().await {
             Ok(ctx) => ctx,
             Err(e) => return ToolOutcome::Error(format!("Failed to get history context: {e}")),
         };
@@ -1157,19 +1071,28 @@ impl AtuinHistoryToolCall {
             .map(atuin_client::settings::FilterMode::from)
             .unwrap_or(atuin_client::settings::FilterMode::Global);
 
+        // An empty session would silently match nothing; error instead so a
+        // missing $ATUIN_SESSION (e.g. MCP server launched outside a hooked
+        // shell) isn't mistaken for empty history.
+        if matches!(filter_mode, atuin_client::settings::FilterMode::Session)
+            && context.session.is_empty()
+        {
+            return ToolOutcome::Error(
+                "Session-scoped search is unavailable: $ATUIN_SESSION is not set, so there is no \
+                 shell session to scope to. Use another filter mode."
+                    .to_string(),
+            );
+        }
+
         let filter_options = OptFilters {
             limit: Some(self.limit),
+            only_failed: self.only_failed,
+            authors: self.authors.as_slice_filter(),
             ..Default::default()
         };
 
         let results = match db
-            .search(
-                SearchMode::Fuzzy,
-                filter_mode,
-                &context,
-                &self.query,
-                filter_options,
-            )
+            .search(DbSearchMode::Fuzzy, filter_mode, &context, &self.query, filter_options)
             .await
         {
             Ok(results) => results,
@@ -1180,7 +1103,7 @@ impl AtuinHistoryToolCall {
             return ToolOutcome::Success("No matching history entries found.".to_string());
         }
 
-        let local_offset = crate::history_format::current_local_offset();
+        let local_offset = time::UtcOffset::local_or_utc();
 
         let formatted: Vec<String> = results
             .iter()
@@ -1195,9 +1118,13 @@ impl AtuinHistoryToolCall {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct AtuinOutputToolCall {
+pub struct AtuinOutputToolCall {
     pub history_id: Uuid,
     pub ranges: Vec<(i64, i64)>,
+    /// The command the history entry ran, resolved from the local history
+    /// db after parsing (`Effect::ResolveOutputCommand`). Display-only:
+    /// `None` until the lookup lands, or when the id isn't known locally.
+    pub command: Option<String>,
 }
 
 impl TryFrom<&serde_json::Value> for AtuinOutputToolCall {
@@ -1210,11 +1137,8 @@ impl TryFrom<&serde_json::Value> for AtuinOutputToolCall {
             .and_then(|v| Uuid::parse_str(v).ok())
             .ok_or(eyre::eyre!("Missing or invalid history ID"))?;
 
-        let ranges = value
-            .get("ranges")
-            .and_then(|v| v.as_array())
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
+        let ranges =
+            value.get("ranges").and_then(|v| v.as_array()).map(Vec::as_slice).unwrap_or(&[]);
 
         let ranges = ranges
             .iter()
@@ -1227,15 +1151,18 @@ impl TryFrom<&serde_json::Value> for AtuinOutputToolCall {
                 let start = range[0]
                     .as_i64()
                     .ok_or_else(|| eyre::eyre!("Range start must be an integer"))?;
-                let end = range[1]
-                    .as_i64()
-                    .ok_or_else(|| eyre::eyre!("Range end must be an integer"))?;
+                let end =
+                    range[1].as_i64().ok_or_else(|| eyre::eyre!("Range end must be an integer"))?;
 
                 Ok((start, end))
             })
             .collect::<Result<Vec<(i64, i64)>, eyre::Error>>()?;
 
-        Ok(Self { history_id, ranges })
+        Ok(Self {
+            history_id,
+            ranges,
+            command: None,
+        })
     }
 }
 
@@ -1250,14 +1177,8 @@ impl PermissibleToolCall for AtuinOutputToolCall {
 }
 
 fn format_output_lines_for_llm(lines: &[atuin_daemon::semantic::OutputLine]) -> String {
-    let width = lines
-        .iter()
-        .map(|line| line.line_number)
-        .max()
-        .unwrap_or(1)
-        .max(1)
-        .ilog10() as usize
-        + 1;
+    let width =
+        lines.iter().map(|line| line.line_number).max().unwrap_or(1).max(1).ilog10() as usize + 1;
     let mut formatted = Vec::with_capacity(lines.len());
     let mut previous_line_number = None;
 
@@ -1289,10 +1210,7 @@ impl AtuinOutputToolCall {
         };
 
         let history_id = self.history_id.as_simple().to_string();
-        let response = match client
-            .command_output(history_id.clone(), self.ranges.clone())
-            .await
-        {
+        let response = match client.command_output(history_id.clone(), self.ranges.clone()).await {
             Ok(response) => response,
             Err(e) => return ToolOutcome::Error(format!("Failed to fetch command output: {e}")),
         };
@@ -1322,10 +1240,7 @@ impl AtuinOutputToolCall {
                 response.total_bytes, response.output_observed_bytes, response.total_lines
             )
         } else {
-            format!(
-                "{} bytes, {} lines",
-                response.total_bytes, response.total_lines
-            )
+            format!("{} bytes, {} lines", response.total_bytes, response.total_lines)
         };
 
         ToolOutcome::Success(format!(
@@ -1335,7 +1250,7 @@ impl AtuinOutputToolCall {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct LoadSkillToolCall {
+pub struct LoadSkillToolCall {
     pub name: String,
 }
 
@@ -1343,12 +1258,10 @@ impl TryFrom<&serde_json::Value> for LoadSkillToolCall {
     type Error = eyre::Error;
 
     fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
-        let name = value
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or(eyre::eyre!("Missing skill name"))?;
+        let name =
+            value.get("name").and_then(|v| v.as_str()).ok_or(eyre::eyre!("Missing skill name"))?;
 
-        Ok(LoadSkillToolCall {
+        Ok(Self {
             name: name.to_string(),
         })
     }
@@ -1366,6 +1279,9 @@ impl PermissibleToolCall for LoadSkillToolCall {
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::filter;
+    use rstest::*;
+
     use super::*;
 
     fn read_rule(scope: Option<&str>) -> Rule {
@@ -1401,33 +1317,55 @@ mod tests {
     // ── Cross-platform tests ──
 
     #[test]
-    fn atuin_output_ranges_are_optional() {
+    fn atuin_history_filters_are_optional() {
+        let input = serde_json::json!({
+            "query": "cargo",
+            "filter_modes": ["global"],
+        });
+
+        let call = AtuinHistoryToolCall::try_from(&input).unwrap();
+        assert!(!call.only_failed);
+        assert!(call.authors.is_all());
+
+        let input = serde_json::json!({
+            "query": "cargo",
+            "filter_modes": ["global"],
+            "only_failed": true,
+            "authors": ["$all-agent"],
+        });
+
+        let call = AtuinHistoryToolCall::try_from(&input).unwrap();
+        assert!(call.only_failed);
+        assert_eq!(call.authors.items(), filter::Items::Some([AuthorPattern::AllAgent].as_slice()));
+    }
+
+    #[rstest]
+    fn atuin_output_ranges_are_optional() -> eyre::Result<()> {
         let input = serde_json::json!({
             "history_id": "018f0000000070008000000000000000"
         });
 
-        let call = AtuinOutputToolCall::try_from(&input).unwrap();
+        let call = AtuinOutputToolCall::try_from(&input)?;
 
-        assert_eq!(
-            call.history_id.as_simple().to_string(),
-            "018f0000000070008000000000000000"
-        );
+        assert_eq!(call.history_id.as_simple().to_string(), "018f0000000070008000000000000000");
         assert!(call.ranges.is_empty());
+        Ok(())
     }
 
-    #[test]
-    fn atuin_output_parses_line_ranges() {
+    #[rstest]
+    fn atuin_output_parses_line_ranges() -> eyre::Result<()> {
         let input = serde_json::json!({
             "history_id": "018f0000000070008000000000000000",
             "ranges": [[0, 30], [-100, -1]]
         });
 
-        let call = AtuinOutputToolCall::try_from(&input).unwrap();
+        let call = AtuinOutputToolCall::try_from(&input)?;
 
         assert_eq!(call.ranges, vec![(0, 30), (-100, -1)]);
+        Ok(())
     }
 
-    #[test]
+    #[rstest]
     fn atuin_output_formats_lines_like_read_file() {
         let lines = vec![
             atuin_daemon::semantic::OutputLine {
@@ -1446,55 +1384,110 @@ mod tests {
         );
     }
 
-    #[test]
-    fn no_scope_matches_everything() {
-        assert!(read_tool("any/path.txt").matches_rule(&read_rule(None)));
-        assert!(write_tool("any/path.txt").matches_rule(&write_rule(None)));
+    #[rstest]
+    #[case::read_rule_none(read_rule(None), true)]
+    #[case::write_implies_read(write_rule(None), true)]
+    fn read_tool_rule_name(#[case] rule: Rule, #[case] expected: bool) {
+        assert_eq!(read_tool("foo.txt").matches_rule(&rule), expected);
     }
 
-    #[test]
-    fn wildcard_star_matches_everything() {
-        assert!(read_tool("foo/bar.rs").matches_rule(&read_rule(Some("*"))));
+    #[rstest]
+    #[case::write_rule_none(write_rule(None), true)]
+    #[case::read_does_not_imply_write(read_rule(None), false)]
+    fn write_tool_rule_name(#[case] rule: Rule, #[case] expected: bool) {
+        assert_eq!(write_tool("foo.txt").matches_rule(&rule), expected);
     }
 
-    #[test]
-    fn write_implies_read() {
-        // A Write rule also permits reads on the same path
-        assert!(read_tool("foo.txt").matches_rule(&write_rule(None)));
-        // But a Read rule does not permit writes
-        assert!(!write_tool("foo.txt").matches_rule(&read_rule(None)));
-    }
-
-    #[test]
-    fn edit_uses_write_rule() {
+    #[rstest]
+    #[case::edit_uses_write(write_rule(None), true)]
+    #[case::edit_rejects_read(read_rule(None), false)]
+    fn edit_tool_rule_name(#[case] rule: Rule, #[case] expected: bool) {
         let edit = EditToolCall {
             path: expand_path("/home/user/config.toml"),
             old_string: "x".into(),
             new_string: "y".into(),
             replace_all: false,
         };
-        assert!(edit.matches_rule(&write_rule(None)));
-        assert!(!edit.matches_rule(&read_rule(None)));
+        assert_eq!(edit.matches_rule(&rule), expected);
     }
 
-    #[test]
-    fn extension_glob() {
-        assert!(read_tool("notes.md").matches_rule(&read_rule(Some("*.md"))));
-        assert!(!read_tool("notes.txt").matches_rule(&read_rule(Some("*.md"))));
+    #[rstest]
+    #[case::wildcard_star("foo/bar.rs", "*", true)]
+    #[case::extension_glob_matches("notes.md", "*.md", true)]
+    #[case::extension_glob_rejects("notes.txt", "*.md", false)]
+    #[cfg_attr(
+        unix,
+        case::unix_absolute_glob_matches("/home/user/src/main.rs", "/home/user/src/*.rs", true)
+    )]
+    #[cfg_attr(
+        unix,
+        case::unix_absolute_glob_rejects(
+            "/home/user/docs/readme.md",
+            "/home/user/src/*.rs",
+            false
+        )
+    )]
+    #[cfg_attr(
+        unix,
+        case::unix_double_star_matches(
+            "/project/crates/foo/src/lib.rs",
+            "/project/crates/**/*.rs",
+            true
+        )
+    )]
+    #[cfg_attr(
+        unix,
+        case::unix_double_star_rejects(
+            "/project/crates/foo/src/lib.py",
+            "/project/crates/**/*.rs",
+            false
+        )
+    )]
+    #[cfg_attr(
+        windows,
+        case::windows_absolute_glob_matches(
+            r"C:\Users\dev\src\main.rs",
+            "C:/Users/dev/src/*.rs",
+            true
+        )
+    )]
+    #[cfg_attr(
+        windows,
+        case::windows_absolute_glob_rejects(
+            r"C:\Users\dev\docs\readme.md",
+            "C:/Users/dev/src/*.rs",
+            false
+        )
+    )]
+    #[cfg_attr(
+        windows,
+        case::windows_double_star_matches(
+            r"C:\project\crates\foo\src\lib.rs",
+            "C:/project/crates/**/*.rs",
+            true
+        )
+    )]
+    #[cfg_attr(
+        windows,
+        case::windows_double_star_rejects(
+            r"C:\project\crates\foo\src\lib.py",
+            "C:/project/crates/**/*.rs",
+            false
+        )
+    )]
+    fn read_scope_glob(#[case] path: &str, #[case] scope: &str, #[case] expected: bool) {
+        assert_eq!(read_tool(path).matches_rule(&read_rule(Some(scope))), expected);
     }
 
-    #[test]
-    fn relative_multi_segment_glob() {
+    #[rstest]
+    #[case("crates/**/*.rs", true)]
+    #[case("crates/**/*.py", false)]
+    fn relative_multi_segment_glob(#[case] scope: &str, #[case] expected: bool) {
         // This matches against the path relative to cwd
         let cwd = std::env::current_dir().unwrap();
-        let abs = cwd
-            .join("crates")
-            .join("atuin-ai")
-            .join("src")
-            .join("lib.rs");
+        let abs = cwd.join("crates").join("atuin-ai").join("src").join("lib.rs");
         let tool = read_tool(abs.to_str().unwrap());
-        assert!(tool.matches_rule(&read_rule(Some("crates/**/*.rs"))));
-        assert!(!tool.matches_rule(&read_rule(Some("crates/**/*.py"))));
+        assert_eq!(tool.matches_rule(&read_rule(Some(scope))), expected);
     }
 
     // ── all_covered_by tests (compound shell command semantics) ──
@@ -1516,41 +1509,30 @@ mod tests {
         }
     }
 
-    #[test]
-    fn all_covered_by_simple_command() {
-        let rules = vec![shell_rule(Some("git *"))];
-        assert!(shell_tool("git add .").all_covered_by(&rules));
-        assert!(!shell_tool("npm test").all_covered_by(&rules));
+    #[rstest]
+    #[case::git_scope_allows(vec![shell_rule(Some("git *"))], "git add .", true)]
+    #[case::git_scope_rejects_npm(vec![shell_rule(Some("git *"))], "npm test", false)]
+    #[case::compound_all_covered(
+        vec![shell_rule(Some("git *")), shell_rule(Some("npm *"))],
+        "git add . && npm test",
+        true
+    )]
+    #[case::compound_partially_covered(
+        vec![shell_rule(Some("git *"))],
+        "git add . && npm test",
+        false
+    )]
+    #[case::unscoped_covers_all(vec![shell_rule(None)], "git add . && rm -rf /", true)]
+    #[case::wildcard_covers_all(vec![shell_rule(Some("*"))], "git add . && npm test", true)]
+    fn shell_all_covered_by(
+        #[case] rules: Vec<Rule>,
+        #[case] command: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(shell_tool(command).all_covered_by(&rules), expected);
     }
 
-    #[test]
-    fn all_covered_by_compound_all_covered() {
-        let rules = vec![shell_rule(Some("git *")), shell_rule(Some("npm *"))];
-        assert!(shell_tool("git add . && npm test").all_covered_by(&rules));
-    }
-
-    #[test]
-    fn all_covered_by_compound_partially_covered() {
-        // Only git is allowed — npm subcommand is not covered, so the
-        // compound command must not be auto-allowed.
-        let rules = vec![shell_rule(Some("git *"))];
-        assert!(!shell_tool("git add . && npm test").all_covered_by(&rules));
-    }
-
-    #[test]
-    fn all_covered_by_unscoped_shell_rule() {
-        // Shell without scope covers everything
-        let rules = vec![shell_rule(None)];
-        assert!(shell_tool("git add . && rm -rf /").all_covered_by(&rules));
-    }
-
-    #[test]
-    fn all_covered_by_wildcard_shell_rule() {
-        let rules = vec![shell_rule(Some("*"))];
-        assert!(shell_tool("git add . && npm test").all_covered_by(&rules));
-    }
-
-    #[test]
+    #[rstest]
     fn all_covered_by_non_shell_tool_unchanged() {
         // Non-shell tools use the default (any single rule matches)
         let rules = vec![read_rule(Some("*.md"))];
@@ -1558,14 +1540,14 @@ mod tests {
         assert!(!read_tool("notes.txt").all_covered_by(&rules));
     }
 
-    #[test]
+    #[rstest]
     fn matches_rule_still_uses_any_semantics() {
         // matches_rule (used for deny/ask) still triggers on any subcommand
         let rule = shell_rule(Some("rm *"));
         assert!(shell_tool("git add . && rm -rf /").matches_rule(&rule));
     }
 
-    #[test]
+    #[rstest]
     fn bare_pattern_asymmetry() {
         // Deny (matches_rule, prefix_bare=true): bare "rm" blocks "rm -rf /"
         let deny_rule = shell_rule(Some("rm"));
@@ -1579,37 +1561,6 @@ mod tests {
         // Bare prefix match is word-boundary, not substring — "rm" must not match "rmbackup"
         assert!(!shell_tool("rmbackup").matches_rule(&deny_rule));
         assert!(!shell_tool("rmbackup /tmp").matches_rule(&deny_rule));
-    }
-
-    // ── Unix-specific tests (absolute paths with forward slashes) ──
-
-    #[cfg(unix)]
-    mod unix {
-        use super::*;
-
-        #[test]
-        fn absolute_glob() {
-            assert!(
-                read_tool("/home/user/src/main.rs")
-                    .matches_rule(&read_rule(Some("/home/user/src/*.rs")))
-            );
-            assert!(
-                !read_tool("/home/user/docs/readme.md")
-                    .matches_rule(&read_rule(Some("/home/user/src/*.rs")))
-            );
-        }
-
-        #[test]
-        fn double_star_glob() {
-            assert!(
-                read_tool("/project/crates/foo/src/lib.rs")
-                    .matches_rule(&read_rule(Some("/project/crates/**/*.rs")))
-            );
-            assert!(
-                !read_tool("/project/crates/foo/src/lib.py")
-                    .matches_rule(&read_rule(Some("/project/crates/**/*.rs")))
-            );
-        }
     }
 
     // ── edit_file execution tests ──
@@ -1644,36 +1595,53 @@ mod tests {
             }
         }
 
-        #[test]
-        fn successful_single_replacement() {
-            let (_dir, path, tracker) = setup_tracked_file("[section]\nkey = old_value\n");
+        #[rstest]
+        #[case::single(
+            "[section]\nkey = old_value\n",
+            "old_value",
+            "new_value",
+            false,
+            "[section]\nkey = new_value\n",
+            None
+        )]
+        #[case::replace_all(
+            "aaa bbb aaa ccc aaa",
+            "aaa",
+            "xxx",
+            true,
+            "xxx bbb xxx ccc xxx",
+            Some("3 occurrences")
+        )]
+        #[case::multiline(
+            "[section]\nkey1 = val1\nkey2 = val2\n[other]\n",
+            "key1 = val1\nkey2 = val2",
+            "key1 = new1\nkey2 = new2",
+            false,
+            "[section]\nkey1 = new1\nkey2 = new2\n[other]\n",
+            None
+        )]
+        fn edit_success(
+            #[case] content: &str,
+            #[case] old: &str,
+            #[case] new: &str,
+            #[case] replace_all: bool,
+            #[case] expected: &str,
+            #[case] success_substr: Option<&str>,
+        ) {
+            let (_dir, path, tracker) = setup_tracked_file(content);
 
-            let call = edit_call(&path, "old_value", "new_value", false);
+            let call = edit_call(&path, old, new, replace_all);
             let (outcome, new_bytes) = call.execute(&path, &tracker);
 
             assert!(matches!(outcome, ToolOutcome::Success(_)));
+            if let Some(s) = success_substr {
+                assert!(matches!(outcome, ToolOutcome::Success(ref out) if out.contains(s)));
+            }
             assert!(new_bytes.is_some());
-            assert_eq!(
-                std::fs::read_to_string(&path).unwrap(),
-                "[section]\nkey = new_value\n"
-            );
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
         }
 
-        #[test]
-        fn successful_replace_all() {
-            let (_dir, path, tracker) = setup_tracked_file("aaa bbb aaa ccc aaa");
-
-            let call = edit_call(&path, "aaa", "xxx", true);
-            let (outcome, _) = call.execute(&path, &tracker);
-
-            assert!(matches!(outcome, ToolOutcome::Success(ref s) if s.contains("3 occurrences")));
-            assert_eq!(
-                std::fs::read_to_string(&path).unwrap(),
-                "xxx bbb xxx ccc xxx"
-            );
-        }
-
-        #[test]
+        #[rstest]
         fn error_file_not_read() {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("unread.txt");
@@ -1692,7 +1660,7 @@ mod tests {
             }
         }
 
-        #[test]
+        #[rstest]
         fn error_file_modified_since_read() {
             let (_dir, path, tracker) = setup_tracked_file("original");
 
@@ -1712,56 +1680,51 @@ mod tests {
             }
         }
 
-        #[test]
-        fn error_no_match() {
-            let (_dir, path, tracker) = setup_tracked_file("hello world");
+        #[rstest]
+        #[case::no_match("hello world", "nonexistent", "replacement", false, &["not found"], false)]
+        #[case::multiple_without_replace_all(
+            "foo bar foo baz foo",
+            "foo",
+            "qux",
+            false,
+            &["3 matches", "replace_all"],
+            true
+        )]
+        #[case::empty_old_string("content", "", "something", false, &[], true)]
+        #[case::preserves_on_no_match(
+            "[config]\nport = 8080\nhost = localhost\n",
+            "port = 9090",
+            "port = 3000",
+            false,
+            &[],
+            true
+        )]
+        fn edit_error(
+            #[case] content: &str,
+            #[case] old: &str,
+            #[case] new: &str,
+            #[case] replace_all: bool,
+            #[case] expect_substrings: &[&str],
+            #[case] check_unchanged: bool,
+        ) {
+            let (_dir, path, tracker) = setup_tracked_file(content);
 
-            let call = edit_call(&path, "nonexistent", "replacement", false);
-            let (outcome, new_bytes) = call.execute(&path, &tracker);
+            let (outcome, new_bytes) =
+                edit_call(&path, old, new, replace_all).execute(&path, &tracker);
 
             assert!(new_bytes.is_none());
-            match outcome {
-                ToolOutcome::Error(msg) => {
-                    assert!(msg.contains("not found"), "got: {msg}");
-                }
-                _ => panic!("expected error"),
+            let ToolOutcome::Error(msg) = outcome else {
+                panic!("expected error")
+            };
+            for s in expect_substrings {
+                assert!(msg.contains(*s), "got: {msg}");
+            }
+            if check_unchanged {
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
             }
         }
 
-        #[test]
-        fn error_multiple_matches_without_replace_all() {
-            let (_dir, path, tracker) = setup_tracked_file("foo bar foo baz foo");
-
-            let call = edit_call(&path, "foo", "qux", false);
-            let (outcome, new_bytes) = call.execute(&path, &tracker);
-
-            assert!(new_bytes.is_none());
-            match outcome {
-                ToolOutcome::Error(msg) => {
-                    assert!(msg.contains("3 matches"), "got: {msg}");
-                    assert!(msg.contains("replace_all"), "got: {msg}");
-                }
-                _ => panic!("expected error"),
-            }
-            // File should be unchanged
-            assert_eq!(
-                std::fs::read_to_string(&path).unwrap(),
-                "foo bar foo baz foo"
-            );
-        }
-
-        #[test]
-        fn error_empty_old_string() {
-            let (_dir, path, tracker) = setup_tracked_file("content");
-
-            let call = edit_call(&path, "", "something", false);
-            let (outcome, new_bytes) = call.execute(&path, &tracker);
-
-            assert!(new_bytes.is_none());
-            assert!(matches!(outcome, ToolOutcome::Error(_)));
-        }
-
-        #[test]
+        #[rstest]
         fn error_file_does_not_exist() {
             let tracker = FileReadTracker::default();
             let dir = tempfile::tempdir().unwrap();
@@ -1777,39 +1740,6 @@ mod tests {
                 }
                 _ => panic!("expected error"),
             }
-        }
-
-        #[test]
-        fn preserves_file_when_no_match() {
-            let original = "[config]\nport = 8080\nhost = localhost\n";
-            let (_dir, path, tracker) = setup_tracked_file(original);
-
-            let call = edit_call(&path, "port = 9090", "port = 3000", false);
-            let (outcome, _) = call.execute(&path, &tracker);
-
-            assert!(matches!(outcome, ToolOutcome::Error(_)));
-            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
-        }
-
-        #[test]
-        fn multiline_replacement() {
-            let content = "[section]\nkey1 = val1\nkey2 = val2\n[other]\n";
-            let (_dir, path, tracker) = setup_tracked_file(content);
-
-            let call = edit_call(
-                &path,
-                "key1 = val1\nkey2 = val2",
-                "key1 = new1\nkey2 = new2",
-                false,
-            );
-            let (outcome, new_bytes) = call.execute(&path, &tracker);
-
-            assert!(matches!(outcome, ToolOutcome::Success(_)));
-            assert!(new_bytes.is_some());
-            assert_eq!(
-                std::fs::read_to_string(&path).unwrap(),
-                "[section]\nkey1 = new1\nkey2 = new2\n[other]\n"
-            );
         }
     }
 
@@ -1841,7 +1771,7 @@ mod tests {
             tracker.update_after_edit(path, new_bytes, mtime);
         }
 
-        #[test]
+        #[rstest]
         fn full_read_snapshot_edit_cycle() {
             let dir = tempfile::tempdir().unwrap();
             let file_path = dir.path().join("config.toml");
@@ -1886,7 +1816,7 @@ mod tests {
             assert_eq!(snapshot_content, "[db]\nhost = localhost\nport = 5432\n");
         }
 
-        #[test]
+        #[rstest]
         fn second_edit_without_reread() {
             let dir = tempfile::tempdir().unwrap();
             let file_path = dir.path().join("config.toml");
@@ -1918,13 +1848,10 @@ mod tests {
             let (outcome, new_bytes) = call2.execute(&file_path, &tracker);
             assert!(matches!(outcome, ToolOutcome::Success(_)));
             assert!(new_bytes.is_some());
-            assert_eq!(
-                std::fs::read_to_string(&file_path).unwrap(),
-                "key1 = xxx\nkey2 = yyy\n"
-            );
+            assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "key1 = xxx\nkey2 = yyy\n");
         }
 
-        #[test]
+        #[rstest]
         fn external_modification_between_edits() {
             let dir = tempfile::tempdir().unwrap();
             let file_path = dir.path().join("config.toml");
@@ -1963,13 +1890,10 @@ mod tests {
             }
 
             // File should be unchanged (the user's edit preserved)
-            assert_eq!(
-                std::fs::read_to_string(&file_path).unwrap(),
-                "value = user_changed\n"
-            );
+            assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "value = user_changed\n");
         }
 
-        #[test]
+        #[rstest]
         fn snapshot_only_created_once_per_file() {
             let dir = tempfile::tempdir().unwrap();
             let file_path = dir.path().join("config.toml");
@@ -1997,13 +1921,11 @@ mod tests {
 
             // Second edit — snapshot should NOT be recreated
             let content_before_second = std::fs::read(&file_path).unwrap();
-            let created = store
-                .ensure_snapshot(&file_path, &content_before_second)
-                .unwrap();
+            let created = store.ensure_snapshot(&file_path, &content_before_second).unwrap();
             assert!(!created); // idempotent — already snapshotted
         }
 
-        #[test]
+        #[rstest]
         fn permission_cache_grant_and_check() {
             let mut cache = EditPermissionCache::default();
             let path = std::path::PathBuf::from("/Users/me/.config/atuin/config.toml");
@@ -2030,10 +1952,14 @@ mod tests {
     mod write {
         use super::*;
 
-        #[test]
-        fn creates_new_file() {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("new_file.txt");
+        #[fixture]
+        fn tempdir() -> tempfile::TempDir {
+            tempfile::tempdir().unwrap()
+        }
+
+        #[rstest]
+        fn creates_new_file(tempdir: tempfile::TempDir) {
+            let path = tempdir.path().join("new_file.txt");
 
             let call = WriteToolCall {
                 path: path.clone(),
@@ -2047,56 +1973,45 @@ mod tests {
             assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello\nworld\n");
         }
 
-        #[test]
-        fn error_file_exists_without_overwrite() {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("existing.txt");
+        #[rstest]
+        #[case::rejects_without_overwrite(false, "new content", true, "original")]
+        #[case::overwrites_with_flag(true, "replaced content\n", false, "replaced content\n")]
+        fn write_over_existing(
+            tempdir: tempfile::TempDir,
+            #[case] overwrite: bool,
+            #[case] new_content: &str,
+            #[case] expect_error: bool,
+            #[case] expected_final: &str,
+        ) {
+            let path = tempdir.path().join("existing.txt");
             std::fs::write(&path, "original").unwrap();
 
             let call = WriteToolCall {
                 path: path.clone(),
-                content: "new content".to_string(),
-                overwrite: false,
+                content: new_content.to_string(),
+                overwrite,
             };
             let (outcome, new_bytes) = call.execute(&path);
 
-            assert!(new_bytes.is_none());
-            match outcome {
-                ToolOutcome::Error(msg) => {
-                    assert!(msg.contains("already exists"), "got: {msg}");
-                    assert!(msg.contains("overwrite"), "got: {msg}");
+            if expect_error {
+                assert!(new_bytes.is_none());
+                match outcome {
+                    ToolOutcome::Error(msg) => {
+                        assert!(msg.contains("already exists"), "got: {msg}");
+                        assert!(msg.contains("overwrite"), "got: {msg}");
+                    }
+                    _ => panic!("expected error"),
                 }
-                _ => panic!("expected error"),
+            } else {
+                assert!(matches!(outcome, ToolOutcome::Success(_)));
+                assert!(new_bytes.is_some());
             }
-            // Original preserved
-            assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), expected_final);
         }
 
-        #[test]
-        fn overwrites_existing_file_when_flag_set() {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("existing.txt");
-            std::fs::write(&path, "original").unwrap();
-
-            let call = WriteToolCall {
-                path: path.clone(),
-                content: "replaced content\n".to_string(),
-                overwrite: true,
-            };
-            let (outcome, new_bytes) = call.execute(&path);
-
-            assert!(matches!(outcome, ToolOutcome::Success(_)));
-            assert!(new_bytes.is_some());
-            assert_eq!(
-                std::fs::read_to_string(&path).unwrap(),
-                "replaced content\n"
-            );
-        }
-
-        #[test]
-        fn creates_parent_directories() {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("sub").join("dir").join("file.txt");
+        #[rstest]
+        fn creates_parent_directories(tempdir: tempfile::TempDir) {
+            let path = tempdir.path().join("sub").join("dir").join("file.txt");
 
             let call = WriteToolCall {
                 path: path.clone(),
@@ -2109,10 +2024,9 @@ mod tests {
             assert_eq!(std::fs::read_to_string(&path).unwrap(), "nested\n");
         }
 
-        #[test]
-        fn error_path_is_directory() {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().to_path_buf();
+        #[rstest]
+        fn error_path_is_directory(tempdir: tempfile::TempDir) {
+            let path = tempdir.path().to_path_buf();
 
             let call = WriteToolCall {
                 path: path.clone(),
@@ -2123,37 +2037,6 @@ mod tests {
 
             assert!(new_bytes.is_none());
             assert!(matches!(outcome, ToolOutcome::Error(ref msg) if msg.contains("directory")));
-        }
-    }
-
-    // ── Windows-specific tests (absolute paths with drive letters) ──
-
-    #[cfg(windows)]
-    mod windows {
-        use super::*;
-
-        #[test]
-        fn absolute_glob() {
-            assert!(
-                read_tool(r"C:\Users\dev\src\main.rs")
-                    .matches_rule(&read_rule(Some("C:/Users/dev/src/*.rs")))
-            );
-            assert!(
-                !read_tool(r"C:\Users\dev\docs\readme.md")
-                    .matches_rule(&read_rule(Some("C:/Users/dev/src/*.rs")))
-            );
-        }
-
-        #[test]
-        fn double_star_glob() {
-            assert!(
-                read_tool(r"C:\project\crates\foo\src\lib.rs")
-                    .matches_rule(&read_rule(Some("C:/project/crates/**/*.rs")))
-            );
-            assert!(
-                !read_tool(r"C:\project\crates\foo\src\lib.py")
-                    .matches_rule(&read_rule(Some("C:/project/crates/**/*.rs")))
-            );
         }
     }
 }

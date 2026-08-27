@@ -23,7 +23,7 @@ const FROZEN_PREFIX_TURNS: usize = 1;
 
 /// Builds API messages from conversation events while respecting a character
 /// budget using frozen prefix + live tail truncation.
-pub(crate) struct ContextWindowBuilder {
+pub struct ContextWindowBuilder {
     budget: usize,
 }
 
@@ -49,10 +49,8 @@ impl ContextWindowBuilder {
         // This is safe because the combining logic (Text + ToolCall merging)
         // only operates within a single assistant response, which never
         // spans turn boundaries.
-        let turn_messages: Vec<Vec<serde_json::Value>> = turns
-            .iter()
-            .map(|range| events_to_messages(&events[range.clone()]))
-            .collect();
+        let turn_messages: Vec<Vec<serde_json::Value>> =
+            turns.iter().map(|range| events_to_messages(&events[range.clone()])).collect();
 
         let turn_chars: Vec<usize> = turn_messages.iter().map(|m| estimate_chars(m)).collect();
         let total_chars: usize = turn_chars.iter().sum();
@@ -154,6 +152,8 @@ fn estimate_chars(messages: &[serde_json::Value]) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     fn user(content: &str) -> ConversationEvent {
@@ -202,77 +202,54 @@ mod tests {
 
     // --- group_into_turns ---
 
-    #[test]
-    fn empty_events_produce_no_turns() {
-        assert!(group_into_turns(&[]).is_empty());
-    }
-
-    #[test]
-    fn single_user_message_is_one_turn() {
-        let events = vec![user("hello")];
-        let turns = group_into_turns(&events);
-        assert_eq!(turns, vec![0..1]);
-    }
-
-    #[test]
-    fn user_assistant_is_one_turn() {
-        let events = vec![user("hello"), text("hi there")];
-        let turns = group_into_turns(&events);
-        assert_eq!(turns, vec![0..2]);
-    }
-
-    #[test]
-    fn two_turns_split_at_user_message() {
-        let events = vec![
+    #[rstest]
+    #[case::empty(vec![], vec![])]
+    #[case::single_user(vec![user("hello")], vec![0..1])]
+    #[case::user_assistant(vec![user("hello"), text("hi there")], vec![0..2])]
+    #[case::two_turns(
+        vec![
             user("first"),
             text("response 1"),
             user("second"),
             text("response 2"),
-        ];
-        let turns = group_into_turns(&events);
-        assert_eq!(turns, vec![0..2, 2..4]);
-    }
-
-    #[test]
-    fn tool_calls_and_results_stay_in_same_turn() {
-        let events = vec![
+        ],
+        vec![0..2, 2..4]
+    )]
+    #[case::tool_calls_same_turn(
+        vec![
             user("list files"),
             text("Let me check"),
             tool_call("tc1", "suggest_command"),
             tool_result("tc1", "file1\nfile2"),
             text("Here are your files"),
-        ];
-        let turns = group_into_turns(&events);
-        assert_eq!(turns, vec![0..5]);
-    }
-
-    #[test]
-    fn system_context_starts_new_turn() {
-        let events = vec![
+        ],
+        vec![0..5]
+    )]
+    #[case::system_context_new_turn(
+        vec![
             user("hello"),
             text("hi"),
             system_context("invocation boundary"),
             user("next question"),
             text("answer"),
-        ];
-        let turns = group_into_turns(&events);
-        assert_eq!(turns, vec![0..2, 2..3, 3..5]);
-    }
-
-    #[test]
-    fn oob_events_stay_in_current_turn() {
-        let events = vec![user("hello"), oob("some output"), text("response")];
-        let turns = group_into_turns(&events);
-        assert_eq!(turns, vec![0..3]);
-    }
-
-    #[test]
-    fn leading_text_without_user_message() {
-        // Edge case: events start with assistant text (shouldn't happen
-        // normally but handle gracefully)
-        let events = vec![text("orphaned"), user("hello"), text("hi")];
-        let turns = group_into_turns(&events);
-        assert_eq!(turns, vec![0..1, 1..3]);
+        ],
+        vec![0..2, 2..3, 3..5]
+    )]
+    #[case::oob_same_turn(
+        vec![user("hello"), oob("some output"), text("response")],
+        vec![0..3]
+    )]
+    // Edge case: events start with assistant text (shouldn't happen normally
+    // but handle gracefully)
+    #[case::leading_text(
+        vec![text("orphaned"), user("hello"), text("hi")],
+        vec![0..1, 1..3]
+    )]
+    fn group_into_turns_cases(
+        #[case] events: Vec<ConversationEvent>,
+        #[case] expected: Vec<Range<usize>>,
+    ) {
+        assert_eq!(group_into_turns(&events), expected);
     }
 
     // --- ContextWindowBuilder ---
@@ -364,10 +341,7 @@ mod tests {
         let messages = builder.build(&events);
 
         // Should have prefix (turn 1) + marker + last turn (turn 3)
-        assert!(
-            messages.len() >= 3,
-            "should have at least prefix + marker + tail"
-        );
+        assert!(messages.len() >= 3, "should have at least prefix + marker + tail");
 
         // First message should be from turn 1
         assert_eq!(messages[0]["content"], "first");
@@ -415,9 +389,7 @@ mod tests {
 
         // Verify turn 2 (the tool call turn) was dropped
         let has_tool_use = messages.iter().any(|m| {
-            m["content"]
-                .as_array()
-                .is_some_and(|arr| arr.iter().any(|b| b["type"] == "tool_use"))
+            m["content"].as_array().is_some_and(|arr| arr.iter().any(|b| b["type"] == "tool_use"))
         });
         assert!(!has_tool_use, "tool call turn should have been truncated");
 
@@ -449,10 +421,7 @@ mod tests {
 
         let marker_cost = estimate_chars(std::slice::from_ref(&truncation_marker()));
         let budget = total - turn2_chars + marker_cost + 5;
-        assert!(
-            budget < total,
-            "budget must be less than total for truncation to trigger"
-        );
+        assert!(budget < total, "budget must be less than total for truncation to trigger");
 
         let builder = ContextWindowBuilder::new(budget);
         let messages = builder.build(&events);
@@ -460,43 +429,13 @@ mod tests {
         // Should have: prefix (t1: 2 msgs) + marker (1 msg) + t3 (2 msgs) + t4 (2 msgs) = 7
         // (turn 2 dropped)
         assert_eq!(messages.len(), 7);
-        assert!(
-            messages[0]["content"]
-                .as_str()
-                .unwrap()
-                .starts_with("turn-1-user-")
-        );
-        assert!(
-            messages[1]["content"]
-                .as_str()
-                .unwrap()
-                .starts_with("turn-1-response-")
-        );
+        assert!(messages[0]["content"].as_str().unwrap().starts_with("turn-1-user-"));
+        assert!(messages[1]["content"].as_str().unwrap().starts_with("turn-1-response-"));
         assert!(messages[2]["content"].as_str().unwrap().contains("omitted"));
-        assert!(
-            messages[3]["content"]
-                .as_str()
-                .unwrap()
-                .starts_with("turn-3-user-")
-        );
-        assert!(
-            messages[4]["content"]
-                .as_str()
-                .unwrap()
-                .starts_with("turn-3-response-")
-        );
-        assert!(
-            messages[5]["content"]
-                .as_str()
-                .unwrap()
-                .starts_with("turn-4-user-")
-        );
-        assert!(
-            messages[6]["content"]
-                .as_str()
-                .unwrap()
-                .starts_with("turn-4-response-")
-        );
+        assert!(messages[3]["content"].as_str().unwrap().starts_with("turn-3-user-"));
+        assert!(messages[4]["content"].as_str().unwrap().starts_with("turn-3-response-"));
+        assert!(messages[5]["content"].as_str().unwrap().starts_with("turn-4-user-"));
+        assert!(messages[6]["content"].as_str().unwrap().starts_with("turn-4-response-"));
     }
 
     #[test]
@@ -510,9 +449,7 @@ mod tests {
         // No truncation marker
         assert_eq!(messages.len(), 4);
         assert!(
-            !messages
-                .iter()
-                .any(|m| m["content"].as_str().is_some_and(|s| s.contains("omitted")))
+            !messages.iter().any(|m| m["content"].as_str().is_some_and(|s| s.contains("omitted")))
         );
     }
 
@@ -570,9 +507,6 @@ mod tests {
         );
 
         // Turn 2 was dropped entirely, so no tool IDs should be present
-        assert!(
-            !tool_use_ids.contains(&"tc1"),
-            "dropped turn's tool_use should not appear"
-        );
+        assert!(!tool_use_ids.contains(&"tc1"), "dropped turn's tool_use should not appear");
     }
 }

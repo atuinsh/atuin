@@ -1,21 +1,19 @@
 mod wrappers;
 
 use std::collections::HashMap;
-use std::ops::Range;
 
 use async_trait::async_trait;
-use atuin_common::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
-use atuin_server_database::models::{History, NewHistory, NewSession, NewUser, Session, User};
-use atuin_server_database::{Database, DbError, DbResult, DbSettings, into_utc};
-use futures_util::TryStreamExt;
+use atuin_domain::record::{
+    EncryptedData, HostId, Record, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
+};
+use atuin_server_database::models::{NewSession, NewUser, Session, User};
+use atuin_server_database::{Database, DbError, DbResult, DbSettings};
 use rand::Rng;
-use sqlx::Row;
 use sqlx::mysql::MySqlPoolOptions;
 
-use time::OffsetDateTime;
 use tracing::instrument;
 use uuid::Uuid;
-use wrappers::{DbHistory, DbRecord, DbSession, DbUser};
+use wrappers::DbRecord;
 
 #[derive(Clone)]
 pub struct MySql {
@@ -65,7 +63,6 @@ impl Database for MySql {
             .fetch_one(self.read_pool())
             .await
             .map_err(Into::into)
-            .map(|DbSession(session)| session)
     }
 
     #[instrument(skip_all)]
@@ -80,7 +77,6 @@ impl Database for MySql {
         .fetch_one(self.read_pool())
         .await
         .map_err(Into::into)
-        .map(|DbUser(user)| user)
     }
 
     #[instrument(skip_all)]
@@ -107,7 +103,6 @@ impl Database for MySql {
             .fetch_one(self.read_pool())
             .await
             .map_err(Into::into)
-            .map(|DbUser(user)| user)
     }
 
     #[instrument(skip_all)]
@@ -117,7 +112,6 @@ impl Database for MySql {
             .fetch_one(self.read_pool())
             .await
             .map_err(Into::into)
-            .map(|DbSession(session)| session)
     }
 
     #[instrument(skip_all)]
@@ -156,28 +150,6 @@ impl Database for MySql {
     }
 
     #[instrument(skip_all)]
-    async fn count_history(&self, user: &User) -> DbResult<i64> {
-        // The cache is new, and the user might not yet have a cache value.
-        // They will have one as soon as they post up some new history, but handle that
-        // edge case.
-
-        let res: (i64,) = sqlx::query_as(
-            "select count(1) from history
-            where user_id = ?",
-        )
-        .bind(user.id)
-        .fetch_one(self.read_pool())
-        .await?;
-
-        Ok(res.0)
-    }
-
-    #[instrument(skip_all)]
-    async fn count_history_cached(&self, _user: &User) -> DbResult<i64> {
-        Err(DbError::NotFound)
-    }
-
-    #[instrument(skip_all)]
     async fn delete_user(&self, u: &User) -> DbResult<()> {
         sqlx::query("delete from sessions where user_id = ?")
             .bind(u.id)
@@ -200,47 +172,6 @@ impl Database for MySql {
             .await?;
 
         Ok(())
-    }
-
-    #[instrument(skip_all)]
-    async fn delete_history(&self, user: &User, id: String) -> DbResult<()> {
-        sqlx::query(
-            "update history
-            set deleted_at = ?
-            where user_id = ?
-            and client_id = ?
-            and deleted_at is null", // don't just keep setting it
-        )
-        .bind(OffsetDateTime::now_utc())
-        .bind(user.id)
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    #[instrument(skip_all)]
-    async fn deleted_history(&self, user: &User) -> DbResult<Vec<String>> {
-        // The cache is new, and the user might not yet have a cache value.
-        // They will have one as soon as they post up some new history, but handle that
-        // edge case.
-
-        let res = sqlx::query(
-            "select client_id from history
-            where user_id = ?
-            and deleted_at is not null",
-        )
-        .bind(user.id)
-        .fetch_all(self.read_pool())
-        .await?;
-
-        let res = res
-            .iter()
-            .map(|row| row.get::<String, _>("client_id"))
-            .collect();
-
-        Ok(res)
     }
 
     #[instrument(skip_all)]
@@ -286,7 +217,7 @@ impl Database for MySql {
 
             let result = sqlx::query(
                 "insert ignore into store
-                    (id, client_id, host, idx, timestamp, version, tag, data, cek, user_id) 
+                    (id, client_id, host, idx, timestamp, version, tag, data, cek, user_id)
                 values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ",
             )
@@ -295,10 +226,10 @@ impl Database for MySql {
             .bind(i.host.id)
             .bind(i.idx as i64)
             .bind(i.timestamp as i64) // throwing away some data, but i64 is still big in terms of time
-            .bind(&i.version)
-            .bind(&i.tag)
-            .bind(&i.data.data)
-            .bind(&i.data.content_encryption_key)
+            .bind(i.version.as_str())
+            .bind(i.tag.as_str())
+            .bind(&i.data.raw)
+            .bind(&i.data.cek)
             .bind(user.id)
             .execute(&mut *tx)
             .await?;
@@ -306,7 +237,7 @@ impl Database for MySql {
             // Only update heads if we actually inserted the record
             if result.rows_affected() > 0 {
                 heads
-                    .entry((i.host.id, &i.tag))
+                    .entry((i.host.id, i.tag.as_str()))
                     .and_modify(|e| {
                         if i.idx > *e {
                             *e = i.idx
@@ -320,7 +251,7 @@ impl Database for MySql {
         for ((host, tag), idx) in heads {
             sqlx::query(
                 "insert into store_idx_cache
-                    (user_id, host, tag, idx) 
+                    (user_id, host, tag, idx)
                 values (?, ?, ?, ?)
                 on duplicate key update idx = greatest(idx, ?)
                 ",
@@ -343,12 +274,11 @@ impl Database for MySql {
     async fn next_records(
         &self,
         user: &User,
-        host: HostId,
-        tag: String,
+        series: &RecordSeriesKey,
         start: Option<RecordIdx>,
         count: u64,
     ) -> DbResult<Vec<Record<EncryptedData>>> {
-        tracing::debug!("{:?} - {:?} - {:?}", host, tag, start);
+        tracing::debug!("{:?} - {:?} - {:?}", series.host_id, series.tag, start);
         let start = start.unwrap_or(0);
 
         let records: Result<Vec<DbRecord>, DbError> = sqlx::query_as(
@@ -361,8 +291,8 @@ impl Database for MySql {
                     limit ?",
         )
         .bind(user.id)
-        .bind(tag.clone())
-        .bind(host)
+        .bind(series.tag.as_str())
+        .bind(series.host_id)
         .bind(start as i64)
         .bind(count as i64)
         .fetch_all(self.read_pool())
@@ -382,7 +312,7 @@ impl Database for MySql {
                 records
             }
             Err(DbError::NotFound) => {
-                tracing::debug!("no records found in store: {:?}/{}", host, tag);
+                tracing::debug!("no records found in store: {:?}/{}", series.host_id, series.tag);
                 return Ok(vec![]);
             }
             Err(e) => return Err(e),
@@ -426,105 +356,12 @@ impl Database for MySql {
 
         for i in res.iter() {
             let host_uuid = Uuid::from_slice(&i.0).map_err(|e| DbError::Other(e.into()))?;
-            status.set_raw(HostId(host_uuid), i.1.clone(), i.2 as u64);
+            status.set_raw(
+                RecordSeriesKey::new(HostId(host_uuid), RecordTag::from(i.1.clone())),
+                i.2 as u64,
+            );
         }
 
         Ok(status)
-    }
-
-    #[instrument(skip_all)]
-    async fn count_history_range(
-        &self,
-        user: &User,
-        range: Range<OffsetDateTime>,
-    ) -> DbResult<i64> {
-        let res: (i64,) = sqlx::query_as(
-            "select count(1) from history
-            where user_id = ?
-            and timestamp >= ?
-            and timestamp < ?",
-        )
-        .bind(user.id)
-        .bind(into_utc(range.start))
-        .bind(into_utc(range.end))
-        .fetch_one(self.read_pool())
-        .await?;
-
-        Ok(res.0)
-    }
-
-    #[instrument(skip_all)]
-    async fn list_history(
-        &self,
-        user: &User,
-        created_after: OffsetDateTime,
-        since: OffsetDateTime,
-        host: &str,
-        page_size: i64,
-    ) -> DbResult<Vec<History>> {
-        let res = sqlx::query_as(
-            "select id, client_id, user_id, hostname, timestamp, data, created_at from history
-            where user_id = ?
-            and hostname != ?
-            and created_at >= ?
-            and timestamp >= ?
-            order by timestamp asc
-            limit ?",
-        )
-        .bind(user.id)
-        .bind(host)
-        .bind(into_utc(created_after))
-        .bind(into_utc(since))
-        .bind(page_size)
-        .fetch(self.read_pool())
-        .map_ok(|DbHistory(h)| h)
-        .try_collect()
-        .await?;
-
-        Ok(res)
-    }
-
-    #[instrument(skip_all)]
-    async fn add_history(&self, history: &[NewHistory]) -> DbResult<()> {
-        let mut tx = self.pool.begin().await?;
-
-        for i in history {
-            let client_id: &str = &i.client_id;
-            let hostname: &str = &i.hostname;
-            let data: &str = &i.data;
-
-            sqlx::query(
-                "insert ignore into history
-                    (client_id, user_id, hostname, timestamp, data) 
-                values (?, ?, ?, ?, ?)
-                ",
-            )
-            .bind(client_id)
-            .bind(i.user_id)
-            .bind(hostname)
-            .bind(i.timestamp)
-            .bind(data)
-            .execute(&mut *tx)
-            .await?;
-        }
-
-        tx.commit().await?;
-
-        Ok(())
-    }
-
-    #[instrument(skip_all)]
-    async fn oldest_history(&self, user: &User) -> DbResult<History> {
-        sqlx::query_as(
-            "select id, client_id, user_id, hostname, timestamp, data, created_at from history
-            where user_id = ?
-            order by timestamp asc
-            limit 1",
-        )
-        .bind(user.id)
-        .fetch_one(self.read_pool())
-        .await
-        .map_err(Into::into)
-        .map(|DbHistory(h)| h)
     }
 }

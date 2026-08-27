@@ -1,31 +1,31 @@
 use std::fs::File;
 use std::io::{IsTerminal as _, Write, stderr, stdout};
 
-use atuin_common::utils::{self, Escapable as _};
+use atuin_client::database::{OptFilters, Sqlite, current_context};
+use atuin_client::history::store::HistoryStore;
+use atuin_client::history::{AuthorPattern, History};
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::{FilterMode, KeymapMode, RequestedSearchMode, Settings};
+use atuin_client::theme::Theme;
+use atuin_common::encryption::paseto_v4;
+use atuin_common::filter::OrFilter;
+use atuin_common::string::EscapeNonPrintablePosixExt as _;
+use atuin_common::utils;
 use clap::Parser;
-use eyre::Result;
-
-use atuin_client::{
-    database::Database,
-    database::{OptFilters, current_context},
-    encryption,
-    history::{History, store::HistoryStore},
-    record::sqlite_store::SqliteStore,
-    settings::{FilterMode, KeymapMode, SearchMode, Settings, Timezone},
-    theme::Theme,
-};
+use eyre::{Context as _, Result};
+use tracing::instrument;
 
 use super::history::ListMode;
 
 mod cursor;
-mod duration;
 mod engines;
 mod history_list;
 mod inspector;
 mod interactive;
 pub mod keybindings;
+mod syntax;
 
-pub use duration::format_duration_into;
+use atuin_common::time::UtcOffsetSpec;
 
 #[allow(clippy::struct_excessive_bools, clippy::struct_field_names)]
 #[derive(Parser, Debug)]
@@ -35,7 +35,7 @@ pub struct Cmd {
     cwd: Option<String>,
 
     /// Exclude directory from results
-    #[arg(long = "exclude-cwd")]
+    #[arg(long)]
     exclude_cwd: Option<String>,
 
     /// Filter search result by exit code
@@ -43,7 +43,7 @@ pub struct Cmd {
     exit: Option<i64>,
 
     /// Exclude results with this exit code
-    #[arg(long = "exclude-exit")]
+    #[arg(long)]
     exclude_exit: Option<i64>,
 
     /// Only include results added before this date
@@ -67,19 +67,23 @@ pub struct Cmd {
     interactive: bool,
 
     /// Allow overriding filter mode over config
-    #[arg(long = "filter-mode")]
+    #[arg(long)]
     filter_mode: Option<FilterMode>,
 
     /// Allow overriding search mode over config
-    #[arg(long = "search-mode")]
-    search_mode: Option<SearchMode>,
+    ///
+    /// Note: for non-interactive searches, "daemon-fuzzy" behaves like "fuzzy". "skim" used to
+    /// behave like "fuzzy" in non-interactive searches too; it has since been removed but is still
+    /// accepted here as an alias of "fuzzy".
+    #[arg(long)]
+    search_mode: Option<RequestedSearchMode>,
 
     /// Marker argument used to inform atuin that it was invoked from a shell up-key binding (hidden from help to avoid confusion)
-    #[arg(long = "shell-up-key-binding", hide = true)]
+    #[arg(long, hide = true)]
     shell_up_key_binding: bool,
 
     /// Notify the keymap at the shell's side
-    #[arg(long = "keymap-mode", default_value = "auto")]
+    #[arg(long, default_value = "auto")]
     keymap_mode: KeymapMode,
 
     /// Use human-readable formatting for time
@@ -87,7 +91,7 @@ pub struct Cmd {
     human: bool,
 
     #[arg(allow_hyphen_values = true)]
-    query: Option<Vec<String>>,
+    query: Vec<String>,
 
     /// Show only the text of the command
     #[arg(long)]
@@ -112,37 +116,49 @@ pub struct Cmd {
     /// Display the command time in another timezone other than the configured default.
     ///
     /// This option takes one of the following kinds of values:
+    ///
     /// - the special value "local" (or "l") which refers to the system time zone
     /// - an offset from UTC (e.g. "+9", "-2:30")
-    #[arg(long, visible_alias = "tz")]
-    #[arg(allow_hyphen_values = true)]
-    // Clippy warns about `Option<Option<T>>`, but we suppress it because we need
-    // this distinction for proper argument handling.
-    #[allow(clippy::option_option)]
-    timezone: Option<Option<Timezone>>,
+    #[arg(long, visible_alias = "tz", verbatim_doc_comment)]
+    // `num_args = 0..=1` allows a user to run `atuin search --tz` with no argument to `--tz`. This
+    // does the same thing as not providing the flag, but we previously allowed it (via an
+    // `Option<Option<T>>` field type), so let's keep supporting it to avoid breaking existing
+    // scripts.
+    #[arg(allow_hyphen_values = true, num_args = 0..=1)]
+    timezone: Option<UtcOffsetSpec>,
 
     /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {time}, {exit} and
     /// {relativetime}.
+    ///
     /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
     #[arg(long, short)]
     format: Option<String>,
 
     /// Set the maximum number of lines Atuin's interface should take up.
-    #[arg(long = "inline-height")]
+    #[arg(long)]
     inline_height: Option<u16>,
 
     /// Filter by author. Supports $all-user (non-agents), $all-agent, or literal names.
+    ///
     /// Can be specified multiple times.
     #[arg(long)]
-    author: Option<Vec<String>>,
+    author: Vec<AuthorPattern>,
 
     /// Include duplicate commands in the output (non-interactive only)
     #[arg(long)]
     include_duplicates: bool,
 
     /// File name to write the result to (hidden from help as this is meant to be used from a script)
-    #[arg(long = "result-file", hide = true)]
+    #[arg(long, hide = true)]
     result_file: Option<String>,
+
+    /// Filter by the shell that was used to run the command
+    ///
+    /// If passed multiple times, commands from any of the shells will be shown.
+    ///
+    /// `--shell ""` will include commands for which the shell is unknown.
+    #[arg(long)]
+    shell: Vec<String>,
 }
 
 impl Cmd {
@@ -155,24 +171,22 @@ impl Cmd {
     // clippy: now it has too many lines
     // me: I'll do it later OKAY
     #[allow(clippy::too_many_lines)]
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(
         self,
-        db: impl Database,
+        db: Sqlite,
         settings: &mut Settings,
         store: SqliteStore,
         theme: &Theme,
     ) -> Result<()> {
-        let query = self.query.unwrap_or_else(|| {
+        let query = if self.query.is_empty() {
             std::env::var("ATUIN_QUERY").map_or_else(
                 |_| vec![],
-                |query| {
-                    query
-                        .split(' ')
-                        .map(std::string::ToString::to_string)
-                        .collect()
-                },
+                |query| query.split(' ').map(std::string::ToString::to_string).collect(),
             )
-        });
+        } else {
+            self.query
+        };
 
         if (self.delete_it_all || self.delete) && self.limit.is_some() {
             // Because of how deletion is implemented, it will always delete all matches
@@ -188,7 +202,8 @@ impl Cmd {
 
         if self.delete && query.is_empty() {
             eprintln!(
-                "Please specify a query to match the items you wish to delete. If you wish to delete all history, pass --delete-it-all"
+                "Please specify a query to match the items you wish to delete. If you wish to \
+                 delete all history, pass --delete-it-all"
             );
             return Ok(());
         }
@@ -201,7 +216,7 @@ impl Cmd {
         }
 
         if let Some(search_mode) = self.search_mode {
-            settings.search_mode = search_mode;
+            settings.requested_search_mode = search_mode;
         }
         if let Some(filter_mode) = self.filter_mode {
             settings.filter_mode = Some(filter_mode);
@@ -220,7 +235,8 @@ impl Cmd {
         };
         settings.keymap_mode_shell = self.keymap_mode;
 
-        let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
+        let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+            .context("could not load or generate encryption key")?;
 
         let host_id = Settings::host_id().await?;
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
@@ -237,27 +253,32 @@ impl Cmd {
                 // console code page or `[Console]::OutputEncoding` on PowerShell may be different from UTF-8.
                 println!("{item}");
             } else if stderr().is_terminal() {
-                eprintln!("{}", item.escape_control());
+                eprintln!("{}", item.escape_non_printable());
             } else {
                 eprintln!("{item}");
             }
         } else {
+            // An empty `--author` / `--shell` list means no filtering on that field.
+            let authors = OrFilter::from_list(self.author).unwrap_or_default();
+            let shells = OrFilter::from_list(self.shell).unwrap_or_default();
+
             let opt_filter = OptFilters {
                 exit: self.exit,
                 exclude_exit: self.exclude_exit,
-                cwd: self.cwd,
-                exclude_cwd: self.exclude_cwd,
-                before: self.before,
-                after: self.after,
+                only_failed: false,
+                cwd: self.cwd.as_deref(),
+                exclude_cwd: self.exclude_cwd.as_deref(),
+                before: self.before.as_deref(),
+                after: self.after.as_deref(),
                 limit: self.limit,
                 offset: self.offset,
                 reverse: self.reverse,
                 include_duplicates: self.include_duplicates,
-                authors: self.author.clone().unwrap_or_default(),
+                authors: authors.as_slice_filter(),
+                shells: shells.as_slice_filter(),
             };
 
-            let mut entries =
-                run_non_interactive(settings, opt_filter.clone(), &query, &db).await?;
+            let mut entries = run_non_interactive(settings, opt_filter, &query, &db).await?;
 
             if entries.is_empty() {
                 std::process::exit(1)
@@ -274,25 +295,18 @@ impl Cmd {
                     }
 
                     let ids = history_store.delete_entries(entries).await?;
-                    history_store.incremental_build(&db, &ids).await?;
+                    history_store.build_all(&db, &ids).await?;
 
-                    entries =
-                        run_non_interactive(settings, opt_filter.clone(), &query, &db).await?;
+                    entries = run_non_interactive(settings, opt_filter, &query, &db).await?;
                 }
             } else {
-                let format = match self.format {
-                    None => Some(settings.history_format.as_str()),
-                    _ => self.format.as_deref(),
-                };
-                let tz = match self.timezone {
-                    Some(Some(tz)) => tz,                   // User provided a value
-                    Some(None) | None => settings.timezone, // No value was provided
-                };
+                let format = self.format.as_deref().unwrap_or(settings.history_format.as_str());
+                let tz = self.timezone.unwrap_or(settings.timezone);
 
                 super::history::print_list(
                     &entries,
                     ListMode::from_flags(self.human, self.cmd_only),
-                    format,
+                    Some(format),
                     self.print0,
                     true,
                     tz,
@@ -305,15 +319,16 @@ impl Cmd {
 
 // This is supposed to more-or-less mirror the command line version, so ofc
 // it is going to have a lot of args
-#[allow(clippy::too_many_arguments, clippy::cast_possible_truncation)]
 async fn run_non_interactive(
     settings: &Settings,
-    filter_options: OptFilters,
+    filter_options: OptFilters<'_>,
     query: &[String],
-    db: &impl Database,
+    db: &Sqlite,
 ) -> Result<Vec<History>> {
-    let dir = if filter_options.cwd.as_deref() == Some(".") {
-        Some(utils::get_current_dir())
+    let current_dir;
+    let dir = if filter_options.cwd == Some(".") {
+        current_dir = utils::get_current_dir();
+        Some(current_dir.as_str())
     } else {
         filter_options.cwd
     };
@@ -321,7 +336,7 @@ async fn run_non_interactive(
     let context = current_context().await?;
 
     let opt_filter = OptFilters {
-        cwd: dir.clone(),
+        cwd: dir,
         ..filter_options
     };
 
@@ -329,7 +344,7 @@ async fn run_non_interactive(
 
     let results = db
         .search(
-            settings.search_mode,
+            settings.search_mode().closest_db_mode(),
             filter_mode,
             &context,
             query.join(" ").as_str(),
@@ -340,36 +355,59 @@ async fn run_non_interactive(
     Ok(results)
 }
 
+pub async fn prepare_index(settings: &Settings) -> Result<()> {
+    use engines::AnySearchEngine;
+    #[cfg(feature = "daemon")]
+    if let AnySearchEngine::Daemon(mut search) = engines::engine(settings.search_mode(), settings) {
+        search.prepare_index().await?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Cmd;
     use clap::Parser;
+    use rstest::rstest;
 
-    #[test]
-    fn search_for_triple_dash() {
-        // Issue #3028: searching for `---` should not be treated as a CLI flag
-        let cmd = Cmd::try_parse_from(["search", "---"]);
-        assert!(cmd.is_ok(), "Failed to parse '---' as a query: {cmd:?}");
-        let cmd = cmd.unwrap();
-        assert_eq!(cmd.query, Some(vec!["---".to_string()]));
+    use super::{AuthorPattern, Cmd};
+
+    #[rstest]
+    // triple_dash: Issue #3028 - searching for `---` should not be treated as a CLI flag
+    #[case::triple_dash(vec!["search", "---"], vec!["---"])]
+    // double_dash_value: searching for strings starting with -- should also work
+    #[case::double_dash_value(vec!["search", "--", "--foo"], vec!["--foo"])]
+    fn parses_query_args(#[case] args: Vec<&str>, #[case] expected: Vec<&str>) {
+        let cmd = Cmd::try_parse_from(args).expect("should parse as query");
+        assert_eq!(cmd.query, expected);
     }
 
-    #[test]
-    fn search_for_double_dash_value() {
-        // Searching for strings starting with -- should also work
-        let cmd = Cmd::try_parse_from(["search", "--", "--foo"]);
-        assert!(cmd.is_ok());
-        let cmd = cmd.unwrap();
-        assert_eq!(cmd.query, Some(vec!["--foo".to_string()]));
-    }
-
-    #[test]
+    #[rstest]
     fn search_author_cli_flag() {
         let cmd =
             Cmd::try_parse_from(["search", "--author", "codex", "--author", "ellie"]).unwrap();
-        assert_eq!(
-            cmd.author,
-            Some(vec!["codex".to_string(), "ellie".to_string()])
-        );
+        assert_eq!(cmd.author, vec![
+            AuthorPattern::Name("codex".to_owned()),
+            AuthorPattern::Name("ellie".to_owned()),
+        ],);
+    }
+
+    #[rstest]
+    fn search_author_cli_flag_parses_the_special_values() {
+        let cmd = Cmd::try_parse_from([
+            "search",
+            "--author",
+            "$all-user",
+            "--author",
+            "$all-agent",
+            "--author",
+            "$all-users",
+        ])
+        .unwrap();
+        assert_eq!(cmd.author, vec![
+            AuthorPattern::AllUser,
+            AuthorPattern::AllAgent,
+            // Not a special value; a typo'd one is an author name, as it was before.
+            AuthorPattern::Name("$all-users".to_owned()),
+        ],);
     }
 }

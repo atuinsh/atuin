@@ -1,38 +1,41 @@
+#[cfg(unix)]
+use std::path::PathBuf;
+
 use atuin_client::database::Context;
+use atuin_client::history::History;
 use atuin_client::settings::{FilterMode, Settings};
+use atuin_common::filter::{self, OrFilter};
 use eyre::{Context as EyreContext, Result};
+use hyper_util::rt::TokioIo;
 #[cfg(windows)]
 use tokio::net::TcpStream;
+#[cfg(unix)]
+use tokio::net::UnixStream;
 use tonic::Code;
 use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
-
-use hyper_util::rt::TokioIo;
-
-#[cfg(unix)]
-use tokio::net::UnixStream;
-
-use atuin_client::history::History;
 use tracing::{Level, instrument, span};
 
-use crate::control::HistoryRebuiltEvent;
+use crate::control::control_client::ControlClient as ControlServiceClient;
 use crate::control::{
-    ForceSyncEvent, HistoryDeletedEvent, HistoryPrunedEvent, SendEventRequest,
-    SettingsReloadedEvent, ShutdownEvent, control_client::ControlClient as ControlServiceClient,
+    ForceSyncEvent, HistoryDeletedEvent, HistoryPrunedEvent, HistoryRebuiltEvent, SendEventRequest,
+    SettingsReloadedEvent, ShutdownEvent,
 };
 use crate::events::DaemonEvent;
+use crate::history::history_client::HistoryClient as HistoryServiceClient;
 use crate::history::{
-    EndHistoryReply, EndHistoryRequest, ShutdownRequest, StartHistoryReply, StartHistoryRequest,
-    StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
-    history_client::HistoryClient as HistoryServiceClient,
+    AuthorKind, CancelHistoryReply, CancelHistoryRequest, EndHistoryReply, EndHistoryRequest,
+    ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest,
+    TailHistoryReply, TailHistoryRequest,
 };
+use crate::search::search_client::SearchClient as SearchServiceClient;
 use crate::search::{
-    FilterMode as RpcFilterMode, SearchContext as RpcSearchContext, SearchRequest, SearchResponse,
-    search_client::SearchClient as SearchServiceClient,
+    FilterMode as RpcFilterMode, PrepareIndexRequest, SearchContext as RpcSearchContext,
+    SearchRequest, SearchResponse,
 };
+use crate::semantic::semantic_client::SemanticClient as SemanticServiceClient;
 use crate::semantic::{
     CommandCapture, CommandOutputReply, CommandOutputRequest, OutputRange, RecordCommandsReply,
-    semantic_client::SemanticClient as SemanticServiceClient,
 };
 
 pub struct HistoryClient {
@@ -44,7 +47,8 @@ pub enum DaemonClientErrorKind {
     Connect,
     Unavailable,
     Unimplemented,
-    Other,
+    OtherGrpc,
+    NonGrpc,
 }
 
 #[must_use]
@@ -58,40 +62,41 @@ pub fn classify_error(error: &eyre::Report) -> DaemonClientErrorKind {
             return match status.code() {
                 Code::Unavailable => DaemonClientErrorKind::Unavailable,
                 Code::Unimplemented => DaemonClientErrorKind::Unimplemented,
-                _ => DaemonClientErrorKind::Other,
+                _ => DaemonClientErrorKind::OtherGrpc,
             };
         }
     }
 
-    DaemonClientErrorKind::Other
+    DaemonClientErrorKind::NonGrpc
 }
 
 // Wrap the grpc client
 impl HistoryClient {
     #[cfg(unix)]
-    pub async fn new(path: String) -> Result<Self> {
+    pub async fn new(path: PathBuf) -> Result<Self> {
         use eyre::Context;
 
         let log_path = path.clone();
-        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
-            .connect_with_connector(service_fn(move |_: Uri| {
-                let path = path.clone();
+        let channel =
+            Endpoint::try_from("http://atuin_local_daemon:0")?
+                .connect_with_connector(service_fn(move |_: Uri| {
+                    let path = path.clone();
 
-                async move {
-                    Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path.clone()).await?))
-                }
-            }))
-            .await
-            .wrap_err_with(|| {
-                format!(
-                    "failed to connect to local atuin daemon at {}. Is it running?",
-                    &log_path
-                )
-            })?;
+                    async move {
+                        Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?))
+                    }
+                }))
+                .await
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to connect to local atuin daemon at {}. Is it running?",
+                        log_path.display()
+                    )
+                })?;
 
         let client = HistoryServiceClient::new(channel);
 
-        Ok(HistoryClient { client })
+        Ok(Self { client })
     }
 
     #[cfg(not(unix))]
@@ -120,11 +125,13 @@ impl HistoryClient {
         let req = StartHistoryRequest {
             command: h.command,
             cwd: h.cwd,
-            hostname: h.hostname,
+            hostname: h.cmd_origin.into_string(),
             session: h.session,
             timestamp: h.timestamp.unix_timestamp_nanos() as u64,
             author: h.author,
             intent: h.intent.unwrap_or_default(),
+            shell: h.shell.unwrap_or_default(),
+            author_kind: AuthorKind::from(h.author_kind) as i32,
         };
 
         Ok(self.client.start_history(req).await?.into_inner())
@@ -141,21 +148,48 @@ impl HistoryClient {
         Ok(self.client.end_history(req).await?.into_inner())
     }
 
+    pub async fn cancel_history(&mut self, id: String) -> Result<CancelHistoryReply> {
+        let req = CancelHistoryRequest { id };
+
+        Ok(self.client.cancel_history(req).await?.into_inner())
+    }
+
     pub async fn status(&mut self) -> Result<StatusReply> {
         Ok(self.client.status(StatusRequest {}).await?.into_inner())
     }
 
     pub async fn tail_history(&mut self) -> Result<tonic::Streaming<TailHistoryReply>> {
-        Ok(self
-            .client
-            .tail_history(TailHistoryRequest {})
-            .await?
-            .into_inner())
+        Ok(self.client.tail_history(TailHistoryRequest {}).await?.into_inner())
     }
 
     pub async fn shutdown(&mut self) -> Result<bool> {
         let resp = self.client.shutdown(ShutdownRequest {}).await?.into_inner();
         Ok(resp.accepted)
+    }
+}
+
+#[derive(Clone)]
+pub struct SearchParams {
+    pub query: String,
+    pub query_id: u64,
+    pub filter_mode: FilterMode,
+    pub context: Option<Context>,
+    pub shells: OrFilter<Vec<String>>,
+}
+
+impl From<SearchParams> for SearchRequest {
+    fn from(params: SearchParams) -> Self {
+        Self {
+            query: params.query,
+            query_id: params.query_id,
+            filter_mode: RpcFilterMode::from(params.filter_mode).into(),
+            context: params.context.map(RpcSearchContext::from),
+            // An empty list in `SearchRequest::shells` means "all".
+            shells: match params.shells.into_list() {
+                filter::Items::All => vec![],
+                filter::Items::Some(vec) => vec,
+            },
+        }
     }
 }
 
@@ -165,27 +199,28 @@ pub struct SearchClient {
 
 impl SearchClient {
     #[cfg(unix)]
-    pub async fn new(path: String) -> Result<Self> {
+    pub async fn new(path: PathBuf) -> Result<Self> {
         let log_path = path.clone();
-        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
-            .connect_with_connector(service_fn(move |_: Uri| {
-                let path = path.clone();
+        let channel =
+            Endpoint::try_from("http://atuin_local_daemon:0")?
+                .connect_with_connector(service_fn(move |_: Uri| {
+                    let path = path.clone();
 
-                async move {
-                    Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path.clone()).await?))
-                }
-            }))
-            .await
-            .wrap_err_with(|| {
-                format!(
-                    "failed to connect to local atuin daemon at {}. Is it running?",
-                    &log_path
-                )
-            })?;
+                    async move {
+                        Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?))
+                    }
+                }))
+                .await
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to connect to local atuin daemon at {}. Is it running?",
+                        log_path.display()
+                    )
+                })?;
 
         let client = SearchServiceClient::new(channel);
 
-        Ok(SearchClient { client })
+        Ok(Self { client })
     }
 
     #[cfg(not(unix))]
@@ -210,20 +245,17 @@ impl SearchClient {
         Ok(SearchClient { client })
     }
 
-    #[instrument(skip_all, level = Level::TRACE, name = "daemon_client_search", fields(query = %query, query_id = query_id))]
+    #[instrument(
+        skip_all,
+        level = Level::TRACE,
+        name = "daemon_client_search",
+        fields(query = %params.query, query_id = params.query_id),
+    )]
     pub async fn search(
         &mut self,
-        query: String,
-        query_id: u64,
-        filter_mode: FilterMode,
-        context: Option<Context>,
+        params: SearchParams,
     ) -> Result<tonic::Streaming<SearchResponse>> {
-        let request = SearchRequest {
-            query,
-            query_id,
-            filter_mode: RpcFilterMode::from(filter_mode).into(),
-            context: context.map(RpcSearchContext::from),
-        };
+        let request = SearchRequest::from(params);
         let request_stream = tokio_stream::once(request);
         let response = span!(Level::TRACE, "daemon_client_search.request")
             .in_scope(async || self.client.search(request_stream).await)
@@ -231,31 +263,42 @@ impl SearchClient {
 
         Ok(response.into_inner())
     }
+
+    /// Tell the daemon to build the search index for the given list of shells.
+    pub async fn prepare_index(&mut self, shells: OrFilter<Vec<String>>) -> Result<()> {
+        let request = PrepareIndexRequest {
+            // Same as `SearchRequest::shells` -- empty list means "all".
+            shells: match shells.into_list() {
+                filter::Items::All => vec![],
+                filter::Items::Some(vec) => vec,
+            },
+        };
+        self.client.prepare_index(request).await?;
+        Ok(())
+    }
 }
 
 impl From<FilterMode> for RpcFilterMode {
     fn from(filter_mode: FilterMode) -> Self {
         match filter_mode {
-            FilterMode::Global => RpcFilterMode::Global,
-            FilterMode::Host => RpcFilterMode::Host,
-            FilterMode::Session => RpcFilterMode::Session,
-            FilterMode::Directory => RpcFilterMode::Directory,
-            FilterMode::Workspace => RpcFilterMode::Workspace,
-            FilterMode::SessionPreload => RpcFilterMode::SessionPreload,
+            FilterMode::Global => Self::Global,
+            FilterMode::Host => Self::Host,
+            FilterMode::Session => Self::Session,
+            FilterMode::Directory => Self::Directory,
+            FilterMode::Workspace => Self::Workspace,
+            FilterMode::SessionPreload => Self::SessionPreload,
         }
     }
 }
 
 impl From<Context> for RpcSearchContext {
     fn from(context: Context) -> Self {
-        RpcSearchContext {
+        Self {
             session_id: context.session,
             cwd: context.cwd,
-            hostname: context.hostname,
+            hostname: context.cmd_origin.into_string(),
             host_id: context.host_id,
-            git_root: context
-                .git_root
-                .map(|path| path.to_string_lossy().to_string()),
+            git_root: context.git_root.map(|path| path.to_string_lossy().to_string()),
         }
     }
 }
@@ -266,27 +309,28 @@ pub struct SemanticClient {
 
 impl SemanticClient {
     #[cfg(unix)]
-    pub async fn new(path: String) -> Result<Self> {
+    pub async fn new(path: PathBuf) -> Result<Self> {
         let log_path = path.clone();
-        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
-            .connect_with_connector(service_fn(move |_: Uri| {
-                let path = path.clone();
+        let channel =
+            Endpoint::try_from("http://atuin_local_daemon:0")?
+                .connect_with_connector(service_fn(move |_: Uri| {
+                    let path = path.clone();
 
-                async move {
-                    Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path.clone()).await?))
-                }
-            }))
-            .await
-            .wrap_err_with(|| {
-                format!(
-                    "failed to connect to local atuin daemon at {}. Is it running?",
-                    &log_path
-                )
-            })?;
+                    async move {
+                        Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?))
+                    }
+                }))
+                .await
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to connect to local atuin daemon at {}. Is it running?",
+                        log_path.display()
+                    )
+                })?;
 
         let client = SemanticServiceClient::new(channel);
 
-        Ok(SemanticClient { client })
+        Ok(Self { client })
     }
 
     #[cfg(not(unix))]
@@ -313,7 +357,7 @@ impl SemanticClient {
 
     #[cfg(unix)]
     pub async fn from_settings(settings: &Settings) -> Result<Self> {
-        Self::new(settings.daemon.socket_path.clone()).await
+        Self::new(settings.daemon.existing_socket_path().into_owned()).await
     }
 
     #[cfg(not(unix))]
@@ -336,10 +380,7 @@ impl SemanticClient {
     ) -> Result<CommandOutputReply> {
         let request = CommandOutputRequest {
             history_id,
-            ranges: ranges
-                .into_iter()
-                .map(|(start, end)| OutputRange { start, end })
-                .collect(),
+            ranges: ranges.into_iter().map(|(start, end)| OutputRange { start, end }).collect(),
         };
 
         Ok(self.client.command_output(request).await?.into_inner())
@@ -360,27 +401,28 @@ pub struct ControlClient {
 impl ControlClient {
     /// Connect to the daemon's control service.
     #[cfg(unix)]
-    pub async fn new(path: String) -> Result<Self> {
+    pub async fn new(path: PathBuf) -> Result<Self> {
         let log_path = path.clone();
-        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
-            .connect_with_connector(service_fn(move |_: Uri| {
-                let path = path.clone();
+        let channel =
+            Endpoint::try_from("http://atuin_local_daemon:0")?
+                .connect_with_connector(service_fn(move |_: Uri| {
+                    let path = path.clone();
 
-                async move {
-                    Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path.clone()).await?))
-                }
-            }))
-            .await
-            .wrap_err_with(|| {
-                format!(
-                    "failed to connect to local atuin daemon at {}. Is it running?",
-                    &log_path
-                )
-            })?;
+                    async move {
+                        Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?))
+                    }
+                }))
+                .await
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to connect to local atuin daemon at {}. Is it running?",
+                        log_path.display()
+                    )
+                })?;
 
         let client = ControlServiceClient::new(channel);
 
-        Ok(ControlClient { client })
+        Ok(Self { client })
     }
 
     /// Connect to the daemon's control service.
@@ -409,7 +451,7 @@ impl ControlClient {
     /// Connect using settings.
     #[cfg(unix)]
     pub async fn from_settings(settings: &Settings) -> Result<Self> {
-        Self::new(settings.daemon.socket_path.clone()).await
+        Self::new(settings.daemon.existing_socket_path().into_owned()).await
     }
 
     /// Connect using settings.
@@ -445,7 +487,7 @@ fn daemon_event_to_proto(event: DaemonEvent) -> crate::control::send_event_reque
         // These events are internal and not sent via the control service
         DaemonEvent::HistoryStarted(_)
         | DaemonEvent::HistoryEnded(_)
-        | DaemonEvent::RecordsAdded(_)
+        | DaemonEvent::HistorySynced(_)
         | DaemonEvent::SyncCompleted { .. }
         | DaemonEvent::SyncFailed { .. } => {
             // Use shutdown as a fallback, though this shouldn't happen
@@ -515,4 +557,23 @@ pub async fn emit_event_with_settings(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn internal_status_is_a_daemon_error_but_not_unavailable() {
+        let error = eyre::Report::new(tonic::Status::internal("failed to build index"));
+
+        assert_eq!(classify_error(&error), DaemonClientErrorKind::OtherGrpc);
+    }
+
+    #[test]
+    fn unrelated_error_is_not_a_daemon_error() {
+        let error = eyre::eyre!("local database failed");
+
+        assert_eq!(classify_error(&error), DaemonClientErrorKind::NonGrpc);
+    }
 }

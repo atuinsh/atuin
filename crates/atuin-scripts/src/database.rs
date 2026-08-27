@@ -1,63 +1,40 @@
-use std::{path::Path, str::FromStr, time::Duration};
+use std::ffi::OsStr;
+use std::time::Duration;
 
-use atuin_common::utils;
-use sqlx::{
-    Result, Row,
-    sqlite::{
-        SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
-        SqliteSynchronous,
-    },
-};
-use tokio::fs;
-use tracing::debug;
-use uuid::Uuid;
+use atuin_common::sqlite::{Sqlite, SqliteBuilder};
+use sqlx::sqlite::{SqlitePool, SqliteRow};
+use sqlx::{Result, Row};
+use tracing::{debug, instrument};
 
 use crate::store::script::Script;
 
 #[derive(Debug, Clone)]
 pub struct Database {
-    pub pool: SqlitePool,
+    sqlite: Sqlite,
 }
 
 impl Database {
-    pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
+    pub async fn new(path: impl AsRef<OsStr>, timeout: Duration) -> eyre::Result<Self> {
         let path = path.as_ref();
         debug!("opening script sqlite database at {:?}", path);
 
-        if utils::broken_symlink(path) {
-            eprintln!(
-                "Atuin: Script sqlite db path ({path:?}) is a broken symlink. Unable to read or create replacement."
-            );
-            std::process::exit(1);
-        }
-
-        if !path.exists()
-            && let Some(dir) = path.parent()
-        {
-            fs::create_dir_all(dir).await?;
-        }
-
-        let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
-            .journal_mode(SqliteJournalMode::Wal)
-            .optimize_on_close(true, None)
-            .synchronous(SqliteSynchronous::Normal)
-            .with_regexp()
-            .foreign_keys(true)
-            .create_if_missing(true);
-
-        let pool = SqlitePoolOptions::new()
-            .acquire_timeout(Duration::from_secs_f64(timeout))
-            .connect_with(opts)
-            .await?;
-
-        Self::setup_db(&pool).await?;
-        Ok(Self { pool })
+        Self::from_builder(Sqlite::builder(path), timeout).await
     }
 
-    pub async fn sqlite_version(&self) -> Result<String> {
-        sqlx::query_scalar("SELECT sqlite_version()")
-            .fetch_one(&self.pool)
-            .await
+    pub async fn in_memory(timeout: Duration) -> eyre::Result<Self> {
+        Self::from_builder(Sqlite::builder_in_memory(), timeout).await
+    }
+
+    async fn from_builder(builder: SqliteBuilder<'_>, timeout: Duration) -> eyre::Result<Self> {
+        let sqlite = builder.timeout(timeout).regexp().open().await?;
+
+        Self::setup_db(sqlite.pool()).await?;
+
+        Ok(Self { sqlite })
+    }
+
+    pub async fn sqlite_version(&self) -> eyre::Result<semver::Version> {
+        Ok(self.sqlite.info().await.version?)
     }
 
     async fn setup_db(pool: &SqlitePool) -> Result<()> {
@@ -81,7 +58,7 @@ impl Database {
         .execute(&mut **tx)
         .await?;
 
-        for tag in s.tags.iter() {
+        for tag in &s.tags {
             sqlx::query(
                 "insert or ignore into script_tags(script_id, tag)
                 values(?1, ?2)",
@@ -97,17 +74,20 @@ impl Database {
 
     pub async fn save(&self, s: &Script) -> Result<()> {
         debug!("saving script to sqlite");
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.sqlite.pool().begin().await?;
         Self::save_raw(&mut tx, s).await?;
         tx.commit().await?;
 
         Ok(())
     }
 
+    #[instrument(level = "debug", skip(self, s), fields(count = s.len()))]
     pub async fn save_bulk(&self, s: &[Script]) -> Result<()> {
-        debug!("saving scripts to sqlite");
+        if s.is_empty() {
+            return Ok(());
+        }
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.sqlite.pool().begin().await?;
 
         for i in s {
             Self::save_raw(&mut tx, i).await?;
@@ -118,26 +98,7 @@ impl Database {
         Ok(())
     }
 
-    fn query_script(row: SqliteRow) -> Script {
-        let id = row.get("id");
-        let name = row.get("name");
-        let description = row.get("description");
-        let shebang = row.get("shebang");
-        let script = row.get("script");
-
-        let id = Uuid::parse_str(id).unwrap();
-
-        Script {
-            id,
-            name,
-            description,
-            shebang,
-            script,
-            tags: vec![],
-        }
-    }
-
-    fn query_script_tags(row: SqliteRow) -> String {
+    fn query_script_tags(row: &SqliteRow) -> String {
         row.get("tag")
     }
 
@@ -145,18 +106,17 @@ impl Database {
     async fn load(&self, id: &str) -> Result<Option<Script>> {
         debug!("loading script item {}", id);
 
-        let res = sqlx::query("select * from scripts where id = ?1")
+        let res = sqlx::query_as::<_, Script>("select * from scripts where id = ?1")
             .bind(id)
-            .map(Self::query_script)
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.sqlite.pool())
             .await?;
 
         // intentionally not joining, don't want to duplicate the script data in memory a whole bunch.
         if let Some(mut script) = res {
             let tags = sqlx::query("select tag from script_tags where script_id = ?1")
                 .bind(id)
-                .map(Self::query_script_tags)
-                .fetch_all(&self.pool)
+                .map(|row| Self::query_script_tags(&row))
+                .fetch_all(self.sqlite.pool())
                 .await?;
 
             script.tags = tags;
@@ -169,17 +129,16 @@ impl Database {
     pub async fn list(&self) -> Result<Vec<Script>> {
         debug!("listing scripts");
 
-        let mut res = sqlx::query("select * from scripts")
-            .map(Self::query_script)
-            .fetch_all(&self.pool)
+        let mut res = sqlx::query_as::<_, Script>("select * from scripts")
+            .fetch_all(self.sqlite.pool())
             .await?;
 
         // Fetch all the tags for each script
-        for script in res.iter_mut() {
+        for script in &mut res {
             let tags = sqlx::query("select tag from script_tags where script_id = ?1")
                 .bind(script.id.to_string())
-                .map(Self::query_script_tags)
-                .fetch_all(&self.pool)
+                .map(|row| Self::query_script_tags(&row))
+                .fetch_all(self.sqlite.pool())
                 .await?;
 
             script.tags = tags;
@@ -191,12 +150,8 @@ impl Database {
     pub async fn clear(&self) -> Result<()> {
         debug!("clearing all scripts from sqlite");
 
-        sqlx::query("delete from script_tags")
-            .execute(&self.pool)
-            .await?;
-        sqlx::query("delete from scripts")
-            .execute(&self.pool)
-            .await?;
+        sqlx::query("delete from script_tags").execute(self.sqlite.pool()).await?;
+        sqlx::query("delete from scripts").execute(self.sqlite.pool()).await?;
 
         Ok(())
     }
@@ -206,13 +161,13 @@ impl Database {
 
         sqlx::query("delete from scripts where id = ?1")
             .bind(id)
-            .execute(&self.pool)
+            .execute(self.sqlite.pool())
             .await?;
 
         // delete all the tags for the script
         sqlx::query("delete from script_tags where script_id = ?1")
             .bind(id)
-            .execute(&self.pool)
+            .execute(self.sqlite.pool())
             .await?;
 
         Ok(())
@@ -221,17 +176,20 @@ impl Database {
     pub async fn update(&self, s: &Script) -> Result<()> {
         debug!("updating script {:?}", s);
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.sqlite.pool().begin().await?;
 
         // Update the script's base fields
-        sqlx::query("update scripts set name = ?1, description = ?2, shebang = ?3, script = ?4 where id = ?5")
-            .bind(s.name.as_str())
-            .bind(s.description.as_str())
-            .bind(s.shebang.as_str())
-            .bind(s.script.as_str())
-            .bind(s.id.to_string())
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "update scripts set name = ?1, description = ?2, shebang = ?3, script = ?4 where id = \
+             ?5",
+        )
+        .bind(s.name.as_str())
+        .bind(s.description.as_str())
+        .bind(s.shebang.as_str())
+        .bind(s.script.as_str())
+        .bind(s.id.to_string())
+        .execute(&mut *tx)
+        .await?;
 
         // Delete all existing tags for this script
         sqlx::query("delete from script_tags where script_id = ?1")
@@ -240,7 +198,7 @@ impl Database {
             .await?;
 
         // Insert new tags
-        for tag in s.tags.iter() {
+        for tag in &s.tags {
             sqlx::query(
                 "insert or ignore into script_tags(script_id, tag)
                 values(?1, ?2)",
@@ -257,17 +215,16 @@ impl Database {
     }
 
     pub async fn get_by_name(&self, name: &str) -> Result<Option<Script>> {
-        let res = sqlx::query("select * from scripts where name = ?1")
+        let res = sqlx::query_as::<_, Script>("select * from scripts where name = ?1")
             .bind(name)
-            .map(Self::query_script)
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.sqlite.pool())
             .await?;
 
         let script = if let Some(mut script) = res {
             let tags = sqlx::query("select tag from script_tags where script_id = ?1")
                 .bind(script.id.to_string())
-                .map(Self::query_script_tags)
-                .fetch_all(&self.pool)
+                .map(|row| Self::query_script_tags(&row))
+                .fetch_all(self.sqlite.pool())
                 .await?;
 
             script.tags = tags;
@@ -282,20 +239,37 @@ impl Database {
 
 #[cfg(test)]
 mod test {
+    use rstest::*;
+
     use super::*;
 
+    #[fixture]
+    async fn db() -> Database {
+        Database::in_memory(Duration::from_secs(1)).await.unwrap()
+    }
+
+    #[fixture]
+    fn script(
+        #[default("test")] name: impl Into<String>,
+        #[default("test")] description: impl Into<String>,
+        #[default("test")] shebang: impl Into<String>,
+        #[default("test")] script_body: impl Into<String>,
+    ) -> Script {
+        Script::builder()
+            .name(name.into())
+            .description(description.into())
+            .shebang(shebang.into())
+            .script(script_body.into())
+            .build()
+    }
+
+    #[rstest]
     #[tokio::test]
-    async fn test_list() {
-        let db = Database::new("sqlite::memory:", 1.0).await.unwrap();
+    async fn test_list(#[future] db: Database, script: Script) {
+        let db = db.await;
+
         let scripts = db.list().await.unwrap();
         assert_eq!(scripts.len(), 0);
-
-        let script = Script::builder()
-            .name("test".to_string())
-            .description("test".to_string())
-            .shebang("test".to_string())
-            .script("test".to_string())
-            .build();
 
         db.save(&script).await.unwrap();
 
@@ -304,16 +278,13 @@ mod test {
         assert_eq!(scripts[0].name, "test");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_save_load() {
-        let db = Database::new("sqlite::memory:", 1.0).await.unwrap();
-
-        let script = Script::builder()
-            .name("test name".to_string())
-            .description("test description".to_string())
-            .shebang("test shebang".to_string())
-            .script("test script".to_string())
-            .build();
+    async fn test_save_load(
+        #[future] db: Database,
+        #[with("test name", "test description", "test shebang", "test script")] script: Script,
+    ) {
+        let db = db.await;
 
         db.save(&script).await.unwrap();
 
@@ -322,9 +293,10 @@ mod test {
         assert_eq!(loaded, script);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_save_bulk() {
-        let db = Database::new("sqlite::memory:", 1.0).await.unwrap();
+    async fn test_save_bulk(#[future] db: Database) {
+        let db = db.await;
 
         let scripts = vec![
             Script::builder()
@@ -349,16 +321,10 @@ mod test {
         assert_eq!(loaded[1].name, "test name 2");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_delete() {
-        let db = Database::new("sqlite::memory:", 1.0).await.unwrap();
-
-        let script = Script::builder()
-            .name("test name".to_string())
-            .description("test description".to_string())
-            .shebang("test shebang".to_string())
-            .script("test script".to_string())
-            .build();
+    async fn test_delete(#[future] db: Database, script: Script) {
+        let db = db.await;
 
         db.save(&script).await.unwrap();
 

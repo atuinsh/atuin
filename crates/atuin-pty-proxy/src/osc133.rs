@@ -2,15 +2,15 @@
 //!
 //! OSC 133 marks four regions of a shell interaction:
 //!
-//! | Marker | Meaning                              |
-//! |--------|--------------------------------------|
-//! | A      | Prompt is about to be printed        |
-//! | B      | Prompt ended — command input begins   |
-//! | C      | Command submitted — output begins     |
-//! | D[;n]  | Command finished with exit code *n*   |
+//! | Marker  | Meaning                               |
+//! |---------|---------------------------------------|
+//! | `A`     | Prompt is about to be printed         |
+//! | `B`     | Prompt ended — command input begins   |
+//! | `C`     | Command submitted — output begins     |
+//! | `D[;n]` | Command finished with exit code *n*   |
 //!
-//! The wire format is `ESC ] 133 ; <cmd> [; <params>] ST` where ST is BEL
-//! (0x07), ESC \ (0x1B 0x5C), or C1 ST (0x9C).
+//! The wire format is `ESC ] 133 ; <cmd> [; <params>] ST` where `ST` is `BEL`
+//! (0x07), `ESC \` (0x1B 0x5C), or `C1 ST` (0x9C).
 //!
 //! # Design goals
 //!
@@ -18,13 +18,13 @@
 //!   the caller remains responsible for forwarding bytes to their destination.
 //! * **Bounded** — OSC parameter buffering is capped so malformed output cannot
 //!   grow memory without limit.
-//! * **Non-blocking** — [`Parser::push`] processes whatever bytes are available
-//!   and returns immediately.
+//! * **Non-blocking** — [`Parser::push_located`] processes whatever bytes are
+//!   available and returns immediately.
 //! * **Extensible** — marker parameters are preserved so Atuin-specific metadata
 //!   can ride alongside standard OSC 133 markers.
 
 /// Events emitted when an OSC 133 marker is detected.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Event {
     /// `ESC ] 133 ; A ST` — the shell is about to display its prompt.
     PromptStart,
@@ -72,7 +72,10 @@ pub enum Param {
     /// A positional parameter without an equals sign.
     Value(String),
     /// A `key=value` parameter.
-    KeyValue { key: String, value: String },
+    KeyValue {
+        key: String,
+        value: String,
+    },
 }
 
 /// An OSC 133 event with its position in the most recent input chunk.
@@ -145,7 +148,7 @@ enum State {
 
 /// A streaming, zero-allocation parser for OSC 133 escape sequences.
 ///
-/// Feed arbitrary byte slices into [`Parser::push`].  The parser detects
+/// Feed arbitrary byte slices into [`Parser::push_located`].  The parser detects
 /// OSC 133 markers and reports [`Event`]s through a caller-supplied callback
 /// without modifying the data.  It can sit transparently between a PTY reader
 /// and stdout.
@@ -329,9 +332,7 @@ fn parse_exit_code(code: &[u8]) -> Option<i32> {
         return None;
     }
 
-    std::str::from_utf8(code)
-        .ok()
-        .and_then(|code| code.parse::<i32>().ok())
+    std::str::from_utf8(code).ok().and_then(|code| code.parse::<i32>().ok())
 }
 
 fn parse_params(metadata: &[u8]) -> Params {
@@ -363,6 +364,8 @@ fn parse_param(param: &[u8]) -> Param {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     /// Collect all events from a single `push` call.
@@ -375,100 +378,24 @@ mod tests {
 
     // -- Basic event detection ------------------------------------------------
 
-    #[test]
-    fn detect_prompt_start_bel() {
-        let data = b"\x1b]133;A\x07";
-        assert_eq!(parse_events(data), vec![Event::PromptStart]);
-    }
-
-    #[test]
-    fn detect_prompt_start_st() {
-        let data = b"\x1b]133;A\x1b\\";
-        assert_eq!(parse_events(data), vec![Event::PromptStart]);
-    }
-
-    #[test]
-    fn detect_command_start_bel() {
-        let data = b"\x1b]133;B\x07";
-        assert_eq!(parse_events(data), vec![Event::CommandStart]);
-    }
-
-    #[test]
-    fn detect_command_start_st() {
-        let data = b"\x1b]133;B\x1b\\";
-        assert_eq!(parse_events(data), vec![Event::CommandStart]);
-    }
-
-    #[test]
-    fn detect_command_executed_bel() {
-        let data = b"\x1b]133;C\x07";
-        assert_eq!(parse_events(data), vec![Event::CommandExecuted]);
-    }
-
-    #[test]
-    fn detect_command_executed_st() {
-        let data = b"\x1b]133;C\x1b\\";
-        assert_eq!(parse_events(data), vec![Event::CommandExecuted]);
-    }
-
-    #[test]
-    fn detect_command_finished_no_exit_code() {
-        let data = b"\x1b]133;D\x07";
-        assert_eq!(
-            parse_events(data),
-            vec![Event::CommandFinished { exit_code: None }]
-        );
-    }
-
-    #[test]
-    fn detect_command_finished_exit_zero() {
-        let data = b"\x1b]133;D;0\x07";
-        assert_eq!(
-            parse_events(data),
-            vec![Event::CommandFinished { exit_code: Some(0) }]
-        );
-    }
-
-    #[test]
-    fn detect_command_finished_exit_nonzero() {
-        let data = b"\x1b]133;D;127\x07";
-        assert_eq!(
-            parse_events(data),
-            vec![Event::CommandFinished {
-                exit_code: Some(127)
-            }]
-        );
-    }
-
-    #[test]
-    fn detect_command_finished_negative_exit_code() {
-        let data = b"\x1b]133;D;-1\x07";
-        assert_eq!(
-            parse_events(data),
-            vec![Event::CommandFinished {
-                exit_code: Some(-1)
-            }]
-        );
-    }
-
-    #[test]
-    fn detect_command_finished_exit_code_st() {
-        let data = b"\x1b]133;D;42\x1b\\";
-        assert_eq!(
-            parse_events(data),
-            vec![Event::CommandFinished {
-                exit_code: Some(42)
-            }]
-        );
-    }
-
-    #[test]
-    fn invalid_exit_code_yields_none() {
-        let data = b"\x1b]133;D;abc\x07";
-        assert_eq!(
-            parse_events(data),
-            vec![Event::CommandFinished { exit_code: None }]
-        );
+    #[rstest]
+    #[case::prompt_start_bel(b"\x1b]133;A\x07", Event::PromptStart)]
+    #[case::prompt_start_st(b"\x1b]133;A\x1b\\", Event::PromptStart)]
+    #[case::command_start_bel(b"\x1b]133;B\x07", Event::CommandStart)]
+    #[case::command_start_st(b"\x1b]133;B\x1b\\", Event::CommandStart)]
+    #[case::command_executed_bel(b"\x1b]133;C\x07", Event::CommandExecuted)]
+    #[case::command_executed_st(b"\x1b]133;C\x1b\\", Event::CommandExecuted)]
+    #[case::finished_no_exit_code(b"\x1b]133;D\x07", Event::CommandFinished { exit_code: None })]
+    #[case::finished_exit_zero(b"\x1b]133;D;0\x07", Event::CommandFinished { exit_code: Some(0) })]
+    #[case::finished_exit_nonzero(b"\x1b]133;D;127\x07", Event::CommandFinished { exit_code: Some(127) })]
+    #[case::finished_negative_exit_code(b"\x1b]133;D;-1\x07", Event::CommandFinished { exit_code: Some(-1) })]
+    #[case::finished_exit_code_st(b"\x1b]133;D;42\x1b\\", Event::CommandFinished { exit_code: Some(42) })]
+    #[case::invalid_exit_code_yields_none(b"\x1b]133;D;abc\x07", Event::CommandFinished { exit_code: None })]
+    #[case::d_semicolon_empty_exit(b"\x1b]133;D;\x07", Event::CommandFinished { exit_code: None })]
+    #[case::large_exit_code(b"\x1b]133;D;2147483647\x07", Event::CommandFinished { exit_code: Some(i32::MAX) })]
+    #[case::overflow_exit_code(b"\x1b]133;D;9999999999999\x07", Event::CommandFinished { exit_code: None })]
+    fn detects_event(#[case] data: &[u8], #[case] expected: Event) {
+        assert_eq!(parse_events(data), vec![expected]);
     }
 
     // -- Zone tracking --------------------------------------------------------
@@ -496,159 +423,62 @@ mod tests {
         parser.push(b"\x1b]133;D;0\x07", |e| events.push(e));
         assert_eq!(parser.zone(), Zone::Unknown);
 
-        assert_eq!(
-            events,
-            vec![
-                Event::PromptStart,
-                Event::CommandStart,
-                Event::CommandExecuted,
-                Event::CommandFinished { exit_code: Some(0) },
-            ]
-        );
+        assert_eq!(events, vec![
+            Event::PromptStart,
+            Event::CommandStart,
+            Event::CommandExecuted,
+            Event::CommandFinished { exit_code: Some(0) },
+        ]);
     }
 
-    // -- Multiple events in one push ------------------------------------------
+    // -- Multiple events / interleaved text in one push -----------------------
 
-    #[test]
-    fn multiple_events_single_push() {
-        let data = b"\x1b]133;A\x07$ \x1b]133;B\x07ls\n\x1b]133;C\x07file.txt\n\x1b]133;D;0\x07";
-        let events = parse_events(data);
-        assert_eq!(
-            events,
-            vec![
-                Event::PromptStart,
-                Event::CommandStart,
-                Event::CommandExecuted,
-                Event::CommandFinished { exit_code: Some(0) },
-            ]
-        );
+    #[rstest]
+    #[case::multiple_events(b"\x1b]133;A\x07$ \x1b]133;B\x07ls\n\x1b]133;C\x07file.txt\n\x1b]133;D;0\x07", vec![Event::PromptStart, Event::CommandStart, Event::CommandExecuted, Event::CommandFinished { exit_code: Some(0) }])]
+    #[case::mixed_terminators(b"\x1b]133;A\x07\x1b]133;B\x1b\\\x1b]133;C\x07\x1b]133;D;1\x1b\\", vec![Event::PromptStart, Event::CommandStart, Event::CommandExecuted, Event::CommandFinished { exit_code: Some(1) }])]
+    #[case::normal_text_before_and_after(b"hello world\x1b]133;A\x07prompt text\x1b]133;B\x07command", vec![Event::PromptStart, Event::CommandStart])]
+    #[case::non_133_osc_ignored(b"\x1b]0;window title\x07\x1b]133;A\x07", vec![Event::PromptStart])]
+    #[case::esc_followed_by_non_bracket(b"\x1b[31m\x1b]133;A\x07", vec![Event::PromptStart])]
+    #[case::detects_c1_st_terminator(b"\x1b]133;A\x9c", vec![Event::PromptStart])]
+    #[case::back_to_back_osc_no_gap(b"\x1b]133;A\x07\x1b]133;B\x07", vec![Event::PromptStart, Event::CommandStart])]
+    #[case::csi_sequences_ignored(b"\x1b[32m\x1b]133;A\x07\x1b[0m$ \x1b]133;B\x07", vec![Event::PromptStart, Event::CommandStart])]
+    fn emits_events(#[case] data: &[u8], #[case] expected: Vec<Event>) {
+        assert_eq!(parse_events(data), expected);
     }
 
     // -- Split across push boundaries -----------------------------------------
 
-    #[test]
-    fn split_esc_and_bracket() {
+    #[rstest]
+    #[case::esc_and_bracket(b"\x1b", b"]133;A\x07", vec![Event::PromptStart])]
+    #[case::mid_param(b"\x1b]13", b"3;D;42\x07", vec![Event::CommandFinished { exit_code: Some(42) }])]
+    #[case::before_terminator(b"\x1b]133;B", b"\x07", vec![Event::CommandStart])]
+    #[case::esc_backslash_terminator(b"\x1b]133;C\x1b", b"\\", vec![Event::CommandExecuted])]
+    #[case::lone_esc_aborted(b"\x1b", b"x\x1b]133;A\x07", vec![Event::PromptStart])]
+    fn split_across_push_boundary(
+        #[case] first: &[u8],
+        #[case] second: &[u8],
+        #[case] expected: Vec<Event>,
+    ) {
         let mut parser = Parser::new();
         let mut events = Vec::new();
-
-        parser.push(b"\x1b", |e| events.push(e));
+        parser.push(first, |e| events.push(e));
         assert!(events.is_empty());
-
-        parser.push(b"]133;A\x07", |e| events.push(e));
-        assert_eq!(events, vec![Event::PromptStart]);
-    }
-
-    #[test]
-    fn split_mid_param() {
-        let mut parser = Parser::new();
-        let mut events = Vec::new();
-
-        parser.push(b"\x1b]13", |e| events.push(e));
-        assert!(events.is_empty());
-
-        parser.push(b"3;D;42\x07", |e| events.push(e));
-        assert_eq!(
-            events,
-            vec![Event::CommandFinished {
-                exit_code: Some(42)
-            }]
-        );
-    }
-
-    #[test]
-    fn split_before_terminator() {
-        let mut parser = Parser::new();
-        let mut events = Vec::new();
-
-        parser.push(b"\x1b]133;B", |e| events.push(e));
-        assert!(events.is_empty());
-
-        parser.push(b"\x07", |e| events.push(e));
-        assert_eq!(events, vec![Event::CommandStart]);
-    }
-
-    #[test]
-    fn split_esc_backslash_terminator() {
-        let mut parser = Parser::new();
-        let mut events = Vec::new();
-
-        parser.push(b"\x1b]133;C\x1b", |e| events.push(e));
-        assert!(events.is_empty());
-
-        parser.push(b"\\", |e| events.push(e));
-        assert_eq!(events, vec![Event::CommandExecuted]);
-    }
-
-    // -- Interleaved normal text ----------------------------------------------
-
-    #[test]
-    fn normal_text_before_and_after() {
-        let data = b"hello world\x1b]133;A\x07prompt text\x1b]133;B\x07command";
-        let events = parse_events(data);
-        assert_eq!(events, vec![Event::PromptStart, Event::CommandStart]);
-    }
-
-    // -- Non-133 OSC sequences (should be ignored) ----------------------------
-
-    #[test]
-    fn non_133_osc_ignored() {
-        let data = b"\x1b]0;window title\x07\x1b]133;A\x07";
-        let events = parse_events(data);
-        assert_eq!(events, vec![Event::PromptStart]);
-    }
-
-    #[test]
-    fn osc_7_ignored() {
-        let data = b"\x1b]7;file:///home/user\x07";
-        assert!(parse_events(data).is_empty());
+        parser.push(second, |e| events.push(e));
+        assert_eq!(events, expected);
     }
 
     // -- Unknown command letter -----------------------------------------------
 
-    #[test]
-    fn unknown_command_ignored() {
-        let data = b"\x1b]133;Z\x07";
-        assert!(parse_events(data).is_empty());
-    }
-
-    #[test]
-    fn marker_with_unexpected_trailing_bytes_ignored() {
-        let data = b"\x1b]133;ABC\x07";
-        assert!(parse_events(data).is_empty());
-    }
-
-    // -- Malformed sequences --------------------------------------------------
-
-    #[test]
-    fn esc_followed_by_non_bracket() {
-        let data = b"\x1b[31m\x1b]133;A\x07";
-        let events = parse_events(data);
-        assert_eq!(events, vec![Event::PromptStart]);
-    }
-
-    #[test]
-    fn lone_esc_at_end_of_chunk() {
-        let mut parser = Parser::new();
-        let mut events = Vec::new();
-
-        parser.push(b"\x1b", |e| events.push(e));
-        assert!(events.is_empty());
-
-        // Feed non-bracket to abort the escape, then a real sequence.
-        parser.push(b"x\x1b]133;A\x07", |e| events.push(e));
-        assert_eq!(events, vec![Event::PromptStart]);
-    }
-
-    #[test]
-    fn truncated_133_prefix() {
-        // "13" followed by terminator — not "133;" so no event.
-        let data = b"\x1b]13\x07";
-        assert!(parse_events(data).is_empty());
-    }
-
-    #[test]
-    fn empty_osc() {
-        let data = b"\x1b]\x07";
+    #[rstest]
+    #[case::osc_7(b"\x1b]7;file:///home/user\x07")]
+    #[case::unknown_command_letter(b"\x1b]133;Z\x07")]
+    #[case::marker_with_unexpected_trailing_bytes(b"\x1b]133;ABC\x07")]
+    // "13" followed by terminator — not "133;" so no event.
+    #[case::truncated_133_prefix(b"\x1b]13\x07")]
+    #[case::empty_osc(b"\x1b]\x07")]
+    #[case::empty_input(b"")]
+    #[case::only_normal_text(b"just some regular terminal output\r\n")]
+    fn ignores_input(#[case] data: &[u8]) {
         assert!(parse_events(data).is_empty());
     }
 
@@ -664,19 +494,6 @@ mod tests {
         assert!(parse_events(&data).is_empty());
     }
 
-    // -- Empty input ----------------------------------------------------------
-
-    #[test]
-    fn empty_input() {
-        assert!(parse_events(b"").is_empty());
-    }
-
-    #[test]
-    fn only_normal_text() {
-        let data = b"just some regular terminal output\r\n";
-        assert!(parse_events(data).is_empty());
-    }
-
     // -- Repeated prompts (empty command) ------------------------------------
 
     #[test]
@@ -688,16 +505,13 @@ mod tests {
         let data = b"\x1b]133;A\x07$ \x1b]133;B\x07\x1b]133;D\x07\x1b]133;A\x07$ \x1b]133;B\x07";
         parser.push(data, |e| events.push(e));
 
-        assert_eq!(
-            events,
-            vec![
-                Event::PromptStart,
-                Event::CommandStart,
-                Event::CommandFinished { exit_code: None },
-                Event::PromptStart,
-                Event::CommandStart,
-            ]
-        );
+        assert_eq!(events, vec![
+            Event::PromptStart,
+            Event::CommandStart,
+            Event::CommandFinished { exit_code: None },
+            Event::PromptStart,
+            Event::CommandStart,
+        ]);
         assert_eq!(parser.zone(), Zone::Input);
     }
 
@@ -713,35 +527,9 @@ mod tests {
             parser.push(&[byte], |e| events.push(e));
         }
 
-        assert_eq!(
-            events,
-            vec![Event::CommandFinished {
-                exit_code: Some(99)
-            }]
-        );
-    }
-
-    // -- Mixed terminators ----------------------------------------------------
-
-    #[test]
-    fn mixed_bel_and_st_terminators() {
-        let data = b"\x1b]133;A\x07\x1b]133;B\x1b\\\x1b]133;C\x07\x1b]133;D;1\x1b\\";
-        let events = parse_events(data);
-        assert_eq!(
-            events,
-            vec![
-                Event::PromptStart,
-                Event::CommandStart,
-                Event::CommandExecuted,
-                Event::CommandFinished { exit_code: Some(1) },
-            ]
-        );
-    }
-
-    #[test]
-    fn detects_c1_st_terminator() {
-        let data = b"\x1b]133;A\x9c";
-        assert_eq!(parse_events(data), vec![Event::PromptStart]);
+        assert_eq!(events, vec![Event::CommandFinished {
+            exit_code: Some(99)
+        }]);
     }
 
     // -- Located event offsets ------------------------------------------------
@@ -754,16 +542,13 @@ mod tests {
 
         parser.push_located(data, |e| events.push(e));
 
-        assert_eq!(
-            events,
-            vec![LocatedEvent {
-                event: Event::PromptStart,
-                start_offset: b"before".len(),
-                offset: b"before\x1b]133;A\x07".len(),
-                zone: Zone::Prompt,
-                params: Params::default(),
-            }]
-        );
+        assert_eq!(events, vec![LocatedEvent {
+            event: Event::PromptStart,
+            start_offset: b"before".len(),
+            offset: b"before\x1b]133;A\x07".len(),
+            zone: Zone::Prompt,
+            params: Params::default(),
+        }]);
     }
 
     #[test]
@@ -774,18 +559,15 @@ mod tests {
         parser.push_located(b"\x1b]133;", |e| events.push(e));
         parser.push_located(b"D;42\x07after", |e| events.push(e));
 
-        assert_eq!(
-            events,
-            vec![LocatedEvent {
-                event: Event::CommandFinished {
-                    exit_code: Some(42)
-                },
-                start_offset: 0,
-                offset: b"D;42\x07".len(),
-                zone: Zone::Unknown,
-                params: Params::default(),
-            }]
-        );
+        assert_eq!(events, vec![LocatedEvent {
+            event: Event::CommandFinished {
+                exit_code: Some(42)
+            },
+            start_offset: 0,
+            offset: b"D;42\x07".len(),
+            zone: Zone::Unknown,
+            params: Params::default(),
+        }]);
     }
 
     #[test]
@@ -793,27 +575,18 @@ mod tests {
         let mut parser = Parser::new();
         let mut events = Vec::new();
 
-        parser.push_located(
-            b"\x1b]133;D;127;history_id=018f;session_id=abcd;flag\x07",
-            |event| events.push(event),
-        );
+        parser.push_located(b"\x1b]133;D;127;history_id=018f;session_id=abcd;flag\x07", |event| {
+            events.push(event)
+        });
 
         assert_eq!(events.len(), 1);
         let event = &events[0];
-        assert_eq!(
-            event.event,
-            Event::CommandFinished {
-                exit_code: Some(127)
-            }
-        );
+        assert_eq!(event.event, Event::CommandFinished {
+            exit_code: Some(127)
+        });
         assert_eq!(event.params.get("history_id"), Some("018f"));
         assert_eq!(event.params.get("session_id"), Some("abcd"));
-        assert!(
-            event
-                .params
-                .iter()
-                .any(|param| param == &Param::Value("flag".to_string()))
-        );
+        assert!(event.params.iter().any(|param| param == &Param::Value("flag".to_string())));
     }
 
     #[test]
@@ -843,58 +616,5 @@ mod tests {
     #[test]
     fn zone_default() {
         assert_eq!(Zone::default(), Zone::Unknown);
-    }
-
-    // -- D with empty exit code field -----------------------------------------
-
-    #[test]
-    fn d_with_semicolon_but_empty_code() {
-        // "133;D;" — semicolon present but no digits.
-        let data = b"\x1b]133;D;\x07";
-        assert_eq!(
-            parse_events(data),
-            vec![Event::CommandFinished { exit_code: None }]
-        );
-    }
-
-    // -- Consecutive OSC sequences without gap --------------------------------
-
-    #[test]
-    fn back_to_back_osc_no_gap() {
-        let data = b"\x1b]133;A\x07\x1b]133;B\x07";
-        let events = parse_events(data);
-        assert_eq!(events, vec![Event::PromptStart, Event::CommandStart]);
-    }
-
-    // -- CSI sequences interleaved (should not confuse parser) ----------------
-
-    #[test]
-    fn csi_sequences_ignored() {
-        // CSI (ESC [) color codes mixed with OSC 133.
-        let data = b"\x1b[32m\x1b]133;A\x07\x1b[0m$ \x1b]133;B\x07";
-        let events = parse_events(data);
-        assert_eq!(events, vec![Event::PromptStart, Event::CommandStart]);
-    }
-
-    // -- Large exit codes -----------------------------------------------------
-
-    #[test]
-    fn large_exit_code() {
-        let data = b"\x1b]133;D;2147483647\x07";
-        assert_eq!(
-            parse_events(data),
-            vec![Event::CommandFinished {
-                exit_code: Some(i32::MAX)
-            }]
-        );
-    }
-
-    #[test]
-    fn overflow_exit_code_yields_none() {
-        let data = b"\x1b]133;D;9999999999999\x07";
-        assert_eq!(
-            parse_events(data),
-            vec![Event::CommandFinished { exit_code: None }]
-        );
     }
 }

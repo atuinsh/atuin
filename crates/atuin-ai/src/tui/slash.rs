@@ -1,7 +1,10 @@
 #[derive(Debug, Clone)]
-pub(crate) struct SlashCommand {
+pub struct SlashCommand {
     pub name: String,
     pub description: String,
+    /// Built-in commands take dispatch precedence over skills with the same
+    /// name; skill-backed commands are registered with `new`.
+    pub is_builtin: bool,
 }
 
 impl SlashCommand {
@@ -9,17 +12,25 @@ impl SlashCommand {
         Self {
             name: name.to_string(),
             description: description.to_string(),
+            is_builtin: false,
+        }
+    }
+
+    pub fn builtin(name: &str, description: &str) -> Self {
+        Self {
+            is_builtin: true,
+            ..Self::new(name, description)
         }
     }
 }
 
 #[derive(Debug)]
-pub(crate) struct SlashCommandRegistry {
+pub struct SlashCommandRegistry {
     commands: Vec<SlashCommand>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct SlashCommandSearchResult {
+pub struct SlashCommandSearchResult {
     pub command: SlashCommand,
     pub relevance: f32,
     pub span: (usize, usize),
@@ -40,8 +51,8 @@ impl SlashCommandRegistry {
         &self.commands
     }
 
-    pub fn contains(&self, name: &str) -> bool {
-        self.commands.iter().any(|c| c.name == name)
+    pub fn contains_builtin(&self, name: &str) -> bool {
+        self.commands.iter().any(|c| c.is_builtin && c.name == name)
     }
 
     pub fn search_fuzzy(&self, query: &str) -> Vec<SlashCommandSearchResult> {
@@ -72,12 +83,16 @@ impl SlashCommandRegistry {
 impl Default for SlashCommandRegistry {
     fn default() -> Self {
         let mut registry = Self::new();
-        registry.register(SlashCommand::new("help", "Show help information"));
-        registry.register(SlashCommand::new(
+        registry.register(SlashCommand::builtin("help", "Show help information"));
+        registry.register(SlashCommand::builtin(
+            "model",
+            "Select the AI model to use for this and future sessions",
+        ));
+        registry.register(SlashCommand::builtin(
             "new",
             "Start a new conversation, archiving the current one",
         ));
-        registry.register(SlashCommand::new(
+        registry.register(SlashCommand::builtin(
             "reload",
             "Reload context files (TERMINAL.md) on the next request",
         ));

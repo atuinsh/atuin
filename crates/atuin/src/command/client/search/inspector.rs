@@ -1,28 +1,28 @@
 use std::time::Duration;
+
+use atuin_client::history::{History, HistoryStats};
+use atuin_client::settings::Settings;
+use atuin_common::string::EscapeNonPrintablePosixExt as _;
+use atuin_common::time::{DurationExt, UtcOffsetSpec};
+use ratatui::Frame;
+use ratatui::backend::FromCrossterm;
+use ratatui::layout::Rect;
+use ratatui::prelude::{Constraint, Direction, Layout};
+use ratatui::style::Style;
+use ratatui::text::{Span, Text};
+use ratatui::widgets::{Bar, BarChart, BarGroup, Block, Borders, Padding, Paragraph, Row, Table};
 use time::macros::format_description;
-
-use atuin_client::{
-    history::{History, HistoryStats},
-    settings::{Settings, Timezone},
-};
-use ratatui::{
-    Frame,
-    backend::FromCrossterm,
-    layout::Rect,
-    prelude::{Constraint, Direction, Layout},
-    style::Style,
-    text::{Span, Text},
-    widgets::{Bar, BarChart, BarGroup, Block, Borders, Padding, Paragraph, Row, Table},
-};
-
-use super::duration::format_duration;
 
 use super::super::theme::{Meaning, Theme};
 use super::interactive::{Compactness, to_compactness};
 
 #[allow(clippy::cast_sign_loss)]
 fn u64_or_zero(num: i64) -> u64 {
-    if num < 0 { 0 } else { num as u64 }
+    if num < 0 {
+        0
+    } else {
+        num as u64
+    }
 }
 
 pub fn draw_commands(
@@ -40,22 +40,14 @@ pub fn draw_commands(
             Direction::Horizontal
         })
         .constraints(if compact {
-            [
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Min(0),
-            ]
+            [Constraint::Length(1), Constraint::Length(1), Constraint::Min(0)]
         } else {
-            [
-                Constraint::Ratio(1, 4),
-                Constraint::Ratio(1, 2),
-                Constraint::Ratio(1, 4),
-            ]
+            [Constraint::Ratio(1, 4), Constraint::Ratio(1, 2), Constraint::Ratio(1, 4)]
         })
         .split(parent);
 
     let command = Paragraph::new(Text::from(Span::styled(
-        history.command.clone(),
+        history.command.escape_non_printable(),
         Style::from_crossterm(theme.as_style(Meaning::Important)),
     )))
     .block(if compact {
@@ -70,12 +62,10 @@ pub fn draw_commands(
             .padding(Padding::horizontal(1))
     });
 
-    let previous = Paragraph::new(
-        stats
-            .previous
-            .clone()
-            .map_or_else(|| "[No previous command]".to_string(), |prev| prev.command),
-    )
+    let previous = Paragraph::new(stats.previous.clone().map_or_else(
+        || "[No previous command]".to_string(),
+        |prev| prev.command.escape_non_printable().into_owned(),
+    ))
     .block(if compact {
         Block::new()
             .borders(Borders::NONE)
@@ -90,12 +80,10 @@ pub fn draw_commands(
 
     // Add [] around blank text, as when this is shown in a list
     // compacted, it makes it more obviously control text.
-    let next = Paragraph::new(
-        stats
-            .next
-            .clone()
-            .map_or_else(|| "[No next command]".to_string(), |next| next.command),
-    )
+    let next = Paragraph::new(stats.next.clone().map_or_else(
+        || "[No next command]".to_string(),
+        |next| next.command.escape_non_printable().into_owned(),
+    ))
     .block(if compact {
         Block::new()
             .borders(Borders::NONE)
@@ -117,28 +105,27 @@ pub fn draw_stats_table(
     f: &mut Frame<'_>,
     parent: Rect,
     history: &History,
-    tz: Timezone,
+    tz: UtcOffsetSpec,
     stats: &HistoryStats,
     theme: &Theme,
 ) {
-    let duration = Duration::from_nanos(u64_or_zero(history.duration));
+    let duration = Duration::saturating_from_nanos_i64(history.duration);
     let avg_duration = Duration::from_nanos(stats.average_duration);
-    let (host, user) = history.hostname.split_once(':').unwrap_or(("", ""));
+    let host = history.cmd_origin.host().into_inner();
+    let user = history.cmd_origin.user().into_inner();
 
     let rows = [
         Row::new(vec!["Host".to_string(), host.to_string()]),
         Row::new(vec!["User".to_string(), user.to_string()]),
-        Row::new(vec![
-            "Time".to_string(),
-            history.timestamp.to_offset(tz.0).to_string(),
-        ]),
-        Row::new(vec!["Duration".to_string(), format_duration(duration)]),
+        Row::new(vec!["Time".to_string(), history.timestamp.to_offset(tz.0).to_string()]),
+        Row::new(vec!["Duration".to_string(), duration.display().largest_unit().to_string()]),
         Row::new(vec![
             "Avg duration".to_string(),
-            format_duration(avg_duration),
+            avg_duration.display().largest_unit().to_string(),
         ]),
         Row::new(vec!["Exit".to_string(), history.exit.to_string()]),
         Row::new(vec!["Directory".to_string(), history.cwd.clone()]),
+        Row::new(vec!["Intent".to_string(), history.intent.clone().unwrap_or_default()]),
         Row::new(vec!["Session".to_string(), history.session.clone()]),
         Row::new(vec!["Total runs".to_string(), stats.total.to_string()]),
     ];
@@ -188,10 +175,7 @@ fn sort_duration_over_time(durations: &[(String, i64)]) -> Vec<(String, i64)> {
     durations
         .iter()
         .map(|(date, duration)| {
-            (
-                date.format(output).expect("failed to format sqlite date"),
-                *duration,
-            )
+            (date.format(output).expect("failed to format sqlite date"), *duration)
         })
         .collect()
 }
@@ -200,11 +184,7 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats, them
     let exits: Vec<Bar> = stats
         .exits
         .iter()
-        .map(|(exit, count)| {
-            Bar::default()
-                .label(exit.to_string())
-                .value(u64_or_zero(*count))
-        })
+        .map(|(exit, count)| Bar::default().label(exit.to_string()).value(u64_or_zero(*count)))
         .collect();
 
     let exits = BarChart::default()
@@ -225,9 +205,7 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats, them
         .day_of_week
         .iter()
         .map(|(day, count)| {
-            Bar::default()
-                .label(num_to_day(day.as_str()))
-                .value(u64_or_zero(*count))
+            Bar::default().label(num_to_day(day.as_str())).value(u64_or_zero(*count))
         })
         .collect();
 
@@ -249,11 +227,11 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats, them
     let duration_over_time: Vec<Bar> = duration_over_time
         .iter()
         .map(|(date, duration)| {
-            let d = Duration::from_nanos(u64_or_zero(*duration));
+            let d = Duration::saturating_from_nanos_i64(*duration);
             Bar::default()
                 .label(date.clone())
                 .value(u64_or_zero(*duration))
-                .text_value(format_duration(d))
+                .text_value(d.display().largest_unit().to_string())
         })
         .collect();
 
@@ -273,11 +251,7 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats, them
 
     let layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Ratio(1, 3),
-            Constraint::Ratio(1, 3),
-            Constraint::Ratio(1, 3),
-        ])
+        .constraints([Constraint::Ratio(1, 3), Constraint::Ratio(1, 3), Constraint::Ratio(1, 3)])
         .split(parent);
 
     f.render_widget(exits, layout[0]);
@@ -292,7 +266,7 @@ pub fn draw(
     stats: &HistoryStats,
     settings: &Settings,
     theme: &Theme,
-    tz: Timezone,
+    tz: UtcOffsetSpec,
 ) {
     let compactness = to_compactness(f, settings);
 
@@ -318,7 +292,7 @@ pub fn draw_full(
     history: &History,
     stats: &HistoryStats,
     theme: &Theme,
-    tz: Timezone,
+    tz: UtcOffsetSpec,
 ) {
     let vert_layout = Layout::default()
         .direction(Direction::Vertical)
@@ -337,14 +311,17 @@ pub fn draw_full(
 
 #[cfg(test)]
 mod tests {
-    use super::draw_ultracompact;
-    use atuin_client::{
-        history::{History, HistoryId, HistoryStats},
-        theme::ThemeManager,
-    };
-    use ratatui::{backend::TestBackend, prelude::*};
+    use atuin_client::history::{History, HistoryId, HistoryStats};
+    use atuin_client::theme::ThemeManager;
+    use atuin_domain::record::CmdOrigin;
+    use ratatui::backend::TestBackend;
+    use ratatui::prelude::*;
+    use rstest::*;
     use time::OffsetDateTime;
 
+    use super::draw_ultracompact;
+
+    #[fixture]
     fn mock_history_stats() -> (History, HistoryStats) {
         let history = History {
             id: HistoryId::from("test1".to_string()),
@@ -354,10 +331,13 @@ mod tests {
             command: "/bin/cmd".to_string(),
             cwd: "/toot".to_string(),
             session: "sesh1".to_string(),
-            hostname: "hostn".to_string(),
+            #[allow(deprecated)]
+            cmd_origin: CmdOrigin::parse_lenient("hostn"),
             author: "hostn".to_string(),
             intent: None,
             deleted_at: None,
+            shell: None,
+            author_kind: None,
         };
         let next = History {
             id: HistoryId::from("test2".to_string()),
@@ -367,10 +347,13 @@ mod tests {
             command: "/bin/cmd -os".to_string(),
             cwd: "/toot".to_string(),
             session: "sesh1".to_string(),
-            hostname: "hostn".to_string(),
+            #[allow(deprecated)]
+            cmd_origin: CmdOrigin::parse_lenient("hostn"),
             author: "hostn".to_string(),
             intent: None,
             deleted_at: None,
+            shell: Some("bash".into()),
+            author_kind: None,
         };
         let prev = History {
             id: HistoryId::from("test3".to_string()),
@@ -380,14 +363,17 @@ mod tests {
             command: "/bin/cmd -a".to_string(),
             cwd: "/toot".to_string(),
             session: "sesh1".to_string(),
-            hostname: "hostn".to_string(),
+            #[allow(deprecated)]
+            cmd_origin: CmdOrigin::parse_lenient("hostn"),
             author: "hostn".to_string(),
             intent: None,
             deleted_at: None,
+            shell: Some("nu".into()),
+            author_kind: None,
         };
         let stats = HistoryStats {
-            next: Some(next.clone()),
-            previous: Some(prev.clone()),
+            next: Some(next),
+            previous: Some(prev),
             total: 2,
             average_duration: 3,
             exits: Vec::new(),
@@ -397,19 +383,34 @@ mod tests {
         (history, stats)
     }
 
-    #[test]
-    fn test_output_looks_correct_for_ultracompact() {
-        let backend = TestBackend::new(22, 5);
-        let mut terminal = Terminal::new(backend).expect("Could not create terminal");
-        let chunk = Rect::new(0, 0, 22, 5);
-        let (history, stats) = mock_history_stats();
+    #[fixture]
+    fn theme_manager() -> ThemeManager {
+        ThemeManager::new(Some(true), Some(String::new()))
+    }
+
+    #[fixture]
+    fn terminal(
+        #[default(22u16)] w: u16,
+        #[default(5u16)] h: u16,
+    ) -> (Terminal<TestBackend>, Rect) {
+        let t = Terminal::new(TestBackend::new(w, h)).expect("Could not create terminal");
+        let r = Rect::new(0, 0, w, h);
+        (t, r)
+    }
+
+    #[rstest]
+    fn test_output_looks_correct_for_ultracompact(
+        mock_history_stats: (History, HistoryStats),
+        mut theme_manager: ThemeManager,
+        #[from(terminal)] (mut terminal, chunk): (Terminal<TestBackend>, Rect),
+    ) {
+        let (history, stats) = mock_history_stats;
         let prev = stats.previous.clone().unwrap();
         let next = stats.next.clone().unwrap();
 
-        let mut manager = ThemeManager::new(Some(true), Some("".to_string()));
-        let theme = manager.load_theme("(none)", None);
-        let _ = terminal.draw(|f| draw_ultracompact(f, chunk, &history, &stats, &theme));
-        let mut lines = ["                      "; 5].map(|l| Line::from(l));
+        let theme = theme_manager.load_theme("(none)", None);
+        let _ = terminal.draw(|f| draw_ultracompact(f, chunk, &history, &stats, theme));
+        let mut lines = ["                      "; 5].map(Line::from);
         for (n, entry) in [prev, history, next].iter().enumerate() {
             let mut l = lines[n].to_string();
             l.replace_range(0..entry.command.len(), &entry.command);
@@ -417,5 +418,36 @@ mod tests {
         }
 
         terminal.backend().assert_buffer_lines(lines);
+    }
+
+    #[rstest]
+    fn control_chars_are_escaped_in_commands(
+        mock_history_stats: (History, HistoryStats),
+        mut theme_manager: ThemeManager,
+        #[from(terminal)]
+        #[with(40u16, 8u16)]
+        (mut terminal, chunk): (Terminal<TestBackend>, Rect),
+    ) {
+        let (mut history, mut stats) = mock_history_stats;
+
+        // Inject a NUL byte into the current and neighbouring commands
+        history.command = "echo\0hi".to_string();
+        stats.previous.as_mut().unwrap().command = "prev\0cmd".to_string();
+        stats.next.as_mut().unwrap().command = "next\0cmd".to_string();
+
+        let theme = theme_manager.load_theme("(none)", None);
+        let _ = terminal.draw(|f| draw_ultracompact(f, chunk, &history, &stats, theme));
+
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+
+        // NUL is shown as caret notation ^@, never as a raw NUL byte
+        assert!(rendered.contains("^@"), "expected caret-escaped NUL (^@) in rendered output");
+        assert!(!rendered.contains('\u{0000}'), "raw NUL byte leaked to the terminal");
     }
 }

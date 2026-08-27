@@ -2,11 +2,12 @@
 
 use serde_json::Value;
 
+use crate::models::ModelList;
 use crate::tools::ToolOutcome;
 
 /// Events that drive state transitions in the agent FSM.
 #[derive(Debug, Clone)]
-pub(crate) enum Event {
+pub enum Event {
     // ─── User actions ───────────────────────────────────────────
     /// User submitted a message from the input box.
     UserSubmit(String),
@@ -82,6 +83,12 @@ pub(crate) enum Event {
         lines: Vec<String>,
         exit_code: Option<i32>,
     },
+    /// The command behind an atuin_output call's history id was looked up
+    /// locally (`None` when the id isn't in the local history db).
+    OutputCommandResolved {
+        tool_id: String,
+        command: Option<String>,
+    },
 
     // ─── Timers ─────────────────────────────────────────────────
     /// Confirmation timeout expired.
@@ -107,6 +114,14 @@ pub(crate) enum Event {
         content: String,
     },
 
+    // ─── Model selection ────────────────────────────────────────
+    /// User ran /model — open the model picker.
+    OpenModelPicker,
+    /// The model list fetch finished (spawned by FetchModels).
+    ModelListLoaded(Result<ModelList, String>),
+    /// User picked a model from the picker.
+    ModelSelected(String),
+
     // ─── Skills ────────────────────────────────────────────────
     /// User invoked a skill via /skill-name. FSM emits a LoadSkill
     /// effect; the driver loads the content asynchronously and sends
@@ -126,8 +141,8 @@ pub(crate) enum Event {
 }
 
 /// Result of the permission resolver check.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PermissionResponse {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionResponse {
     /// Rule allows this tool call — execute immediately.
     Allowed,
     /// Rule denies this tool call — reject with error.
@@ -139,8 +154,8 @@ pub(crate) enum PermissionResponse {
 }
 
 /// User's choice from the permission dialog.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PermissionChoice {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionChoice {
     /// Allow this one time.
     Allow,
     /// Allow this file for the remainder of the session.

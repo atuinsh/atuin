@@ -1,16 +1,19 @@
 //! Core state types for the conversation protocol.
 //!
 //! ConversationEvent and events_to_messages are the canonical representations
-//! used by both the FSM and the context window builder. AppMode is used by
-//! the view layer for component prop derivation.
+//! used by both the FSM and the context window builder.
 
 /// Conversation event types matching the API protocol.
 #[derive(Debug, Clone)]
-pub(crate) enum ConversationEvent {
+pub enum ConversationEvent {
     /// User message (what the user typed)
-    UserMessage { content: String },
+    UserMessage {
+        content: String,
+    },
     /// Text content from assistant (streamed or complete)
-    Text { content: String },
+    Text {
+        content: String,
+    },
     /// Tool call from assistant
     ToolCall {
         id: String,
@@ -36,7 +39,9 @@ pub(crate) enum ConversationEvent {
     },
     /// Context injected for the LLM that is not rendered in the TUI.
     /// Converted to a user message in the API protocol.
-    SystemContext { content: String },
+    SystemContext {
+        content: String,
+    },
     /// A skill was loaded and its content injected into the conversation.
     /// Serialized as a full user message for the API but rendered compactly
     /// in the TUI (just the `/name args` invocation line).
@@ -51,19 +56,19 @@ impl ConversationEvent {
     /// Whether this event represents actual conversation content sent to the API.
     pub(crate) fn is_api_content(&self) -> bool {
         match self {
-            ConversationEvent::UserMessage { .. } => true,
-            ConversationEvent::Text { .. } => true,
-            ConversationEvent::ToolCall { .. } => true,
-            ConversationEvent::ToolResult { .. } => true,
-            ConversationEvent::OutOfBandOutput { .. } => false,
-            ConversationEvent::SystemContext { .. } => false,
-            ConversationEvent::SkillInvocation { .. } => true,
+            Self::UserMessage { .. } => true,
+            Self::Text { .. } => true,
+            Self::ToolCall { .. } => true,
+            Self::ToolResult { .. } => true,
+            Self::OutOfBandOutput { .. } => false,
+            Self::SystemContext { .. } => false,
+            Self::SkillInvocation { .. } => true,
         }
     }
 
     /// Extract command from a suggest_command tool call.
     pub(crate) fn as_command(&self) -> Option<&str> {
-        if let ConversationEvent::ToolCall { name, input, .. } = self
+        if let Self::ToolCall { name, input, .. } = self
             && name == "suggest_command"
         {
             return input.get("command").and_then(|v| v.as_str());
@@ -72,28 +77,13 @@ impl ConversationEvent {
     }
 }
 
-/// Application mode for key handling and component props.
-///
-/// Derived from AgentState in the view layer via `From<&AgentState>`.
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
-pub(crate) enum AppMode {
-    /// User is typing input
-    Input,
-    /// Waiting for generation (showing spinner)
-    Generating,
-    /// Streaming SSE response
-    Streaming,
-    /// Error state, can retry
-    Error,
-}
-
 /// Convert a slice of conversation events to Claude API message format.
 ///
 /// This is the canonical event-to-message conversion, used by the context window
 /// builder to convert turn slices independently. The logic handles combining
 /// adjacent Text + ToolCall events into single assistant messages with mixed
 /// content blocks.
-pub(crate) fn events_to_messages(events: &[ConversationEvent]) -> Vec<serde_json::Value> {
+pub fn events_to_messages(events: &[ConversationEvent]) -> Vec<serde_json::Value> {
     let mut messages = Vec::new();
     let mut i = 0;
 

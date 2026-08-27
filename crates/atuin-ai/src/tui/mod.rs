@@ -1,7 +1,13 @@
-pub(crate) mod components;
-pub(crate) mod events;
-pub(crate) mod slash;
-pub(crate) mod state;
-pub(crate) mod view;
+pub mod app;
+pub mod bridge;
+pub mod events;
+pub mod persist;
+pub mod recall;
+pub mod select;
+pub mod slash;
+pub mod state;
+pub mod tips;
+pub mod tools_exec;
+pub mod view;
 
-pub(crate) use state::{ConversationEvent, events_to_messages};
+pub use state::{ConversationEvent, events_to_messages};

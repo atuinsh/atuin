@@ -1,0 +1,49 @@
+name: build-devcontainer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.devcontainer/**'
+      - '.github/workflows/devcontainer.yaml'
+  pull_request:
+    paths:
+      - '.devcontainer/**'
+      - '.github/workflows/devcontainer.yaml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    concurrency:
+      group: ${{ github.ref }}-devcontainer
+      cancel-in-progress: true
+    permissions:
+      packages: write
+      contents: read
+
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Get Repo Owner
+        run: echo "REPO_OWNER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to container registry
+        uses: docker/login-action@v4
+        with:
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+
+      # Builds via the devcontainer CLI rather than plain `docker build`, so the
+      # `features` in devcontainer.json (including the local ./features/atuin)
+      # get baked into the published image.
+      - name: Build and push
+        uses: devcontainers/ci@v0.3
+        with:
+          imageName: ghcr.io/${{ env.REPO_OWNER }}/atuin-devcontainer
+          imageTag: latest,${{ github.sha }}
+          cacheFrom: ghcr.io/${{ env.REPO_OWNER }}/atuin-devcontainer:latest
+          push: ${{ github.event_name == 'pull_request' && 'never' || 'always' }}

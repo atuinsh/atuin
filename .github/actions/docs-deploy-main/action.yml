@@ -1,0 +1,10 @@
+name: Deploy main docs
+description: Publish the `main` (unreleased) docs version. Never touches `latest` or the default.
+
+runs:
+  using: composite
+  steps:
+    - name: Deploy main (unreleased) docs
+      shell: bash
+      working-directory: docs
+      run: uv run mike deploy --push --title "main (unreleased)" main

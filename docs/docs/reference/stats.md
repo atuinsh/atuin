@@ -3,15 +3,37 @@
 Atuin can also calculate stats based on your history - this is currently a
 little basic, but more features to come.
 
+`atuin stats` accepts an optional period, which scopes the stats to a window of
+time. Leave it blank (or pass `all`) for stats since the beginning of your
+history.
+
+| Period    | Stats window                    |
+| --------- | ------------------------------- |
+| (blank)   | your entire history             |
+| `all`     | your entire history             |
+| `today`   | since local midnight            |
+| `week`    | the last 7 days                 |
+| `month`   | the last 31 days                |
+| `year`    | the last 365 days               |
+| a date    | 24h starting from that date     |
+
+```console
+$ atuin stats today
+$ atuin stats week
+$ atuin stats month
+$ atuin stats year
+```
+
 ## 1-day stats
 
-You provide the starting point, and Atuin computes the stats for 24h from that point.
+Any period that isn't one of the keywords above is parsed as a date. You provide
+the starting point, and Atuin computes the stats for 24h from that point.
 Date parsing is provided by `interim`, which supports different formats
 for full or relative dates. Certain formats rely on the dialect option in your
 [configuration](../configuration/config.md#dialect) to differentiate day from month.
-Refer to [the module's documentation](https://docs.rs/interim/0.1.0/interim/#supported-formats) for more details on the supported date formats.
+Refer to [the module's documentation](https://docs.rs/interim/latest/interim/#supported-formats) for more details on the supported date formats.
 
-```
+```console
 $ atuin stats last friday
 
 +---------------------+------------+
@@ -33,7 +55,7 @@ $ atuin stats last thursday 3pm  # between last thursday 3:00pm and the followin
 
 ## Full history stats
 
-```
+```console
 $ atuin stats
 # or
 $ atuin stats all

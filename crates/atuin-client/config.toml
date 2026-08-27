@@ -14,11 +14,6 @@
 ## windows: %USERPROFILE%/.local/share/atuin/key
 # key_path = "~/.key"
 
-## where to store your auth session token, default is your system data directory
-## linux/mac: ~/.local/share/atuin/session
-## windows: %USERPROFILE%/.local/share/atuin/session
-# session_path = "~/.session"
-
 ## date format used, either "us" or "uk"
 # dialect = "us"
 
@@ -34,22 +29,36 @@
 ## enable or disable automatic update checks
 # update_check = true
 
+## which release channel to follow with `atuin update` and update checks
+## "stable" for stable releases only, "nightly" to also receive prereleases
+# update_channel = "stable"
+
 ## address of the sync server
 # sync_address = "https://api.atuin.sh"
 
 ## how often to sync history. note that this is only triggered when a command
 ## is ran, so sync intervals may well be longer
 ## set it to 0 to sync after every command
-# sync_frequency = "10m"
+# sync_frequency = "5m"
 
-## which search mode to use
-## possible values: prefix, fulltext, fuzzy, skim
+## which search mode to use for interactive search
+## possible values: prefix, fulltext, fuzzy, daemon-fuzzy
 # search_mode = "fuzzy"
 
-## which filter mode to use by default
+## which search mode to use when atuin is invoked from a shell up-key binding
+## the accepted values are identical to those of "search_mode"
+## leave unspecified to use same mode set in "search_mode"
+# search_mode_shell_up_key_binding = "fuzzy"
+
+## which filter mode to use for interactive search
 ## possible values: "global", "host", "session", "session-preload", "directory", "workspace"
 ## consider using search.filters to customize the enablement and order of filter modes
 # filter_mode = "global"
+
+## which filter mode to use when atuin is invoked from a shell up-key binding
+## the accepted values are identical to those of "filter_mode"
+## leave unspecified to use same mode set in "filter_mode"
+# filter_mode_shell_up_key_binding = "global"
 
 ## With workspace filtering enabled, Atuin will filter for commands executed
 ## in any directory within a git repository tree (default: false).
@@ -59,23 +68,13 @@
 ## set search.filters to include "workspace" before other filter modes.
 # workspaces = false
 
-## which filter mode to use when atuin is invoked from a shell up-key binding
-## the accepted values are identical to those of "filter_mode"
-## leave unspecified to use same mode set in "filter_mode"
-# filter_mode_shell_up_key_binding = "global"
-
-## which search mode to use when atuin is invoked from a shell up-key binding
-## the accepted values are identical to those of "search_mode"
-## leave unspecified to use same mode set in "search_mode"
-# search_mode_shell_up_key_binding = "fuzzy"
-
-## which style to use
+## which display style to use
 ## possible values: auto, full, compact
-# style = "auto"
+# style = "compact"
 
 ## the maximum number of lines the interface should take up
 ## set it to 0 to always go full screen
-# inline_height = 0
+# inline_height = 40
 
 ## the maximum number of lines the interface should take up
 ## when atuin is invoked from a shell up-key binding
@@ -165,7 +164,7 @@
 ## 5. Stripe live/test keys
 # secrets_filter = true
 
-## Defaults to true. If enabled, upon hitting enter Atuin will immediately execute the command,
+## If enabled, upon hitting enter Atuin will immediately execute the command,
 ## whereas tab will put the command in the prompt for editing.
 ## If set to false, both enter and tab will place the command in the prompt for editing.
 ## This applies for new installs. Old installs will keep the old behaviour unless configured otherwise.
@@ -174,28 +173,37 @@ enter_accept = true
 ## Defaults to false. If enabled, when triggered after &&, || or |, Atuin will complete commands to chain rather than replace the current line.
 # command_chaining = false
 
-## Defaults to "emacs".  This specifies the keymap on the startup of `atuin
-## search`.  If this is set to "auto", the startup keymap mode in the Atuin
-## search is automatically selected based on the shell's keymap where the
-## keybinding is defined.  If this is set to "emacs", "vim-insert", or
-## "vim-normal", the startup keymap mode in the Atuin search is forced to be
-## the specified one.
-# keymap_mode = "auto"
+## This specifies the keymap on the startup of `atuin search`. If this is set
+## to "auto", the startup keymap mode in the Atuin search is automatically
+## selected based on the shell's keymap where the keybinding is defined. If
+## this is set to "emacs", "vim-insert", or "vim-normal", the startup keymap
+## mode in the Atuin search is forced to be the specified one.
+# keymap_mode = "emacs"
 
-## Cursor style in each keymap mode.  If specified, the cursor style is changed
-## in entering the cursor shape.  Available values are "default" and
+## Cursor style in each keymap mode. If specified, the cursor style is changed
+## in entering the cursor shape. Available values are "default" and
 ## "{blink,steady}-{block,underline,bar}".
 # keymap_cursor = { emacs = "blink-block", vim_insert = "blink-block", vim_normal = "steady-block" }
 
 # network_connect_timeout = 5
-# network_timeout = 5
+# network_timeout = 30
+
+## Extra HTTP headers to send on every request to the sync server. Useful when
+## a self-hosted server sits behind a proxy that requires its own auth header,
+## e.g. Cloudflare Access. Headers that Atuin sets itself (e.g. Authorization)
+## cannot be overridden. When set, cross-origin redirects are refused so these
+## headers are never sent to a different origin.
+# extra_headers = { "CF-Access-Client-Id" = "...", "CF-Access-Client-Secret" = "..." }
 
 ## Timeout (in seconds) for acquiring a local database connection (sqlite)
-# local_timeout = 5
+# local_timeout = 2
 
 ## Set this to true and Atuin will minimize motion in the UI - timers will not update live, etc.
 ## Alternatively, set env NO_MOTION=true
 # prefers_reduced_motion = false
+
+## Defaults to true. Configures whether to store commands that failed (those with non-zero exit status) or not.
+# store_failed = true
 
 [stats]
 ## Set commands where we should consider the subcommand for statistics. Eg, kubectl get vs just kubectl
@@ -249,12 +257,6 @@ enter_accept = true
 # Defaults to false. The backspace key performs the same functionality as Tab and copies the selected line to the command line to be modified when at the start of the line.
 # accept_with_backspace = false
 
-[sync]
-# Enable sync v2 by default
-# This ensures that sync v2 is enabled for new installs only
-# In a later release it will become the default across the board
-records = true
-
 [preview]
 ## which preview strategy to use to calculate the preview height (respects max_preview_height).
 ## possible values: auto, static
@@ -275,21 +277,34 @@ records = true
 # sync_frequency = 300
 
 ## The path to the unix socket used by the daemon (on unix systems)
-## linux/mac: ~/.local/share/atuin/atuin.sock
+## linux/mac default:
+## - if systemd_socket is false: $TMPDIR/atuin-$UID/atuin.sock
+## - if systemd_socket is true: $XDG_RUNTIME_DIR/atuin.sock
 ## windows: Not Supported
-# socket_path = "~/.local/share/atuin/atuin.sock"
+# socket_path = "/custom/path/to/atuin.sock"
 
 ## The daemon pidfile used for lifecycle management.
 ## Defaults to the Atuin data directory.
 # pidfile_path = "~/.local/share/atuin/atuin-daemon.pid"
 
-## Use systemd socket activation rather than opening the given path (the path must still be correct for the client)
+## Use systemd socket activation rather than opening the given path (the path must still be correct).
+## Note: setting this to true changes the default value of socket_path; see above.
 ## linux: false
 ## mac/windows: Not Supported
 # systemd_socket = false
 
 ## The port that should be used for TCP on non unix systems
 # tcp_port = 8889
+
+# [pty_proxy]
+## If enabled, `atuin init` will first re-exec your shell inside `atuin pty-proxy`,
+## so you don't need a separate `eval "$(atuin pty-proxy init)"` line in your shell
+## config. Supported for bash, zsh, fish and nu on unix platforms.
+## For the fastest startup, keep your `atuin init` line near the top of your shell
+## config: everything sourced before it runs again inside the proxy.
+## Safe to combine with an existing `atuin pty-proxy init` line — the proxy only
+## starts once.
+# enabled = false
 
 # [theme]
 ## Color theme to use for rendering in the terminal.
@@ -311,7 +326,18 @@ records = true
 ## The list of enabled filter modes, in order of priority.
 ## The "workspace" mode is skipped when not in a workspace or workspaces = false.
 ## Default filter mode can be overridden with the filter_mode setting.
-# filters = [ "global", "host", "session", "session-preload", "workspace", "directory" ]
+# filters = ["global", "host", "session", "workspace", "directory", "session-preload"]
+
+## Filter interactive search results by the shell used to run the command:
+##
+## - "all": show all commands
+##
+## - "auto": show commands run by the current type of shell, or commands that
+##   have no shell recorded (for example, from before Atuin started tracking it)
+##
+## - array of strings: show commands run by any shell in the array; "" includes
+##   commands that have no recorded shell
+# shells = "auto"
 
 [tmux]
 ## Enable using atuin with tmux popup (requires tmux >= 3.2)
@@ -369,3 +395,7 @@ records = true
 ##
 ## Make directory expand instead of command:
 # columns = ["duration", "time", { type = "directory", expand = true }, { type = "command", expand = false }]
+
+## Syntax highlight commands in the search results, using the theme's colors.
+## Not available on all platforms (e.g. Windows).
+# syntax_highlight = true

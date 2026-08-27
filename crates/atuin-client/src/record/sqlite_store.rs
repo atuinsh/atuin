@@ -2,66 +2,86 @@
 // Multiple stores of multiple types are all stored in one chonky table (for now), and we just index
 // by tag/host
 
+use std::ffi::OsStr;
 use std::str::FromStr;
-use std::{path::Path, time::Duration};
+use std::time::Duration;
 
-use async_trait::async_trait;
+use atuin_common::encryption::paseto_v4;
+use atuin_common::sqlite::{Sqlite, SqliteBuilder};
+use atuin_domain::record::{
+    Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
+    RecordVersion,
+};
 use eyre::{Result, eyre};
-use fs_err as fs;
-
-use sqlx::{
-    Row,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow},
-};
-
-use atuin_common::record::{
-    EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordStatus,
-};
-use atuin_common::utils;
+use sqlx::Row;
+use sqlx::sqlite::{SqlitePool, SqliteRow};
+use tracing::instrument;
 use uuid::Uuid;
-
-use super::encryption::PASETO_V4;
-use super::store::Store;
 
 #[derive(Debug, Clone)]
 pub struct SqliteStore {
-    pool: SqlitePool,
+    sqlite: Sqlite,
+}
+
+/// Newtype over the foreign `Record<EncryptedData>` so we can `impl FromRow` for
+/// it locally (the orphan rule blocks implementing it on `Record` here). Unwrap
+/// back to the inner record with `.into()`.
+#[derive(derive_more::Into)]
+struct DbRecord(Record<paseto_v4::EncryptedData>);
+
+impl<'r> ::sqlx::FromRow<'r, SqliteRow> for DbRecord {
+    fn from_row(row: &'r SqliteRow) -> ::sqlx::Result<Self> {
+        let idx: i64 = row.try_get("idx")?;
+        let timestamp: i64 = row.try_get("timestamp")?;
+
+        // UUIDs are stored as hyphenated TEXT, so decode as a string and parse
+        // rather than relying on sqlx's blob-oriented `Uuid` decoding.
+        let parse_uuid = |column: &'static str| -> ::sqlx::Result<Uuid> {
+            let raw: &str = row.try_get(column)?;
+            Uuid::from_str(raw).map_err(|source| ::sqlx::Error::ColumnDecode {
+                index: column.to_owned(),
+                source: Box::new(source),
+            })
+        };
+
+        Ok(Self(Record {
+            id: RecordId(parse_uuid("id")?),
+            idx: idx as u64,
+            host: Host::new(HostId(parse_uuid("host")?)),
+            timestamp: timestamp as u64,
+            tag: RecordTag::from(row.try_get::<String, _>("tag")?),
+            version: RecordVersion::from(row.try_get::<String, _>("version")?),
+            data: paseto_v4::EncryptedData {
+                raw: row.try_get("data")?,
+                cek: row.try_get("cek")?,
+            },
+        }))
+    }
 }
 
 impl SqliteStore {
-    pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
+    #[instrument(level = "trace", skip_all, fields(timeout = ?timeout), err)]
+    pub async fn new(path: impl AsRef<OsStr>, timeout: Duration) -> Result<Self> {
         let path = path.as_ref();
 
         debug!("opening sqlite database at {path:?}");
 
-        if utils::broken_symlink(path) {
-            eprintln!(
-                "Atuin: Sqlite db path ({path:?}) is a broken symlink. Unable to read or create replacement."
-            );
-            std::process::exit(1);
-        }
-
-        if !path.exists()
-            && let Some(dir) = path.parent()
-        {
-            fs::create_dir_all(dir)?;
-        }
-
-        let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
-            .journal_mode(SqliteJournalMode::Wal)
-            .foreign_keys(true)
-            .create_if_missing(true);
-
-        let pool = SqlitePoolOptions::new()
-            .acquire_timeout(Duration::from_secs_f64(timeout))
-            .connect_with(opts)
-            .await?;
-
-        Self::setup_db(&pool).await?;
-
-        Ok(Self { pool })
+        Self::from_builder(Sqlite::builder(path), timeout).await
     }
 
+    pub async fn in_memory(timeout: Duration) -> Result<Self> {
+        Self::from_builder(Sqlite::builder_in_memory(), timeout).await
+    }
+
+    async fn from_builder(builder: SqliteBuilder<'_>, timeout: Duration) -> Result<Self> {
+        let sqlite = builder.timeout(timeout).open().await?;
+
+        Self::setup_db(sqlite.pool()).await?;
+
+        Ok(Self { sqlite })
+    }
+
+    #[instrument(level = "trace", skip_all, err)]
     async fn setup_db(pool: &SqlitePool) -> Result<()> {
         debug!("running sqlite database setup");
 
@@ -72,69 +92,72 @@ impl SqliteStore {
 
     async fn save_raw(
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-        r: &Record<EncryptedData>,
+        r: &Record<paseto_v4::EncryptedData>,
     ) -> Result<()> {
         // In sqlite, we are "limited" to i64. But that is still fine, until 2262.
         sqlx::query(
             "insert or ignore into store(id, idx, host, tag, timestamp, version, data, cek)
                 values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
-        .bind(r.id.0.as_hyphenated().to_string())
+        .bind(r.id.as_hyphenated().to_string())
         .bind(r.idx as i64)
-        .bind(r.host.id.0.as_hyphenated().to_string())
+        .bind(r.host.id.as_hyphenated().to_string())
         .bind(r.tag.as_str())
         .bind(r.timestamp as i64)
         .bind(r.version.as_str())
-        .bind(r.data.data.as_str())
-        .bind(r.data.content_encryption_key.as_str())
+        .bind(r.data.raw.as_str())
+        .bind(r.data.cek.as_str())
         .execute(&mut **tx)
         .await?;
 
         Ok(())
     }
 
-    fn query_row(row: SqliteRow) -> Record<EncryptedData> {
-        let idx: i64 = row.get("idx");
-        let timestamp: i64 = row.get("timestamp");
-
-        // tbh at this point things are pretty fucked so just panic
-        let id = Uuid::from_str(row.get("id")).expect("invalid id UUID format in sqlite DB");
-        let host = Uuid::from_str(row.get("host")).expect("invalid host UUID format in sqlite DB");
-
-        Record {
-            id: RecordId(id),
-            idx: idx as u64,
-            host: Host::new(HostId(host)),
-            timestamp: timestamp as u64,
-            tag: row.get("tag"),
-            version: row.get("version"),
-            data: EncryptedData {
-                data: row.get("data"),
-                content_encryption_key: row.get("cek"),
-            },
-        }
-    }
-
-    async fn load_all(&self) -> Result<Vec<Record<EncryptedData>>> {
-        let res = sqlx::query("select * from store ")
-            .map(Self::query_row)
-            .fetch_all(&self.pool)
+    #[instrument(level = "trace", skip_all, err)]
+    async fn load_all(&self) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
+        let res = sqlx::query_as::<_, DbRecord>("select * from store ")
+            .fetch_all(self.sqlite.pool())
             .await?;
 
-        Ok(res)
+        Ok(res.into_iter().map(Into::into).collect())
     }
-}
 
-#[async_trait]
-impl Store for SqliteStore {
-    async fn push_batch(
+    #[instrument(level = "trace", skip_all, fields(id = ?record.id, idx = record.idx, host = ?record.host.id, tag = ?record.tag), err)]
+    pub async fn push(&self, record: &Record<paseto_v4::EncryptedData>) -> Result<()> {
+        self.push_batch(std::iter::once(record)).await
+    }
+
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn push_batch(
         &self,
-        records: impl Iterator<Item = &Record<EncryptedData>> + Send + Sync,
+        records: impl Iterator<Item = &Record<paseto_v4::EncryptedData>> + Send + Sync,
     ) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
+        // `store` has 8 columns, so each row binds 8 parameters; keep a full chunk
+        // within the bind-parameter limit. `max(1)` keeps the chunk non-empty on any
+        // (implausible) tiny limit.
+        const COLUMNS: usize = 8;
+        let rows_per_insert = (self.sqlite.info().await.variable_number_limit() / COLUMNS).max(1);
 
-        for record in records {
-            Self::save_raw(&mut tx, record).await?;
+        let mut records = records.peekable();
+        let mut tx = self.sqlite.pool().begin().await?;
+
+        while records.peek().is_some() {
+            let mut builder = sqlx::QueryBuilder::new(
+                "insert or ignore into store(id, idx, host, tag, timestamp, version, data, cek) ",
+            );
+
+            builder.push_values(records.by_ref().take(rows_per_insert), |mut b, r| {
+                b.push_bind(r.id.0.as_hyphenated().to_string())
+                    .push_bind(r.idx as i64)
+                    .push_bind(r.host.id.0.as_hyphenated().to_string())
+                    .push_bind(r.tag.as_str())
+                    .push_bind(r.timestamp as i64)
+                    .push_bind(r.version.as_str())
+                    .push_bind(r.data.raw.as_str())
+                    .push_bind(r.data.cek.as_str());
+            });
+
+            builder.build().execute(&mut *tx).await?;
         }
 
         tx.commit().await?;
@@ -142,66 +165,77 @@ impl Store for SqliteStore {
         Ok(())
     }
 
-    async fn get(&self, id: RecordId) -> Result<Record<EncryptedData>> {
-        let res = sqlx::query("select * from store where store.id = ?1")
-            .bind(id.0.as_hyphenated().to_string())
-            .map(Self::query_row)
-            .fetch_one(&self.pool)
+    #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
+    pub async fn get(&self, id: RecordId) -> Result<Record<paseto_v4::EncryptedData>> {
+        let res = sqlx::query_as::<_, DbRecord>("select * from store where store.id = ?1")
+            .bind(id.as_hyphenated().to_string())
+            .fetch_one(self.sqlite.pool())
             .await?;
 
-        Ok(res)
+        Ok(res.into())
     }
 
-    async fn delete(&self, id: RecordId) -> Result<()> {
+    #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
+    pub async fn delete(&self, id: RecordId) -> Result<()> {
         sqlx::query("delete from store where id = ?1")
-            .bind(id.0.as_hyphenated().to_string())
-            .execute(&self.pool)
+            .bind(id.as_hyphenated().to_string())
+            .execute(self.sqlite.pool())
             .await?;
 
         Ok(())
     }
 
-    async fn delete_all(&self) -> Result<()> {
-        sqlx::query("delete from store").execute(&self.pool).await?;
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn delete_all(&self) -> Result<()> {
+        sqlx::query("delete from store").execute(self.sqlite.pool()).await?;
 
         Ok(())
     }
 
-    async fn last(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>> {
-        let res =
-            sqlx::query("select * from store where host=?1 and tag=?2 order by idx desc limit 1")
-                .bind(host.0.as_hyphenated().to_string())
-                .bind(tag)
-                .map(Self::query_row)
-                .fetch_one(&self.pool)
-                .await;
+    #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag), err)]
+    pub async fn last(
+        &self,
+        series: &RecordSeriesKey,
+    ) -> Result<Option<Record<paseto_v4::EncryptedData>>> {
+        let res = sqlx::query_as::<_, DbRecord>(
+            "select * from store where host=?1 and tag=?2 order by idx desc limit 1",
+        )
+        .bind(series.host_id.as_hyphenated().to_string())
+        .bind(series.tag.as_str())
+        .fetch_one(self.sqlite.pool())
+        .await;
 
         match res {
             Err(sqlx::Error::RowNotFound) => Ok(None),
             Err(e) => Err(eyre!("an error occurred: {}", e)),
-            Ok(record) => Ok(Some(record)),
+            Ok(record) => Ok(Some(record.into())),
         }
     }
 
-    async fn first(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>> {
-        self.idx(host, tag, 0).await
+    #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag), err)]
+    pub async fn first(
+        &self,
+        series: &RecordSeriesKey,
+    ) -> Result<Option<Record<paseto_v4::EncryptedData>>> {
+        self.idx(series, 0).await
     }
 
-    async fn len_all(&self) -> Result<u64> {
-        let res: Result<(i64,), sqlx::Error> = sqlx::query_as("select count(*) from store")
-            .fetch_one(&self.pool)
-            .await;
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn len_all(&self) -> Result<u64> {
+        let res: Result<(i64,), sqlx::Error> =
+            sqlx::query_as("select count(*) from store").fetch_one(self.sqlite.pool()).await;
         match res {
             Err(e) => Err(eyre!("failed to fetch local store len: {}", e)),
             Ok(v) => Ok(v.0 as u64),
         }
     }
 
-    async fn len_tag(&self, tag: &str) -> Result<u64> {
+    #[instrument(level = "trace", skip_all, fields(tag = ?tag), err)]
+    pub async fn len_tag(&self, tag: &RecordTag) -> Result<u64> {
         let res: Result<(i64,), sqlx::Error> =
             sqlx::query_as("select count(*) from store where tag=?1")
-                .bind(tag)
-                .fetch_one(&self.pool)
+                .bind(tag.as_str())
+                .fetch_one(self.sqlite.pool())
                 .await;
         match res {
             Err(e) => Err(eyre!("failed to fetch local store len: {}", e)),
@@ -209,64 +243,87 @@ impl Store for SqliteStore {
         }
     }
 
-    async fn len(&self, host: HostId, tag: &str) -> Result<u64> {
-        let last = self.last(host, tag).await?;
+    #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag), err)]
+    pub async fn len(&self, series: &RecordSeriesKey) -> Result<u64> {
+        let last = self.last(series).await?;
 
         if let Some(last) = last {
             return Ok(last.idx + 1);
         }
 
-        return Ok(0);
+        Ok(0)
     }
 
-    async fn next(
-        &self,
-        host: HostId,
-        tag: &str,
-        idx: RecordIdx,
-        limit: u64,
-    ) -> Result<Vec<Record<EncryptedData>>> {
-        let res = sqlx::query(
-            "select * from store where idx >= ?1 and host = ?2 and tag = ?3 order by idx asc limit ?4",
+    /// The smallest `idx >= 0` with no record for `(host, tag)`: Unlike `last().idx + 1`, this
+    /// points at an interior hole when one exists.
+    #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag), err)]
+    pub async fn first_gap(&self, series: &RecordSeriesKey) -> Result<RecordIdx> {
+        let gap: Option<i64> = sqlx::query_scalar(
+            "select min(idx) from (
+                 select idx + 1 as idx from store where host = ?1 and tag = ?2
+                 union
+                 select 0
+             ) as candidates
+             where idx not in (select idx from store where host = ?1 and tag = ?2)",
         )
-        .bind(idx as i64)
-        .bind(host.0.as_hyphenated().to_string())
-        .bind(tag)
-        .bind(limit as i64)
-        .map(Self::query_row)
-        .fetch_all(&self.pool)
+        .bind(series.host_id.as_hyphenated().to_string())
+        .bind(series.tag.as_str())
+        .fetch_one(self.sqlite.pool())
         .await?;
 
-        Ok(res)
+        Ok(gap.unwrap_or(0) as u64)
     }
 
-    async fn idx(
+    #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag, idx, limit), err)]
+    pub async fn next(
         &self,
-        host: HostId,
-        tag: &str,
+        series: &RecordSeriesKey,
         idx: RecordIdx,
-    ) -> Result<Option<Record<EncryptedData>>> {
-        let res = sqlx::query("select * from store where idx = ?1 and host = ?2 and tag = ?3")
-            .bind(idx as i64)
-            .bind(host.0.as_hyphenated().to_string())
-            .bind(tag)
-            .map(Self::query_row)
-            .fetch_one(&self.pool)
-            .await;
+        limit: u64,
+    ) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
+        let res = sqlx::query_as::<_, DbRecord>(
+            "select * from store where idx >= ?1 and host = ?2 and tag = ?3 order by idx asc \
+             limit ?4",
+        )
+        .bind(idx as i64)
+        .bind(series.host_id.as_hyphenated().to_string())
+        .bind(series.tag.as_str())
+        .bind(limit as i64)
+        .fetch_all(self.sqlite.pool())
+        .await?;
+
+        Ok(res.into_iter().map(Into::into).collect())
+    }
+
+    #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag, idx), err)]
+    pub async fn idx(
+        &self,
+        series: &RecordSeriesKey,
+        idx: RecordIdx,
+    ) -> Result<Option<Record<paseto_v4::EncryptedData>>> {
+        let res = sqlx::query_as::<_, DbRecord>(
+            "select * from store where idx = ?1 and host = ?2 and tag = ?3",
+        )
+        .bind(idx as i64)
+        .bind(series.host_id.as_hyphenated().to_string())
+        .bind(series.tag.as_str())
+        .fetch_one(self.sqlite.pool())
+        .await;
 
         match res {
             Err(sqlx::Error::RowNotFound) => Ok(None),
             Err(e) => Err(eyre!("an error occurred: {}", e)),
-            Ok(v) => Ok(Some(v)),
+            Ok(v) => Ok(Some(v.into())),
         }
     }
 
-    async fn status(&self) -> Result<RecordStatus> {
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn status(&self) -> Result<RecordStatus> {
         let mut status = RecordStatus::new();
 
         let res: Result<Vec<(String, String, i64)>, sqlx::Error> =
             sqlx::query_as("select host, tag, max(idx) from store group by host, tag")
-                .fetch_all(&self.pool)
+                .fetch_all(self.sqlite.pool())
                 .await;
 
         let res = match res {
@@ -279,25 +336,35 @@ impl Store for SqliteStore {
                 Uuid::from_str(i.0.as_str()).expect("failed to parse uuid for local store status"),
             );
 
-            status.set_raw(host, i.1, i.2 as u64);
+            status.set_raw(RecordSeriesKey::new(host, RecordTag::from(i.1)), i.2 as u64);
         }
 
         Ok(status)
     }
 
-    async fn all_tagged(&self, tag: &str) -> Result<Vec<Record<EncryptedData>>> {
-        let res = sqlx::query("select * from store where tag = ?1 order by timestamp asc")
-            .bind(tag)
-            .map(Self::query_row)
-            .fetch_all(&self.pool)
-            .await?;
+    #[instrument(level = "trace", skip_all, fields(tag = ?tag), err)]
+    pub async fn all_tagged(
+        &self,
+        tag: &RecordTag,
+    ) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
+        let res = sqlx::query_as::<_, DbRecord>(
+            "select * from store where tag = ?1 order by timestamp asc",
+        )
+        .bind(tag.as_str())
+        .fetch_all(self.sqlite.pool())
+        .await?;
 
-        Ok(res)
+        Ok(res.into_iter().map(Into::into).collect())
     }
 
     /// Reencrypt every single item in this store with a new key
     /// Be careful - this may mess with sync.
-    async fn re_encrypt(&self, old_key: &[u8; 32], new_key: &[u8; 32]) -> Result<()> {
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn re_encrypt(
+        &self,
+        old_key: &paseto_v4::Key,
+        new_key: &paseto_v4::Key,
+    ) -> Result<()> {
         // Load all the records
         // In memory like some of the other code here
         // This will never be called in a hot loop, and only under the following circumstances
@@ -309,13 +376,16 @@ impl Store for SqliteStore {
 
         let re_encrypted = all
             .into_iter()
-            .map(|record| record.re_encrypt::<PASETO_V4>(old_key, new_key))
+            .map(|record| {
+                let data = paseto_v4::reencrypt_sync(&record.data, old_key, new_key)?;
+                Ok(record.with_data(data))
+            })
             .collect::<Result<Vec<_>>>()?;
 
         // next up, we delete all the old data and reinsert the new stuff
         // do it in one transaction, so if anything fails we rollback OK
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.sqlite.pool().begin().await?;
 
         let res = sqlx::query("delete from store").execute(&mut *tx).await?;
 
@@ -336,29 +406,26 @@ impl Store for SqliteStore {
 
     /// Verify that every record in this store can be decrypted with the current key
     /// Someday maybe also check each tag/record can be deserialized, but not for now.
-    async fn verify(&self, key: &[u8; 32]) -> Result<()> {
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn verify(&self, key: &paseto_v4::Key) -> Result<()> {
         let all = self.load_all().await?;
 
-        all.into_iter()
-            .map(|record| record.decrypt::<PASETO_V4>(key))
-            .collect::<Result<Vec<_>>>()?;
+        all.into_iter().map(|record| record.decrypt(key)).collect::<Result<Vec<_>>>()?;
 
         Ok(())
     }
 
     /// Verify that every record in this store can be decrypted with the current key
     /// Someday maybe also check each tag/record can be deserialized, but not for now.
-    async fn purge(&self, key: &[u8; 32]) -> Result<()> {
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn purge(&self, key: &paseto_v4::Key) -> Result<()> {
         let all = self.load_all().await?;
 
-        for record in all.iter() {
-            match record.clone().decrypt::<PASETO_V4>(key) {
+        for record in &all {
+            match record.clone().decrypt(key) {
                 Ok(_) => continue,
                 Err(_) => {
-                    println!(
-                        "Failed to decrypt {}, deleting",
-                        record.id.0.as_hyphenated()
-                    );
+                    println!("Failed to decrypt {}, deleting", record.id.as_hyphenated());
 
                     self.delete(record.id).await?;
                 }
@@ -371,272 +438,233 @@ impl Store for SqliteStore {
 
 #[cfg(test)]
 mod tests {
-    use atuin_common::{
-        record::{DecryptedData, EncryptedData, Host, HostId, Record},
-        utils::uuid_v7,
+    use atuin_common::encryption::paseto_v4;
+    use atuin_common::utils::uuid_v7;
+    use atuin_domain::record::{
+        DecryptedData, Host, HostId, Record, RecordSeriesKey, RecordTag, RecordVersion,
     };
-
-    use crate::{
-        encryption::generate_encoded_key,
-        record::{encryption::PASETO_V4, store::Store},
-        settings::test_local_timeout,
-    };
+    use rstest::{fixture, rstest};
 
     use super::SqliteStore;
+    use crate::settings::test_local_timeout;
 
-    fn test_record() -> Record<EncryptedData> {
+    #[fixture]
+    async fn store() -> SqliteStore {
+        SqliteStore::in_memory(test_local_timeout()).await.unwrap()
+    }
+
+    #[fixture]
+    fn record() -> Record<paseto_v4::EncryptedData> {
         Record::builder()
-            .host(Host::new(HostId(atuin_common::utils::uuid_v7())))
+            .host(Host::new(HostId(uuid_v7())))
             .version("v1".into())
-            .tag(atuin_common::utils::uuid_v7().simple().to_string())
-            .data(EncryptedData {
-                data: "1234".into(),
-                content_encryption_key: "1234".into(),
+            .tag(RecordTag::Other(uuid_v7().simple().to_string()))
+            .data(paseto_v4::EncryptedData {
+                raw: "1234".into(),
+                cek: "1234".into(),
             })
             .idx(0)
             .build()
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn create_db() {
-        let db = SqliteStore::new(":memory:", test_local_timeout()).await;
-
-        assert!(
-            db.is_ok(),
-            "db could not be created, {:?}",
-            db.err().unwrap()
-        );
+    async fn create_db(#[future(awt)] store: SqliteStore) {
+        // the `store` fixture opens/creates the db and unwraps; a successful
+        // injection proves creation succeeded. confirm it is queryable.
+        assert_eq!(store.len_all().await.unwrap(), 0, "db could not be created");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn push_record() {
-        let db = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let record = test_record();
-
-        db.push(&record).await.expect("failed to insert record");
+    async fn push_record(
+        #[future(awt)] store: SqliteStore,
+        record: Record<paseto_v4::EncryptedData>,
+    ) {
+        store.push(&record).await.expect("failed to insert record");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn get_record() {
-        let db = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let record = test_record();
-        db.push(&record).await.unwrap();
-
-        let new_record = db.get(record.id).await.expect("failed to fetch record");
-
-        assert_eq!(record, new_record, "records are not equal");
+    async fn get_record(
+        #[future(awt)] store: SqliteStore,
+        record: Record<paseto_v4::EncryptedData>,
+    ) {
+        store.push(&record).await.unwrap();
+        let fetched = store.get(record.id).await.expect("failed to fetch record");
+        assert_eq!(fetched, record, "records are not equal");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn last() {
-        let db = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let record = test_record();
-        db.push(&record).await.unwrap();
-
-        let last = db
-            .last(record.host.id, record.tag.as_str())
-            .await
-            .expect("failed to get store len");
-
-        assert_eq!(
-            last.unwrap().id,
-            record.id,
-            "expected to get back the same record that was inserted"
-        );
+    async fn last(#[future(awt)] store: SqliteStore, record: Record<paseto_v4::EncryptedData>) {
+        store.push(&record).await.unwrap();
+        let last = store.last(&record.series_key()).await.unwrap();
+        assert_eq!(last.unwrap().id, record.id, "did not get the inserted record");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn first() {
-        let db = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let record = test_record();
-        db.push(&record).await.unwrap();
-
-        let first = db
-            .first(record.host.id, record.tag.as_str())
-            .await
-            .expect("failed to get store len");
-
-        assert_eq!(
-            first.unwrap().id,
-            record.id,
-            "expected to get back the same record that was inserted"
-        );
+    async fn first(#[future(awt)] store: SqliteStore, record: Record<paseto_v4::EncryptedData>) {
+        store.push(&record).await.unwrap();
+        let first = store.first(&record.series_key()).await.unwrap();
+        assert_eq!(first.unwrap().id, record.id, "did not get the inserted record");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn len() {
-        let db = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let record = test_record();
-        db.push(&record).await.unwrap();
+    async fn first_gap_finds_the_contiguous_frontier(#[future(awt)] store: SqliteStore) {
+        let host = HostId(uuid_v7());
+        let tag = RecordTag::History;
 
-        let len = db
-            .len(record.host.id, record.tag.as_str())
-            .await
-            .expect("failed to get store len");
+        let at = |idx: u64| {
+            Record::builder()
+                .host(Host::new(host))
+                .version("v1".into())
+                .tag(tag.clone())
+                .idx(idx)
+                .data(paseto_v4::EncryptedData {
+                    raw: "x".into(),
+                    cek: "x".into(),
+                })
+                .build()
+        };
 
+        // Empty stream -> frontier is 0.
+        assert_eq!(store.first_gap(&RecordSeriesKey::new(host, tag.clone())).await.unwrap(), 0);
+
+        // Contiguous 0,1,2 -> frontier is the next idx, 3.
+        for idx in [0, 1, 2] {
+            store.push(&at(idx)).await.unwrap();
+        }
+        assert_eq!(store.first_gap(&RecordSeriesKey::new(host, tag.clone())).await.unwrap(), 3);
+
+        // Add 4,5 but not 3: the frontier drops back to the hole, not the head + 1.
+        for idx in [4, 5] {
+            store.push(&at(idx)).await.unwrap();
+        }
+        assert_eq!(store.first_gap(&RecordSeriesKey::new(host, tag.clone())).await.unwrap(), 3);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn len(#[future(awt)] store: SqliteStore, record: Record<paseto_v4::EncryptedData>) {
+        store.push(&record).await.unwrap();
+        let len = store.len(&record.series_key()).await.unwrap();
         assert_eq!(len, 1, "expected length of 1 after insert");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn len_tag() {
-        let db = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let record = test_record();
-        db.push(&record).await.unwrap();
-
-        let len = db
-            .len_tag(record.tag.as_str())
-            .await
-            .expect("failed to get store len");
-
+    async fn len_tag(#[future(awt)] store: SqliteStore, record: Record<paseto_v4::EncryptedData>) {
+        store.push(&record).await.unwrap();
+        let len = store.len_tag(&record.tag).await.unwrap();
         assert_eq!(len, 1, "expected length of 1 after insert");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn len_different_tags() {
-        let db = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
+    async fn len_different_tags(#[future(awt)] store: SqliteStore) {
+        // different tags model independent stores in one database, so each
+        // is length 1 despite sharing a table
+        let first = record();
+        let second = record();
+        store.push(&first).await.unwrap();
+        store.push(&second).await.unwrap();
 
-        // these have different tags, so the len should be the same
-        // we model multiple stores within one database
-        // new store = new tag = independent length
-        let first = test_record();
-        let second = test_record();
-
-        db.push(&first).await.unwrap();
-        db.push(&second).await.unwrap();
-
-        let first_len = db.len(first.host.id, first.tag.as_str()).await.unwrap();
-        let second_len = db.len(second.host.id, second.tag.as_str()).await.unwrap();
-
-        assert_eq!(first_len, 1, "expected length of 1 after insert");
-        assert_eq!(second_len, 1, "expected length of 1 after insert");
+        assert_eq!(store.len(&first.series_key()).await.unwrap(), 1);
+        assert_eq!(store.len(&second.series_key()).await.unwrap(), 1);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn append_a_bunch() {
-        let db = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-
-        let mut tail = test_record();
-        db.push(&tail).await.expect("failed to push record");
+    async fn append_a_bunch(#[future(awt)] store: SqliteStore) {
+        let mut tail = record();
+        store.push(&tail).await.expect("failed to push record");
 
         for _ in 1..100 {
-            tail = tail.append(vec![1, 2, 3, 4]).encrypt::<PASETO_V4>(&[0; 32]);
-            db.push(&tail).await.unwrap();
+            tail = tail.append(vec![1, 2, 3, 4]).encrypt(&[0; 32].into());
+            store.push(&tail).await.unwrap();
         }
 
         assert_eq!(
-            db.len(tail.host.id, tail.tag.as_str()).await.unwrap(),
+            store.len(&tail.series_key()).await.unwrap(),
             100,
             "failed to insert 100 records"
         );
-
-        assert_eq!(
-            db.len_tag(tail.tag.as_str()).await.unwrap(),
-            100,
-            "failed to insert 100 records"
-        );
+        assert_eq!(store.len_tag(&tail.tag).await.unwrap(), 100, "failed to insert 100 records");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn append_a_big_bunch() {
-        let db = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
+    async fn append_a_big_bunch(#[future(awt)] store: SqliteStore) {
+        let mut records: Vec<Record<paseto_v4::EncryptedData>> = Vec::with_capacity(10000);
 
-        let mut records: Vec<Record<EncryptedData>> = Vec::with_capacity(10000);
-
-        let mut tail = test_record();
+        let mut tail = record();
         records.push(tail.clone());
-
         for _ in 1..10000 {
-            tail = tail.append(vec![1, 2, 3]).encrypt::<PASETO_V4>(&[0; 32]);
+            tail = tail.append(vec![1, 2, 3]).encrypt(&[0; 32].into());
             records.push(tail.clone());
         }
 
-        db.push_batch(records.iter()).await.unwrap();
+        store.push_batch(records.iter()).await.unwrap();
 
         assert_eq!(
-            db.len(tail.host.id, tail.tag.as_str()).await.unwrap(),
+            store.len(&tail.series_key()).await.unwrap(),
             10000,
             "failed to insert 10k records"
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn re_encrypt() {
-        let store = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let (key, _) = generate_encoded_key().unwrap();
+    async fn re_encrypt(#[future(awt)] store: SqliteStore) {
+        let key = paseto_v4::Key::generate();
         let data = vec![0u8, 1u8, 2u8, 3u8];
         let host_id = HostId(uuid_v7());
 
         for i in 0..10 {
             let record = Record::builder()
                 .host(Host::new(host_id))
-                .version(String::from("test"))
-                .tag(String::from("test"))
+                .version(RecordVersion::Other("test".to_owned()))
+                .tag(RecordTag::Other("test".to_owned()))
                 .idx(i)
                 .data(DecryptedData(data.clone()))
-                .build();
-
-            let record = record.encrypt::<PASETO_V4>(&key.into());
-            store
-                .push(&record)
-                .await
-                .expect("failed to push encrypted record");
+                .build()
+                .encrypt(&key);
+            store.push(&record).await.expect("failed to push encrypted record");
         }
 
-        // first, check that we can decrypt the data with the current key
-        let all = store.all_tagged("test").await.unwrap();
-
+        // the data decrypts with the current key
+        let all = store.all_tagged(&RecordTag::Other("test".to_owned())).await.unwrap();
         assert_eq!(all.len(), 10, "failed to fetch all records");
-
         for record in all {
-            let decrypted = record.decrypt::<PASETO_V4>(&key.into()).unwrap();
+            let decrypted = record.decrypt(&key).unwrap();
             assert_eq!(decrypted.data.0, data);
         }
 
-        // reencrypt the store, then check if
-        // 1) it cannot be decrypted with the old key
-        // 2) it can be decrypted with the new key
+        // after re-encrypting: the old key fails, the new key works
+        let new_key = paseto_v4::Key::generate();
+        store.re_encrypt(&key, &new_key).await.expect("failed to re-encrypt store");
 
-        let (new_key, _) = generate_encoded_key().unwrap();
-        store
-            .re_encrypt(&key.into(), &new_key.into())
-            .await
-            .expect("failed to re-encrypt store");
-
-        let all = store.all_tagged("test").await.unwrap();
-
-        for record in all.iter() {
-            let decrypted = record.clone().decrypt::<PASETO_V4>(&key.into());
+        let all = store.all_tagged(&RecordTag::Other("test".to_owned())).await.unwrap();
+        for record in &all {
             assert!(
-                decrypted.is_err(),
-                "did not get error decrypting with old key after re-encrypt"
-            )
+                record.clone().decrypt(&key).is_err(),
+                "old key still decrypts after re-encrypt"
+            );
         }
-
         for record in all {
-            let decrypted = record.decrypt::<PASETO_V4>(&new_key.into()).unwrap();
+            let decrypted = record.decrypt(&new_key).unwrap();
             assert_eq!(decrypted.data.0, data);
         }
 
-        assert_eq!(store.len(host_id, "test").await.unwrap(), 10);
+        assert_eq!(
+            store
+                .len(&RecordSeriesKey::new(host_id, RecordTag::Other("test".to_owned())))
+                .await
+                .unwrap(),
+            10
+        );
     }
 }

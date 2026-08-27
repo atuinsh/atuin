@@ -1,0 +1,31 @@
+name: Vale
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/docs/**"
+      - ".vale.ini"
+      - ".vale/styles/config/**"
+      - ".github/workflows/vale.yml"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  vale:
+    name: Lint docs prose
+    runs-on: depot-ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: vale-cli/vale-action@v2.1.2
+        with:
+          version: "3.15.2"
+          files: docs/docs
+          filter_mode: nofilter
+          fail_on_error: true
+          level: warning
+          vale_flags: "--minAlertLevel=warning"

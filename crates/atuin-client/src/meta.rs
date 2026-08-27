@@ -1,11 +1,12 @@
-use std::path::Path;
+use std::ffi::OsStr;
 use std::str::FromStr;
 use std::time::Duration;
 
-use atuin_common::record::HostId;
+use atuin_common::sqlite::{Journaling, Sqlite, SqliteBuilder};
+use atuin_domain::record::HostId;
 use eyre::{Result, eyre};
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use tokio::sync::OnceCell;
 use uuid::Uuid;
 
@@ -25,61 +26,46 @@ const KEY_HUB_SESSION: &str = "hub_session";
 const KEY_FILES_MIGRATED: &str = "files_migrated";
 
 pub struct MetaStore {
-    pool: SqlitePool,
+    sqlite: Sqlite,
     cached_host_id: OnceCell<HostId>,
 }
 
 impl MetaStore {
-    pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
+    pub async fn new(path: impl AsRef<OsStr>, timeout: Duration) -> Result<Self> {
         let path = path.as_ref();
-        let path_str = path
-            .as_os_str()
-            .to_str()
-            .ok_or_else(|| eyre!("meta database path is not valid UTF-8: {path:?}"))?;
         debug!("opening meta sqlite database at {path:?}");
 
-        let is_memory = path_str.contains(":memory:");
+        let builder = Sqlite::builder(path);
+        let ephemeral = builder.is_memory();
 
-        if !is_memory
-            && !path.exists()
-            && let Some(dir) = path.parent()
-        {
-            fs_err::create_dir_all(dir)?;
-        }
+        let store = Self::from_builder(builder, timeout).await?;
 
-        // Use DELETE journal mode instead of WAL. This is a small, infrequently-
-        // written KV store — WAL's concurrency benefits aren't needed, and DELETE
-        // mode avoids creating auxiliary -wal/-shm files that complicate
-        // permission handling.
-        let opts = SqliteConnectOptions::from_str(path_str)?
-            .journal_mode(SqliteJournalMode::Delete)
-            .optimize_on_close(true, None)
-            .create_if_missing(true);
-
-        let pool = SqlitePoolOptions::new()
-            .acquire_timeout(Duration::from_secs_f64(timeout))
-            .connect_with(opts)
-            .await?;
-
-        sqlx::migrate!("./meta-migrations").run(&pool).await?;
-
-        // Session tokens are stored in this database, so restrict permissions.
-        #[cfg(unix)]
-        if !is_memory {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-        }
-
-        let store = Self {
-            pool,
-            cached_host_id: OnceCell::const_new(),
-        };
-
-        if !is_memory {
+        if !ephemeral {
             store.migrate_files().await?;
         }
 
         Ok(store)
+    }
+
+    pub async fn in_memory(timeout: Duration) -> Result<Self> {
+        Self::from_builder(Sqlite::builder_in_memory(), timeout).await
+    }
+
+    async fn from_builder(builder: SqliteBuilder<'_>, timeout: Duration) -> Result<Self> {
+        let sqlite = builder
+            .timeout(timeout)
+            .journal(Some(Journaling::Delete))
+            .foreign_keys(false)
+            .restrict_permissions()
+            .open()
+            .await?;
+
+        sqlx::migrate!("./meta-migrations").run(sqlite.pool()).await?;
+
+        Ok(Self {
+            sqlite,
+            cached_host_id: OnceCell::const_new(),
+        })
     }
 
     // Generic key-value operations
@@ -87,7 +73,7 @@ impl MetaStore {
     pub async fn get(&self, key: &str) -> Result<Option<String>> {
         let row: Option<(String,)> = sqlx::query_as("SELECT value FROM meta WHERE key = ?1")
             .bind(key)
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.sqlite.pool())
             .await?;
 
         Ok(row.map(|r| r.0))
@@ -100,7 +86,7 @@ impl MetaStore {
         )
         .bind(key)
         .bind(value)
-        .execute(&self.pool)
+        .execute(self.sqlite.pool())
         .await?;
 
         Ok(())
@@ -109,7 +95,7 @@ impl MetaStore {
     pub async fn delete(&self, key: &str) -> Result<()> {
         sqlx::query("DELETE FROM meta WHERE key = ?1")
             .bind(key)
-            .execute(&self.pool)
+            .execute(self.sqlite.pool())
             .await?;
 
         Ok(())
@@ -127,8 +113,7 @@ impl MetaStore {
                 }
 
                 let uuid = atuin_common::utils::uuid_v7();
-                self.set(KEY_HOST_ID, uuid.as_simple().to_string().as_ref())
-                    .await?;
+                self.set(KEY_HOST_ID, uuid.as_simple().to_string().as_ref()).await?;
 
                 Ok(HostId(uuid))
             })
@@ -144,11 +129,7 @@ impl MetaStore {
     }
 
     pub async fn save_sync_time(&self) -> Result<()> {
-        self.set(
-            KEY_LAST_SYNC,
-            OffsetDateTime::now_utc().format(&Rfc3339)?.as_str(),
-        )
-        .await
+        self.set(KEY_LAST_SYNC, OffsetDateTime::now_utc().format(&Rfc3339)?.as_str()).await
     }
 
     pub async fn last_version_check(&self) -> Result<OffsetDateTime> {
@@ -159,11 +140,7 @@ impl MetaStore {
     }
 
     pub async fn save_version_check_time(&self) -> Result<()> {
-        self.set(
-            KEY_LAST_VERSION_CHECK,
-            OffsetDateTime::now_utc().format(&Rfc3339)?.as_str(),
-        )
-        .await
+        self.set(KEY_LAST_VERSION_CHECK, OffsetDateTime::now_utc().format(&Rfc3339)?.as_str()).await
     }
 
     pub async fn latest_version(&self) -> Result<Option<String>> {
@@ -295,16 +272,18 @@ impl MetaStore {
 
 #[cfg(test)]
 mod tests {
+    use rstest::*;
+
     use super::*;
 
-    async fn new_test_store() -> MetaStore {
-        MetaStore::new("sqlite::memory:", 2.0).await.unwrap()
+    #[fixture]
+    async fn store() -> MetaStore {
+        MetaStore::in_memory(Duration::from_secs(2)).await.unwrap()
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_get_set_delete() {
-        let store = new_test_store().await;
-
+    async fn test_get_set_delete(#[future(awt)] store: MetaStore) {
         assert_eq!(store.get("foo").await.unwrap(), None);
 
         store.set("foo", "bar").await.unwrap();
@@ -317,20 +296,18 @@ mod tests {
         assert_eq!(store.get("foo").await.unwrap(), None);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_host_id_generation_and_stability() {
-        let store = new_test_store().await;
-
+    async fn test_host_id_generation_and_stability(#[future(awt)] store: MetaStore) {
         let id1 = store.host_id().await.unwrap();
         let id2 = store.host_id().await.unwrap();
 
         assert_eq!(id1, id2, "host_id should be stable across calls");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_sync_time() {
-        let store = new_test_store().await;
-
+    async fn test_sync_time(#[future(awt)] store: MetaStore) {
         let t = store.last_sync().await.unwrap();
         assert_eq!(t, OffsetDateTime::UNIX_EPOCH);
 
@@ -339,10 +316,9 @@ mod tests {
         assert!(t > OffsetDateTime::UNIX_EPOCH);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_version_check_time() {
-        let store = new_test_store().await;
-
+    async fn test_version_check_time(#[future(awt)] store: MetaStore) {
         let t = store.last_version_check().await.unwrap();
         assert_eq!(t, OffsetDateTime::UNIX_EPOCH);
 
@@ -351,34 +327,33 @@ mod tests {
         assert!(t > OffsetDateTime::UNIX_EPOCH);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_session_crud() {
-        let store = new_test_store().await;
-
+    async fn test_session_crud(#[future(awt)] store: MetaStore) {
         assert!(!store.logged_in().await.unwrap());
         assert_eq!(store.session_token().await.unwrap(), None);
 
         store.save_session("tok123").await.unwrap();
         assert!(store.logged_in().await.unwrap());
-        assert_eq!(
-            store.session_token().await.unwrap(),
-            Some("tok123".to_string())
-        );
+        assert_eq!(store.session_token().await.unwrap(), Some("tok123".to_string()));
 
         store.delete_session().await.unwrap();
         assert!(!store.logged_in().await.unwrap());
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_latest_version() {
-        let store = new_test_store().await;
-
+    async fn test_latest_version(#[future(awt)] store: MetaStore) {
         assert_eq!(store.latest_version().await.unwrap(), None);
 
         store.save_latest_version("1.2.3").await.unwrap();
-        assert_eq!(
-            store.latest_version().await.unwrap(),
-            Some("1.2.3".to_string())
-        );
+        assert_eq!(store.latest_version().await.unwrap(), Some("1.2.3".to_string()));
+    }
+
+    #[tokio::test]
+    async fn memory_store_skips_file_migration() {
+        let store = MetaStore::new(":memory:", Duration::from_secs(2)).await.unwrap();
+
+        assert_eq!(store.get(KEY_FILES_MIGRATED).await.unwrap(), None);
     }
 }

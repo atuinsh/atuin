@@ -3,7 +3,7 @@
 /// Covers both client-side tools (ones the CLI executes locally) and
 /// server-side tools (ones the API executes remotely). This is the single
 /// source of truth for display text and classification.
-pub(crate) struct ToolDescriptor {
+pub struct ToolDescriptor {
     /// Canonical wire names for this tool (the names the server sends).
     pub canonical_names: &'static [&'static str],
     /// The capability string the client must advertise for this tool to be
@@ -22,7 +22,7 @@ pub(crate) struct ToolDescriptor {
 
 // ── Client-side tool descriptors ──
 
-pub(crate) const READ: &ToolDescriptor = &ToolDescriptor {
+pub const READ: &ToolDescriptor = &ToolDescriptor {
     canonical_names: &["read_file"],
     capability: Some("client_v1_read_file"),
     display_verb: "read",
@@ -31,7 +31,7 @@ pub(crate) const READ: &ToolDescriptor = &ToolDescriptor {
     is_client: true,
 };
 
-pub(crate) const EDIT: &ToolDescriptor = &ToolDescriptor {
+pub const EDIT: &ToolDescriptor = &ToolDescriptor {
     canonical_names: &["edit_file"],
     capability: Some("client_v1_edit_file"),
     display_verb: "edit",
@@ -40,7 +40,7 @@ pub(crate) const EDIT: &ToolDescriptor = &ToolDescriptor {
     is_client: true,
 };
 
-pub(crate) const WRITE: &ToolDescriptor = &ToolDescriptor {
+pub const WRITE: &ToolDescriptor = &ToolDescriptor {
     canonical_names: &["write_file"],
     capability: Some("client_v1_write_file"),
     display_verb: "write to",
@@ -49,7 +49,7 @@ pub(crate) const WRITE: &ToolDescriptor = &ToolDescriptor {
     is_client: true,
 };
 
-pub(crate) const SHELL: &ToolDescriptor = &ToolDescriptor {
+pub const SHELL: &ToolDescriptor = &ToolDescriptor {
     canonical_names: &["execute_shell_command"],
     capability: Some("client_v1_execute_shell_command"),
     display_verb: "run",
@@ -58,7 +58,7 @@ pub(crate) const SHELL: &ToolDescriptor = &ToolDescriptor {
     is_client: true,
 };
 
-pub(crate) const ATUIN_HISTORY: &ToolDescriptor = &ToolDescriptor {
+pub const ATUIN_HISTORY: &ToolDescriptor = &ToolDescriptor {
     canonical_names: &["atuin_history"],
     capability: Some("client_v1_atuin_history"),
     display_verb: "search your Atuin history for",
@@ -67,7 +67,7 @@ pub(crate) const ATUIN_HISTORY: &ToolDescriptor = &ToolDescriptor {
     is_client: true,
 };
 
-pub(crate) const ATUIN_OUTPUT: &ToolDescriptor = &ToolDescriptor {
+pub const ATUIN_OUTPUT: &ToolDescriptor = &ToolDescriptor {
     canonical_names: &["atuin_output"],
     capability: Some("client_v1_atuin_output"),
     display_verb: "view the output for command",
@@ -76,7 +76,7 @@ pub(crate) const ATUIN_OUTPUT: &ToolDescriptor = &ToolDescriptor {
     is_client: true,
 };
 
-pub(crate) const LOAD_SKILL: &ToolDescriptor = &ToolDescriptor {
+pub const LOAD_SKILL: &ToolDescriptor = &ToolDescriptor {
     canonical_names: &["load_skill"],
     capability: Some("client_v1_load_skill"),
     display_verb: "load skill",
@@ -88,7 +88,7 @@ pub(crate) const LOAD_SKILL: &ToolDescriptor = &ToolDescriptor {
 // ── Server-side tool descriptors ──
 // These appear in tool summaries but aren't client-side tools.
 
-pub(crate) const SERVER_SEARCH: &ToolDescriptor = &ToolDescriptor {
+pub const SERVER_SEARCH: &ToolDescriptor = &ToolDescriptor {
     canonical_names: &["web_search"],
     capability: None,
     display_verb: "search",
@@ -97,7 +97,7 @@ pub(crate) const SERVER_SEARCH: &ToolDescriptor = &ToolDescriptor {
     is_client: false,
 };
 
-pub(crate) const SERVER_SCRAPE: &ToolDescriptor = &ToolDescriptor {
+pub const SERVER_SCRAPE: &ToolDescriptor = &ToolDescriptor {
     canonical_names: &["web_scrape"],
     capability: None,
     display_verb: "scrape",
@@ -121,9 +121,6 @@ const ALL_DESCRIPTORS: &[&ToolDescriptor] = &[
 
 /// Look up a tool descriptor by its canonical wire name.
 /// Returns None for unknown tool names.
-pub(crate) fn by_name(name: &str) -> Option<&'static ToolDescriptor> {
-    ALL_DESCRIPTORS
-        .iter()
-        .find(|d| d.canonical_names.contains(&name))
-        .copied()
+pub fn by_name(name: &str) -> Option<&'static ToolDescriptor> {
+    ALL_DESCRIPTORS.iter().find(|d| d.canonical_names.contains(&name)).copied()
 }

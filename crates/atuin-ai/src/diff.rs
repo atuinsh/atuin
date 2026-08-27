@@ -11,13 +11,13 @@ const CONTEXT_LINES: u32 = 3;
 
 /// A structured diff preview for a file edit, ready for rendering.
 #[derive(Debug, Clone)]
-pub(crate) struct EditPreview {
+pub struct EditPreview {
     pub hunks: Vec<DiffHunk>,
 }
 
 /// A contiguous group of diff lines (context + changes).
 #[derive(Debug, Clone)]
-pub(crate) struct DiffHunk {
+pub struct DiffHunk {
     /// 1-indexed line number of the first line in this hunk (in the original file).
     pub before_start: u32,
     /// 1-indexed line number of the first line in this hunk (in the new file).
@@ -27,7 +27,7 @@ pub(crate) struct DiffHunk {
 
 /// A single line in a diff hunk.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DiffLine {
+pub enum DiffLine {
     /// Unchanged line (shown for context).
     Context(String),
     /// Line added in the new version.
@@ -48,7 +48,7 @@ impl EditPreview {
 
         let raw_hunks: Vec<_> = diff.hunks().collect();
         if raw_hunks.is_empty() {
-            return EditPreview { hunks: Vec::new() };
+            return Self { hunks: Vec::new() };
         }
 
         // Merge hunks that are within 2*CONTEXT_LINES of each other
@@ -68,12 +68,9 @@ impl EditPreview {
         merged_groups.push(current_group);
 
         // Build structured hunks from merged groups
-        let hunks = merged_groups
-            .into_iter()
-            .map(|group| build_hunk(&group, &input))
-            .collect();
+        let hunks = merged_groups.into_iter().map(|group| build_hunk(&group, &input)).collect();
 
-        EditPreview { hunks }
+        Self { hunks }
     }
 
     /// The highest line number (from either file) that will be displayed.
@@ -109,7 +106,7 @@ const WRITE_PREVIEW_LINES: usize = 10;
 /// Shows the first N lines of the written content plus a count of
 /// remaining lines if truncated.
 #[derive(Debug, Clone)]
-pub(crate) struct WritePreview {
+pub struct WritePreview {
     /// First lines of content (up to WRITE_PREVIEW_LINES).
     pub lines: Vec<String>,
     /// Total number of lines in the written file.
@@ -121,12 +118,8 @@ impl WritePreview {
     pub fn from_content(content: &str) -> Self {
         let all_lines: Vec<&str> = content.lines().collect();
         let total_lines = all_lines.len();
-        let lines = all_lines
-            .into_iter()
-            .take(WRITE_PREVIEW_LINES)
-            .map(String::from)
-            .collect();
-        WritePreview { lines, total_lines }
+        let lines = all_lines.into_iter().take(WRITE_PREVIEW_LINES).map(String::from).collect();
+        Self { lines, total_lines }
     }
 
     /// Number of lines not shown in the preview.
@@ -199,6 +192,8 @@ fn token_text(input: &InternedInput<&str>, is_before: bool, idx: u32) -> String 
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     #[test]
@@ -248,24 +243,17 @@ mod tests {
         assert!(hunk.lines.contains(&DiffLine::Removed("remove_me".into())));
     }
 
-    #[test]
-    fn distant_changes_produce_separate_hunks() {
-        // Two changes separated by more than 2*CONTEXT_LINES (6) lines
-        let old = "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n";
-        let new = "1\nX\n3\n4\n5\n6\n7\n8\n9\n10\n11\nY\n";
-        let preview = EditPreview::compute(old, new);
-
-        assert_eq!(preview.hunks.len(), 2);
-    }
-
-    #[test]
-    fn close_changes_merge_into_one_hunk() {
-        // Two changes separated by fewer than 2*CONTEXT_LINES lines
-        let old = "1\n2\n3\n4\n5\n";
-        let new = "X\n2\n3\n4\nY\n";
-        let preview = EditPreview::compute(old, new);
-
-        assert_eq!(preview.hunks.len(), 1);
+    #[rstest]
+    // Two changes separated by more than 2*CONTEXT_LINES (6) lines
+    #[case::distant_separate(
+        "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n",
+        "1\nX\n3\n4\n5\n6\n7\n8\n9\n10\n11\nY\n",
+        2
+    )]
+    // Two changes separated by fewer than 2*CONTEXT_LINES lines
+    #[case::close_merge("1\n2\n3\n4\n5\n", "X\n2\n3\n4\nY\n", 1)]
+    fn hunk_grouping(#[case] old: &str, #[case] new: &str, #[case] expected_hunks: usize) {
+        assert_eq!(EditPreview::compute(old, new).hunks.len(), expected_hunks);
     }
 
     #[test]
@@ -314,14 +302,8 @@ mod tests {
 
         assert_eq!(preview.hunks.len(), 1);
         let hunk = &preview.hunks[0];
-        assert!(
-            hunk.lines
-                .contains(&DiffLine::Removed("key1 = old1".into()))
-        );
-        assert!(
-            hunk.lines
-                .contains(&DiffLine::Removed("key2 = old2".into()))
-        );
+        assert!(hunk.lines.contains(&DiffLine::Removed("key1 = old1".into())));
+        assert!(hunk.lines.contains(&DiffLine::Removed("key2 = old2".into())));
         assert!(hunk.lines.contains(&DiffLine::Added("key1 = new1".into())));
         assert!(hunk.lines.contains(&DiffLine::Added("key2 = new2".into())));
     }

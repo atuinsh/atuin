@@ -5,19 +5,27 @@
 //! (direct SQLite). When the daemon owns session state, a gRPC-backed
 //! implementation can be swapped in without changing the TUI code.
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 use eyre::Result;
 
 use crate::event_serde;
 use crate::store::{AiSessionStore, StoredEvent, StoredSession};
 use crate::tui::ConversationEvent;
+use crate::usage::UsageSnapshot;
 
 // ---------------------------------------------------------------------------
 // Trait
 // ---------------------------------------------------------------------------
 
+pub struct CachedUsageSnapshot {
+    pub snapshot: UsageSnapshot,
+    pub written_at: i64,
+}
+
 #[async_trait]
-pub(crate) trait SessionService: Send + Sync {
+pub trait SessionService: Send + Sync {
     async fn create_session(
         &self,
         id: &str,
@@ -54,19 +62,30 @@ pub(crate) trait SessionService: Send + Sync {
 
     async fn get_metadata(&self, session_id: &str, key: &str) -> Result<Option<String>>;
     async fn set_metadata(&self, session_id: &str, key: &str, value: &str) -> Result<()>;
+
+    /// Read the cached usage snapshot (JSON, written-at unix timestamp) for
+    /// a user key. Not session-scoped: usage is per hub account.
+    async fn get_cached_usage(&self, user_key: &str) -> Result<Option<CachedUsageSnapshot>>;
+    async fn set_cached_usage(&self, user_key: &str, snapshot: &UsageSnapshot) -> Result<()>;
 }
 
 // ---------------------------------------------------------------------------
 // Local implementation (direct SQLite)
 // ---------------------------------------------------------------------------
 
-pub(crate) struct LocalSessionService {
+pub struct LocalSessionService {
     store: AiSessionStore,
 }
 
 impl LocalSessionService {
-    pub async fn open(path: impl AsRef<std::path::Path>, timeout: f64) -> Result<Self> {
+    pub async fn open(path: impl AsRef<std::ffi::OsStr>, timeout: Duration) -> Result<Self> {
         let store = AiSessionStore::new(path, timeout).await?;
+        Ok(Self { store })
+    }
+
+    #[cfg(test)]
+    pub async fn in_memory(timeout: Duration) -> Result<Self> {
+        let store = AiSessionStore::in_memory(timeout).await?;
         Ok(Self { store })
     }
 }
@@ -88,9 +107,7 @@ impl SessionService for LocalSessionService {
         git_root: Option<&str>,
         max_age_secs: i64,
     ) -> Result<Option<StoredSession>> {
-        self.store
-            .find_resumable_session(directory, git_root, max_age_secs)
-            .await
+        self.store.find_resumable_session(directory, git_root, max_age_secs).await
     }
 
     async fn load_events(&self, session_id: &str) -> Result<Vec<StoredEvent>> {
@@ -107,14 +124,7 @@ impl SessionService for LocalSessionService {
         event_data: &str,
     ) -> Result<()> {
         self.store
-            .append_event(
-                session_id,
-                event_id,
-                parent_id,
-                invocation_id,
-                event_type,
-                event_data,
-            )
+            .append_event(session_id, event_id, parent_id, invocation_id, event_type, event_data)
             .await
     }
 
@@ -123,9 +133,7 @@ impl SessionService for LocalSessionService {
         session_id: &str,
         server_session_id: &str,
     ) -> Result<()> {
-        self.store
-            .update_server_session_id(session_id, server_session_id)
-            .await
+        self.store.update_server_session_id(session_id, server_session_id).await
     }
 
     async fn archive(&self, session_id: &str) -> Result<()> {
@@ -139,6 +147,14 @@ impl SessionService for LocalSessionService {
     async fn set_metadata(&self, session_id: &str, key: &str, value: &str) -> Result<()> {
         self.store.set_metadata(session_id, key, value).await
     }
+
+    async fn get_cached_usage(&self, user_key: &str) -> Result<Option<CachedUsageSnapshot>> {
+        self.store.get_usage(user_key).await
+    }
+
+    async fn set_cached_usage(&self, user_key: &str, snapshot: &UsageSnapshot) -> Result<()> {
+        self.store.set_usage(user_key, snapshot).await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -149,7 +165,7 @@ impl SessionService for LocalSessionService {
 ///
 /// Owns the current session identity, tracks what has been persisted, and
 /// handles serialization between `ConversationEvent` and the storage format.
-pub(crate) struct SessionManager {
+pub struct SessionManager {
     service: Box<dyn SessionService>,
     session_id: String,
     invocation_id: String,
@@ -196,13 +212,7 @@ impl SessionManager {
     pub async fn resume(
         service: Box<dyn SessionService>,
         stored: &StoredSession,
-    ) -> Result<(
-        Self,
-        Vec<ConversationEvent>,
-        Option<String>,
-        Option<i64>,
-        String,
-    )> {
+    ) -> Result<(Self, Vec<ConversationEvent>, Option<String>, Option<i64>, String)> {
         let invocation_id = atuin_common::utils::uuid_v7().to_string();
         let stored_events = service.load_events(&stored.id).await?;
 
@@ -210,10 +220,7 @@ impl SessionManager {
         let mut last_event_id = None;
         let mut last_event_ts = None;
         for se in &stored_events {
-            events.push(event_serde::deserialize_event(
-                &se.event_type,
-                &se.event_data,
-            )?);
+            events.push(event_serde::deserialize_event(&se.event_type, &se.event_data)?);
             last_event_id = Some(se.id.clone());
             last_event_ts = Some(se.created_at);
         }
@@ -229,13 +236,7 @@ impl SessionManager {
             persisted_to_db: true,
         };
 
-        Ok((
-            manager,
-            events,
-            stored.server_session_id.clone(),
-            last_event_ts,
-            invocation_id,
-        ))
+        Ok((manager, events, stored.server_session_id.clone(), last_event_ts, invocation_id))
     }
 
     /// Ensure the session row exists in the database.
@@ -283,9 +284,7 @@ impl SessionManager {
     /// Persist the server session ID if it has changed.
     pub async fn persist_server_session_id(&mut self, server_session_id: &str) -> Result<()> {
         self.ensure_persisted().await?;
-        self.service
-            .update_server_session_id(&self.session_id, server_session_id)
-            .await
+        self.service.update_server_session_id(&self.session_id, server_session_id).await
     }
 
     /// Archive the current session (for `/new` command).
@@ -333,26 +332,31 @@ impl SessionManager {
     /// Write a metadata value for the current session.
     pub async fn set_metadata(&mut self, key: &str, value: &str) -> Result<()> {
         self.ensure_persisted().await?;
-        self.service
-            .set_metadata(&self.session_id, key, value)
-            .await
+        self.service.set_metadata(&self.session_id, key, value).await
+    }
+
+    /// Write the usage cache for a user key. Not tied to the current
+    /// session, so no session row is created.
+    pub async fn set_cached_usage(&self, user_key: &str, snapshot: &UsageSnapshot) -> Result<()> {
+        self.service.set_cached_usage(user_key, snapshot).await
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use rstest::*;
+
     use super::*;
 
-    async fn test_service() -> Box<dyn SessionService> {
-        let svc = LocalSessionService::open("sqlite::memory:", 2.0)
-            .await
-            .unwrap();
-        Box::new(svc)
+    #[fixture]
+    async fn service() -> Box<dyn SessionService> {
+        Box::new(LocalSessionService::in_memory(Duration::from_secs(2)).await.unwrap())
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_create_new_and_persist() {
-        let service = test_service().await;
+    async fn test_create_new_and_persist(#[future] service: Box<dyn SessionService>) {
+        let service = service.await;
         let mut mgr = SessionManager::create_new(service, Some("/tmp"), None);
 
         let events = vec![
@@ -370,17 +374,14 @@ mod tests {
         mgr.persist_events(&events).await.unwrap();
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_create_and_resume() {
+    async fn test_create_and_resume(#[future] service: Box<dyn SessionService>) {
         // Create a session and persist some events
-        let svc = LocalSessionService::open("sqlite::memory:", 2.0)
-            .await
-            .unwrap();
+        let svc = service.await;
 
         let session_id = atuin_common::utils::uuid_v7().to_string();
-        svc.create_session(&session_id, Some("/project"), Some("/project"))
-            .await
-            .unwrap();
+        svc.create_session(&session_id, Some("/project"), Some("/project")).await.unwrap();
 
         let events = vec![
             ConversationEvent::UserMessage {
@@ -408,9 +409,7 @@ mod tests {
             parent = Some(eid);
         }
 
-        svc.update_server_session_id(&session_id, "srv-abc")
-            .await
-            .unwrap();
+        svc.update_server_session_id(&session_id, "srv-abc").await.unwrap();
 
         // Now find and resume the session with a fresh service connection
         let stored = svc
@@ -420,9 +419,7 @@ mod tests {
             .expect("should find session");
 
         let (mut mgr, loaded_events, server_sid, last_ts, _invocation_id) =
-            SessionManager::resume(Box::new(svc), &stored)
-                .await
-                .unwrap();
+            SessionManager::resume(svc, &stored).await.unwrap();
 
         assert_eq!(loaded_events.len(), 3);
         assert_eq!(server_sid.as_deref(), Some("srv-abc"));
@@ -433,9 +430,10 @@ mod tests {
         mgr.persist_events(&loaded_events).await.unwrap();
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_incremental_persist() {
-        let service = test_service().await;
+    async fn test_incremental_persist(#[future] service: Box<dyn SessionService>) {
+        let service = service.await;
         let mut mgr = SessionManager::create_new(service, Some("/tmp"), None);
 
         let mut events = vec![ConversationEvent::UserMessage {
@@ -456,34 +454,33 @@ mod tests {
         // the service is moved, but the lack of errors confirms correctness)
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_archive() {
-        let svc = LocalSessionService::open("sqlite::memory:", 2.0)
-            .await
-            .unwrap();
+    async fn test_archive(#[future] service: Box<dyn SessionService>) {
+        let svc = service.await;
 
-        let mgr = SessionManager::create_new(Box::new(svc), Some("/tmp"), None);
+        let mgr = SessionManager::create_new(svc, Some("/tmp"), None);
 
         mgr.archive().await.unwrap();
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_persist_server_session_id() {
-        let service = test_service().await;
+    async fn test_persist_server_session_id(#[future] service: Box<dyn SessionService>) {
+        let service = service.await;
         let mut mgr = SessionManager::create_new(service, Some("/tmp"), None);
 
         mgr.persist_server_session_id("srv-123").await.unwrap();
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_parent_chain_integrity() {
+    async fn test_parent_chain_integrity(#[future] service: Box<dyn SessionService>) {
         // Verify that persisted events form a proper parent chain
-        let svc = LocalSessionService::open("sqlite::memory:", 2.0)
-            .await
-            .unwrap();
+        let svc = service.await;
 
         let session_id = {
-            let mut mgr = SessionManager::create_new(Box::new(svc), Some("/tmp"), None);
+            let mut mgr = SessionManager::create_new(svc, Some("/tmp"), None);
 
             let events = vec![
                 ConversationEvent::UserMessage {

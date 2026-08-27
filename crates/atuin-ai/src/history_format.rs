@@ -1,11 +1,8 @@
 use atuin_client::history::History;
+use atuin_common::time::{DurationExt, OffsetDateTimeExt};
 use time::UtcOffset;
 
-pub(crate) fn current_local_offset() -> UtcOffset {
-    UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC)
-}
-
-pub(crate) fn format_last_command(history: &History, local_offset: UtcOffset) -> String {
+pub fn format_last_command(history: &History, local_offset: UtcOffset) -> String {
     format!(
         "History ID: {} - `{}`\n{}",
         history.id,
@@ -14,7 +11,7 @@ pub(crate) fn format_last_command(history: &History, local_offset: UtcOffset) ->
     )
 }
 
-pub(crate) fn format_history_search_result(
+pub fn format_history_search_result(
     ordinal: usize,
     history: &History,
     local_offset: UtcOffset,
@@ -30,25 +27,33 @@ pub(crate) fn format_history_search_result(
 
 fn format_history_metadata(history: &History, local_offset: UtcOffset) -> String {
     format!(
-        "[{}] (in `{}`, exit {}){}",
+        "[{}] (in `{}`, exit {}){}{}",
         format_timestamp(history, local_offset),
         history.cwd,
         history.exit,
-        format_duration(history.duration)
+        format_duration(history.duration),
+        format_attribution(history)
     )
 }
 
+/// Attribution for agent-run commands: which agent, and its stated intent.
+/// A stated intent marks a command as agent-run even when the entry is not
+/// recognised as one, so its author is still named. User-run commands (no
+/// intent, not an agent) get nothing.
+fn format_attribution(history: &History) -> String {
+    match (history.is_agent(), &history.intent) {
+        (true, Some(intent)) => format!(" — {}: {intent}", history.author),
+        (true, None) => format!(" — {}", history.author),
+        (false, Some(intent)) if !history.author.is_empty() => {
+            format!(" — {}: {intent}", history.author)
+        }
+        (false, Some(intent)) => format!(" — intent: {intent}"),
+        (false, None) => String::new(),
+    }
+}
+
 fn format_timestamp(history: &History, local_offset: UtcOffset) -> String {
-    let ts = history.timestamp.to_offset(local_offset);
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-        ts.year(),
-        ts.month() as u8,
-        ts.day(),
-        ts.hour(),
-        ts.minute(),
-        ts.second(),
-    )
+    history.timestamp.to_offset(local_offset).display().ymd_hms().to_string()
 }
 
 fn format_duration(nanos: i64) -> String {
@@ -56,32 +61,14 @@ fn format_duration(nanos: i64) -> String {
         return String::new();
     }
 
-    let total_secs = nanos / 1_000_000_000;
-    let millis = (nanos % 1_000_000_000) / 1_000_000;
-
-    if total_secs >= 3600 {
-        let hours = total_secs / 3600;
-        let mins = (total_secs % 3600) / 60;
-        let secs = total_secs % 60;
-        format!(", {hours}h{mins}m{secs}s")
-    } else if total_secs >= 60 {
-        let mins = total_secs / 60;
-        let secs = total_secs % 60;
-        format!(", {mins}m{secs}s")
-    } else if total_secs > 0 {
-        if millis > 0 {
-            format!(", {total_secs}.{millis:03}s")
-        } else {
-            format!(", {total_secs}s")
-        }
-    } else {
-        format!(", {millis}ms")
-    }
+    format!(", {}", std::time::Duration::saturating_from_nanos_i64(nanos).display().stopwatch())
 }
 
 #[cfg(test)]
 mod tests {
     use atuin_client::history::{History, HistoryId};
+    use atuin_domain::record::CmdOrigin;
+    use rstest::rstest;
     use time::{OffsetDateTime, UtcOffset};
 
     use super::*;
@@ -95,10 +82,12 @@ mod tests {
             command: "cargo test".to_string(),
             cwd: "/repo".to_string(),
             session: String::new(),
-            hostname: String::new(),
+            cmd_origin: CmdOrigin::default(),
             author: String::new(),
             intent: None,
             deleted_at: None,
+            shell: Some("zsh".into()),
+            author_kind: None,
         }
     }
 
@@ -106,7 +95,8 @@ mod tests {
     fn formats_last_command() {
         assert_eq!(
             format_last_command(&history(1_234_000_000), UtcOffset::UTC),
-            "History ID: 018f011c-9a0a-7000-8000-000000000001 - `cargo test`\n[1970-01-01 00:00:00] (in `/repo`, exit 2), 1.234s"
+            "History ID: 018f011c-9a0a-7000-8000-000000000001 - `cargo test`\n[1970-01-01 \
+             00:00:00] (in `/repo`, exit 2), 1.234s"
         );
     }
 
@@ -114,7 +104,29 @@ mod tests {
     fn formats_history_search_result() {
         assert_eq!(
             format_history_search_result(3, &history(0), UtcOffset::UTC),
-            "## #3. (History ID: 018f011c-9a0a-7000-8000-000000000001):\n`cargo test`\n[1970-01-01 00:00:00] (in `/repo`, exit 2)\n"
+            "## #3. (History ID: 018f011c-9a0a-7000-8000-000000000001):\n`cargo \
+             test`\n[1970-01-01 00:00:00] (in `/repo`, exit 2)\n"
         );
+    }
+
+    #[rstest]
+    #[case::known_with_intent(
+        "claude-code",
+        Some("Run the test suite"),
+        " — claude-code: Run the test suite"
+    )]
+    #[case::known_no_intent("codex", None, " — codex")]
+    #[case::unknown_author_with_intent("deploy-bot", Some("ship it"), " — deploy-bot: ship it")]
+    #[case::empty_author_with_intent("", Some("mystery"), " — intent: mystery")]
+    #[case::user_no_intent("ellie", None, "")]
+    fn attribution_matrix(
+        #[case] author: &str,
+        #[case] intent: Option<&str>,
+        #[case] expected: &str,
+    ) {
+        let mut h = history(0);
+        h.author = author.to_string();
+        h.intent = intent.map(String::from);
+        assert_eq!(format_attribution(&h), expected);
     }
 }

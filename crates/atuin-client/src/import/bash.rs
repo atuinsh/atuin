@@ -1,4 +1,5 @@
-use std::{path::PathBuf, str};
+use std::path::PathBuf;
+use std::str;
 
 use async_trait::async_trait;
 use directories::UserDirs;
@@ -53,7 +54,7 @@ impl Importer for Bash {
                 _ => None,
             })
             // if no known timestamps, use now as base
-            .unwrap_or((lines.len(), OffsetDateTime::now_utc()));
+            .unwrap_or_else(|| (lines.len(), OffsetDateTime::now_utc()));
 
         // if no timestamp is recorded, then use this increment to set an arbitrary timestamp
         // to preserve ordering
@@ -64,26 +65,32 @@ impl Importer for Bash {
 
         // make sure there is a minimum amount of time before the first known timestamp
         // to fit all commands, given the default increment
-        let mut next_timestamp =
-            first_timestamp - timestamp_increment * commands_before_first_timestamp as i32;
+        let backfill = timestamp_increment
+            * u32::try_from(commands_before_first_timestamp).unwrap_or(u32::MAX);
+        // a timestamp near the start of the representable range would underflow
+        let mut next_timestamp = first_timestamp.checked_sub(backfill).unwrap_or(first_timestamp);
 
-        for line in lines.into_iter() {
+        for line in lines {
             match line {
                 LineType::NotUtf8 => unreachable!(), // already filtered
                 LineType::Empty => {}                // do nothing
                 LineType::Timestamp(t) => {
                     if t < next_timestamp {
                         warn!(
-                            "Time reversal detected in Bash history! Commands may be ordered incorrectly."
+                            "Time reversal detected in Bash history! Commands may be ordered \
+                             incorrectly."
                         );
                     }
                     next_timestamp = t;
                 }
                 LineType::Command(c) => {
-                    let imported = History::import().timestamp(next_timestamp).command(c);
+                    let imported =
+                        History::import().shell("bash").timestamp(next_timestamp).command(c);
 
                     h.push(imported.build().into()).await?;
-                    next_timestamp += timestamp_increment;
+                    // a timestamp near the end of the representable range would overflow
+                    next_timestamp =
+                        next_timestamp.checked_add(timestamp_increment).unwrap_or(next_timestamp);
                 }
             }
         }
@@ -129,37 +136,46 @@ mod test {
     use std::cmp::Ordering;
 
     use itertools::{Itertools, assert_equal};
-
-    use crate::import::{Importer, tests::TestLoader};
+    use rstest::rstest;
 
     use super::Bash;
+    use crate::import::Importer;
+    use crate::import::tests::TestLoader;
 
+    #[rstest]
+    #[case::no_timestamps(
+        "cargo install atuin\ncargo update\ncargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷\n"
+            .as_bytes()
+            .to_owned(),
+        3,
+        vec![
+            "cargo install atuin",
+            "cargo update",
+            "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷",
+        ]
+    )]
+    #[case::partial_timestamps(
+        b"git reset\n#1672919006\ngit clean -dxf\ncd ../\n".to_vec(),
+        3,
+        vec!["git reset", "git clean -dxf", "cd ../"]
+    )]
     #[tokio::test]
-    async fn parse_no_timestamps() {
-        let bytes = r"cargo install atuin
-cargo update
-cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷
-"
-        .as_bytes()
-        .to_owned();
-
+    async fn parse_strictly_sorted(
+        #[case] bytes: Vec<u8>,
+        #[case] expected_entries: usize,
+        #[case] expected_commands: Vec<&str>,
+    ) {
         let mut bash = Bash { bytes };
-        assert_eq!(bash.entries().await.unwrap(), 3);
+        assert_eq!(bash.entries().await.unwrap(), expected_entries);
 
         let mut loader = TestLoader::default();
         bash.load(&mut loader).await.unwrap();
 
-        assert_equal(
-            loader.buf.iter().map(|h| h.command.as_str()),
-            [
-                "cargo install atuin",
-                "cargo update",
-                "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷",
-            ],
-        );
-        assert!(is_strictly_sorted(loader.buf.iter().map(|h| h.timestamp)))
+        assert_equal(loader.buf.iter().map(|h| h.command.as_str()), expected_commands);
+        assert!(is_strictly_sorted(loader.buf.iter().map(|h| h.timestamp)));
     }
 
+    #[rstest]
     #[tokio::test]
     async fn parse_with_timestamps() {
         let bytes = b"#1672918999
@@ -177,36 +193,14 @@ cd ../
         let mut loader = TestLoader::default();
         bash.load(&mut loader).await.unwrap();
 
-        assert_equal(
-            loader.buf.iter().map(|h| h.command.as_str()),
-            ["git reset", "git clean -dxf", "cd ../"],
-        );
-        assert_equal(
-            loader.buf.iter().map(|h| h.timestamp.unix_timestamp()),
-            [1672918999, 1672919006, 1672919020],
-        )
-    }
-
-    #[tokio::test]
-    async fn parse_with_partial_timestamps() {
-        let bytes = b"git reset
-#1672919006
-git clean -dxf
-cd ../
-"
-        .to_vec();
-
-        let mut bash = Bash { bytes };
-        assert_eq!(bash.entries().await.unwrap(), 3);
-
-        let mut loader = TestLoader::default();
-        bash.load(&mut loader).await.unwrap();
-
-        assert_equal(
-            loader.buf.iter().map(|h| h.command.as_str()),
-            ["git reset", "git clean -dxf", "cd ../"],
-        );
-        assert!(is_strictly_sorted(loader.buf.iter().map(|h| h.timestamp)))
+        assert_equal(loader.buf.iter().map(|h| h.command.as_str()), [
+            "git reset",
+            "git clean -dxf",
+            "cd ../",
+        ]);
+        assert_equal(loader.buf.iter().map(|h| h.timestamp.unix_timestamp()), [
+            1672918999, 1672919006, 1672919020,
+        ])
     }
 
     fn is_strictly_sorted<T>(iter: impl IntoIterator<Item = T>) -> bool
@@ -216,5 +210,54 @@ cd ../
         iter.into_iter()
             .tuple_windows()
             .all(|(a, b)| matches!(a.partial_cmp(&b), Some(Ordering::Less)))
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn timestamp_near_range_start_does_not_panic_on_backfill() {
+        // first timestamp is near the minimum representable instant, preceded by an
+        // untimestamped command; backfilling before it must not underflow
+        let bytes = b"cargo install atuin
+#-377705116800
+cargo update
+"
+        .to_vec();
+
+        let mut bash = Bash { bytes };
+        assert_eq!(bash.entries().await.unwrap(), 2);
+
+        let mut loader = TestLoader::default();
+        bash.load(&mut loader).await.unwrap();
+
+        assert_equal(loader.buf.iter().map(|h| h.command.as_str()), [
+            "cargo install atuin",
+            "cargo update",
+        ]);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn timestamp_near_range_end_does_not_panic_on_increment() {
+        // first timestamp is the maximum representable instant (253402300799 is the
+        // last second `OffsetDateTime` can represent, i.e. 9999-12-31 23:59:59 UTC).
+        // 1000 untimestamped commands walk the 1ms increment past .999 and off the
+        // end of the representable range.
+        let commands: Vec<String> = (0..1_000).map(|i| format!("cmd-{i}")).collect();
+        let bytes = format!("#253402300799\n{}\n", commands.join("\n")).into_bytes();
+
+        let mut bash = Bash { bytes };
+        assert_eq!(bash.entries().await.unwrap(), commands.len());
+
+        let mut loader = TestLoader::default();
+        bash.load(&mut loader).await.unwrap();
+
+        assert_equal(
+            loader.buf.iter().map(|h| h.command.as_str()),
+            commands.iter().map(String::as_str),
+        );
+
+        // the increment saturates at the maximum representable instant rather than
+        // wrapping or resetting to the epoch
+        assert_eq!(loader.buf.last().unwrap().timestamp.unix_timestamp(), 253_402_300_799);
     }
 }

@@ -1,6 +1,16 @@
 syntax = "proto3";
 package history;
 
+// Whether a human or an agent ran a command. Unspecified means the caller did
+// not say, and the author name is all the receiver has to go on. Unspecified is
+// also what keeps this backwards compatible: it is proto3's zero value, so a
+// peer from before this field existed reads and writes it implicitly.
+enum AuthorKind {
+  AUTHOR_KIND_UNSPECIFIED = 0;
+  AUTHOR_KIND_USER = 1;
+  AUTHOR_KIND_AGENT = 2;
+}
+
 message StartHistoryRequest {
   // If people are still using my software in ~530 years, they can figure out a u128 migration
   uint64 timestamp = 1; // nanosecond unix epoch
@@ -10,12 +20,19 @@ message StartHistoryRequest {
   string hostname = 5;
   string author = 6;
   string intent = 7;
+  string shell = 8;
+  AuthorKind author_kind = 9;
 }
 
 message EndHistoryRequest {
   string id = 1;
   int64 exit = 2;
   uint64 duration = 3;
+}
+
+// Cancel an in-progress history entry without adding it to the database.
+message CancelHistoryRequest {
+  string id = 1;
 }
 
 message StartHistoryReply {
@@ -29,6 +46,11 @@ message EndHistoryReply {
   uint64 idx = 2;
   string version = 3;
   uint32 protocol = 4;
+}
+
+message CancelHistoryReply {
+  string version = 1;
+  uint32 protocol = 2;
 }
 
 message StatusRequest {}
@@ -65,6 +87,8 @@ message HistoryEntry {
   string intent = 8;
   int64 exit = 9;
   int64 duration = 10;
+  string shell = 11;
+  AuthorKind author_kind = 12;
 }
 
 message TailHistoryReply {
@@ -75,6 +99,7 @@ message TailHistoryReply {
 service History {
   rpc StartHistory(StartHistoryRequest) returns (StartHistoryReply);
   rpc EndHistory(EndHistoryRequest) returns (EndHistoryReply);
+  rpc CancelHistory(CancelHistoryRequest) returns (CancelHistoryReply);
   rpc TailHistory(TailHistoryRequest) returns (stream TailHistoryReply);
   rpc Status(StatusRequest) returns (StatusReply);
   rpc Shutdown(ShutdownRequest) returns (ShutdownReply);

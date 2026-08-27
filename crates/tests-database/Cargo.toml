@@ -11,6 +11,7 @@ repository = { workspace = true }
 
 [dependencies]
 atuin-common = { workspace = true }
+atuin-domain = { workspace = true }
 atuin-server-database = { workspace = true }
 atuin-server-postgres = { workspace = true }
 atuin-server-sqlite = { workspace = true }
@@ -21,7 +22,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 time = { workspace = true }
 serde = { workspace = true }
-sqlx = { workspace = true, features = ["sqlite", "regexp", "mysql"] }
+sqlx = { workspace = true, features = ["sqlite", "regexp", "postgres", "mysql", "tls-native-tls"] }
 async-trait = { workspace = true }
 uuid = { workspace = true }
 metrics = "0.24"
@@ -32,3 +33,9 @@ snowflake_uid = { version = "0.1.1" }
 
 regex.workspace = true
 url = "2.5.8"
+
+[dev-dependencies]
+rstest = { workspace = true }
+
+[lints]
+workspace = true

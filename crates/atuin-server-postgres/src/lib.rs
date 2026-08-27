@@ -1,20 +1,16 @@
 use std::collections::HashMap;
-use std::ops::Range;
-
-use rand::Rng;
 
 use async_trait::async_trait;
-use atuin_common::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
-use atuin_server_database::models::{History, NewHistory, NewSession, NewUser, Session, User};
-use atuin_server_database::{Database, DbError, DbResult, DbSettings, into_utc};
-use futures_util::TryStreamExt;
-use sqlx::Row;
+use atuin_domain::record::{
+    EncryptedData, HostId, Record, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
+};
+use atuin_server_database::models::{NewSession, NewUser, Session, User};
+use atuin_server_database::{Database, DbError, DbResult, DbSettings};
+use rand::Rng;
 use sqlx::postgres::PgPoolOptions;
-
-use time::OffsetDateTime;
 use tracing::instrument;
 use uuid::Uuid;
-use wrappers::{DbHistory, DbRecord, DbSession, DbUser};
+use wrappers::DbRecord;
 
 mod wrappers;
 
@@ -38,25 +34,22 @@ impl Postgres {
 #[async_trait]
 impl Database for Postgres {
     async fn new(settings: &DbSettings) -> DbResult<Self> {
-        let pool = PgPoolOptions::new()
-            .max_connections(100)
-            .connect(settings.db_uri.as_str())
-            .await?;
+        let pool =
+            PgPoolOptions::new().max_connections(100).connect(settings.db_uri.as_str()).await?;
 
         // Call server_version_num to get the DB server's major version number
         // The call returns None for servers older than 8.x.
-        let pg_major_version: u32 =
-            pool.acquire()
-                .await?
-                .server_version_num()
-                .ok_or(DbError::Other(eyre::Report::msg(
-                    "could not get PostgreSQL version",
-                )))?
-                / 10000;
+        let pg_major_version: u32 = pool
+            .acquire()
+            .await?
+            .server_version_num()
+            .ok_or(DbError::Other(eyre::Report::msg("could not get PostgreSQL version")))?
+            / 10000;
 
         if pg_major_version < MIN_PG_VERSION {
             return Err(DbError::Other(eyre::Report::msg(format!(
-                "unsupported PostgreSQL version {pg_major_version}, minimum required is {MIN_PG_VERSION}"
+                "unsupported PostgreSQL version {pg_major_version}, minimum required is \
+                 {MIN_PG_VERSION}"
             ))));
         }
 
@@ -68,24 +61,19 @@ impl Database for Postgres {
         // Create read replica pool if configured
         let read_pool = if let Some(read_db_uri) = &settings.read_db_uri {
             tracing::info!("Connecting to read replica database");
-            let read_pool = PgPoolOptions::new()
-                .max_connections(100)
-                .connect(read_db_uri.as_str())
-                .await?;
+            let read_pool =
+                PgPoolOptions::new().max_connections(100).connect(read_db_uri.as_str()).await?;
 
             // Verify the read replica is also a supported PostgreSQL version
-            let read_pg_major_version: u32 = read_pool
-                .acquire()
-                .await?
-                .server_version_num()
-                .ok_or(DbError::Other(eyre::Report::msg(
-                    "could not get PostgreSQL version from read replica",
-                )))?
-                / 10000;
+            let read_pg_major_version: u32 =
+                read_pool.acquire().await?.server_version_num().ok_or(DbError::Other(
+                    eyre::Report::msg("could not get PostgreSQL version from read replica"),
+                ))? / 10000;
 
             if read_pg_major_version < MIN_PG_VERSION {
                 return Err(DbError::Other(eyre::Report::msg(format!(
-                    "unsupported PostgreSQL version {read_pg_major_version} on read replica, minimum required is {MIN_PG_VERSION}"
+                    "unsupported PostgreSQL version {read_pg_major_version} on read replica, \
+                     minimum required is {MIN_PG_VERSION}"
                 ))));
             }
 
@@ -104,7 +92,6 @@ impl Database for Postgres {
             .fetch_one(self.read_pool())
             .await
             .map_err(Into::into)
-            .map(|DbSession(session)| session)
     }
 
     #[instrument(skip_all)]
@@ -114,7 +101,6 @@ impl Database for Postgres {
             .fetch_one(self.read_pool())
             .await
             .map_err(Into::into)
-            .map(|DbUser(user)| user)
     }
 
     #[instrument(skip_all)]
@@ -129,37 +115,6 @@ impl Database for Postgres {
         .fetch_one(self.read_pool())
         .await
         .map_err(Into::into)
-        .map(|DbUser(user)| user)
-    }
-
-    #[instrument(skip_all)]
-    async fn count_history(&self, user: &User) -> DbResult<i64> {
-        // The cache is new, and the user might not yet have a cache value.
-        // They will have one as soon as they post up some new history, but handle that
-        // edge case.
-
-        let res: (i64,) = sqlx::query_as(
-            "select count(1) from history
-            where user_id = $1",
-        )
-        .bind(user.id)
-        .fetch_one(self.read_pool())
-        .await?;
-
-        Ok(res.0)
-    }
-
-    #[instrument(skip_all)]
-    async fn count_history_cached(&self, user: &User) -> DbResult<i64> {
-        let res: (i32,) = sqlx::query_as(
-            "select total from total_history_count_user
-            where user_id = $1",
-        )
-        .bind(user.id)
-        .fetch_one(self.read_pool())
-        .await?;
-
-        Ok(res.0 as i64)
     }
 
     async fn delete_store(&self, user: &User) -> DbResult<()> {
@@ -186,128 +141,6 @@ impl Database for Postgres {
         Ok(())
     }
 
-    async fn delete_history(&self, user: &User, id: String) -> DbResult<()> {
-        sqlx::query(
-            "update history
-            set deleted_at = $3
-            where user_id = $1
-            and client_id = $2
-            and deleted_at is null", // don't just keep setting it
-        )
-        .bind(user.id)
-        .bind(id)
-        .bind(OffsetDateTime::now_utc())
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    #[instrument(skip_all)]
-    async fn deleted_history(&self, user: &User) -> DbResult<Vec<String>> {
-        // The cache is new, and the user might not yet have a cache value.
-        // They will have one as soon as they post up some new history, but handle that
-        // edge case.
-
-        let res = sqlx::query(
-            "select client_id from history
-            where user_id = $1
-            and deleted_at is not null",
-        )
-        .bind(user.id)
-        .fetch_all(self.read_pool())
-        .await?;
-
-        let res = res
-            .iter()
-            .map(|row| row.get::<String, _>("client_id"))
-            .collect();
-
-        Ok(res)
-    }
-
-    #[instrument(skip_all)]
-    async fn count_history_range(
-        &self,
-        user: &User,
-        range: Range<OffsetDateTime>,
-    ) -> DbResult<i64> {
-        let res: (i64,) = sqlx::query_as(
-            "select count(1) from history
-            where user_id = $1
-            and timestamp >= $2::date
-            and timestamp < $3::date",
-        )
-        .bind(user.id)
-        .bind(into_utc(range.start))
-        .bind(into_utc(range.end))
-        .fetch_one(self.read_pool())
-        .await?;
-
-        Ok(res.0)
-    }
-
-    #[instrument(skip_all)]
-    async fn list_history(
-        &self,
-        user: &User,
-        created_after: OffsetDateTime,
-        since: OffsetDateTime,
-        host: &str,
-        page_size: i64,
-    ) -> DbResult<Vec<History>> {
-        let res = sqlx::query_as(
-            "select id, client_id, user_id, hostname, timestamp, data, created_at from history
-            where user_id = $1
-            and hostname != $2
-            and created_at >= $3
-            and timestamp >= $4
-            order by timestamp asc
-            limit $5",
-        )
-        .bind(user.id)
-        .bind(host)
-        .bind(into_utc(created_after))
-        .bind(into_utc(since))
-        .bind(page_size)
-        .fetch(self.read_pool())
-        .map_ok(|DbHistory(h)| h)
-        .try_collect()
-        .await?;
-
-        Ok(res)
-    }
-
-    #[instrument(skip_all)]
-    async fn add_history(&self, history: &[NewHistory]) -> DbResult<()> {
-        let mut tx = self.pool.begin().await?;
-
-        for i in history {
-            let client_id: &str = &i.client_id;
-            let hostname: &str = &i.hostname;
-            let data: &str = &i.data;
-
-            sqlx::query(
-                "insert into history
-                    (client_id, user_id, hostname, timestamp, data) 
-                values ($1, $2, $3, $4, $5)
-                on conflict do nothing
-                ",
-            )
-            .bind(client_id)
-            .bind(i.user_id)
-            .bind(hostname)
-            .bind(i.timestamp)
-            .bind(data)
-            .execute(&mut *tx)
-            .await?;
-        }
-
-        tx.commit().await?;
-
-        Ok(())
-    }
-
     #[instrument(skip_all)]
     async fn delete_user(&self, u: &User) -> DbResult<()> {
         sqlx::query("delete from sessions where user_id = $1")
@@ -320,20 +153,14 @@ impl Database for Postgres {
             .execute(&self.pool)
             .await?;
 
-        sqlx::query("delete from store where user_id = $1")
-            .bind(u.id)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query("delete from store where user_id = $1").bind(u.id).execute(&self.pool).await?;
 
         sqlx::query("delete from total_history_count_user where user_id = $1")
             .bind(u.id)
             .execute(&self.pool)
             .await?;
 
-        sqlx::query("delete from users where id = $1")
-            .bind(u.id)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query("delete from users where id = $1").bind(u.id).execute(&self.pool).await?;
 
         Ok(())
     }
@@ -398,22 +225,6 @@ impl Database for Postgres {
             .fetch_one(self.read_pool())
             .await
             .map_err(Into::into)
-            .map(|DbSession(session)| session)
-    }
-
-    #[instrument(skip_all)]
-    async fn oldest_history(&self, user: &User) -> DbResult<History> {
-        sqlx::query_as(
-            "select id, client_id, user_id, hostname, timestamp, data, created_at from history
-            where user_id = $1
-            order by timestamp asc
-            limit 1",
-        )
-        .bind(user.id)
-        .fetch_one(self.read_pool())
-        .await
-        .map_err(Into::into)
-        .map(|DbHistory(h)| h)
     }
 
     #[instrument(skip_all)]
@@ -434,7 +245,7 @@ impl Database for Postgres {
 
             let result = sqlx::query(
                 "insert into store
-                    (id, client_id, host, idx, timestamp, version, tag, data, cek, user_id) 
+                    (id, client_id, host, idx, timestamp, version, tag, data, cek, user_id)
                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 on conflict do nothing
                 ",
@@ -444,10 +255,10 @@ impl Database for Postgres {
             .bind(i.host.id)
             .bind(i.idx as i64)
             .bind(i.timestamp as i64) // throwing away some data, but i64 is still big in terms of time
-            .bind(&i.version)
-            .bind(&i.tag)
-            .bind(&i.data.data)
-            .bind(&i.data.content_encryption_key)
+            .bind(i.version.as_str())
+            .bind(i.tag.as_str())
+            .bind(&i.data.raw)
+            .bind(&i.data.cek)
             .bind(user.id)
             .execute(&mut *tx)
             .await?;
@@ -455,7 +266,7 @@ impl Database for Postgres {
             // Only update heads if we actually inserted the record
             if result.rows_affected() > 0 {
                 heads
-                    .entry((i.host.id, &i.tag))
+                    .entry((i.host.id, i.tag.as_str()))
                     .and_modify(|e| {
                         if i.idx > *e {
                             *e = i.idx
@@ -469,9 +280,10 @@ impl Database for Postgres {
         for ((host, tag), idx) in heads {
             sqlx::query(
                 "insert into store_idx_cache
-                    (user_id, host, tag, idx) 
+                    (user_id, host, tag, idx)
                 values ($1, $2, $3, $4)
-                on conflict(user_id, host, tag) do update set idx = greatest(store_idx_cache.idx, $4)
+                on conflict(user_id, host, tag) do update set idx = greatest(store_idx_cache.idx, \
+                 $4)
                 ",
             )
             .bind(user.id)
@@ -479,8 +291,7 @@ impl Database for Postgres {
             .bind(tag)
             .bind(idx as i64)
             .execute(&mut *tx)
-            .await
-            ?;
+            .await?;
         }
 
         tx.commit().await?;
@@ -492,12 +303,11 @@ impl Database for Postgres {
     async fn next_records(
         &self,
         user: &User,
-        host: HostId,
-        tag: String,
+        series: &RecordSeriesKey,
         start: Option<RecordIdx>,
         count: u64,
     ) -> DbResult<Vec<Record<EncryptedData>>> {
-        tracing::debug!("{:?} - {:?} - {:?}", host, tag, start);
+        tracing::debug!("{:?} - {:?} - {:?}", series.host_id, series.tag, start);
         let start = start.unwrap_or(0);
 
         let records: Result<Vec<DbRecord>, DbError> = sqlx::query_as(
@@ -510,8 +320,8 @@ impl Database for Postgres {
                     limit $5",
         )
         .bind(user.id)
-        .bind(tag.clone())
-        .bind(host)
+        .bind(series.tag.as_str())
+        .bind(series.host_id)
         .bind(start as i64)
         .bind(count as i64)
         .fetch_all(self.read_pool())
@@ -531,7 +341,7 @@ impl Database for Postgres {
                 records
             }
             Err(DbError::NotFound) => {
-                tracing::debug!("no records found in store: {:?}/{}", host, tag);
+                tracing::debug!("no records found in store: {:?}/{}", series.host_id, series.tag);
                 return Ok(vec![]);
             }
             Err(e) => return Err(e),
@@ -562,18 +372,18 @@ impl Database for Postgres {
                 .await?
         } else {
             tracing::debug!("using aggregate query for user {}", user.id);
-            sqlx::query_as(STATUS_SQL)
-                .bind(user.id)
-                .fetch_all(self.read_pool())
-                .await?
+            sqlx::query_as(STATUS_SQL).bind(user.id).fetch_all(self.read_pool()).await?
         };
 
         res.sort();
 
         let mut status = RecordStatus::new();
 
-        for i in res.iter() {
-            status.set_raw(HostId(i.0), i.1.clone(), i.2 as u64);
+        for i in &res {
+            status.set_raw(
+                RecordSeriesKey::new(HostId(i.0), RecordTag::from(i.1.clone())),
+                i.2 as u64,
+            );
         }
 
         Ok(status)

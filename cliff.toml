@@ -12,7 +12,7 @@ header = """
 All notable changes to this project will be documented in this file.\n
 """
 # template for the changelog body
-# https://keats.github.io/tera/docs/#introduction
+# https://keats.github.io/tera/
 body = """
 {% if version %}\
     ## {{ version | trim_start_matches(pat="v") }}

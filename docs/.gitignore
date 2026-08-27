@@ -1,1 +1,7 @@
 site/
+superpowers/
+
+# mkdocs-material's privacy plugin caches every external asset it downloads
+# (fonts, remote images) here so rebuilds do not re-fetch them. Machine-local
+# build state, ~4MB of binaries -- not source.
+.cache/

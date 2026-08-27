@@ -1,18 +1,23 @@
-use crate::{SHA, VERSION};
-use atuin_client::{api_client, database::Database, settings::Settings};
+use atuin_client::api_client;
+use atuin_client::settings::Settings;
 use colored::Colorize;
 use eyre::{Result, bail};
 
-pub async fn run(settings: &Settings, db: &impl Database) -> Result<()> {
+use crate::{SHA, VERSION};
+
+pub async fn run(settings: &Settings) -> Result<()> {
     if !settings.logged_in().await? {
         bail!("You are not logged in to a sync server - cannot show sync status");
     }
 
+    let caps = api_client::caps_client(settings)?;
     let client = api_client::Client::new(
-        &settings.sync_address,
-        settings.sync_auth_token().await?,
+        settings.sync_address.clone(),
+        &settings.sync_auth_token().await?,
         settings.network_connect_timeout,
         settings.network_timeout,
+        &settings.extra_headers,
+        caps,
     )?;
 
     let me = client.me().await?;
@@ -25,14 +30,6 @@ pub async fn run(settings: &Settings, db: &impl Database) -> Result<()> {
     if settings.auto_sync {
         println!("Sync frequency: {}", settings.sync_frequency);
         println!("Last sync: {}", last_sync.to_offset(settings.timezone.0));
-    }
-
-    if !settings.sync.records {
-        let local_count = db.history_count(false).await?;
-        let deleted_count = db.history_count(true).await? - local_count;
-
-        println!("History count: {local_count}");
-        println!("Deleted history count: {deleted_count}\n");
     }
 
     if settings.auto_sync {

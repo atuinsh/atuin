@@ -1,0 +1,19 @@
+name: Bats tests
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        bash-version: ['3.2', '4.4', '5.0', '5.3']
+    container:
+      image: bash:${{ matrix.bash-version }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+      - name: Install Bats
+        run: apk add --no-cache bats
+      - name: Run tests
+        run: bats test

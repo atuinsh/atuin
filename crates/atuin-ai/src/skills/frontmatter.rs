@@ -8,7 +8,7 @@ use yaml_rust2::YamlLoader;
 
 /// Parsed frontmatter fields from a `SKILL.md` file.
 #[derive(Debug, Default)]
-pub(crate) struct Frontmatter {
+pub struct Frontmatter {
     pub name: Option<String>,
     pub description: Option<String>,
     pub disable_model_invocation: bool,
@@ -16,7 +16,7 @@ pub(crate) struct Frontmatter {
 
 /// Result of splitting a skill file into frontmatter + body.
 #[derive(Debug)]
-pub(crate) struct ParsedSkillFile {
+pub struct ParsedSkillFile {
     pub frontmatter: Frontmatter,
     /// Everything after the closing `---` delimiter.
     pub body: String,
@@ -26,7 +26,7 @@ pub(crate) struct ParsedSkillFile {
 ///
 /// If no frontmatter delimiters are found, all content is treated as body
 /// with default frontmatter.
-pub(crate) fn parse(content: &str) -> ParsedSkillFile {
+pub fn parse(content: &str) -> ParsedSkillFile {
     let Some((yaml_str, body)) = split_frontmatter(content) else {
         return ParsedSkillFile {
             frontmatter: Frontmatter::default(),
@@ -61,11 +61,8 @@ fn split_frontmatter(content: &str) -> Option<(&str, String)> {
     let after_open = after_open.strip_prefix('\n').unwrap_or(after_open);
 
     // Find the closing `---`
-    let close_pos = after_open
-        .lines()
-        .enumerate()
-        .find(|(_, line)| line.trim() == "---")
-        .map(|(i, _)| {
+    let close_pos =
+        after_open.lines().enumerate().find(|(_, line)| line.trim() == "---").map(|(i, _)| {
             after_open
                 .lines()
                 .take(i)
@@ -76,10 +73,7 @@ fn split_frontmatter(content: &str) -> Option<(&str, String)> {
     let yaml_str = &after_open[..close_pos];
     let rest = &after_open[close_pos..];
     // Skip the closing `---` line
-    let body = rest
-        .strip_prefix("---")
-        .unwrap_or(rest)
-        .trim_start_matches(|c: char| c != '\n');
+    let body = rest.strip_prefix("---").unwrap_or(rest).trim_start_matches(|c: char| c != '\n');
     let body = body.strip_prefix('\n').unwrap_or(body);
 
     Some((yaml_str, body.to_string()))
@@ -113,11 +107,13 @@ fn extract_fields(doc: &yaml_rust2::Yaml) -> Frontmatter {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    fn basic_frontmatter() {
-        let content = "\
+    #[rstest]
+    #[case::basic(
+        "\
 ---
 name: my-skill
 description: A test skill
@@ -125,18 +121,76 @@ disable-model-invocation: true
 ---
 
 Body content here.
-";
+",
+        Some("my-skill"),
+        Some("A test skill"),
+        true,
+        Some("Body content here.")
+    )]
+    #[case::no_frontmatter(
+        "Just a body with no frontmatter.",
+        None,
+        None,
+        false,
+        Some("Just a body with no frontmatter.")
+    )]
+    #[case::empty(
+        "\
+---
+---
+
+Body after empty frontmatter.
+",
+        None,
+        None,
+        false,
+        Some("Body after empty frontmatter.")
+    )]
+    #[case::missing_fields(
+        "\
+---
+name: partial
+---
+
+Some body.
+",
+        Some("partial"),
+        None,
+        false,
+        None
+    )]
+    #[case::unknown_fields(
+        "\
+---
+name: my-skill
+future-field: some value
+another: 42
+---
+
+Body.
+",
+        Some("my-skill"),
+        None,
+        false,
+        None
+    )]
+    fn parses_frontmatter_fields(
+        #[case] content: &str,
+        #[case] expected_name: Option<&str>,
+        #[case] expected_desc: Option<&str>,
+        #[case] expected_disable: bool,
+        #[case] expected_body_trimmed: Option<&str>,
+    ) {
         let parsed = parse(content);
-        assert_eq!(parsed.frontmatter.name.as_deref(), Some("my-skill"));
-        assert_eq!(
-            parsed.frontmatter.description.as_deref(),
-            Some("A test skill")
-        );
-        assert!(parsed.frontmatter.disable_model_invocation);
-        assert_eq!(parsed.body.trim(), "Body content here.");
+        assert_eq!(parsed.frontmatter.name.as_deref(), expected_name);
+        assert_eq!(parsed.frontmatter.description.as_deref(), expected_desc);
+        assert_eq!(parsed.frontmatter.disable_model_invocation, expected_disable);
+        if let Some(b) = expected_body_trimmed {
+            assert_eq!(parsed.body.trim(), b);
+        }
     }
 
-    #[test]
+    #[rstest]
     fn multiline_folded_description() {
         let content = "\
 ---
@@ -158,61 +212,7 @@ disable-model-invocation: true
         assert!(parsed.body.contains("# Release steps"));
     }
 
-    #[test]
-    fn no_frontmatter() {
-        let content = "Just a body with no frontmatter.";
-        let parsed = parse(content);
-        assert!(parsed.frontmatter.name.is_none());
-        assert!(parsed.frontmatter.description.is_none());
-        assert!(!parsed.frontmatter.disable_model_invocation);
-        assert_eq!(parsed.body, content);
-    }
-
-    #[test]
-    fn empty_frontmatter() {
-        let content = "\
----
----
-
-Body after empty frontmatter.
-";
-        let parsed = parse(content);
-        assert!(parsed.frontmatter.name.is_none());
-        assert!(parsed.frontmatter.description.is_none());
-        assert_eq!(parsed.body.trim(), "Body after empty frontmatter.");
-    }
-
-    #[test]
-    fn missing_fields_use_defaults() {
-        let content = "\
----
-name: partial
----
-
-Some body.
-";
-        let parsed = parse(content);
-        assert_eq!(parsed.frontmatter.name.as_deref(), Some("partial"));
-        assert!(parsed.frontmatter.description.is_none());
-        assert!(!parsed.frontmatter.disable_model_invocation);
-    }
-
-    #[test]
-    fn unknown_fields_ignored() {
-        let content = "\
----
-name: my-skill
-future-field: some value
-another: 42
----
-
-Body.
-";
-        let parsed = parse(content);
-        assert_eq!(parsed.frontmatter.name.as_deref(), Some("my-skill"));
-    }
-
-    #[test]
+    #[rstest]
     fn body_with_triple_dashes() {
         let content = "\
 ---

@@ -11,10 +11,12 @@ for arg in "$@"; do
 done
 
 if [ "$ATUIN_NON_INTERACTIVE" != "yes" ]; then
-  if [ -t 0 ] || { true </dev/tty; } 2>/dev/null; then
-    ATUIN_NON_INTERACTIVE="no"
-  else
-    ATUIN_NON_INTERACTIVE="yes"
+  ATUIN_NON_INTERACTIVE=yes
+  if { exec 3</dev/tty; } 2>/dev/null; then
+    if [ -t 3 ]; then
+        ATUIN_NON_INTERACTIVE=no
+    fi
+    exec 3<&-
   fi
 fi
 
@@ -40,14 +42,14 @@ Please file an issue or reach out on the forum if you encounter any problems!
 EOF
 
 __atuin_install_binary(){
-  curl --proto '=https' --tlsv1.2 -LsSf https://github.com/atuinsh/atuin/releases/latest/download/atuin-installer.sh | sh
+  install_script=$(curl --proto '=https' --tlsv1.2 -LsSf https://github.com/atuinsh/atuin/releases/latest/download/atuin-installer.sh)
+  echo "$install_script" | sh
 }
 
 if ! command -v curl > /dev/null; then
     echo "curl not installed. Please install curl."
     exit
 fi
-
 
 __atuin_install_binary
 
@@ -61,10 +63,8 @@ fi
 # Use of single quotes around $() is intentional here
 # shellcheck disable=SC2016
 
-if ! grep -q "atuin init bash" ~/.bashrc; then
-  curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
-  printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh\n' >> ~/.bashrc
-  echo 'eval "$(atuin init bash)"' >> ~/.bashrc
+if ! grep -q "atuin init bash" "$HOME/.bashrc"; then
+  echo 'eval "$(atuin init bash)"' >> "$HOME/.bashrc"
 fi
 
 if [ -f "$HOME/.config/fish/config.fish" ]; then
@@ -105,6 +105,7 @@ __atuin_install_agent_hook(){
 
 __atuin_install_agent_hook "claude-code" "Claude Code" "$HOME/.claude" claude
 __atuin_install_agent_hook "codex" "Codex" "$HOME/.codex" codex
+__atuin_install_agent_hook "opencode" "opencode" "${XDG_CONFIG_HOME:-$HOME/.config}/opencode" opencode
 __atuin_install_agent_hook "pi" "pi" "$HOME/.config/pi" pi
 
 echo ""
@@ -141,22 +142,37 @@ Sync your history across all your machines with Atuin Cloud:
 
 EOF
 
-  printf "Sign up for a sync account? [Y/n] "
-  read -r sync_answer </dev/tty || sync_answer="n"
-  sync_answer="${sync_answer:-y}"
+  echo "Set up sync with an Atuin account?"
+  echo ""
+  echo "  1) Yes - create a new account"
+  echo "  2) Log in to an existing account"
+  echo "  3) Skip sync for now"
+  echo ""
+  printf "Select an option [1/2/3] (default 1): "
+  read -r sync_answer </dev/tty || sync_answer="3"
+  sync_answer="${sync_answer:-1}"
 
   case "$sync_answer" in
-    [yY]*)
+    1|[yYcC]*)
       echo ""
       if ! "$ATUIN_BIN" register </dev/tty; then
         echo ""
         echo "Registration did not complete. You can run 'atuin register' any time to try again."
       fi
       ;;
+    2|[lL]*)
+      echo ""
+      # Silences pre-#3916 401 log spam; drop once that fix is in the latest release.
+      if ! ATUIN_LOG="warn,atuin_client::hub=off" "$ATUIN_BIN" login </dev/tty; then
+        echo ""
+        echo "Login did not complete. You can run 'atuin login' any time to try again."
+      fi
+      ;;
     *)
       echo ""
-      printf "Already have an account? Log in with 'atuin login'.\n"
-      echo "You can also run 'atuin register' any time to create one."
+      echo "Skipping sync setup."
+      echo "You can run 'atuin register' any time to create an account,"
+      echo "or 'atuin login' if you already have one."
       ;;
   esac
 
@@ -170,7 +186,10 @@ else
 fi
 
 if [ "$ATUIN_NON_INTERACTIVE" != "yes" ]; then
-  "$ATUIN_BIN" setup </dev/tty
+  if ! "$ATUIN_BIN" setup </dev/tty; then
+    echo ""
+    echo "Setup did not complete. You can run 'atuin setup' any time to finish."
+  fi
 fi
 
 cat << EOF

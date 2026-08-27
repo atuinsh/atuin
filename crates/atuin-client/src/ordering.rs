@@ -1,32 +1,60 @@
 use minspan::minspan;
 
-use super::{history::History, settings::SearchMode};
+use super::database::DbSearchMode;
+use super::history::History;
 
-pub fn reorder_fuzzy(mode: SearchMode, query: &str, res: Vec<History>) -> Vec<History> {
+#[must_use]
+pub fn reorder_fuzzy(mode: DbSearchMode, query: &str, res: Vec<History>) -> Vec<History> {
     match mode {
-        SearchMode::Fuzzy => reorder(query, |x| &x.command, res),
-        _ => res,
+        DbSearchMode::Fuzzy => reorder(query, |x| &x.command, res),
+        DbSearchMode::Prefix | DbSearchMode::FullText => res,
     }
 }
 
 fn reorder<F, A>(query: &str, f: F, res: Vec<A>) -> Vec<A>
 where
     F: Fn(&A) -> &String,
-    A: Clone,
 {
-    let mut r = res.clone();
+    let mut r = res;
     let qvec = &query.chars().collect();
     r.sort_by_cached_key(|h| {
         // TODO for fzf search we should sum up scores for each matched term
-        let (from, to) = match minspan::span(qvec, &(f(h).chars().collect())) {
-            Some(x) => x,
-            // this is a little unfortunate: when we are asked to match a query that is found nowhere,
-            // we don't want to return a None, as the comparison behaviour would put the worst matches
-            // at the front. therefore, we'll return a set of indices that are one larger than the longest
-            // possible legitimate match. This is meaningless except as a comparison.
-            None => (0, res.len()),
-        };
-        1 + to - from
+        // A non-matching row sorts last rather than by a sentinel that can undercut a real match.
+        minspan::span(qvec, &(f(h).chars().collect()))
+            .map_or(usize::MAX, |(from, to)| 1 + to - from)
     });
     r
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+    use time::OffsetDateTime;
+
+    use super::*;
+    use crate::history::History;
+
+    fn hist(command: &str) -> History {
+        History::capture()
+            .timestamp(OffsetDateTime::now_utc())
+            .command(command)
+            .cwd("/")
+            .build()
+            .into()
+    }
+
+    fn commands(res: Vec<History>) -> Vec<String> {
+        res.into_iter().map(|h| h.command).collect()
+    }
+
+    #[rstest]
+    // A non-matching row must sort last, not ahead of a genuine match.
+    #[case::nonmatch_sorts_last("screen", vec!["screen", "hello"], vec!["screen", "hello"])]
+    // The unchanged match path: a tight match outranks a loose one.
+    #[case::matches_by_span("curl", vec!["central urllib", "curl"], vec!["curl", "central urllib"])]
+    fn reorder_ranks(#[case] query: &str, #[case] input: Vec<&str>, #[case] expected: Vec<&str>) {
+        let res = input.into_iter().map(hist).collect();
+        let out = reorder_fuzzy(DbSearchMode::Fuzzy, query, res);
+        assert_eq!(commands(out), expected);
+    }
 }

@@ -12,18 +12,45 @@ ci = "github"
 # The installers to generate for each app
 installers = ["shell", "powershell"]
 # Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "aarch64-unknown-linux-musl", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "aarch64-unknown-linux-gnu", "aarch64-unknown-linux-musl", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
 # Which actions to run on pull requests
 pr-run-mode = "plan"
-# Whether to install an updater program
-install-updater = true
+# Don't ship the standalone axoupdater binary (atuin-update); `atuin update`
+# embeds axoupdater and uses the same install receipt.
+install-updater = false
 # The archive format to use for non-windows builds (defaults .tar.xz)
 unix-archive = ".tar.gz"
 # Whether to enable GitHub Attestations
 github-attestations = true
+# Vendor (statically link) OpenSSL so the downloadable binaries are portable and
+# don't depend on the host's libssl version. No-op on macOS/Windows.
+# self-update: only installer-installed binaries can self-update, so the
+# `atuin update` machinery is compiled into release artifacts only.
+features = ["vendored-tls", "self-update"]
 
 [dist.github-custom-runners]
 aarch64-unknown-linux-gnu = "depot-ubuntu-24.04-arm-8"
 aarch64-unknown-linux-musl = "depot-ubuntu-24.04-arm-8"
 x86_64-unknown-linux-gnu = "depot-ubuntu-24.04-8"
 x86_64-unknown-linux-musl = "depot-ubuntu-24.04-8"
+
+# Build both mac targets in one job on a Depot M4 runner: aarch64 natively,
+# x86_64 cross-compiled. Depot runner names don't encode the host arch, so
+# dist needs `host` spelled out to know these are arm64 machines.
+[dist.github-custom-runners.aarch64-apple-darwin]
+runner = "depot-macos-26"
+host = "aarch64-apple-darwin"
+
+[dist.github-custom-runners.x86_64-apple-darwin]
+runner = "depot-macos-26"
+host = "aarch64-apple-darwin"
+
+# Pin the actions dist generates into release.yml. Without these, `dist generate`
+# emits the versions baked into dist 0.31.0 (checkout@v6, upload-artifact@v6,
+# download-artifact@v7, attest-build-provenance@v3) and `dist plan` fails CI as
+# out-of-date. Drop entries here once a dist upgrade makes them the default.
+[dist.github-action-commits]
+"actions/checkout" = "v7"
+"actions/upload-artifact" = "v7"
+"actions/download-artifact" = "v8"
+"actions/attest-build-provenance" = "v4"

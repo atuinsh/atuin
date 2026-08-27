@@ -1,36 +1,36 @@
 use std::time::Duration;
 
-use super::duration::format_duration;
-use super::engines::SearchEngine;
-use atuin_client::{
-    history::History,
-    settings::{UiColumn, UiColumnType},
-    theme::{Meaning, Theme},
-};
-use atuin_common::utils::Escapable as _;
+use atuin_client::history::History;
+use atuin_client::settings::{UiColumn, UiColumnType};
+use atuin_client::theme::{Meaning, Theme};
+use atuin_common::string::align::Alignment;
+use atuin_common::string::ellipsis::{Indicator, Pos};
+use atuin_common::string::{EllipsizeExt as _, EscapeNonPrintablePosixExt as _, Measure};
+use atuin_common::time::{DurationExt, OffsetDateTimeExt};
 use itertools::Itertools;
-use ratatui::{
-    backend::FromCrossterm,
-    buffer::Buffer,
-    crossterm::style,
-    layout::Rect,
-    style::{Modifier, Style},
-    widgets::{Block, StatefulWidget, Widget},
-};
-use time::OffsetDateTime;
+use ratatui::backend::FromCrossterm;
+use ratatui::buffer::Buffer;
+use ratatui::crossterm::style;
+use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
+use ratatui::widgets::{Block, StatefulWidget, Widget};
+use time::{OffsetDateTime, UtcOffset};
+
+use super::engines::{AnySearchEngine, SearchEngine};
+use super::syntax;
 
 pub struct HistoryHighlighter<'a> {
-    pub engine: &'a dyn SearchEngine,
+    pub engine: &'a AnySearchEngine,
     pub search_input: &'a str,
 }
 
 impl HistoryHighlighter<'_> {
     pub fn get_highlight_indices(&self, command: &str) -> Vec<usize> {
-        self.engine
-            .get_highlight_indices(command, self.search_input)
+        self.engine.get_highlight_indices(command, self.search_input)
     }
 }
 
+#[allow(clippy::struct_excessive_bools)]
 pub struct HistoryList<'a> {
     history: &'a [History],
     block: Option<Block<'a>>,
@@ -38,10 +38,13 @@ pub struct HistoryList<'a> {
     /// Apply an alternative highlighting to the selected row
     alternate_highlight: bool,
     now: &'a dyn Fn() -> OffsetDateTime,
+    /// Offset absolute timestamps are rendered in
+    tz: UtcOffset,
     indicator: &'a str,
     theme: &'a Theme,
     history_highlighter: HistoryHighlighter<'a>,
     show_numeric_shortcuts: bool,
+    syntax_highlight: bool,
     /// Columns to display (in order, after the indicator)
     columns: &'a [UiColumn],
 }
@@ -99,10 +102,12 @@ impl StatefulWidget for HistoryList<'_> {
             inverted: self.inverted,
             alternate_highlight: self.alternate_highlight,
             now: &self.now,
+            tz: self.tz,
             indicator: self.indicator,
             theme: self.theme,
             history_highlighter: self.history_highlighter,
             show_numeric_shortcuts: self.show_numeric_shortcuts,
+            syntax_highlight: self.syntax_highlight,
             columns: self.columns,
         };
 
@@ -117,16 +122,18 @@ impl StatefulWidget for HistoryList<'_> {
 }
 
 impl<'a> HistoryList<'a> {
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
     pub fn new(
         history: &'a [History],
         inverted: bool,
         alternate_highlight: bool,
         now: &'a dyn Fn() -> OffsetDateTime,
+        tz: UtcOffset,
         indicator: &'a str,
         theme: &'a Theme,
         history_highlighter: HistoryHighlighter<'a>,
         show_numeric_shortcuts: bool,
+        syntax_highlight: bool,
         columns: &'a [UiColumn],
     ) -> Self {
         Self {
@@ -135,10 +142,12 @@ impl<'a> HistoryList<'a> {
             inverted,
             alternate_highlight,
             now,
+            tz,
             indicator,
             theme,
             history_highlighter,
             show_numeric_shortcuts,
+            syntax_highlight,
             columns,
         }
     }
@@ -163,6 +172,7 @@ impl<'a> HistoryList<'a> {
     }
 }
 
+#[allow(clippy::struct_excessive_bools)]
 struct DrawState<'a> {
     buf: &'a mut Buffer,
     list_area: Rect,
@@ -172,10 +182,13 @@ struct DrawState<'a> {
     inverted: bool,
     alternate_highlight: bool,
     now: &'a dyn Fn() -> OffsetDateTime,
+    /// Offset absolute timestamps are rendered in
+    tz: UtcOffset,
     indicator: &'a str,
     theme: &'a Theme,
     history_highlighter: HistoryHighlighter<'a>,
     show_numeric_shortcuts: bool,
+    syntax_highlight: bool,
     columns: &'a [UiColumn],
 }
 
@@ -192,16 +205,8 @@ impl DrawState<'_> {
         // Calculate the width for the expanding column
         // Fixed columns use their configured width + 1 (trailing space)
         let indicator_width: u16 = 3;
-        let fixed_width: u16 = self
-            .columns
-            .iter()
-            .filter(|c| !c.expand)
-            .map(|c| c.width + 1)
-            .sum();
-        let expand_width = self
-            .list_area
-            .width
-            .saturating_sub(indicator_width + fixed_width);
+        let fixed_width: u16 = self.columns.iter().filter(|c| !c.expand).map(|c| c.width + 1).sum();
+        let expand_width = self.list_area.width.saturating_sub(indicator_width + fixed_width);
 
         let style = self.theme.as_style(Meaning::Base);
         // Render each configured column
@@ -222,7 +227,7 @@ impl DrawState<'_> {
                 UiColumnType::Host => self.host(h, width),
                 UiColumnType::User => self.user(h, width),
                 UiColumnType::Exit => self.exit_code(h, width),
-                UiColumnType::Command => self.command(h),
+                UiColumnType::Command => self.command(h, width),
             }
         }
     }
@@ -231,7 +236,11 @@ impl DrawState<'_> {
         if !self.show_numeric_shortcuts {
             let i = self.y as usize + self.state.offset;
             let is_selected = i == self.state.selected();
-            let prompt: &str = if is_selected { self.indicator } else { "   " };
+            let prompt: &str = if is_selected {
+                self.indicator
+            } else {
+                "   "
+            };
             self.draw(prompt, Style::default());
             return;
         }
@@ -256,34 +265,38 @@ impl DrawState<'_> {
         } else {
             Meaning::AlertError
         });
-        let duration = Duration::from_nanos(u64::try_from(h.duration).unwrap_or(0));
-        let formatted = format_duration(duration);
+        let duration = Duration::saturating_from_nanos_i64(h.duration);
+        let formatted = duration.display().largest_unit().to_string();
         let w = width as usize;
-        // Right-align duration within its column width, plus trailing space
-        let display = format!("{formatted:>w$}");
+        // Right-align within the column, ellipsizing if it somehow overflows.
+        let display = formatted.pad_ellipsize(
+            Measure::Columns(w),
+            Pos::End,
+            Indicator::UNICODE,
+            Alignment::End,
+        );
         self.draw(&display, Style::from_crossterm(style));
     }
 
     fn time(&mut self, h: &History, width: u16) {
         let style = self.theme.as_style(Meaning::Guidance);
 
-        // Account for the chance that h.timestamp is "in the future"
-        // This would mean that "since" is negative, and the unwrap here
-        // would fail.
-        // If the timestamp would otherwise be in the future, display
-        // the time since as 0.
-        let since = (self.now)() - h.timestamp;
-        let time = format_duration(since.try_into().unwrap_or_default());
+        let time = (self.now)().saturating_duration_since(h.timestamp).display().largest_unit();
 
         // Format as "Xs ago" right-aligned within column width
         let w = width as usize;
         let time_str = format!("{time} ago");
 
-        let display = format!("{time_str:>w$}");
+        let display = time_str.pad_ellipsize(
+            Measure::Columns(w),
+            Pos::End,
+            Indicator::UNICODE,
+            Alignment::End,
+        );
         self.draw(&display, Style::from_crossterm(style));
     }
 
-    fn command(&mut self, h: &History) {
+    fn command(&mut self, h: &History, _width: u16) {
         let mut style = self.theme.as_style(Meaning::Base);
         let mut row_highlighted = false;
         if !self.alternate_highlight && (self.y as usize + self.state.offset == self.state.selected)
@@ -294,55 +307,62 @@ impl DrawState<'_> {
             style.attributes.set(style::Attribute::Bold);
         }
 
-        let highlight_indices = self.history_highlighter.get_highlight_indices(
-            h.command
-                .escape_control()
-                .split_ascii_whitespace()
-                .join(" ")
-                .as_str(),
-        );
+        // Build the normalized command string (whitespace-collapsed, control chars escaped)
+        let normalized: String =
+            h.command.escape_non_printable().split_ascii_whitespace().join(" ");
 
-        let mut pos = 0;
-        for section in h.command.escape_control().split_ascii_whitespace() {
-            if pos != 0 {
-                self.draw(" ", Style::from_crossterm(style));
+        let highlight_indices = self.history_highlighter.get_highlight_indices(&normalized);
+
+        // The selected row keeps its single highlight color.
+        let syntax = if self.syntax_highlight && !row_highlighted {
+            syntax::classify(&normalized, h.shell.as_deref())
+        } else {
+            Vec::new()
+        };
+
+        // Calculate the available width for the command text.
+        // `self.x` is already past the indicator and any preceding columns,
+        // so the remaining width is how far we can draw.
+        let avail = (self.list_area.width.saturating_sub(self.x)) as usize;
+
+        // Truncate long commands from the middle to show both start and end,
+        // so users can identify commands even in narrow terminals (issue #3596).
+        let ellipsized =
+            normalized.ellipsize(Measure::Columns(avail), Pos::Middle, Indicator::UNICODE);
+        let display = ellipsized.to_string();
+        for (i, ch) in display.char_indices() {
+            if self.x > self.list_area.width {
+                return;
             }
-            for ch in section.chars() {
-                if self.x > self.list_area.width {
-                    // Avoid attempting to draw a command section beyond the width
-                    // of the list
-                    return;
+            // Map each output cell back to its source byte and test the existing
+            // highlight set; a cell on the spliced ellipsis maps to None and is
+            // never highlighted (this is why the "…" is never bolded).
+            let source_byte = ellipsized.source_index(i);
+            let highlighted = source_byte.is_some_and(|b| highlight_indices.contains(&b));
+            let mut char_style = source_byte
+                .and_then(|b| syntax.get(b))
+                .map_or(style, |&meaning| self.theme.as_style(meaning));
+            if highlighted {
+                if row_highlighted {
+                    char_style = self.theme.as_style(Meaning::AlertWarn);
                 }
-                let mut style = style;
-                if highlight_indices.contains(&pos) {
-                    if row_highlighted {
-                        // if the row is highlighted bold is not enough as the whole row is bold
-                        // change the color too
-                        style = self.theme.as_style(Meaning::AlertWarn);
-                    }
-                    style.attributes.set(style::Attribute::Bold);
-                }
-                let s = ch.to_string();
-                self.draw(&s, Style::from_crossterm(style));
-                pos += s.len();
+                char_style.attributes.set(style::Attribute::Bold);
             }
-            pos += 1;
+            self.draw(&ch.to_string(), Style::from_crossterm(char_style));
         }
     }
 
     /// Render the absolute datetime column (e.g., "2025-01-22 14:35")
     fn datetime(&mut self, h: &History, width: u16) {
         let style = self.theme.as_style(Meaning::Annotation);
-        // Format: YYYY-MM-DD HH:MM
-        let formatted = h
-            .timestamp
-            .format(
-                &time::format_description::parse("[year]-[month]-[day] [hour]:[minute]")
-                    .expect("valid format"),
-            )
-            .unwrap_or_else(|_| "????-??-?? ??:??".to_string());
+        let formatted = h.timestamp.to_offset(self.tz).display().ymd_hm().to_string();
         let w = width as usize;
-        let display = format!("{formatted:w$}");
+        let display = formatted.pad_ellipsize(
+            Measure::Columns(w),
+            Pos::End,
+            Indicator::UNICODE,
+            Alignment::Start,
+        );
         self.draw(&display, Style::from_crossterm(style));
     }
 
@@ -351,15 +371,14 @@ impl DrawState<'_> {
         let style = self.theme.as_style(Meaning::Annotation);
         let w = width as usize;
         let cwd = &h.cwd;
-        let char_count = cwd.chars().count();
-        // Truncate from the left with "..." if too long, plus trailing space
-        // Use character count for comparison and skip for UTF-8 safety
-        let display = if char_count > w && w >= 4 {
-            let truncated: String = cwd.chars().skip(char_count - (w - 3)).collect();
-            format!("...{truncated}")
-        } else {
-            format!("{cwd:w$}")
-        };
+        // Elide from the left with "…" so the leaf directory stays visible;
+        // pad to the column width when it already fits.
+        let display = cwd.pad_ellipsize(
+            Measure::Columns(w),
+            Pos::Start,
+            Indicator::UNICODE,
+            Alignment::Start,
+        );
         self.draw(&display, Style::from_crossterm(style));
     }
 
@@ -368,15 +387,9 @@ impl DrawState<'_> {
         let style = self.theme.as_style(Meaning::Annotation);
         let w = width as usize;
         // Database stores hostname as "hostname:username"
-        let host = h.hostname.split(':').next().unwrap_or(&h.hostname);
-        let char_count = host.chars().count();
-        // Use character count for comparison and take for UTF-8 safety
-        let display = if char_count > w && w >= 4 {
-            let truncated: String = host.chars().take(w.saturating_sub(4)).collect();
-            format!("{truncated}...")
-        } else {
-            format!("{host:w$}")
-        };
+        let host = h.cmd_origin.host().into_inner();
+        let display =
+            host.pad_ellipsize(Measure::Columns(w), Pos::End, Indicator::UNICODE, Alignment::Start);
         self.draw(&display, Style::from_crossterm(style));
     }
 
@@ -385,15 +398,9 @@ impl DrawState<'_> {
         let style = self.theme.as_style(Meaning::Annotation);
         let w = width as usize;
         // Database stores hostname as "hostname:username"
-        let user = h.hostname.split(':').nth(1).unwrap_or("");
-        let char_count = user.chars().count();
-        // Use character count for comparison and take for UTF-8 safety
-        let display = if char_count > w && w >= 4 {
-            let truncated: String = user.chars().take(w.saturating_sub(4)).collect();
-            format!("{truncated}...")
-        } else {
-            format!("{user:w$}")
-        };
+        let user = h.cmd_origin.user().into_inner();
+        let display =
+            user.pad_ellipsize(Measure::Columns(w), Pos::End, Indicator::UNICODE, Alignment::Start);
         self.draw(&display, Style::from_crossterm(style));
     }
 

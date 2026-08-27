@@ -7,15 +7,22 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use directories::UserDirs;
 use eyre::{Result, eyre};
-use time::OffsetDateTime;
+use time::{Duration, OffsetDateTime};
 
 use super::{Importer, Loader, get_histfile_path, unix_byte_lines};
 use crate::history::History;
+use crate::history::builder::HistoryImported;
 use crate::import::read_to_end;
 
 #[derive(Debug)]
 pub struct Zsh {
     bytes: Vec<u8>,
+}
+
+impl Zsh {
+    fn num_entries(&self) -> usize {
+        super::count_lines(&self.bytes)
+    }
 }
 
 fn default_histpath() -> Result<PathBuf> {
@@ -44,6 +51,46 @@ fn default_histpath() -> Result<PathBuf> {
     }
 }
 
+/// Represents a line of zsh history.
+struct Entry {
+    pub command: String,
+    pub timestamp: Option<OffsetDateTime>,
+    /// Nanoseconds
+    pub duration: Option<i64>,
+}
+
+impl Entry {
+    pub fn parse(line: &str) -> Self {
+        // extended history looks like `: <start>:<duration>;<command>`.
+        // anything that does not match that shape is a bare command line
+        let extended = line
+            .strip_prefix(": ")
+            .and_then(|rest| rest.split_once(':'))
+            .and_then(|(time, rest)| rest.split_once(';').map(|(dur, cmd)| (time, dur, cmd)));
+
+        let Some((time, duration, command)) = extended else {
+            return Self {
+                command: line.trim_end().to_owned(),
+                timestamp: None,
+                duration: None,
+            };
+        };
+
+        let time =
+            time.parse::<i64>().ok().and_then(|t| OffsetDateTime::from_unix_timestamp(t).ok());
+
+        // use nanos, because why the hell not? we won't display them.
+        // saturate rather than overflow on an implausible duration
+        let duration = duration.parse::<i64>().map_or(-1, |t| t.saturating_mul(1_000_000_000));
+
+        Self {
+            command: command.trim_end().to_owned(),
+            timestamp: time,
+            duration: Some(duration),
+        }
+    }
+}
+
 #[async_trait]
 impl Importer for Zsh {
     const NAME: &'static str = "zsh";
@@ -54,18 +101,17 @@ impl Importer for Zsh {
     }
 
     async fn entries(&mut self) -> Result<usize> {
-        Ok(super::count_lines(&self.bytes))
+        Ok(self.num_entries())
     }
 
     async fn load(self, h: &mut impl Loader) -> Result<()> {
-        let now = OffsetDateTime::now_utc();
         let mut line = String::new();
+        let mut entries = Vec::with_capacity(self.num_entries());
 
-        let mut counter = 0;
         for b in unix_byte_lines(&self.bytes) {
-            let s = match unmetafy(b) {
-                Some(s) => s,
-                _ => continue, // we can skip past things like invalid utf8
+            // we can skip past things like invalid utf8
+            let Some(s) = unmetafy(b) else {
+                continue;
             };
 
             if let Some(s) = s.strip_suffix('\\') {
@@ -73,49 +119,42 @@ impl Importer for Zsh {
                 line.push('\n');
             } else {
                 line.push_str(&s);
-                let command = std::mem::take(&mut line);
-
-                if let Some(command) = command.strip_prefix(": ") {
-                    counter += 1;
-                    h.push(parse_extended(command, counter)).await?;
-                } else {
-                    let offset = time::Duration::seconds(counter);
-                    counter += 1;
-
-                    let imported = History::import()
-                        // preserve ordering
-                        .timestamp(now - offset)
-                        .command(command.trim_end().to_string());
-
-                    h.push(imported.build().into()).await?;
-                }
+                entries.push(Entry::parse(&line));
+                line.clear();
             }
         }
 
+        // Similar approach to preserving order as the Bash importer.
+        let (commands_until_timestamp, first_timestamp) = entries
+            .iter()
+            .enumerate()
+            .find_map(|(i, entry)| entry.timestamp.map(|t| (i + 1, t)))
+            .unwrap_or_else(|| (entries.len(), OffsetDateTime::now_utc()));
+
+        let timestamp_increment = Duration::milliseconds(1);
+        let backfill =
+            u32::try_from(commands_until_timestamp).unwrap_or(u32::MAX) * timestamp_increment;
+        // a timestamp near the start of the representable range would underflow
+        let mut timestamp = first_timestamp.checked_sub(backfill).unwrap_or(first_timestamp);
+
+        for entry in entries {
+            if let Some(time) = entry.timestamp {
+                timestamp = time;
+            } else {
+                // a timestamp near the end of the representable range would overflow
+                timestamp = timestamp.checked_add(timestamp_increment).unwrap_or(timestamp);
+            }
+
+            let imported = History::import()
+                .shell("zsh")
+                .timestamp(timestamp)
+                .duration(entry.duration.unwrap_or(HistoryImported::DEFAULT_DURATION))
+                .command(entry.command)
+                .build();
+            h.push(imported.into()).await?;
+        }
         Ok(())
     }
-}
-
-fn parse_extended(line: &str, counter: i64) -> History {
-    let (time, duration) = line.split_once(':').unwrap();
-    let (duration, command) = duration.split_once(';').unwrap();
-
-    let time = time
-        .parse::<i64>()
-        .ok()
-        .and_then(|t| OffsetDateTime::from_unix_timestamp(t).ok())
-        .unwrap_or_else(OffsetDateTime::now_utc)
-        + time::Duration::milliseconds(counter);
-
-    // use nanos, because why the hell not? we won't display them.
-    let duration = duration.parse::<i64>().map_or(-1, |t| t * 1_000_000_000);
-
-    let imported = History::import()
-        .timestamp(time)
-        .command(command.trim_end().to_string())
-        .duration(duration);
-
-    imported.build().into()
 }
 
 fn unmetafy(line: &[u8]) -> Option<Cow<'_, str>> {
@@ -141,48 +180,73 @@ fn unmetafy(line: &[u8]) -> Option<Cow<'_, str>> {
 #[cfg(test)]
 mod test {
     use itertools::assert_equal;
-
-    use crate::import::tests::TestLoader;
+    use rstest::rstest;
 
     use super::*;
+    use crate::import::tests::TestLoader;
 
-    #[test]
-    fn test_parse_extended_simple() {
-        let parsed = parse_extended("1613322469:0;cargo install atuin", 0);
+    #[rstest]
+    #[case::zero_duration(
+        ": 1613322469:0;cargo install atuin",
+        "cargo install atuin",
+        Some(1_613_322_469),
+        Some(0)
+    )]
+    #[case::multi_semicolon(
+        ": 1613322469:10;cargo install atuin;cargo update",
+        "cargo install atuin;cargo update",
+        Some(1_613_322_469),
+        Some(10_000_000_000)
+    )]
+    #[case::unicode_command(
+        ": 1613322469:10;cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷",
+        "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷",
+        Some(1_613_322_469),
+        Some(10_000_000_000)
+    )]
+    #[case::trailing_newline_escape(
+        ": 1613322469:10;cargo install \\n atuin\n",
+        "cargo install \\n atuin",
+        Some(1_613_322_469),
+        Some(10_000_000_000)
+    )]
+    fn parse_extended_simple(
+        #[case] line: &str,
+        #[case] command: &str,
+        #[case] timestamp: Option<i64>,
+        #[case] duration: Option<i64>,
+    ) {
+        let parsed = Entry::parse(line);
 
-        assert_eq!(parsed.command, "cargo install atuin");
-        assert_eq!(parsed.duration, 0);
-        assert_eq!(
-            parsed.timestamp,
-            OffsetDateTime::from_unix_timestamp(1_613_322_469).unwrap()
-        );
+        assert_eq!(parsed.command, command);
+        assert_eq!(parsed.duration, duration);
+        assert_eq!(parsed.timestamp.map(|t| t.unix_timestamp()), timestamp);
+    }
 
-        let parsed = parse_extended("1613322469:10;cargo install atuin;cargo update", 0);
+    /// Lines that are not valid extended history must not panic. Anything that
+    /// does not match `: <start>:<duration>;<command>` is a bare command line;
+    /// values that do match but cannot be represented are dropped or saturated.
+    #[rstest]
+    #[case::no_colon(": not-extended", ": not-extended", None, None)]
+    #[case::no_semicolon(": 1613322469:0", ": 1613322469:0", None, None)]
+    #[case::out_of_range_time(": 999999999999999:0;echo hello", "echo hello", None, Some(0))]
+    #[case::duration_saturates(
+        ": 1613322469:9223372036854775807;echo hello",
+        "echo hello",
+        Some(1_613_322_469),
+        Some(i64::MAX)
+    )]
+    fn parse_malformed_extended_lines(
+        #[case] line: &str,
+        #[case] command: &str,
+        #[case] timestamp: Option<i64>,
+        #[case] duration: Option<i64>,
+    ) {
+        let parsed = Entry::parse(line);
 
-        assert_eq!(parsed.command, "cargo install atuin;cargo update");
-        assert_eq!(parsed.duration, 10_000_000_000);
-        assert_eq!(
-            parsed.timestamp,
-            OffsetDateTime::from_unix_timestamp(1_613_322_469).unwrap()
-        );
-
-        let parsed = parse_extended("1613322469:10;cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷", 0);
-
-        assert_eq!(parsed.command, "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷");
-        assert_eq!(parsed.duration, 10_000_000_000);
-        assert_eq!(
-            parsed.timestamp,
-            OffsetDateTime::from_unix_timestamp(1_613_322_469).unwrap()
-        );
-
-        let parsed = parse_extended("1613322469:10;cargo install \\n atuin\n", 0);
-
-        assert_eq!(parsed.command, "cargo install \\n atuin");
-        assert_eq!(parsed.duration, 10_000_000_000);
-        assert_eq!(
-            parsed.timestamp,
-            OffsetDateTime::from_unix_timestamp(1_613_322_469).unwrap()
-        );
+        assert_eq!(parsed.command, command);
+        assert_eq!(parsed.timestamp.map(OffsetDateTime::unix_timestamp), timestamp);
+        assert_eq!(parsed.duration, duration);
     }
 
     #[tokio::test]
@@ -201,14 +265,60 @@ cargo update
         let mut loader = TestLoader::default();
         zsh.load(&mut loader).await.unwrap();
 
+        assert_equal(loader.buf.iter().map(|h| h.command.as_str()), [
+            "cargo install atuin",
+            "cargo install atuin; \\\ncargo update",
+            "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷",
+        ]);
+    }
+
+    #[tokio::test]
+    async fn timestamp_near_range_start_does_not_panic_on_backfill() {
+        // first timestamp is near the minimum representable instant, preceded by an
+        // untimestamped command; backfilling before it must not underflow
+        let bytes = b"cargo install atuin\n: -377705116800:0;cargo update\n".to_vec();
+
+        let mut zsh = Zsh { bytes };
+        assert_eq!(zsh.entries().await.unwrap(), 2);
+
+        let mut loader = TestLoader::default();
+        zsh.load(&mut loader).await.unwrap();
+
+        assert_equal(loader.buf.iter().map(|h| h.command.as_str()), [
+            "cargo install atuin",
+            "cargo update",
+        ]);
+    }
+
+    #[tokio::test]
+    async fn timestamp_near_range_end_does_not_panic_on_increment() {
+        // first timestamp is the maximum representable instant (253402300799 is the
+        // last second `OffsetDateTime` can represent, i.e. 9999-12-31 23:59:59 UTC).
+        // 1000 untimestamped commands walk the 1ms increment past .999 and off the
+        // end of the representable range.
+        let commands: Vec<String> = (0..1_000).map(|i| format!("cmd-{i}")).collect();
+        let bytes = format!(": 253402300799:0;first\n{}\n", commands.join("\n")).into_bytes();
+
+        let mut zsh = Zsh { bytes };
+        assert_eq!(zsh.entries().await.unwrap(), commands.len() + 1);
+
+        let mut loader = TestLoader::default();
+        zsh.load(&mut loader).await.unwrap();
+
+        let mut expected = vec!["first".to_string()];
+        expected.extend(commands);
         assert_equal(
             loader.buf.iter().map(|h| h.command.as_str()),
-            [
-                "cargo install atuin",
-                "cargo install atuin; \\\ncargo update",
-                "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷",
-            ],
+            expected.iter().map(String::as_str),
         );
+
+        // the first entry's timestamp must actually resolve; without this, every
+        // entry would silently fall back to untimestamped and the overflow this
+        // test targets would never be exercised
+        assert_eq!(loader.buf[0].timestamp.unix_timestamp(), 253_402_300_799);
+        // the increment saturates at the maximum representable instant rather than
+        // wrapping or resetting to the epoch
+        assert_eq!(loader.buf.last().unwrap().timestamp.unix_timestamp(), 253_402_300_799);
     }
 
     #[tokio::test]
@@ -222,9 +332,6 @@ cargo update
         let mut loader = TestLoader::default();
         zsh.load(&mut loader).await.unwrap();
 
-        assert_equal(
-            loader.buf.iter().map(|h| h.command.as_str()),
-            ["echo 你好", "ls ~/音乐"],
-        );
+        assert_equal(loader.buf.iter().map(|h| h.command.as_str()), ["echo 你好", "ls ~/音乐"]);
     }
 }

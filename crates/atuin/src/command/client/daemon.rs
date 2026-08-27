@@ -1,22 +1,23 @@
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{ErrorKind, Write};
+use std::ops::ControlFlow;
 #[cfg(unix)]
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use atuin_client::{
-    database::Sqlite, history::History, record::sqlite_store::SqliteStore, settings::Settings,
-};
+use atuin_client::database::Sqlite;
+use atuin_client::history::History;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::Settings;
+use atuin_common::futures::Backoff;
 use atuin_daemon::DaemonEvent;
 use atuin_daemon::client::{ControlClient, DaemonClientErrorKind, HistoryClient, classify_error};
 use clap::Subcommand;
 #[cfg(unix)]
 use daemonize::Daemonize;
 use eyre::{Result, WrapErr, bail, eyre};
-use fs4::fs_std::FileExt;
-use tokio::time::sleep;
 
 #[derive(clap::Args, Debug)]
 pub struct Cmd {
@@ -113,11 +114,15 @@ impl PidfileGuard {
     fn acquire(path: &Path) -> Result<Self> {
         let mut file = open_lock_file(path)?;
 
-        if !file.try_lock_exclusive()? {
-            bail!(
-                "daemon already running (pidfile lock busy at {})",
-                path.display()
-            );
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => {
+                bail!("daemon already running (pidfile lock busy at {})", path.display())
+            }
+            Err(TryLockError::Error(err)) => {
+                return Err(err)
+                    .wrap_err_with(|| format!("could not lock daemon pidfile {}", path.display()));
+            }
         }
 
         file.set_len(0)
@@ -158,7 +163,7 @@ fn is_legacy_daemon_error(err: &eyre::Report) -> bool {
     matches!(classify_error(err), DaemonClientErrorKind::Unimplemented)
 }
 
-fn should_retry_after_error(err: &eyre::Report) -> bool {
+pub(super) fn should_retry_after_error(err: &eyre::Report) -> bool {
     matches!(
         classify_error(err),
         DaemonClientErrorKind::Connect
@@ -190,29 +195,30 @@ fn open_lock_file(path: &Path) -> Result<File> {
 
 async fn wait_for_lock(path: &Path, timeout: Duration) -> Result<File> {
     let file = open_lock_file(path)?;
-    let start = Instant::now();
 
-    loop {
-        match file.try_lock_exclusive() {
-            Ok(true) => return Ok(file),
-            Ok(false) => {
-                if start.elapsed() >= timeout {
-                    bail!("timed out waiting for lock at {}", path.display());
+    let outcome = Backoff::Linear(LOCK_POLL)
+        .retry_sync(
+            || match file.try_lock() {
+                Ok(()) => ControlFlow::Break(Ok(())),
+                Err(TryLockError::WouldBlock) => ControlFlow::Continue(()),
+                Err(TryLockError::Error(err)) => {
+                    ControlFlow::Break(Err(eyre!("could not lock {}: {err}", path.display())))
                 }
+            },
+            timeout,
+        )
+        .await;
 
-                sleep(LOCK_POLL).await;
-            }
-            Err(err) => {
-                return Err(eyre!("could not lock {}: {err}", path.display()));
-            }
-        }
+    match outcome {
+        Ok(Ok(())) => Ok(file),
+        Ok(Err(err)) => Err(err),
+        Err(()) => bail!("timed out waiting for lock at {}", path.display()),
     }
 }
 
 async fn wait_for_pidfile_available(path: &Path, timeout: Duration) -> Result<()> {
     let file = wait_for_lock(path, timeout).await?;
-    file.unlock()
-        .wrap_err_with(|| format!("failed to unlock {}", path.display()))?;
+    file.unlock().wrap_err_with(|| format!("failed to unlock {}", path.display()))?;
     Ok(())
 }
 
@@ -221,7 +227,7 @@ async fn connect_client(settings: &Settings) -> Result<HistoryClient> {
         #[cfg(not(unix))]
         settings.daemon.tcp_port,
         #[cfg(unix)]
-        settings.daemon.socket_path.clone(),
+        settings.daemon.existing_socket_path().into_owned(),
     )
     .await
 }
@@ -254,11 +260,7 @@ fn spawn_daemon_process() -> Result<()> {
     let exe = std::env::current_exe().wrap_err("could not locate atuin executable")?;
 
     let mut cmd = Command::new(exe);
-    cmd.arg("daemon")
-        .arg("start")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    cmd.arg("daemon").arg("start").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
 
     #[cfg(unix)]
     cmd.arg("--daemonize");
@@ -268,67 +270,88 @@ fn spawn_daemon_process() -> Result<()> {
     Ok(())
 }
 
-fn startup_timeout(settings: &Settings) -> Duration {
-    Duration::from_secs_f64(settings.local_timeout.max(0.5) + 2.0)
+fn startup_timeout(settings: &Settings) -> Result<Duration> {
+    Duration::try_from_secs_f64(settings.local_timeout.max(0.5) + 2.0)
+        .wrap_err("invalid local_timeout setting")
 }
 
+/// An error that occurred while trying to remove a socket.
 #[cfg(unix)]
-fn remove_stale_socket_if_present(settings: &Settings) -> Result<()> {
+#[derive(Debug, thiserror::Error)]
+#[error("failed to remove daemon socket {}: {source}", .path.display())]
+struct RemoveSocketError {
+    path: PathBuf,
+    source: std::io::Error,
+}
+
+/// Remove the daemon's socket from every path it may be at, subject to `should_remove`.
+#[cfg(unix)]
+fn remove_sockets(
+    settings: &Settings,
+    should_remove: impl Fn(&Path) -> bool,
+) -> Result<(), RemoveSocketError> {
     if settings.daemon.systemd_socket {
         return Ok(());
     }
 
-    let socket_path = Path::new(&settings.daemon.socket_path);
-    if !socket_path.exists() {
-        return Ok(());
+    let mut error = None;
+    for socket_path in settings.daemon.potential_socket_paths() {
+        if !socket_path.exists() || !should_remove(&socket_path) {
+            continue;
+        }
+
+        if let Err(e) = fs::remove_file(&socket_path)
+            && e.kind() != ErrorKind::NotFound
+        {
+            // Log the error because we only return the first error when multiple occur.
+            tracing::error!("failed to remove daemon socket {}: {e}", socket_path.display());
+            error.get_or_insert_with(|| RemoveSocketError {
+                path: socket_path.into_owned(),
+                source: e,
+            });
+        }
     }
 
-    match StdUnixStream::connect(socket_path) {
-        Ok(stream) => {
-            drop(stream);
-            Ok(())
-        }
-        Err(err) if err.kind() == ErrorKind::ConnectionRefused => {
-            fs::remove_file(socket_path).wrap_err_with(|| {
-                format!(
-                    "failed to remove stale daemon socket {}",
-                    socket_path.display()
-                )
-            })?;
-            Ok(())
-        }
-        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
-        Err(_) => Ok(()),
-    }
+    error.map_or(Ok(()), Err)
+}
+
+/// Remove any socket left behind by a daemon that is no longer listening.
+#[cfg(unix)]
+fn remove_stale_socket_if_present(settings: &Settings) -> Result<(), RemoveSocketError> {
+    remove_sockets(settings, |socket_path| {
+        // A refused connection means the socket is left over from a daemon that is gone.
+        matches!(
+            StdUnixStream::connect(socket_path),
+            Err(e) if e.kind() == ErrorKind::ConnectionRefused
+        )
+    })
 }
 
 async fn wait_until_ready(settings: &Settings, timeout: Duration) -> Result<HistoryClient> {
-    let start = Instant::now();
-    let mut last_error = eyre!("daemon did not become ready");
-
-    loop {
-        match probe(settings).await {
-            Probe::Ready(client) => return Ok(client),
-            Probe::NeedsRestart(reason) => {
-                last_error = eyre!(reason);
-            }
-            Probe::Unreachable(err) => {
-                if is_legacy_daemon_error(&err) {
-                    return Err(err.wrap_err(LEGACY_DAEMON_RESTART_MESSAGE));
+    Backoff::Linear(STARTUP_POLL)
+        .retry(
+            || async move {
+                match probe(settings).await {
+                    Probe::Ready(client) => ControlFlow::Break(Ok(client)),
+                    Probe::NeedsRestart(reason) => ControlFlow::Continue(eyre!(reason)),
+                    Probe::Unreachable(err) => {
+                        if is_legacy_daemon_error(&err) {
+                            ControlFlow::Break(Err(err.wrap_err(LEGACY_DAEMON_RESTART_MESSAGE)))
+                        } else {
+                            ControlFlow::Continue(err)
+                        }
+                    }
                 }
-                last_error = err;
-            }
-        }
-
-        if start.elapsed() >= timeout {
-            return Err(last_error.wrap_err(format!(
+            },
+            timeout,
+        )
+        .await
+        .unwrap_or_else(|last| {
+            Err(last.wrap_err(format!(
                 "timed out waiting for daemon startup after {}ms",
                 timeout.as_millis()
-            )));
-        }
-
-        sleep(STARTUP_POLL).await;
-    }
+            )))
+        })
 }
 
 #[allow(clippy::unnecessary_wraps)]
@@ -336,7 +359,8 @@ fn ensure_autostart_supported(settings: &Settings) -> Result<()> {
     #[cfg(unix)]
     if settings.daemon.systemd_socket {
         bail!(
-            "daemon autostart is incompatible with `daemon.systemd_socket = true`; use systemd to manage the daemon"
+            "daemon autostart is incompatible with `daemon.systemd_socket = true`; use systemd to \
+             manage the daemon"
         );
     }
     #[cfg(not(unix))]
@@ -355,7 +379,7 @@ fn ensure_autostart_supported(settings: &Settings) -> Result<()> {
 pub async fn ensure_daemon_running(settings: &Settings) -> Result<()> {
     ensure_autostart_supported(settings)?;
 
-    let timeout = startup_timeout(settings);
+    let timeout = startup_timeout(settings)?;
     let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
     let startup_lock_path = daemon_startup_lock_path(&pidfile_path);
     let startup_lock = wait_for_lock(&startup_lock_path, timeout).await?;
@@ -406,25 +430,46 @@ fn ensure_reply_compatible(settings: &Settings, version: &str, protocol: u32) ->
     bail!("{message}. Enable `daemon.autostart = true` or restart the daemon manually");
 }
 
-pub async fn start_history(settings: &Settings, history: History) -> Result<String> {
-    match async {
-        connect_client(settings)
-            .await?
-            .start_history(history.clone())
-            .await
-    }
-    .await
+#[derive(Clone, Copy)]
+struct TryWithRestartOptions {
+    /// Whether to resend the command if the daemon isn't the expected version.
+    pub retry_on_version_mismatch: bool,
+}
+
+/// Try to send a request to the daemon, restarting it and retrying if necessary.
+///
+/// `context` will be passed to the closure. Compared to capturing the needed context in the
+/// closure, this may reduce the number of required clones.
+async fn try_with_restart<C, F, R>(
+    settings: &Settings,
+    send_request: F,
+    context: C,
+    options: TryWithRestartOptions,
+) -> Result<R>
+where
+    C: Clone + Sync,
+    F: AsyncFn(&mut HistoryClient, C) -> Result<R> + Sync,
+    R: atuin_daemon::history::VersionedReply,
+{
+    match async { send_request(&mut connect_client(settings).await?, context.clone()).await }.await
     {
         Ok(resp) => {
-            if daemon_matches_expected(&resp.version, resp.protocol) {
-                return Ok(resp.id);
+            if daemon_matches_expected(resp.version(), resp.protocol()) {
+                return Ok(resp);
             }
 
             if !settings.daemon.autostart {
                 return Err(eyre!(
                     "{}. Enable `daemon.autostart = true` or restart the daemon manually",
-                    daemon_mismatch_message(&resp.version, resp.protocol)
+                    daemon_mismatch_message(resp.version(), resp.protocol())
                 ));
+            }
+
+            if !options.retry_on_version_mismatch {
+                // We don't need to retry the request, so only restart to make subsequent hook calls
+                // target the expected version.
+                let _ = restart_daemon(settings).await;
+                return Ok(resp);
             }
         }
         Err(err) if !settings.daemon.autostart => return Err(err),
@@ -432,50 +477,47 @@ pub async fn start_history(settings: &Settings, history: History) -> Result<Stri
         Err(_) => {}
     }
 
-    let resp = restart_daemon(settings)
-        .await?
-        .start_history(history)
-        .await?;
-    ensure_reply_compatible(settings, &resp.version, resp.protocol)?;
+    let resp = send_request(&mut restart_daemon(settings).await?, context).await?;
+    ensure_reply_compatible(settings, resp.version(), resp.protocol())?;
+    Ok(resp)
+}
+
+pub async fn start_history(settings: &Settings, history: History) -> Result<String> {
+    let resp = try_with_restart(
+        settings,
+        async |client, history| client.start_history(history).await,
+        history,
+        TryWithRestartOptions {
+            retry_on_version_mismatch: true,
+        },
+    )
+    .await?;
     Ok(resp.id)
 }
 
 pub async fn end_history(settings: &Settings, id: String, duration: u64, exit: i64) -> Result<()> {
-    match async {
-        connect_client(settings)
-            .await?
-            .end_history(id.clone(), duration, exit)
-            .await
-    }
-    .await
-    {
-        Ok(resp) => {
-            if daemon_matches_expected(&resp.version, resp.protocol) {
-                return Ok(());
-            }
+    try_with_restart(
+        settings,
+        async |client, id| client.end_history(id, duration, exit).await,
+        id,
+        TryWithRestartOptions {
+            retry_on_version_mismatch: false,
+        },
+    )
+    .await?;
+    Ok(())
+}
 
-            if !settings.daemon.autostart {
-                return Err(eyre!(
-                    "{}. Enable `daemon.autostart = true` or restart the daemon manually",
-                    daemon_mismatch_message(&resp.version, resp.protocol)
-                ));
-            }
-
-            // End succeeded on the running daemon, so avoid replaying it.
-            // We only restart to make subsequent hook calls target the expected version.
-            let _ = restart_daemon(settings).await;
-            return Ok(());
-        }
-        Err(err) if !settings.daemon.autostart => return Err(err),
-        Err(err) if !should_retry_after_error(&err) => return Err(err),
-        Err(_) => {}
-    }
-
-    let resp = restart_daemon(settings)
-        .await?
-        .end_history(id, duration, exit)
-        .await?;
-    ensure_reply_compatible(settings, &resp.version, resp.protocol)?;
+pub async fn cancel_history(settings: &Settings, id: String) -> Result<()> {
+    try_with_restart(
+        settings,
+        async |client, id| client.cancel_history(id).await,
+        id,
+        TryWithRestartOptions {
+            retry_on_version_mismatch: false,
+        },
+    )
+    .await?;
     Ok(())
 }
 
@@ -545,7 +587,7 @@ async fn status_cmd(settings: &Settings) -> Result<()> {
             println!("  Protocol: {}", status.protocol);
             println!("  Healthy:  {}", status.healthy);
             #[cfg(unix)]
-            println!("  Socket:   {}", settings.daemon.socket_path);
+            println!("  Socket:   {}", settings.daemon.existing_socket_path().display());
             #[cfg(not(unix))]
             println!("  Port:     {}", settings.daemon.tcp_port);
         }
@@ -609,7 +651,7 @@ async fn restart_cmd(settings: &Settings) -> Result<()> {
     spawn_daemon_process()?;
     println!("Starting daemon...");
 
-    let timeout = startup_timeout(settings);
+    let timeout = startup_timeout(settings)?;
     let status = wait_until_ready(settings, timeout).await?.status().await?;
 
     println!("Daemon restarted");
@@ -627,10 +669,7 @@ pub fn daemonize_current_process() -> Result<()> {
     let cwd =
         std::env::current_dir().wrap_err("could not determine current directory for daemon")?;
 
-    Daemonize::new()
-        .working_directory(cwd)
-        .start()
-        .wrap_err("failed to daemonize process")?;
+    Daemonize::new().working_directory(cwd).start().wrap_err("failed to daemonize process")?;
 
     Ok(())
 }
@@ -642,7 +681,7 @@ async fn run(
     force: bool,
 ) -> Result<()> {
     if force {
-        force_cleanup(&settings);
+        force_cleanup(&settings).await;
     }
 
     let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
@@ -654,7 +693,7 @@ async fn run(
 }
 
 /// Force cleanup: kill existing daemon process and remove socket.
-fn force_cleanup(settings: &Settings) {
+async fn force_cleanup(settings: &Settings) {
     let pidfile_path = Path::new(&settings.daemon.pidfile_path);
 
     // Read and kill the existing process if pidfile exists
@@ -662,10 +701,10 @@ fn force_cleanup(settings: &Settings) {
         if let Ok(contents) = fs::read_to_string(pidfile_path)
             && let Some(pid_str) = contents.lines().next()
             && let Ok(pid) = pid_str.parse::<u32>()
+            && let Err(e) =
+                atuin_common::os::process::force_terminate(pid, Duration::from_secs(2)).await
         {
-            kill_process(pid);
-            // Give it a moment to release resources
-            std::thread::sleep(Duration::from_millis(100));
+            tracing::warn!("could not terminate existing daemon (pid {pid}): {e}");
         }
 
         // Remove the pidfile
@@ -676,72 +715,44 @@ fn force_cleanup(settings: &Settings) {
         }
     }
 
-    // Remove the socket file
+    // Remove the socket files
     #[cfg(unix)]
-    {
-        let socket_path = Path::new(&settings.daemon.socket_path);
-        if socket_path.exists()
-            && let Err(e) = fs::remove_file(socket_path)
-            && e.kind() != ErrorKind::NotFound
-        {
-            tracing::warn!("failed to remove socket: {e}");
-        }
+    if let Err(e) = remove_sockets(settings, |_| true) {
+        tracing::warn!("{e}");
     }
-}
-
-/// Kill a process by PID.
-#[cfg(unix)]
-fn kill_process(pid: u32) {
-    // Use kill command to send SIGTERM for graceful shutdown
-    let _ = Command::new("kill")
-        .args(["-TERM", &pid.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-}
-
-/// Kill a process by PID.
-#[cfg(not(unix))]
-fn kill_process(pid: u32) {
-    // On Windows, use taskkill
-    let _ = Command::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/F"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
 }
 
 #[cfg(test)]
 mod tests {
+    use rstest::{fixture, rstest};
+
     use super::*;
 
-    #[test]
-    fn test_version_matches() {
-        assert!(daemon_matches_expected(
-            DAEMON_VERSION,
-            DAEMON_PROTOCOL_VERSION
-        ));
+    #[rstest]
+    #[case::matches(DAEMON_VERSION, DAEMON_PROTOCOL_VERSION, true)]
+    #[case::wrong_version("0.0.0", DAEMON_PROTOCOL_VERSION, false)]
+    #[case::wrong_protocol(DAEMON_VERSION, 999, false)]
+    #[case::wrong_both("0.0.0", 999, false)]
+    fn daemon_matches_expected_cases(
+        #[case] version: &str,
+        #[case] protocol: u32,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(daemon_matches_expected(version, protocol), expected);
     }
 
-    #[test]
-    fn test_version_mismatch() {
-        assert!(!daemon_matches_expected("0.0.0", DAEMON_PROTOCOL_VERSION));
-        assert!(!daemon_matches_expected(DAEMON_VERSION, 999));
-        assert!(!daemon_matches_expected("0.0.0", 999));
-    }
-
-    #[test]
-    fn test_mismatch_message_version() {
-        let msg = daemon_mismatch_message("0.0.0", DAEMON_PROTOCOL_VERSION);
-        assert!(msg.contains("out of date"), "got: {msg}");
-        assert!(msg.contains("0.0.0"));
-        assert!(msg.contains(DAEMON_VERSION));
-    }
-
-    #[test]
-    fn test_mismatch_message_protocol() {
-        let msg = daemon_mismatch_message(DAEMON_VERSION, 999);
-        assert!(msg.contains("protocol mismatch"), "got: {msg}");
+    #[rstest]
+    #[case::out_of_date("0.0.0", DAEMON_PROTOCOL_VERSION, vec!["out of date", "0.0.0", DAEMON_VERSION])]
+    #[case::protocol_mismatch(DAEMON_VERSION, 999, vec!["protocol mismatch"])]
+    fn daemon_mismatch_message_cases(
+        #[case] version: &str,
+        #[case] protocol: u32,
+        #[case] needles: Vec<&str>,
+    ) {
+        let msg = daemon_mismatch_message(version, protocol);
+        for needle in needles {
+            assert!(msg.contains(needle), "got: {msg}");
+        }
     }
 
     #[test]
@@ -751,11 +762,17 @@ mod tests {
         assert_eq!(lock, PathBuf::from("/tmp/atuin-daemon.pid.startup.lock"));
     }
 
-    #[test]
-    fn test_pidfile_guard_acquire_and_drop() {
+    #[fixture]
+    fn pidfile() -> (tempfile::TempDir, PathBuf) {
         let tmp = tempfile::tempdir().unwrap();
-        let pidfile = tmp.path().join("daemon.pid");
+        let path = tmp.path().join("daemon.pid");
+        (tmp, path)
+    }
 
+    #[rstest]
+    fn test_pidfile_guard_acquire_and_drop(
+        #[from(pidfile)] (_tmp, pidfile): (tempfile::TempDir, PathBuf),
+    ) {
         {
             let _guard = PidfileGuard::acquire(&pidfile).unwrap();
             // Guard holds an exclusive lock — on Windows other handles cannot
@@ -772,11 +789,10 @@ mod tests {
         let _guard2 = PidfileGuard::acquire(&pidfile).unwrap();
     }
 
-    #[test]
-    fn test_pidfile_guard_prevents_double_acquire() {
-        let tmp = tempfile::tempdir().unwrap();
-        let pidfile = tmp.path().join("daemon.pid");
-
+    #[rstest]
+    fn test_pidfile_guard_prevents_double_acquire(
+        #[from(pidfile)] (_tmp, pidfile): (tempfile::TempDir, PathBuf),
+    ) {
         let _guard = PidfileGuard::acquire(&pidfile).unwrap();
         let result = PidfileGuard::acquire(&pidfile);
         assert!(result.is_err());

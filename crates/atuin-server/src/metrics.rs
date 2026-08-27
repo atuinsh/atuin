@@ -1,16 +1,14 @@
 use std::time::Instant;
 
-use axum::{
-    extract::{MatchedPath, Request},
-    middleware::Next,
-    response::IntoResponse,
-};
+use axum::extract::{MatchedPath, Request};
+use axum::middleware::Next;
+use axum::response::IntoResponse;
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 
+#[must_use]
 pub fn setup_metrics_recorder() -> PrometheusHandle {
-    const EXPONENTIAL_SECONDS: &[f64] = &[
-        0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
-    ];
+    const EXPONENTIAL_SECONDS: &[f64] =
+        &[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0];
 
     PrometheusBuilder::new()
         .set_buckets_for_metric(
@@ -23,8 +21,9 @@ pub fn setup_metrics_recorder() -> PrometheusHandle {
 }
 
 /// Middleware to record some common HTTP metrics
-/// Generic over B to allow for arbitrary body types (eg Vec<u8>, Streams, a deserialized thing, etc)
-/// Someday tower-http might provide a metrics middleware: https://github.com/tower-rs/tower-http/issues/57
+///
+/// Generic over B to allow for arbitrary body types (eg `Vec<u8>`, `Stream`s, a deserialized thing, etc).
+/// Someday tower-http might provide a metrics middleware: <https://github.com/tower-rs/tower-http/issues/57>
 pub async fn track_metrics(req: Request, next: Next) -> impl IntoResponse {
     let start = Instant::now();
 
@@ -42,11 +41,7 @@ pub async fn track_metrics(req: Request, next: Next) -> impl IntoResponse {
     let latency = start.elapsed().as_secs_f64();
     let status = response.status().as_u16().to_string();
 
-    let labels = [
-        ("method", method.to_string()),
-        ("path", path),
-        ("status", status),
-    ];
+    let labels = [("method", method.to_string()), ("path", path), ("status", status)];
 
     metrics::counter!("http_requests_total", &labels).increment(1);
     metrics::histogram!("http_requests_duration_seconds", &labels).record(latency);

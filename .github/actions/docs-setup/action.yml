@@ -1,0 +1,29 @@
+name: Docs deploy environment
+description: >-
+  Install uv, Python, and the docs dependencies, and configure the git
+  identity mike commits to gh-pages with. Expects the repo to already be
+  checked out with full history.
+
+runs:
+  using: composite
+  steps:
+    - name: Install uv
+      uses: astral-sh/setup-uv@v8.3.2
+      with:
+        version: "latest"
+
+    - name: Set up Python
+      shell: bash
+      working-directory: docs
+      run: uv python install 3.12
+
+    - name: Install dependencies
+      shell: bash
+      working-directory: docs
+      run: uv sync
+
+    - name: Configure git identity for mike
+      shell: bash
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

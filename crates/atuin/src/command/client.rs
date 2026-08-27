@@ -1,44 +1,15 @@
-use std::fs::{self, OpenOptions};
-use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use atuin_client::database::Sqlite;
+use atuin_client::logs::FromSettings;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::Settings;
+use atuin_client::theme;
+use atuin_common::logs::{self, LogConfig};
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
-use atuin_client::{
-    database::Sqlite, record::sqlite_store::SqliteStore, settings::Settings, theme,
-};
-use tracing_appender::rolling::{RollingFileAppender, Rotation};
-use tracing_subscriber::{
-    Layer, filter::EnvFilter, filter::LevelFilter, fmt, fmt::format::FmtSpan, prelude::*,
-};
-
-fn cleanup_old_logs(log_dir: &Path, prefix: &str, retention_days: u64) {
-    let cutoff = std::time::SystemTime::now()
-        - std::time::Duration::from_secs(retention_days * 24 * 60 * 60);
-
-    let Ok(entries) = fs::read_dir(log_dir) else {
-        return;
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-
-        // Match files like "search.log.2024-02-23" or "daemon.log.2024-02-23"
-        if !name.starts_with(prefix) || name == prefix {
-            continue;
-        }
-
-        if let Ok(metadata) = entry.metadata()
-            && let Ok(modified) = metadata.modified()
-            && modified < cutoff
-        {
-            let _ = fs::remove_file(&path);
-        }
-    }
-}
+use crate::logs::LogCtx;
 
 #[cfg(feature = "sync")]
 mod sync;
@@ -58,12 +29,15 @@ mod hook;
 mod import;
 mod info;
 mod init;
+mod internal;
 mod kv;
 mod scripts;
 mod search;
 mod setup;
 mod stats;
 mod store;
+#[cfg(feature = "self-update")]
+mod update;
 mod wrapped;
 
 #[derive(Subcommand, Debug)]
@@ -126,8 +100,15 @@ pub enum Cmd {
     #[command()]
     Doctor,
 
+    /// Update atuin to the latest version on your release channel
+    #[cfg(feature = "self-update")]
     #[command()]
-    Wrapped { year: Option<i32> },
+    Update(update::Cmd),
+
+    #[command()]
+    Wrapped {
+        year: Option<i32>,
+    },
 
     /// *Experimental* Manage the background daemon
     #[cfg(feature = "daemon")]
@@ -144,7 +125,36 @@ pub enum Cmd {
     /// Run the AI assistant
     #[cfg(feature = "ai")]
     #[command(subcommand)]
-    Ai(atuin_ai::commands::Commands),
+    Ai(atuin_ai::commands::Command),
+
+    /// Start an MCP server exposing history search to AI tools (stdio)
+    #[cfg(feature = "ai")]
+    #[command()]
+    Mcp,
+
+    /// Internal subcommands, not for direct use by users.
+    #[command(
+        subcommand,
+        hide = true,
+        name = "__internal",
+        help_template = "error: this command is not meant to be accessed directly",
+        disable_help_flag = true,
+        disable_help_subcommand = true
+    )]
+    Internal(internal::Cmd),
+
+    /// We want to exclude the `__internal` subcommand from Clap's `infer_subcommands`; otherwise,
+    /// a user could access it simply by typing `atuin _`. However, Clap has no way to disable
+    /// `infer_subcommands` for a single command. As a workaround, we define a dummy command with
+    /// the same name but with an extra understore, which forces `__internal` to be typed out in
+    /// entirety, since any prefix of the name would be ambiguous.
+    #[command(
+        hide = true,
+        name = "__internal_",
+        disable_help_flag = true,
+        disable_help_subcommand = true
+    )]
+    InternalDecoy,
 }
 
 impl Cmd {
@@ -174,6 +184,11 @@ impl Cmd {
         // doing anything else. History commands are performance-sensitive and run before and after
         // every shell command, so we want to skip any unnecessary initialization for them.
         let settings = Settings::new().wrap_err("could not load client settings")?;
+        let _logging = self
+            .log_config(&settings)
+            .map(|c| LogCtx::try_enable("atuin", &c))
+            .transpose()
+            .wrap_err("failed to enable logging")?;
         let theme_manager = theme::ThemeManager::new(settings.theme.debug, None);
         let res = runtime.block_on(self.run_inner(settings, theme_manager));
 
@@ -182,158 +197,15 @@ impl Cmd {
         res
     }
 
-    #[allow(clippy::too_many_lines, clippy::future_not_send)]
+    #[allow(clippy::too_many_lines)]
+    // `atuin_ai::commands::run` is not `Send` because `eye_declare` holds a `StdoutLock` across
+    // await points.
+    #[allow(clippy::future_not_send)]
     async fn run_inner(
         self,
         mut settings: Settings,
         mut theme_manager: theme::ThemeManager,
     ) -> Result<()> {
-        // ATUIN_LOG env var overrides config file level settings
-        let env_log_set = std::env::var("ATUIN_LOG").is_ok();
-
-        // Base filter from env var (or empty if not set)
-        let base_filter =
-            EnvFilter::from_env("ATUIN_LOG").add_directive("sqlx_sqlite::regexp=off".parse()?);
-
-        let is_interactive_search = matches!(&self, Self::Search(cmd) if cmd.is_interactive());
-        // Use file-based logging for interactive search (TUI mode)
-        let use_search_logging = is_interactive_search && settings.logs.search_enabled();
-
-        // Use file-based logging for daemon
-        #[cfg(feature = "daemon")]
-        let use_daemon_logging = matches!(&self, Self::Daemon(_)) && settings.logs.daemon_enabled();
-
-        #[cfg(not(feature = "daemon"))]
-        let use_daemon_logging = false;
-
-        // Check if daemon should also log to console
-        #[cfg(feature = "daemon")]
-        let daemon_show_logs = matches!(&self, Self::Daemon(cmd) if cmd.show_logs());
-
-        #[cfg(not(feature = "daemon"))]
-        let daemon_show_logs = false;
-
-        // Set up span timing JSON logs if ATUIN_SPAN is set
-        let span_path = std::env::var("ATUIN_SPAN").ok().map(|p| {
-            if p.is_empty() {
-                "atuin-spans.json".to_string()
-            } else {
-                p
-            }
-        });
-
-        // Helper to create span timing layer
-        macro_rules! make_span_layer {
-            ($path:expr) => {{
-                let span_file = OpenOptions::new()
-                    .create(true)
-                    .truncate(true)
-                    .write(true)
-                    .open($path)?;
-                Some(
-                    fmt::layer()
-                        .json()
-                        .with_writer(span_file)
-                        .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
-                        .with_filter(LevelFilter::TRACE),
-                )
-            }};
-        }
-
-        // Build the subscriber with all configured layers
-        if use_search_logging {
-            let search_filename = settings.logs.search.file.clone();
-            let log_dir = PathBuf::from(&settings.logs.dir);
-            fs::create_dir_all(&log_dir)?;
-
-            // Clean up old log files
-            cleanup_old_logs(&log_dir, &search_filename, settings.logs.search_retention());
-
-            let file_appender =
-                RollingFileAppender::new(Rotation::DAILY, &log_dir, &search_filename);
-
-            // Use config level unless ATUIN_LOG is set
-            let filter = if env_log_set {
-                base_filter
-            } else {
-                EnvFilter::default()
-                    .add_directive(settings.logs.search_level().as_directive().parse()?)
-                    .add_directive("sqlx_sqlite::regexp=off".parse()?)
-            };
-
-            let base = tracing_subscriber::registry().with(
-                fmt::layer()
-                    .with_writer(file_appender)
-                    .with_ansi(false)
-                    .with_filter(filter),
-            );
-
-            match &span_path {
-                Some(sp) => {
-                    base.with(make_span_layer!(sp)).init();
-                }
-                None => {
-                    base.init();
-                }
-            }
-        } else if use_daemon_logging {
-            let daemon_filename = settings.logs.daemon.file.clone();
-            let log_dir = PathBuf::from(&settings.logs.dir);
-            fs::create_dir_all(&log_dir)?;
-
-            // Clean up old log files
-            cleanup_old_logs(&log_dir, &daemon_filename, settings.logs.daemon_retention());
-
-            let file_appender =
-                RollingFileAppender::new(Rotation::DAILY, &log_dir, &daemon_filename);
-
-            // Use config level unless ATUIN_LOG is set
-            let file_filter = if env_log_set {
-                base_filter
-            } else {
-                EnvFilter::default()
-                    .add_directive(settings.logs.daemon_level().as_directive().parse()?)
-                    .add_directive("sqlx_sqlite::regexp=off".parse()?)
-            };
-
-            let file_layer = fmt::layer()
-                .with_writer(file_appender)
-                .with_ansi(false)
-                .with_filter(file_filter);
-
-            // Optionally add console layer for --show-logs
-            if daemon_show_logs {
-                let console_filter = EnvFilter::from_env("ATUIN_LOG")
-                    .add_directive("sqlx_sqlite::regexp=off".parse()?);
-
-                let console_layer = fmt::layer().with_filter(console_filter);
-
-                let base = tracing_subscriber::registry()
-                    .with(file_layer)
-                    .with(console_layer);
-
-                match &span_path {
-                    Some(sp) => {
-                        base.with(make_span_layer!(sp)).init();
-                    }
-                    None => {
-                        base.init();
-                    }
-                }
-            } else {
-                let base = tracing_subscriber::registry().with(file_layer);
-
-                match &span_path {
-                    Some(sp) => {
-                        base.with(make_span_layer!(sp)).init();
-                    }
-                    None => {
-                        base.init();
-                    }
-                }
-            }
-        }
-
         tracing::trace!(command = ?self, "client command");
 
         // Skip initializing any databases for history
@@ -344,15 +216,26 @@ impl Cmd {
             Self::Hook(hook) => return hook.run(&settings).await,
             Self::Init(init) => return init.run(&settings).await,
             Self::Doctor => return doctor::run(&settings).await,
+            #[cfg(feature = "self-update")]
+            Self::Update(update) => return update.run(&settings).await,
             Self::Config(config) => return config.run(&settings).await,
+            Self::Internal(cmd) => return cmd.run(&settings).await,
+            Self::InternalDecoy => {
+                eprintln!("error: this command is not meant to be accessed directly");
+                std::process::exit(1);
+            }
             _ => {}
         }
 
-        let db_path = PathBuf::from(settings.db_path.as_str());
-        let record_store_path = PathBuf::from(settings.record_store_path.as_str());
+        let db_path = &settings.db_path;
+        let record_store_path = &settings.record_store_path;
 
-        let db = Sqlite::new(db_path, settings.local_timeout).await?;
-        let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
+        let db = Sqlite::new(db_path, Duration::try_from_secs_f64(settings.local_timeout)?).await?;
+        let sqlite_store = SqliteStore::new(
+            record_store_path,
+            Duration::try_from_secs_f64(settings.local_timeout)?,
+        )
+        .await?;
 
         let theme_name = settings.theme.name.clone();
         let theme = theme_manager.load_theme(theme_name.as_str(), settings.theme.max_depth);
@@ -392,12 +275,47 @@ impl Cmd {
             #[cfg(feature = "daemon")]
             Self::Daemon(cmd) => cmd.run(settings, sqlite_store, db).await,
 
-            Self::History(_) | Self::Hook(_) | Self::Init(_) | Self::Doctor | Self::Config(_) => {
+            Self::History(_)
+            | Self::Hook(_)
+            | Self::Init(_)
+            | Self::Doctor
+            | Self::Config(_)
+            | Self::Internal(_)
+            | Self::InternalDecoy => {
                 unreachable!()
             }
 
+            #[cfg(feature = "self-update")]
+            Self::Update(_) => unreachable!(),
+
             #[cfg(feature = "ai")]
             Self::Ai(cli) => atuin_ai::commands::run(cli, &settings).await,
+
+            #[cfg(feature = "ai")]
+            Self::Mcp => atuin_ai::mcp::run(&db).await,
+        }
+    }
+
+    fn log_config(&self, settings: &Settings) -> Option<LogConfig> {
+        match self {
+            Self::History(cmd) => cmd.log_config(),
+
+            Self::Search(cmd) if cmd.is_interactive() => {
+                Some(LogConfig::from_settings(&settings.logs, &settings.logs.search))
+            }
+
+            #[cfg(feature = "daemon")]
+            Self::Daemon(cmd) => Some(LogConfig {
+                file: logs::FileConfig::from_settings(&settings.logs, &settings.logs.daemon),
+                stderr: cmd.show_logs().then(logs::StderrConfig::verbose),
+            }),
+
+            #[cfg(feature = "ai")]
+            Self::Ai(cmd) => Some(cmd.log_config(settings)),
+
+            Self::Internal(cmd) => cmd.log_config(),
+
+            _ => Some(LogConfig::stderr_only()),
         }
     }
 }

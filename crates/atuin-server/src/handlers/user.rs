@@ -1,33 +1,24 @@
 use std::borrow::Borrow;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::time::Duration;
 
-use argon2::{
-    Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version,
-    password_hash::SaltString,
-};
-use axum::{
-    Json,
-    extract::{Path, State},
-    http::StatusCode,
-};
+use argon2::password_hash::SaltString;
+use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version};
+use atuin_common::utils::crypto_random_string;
+use atuin_domain::api::*;
+use atuin_server_database::models::{NewSession, NewUser};
+use atuin_server_database::{Database, DbError};
+use axum::Json;
+use axum::extract::{ConnectInfo, Path, State};
+use axum::http::StatusCode;
 use metrics::counter;
-
 use rand::rngs::OsRng;
-use tracing::{debug, error, info, instrument};
-
-use atuin_common::tls::ensure_crypto_provider;
+use reqwest::header::CONTENT_TYPE;
+use tracing::{debug, error, info, instrument, warn};
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::router::{AppState, UserAuth};
-use atuin_server_database::{
-    Database, DbError,
-    models::{NewSession, NewUser},
-};
-
-use reqwest::header::CONTENT_TYPE;
-
-use atuin_common::{api::*, utils::crypto_random_string};
 
 pub fn verify_str(hash: &str, password: &str) -> bool {
     let arg2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::default());
@@ -39,8 +30,7 @@ pub fn verify_str(hash: &str, password: &str) -> bool {
 
 // Try to send a Discord webhook once - if it fails, we don't retry. "At most once", and best effort.
 // Don't return the status because if this fails, we don't really care.
-async fn send_register_hook(url: &str, username: String, registered: String) {
-    ensure_crypto_provider();
+async fn send_register_hook(url: &url::Url, username: String, registered: String) {
     let hook = HashMap::from([
         ("username", username),
         ("content", format!("{registered} has just signed up!")),
@@ -49,8 +39,8 @@ async fn send_register_hook(url: &str, username: String, registered: String) {
     let client = reqwest::Client::new();
 
     let resp = client
-        .post(url)
-        .timeout(Duration::new(5, 0))
+        .post(url.clone())
+        .timeout(Duration::from_secs(5))
         .header(CONTENT_TYPE, "application/json")
         .json(&hook)
         .send()
@@ -62,7 +52,7 @@ async fn send_register_hook(url: &str, username: String, registered: String) {
     }
 }
 
-#[instrument(skip_all, fields(user.username = username.as_str()))]
+#[instrument(skip_all, err(level = "warn"), fields(user.username = username.as_str()))]
 pub async fn get<DB: Database>(
     Path(username): Path<String>,
     state: State<AppState<DB>>,
@@ -86,16 +76,14 @@ pub async fn get<DB: Database>(
     }))
 }
 
-#[instrument(skip_all)]
+#[instrument(skip_all, err(level = "warn"), fields(user.username = register.username.as_str()))]
 pub async fn register<DB: Database>(
     state: State<AppState<DB>>,
     Json(register): Json<RegisterRequest>,
 ) -> Result<Json<RegisterResponse>, ErrorResponseStatus<'static>> {
     if !state.settings.open_registration {
-        return Err(
-            ErrorResponse::reply("this server is not open for registrations")
-                .with_status(StatusCode::BAD_REQUEST),
-        );
+        return Err(ErrorResponse::reply("this server is not open for registrations")
+            .with_status(StatusCode::BAD_REQUEST));
     }
 
     for c in register.username.chars() {
@@ -128,6 +116,8 @@ pub async fn register<DB: Database>(
             );
         }
     };
+
+    info!(user.id = user_id, "registered new user");
 
     // 24 bytes encoded as base64
     let token = crypto_random_string::<24>();
@@ -162,7 +152,7 @@ pub async fn register<DB: Database>(
     }
 }
 
-#[instrument(skip_all, fields(user.id = user.id))]
+#[instrument(skip_all, err(level = "warn"), fields(user.id = user.id, user.username = user.username.as_str()))]
 pub async fn delete<DB: Database>(
     UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
@@ -179,10 +169,12 @@ pub async fn delete<DB: Database>(
 
     counter!("atuin_users_deleted").increment(1);
 
+    info!(user.id = user.id, "deleted user account");
+
     Ok(Json(DeleteUserResponse {}))
 }
 
-#[instrument(skip_all, fields(user.id = user.id, change_password))]
+#[instrument(skip_all, err(level = "warn"), fields(user.id = user.id))]
 pub async fn change_password<DB: Database>(
     UserAuth(mut user): UserAuth,
     state: State<AppState<DB>>,
@@ -190,10 +182,7 @@ pub async fn change_password<DB: Database>(
 ) -> Result<Json<ChangePasswordResponse>, ErrorResponseStatus<'static>> {
     let db = &state.0.database;
 
-    let verified = verify_str(
-        user.password.as_str(),
-        change_password.current_password.borrow(),
-    );
+    let verified = verify_str(user.password.as_str(), change_password.current_password.borrow());
     if !verified {
         return Err(
             ErrorResponse::reply("password is not correct").with_status(StatusCode::UNAUTHORIZED)
@@ -209,11 +198,15 @@ pub async fn change_password<DB: Database>(
         return Err(ErrorResponse::reply("failed to change user password")
             .with_status(StatusCode::INTERNAL_SERVER_ERROR));
     };
+
+    info!(user.id = user.id, "changed user password");
+
     Ok(Json(ChangePasswordResponse {}))
 }
 
-#[instrument(skip_all, fields(user.username = login.username.as_str()))]
+#[instrument(skip_all, err(level = "warn"), fields(client.ip = %addr.ip(), user.username = login.username.as_str()))]
 pub async fn login<DB: Database>(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     state: State<AppState<DB>>,
     login: Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, ErrorResponseStatus<'static>> {
@@ -247,13 +240,13 @@ pub async fn login<DB: Database>(
     let verified = verify_str(user.password.as_str(), login.password.borrow());
 
     if !verified {
-        debug!(user = user.username, "login failed");
+        warn!(user.id = user.id, "login failed: incorrect password");
         return Err(
             ErrorResponse::reply("password is not correct").with_status(StatusCode::UNAUTHORIZED)
         );
     }
 
-    debug!(user = user.username, "login success");
+    info!(user.id = user.id, "login succeeded");
 
     Ok(Json(LoginResponse {
         session: session.token,

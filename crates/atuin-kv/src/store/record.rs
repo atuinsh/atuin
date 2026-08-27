@@ -1,9 +1,7 @@
-use atuin_common::record::DecryptedData;
+use atuin_domain::record::{DecryptedData, RecordVersion};
 use eyre::{Result, bail, ensure, eyre};
 use typed_builder::TypedBuilder;
 
-pub const KV_VERSION: &str = "v1";
-pub const KV_TAG: &str = "kv";
 pub const KV_VAL_MAX_LEN: usize = 100 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, TypedBuilder)]
@@ -33,7 +31,7 @@ impl KvRecord {
         Ok(DecryptedData(output))
     }
 
-    pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
+    pub fn deserialize(data: &DecryptedData, version: &RecordVersion) -> Result<Self> {
         use rmp::decode;
 
         fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
@@ -41,7 +39,7 @@ impl KvRecord {
         }
 
         match version {
-            "v0" => {
+            RecordVersion::V0 => {
                 let mut bytes = decode::Bytes::new(&data.0);
 
                 let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
@@ -55,16 +53,16 @@ impl KvRecord {
                 let (value, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
 
                 if !bytes.is_empty() {
-                    bail!("trailing bytes in encoded kvrecord. malformed")
+                    bail!("trailing bytes in encoded kvrecord. malformed");
                 }
 
-                Ok(KvRecord {
+                Ok(Self {
                     namespace: namespace.to_owned(),
                     key: key.to_owned(),
                     value: Some(value.to_owned()),
                 })
             }
-            KV_VERSION => {
+            RecordVersion::V1 => {
                 let mut bytes = decode::Bytes::new(&data.0);
 
                 let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
@@ -86,17 +84,17 @@ impl KvRecord {
                 };
 
                 if !bytes.is_empty() {
-                    bail!("trailing bytes in encoded kvrecord. malformed")
+                    bail!("trailing bytes in encoded kvrecord. malformed");
                 }
 
-                Ok(KvRecord {
+                Ok(Self {
                     namespace: namespace.to_owned(),
                     key: key.to_owned(),
                     value,
                 })
             }
-            _ => {
-                bail!("unknown version {version:?}")
+            other => {
+                bail!("unknown kv record version {other:?}");
             }
         }
     }
@@ -104,39 +102,28 @@ impl KvRecord {
 
 #[cfg(test)]
 mod tests {
-    use super::{DecryptedData, KV_VERSION, KvRecord};
+    use atuin_domain::record::RecordVersion;
+    use rstest::rstest;
 
-    #[test]
-    fn encode_decode_some() {
+    use super::{DecryptedData, KvRecord};
+
+    #[rstest]
+    #[case::some(
+        Some("baz".to_owned()),
+        &[0x94, 0xa3, b'f', b'o', b'o', 0xa3, b'b', b'a', b'r', 0xc3, 0xa3, b'b', b'a', b'z']
+    )]
+    #[case::none(None, &[0x94, 0xa3, b'f', b'o', b'o', 0xa3, b'b', b'a', b'r', 0xc2])]
+    fn encode_decode(#[case] value: Option<String>, #[case] snapshot: &[u8]) {
         let kv = KvRecord {
             namespace: "foo".to_owned(),
             key: "bar".to_owned(),
-            value: Some("baz".to_owned()),
+            value,
         };
-        let snapshot = [
-            0x94, 0xa3, b'f', b'o', b'o', 0xa3, b'b', b'a', b'r', 0xc3, 0xa3, b'b', b'a', b'z',
-        ];
 
         let encoded = kv.serialize().unwrap();
-        let decoded = KvRecord::deserialize(&encoded, KV_VERSION).unwrap();
+        let decoded = KvRecord::deserialize(&encoded, &RecordVersion::V1).unwrap();
 
-        assert_eq!(encoded.0, &snapshot);
-        assert_eq!(decoded, kv);
-    }
-
-    #[test]
-    fn encode_decode_none() {
-        let kv = KvRecord {
-            namespace: "foo".to_owned(),
-            key: "bar".to_owned(),
-            value: None,
-        };
-        let snapshot = [0x94, 0xa3, b'f', b'o', b'o', 0xa3, b'b', b'a', b'r', 0xc2];
-
-        let encoded = kv.serialize().unwrap();
-        let decoded = KvRecord::deserialize(&encoded, KV_VERSION).unwrap();
-
-        assert_eq!(encoded.0, &snapshot);
+        assert_eq!(encoded.0.as_slice(), snapshot);
         assert_eq!(decoded, kv);
     }
 
@@ -148,11 +135,10 @@ mod tests {
             value: Some("baz".to_owned()),
         };
 
-        let snapshot = vec![
-            0x93, 0xa3, b'f', b'o', b'o', 0xa3, b'b', b'a', b'r', 0xa3, b'b', b'a', b'z',
-        ];
+        let snapshot =
+            vec![0x93, 0xa3, b'f', b'o', b'o', 0xa3, b'b', b'a', b'r', 0xa3, b'b', b'a', b'z'];
 
-        let decoded = KvRecord::deserialize(&DecryptedData(snapshot), "v0").unwrap();
+        let decoded = KvRecord::deserialize(&DecryptedData(snapshot), &RecordVersion::V0).unwrap();
 
         assert_eq!(decoded, kv);
     }

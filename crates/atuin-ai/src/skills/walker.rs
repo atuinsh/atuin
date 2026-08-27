@@ -10,7 +10,7 @@ const SKILL_FILENAME: &str = "SKILL.md";
 
 /// A skill file found on disk, before body interpolation.
 #[derive(Debug)]
-pub(crate) struct RawSkillFile {
+pub struct RawSkillFile {
     /// Full path to the SKILL.md file.
     pub path: PathBuf,
     /// The parent directory name, used as fallback skill name.
@@ -26,7 +26,7 @@ pub(crate) struct RawSkillFile {
 ///
 /// Project skills come first in the returned list (higher priority for
 /// deduplication).
-pub(crate) async fn discover(
+pub async fn discover(
     project_skills_dir: Option<&Path>,
     global_skills_dir: &Path,
 ) -> Vec<RawSkillFile> {
@@ -46,12 +46,12 @@ pub(crate) async fn discover(
 }
 
 /// The default global skills directory (`~/.config/atuin/skills/`).
-pub(crate) fn global_skills_dir() -> PathBuf {
+pub fn global_skills_dir() -> PathBuf {
     atuin_common::utils::config_dir().join("skills")
 }
 
 /// Given a project working directory, return the project skills directory.
-pub(crate) fn project_skills_dir(project_root: &Path) -> PathBuf {
+pub fn project_skills_dir(project_root: &Path) -> PathBuf {
     project_root.join(".atuin").join("skills")
 }
 
@@ -74,11 +74,8 @@ async fn scan_dir(dir: &Path, is_project: bool, out: &mut Vec<RawSkillFile>) {
             // Check for SKILL.md directly in this directory
             let skill_path = path.join(SKILL_FILENAME);
             if skill_path.is_file() {
-                let dir_name = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("unknown")
-                    .to_string();
+                let dir_name =
+                    path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown").to_string();
 
                 match tokio::fs::read_to_string(&skill_path).await {
                     Ok(content) => {
@@ -168,11 +165,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_directories_handled() {
-        let files = discover(
-            Some(Path::new("/does/not/exist")),
-            Path::new("/also/missing"),
-        )
-        .await;
+        let files = discover(Some(Path::new("/does/not/exist")), Path::new("/also/missing")).await;
         assert!(files.is_empty());
     }
 }

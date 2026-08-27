@@ -1,6 +1,9 @@
 use atuin_client::settings::Tmux;
-use atuin_dotfiles::store::{AliasStore, var::VarStore};
+use atuin_dotfiles::store::AliasStore;
+use atuin_dotfiles::store::var::VarStore;
 use eyre::Result;
+
+use super::StaticInitOptions;
 
 fn print_tmux_config(tmux: &Tmux) {
     if tmux.enabled {
@@ -11,11 +14,9 @@ fn print_tmux_config(tmux: &Tmux) {
     }
 }
 
-pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool, disable_ai: bool, tmux: &Tmux) {
-    let base = include_str!("../../../shell/atuin.zsh");
-
-    print_tmux_config(tmux);
-    println!("{base}");
+pub fn init_static(options: &StaticInitOptions<'_>) {
+    print_tmux_config(options.tmux);
+    println!("{}", crate::shell::ZSH);
 
     if std::env::var("ATUIN_NOBIND").is_err() {
         const BIND_CTRL_R: &str = r"bindkey -M emacs '^r' atuin-search
@@ -30,18 +31,16 @@ bindkey -M vicmd '^[OA' atuin-up-search-vicmd
 bindkey -M viins '^[OA' atuin-up-search-viins
 bindkey -M vicmd 'k' atuin-up-search-vicmd";
 
-        if !disable_ctrl_r {
+        if options.enable_ctrl_r {
             println!("{BIND_CTRL_R}");
         }
-        if !disable_up_arrow {
+        if options.enable_up_arrow {
             println!("{BIND_UP_ARROW}");
         }
 
         #[cfg(feature = "ai")]
-        if !disable_ai {
-            let bind_ai = atuin_ai::commands::init::generate_zsh_integration();
-
-            println!("{bind_ai}");
+        if options.enable_ai {
+            println!("{}", atuin_ai::shell::ZSH_INIT);
         }
     }
 }
@@ -49,12 +48,9 @@ bindkey -M vicmd 'k' atuin-up-search-vicmd";
 pub async fn init(
     aliases: AliasStore,
     vars: VarStore,
-    disable_up_arrow: bool,
-    disable_ctrl_r: bool,
-    disable_ai: bool,
-    tmux: &Tmux,
+    options: &StaticInitOptions<'_>,
 ) -> Result<()> {
-    init_static(disable_up_arrow, disable_ctrl_r, disable_ai, tmux);
+    init_static(options);
 
     let aliases = atuin_dotfiles::shell::zsh::alias_config(&aliases).await;
     let vars = atuin_dotfiles::shell::zsh::var_config(&vars).await;

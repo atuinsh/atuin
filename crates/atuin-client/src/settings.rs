@@ -1,101 +1,123 @@
-use std::{collections::HashMap, fmt, io::prelude::*, path::PathBuf, str::FromStr, sync::OnceLock};
-use tokio::sync::OnceCell;
+use std::collections::HashMap;
+use std::io::prelude::*;
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, OnceLock};
+#[cfg(test)]
+use std::time::Duration;
 
-use atuin_common::record::HostId;
-use atuin_common::utils;
+use atuin_common::logs::LogLevel;
+use atuin_common::path::PathExt;
+use atuin_domain::record::HostId;
 use clap::ValueEnum;
-use config::{
-    Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat, builder::DefaultState,
-};
-use eyre::{Context, Error, Result, bail, eyre};
+use config::builder::DefaultState;
+use config::{Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat};
+use eyre::{Context, Result, eyre};
 use fs_err::{File, create_dir_all};
 use humantime::parse_duration;
 use regex::RegexSet;
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use serde_with::DeserializeFromStr;
-use time::{OffsetDateTime, UtcOffset, format_description::FormatItem, macros::format_description};
+use thiserror::Error;
+use time::OffsetDateTime;
+use tokio::sync::OnceCell;
+use tracing::instrument;
+use url::Url;
 
-pub const HISTORY_PAGE_SIZE: i64 = 100;
 static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 
 static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 static META_CONFIG: OnceLock<(String, f64)> = OnceLock::new();
 static META_STORE: OnceCell<crate::meta::MetaStore> = OnceCell::const_new();
 
+pub mod daemon;
 mod dotfiles;
 mod kv;
 pub(crate) mod meta;
 mod scripts;
+pub mod shells;
 pub mod watcher;
 
-pub struct HubEndpoint(String);
+pub use daemon::Daemon;
+pub use shells::Shells;
 
-/// Default sync address for Atuin's hosted service
-pub const DEFAULT_SYNC_ADDRESS: &str = "https://api.atuin.sh";
+/// Default sync address for Atuin's hosted service, parsed once.
+pub static DEFAULT_SYNC_URL: LazyLock<Url> =
+    LazyLock::new(|| Url::parse("https://api.atuin.sh").expect("default sync address is valid"));
 
-/// Default Hub web/API endpoint for Atuin's hosted service
-pub const DEFAULT_HUB_ENDPOINT: &str = "https://hub.atuin.sh";
+/// Default Hub web/API endpoint for Atuin's hosted service, parsed once.
+pub static DEFAULT_HUB_URL: LazyLock<Url> =
+    LazyLock::new(|| Url::parse("https://hub.atuin.sh").expect("default hub endpoint is valid"));
 
-impl Default for HubEndpoint {
-    fn default() -> Self {
-        HubEndpoint(DEFAULT_HUB_ENDPOINT.to_string())
-    }
-}
-
-impl AsRef<str> for HubEndpoint {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Copy, ValueEnum, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SearchMode {
-    #[serde(rename = "prefix")]
     Prefix,
-
-    #[serde(rename = "fulltext")]
-    #[clap(aliases = &["fulltext"])]
     FullText,
-
-    #[serde(rename = "fuzzy")]
     Fuzzy,
-
-    #[serde(rename = "skim")]
-    Skim,
-
-    #[serde(rename = "daemon-fuzzy")]
-    #[clap(aliases = &["daemon-fuzzy"])]
     DaemonFuzzy,
 }
 
-impl SearchMode {
-    pub fn as_str(&self) -> &'static str {
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum RequestedSearchMode {
+    Prefix,
+    #[clap(alias("full-text"))]
+    Fulltext,
+    Fuzzy,
+    DaemonFuzzy,
+    /// Removed: falls back to [`Self::Fuzzy`] but shows a warning.
+    #[clap(hide = true)]
+    Skim,
+}
+
+impl RequestedSearchMode {
+    /// Return the actual search mode that will be used.
+    ///
+    /// Not all requested modes are supported; this method returns the closest supported mode for
+    /// the given requested mode.
+    #[must_use]
+    pub fn effective_mode(self) -> SearchMode {
         match self {
-            SearchMode::Prefix => "PREFIX",
-            SearchMode::FullText => "FULLTXT",
-            SearchMode::Fuzzy => "FUZZY",
-            SearchMode::Skim => "SKIM",
-            SearchMode::DaemonFuzzy => "DAEMON",
-        }
-    }
-    pub fn next(&self, settings: &Settings) -> Self {
-        match self {
-            SearchMode::Prefix => SearchMode::FullText,
-            // if the user is using skim, we go to skim
-            SearchMode::FullText if settings.search_mode == SearchMode::Skim => SearchMode::Skim,
-            // if the user is using daemon-fuzzy, we go to daemon-fuzzy
-            SearchMode::FullText if settings.search_mode == SearchMode::DaemonFuzzy => {
-                SearchMode::DaemonFuzzy
-            }
-            // otherwise fuzzy.
-            SearchMode::FullText => SearchMode::Fuzzy,
-            SearchMode::Fuzzy | SearchMode::Skim | SearchMode::DaemonFuzzy => SearchMode::Prefix,
+            Self::Prefix => SearchMode::Prefix,
+            Self::Fulltext => SearchMode::FullText,
+            Self::Fuzzy | Self::Skim => SearchMode::Fuzzy,
+            Self::DaemonFuzzy => SearchMode::DaemonFuzzy,
         }
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum, Serialize)]
+impl From<RequestedSearchMode> for SearchMode {
+    fn from(requested: RequestedSearchMode) -> Self {
+        requested.effective_mode()
+    }
+}
+
+impl SearchMode {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Prefix => "PREFIX",
+            Self::FullText => "FULLTXT",
+            Self::Fuzzy => "FUZZY",
+            Self::DaemonFuzzy => "DAEMON",
+        }
+    }
+
+    #[must_use]
+    pub fn next(self, settings: &Settings) -> Self {
+        match self {
+            Self::Prefix => Self::FullText,
+            // if the user is using daemon-fuzzy, we go to daemon-fuzzy
+            Self::FullText if settings.active_search_mode() == Self::DaemonFuzzy => {
+                Self::DaemonFuzzy
+            }
+            // otherwise fuzzy.
+            Self::FullText => Self::Fuzzy,
+            Self::Fuzzy | Self::DaemonFuzzy => Self::Prefix,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Deserialize, PartialEq, Eq, ValueEnum, Serialize)]
 pub enum FilterMode {
     #[serde(rename = "global")]
     Global = 0,
@@ -117,14 +139,15 @@ pub enum FilterMode {
 }
 
 impl FilterMode {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
-            FilterMode::Global => "GLOBAL",
-            FilterMode::Host => "HOST",
-            FilterMode::Session => "SESSION",
-            FilterMode::Directory => "DIRECTORY",
-            FilterMode::Workspace => "WORKSPACE",
-            FilterMode::SessionPreload => "SESSION+",
+            Self::Global => "GLOBAL",
+            Self::Host => "HOST",
+            Self::Session => "SESSION",
+            Self::Directory => "DIRECTORY",
+            Self::Workspace => "WORKSPACE",
+            Self::SessionPreload => "SESSION+",
         }
     }
 }
@@ -150,63 +173,15 @@ pub enum Dialect {
 }
 
 impl From<Dialect> for interim::Dialect {
-    fn from(d: Dialect) -> interim::Dialect {
+    fn from(d: Dialect) -> Self {
         match d {
-            Dialect::Uk => interim::Dialect::Uk,
-            Dialect::Us => interim::Dialect::Us,
+            Dialect::Uk => Self::Uk,
+            Dialect::Us => Self::Us,
         }
     }
 }
 
-/// Type wrapper around `time::UtcOffset` to support a wider variety of timezone formats.
-///
-/// Note that the parsing of this struct needs to be done before starting any
-/// multithreaded runtime, otherwise it will fail on most Unix systems.
-///
-/// See: <https://github.com/atuinsh/atuin/pull/1517#discussion_r1447516426>
-#[derive(Clone, Copy, Debug, Eq, PartialEq, DeserializeFromStr, Serialize)]
-pub struct Timezone(pub UtcOffset);
-impl fmt::Display for Timezone {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-/// format: <+|-><hour>[:<minute>[:<second>]]
-static OFFSET_FMT: &[FormatItem<'_>] = format_description!(
-    "[offset_hour sign:mandatory padding:none][optional [:[offset_minute padding:none][optional [:[offset_second padding:none]]]]]"
-);
-impl FromStr for Timezone {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Self> {
-        // local timezone
-        if matches!(s.to_lowercase().as_str(), "l" | "local") {
-            // There have been some timezone issues, related to errors fetching it on some
-            // platforms
-            // Rather than fail to start, fallback to UTC. The user should still be able to specify
-            // their timezone manually in the config file.
-            let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
-            return Ok(Self(offset));
-        }
-
-        if matches!(s.to_lowercase().as_str(), "0" | "utc") {
-            let offset = UtcOffset::UTC;
-            return Ok(Self(offset));
-        }
-
-        // offset from UTC
-        if let Ok(offset) = UtcOffset::parse(s, OFFSET_FMT) {
-            return Ok(Self(offset));
-        }
-
-        // IDEA: Currently named timezones are not supported, because the well-known crate
-        // for this is `chrono_tz`, which is not really interoperable with the datetime crate
-        // that we currently use - `time`. If ever we migrate to using `chrono`, this would
-        // be a good feature to add.
-
-        bail!(r#""{s}" is not a valid timezone spec"#)
-    }
-}
+use atuin_common::time::UtcOffsetSpec;
 
 #[derive(Clone, Debug, Deserialize, Copy, Serialize)]
 pub enum Style {
@@ -218,6 +193,18 @@ pub enum Style {
 
     #[serde(rename = "compact")]
     Compact,
+}
+
+#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, Serialize)]
+pub enum UpdateChannel {
+    /// Stable releases only.
+    #[serde(rename = "stable")]
+    Stable,
+
+    /// Prerelease builds, plus stable releases once they overtake the latest
+    /// prerelease.
+    #[serde(rename = "nightly")]
+    Nightly,
 }
 
 #[derive(Clone, Debug, Deserialize, Copy, Serialize)]
@@ -245,12 +232,13 @@ pub enum KeymapMode {
 }
 
 impl KeymapMode {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
-            KeymapMode::Emacs => "EMACS",
-            KeymapMode::VimNormal => "VIMNORMAL",
-            KeymapMode::VimInsert => "VIMINSERT",
-            KeymapMode::Auto => "AUTO",
+            Self::Emacs => "EMACS",
+            Self::VimNormal => "VIMNORMAL",
+            Self::VimInsert => "VIMINSERT",
+            Self::Auto => "AUTO",
         }
     }
 }
@@ -285,15 +273,16 @@ pub enum CursorStyle {
 }
 
 impl CursorStyle {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
-            CursorStyle::DefaultUserShape => "DEFAULT",
-            CursorStyle::BlinkingBlock => "BLINKBLOCK",
-            CursorStyle::SteadyBlock => "STEADYBLOCK",
-            CursorStyle::BlinkingUnderScore => "BLINKUNDERLINE",
-            CursorStyle::SteadyUnderScore => "STEADYUNDERLINE",
-            CursorStyle::BlinkingBar => "BLINKBAR",
-            CursorStyle::SteadyBar => "STEADYBAR",
+            Self::DefaultUserShape => "DEFAULT",
+            Self::BlinkingBlock => "BLINKBLOCK",
+            Self::SteadyBlock => "STEADYBLOCK",
+            Self::BlinkingUnderScore => "BLINKUNDERLINE",
+            Self::SteadyUnderScore => "STEADYUNDERLINE",
+            Self::BlinkingBar => "BLINKBAR",
+            Self::SteadyBar => "STEADYBAR",
         }
     }
 }
@@ -357,11 +346,6 @@ impl Default for Stats {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Default, Serialize)]
-pub struct Sync {
-    pub records: bool,
-}
-
 /// Sync protocol type for authentication.
 ///
 /// This setting is primarily for development/testing. When not explicitly set,
@@ -393,17 +377,25 @@ pub enum SyncProtocol {
 pub enum SyncAuth {
     /// Self-hosted Rust server. Uses `Authorization: Token <session>` and
     /// legacy endpoints.
-    Legacy { token: String },
+    Legacy {
+        token: String,
+    },
     /// Hub with a valid Hub API token (`atapi_*`). Uses
     /// `Authorization: Bearer <token>` and v0 endpoints.
-    Hub { token: String },
+    Hub {
+        token: String,
+    },
     /// Targeting Hub but only has a CLI session token. Uses
     /// `Authorization: Token <session>` against compat/record endpoints.
     /// Sync, password change, and account deletion still work, but the user
     /// should be nudged to run `atuin login` for full Hub auth.
-    HubViaCli { token: String },
+    HubViaCli {
+        token: String,
+    },
     /// Not authenticated at all. Contains an actionable user-facing message.
-    NotLoggedIn { reason: String },
+    NotLoggedIn {
+        reason: String,
+    },
 }
 
 #[cfg(feature = "sync")]
@@ -414,10 +406,10 @@ impl SyncAuth {
     pub fn into_auth_token(self) -> Result<crate::api_client::AuthToken> {
         use crate::api_client::AuthToken;
         match self {
-            SyncAuth::Legacy { token } => Ok(AuthToken::Token(token)),
-            SyncAuth::Hub { token } => Ok(AuthToken::Bearer(token)),
-            SyncAuth::HubViaCli { token } => Ok(AuthToken::Token(token)),
-            SyncAuth::NotLoggedIn { reason } => Err(eyre!(reason)),
+            Self::Legacy { token } => Ok(AuthToken::Token(token)),
+            Self::Hub { token } => Ok(AuthToken::Bearer(token)),
+            Self::HubViaCli { token } => Ok(AuthToken::Token(token)),
+            Self::NotLoggedIn { reason } => Err(eyre!(reason)),
         }
     }
 }
@@ -435,8 +427,9 @@ pub struct Keys {
 impl Keys {
     /// The standard default values for all `[keys]` options.
     /// These match the config defaults set in `builder_with_data_dir()`.
+    #[must_use]
     pub fn standard_defaults() -> Self {
-        Keys {
+        Self {
             scroll_exits: true,
             exit_past_line_start: true,
             accept_past_line_end: true,
@@ -447,6 +440,7 @@ impl Keys {
     }
 
     /// Returns true if any value differs from the standard defaults.
+    #[must_use]
     pub fn has_non_default_values(&self) -> bool {
         let d = Self::standard_defaults();
         self.scroll_exits != d.scroll_exits
@@ -497,6 +491,7 @@ pub struct KeymapConfig {
 
 impl KeymapConfig {
     /// Returns true if no keybinding overrides are configured in any mode.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.emacs.is_empty()
             && self.vim_normal.is_empty()
@@ -523,30 +518,14 @@ pub struct Theme {
     pub max_depth: Option<u8>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Daemon {
-    /// Use the daemon to sync
-    /// If enabled, history hooks are routed through the daemon.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct PtyProxy {
+    /// If enabled, `atuin init` emits shell code that re-execs the shell
+    /// inside `atuin pty-proxy`, so no separate `atuin pty-proxy init` line
+    /// is needed in shell config. Supported for bash, zsh, fish and nu on
+    /// unix platforms.
     #[serde(alias = "enable")]
     pub enabled: bool,
-
-    /// Automatically start and manage a local daemon when needed.
-    pub autostart: bool,
-
-    /// The daemon will handle sync on an interval. How often to sync, in seconds.
-    pub sync_frequency: u64,
-
-    /// The path to the unix socket used by the daemon
-    pub socket_path: String,
-
-    /// Path to the daemon pidfile used for process coordination.
-    pub pidfile_path: String,
-
-    /// Use a socket passed via systemd's socket activation protocol, instead of the path
-    pub systemd_socket: bool,
-
-    /// The port that should be used for TCP on non unix systems
-    pub tcp_port: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -565,6 +544,11 @@ pub struct Search {
     /// The overall frecency score multiplier for the search index (default: 1.0).
     /// Applied after combining recency and frequency scores.
     pub frecency_score_multiplier: f64,
+
+    /// Controls which shells' commands are shown in interactive search.
+    ///
+    /// One of: `"all"`, `"auto"`, or an array of strings.
+    pub shells: Shells,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -577,31 +561,6 @@ pub struct Tmux {
 
     /// Height of the tmux popup (percentage)
     pub height: String,
-}
-
-/// Log level for file logging. Maps to tracing's LevelFilter.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum LogLevel {
-    Trace,
-    Debug,
-    #[default]
-    Info,
-    Warn,
-    Error,
-}
-
-impl LogLevel {
-    /// Convert to a tracing directive string for use with EnvFilter.
-    pub fn as_directive(&self) -> &'static str {
-        match self {
-            LogLevel::Trace => "trace",
-            LogLevel::Debug => "debug",
-            LogLevel::Info => "info",
-            LogLevel::Warn => "warn",
-            LogLevel::Error => "error",
-        }
-    }
 }
 
 /// Configuration for a specific log type (search or daemon).
@@ -618,6 +577,15 @@ pub struct LogConfig {
 
     /// Override global retention days setting for this log type.
     pub retention: Option<u64>,
+}
+
+impl LogConfig {
+    pub fn new(file: impl Into<String>) -> Self {
+        Self {
+            file: file.into(),
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -638,7 +606,7 @@ pub struct Logs {
     #[serde(default = "Logs::default_retention")]
     pub retention: u64,
 
-    /// Search log settings
+    /// Search log settings; only used with `--interactive`
     #[serde(default)]
     pub search: LogConfig,
 
@@ -651,6 +619,25 @@ pub struct Logs {
     pub ai: LogConfig,
 }
 
+/// Endpoint protocol for Atuin AI.
+///
+/// When set to "auto" (default), the protocol is inferred from `ai.endpoint`:
+/// an unset or official Atuin address is treated as Hub, anything else as an
+/// OSS server. Set explicitly to "hub" to keep Hub behavior with a custom
+/// endpoint (useful for local development against a Hub instance).
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AiEndpointProtocol {
+    /// Atuin Hub: browser-based login flow, stored Hub session, usage reporting.
+    Hub,
+    /// A standalone AI server (e.g. atuin-ai-server): requests go straight to
+    /// the endpoint, authenticated with `ai.api_token` if set.
+    Oss,
+    /// Infer from ai.endpoint (default behavior)
+    #[default]
+    Auto,
+}
+
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
 pub struct Ai {
     /// Whether or not the AI features are enabled.
@@ -658,7 +645,11 @@ pub struct Ai {
 
     /// The address of the Atuin AI endpoint. Used for AI features like command generation.
     /// Only necessary for custom AI endpoints.
-    pub endpoint: Option<String>,
+    pub endpoint: Option<Url>,
+
+    /// How to talk to `endpoint`. See [`AiEndpointProtocol`].
+    #[serde(default)]
+    pub endpoint_protocol: AiEndpointProtocol,
 
     /// The API token for the Atuin AI endpoint. Used for AI features like command generation.
     /// Only necessary for custom AI endpoints.
@@ -669,6 +660,13 @@ pub struct Ai {
 
     /// The maximum time in minutes that an AI session can be automatically resumed.
     pub session_continue_minutes: i64,
+
+    /// The AI model to use for AI chats, based on the Atuin AI model alias.
+    pub model: Option<String>,
+
+    /// Whether to enable YOLO mode (skips all permission checks)
+    #[serde(default)]
+    pub yolo: bool,
 
     /// Deprecated: use opening.send_cwd instead. Kept for backwards compatibility.
     #[serde(default)]
@@ -681,6 +679,9 @@ pub struct Ai {
     /// Tool capability flags.
     #[serde(default)]
     pub capabilities: AiCapabilities,
+
+    /// Whether the AI TUI surfaces feature tips. `None` = enabled.
+    pub tips: Option<bool>,
 }
 
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
@@ -722,20 +723,6 @@ impl Default for Theme {
     }
 }
 
-impl Default for Daemon {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            autostart: false,
-            sync_frequency: 300,
-            socket_path: "".to_string(),
-            pidfile_path: "".to_string(),
-            systemd_socket: false,
-            tcp_port: 8889,
-        }
-    }
-}
-
 impl Default for Logs {
     fn default() -> Self {
         Self {
@@ -743,18 +730,9 @@ impl Default for Logs {
             dir: "".to_string(),
             level: LogLevel::default(),
             retention: Self::default_retention(),
-            search: LogConfig {
-                file: "search.log".to_string(),
-                ..Default::default()
-            },
-            daemon: LogConfig {
-                file: "daemon.log".to_string(),
-                ..Default::default()
-            },
-            ai: LogConfig {
-                file: "ai.log".to_string(),
-                ..Default::default()
-            },
+            search: LogConfig::new("search.log"),
+            daemon: LogConfig::new("daemon.log"),
+            ai: LogConfig::new("ai.log"),
         }
     }
 }
@@ -766,78 +744,6 @@ impl Logs {
 
     fn default_retention() -> u64 {
         4
-    }
-
-    /// Returns whether search logging is enabled.
-    /// Uses search-specific setting if set, otherwise falls back to global.
-    pub fn search_enabled(&self) -> bool {
-        self.search.enabled.unwrap_or(self.enabled)
-    }
-
-    /// Returns whether daemon logging is enabled.
-    /// Uses daemon-specific setting if set, otherwise falls back to global.
-    pub fn daemon_enabled(&self) -> bool {
-        self.daemon.enabled.unwrap_or(self.enabled)
-    }
-
-    /// Returns whether AI logging is enabled.
-    /// Uses AI-specific setting if set, otherwise falls back to global.
-    pub fn ai_enabled(&self) -> bool {
-        self.ai.enabled.unwrap_or(self.enabled)
-    }
-
-    /// Returns the log level for search logging.
-    /// Uses search-specific setting if set, otherwise falls back to global.
-    pub fn search_level(&self) -> LogLevel {
-        self.search.level.unwrap_or(self.level)
-    }
-
-    /// Returns the log level for daemon logging.
-    /// Uses daemon-specific setting if set, otherwise falls back to global.
-    pub fn daemon_level(&self) -> LogLevel {
-        self.daemon.level.unwrap_or(self.level)
-    }
-
-    /// Returns the log level for AI logging.
-    /// Uses AI-specific setting if set, otherwise falls back to global.
-    pub fn ai_level(&self) -> LogLevel {
-        self.ai.level.unwrap_or(self.level)
-    }
-
-    /// Returns the retention days for search logging.
-    /// Uses search-specific setting if set, otherwise falls back to global.
-    pub fn search_retention(&self) -> u64 {
-        self.search.retention.unwrap_or(self.retention)
-    }
-
-    /// Returns the retention days for daemon logging.
-    /// Uses daemon-specific setting if set, otherwise falls back to global.
-    pub fn daemon_retention(&self) -> u64 {
-        self.daemon.retention.unwrap_or(self.retention)
-    }
-
-    /// Returns the retention days for AI logging.
-    /// Uses AI-specific setting if set, otherwise falls back to global.
-    pub fn ai_retention(&self) -> u64 {
-        self.ai.retention.unwrap_or(self.retention)
-    }
-
-    /// Returns the full path for the search log file.
-    pub fn search_path(&self) -> PathBuf {
-        let path = PathBuf::from(&self.search.file);
-        PathBuf::from(&self.dir).join(path)
-    }
-
-    /// Returns the full path for the daemon log file.
-    pub fn daemon_path(&self) -> PathBuf {
-        let path = PathBuf::from(&self.daemon.file);
-        PathBuf::from(&self.dir).join(path)
-    }
-
-    /// Returns the full path for the AI log file.
-    pub fn ai_path(&self) -> PathBuf {
-        let path = PathBuf::from(&self.ai.file);
-        PathBuf::from(&self.dir).join(path)
     }
 }
 
@@ -856,6 +762,7 @@ impl Default for Search {
             recency_score_multiplier: 1.0,
             frequency_score_multiplier: 1.0,
             frecency_score_multiplier: 1.0,
+            shells: Default::default(),
         }
     }
 }
@@ -911,22 +818,23 @@ pub enum UiColumnType {
 impl UiColumnType {
     /// Returns the default width for this column type (in characters).
     /// The Command column returns 0 as it expands to fill remaining space.
+    #[must_use]
     pub fn default_width(&self) -> u16 {
         match self {
-            UiColumnType::Duration => 5,  // "814ms"
-            UiColumnType::Time => 9,      // "459ms ago"
-            UiColumnType::Datetime => 16, // "2025-01-22 14:35"
-            UiColumnType::Directory => 20,
-            UiColumnType::Host => 15,
-            UiColumnType::User => 10,
-            UiColumnType::Exit => {
+            Self::Duration => 5,  // "814ms"
+            Self::Time => 9,      // "459ms ago"
+            Self::Datetime => 16, // "2025-01-22 14:35"
+            Self::Directory => 20,
+            Self::Host => 15,
+            Self::User => 10,
+            Self::Exit => {
                 if cfg!(windows) {
                     11 // 32-bit integer on Windows: "-1978335212"
                 } else {
                     3 // Usually a byte on Unix
                 }
             }
-            UiColumnType::Command => 0, // Expands to fill
+            Self::Command => 0, // Expands to fill
         }
     }
 }
@@ -942,6 +850,7 @@ pub struct UiColumn {
 }
 
 impl UiColumn {
+    #[must_use]
     pub fn new(column_type: UiColumnType) -> Self {
         Self {
             width: column_type.default_width(),
@@ -950,6 +859,7 @@ impl UiColumn {
         }
     }
 
+    #[must_use]
     pub fn with_width(column_type: UiColumnType, width: u16) -> Self {
         Self {
             column_type,
@@ -1037,6 +947,10 @@ pub struct Ui {
     /// Can be simple strings or objects with type and width.
     #[serde(default = "Ui::default_columns")]
     pub columns: Vec<UiColumn>,
+
+    /// Syntax highlight commands in the interactive search results.
+    #[serde(default = "Ui::default_syntax_highlight")]
+    pub syntax_highlight: bool,
 }
 
 impl Ui {
@@ -1048,24 +962,33 @@ impl Ui {
         ]
     }
 
+    fn default_syntax_highlight() -> bool {
+        true
+    }
+
     /// Validate the UI configuration.
     /// Returns an error if more than one column has expand = true.
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<(), UiValidationError> {
         let expand_count = self.columns.iter().filter(|c| c.expand).count();
         if expand_count > 1 {
-            bail!(
-                "Only one column can have expand = true, but {} columns are set to expand",
-                expand_count
-            );
+            return Err(UiValidationError::MultipleExpandingColumns(expand_count));
         }
         Ok(())
     }
+}
+
+/// A [`Ui`] configuration that cannot be used as written.
+#[derive(Debug, Error)]
+pub enum UiValidationError {
+    #[error("Only one column can have expand = true, but {0} columns are set to expand")]
+    MultipleExpandingColumns(usize),
 }
 
 impl Default for Ui {
     fn default() -> Self {
         Self {
             columns: Self::default_columns(),
+            syntax_highlight: Self::default_syntax_highlight(),
         }
     }
 }
@@ -1074,13 +997,14 @@ impl Default for Ui {
 pub struct Settings {
     pub data_dir: Option<String>,
     pub dialect: Dialect,
-    pub timezone: Timezone,
+    pub timezone: UtcOffsetSpec,
     pub style: Style,
     pub auto_sync: bool,
     pub update_check: bool,
+    pub update_channel: UpdateChannel,
 
     /// The sync address for atuin.
-    pub sync_address: String,
+    pub sync_address: Url,
 
     /// Sync protocol for authentication. When set to "auto" (default), the protocol
     /// is inferred from sync_address. Set to "hub" to force Hub auth with a custom
@@ -1089,13 +1013,18 @@ pub struct Settings {
     pub sync_protocol: SyncProtocol,
 
     pub sync_frequency: String,
-    pub db_path: String,
-    pub record_store_path: String,
-    pub key_path: String,
-    pub search_mode: SearchMode,
+    pub db_path: PathBuf,
+    pub record_store_path: PathBuf,
+    pub key_path: PathBuf,
+    #[serde(rename = "search_mode")]
+    pub requested_search_mode: RequestedSearchMode,
     pub filter_mode: Option<FilterMode>,
     pub filter_mode_shell_up_key_binding: Option<FilterMode>,
-    pub search_mode_shell_up_key_binding: Option<SearchMode>,
+    #[serde(rename = "search_mode_shell_up_key_binding")]
+    pub requested_search_mode_shell_up_key_binding: Option<RequestedSearchMode>,
+
+    /// This is not a real setting. Instead, `atuin search` manually sets this field to true if
+    /// the hidden `--shell-up-key-binding` option was passed.
     pub shell_up_key_binding: bool,
     pub inline_height: u16,
     pub inline_height_shell_up_key_binding: Option<u16>,
@@ -1132,15 +1061,20 @@ pub struct Settings {
     pub network_connect_timeout: u64,
     pub network_timeout: u64,
     pub local_timeout: f64,
+
+    /// Extra HTTP headers to send on every request to the sync server, e.g.
+    /// for services like Cloudflare Access that sit in front of a self-hosted
+    /// server. Headers that Atuin sets itself (e.g. Authorization) win over
+    /// values configured here.
+    #[serde(default)]
+    pub extra_headers: HashMap<String, String>,
+
     pub enter_accept: bool,
     pub smart_sort: bool,
     pub command_chaining: bool,
 
     #[serde(default)]
     pub stats: Stats,
-
-    #[serde(default)]
-    pub sync: Sync,
 
     #[serde(default)]
     pub keys: Keys,
@@ -1156,6 +1090,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub daemon: Daemon,
+
+    #[serde(default)]
+    pub pty_proxy: PtyProxy,
 
     #[serde(default)]
     pub search: Search,
@@ -1186,6 +1123,7 @@ pub struct Settings {
 }
 
 impl Settings {
+    #[must_use]
     pub fn utc() -> Self {
         Self::builder()
             .expect("Could not build default")
@@ -1197,11 +1135,31 @@ impl Settings {
             .expect("Could not deserialize config")
     }
 
+    #[must_use]
+    pub fn search_mode(&self) -> SearchMode {
+        self.requested_search_mode.into()
+    }
+
+    pub fn search_mode_shell_up_key_binding(&self) -> Option<SearchMode> {
+        self.requested_search_mode_shell_up_key_binding.map(Into::into)
+    }
+
+    /// Return the active search mode depending on whether Atuin was invoked from the "up"
+    /// keybinding.
+    ///
+    /// If Atuin was invoked from the "up" keybinding, this returns
+    /// [`Self::search_mode_shell_up_key_binding`], falling back to [`Self::search_mode`] if that
+    /// binding isn't defined. Otherwise, [`Self::search_mode`] is returned.
+    #[must_use]
+    pub fn active_search_mode(&self) -> SearchMode {
+        self.shell_up_key_binding
+            .then(|| self.search_mode_shell_up_key_binding())
+            .flatten()
+            .unwrap_or_else(|| self.search_mode())
+    }
+
     pub(crate) fn effective_data_dir() -> PathBuf {
-        DATA_DIR
-            .get()
-            .cloned()
-            .unwrap_or_else(atuin_common::utils::data_dir)
+        DATA_DIR.get().cloned().unwrap_or_else(atuin_common::utils::data_dir)
     }
 
     // -- Meta store: lazily initialized on first access --
@@ -1212,7 +1170,11 @@ impl Settings {
                 let (db_path, timeout) = META_CONFIG.get().ok_or_else(|| {
                     eyre!("meta store config not set — Settings::new() has not been called")
                 })?;
-                crate::meta::MetaStore::new(db_path, *timeout).await
+                crate::meta::MetaStore::new(
+                    db_path,
+                    std::time::Duration::try_from_secs_f64(*timeout)?,
+                )
+                .await
             })
             .await
     }
@@ -1249,7 +1211,7 @@ impl Settings {
         match parse_duration(self.sync_frequency.as_str()) {
             Ok(d) => {
                 let d = time::Duration::try_from(d)?;
-                Ok(OffsetDateTime::now_utc() - Settings::last_sync().await? >= d)
+                Ok(OffsetDateTime::now_utc() - Self::last_sync().await? >= d)
             }
             Err(e) => Err(eyre!("failed to check sync: {}", e)),
         }
@@ -1273,16 +1235,10 @@ impl Settings {
         }
     }
 
-    /// Normalize a URL for comparison by trimming trailing slashes
-    fn normalize_url(url: &str) -> &str {
-        url.trim_end_matches('/')
-    }
-
-    /// Check if a URL matches one of Atuin's official hosted addresses
-    fn is_official_address(url: &str) -> bool {
-        let normalized = Self::normalize_url(url);
-        normalized == Self::normalize_url(DEFAULT_SYNC_ADDRESS)
-            || normalized == Self::normalize_url(DEFAULT_HUB_ENDPOINT)
+    /// Check if a URL matches one of Atuin's official hosted addresses.
+    fn is_official_address(url: &Url) -> bool {
+        let origin = url.origin();
+        origin == DEFAULT_SYNC_URL.origin() || origin == DEFAULT_HUB_URL.origin()
     }
 
     /// Returns whether this configuration uses Hub-style sync.
@@ -1291,6 +1247,7 @@ impl Settings {
     /// Atuin's hosted service. This returns true when:
     /// - `sync_protocol` is explicitly set to `Hub`, OR
     /// - `sync_protocol` is `Auto` and `sync_address` is an official Atuin address
+    #[must_use]
     pub fn is_hub_sync(&self) -> bool {
         match self.sync_protocol {
             SyncProtocol::Hub => true,
@@ -1299,20 +1256,32 @@ impl Settings {
         }
     }
 
-    /// Returns the base URL for the Hub endpoint.
+    /// Returns whether the resolved AI endpoint should be treated as an Atuin
+    /// Hub instance (browser login flow, Hub session management, usage
+    /// reporting) rather than a standalone OSS server.
     ///
-    /// For Atuin's official hosted service, this always returns `https://hub.atuin.sh`
+    /// `endpoint` is the resolved AI endpoint — the `--api-endpoint` flag or
+    /// `ai.endpoint` setting, after defaults are applied — which is why it's a
+    /// parameter rather than read from `self.ai.endpoint`.
+    #[must_use]
+    pub fn is_hub_ai_endpoint(&self, endpoint: &Url) -> bool {
+        match self.ai.endpoint_protocol {
+            AiEndpointProtocol::Hub => true,
+            AiEndpointProtocol::Oss => false,
+            AiEndpointProtocol::Auto => Self::is_official_address(endpoint),
+        }
+    }
+
+    /// The base URL for the Hub endpoint.
+    ///
+    /// For Atuin's official hosted service this is always `https://hub.atuin.sh`,
     /// regardless of whether `sync_address` is `api.atuin.sh` or `hub.atuin.sh`.
-    /// For self-hosted instances, returns the configured `sync_address`.
-    pub fn active_hub_endpoint(&self) -> Option<HubEndpoint> {
-        if self.is_hub_sync() {
-            if Self::is_official_address(&self.sync_address) {
-                Some(HubEndpoint::default())
-            } else {
-                Some(HubEndpoint(self.sync_address.clone()))
-            }
+    /// For a self-hosted Hub, it is the configured `sync_address`.
+    pub fn hub_endpoint(&self) -> Url {
+        if self.is_hub_sync() && !Self::is_official_address(&self.sync_address) {
+            self.sync_address.clone()
         } else {
-            None
+            DEFAULT_HUB_URL.clone()
         }
     }
 
@@ -1320,6 +1289,7 @@ impl Settings {
     /// the correct auth strategy. Also performs cleanup of mis-stored tokens
     /// (e.g. a CLI token incorrectly saved in the Hub session slot).
     #[cfg(feature = "sync")]
+    #[must_use]
     pub async fn resolve_sync_auth(&self) -> SyncAuth {
         let meta = match Self::meta_store().await {
             Ok(m) => m,
@@ -1335,8 +1305,8 @@ impl Settings {
             return match meta.session_token().await {
                 Ok(Some(token)) => SyncAuth::Legacy { token },
                 _ => SyncAuth::NotLoggedIn {
-                    reason: "Not logged in. Run 'atuin login' to authenticate \
-                             with your sync server."
+                    reason: "Not logged in. Run 'atuin login' to authenticate with your sync \
+                             server."
                         .into(),
                 },
             };
@@ -1367,8 +1337,7 @@ impl Settings {
         match meta.session_token().await {
             Ok(Some(token)) => SyncAuth::HubViaCli { token },
             _ => SyncAuth::NotLoggedIn {
-                reason: "Not logged in. Run 'atuin login' or 'atuin register' \
-                         to authenticate."
+                reason: "Not logged in. Run 'atuin login' or 'atuin register' to authenticate."
                     .into(),
             },
         }
@@ -1376,17 +1345,18 @@ impl Settings {
 
     /// Returns the appropriate auth token for sync operations.
     ///
-    /// Delegates to [`resolve_sync_auth`] and converts the result to an
+    /// Delegates to [`Self::resolve_sync_auth`] and converts the result to an
     /// `AuthToken`. Callers that need to distinguish between auth states
     /// (e.g. to show different UI) should call `resolve_sync_auth` directly.
     #[cfg(feature = "sync")]
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn sync_auth_token(&self) -> Result<crate::api_client::AuthToken> {
         self.resolve_sync_auth().await.into_auth_token()
     }
 
     #[cfg(feature = "check-update")]
     async fn needs_update_check(&self) -> Result<bool> {
-        let last_check = Settings::last_version_check().await?;
+        let last_check = Self::last_version_check().await?;
         let diff = OffsetDateTime::now_utc() - last_check;
 
         // Check a max of once per hour
@@ -1417,7 +1387,7 @@ impl Settings {
         let latest = current;
 
         let meta = Self::meta_store().await?;
-        Settings::save_version_check_time().await?;
+        Self::save_version_check_time().await?;
         meta.save_latest_version(&latest.to_string()).await?;
 
         Ok(latest)
@@ -1448,6 +1418,7 @@ impl Settings {
         None
     }
 
+    #[must_use]
     pub fn default_filter_mode(&self, git_root: bool) -> FilterMode {
         self.filter_mode
             .filter(|x| self.search.filters.contains(x))
@@ -1466,21 +1437,26 @@ impl Settings {
     }
 
     #[cfg(not(feature = "check-update"))]
+    #[allow(
+        clippy::unused_async,
+        reason = "needs to match the `check-update` version of this method"
+    )]
     pub async fn needs_update(&self) -> Option<Version> {
         None
     }
 
     pub fn builder() -> Result<ConfigBuilder<DefaultState>> {
-        Self::builder_with_data_dir(&atuin_common::utils::data_dir())
+        Ok(Self::builder_with_data_dir(&atuin_common::utils::data_dir())?)
     }
 
-    fn builder_with_data_dir(data_dir: &std::path::Path) -> Result<ConfigBuilder<DefaultState>> {
+    fn builder_with_data_dir(
+        data_dir: &std::path::Path,
+    ) -> Result<ConfigBuilder<DefaultState>, config::ConfigError> {
         let db_path = data_dir.join("history.db");
         let record_store_path = data_dir.join("records.db");
         let kv_path = data_dir.join("kv.db");
         let scripts_path = data_dir.join("scripts.db");
         let ai_sessions_path = data_dir.join("ai_sessions.db");
-        let socket_path = atuin_common::utils::runtime_dir().join("atuin.sock");
         let pidfile_path = data_dir.join("atuin-daemon.pid");
         let logs_dir = atuin_common::utils::logs_dir();
 
@@ -1496,7 +1472,8 @@ impl Settings {
             .set_default("timezone", "local")?
             .set_default("auto_sync", true)?
             .set_default("update_check", cfg!(feature = "check-update"))?
-            .set_default("sync_address", "https://api.atuin.sh")?
+            .set_default("update_channel", "stable")?
+            .set_default("sync_address", DEFAULT_SYNC_URL.as_str())?
             .set_default("sync_frequency", "5m")?
             .set_default("search_mode", "fuzzy")?
             .set_default("filter_mode", None::<String>)?
@@ -1524,6 +1501,7 @@ impl Settings {
             .set_default("strip_trailing_whitespace", true)?
             .set_default("network_connect_timeout", 5)?
             .set_default("network_timeout", 30)?
+            .set_default("extra_headers", HashMap::<String, String>::new())?
             .set_default("local_timeout", 2.0)?
             // enter_accept defaults to false here, but true in the default config file. The dissonance is
             // intentional!
@@ -1531,7 +1509,6 @@ impl Settings {
             // muscle memory.
             // New users will get the new default, that is more similar to what they are used to.
             .set_default("enter_accept", false)?
-            .set_default("sync.records", true)?
             .set_default("keys.scroll_exits", true)?
             .set_default("keys.accept_past_line_end", true)?
             .set_default("keys.exit_past_line_start", true)?
@@ -1547,7 +1524,7 @@ impl Settings {
             .set_default("daemon.sync_frequency", 300)?
             .set_default("daemon.enabled", false)?
             .set_default("daemon.autostart", false)?
-            .set_default("daemon.socket_path", socket_path.to_str())?
+            .set_default("daemon.socket_path", None::<String>)?
             .set_default("daemon.pidfile_path", pidfile_path.to_str())?
             .set_default("daemon.systemd_socket", false)?
             .set_default("daemon.tcp_port", 8889)?
@@ -1562,23 +1539,22 @@ impl Settings {
             .set_default("search.recency_score_multiplier", 1.0)?
             .set_default("search.frequency_score_multiplier", 1.0)?
             .set_default("search.frecency_score_multiplier", 1.0)?
+            .set_default("search.shells", "auto")?
             .set_default("meta.db_path", meta_path.to_str())?
             .set_default("ai.db_path", ai_sessions_path.to_str())?
             .set_default("ai.session_continue_minutes", 60)?
             .set_default("ai.send_cwd", false)?
             .set_default("ai.opening.send_cwd", false)?
             .set_default("ai.opening.send_last_command", false)?
-            .set_default(
-                "search.filters",
-                vec![
-                    "global",
-                    "host",
-                    "session",
-                    "workspace",
-                    "directory",
-                    "session-preload",
-                ],
-            )?
+            .set_default("ui.syntax_highlight", true)?
+            .set_default("search.filters", vec![
+                "global",
+                "host",
+                "session",
+                "workspace",
+                "directory",
+                "session-preload",
+            ])?
             .set_default("theme.name", "default")?
             .set_default("theme.debug", None::<bool>)?
             .set_default("tmux.enabled", false)?
@@ -1592,11 +1568,7 @@ impl Settings {
                     .unwrap_or_else(|| config::Value::new(None, config::ValueKind::Boolean(false))),
             )?
             .set_default("no_mouse", false)?
-            .add_source(
-                Environment::with_prefix("atuin")
-                    .prefix_separator("_")
-                    .separator("__"),
-            ))
+            .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__")))
     }
 
     pub fn get_config_path() -> Result<PathBuf> {
@@ -1633,17 +1605,12 @@ impl Settings {
                 data_dir: Option<String>,
             }
 
-            let config_file_str = config_file
-                .to_str()
-                .ok_or_else(|| eyre!("config file path is not valid UTF-8"))?;
+            let config_file_str =
+                config_file.to_str().ok_or_else(|| eyre!("config file path is not valid UTF-8"))?;
 
             let partial_config = Config::builder()
                 .add_source(ConfigFile::new(config_file_str, FileFormat::Toml))
-                .add_source(
-                    Environment::with_prefix("atuin")
-                        .prefix_separator("_")
-                        .separator("__"),
-                )
+                .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__"))
                 .build()
                 .ok();
 
@@ -1671,9 +1638,8 @@ impl Settings {
         let mut config_builder = Self::builder_with_data_dir(&effective_data_dir)?;
 
         config_builder = if config_file.exists() {
-            let config_file_str = config_file
-                .to_str()
-                .ok_or_else(|| eyre!("config file path is not valid UTF-8"))?;
+            let config_file_str =
+                config_file.to_str().ok_or_else(|| eyre!("config file path is not valid UTF-8"))?;
             config_builder.add_source(ConfigFile::new(config_file_str, FileFormat::Toml))
         } else {
             let mut file = File::create(config_file).wrap_err("could not create config file")?;
@@ -1685,6 +1651,7 @@ impl Settings {
 
         // all paths should be expanded
         let built = config_builder.build_cloned()?;
+
         config_builder = [
             "db_path",
             "record_store_path",
@@ -1697,10 +1664,13 @@ impl Settings {
         ]
         .iter()
         .map(|key| (key, built.get_string(key).unwrap_or_default()))
-        .filter_map(|(key, value)| match Self::expand_path(value) {
+        // An unset optional path (`daemon.socket_path`) must stay unset rather
+        // than be overridden with an empty one.
+        .filter(|(_, value)| !value.is_empty())
+        .filter_map(|(key, value)| match Self::expand_path(&value) {
             Ok(expanded) => Some((key, expanded)),
             Err(e) => {
-                log::warn!("failed to expand path for {key}: {e}");
+                tracing::warn!("failed to expand path for {key}: {e}");
                 None
             }
         })
@@ -1719,10 +1689,32 @@ impl Settings {
     /// environment — without the side-effects of full `Settings` construction
     /// (meta store init, path expansion, etc.).
     pub fn get_config_value(key: &str) -> Result<String> {
-        let config = Self::build_config()?;
-        let value: config::Value = config
-            .get(key)
-            .map_err(|e| eyre!("failed to get config value '{}': {}", key, e))?;
+        use config::Value;
+
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut config = Self::build_config()?;
+
+        // When unset, `daemon.socket_path` is calculated dynamically by [`Daemon::socket_path`] and
+        // wouldn't show up in `atuin config get --resolved daemon.socket_path`. However, it may be
+        // useful for users to see the path when debugging socket issues, so we manually insert it
+        // into the config map here.
+        #[cfg(unix)]
+        if (key == "daemon" || key == "daemon.socket_path")
+            && let Ok(daemon) = config.get::<Daemon>("daemon")
+            && daemon.socket_path.is_none()
+            && let config::ValueKind::Table(root_map) = &mut config.cache.kind
+            && let Some(daemon_value) = root_map.get_mut("daemon")
+            && let config::ValueKind::Table(daemon_map) = &mut daemon_value.kind
+        {
+            daemon_map.insert(
+                "socket_path".into(),
+                daemon.socket_path().as_path().display().to_string().into(),
+            );
+        }
+
+        let value: Value =
+            config.get(key).map_err(|e| eyre!("failed to get config value '{}': {}", key, e))?;
+
         Ok(Self::format_resolved_value(&value, key))
     }
 
@@ -1739,10 +1731,8 @@ impl Settings {
             ValueKind::Float(f) => f.to_string(),
             ValueKind::String(s) => s.clone(),
             ValueKind::Array(arr) => {
-                let items: Vec<String> = arr
-                    .iter()
-                    .map(|v| Self::format_resolved_value(v, ""))
-                    .collect();
+                let items: Vec<String> =
+                    arr.iter().map(|v| Self::format_resolved_value(v, "")).collect();
                 format!("[{}]", items.join(", "))
             }
             ValueKind::Table(map) => {
@@ -1755,7 +1745,7 @@ impl Settings {
                     let full_key = if prefix.is_empty() {
                         k.clone()
                     } else {
-                        format!("{}.{}", prefix, k)
+                        format!("{prefix}.{k}")
                     };
 
                     match &v.kind {
@@ -1779,39 +1769,53 @@ impl Settings {
 
     pub fn new() -> Result<Self> {
         let config = Self::build_config()?;
-        let settings: Settings = config
-            .try_deserialize()
-            .map_err(|e| eyre!("failed to deserialize: {}", e))?;
+        let settings: Self =
+            config.try_deserialize().map_err(|e| eyre!("failed to deserialize: {}", e))?;
 
         // Validate UI settings
         settings.ui.validate()?;
 
         // Register meta store config for lazy initialization on first access
-        META_CONFIG
-            .set((settings.meta.db_path.clone(), settings.local_timeout))
-            .ok();
+        META_CONFIG.set((settings.meta.db_path.clone(), settings.local_timeout)).ok();
 
         Ok(settings)
     }
 
-    fn expand_path(path: String) -> Result<String> {
-        shellexpand::full(&path)
+    fn expand_path(path: &str) -> Result<String> {
+        shellexpand::full(path)
             .map(|p| p.to_string())
             .map_err(|e| eyre!("failed to expand path: {}", e))
     }
 
+    #[must_use]
     pub fn example_config() -> &'static str {
         EXAMPLE_CONFIG
     }
 
+    #[must_use]
     pub fn paths_ok(&self) -> bool {
-        let paths = [
-            &self.db_path,
-            &self.record_store_path,
-            &self.key_path,
-            &self.meta.db_path,
+        let paths: [&Path; 4] = [
+            self.db_path.as_path(),
+            self.record_store_path.as_path(),
+            self.key_path.as_path(),
+            Path::new(&self.meta.db_path),
         ];
-        paths.iter().all(|p| !utils::broken_symlink(p))
+        paths.iter().all(|p| !p.is_dangling_symlink())
+    }
+
+    /// Check that a TOML string can be successfully deserialized into a [`Settings`] object.
+    pub fn validate_str(toml: &str) -> Result<(), ValidationError> {
+        let config = Self::builder_with_data_dir(&atuin_common::utils::data_dir())?
+            .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
+            .build()?;
+
+        let settings: Self = config.try_deserialize()?;
+        if let Some(dir) = &settings.data_dir {
+            shellexpand::full(dir).map_err(ValidationError::DataDir)?;
+        }
+
+        settings.ui.validate()?;
+        Ok(())
     }
 }
 
@@ -1826,6 +1830,19 @@ impl Default for Settings {
             .try_deserialize()
             .expect("Could not deserialize config")
     }
+}
+
+/// Error returned by [`Settings::validate_str`] when validation fails.
+#[derive(Debug, Error)]
+pub enum ValidationError {
+    #[error(transparent)]
+    Config(#[from] config::ConfigError),
+
+    #[error(transparent)]
+    Ui(#[from] UiValidationError),
+
+    #[error("failed to expand `data_dir`: {0}")]
+    DataDir(shellexpand::LookupError<std::env::VarError>),
 }
 
 /// Initialize the meta store configuration for testing.
@@ -1843,13 +1860,14 @@ pub fn init_meta_config_for_testing(meta_db_path: impl Into<String>, local_timeo
 }
 
 #[cfg(test)]
-pub(crate) fn test_local_timeout() -> f64 {
-    std::env::var("ATUIN_TEST_LOCAL_TIMEOUT")
+pub(crate) fn test_local_timeout() -> Duration {
+    let secs = std::env::var("ATUIN_TEST_LOCAL_TIMEOUT")
         .ok()
-        .and_then(|x| x.parse().ok())
+        .and_then(|x| x.parse::<f64>().ok())
         // this hardcoded value should be replaced by a simple way to get the
         // default local_timeout of Settings if possible
-        .unwrap_or(2.0)
+        .unwrap_or(2.0);
+    Duration::try_from_secs_f64(secs).unwrap_or_else(|_| Duration::from_secs(2))
 }
 
 #[cfg(test)]
@@ -1857,41 +1875,85 @@ mod tests {
     use std::str::FromStr;
 
     use eyre::Result;
+    use rstest::rstest;
+    use url::Url;
 
-    use super::Timezone;
+    use super::{
+        AiEndpointProtocol, ConfigFile, FileFormat, FilterMode, RequestedSearchMode, SearchMode,
+        Settings, UtcOffsetSpec,
+    };
 
-    #[test]
-    fn can_parse_offset_timezone_spec() -> Result<()> {
-        assert_eq!(Timezone::from_str("+02")?.0.as_hms(), (2, 0, 0));
-        assert_eq!(Timezone::from_str("-04")?.0.as_hms(), (-4, 0, 0));
-        assert_eq!(Timezone::from_str("+05:30")?.0.as_hms(), (5, 30, 0));
-        assert_eq!(Timezone::from_str("-09:30")?.0.as_hms(), (-9, -30, 0));
-
-        // single digit hours are allowed
-        assert_eq!(Timezone::from_str("+2")?.0.as_hms(), (2, 0, 0));
-        assert_eq!(Timezone::from_str("-4")?.0.as_hms(), (-4, 0, 0));
-        assert_eq!(Timezone::from_str("+5:30")?.0.as_hms(), (5, 30, 0));
-        assert_eq!(Timezone::from_str("-9:30")?.0.as_hms(), (-9, -30, 0));
-
-        // fully qualified form
-        assert_eq!(Timezone::from_str("+09:30:00")?.0.as_hms(), (9, 30, 0));
-        assert_eq!(Timezone::from_str("-09:30:00")?.0.as_hms(), (-9, -30, 0));
-
-        // these offsets don't really exist but are supported anyway
-        assert_eq!(Timezone::from_str("+0:5")?.0.as_hms(), (0, 5, 0));
-        assert_eq!(Timezone::from_str("-0:5")?.0.as_hms(), (0, -5, 0));
-        assert_eq!(Timezone::from_str("+01:23:45")?.0.as_hms(), (1, 23, 45));
-        assert_eq!(Timezone::from_str("-01:23:45")?.0.as_hms(), (-1, -23, -45));
-
-        // require a leading sign for clarity
-        assert!(Timezone::from_str("5").is_err());
-        assert!(Timezone::from_str("10:30").is_err());
-
+    #[rstest]
+    #[case::plus_two_digit_hours("+02", (2, 0, 0))]
+    #[case::minus_two_digit_hours("-04", (-4, 0, 0))]
+    #[case::plus_hours_minutes("+05:30", (5, 30, 0))]
+    #[case::minus_hours_minutes("-09:30", (-9, -30, 0))]
+    // single digit hours are allowed
+    #[case::plus_single_digit_hour("+2", (2, 0, 0))]
+    #[case::minus_single_digit_hour("-4", (-4, 0, 0))]
+    #[case::plus_single_digit_hour_minutes("+5:30", (5, 30, 0))]
+    #[case::minus_single_digit_hour_minutes("-9:30", (-9, -30, 0))]
+    // fully qualified form
+    #[case::plus_fully_qualified("+09:30:00", (9, 30, 0))]
+    #[case::minus_fully_qualified("-09:30:00", (-9, -30, 0))]
+    // these offsets don't really exist but are supported anyway
+    #[case::plus_zero_hour_minutes("+0:5", (0, 5, 0))]
+    #[case::minus_zero_hour_minutes("-0:5", (0, -5, 0))]
+    #[case::plus_with_seconds("+01:23:45", (1, 23, 45))]
+    #[case::minus_with_seconds("-01:23:45", (-1, -23, -45))]
+    fn can_parse_offset_timezone_spec(
+        #[case] input: &str,
+        #[case] expected: (i8, i8, i8),
+    ) -> Result<()> {
+        assert_eq!(UtcOffsetSpec::from_str(input)?.0.as_hms(), expected);
         Ok(())
     }
 
+    /// A leading sign is required, for clarity.
+    #[rstest]
+    #[case::bare_hour("5")]
+    #[case::bare_hour_minutes("10:30")]
+    fn rejects_timezone_spec_without_leading_sign(#[case] input: &str) {
+        assert!(UtcOffsetSpec::from_str(input).is_err());
+    }
+
+    #[rstest]
+    // Auto: official addresses are Hub, anything else is OSS
+    #[case::auto_hub_address(AiEndpointProtocol::Auto, "https://hub.atuin.sh", true)]
+    #[case::auto_api_address(AiEndpointProtocol::Auto, "https://api.atuin.sh", true)]
+    #[case::auto_third_party_address(AiEndpointProtocol::Auto, "https://ai.example.com", false)]
+    #[case::auto_localhost(AiEndpointProtocol::Auto, "http://localhost:4000", false)]
+    // An explicit protocol overrides the address check
+    #[case::explicit_hub_overrides_address(AiEndpointProtocol::Hub, "http://localhost:4000", true)]
+    #[case::explicit_oss_overrides_address(AiEndpointProtocol::Oss, "https://hub.atuin.sh", false)]
+    fn ai_endpoint_protocol_resolution(
+        #[case] protocol: AiEndpointProtocol,
+        #[case] endpoint: &str,
+        #[case] expected: bool,
+    ) {
+        let mut settings = Settings::default();
+        settings.ai.endpoint_protocol = protocol;
+
+        assert_eq!(settings.is_hub_ai_endpoint(&Url::parse(endpoint).unwrap()), expected,);
+    }
+
+    /// Forces both `LazyLock`s, so a typo in either constant fails here rather
+    /// than panicking at runtime.
     #[test]
-    fn can_choose_workspace_filters_when_in_git_context() -> Result<()> {
+    fn default_addresses_parse() {
+        assert_eq!(super::DEFAULT_SYNC_URL.host_str(), Some("api.atuin.sh"));
+        assert_eq!(super::DEFAULT_HUB_URL.host_str(), Some("hub.atuin.sh"));
+    }
+
+    #[rstest]
+    #[case::in_git_context(true, true, FilterMode::Workspace)]
+    #[case::not_in_git_context(true, false, FilterMode::Host)]
+    #[case::workspaces_disabled(false, true, FilterMode::Host)]
+    fn workspace_filter_selection(
+        #[case] workspaces: bool,
+        #[case] git_root: bool,
+        #[case] expected: FilterMode,
+    ) {
         let mut settings = super::Settings::default();
         settings.search.filters = vec![
             super::FilterMode::Workspace,
@@ -1900,48 +1962,9 @@ mod tests {
             super::FilterMode::Session,
             super::FilterMode::Global,
         ];
-        settings.workspaces = true;
+        settings.workspaces = workspaces;
 
-        assert_eq!(
-            settings.default_filter_mode(true),
-            super::FilterMode::Workspace,
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn wont_choose_workspace_filters_when_not_in_git_context() -> Result<()> {
-        let mut settings = super::Settings::default();
-        settings.search.filters = vec![
-            super::FilterMode::Workspace,
-            super::FilterMode::Host,
-            super::FilterMode::Directory,
-            super::FilterMode::Session,
-            super::FilterMode::Global,
-        ];
-        settings.workspaces = true;
-
-        assert_eq!(settings.default_filter_mode(false), super::FilterMode::Host,);
-
-        Ok(())
-    }
-
-    #[test]
-    fn wont_choose_workspace_filters_when_workspaces_disabled() -> Result<()> {
-        let mut settings = super::Settings::default();
-        settings.search.filters = vec![
-            super::FilterMode::Workspace,
-            super::FilterMode::Host,
-            super::FilterMode::Directory,
-            super::FilterMode::Session,
-            super::FilterMode::Global,
-        ];
-        settings.workspaces = false;
-
-        assert_eq!(settings.default_filter_mode(true), super::FilterMode::Host,);
-
-        Ok(())
+        assert_eq!(settings.default_filter_mode(git_root), expected);
     }
 
     #[test]
@@ -1958,36 +1981,49 @@ mod tests {
         let kv_db_path: String = config.get("kv.db_path")?;
         let scripts_db_path: String = config.get("scripts.db_path")?;
         let meta_db_path: String = config.get("meta.db_path")?;
-        let daemon_socket_path: String = config.get("daemon.socket_path")?;
+        let daemon_socket_path: Option<String> = config.get("daemon.socket_path")?;
         let daemon_pidfile_path: String = config.get("daemon.pidfile_path")?;
         let daemon_autostart: bool = config.get("daemon.autostart")?;
 
         assert_eq!(db_path, custom_dir.join("history.db").to_str().unwrap());
         assert_eq!(key_path, custom_dir.join("key").to_str().unwrap());
-        assert_eq!(
-            record_store_path,
-            custom_dir.join("records.db").to_str().unwrap()
-        );
+        assert_eq!(record_store_path, custom_dir.join("records.db").to_str().unwrap());
         assert_eq!(kv_db_path, custom_dir.join("kv.db").to_str().unwrap());
-        assert_eq!(
-            scripts_db_path,
-            custom_dir.join("scripts.db").to_str().unwrap()
-        );
+        assert_eq!(scripts_db_path, custom_dir.join("scripts.db").to_str().unwrap());
         assert_eq!(meta_db_path, custom_dir.join("meta.db").to_str().unwrap());
-        assert_eq!(
-            daemon_socket_path,
-            atuin_common::utils::runtime_dir()
-                .join("atuin.sock")
-                .to_str()
-                .unwrap()
-        );
-        assert_eq!(
-            daemon_pidfile_path,
-            custom_dir.join("atuin-daemon.pid").to_str().unwrap()
-        );
+        assert_eq!(daemon_socket_path, None);
+        assert_eq!(daemon_pidfile_path, custom_dir.join("atuin-daemon.pid").to_str().unwrap());
         assert!(!daemon_autostart);
 
         Ok(())
+    }
+
+    #[rstest]
+    #[case::valid_config("search_mode = \"fuzzy\"\n")]
+    #[case::empty_config("")]
+    #[case::plain_data_dir("data_dir = \"/tmp/atuin-test\"\n")]
+    fn validate_accepts(#[case] toml: &str) {
+        assert!(Settings::validate_str(toml).is_ok());
+    }
+
+    /// The error should always name the offending key.
+    #[rstest]
+    #[case::invalid_enum_variant("search_mode = \"invalid\"\n", "search_mode")]
+    #[case::value_of_the_wrong_type("auto_sync = \"banana\"\n", "auto_sync")]
+    #[case::invalid_nested_value("[search]\nfilters = [\"nope\"]\n", "search.filters")]
+    #[case::data_dir_with_an_unexpandable_variable(
+        "data_dir = \"${DEFINITELY_UNSET_VAR_XYZ}/atuin\"\n",
+        "data_dir"
+    )]
+    #[case::more_than_one_expanding_column(
+        "[ui]\ncolumns = [{ type = \"duration\", expand = true }, { type = \"command\", expand = \
+         true }]\n",
+        "expand"
+    )]
+    fn validate_rejects(#[case] toml: &str, #[case] expected_err: &str) {
+        let err = Settings::validate_str(toml).expect_err("config should not validate").to_string();
+
+        assert!(err.contains(expected_err), "error should mention `{expected_err}`, got: {err}");
     }
 
     #[test]
@@ -2061,5 +2097,64 @@ mod tests {
         assert_eq!(config.inspector.len(), 1);
         assert!(config.vim_insert.is_empty());
         assert!(config.prefix.is_empty());
+    }
+
+    /// Deserialize a TOML string into a [`Settings`] object.
+    fn parse_settings(toml: &str) -> Settings {
+        Settings::builder_with_data_dir(&atuin_common::utils::data_dir())
+            .expect("could not build settings builder")
+            .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
+            .build()
+            .expect("could not build config")
+            .try_deserialize()
+            .expect("could not deserialize config")
+    }
+
+    #[test]
+    fn skim_is_requested_but_resolves_to_fuzzy() {
+        let settings = parse_settings("search_mode = \"skim\"\n");
+
+        assert_eq!(settings.requested_search_mode, RequestedSearchMode::Skim);
+        assert_eq!(settings.search_mode(), SearchMode::Fuzzy);
+    }
+
+    #[test]
+    fn skim_shell_up_key_binding_resolves_to_fuzzy() {
+        let settings = parse_settings("search_mode_shell_up_key_binding = \"skim\"\n");
+
+        assert_eq!(
+            settings.requested_search_mode_shell_up_key_binding,
+            Some(RequestedSearchMode::Skim)
+        );
+        assert_eq!(settings.search_mode_shell_up_key_binding(), Some(SearchMode::Fuzzy));
+    }
+
+    #[rstest]
+    #[case("prefix", RequestedSearchMode::Prefix)]
+    #[case("fulltext", RequestedSearchMode::Fulltext)]
+    #[case("fuzzy", RequestedSearchMode::Fuzzy)]
+    #[case("daemon-fuzzy", RequestedSearchMode::DaemonFuzzy)]
+    #[case("skim", RequestedSearchMode::Skim)]
+    fn requested_search_mode_parses_correctly(
+        #[case] value: &str,
+        #[case] expected: RequestedSearchMode,
+    ) {
+        let settings = parse_settings(&format!("search_mode = \"{value}\"\n"));
+        assert_eq!(settings.requested_search_mode, expected);
+    }
+
+    #[rstest]
+    #[case(RequestedSearchMode::Prefix, SearchMode::Prefix)]
+    #[case(RequestedSearchMode::Fulltext, SearchMode::FullText)]
+    #[case(RequestedSearchMode::Fuzzy, SearchMode::Fuzzy)]
+    #[case(RequestedSearchMode::DaemonFuzzy, SearchMode::DaemonFuzzy)]
+    // "skim" was removed -- maps to "fuzzy"
+    #[case(RequestedSearchMode::Skim, SearchMode::Fuzzy)]
+    fn effective_search_mode_matches_requested(
+        #[case] requested: RequestedSearchMode,
+        #[case] expected: SearchMode,
+    ) {
+        assert_eq!(requested.effective_mode(), expected);
+        assert_eq!(SearchMode::from(requested), expected);
     }
 }

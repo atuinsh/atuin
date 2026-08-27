@@ -1,17 +1,14 @@
-use atuin_common::{
-    record::{EncryptedData, Host, HostId, Record, RecordIdx},
-    utils::{crypto_random_string, uuid_v7},
+use atuin_common::utils::{crypto_random_string, uuid_v7};
+use atuin_domain::record::{
+    EncryptedData, Host, HostId, Record, RecordIdx, RecordSeriesKey, RecordTag,
 };
-use atuin_server_database::{
-    Database, DbSettings, DbType,
-    models::{NewHistory, NewSession, NewUser, User},
-};
+use atuin_server_database::models::{NewSession, NewUser, User};
+use atuin_server_database::{Database, DbSettings, DbType};
 use atuin_server_mysql::MySql;
 use atuin_server_postgres::Postgres;
 use atuin_server_sqlite::Sqlite;
+use rstest::rstest;
 use tests_database::helpers::{create_test_db, destroy_test_db};
-use time::OffsetDateTime;
-use uuid::Uuid;
 
 struct TestDb {
     settings: DbSettings,
@@ -28,13 +25,10 @@ impl Drop for TestDb {
     fn drop(&mut self) {
         let settings = self.settings.clone();
         let _ = std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             rt.block_on(async {
                 if let Err(e) = destroy_test_db(&settings).await {
-                    eprintln!("Failed to destroy test db: {:?}", e);
+                    eprintln!("Failed to destroy test db: {e:?}");
                 }
             });
         })
@@ -44,6 +38,7 @@ impl Drop for TestDb {
 
 /// This test runs through a story of using the database. The goal is to fully exercise all DB code
 /// in a single repeatable manner.
+#[rstest]
 #[tokio::test]
 async fn test_full_db_story() -> eyre::Result<()> {
     let test_db = TestDb::new().await?;
@@ -97,25 +92,6 @@ async fn run_the_test<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
     let user = db.get_user("foo").await?;
     assert_eq!(user.password, "hunter3");
 
-    // add some history
-    let h = vec![
-        generate_history(user_id),
-        generate_history(user_id),
-        generate_history(user_id),
-        generate_history(user_id),
-    ];
-    db.add_history(&h).await?;
-
-    assert_eq!(db.count_history(&user).await?, 4);
-
-    // AFAICT history is not used any more so I'm not going figure out how to take the timestamps
-    // from generated history into this
-    // assert_eq!(db.count_history_range(&user).await?, 4);
-
-    db.delete_history(&user, h[0].client_id.clone()).await?;
-    let deleted_history = db.deleted_history(&user).await?;
-    assert_eq!(deleted_history.len(), 1);
-
     // add a bunch of records
     let host_a = Host::new(HostId(uuid_v7()));
     let host_b = Host::new(HostId(uuid_v7()));
@@ -134,30 +110,12 @@ async fn run_the_test<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
     let status = db.status(&user).await?;
     assert!(status.hosts.contains_key(&host_a.id));
     assert!(status.hosts.contains_key(&host_b.id));
-    assert_eq!(
-        status
-            .hosts
-            .get(&host_a.id)
-            .unwrap()
-            .get("history")
-            .unwrap()
-            .clone(),
-        6
-    );
-    assert_eq!(
-        status
-            .hosts
-            .get(&host_b.id)
-            .unwrap()
-            .get("history")
-            .unwrap()
-            .clone(),
-        2
-    );
+    assert_eq!(status.hosts.get(&host_a.id).unwrap().get(&RecordTag::History).unwrap().clone(), 6);
+    assert_eq!(status.hosts.get(&host_b.id).unwrap().get(&RecordTag::History).unwrap().clone(), 2);
 
     // Get 3 records from the beginning
     let recs = db
-        .next_records(&user, host_a.id, "history".into(), None, 3)
+        .next_records(&user, &RecordSeriesKey::new(host_a.id, RecordTag::History), None, 3)
         .await?;
     assert_eq!(recs.len(), 3);
     assert_eq!(recs[0].idx, 1);
@@ -165,7 +123,7 @@ async fn run_the_test<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
 
     // Get from the end, for host a. Get more than exists
     let recs = db
-        .next_records(&user, host_a.id, "history".into(), Some(4), 10)
+        .next_records(&user, &RecordSeriesKey::new(host_a.id, RecordTag::History), Some(4), 10)
         .await?;
     assert_eq!(recs.len(), 3);
     assert_eq!(recs[0].idx, 4); // check the head record is idx 4
@@ -174,42 +132,23 @@ async fn run_the_test<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
     // delete_store
     db.delete_store(&user).await?;
     let recs = db
-        .next_records(&user, host_a.id, "history".into(), Some(4), 10)
+        .next_records(&user, &RecordSeriesKey::new(host_a.id, RecordTag::History), Some(4), 10)
         .await?;
     assert_eq!(recs.len(), 0);
 
     Ok(())
 }
 
-fn generate_history(user_id: i64) -> NewHistory {
-    use fake::Fake;
-    use fake::faker::lorem::en::*;
-
-    let data: String = Sentence(1..3).fake();
-    let hostname: String = "foo".to_owned();
-    let client_id = Uuid::new_v4().to_string();
-
-    let timestamp: OffsetDateTime = OffsetDateTime::now_utc();
-
-    NewHistory {
-        client_id,
-        user_id,
-        hostname,
-        timestamp,
-        data,
-    }
-}
-
 fn generate_record(host: &Host, idx: RecordIdx) -> Record<EncryptedData> {
     let data = EncryptedData {
-        data: "some data".into(),
-        content_encryption_key: "key".into(),
+        raw: "some data".into(),
+        cek: "key".into(),
     };
     Record::builder()
         .idx(idx)
         .host(host.clone())
         .version("2".into())
-        .tag("history".into())
+        .tag(RecordTag::History)
         .data(data)
         .build()
 }

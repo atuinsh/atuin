@@ -6,13 +6,13 @@ use serde::{Deserialize, Serialize};
 static RULE_RE: OnceLock<Regex> = OnceLock::new();
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum RuleError {
+pub enum RuleError {
     #[error("invalid rule format: {0}")]
     InvalidRule(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Rule {
+pub struct Rule {
     pub tool: String,
     pub scope: Option<String>,
 }
@@ -50,57 +50,36 @@ impl TryFrom<&str> for Rule {
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         let value = value.trim();
         let re = RULE_RE.get_or_init(|| Regex::new(r"^(\w+)(?:\((.*)\))?$").unwrap());
-        let caps = re
-            .captures(value)
-            .ok_or(RuleError::InvalidRule(value.to_string()))?;
+        let caps = re.captures(value).ok_or(RuleError::InvalidRule(value.to_string()))?;
         let tool = caps.get(1).unwrap().as_str().to_string();
         let scope = caps.get(2).map(|m| m.as_str().to_string());
-        Ok(Rule { tool, scope })
+        Ok(Self { tool, scope })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    fn test_rule_try_from() {
-        assert_eq!(
-            Rule::try_from("Read").unwrap(),
-            Rule {
-                tool: "Read".to_string(),
-                scope: None
-            }
-        );
-        assert_eq!(
-            Rule::try_from("Read(*)").unwrap(),
-            Rule {
-                tool: "Read".to_string(),
-                scope: Some("*".to_string())
-            }
-        );
-        assert_eq!(
-            Rule::try_from("Write(*.md)").unwrap(),
-            Rule {
-                tool: "Write".to_string(),
-                scope: Some("*.md".to_string())
-            }
-        );
-        assert_eq!(
-            Rule::try_from("Shell(git commit *)").unwrap(),
-            Rule {
-                tool: "Shell".to_string(),
-                scope: Some("git commit *".to_string())
-            }
-        );
-        assert_eq!(
-            Rule::try_from("Shell(echo ())").unwrap(),
-            Rule {
-                tool: "Shell".to_string(),
-                scope: Some("echo ()".to_string())
-            }
-        );
-        assert!(Rule::try_from("Shell(git commit *").is_err());
-        assert!(Rule::try_from("Shell(git commit *)!").is_err());
+    #[rstest]
+    #[case::bare_tool("Read", "Read", None)]
+    #[case::wildcard_scope("Read(*)", "Read", Some("*"))]
+    #[case::glob_scope("Write(*.md)", "Write", Some("*.md"))]
+    #[case::shell_with_space("Shell(git commit *)", "Shell", Some("git commit *"))]
+    #[case::nested_parens("Shell(echo ())", "Shell", Some("echo ()"))]
+    fn parses_valid_rule(#[case] input: &str, #[case] tool: &str, #[case] scope: Option<&str>) {
+        assert_eq!(Rule::try_from(input).unwrap(), Rule {
+            tool: tool.to_string(),
+            scope: scope.map(String::from),
+        });
+    }
+
+    #[rstest]
+    #[case::unclosed_paren("Shell(git commit *")]
+    #[case::trailing_junk("Shell(git commit *)!")]
+    fn rejects_invalid_rule(#[case] input: &str) {
+        assert!(Rule::try_from(input).is_err());
     }
 }

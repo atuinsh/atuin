@@ -18,19 +18,23 @@ path = "src/lib.rs"
 name = "atuin-server"
 path = "src/bin/main.rs"
 
+[features]
+# Statically link (vendor) OpenSSL for native-tls instead of using the system
+# libssl. Used for portable release artifacts; a no-op on macOS/Windows.
+vendored-tls = ["reqwest/native-tls-vendored"]
+
 [dependencies]
 atuin-common = { workspace = true }
+atuin-domain = { workspace = true, features = ["axum"] }
 atuin-server-database = { workspace = true }
 atuin-server-postgres = { workspace = true }
 atuin-server-sqlite = { workspace = true }
 atuin-server-mysql = { workspace = true }
 
 tracing = { workspace = true }
-time = { workspace = true }
 eyre = { workspace = true }
 config = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 rand = { workspace = true }
 tokio = { workspace = true }
 axum = "0.8"
@@ -38,9 +42,22 @@ fs-err = { workspace = true }
 tower = { workspace = true }
 tower-http = { version = "0.6", features = ["trace"] }
 reqwest = { workspace = true }
+url = { workspace = true }
 argon2 = "0.5"
-semver = { workspace = true }
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
 metrics = "0.24"
 clap = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+# Integration tests in tests/ spin up a real server and drive it with the
+# client's api_client. atuin-client is only a dev dependency here so the client
+# binary crate stays free of server/postgres deps (see issue #2884).
+[dev-dependencies]
+atuin-client = { path = "../atuin-client", version = "18.20.1", default-features = false, features = ["sync"] }
+rstest = { workspace = true }
+futures-util = "0.3"
+tracing-tree = "0.4"
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

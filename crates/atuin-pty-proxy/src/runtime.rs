@@ -1,7 +1,6 @@
 use std::io::{Read, Write};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 
 use crossterm::terminal;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
@@ -11,7 +10,7 @@ use crate::debug::{Osc133DebugHighlighter, RESET};
 use crate::pty_proxy::RuntimeOptions;
 use crate::screen::{self, Msg};
 
-pub(crate) fn main(options: RuntimeOptions) {
+pub fn main(options: RuntimeOptions) {
     if let Err(e) = run(options) {
         let _ = terminal::disable_raw_mode();
         eprintln!("atuin pty-proxy: {e:#}");
@@ -32,38 +31,60 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
         })
         .map_err(|e| eyre::eyre!("{e:#}"))?;
 
-    let sock_path = screen::socket_path();
-    let _ = std::fs::remove_file(&sock_path);
+    let sock_path = match screen::socket_path() {
+        Ok(path) => {
+            let _ = std::fs::remove_file(&path);
+            Some(path)
+        }
+        Err(e) => {
+            // If creating the socket fails, print the error and continue rather than returning it,
+            // so the user still gets a shell. This is the same behavior as when binding the socket
+            // fails in `screen::spawn_socket_server`.
+            eprintln!("atuin pty-proxy: failed to create socket: {e}");
+            None
+        }
+    };
 
     let mut cmd = match options.shell {
         Some(ref path) => CommandBuilder::new(path),
         None => CommandBuilder::new_default_prog(),
     };
     cmd.cwd(std::env::current_dir()?);
-    cmd.env("ATUIN_PTY_PROXY_SOCKET", sock_path.as_os_str());
+    // Reflect the shell we actually spawn in `$SHELL` so the child — and
+    // anything it execs via `$SHELL -c` (e.g. fzf's `become`) — sees the
+    // shell the user asked for instead of a stale value inherited from the
+    // parent environment.
+    if let Some(ref path) = options.shell {
+        cmd.env("SHELL", path);
+    }
+    if let Some(path) = &sock_path {
+        cmd.env("ATUIN_PTY_PROXY_SOCKET", path);
+    } else {
+        cmd.env_remove("ATUIN_PTY_PROXY_SOCKET");
+    }
     cmd.env("ATUIN_PTY_PROXY_ACTIVE", "1");
+    // Atuin sets a restrictive process-wide umask on startup to protect the
+    // files it creates. The shell must not inherit it (#3695) — restore the
+    // umask the user launched us with. Applied in the child between fork and
+    // exec, so the proxy's own umask stays restrictive.
+    if let Some(mask) = options.child_umask {
+        cmd.umask(Some(mask as _));
+    }
 
-    let mut child = pair
-        .slave
-        .spawn_command(cmd)
-        .map_err(|e| eyre::eyre!("{e:#}"))?;
+    let mut child = pair.slave.spawn_command(cmd).map_err(|e| eyre::eyre!("{e:#}"))?;
 
     drop(pair.slave);
 
-    let mut pty_reader = pair
-        .master
-        .try_clone_reader()
-        .map_err(|e| eyre::eyre!("{e:#}"))?;
-    let mut pty_writer = pair
-        .master
-        .take_writer()
-        .map_err(|e| eyre::eyre!("{e:#}"))?;
+    let mut pty_reader = pair.master.try_clone_reader().map_err(|e| eyre::eyre!("{e:#}"))?;
+    let mut pty_writer = pair.master.take_writer().map_err(|e| eyre::eyre!("{e:#}"))?;
 
     let (msg_tx, msg_rx) = mpsc::sync_channel::<Msg>(64);
     let current_cols = Arc::new(AtomicU16::new(cols.max(1)));
 
     screen::spawn_parser_thread(rows, cols, msg_rx);
-    screen::spawn_socket_server(sock_path.clone(), msg_tx.clone());
+    if let Some(path) = &sock_path {
+        screen::spawn_socket_server(path.clone(), msg_tx.clone());
+    }
     spawn_resize_handler(pair.master, msg_tx.clone(), current_cols.clone())?;
 
     terminal::enable_raw_mode()?;
@@ -71,32 +92,29 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     let stdout_thread = std::thread::spawn(move || {
         let mut stdout = std::io::stdout();
         let mut highlighter = options.debug_osc133.then(Osc133DebugHighlighter::new);
-        let mut capture_tracker = options
-            .command_capture_sink
-            .as_ref()
-            .map(|_| CommandCaptureTracker::new(current_cols));
+        let mut capture_tracker =
+            options.command_capture_sink.as_ref().map(|_| CommandCaptureTracker::new(current_cols));
         let mut buf = [0u8; 8192];
 
         loop {
             match pty_reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if let (Some(tracker), Some(sink)) = (
-                        capture_tracker.as_mut(),
-                        options.command_capture_sink.as_ref(),
-                    ) {
+                    if let (Some(tracker), Some(sink)) =
+                        (capture_tracker.as_mut(), options.command_capture_sink.as_ref())
+                    {
                         tracker.push(&buf[..n], sink);
                     }
 
                     if let Some(highlighter) = highlighter.as_mut() {
                         let rendered = highlighter.render(&buf[..n]);
-                        let _ = msg_tx.try_send(Msg::Data(rendered.clone()));
+                        let _ = msg_tx.send(Msg::Data(rendered.clone()));
 
                         if stdout.write_all(&rendered).is_err() {
                             break;
                         }
                     } else {
-                        let _ = msg_tx.try_send(Msg::Data(buf[..n].to_vec()));
+                        let _ = msg_tx.send(Msg::Data(buf[..n].to_vec()));
 
                         if stdout.write_all(&buf[..n]).is_err() {
                             break;
@@ -132,7 +150,9 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     let _ = stdout_thread.join();
 
     let _ = terminal::disable_raw_mode();
-    let _ = std::fs::remove_file(&sock_path);
+    if let Some(path) = &sock_path {
+        let _ = std::fs::remove_file(path);
+    }
 
     std::process::exit(process_exit_code(status.exit_code()));
 }
@@ -157,7 +177,7 @@ fn spawn_resize_handler(
                     pixel_width: 0,
                     pixel_height: 0,
                 });
-                let _ = resize_tx.try_send(Msg::Resize { rows, cols });
+                let _ = resize_tx.send(Msg::Resize { rows, cols });
             }
         }
     });
@@ -171,17 +191,16 @@ fn process_exit_code(code: u32) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::process_exit_code;
 
-    #[test]
-    fn process_exit_code_preserves_valid_values() {
-        assert_eq!(process_exit_code(0), 0);
-        assert_eq!(process_exit_code(127), 127);
-        assert_eq!(process_exit_code(i32::MAX as u32), i32::MAX);
-    }
-
-    #[test]
-    fn process_exit_code_defaults_when_out_of_range() {
-        assert_eq!(process_exit_code(i32::MAX as u32 + 1), 1);
+    #[rstest]
+    #[case::zero(0, 0)]
+    #[case::mid_range(127, 127)]
+    #[case::max_i32(i32::MAX as u32, i32::MAX)]
+    #[case::overflow_defaults_to_one(i32::MAX as u32 + 1, 1)]
+    fn maps_exit_code(#[case] input: u32, #[case] expected: i32) {
+        assert_eq!(process_exit_code(input), expected);
     }
 }

@@ -1,22 +1,18 @@
-use atuin_common::record::DecryptedData;
+use atuin_domain::record::DecryptedData;
 use eyre::{Result, bail, ensure};
+use rmp::decode::{self, Bytes};
+use rmp::encode;
+use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
-use rmp::{
-    decode::{self, Bytes},
-    encode,
-};
-use typed_builder::TypedBuilder;
-
-pub const SCRIPT_VERSION: &str = "v0";
-pub const SCRIPT_TAG: &str = "script";
 pub const SCRIPT_LEN: usize = 20000; // 20kb max total len
 
-#[derive(Debug, Clone, PartialEq, Eq, TypedBuilder)]
+#[derive(Debug, Clone, PartialEq, Eq, TypedBuilder, sqlx::FromRow)]
 /// A script is a set of commands that can be run, with the specified shebang
 pub struct Script {
     /// The id of the script
     #[builder(default = uuid::Uuid::new_v4())]
+    #[sqlx(try_from = "String")]
     pub id: Uuid,
 
     /// The name of the script
@@ -31,7 +27,10 @@ pub struct Script {
     pub shebang: String,
 
     /// The tags of the script
+    ///
+    /// Not a column on `scripts`; populated from a separate `script_tags` query.
     #[builder(default = Vec::new())]
+    #[sqlx(skip)]
     pub tags: Vec<String>,
 
     /// The script content
@@ -90,10 +89,10 @@ impl Script {
         let (script, bytes) = decode::read_str_from_slice(bytes).unwrap();
 
         if !bytes.is_empty() {
-            bail!("trailing bytes in encoded script record. malformed")
+            bail!("trailing bytes in encoded script record. malformed");
         }
 
-        Ok(Script {
+        Ok(Self {
             id: Uuid::parse_str(id).unwrap(),
             name: name.to_owned(),
             description: description.to_owned(),
@@ -120,15 +119,12 @@ mod tests {
         };
 
         let serialized = script.serialize().unwrap();
-        assert_eq!(
-            serialized.0,
-            vec![
-                150, 217, 36, 48, 49, 57, 53, 99, 56, 50, 53, 45, 97, 51, 53, 102, 45, 55, 57, 56,
-                50, 45, 98, 100, 98, 48, 45, 49, 54, 49, 54, 56, 56, 56, 49, 99, 98, 99, 54, 164,
-                116, 101, 115, 116, 164, 116, 101, 115, 116, 164, 116, 101, 115, 116, 145, 164,
-                116, 101, 115, 116, 164, 116, 101, 115, 116
-            ]
-        );
+        assert_eq!(serialized.0, vec![
+            150, 217, 36, 48, 49, 57, 53, 99, 56, 50, 53, 45, 97, 51, 53, 102, 45, 55, 57, 56, 50,
+            45, 98, 100, 98, 48, 45, 49, 54, 49, 54, 56, 56, 56, 49, 99, 98, 99, 54, 164, 116, 101,
+            115, 116, 164, 116, 101, 115, 116, 164, 116, 101, 115, 116, 145, 164, 116, 101, 115,
+            116, 164, 116, 101, 115, 116
+        ]);
     }
 
     #[test]

@@ -1,8 +1,7 @@
+use atuin_common::shell::{Shell, ShellError};
 use eyre::{Result, ensure, eyre};
 use rmp::{decode, encode};
 use serde::Serialize;
-
-use atuin_common::shell::{Shell, ShellError};
 
 use crate::store::AliasStore;
 
@@ -68,7 +67,7 @@ impl Var {
             "trailing bytes in encoded dotfiles env record, malformed"
         );
 
-        Ok(Var {
+        Ok(Self {
             name: key.to_owned(),
             value: value.to_owned(),
             export,
@@ -76,6 +75,7 @@ impl Var {
     }
 }
 
+#[must_use]
 pub fn parse_alias(line: &str) -> Option<Alias> {
     // consider the fact we might be importing a fish alias
     // 'alias' output
@@ -87,7 +87,13 @@ pub fn parse_alias(line: &str) -> Option<Alias> {
     let parts: Vec<&str> = if is_fish {
         line.split(' ')
             .enumerate()
-            .filter_map(|(n, i)| if n == 0 { None } else { Some(i) })
+            .filter_map(|(n, i)| {
+                if n == 0 {
+                    None
+                } else {
+                    Some(i)
+                }
+            })
             .collect()
     } else {
         line.split('=').collect()
@@ -159,54 +165,35 @@ pub async fn import_aliases(store: &AliasStore) -> Result<Vec<Alias>> {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use crate::shell::{Alias, parse_alias};
 
-    #[test]
-    fn test_parse_simple_alias() {
-        let alias = super::parse_alias("foo=bar").expect("failed to parse alias");
-        assert_eq!(alias.name, "foo");
-        assert_eq!(alias.value, "bar");
-    }
-
-    #[test]
-    fn test_parse_quoted_alias() {
-        let alias = super::parse_alias("emacs='TERM=xterm-24bits emacs -nw'")
-            .expect("failed to parse alias");
-
-        assert_eq!(alias.name, "emacs");
-        assert_eq!(alias.value, "'TERM=xterm-24bits emacs -nw'");
-
-        let git_alias = super::parse_alias("gwip='git add -A; git rm $(git ls-files --deleted) 2> /dev/null; git commit --no-verify --no-gpg-sign --message \"--wip-- [skip ci]\"'").expect("failed to parse alias");
-        assert_eq!(git_alias.name, "gwip");
-        assert_eq!(
-            git_alias.value,
-            "'git add -A; git rm $(git ls-files --deleted) 2> /dev/null; git commit --no-verify --no-gpg-sign --message \"--wip-- [skip ci]\"'"
-        );
-    }
-
-    #[test]
-    fn test_parse_quoted_alias_equals() {
-        let alias = super::parse_alias("emacs='TERM=xterm-24bits emacs -nw --foo=bar'")
-            .expect("failed to parse alias");
-        assert_eq!(alias.name, "emacs");
-        assert_eq!(alias.value, "'TERM=xterm-24bits emacs -nw --foo=bar'");
-    }
-
-    #[test]
-    fn test_parse_fish() {
-        let alias = super::parse_alias("alias foo bar").expect("failed to parse alias");
-        assert_eq!(alias.name, "foo");
-        assert_eq!(alias.value, "bar");
-
-        let alias =
-            super::parse_alias("alias x 'exa --icons --git --classify --group-directories-first'")
-                .expect("failed to parse alias");
-
-        assert_eq!(alias.name, "x");
-        assert_eq!(
-            alias.value,
-            "'exa --icons --git --classify --group-directories-first'"
-        );
+    #[rstest]
+    #[case::simple("foo=bar", "foo", "bar")]
+    #[case::quoted("emacs='TERM=xterm-24bits emacs -nw'", "emacs", "'TERM=xterm-24bits emacs -nw'")]
+    #[case::quoted_git(
+        "gwip='git add -A; git rm $(git ls-files --deleted) 2> /dev/null; git commit --no-verify \
+         --no-gpg-sign --message \"--wip-- [skip ci]\"'",
+        "gwip",
+        "'git add -A; git rm $(git ls-files --deleted) 2> /dev/null; git commit --no-verify \
+         --no-gpg-sign --message \"--wip-- [skip ci]\"'"
+    )]
+    #[case::quoted_equals(
+        "emacs='TERM=xterm-24bits emacs -nw --foo=bar'",
+        "emacs",
+        "'TERM=xterm-24bits emacs -nw --foo=bar'"
+    )]
+    #[case::fish("alias foo bar", "foo", "bar")]
+    #[case::fish_quoted(
+        "alias x 'exa --icons --git --classify --group-directories-first'",
+        "x",
+        "'exa --icons --git --classify --group-directories-first'"
+    )]
+    fn parse_alias_cases(#[case] input: &str, #[case] name: &str, #[case] value: &str) {
+        let alias = super::parse_alias(input).expect("failed to parse alias");
+        assert_eq!(alias.name, name);
+        assert_eq!(alias.value, value);
     }
 
     #[test]

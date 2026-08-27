@@ -20,9 +20,10 @@ message SearchContext {
 
 message SearchRequest {
   string query = 1;
-  uint64 query_id = 2;  // Incrementing ID to match responses to queries
+  uint64 query_id = 2; // Incrementing ID to match responses to queries
   FilterMode filter_mode = 3;
   SearchContext context = 4;
+  repeated string shells = 5; // Which shells' commands to include
 }
 
 message SearchResponse {
@@ -30,6 +31,16 @@ message SearchResponse {
   repeated bytes ids = 2;
 }
 
+// Tells the daemon to build the search index for the given list of shells.
+// This message gets sent from the shell init scripts, to avoid a delay when
+// the first search request is sent.
+message PrepareIndexRequest {
+  repeated string shells = 1;
+}
+
+message PrepareIndexResponse {}
+
 service Search {
   rpc Search(stream SearchRequest) returns (stream SearchResponse);
+  rpc PrepareIndex(PrepareIndexRequest) returns (PrepareIndexResponse);
 }

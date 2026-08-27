@@ -1,15 +1,15 @@
-use async_trait::async_trait;
-use eyre::{Context, Result, bail};
-use reqwest::{StatusCode, Url, header::USER_AGENT};
-use serde::Deserialize;
+use std::collections::HashMap;
 
-use atuin_common::{
-    api::{
-        ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ChangePasswordRequest, LoginRequest,
-        LoginResponse, RegisterResponse,
-    },
-    tls::ensure_crypto_provider,
+use atuin_common::url::UrlAppendExt;
+use atuin_domain::api::{
+    ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ChangePasswordRequest, LoginRequest, LoginResponse,
+    RegisterResponse,
 };
+use enum_dispatch::enum_dispatch;
+use eyre::{Context, Result, bail};
+use reqwest::header::USER_AGENT;
+use reqwest::{StatusCode, Url};
+use serde::Deserialize;
 
 use crate::settings::Settings;
 
@@ -43,7 +43,8 @@ pub enum MutateResponse {
 ///
 /// CLI commands use this trait so they don't need to know which backend is
 /// active — they just prompt for input and call these methods.
-#[async_trait]
+#[enum_dispatch]
+#[allow(async_fn_in_trait, reason = "only used within our code and we don't need it to be Send")]
 pub trait AuthClient: Send + Sync {
     /// Log in with username + password, optionally providing a TOTP code.
     async fn login(
@@ -72,21 +73,26 @@ pub trait AuthClient: Send + Sync {
     ) -> Result<MutateResponse>;
 }
 
+/// Static-dispatch enum over the two auth backends.
+#[enum_dispatch(AuthClient)]
+pub enum AnyAuthClient {
+    Legacy(LegacyAuthClient),
+    Hub(HubAuthClient),
+}
+
 /// Resolve the appropriate [`AuthClient`] for the current settings.
-pub async fn auth_client(settings: &Settings) -> Box<dyn AuthClient> {
+pub async fn auth_client(settings: &Settings) -> AnyAuthClient {
     if settings.is_hub_sync() {
-        let endpoint = settings.active_hub_endpoint().unwrap_or_default();
-        Box::new(HubAuthClient::new(
-            endpoint.as_ref(),
-            settings.hub_session_token().await.ok(),
-        )) as Box<dyn AuthClient>
+        let endpoint = settings.hub_endpoint();
+        AnyAuthClient::Hub(HubAuthClient::new(&endpoint, settings.hub_session_token().await.ok()))
     } else {
-        Box::new(LegacyAuthClient::new(
+        AnyAuthClient::Legacy(LegacyAuthClient::new(
             &settings.sync_address,
             settings.session_token().await.ok(),
             settings.network_connect_timeout,
             settings.network_timeout,
-        )) as Box<dyn AuthClient>
+            settings.extra_headers.clone(),
+        ))
     }
 }
 
@@ -95,51 +101,47 @@ pub async fn auth_client(settings: &Settings) -> Box<dyn AuthClient> {
 // ---------------------------------------------------------------------------
 
 pub struct LegacyAuthClient {
-    address: String,
+    address: Url,
     session_token: Option<String>,
     connect_timeout: u64,
     timeout: u64,
+    extra_headers: HashMap<String, String>,
 }
 
 impl LegacyAuthClient {
+    #[must_use]
     pub fn new(
-        address: &str,
+        address: &Url,
         session_token: Option<String>,
         connect_timeout: u64,
         timeout: u64,
+        extra_headers: HashMap<String, String>,
     ) -> Self {
         Self {
-            address: address.to_string(),
+            address: address.clone(),
             session_token,
             connect_timeout,
             timeout,
+            extra_headers,
         }
     }
 
     fn authenticated_client(&self) -> Result<reqwest::Client> {
-        let token = self
-            .session_token
-            .as_deref()
-            .ok_or_else(|| eyre::eyre!("Not logged in"))?;
+        let token = self.session_token.as_deref().ok_or_else(|| eyre::eyre!("Not logged in"))?;
 
-        ensure_crypto_provider();
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            reqwest::header::AUTHORIZATION,
-            format!("Token {token}").parse()?,
-        );
+        let mut headers = crate::api_client::extra_headers_map(&self.extra_headers)?;
+        headers.insert(reqwest::header::AUTHORIZATION, format!("Token {token}").parse()?);
         headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
         headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
 
-        Ok(reqwest::Client::builder()
+        Ok(crate::api_client::client_builder(&self.extra_headers)
             .default_headers(headers)
-            .connect_timeout(std::time::Duration::new(self.connect_timeout, 0))
-            .timeout(std::time::Duration::new(self.timeout, 0))
+            .connect_timeout(std::time::Duration::from_secs(self.connect_timeout))
+            .timeout(std::time::Duration::from_secs(self.timeout))
             .build()?)
     }
 }
 
-#[async_trait]
 impl AuthClient for LegacyAuthClient {
     async fn login(
         &self,
@@ -154,6 +156,7 @@ impl AuthClient for LegacyAuthClient {
                 username: username.to_string(),
                 password: password.to_string(),
             },
+            &self.extra_headers,
         )
         .await?;
 
@@ -164,7 +167,14 @@ impl AuthClient for LegacyAuthClient {
     }
 
     async fn register(&self, username: &str, email: &str, password: &str) -> Result<AuthResponse> {
-        let resp = crate::api_client::register(&self.address, username, email, password).await?;
+        let resp = crate::api_client::register(
+            &self.address,
+            username,
+            email,
+            password,
+            &self.extra_headers,
+        )
+        .await?;
         Ok(AuthResponse::Success {
             session: resp.session,
             auth_type: resp.auth.or(Some("cli".into())),
@@ -178,10 +188,10 @@ impl AuthClient for LegacyAuthClient {
         _totp_code: Option<&str>,
     ) -> Result<MutateResponse> {
         let client = self.authenticated_client()?;
-        let url = make_url(&self.address, "/account/password")?;
+        let url = self.address.append_path("account/password")?;
 
         let resp = client
-            .patch(&url)
+            .patch(url)
             .json(&ChangePasswordRequest {
                 current_password: current_password.to_string(),
                 new_password: new_password.to_string(),
@@ -191,9 +201,15 @@ impl AuthClient for LegacyAuthClient {
 
         match resp.status().as_u16() {
             200 => Ok(MutateResponse::Success),
-            401 => bail!("current password is incorrect"),
-            403 => bail!("invalid login details"),
-            _ => bail!("unknown error"),
+            401 => {
+                bail!("current password is incorrect");
+            }
+            403 => {
+                bail!("invalid login details");
+            }
+            _ => {
+                bail!("unknown error");
+            }
         }
     }
 
@@ -203,19 +219,22 @@ impl AuthClient for LegacyAuthClient {
         _totp_code: Option<&str>,
     ) -> Result<MutateResponse> {
         let client = self.authenticated_client()?;
-        let url = make_url(&self.address, "/account")?;
+        let url = self.address.append(["account"])?;
 
-        let resp = client
-            .delete(&url)
-            .json(&serde_json::json!({ "password": password }))
-            .send()
-            .await?;
+        let resp =
+            client.delete(url).json(&serde_json::json!({ "password": password })).send().await?;
 
         match resp.status().as_u16() {
             200 => Ok(MutateResponse::Success),
-            401 => bail!("password is incorrect"),
-            403 => bail!("invalid login details"),
-            _ => bail!("unknown error"),
+            401 => {
+                bail!("password is incorrect");
+            }
+            403 => {
+                bail!("invalid login details");
+            }
+            _ => {
+                bail!("unknown error");
+            }
         }
     }
 }
@@ -225,14 +244,15 @@ impl AuthClient for LegacyAuthClient {
 // ---------------------------------------------------------------------------
 
 pub struct HubAuthClient {
-    address: String,
+    address: Url,
     hub_token: Option<String>,
 }
 
 impl HubAuthClient {
-    pub fn new(address: &str, hub_token: Option<String>) -> Self {
+    #[must_use]
+    pub fn new(address: &Url, hub_token: Option<String>) -> Self {
         Self {
-            address: address.trim_end_matches('/').to_string(),
+            address: address.clone(),
             hub_token,
         }
     }
@@ -246,7 +266,6 @@ struct HubErrorResponse {
     code: Option<String>,
 }
 
-#[async_trait]
 impl AuthClient for HubAuthClient {
     async fn login(
         &self,
@@ -254,8 +273,7 @@ impl AuthClient for HubAuthClient {
         password: &str,
         totp_code: Option<&str>,
     ) -> Result<AuthResponse> {
-        ensure_crypto_provider();
-        let url = make_url(&self.address, "/api/v0/login")?;
+        let url = self.address.append_path("api/v0/login")?;
         let client = reqwest::Client::new();
 
         let mut body = serde_json::json!({
@@ -267,7 +285,7 @@ impl AuthClient for HubAuthClient {
         }
 
         let resp = client
-            .post(&url)
+            .post(url)
             .header(USER_AGENT, APP_USER_AGENT)
             .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
             .json(&body)
@@ -302,12 +320,11 @@ impl AuthClient for HubAuthClient {
     }
 
     async fn register(&self, username: &str, email: &str, password: &str) -> Result<AuthResponse> {
-        ensure_crypto_provider();
-        let url = make_url(&self.address, "/api/v0/register")?;
+        let url = self.address.append_path("api/v0/register")?;
         let client = reqwest::Client::new();
 
         let resp = client
-            .post(&url)
+            .post(url)
             .header(USER_AGENT, APP_USER_AGENT)
             .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
             .json(&serde_json::json!({
@@ -343,21 +360,17 @@ impl AuthClient for HubAuthClient {
         totp_code: Option<&str>,
     ) -> Result<MutateResponse> {
         let hub_token = self.hub_token.as_deref().ok_or_else(|| {
-            eyre::eyre!(
-                "Not logged in to Atuin Hub. \
-                     Please run 'atuin login' to authenticate."
-            )
+            eyre::eyre!("Not logged in to Atuin Hub. Please run 'atuin login' to authenticate.")
         })?;
 
         if !hub_token.starts_with("atapi_") {
             bail!(
-                "Your Hub session token is invalid. \
-                 Please run 'atuin login' to re-authenticate with Atuin Hub."
+                "Your Hub session token is invalid. Please run 'atuin login' to re-authenticate \
+                 with Atuin Hub."
             );
         }
 
-        ensure_crypto_provider();
-        let url = make_url(&self.address, "/api/v0/account/password")?;
+        let url = self.address.append_path("api/v0/account/password")?;
         let client = reqwest::Client::new();
 
         let mut body = serde_json::json!({
@@ -369,7 +382,7 @@ impl AuthClient for HubAuthClient {
         }
 
         let resp = client
-            .patch(&url)
+            .patch(url)
             .header(USER_AGENT, APP_USER_AGENT)
             .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
             .bearer_auth(hub_token)
@@ -387,15 +400,25 @@ impl AuthClient for HubAuthClient {
         if let Ok(err) = resp.json::<HubErrorResponse>().await {
             match err.code.as_deref() {
                 Some("2fa_required") => return Ok(MutateResponse::TwoFactorRequired),
-                Some("invalid_2fa_code") => bail!("invalid two-factor code"),
-                _ => bail!("{}", err.reason),
+                Some("invalid_2fa_code") => {
+                    bail!("invalid two-factor code");
+                }
+                _ => {
+                    bail!("{}", err.reason);
+                }
             }
         }
 
         match status {
-            StatusCode::UNAUTHORIZED => bail!("current password is incorrect"),
-            StatusCode::FORBIDDEN => bail!("invalid login details"),
-            _ => bail!("Hub password change failed with status {status}"),
+            StatusCode::UNAUTHORIZED => {
+                bail!("current password is incorrect");
+            }
+            StatusCode::FORBIDDEN => {
+                bail!("invalid login details");
+            }
+            _ => {
+                bail!("Hub password change failed with status {status}");
+            }
         }
     }
 
@@ -405,21 +428,17 @@ impl AuthClient for HubAuthClient {
         totp_code: Option<&str>,
     ) -> Result<MutateResponse> {
         let hub_token = self.hub_token.as_deref().ok_or_else(|| {
-            eyre::eyre!(
-                "Not logged in to Atuin Hub. \
-                     Please run 'atuin login' to authenticate."
-            )
+            eyre::eyre!("Not logged in to Atuin Hub. Please run 'atuin login' to authenticate.")
         })?;
 
         if !hub_token.starts_with("atapi_") {
             bail!(
-                "Your Hub session token is invalid. \
-                 Please run 'atuin login' to re-authenticate with Atuin Hub."
+                "Your Hub session token is invalid. Please run 'atuin login' to re-authenticate \
+                 with Atuin Hub."
             );
         }
 
-        ensure_crypto_provider();
-        let url = make_url(&self.address, "/api/v0/account")?;
+        let url = self.address.append_path("api/v0/account")?;
         let client = reqwest::Client::new();
 
         let mut body = serde_json::json!({
@@ -430,7 +449,7 @@ impl AuthClient for HubAuthClient {
         }
 
         let resp = client
-            .delete(&url)
+            .delete(url)
             .header(USER_AGENT, APP_USER_AGENT)
             .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
             .bearer_auth(hub_token)
@@ -448,36 +467,25 @@ impl AuthClient for HubAuthClient {
         if let Ok(err) = resp.json::<HubErrorResponse>().await {
             match err.code.as_deref() {
                 Some("2fa_required") => return Ok(MutateResponse::TwoFactorRequired),
-                Some("invalid_2fa_code") => bail!("invalid two-factor code"),
-                _ => bail!("{}", err.reason),
+                Some("invalid_2fa_code") => {
+                    bail!("invalid two-factor code");
+                }
+                _ => {
+                    bail!("{}", err.reason);
+                }
             }
         }
 
         match status {
-            StatusCode::UNAUTHORIZED => bail!("password is incorrect"),
-            StatusCode::FORBIDDEN => bail!("invalid login details"),
-            _ => bail!("Hub account deletion failed with status {status}"),
+            StatusCode::UNAUTHORIZED => {
+                bail!("password is incorrect");
+            }
+            StatusCode::FORBIDDEN => {
+                bail!("invalid login details");
+            }
+            _ => {
+                bail!("Hub account deletion failed with status {status}");
+            }
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------------------
-
-fn make_url(address: &str, path: &str) -> Result<String> {
-    let address = if address.ends_with('/') {
-        address.to_string()
-    } else {
-        format!("{address}/")
-    };
-
-    let path = path.strip_prefix('/').unwrap_or(path);
-
-    let url = Url::parse(&address)
-        .context("failed to parse server address")?
-        .join(path)
-        .context("failed to join URL path")?;
-
-    Ok(url.to_string())
 }

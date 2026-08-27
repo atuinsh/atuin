@@ -21,19 +21,15 @@
 //! }
 //! ```
 
-use std::{
-    path::PathBuf,
-    sync::{Arc, OnceLock},
-    time::Duration,
-};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use eyre::{Result, WrapErr};
-use log::{debug, error, info, warn};
-use notify::{
-    Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher,
-    event::{EventKind, ModifyKind},
-};
+use notify::event::{EventKind, ModifyKind};
+use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::watch;
+use tracing::{debug, error, info, warn};
 
 use super::Settings;
 
@@ -76,7 +72,7 @@ impl SettingsWatcher {
         let config_path = Self::config_path();
         info!("starting config file watcher: {:?}", config_path);
 
-        let watcher = Self::create_watcher(tx, config_path)?;
+        let watcher = Self::create_watcher(tx, &config_path)?;
 
         Ok(Self {
             rx,
@@ -89,11 +85,13 @@ impl SettingsWatcher {
     /// Returns a receiver that will be notified when settings change.
     /// Use `changed().await` to wait for the next update, then `borrow()`
     /// to access the current settings.
+    #[must_use]
     pub fn subscribe(&self) -> watch::Receiver<Arc<Settings>> {
         self.rx.clone()
     }
 
     /// Get the current settings without subscribing to updates.
+    #[must_use]
     pub fn current(&self) -> Arc<Settings> {
         self.rx.borrow().clone()
     }
@@ -111,19 +109,19 @@ impl SettingsWatcher {
     /// Create the file watcher with debouncing.
     fn create_watcher(
         tx: watch::Sender<Arc<Settings>>,
-        config_path: PathBuf,
+        config_path: &Path,
     ) -> Result<RecommendedWatcher> {
         // Channel for debouncing file events
         let (debounce_tx, debounce_rx) = std::sync::mpsc::channel::<()>();
 
         // Spawn debounce thread
-        let config_path_clone = config_path.clone();
+        let config_path_clone = config_path.to_path_buf();
         std::thread::spawn(move || {
-            Self::debounce_loop(debounce_rx, tx, config_path_clone);
+            Self::debounce_loop(&debounce_rx, &tx, &config_path_clone);
         });
 
         // Clone config_path for use in the watcher callback
-        let config_path_for_watcher = config_path.clone();
+        let config_path_for_watcher = config_path.to_path_buf();
 
         // Canonicalize config path for reliable comparison on macOS
         // (handles symlinks like /var -> /private/var)
@@ -184,21 +182,18 @@ impl SettingsWatcher {
         .wrap_err("failed to create file watcher")?;
 
         // Watch the config file's parent directory (some editors create new files)
-        let watch_path = config_path.parent().unwrap_or(&config_path);
+        let watch_path = config_path.parent().unwrap_or(config_path);
 
         // Defensive: ensure watch path exists before trying to watch
         if !watch_path.exists() {
-            warn!(
-                "config directory does not exist, creating it: {:?}",
-                watch_path
-            );
+            warn!("config directory does not exist, creating it: {:?}", watch_path);
             std::fs::create_dir_all(watch_path)
-                .wrap_err_with(|| format!("failed to create config directory: {:?}", watch_path))?;
+                .wrap_err_with(|| format!("failed to create config directory: {watch_path:?}"))?;
         }
 
         watcher
             .watch(watch_path, RecursiveMode::NonRecursive)
-            .wrap_err_with(|| format!("failed to watch config directory: {:?}", watch_path))?;
+            .wrap_err_with(|| format!("failed to watch config directory: {watch_path:?}"))?;
 
         info!("config file watcher initialized for: {:?}", watch_path);
         Ok(watcher)
@@ -206,9 +201,9 @@ impl SettingsWatcher {
 
     /// Debounce loop that batches file events and reloads settings.
     fn debounce_loop(
-        rx: std::sync::mpsc::Receiver<()>,
-        tx: watch::Sender<Arc<Settings>>,
-        config_path: PathBuf,
+        rx: &std::sync::mpsc::Receiver<()>,
+        tx: &watch::Sender<Arc<Settings>>,
+        config_path: &Path,
     ) {
         const DEBOUNCE_DURATION: Duration = Duration::from_millis(500);
 
@@ -228,10 +223,7 @@ impl SettingsWatcher {
             // Defensive: check if config file exists before reloading
             // (handles case where file was deleted - we'll get notified when it's recreated)
             if !config_path.exists() {
-                debug!(
-                    "config file does not exist, skipping reload: {:?}",
-                    config_path
-                );
+                debug!("config file does not exist, skipping reload: {:?}", config_path);
                 continue;
             }
 

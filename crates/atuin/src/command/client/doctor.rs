@@ -1,15 +1,18 @@
+use std::env;
+use std::path::PathBuf;
 use std::process::Command;
-use std::{env, str::FromStr};
+use std::str::FromStr;
+use std::time::Duration;
 
 use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
+use atuin_common::path::PathExt;
 use atuin_common::shell::{Shell, shell_name};
-use atuin_common::utils;
 use colored::Colorize;
 use eyre::Result;
 use serde::Serialize;
-
 use sysinfo::{Disks, System, get_current_pid};
+use tracing::instrument;
 
 #[derive(Debug, Serialize)]
 struct ShellInfo {
@@ -33,12 +36,10 @@ impl ShellInfo {
     // variable.  There's a chance this won't work, so it should not be fatal.
     //
     // Every shell we support handles `shell -ic 'command'`
+    #[must_use]
     fn shellvar_exists(shell: &str, var: &str) -> bool {
         let cmd = Command::new(shell)
-            .args([
-                "-ic",
-                format!("[ -z ${var} ] || echo ATUIN_DOCTOR_ENV_FOUND").as_str(),
-            ])
+            .args(["-ic", format!("[ -z ${var} ] || echo ATUIN_DOCTOR_ENV_FOUND").as_str()])
             .output()
             .map_or(String::new(), |v| {
                 let out = v.stdout;
@@ -52,14 +53,11 @@ impl ShellInfo {
         if env::var("ATUIN_SESSION").ok().is_none() {
             None
         } else if shell.starts_with("bash") || shell == "sh" {
-            env::var("ATUIN_PREEXEC_BACKEND")
-                .ok()
-                .filter(|value| !value.is_empty())
-                .and_then(|atuin_preexec_backend| {
+            env::var("ATUIN_PREEXEC_BACKEND").ok().filter(|value| !value.is_empty()).and_then(
+                |atuin_preexec_backend| {
                     atuin_preexec_backend.rfind(':').and_then(|pos_colon| {
                         u32::from_str(&atuin_preexec_backend[..pos_colon])
-                            .ok()
-                            .is_some_and(|preexec_shlvl| {
+                            .is_ok_and(|preexec_shlvl| {
                                 env::var("SHLVL")
                                     .ok()
                                     .and_then(|shlvl| u32::from_str(&shlvl).ok())
@@ -67,7 +65,8 @@ impl ShellInfo {
                             })
                             .then(|| atuin_preexec_backend[pos_colon + 1..].to_string())
                     })
-                })
+                },
+            )
         } else {
             Some("built-in".to_string())
         }
@@ -86,6 +85,7 @@ impl ShellInfo {
             .map(|_| "blesh".to_string())
     }
 
+    #[must_use]
     pub fn plugins(shell: &str, shell_process: &sysinfo::Process) -> Vec<String> {
         // consider a different detection approach if there are plugins
         // that don't set shell vars
@@ -112,12 +112,7 @@ impl ShellInfo {
 
         type PluginValidator = fn(&str, &sysinfo::Process, &str) -> Option<String>;
 
-        let plugin_list: [(
-            &str,
-            PluginShellType,
-            PluginProbeType,
-            Option<PluginValidator>,
-        ); 3] = [
+        let plugin_list: [(&str, PluginShellType, PluginProbeType, Option<PluginValidator>); 3] = [
             (
                 "atuin",
                 PluginShellType::Any,
@@ -167,18 +162,31 @@ impl ShellInfo {
             .collect()
     }
 
+    fn unknown() -> Self {
+        let name = Shell::Unknown.to_string();
+        let default = Shell::default_shell().unwrap_or(Shell::Unknown).to_string();
+        let preexec = Self::detect_preexec_framework(name.as_str());
+
+        Self {
+            name,
+            default,
+            plugins: Vec::new(),
+            preexec,
+        }
+    }
+
     pub fn new() -> Self {
         // TODO: rework to use atuin_common::Shell
 
         let sys = System::new_all();
 
-        let process = sys
-            .process(get_current_pid().expect("Failed to get current PID"))
-            .expect("Process with current pid does not exist");
+        let Some(process) = get_current_pid().ok().and_then(|pid| sys.process(pid)) else {
+            return Self::unknown();
+        };
 
-        let parent = sys
-            .process(process.parent().expect("Atuin running with no parent!"))
-            .expect("Process with parent pid does not exist");
+        let Some(parent) = process.parent().and_then(|pid| sys.process(pid)) else {
+            return Self::unknown();
+        };
 
         let name = shell_name(Some(parent));
 
@@ -237,7 +245,6 @@ impl SystemInfo {
 #[derive(Debug, Serialize)]
 struct SyncInfo {
     pub auth_state: String,
-    pub records: bool,
     pub auto_sync: bool,
 
     pub last_sync: String,
@@ -250,12 +257,9 @@ impl SyncInfo {
         // that a diagnostic command should not trigger.
         let meta = Settings::meta_store().await.ok();
         let has_hub_token = match &meta {
-            Some(m) => m
-                .hub_session_token()
-                .await
-                .ok()
-                .flatten()
-                .is_some_and(|t| t.starts_with("atapi_")),
+            Some(m) => {
+                m.hub_session_token().await.ok().flatten().is_some_and(|t| t.starts_with("atapi_"))
+            }
             None => false,
         };
         let has_cli_token = match &meta {
@@ -276,7 +280,6 @@ impl SyncInfo {
         Self {
             auth_state,
             auto_sync: settings.auto_sync,
-            records: settings.sync.records,
             last_sync: Settings::last_sync()
                 .await
                 .map_or_else(|_| "no last sync".to_string(), |v| v.to_string()),
@@ -286,9 +289,9 @@ impl SyncInfo {
 
 #[derive(Debug)]
 struct SettingPaths {
-    db: String,
-    record_store: String,
-    key: String,
+    db: PathBuf,
+    record_store: PathBuf,
+    key: PathBuf,
 }
 
 impl SettingPaths {
@@ -308,9 +311,10 @@ impl SettingPaths {
         ];
 
         for (path_env_var, path) in paths {
-            if utils::broken_symlink(path) {
+            if path.as_path().is_dangling_symlink() {
                 eprintln!(
-                    "{path} (${path_env_var}) is a broken symlink. This may cause issues with Atuin."
+                    "{} (${path_env_var}) is a broken symlink. This may cause issues with Atuin.",
+                    path.display()
                 );
             }
         }
@@ -330,6 +334,8 @@ struct AtuinInfo {
 
     #[serde(skip)] // probably unnecessary to expose this
     pub setting_paths: SettingPaths,
+
+    pub daemon_enabled: bool,
 }
 
 impl AtuinInfo {
@@ -342,11 +348,10 @@ impl AtuinInfo {
             None
         };
 
-        let sqlite_version = match Sqlite::new("sqlite::memory:", 0.1).await {
-            Ok(db) => db
-                .sqlite_version()
-                .await
-                .unwrap_or_else(|_| "unknown".to_string()),
+        let sqlite_version = match Sqlite::in_memory(Duration::from_millis(100)).await {
+            Ok(db) => {
+                db.sqlite_version().await.map_or_else(|_| "unknown".to_string(), |v| v.to_string())
+            }
             Err(_) => "error".to_string(),
         };
 
@@ -356,6 +361,7 @@ impl AtuinInfo {
             sync,
             sqlite_version,
             setting_paths: SettingPaths::new(settings),
+            daemon_enabled: cfg!(feature = "daemon") && settings.daemon.enabled,
         }
     }
 }
@@ -381,8 +387,24 @@ fn checks(info: &DoctorDump) {
     println!(); // spacing
     //
     let zfs_error = "[Filesystem] ZFS is known to have some issues with SQLite. Atuin uses SQLite heavily. If you are having poor performance, there are some workarounds here: https://github.com/atuinsh/atuin/issues/952".bold().red();
-    let bash_plugin_error = "[Shell] If you are using Bash, Atuin requires that either bash-preexec or ble.sh (>= 0.4) be installed. An older ble.sh may not be detected. so ignore this if you have ble.sh >= 0.4 set up! Read more here: https://docs.atuin.sh/guide/installation/#bash".bold().red();
-    let blesh_integration_error = "[Shell] Atuin and ble.sh seem to be loaded in the session, but the integration does not seem to be working. Please check the setup in .bashrc.".bold().red();
+    let bash_plugin_error = format!(
+        "[Shell] If you are using Bash, Atuin requires that either bash-preexec or ble.sh (>= \
+         0.4) be installed. An older ble.sh may not be detected. so ignore this if you have \
+         ble.sh >= 0.4 set up! Read more here: {}",
+        atuin_common::docs::url("guide/installation/#installing-the-shell-plugin")
+    )
+    .bold()
+    .red();
+    let blesh_integration_error = "[Shell] Atuin and ble.sh seem to be loaded in the session, but \
+                                   the integration does not seem to be working. Please check the \
+                                   setup in .bashrc."
+        .bold()
+        .red();
+    let openbsd_warning = "[System] OpenBSD is not officially supported.".bold().red();
+
+    if cfg!(target_os = "openbsd") {
+        println!("{openbsd_warning}");
+    }
 
     // ZFS: https://github.com/atuinsh/atuin/issues/952
     if info.system.disks.iter().any(|d| d.filesystem == "zfs") {
@@ -393,12 +415,7 @@ fn checks(info: &DoctorDump) {
 
     // Shell
     if info.shell.name == "bash" {
-        if !info
-            .shell
-            .plugins
-            .iter()
-            .any(|p| p == "blesh" || p == "bash-preexec")
-        {
+        if !info.shell.plugins.iter().any(|p| p == "blesh" || p == "bash-preexec") {
             println!("{bash_plugin_error}");
         }
 
@@ -411,6 +428,7 @@ fn checks(info: &DoctorDump) {
     }
 }
 
+#[instrument(level = "trace", skip_all, err)]
 pub async fn run(settings: &Settings) -> Result<()> {
     println!("{}", "Atuin Doctor".bold());
     println!("Checking for diagnostics");

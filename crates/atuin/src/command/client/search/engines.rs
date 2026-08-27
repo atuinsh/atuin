@@ -1,9 +1,7 @@
-use async_trait::async_trait;
-use atuin_client::{
-    database::{Context, Database, OptFilters},
-    history::{AUTHOR_FILTER_ALL_USER, History, HistoryId},
-    settings::{FilterMode, SearchMode, Settings},
-};
+use atuin_client::database::{Context, DbSearchMode, OptFilters, Sqlite};
+use atuin_client::history::{History, HistoryId, all_user_author_filter};
+use atuin_client::settings::{FilterMode, SearchMode, Settings, Shells};
+use enum_dispatch::enum_dispatch;
 use eyre::Result;
 
 use super::cursor::Cursor;
@@ -11,20 +9,20 @@ use super::cursor::Cursor;
 #[cfg(feature = "daemon")]
 pub mod daemon;
 pub mod db;
-pub mod skim;
 
 #[allow(unused)] // settings is only used if daemon feature is enabled
-pub fn engine(search_mode: SearchMode, settings: &Settings) -> Box<dyn SearchEngine> {
+pub fn engine(search_mode: SearchMode, settings: &Settings) -> AnySearchEngine {
     match search_mode {
-        SearchMode::Skim => Box::new(skim::Search::new()) as Box<_>,
         #[cfg(feature = "daemon")]
-        SearchMode::DaemonFuzzy => Box::new(daemon::Search::new(settings)) as Box<_>,
+        SearchMode::DaemonFuzzy => Box::new(daemon::Search::new(settings)).into(),
         #[cfg(not(feature = "daemon"))]
         SearchMode::DaemonFuzzy => {
             // Fall back to fuzzy mode if daemon feature is not enabled
-            Box::new(db::Search(SearchMode::Fuzzy)) as Box<_>
+            db::Search(DbSearchMode::Fuzzy).into()
         }
-        mode => Box::new(db::Search(mode)) as Box<_>,
+        SearchMode::Prefix => db::Search(DbSearchMode::Prefix).into(),
+        SearchMode::FullText => db::Search(DbSearchMode::FullText).into(),
+        SearchMode::Fuzzy => db::Search(DbSearchMode::Fuzzy).into(),
     }
 }
 
@@ -33,16 +31,13 @@ pub struct SearchState {
     pub filter_mode: FilterMode,
     pub context: Context,
     pub custom_context: Option<HistoryId>,
+    pub shells: Shells,
 }
 
 impl SearchState {
     pub(crate) fn rotate_filter_mode(&mut self, settings: &Settings, offset: isize) {
-        let mut i = settings
-            .search
-            .filters
-            .iter()
-            .position(|&m| m == self.filter_mode)
-            .unwrap_or_default();
+        let mut i =
+            settings.search.filters.iter().position(|&m| m == self.filter_mode).unwrap_or_default();
         for _ in 0..settings.search.filters.len() {
             i = (i.wrapping_add_signed(offset)) % settings.search.filters.len();
             let mode = settings.search.filters[i];
@@ -62,28 +57,20 @@ impl SearchState {
     }
 }
 
-#[async_trait]
+#[enum_dispatch]
 pub trait SearchEngine: Send + Sync + 'static {
-    async fn full_query(
-        &mut self,
-        state: &SearchState,
-        db: &mut dyn Database,
-    ) -> Result<Vec<History>>;
+    async fn full_query(&mut self, state: &SearchState, db: &mut Sqlite) -> Result<Vec<History>>;
 
-    async fn query(&mut self, state: &SearchState, db: &mut dyn Database) -> Result<Vec<History>> {
+    async fn query(&mut self, state: &SearchState, db: &mut Sqlite) -> Result<Vec<History>> {
         if state.input.as_str().is_empty() {
+            let shells = state.shells.to_filter();
             Ok(db
-                .search(
-                    SearchMode::FullText,
-                    state.filter_mode,
-                    &state.context,
-                    "",
-                    OptFilters {
-                        limit: Some(200),
-                        authors: vec![AUTHOR_FILTER_ALL_USER.to_string()],
-                        ..Default::default()
-                    },
-                )
+                .search(DbSearchMode::FullText, state.filter_mode, &state.context, "", OptFilters {
+                    limit: Some(200),
+                    authors: all_user_author_filter(),
+                    shells: shells.as_filter(),
+                    ..Default::default()
+                })
                 .await?
                 .into_iter()
                 .collect::<Vec<_>>())
@@ -91,5 +78,28 @@ pub trait SearchEngine: Send + Sync + 'static {
             self.full_query(state, db).await
         }
     }
+
     fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize>;
+}
+
+impl<T: SearchEngine> SearchEngine for Box<T> {
+    async fn full_query(&mut self, state: &SearchState, db: &mut Sqlite) -> Result<Vec<History>> {
+        T::full_query(self, state, db).await
+    }
+
+    async fn query(&mut self, state: &SearchState, db: &mut Sqlite) -> Result<Vec<History>> {
+        T::query(self, state, db).await
+    }
+
+    fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize> {
+        T::get_highlight_indices(self, command, search_input)
+    }
+}
+
+/// Static-dispatch enum over the search-engine backends.
+#[enum_dispatch(SearchEngine)]
+pub enum AnySearchEngine {
+    Db(db::Search),
+    #[cfg(feature = "daemon")]
+    Daemon(Box<daemon::Search>),
 }

@@ -17,13 +17,11 @@ pub struct Fish {
     bytes: Vec<u8>,
 }
 
-/// see https://fishshell.com/docs/current/interactive.html#searchable-command-history
+/// see <https://fishshell.com/docs/current/interactive.html#searchable-command-history>
 fn default_histpath() -> Result<PathBuf> {
     let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
-    let data = std::env::var("XDG_DATA_HOME").map_or_else(
-        |_| base.home_dir().join(".local").join("share"),
-        PathBuf::from,
-    );
+    let data = std::env::var("XDG_DATA_HOME")
+        .map_or_else(|_| base.home_dir().join(".local").join("share"), PathBuf::from);
 
     // fish supports multiple history sessions
     // If `fish_history` var is missing, or set to `default`, use `fish` as the session
@@ -62,20 +60,26 @@ impl Importer for Fish {
         let mut time: Option<OffsetDateTime> = None;
         let mut cmd: Option<String> = None;
 
+        let mut process_cmd = async |cmd: &mut Option<String>, time: Option<OffsetDateTime>| {
+            let Some(cmd) = cmd.take() else {
+                return Ok(());
+            };
+
+            let time = time.unwrap_or(now);
+            let entry = History::import().shell("fish").timestamp(time).command(cmd);
+
+            loader.push(entry.build().into()).await
+        };
+
         for b in unix_byte_lines(&self.bytes) {
-            let s = match std::str::from_utf8(b) {
-                Ok(s) => s,
-                Err(_) => continue, // we can skip past things like invalid utf8
+            // we can skip past things like invalid utf8
+            let Ok(s) = std::str::from_utf8(b) else {
+                continue;
             };
 
             if let Some(c) = s.strip_prefix("- cmd: ") {
                 // first, we must deal with the prev cmd
-                if let Some(cmd) = cmd.take() {
-                    let time = time.unwrap_or(now);
-                    let entry = History::import().timestamp(time).command(cmd);
-
-                    loader.push(entry.build().into()).await?;
-                }
+                process_cmd(&mut cmd, time).await?;
 
                 // using raw strings to avoid needing escaping.
                 // replaces double backslashes with single backslashes
@@ -86,23 +90,21 @@ impl Importer for Fish {
 
                 cmd = Some(c);
             } else if let Some(t) = s.strip_prefix("  when: ") {
-                // if t is not an int, just ignore this line
-                if let Ok(t) = t.parse::<i64>() {
-                    time = Some(OffsetDateTime::from_unix_timestamp(t)?);
-                }
+                // ignore the line if it is not an int, or is outside the range we can
+                // represent - keeping the previous entry's timestamp preserves ordering,
+                // and a corrupt entry must not abort the import
+                time = t
+                    .parse::<i64>()
+                    .ok()
+                    .and_then(|t| OffsetDateTime::from_unix_timestamp(t).ok())
+                    .or(time);
             } else {
                 // ... ignore paths lines
             }
         }
 
         // we might have a trailing cmd
-        if let Some(cmd) = cmd.take() {
-            let time = time.unwrap_or(now);
-            let entry = History::import().timestamp(time).command(cmd);
-
-            loader.push(entry.build().into()).await?;
-        }
-
+        process_cmd(&mut cmd, time).await?;
         Ok(())
     }
 }
@@ -110,9 +112,36 @@ impl Importer for Fish {
 #[cfg(test)]
 mod test {
 
-    use crate::import::{Importer, tests::TestLoader};
-
     use super::Fish;
+    use crate::import::Importer;
+    use crate::import::tests::TestLoader;
+
+    #[tokio::test]
+    async fn parse_out_of_range_timestamp() {
+        // A corrupt `when:` must degrade that one entry, not abort the import.
+        // https://github.com/atuinsh/atuin/issues/938
+        let bytes = r"- cmd: echo before
+  when: 1639162832
+- cmd: echo corrupt
+  when: 999999999999999
+- cmd: echo after
+  when: 1639162851
+"
+        .as_bytes()
+        .to_owned();
+
+        let fish = Fish { bytes };
+        let mut loader = TestLoader::default();
+        fish.load(&mut loader).await.expect("import must not fail");
+
+        let commands: Vec<&str> = loader.buf.iter().map(|h| h.command.as_str()).collect();
+        assert_eq!(commands, ["echo before", "echo corrupt", "echo after"]);
+
+        // the corrupt entry inherits its predecessor's timestamp, so ordering holds
+        assert_eq!(loader.buf[0].timestamp.unix_timestamp(), 1_639_162_832);
+        assert_eq!(loader.buf[1].timestamp.unix_timestamp(), 1_639_162_832);
+        assert_eq!(loader.buf[2].timestamp.unix_timestamp(), 1_639_162_851);
+    }
 
     #[tokio::test]
     async fn parse_complex() {
