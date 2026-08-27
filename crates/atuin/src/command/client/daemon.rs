@@ -1,7 +1,5 @@
-use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io::{ErrorKind, Write};
-#[cfg(unix)]
-use std::os::unix::net::UnixStream as StdUnixStream;
+use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -102,17 +100,14 @@ impl Cmd {
 const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DAEMON_PROTOCOL_VERSION: u32 = 1;
 const STARTUP_POLL: Duration = Duration::from_millis(40);
-const LOCK_POLL: Duration = Duration::from_millis(20);
 const LEGACY_DAEMON_RESTART_MESSAGE: &str = "legacy daemon detected; restart daemon manually";
 
-#[cfg(unix)]
 #[derive(Debug)]
 struct PidMeta {
     pid: u32,
     version: String,
 }
 
-#[cfg(unix)]
 #[derive(Debug, thiserror::Error)]
 enum PidMetaError {
     #[error("pidfile is not valid utf-8")]
@@ -123,8 +118,7 @@ enum PidMetaError {
     BadPid(std::num::ParseIntError),
 }
 
-#[cfg(unix)]
-impl atuin_common::os::unix::file::IsPidfileBody for PidMeta {
+impl atuin_common::os::file::IsPidfileBody for PidMeta {
     type CodecError = PidMetaError;
 
     fn owner(&self) -> u32 {
@@ -142,43 +136,6 @@ impl atuin_common::os::unix::file::IsPidfileBody for PidMeta {
             lines.next().ok_or(PidMetaError::MissingPid)?.parse().map_err(PidMetaError::BadPid)?;
         let version = lines.next().unwrap_or_default().to_string();
         Ok(Self { pid, version })
-    }
-}
-
-#[allow(dead_code)]
-struct PidfileGuard {
-    file: File,
-}
-
-impl PidfileGuard {
-    #[allow(dead_code)]
-    fn acquire(path: &Path) -> Result<Self> {
-        let mut file = open_lock_file(path)?;
-
-        match file.try_lock() {
-            Ok(()) => {}
-            Err(TryLockError::WouldBlock) => {
-                bail!("daemon already running (pidfile lock busy at {})", path.display())
-            }
-            Err(TryLockError::Error(err)) => {
-                return Err(err)
-                    .wrap_err_with(|| format!("could not lock daemon pidfile {}", path.display()));
-            }
-        }
-
-        file.set_len(0)
-            .wrap_err_with(|| format!("could not truncate daemon pidfile {}", path.display()))?;
-        writeln!(file, "{}", std::process::id())
-            .and_then(|()| writeln!(file, "{DAEMON_VERSION}"))
-            .wrap_err_with(|| format!("could not write daemon pidfile {}", path.display()))?;
-
-        Ok(Self { file })
-    }
-}
-
-impl Drop for PidfileGuard {
-    fn drop(&mut self) {
-        let _ = self.file.unlock();
     }
 }
 
@@ -213,46 +170,20 @@ pub(super) fn should_retry_after_error(err: &eyre::Report) -> bool {
     )
 }
 
-fn open_lock_file(path: &Path) -> Result<File> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .wrap_err_with(|| format!("could not create lock directory {}", parent.display()))?;
-    }
-
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(path)
-        .wrap_err_with(|| format!("could not open lock file {}", path.display()))
-}
-
-async fn wait_for_lock(path: &Path, timeout: Duration) -> Result<File> {
-    let file = open_lock_file(path)?;
-    let start = Instant::now();
-
-    loop {
-        match file.try_lock() {
-            Ok(()) => return Ok(file),
-            Err(TryLockError::WouldBlock) => {
-                if start.elapsed() >= timeout {
-                    bail!("timed out waiting for lock at {}", path.display());
-                }
-
-                sleep(LOCK_POLL).await;
-            }
-            Err(TryLockError::Error(err)) => {
-                return Err(eyre!("could not lock {}: {err}", path.display()));
-            }
-        }
-    }
-}
-
 async fn wait_for_pidfile_available(path: &Path, timeout: Duration) -> Result<()> {
-    let file = wait_for_lock(path, timeout).await?;
-    file.unlock().wrap_err_with(|| format!("failed to unlock {}", path.display()))?;
-    Ok(())
+    use atuin_common::sync::ProcMutexPool;
+
+    let pool = ProcMutexPool::new(path.parent().unwrap_or_else(|| Path::new(".")))
+        .wrap_err_with(|| format!("could not open lock directory for {}", path.display()))?;
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("atuin-daemon.pid");
+    let mutex = pool
+        .new_async_mutex(name, ())
+        .wrap_err_with(|| format!("could not open lock file {}", path.display()))?;
+
+    match mutex.lock_timeout(timeout).await? {
+        Some(_guard) => Ok(()),
+        None => bail!("timed out waiting for the daemon to release {}", path.display()),
+    }
 }
 
 async fn connect_client(settings: &Settings) -> Result<HistoryClient> {
@@ -348,18 +279,6 @@ fn remove_sockets(
     error.map_or(Ok(()), Err)
 }
 
-/// Remove any socket left behind by a daemon that is no longer listening.
-#[cfg(unix)]
-fn remove_stale_socket_if_present(settings: &Settings) -> Result<(), RemoveSocketError> {
-    remove_sockets(settings, |socket_path| {
-        // A refused connection means the socket is left over from a daemon that is gone.
-        matches!(
-            StdUnixStream::connect(socket_path),
-            Err(e) if e.kind() == ErrorKind::ConnectionRefused
-        )
-    })
-}
-
 async fn wait_until_ready(settings: &Settings, timeout: Duration) -> Result<HistoryClient> {
     let start = Instant::now();
     let mut last_error = eyre!("daemon did not become ready");
@@ -445,12 +364,6 @@ pub async fn ensure_daemon_running(settings: &Settings) -> Result<()> {
             }
         }
     }
-
-    // This prevents rapid-fire hook invocations from racing daemon restart.
-    wait_for_pidfile_available(&pidfile_path, timeout).await?;
-
-    #[cfg(unix)]
-    remove_stale_socket_if_present(settings)?;
 
     spawn_daemon_process()?;
     let _ = wait_until_ready(settings, timeout).await?;
@@ -679,20 +592,11 @@ async fn restart_cmd(settings: &Settings) -> Result<()> {
         Probe::Ready(_) | Probe::NeedsRestart(_) => {
             request_shutdown(settings).await;
             println!("Stopping daemon...");
-
-            let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
-            let timeout = Duration::from_secs(5);
-            wait_for_pidfile_available(&pidfile_path, timeout)
-                .await
-                .wrap_err("Timed out waiting for old daemon to stop")?;
         }
         Probe::Unreachable(_) => {
             println!("No daemon running");
         }
     }
-
-    #[cfg(unix)]
-    remove_stale_socket_if_present(settings)?;
 
     spawn_daemon_process()?;
     println!("Starting daemon...");
@@ -732,27 +636,19 @@ async fn run(
 
     let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
 
-    #[cfg(unix)]
-    {
-        use atuin_common::os::unix::file::PidFile;
+    let meta = PidMeta {
+        pid: std::process::id(),
+        version: DAEMON_VERSION.to_string(),
+    };
+    let timeout = startup_timeout(&settings)?;
+    let lock = atuin_common::os::file::PidFile::open_or_create(&pidfile_path)
+        .wrap_err("could not open daemon pidfile")?
+        .lock_timeout(&meta, timeout)
+        .await
+        .map_err(|e| eyre!("could not lock daemon pidfile: {e}"))?
+        .ok_or_else(|| eyre!("daemon already running (timed out acquiring the pidfile lock)"))?;
 
-        let meta = PidMeta {
-            pid: std::process::id(),
-            version: DAEMON_VERSION.to_string(),
-        };
-        let lock = PidFile::open_or_create(&pidfile_path)
-            .wrap_err("could not open daemon pidfile")?
-            .try_lock(&meta)
-            .map_err(|e| eyre!("daemon already running or pidfile lock failed: {e}"))?;
-
-        atuin_daemon::boot(settings, store, history_db, lock).await?;
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _pidfile_guard = PidfileGuard::acquire(&pidfile_path)?;
-        atuin_daemon::boot(settings, store, history_db, ()).await?;
-    }
+    atuin_daemon::boot(settings, store, history_db, lock).await?;
 
     Ok(())
 }
@@ -767,7 +663,9 @@ fn force_cleanup(settings: &Settings) {
             && let Some(pid_str) = contents.lines().next()
             && let Ok(pid) = pid_str.parse::<u32>()
         {
-            kill_process(pid);
+            if let Err(e) = atuin_common::os::process::terminate(pid, Duration::from_secs(2)) {
+                tracing::warn!("could not terminate existing daemon (pid {pid}): {e}");
+            }
             // Give it a moment to release resources
             std::thread::sleep(Duration::from_millis(100));
         }
@@ -787,31 +685,9 @@ fn force_cleanup(settings: &Settings) {
     }
 }
 
-/// Kill a process by PID.
-#[cfg(unix)]
-fn kill_process(pid: u32) {
-    // Use kill command to send SIGTERM for graceful shutdown
-    let _ = Command::new("kill")
-        .args(["-TERM", &pid.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-}
-
-/// Kill a process by PID.
-#[cfg(not(unix))]
-fn kill_process(pid: u32) {
-    // On Windows, use taskkill
-    let _ = Command::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/F"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-}
-
 #[cfg(test)]
 mod tests {
-    use rstest::{fixture, rstest};
+    use rstest::rstest;
 
     use super::*;
 
@@ -840,41 +716,5 @@ mod tests {
         for needle in needles {
             assert!(msg.contains(needle), "got: {msg}");
         }
-    }
-
-    #[fixture]
-    fn pidfile() -> (tempfile::TempDir, PathBuf) {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("daemon.pid");
-        (tmp, path)
-    }
-
-    #[rstest]
-    fn test_pidfile_guard_acquire_and_drop(
-        #[from(pidfile)] (_tmp, pidfile): (tempfile::TempDir, PathBuf),
-    ) {
-        {
-            let _guard = PidfileGuard::acquire(&pidfile).unwrap();
-            // Guard holds an exclusive lock — on Windows other handles cannot
-            // read the file, so we verify contents after the guard is dropped.
-        }
-
-        let contents = std::fs::read_to_string(&pidfile).unwrap();
-        let lines: Vec<&str> = contents.lines().collect();
-        assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0], std::process::id().to_string());
-        assert_eq!(lines[1], DAEMON_VERSION);
-
-        // After guard is dropped, lock should be released — acquiring again must succeed.
-        let _guard2 = PidfileGuard::acquire(&pidfile).unwrap();
-    }
-
-    #[rstest]
-    fn test_pidfile_guard_prevents_double_acquire(
-        #[from(pidfile)] (_tmp, pidfile): (tempfile::TempDir, PathBuf),
-    ) {
-        let _guard = PidfileGuard::acquire(&pidfile).unwrap();
-        let result = PidfileGuard::acquire(&pidfile);
-        assert!(result.is_err());
     }
 }

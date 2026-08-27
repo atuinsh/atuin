@@ -4,7 +4,7 @@ use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::os::unix::file::PidFileLock;
+use crate::os::file::PidFileLock;
 
 #[derive(Debug)]
 pub struct ExclusiveSocket(PidFileLock<OwnedFd>);

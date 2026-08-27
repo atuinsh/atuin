@@ -80,7 +80,7 @@ pub async fn run_grpc_server(
         #[cfg(not(target_os = "linux"))]
         unreachable!()
     } else {
-        use atuin_common::os::unix::file::PidFileLock;
+        use atuin_common::os::file::PidFileLock;
         use atuin_common::os::unix::socket::ExclusiveSocket;
         use atuin_common::path::DisplayRichExt;
 
@@ -164,7 +164,7 @@ pub async fn run_grpc_server(
     semantic_service: SemanticServer<SemanticGrpcService>,
     control_service: ControlServer<ControlService>,
     handle: DaemonHandle,
-    _lock: crate::PidLock,
+    lock: crate::PidLock,
 ) -> Result<()> {
     use tokio::net::TcpListener;
     use tokio_stream::wrappers::TcpListenerStream;
@@ -194,6 +194,8 @@ pub async fn run_grpc_server(
 
     // Spawn the server in the background
     tokio::spawn(async move {
+        let _lock = lock;
+
         if let Err(e) = Server::builder()
             .add_service(history_service)
             .add_service(search_service)

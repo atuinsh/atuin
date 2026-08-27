@@ -475,6 +475,7 @@ dependencies = [
  "getrandom 0.4.3",
  "itertools 0.15.0",
  "libsqlite3-sys",
+ "nix 0.30.1",
  "parking_lot",
  "pretty_assertions",
  "proptest",
@@ -500,6 +501,7 @@ dependencies = [
  "unicode-width 0.2.2",
  "url",
  "uuid",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 

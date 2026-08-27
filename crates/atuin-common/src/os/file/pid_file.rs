@@ -2,9 +2,8 @@
 //!
 //! PID files, by convention, contain metadata about the process currently owning the file.
 
-use std::fs::{File, OpenOptions, Permissions};
+use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, Write};
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -158,7 +157,11 @@ impl PidFile {
         let file =
             OpenOptions::new().write(true).read(true).create(true).truncate(false).open(path)?;
 
-        file.set_permissions(Permissions::from_mode(0o600))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
 
         Ok(Self { file })
     }

@@ -23,7 +23,7 @@ unicode = ["dep:unicode-width", "dep:unicode-segmentation"]
 # via a `vt100` terminal emulator. Compiled only when enabled.
 ansi = ["dep:atuin-vt100"]
 # Enables OS-specific utilities.
-os = ["dep:rustix"]
+os = ["dep:rustix", "dep:nix", "dep:windows-sys"]
 # The `sqlite` module: an atuin-specific wrapper around a bundled SQLite pool.
 sqlite = ["dep:sqlx", "dep:libsqlite3-sys"]
 
@@ -63,6 +63,10 @@ libsqlite3-sys = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, optional = true }
+nix = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, optional = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

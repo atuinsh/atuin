@@ -4,10 +4,7 @@ use atuin_client::settings::Settings;
 use atuin_client::settings::watcher::global_settings_watcher;
 use eyre::Result;
 
-#[cfg(unix)]
-pub type PidLock = atuin_common::os::unix::file::PidFileLock<()>;
-#[cfg(not(unix))]
-pub type PidLock = ();
+pub type PidLock = atuin_common::os::file::PidFileLock<()>;
 
 pub mod client;
 pub mod components;
