@@ -8,7 +8,7 @@ use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, Term
 use crate::os::process::{KillError, Signal as CommonSignal};
 
 /// RAII-safe operations on windows [`HANDLE`] types.
-struct Handle {
+pub struct Handle {
     inner: HANDLE,
 }
 
@@ -78,14 +78,4 @@ impl Drop for Handle {
             CloseHandle(self.inner);
         }
     }
-}
-
-/// Given a process ID, kill it. Equivalent to `SIGKILL` -- very not graceful.
-pub fn kill(pid: i32) -> Result<(), std::io::Error> {
-    Handle::open(pid, PROCESS_TERMINATE)?.terminate()
-}
-
-/// See [`Handle::force_stop`].
-pub async fn force_stop(pid: i32, timeout: Duration) -> Result<(), std::io::Error> {
-    Handle::open(pid, PROCESS_SYNCHRONIZE | PROCESS_TERMINATE)?.force_stop().await?
 }

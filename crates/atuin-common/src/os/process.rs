@@ -14,5 +14,5 @@ pub async fn force_terminate(pid: i32, timeout: Duration) -> Result<(), std::io:
     unix::process::force_terminate(nix::unistd::Pid::from_raw(pid), timeout).await
 
     #[cfg(windows)]
-    windows::process::force_stop(pid, timeout).await
+    Handle::open(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE)?.force_stop(timeout).await?
 }
