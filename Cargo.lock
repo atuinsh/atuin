@@ -711,9 +711,10 @@ version = "18.20.1"
 dependencies = [
  "async-trait",
  "atuin-common",
+ "atuin-domain",
  "atuin-server-database",
+ "derive_more",
  "eyre",
- "futures-util",
  "metrics",
  "rand 0.8.7",
  "serde",
