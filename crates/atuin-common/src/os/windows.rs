@@ -1,3 +1,28 @@
 //! Windows-specific utilities.
+#![allow(unsafe_code)]
+
+use windows_sys::Win32::Foundation::GetLastError;
 
 pub mod process;
+
+/// Query the system for the last set error.
+#[must_use]
+pub fn get_last_error() -> std::io::Error {
+    std::io::Error::from_raw_os_error(unsafe { GetLastError() } as i32)
+}
+
+/// Perform a windows operation that returns a `BOOL`-like status.
+///
+/// A returned value of `0` is treated as the failure case, matching the Win32 convention where a
+/// zero `BOOL` signals failure and the reason is retrieved via [`GetLastError`].
+pub fn fallible_do<T, F>(op: F) -> Result<(), std::io::Error>
+where
+    F: FnOnce() -> T,
+    T: PartialEq<i32>,
+{
+    if op() == 0 {
+        Err(get_last_error())
+    } else {
+        Ok(())
+    }
+}

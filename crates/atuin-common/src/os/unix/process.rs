@@ -1,12 +1,11 @@
 //! Utilities for operating on processes.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use nix::errno::Errno;
+use nix::sys::signal;
 use nix::sys::signal::Signal as NixSignal;
 use nix::unistd::Pid;
-use nix::{errno::Errno, sys::signal};
-
-use crate::os::process::KillError;
 
 /// Gracefully terminate the process via `SIGTERM`.
 ///
@@ -33,6 +32,7 @@ pub async fn force_terminate(pid: Pid, timeout: Duration) -> Result<(), std::io:
 }
 
 /// Check whether the given pid is alive.
+#[must_use]
 pub fn is_alive(pid: Pid) -> bool {
     !matches!(nix::sys::signal::kill(pid, None::<NixSignal>), Err(Errno::ESRCH))
 }

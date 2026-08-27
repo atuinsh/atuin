@@ -1,25 +1,29 @@
+#![allow(unsafe_code)]
+
 use std::time::Duration;
 
-use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, GetLastError,
-};
-use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, WAIT_TIMEOUT};
+use windows_sys::Win32::System::Console::{CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent};
+use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, WaitForSingleObject};
 
-use crate::os::process::{KillError, Signal as CommonSignal};
+use crate::os::windows::{fallible_do, get_last_error};
 
 /// RAII-safe operations on windows [`HANDLE`] types.
 pub struct Handle {
     inner: HANDLE,
+    pid: u32,
 }
 
 impl Handle {
     /// Open the given pid with the specified desired access mask.
     ///
     /// See [`OpenProcess`].
-    pub fn open(pid: i32, access: DWORD) -> Result<Self, std::io::Error> {
-        Ok(Self {
-            inner: fallible_do(|| unsafe { OpenProcess(access, 0, pid) })?,
-        })
+    pub fn open(pid: u32, access: u32) -> Result<Self, std::io::Error> {
+        let inner = unsafe { OpenProcess(access, 0, pid) };
+        if inner.is_null() {
+            return Err(get_last_error());
+        }
+        Ok(Self { inner, pid })
     }
 
     /// Kill the process via the [`TerminateProcess`] call. Requires [`PROCESS_TERMINATE`] access.
@@ -37,16 +41,14 @@ impl Handle {
     ///   - They must have a registered [`SetConsoleCtrlHandler`].
     ///   - They must have spawned with [`CREATE_NEW_PROCESS_GROUP`].
     pub fn send_ctrl_break(&self) -> Result<(), std::io::Error> {
-        fallible_do(|| unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT) })
+        fallible_do(|| unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, self.pid) })
     }
 
     /// Check whether the process is alive right now. Requires [`PROCESS_SYNCHRONIZE`] access.
+    #[must_use]
     pub fn is_alive(&self) -> bool {
-        if unsafe { WaitForSingleObject(self.inner, 0) } == WAIT_TIMEOUT {
-            false
-        } else {
-            true
-        }
+        let status = unsafe { WaitForSingleObject(self.inner, 0) };
+        status == WAIT_TIMEOUT
     }
 
     /// Try to terminate the process.
@@ -54,21 +56,14 @@ impl Handle {
     /// This calls [`send_ctrl_break`] and, after the specified duration, checks whether the process
     /// has gracefully exited. If it hasn't it gets killed via [`Self::terminate`].
     pub async fn force_stop(&self, timeout: Duration) -> Result<(), std::io::Error> {
-        let ctrlb = self.send_ctrl_break();
-
-        let err = match ctrlb {
-            Ok(()) => return Ok(()),
-            Err(err) => err,
-        };
+        let _ = self.send_ctrl_break();
 
         tokio::time::sleep(timeout).await;
         if !self.is_alive() {
             return Ok(());
         }
 
-        self.terminate()?;
-
-        Ok(())
+        self.terminate()
     }
 }
 

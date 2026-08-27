@@ -680,7 +680,7 @@ async fn run(
     force: bool,
 ) -> Result<()> {
     if force {
-        force_cleanup(&settings);
+        force_cleanup(&settings).await;
     }
 
     let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
@@ -692,7 +692,7 @@ async fn run(
 }
 
 /// Force cleanup: kill existing daemon process and remove socket.
-fn force_cleanup(settings: &Settings) {
+async fn force_cleanup(settings: &Settings) {
     let pidfile_path = Path::new(&settings.daemon.pidfile_path);
 
     // Read and kill the existing process if pidfile exists
@@ -701,7 +701,12 @@ fn force_cleanup(settings: &Settings) {
             && let Some(pid_str) = contents.lines().next()
             && let Ok(pid) = pid_str.parse::<u32>()
         {
-            if let Err(e) = atuin_common::os::process::terminate(pid, Duration::from_secs(2)) {
+            if let Err(e) = atuin_common::os::process::force_terminate(
+                pid.cast_signed(),
+                Duration::from_secs(2),
+            )
+            .await
+            {
                 tracing::warn!("could not terminate existing daemon (pid {pid}): {e}");
             }
             // Give it a moment to release resources
