@@ -701,7 +701,9 @@ fn force_cleanup(settings: &Settings) {
             && let Some(pid_str) = contents.lines().next()
             && let Ok(pid) = pid_str.parse::<u32>()
         {
-            kill_process(pid);
+            if let Err(e) = atuin_common::os::process::terminate(pid, Duration::from_secs(2)) {
+                tracing::warn!("could not terminate existing daemon (pid {pid}): {e}");
+            }
             // Give it a moment to release resources
             std::thread::sleep(Duration::from_millis(100));
         }
@@ -719,28 +721,6 @@ fn force_cleanup(settings: &Settings) {
     if let Err(e) = remove_sockets(settings, |_| true) {
         tracing::warn!("{e}");
     }
-}
-
-/// Kill a process by PID.
-#[cfg(unix)]
-fn kill_process(pid: u32) {
-    // Use kill command to send SIGTERM for graceful shutdown
-    let _ = Command::new("kill")
-        .args(["-TERM", &pid.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-}
-
-/// Kill a process by PID.
-#[cfg(not(unix))]
-fn kill_process(pid: u32) {
-    // On Windows, use taskkill
-    let _ = Command::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/F"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
 }
 
 #[cfg(test)]

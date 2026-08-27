@@ -65,6 +65,8 @@ zeroize = "1"
 rstest = "0.26.1"
 thiserror = "2"
 rustix = { version = "1.1.4", features = ["process", "fs"] }
+nix = { version = "0.30.1", features = ["signal"] }
+windows-sys = { version = "0.61.2", features = ["Win32_System_Threading", "Win32_Foundation"] }
 tower = "0.5"
 # `release_max_level_info` compiles out trace/debug events in any build with
 # debug assertions off (release, dist, profiling). Builds that want the
