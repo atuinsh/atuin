@@ -1,9 +1,12 @@
 //! Utilities for operating on processes.
 
+use std::ops::ControlFlow;
 use std::time::Duration;
 
 use rustix::io::Errno;
 use rustix::process::{self, Pid, Signal};
+
+use crate::futures::retry_blocking;
 
 /// Gracefully terminate the process via `SIGTERM`.
 ///
@@ -15,8 +18,20 @@ pub async fn force_terminate(pid: Pid, timeout: Duration) -> Result<(), std::io:
         Err(errno) => return Err(errno.into()),
     }
 
-    tokio::time::sleep(timeout).await;
-    if !is_alive(pid) {
+    let exited = retry_blocking(
+        || {
+            if is_alive(pid) {
+                ControlFlow::Continue(())
+            } else {
+                ControlFlow::Break(())
+            }
+        },
+        crate::os::process::EXIT_BACKOFF,
+        timeout,
+    )
+    .await;
+
+    if exited.is_ok() {
         return Ok(());
     }
 

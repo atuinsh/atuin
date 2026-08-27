@@ -1,12 +1,14 @@
 #![allow(unsafe_code, reason = "win32 API calls all require unsafe.")]
 
+use std::ops::ControlFlow;
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Console::{CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent};
 use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, WaitForSingleObject};
 
-use crate::os::windows::{fallible_do, get_last_error};
+use super::{fallible_do, get_last_error};
+use crate::futures::retry_blocking;
 
 /// RAII-safe operations on windows [`HANDLE`] types.
 pub struct Handle {
@@ -58,8 +60,20 @@ impl Handle {
     pub async fn force_stop(&self, timeout: Duration) -> Result<(), std::io::Error> {
         let _ = self.send_ctrl_break();
 
-        tokio::time::sleep(timeout).await;
-        if !self.is_alive() {
+        let exited = retry_blocking(
+            || {
+                if self.is_alive() {
+                    ControlFlow::Continue(())
+                } else {
+                    ControlFlow::Break(())
+                }
+            },
+            crate::os::process::EXIT_BACKOFF,
+            timeout,
+        )
+        .await;
+
+        if exited.is_ok() {
             return Ok(());
         }
 
