@@ -6,8 +6,9 @@ use std::ffi::OsStr;
 use std::str::FromStr;
 use std::time::Duration;
 
+use atuin_common::db;
+use atuin_common::db::sqlite::{Sqlite, SqliteBuilder};
 use atuin_common::encryption::paseto_v4;
-use atuin_common::sqlite::{Sqlite, SqliteBuilder};
 use atuin_domain::record::{
     Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
     RecordVersion,
@@ -17,6 +18,8 @@ use sqlx::Row;
 use sqlx::sqlite::{SqlitePool, SqliteRow};
 use tracing::instrument;
 use uuid::Uuid;
+
+const STORE_COLUMNS: &str = "id, idx, host, tag, timestamp, version, data, cek";
 
 #[derive(Debug, Clone)]
 pub struct SqliteStore {
@@ -85,7 +88,7 @@ impl SqliteStore {
     async fn setup_db(pool: &SqlitePool) -> Result<()> {
         debug!("running sqlite database setup");
 
-        sqlx::migrate!("./record-migrations").run(pool).await?;
+        db::migrate!(pool, "./record-migrations").await?;
 
         Ok(())
     }
@@ -95,7 +98,7 @@ impl SqliteStore {
         r: &Record<paseto_v4::EncryptedData>,
     ) -> Result<()> {
         // In sqlite, we are "limited" to i64. But that is still fine, until 2262.
-        sqlx::query(
+        db::query(
             "insert or ignore into store(id, idx, host, tag, timestamp, version, data, cek)
                 values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
@@ -115,9 +118,11 @@ impl SqliteStore {
 
     #[instrument(level = "trace", skip_all, err)]
     async fn load_all(&self) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
-        let res = sqlx::query_as::<_, DbRecord>("select * from store ")
-            .fetch_all(self.sqlite.pool())
-            .await?;
+        let res = db::query_as::<_, DbRecord>(sqlx::AssertSqlSafe(format!(
+            "select {STORE_COLUMNS} from store"
+        )))
+        .fetch_all(self.sqlite.pool())
+        .await?;
 
         Ok(res.into_iter().map(Into::into).collect())
     }
@@ -167,17 +172,19 @@ impl SqliteStore {
 
     #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
     pub async fn get(&self, id: RecordId) -> Result<Record<paseto_v4::EncryptedData>> {
-        let res = sqlx::query_as::<_, DbRecord>("select * from store where store.id = ?1")
-            .bind(id.as_hyphenated().to_string())
-            .fetch_one(self.sqlite.pool())
-            .await?;
+        let res = db::query_as::<_, DbRecord>(sqlx::AssertSqlSafe(format!(
+            "select {STORE_COLUMNS} from store where store.id = ?1"
+        )))
+        .bind(id.as_hyphenated().to_string())
+        .fetch_one(self.sqlite.pool())
+        .await?;
 
         Ok(res.into())
     }
 
     #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
     pub async fn delete(&self, id: RecordId) -> Result<()> {
-        sqlx::query("delete from store where id = ?1")
+        db::query("delete from store where id = ?1")
             .bind(id.as_hyphenated().to_string())
             .execute(self.sqlite.pool())
             .await?;
@@ -187,7 +194,7 @@ impl SqliteStore {
 
     #[instrument(level = "trace", skip_all, err)]
     pub async fn delete_all(&self) -> Result<()> {
-        sqlx::query("delete from store").execute(self.sqlite.pool()).await?;
+        db::query("delete from store").execute(self.sqlite.pool()).await?;
 
         Ok(())
     }
@@ -197,9 +204,9 @@ impl SqliteStore {
         &self,
         series: &RecordSeriesKey,
     ) -> Result<Option<Record<paseto_v4::EncryptedData>>> {
-        let res = sqlx::query_as::<_, DbRecord>(
-            "select * from store where host=?1 and tag=?2 order by idx desc limit 1",
-        )
+        let res = db::query_as::<_, DbRecord>(sqlx::AssertSqlSafe(format!(
+            "select {STORE_COLUMNS} from store where host=?1 and tag=?2 order by idx desc limit 1"
+        )))
         .bind(series.host_id.as_hyphenated().to_string())
         .bind(series.tag.as_str())
         .fetch_one(self.sqlite.pool())
@@ -223,7 +230,7 @@ impl SqliteStore {
     #[instrument(level = "trace", skip_all, err)]
     pub async fn len_all(&self) -> Result<u64> {
         let res: Result<(i64,), sqlx::Error> =
-            sqlx::query_as("select count(*) from store").fetch_one(self.sqlite.pool()).await;
+            db::query_as("select count(*) from store").fetch_one(self.sqlite.pool()).await;
         match res {
             Err(e) => Err(eyre!("failed to fetch local store len: {}", e)),
             Ok(v) => Ok(v.0 as u64),
@@ -233,7 +240,7 @@ impl SqliteStore {
     #[instrument(level = "trace", skip_all, fields(tag = ?tag), err)]
     pub async fn len_tag(&self, tag: &RecordTag) -> Result<u64> {
         let res: Result<(i64,), sqlx::Error> =
-            sqlx::query_as("select count(*) from store where tag=?1")
+            db::query_as("select count(*) from store where tag=?1")
                 .bind(tag.as_str())
                 .fetch_one(self.sqlite.pool())
                 .await;
@@ -258,7 +265,7 @@ impl SqliteStore {
     /// points at an interior hole when one exists.
     #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag), err)]
     pub async fn first_gap(&self, series: &RecordSeriesKey) -> Result<RecordIdx> {
-        let gap: Option<i64> = sqlx::query_scalar(
+        let gap: Option<i64> = db::query_scalar(
             "select min(idx) from (
                  select idx + 1 as idx from store where host = ?1 and tag = ?2
                  union
@@ -281,10 +288,10 @@ impl SqliteStore {
         idx: RecordIdx,
         limit: u64,
     ) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
-        let res = sqlx::query_as::<_, DbRecord>(
-            "select * from store where idx >= ?1 and host = ?2 and tag = ?3 order by idx asc \
-             limit ?4",
-        )
+        let res = db::query_as::<_, DbRecord>(sqlx::AssertSqlSafe(format!(
+            "select {STORE_COLUMNS} from store where idx >= ?1 and host = ?2 and tag = ?3 order \
+             by idx asc limit ?4"
+        )))
         .bind(idx as i64)
         .bind(series.host_id.as_hyphenated().to_string())
         .bind(series.tag.as_str())
@@ -301,9 +308,9 @@ impl SqliteStore {
         series: &RecordSeriesKey,
         idx: RecordIdx,
     ) -> Result<Option<Record<paseto_v4::EncryptedData>>> {
-        let res = sqlx::query_as::<_, DbRecord>(
-            "select * from store where idx = ?1 and host = ?2 and tag = ?3",
-        )
+        let res = db::query_as::<_, DbRecord>(sqlx::AssertSqlSafe(format!(
+            "select {STORE_COLUMNS} from store where idx = ?1 and host = ?2 and tag = ?3"
+        )))
         .bind(idx as i64)
         .bind(series.host_id.as_hyphenated().to_string())
         .bind(series.tag.as_str())
@@ -322,7 +329,7 @@ impl SqliteStore {
         let mut status = RecordStatus::new();
 
         let res: Result<Vec<(String, String, i64)>, sqlx::Error> =
-            sqlx::query_as("select host, tag, max(idx) from store group by host, tag")
+            db::query_as("select host, tag, max(idx) from store group by host, tag")
                 .fetch_all(self.sqlite.pool())
                 .await;
 
@@ -347,9 +354,9 @@ impl SqliteStore {
         &self,
         tag: &RecordTag,
     ) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
-        let res = sqlx::query_as::<_, DbRecord>(
-            "select * from store where tag = ?1 order by timestamp asc",
-        )
+        let res = db::query_as::<_, DbRecord>(sqlx::AssertSqlSafe(format!(
+            "select {STORE_COLUMNS} from store where tag = ?1 order by timestamp asc"
+        )))
         .bind(tag.as_str())
         .fetch_all(self.sqlite.pool())
         .await?;
@@ -387,7 +394,7 @@ impl SqliteStore {
 
         let mut tx = self.sqlite.pool().begin().await?;
 
-        let res = sqlx::query("delete from store").execute(&mut *tx).await?;
+        let res = db::query("delete from store").execute(&mut *tx).await?;
 
         let rows = res.rows_affected();
         debug!("deleted {rows} rows");

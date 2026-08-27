@@ -127,7 +127,8 @@ impl Search {
     async fn hydrate_from_db(&self, db: &Sqlite, ids: &[String]) -> Result<Vec<History>> {
         let placeholders: Vec<String> = ids.iter().map(|id| format!("'{id}'")).collect();
         let sql_query = format!(
-            "SELECT * FROM history WHERE id IN ({}) ORDER BY timestamp DESC",
+            "SELECT {} FROM history WHERE id IN ({}) ORDER BY timestamp DESC",
+            atuin_client::database::HISTORY_COLUMNS,
             placeholders.join(",")
         );
         Ok(db.query_history(&sql_query).await?)

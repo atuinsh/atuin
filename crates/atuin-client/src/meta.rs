@@ -2,7 +2,8 @@ use std::ffi::OsStr;
 use std::str::FromStr;
 use std::time::Duration;
 
-use atuin_common::sqlite::{Journaling, Sqlite, SqliteBuilder};
+use atuin_common::db;
+use atuin_common::db::sqlite::{Journaling, Sqlite, SqliteBuilder};
 use atuin_domain::record::HostId;
 use eyre::{Result, eyre};
 use time::OffsetDateTime;
@@ -60,7 +61,7 @@ impl MetaStore {
             .open()
             .await?;
 
-        sqlx::migrate!("./meta-migrations").run(sqlite.pool()).await?;
+        db::migrate!(sqlite.pool(), "./meta-migrations").await?;
 
         Ok(Self {
             sqlite,
@@ -71,7 +72,7 @@ impl MetaStore {
     // Generic key-value operations
 
     pub async fn get(&self, key: &str) -> Result<Option<String>> {
-        let row: Option<(String,)> = sqlx::query_as("SELECT value FROM meta WHERE key = ?1")
+        let row: Option<(String,)> = db::query_as("SELECT value FROM meta WHERE key = ?1")
             .bind(key)
             .fetch_optional(self.sqlite.pool())
             .await?;
@@ -80,7 +81,7 @@ impl MetaStore {
     }
 
     pub async fn set(&self, key: &str, value: &str) -> Result<()> {
-        sqlx::query(
+        db::query(
             "INSERT INTO meta (key, value, updated_at) VALUES (?1, ?2, strftime('%s', 'now'))
              ON CONFLICT(key) DO UPDATE SET value = ?2, updated_at = strftime('%s', 'now')",
         )
@@ -93,10 +94,7 @@ impl MetaStore {
     }
 
     pub async fn delete(&self, key: &str) -> Result<()> {
-        sqlx::query("DELETE FROM meta WHERE key = ?1")
-            .bind(key)
-            .execute(self.sqlite.pool())
-            .await?;
+        db::query("DELETE FROM meta WHERE key = ?1").bind(key).execute(self.sqlite.pool()).await?;
 
         Ok(())
     }
