@@ -5,7 +5,7 @@ use std::time::Duration;
 
 pub mod stream;
 
-/// See [`retry`].
+/// See [`Backoff::retry`].
 #[derive(Debug, Clone, Copy)]
 pub enum Backoff {
     /// Repeatedly poll the function with the specified duration delay.
