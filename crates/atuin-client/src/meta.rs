@@ -1,8 +1,8 @@
-use std::path::Path;
+use std::ffi::OsStr;
 use std::str::FromStr;
 use std::time::Duration;
 
-use atuin_common::sqlite::{Journaling, Sqlite};
+use atuin_common::sqlite::{Journaling, Sqlite, SqliteBuilder};
 use atuin_domain::record::HostId;
 use eyre::{Result, eyre};
 use time::OffsetDateTime;
@@ -31,13 +31,28 @@ pub struct MetaStore {
 }
 
 impl MetaStore {
-    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> Result<Self> {
+    pub async fn new(path: impl AsRef<OsStr>, timeout: Duration) -> Result<Self> {
         let path = path.as_ref();
         debug!("opening meta sqlite database at {path:?}");
 
-        let is_memory = path.to_str().is_some_and(|p| p.contains(":memory:"));
+        let builder = Sqlite::builder(path);
+        let ephemeral = builder.is_memory();
 
-        let sqlite = Sqlite::builder(path)
+        let store = Self::from_builder(builder, timeout).await?;
+
+        if !ephemeral {
+            store.migrate_files().await?;
+        }
+
+        Ok(store)
+    }
+
+    pub async fn in_memory(timeout: Duration) -> Result<Self> {
+        Self::from_builder(Sqlite::builder_in_memory(), timeout).await
+    }
+
+    async fn from_builder(builder: SqliteBuilder<'_>, timeout: Duration) -> Result<Self> {
+        let sqlite = builder
             .timeout(timeout)
             .journal(Some(Journaling::Delete))
             .foreign_keys(false)
@@ -47,16 +62,10 @@ impl MetaStore {
 
         sqlx::migrate!("./meta-migrations").run(sqlite.pool()).await?;
 
-        let store = Self {
+        Ok(Self {
             sqlite,
             cached_host_id: OnceCell::const_new(),
-        };
-
-        if !is_memory {
-            store.migrate_files().await?;
-        }
-
-        Ok(store)
+        })
     }
 
     // Generic key-value operations
@@ -269,7 +278,7 @@ mod tests {
 
     #[fixture]
     async fn store() -> MetaStore {
-        MetaStore::new(":memory:", Duration::from_secs(2)).await.unwrap()
+        MetaStore::in_memory(Duration::from_secs(2)).await.unwrap()
     }
 
     #[rstest]
@@ -339,5 +348,12 @@ mod tests {
 
         store.save_latest_version("1.2.3").await.unwrap();
         assert_eq!(store.latest_version().await.unwrap(), Some("1.2.3".to_string()));
+    }
+
+    #[tokio::test]
+    async fn memory_store_skips_file_migration() {
+        let store = MetaStore::new(":memory:", Duration::from_secs(2)).await.unwrap();
+
+        assert_eq!(store.get(KEY_FILES_MIGRATED).await.unwrap(), None);
     }
 }

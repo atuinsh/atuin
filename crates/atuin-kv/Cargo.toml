@@ -27,6 +27,7 @@ tokio = { workspace = true }
 typed-builder = { workspace = true }
 pretty_assertions = { workspace = true }
 sqlx = { workspace = true }
+semver = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }

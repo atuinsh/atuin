@@ -1,7 +1,7 @@
-use std::path::Path;
+use std::ffi::OsStr;
 use std::time::Duration;
 
-use atuin_common::sqlite::Sqlite;
+use atuin_common::sqlite::{Sqlite, SqliteBuilder};
 use sqlx::sqlite::{SqlitePool, SqliteRow};
 use sqlx::{Result, Row};
 use tracing::{debug, instrument};
@@ -14,19 +14,27 @@ pub struct Database {
 }
 
 impl Database {
-    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> eyre::Result<Self> {
+    pub async fn new(path: impl AsRef<OsStr>, timeout: Duration) -> eyre::Result<Self> {
         let path = path.as_ref();
         debug!("opening script sqlite database at {:?}", path);
 
-        let sqlite = Sqlite::builder(path).timeout(timeout).regexp().open().await?;
+        Self::from_builder(Sqlite::builder(path), timeout).await
+    }
+
+    pub async fn in_memory(timeout: Duration) -> eyre::Result<Self> {
+        Self::from_builder(Sqlite::builder_in_memory(), timeout).await
+    }
+
+    async fn from_builder(builder: SqliteBuilder<'_>, timeout: Duration) -> eyre::Result<Self> {
+        let sqlite = builder.timeout(timeout).regexp().open().await?;
 
         Self::setup_db(sqlite.pool()).await?;
 
         Ok(Self { sqlite })
     }
 
-    pub async fn sqlite_version(&self) -> Result<String> {
-        sqlx::query_scalar("SELECT sqlite_version()").fetch_one(self.sqlite.pool()).await
+    pub async fn sqlite_version(&self) -> eyre::Result<semver::Version> {
+        Ok(self.sqlite.info().await.version?)
     }
 
     async fn setup_db(pool: &SqlitePool) -> Result<()> {
@@ -237,7 +245,7 @@ mod test {
 
     #[fixture]
     async fn db() -> Database {
-        Database::new(":memory:", Duration::from_secs(1)).await.unwrap()
+        Database::in_memory(Duration::from_secs(1)).await.unwrap()
     }
 
     #[fixture]

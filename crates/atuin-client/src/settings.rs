@@ -74,6 +74,7 @@ impl RequestedSearchMode {
     ///
     /// Not all requested modes are supported; this method returns the closest supported mode for
     /// the given requested mode.
+    #[must_use]
     pub fn effective_mode(self) -> SearchMode {
         match self {
             Self::Prefix => SearchMode::Prefix,
@@ -91,6 +92,7 @@ impl From<RequestedSearchMode> for SearchMode {
 }
 
 impl SearchMode {
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Prefix => "PREFIX",
@@ -100,6 +102,7 @@ impl SearchMode {
         }
     }
 
+    #[must_use]
     pub fn next(self, settings: &Settings) -> Self {
         match self {
             Self::Prefix => Self::FullText,
@@ -136,6 +139,7 @@ pub enum FilterMode {
 }
 
 impl FilterMode {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Global => "GLOBAL",
@@ -228,6 +232,7 @@ pub enum KeymapMode {
 }
 
 impl KeymapMode {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Emacs => "EMACS",
@@ -268,6 +273,7 @@ pub enum CursorStyle {
 }
 
 impl CursorStyle {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::DefaultUserShape => "DEFAULT",
@@ -421,6 +427,7 @@ pub struct Keys {
 impl Keys {
     /// The standard default values for all `[keys]` options.
     /// These match the config defaults set in `builder_with_data_dir()`.
+    #[must_use]
     pub fn standard_defaults() -> Self {
         Self {
             scroll_exits: true,
@@ -433,6 +440,7 @@ impl Keys {
     }
 
     /// Returns true if any value differs from the standard defaults.
+    #[must_use]
     pub fn has_non_default_values(&self) -> bool {
         let d = Self::standard_defaults();
         self.scroll_exits != d.scroll_exits
@@ -483,6 +491,7 @@ pub struct KeymapConfig {
 
 impl KeymapConfig {
     /// Returns true if no keybinding overrides are configured in any mode.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.emacs.is_empty()
             && self.vim_normal.is_empty()
@@ -809,6 +818,7 @@ pub enum UiColumnType {
 impl UiColumnType {
     /// Returns the default width for this column type (in characters).
     /// The Command column returns 0 as it expands to fill remaining space.
+    #[must_use]
     pub fn default_width(&self) -> u16 {
         match self {
             Self::Duration => 5,  // "814ms"
@@ -840,6 +850,7 @@ pub struct UiColumn {
 }
 
 impl UiColumn {
+    #[must_use]
     pub fn new(column_type: UiColumnType) -> Self {
         Self {
             width: column_type.default_width(),
@@ -848,6 +859,7 @@ impl UiColumn {
         }
     }
 
+    #[must_use]
     pub fn with_width(column_type: UiColumnType, width: u16) -> Self {
         Self {
             column_type,
@@ -1111,6 +1123,7 @@ pub struct Settings {
 }
 
 impl Settings {
+    #[must_use]
     pub fn utc() -> Self {
         Self::builder()
             .expect("Could not build default")
@@ -1122,6 +1135,7 @@ impl Settings {
             .expect("Could not deserialize config")
     }
 
+    #[must_use]
     pub fn search_mode(&self) -> SearchMode {
         self.requested_search_mode.into()
     }
@@ -1136,6 +1150,7 @@ impl Settings {
     /// If Atuin was invoked from the "up" keybinding, this returns
     /// [`Self::search_mode_shell_up_key_binding`], falling back to [`Self::search_mode`] if that
     /// binding isn't defined. Otherwise, [`Self::search_mode`] is returned.
+    #[must_use]
     pub fn active_search_mode(&self) -> SearchMode {
         self.shell_up_key_binding
             .then(|| self.search_mode_shell_up_key_binding())
@@ -1232,6 +1247,7 @@ impl Settings {
     /// Atuin's hosted service. This returns true when:
     /// - `sync_protocol` is explicitly set to `Hub`, OR
     /// - `sync_protocol` is `Auto` and `sync_address` is an official Atuin address
+    #[must_use]
     pub fn is_hub_sync(&self) -> bool {
         match self.sync_protocol {
             SyncProtocol::Hub => true,
@@ -1247,6 +1263,7 @@ impl Settings {
     /// `endpoint` is the resolved AI endpoint — the `--api-endpoint` flag or
     /// `ai.endpoint` setting, after defaults are applied — which is why it's a
     /// parameter rather than read from `self.ai.endpoint`.
+    #[must_use]
     pub fn is_hub_ai_endpoint(&self, endpoint: &Url) -> bool {
         match self.ai.endpoint_protocol {
             AiEndpointProtocol::Hub => true,
@@ -1272,6 +1289,7 @@ impl Settings {
     /// the correct auth strategy. Also performs cleanup of mis-stored tokens
     /// (e.g. a CLI token incorrectly saved in the Hub session slot).
     #[cfg(feature = "sync")]
+    #[must_use]
     pub async fn resolve_sync_auth(&self) -> SyncAuth {
         let meta = match Self::meta_store().await {
             Ok(m) => m,
@@ -1400,6 +1418,7 @@ impl Settings {
         None
     }
 
+    #[must_use]
     pub fn default_filter_mode(&self, git_root: bool) -> FilterMode {
         self.filter_mode
             .filter(|x| self.search.filters.contains(x))
@@ -1768,10 +1787,12 @@ impl Settings {
             .map_err(|e| eyre!("failed to expand path: {}", e))
     }
 
+    #[must_use]
     pub fn example_config() -> &'static str {
         EXAMPLE_CONFIG
     }
 
+    #[must_use]
     pub fn paths_ok(&self) -> bool {
         let paths: [&Path; 4] = [
             self.db_path.as_path(),

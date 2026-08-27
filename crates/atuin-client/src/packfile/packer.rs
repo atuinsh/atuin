@@ -105,7 +105,7 @@ mod tests {
 
     #[fixture]
     async fn store() -> SqliteStore {
-        SqliteStore::new(":memory:", test_local_timeout()).await.unwrap()
+        SqliteStore::in_memory(test_local_timeout()).await.unwrap()
     }
 
     #[fixture]
@@ -185,7 +185,7 @@ mod tests {
         #[test]
         fn packing_tiles_a_maximal_prefix(count in 0u64..=40, pack_count in 1u64..=8) {
             runtime().block_on(async move {
-                let store = SqliteStore::new(":memory:", test_local_timeout()).await.unwrap();
+                let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
                 let host = HostId(uuid_v7());
                 seed_history(&store, host, count).await;
 
@@ -220,7 +220,7 @@ mod tests {
             pack_count in 1u64..=6,
         ) {
             runtime().block_on(async move {
-                let store = SqliteStore::new(":memory:", test_local_timeout()).await.unwrap();
+                let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
                 let host = HostId(uuid_v7());
 
                 seed_history(&store, host, first).await;

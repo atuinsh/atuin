@@ -1,9 +1,10 @@
 use std::env;
-use std::path::{Path, PathBuf};
+use std::ffi::OsStr;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use atuin_common::filter::{self, OrFilter};
-use atuin_common::sqlite::Sqlite as CommonSqlite;
+use atuin_common::sqlite::{Sqlite as CommonSqlite, SqliteBuilder};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils;
 use atuin_domain::record::{CmdOrigin, UNKNOWN_USER};
@@ -87,6 +88,7 @@ pub async fn current_context() -> eyre::Result<Context> {
 }
 
 impl Context {
+    #[must_use]
     pub fn from_history(entry: &History) -> Self {
         Self {
             session: entry.session.to_string(),
@@ -246,6 +248,7 @@ impl SearchMode {
     ///
     /// This maps [`SearchMode::DaemonFuzzy`], which is interactive-only, to
     /// [`DbSearchMode::Fuzzy`].
+    #[must_use]
     pub fn closest_db_mode(self) -> DbSearchMode {
         match self {
             Self::Prefix => DbSearchMode::Prefix,
@@ -314,11 +317,19 @@ struct HistoryWithCount {
 
 impl Sqlite {
     #[instrument(level = "trace", skip_all, fields(timeout = ?timeout), err)]
-    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> eyre::Result<Self> {
+    pub async fn new(path: impl AsRef<OsStr>, timeout: Duration) -> eyre::Result<Self> {
         let path = path.as_ref();
         debug!("opening sqlite database at {path:?}");
 
-        let sqlite = CommonSqlite::builder(path).timeout(timeout).regexp().open().await?;
+        Self::from_builder(CommonSqlite::builder(path), timeout).await
+    }
+
+    pub async fn in_memory(timeout: Duration) -> eyre::Result<Self> {
+        Self::from_builder(CommonSqlite::builder_in_memory(), timeout).await
+    }
+
+    async fn from_builder(builder: SqliteBuilder<'_>, timeout: Duration) -> eyre::Result<Self> {
+        let sqlite = builder.timeout(timeout).regexp().open().await?;
 
         Self::setup_db(sqlite.pool()).await?;
 
@@ -332,8 +343,8 @@ impl Sqlite {
     }
 
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn sqlite_version(&self) -> Result<String> {
-        sqlx::query_scalar("SELECT sqlite_version()").fetch_one(self.sqlite.pool()).await
+    pub async fn sqlite_version(&self) -> eyre::Result<semver::Version> {
+        Ok(self.sqlite.info().await.version?)
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -882,6 +893,7 @@ impl Sqlite {
         Ok(res.into_iter().map(|r| (r.history, r.count)).collect())
     }
 
+    #[must_use]
     pub fn all_paged(&self, page_size: usize, include_deleted: bool, unique: bool) -> Paged {
         Paged::new(self.clone(), page_size, include_deleted, unique)
     }
@@ -1057,6 +1069,7 @@ pub struct Paged {
 }
 
 impl Paged {
+    #[must_use]
     pub fn new(database: Sqlite, page_size: usize, include_deleted: bool, unique: bool) -> Self {
         Self {
             database,
@@ -1167,6 +1180,7 @@ impl QueryToken<'_> {
         }
     }
 
+    #[must_use]
     pub fn is_inverse(&self) -> bool {
         match self {
             Self::Match(_, inv)
@@ -1179,6 +1193,7 @@ impl QueryToken<'_> {
 }
 
 impl<'a> QueryTokenizer<'a> {
+    #[must_use]
     pub fn new(query: &'a str) -> Self {
         Self { query, last_pos: 0 }
     }
@@ -1270,7 +1285,7 @@ mod test {
 
     #[fixture]
     async fn empty_db() -> Sqlite {
-        Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap()
+        Sqlite::in_memory(test_local_timeout()).await.unwrap()
     }
 
     async fn assert_search_eq(
@@ -1492,7 +1507,7 @@ mod test {
     }
 
     async fn db_with(commands: &[&str]) -> Sqlite {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+        let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
 
         for command in commands {
             new_history_item(&db, command).await.unwrap();
@@ -1516,7 +1531,7 @@ mod test {
     ) {
         let t = OffsetDateTime::from_unix_timestamp(1708330400).unwrap();
 
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+        let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
         new_history_item_at(&db, "ls /home/ellie", Some(t)).await.unwrap();
         new_history_item_at(&db, "ls /home/frank", None).await.unwrap();
 
@@ -1719,7 +1734,7 @@ mod test {
     #[case::daemon_fuzzy(SearchMode::DaemonFuzzy)]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_interactive_only_modes_rank_like_fuzzy(#[case] mode: SearchMode) {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+        let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
 
         // "corburl" is strictly newer, so an unranked query would return it first and the assertion
         // below would fail.
@@ -1740,7 +1755,7 @@ mod test {
     #[case::trailing_space("screen ")]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_fuzzy_trailing_space(#[case] query: &str) {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+        let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
 
         let now = OffsetDateTime::now_utc();
         let irssi = "screen irssi";
@@ -1786,7 +1801,7 @@ mod test {
         #[case] close: &str,
         #[case] far: &str,
     ) {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+        let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
 
         let now = OffsetDateTime::now_utc();
         new_history_item_at(&db, close, Some(now - time::Duration::days(5))).await.unwrap();
@@ -1977,7 +1992,7 @@ mod test {
         #[case] shells: [&str; N],
         #[case] expected_count: usize,
     ) {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+        let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
 
         for (command, shell) in [
             ("echo unknown1", None),
@@ -2027,7 +2042,7 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     #[rstest]
     async fn author_filter_treats_an_unknown_kind_as_unstated() {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+        let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
 
         let history: History = History::import()
             .timestamp(OffsetDateTime::now_utc())
@@ -2076,7 +2091,7 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     #[rstest]
     async fn author_filter_treats_a_colonless_agent_hostname_as_human() {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+        let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
 
         let history: History = History::import()
             .timestamp(OffsetDateTime::now_utc())
@@ -2117,7 +2132,7 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     #[rstest]
     async fn author_filter_treats_a_placeholder_user_agent_hostname_as_human() {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+        let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
 
         let history: History = History::import()
             .timestamp(OffsetDateTime::now_utc())
@@ -2164,7 +2179,7 @@ mod test {
         #[case] authors: [&str; N],
         #[case] expected: &[&str],
     ) {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+        let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
 
         for (command, author, author_kind) in [
             ("echo pi-agent", "pi", Some(AuthorKind::Agent)),
@@ -2222,7 +2237,7 @@ mod test {
         #[case] authors: [&str; N],
         #[case] expected_count: usize,
     ) {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+        let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
 
         for (command, author) in [
             ("echo alice1", "alice"),

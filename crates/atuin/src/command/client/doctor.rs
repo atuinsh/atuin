@@ -36,6 +36,7 @@ impl ShellInfo {
     // variable.  There's a chance this won't work, so it should not be fatal.
     //
     // Every shell we support handles `shell -ic 'command'`
+    #[must_use]
     fn shellvar_exists(shell: &str, var: &str) -> bool {
         let cmd = Command::new(shell)
             .args(["-ic", format!("[ -z ${var} ] || echo ATUIN_DOCTOR_ENV_FOUND").as_str()])
@@ -84,6 +85,7 @@ impl ShellInfo {
             .map(|_| "blesh".to_string())
     }
 
+    #[must_use]
     pub fn plugins(shell: &str, shell_process: &sysinfo::Process) -> Vec<String> {
         // consider a different detection approach if there are plugins
         // that don't set shell vars
@@ -346,8 +348,10 @@ impl AtuinInfo {
             None
         };
 
-        let sqlite_version = match Sqlite::new(":memory:", Duration::from_millis(100)).await {
-            Ok(db) => db.sqlite_version().await.unwrap_or_else(|_| "unknown".to_string()),
+        let sqlite_version = match Sqlite::in_memory(Duration::from_millis(100)).await {
+            Ok(db) => {
+                db.sqlite_version().await.map_or_else(|_| "unknown".to_string(), |v| v.to_string())
+            }
             Err(_) => "error".to_string(),
         };
 

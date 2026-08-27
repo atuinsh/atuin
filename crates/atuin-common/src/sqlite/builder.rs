@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::ffi::OsStr;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -24,8 +24,8 @@ pub enum Journaling {
     Delete,
 }
 
-pub struct SqliteBuilder<P> {
-    path: P,
+pub struct SqliteBuilder<'a> {
+    input: &'a OsStr,
     timeout: Duration,
     journal: Option<Journaling>,
     synchronous: SqliteSynchronous,
@@ -34,14 +34,45 @@ pub struct SqliteBuilder<P> {
     regexp: bool,
 }
 
-impl<P: AsRef<Path>> SqliteBuilder<P> {
+impl<'a> SqliteBuilder<'a> {
     /// When using the WAL, we set a journal limit in sqlite, which will cause sqlite to aim to have
     /// the WAL fit within that size.
     const DEFAULT_MAX_WAL_SIZE: u64 = 4 * 1024 * 1024;
 
-    pub(super) fn new(path: P) -> Self {
+    pub(super) fn new(input: &'a OsStr) -> Self {
+        Self::with_input(input)
+    }
+
+    pub(super) fn memory() -> Self {
+        Self::with_input(OsStr::new(":memory:"))
+    }
+
+    #[must_use]
+    pub fn is_memory(&self) -> bool {
+        let path = self.input;
+        let Some(raw) = path.to_str() else {
+            return false;
+        };
+
+        let stripped = raw
+            .strip_prefix("sqlite://")
+            .or_else(|| raw.strip_prefix("sqlite:"))
+            .or_else(|| raw.strip_prefix("file://"))
+            .or_else(|| raw.strip_prefix("file:"))
+            .unwrap_or(raw);
+
+        let (database, params) = match stripped.split_once('?') {
+            Some((database, params)) => (database, Some(params)),
+            None => (stripped, None),
+        };
+
+        database == ":memory:"
+            || params.is_some_and(|params| params.split('&').any(|pair| pair == "mode=memory"))
+    }
+
+    fn with_input(input: &'a OsStr) -> Self {
         Self {
-            path,
+            input,
             timeout: Duration::from_secs(5),
             journal: Some(Journaling::Wal {
                 max_size_hint: Self::DEFAULT_MAX_WAL_SIZE,
@@ -90,17 +121,7 @@ impl<P: AsRef<Path>> SqliteBuilder<P> {
     }
 
     pub async fn open(self) -> Result<Sqlite, SqliteOpenOrCreateError> {
-        let path = self.path.as_ref();
-
-        if path.is_dangling_symlink() {
-            return Err(SqliteOpenOrCreateError::BadSymlink(path.to_path_buf()));
-        }
-
-        if !path.exists()
-            && let Some(dir) = path.parent()
-        {
-            std::fs::create_dir_all(dir).map_err(SqliteOpenOrCreateError::FailedToCreateDir)?;
-        }
+        let path = self.input;
 
         let path_str = path.to_str().ok_or_else(|| {
             SqliteOpenOrCreateError::ConenctOptionsParsing(sqlx::Error::Configuration(
@@ -133,16 +154,34 @@ impl<P: AsRef<Path>> SqliteBuilder<P> {
             opts = opts.with_regexp();
         }
 
+        let is_memory = self.is_memory();
+        let on_disk = (!is_memory).then(|| opts.get_filename().to_path_buf());
+
+        if let Some(fs_path) = &on_disk {
+            if fs_path.is_dangling_symlink() {
+                return Err(SqliteOpenOrCreateError::BadSymlink(fs_path.clone()));
+            }
+
+            if !fs_path.exists()
+                && let Some(dir) = fs_path.parent()
+            {
+                std::fs::create_dir_all(dir).map_err(SqliteOpenOrCreateError::FailedToCreateDir)?;
+            }
+        }
+
         let mut sqlite = Sqlite::connect(opts.clone(), self.timeout).await?;
 
-        if matches!(self.journal, Some(Journaling::Wal { .. })) {
+        if matches!(self.journal, Some(Journaling::Wal { .. })) && !is_memory {
             sqlite.compactor = Compactor::spawn_active(opts, sqlite.info.clone()).await;
         }
 
         #[cfg(unix)]
-        if self.restrict_permissions && path.exists() {
+        if self.restrict_permissions
+            && let Some(fs_path) = &on_disk
+            && fs_path.exists()
+        {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            std::fs::set_permissions(fs_path, std::fs::Permissions::from_mode(0o600))
                 .map_err(SqliteOpenOrCreateError::FailedToSetPermissions)?;
         }
 

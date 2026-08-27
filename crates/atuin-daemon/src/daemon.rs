@@ -102,6 +102,7 @@ impl DaemonHandle {
     /// Returns a receiver that will receive all events emitted after this call.
     /// Useful for components that need to listen for events outside of the
     /// normal `handle_event` callback flow.
+    #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<DaemonEvent> {
         self.state.event_tx.subscribe()
     }
@@ -142,6 +143,7 @@ impl DaemonHandle {
     }
 
     /// Get the encryption key.
+    #[must_use]
     pub fn encryption_key(&self) -> &paseto_v4::Key {
         &self.state.encryption_key
     }
@@ -149,11 +151,13 @@ impl DaemonHandle {
     // ---- Database ----
 
     /// Get a reference to the history database.
+    #[must_use]
     pub fn history_db(&self) -> &HistoryDatabase {
         &self.state.history_db
     }
 
     /// Get a reference to the record store.
+    #[must_use]
     pub fn store(&self) -> &SqliteStore {
         &self.state.store
     }
@@ -161,6 +165,7 @@ impl DaemonHandle {
     // ---- Capabilities ----
 
     /// Get the capability reader for the configured sync server.
+    #[must_use]
     pub fn caps(&self) -> &Arc<CapClient> {
         &self.state.caps
     }
@@ -288,6 +293,7 @@ pub struct Daemon {
 
 impl Daemon {
     /// Create a new daemon builder.
+    #[must_use]
     pub fn builder(settings: Settings) -> DaemonBuilder {
         DaemonBuilder::new(settings)
     }
@@ -295,6 +301,7 @@ impl Daemon {
     /// Get a clone of the daemon handle.
     ///
     /// The handle can be used to emit events, access settings, etc.
+    #[must_use]
     pub fn handle(&self) -> DaemonHandle {
         self.handle.clone()
     }
@@ -413,6 +420,7 @@ pub struct DaemonBuilder {
 
 impl DaemonBuilder {
     /// Create a new daemon builder with the given settings.
+    #[must_use]
     pub fn new(settings: Settings) -> Self {
         Self {
             settings,
@@ -423,12 +431,14 @@ impl DaemonBuilder {
     }
 
     /// Set the record store.
+    #[must_use]
     pub fn store(mut self, store: SqliteStore) -> Self {
         self.store = Some(store);
         self
     }
 
     /// Set the history database.
+    #[must_use]
     pub fn history_db(mut self, db: HistoryDatabase) -> Self {
         self.history_db = Some(db);
         self

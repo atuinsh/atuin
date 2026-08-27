@@ -2,12 +2,12 @@
 // Multiple stores of multiple types are all stored in one chonky table (for now), and we just index
 // by tag/host
 
-use std::path::Path;
+use std::ffi::OsStr;
 use std::str::FromStr;
 use std::time::Duration;
 
 use atuin_common::encryption::paseto_v4;
-use atuin_common::sqlite::Sqlite;
+use atuin_common::sqlite::{Sqlite, SqliteBuilder};
 use atuin_domain::record::{
     Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
     RecordVersion,
@@ -61,12 +61,20 @@ impl<'r> ::sqlx::FromRow<'r, SqliteRow> for DbRecord {
 
 impl SqliteStore {
     #[instrument(level = "trace", skip_all, fields(timeout = ?timeout), err)]
-    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> Result<Self> {
+    pub async fn new(path: impl AsRef<OsStr>, timeout: Duration) -> Result<Self> {
         let path = path.as_ref();
 
         debug!("opening sqlite database at {path:?}");
 
-        let sqlite = Sqlite::builder(path).timeout(timeout).open().await?;
+        Self::from_builder(Sqlite::builder(path), timeout).await
+    }
+
+    pub async fn in_memory(timeout: Duration) -> Result<Self> {
+        Self::from_builder(Sqlite::builder_in_memory(), timeout).await
+    }
+
+    async fn from_builder(builder: SqliteBuilder<'_>, timeout: Duration) -> Result<Self> {
+        let sqlite = builder.timeout(timeout).open().await?;
 
         Self::setup_db(sqlite.pool()).await?;
 
@@ -442,7 +450,7 @@ mod tests {
 
     #[fixture]
     async fn store() -> SqliteStore {
-        SqliteStore::new(":memory:", test_local_timeout()).await.unwrap()
+        SqliteStore::in_memory(test_local_timeout()).await.unwrap()
     }
 
     #[fixture]

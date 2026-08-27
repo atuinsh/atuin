@@ -3,6 +3,7 @@ use std::process::Command;
 /// Detect the Linux distribution from the system,
 /// using system-specific release files and falling
 /// back to lsb_release.
+#[must_use]
 pub fn detect_linux_distribution() -> String {
     detect_from_os_release()
         .or_else(detect_from_debian_version)

@@ -132,6 +132,7 @@ const BUILD_BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(5000).unwrap();
 const DECODE_CONCURRENCY: usize = 4;
 
 impl HistoryStore {
+    #[must_use]
     pub fn new(store: SqliteStore, host_id: HostId, encryption_key: paseto_v4::Key) -> Self {
         Self {
             store,
@@ -499,7 +500,7 @@ mod tests {
     /// and the `HistoryStore` layered on it must originate from a single fixture.
     #[fixture]
     async fn stores() -> (SqliteStore, HostId, HistoryStore) {
-        let store = SqliteStore::new(":memory:", test_local_timeout()).await.unwrap();
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
         let host_id = HostId(atuin_common::utils::uuid_v7());
         let history_store = HistoryStore::new(store.clone(), host_id, [0u8; 32].into());
         (store, host_id, history_store)
@@ -614,7 +615,7 @@ mod tests {
     }
 
     async fn memory_db() -> Sqlite {
-        Sqlite::new(":memory:", test_local_timeout()).await.unwrap()
+        Sqlite::in_memory(test_local_timeout()).await.unwrap()
     }
 
     fn history_n(n: usize) -> History {

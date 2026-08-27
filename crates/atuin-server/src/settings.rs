@@ -92,6 +92,7 @@ impl Settings {
     }
 }
 
+#[must_use]
 pub fn example_config() -> &'static str {
     EXAMPLE_CONFIG
 }

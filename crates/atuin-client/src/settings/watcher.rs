@@ -85,11 +85,13 @@ impl SettingsWatcher {
     /// Returns a receiver that will be notified when settings change.
     /// Use `changed().await` to wait for the next update, then `borrow()`
     /// to access the current settings.
+    #[must_use]
     pub fn subscribe(&self) -> watch::Receiver<Arc<Settings>> {
         self.rx.clone()
     }
 
     /// Get the current settings without subscribing to updates.
+    #[must_use]
     pub fn current(&self) -> Arc<Settings> {
         self.rx.borrow().clone()
     }

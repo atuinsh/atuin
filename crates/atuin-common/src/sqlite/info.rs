@@ -1,8 +1,12 @@
-use std::ffi::CStr;
+use std::ffi::{CStr, c_int};
 use std::path::{Path, PathBuf};
 use std::str::Utf8Error;
 use std::sync::Arc;
+use std::time::Duration;
 
+use sqlx::Sqlite;
+use sqlx::error::DatabaseError;
+use sqlx::pool::PoolConnection;
 use sqlx::sqlite::{LockedSqliteHandle, SqlitePool};
 use thiserror::Error;
 use tracing::warn;
@@ -51,7 +55,12 @@ struct FfiInfo {
 
 impl FfiInfo {
     async fn query(pool: &SqlitePool) -> Self {
-        let mut conn = match pool.acquire().await {
+        // Connections can potentially fail. Under some operations (migrations, for example), sqlite
+        // can return SQLITE_BUSY or SQLITE_LOCKED. In effect, this means the whole database is
+        // locked by someone else and the lock will be removed soon-ish.
+        //
+        // `Self::acquire_retrying` will perform that retry logic.
+        let mut conn = match Self::acquire_retrying(pool).await {
             Ok(conn) => conn,
             Err(err) => return Self::unavailable(err),
         };
@@ -76,6 +85,35 @@ impl FfiInfo {
         Self {
             variable_number_limit: None,
             wal_path: Err(SqlitePathError::Acquire(Arc::new(err))),
+        }
+    }
+
+    async fn acquire_retrying(pool: &SqlitePool) -> Result<PoolConnection<Sqlite>, sqlx::Error> {
+        // TODO(markovejnovic): This could be exponential back-off, but I'd like to do that after we
+        // have a nice utility for it.
+        const MAX_ATTEMPTS: u32 = 25;
+        const RETRY_DELAY: Duration = Duration::from_millis(20);
+
+        let err_is_locked = |err: &sqlx::Error| {
+            err.as_database_error()
+                .and_then(DatabaseError::code)
+                .and_then(|code| code.parse::<c_int>().ok())
+                .is_some_and(|code| {
+                    let primary = code & 0xff;
+                    primary == libsqlite3_sys::SQLITE_BUSY
+                        || primary == libsqlite3_sys::SQLITE_LOCKED
+                })
+        };
+
+        let mut attempt = 1;
+        loop {
+            match pool.acquire().await {
+                Err(err) if attempt < MAX_ATTEMPTS && err_is_locked(&err) => {
+                    attempt += 1;
+                    tokio::time::sleep(RETRY_DELAY).await;
+                }
+                result => return result,
+            }
         }
     }
 
@@ -139,6 +177,7 @@ impl Info {
     /// # Panics
     ///
     /// Panics if there is no active [`tokio::runtime::Handle`].
+    #[must_use]
     pub fn new_eager_future(pool: SqlitePool) -> EagerFutureCell<Self> {
         EagerFutureCell::new(
             async move {
@@ -164,6 +203,7 @@ impl Info {
     }
 
     /// Get the maximum number of `?` binds a SQL query can have.
+    #[must_use]
     pub fn variable_number_limit(&self) -> usize {
         self.ffi_info.variable_number_limit.unwrap_or(Self::MAX_BIND_PARAMS_FALLBACK)
     }

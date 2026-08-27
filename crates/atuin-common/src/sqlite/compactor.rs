@@ -40,6 +40,7 @@ impl ActiveCompactor {
     // What is the maximum acceptable period to compact the WAL?
     const MAX_TIMEOUT: Duration = Duration::from_millis(500);
 
+    #[must_use]
     fn spawn(conn: SqliteConnection, info: EagerFutureCell<Info>) -> Self {
         let task = tokio::spawn(Self::run(conn, info));
 

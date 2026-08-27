@@ -78,8 +78,14 @@ pub struct LocalSessionService {
 }
 
 impl LocalSessionService {
-    pub async fn open(path: impl AsRef<std::path::Path>, timeout: Duration) -> Result<Self> {
+    pub async fn open(path: impl AsRef<std::ffi::OsStr>, timeout: Duration) -> Result<Self> {
         let store = AiSessionStore::new(path, timeout).await?;
+        Ok(Self { store })
+    }
+
+    #[cfg(test)]
+    pub async fn in_memory(timeout: Duration) -> Result<Self> {
+        let store = AiSessionStore::in_memory(timeout).await?;
         Ok(Self { store })
     }
 }
@@ -344,7 +350,7 @@ mod tests {
 
     #[fixture]
     async fn service() -> Box<dyn SessionService> {
-        Box::new(LocalSessionService::open(":memory:", Duration::from_secs(2)).await.unwrap())
+        Box::new(LocalSessionService::in_memory(Duration::from_secs(2)).await.unwrap())
     }
 
     #[rstest]
