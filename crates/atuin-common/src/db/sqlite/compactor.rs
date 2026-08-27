@@ -10,7 +10,7 @@ use thiserror::Error;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::warn;
 
-use crate::sqlite::Info;
+use crate::db::sqlite::Info;
 use crate::sync::EagerFutureCell;
 
 #[derive(Debug, Error)]

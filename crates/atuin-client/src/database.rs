@@ -3,8 +3,8 @@ use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use atuin_common::db::sqlite::{Sqlite as CommonSqlite, SqliteBuilder};
 use atuin_common::filter::{self, OrFilter};
-use atuin_common::sqlite::{Sqlite as CommonSqlite, SqliteBuilder};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::{db, utils};
 use atuin_domain::record::{CmdOrigin, UNKNOWN_USER};

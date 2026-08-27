@@ -3,7 +3,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use atuin_common::db;
-use atuin_common::sqlite::{Journaling, Sqlite, SqliteBuilder};
+use atuin_common::db::sqlite::{Journaling, Sqlite, SqliteBuilder};
 use atuin_domain::record::HostId;
 use eyre::{Result, eyre};
 use time::OffsetDateTime;

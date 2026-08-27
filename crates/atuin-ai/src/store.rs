@@ -2,7 +2,7 @@ use std::ffi::OsStr;
 use std::time::Duration;
 
 use atuin_common::db;
-use atuin_common::sqlite::{Sqlite, SqliteBuilder};
+use atuin_common::db::sqlite::{Sqlite, SqliteBuilder};
 use eyre::Result;
 use time::OffsetDateTime;
 

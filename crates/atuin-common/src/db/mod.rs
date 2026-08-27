@@ -1,10 +1,10 @@
 //! Utilities for operating on databases.
 
-use sqlx::database::HasStatementCache;
-use sqlx::migrate::{Migrate, MigrateError, Migrator};
-use sqlx::pool::Pool;
+#[cfg(feature = "sqlite")]
+pub mod sqlite;
+
 use sqlx::query::{Query, QueryAs, QueryScalar};
-use sqlx::{Acquire, Connection, Database, FromRow, SqlSafeStr};
+use sqlx::{Database, FromRow, SqlSafeStr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BannedPattern {
@@ -83,25 +83,27 @@ where
     sqlx::query_scalar(sql)
 }
 
-/// Run the migrator against the given
-pub async fn run_migrator<DB>(pool: &Pool<DB>, migrator: Migrator) -> Result<(), MigrateError>
-where
-    DB: Database + HasStatementCache,
-    DB::Connection: Migrate,
-    for<'a> &'a mut DB::Connection: Acquire<'a, Database = DB>,
-{
-    migrator.run(pool).await?;
-    let mut conn = pool.acquire().await.map_err(MigrateError::Execute)?;
-    conn.clear_cached_statements().await?;
-    Ok(())
-}
-
 #[macro_export]
 macro_rules! __atuin_db_migrate {
     ($pool:expr, $dir:literal) => {{
-        #[allow(clippy::disallowed_macros)]
-        let migrator = ::sqlx::migrate!($dir);
-        $crate::db::run_migrator($pool, migrator)
+        let pool = $pool;
+        async move {
+            #[allow(clippy::disallowed_macros)]
+            ::sqlx::migrate!($dir).run(pool).await?;
+            let mut conn = ::sqlx::Acquire::acquire(pool)
+                .await
+                .map_err(::sqlx::migrate::MigrateError::Execute)?;
+            // Unfortunately this is necessary. Sqlx caches statements, so if you do something like
+            // "SELECT * FROM foobar" where foobar has columns foo and bar, sqlx will cache the
+            // "compiled" statement.
+            //
+            // This results in nastiness with migrations -- you _just_ ran a migration, so you need
+            // to effectively clear the cached statements:
+            //
+            // See https://github.com/transact-rs/sqlx/issues/2517
+            ::sqlx::Connection::clear_cached_statements(&mut *conn).await?;
+            ::core::result::Result::<(), ::sqlx::migrate::MigrateError>::Ok(())
+        }
     }};
 }
 
@@ -115,7 +117,7 @@ mod tests {
     use sqlx::pool::PoolConnection;
 
     use super::*;
-    use crate::sqlite::Sqlite as AtuinSqlite;
+    use crate::db::sqlite::Sqlite as AtuinSqlite;
 
     #[rstest]
     #[case::bare_star("select * from history", Some(BannedPattern::StarGlob))]
