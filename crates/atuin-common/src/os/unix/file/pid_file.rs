@@ -1,23 +1,26 @@
 //! A generic wrapper over a PID file.
 //!
 //! PID files, by convention, contain metadata about the process currently owning the file.
-//!
-//! In our case, this is encoded by the [`PidMeta`] structure.
 
 use std::fs::{File, OpenOptions, Permissions};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use thiserror::Error;
 
-use crate::os::unix::file::LockedExclusiveFile;
-use crate::os::unix::file::locked_exclusive_file::LockingError;
+use crate::os::file::{LockedExclusiveFile, LockingError};
+
+const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 pub trait IsCodecError: std::error::Error + Send + Sync + Sized + 'static {}
 
+impl<T: std::error::Error + Send + Sync + 'static> IsCodecError for T {}
+
 /// Defines the contents stored within a PID file.
-trait IsPidfileBody: Sized {
+pub trait IsPidfileBody: Sized {
     type CodecError: IsCodecError;
 
     /// The PID which owns this pid file.
@@ -43,11 +46,20 @@ pub enum PidfileLockingError<CE: IsCodecError> {
     #[error("unexpected io error while stamping pid file {0}")]
     Stamping(std::io::Error),
 
-    #[error("unexpected error decoding pid file: {0}")]
-    DecodingError(CE),
+    #[error("failed to read the pidfile: {0}")]
+    Peeking(#[from] PidFilePeekError<CE>),
 
     #[error("unexpected error encoding pid file: {0}")]
     EncodingError(CE),
+}
+
+#[derive(Debug, Error)]
+pub enum PidFilePeekError<CE: IsCodecError> {
+    #[error("error decoding: {0}")]
+    DecodingError(CE),
+
+    #[error("error reading: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 /// Represents a PID file on-disk.
@@ -73,7 +85,7 @@ impl PidFile {
     pub fn try_lock<B: IsPidfileBody>(
         self,
         meta: &B,
-    ) -> Result<LockedPidFile, PidfileLockingError<B::CodecError>> {
+    ) -> Result<PidFileLock<()>, PidfileLockingError<B::CodecError>> {
         let encoded = meta.to_bytes().map_err(PidfileLockingError::EncodingError)?;
 
         let mut locked = match LockedExclusiveFile::try_from(self.file) {
@@ -83,10 +95,7 @@ impl PidFile {
                 // and there's not much we can do about it.
                 //
                 // Let's get more info and abort.
-                let mut buf = Vec::new();
-                (&file).read_to_end(&mut buf)?;
-
-                let body = B::from_bytes(&buf).map_err(PidfileLockingError::DecodingError)?;
+                let body = Self::peekf::<B>(&file)?;
 
                 return Err(PidfileLockingError::OwnedByAnotherPid(body.owner()));
             }
@@ -101,14 +110,45 @@ impl PidFile {
         file.set_len(0)?;
         file.write_all(&encoded).map_err(PidfileLockingError::Stamping)?;
 
-        Ok(LockedPidFile { file: locked })
+        Ok(PidFileLock::new(locked, ()))
+    }
+
+    pub async fn lock_timeout<B: IsPidfileBody>(
+        self,
+        meta: &B,
+        timeout: Duration,
+    ) -> Result<Option<PidFileLock<()>>, PidfileLockingError<B::CodecError>> {
+        let encoded = meta.to_bytes().map_err(PidfileLockingError::EncodingError)?;
+
+        let mut file = self.file;
+        let start = Instant::now();
+        loop {
+            match LockedExclusiveFile::lock(file) {
+                Ok(mut locked) => {
+                    let f = locked.file_mut();
+                    f.set_len(0)?;
+                    f.write_all(&encoded).map_err(PidfileLockingError::Stamping)?;
+                    return Ok(Some(PidFileLock::new(locked, ())));
+                }
+                Err((f, LockingError::AlreadyLocked(_))) => {
+                    if start.elapsed() >= timeout {
+                        return Ok(None);
+                    }
+                    file = f;
+                    tokio::time::sleep(LOCK_POLL_INTERVAL).await;
+                }
+                Err((_file, LockingError::Io(err))) => {
+                    return Err(PidfileLockingError::LockingIo(err));
+                }
+            }
+        }
     }
 
     /// Open the [`PidFile`] from the given path.
     ///
     ///   - The file will be created if necessary, and so will its parent, if necessary.
     ///   - The file is created under `0o600` permissions.
-    pub fn open_or_create<P: AsRef<Path>>(self, path: P) -> Result<Self, std::io::Error> {
+    pub fn open_or_create<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error> {
         let path = path.as_ref();
 
         if let Some(parent) = path.parent() {
@@ -122,23 +162,95 @@ impl PidFile {
 
         Ok(Self { file })
     }
+
+    fn peekf<B: IsPidfileBody>(mut file: &File) -> Result<B, PidFilePeekError<B::CodecError>> {
+        file.rewind()?;
+
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+
+        B::from_bytes(&buf).map_err(PidFilePeekError::DecodingError)
+    }
+
+    /// Read the value of the pidfile without acquiring a lock on it.
+    pub fn peek<B: IsPidfileBody>(&self) -> Result<B, PidFilePeekError<B::CodecError>> {
+        Self::peekf(&self.file)
+    }
 }
 
-/// Represents a file which is locked by the active process.
-///
-/// - Other processes can read/write to the file, however, they cannot lock the file.
-/// - The file is unlocked on [`Drop`].
-/// - The locked pid file is periodically touched in the background while it is locked.
 #[derive(Debug)]
-pub struct LockedPidFile {
+struct Lease {
+    #[allow(dead_code)]
     file: LockedExclusiveFile,
 }
 
-impl LockedPidFile {
-    /// Unlock this file so other processes can lock it.
-    pub fn unlock(self) -> Result<PidFile, std::io::Error> {
-        let unlocked = self.file.unlock()?;
+pub struct PidFileLock<T> {
+    lease: Arc<Lease>,
+    data: T,
+}
 
-        Ok(PidFile { file: unlocked })
+impl<T> PidFileLock<T> {
+    fn new(file: LockedExclusiveFile, data: T) -> Self {
+        Self {
+            lease: Arc::new(Lease { file }),
+            data,
+        }
+    }
+
+    /// Replace the payload, transforming it while keeping the same held lock.
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> PidFileLock<U> {
+        PidFileLock {
+            lease: self.lease,
+            data: f(self.data),
+        }
+    }
+
+    /// Fallibly replace the payload, keeping the same held lock on success.
+    pub fn try_map<U, E>(self, f: impl FnOnce(T) -> Result<U, E>) -> Result<PidFileLock<U>, E> {
+        Ok(PidFileLock {
+            lease: self.lease,
+            data: f(self.data)?,
+        })
+    }
+
+    /// Share the held lock, attaching a new payload to the clone.
+    pub fn with_payload<U>(&self, data: U) -> PidFileLock<U> {
+        PidFileLock {
+            lease: Arc::clone(&self.lease),
+            data,
+        }
+    }
+
+    pub fn into_data(self) -> T {
+        self.data
+    }
+}
+
+impl<T: Clone> Clone for PidFileLock<T> {
+    fn clone(&self) -> Self {
+        Self {
+            lease: Arc::clone(&self.lease),
+            data: self.data.clone(),
+        }
+    }
+}
+
+impl<T> std::ops::Deref for PidFileLock<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.data
+    }
+}
+
+impl<T> std::ops::DerefMut for PidFileLock<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.data
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for PidFileLock<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PidFileLock").field("lease", &self.lease).field("data", &self.data).finish()
     }
 }

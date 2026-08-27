@@ -105,11 +105,53 @@ const STARTUP_POLL: Duration = Duration::from_millis(40);
 const LOCK_POLL: Duration = Duration::from_millis(20);
 const LEGACY_DAEMON_RESTART_MESSAGE: &str = "legacy daemon detected; restart daemon manually";
 
+#[cfg(unix)]
+#[derive(Debug)]
+struct PidMeta {
+    pid: u32,
+    version: String,
+}
+
+#[cfg(unix)]
+#[derive(Debug, thiserror::Error)]
+enum PidMetaError {
+    #[error("pidfile is not valid utf-8")]
+    Utf8,
+    #[error("pidfile is missing the pid")]
+    MissingPid,
+    #[error("pidfile pid is not a number: {0}")]
+    BadPid(std::num::ParseIntError),
+}
+
+#[cfg(unix)]
+impl atuin_common::os::unix::file::IsPidfileBody for PidMeta {
+    type CodecError = PidMetaError;
+
+    fn owner(&self) -> u32 {
+        self.pid
+    }
+
+    fn to_bytes(&self) -> Result<Vec<u8>, Self::CodecError> {
+        Ok(format!("{}\n{}\n", self.pid, self.version).into_bytes())
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, Self::CodecError> {
+        let text = std::str::from_utf8(bytes).map_err(|_| PidMetaError::Utf8)?;
+        let mut lines = text.lines();
+        let pid =
+            lines.next().ok_or(PidMetaError::MissingPid)?.parse().map_err(PidMetaError::BadPid)?;
+        let version = lines.next().unwrap_or_default().to_string();
+        Ok(Self { pid, version })
+    }
+}
+
+#[allow(dead_code)]
 struct PidfileGuard {
     file: File,
 }
 
 impl PidfileGuard {
+    #[allow(dead_code)]
     fn acquire(path: &Path) -> Result<Self> {
         let mut file = open_lock_file(path)?;
 
@@ -169,12 +211,6 @@ pub(super) fn should_retry_after_error(err: &eyre::Report) -> bool {
             | DaemonClientErrorKind::Unavailable
             | DaemonClientErrorKind::Unimplemented
     )
-}
-
-fn daemon_startup_lock_path(pidfile_path: &Path) -> PathBuf {
-    let mut os = pidfile_path.as_os_str().to_os_string();
-    os.push(".startup.lock");
-    PathBuf::from(os)
 }
 
 fn open_lock_file(path: &Path) -> Result<File> {
@@ -380,12 +416,24 @@ pub async fn ensure_daemon_running(settings: &Settings) -> Result<()> {
 
     let timeout = startup_timeout(settings)?;
     let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
-    let startup_lock_path = daemon_startup_lock_path(&pidfile_path);
-    let startup_lock = wait_for_lock(&startup_lock_path, timeout).await?;
+
+    let startup_pool = atuin_common::sync::ProcMutexPool::new(
+        pidfile_path.parent().unwrap_or_else(|| Path::new(".")),
+    )?;
+    let startup_mutex = startup_pool.new_async_mutex(
+        &format!(
+            "{}.startup.lock",
+            pidfile_path.file_name().and_then(|n| n.to_str()).unwrap_or("atuin-daemon")
+        ),
+        (),
+    )?;
+    let _startup_lock = startup_mutex
+        .lock_timeout(timeout)
+        .await?
+        .ok_or_else(|| eyre!("timed out waiting for the daemon startup lock"))?;
 
     match probe(settings).await {
         Probe::Ready(_) => {
-            drop(startup_lock);
             return Ok(());
         }
         Probe::NeedsRestart(_) => {
@@ -407,7 +455,6 @@ pub async fn ensure_daemon_running(settings: &Settings) -> Result<()> {
     spawn_daemon_process()?;
     let _ = wait_until_ready(settings, timeout).await?;
 
-    drop(startup_lock);
     Ok(())
 }
 
@@ -684,9 +731,28 @@ async fn run(
     }
 
     let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
-    let _pidfile_guard = PidfileGuard::acquire(&pidfile_path)?;
 
-    atuin_daemon::boot(settings, store, history_db).await?;
+    #[cfg(unix)]
+    {
+        use atuin_common::os::unix::file::PidFile;
+
+        let meta = PidMeta {
+            pid: std::process::id(),
+            version: DAEMON_VERSION.to_string(),
+        };
+        let lock = PidFile::open_or_create(&pidfile_path)
+            .wrap_err("could not open daemon pidfile")?
+            .try_lock(&meta)
+            .map_err(|e| eyre!("daemon already running or pidfile lock failed: {e}"))?;
+
+        atuin_daemon::boot(settings, store, history_db, lock).await?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _pidfile_guard = PidfileGuard::acquire(&pidfile_path)?;
+        atuin_daemon::boot(settings, store, history_db, ()).await?;
+    }
 
     Ok(())
 }
@@ -774,13 +840,6 @@ mod tests {
         for needle in needles {
             assert!(msg.contains(needle), "got: {msg}");
         }
-    }
-
-    #[test]
-    fn test_startup_lock_path() {
-        let pidfile = Path::new("/tmp/atuin-daemon.pid");
-        let lock = daemon_startup_lock_path(pidfile);
-        assert_eq!(lock, PathBuf::from("/tmp/atuin-daemon.pid.startup.lock"));
     }
 
     #[fixture]

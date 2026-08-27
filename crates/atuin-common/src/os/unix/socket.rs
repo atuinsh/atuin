@@ -1,57 +1,57 @@
-//! Utilities for working with sockets.
-
+use std::io::ErrorKind;
 use std::os::fd::OwnedFd;
+use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::time::Duration;
 
-use tokio;
+use crate::os::unix::file::PidFileLock;
 
-/// [`OwnedFd`]-wrapper newtype representing a UNIX socket file descriptor.
-///
-/// Similarly to how [`std::os::unix::net::UnixListener`] implements [`From`] for [`OwnedFd`], there
-/// is a [`From`] implementation for [`tokio::net::UnixListener`] from this type.
 #[derive(Debug)]
-pub struct ExclusiveSocket {
-    sock_fd: OwnedFd,
-    lock_fd: OwnedFd,
-}
+pub struct ExclusiveSocket(PidFileLock<OwnedFd>);
 
 impl ExclusiveSocket {
-    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error> {}
+    pub fn open_or_create<P: AsRef<Path>, T>(
+        path: P,
+        lock: &PidFileLock<T>,
+    ) -> Result<Self, std::io::Error> {
+        let path = path.as_ref();
 
-    /// Try to open the given file path as an owned socket FD.
-    pub fn open_or_create<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error> {}
-}
-
-impl TryFrom<ExclusiveSocket> for tokio::net::UnixListener {
-    type Error = std::io::Error;
-
-    fn try_from(value: ExlusiveSocket) -> Result<Self, Self::Error> {
-        let std_listener = std::os::unix::net::UnixListener::from(value.0);
-
-        let set_nb_spinlock = || -> Result<(), Self::Error> {
-            const MAX_RETRY_COUNT: usize = 1000;
-            const SLEEP_DURATION: Duration = Duration::from_millis(1);
-
-            for _ in 0..(MAX_RETRY_COUNT - 1) {
-                match std_listener.set_nonblocking(true) {
-                    Ok(()) => return Ok(()),
-                    Err(err) => match err.kind() {
-                        std::io::ErrorKind::WouldBlock => {
-                            std::thread::sleep(SLEEP_DURATION);
-                        }
-                        _ => {
-                            return Err(err);
-                        }
-                    },
-                }
+        let listener = match UnixListener::bind(path) {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == ErrorKind::AddrInUse => {
+                std::fs::remove_file(path)?;
+                UnixListener::bind(path)?
             }
-
-            std_listener.set_nonblocking(true)
+            Err(err) => return Err(err),
         };
 
-        set_nb_spinlock()?;
+        Ok(Self(lock.with_payload(OwnedFd::from(listener))))
+    }
 
-        Self::from_std(std_listener)
+    fn set_nonblocking(listener: &UnixListener) -> Result<(), std::io::Error> {
+        const MAX_RETRIES: usize = 1000;
+        const SLEEP: Duration = Duration::from_millis(1);
+
+        for _ in 0..MAX_RETRIES - 1 {
+            match listener.set_nonblocking(true) {
+                Ok(()) => return Ok(()),
+                Err(err) if err.kind() == ErrorKind::WouldBlock => std::thread::sleep(SLEEP),
+                Err(err) => return Err(err),
+            }
+        }
+
+        listener.set_nonblocking(true)
+    }
+}
+
+impl TryFrom<ExclusiveSocket> for PidFileLock<tokio::net::UnixListener> {
+    type Error = std::io::Error;
+
+    fn try_from(value: ExclusiveSocket) -> Result<Self, Self::Error> {
+        value.0.try_map(|fd| {
+            let listener = UnixListener::from(fd);
+            ExclusiveSocket::set_nonblocking(&listener)?;
+            tokio::net::UnixListener::from_std(listener)
+        })
     }
 }

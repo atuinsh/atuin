@@ -4,6 +4,11 @@ use atuin_client::settings::Settings;
 use atuin_client::settings::watcher::global_settings_watcher;
 use eyre::Result;
 
+#[cfg(unix)]
+pub type PidLock = atuin_common::os::unix::file::PidFileLock<()>;
+#[cfg(not(unix))]
+pub type PidLock = ();
+
 pub mod client;
 pub mod components;
 pub mod control;
@@ -30,6 +35,7 @@ pub async fn boot(
     settings: Settings,
     store: SqliteStore,
     history_db: HistoryDatabase,
+    lock: PidLock,
 ) -> Result<()> {
     // Create the components
     let history_component = HistoryComponent::new();
@@ -98,6 +104,7 @@ pub async fn boot(
         semantic_service,
         control_service.into_server(),
         handle,
+        lock,
     )
     .await?;
 
