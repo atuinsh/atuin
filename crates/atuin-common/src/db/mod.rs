@@ -46,7 +46,7 @@ fn debug_sanity_check_query(sql: &str) {
     }
 }
 
-/// Equivalent to [`sqlx::query`].
+/// Equivalent to [`sqlx::query()`].
 pub fn query<'a, DB>(sql: impl SqlSafeStr) -> Query<'a, DB, <DB as Database>::Arguments>
 where
     DB: Database,
@@ -57,7 +57,7 @@ where
     sqlx::query(sql)
 }
 
-/// Equivalent to [`sqlx::query_as`].
+/// Equivalent to [`sqlx::query_as()`].
 pub fn query_as<'q, DB, O>(sql: impl SqlSafeStr) -> QueryAs<'q, DB, O, <DB as Database>::Arguments>
 where
     DB: Database,
@@ -69,7 +69,7 @@ where
     sqlx::query_as(sql)
 }
 
-/// Equivalent to [`sqlx::query_scalar`].
+/// Equivalent to [`sqlx::query_scalar()`].
 pub fn query_scalar<'q, DB, O>(
     sql: impl SqlSafeStr,
 ) -> QueryScalar<'q, DB, O, <DB as Database>::Arguments>
