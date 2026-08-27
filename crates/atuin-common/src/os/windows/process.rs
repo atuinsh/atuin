@@ -7,63 +7,85 @@ use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, Term
 
 use crate::os::process::{KillError, Signal as CommonSignal};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Signal {
-    Kill,
+/// RAII-safe operations on windows [`HANDLE`] types.
+struct Handle {
+    inner: HANDLE,
 }
 
-impl From<CommonSignal> for Signal {
-    fn from(signal: CommonSignal) -> Self {
-        match signal {
-            CommonSignal::Kill => Self::Kill,
-        }
+impl Handle {
+    /// Open the given pid with the specified desired access mask.
+    ///
+    /// See [`OpenProcess`].
+    pub fn open(pid: i32, access: DWORD) -> Result<Self, std::io::Error> {
+        Ok(Self {
+            inner: fallible_do(|| unsafe { OpenProcess(access, 0, pid) })?,
+        })
     }
-}
 
-pub fn kill(pid: u32, signal: Signal) -> Result<(), KillError> {
-    match signal {
-        Signal::Kill => terminate_process(pid),
+    /// Kill the process via the [`TerminateProcess`] call. Requires [`PROCESS_TERMINATE`] access.
+    pub fn terminate(&self) -> Result<(), std::io::Error> {
+        fallible_do(|| unsafe { TerminateProcess(self.inner, 1) })
     }
-}
 
-pub fn terminate(pid: u32, timeout: Duration) -> Result<(), KillError> {
-    let _ = timeout;
-
-    match terminate_process(pid) {
-        Ok(()) | Err(KillError::NoSuchProcess { .. }) => Ok(()),
-        Err(err) => Err(err),
+    /// Send a CTRL-Break code to a particular process.
+    ///
+    /// This is the best signal we have in-place of `SIGTERM` on windows, so this is what we get.
+    ///
+    /// Ctrl-Break is a signal that processes cannot ignore. The target process must have done two
+    /// things to receive this signal:
+    ///
+    ///   - They must have a registered [`SetConsoleCtrlHandler`].
+    ///   - They must have spawned with [`CREATE_NEW_PROCESS_GROUP`].
+    pub fn send_ctrl_break(&self) -> Result<(), std::io::Error> {
+        fallible_do(|| unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT) })
     }
-}
 
-fn terminate_process(pid: u32) -> Result<(), KillError> {
-    unsafe {
-        let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
-        if handle.is_null() {
-            return Err(match GetLastError() {
-                ERROR_ACCESS_DENIED => KillError::PermissionDenied { pid },
-                ERROR_INVALID_PARAMETER => KillError::NoSuchProcess { pid },
-                code => KillError::Os {
-                    pid,
-                    source: std::io::Error::from_raw_os_error(code as i32),
-                },
-            });
-        }
-
-        let terminated = TerminateProcess(handle, 1);
-        let code = if terminated == 0 {
-            GetLastError()
+    /// Check whether the process is alive right now. Requires [`PROCESS_SYNCHRONIZE`] access.
+    pub fn is_alive(&self) -> bool {
+        if unsafe { WaitForSingleObject(self.inner, 0) } == WAIT_TIMEOUT {
+            false
         } else {
-            0
-        };
-        CloseHandle(handle);
-
-        if terminated == 0 {
-            return Err(KillError::Os {
-                pid,
-                source: std::io::Error::from_raw_os_error(code as i32),
-            });
+            true
         }
     }
 
-    Ok(())
+    /// Try to terminate the process.
+    ///
+    /// This calls [`send_ctrl_break`] and, after the specified duration, checks whether the process
+    /// has gracefully exited. If it hasn't it gets killed via [`Self::terminate`].
+    pub async fn force_stop(&self, timeout: Duration) -> Result<(), std::io::Error> {
+        let ctrlb = self.send_ctrl_break();
+
+        let err = match ctrlb {
+            Ok(()) => return Ok(()),
+            Err(err) => err,
+        };
+
+        tokio::time::sleep(timeout).await;
+        if !self.is_alive() {
+            return Ok(());
+        }
+
+        self.terminate()?;
+
+        Ok(())
+    }
+}
+
+impl Drop for Handle {
+    fn drop(&mut self) {
+        unsafe {
+            CloseHandle(self.inner);
+        }
+    }
+}
+
+/// Given a process ID, kill it. Equivalent to `SIGKILL` -- very not graceful.
+pub fn kill(pid: i32) -> Result<(), std::io::Error> {
+    Handle::open(pid, PROCESS_TERMINATE)?.terminate()
+}
+
+/// See [`Handle::force_stop`].
+pub async fn force_stop(pid: i32, timeout: Duration) -> Result<(), std::io::Error> {
+    Handle::open(pid, PROCESS_SYNCHRONIZE | PROCESS_TERMINATE)?.force_stop().await?
 }
