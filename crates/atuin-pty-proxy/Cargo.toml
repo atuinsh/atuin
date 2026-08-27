@@ -10,16 +10,43 @@ license = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 
+[features]
+default = ["client", "server"]
+domain = [
+  "dep:postcard",
+  "dep:serde",
+  "dep:thiserror",
+  "dep:derive_more",
+]
+client = ["domain", "dep:tokio"]
+server = [
+  "domain",
+  "dep:clap",
+  "dep:atuin-common",
+  "dep:atuin-vt100",
+  "dep:crossterm",
+  "dep:eyre",
+  "dep:portable-pty",
+  "dep:signal-hook",
+  "dep:tracing",
+]
+
 [dependencies]
-clap = { workspace = true }
+clap = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
-atuin-common = { workspace = true, features = ["ansi", "os"] }
-atuin-vt100 = { workspace = true }
-crossterm = { workspace = true }
-eyre = { workspace = true }
-portable-pty = "0.9"
-signal-hook = "0.3"
+atuin-common = { workspace = true, features = ["ansi", "os"], optional = true }
+atuin-vt100 = { workspace = true, optional = true }
+crossterm = { workspace = true, optional = true }
+derive_more = { workspace = true, optional = true }
+eyre = { workspace = true, optional = true }
+portable-pty = { version = "0.9", optional = true }
+postcard = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+signal-hook = { version = "0.3", optional = true }
+thiserror = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
 
 [dev-dependencies]
 rstest = { workspace = true }

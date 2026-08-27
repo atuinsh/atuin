@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand, ValueEnum};
 
-use crate::{CommandCaptureSink, runtime};
+use super::capture::CommandCaptureSink;
+use super::runtime;
 
 #[derive(Args, Debug)]
 pub struct PtyProxy {

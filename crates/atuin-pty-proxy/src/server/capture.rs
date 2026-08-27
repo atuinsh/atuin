@@ -2,7 +2,7 @@ use std::num::NonZeroU16;
 
 use atuin_common::string::{BoundedBuffer, TrimExt as _};
 
-use crate::osc133::{self, Event, EventChunk, EventChunks, Param, Zone};
+use super::osc133::{self, Event, EventChunk, EventChunks, Param, Zone};
 
 /// Clears the screen while maintaining cursor position.
 ///

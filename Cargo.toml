@@ -36,7 +36,7 @@ time = { version = "0.3.47", features = [
 ] }
 clap = { version = "4.5.7", features = ["derive"] }
 config = { version = "0.15.8", default-features = false, features = ["toml"] }
-derive_more = { version = "2", features = ["as_ref", "deref", "display", "error", "from", "into", "debug"] }
+derive_more = { version = "2", features = ["as_ref", "deref", "display", "error", "from", "into", "try_into", "debug"] }
 directories = "6.0.0"
 eyre = "0.6"
 fs-err = "3.1"
@@ -77,6 +77,7 @@ tiny-bip39 = "2"
 tree-sitter-fish = "3.6.0"
 tree-sitter-powershell = "0.26.4"
 rmp = "0.8.14"
+postcard = { version = "1", default-features = false, features = ["use-std"] }
 ratatui = "0.30.0"
 sql-builder = "3"
 tempfile = { version = "3.19" }

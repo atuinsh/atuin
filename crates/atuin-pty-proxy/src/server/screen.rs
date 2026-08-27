@@ -1,14 +1,12 @@
-use std::io::Write;
 use std::num::NonZeroU16;
-use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::thread::JoinHandle;
+use std::sync::mpsc::{self, Receiver};
 
 use atuin_common::os::unix::{SecureTempDirError, create_secure_temp_dir};
 
-use crate::capture::{CommandCaptureSink, CommandCaptureTracker};
-use crate::debug::Osc133DebugHighlighter;
+use super::capture::{CommandCaptureSink, CommandCaptureTracker};
+use super::debug::Osc133DebugHighlighter;
+use crate::domain::screen::ScreenSnapshot;
 
 pub enum Msg {
     Data(Vec<u8>),
@@ -16,7 +14,7 @@ pub enum Msg {
         rows: u16,
         cols: u16,
     },
-    ScreenRequest(mpsc::Sender<Vec<u8>>),
+    ScreenRequest(mpsc::Sender<ScreenSnapshot>),
 }
 
 pub fn socket_path() -> Result<PathBuf, SecureTempDirError> {
@@ -74,7 +72,7 @@ impl Parser {
                 }
             }
             Msg::ScreenRequest(reply_tx) => {
-                let _ = reply_tx.send(encode_screen(&self.emulator));
+                let _ = reply_tx.send(self.emulator.snapshot());
             }
         }
     }
@@ -85,7 +83,7 @@ pub fn spawn_parser_thread(
     cols: u16,
     screen_rx: Receiver<Msg>,
     options: ParserOptions,
-) -> JoinHandle<()> {
+) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         // `vt100` dimensions can't be 0. Upstream would panic; now our `atuin-vt100` fork requires
         // dimensions to be `NonZeroU16` to ensure we don't hit those panics. Clamp dimensions to 1.
@@ -98,103 +96,37 @@ pub fn spawn_parser_thread(
     })
 }
 
-pub fn spawn_socket_server(sock_path: PathBuf, screen_tx: SyncSender<Msg>) {
-    std::thread::spawn(move || {
-        let listener = match UnixListener::bind(&sock_path) {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("atuin pty-proxy: failed to bind socket: {e}");
-                return;
-            }
-        };
-
-        for stream in listener.incoming() {
-            let Ok(mut stream) = stream else {
-                break;
-            };
-
-            let (reply_tx, reply_rx) = mpsc::channel();
-            if screen_tx.send(Msg::ScreenRequest(reply_tx)).is_err() {
-                break;
-            }
-            if let Ok(data) = reply_rx.recv() {
-                let _ = stream.write_all(&data);
-                let _ = stream.flush();
-            }
-        }
-    });
+trait SnapshotExt {
+    /// Snapshot the current state of the terminal emulator.
+    fn snapshot(&self) -> ScreenSnapshot;
 }
 
-/// Wire format written to the Unix socket:
-///
-/// ```text
-/// [rows: u16 BE][cols: u16 BE][cursor_row: u16 BE][cursor_col: u16 BE]
-/// [row_0_len: u32 BE][row_0_bytes...]
-/// [row_1_len: u32 BE][row_1_bytes...]
-/// ...
-/// ```
-///
-/// Each row's bytes come from `screen.rows_formatted(0, cols)` and contain
-/// pre-built ANSI escape sequences. The client can write them directly to
-/// stdout without needing its own vt100 parser.
-fn encode_screen(parser: &vt100::Parser) -> Vec<u8> {
-    let screen = parser.screen();
-    let (rows, cols) = screen.size();
-    let (cursor_row, cursor_col) = screen.cursor_position();
-
-    let mut buf = Vec::with_capacity(256 + (usize::from(rows) * usize::from(cols)));
-    buf.extend_from_slice(&rows.to_be_bytes());
-    buf.extend_from_slice(&cols.to_be_bytes());
-    buf.extend_from_slice(&cursor_row.to_be_bytes());
-    buf.extend_from_slice(&cursor_col.to_be_bytes());
-
-    for row_data in screen.rows_formatted(0, cols) {
-        let len = row_data.len() as u32;
-        buf.extend_from_slice(&len.to_be_bytes());
-        buf.extend_from_slice(row_data.as_bytes());
+impl SnapshotExt for vt100::Parser {
+    fn snapshot(&self) -> ScreenSnapshot {
+        let screen = self.screen();
+        let (_, cols) = screen.size();
+        ScreenSnapshot::new(
+            screen.size(),
+            screen.cursor_position(),
+            screen.rows_formatted(0, cols).collect(),
+        )
     }
-
-    buf
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc::SyncSender;
     use std::time::Duration;
 
     use rstest::{fixture, rstest};
 
     use super::*;
-    use crate::capture::CommandCapture;
+    use crate::server::capture::CommandCapture;
 
     const TIMEOUT: Duration = Duration::from_secs(5);
 
-    /// Get the `rows` and `cols` values from an [`encode_screen`] blob.
-    fn size_of(blob: &[u8]) -> (u16, u16) {
-        (u16::from_be_bytes([blob[0], blob[1]]), u16::from_be_bytes([blob[2], blob[3]]))
-    }
-
-    /// Get the cursor position from an [`encode_screen`] blob.
-    fn cursor_of(blob: &[u8]) -> (u16, u16) {
-        (u16::from_be_bytes([blob[4], blob[5]]), u16::from_be_bytes([blob[6], blob[7]]))
-    }
-
-    /// Get the per-row payloads from an [`encode_screen`] blob.
-    fn rows_of(blob: &[u8]) -> Vec<String> {
-        let (rows, _) = size_of(blob);
-        let mut rest = &blob[8..];
-        (0..rows)
-            .map(|_| {
-                let (len, body) = rest.split_at(4);
-                let len = u32::from_be_bytes(len.try_into().expect("4 bytes")) as usize;
-                let (row, remainder) = body.split_at(len);
-                rest = remainder;
-                String::from_utf8(row.to_vec()).expect("rows are valid UTF-8")
-            })
-            .collect()
-    }
-
     /// Ask a parser thread for its screen, waiting for it to work through the queue first.
-    fn request_screen(msg_tx: &SyncSender<Msg>) -> Vec<u8> {
+    fn request_screen(msg_tx: &SyncSender<Msg>) -> ScreenSnapshot {
         let (reply_tx, reply_rx) = mpsc::channel();
         msg_tx.send(Msg::ScreenRequest(reply_tx)).expect("parser thread alive");
         reply_rx.recv_timeout(TIMEOUT).expect("parser thread still answering")
@@ -207,7 +139,7 @@ mod tests {
         msg_tx.send(Msg::Data(b"hello world".to_vec())).expect("parser thread alive");
 
         // Dimensions are clamped to (1, 1) because vt100 dimensions must be positive.
-        assert_eq!(size_of(&request_screen(&msg_tx)), (rows.max(1), cols.max(1)));
+        assert_eq!(request_screen(&msg_tx).screen_dims, (rows.max(1), cols.max(1)));
     }
 
     #[rstest]
@@ -220,18 +152,18 @@ mod tests {
         parser.handle_msg(Msg::Data(b"hello world".to_vec()));
 
         // Dimensions are clamped to (1, 1) because vt100 dimensions must be positive.
-        assert_eq!(size_of(&encode_screen(&parser.emulator)), (rows.max(1), cols.max(1)));
+        assert_eq!(parser.emulator.snapshot().screen_dims, (rows.max(1), cols.max(1)));
     }
 
     #[rstest]
     fn encodes_the_screen_contents_and_cursor(#[with(3, 10)] mut parser: Parser) {
         parser.handle_msg(Msg::Data(b"one\r\ntwo".to_vec()));
 
-        let blob = encode_screen(&parser.emulator);
-        assert_eq!(size_of(&blob), (3, 10));
-        assert_eq!(cursor_of(&blob), (1, 3));
+        let snapshot = parser.emulator.snapshot();
+        assert_eq!(snapshot.screen_dims, (3, 10));
+        assert_eq!(snapshot.cursor_pos, (1, 3));
 
-        let rows = rows_of(&blob);
+        let rows = &snapshot.rows;
         assert_eq!(rows.len(), 3);
         assert!(rows[0].contains("one"), "{rows:?}");
         assert!(rows[1].contains("two"), "{rows:?}");
@@ -269,8 +201,8 @@ mod tests {
             ))
             .expect("parser thread alive");
         // A screen request only comes back once the data above has been handled.
-        let blob = request_screen(&msg_tx);
-        assert_eq!(size_of(&blob), (24, 80));
+        let snapshot = request_screen(&msg_tx);
+        assert_eq!(snapshot.screen_dims, (24, 80));
 
         let captures: Vec<_> = captures.try_iter().collect();
         assert_eq!(captures.len(), 1);
@@ -307,7 +239,7 @@ mod tests {
         assert_eq!(captures[0].output_observed_bytes, b"hi\r\n".len() as u64);
 
         // The screen snapshot, on the other hand, is where the labels belong.
-        let rows = rows_of(&encode_screen(&parser.emulator)).join("\n");
+        let rows = parser.emulator.snapshot().rows.join("\n");
         assert!(rows.contains("[OSC133:A prompt]"), "{rows:?}");
         assert!(rows.contains("[OSC133:D exit=0]"), "{rows:?}");
     }
@@ -316,7 +248,7 @@ mod tests {
     fn a_parser_without_a_sink_still_tracks_the_screen(#[with(6, 20)] mut parser: Parser) {
         parser.handle_msg(Msg::Data(b"\x1b]133;C\x07hi\r\n\x1b]133;D;0\x07".to_vec()));
 
-        assert!(rows_of(&encode_screen(&parser.emulator))[0].contains("hi"));
+        assert!(parser.emulator.snapshot().rows[0].contains("hi"));
     }
 
     fn nonzero(value: u16) -> NonZeroU16 {

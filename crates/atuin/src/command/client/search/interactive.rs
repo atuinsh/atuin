@@ -1,5 +1,3 @@
-#[cfg(unix)]
-use std::io::Read as _;
 use std::io::{IsTerminal, Write, stdout};
 use std::time::Duration;
 
@@ -1480,7 +1478,7 @@ impl Drop for TerminalWriter {
 }
 
 /// Screen state captured from atuin pty-proxy's screen server.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "pty-proxy"))]
 struct SavedScreen {
     #[allow(dead_code)]
     rows: u16,
@@ -1493,61 +1491,22 @@ struct SavedScreen {
 }
 
 /// Connect to atuin pty-proxy's Unix socket and fetch the current screen state.
-///
-/// The wire format is:
-/// ```text
-/// [rows: u16 BE][cols: u16 BE][cursor_row: u16 BE][cursor_col: u16 BE]
-/// [row_0_len: u32 BE][row_0_bytes...]
-/// [row_1_len: u32 BE][row_1_bytes...]
-/// ...
-/// ```
-#[cfg(unix)]
-fn fetch_screen_state(socket_path: &str) -> Option<SavedScreen> {
-    use std::os::unix::net::UnixStream;
-
-    let mut stream = UnixStream::connect(socket_path).ok()?;
-    // We only read from this socket, but an older version of the PTY proxy might be waiting up to
-    // 100ms for us to send a magic byte we never do; shut down the write end of the socket
-    // immediately to cancel the timeout.
-    let _ = stream.shutdown(std::net::Shutdown::Write);
-    stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
-
-    let mut data = Vec::new();
-    stream.read_to_end(&mut data).ok()?;
-
-    if data.len() < 8 {
-        return None;
-    }
-
-    let rows = u16::from_be_bytes([data[0], data[1]]);
-    let cols = u16::from_be_bytes([data[2], data[3]]);
-    let cursor_row = u16::from_be_bytes([data[4], data[5]]);
-    let cursor_col = u16::from_be_bytes([data[6], data[7]]);
-
-    // Parse length-prefixed rows
-    let mut rows_data = Vec::with_capacity(rows as usize);
-    let mut offset = 8;
-    while offset + 4 <= data.len() {
-        let row_len = u32::from_be_bytes([
-            data[offset],
-            data[offset + 1],
-            data[offset + 2],
-            data[offset + 3],
-        ]) as usize;
-        offset += 4;
-        if offset + row_len > data.len() {
-            break;
-        }
-        rows_data.push(data[offset..offset + row_len].to_vec());
-        offset += row_len;
-    }
+#[cfg(all(unix, feature = "pty-proxy"))]
+async fn fetch_screen_state(socket_path: &str) -> Option<SavedScreen> {
+    let protocol = std::env::var("ATUIN_PTY_PROXY_PROTOCOL").ok().and_then(|v| v.parse().ok());
+    let mut conn = atuin_pty_proxy::IpcClient::new(socket_path)
+        .with_protocol(protocol)
+        .connect()
+        .await
+        .ok()?;
+    let snap = conn.dump_screen().await.ok()?;
 
     Some(SavedScreen {
-        rows,
-        cols,
-        cursor_row,
-        cursor_col,
-        rows_data,
+        rows: snap.row_count(),
+        cols: snap.col_count(),
+        cursor_row: snap.cursor_row(),
+        cursor_col: snap.cursor_col(),
+        rows_data: snap.formatted_rows().iter().map(|row| row.as_bytes().to_vec()).collect(),
     })
 }
 
@@ -1556,7 +1515,7 @@ fn fetch_screen_state(socket_path: &str) -> Option<SavedScreen> {
 /// Writes the pre-formatted per-row ANSI bytes received from atuin pty-proxy
 /// directly to stdout, which correctly handles wide characters, colors, and
 /// all text attributes without needing a client-side vt100 parser.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "pty-proxy"))]
 fn restore_popup_area(saved: &SavedScreen, popup_rect: Rect, scroll_offset: u16) {
     use ratatui::crossterm::cursor::MoveTo;
 
@@ -1677,7 +1636,7 @@ impl Write for Stdout {
 /// of lines the caller should scroll the terminal up before rendering.
 ///
 /// This function performs no I/O — it is a pure computation.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "pty-proxy"))]
 fn compute_popup_placement(
     cursor_row: u16,
     term_rows: u16,
@@ -1738,7 +1697,7 @@ pub async fn history(
 
     // Popup mode: if running under atuin pty-proxy and inline mode is requested,
     // fetch the screen state and render as a centered overlay.
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "pty-proxy"))]
     let (saved_screen, popup_rect, popup_scroll_offset) = {
         let socket_path = std::env::var("ATUIN_PTY_PROXY_SOCKET")
             .or_else(|_| std::env::var("ATUIN_HEX_SOCKET"))
@@ -1746,7 +1705,7 @@ pub async fn history(
         if let Some(ref path) = socket_path
             && inline_height > 0
         {
-            let saved = fetch_screen_state(path);
+            let saved = fetch_screen_state(path).await;
             if let Some(ref s) = saved {
                 let (term_cols, term_rows) = terminal::size().unwrap_or((s.cols, s.rows));
                 let (popup_rect, scroll) =
@@ -1772,7 +1731,7 @@ pub async fn history(
         }
     };
 
-    #[cfg(not(unix))]
+    #[cfg(not(all(unix, feature = "pty-proxy")))]
     let (saved_screen, popup_rect, _popup_scroll_offset): (Option<()>, Rect, u16) =
         (None, Rect::default(), 0);
 
@@ -2087,7 +2046,7 @@ pub async fn history(
     if popup_mode {
         // In popup mode, restore the screen area that was covered by the popup.
         // This must happen before Stdout is dropped (which disables raw mode).
-        #[cfg(unix)]
+        #[cfg(all(unix, feature = "pty-proxy"))]
         if let Some(ref saved) = saved_screen {
             restore_popup_area(saved, popup_rect, popup_scroll_offset);
         }

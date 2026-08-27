@@ -1,4 +1,4 @@
-use crate::osc133::{Event, Parser};
+use super::osc133::{Event, Parser};
 
 pub const RESET: &[u8] = b"\x1b[0m";
 

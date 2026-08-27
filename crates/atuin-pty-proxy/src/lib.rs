@@ -1,53 +1,25 @@
-#[cfg(unix)]
-mod capture;
-#[cfg(unix)]
-mod debug;
-#[cfg(unix)]
-mod osc133;
-#[cfg(unix)]
-mod pty_proxy;
-#[cfg(unix)]
-mod runtime;
-#[cfg(unix)]
-mod screen;
+//! The pty-proxy is a service which runs in the user's shell, intercepts terminal data and then
+//! provides structured views into terminal data.
+//!
+//! The crate is organized into two modules:
+//!
+//!   - [`self::server`] is an embeddable service which you can add into any process to spawn the
+//!     proxy runtime. This server exposes an IPC server which you can use to query the pty-proxy
+//!     from other processes.
+//!   - [`self::client`] is a client you can use to communicate with the `pty-proxy`. This client
+//!     talks to a running [`self::server`] in runtime.
+#[cfg(all(unix, feature = "domain"))]
+mod domain;
 
-#[cfg(unix)]
-pub use capture::{CommandCapture, CommandCaptureSink};
-#[cfg(unix)]
-pub use pty_proxy::{PtyProxy, Shell, init_script};
+#[cfg(all(unix, feature = "server"))]
+mod server;
 
-#[cfg(not(unix))]
-#[allow(dead_code)]
-mod unsupported {
-    use clap::{Args, Subcommand};
+#[cfg(all(unix, feature = "client"))]
+mod client;
 
-    #[derive(Args, Debug)]
-    pub struct PtyProxy {
-        /// Highlight OSC 133 prompt, input, output, and exit-code regions
-        #[arg(long)]
-        debug_osc133: bool,
-
-        /// Path to the shell binary that atuin pty-proxy should spawn.
-        /// Defaults to the system login shell. Only valid when no subcommand is given.
-        #[arg(long, value_name = "PATH")]
-        shell: Option<std::path::PathBuf>,
-
-        #[command(subcommand)]
-        cmd: Option<Cmd>,
-    }
-
-    #[derive(Subcommand, Debug)]
-    enum Cmd {
-        /// Print shell code to initialize atuin pty-proxy on shell startup
-        Init(Init),
-    }
-
-    #[derive(Args, Debug)]
-    struct Init {
-        /// Shell to generate init for. If omitted, attempt auto-detection
-        shell: Option<String>,
-    }
-}
-
-#[cfg(not(unix))]
-pub use unsupported::PtyProxy;
+#[cfg(all(unix, feature = "client"))]
+pub use client::{IpcClient, IpcConnectError, IpcConnection, IpcError};
+#[cfg(all(unix, feature = "domain"))]
+pub use domain::ScreenSnapshot;
+#[cfg(all(unix, feature = "server"))]
+pub use server::{CommandCapture, CommandCaptureSink, PtyProxy, Shell, init_script};
