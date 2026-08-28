@@ -139,32 +139,28 @@ impl IpcConnection {
         let framed = wire::try_encode(&req).map_err(IpcError::Encode)?;
         let request_timeout = self.request_timeout;
 
-        let rep = timeout(request_timeout, exchange(&mut self.stream, &mut self.scratch, &framed))
+        let rep = timeout(request_timeout, self.exchange(&framed))
             .await
             .map_err(|_| IpcError::Timeout)??;
 
         R::Rep::try_from(rep).map_err(|_| IpcError::UnexpectedReply)
     }
-}
 
-async fn exchange(
-    stream: &mut UnixStream,
-    scratch: &mut Vec<u8>,
-    framed: &[u8],
-) -> Result<Rep, IpcError> {
-    stream.write_all(framed).await.map_err(IpcError::Io)?;
-    stream.flush().await.map_err(IpcError::Io)?;
+    async fn exchange(&mut self, framed: &[u8]) -> Result<Rep, IpcError> {
+        self.stream.write_all(framed).await.map_err(IpcError::Io)?;
+        self.stream.flush().await.map_err(IpcError::Io)?;
 
-    let mut header_bytes = [0u8; Header::SERIALIZED_LEN];
-    stream.read_exact(&mut header_bytes).await.map_err(IpcError::Io)?;
+        let mut header_bytes = [0u8; Header::SERIALIZED_LEN];
+        self.stream.read_exact(&mut header_bytes).await.map_err(IpcError::Io)?;
 
-    let header = Header::parse(header_bytes).map_err(IpcError::Header)?;
-    let body_len = (header.message_width as usize).saturating_sub(Header::SERIALIZED_LEN);
-    if scratch.len() < body_len {
-        scratch.resize(body_len, 0);
+        let header = Header::parse(header_bytes).map_err(IpcError::Header)?;
+        let body_len = (header.message_width as usize).saturating_sub(Header::SERIALIZED_LEN);
+        if self.scratch.len() < body_len {
+            self.scratch.resize(body_len, 0);
+        }
+        let buf = &mut self.scratch[..body_len];
+        self.stream.read_exact(buf).await.map_err(IpcError::Io)?;
+
+        wire::decode_body::<Rep>(buf).map_err(IpcError::Decode)
     }
-    let buf = &mut scratch[..body_len];
-    stream.read_exact(buf).await.map_err(IpcError::Io)?;
-
-    wire::decode_body::<Rep>(buf).map_err(IpcError::Decode)
 }
