@@ -58,7 +58,7 @@ ATUIN_DB_URI="postgres://user:password@hostname/database"
 
 ## Database
 
-You **must** configure the database as Atuin cannot proceed without one. You
+You **must** configure the database as Atuin can't proceed without one. You
 can do so either in `server.toml` or via the environment variable:
 
 === "Postgres"

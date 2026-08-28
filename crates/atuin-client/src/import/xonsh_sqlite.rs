@@ -2,6 +2,7 @@ use std::env;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use atuin_common::db;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::record::CmdOrigin;
 use directories::BaseDirs;
@@ -98,7 +99,7 @@ impl Importer for XonshSqlite {
 
     async fn entries(&mut self) -> Result<usize> {
         let query = "SELECT COUNT(*) FROM xonsh_history";
-        let row = sqlx::query(query).fetch_one(&self.pool).await?;
+        let row = db::query(query).fetch_one(&self.pool).await?;
         let count: u32 = row.get(0);
         Ok(count as usize)
     }
@@ -111,7 +112,7 @@ impl Importer for XonshSqlite {
             ORDER BY rowid
         ";
 
-        let mut entries = sqlx::query_as::<_, HistDbEntry>(query).fetch(&self.pool);
+        let mut entries = db::query_as::<_, HistDbEntry>(query).fetch(&self.pool);
 
         let mut count = 0;
         while let Some(entry) = entries.try_next().await? {

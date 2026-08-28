@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use atuin_common::db;
 use atuin_domain::record::{
     EncryptedData, HostId, Record, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
 };
@@ -50,10 +51,7 @@ impl Database for Postgres {
             ))));
         }
 
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .map_err(|error| DbError::Other(error.into()))?;
+        db::migrate!(&pool, "./migrations").await.map_err(|error| DbError::Other(error.into()))?;
 
         // Create read replica pool if configured
         let read_pool = if let Some(read_db_uri) = &settings.read_db_uri {
@@ -84,7 +82,7 @@ impl Database for Postgres {
 
     #[instrument(skip_all)]
     async fn get_session(&self, token: &str) -> DbResult<Session> {
-        sqlx::query_as("select id, user_id, token from sessions where token = $1")
+        db::query_as("select id, user_id, token from sessions where token = $1")
             .bind(token)
             .fetch_one(self.read_pool())
             .await
@@ -93,7 +91,7 @@ impl Database for Postgres {
 
     #[instrument(skip_all)]
     async fn get_user(&self, username: &str) -> DbResult<User> {
-        sqlx::query_as("select id, username, email, password from users where username = $1")
+        db::query_as("select id, username, email, password from users where username = $1")
             .bind(username)
             .fetch_one(self.read_pool())
             .await
@@ -102,7 +100,7 @@ impl Database for Postgres {
 
     #[instrument(skip_all)]
     async fn get_session_user(&self, token: &str) -> DbResult<User> {
-        sqlx::query_as(
+        db::query_as(
             "select users.id, users.username, users.email, users.password from users
             inner join sessions
             on users.id = sessions.user_id
@@ -115,38 +113,32 @@ impl Database for Postgres {
     }
 
     async fn delete_store(&self, user: &User) -> DbResult<()> {
-        sqlx::query("delete from store where user_id = $1").bind(user.id).execute(&self.pool).await?;
+        db::query("delete from store where user_id = $1").bind(user.id).execute(&self.pool).await?;
 
         Ok(())
     }
 
     #[instrument(skip_all)]
     async fn delete_user(&self, u: &User) -> DbResult<()> {
-        sqlx::query("delete from sessions where user_id = $1")
+        db::query("delete from sessions where user_id = $1").bind(u.id).execute(&self.pool).await?;
+
+        db::query("delete from history where user_id = $1").bind(u.id).execute(&self.pool).await?;
+
+        db::query("delete from store where user_id = $1").bind(u.id).execute(&self.pool).await?;
+
+        db::query("delete from total_history_count_user where user_id = $1")
             .bind(u.id)
             .execute(&self.pool)
             .await?;
 
-        sqlx::query("delete from history where user_id = $1")
-            .bind(u.id)
-            .execute(&self.pool)
-            .await?;
-
-        sqlx::query("delete from store where user_id = $1").bind(u.id).execute(&self.pool).await?;
-
-        sqlx::query("delete from total_history_count_user where user_id = $1")
-            .bind(u.id)
-            .execute(&self.pool)
-            .await?;
-
-        sqlx::query("delete from users where id = $1").bind(u.id).execute(&self.pool).await?;
+        db::query("delete from users where id = $1").bind(u.id).execute(&self.pool).await?;
 
         Ok(())
     }
 
     #[instrument(skip_all)]
     async fn update_user_password(&self, user: &User) -> DbResult<()> {
-        sqlx::query(
+        db::query(
             "update users
             set password = $1
             where id = $2",
@@ -165,7 +157,7 @@ impl Database for Postgres {
         let username: &str = &user.username;
         let password: &str = &user.password;
 
-        let res: (i64,) = sqlx::query_as(
+        let res: (i64,) = db::query_as(
             "insert into users
                 (username, email, password)
             values($1, $2, $3)
@@ -184,7 +176,7 @@ impl Database for Postgres {
     async fn add_session(&self, session: &NewSession) -> DbResult<()> {
         let token: &str = &session.token;
 
-        sqlx::query(
+        db::query(
             "insert into sessions
                 (user_id, token)
             values($1, $2)",
@@ -199,7 +191,7 @@ impl Database for Postgres {
 
     #[instrument(skip_all)]
     async fn get_user_session(&self, u: &User) -> DbResult<Session> {
-        sqlx::query_as("select id, user_id, token from sessions where user_id = $1")
+        db::query_as("select id, user_id, token from sessions where user_id = $1")
             .bind(u.id)
             .fetch_one(self.read_pool())
             .await
@@ -213,7 +205,7 @@ impl Database for Postgres {
         for i in records {
             let id = atuin_common::utils::uuid_v7();
 
-            sqlx::query(
+            db::query(
                 "insert into store
                     (id, client_id, host, idx, timestamp, version, tag, data, cek, user_id)
                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
@@ -250,7 +242,7 @@ impl Database for Postgres {
         tracing::debug!("{:?} - {:?} - {:?}", series.host_id, series.tag, start);
         let start = start.unwrap_or(0);
 
-        let records: Result<Vec<DbRecord>, DbError> = sqlx::query_as(
+        let records: Result<Vec<DbRecord>, DbError> = db::query_as(
             "select client_id, host, idx, timestamp, version, tag, data, cek from store
                     where user_id = $1
                     and tag = $2
@@ -295,7 +287,7 @@ impl Database for Postgres {
             "select host, tag, max(idx) from store where user_id = $1 group by host, tag";
 
         let mut res: Vec<(Uuid, String, i64)> =
-            sqlx::query_as(STATUS_SQL).bind(user.id).fetch_all(self.read_pool()).await?;
+            db::query_as(STATUS_SQL).bind(user.id).fetch_all(self.read_pool()).await?;
 
         res.sort();
 

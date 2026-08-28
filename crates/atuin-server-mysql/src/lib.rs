@@ -1,13 +1,13 @@
 mod wrappers;
 
 use async_trait::async_trait;
+use atuin_common::db;
 use atuin_domain::record::{
     EncryptedData, HostId, Record, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
 };
 use atuin_server_database::models::{NewSession, NewUser, Session, User};
 use atuin_server_database::{Database, DbError, DbResult, DbSettings};
 use sqlx::mysql::MySqlPoolOptions;
-
 use tracing::instrument;
 use uuid::Uuid;
 use wrappers::DbRecord;
@@ -30,21 +30,15 @@ impl MySql {
 #[async_trait]
 impl Database for MySql {
     async fn new(settings: &DbSettings) -> DbResult<Self> {
-        let pool = MySqlPoolOptions::new()
-            .max_connections(100)
-            .connect_lazy(settings.db_uri.as_str())?;
+        let pool =
+            MySqlPoolOptions::new().max_connections(100).connect_lazy(settings.db_uri.as_str())?;
 
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .map_err(|error| DbError::Other(error.into()))?;
+        db::migrate!(&pool, "./migrations").await.map_err(|error| DbError::Other(error.into()))?;
 
         let read_pool = if let Some(read_db_uri) = &settings.read_db_uri {
             tracing::info!("Connecting to read replica database");
-            let read_pool = MySqlPoolOptions::new()
-                .max_connections(100)
-                .connect(read_db_uri.as_str())
-                .await?;
+            let read_pool =
+                MySqlPoolOptions::new().max_connections(100).connect(read_db_uri.as_str()).await?;
 
             Some(read_pool)
         } else {
@@ -55,7 +49,7 @@ impl Database for MySql {
 
     #[instrument(skip_all)]
     async fn get_session(&self, token: &str) -> DbResult<Session> {
-        sqlx::query_as("select id, user_id, token from sessions where token = ?")
+        db::query_as("select id, user_id, token from sessions where token = ?")
             .bind(token)
             .fetch_one(self.read_pool())
             .await
@@ -64,7 +58,7 @@ impl Database for MySql {
 
     #[instrument(skip_all)]
     async fn get_session_user(&self, token: &str) -> DbResult<User> {
-        sqlx::query_as(
+        db::query_as(
             "select users.id, users.username, users.email, users.password from users
             inner join sessions
             on users.id = sessions.user_id
@@ -80,7 +74,7 @@ impl Database for MySql {
     async fn add_session(&self, session: &NewSession) -> DbResult<()> {
         let token: &str = &session.token;
 
-        sqlx::query(
+        db::query(
             "insert into sessions
                 (user_id, token)
             values(?, ?)",
@@ -95,7 +89,7 @@ impl Database for MySql {
 
     #[instrument(skip_all)]
     async fn get_user(&self, username: &str) -> DbResult<User> {
-        sqlx::query_as("select id, username, email, password from users where username = ?")
+        db::query_as("select id, username, email, password from users where username = ?")
             .bind(username)
             .fetch_one(self.read_pool())
             .await
@@ -104,7 +98,7 @@ impl Database for MySql {
 
     #[instrument(skip_all)]
     async fn get_user_session(&self, u: &User) -> DbResult<Session> {
-        sqlx::query_as("select id, user_id, token from sessions where user_id = ?")
+        db::query_as("select id, user_id, token from sessions where user_id = ?")
             .bind(u.id)
             .fetch_one(self.read_pool())
             .await
@@ -117,7 +111,7 @@ impl Database for MySql {
         let username: &str = &user.username;
         let password: &str = &user.password;
 
-        let res = sqlx::query(
+        let res = db::query(
             "insert into users
                 (username, email, password)
             values(?, ?, ?)",
@@ -133,7 +127,7 @@ impl Database for MySql {
 
     #[instrument(skip_all)]
     async fn update_user_password(&self, u: &User) -> DbResult<()> {
-        sqlx::query(
+        db::query(
             "update users
             set password = ?
             where id = ?",
@@ -148,35 +142,20 @@ impl Database for MySql {
 
     #[instrument(skip_all)]
     async fn delete_user(&self, u: &User) -> DbResult<()> {
-        sqlx::query("delete from sessions where user_id = ?")
-            .bind(u.id)
-            .execute(&self.pool)
-            .await?;
+        db::query("delete from sessions where user_id = ?").bind(u.id).execute(&self.pool).await?;
 
-        sqlx::query("delete from history where user_id = ?")
-            .bind(u.id)
-            .execute(&self.pool)
-            .await?;
+        db::query("delete from history where user_id = ?").bind(u.id).execute(&self.pool).await?;
 
-        sqlx::query("delete from store where user_id = ?")
-            .bind(u.id)
-            .execute(&self.pool)
-            .await?;
+        db::query("delete from store where user_id = ?").bind(u.id).execute(&self.pool).await?;
 
-        sqlx::query("delete from users where id = ?")
-            .bind(u.id)
-            .execute(&self.pool)
-            .await?;
+        db::query("delete from users where id = ?").bind(u.id).execute(&self.pool).await?;
 
         Ok(())
     }
 
     #[instrument(skip_all)]
     async fn delete_store(&self, user: &User) -> DbResult<()> {
-        sqlx::query("delete from store where user_id = ?")
-            .bind(user.id)
-            .execute(&self.pool)
-            .await?;
+        db::query("delete from store where user_id = ?").bind(user.id).execute(&self.pool).await?;
 
         Ok(())
     }
@@ -188,7 +167,7 @@ impl Database for MySql {
         for i in records {
             let id = atuin_common::utils::uuid_v7();
 
-            sqlx::query(
+            db::query(
                 "insert into store
                     (id, client_id, host, idx, timestamp, version, tag, data, cek, user_id)
                 values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -225,7 +204,7 @@ impl Database for MySql {
         tracing::debug!("{:?} - {:?} - {:?}", series.host_id, series.tag, start);
         let start = start.unwrap_or(0);
 
-        let records: Result<Vec<DbRecord>, DbError> = sqlx::query_as(
+        let records: Result<Vec<DbRecord>, DbError> = db::query_as(
             "select client_id, host, idx, timestamp, version, tag, data, cek from store
                     where user_id = ?
                     and tag = ?
@@ -270,10 +249,8 @@ impl Database for MySql {
         const STATUS_SQL: &str =
             "select host, tag, max(idx) from store where user_id = ? group by host, tag";
 
-        let mut res: Vec<(Vec<u8>, String, i64)> = sqlx::query_as(STATUS_SQL)
-            .bind(user.id)
-            .fetch_all(self.read_pool())
-            .await?;
+        let mut res: Vec<(Vec<u8>, String, i64)> =
+            db::query_as(STATUS_SQL).bind(user.id).fetch_all(self.read_pool()).await?;
 
         res.sort();
 

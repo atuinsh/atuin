@@ -1,5 +1,8 @@
-use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordId, RecordTag, RecordVersion};
-use sqlx::{Row, mysql::MySqlRow};
+use atuin_domain::record::{
+    EncryptedData, Host, HostId, Record, RecordId, RecordTag, RecordVersion,
+};
+use sqlx::Row;
+use sqlx::mysql::MySqlRow;
 
 #[derive(derive_more::Into)]
 pub struct DbRecord(pub Record<EncryptedData>);

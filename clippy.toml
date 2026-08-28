@@ -53,3 +53,23 @@ reason = "use parking_lot::Once which is faster"
 [[disallowed-types]]
 path = "std::sync::ReentrantLock"
 reason = "use parking_lot::ReentrantMutex which is faster"
+
+[[disallowed-methods]]
+path = "sqlx::query"
+reason = """use atuin_common::db::query, which forwards to sqlx::query and, in debug builds, \
+    rejects `SELECT *` and `ALTER` (a cached `SELECT *` whose column count changes under an \
+    ALTER panics in sqlx-sqlite)"""
+
+[[disallowed-methods]]
+path = "sqlx::query_as"
+reason = "use atuin_common::db::query_as; see the note on sqlx::query"
+
+[[disallowed-methods]]
+path = "sqlx::query_scalar"
+reason = "use atuin_common::db::query_scalar; see the note on sqlx::query"
+
+[[disallowed-macros]]
+path = "sqlx::migrate"
+reason = """use atuin_common::db::migrate!, which runs the migrator and then clears the \
+    connection's prepared-statement cache so a later query can't reuse pre-migration column \
+    metadata"""

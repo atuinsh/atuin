@@ -203,7 +203,8 @@ impl Info {
     }
 
     async fn query_version(pool: &SqlitePool) -> Result<semver::Version, VersionError> {
-        let str: String = sqlx::query_scalar("SELECT sqlite_version()").fetch_one(pool).await?;
+        let str: String =
+            crate::db::query_scalar("SELECT sqlite_version()").fetch_one(pool).await?;
         Ok(semver::Version::parse(&str)?)
     }
 
