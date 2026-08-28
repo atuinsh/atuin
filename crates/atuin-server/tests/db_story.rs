@@ -90,13 +90,13 @@ async fn test_full_db_story() -> eyre::Result<()> {
     let settings = &test_db.settings;
 
     match &settings.db_uri {
-        DbUrl::Postgres(url) => run_the_test::<Postgres>(url.clone(), settings).await,
-        DbUrl::Sqlite(url) => run_the_test::<Sqlite>(url.clone(), settings).await,
-        DbUrl::Mysql(url) => run_the_test::<MySql>(url.clone(), settings).await,
+        DbUrl::Postgres(url) => run_the_test::<Postgres>(url.clone()).await,
+        DbUrl::Sqlite(url) => run_the_test::<Sqlite>(url.clone()).await,
+        DbUrl::Mysql(url) => run_the_test::<MySql>(url.clone()).await,
     }
 }
 
-async fn run_the_test<DB: Database>(url: DB::Url, settings: &DbSettings) -> eyre::Result<()> {
+async fn run_the_test<DB: Database>(url: DB::Url) -> eyre::Result<()> {
     let db = DB::connect(url, None).await?;
     // register a user
     let new_user = NewUser {
@@ -218,10 +218,10 @@ mod tests {
     use super::get_settings;
 
     #[rstest]
-    #[case::none(None, r"sqlite://.*[\\/]atuin_test_db_\d+")]
+    #[case::none(None, r"sqlite://.*[\\/]atuin_test_db_[0-9a-f]+")]
     #[case::with_param(
         Some("postgres://user:pass@host/database_?mode=ssl".into()),
-        r"postgres://user:pass@host/database_\d+\?mode=ssl"
+        r"postgres://user:pass@host/database_[0-9a-f]+\?mode=ssl"
     )]
     fn settings(#[case] input: Option<String>, #[case] pattern: &str) -> eyre::Result<()> {
         let settings = get_settings(input)?;
