@@ -3,8 +3,6 @@ use std::sync::Arc;
 use atuin_domain::api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ErrorResponse};
 use atuin_domain::caps::axum::{CapabilitiesRouterExt, get as capabilities_endpoint};
 use atuin_domain::caps::{CapServer, CapabilitiesCap, PageSizeCap};
-use atuin_server_database::models::User;
-use atuin_server_database::{Database, DbError};
 use axum::Router;
 use axum::extract::{FromRequestParts, Request};
 use axum::http::request::Parts;
@@ -17,6 +15,8 @@ use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
 
 use super::handlers;
+use crate::db::models::User;
+use crate::db::{Database, DbError};
 use crate::handlers::{ErrorResponseStatus, RespExt};
 use crate::metrics;
 use crate::settings::Settings;

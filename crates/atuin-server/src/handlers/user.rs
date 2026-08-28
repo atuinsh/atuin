@@ -10,8 +10,6 @@ use atuin_domain::api::{
     ChangePasswordRequest, ChangePasswordResponse, DeleteUserResponse, LoginRequest, LoginResponse,
     RegisterRequest, RegisterResponse, UserResponse,
 };
-use atuin_server_database::models::{NewSession, NewUser};
-use atuin_server_database::{Database, DbError};
 use axum::Json;
 use axum::extract::{ConnectInfo, Path, State};
 use axum::http::StatusCode;
@@ -21,6 +19,8 @@ use reqwest::header::CONTENT_TYPE;
 use tracing::{debug, error, info, instrument, warn};
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
+use crate::db::models::{NewSession, NewUser};
+use crate::db::{Database, DbError};
 use crate::router::{AppState, UserAuth};
 
 pub fn verify_str(hash: &str, password: &str) -> bool {

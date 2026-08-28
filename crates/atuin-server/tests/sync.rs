@@ -7,9 +7,8 @@ use atuin_client::record::sync::{ClientSource, SyncEngine};
 use atuin_common::encryption::paseto_v4;
 use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag};
+use atuin_server::db::DbSettings;
 use atuin_server::{Settings as ServerSettings, launch_with_tcp_listener};
-use atuin_server_database::DbSettings;
-use atuin_server_sqlite::Sqlite;
 use futures_util::TryFutureExt;
 use rstest::{fixture, rstest};
 use tokio::net::TcpListener;
@@ -77,8 +76,7 @@ async fn server() -> TestServer {
         register_webhook_url: None,
         register_webhook_username: String::new(),
         db_settings: DbSettings {
-            db_uri: format!("sqlite://{}", db.to_str().unwrap()),
-            read_db_uri: None,
+            db_uri: format!("sqlite://{}", db.to_str().unwrap()).parse().unwrap(),
         },
         metrics: atuin_server::settings::Metrics::default(),
         fake_version: None,
@@ -89,12 +87,9 @@ async fn server() -> TestServer {
     let addr = listener.local_addr().unwrap();
 
     let handle = tokio::spawn(async move {
-        if let Err(e) = launch_with_tcp_listener::<Sqlite>(
-            server_settings,
-            listener,
-            shutdown_rx.unwrap_or_else(|_| ()),
-        )
-        .await
+        if let Err(e) =
+            launch_with_tcp_listener(server_settings, listener, shutdown_rx.unwrap_or_else(|_| ()))
+                .await
         {
             panic!("error running server: {e:?}");
         }

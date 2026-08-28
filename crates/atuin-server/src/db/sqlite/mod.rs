@@ -2,17 +2,13 @@ use std::str::FromStr;
 
 use async_trait::async_trait;
 use atuin_common::db;
-use atuin_domain::record::{
-    EncryptedData, HostId, Record, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
-};
-use atuin_server_database::models::{NewSession, NewUser, Session, User};
-use atuin_server_database::{Database, DbError, DbResult, DbSettings};
+use atuin_common::db::SqliteDbUrl;
+use atuin_domain::record::{EncryptedData, Record, RecordIdx, RecordSeriesKey, RecordStatus};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
-use sqlx::types::Uuid;
 use tracing::instrument;
-use wrappers::DbRecord;
 
-mod wrappers;
+use super::models::{DbRecord, NewSession, NewUser, RecordSeriesPoint, Session, User};
+use super::{Database, DbError, DbResult};
 
 #[derive(Clone)]
 pub struct Sqlite {
@@ -21,14 +17,18 @@ pub struct Sqlite {
 
 #[async_trait]
 impl Database for Sqlite {
-    async fn new(settings: &DbSettings) -> DbResult<Self> {
-        let opts = SqliteConnectOptions::from_str(&settings.db_uri)?
+    type Url = SqliteDbUrl;
+
+    async fn connect(url: SqliteDbUrl) -> DbResult<Self> {
+        let opts = SqliteConnectOptions::from_str(url.as_str())?
             .journal_mode(SqliteJournalMode::Wal)
             .create_if_missing(true);
 
         let pool = SqlitePoolOptions::new().connect_with(opts).await?;
 
-        db::migrate!(&pool, "./migrations").await.map_err(|error| DbError::Other(error.into()))?;
+        db::migrate!(&pool, "src/db/sqlite/migrations")
+            .await
+            .map_err(|error| DbError::Other(error.into()))?;
 
         Ok(Self { pool })
     }
@@ -131,9 +131,11 @@ impl Database for Sqlite {
     async fn delete_user(&self, u: &User) -> DbResult<()> {
         db::query("delete from sessions where user_id = $1").bind(u.id).execute(&self.pool).await?;
 
-        db::query("delete from users where id = $1").bind(u.id).execute(&self.pool).await?;
-
         db::query("delete from history where user_id = $1").bind(u.id).execute(&self.pool).await?;
+
+        db::query("delete from store where user_id = $1").bind(u.id).execute(&self.pool).await?;
+
+        db::query("delete from users where id = $1").bind(u.id).execute(&self.pool).await?;
 
         Ok(())
     }
@@ -194,7 +196,7 @@ impl Database for Sqlite {
         tracing::debug!("{:?} - {:?} - {:?}", series.host_id, series.tag, start);
         let start = start.unwrap_or(0);
 
-        let records: Result<Vec<DbRecord>, DbError> = db::query_as(
+        db::query_as::<_, DbRecord>(
             "select client_id, host, idx, timestamp, version, tag, data, cek from store
                     where user_id = $1
                     and tag = $2
@@ -210,43 +212,18 @@ impl Database for Sqlite {
         .bind(count as i64)
         .fetch_all(&self.pool)
         .await
-        .map_err(Into::into);
-
-        let ret = match records {
-            Ok(records) => {
-                let records: Vec<Record<EncryptedData>> = records
-                    .into_iter()
-                    .map(|f| {
-                        let record: Record<EncryptedData> = f.into();
-                        record
-                    })
-                    .collect();
-
-                records
-            }
-            Err(DbError::NotFound) => {
-                tracing::debug!("no records found in store: {:?}/{}", series.host_id, series.tag);
-                return Ok(vec![]);
-            }
-            Err(e) => return Err(e),
-        };
-
-        Ok(ret)
+        .map(|records| records.into_iter().map(Into::into).collect())
+        .map_err(Into::into)
     }
 
     async fn status(&self, user: &User) -> DbResult<RecordStatus> {
         const STATUS_SQL: &str =
-            "select host, tag, max(idx) from store where user_id = $1 group by host, tag";
+            "select host, tag, max(idx) as idx from store where user_id = $1 group by host, tag";
 
-        let res: Vec<(Uuid, String, i64)> =
-            db::query_as(STATUS_SQL).bind(user.id).fetch_all(&self.pool).await?;
-
-        let mut status = RecordStatus::new();
-
-        for i in res {
-            status.set_raw(RecordSeriesKey::new(HostId(i.0), RecordTag::from(i.1)), i.2 as u64);
-        }
-
-        Ok(status)
+        let points = db::query_as::<_, RecordSeriesPoint>(STATUS_SQL)
+            .bind(user.id)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(RecordStatus::from_points(points.into_iter().map(Into::into)))
     }
 }

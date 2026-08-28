@@ -661,25 +661,26 @@ name = "atuin-server"
 version = "18.20.1"
 dependencies = [
  "argon2",
+ "async-trait",
  "atuin-client",
  "atuin-common",
  "atuin-domain",
- "atuin-server-database",
- "atuin-server-mysql",
- "atuin-server-postgres",
- "atuin-server-sqlite",
  "axum",
  "clap",
  "config",
+ "derive_more",
  "eyre",
  "fs-err",
  "futures-util",
  "metrics",
  "metrics-exporter-prometheus",
  "rand 0.8.7",
+ "regex",
  "reqwest",
  "rstest",
  "serde",
+ "sqlx",
+ "time",
  "tokio",
  "tower",
  "tower-http",
@@ -687,77 +688,6 @@ dependencies = [
  "tracing-subscriber",
  "tracing-tree",
  "url",
-]
-
-[[package]]
-name = "atuin-server-database"
-version = "18.20.1"
-dependencies = [
- "async-trait",
- "atuin-common",
- "atuin-domain",
- "derive_more",
- "eyre",
- "rstest",
- "serde",
- "sqlx",
- "time",
- "url",
-]
-
-[[package]]
-name = "atuin-server-mysql"
-version = "18.20.1"
-dependencies = [
- "async-trait",
- "atuin-common",
- "atuin-domain",
- "atuin-server-database",
- "derive_more",
- "eyre",
- "metrics",
- "rand 0.8.7",
- "serde",
- "sqlx",
- "time",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "atuin-server-postgres"
-version = "18.20.1"
-dependencies = [
- "async-trait",
- "atuin-common",
- "atuin-domain",
- "atuin-server-database",
- "derive_more",
- "eyre",
- "metrics",
- "rand 0.8.7",
- "serde",
- "sqlx",
- "time",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "atuin-server-sqlite"
-version = "18.20.1"
-dependencies = [
- "async-trait",
- "atuin-common",
- "atuin-domain",
- "atuin-server-database",
- "derive_more",
- "eyre",
- "metrics",
- "serde",
- "sqlx",
- "time",
- "tracing",
  "uuid",
 ]
 
@@ -1707,12 +1637,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "deunicode"
-version = "1.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "abd57806937c9cc163efc8ea3910e00a62e2aeb0b8119f1793a978088f8f6b04"
-
-[[package]]
 name = "diff"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1988,18 +1912,6 @@ checksum = "7cd915d99f24784cdc19fd37ef22b97e3ff0ae756c7e492e9fbfe897d61e2aec"
 dependencies = [
  "indenter",
  "once_cell",
-]
-
-[[package]]
-name = "fake"
-version = "5.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea6be833b323a56361118a747470a45a1bcd5c52a2ec9b1e40c83dafe687e453"
-dependencies = [
- "deunicode",
- "either",
- "rand 0.10.1",
- "time",
 ]
 
 [[package]]
@@ -5232,12 +5144,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "snowflake_uid"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "167e0bc9777318b7b2168046f75fa9cdd1211c37cc5079847f3fec58088a0853"
-
-[[package]]
 name = "socket2"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5708,33 +5614,6 @@ dependencies = [
  "wezterm-dynamic",
  "wezterm-input-types",
  "winapi",
-]
-
-[[package]]
-name = "tests-database"
-version = "18.20.1"
-dependencies = [
- "async-trait",
- "atuin-common",
- "atuin-domain",
- "atuin-server-database",
- "atuin-server-mysql",
- "atuin-server-postgres",
- "atuin-server-sqlite",
- "eyre",
- "fake",
- "futures-util",
- "metrics",
- "regex",
- "rstest",
- "serde",
- "snowflake_uid",
- "sqlx",
- "time",
- "tokio",
- "tracing",
- "url",
- "uuid",
 ]
 
 [[package]]
