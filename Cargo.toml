@@ -28,6 +28,7 @@ atuin-server = { path = "crates/atuin-server", version = "18.20.1" }
 atuin-server-database = { path = "crates/atuin-server-database", version = "18.20.1" }
 atuin-server-postgres = { path = "crates/atuin-server-postgres", version = "18.20.1" }
 atuin-server-sqlite = { path = "crates/atuin-server-sqlite", version = "18.20.1" }
+atuin-server-mysql = { path = "crates/atuin-server-mysql", version = "18.20.1" }
 atuin-vt100 = "0.17"
 frizbee = "0.12.0"
 base64 = "0.22"

@@ -665,6 +665,7 @@ dependencies = [
  "atuin-common",
  "atuin-domain",
  "atuin-server-database",
+ "atuin-server-mysql",
  "atuin-server-postgres",
  "atuin-server-sqlite",
  "axum",
@@ -702,6 +703,25 @@ dependencies = [
  "sqlx",
  "time",
  "url",
+]
+
+[[package]]
+name = "atuin-server-mysql"
+version = "18.20.1"
+dependencies = [
+ "async-trait",
+ "atuin-common",
+ "atuin-domain",
+ "atuin-server-database",
+ "derive_more",
+ "eyre",
+ "metrics",
+ "rand 0.8.7",
+ "serde",
+ "sqlx",
+ "time",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -5698,6 +5718,7 @@ dependencies = [
  "atuin-common",
  "atuin-domain",
  "atuin-server-database",
+ "atuin-server-mysql",
  "atuin-server-postgres",
  "atuin-server-sqlite",
  "eyre",
