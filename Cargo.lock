@@ -661,6 +661,7 @@ name = "atuin-server"
 version = "18.20.1"
 dependencies = [
  "argon2",
+ "async-trait",
  "atuin-client",
  "atuin-common",
  "atuin-domain",
@@ -671,6 +672,7 @@ dependencies = [
  "axum",
  "clap",
  "config",
+ "derive_more",
  "eyre",
  "fs-err",
  "futures-util",
@@ -680,6 +682,8 @@ dependencies = [
  "reqwest",
  "rstest",
  "serde",
+ "sqlx",
+ "time",
  "tokio",
  "tower",
  "tower-http",
@@ -687,6 +691,7 @@ dependencies = [
  "tracing-subscriber",
  "tracing-tree",
  "url",
+ "uuid",
 ]
 
 [[package]]
