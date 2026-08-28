@@ -1434,7 +1434,7 @@ mod test {
         let bravo = save_history_item(&db, "echo bravo").await;
         let _charlie = save_history_item(&db, "echo charlie").await;
 
-        let loaded = db.load_active([alpha.id.clone(), bravo.id.clone()]).await.unwrap();
+        let loaded = db.load_active([alpha.id, bravo.id]).await.unwrap();
 
         let mut commands: Vec<String> = loaded.into_iter().map(|h| h.command).collect();
         commands.sort();
@@ -1471,10 +1471,46 @@ mod test {
         alpha.command = String::new();
         db.update(&alpha).await.unwrap();
 
-        let loaded = db.load_active([alpha.id.clone(), bravo.id.clone()]).await.unwrap();
+        let loaded = db.load_active([alpha.id, bravo.id]).await.unwrap();
 
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].command, "echo bravo");
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn drop_non_uuid_ids_migration_removes_only_unparsable_rows(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        // A healthy row, a row whose id is valid but upper-case (still accepted by
+        // `Uuid::parse_str`), and a row whose id is not a UUID at all — the kind that
+        // fails to decode and breaks every history query after this refactor.
+        let good = save_history_item(&db, "echo good").await;
+        let upper = save_history_item(&db, "echo upper").await;
+        let doomed = save_history_item(&db, "echo doomed").await;
+
+        let set_id = |from: HistoryId, to: &'static str| {
+            db::query("update history set id = ?1 where id = ?2")
+                .bind(to)
+                .bind(from.0.as_simple().to_string())
+                .execute(db.sqlite.pool())
+        };
+        set_id(upper.id, "0123456789ABCDEF0123456789ABCDEF").await.unwrap();
+        set_id(doomed.id, "not-a-uuid").await.unwrap();
+
+        // Mirrors migrations/20260828000000_drop_non_uuid_history_ids.sql.
+        db::query("delete from history where length(id) <> 32 or id glob '*[^0-9a-fA-F]*'")
+            .execute(db.sqlite.pool())
+            .await
+            .unwrap();
+
+        // The two well-formed rows survive; only the unparsable one is dropped.
+        let (remaining,): (i64,) =
+            db::query_as("select count(*) from history").fetch_one(db.sqlite.pool()).await.unwrap();
+        assert_eq!(remaining, 2);
+        assert_eq!(db.load_active([good.id]).await.unwrap()[0].command, "echo good");
     }
 
     #[rstest]

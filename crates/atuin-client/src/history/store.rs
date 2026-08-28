@@ -688,7 +688,7 @@ mod tests {
 
         let first = history_n(1);
         let (create_first, _) = history_store.push(first.clone()).await.unwrap();
-        let (delete_first, _) = history_store.delete(first.id.clone()).await.unwrap();
+        let (delete_first, _) = history_store.delete(first.id).await.unwrap();
         let (create_second, _) = history_store.push(history_n(2)).await.unwrap();
 
         // Three flushes: the create, the delete (which creates nothing), then the create.

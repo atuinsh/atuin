@@ -1331,7 +1331,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(value["event"], "ended");
-        assert_eq!(value["history"]["id"], "history-id");
+        assert_eq!(value["history"]["id"], "018f011c9a0a70008000000000000001");
         assert_eq!(value["history"]["duration_ns"], 12_345_678);
         assert_eq!(value["history"]["success"], true);
         assert!(value.get("record").is_none());
