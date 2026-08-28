@@ -42,6 +42,10 @@ macro_rules! new_uuid {
             fn type_info() -> <DB as sqlx::Database>::TypeInfo {
                 Uuid::type_info()
             }
+
+            fn compatible(ty: &<DB as sqlx::Database>::TypeInfo) -> bool {
+                <Uuid as sqlx::Type<DB>>::compatible(ty)
+            }
         }
 
         impl<'r, DB: sqlx::Database> sqlx::Decode<'r, DB> for $name
