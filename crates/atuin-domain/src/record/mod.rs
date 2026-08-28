@@ -206,10 +206,8 @@ pub struct RecordStatus {
 }
 
 impl RecordStatus {
-    pub fn from_points(
-        points: impl IntoIterator<Item = (RecordSeriesKey, RecordIdx)>,
-    ) -> RecordStatus {
-        let mut status = RecordStatus::new();
+    pub fn from_points(points: impl IntoIterator<Item = (RecordSeriesKey, RecordIdx)>) -> Self {
+        let mut status = Self::new();
         status.extend(points);
         status
     }
@@ -454,11 +452,14 @@ mod tests {
         let diff = index1.diff(&index2);
 
         assert_eq!(1, diff.len(), "expected single diff");
-        assert_eq!(diff[0], Diff {
-            series: record2.series_key(),
-            remote: Some(1),
-            local: Some(0)
-        });
+        assert_eq!(
+            diff[0],
+            Diff {
+                series: record2.series_key(),
+                remote: Some(1),
+                local: Some(0)
+            }
+        );
     }
 
     #[rstest]
