@@ -266,5 +266,4 @@ used_underscore_items = "warn"
 useless_let_if_seq = "warn"
 verbose_bit_mask = "warn"
 while_float = "warn"
-# TODO(markovejnovic): Enable and tune
-# wildcard_imports = "warn"
+wildcard_imports = "warn"
