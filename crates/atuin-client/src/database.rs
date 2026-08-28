@@ -930,7 +930,7 @@ impl Sqlite {
         let mut tx = self.sqlite.pool().begin().await?;
 
         for id in ids {
-            Self::delete_row_raw(&mut tx, id.clone()).await?;
+            Self::delete_row_raw(&mut tx, id).await?;
         }
 
         tx.commit().await?;

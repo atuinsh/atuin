@@ -172,9 +172,9 @@ impl HistorySvc for HistoryGrpcService {
             handle.emit(DaemonEvent::HistoryStarted(h.clone()));
         }
 
-        let id = h.id.clone();
+        let id = h.id;
         tracing::info!(id = id.to_string(), "start history");
-        self.inner.running.insert(id.clone(), h);
+        self.inner.running.insert(id, h);
 
         let reply = StartHistoryReply {
             id: id.to_string(),

@@ -1002,7 +1002,7 @@ impl Cmd {
 
             for entry in matches {
                 eprintln!("deleting {}", entry.id);
-                let (id, _) = history_store.delete(entry.id.clone()).await?;
+                let (id, _) = history_store.delete(entry.id).await?;
                 history_store.build_all(db, &[id]).await?;
             }
 
@@ -1056,7 +1056,7 @@ impl Cmd {
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
             #[cfg(feature = "daemon")]
-            let ids = matches.iter().map(|h| h.id.clone()).collect::<Vec<_>>();
+            let ids = matches.iter().map(|h| h.id).collect::<Vec<_>>();
 
             for entry in matches {
                 eprintln!("deleting {}", entry.id);

@@ -399,8 +399,8 @@ impl HistoryStore {
         let history = self.history().await?;
 
         let ret = HashSet::from_iter(history.iter().map(|h| match h {
-            HistoryRecord::Create(h) => h.id.clone(),
-            HistoryRecord::Delete(id) => id.clone(),
+            HistoryRecord::Create(h) => h.id,
+            HistoryRecord::Delete(id) => *id,
         }));
 
         Ok(ret)

@@ -203,7 +203,7 @@ impl SemanticState {
     }
 
     fn record_history(&mut self, history: History) {
-        let history_id = history.id.clone();
+        let history_id = history.id;
 
         if let Some(capture_ref) = self.history_index.get(&history_id).cloned() {
             if let Some(stored) = self.stored_capture_mut(&capture_ref) {
@@ -272,7 +272,7 @@ impl SemanticState {
 
         let (capture_id, evicted) = {
             let session = self.sessions.entry(session_id.clone()).or_default();
-            session.push(history_id.clone(), record)
+            session.push(history_id, record)
         };
 
         let capture_ref = CaptureRef {

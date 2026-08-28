@@ -67,13 +67,13 @@ pub struct InspectingState {
 
 impl InspectingState {
     pub fn move_to_previous(&mut self) {
-        let previous = self.previous.clone();
+        let previous = self.previous;
         self.reset();
         self.current = previous;
     }
 
     pub fn move_to_next(&mut self) {
-        let next = self.next.clone();
+        let next = self.next;
         self.reset();
         self.current = next;
     }
@@ -1918,7 +1918,7 @@ pub async fn history(
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;
         let initial_search_mode = app.search_mode();
-        let initial_custom_context = app.search.custom_context.clone();
+        let initial_custom_context = app.search.custom_context;
 
         let event_ready = tokio::task::spawn_blocking(|| event::poll(Duration::from_millis(250)));
 
@@ -1975,7 +1975,7 @@ pub async fn history(
                             },
                             InputAction::SwitchContext(index) => {
                                 if let Some(index) = index && let Some(entry) = results.get(index) {
-                                    app.search.custom_context = Some(entry.id.clone());
+                                    app.search.custom_context = Some(entry.id);
                                     app.search.context = Context::from_history(entry);
                                     app.search.filter_mode = FilterMode::Session;
                                     app.search.input = Cursor::from(String::new());
@@ -2029,7 +2029,7 @@ pub async fn history(
             && app.search.input.as_str().is_empty()
             && (initial_custom_context != app.search.custom_context
                 || initial_filter_mode != app.search.filter_mode)
-            && let Some(history_id) = app.search.custom_context.clone()
+            && let Some(history_id) = app.search.custom_context
             && let Some(pos) = results.iter().position(|entry| entry.id == history_id)
         {
             app.results_state.select(pos);
@@ -2064,7 +2064,7 @@ pub async fn history(
                 stats
             } else {
                 let stats = db.stats(&selected).await?;
-                stats_for = Some(selected.id.clone());
+                stats_for = Some(selected.id);
                 app.inspecting_state.current = Some(selected.id);
                 app.inspecting_state.previous = match stats.previous.clone() {
                     Some(p) => Some(p.id),
