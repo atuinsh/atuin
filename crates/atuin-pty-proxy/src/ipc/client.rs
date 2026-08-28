@@ -103,7 +103,8 @@ impl IpcClient {
 
     pub async fn connect(self) -> Result<IpcConnection, IpcConnectError> {
         match self.protocol {
-            // The proxy advertised the framed protocol via `ATUIN_PTY_PROXY_PROTOCOL`.          Some(_) => self.connect_v1().await.map(IpcConnection::V1),
+            // The proxy advertised the framed protocol via `ATUIN_PTY_PROXY_PROTOCOL`.
+            Some(_) => self.connect_v1().await.map(IpcConnection::V1),
             // No advertisement: a legacy proxy that pushes a raw screen dump on
             // connect. Nothing to negotiate; connect lazily on each dump.
             #[allow(deprecated, reason = "legacy pty-proxy ipc protocol")]
