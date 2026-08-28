@@ -9,13 +9,12 @@ pub use postgres::Postgres;
 
 pub mod sqlite;
 
-pub use sqlite::Sqlite;
-
 use std::fmt::Debug;
 
 use async_trait::async_trait;
 use atuin_domain::record::{EncryptedData, Record, RecordIdx, RecordSeriesKey, RecordStatus};
 use serde::{Deserialize, Serialize};
+pub use sqlite::Sqlite;
 
 use self::models::{NewSession, NewUser, Session, User};
 
