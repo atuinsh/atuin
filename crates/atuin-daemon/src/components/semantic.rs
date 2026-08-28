@@ -26,15 +26,17 @@ const MAX_BYTES_PER_SESSION: usize = 32 * 1024 * 1024;
 const MAX_PENDING_HISTORIES: usize = 128;
 
 /// Stores completed command captures and associates them with history events.
+#[derive(Debug)]
 pub struct SemanticComponent {
     inner: Arc<SemanticComponentInner>,
 }
 
+#[derive(Debug)]
 struct SemanticComponentInner {
     state: Mutex<SemanticState>,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct SemanticState {
     sessions: HashMap<SessionId, SessionCaptures>,
     session_lru: VecDeque<SessionId>,
@@ -56,13 +58,14 @@ struct CaptureRef {
     capture_id: CaptureId,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct SessionCaptures {
     next_id: u64,
     records: VecDeque<StoredCapture>,
     output_bytes: usize,
 }
 
+#[derive(Debug)]
 struct StoredCapture {
     id: CaptureId,
     history_id: HistoryId,
@@ -97,6 +100,10 @@ impl SemanticComponent {
             inner: self.inner.clone(),
         })
     }
+
+    pub async fn record_history(&self, history: History) {
+        self.inner.record_history(history).await
+    }
 }
 
 impl Default for SemanticComponent {
@@ -116,10 +123,6 @@ impl Component for SemanticComponent {
     }
 
     async fn handle_event(&mut self, event: &DaemonEvent) -> Result<()> {
-        if let DaemonEvent::HistoryEnded(history) = event {
-            self.inner.record_history(history.clone()).await;
-        }
-
         Ok(())
     }
 

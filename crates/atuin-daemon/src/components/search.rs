@@ -219,16 +219,6 @@ impl Component for SearchComponent {
                 let histories = handle.history_db().load_active(ids.iter().cloned()).await?;
                 self.index.read().await.add_histories(&histories);
             }
-            DaemonEvent::HistoryStarted(history) => {
-                debug!(id = %history.id, command = %history.command, "History started (no index action)");
-            }
-            DaemonEvent::HistoryEnded(history) => {
-                span!(Level::TRACE, "inject_history_ended")
-                    .in_scope(async || {
-                        self.index.read().await.add_history(history);
-                    })
-                    .await;
-            }
             DaemonEvent::HistoryPruned | DaemonEvent::HistoryRebuilt => {
                 info!("History store pruned or rebuilt, rebuilding search index");
                 self.rebuild_index_only().await;

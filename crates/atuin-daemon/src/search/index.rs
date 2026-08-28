@@ -94,6 +94,7 @@ impl FrecencyData {
 }
 
 /// Data for a unique command.
+#[derive(Debug)]
 pub struct CommandData {
     /// History ID of the most recent invocation (16-byte UUID).
     most_recent_id: [u8; 16],
@@ -263,6 +264,7 @@ type FrecencyMap = Arc<Vec<u32>>;
 
 /// One entry in the fuzzy matcher's haystack: the original string plus the normalized version
 /// (diacritics removed) we actually match against.
+#[derive(Debug)]
 struct HaystackEntry {
     /// The original text of the entry.
     pub original: Arc<str>,
@@ -324,6 +326,7 @@ impl PartialOrd for Score {
 /// Global frecency is precomputed by a background task and used for scoring.
 /// If frecency data is not available, search still works but without frecency ranking;
 /// although this should never happen due to precomputing the frecency map.
+#[derive(Debug)]
 pub struct SearchIndex {
     /// Map from command text to command data.
     ///

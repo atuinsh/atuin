@@ -11,7 +11,7 @@ use atuin_client::packfile;
 use atuin_client::settings::Settings;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::caps::PackfileCap;
-use atuin_domain::record::{CmdOrigin, RecordSeriesKey, RecordTag};
+use atuin_domain::record::{RecordSeriesKey, RecordTag};
 use dashmap::DashMap;
 use eyre::Result;
 use time::OffsetDateTime;
@@ -42,14 +42,8 @@ pub struct HistoryComponent {
 }
 
 struct HistoryComponentInner {
-    /// Commands currently running (not yet completed).
-    running: DashMap<HistoryId, History>,
-
     /// Handle to the daemon (set during start).
     handle: tokio::sync::RwLock<Option<DaemonHandle>>,
-
-    /// History store for pushing records (set during start).
-    history_store: tokio::sync::RwLock<Option<HistoryStore>>,
 }
 
 impl HistoryComponent {
@@ -58,9 +52,7 @@ impl HistoryComponent {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(HistoryComponentInner {
-                running: DashMap::new(),
                 handle: tokio::sync::RwLock::new(None),
-                history_store: tokio::sync::RwLock::new(None),
             }),
         }
     }
@@ -147,34 +139,10 @@ impl HistorySvc for HistoryGrpcService {
         &self,
         request: Request<StartHistoryRequest>,
     ) -> Result<Response<StartHistoryReply>, Status> {
-        let req = request.into_inner();
-
-        let timestamp = OffsetDateTime::from_unix_nanos_u64(req.timestamp);
-        let author_kind = req.author_kind();
-
-        let cmd_origin = CmdOrigin::try_from(req.hostname)
-            .map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let h: History = History::daemon()
-            .timestamp(timestamp)
-            .command(req.command)
-            .cwd(req.cwd)
-            .session(req.session)
-            .cmd_origin(cmd_origin)
-            .author(req.author)
-            .intent(req.intent)
-            .shell(req.shell)
-            .author_kind(author_kind.into())
-            .build()
-            .into();
-
-        // Emit the event
-        if let Some(handle) = self.inner.handle.read().await.as_ref() {
-            handle.emit(DaemonEvent::HistoryStarted(h.clone()));
-        }
+        let h: History = request.into_inner().try_into()?;
 
         let id = h.id.clone();
         tracing::info!(id = id.to_string(), "start history");
-        self.inner.running.insert(id.clone(), h);
 
         let reply = StartHistoryReply {
             id: id.to_string(),
@@ -247,9 +215,6 @@ impl HistorySvc for HistoryGrpcService {
             {
                 tracing::warn!("packing failed: {e}");
             }
-
-            // Emit the event
-            handle.emit(DaemonEvent::HistoryEnded(history));
 
             let reply = EndHistoryReply {
                 id: record_id.0.to_string(),

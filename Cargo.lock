@@ -486,6 +486,7 @@ dependencies = [
  "atuin-domain",
  "atuin-dotfiles",
  "atuin-history",
+ "atuin-pty-proxy",
  "dashmap",
  "derive_more",
  "enum_dispatch",
@@ -503,6 +504,7 @@ dependencies = [
  "reqwest",
  "rstest",
  "tempfile",
+ "thiserror 2.0.19",
  "time",
  "tokio",
  "tokio-stream",
@@ -5946,6 +5948,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
