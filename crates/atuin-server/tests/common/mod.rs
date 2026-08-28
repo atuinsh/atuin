@@ -3,9 +3,8 @@ use std::time::Duration;
 
 use atuin_client::api_client;
 use atuin_common::utils::uuid_v7;
+use atuin_server::db::{DbSettings, Postgres};
 use atuin_server::{Settings as ServerSettings, launch_with_tcp_listener};
-use atuin_server_database::DbSettings;
-use atuin_server_postgres::Postgres;
 use futures_util::TryFutureExt;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
