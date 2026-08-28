@@ -7,7 +7,6 @@ use atuin_domain::record::{
 use atuin_server::db::models::{NewSession, NewUser, User};
 use atuin_server::db::{Database, DbError, DbSettings, DbType, MySql, Postgres, Sqlite};
 use rstest::rstest;
-use snowflake_uid::{Config, Generator};
 use sqlx::migrate::MigrateDatabase;
 use url::Url;
 
@@ -20,11 +19,9 @@ fn get_settings(env_uri: Option<String>) -> eyre::Result<DbSettings> {
     });
 
     let mut url = Url::parse(&db_uri)?;
-    let cfg = Config::default();
-    let mut generator = Generator::from(cfg, 0);
-    let snowflake = generator.get();
+    let unique = uuid_v7().as_simple().to_string();
 
-    let unique_path = format!("{}{snowflake}", url.path());
+    let unique_path = format!("{}{unique}", url.path());
     url.set_path(&unique_path);
 
     let db_uri = url.to_string();
