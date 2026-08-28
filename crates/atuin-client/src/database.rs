@@ -1487,7 +1487,10 @@ mod test {
         let alpha = save_history_item(&db, "echo alpha").await;
 
         let loaded = db
-            .load_active([alpha.id, HistoryId("018f011c-9a0a-7000-8000-0000000000ff".parse().unwrap())])
+            .load_active([
+                alpha.id,
+                HistoryId("018f011c-9a0a-7000-8000-0000000000ff".parse().unwrap()),
+            ])
             .await
             .unwrap();
 
