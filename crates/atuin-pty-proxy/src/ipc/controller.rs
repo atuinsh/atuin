@@ -1,9 +1,12 @@
+//! The main controller responsible for servicing the [`crate::ipc::IpcServer`].
+//!
+//! This controller is injected into [`crate::ipc::IpcServer::spawn`] and is responsible for
+//! servicing client requests.
 use std::sync::mpsc::{self, SyncSender};
 
 use crate::ipc::domain::*;
 use crate::screen::{Msg, ScreenSnapshot};
 
-/// This trait must be implemented by a controller which services each of these messages.
 #[derive(Debug, Clone)]
 pub struct IpcController {
     /// TODO(markovejnovic): World's biggest debt.

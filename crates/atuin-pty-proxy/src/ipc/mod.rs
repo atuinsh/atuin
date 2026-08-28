@@ -8,9 +8,11 @@ mod client;
 mod controller;
 #[cfg(feature = "server")]
 mod server;
+#[cfg(all(test, feature = "client", feature = "server"))]
+mod test;
 
 #[cfg(feature = "client")]
-pub use client::{IpcClient, IpcConnection, IpcError};
+pub use client::{IpcClient, IpcConnectError, IpcConnection, IpcError};
 #[cfg(feature = "server")]
 pub use controller::IpcController;
 #[cfg(feature = "server")]

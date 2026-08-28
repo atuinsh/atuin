@@ -17,12 +17,12 @@
 //! at versioning the body rather than the header.
 //!
 //! The header fields are all big-endian encoded.
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, Error)]
 pub enum HeaderParseError {
-    #[error("message is too long: {0} > {0}")]
+    #[error("message is too long: {0} > {1}")]
     MessageTooLong(u32, u32),
     #[error("invalid version: {0}")]
     BadVersion(u8),
@@ -37,17 +37,18 @@ struct V1Payload;
 impl V1Payload {
     const SERIALIZED_LEN: usize = 27;
 
-    fn to_slice(&self, slice: &mut [u8]) {
+    fn to_slice(slice: &mut [u8]) {
         debug_assert_eq!(slice.len(), Self::SERIALIZED_LEN);
         slice.fill(0);
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     fn parse(_bytes: [u8; Self::SERIALIZED_LEN]) -> Result<Self, HeaderParseError> {
         Ok(Self {})
     }
 }
 
-/// The header of the wire protocol.
+/// The versioned payload carried inside the header.
 #[derive(Debug, Clone, Copy)]
 enum HeaderPayload {
     /// Version one of the header payload carries no semantics.
@@ -64,11 +65,11 @@ impl HeaderPayload {
         }
     }
 
-    fn to_slice(&self, slice: &mut [u8]) {
+    fn to_slice(self, slice: &mut [u8]) {
         debug_assert_eq!(slice.len(), Self::SERIALIZED_LEN);
         slice[0] = self.version();
         match self {
-            Self::V1(p) => p.to_slice(&mut slice[Self::VERSION_LEN..]),
+            Self::V1(_) => V1Payload::to_slice(&mut slice[Self::VERSION_LEN..]),
         }
     }
 
@@ -90,15 +91,15 @@ pub struct Header {
     /// The total width of the message, including the header.
     pub message_width: u32,
     /// Additional data, versioned by some version.
-    pub payload: HeaderPayload,
+    payload: HeaderPayload,
 }
 
 impl Header {
     /// Be very careful changing this -- bad things could happen. I haven't thought about them all.
     /// You probably don't want to change this.
-    const SERIALIZED_LEN: usize = 32;
+    pub const SERIALIZED_LEN: usize = 32;
 
-    /// Encode the header into a vec
+    /// Encode the header into the given slice.
     fn to_slice(&self, slice: &mut [u8]) {
         debug_assert_eq!(slice.len(), Self::SERIALIZED_LEN);
         slice[..4].copy_from_slice(&self.message_width.to_be_bytes());
@@ -114,7 +115,7 @@ impl Header {
             return Err(HeaderParseError::MessageTooLong(message_width, MAX_MSG_LEN));
         }
 
-        // Aweosme, let's parse the version
+        // Awesome, let's parse the version
         let payload = HeaderPayload::parse(payload_bytes.try_into().unwrap())?;
 
         Ok(Self {
@@ -150,4 +151,9 @@ pub fn try_encode<T: Serialize>(data: &T) -> Result<Vec<u8>, EncodeError> {
     header.to_slice(&mut buf[..Header::SERIALIZED_LEN]);
 
     Ok(buf)
+}
+
+/// Decode a postcard-encoded body into a `T`.
+pub fn decode_body<'a, T: Deserialize<'a>>(buf: &'a [u8]) -> Result<T, postcard::Error> {
+    postcard::from_bytes(buf)
 }

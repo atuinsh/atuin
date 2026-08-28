@@ -16,7 +16,7 @@ mod screen;
 #[cfg(all(unix, feature = "server"))]
 pub use capture::{CommandCapture, CommandCaptureSink};
 #[cfg(all(unix, feature = "client"))]
-pub use ipc::{IpcClient, IpcConnection, IpcError};
+pub use ipc::{IpcClient, IpcConnectError, IpcConnection, IpcError};
 #[cfg(all(unix, feature = "server"))]
 pub use pty_proxy::{PtyProxy, Shell, init_script};
 #[cfg(all(unix, any(feature = "client", feature = "server")))]

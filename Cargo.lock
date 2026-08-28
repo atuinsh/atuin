@@ -610,6 +610,7 @@ dependencies = [
  "atuin-vt100",
  "clap",
  "crossterm",
+ "derive_more",
  "eyre",
  "portable-pty",
  "postcard",

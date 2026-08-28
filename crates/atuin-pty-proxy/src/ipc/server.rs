@@ -8,7 +8,7 @@ use tracing::{error, warn};
 
 use crate::ipc::controller::IpcController;
 use crate::ipc::domain::{Rep, Req};
-use crate::ipc::wire::{self, FrameError};
+use crate::ipc::wire::{self, EncodeError, Header, HeaderParseError};
 
 #[derive(Debug, Error)]
 pub enum IpcSpawnError {
@@ -35,6 +35,9 @@ enum StreamServiceError {
 
     #[error("peer sent an oversized message: {0} bytes")]
     TooLarge(usize),
+
+    #[error("peer sent an unsupported header version: {0}")]
+    BadVersion(u8),
 
     #[error("failed to decode message from peer: {0}")]
     Decode(postcard::Error),
@@ -141,34 +144,35 @@ impl IpcServerWorker {
         }
     }
 
-    /// Reads a request fro the server and parses it into a [`Req`] structure.
+    /// Reads a request from the server and parses it into a [`Req`] structure.
     ///
     /// Returns [`None`] if the client aborted the connection normally.
     fn read_request(
         stream: &mut UnixStream,
         scratch: &mut Vec<u8>,
     ) -> Result<Option<Req>, StreamServiceError> {
-        let mut len_bytes = [0u8; wire::LEN_PREFIX_BYTES];
-        if let Err(err) = stream.read_exact(&mut len_bytes) {
+        let mut header_bytes = [0u8; Header::SERIALIZED_LEN];
+        if let Err(err) = stream.read_exact(&mut header_bytes) {
             return match err.kind() {
                 ErrorKind::UnexpectedEof => Ok(None),
                 _ => Err(err.into()),
             };
         }
 
-        let len = wire::parse_len(len_bytes)?;
-        if scratch.len() < len {
-            scratch.resize(len, 0);
+        let header = Header::parse(header_bytes)?;
+        let body_len = (header.message_width as usize).saturating_sub(Header::SERIALIZED_LEN);
+        if scratch.len() < body_len {
+            scratch.resize(body_len, 0);
         }
-        let buf = &mut scratch[..len];
+        let buf = &mut scratch[..body_len];
         stream.read_exact(buf)?;
 
-        let req = wire::decode_body::<Req>(buf)?;
+        let req = wire::decode_body::<Req>(buf).map_err(StreamServiceError::Decode)?;
         Ok(Some(req))
     }
 
     fn write_reply(stream: &mut UnixStream, rep: &Rep) -> Result<(), StreamServiceError> {
-        let framed = wire::encode_frame(rep)?;
+        let framed = wire::try_encode(rep)?;
         stream.write_all(&framed)?;
         stream.flush()?;
 
@@ -176,12 +180,20 @@ impl IpcServerWorker {
     }
 }
 
-impl From<FrameError> for StreamServiceError {
-    fn from(err: FrameError) -> Self {
+impl From<EncodeError> for StreamServiceError {
+    fn from(err: EncodeError) -> Self {
         match err {
-            FrameError::TooLarge(len) => Self::TooLarge(len),
-            FrameError::Encode(err) => Self::Encode(err),
-            FrameError::Decode(err) => Self::Decode(err),
+            EncodeError::DataEncodingErr(err) => Self::Encode(err),
+            EncodeError::TooLong(len, _) => Self::TooLarge(len),
+        }
+    }
+}
+
+impl From<HeaderParseError> for StreamServiceError {
+    fn from(err: HeaderParseError) -> Self {
+        match err {
+            HeaderParseError::MessageTooLong(len, _) => Self::TooLarge(len as usize),
+            HeaderParseError::BadVersion(version) => Self::BadVersion(version),
         }
     }
 }
