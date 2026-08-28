@@ -7,6 +7,10 @@ pub mod postgres;
 
 pub use postgres::Postgres;
 
+pub mod sqlite;
+
+pub use sqlite::Sqlite;
+
 use std::fmt::Debug;
 
 use async_trait::async_trait;
