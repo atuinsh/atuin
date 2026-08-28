@@ -71,7 +71,7 @@ impl HistoryRecord {
             Self::Delete(id) => {
                 // 1 -> a history delete
                 encode::write_u8(&mut output, 1)?;
-                encode::write_str(&mut output, id.0.as_str())?;
+                encode::write_str(&mut output, &id.0.as_simple().to_string())?;
             }
         };
 
@@ -112,7 +112,7 @@ impl HistoryRecord {
                     );
                 }
 
-                Ok(Self::Delete(id.to_string().into()))
+                Ok(Self::Delete(id.parse()?))
             }
 
             n => {
@@ -478,7 +478,7 @@ mod tests {
     #[fixture]
     fn sample_history() -> History {
         History {
-            id: "018cd4fe81757cd2aee65cd7861f9c81".to_owned().into(),
+            id: "018cd4fe81757cd2aee65cd7861f9c81".parse().unwrap(),
             timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00),
             duration: 100,
             exit: 0,
@@ -526,7 +526,7 @@ mod tests {
     #[rstest]
     #[case::create(
         HistoryRecord::Create(History {
-            id: "018cd4fe81757cd2aee65cd7861f9c81".to_owned().into(),
+            id: "018cd4fe81757cd2aee65cd7861f9c81".parse().unwrap(),
             timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00),
             duration: 100,
             exit: 0,
@@ -553,7 +553,7 @@ mod tests {
         ]
     )]
     #[case::delete(
-        HistoryRecord::Delete("018cd4fe81757cd2aee65cd7861f9c81".to_string().into()),
+        HistoryRecord::Delete("018cd4fe81757cd2aee65cd7861f9c81".parse().unwrap()),
         vec![
             204, 1, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 56, 49, 55, 53, 55, 99, 100, 50,
             97, 101, 101, 54, 53, 99, 100, 55, 56, 54, 49, 102, 57, 99, 56, 49,
@@ -620,7 +620,7 @@ mod tests {
 
     fn history_n(n: usize) -> History {
         History {
-            id: format!("{n:032x}").into(),
+            id: format!("{n:032x}").parse().unwrap(),
             timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00) + Duration::seconds(n as i64),
             command: format!("command {n}"),
             ..sample_history()

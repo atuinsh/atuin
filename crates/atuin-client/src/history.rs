@@ -189,9 +189,17 @@ const LATEST_SERIALIZED_FIELDS: u32 = 13;
 /// [`LATEST_SERIALIZED_FIELDS`].
 const V2_AUTHOR_KIND_FIELD_NUMBER: u32 = 13;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, derive_more::Display, derive_more::From)]
-#[display("{_0}")]
-pub struct HistoryId(pub String);
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, derive_more::Display, derive_more::From)]
+#[display("{}", _0.as_simple())]
+pub struct HistoryId(pub uuid::Uuid);
+
+impl std::str::FromStr for HistoryId {
+    type Err = uuid::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(uuid::Uuid::parse_str(s)?))
+    }
+}
 
 /// Client-side history entry.
 ///
@@ -288,7 +296,7 @@ impl History {
         let shell = normalize_optional_string(shell);
 
         Self {
-            id: uuid_v7().as_simple().to_string().into(),
+            id: HistoryId::from(uuid_v7()),
             timestamp,
             command,
             cwd,
@@ -348,7 +356,7 @@ impl History {
         encode::write_u16(&mut output, Version::LATEST.as_int())?;
         encode::write_array_len(&mut output, LATEST_SERIALIZED_FIELDS)?;
 
-        encode::write_str(&mut output, &self.id.0)?;
+        encode::write_str(&mut output, &self.id.0.as_simple().to_string())?;
         encode::write_u64(&mut output, self.timestamp.unix_timestamp_nanos() as u64)?;
         encode::write_sint(&mut output, self.duration)?;
         encode::write_sint(&mut output, self.exit)?;
@@ -437,7 +445,7 @@ impl History {
         }
 
         Ok(Self {
-            id: id.into(),
+            id: id.parse()?,
             timestamp: OffsetDateTime::from_unix_nanos_u64(timestamp),
             duration,
             exit,
@@ -805,7 +813,7 @@ mod tests {
 
     #[rstest]
     #[case::basic(History {
-        id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
+        id: "66d16cbee7cd47538e5c5b8b44e9006e".parse().unwrap(),
         timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
         duration: 49206000,
         exit: 0,
@@ -820,7 +828,7 @@ mod tests {
         author_kind: None,
     })]
     #[case::deleted(History {
-        id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
+        id: "66d16cbee7cd47538e5c5b8b44e9006e".parse().unwrap(),
         timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
         duration: 49206000,
         exit: 0,
@@ -835,7 +843,7 @@ mod tests {
         author_kind: Some(AuthorKind::User),
     })]
     #[case::with_author_and_intent(History {
-        id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
+        id: "66d16cbee7cd47538e5c5b8b44e9006e".parse().unwrap(),
         timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
         duration: 49206000,
         exit: 0,
@@ -886,7 +894,7 @@ mod tests {
 
     fn expected_v2() -> History {
         History {
-            id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
+            id: "66d16cbee7cd47538e5c5b8b44e9006e".parse().unwrap(),
             timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
             duration: 49206000,
             exit: 0,

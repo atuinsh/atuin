@@ -75,7 +75,7 @@ mod tests {
 
     fn history(duration: i64) -> History {
         History {
-            id: HistoryId("018f011c-9a0a-7000-8000-000000000001".to_string()),
+            id: HistoryId("018f011c-9a0a-7000-8000-000000000001".parse().unwrap()),
             timestamp: OffsetDateTime::UNIX_EPOCH,
             duration,
             exit: 2,

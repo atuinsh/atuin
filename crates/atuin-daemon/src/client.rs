@@ -479,7 +479,7 @@ fn daemon_event_to_proto(event: DaemonEvent) -> crate::control::send_event_reque
         DaemonEvent::HistoryPruned => Event::HistoryPruned(HistoryPrunedEvent {}),
         DaemonEvent::HistoryRebuilt => Event::HistoryRebuilt(HistoryRebuiltEvent {}),
         DaemonEvent::HistoryDeleted { ids } => Event::HistoryDeleted(HistoryDeletedEvent {
-            ids: ids.into_iter().map(|id| id.0).collect(),
+            ids: ids.into_iter().map(|id| id.0.as_simple().to_string()).collect(),
         }),
         DaemonEvent::ForceSync => Event::ForceSync(ForceSyncEvent {}),
         DaemonEvent::SettingsReloaded => Event::SettingsReloaded(SettingsReloadedEvent {}),

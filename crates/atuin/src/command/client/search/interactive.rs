@@ -2040,7 +2040,7 @@ pub async fn history(
         match inspecting_id {
             Some(inspecting_id) => {
                 if inspecting.is_none() || inspecting_id != inspecting.clone().unwrap().id {
-                    inspecting = db.load(inspecting_id.0.as_str()).await?;
+                    inspecting = db.load(&inspecting_id.to_string()).await?;
                 }
             }
             _ => {

@@ -456,8 +456,7 @@ impl SemanticSvc for SemanticGrpcService {
 }
 
 fn history_id_from_str(value: Option<&str>) -> Option<HistoryId> {
-    let value = value?.trim();
-    (!value.is_empty()).then(|| HistoryId(value.to_string()))
+    value?.trim().parse().ok()
 }
 
 fn take_pending_history(
@@ -590,9 +589,26 @@ mod tests {
 
     use super::*;
 
+    /// Deterministically map an arbitrary test label to a valid, distinct [`HistoryId`].
+    ///
+    /// `HistoryId` is a UUID, so the old free-form string labels ("id-1", "first", ...) no longer
+    /// parse. This keeps distinct labels distinct while producing real UUIDs.
+    fn det_id(label: &str) -> HistoryId {
+        use std::hash::{Hash, Hasher};
+        let mut hi = std::collections::hash_map::DefaultHasher::new();
+        label.hash(&mut hi);
+        let mut lo = std::collections::hash_map::DefaultHasher::new();
+        (label, 0x9e37_79b9_u32).hash(&mut lo);
+        HistoryId(uuid::Uuid::from_u64_pair(hi.finish(), lo.finish()))
+    }
+
+    fn det_id_str(label: &str) -> String {
+        det_id(label).to_string()
+    }
+
     fn history(id: &str, session: &str, command: &str) -> History {
         History {
-            id: HistoryId(id.to_string()),
+            id: det_id(id),
             timestamp: OffsetDateTime::UNIX_EPOCH,
             duration: 0,
             exit: 0,
@@ -614,7 +630,7 @@ mod tests {
             command: String::new(),
             output: output.to_string(),
             exit_code: None,
-            history_id: history_id.map(str::to_string),
+            history_id: history_id.map(det_id_str),
             session_id: session_id.map(str::to_string),
             output_truncated: false,
             output_observed_bytes: output.len() as u64,
@@ -623,7 +639,7 @@ mod tests {
 
     fn command_output(state: &mut SemanticState, history_id: &str) -> CommandOutputReply {
         state.command_output(&CommandOutputRequest {
-            history_id: history_id.to_string(),
+            history_id: det_id_str(history_id),
             ranges: Vec::new(),
         })
     }
@@ -675,7 +691,7 @@ mod tests {
         assert!(state.record_capture(capture(Some("id-1"), Some("session-1"), "output")));
         state.record_history(history("id-1", "session-1", "different command"));
 
-        let capture_ref = state.history_index.get(&HistoryId("id-1".to_string())).unwrap();
+        let capture_ref = state.history_index.get(&det_id("id-1")).unwrap();
         let stored = state
             .sessions
             .get(&capture_ref.session_id)
@@ -729,7 +745,7 @@ mod tests {
         let first_output = "x".repeat(10);
         let second_output = "y";
         let (_, evicted_first) = session.push_with_limits(
-            HistoryId("first".to_string()),
+            det_id("first"),
             SemanticCommandRecord {
                 capture: capture(Some("first"), Some("session-1"), &first_output),
                 history: None,
@@ -740,7 +756,7 @@ mod tests {
         assert!(evicted_first.is_empty());
 
         let (_, evicted_second) = session.push_with_limits(
-            HistoryId("second".to_string()),
+            det_id("second"),
             SemanticCommandRecord {
                 capture: capture(Some("second"), Some("session-1"), second_output),
                 history: None,
@@ -750,7 +766,7 @@ mod tests {
         );
 
         assert_eq!(evicted_second.len(), 1);
-        assert_eq!(evicted_second[0].history_id, HistoryId("first".to_string()));
+        assert_eq!(evicted_second[0].history_id, det_id("first"));
         assert_eq!(session.records.len(), 1);
         assert_eq!(session.output_bytes, 1);
     }

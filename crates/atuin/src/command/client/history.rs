@@ -345,7 +345,7 @@ impl FormatKey for FmtHistory<'_> {
             "intent" => f.write_str(self.history.intent.as_deref().unwrap_or_default())?,
             "user" => f.write_str(self.history.cmd_origin.user().into_inner())?,
             "session" => f.write_str(&self.history.session)?,
-            "uuid" => f.write_str(&self.history.id.0)?,
+            "uuid" => write!(f, "{}", self.history.id)?,
             _ => return Err(FormatKeyError::UnknownKey),
         }
         Ok(())
@@ -455,7 +455,7 @@ async fn handle_start(
         debug!("failed to save history: {e}");
     }
 
-    Ok(Some(h.id.0.clone()))
+    Ok(Some(h.id.to_string()))
 }
 
 #[cfg(feature = "daemon")]
@@ -471,7 +471,7 @@ async fn handle_daemon_start(
         return Ok(None);
     };
 
-    let local_id = h.id.0.clone();
+    let local_id = h.id.to_string();
 
     // Attempt to start history via daemon, but silently ignore errors
     // to avoid breaking the shell when the daemon is unavailable or disk is full
@@ -646,7 +646,7 @@ struct TailJsonEvent<'a> {
 #[cfg(feature = "daemon")]
 #[derive(Serialize)]
 struct TailJsonHistory<'a> {
-    id: &'a str,
+    id: String,
     timestamp: String,
     timestamp_unix_ns: u64,
     command: &'a str,
@@ -689,7 +689,7 @@ impl TailEvent {
         Ok(Self {
             kind,
             history: History {
-                id: history.id.into(),
+                id: history.id.parse()?,
                 timestamp,
                 duration: history.duration,
                 exit: history.exit,
@@ -721,7 +721,7 @@ impl TailEvent {
         let payload = TailJsonEvent {
             event: self.kind.as_str(),
             history: TailJsonHistory {
-                id: &self.history.id.0,
+                id: self.history.id.to_string(),
                 timestamp: self.history.timestamp.to_offset(tz.0).display().ymd_hms().to_string(),
                 timestamp_unix_ns: u64::try_from(self.history.timestamp.unix_timestamp_nanos())
                     .context("history timestamp predates unix epoch")?,
@@ -781,7 +781,7 @@ impl TailEvent {
             "start",
             &self.history.timestamp.to_offset(tz.0).display().ymd_hms().to_string(),
         );
-        push_pretty_field(&mut out, "history", &self.history.id.0);
+        push_pretty_field(&mut out, "history", &self.history.id.to_string());
         push_pretty_field(&mut out, "session", &self.history.session);
         push_pretty_field(&mut out, "exit", &self.exit_display());
         push_pretty_field(&mut out, "duration", &self.duration_display());
@@ -1307,7 +1307,7 @@ mod tests {
         TailEvent {
             kind,
             history: History {
-                id: "history-id".to_owned().into(),
+                id: "018f011c-9a0a-7000-8000-000000000001".parse().unwrap(),
                 timestamp: datetime!(2026-04-09 17:18:19 UTC),
                 duration: 12_345_678,
                 exit: 0,

@@ -218,7 +218,7 @@ impl SearchEngine for Search {
         let ordered_results = span!(Level::TRACE, "reorder_results").in_scope(|| {
             let mut ordered_results = Vec::with_capacity(results.len());
             for id in &ids {
-                if let Some(history) = results.iter().find(|h| h.id.0 == *id) {
+                if let Some(history) = results.iter().find(|h| h.id.to_string() == *id) {
                     ordered_results.push(history.clone());
                 }
             }

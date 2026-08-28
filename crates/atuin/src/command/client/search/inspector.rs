@@ -311,7 +311,7 @@ pub fn draw_full(
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::history::{History, HistoryId, HistoryStats};
+    use atuin_client::history::{History, HistoryStats};
     use atuin_client::theme::ThemeManager;
     use atuin_domain::record::CmdOrigin;
     use ratatui::backend::TestBackend;
@@ -324,7 +324,7 @@ mod tests {
     #[fixture]
     fn mock_history_stats() -> (History, HistoryStats) {
         let history = History {
-            id: HistoryId::from("test1".to_string()),
+            id: "018f011c-9a0a-7000-8000-000000000001".parse().unwrap(),
             timestamp: OffsetDateTime::now_utc(),
             duration: 3,
             exit: 0,
@@ -340,7 +340,7 @@ mod tests {
             author_kind: None,
         };
         let next = History {
-            id: HistoryId::from("test2".to_string()),
+            id: "018f011c-9a0a-7000-8000-000000000002".parse().unwrap(),
             timestamp: OffsetDateTime::now_utc(),
             duration: 2,
             exit: 0,
@@ -356,7 +356,7 @@ mod tests {
             author_kind: None,
         };
         let prev = History {
-            id: HistoryId::from("test3".to_string()),
+            id: "018f011c-9a0a-7000-8000-000000000003".parse().unwrap(),
             timestamp: OffsetDateTime::now_utc(),
             duration: 1,
             exit: 0,

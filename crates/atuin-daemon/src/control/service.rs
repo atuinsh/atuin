@@ -3,7 +3,6 @@
 //! This gRPC service allows external processes (like CLI commands) to inject
 //! events into the daemon's event bus.
 
-use atuin_client::history::HistoryId;
 use tonic::{Request, Response, Status};
 use tracing::{Level, info, instrument};
 
@@ -61,7 +60,7 @@ fn proto_event_to_daemon_event(event: Event) -> DaemonEvent {
         Event::HistoryPruned(_) => DaemonEvent::HistoryPruned,
         Event::HistoryRebuilt(_) => DaemonEvent::HistoryRebuilt,
         Event::HistoryDeleted(e) => DaemonEvent::HistoryDeleted {
-            ids: e.ids.into_iter().map(HistoryId).collect(),
+            ids: e.ids.iter().filter_map(|id| id.parse().ok()).collect(),
         },
         Event::ForceSync(_) => DaemonEvent::ForceSync,
         Event::SettingsReloaded(_) => DaemonEvent::SettingsReloaded,
