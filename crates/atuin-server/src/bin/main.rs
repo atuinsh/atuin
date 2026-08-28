@@ -2,11 +2,8 @@
 
 use std::net::SocketAddr;
 
+use atuin_server::db::{DbType, MySql, Postgres, Sqlite};
 use atuin_server::{Settings, example_config, launch, launch_metrics_server};
-use atuin_server_database::DbType;
-use atuin_server_mysql::MySql;
-use atuin_server_postgres::Postgres;
-use atuin_server_sqlite::Sqlite;
 use clap::Parser;
 use eyre::{Context, Result, eyre};
 use tracing_subscriber::prelude::*;

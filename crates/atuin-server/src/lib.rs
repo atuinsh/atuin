@@ -3,9 +3,10 @@
 use std::future::Future;
 use std::net::SocketAddr;
 
-use atuin_server_database::Database;
 use axum::{Router, serve};
 use eyre::{Context, Result};
+
+use crate::db::Database;
 
 mod handlers;
 mod metrics;
