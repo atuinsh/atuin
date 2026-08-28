@@ -176,9 +176,7 @@ async fn run_inline_tui(
     // once the event channel exists) replaces it unless it's fresh. OSS
     // endpoints have no usage API, so both are skipped ("fresh" suppresses
     // the fetch).
-    let (cached_usage, usage_is_fresh) = if !ctx.endpoint_is_hub {
-        (None, true)
-    } else {
+    let (cached_usage, usage_is_fresh) = if ctx.endpoint_is_hub {
         let usage_key = crate::usage::cache_key(&ctx.token);
         match service.get_cached_usage(&usage_key).await {
             Ok(Some(cached_snapshot)) => {
@@ -193,6 +191,8 @@ async fn run_inline_tui(
                 (None, false)
             }
         }
+    } else {
+        (None, true)
     };
 
     let cwd = std::env::current_dir().ok().map(|p| p.to_string_lossy().into_owned());

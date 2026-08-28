@@ -91,8 +91,8 @@ impl Context {
     #[must_use]
     pub fn from_history(entry: &History) -> Self {
         Self {
-            session: entry.session.to_string(),
-            cwd: entry.cwd.to_string(),
+            session: entry.session.clone(),
+            cwd: entry.cwd.clone(),
             cmd_origin: entry.cmd_origin.clone(),
             host_id: String::new(),
             git_root: utils::in_git_repo(entry.cwd.as_str()),
@@ -729,11 +729,11 @@ impl Sqlite {
                             continue;
                         }
                         QueryToken::Or => {
-                            if !is_or {
+                            if is_or {
+                                format!("{glob}|{glob}")
+                            } else {
                                 is_or = true;
                                 continue;
-                            } else {
-                                format!("{glob}|{glob}")
                             }
                         }
                         QueryToken::MatchStart(term, _) => {

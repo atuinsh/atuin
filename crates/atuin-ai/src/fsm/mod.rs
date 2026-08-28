@@ -1165,7 +1165,11 @@ impl AgentFsm {
         // Turn is complete. Check if we need to continue (tool results to send back).
         // We continue if this turn had any client tool calls (the LLM needs to see
         // the results and respond).
-        if !self.ctx.current_turn_tool_ids.is_empty() {
+        if self.ctx.current_turn_tool_ids.is_empty() {
+            // No tools — turn is done, go idle
+            self.state = AgentState::Idle { confirmation: None };
+            vec![Effect::TurnEnded, Effect::Persist]
+        } else {
             // Continue conversation with tool results.
             // Don't clear tools — they persist for rendering history.
             // Clear turn IDs so the continuation turn doesn't loop.
@@ -1180,10 +1184,6 @@ impl AgentFsm {
                 messages,
                 session_id,
             }]
-        } else {
-            // No tools — turn is done, go idle
-            self.state = AgentState::Idle { confirmation: None };
-            vec![Effect::TurnEnded, Effect::Persist]
         }
     }
 

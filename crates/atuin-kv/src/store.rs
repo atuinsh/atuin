@@ -67,7 +67,7 @@ impl KvStore {
         for key in keys {
             let record = KvRecord::builder()
                 .namespace(namespace.to_string())
-                .key(key.to_string())
+                .key(key.clone())
                 .value(None)
                 .build();
 

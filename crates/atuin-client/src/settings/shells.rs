@@ -2,7 +2,7 @@ use atuin_common::filter::{self, OrFilter};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Controls which shells' commands are included in interactive search.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Shells {
     #[default]
     /// Include commands run from the current shell, or commands that have no recorded shell.

@@ -83,10 +83,10 @@ pub async fn execute_script_interactive(
     debug!("creating temp file at {}", temp_path.display());
 
     // Extract interpreter from shebang for fallback execution
-    let interpreter = if !shebang.is_empty() {
-        shebang.trim_start_matches("#!").trim().to_string()
-    } else {
+    let interpreter = if shebang.is_empty() {
         "/usr/bin/env bash".to_string()
+    } else {
+        shebang.trim_start_matches("#!").trim().to_string()
     };
 
     // Write script content to the temp file, including the shebang
