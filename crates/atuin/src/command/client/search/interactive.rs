@@ -1501,7 +1501,13 @@ struct SavedScreen {
 /// ```
 #[cfg(all(unix, feature = "pty-proxy"))]
 async fn fetch_screen_state(socket_path: &str) -> Option<SavedScreen> {
-    let mut conn = atuin_pty_proxy::IpcClient::new(socket_path).connect().await.ok()?;
+    // Absent variable => a legacy proxy that only speaks the V0 push protocol.
+    let protocol = std::env::var("ATUIN_PTY_PROXY_PROTOCOL").ok().and_then(|v| v.parse().ok());
+    let mut conn = atuin_pty_proxy::IpcClient::new(socket_path)
+        .with_protocol(protocol)
+        .connect()
+        .await
+        .ok()?;
     let snap = conn.dump_screen().await.ok()?;
 
     Some(SavedScreen {

@@ -56,6 +56,19 @@ pub struct ScreenSnapshot {
 }
 
 impl ScreenSnapshot {
+    #[cfg(feature = "client")]
+    pub(crate) fn from_parts(
+        screen_dims: (u16, u16),
+        cursor_pos: (u16, u16),
+        rows: Vec<String>,
+    ) -> Self {
+        Self {
+            screen_dims,
+            cursor_pos,
+            rows,
+        }
+    }
+
     #[must_use]
     pub fn row_count(&self) -> u16 {
         self.screen_dims.0

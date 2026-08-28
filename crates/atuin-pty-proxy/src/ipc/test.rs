@@ -55,6 +55,30 @@ fn canned_server(sock: &Path, rep: Rep) -> JoinHandle<()> {
     })
 }
 
+/// A legacy (v18.20.1) proxy: on connect, push the raw screen dump and close.
+fn v0_server(
+    sock: &Path,
+    dims: (u16, u16),
+    cursor: (u16, u16),
+    lines: Vec<String>,
+) -> JoinHandle<()> {
+    let listener = StdUnixListener::bind(sock).unwrap();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&dims.0.to_be_bytes());
+        buf.extend_from_slice(&dims.1.to_be_bytes());
+        buf.extend_from_slice(&cursor.0.to_be_bytes());
+        buf.extend_from_slice(&cursor.1.to_be_bytes());
+        for line in &lines {
+            buf.extend_from_slice(&u32::try_from(line.len()).unwrap().to_be_bytes());
+            buf.extend_from_slice(line.as_bytes());
+        }
+        stream.write_all(&buf).unwrap();
+        stream.flush().unwrap();
+    })
+}
+
 #[rstest]
 #[case(24, 80, "hello world")]
 #[case(10, 40, "another line")]
@@ -68,7 +92,11 @@ async fn dump_screen_reflects_live_screen(
 ) {
     serve(sock.path(), rows, cols, seed.as_bytes());
 
-    let mut conn = IpcClient::new(sock.path()).connect().await.expect("connect");
+    let mut conn = IpcClient::new(sock.path())
+        .with_protocol(Some(PROTOCOL_VERSION))
+        .connect()
+        .await
+        .expect("connect");
     let snap = conn.dump_screen().await.expect("dump_screen");
 
     assert_eq!((snap.row_count(), snap.col_count()), (rows, cols));
@@ -87,11 +115,19 @@ async fn dump_screen_reflects_live_screen(
 async fn drop_lets_server_serve_the_next_client(sock: TempSock) {
     serve(sock.path(), 10, 40, b"screen");
 
-    let mut first = IpcClient::new(sock.path()).connect().await.expect("connect 1");
+    let mut first = IpcClient::new(sock.path())
+        .with_protocol(Some(PROTOCOL_VERSION))
+        .connect()
+        .await
+        .expect("connect 1");
     first.dump_screen().await.expect("dump 1");
     drop(first);
 
-    let mut second = IpcClient::new(sock.path()).connect().await.expect("connect 2");
+    let mut second = IpcClient::new(sock.path())
+        .with_protocol(Some(PROTOCOL_VERSION))
+        .connect()
+        .await
+        .expect("connect 2");
     assert_eq!(second.dump_screen().await.expect("dump 2").col_count(), 40);
 }
 
@@ -101,7 +137,11 @@ async fn connect_rejects_version_mismatch(sock: TempSock) {
     let theirs = PROTOCOL_VERSION + 1;
     let server = canned_server(sock.path(), Rep::Hello(HelloRep { version: theirs }));
 
-    let err = IpcClient::new(sock.path()).connect().await.unwrap_err();
+    let err = IpcClient::new(sock.path())
+        .with_protocol(Some(PROTOCOL_VERSION))
+        .connect()
+        .await
+        .unwrap_err();
 
     assert!(
         matches!(err, IpcConnectError::ProtocolMismatch { ours, theirs: got }
@@ -119,7 +159,11 @@ async fn connect_rejects_wrong_reply_variant(sock: TempSock) {
     });
     let server = canned_server(sock.path(), reply);
 
-    let err = IpcClient::new(sock.path()).connect().await.unwrap_err();
+    let err = IpcClient::new(sock.path())
+        .with_protocol(Some(PROTOCOL_VERSION))
+        .connect()
+        .await
+        .unwrap_err();
 
     assert!(
         matches!(err, IpcConnectError::Handshake(IpcError::UnexpectedReply)),
@@ -131,6 +175,27 @@ async fn connect_rejects_wrong_reply_variant(sock: TempSock) {
 #[rstest]
 #[tokio::test]
 async fn connect_fails_without_server(sock: TempSock) {
-    let err = IpcClient::new(sock.path()).connect().await.unwrap_err();
+    let err = IpcClient::new(sock.path())
+        .with_protocol(Some(PROTOCOL_VERSION))
+        .connect()
+        .await
+        .unwrap_err();
     assert!(matches!(err, IpcConnectError::Connect { .. }), "unexpected error: {err:?}");
+}
+
+#[rstest]
+#[tokio::test]
+async fn v0_client_reads_legacy_push(sock: TempSock) {
+    let server = v0_server(sock.path(), (10, 40), (2, 5), vec!["hello".into(), "world".into()]);
+
+    // No advertised protocol => the client speaks the legacy V0 push protocol.
+    let mut conn = IpcClient::new(sock.path()).connect().await.expect("connect");
+    let snap = conn.dump_screen().await.expect("dump_screen");
+
+    assert_eq!((snap.row_count(), snap.col_count()), (10, 40));
+    assert_eq!((snap.cursor_row(), snap.cursor_col()), (2, 5));
+    let got: Vec<&str> = snap.formatted_rows().iter().map(String::as_str).collect();
+    assert_eq!(got, ["hello", "world"]);
+
+    server.join().unwrap();
 }
