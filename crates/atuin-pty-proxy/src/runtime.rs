@@ -63,9 +63,10 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     } else {
         cmd.env_remove("ATUIN_PTY_PROXY_SOCKET");
     }
-    // Advertise the IPC protocol version so a newer client can detect that this
-    // proxy speaks the framed request/response protocol (as opposed to a legacy
-    // proxy that only pushes a raw screen dump on connect).
+    // Legacy PTY proxy versions didn't have a mechanism to announce the version over the protocol,
+    // so passing the environment variable here is a relatively good idea.
+    //
+    // TODO(markovejnovic): Remove this, at some point.
     cmd.env("ATUIN_PTY_PROXY_PROTOCOL", crate::ipc::domain::PROTOCOL_VERSION.to_string());
     cmd.env("ATUIN_PTY_PROXY_ACTIVE", "1");
     // Atuin sets a restrictive process-wide umask on startup to protect the

@@ -1491,17 +1491,8 @@ struct SavedScreen {
 }
 
 /// Connect to atuin pty-proxy's Unix socket and fetch the current screen state.
-///
-/// The wire format is:
-/// ```text
-/// [rows: u16 BE][cols: u16 BE][cursor_row: u16 BE][cursor_col: u16 BE]
-/// [row_0_len: u32 BE][row_0_bytes...]
-/// [row_1_len: u32 BE][row_1_bytes...]
-/// ...
-/// ```
 #[cfg(all(unix, feature = "pty-proxy"))]
 async fn fetch_screen_state(socket_path: &str) -> Option<SavedScreen> {
-    // Absent variable => a legacy proxy that only speaks the V0 push protocol.
     let protocol = std::env::var("ATUIN_PTY_PROXY_PROTOCOL").ok().and_then(|v| v.parse().ok());
     let mut conn = atuin_pty_proxy::IpcClient::new(socket_path)
         .with_protocol(protocol)

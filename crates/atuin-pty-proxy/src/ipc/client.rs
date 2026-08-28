@@ -152,7 +152,7 @@ impl IpcClient {
 #[derive(Debug)]
 pub enum IpcConnection {
     /// Legacy proxy (v18.20.1 and earlier): pushes a raw screen dump on connect.
-    #[deprecated(note = "legacy pty-proxy push protocol (<= 18.20.1); kept only for compatibility")]
+    #[allow(deprecated, reason = "legacy pty-proxy ipc protocol")]
     V0(V0Connection),
     /// Framed request/response protocol.
     V1(V1Connection),
@@ -179,6 +179,7 @@ impl IpcConnection {
 /// Legacy (V0) connection. The old proxy has no request/response protocol: on
 /// each connect it writes a raw screen dump and closes, so every `dump_screen`
 /// opens a fresh connection and reads to EOF.
+#[deprecated]
 #[derive(Debug)]
 pub struct V0Connection {
     sock_path: PathBuf,
@@ -186,6 +187,7 @@ pub struct V0Connection {
     request_timeout: Duration,
 }
 
+#[allow(deprecated, reason = "legacy pty-proxy ipc protocol")]
 impl V0Connection {
     async fn dump_screen(&self) -> Result<ScreenSnapshot, IpcError> {
         let mut stream = timeout(self.connect_timeout, UnixStream::connect(&self.sock_path))
@@ -199,6 +201,7 @@ impl V0Connection {
             .map_err(|_| IpcError::Timeout)?
             .map_err(IpcError::Io)?;
 
+        #[allow(deprecated, reason = "legacy pty-proxy ipc protocol")]
         parse_v0_screen(&data)
     }
 }
@@ -206,6 +209,7 @@ impl V0Connection {
 /// Parse the legacy screen-dump wire format: a `[rows][cols][cursor_row]
 /// [cursor_col]` big-endian `u16` head, then each row as a big-endian `u32`
 /// length followed by that many UTF-8 bytes.
+#[deprecated]
 fn parse_v0_screen(data: &[u8]) -> Result<ScreenSnapshot, IpcError> {
     let head: [u8; 8] =
         data.get(..8).and_then(|h| h.try_into().ok()).ok_or(IpcError::MalformedScreen)?;
