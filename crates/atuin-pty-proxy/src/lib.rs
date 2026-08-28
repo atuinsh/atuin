@@ -55,5 +55,5 @@ mod unsupported {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(unix), feature = "server"))]
 pub use unsupported::PtyProxy;
