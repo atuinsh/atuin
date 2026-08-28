@@ -65,6 +65,7 @@ async fn check_token(State(caps): State<Arc<CapServer>>, request: Request, next:
 pub trait CapabilitiesRouterExt {
     /// Layer the capability-negotiation middleware onto this router, rejecting requests whose
     /// capability token is stale.
+    #[must_use]
     fn negotiate_capabilities(self, caps: Arc<CapServer>) -> Self;
 }
 

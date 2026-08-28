@@ -230,6 +230,7 @@ pub trait FilterStorage: Ord + AsRef<[Self::Item]> + sealed::Sealed {
 ///
 /// This trait is implemented for [`Vec`] and mutable references to slices.
 pub trait FilterStorageMut: FilterStorage + AsMut<[Self::Item]> {
+    #[must_use]
     fn dedup(self) -> Self;
 }
 

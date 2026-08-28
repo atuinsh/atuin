@@ -29,7 +29,7 @@ impl From<(&String, &String)> for DangerLevel {
         let notes = if danger_notes.is_empty() {
             None
         } else {
-            Some(danger_notes.to_string())
+            Some(danger_notes.clone())
         };
 
         match danger_level.as_str() {
@@ -67,7 +67,7 @@ impl From<(&String, &String)> for ConfidenceLevel {
         let notes = if confidence_notes.is_empty() {
             None
         } else {
-            Some(confidence_notes.to_string())
+            Some(confidence_notes.clone())
         };
 
         match confidence_level.as_str() {

@@ -15,7 +15,6 @@ async fn server() -> TestServer {
 #[tokio::test]
 async fn registration(#[future] server: TestServer) {
     let (address, shutdown, server_task) = server.await;
-    dbg!(&address);
 
     // -- REGISTRATION --
 
@@ -79,7 +78,6 @@ async fn change_password(#[future] server: TestServer) {
 #[tokio::test]
 async fn multi_user_test(#[future] server: TestServer) {
     let (address, shutdown, server_task) = server.await;
-    dbg!(&address);
 
     // -- REGISTRATION --
 

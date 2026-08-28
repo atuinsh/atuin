@@ -104,16 +104,16 @@ impl ToolOutcome {
 
                 parts.push(format!("Duration: {duration_ms}ms"));
 
-                if !stdout.is_empty() {
-                    parts.push(format!("stdout:\n{stdout}"));
-                } else {
+                if stdout.is_empty() {
                     parts.push("stdout: (empty)".to_string());
+                } else {
+                    parts.push(format!("stdout:\n{stdout}"));
                 }
 
-                if !stderr.is_empty() {
-                    parts.push(format!("stderr:\n{stderr}"));
-                } else {
+                if stderr.is_empty() {
                     parts.push("stderr: (empty)".to_string());
+                } else {
+                    parts.push(format!("stderr:\n{stderr}"));
                 }
 
                 if *interrupted {

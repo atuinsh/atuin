@@ -230,7 +230,7 @@ impl HistorySvc for HistoryGrpcService {
                 .await
                 .map_err(|e| Status::internal(format!("failed to write to db: {e:?}")))?;
 
-            tracing::info!(id = id.0.to_string(), duration = history.duration, "end history");
+            tracing::info!(id = id.0.clone(), duration = history.duration, "end history");
 
             // Push to record store
             let (record_id, idx) = history_store

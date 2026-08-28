@@ -447,6 +447,7 @@ impl DaemonBuilder {
     /// Register a component.
     ///
     /// Components are started in registration order and stopped in reverse order.
+    #[must_use]
     pub fn component(mut self, component: impl Component) -> Self {
         self.components.push(component.into());
         self
