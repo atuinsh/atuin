@@ -229,7 +229,7 @@ impl RecordStatus {
 
     /// Insert a new tail record into the store
     pub fn set(&mut self, tail: Record<DecryptedData>) {
-        self.set_raw(RecordSeriesKey::new(tail.host.id, tail.tag), tail.idx)
+        self.set_raw(RecordSeriesKey::new(tail.host.id, tail.tag), tail.idx);
     }
 
     pub fn set_raw(&mut self, series: RecordSeriesKey, tail_id: RecordIdx) {
