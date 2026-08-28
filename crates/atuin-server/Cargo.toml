@@ -49,6 +49,19 @@ derive_more = { workspace = true }
 time = { workspace = true }
 uuid = { workspace = true }
 sqlx = { workspace = true, features = ["postgres", "sqlite", "mysql", "regexp", "tls-native-tls"] }
+# sea-orm rides on the SAME sqlx 0.9 the workspace already pins (it requires
+# sqlx ^0.9), so cargo unifies to one sqlx + one bundled sqlite. default-features
+# is off deliberately: the defaults pull chrono + rust_decimal, and this
+# workspace uses `time`. runtime-tokio-native-tls matches the sqlx tls above.
+sea-orm = { version = "2.0.2", default-features = false, features = [
+  "macros",
+  "sqlx-postgres",
+  "sqlx-mysql",
+  "sqlx-sqlite",
+  "runtime-tokio-native-tls",
+  "with-uuid",
+  "with-time",
+] }
 
 # Integration tests in tests/ spin up a real server and drive it with the
 # client's api_client. atuin-client is only a dev dependency here so the client
