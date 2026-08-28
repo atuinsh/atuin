@@ -6,7 +6,7 @@ use sqlx::postgres::PgPoolOptions;
 use tracing::instrument;
 
 use super::models::{DbRecord, NewSession, NewUser, RecordSeriesPoint, Session, User};
-use super::{Database, DbError, DbResult};
+use super::{ConnectableDatabase, Database, DbError, DbResult};
 
 const MIN_PG_VERSION: u32 = 14;
 
@@ -16,7 +16,7 @@ pub struct Postgres {
 }
 
 #[async_trait]
-impl Database for Postgres {
+impl ConnectableDatabase for Postgres {
     type Url = PostgresDbUrl;
 
     async fn connect(url: PostgresDbUrl) -> DbResult<Self> {
@@ -44,7 +44,10 @@ impl Database for Postgres {
 
         Ok(Self { pool })
     }
+}
 
+#[async_trait]
+impl Database for Postgres {
     #[instrument(skip_all)]
     async fn get_session(&self, token: &str) -> DbResult<Session> {
         db::query_as("select id, user_id, token from sessions where token = $1")

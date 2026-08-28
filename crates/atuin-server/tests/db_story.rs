@@ -6,7 +6,7 @@ use atuin_domain::record::{
     EncryptedData, Host, HostId, Record, RecordIdx, RecordSeriesKey, RecordTag,
 };
 use atuin_server::db::models::{NewSession, NewUser, User};
-use atuin_server::db::{Database, DbError, DbSettings, MySql, Postgres, Sqlite};
+use atuin_server::db::{ConnectableDatabase, DbError, DbSettings, MySql, Postgres, Sqlite};
 use rstest::rstest;
 use sqlx::migrate::MigrateDatabase;
 use url::Url;
@@ -95,7 +95,7 @@ async fn test_full_db_story() -> eyre::Result<()> {
     }
 }
 
-async fn run_the_test<DB: Database>(url: DB::Url) -> eyre::Result<()> {
+async fn run_the_test<DB: ConnectableDatabase>(url: DB::Url) -> eyre::Result<()> {
     let db = DB::connect(url).await?;
     // register a user
     let new_user = NewUser {

@@ -4,7 +4,6 @@ use metrics::counter;
 use serde::Deserialize;
 use tracing::{error, instrument};
 
-use crate::db::Database;
 use crate::handlers::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::router::{AppState, UserAuth};
 
@@ -12,10 +11,10 @@ use crate::router::{AppState, UserAuth};
 pub struct DeleteParams {}
 
 #[instrument(skip_all, err(level = "warn"), fields(user.id = user.id))]
-pub async fn delete<DB: Database>(
+pub async fn delete(
     _params: Query<DeleteParams>,
     UserAuth(user): UserAuth,
-    state: State<AppState<DB>>,
+    state: State<AppState>,
 ) -> Result<(), ErrorResponseStatus<'static>> {
     let State(AppState { database, .. }) = state;
 

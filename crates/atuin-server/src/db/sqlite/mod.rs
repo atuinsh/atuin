@@ -8,7 +8,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use tracing::instrument;
 
 use super::models::{DbRecord, NewSession, NewUser, RecordSeriesPoint, Session, User};
-use super::{Database, DbError, DbResult};
+use super::{ConnectableDatabase, Database, DbError, DbResult};
 
 #[derive(Clone)]
 pub struct Sqlite {
@@ -16,7 +16,7 @@ pub struct Sqlite {
 }
 
 #[async_trait]
-impl Database for Sqlite {
+impl ConnectableDatabase for Sqlite {
     type Url = SqliteDbUrl;
 
     async fn connect(url: SqliteDbUrl) -> DbResult<Self> {
@@ -32,7 +32,10 @@ impl Database for Sqlite {
 
         Ok(Self { pool })
     }
+}
 
+#[async_trait]
+impl Database for Sqlite {
     #[instrument(skip_all)]
     async fn get_session(&self, token: &str) -> DbResult<Session> {
         db::query_as("select id, user_id, token from sessions where token = $1")

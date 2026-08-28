@@ -6,7 +6,7 @@ use sqlx::mysql::MySqlPoolOptions;
 use tracing::instrument;
 
 use super::models::{DbRecord, NewSession, NewUser, RecordSeriesPoint, Session, User};
-use super::{Database, DbError, DbResult};
+use super::{ConnectableDatabase, Database, DbError, DbResult};
 
 #[derive(Clone)]
 pub struct MySql {
@@ -14,7 +14,7 @@ pub struct MySql {
 }
 
 #[async_trait]
-impl Database for MySql {
+impl ConnectableDatabase for MySql {
     type Url = MysqlDbUrl;
 
     async fn connect(url: MysqlDbUrl) -> DbResult<Self> {
@@ -26,7 +26,10 @@ impl Database for MySql {
 
         Ok(Self { pool })
     }
+}
 
+#[async_trait]
+impl Database for MySql {
     #[instrument(skip_all)]
     async fn get_session(&self, token: &str) -> DbResult<Session> {
         db::query_as("select id, user_id, token from sessions where token = ?")
