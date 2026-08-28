@@ -383,7 +383,7 @@ mod tests {
 
     #[test]
     fn format_iso8601_produces_valid_format() {
-        let dt = OffsetDateTime::from_unix_timestamp(1700000000).unwrap();
+        let dt = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
         let formatted = format_iso8601(dt);
         assert_eq!(formatted.len(), 20);
         assert!(formatted.starts_with("2023-"));

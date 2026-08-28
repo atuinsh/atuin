@@ -732,7 +732,7 @@ mod tests {
             id: RecordId(Uuid::from_bytes([
                 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
             ])),
-            idx: 12345678910111213141_u64,
+            idx: 12_345_678_910_111_213_141_u64,
             version: "  this is the \0\0\0 version\n",
             tag: "@@ \0 TAG\0",
             host: HostId(Uuid::from_bytes([

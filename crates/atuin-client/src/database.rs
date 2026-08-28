@@ -1534,7 +1534,7 @@ mod test {
         #[case] expected: usize,
         #[case] expect_ellie_match: bool,
     ) {
-        let t = OffsetDateTime::from_unix_timestamp(1708330400).unwrap();
+        let t = OffsetDateTime::from_unix_timestamp(1_708_330_400).unwrap();
 
         let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
         new_history_item_at(&db, "ls /home/ellie", Some(t)).await.unwrap();

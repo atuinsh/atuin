@@ -1368,7 +1368,7 @@ impl Settings {
         // Default to the current version, and if that doesn't parse, a version so high it's unlikely to ever
         // suggest upgrading.
         let current =
-            Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(Version::new(100000, 0, 0));
+            Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(Version::new(100_000, 0, 0));
 
         if !self.needs_update_check().await? {
             let meta = Self::meta_store().await?;
@@ -1401,7 +1401,7 @@ impl Settings {
         }
 
         let current =
-            Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(Version::new(100000, 0, 0));
+            Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(Version::new(100_000, 0, 0));
 
         let latest = self.latest_version().await;
 
