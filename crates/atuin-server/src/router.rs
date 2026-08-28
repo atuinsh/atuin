@@ -23,16 +23,13 @@ use crate::settings::Settings;
 
 pub struct UserAuth(pub User);
 
-impl<DB> FromRequestParts<AppState<DB>> for UserAuth
-where
-    DB: Database + Send + Sync,
-{
+impl FromRequestParts<AppState> for UserAuth {
     type Rejection = ErrorResponseStatus<'static>;
 
     #[tracing::instrument(name = "auth", skip_all)]
     async fn from_request_parts(
         req: &mut Parts,
-        state: &AppState<DB>,
+        state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         let auth_header = req.headers.get(http::header::AUTHORIZATION).ok_or_else(|| {
             tracing::debug!("request is missing the authorization header");
@@ -99,8 +96,8 @@ async fn semver(request: Request, next: Next) -> Response {
 }
 
 #[derive(Clone)]
-pub struct AppState<DB: Database> {
-    pub database: DB,
+pub struct AppState {
+    pub database: Arc<dyn Database>,
     pub settings: Settings,
 }
 
@@ -115,7 +112,7 @@ fn capabilities() -> CapServer {
         .expect("PageSizeCap is registered exactly once")
 }
 
-pub fn router<DB: Database>(database: DB, settings: Settings) -> Router {
+pub fn router(database: Arc<dyn Database>, settings: Settings) -> Router {
     // Advertise the self-referential capabilities capability, so every server that speaks the
     // protocol carries at least one concrete capability a client can observe.
     let caps = Arc::new(capabilities());
