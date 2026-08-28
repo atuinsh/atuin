@@ -1,14 +1,63 @@
+use std::env::{self, temp_dir};
+
 use atuin_common::utils::{crypto_random_string, uuid_v7};
 use atuin_domain::record::{
     EncryptedData, Host, HostId, Record, RecordIdx, RecordSeriesKey, RecordTag,
 };
-use atuin_server_database::models::{NewSession, NewUser, User};
-use atuin_server_database::{Database, DbSettings, DbType};
-use atuin_server_mysql::MySql;
-use atuin_server_postgres::Postgres;
-use atuin_server_sqlite::Sqlite;
+use atuin_server::db::models::{NewSession, NewUser, User};
+use atuin_server::db::{Database, DbSettings, DbType, MySql, Postgres, Sqlite};
 use rstest::rstest;
-use tests_database::helpers::{create_test_db, destroy_test_db};
+use snowflake_uid::{Config, Generator};
+use sqlx::migrate::MigrateDatabase;
+use url::Url;
+
+fn get_settings(env_uri: Option<String>) -> eyre::Result<DbSettings> {
+    let db_uri = env_uri.unwrap_or_else(|| {
+        let dir = temp_dir();
+        let file = dir.join("atuin_test_db_");
+        let filename = file.to_str().unwrap();
+        format!("sqlite://{filename}")
+    });
+
+    let mut url = Url::parse(&db_uri)?;
+    let cfg = Config::default();
+    let mut generator = Generator::from(cfg, 0);
+    let snowflake = generator.get();
+
+    let unique_path = format!("{}{snowflake}", url.path());
+    url.set_path(&unique_path);
+
+    let db_uri = url.to_string();
+
+    Ok(DbSettings {
+        db_uri,
+        read_db_uri: None,
+    })
+}
+
+async fn create_test_db() -> eyre::Result<DbSettings> {
+    let var = env::var("ATUIN_TEST_DB_URI").ok();
+    let settings = get_settings(var)?;
+
+    match settings.db_type() {
+        DbType::Postgres => sqlx::Postgres::create_database(&settings.db_uri).await?,
+        DbType::Sqlite => sqlx::Sqlite::create_database(&settings.db_uri).await?,
+        DbType::MySql => sqlx::MySql::create_database(&settings.db_uri).await?,
+        DbType::Unknown => todo!(),
+    };
+
+    Ok(settings)
+}
+
+async fn destroy_test_db(settings: &DbSettings) -> eyre::Result<()> {
+    match settings.db_type() {
+        DbType::Postgres => sqlx::Postgres::drop_database(&settings.db_uri).await?,
+        DbType::Sqlite => sqlx::Sqlite::drop_database(&settings.db_uri).await?,
+        DbType::MySql => sqlx::MySql::drop_database(&settings.db_uri).await?,
+        DbType::Unknown => todo!(),
+    };
+    Ok(())
+}
 
 struct TestDb {
     settings: DbSettings,
@@ -151,4 +200,25 @@ fn generate_record(host: &Host, idx: RecordIdx) -> Record<EncryptedData> {
         .tag(RecordTag::History)
         .data(data)
         .build()
+}
+
+#[cfg(test)]
+mod tests {
+    use regex::Regex;
+    use rstest::rstest;
+
+    use super::get_settings;
+
+    #[rstest]
+    #[case::none(None, r"sqlite://.*[\\/]atuin_test_db_\d+")]
+    #[case::with_param(
+        Some("postgres://user:pass@host/database_?mode=ssl".into()),
+        r"postgres://user:pass@host/database_\d+\?mode=ssl"
+    )]
+    fn settings(#[case] input: Option<String>, #[case] pattern: &str) -> eyre::Result<()> {
+        let settings = get_settings(input)?;
+        let re = Regex::new(pattern)?;
+        assert!(re.is_match(&settings.db_uri), "{}", &settings.db_uri);
+        Ok(())
+    }
 }

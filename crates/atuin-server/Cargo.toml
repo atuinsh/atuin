@@ -59,6 +59,8 @@ rstest = { workspace = true }
 futures-util = "0.3"
 tracing-tree = "0.4"
 tower = { workspace = true, features = ["util"] }
+snowflake_uid = "0.1.1"
+regex = { workspace = true }
 
 [lints]
 workspace = true
