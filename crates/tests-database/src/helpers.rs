@@ -37,7 +37,8 @@ pub async fn create_test_db() -> eyre::Result<DbSettings> {
     match settings.db_type() {
         DbType::Postgres => sqlx::Postgres::create_database(&settings.db_uri).await?,
         DbType::Sqlite => sqlx::Sqlite::create_database(&settings.db_uri).await?,
-        atuin_server_database::DbType::Unknown => todo!(),
+        DbType::MySql => sqlx::MySql::create_database(&settings.db_uri).await?,
+        DbType::Unknown => todo!(),
     };
 
     Ok(settings)
@@ -48,6 +49,7 @@ pub async fn destroy_test_db(settings: &DbSettings) -> eyre::Result<()> {
     match settings.db_type() {
         DbType::Postgres => sqlx::Postgres::drop_database(&settings.db_uri).await?,
         DbType::Sqlite => sqlx::Sqlite::drop_database(&settings.db_uri).await?,
+        DbType::MySql => sqlx::MySql::drop_database(&settings.db_uri).await?,
         DbType::Unknown => todo!(),
     };
     Ok(())

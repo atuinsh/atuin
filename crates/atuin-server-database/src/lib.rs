@@ -34,6 +34,7 @@ pub type DbResult<T> = Result<T, DbError>;
 pub enum DbType {
     Postgres,
     Sqlite,
+    MySql,
     Unknown,
 }
 
@@ -51,6 +52,8 @@ impl DbSettings {
             DbType::Postgres
         } else if self.db_uri.starts_with("sqlite:") {
             DbType::Sqlite
+        } else if self.db_uri.starts_with("mysql://") {
+            DbType::MySql
         } else {
             DbType::Unknown
         }
@@ -69,7 +72,7 @@ fn redact_db_uri(uri: &str) -> String {
 // Do our best to redact passwords so they're not logged in the event of an error.
 impl Debug for DbSettings {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.db_type() == DbType::Postgres {
+        if matches!(self.db_type(), DbType::Postgres | DbType::MySql) {
             let redacted_uri = redact_db_uri(&self.db_uri);
             let redacted_read_uri = self.read_db_uri.as_ref().map(|uri| redact_db_uri(uri));
             f.debug_struct("DbSettings")
