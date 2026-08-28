@@ -1,5 +1,3 @@
-mod wrappers;
-
 use async_trait::async_trait;
 use atuin_common::db;
 use atuin_domain::record::{
@@ -9,9 +7,9 @@ use sqlx::mysql::MySqlPoolOptions;
 use tracing::instrument;
 use uuid::Uuid;
 
-use self::wrappers::DbRecord;
 use super::models::{NewSession, NewUser, Session, User};
 use super::shared::{build_status, shape_next_records};
+use super::wrappers::DbRecord;
 use super::{Database, DbError, DbResult, DbSettings};
 
 #[derive(Clone)]
@@ -235,17 +233,9 @@ impl Database for MySql {
         const STATUS_SQL: &str =
             "select host, tag, max(idx) from store where user_id = ? group by host, tag";
 
-        let res: Vec<(Vec<u8>, String, i64)> =
+        let res: Vec<(Uuid, String, i64)> =
             db::query_as(STATUS_SQL).bind(user.id).fetch_all(self.read_pool()).await?;
 
-        let rows = res
-            .into_iter()
-            .map(|(host, tag, idx)| {
-                let host_uuid = Uuid::from_slice(&host).map_err(|e| DbError::Other(e.into()))?;
-                Ok::<_, DbError>((HostId(host_uuid), tag, idx))
-            })
-            .collect::<DbResult<Vec<_>>>()?;
-
-        Ok(build_status(rows))
+        Ok(build_status(res.into_iter().map(|(host, tag, idx)| (HostId(host), tag, idx))))
     }
 }

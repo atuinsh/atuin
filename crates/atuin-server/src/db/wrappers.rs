@@ -32,3 +32,4 @@ macro_rules! impl_db_record_from_row {
 
 impl_db_record_from_row!(sqlx::postgres::PgRow);
 impl_db_record_from_row!(sqlx::sqlite::SqliteRow);
+impl_db_record_from_row!(sqlx::mysql::MySqlRow);
