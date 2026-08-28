@@ -129,11 +129,17 @@ impl Database for Sqlite {
 
     #[instrument(skip_all)]
     async fn delete_user(&self, u: &User) -> DbResult<()> {
-        db::query("delete from sessions where user_id = $1").bind(u.id).execute(&self.pool).await?;
+        let mut tx = self.pool.begin().await?;
 
-        db::query("delete from users where id = $1").bind(u.id).execute(&self.pool).await?;
+        db::query("delete from sessions where user_id = $1").bind(u.id).execute(&mut *tx).await?;
 
-        db::query("delete from history where user_id = $1").bind(u.id).execute(&self.pool).await?;
+        db::query("delete from history where user_id = $1").bind(u.id).execute(&mut *tx).await?;
+
+        db::query("delete from store where user_id = $1").bind(u.id).execute(&mut *tx).await?;
+
+        db::query("delete from users where id = $1").bind(u.id).execute(&mut *tx).await?;
+
+        tx.commit().await?;
 
         Ok(())
     }

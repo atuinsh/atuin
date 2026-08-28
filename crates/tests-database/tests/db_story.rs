@@ -1,14 +1,16 @@
+use atuin_common::db;
 use atuin_common::utils::{crypto_random_string, uuid_v7};
 use atuin_domain::record::{
     EncryptedData, Host, HostId, Record, RecordIdx, RecordSeriesKey, RecordTag,
 };
 use atuin_server_database::models::{NewSession, NewUser, User};
-use atuin_server_database::{Database, DbSettings, DbType};
+use atuin_server_database::{Database, DbError, DbSettings, DbType};
 use atuin_server_mysql::MySql;
 use atuin_server_postgres::Postgres;
 use atuin_server_sqlite::Sqlite;
 use rstest::rstest;
 use tests_database::helpers::{create_test_db, destroy_test_db};
+use time::OffsetDateTime;
 
 struct TestDb {
     settings: DbSettings,
@@ -136,7 +138,104 @@ async fn run_the_test<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
         .await?;
     assert_eq!(recs.len(), 0);
 
+    // Re-add records so delete_user must clean them up too.
+    db.add_records(&user, &records).await?;
+    add_history(settings, user_id).await?;
+
+    db.delete_user(&user).await?;
+
+    assert!(matches!(db.get_user("foo").await, Err(DbError::NotFound)));
+    assert!(matches!(db.get_session(&token).await, Err(DbError::NotFound)));
+    assert_eq!(history_count(settings, user_id).await?, 0);
+
+    let recs = db
+        .next_records(&user, &RecordSeriesKey::new(host_a.id, RecordTag::History), None, 10)
+        .await?;
+    assert_eq!(recs.len(), 0);
+
     Ok(())
+}
+
+async fn add_history(settings: &DbSettings, user_id: i64) -> eyre::Result<()> {
+    let client_id = uuid_v7().to_string();
+    let timestamp = OffsetDateTime::now_utc();
+
+    match settings.db_type() {
+        DbType::Postgres => {
+            let pool = sqlx::PgPool::connect(&settings.db_uri).await?;
+            db::query(
+                "insert into history (client_id, user_id, hostname, timestamp, data)
+                values ($1, $2, $3, $4, $5)",
+            )
+            .bind(client_id)
+            .bind(user_id)
+            .bind("foo")
+            .bind(timestamp)
+            .bind("encrypted history")
+            .execute(&pool)
+            .await?;
+        }
+        DbType::Sqlite => {
+            let pool = sqlx::SqlitePool::connect(&settings.db_uri).await?;
+            db::query(
+                "insert into history (client_id, user_id, hostname, timestamp, data)
+                values ($1, $2, $3, $4, $5)",
+            )
+            .bind(client_id)
+            .bind(user_id)
+            .bind("foo")
+            .bind(timestamp)
+            .bind("encrypted history")
+            .execute(&pool)
+            .await?;
+        }
+        DbType::MySql => {
+            let pool = sqlx::MySqlPool::connect(&settings.db_uri).await?;
+            db::query(
+                "insert into history (client_id, user_id, hostname, timestamp, data)
+                values (?, ?, ?, ?, ?)",
+            )
+            .bind(client_id)
+            .bind(user_id)
+            .bind("foo")
+            .bind(timestamp)
+            .bind("encrypted history")
+            .execute(&pool)
+            .await?;
+        }
+        DbType::Unknown => unreachable!(),
+    }
+
+    Ok(())
+}
+
+async fn history_count(settings: &DbSettings, user_id: i64) -> eyre::Result<i64> {
+    let count = match settings.db_type() {
+        DbType::Postgres => {
+            let pool = sqlx::PgPool::connect(&settings.db_uri).await?;
+            db::query_scalar("select count(*) from history where user_id = $1")
+                .bind(user_id)
+                .fetch_one(&pool)
+                .await?
+        }
+        DbType::Sqlite => {
+            let pool = sqlx::SqlitePool::connect(&settings.db_uri).await?;
+            db::query_scalar("select count(*) from history where user_id = $1")
+                .bind(user_id)
+                .fetch_one(&pool)
+                .await?
+        }
+        DbType::MySql => {
+            let pool = sqlx::MySqlPool::connect(&settings.db_uri).await?;
+            db::query_scalar("select count(*) from history where user_id = ?")
+                .bind(user_id)
+                .fetch_one(&pool)
+                .await?
+        }
+        DbType::Unknown => unreachable!(),
+    };
+
+    Ok(count)
 }
 
 fn generate_record(host: &Host, idx: RecordIdx) -> Record<EncryptedData> {
