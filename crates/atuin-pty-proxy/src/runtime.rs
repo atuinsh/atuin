@@ -88,8 +88,15 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     let current_cols = Arc::new(AtomicU16::new(cols.max(1)));
 
     screen::spawn_parser_thread(rows, cols, msg_rx);
-    let _ipc_server =
-        sock_path.as_ref().map(|path| IpcServer::spawn(path, IpcController::new(msg_tx.clone())));
+    let _ipc_server = sock_path.as_ref().and_then(|path| {
+        match IpcServer::spawn(path, IpcController::new(msg_tx.clone())) {
+            Ok(server) => Some(server),
+            Err(e) => {
+                eprintln!("atuin pty-proxy: failed to start screen server: {e}");
+                None
+            }
+        }
+    });
     spawn_resize_handler(pair.master, msg_tx.clone(), current_cols.clone())?;
 
     terminal::enable_raw_mode()?;

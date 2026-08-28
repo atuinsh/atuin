@@ -63,7 +63,6 @@ impl IpcServer {
 }
 
 struct IpcServerWorker {
-    scratch_buf: Vec<u8>,
     controller: IpcController,
 }
 
@@ -76,13 +75,10 @@ impl IpcServerWorker {
     fn new(ctrl: IpcController) -> Self {
         debug_assert!(Self::WRITE_TIMEOUT + Self::READ_TIMEOUT >= Self::HEARTBEAT_TIMEOUT);
 
-        Self {
-            scratch_buf: Vec::new(),
-            controller: ctrl,
-        }
+        Self { controller: ctrl }
     }
 
-    fn work(mut self, listener: &UnixListener) -> Result<(), IpcServerError> {
+    fn work(self, listener: &UnixListener) -> Result<(), IpcServerError> {
         for stream in listener.incoming() {
             let mut stream = match stream {
                 Ok(stream) => stream,
@@ -114,7 +110,7 @@ impl IpcServerWorker {
         Ok(())
     }
 
-    fn service_stream(&mut self, stream: &mut UnixStream) -> Result<(), StreamServiceError> {
+    fn service_stream(&self, stream: &mut UnixStream) -> Result<(), StreamServiceError> {
         // The following protocol is very naive, but might just be good enough.
         //
         // The client needs to respond to us within 200ms. If the client does not respond within
@@ -126,7 +122,7 @@ impl IpcServerWorker {
         // crash and restart on a stream we are just servicing, so this logic is correct and
         // good to have.
         loop {
-            let Some(req) = Self::read_request(stream, &mut self.scratch_buf)? else {
+            let Some(req) = Self::read_request(stream)? else {
                 return Ok(());
             };
 
@@ -147,10 +143,7 @@ impl IpcServerWorker {
     /// Reads a request from the server and parses it into a [`Req`] structure.
     ///
     /// Returns [`None`] if the client aborted the connection normally.
-    fn read_request(
-        stream: &mut UnixStream,
-        scratch: &mut Vec<u8>,
-    ) -> Result<Option<Req>, StreamServiceError> {
+    fn read_request(stream: &mut UnixStream) -> Result<Option<Req>, StreamServiceError> {
         let mut header_bytes = [0u8; Header::SERIALIZED_LEN];
         if let Err(err) = stream.read_exact(&mut header_bytes) {
             return match err.kind() {
@@ -161,13 +154,10 @@ impl IpcServerWorker {
 
         let header = Header::parse(header_bytes)?;
         let body_len = (header.message_width as usize).saturating_sub(Header::SERIALIZED_LEN);
-        if scratch.len() < body_len {
-            scratch.resize(body_len, 0);
-        }
-        let buf = &mut scratch[..body_len];
-        stream.read_exact(buf)?;
+        let mut buf = vec![0u8; body_len];
+        stream.read_exact(&mut buf)?;
 
-        let req = wire::decode_body::<Req>(buf).map_err(StreamServiceError::Decode)?;
+        let req = wire::decode_body::<Req>(&buf).map_err(StreamServiceError::Decode)?;
         Ok(Some(req))
     }
 

@@ -103,8 +103,7 @@ impl IpcClient {
 
     pub async fn connect(self) -> Result<IpcConnection, IpcConnectError> {
         match self.protocol {
-            // The proxy advertised the framed protocol: perform the V1 handshake.
-            Some(_) => self.connect_v1().await.map(IpcConnection::V1),
+            // The proxy advertised the framed protocol via `ATUIN_PTY_PROXY_PROTOCOL`.          Some(_) => self.connect_v1().await.map(IpcConnection::V1),
             // No advertisement: a legacy proxy that pushes a raw screen dump on
             // connect. Nothing to negotiate; connect lazily on each dump.
             #[allow(deprecated, reason = "legacy pty-proxy ipc protocol")]
@@ -128,7 +127,6 @@ impl IpcClient {
         let mut conn = V1Connection {
             stream,
             request_timeout: self.request_timeout,
-            scratch: Vec::new(),
         };
 
         let rep = conn
@@ -239,7 +237,6 @@ fn parse_v0_screen(data: &[u8]) -> Result<ScreenSnapshot, IpcError> {
 pub struct V1Connection {
     stream: UnixStream,
     request_timeout: Duration,
-    scratch: Vec<u8>,
 }
 
 impl V1Connection {
@@ -273,12 +270,9 @@ impl V1Connection {
 
         let header = Header::parse(header_bytes).map_err(IpcError::Header)?;
         let body_len = (header.message_width as usize).saturating_sub(Header::SERIALIZED_LEN);
-        if self.scratch.len() < body_len {
-            self.scratch.resize(body_len, 0);
-        }
-        let buf = &mut self.scratch[..body_len];
-        self.stream.read_exact(buf).await.map_err(IpcError::Io)?;
+        let mut buf = vec![0u8; body_len];
+        self.stream.read_exact(&mut buf).await.map_err(IpcError::Io)?;
 
-        wire::decode_body::<Rep>(buf).map_err(IpcError::Decode)
+        wire::decode_body::<Rep>(&buf).map_err(IpcError::Decode)
     }
 }
