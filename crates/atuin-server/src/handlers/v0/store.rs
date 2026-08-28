@@ -1,10 +1,10 @@
-use atuin_server_database::Database;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use metrics::counter;
 use serde::Deserialize;
 use tracing::{error, instrument};
 
+use crate::db::Database;
 use crate::handlers::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::router::{AppState, UserAuth};
 

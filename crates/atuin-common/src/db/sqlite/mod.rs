@@ -51,6 +51,8 @@ pub enum SqliteOpenOrCreateError {
 }
 
 impl Sqlite {
+    // TODO(markovejnovic): Modify this to accept the `SqliteDbUrl` type. The change is large at
+    // this moment, since it would change settings contracts, etc, which I'd like to avoid for now.
     #[must_use]
     pub fn builder(uri: &OsStr) -> SqliteBuilder<'_> {
         SqliteBuilder::new(uri)

@@ -1,14 +1,58 @@
+use std::env::{self, temp_dir};
+
+use atuin_common::db::DbUrl;
 use atuin_common::utils::{crypto_random_string, uuid_v7};
 use atuin_domain::record::{
     EncryptedData, Host, HostId, Record, RecordIdx, RecordSeriesKey, RecordTag,
 };
-use atuin_server_database::models::{NewSession, NewUser, User};
-use atuin_server_database::{Database, DbSettings, DbType};
-use atuin_server_mysql::MySql;
-use atuin_server_postgres::Postgres;
-use atuin_server_sqlite::Sqlite;
+use atuin_server::db::models::{NewSession, NewUser, User};
+use atuin_server::db::{Database, DbError, DbSettings, MySql, Postgres, Sqlite};
 use rstest::rstest;
-use tests_database::helpers::{create_test_db, destroy_test_db};
+use sqlx::migrate::MigrateDatabase;
+use url::Url;
+
+fn get_settings(env_uri: Option<String>) -> eyre::Result<DbSettings> {
+    let db_uri = env_uri.unwrap_or_else(|| {
+        let dir = temp_dir();
+        let file = dir.join("atuin_test_db_");
+        let filename = file.to_str().unwrap();
+        format!("sqlite://{filename}")
+    });
+
+    let mut url = Url::parse(&db_uri)?;
+    let unique = uuid_v7().as_simple().to_string();
+
+    let unique_path = format!("{}{unique}", url.path());
+    url.set_path(&unique_path);
+
+    let db_uri = url.to_string();
+
+    Ok(DbSettings {
+        db_uri: db_uri.parse()?,
+    })
+}
+
+async fn create_test_db() -> eyre::Result<DbSettings> {
+    let var = env::var("ATUIN_TEST_DB_URI").ok();
+    let settings = get_settings(var)?;
+
+    match &settings.db_uri {
+        DbUrl::Postgres(_) => sqlx::Postgres::create_database(settings.db_uri.as_str()).await?,
+        DbUrl::Sqlite(_) => sqlx::Sqlite::create_database(settings.db_uri.as_str()).await?,
+        DbUrl::Mysql(_) => sqlx::MySql::create_database(settings.db_uri.as_str()).await?,
+    };
+
+    Ok(settings)
+}
+
+async fn destroy_test_db(settings: &DbSettings) -> eyre::Result<()> {
+    match &settings.db_uri {
+        DbUrl::Postgres(_) => sqlx::Postgres::drop_database(settings.db_uri.as_str()).await?,
+        DbUrl::Sqlite(_) => sqlx::Sqlite::drop_database(settings.db_uri.as_str()).await?,
+        DbUrl::Mysql(_) => sqlx::MySql::drop_database(settings.db_uri.as_str()).await?,
+    };
+    Ok(())
+}
 
 struct TestDb {
     settings: DbSettings,
@@ -44,16 +88,15 @@ async fn test_full_db_story() -> eyre::Result<()> {
     let test_db = TestDb::new().await?;
     let settings = &test_db.settings;
 
-    match settings.db_type() {
-        DbType::Postgres => run_the_test::<Postgres>(settings).await,
-        DbType::Sqlite => run_the_test::<Sqlite>(settings).await,
-        DbType::MySql => run_the_test::<MySql>(settings).await,
-        DbType::Unknown => todo!(),
+    match &settings.db_uri {
+        DbUrl::Postgres(url) => run_the_test::<Postgres>(url.clone()).await,
+        DbUrl::Sqlite(url) => run_the_test::<Sqlite>(url.clone()).await,
+        DbUrl::Mysql(url) => run_the_test::<MySql>(url.clone()).await,
     }
 }
 
-async fn run_the_test<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
-    let db = DB::new(settings).await?;
+async fn run_the_test<DB: Database>(url: DB::Url) -> eyre::Result<()> {
+    let db = DB::connect(url).await?;
     // register a user
     let new_user = NewUser {
         username: "foo".to_owned(),
@@ -136,6 +179,19 @@ async fn run_the_test<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
         .await?;
     assert_eq!(recs.len(), 0);
 
+    // Converged behavior: delete_user must purge the user's store rows on every
+    // backend (SQLite previously left them behind).
+    db.add_records(&user, &records).await?;
+    db.delete_user(&user).await?;
+
+    let recs = db
+        .next_records(&user, &RecordSeriesKey::new(host_a.id, RecordTag::History), None, 10)
+        .await?;
+    assert_eq!(recs.len(), 0, "delete_user must purge store rows");
+
+    let missing = db.get_user("foo").await;
+    assert!(matches!(missing, Err(DbError::NotFound)), "user should be gone after delete_user");
+
     Ok(())
 }
 
@@ -151,4 +207,25 @@ fn generate_record(host: &Host, idx: RecordIdx) -> Record<EncryptedData> {
         .tag(RecordTag::History)
         .data(data)
         .build()
+}
+
+#[cfg(test)]
+mod tests {
+    use regex::Regex;
+    use rstest::rstest;
+
+    use super::get_settings;
+
+    #[rstest]
+    #[case::none(None, r"sqlite://.*[\\/]atuin_test_db_[0-9a-f]+")]
+    #[case::with_param(
+        Some("postgres://user:pass@host/database_?mode=ssl".into()),
+        r"postgres://user:pass@host/database_[0-9a-f]+\?mode=ssl"
+    )]
+    fn settings(#[case] input: Option<String>, #[case] pattern: &str) -> eyre::Result<()> {
+        let settings = get_settings(input)?;
+        let re = Regex::new(pattern)?;
+        assert!(re.is_match(settings.db_uri.as_str()), "{}", settings.db_uri.as_str());
+        Ok(())
+    }
 }

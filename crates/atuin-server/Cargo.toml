@@ -24,12 +24,8 @@ path = "src/bin/main.rs"
 vendored-tls = ["reqwest/native-tls-vendored"]
 
 [dependencies]
-atuin-common = { workspace = true }
+atuin-common = { workspace = true, features = ["db"] }
 atuin-domain = { workspace = true, features = ["axum"] }
-atuin-server-database = { workspace = true }
-atuin-server-postgres = { workspace = true }
-atuin-server-sqlite = { workspace = true }
-atuin-server-mysql = { workspace = true }
 
 tracing = { workspace = true }
 eyre = { workspace = true }
@@ -48,6 +44,11 @@ metrics-exporter-prometheus = { version = "0.18", default-features = false }
 metrics = "0.24"
 clap = { workspace = true }
 tracing-subscriber = { workspace = true }
+async-trait = { workspace = true }
+derive_more = { workspace = true }
+time = { workspace = true }
+uuid = { workspace = true }
+sqlx = { workspace = true, features = ["postgres", "sqlite", "mysql", "regexp", "tls-native-tls"] }
 
 # Integration tests in tests/ spin up a real server and drive it with the
 # client's api_client. atuin-client is only a dev dependency here so the client
@@ -58,6 +59,7 @@ rstest = { workspace = true }
 futures-util = "0.3"
 tracing-tree = "0.4"
 tower = { workspace = true, features = ["util"] }
+regex = { workspace = true }
 
 [lints]
 workspace = true

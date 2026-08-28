@@ -1,12 +1,12 @@
 use std::fmt;
 
 use atuin_domain::api::{ErrorResponse, IndexResponse};
-use atuin_server_database::Database;
 use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::{Json, http};
 use tracing::instrument;
 
+use crate::db::Database;
 use crate::router::AppState;
 
 pub mod health;

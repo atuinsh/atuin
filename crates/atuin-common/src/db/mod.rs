@@ -3,8 +3,18 @@
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 
+use std::borrow::Borrow;
+use std::fmt;
+use std::ops::Deref;
+use std::str::FromStr;
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sqlx::query::{Query, QueryAs, QueryScalar};
 use sqlx::{Database, FromRow, SqlSafeStr};
+use thiserror::Error;
+use url::Url;
+
+use crate::string::FormatSafeUrlExt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BannedPattern {
@@ -109,6 +119,158 @@ macro_rules! __atuin_db_migrate {
 
 pub use __atuin_db_migrate as migrate;
 
+/// A sqlite connection string.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SqliteDbUrl<T: Borrow<str> = String>(pub T);
+
+/// A postgres connection URL.
+#[derive(Clone, PartialEq, Eq)]
+pub struct PostgresDbUrl<T: Borrow<Url> = Url>(pub T);
+
+/// A mysql connection URL.
+#[derive(Clone, PartialEq, Eq)]
+pub struct MysqlDbUrl<T: Borrow<Url> = Url>(pub T);
+
+impl<T: Borrow<str>> SqliteDbUrl<T> {
+    /// The connection string as sqlx expects it, byte-for-byte.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.0.borrow()
+    }
+}
+
+impl<T: Borrow<Url>> PostgresDbUrl<T> {
+    #[must_use]
+    pub fn url(&self) -> &Url {
+        self.0.borrow()
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.0.borrow().as_str()
+    }
+}
+
+impl<T: Borrow<Url>> MysqlDbUrl<T> {
+    #[must_use]
+    pub fn url(&self) -> &Url {
+        self.0.borrow()
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.0.borrow().as_str()
+    }
+}
+
+impl<T: Borrow<str>> fmt::Debug for SqliteDbUrl<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self.0.borrow(), f)
+    }
+}
+
+impl<T: Borrow<Url>> fmt::Debug for PostgresDbUrl<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.borrow().format_safe(f)
+    }
+}
+
+impl<T: Borrow<Url>> fmt::Debug for MysqlDbUrl<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.borrow().format_safe(f)
+    }
+}
+
+/// A database connection URL, tagged by backend.
+#[derive(Clone, PartialEq, Eq, derive_more::Debug)]
+pub enum DbUrl<S = String, U = Url>
+where
+    S: Borrow<str>,
+    U: Borrow<Url>,
+{
+    #[debug("{_0:?}")]
+    Sqlite(SqliteDbUrl<S>),
+    #[debug("{_0:?}")]
+    Postgres(PostgresDbUrl<U>),
+    #[debug("{_0:?}")]
+    Mysql(MysqlDbUrl<U>),
+}
+
+/// An owned [`DbUrl`] — what [`FromStr`], serde, and config produce.
+pub type OwnedDbUrl = DbUrl;
+
+/// A borrowed view into an [`OwnedDbUrl`], produced by [`OwnedDbUrl::as_view`].
+pub type DbUrlView<'a> = DbUrl<&'a str, &'a Url>;
+
+impl<S: Borrow<str>, U: Borrow<Url>> DbUrl<S, U> {
+    /// The connection string as sqlx expects it, byte-for-byte.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Sqlite(SqliteDbUrl(s)) => s.borrow(),
+            Self::Postgres(PostgresDbUrl(u)) | Self::Mysql(MysqlDbUrl(u)) => u.borrow().as_str(),
+        }
+    }
+}
+
+impl<S: Borrow<str>, U: Borrow<Url>> Deref for DbUrl<S, U> {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl OwnedDbUrl {
+    /// Borrow this URL as a [`DbUrlView`], without cloning.
+    #[must_use]
+    pub fn as_view(&self) -> DbUrlView<'_> {
+        match self {
+            Self::Sqlite(SqliteDbUrl(s)) => DbUrl::Sqlite(SqliteDbUrl(s.as_str())),
+            Self::Postgres(PostgresDbUrl(u)) => DbUrl::Postgres(PostgresDbUrl(u)),
+            Self::Mysql(MysqlDbUrl(u)) => DbUrl::Mysql(MysqlDbUrl(u)),
+        }
+    }
+}
+
+/// The scheme of a database URL was not one we recognise.
+#[derive(Debug, Error)]
+pub enum DbUrlParseError {
+    #[error("unrecognised database scheme)")]
+    UnknownScheme,
+    #[error("invalid database url: {_0}")]
+    InvalidUrl(#[from] url::ParseError),
+}
+
+impl FromStr for OwnedDbUrl {
+    type Err = DbUrlParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.starts_with("postgres://") || s.starts_with("postgresql://") {
+            Ok(Self::Postgres(PostgresDbUrl(Url::parse(s)?)))
+        } else if s.starts_with("mysql://") {
+            Ok(Self::Mysql(MysqlDbUrl(Url::parse(s)?)))
+        } else if s.starts_with("sqlite:") {
+            Ok(Self::Sqlite(SqliteDbUrl(s.to_owned())))
+        } else {
+            Err(DbUrlParseError::UnknownScheme)
+        }
+    }
+}
+
+impl Serialize for OwnedDbUrl {
+    fn serialize<Ser: Serializer>(&self, serializer: Ser) -> Result<Ser::Ok, Ser::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for OwnedDbUrl {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        raw.parse().map_err(serde::de::Error::custom)
+    }
+}
+
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use proptest::prelude::*;
@@ -118,6 +280,61 @@ mod tests {
 
     use super::*;
     use crate::db::sqlite::Sqlite as AtuinSqlite;
+
+    #[rstest]
+    #[case::postgres_password(
+        "postgres://user:hunter2@host:5432/atuin",
+        r#""postgres://user:****@host:5432/atuin""#
+    )]
+    #[case::mysql_password(
+        "mysql://root:hunter2@127.0.0.1/atuin",
+        r#""mysql://root:****@127.0.0.1/atuin""#
+    )]
+    // A URL without a password is printed as-is; `****` is never fabricated.
+    #[case::postgres_no_password("postgres://host/atuin", r#""postgres://host/atuin""#)]
+    // sqlite is never parsed as a URL, so nothing is redacted or reshaped.
+    #[case::sqlite(
+        "sqlite:///var/lib/atuin/atuin.db?mode=rwc",
+        r#""sqlite:///var/lib/atuin/atuin.db?mode=rwc""#
+    )]
+    fn db_url_debug_redacts_passwords(#[case] uri: &str, #[case] expected_debug: &str) {
+        let url: OwnedDbUrl = uri.parse().unwrap();
+        assert_eq!(format!("{url:?}"), expected_debug);
+        assert!(!format!("{url:?}").contains("hunter2"), "password leaked into Debug");
+    }
+
+    #[rstest]
+    #[case::postgres("postgres://u:p@h/db")]
+    #[case::mysql("mysql://u:p@h/db")]
+    #[case::sqlite("sqlite://:memory:")]
+    fn db_url_as_str_matches_view(#[case] uri: &str) {
+        let owned: OwnedDbUrl = uri.parse().unwrap();
+        assert_eq!(owned.as_str(), owned.as_view().as_str());
+    }
+
+    #[rstest]
+    #[case::path("sqlite:///var/lib/atuin/atuin.db?mode=rwc")]
+    #[case::memory("sqlite://:memory:")]
+    fn sqlite_url_reaches_sqlx_byte_for_byte(#[case] uri: &str) {
+        let url: OwnedDbUrl = uri.parse().unwrap();
+        assert_eq!(url.as_str(), uri);
+    }
+
+    #[rstest]
+    #[case::redis("redis://localhost")]
+    #[case::bare("not-a-database-url")]
+    fn db_url_rejects_unknown_scheme(#[case] uri: &str) {
+        assert!(matches!(uri.parse::<OwnedDbUrl>(), Err(DbUrlParseError::UnknownScheme)));
+    }
+
+    #[test]
+    fn db_url_serde_round_trips_through_the_real_connection_string() {
+        let owned: OwnedDbUrl = "postgres://user:hunter2@host/atuin".parse().unwrap();
+        let json = serde_json::to_string(&owned).unwrap();
+        // serialized form is the real connection string, not the redacted debug
+        assert_eq!(json, r#""postgres://user:hunter2@host/atuin""#);
+        assert_eq!(serde_json::from_str::<OwnedDbUrl>(&json).unwrap(), owned);
+    }
 
     #[rstest]
     #[case::bare_star("select * from history", Some(BannedPattern::StarGlob))]

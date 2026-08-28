@@ -1,57 +1,37 @@
-mod wrappers;
-
 use async_trait::async_trait;
 use atuin_common::db;
-use atuin_domain::record::{
-    EncryptedData, HostId, Record, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
-};
-use atuin_server_database::models::{NewSession, NewUser, Session, User};
-use atuin_server_database::{Database, DbError, DbResult, DbSettings};
+use atuin_common::db::MysqlDbUrl;
+use atuin_domain::record::{EncryptedData, Record, RecordIdx, RecordSeriesKey, RecordStatus};
 use sqlx::mysql::MySqlPoolOptions;
 use tracing::instrument;
-use uuid::Uuid;
-use wrappers::DbRecord;
+
+use super::models::{DbRecord, NewSession, NewUser, RecordSeriesPoint, Session, User};
+use super::{Database, DbError, DbResult};
 
 #[derive(Clone)]
 pub struct MySql {
     pool: sqlx::Pool<sqlx::mysql::MySql>,
-    /// Optional read replica pool for read-only queries
-    read_pool: Option<sqlx::Pool<sqlx::mysql::MySql>>,
-}
-
-impl MySql {
-    /// Returns the appropriate pool for read operations.
-    /// Uses read_pool if available, otherwise falls back to the primary pool.
-    fn read_pool(&self) -> &sqlx::Pool<sqlx::mysql::MySql> {
-        self.read_pool.as_ref().unwrap_or(&self.pool)
-    }
 }
 
 #[async_trait]
 impl Database for MySql {
-    async fn new(settings: &DbSettings) -> DbResult<Self> {
-        let pool =
-            MySqlPoolOptions::new().max_connections(100).connect_lazy(settings.db_uri.as_str())?;
+    type Url = MysqlDbUrl;
 
-        db::migrate!(&pool, "./migrations").await.map_err(|error| DbError::Other(error.into()))?;
+    async fn connect(url: MysqlDbUrl) -> DbResult<Self> {
+        let pool = MySqlPoolOptions::new().max_connections(100).connect_lazy(url.as_str())?;
 
-        let read_pool = if let Some(read_db_uri) = &settings.read_db_uri {
-            tracing::info!("Connecting to read replica database");
-            let read_pool =
-                MySqlPoolOptions::new().max_connections(100).connect(read_db_uri.as_str()).await?;
+        db::migrate!(&pool, "src/db/mysql/migrations")
+            .await
+            .map_err(|error| DbError::Other(error.into()))?;
 
-            Some(read_pool)
-        } else {
-            None
-        };
-        Ok(Self { pool, read_pool })
+        Ok(Self { pool })
     }
 
     #[instrument(skip_all)]
     async fn get_session(&self, token: &str) -> DbResult<Session> {
         db::query_as("select id, user_id, token from sessions where token = ?")
             .bind(token)
-            .fetch_one(self.read_pool())
+            .fetch_one(&self.pool)
             .await
             .map_err(Into::into)
     }
@@ -65,7 +45,7 @@ impl Database for MySql {
             and sessions.token = ?",
         )
         .bind(token)
-        .fetch_one(self.read_pool())
+        .fetch_one(&self.pool)
         .await
         .map_err(Into::into)
     }
@@ -91,7 +71,7 @@ impl Database for MySql {
     async fn get_user(&self, username: &str) -> DbResult<User> {
         db::query_as("select id, username, email, password from users where username = ?")
             .bind(username)
-            .fetch_one(self.read_pool())
+            .fetch_one(&self.pool)
             .await
             .map_err(Into::into)
     }
@@ -100,7 +80,7 @@ impl Database for MySql {
     async fn get_user_session(&self, u: &User) -> DbResult<Session> {
         db::query_as("select id, user_id, token from sessions where user_id = ?")
             .bind(u.id)
-            .fetch_one(self.read_pool())
+            .fetch_one(&self.pool)
             .await
             .map_err(Into::into)
     }
@@ -204,7 +184,7 @@ impl Database for MySql {
         tracing::debug!("{:?} - {:?} - {:?}", series.host_id, series.tag, start);
         let start = start.unwrap_or(0);
 
-        let records: Result<Vec<DbRecord>, DbError> = db::query_as(
+        db::query_as::<_, DbRecord>(
             "select client_id, host, idx, timestamp, version, tag, data, cek from store
                     where user_id = ?
                     and tag = ?
@@ -218,52 +198,21 @@ impl Database for MySql {
         .bind(series.host_id)
         .bind(start as i64)
         .bind(count as i64)
-        .fetch_all(self.read_pool())
+        .fetch_all(&self.pool)
         .await
-        .map_err(Into::into);
-
-        let ret = match records {
-            Ok(records) => {
-                let records: Vec<Record<EncryptedData>> = records
-                    .into_iter()
-                    .map(|f| {
-                        let record: Record<EncryptedData> = f.into();
-                        record
-                    })
-                    .collect();
-
-                records
-            }
-            Err(DbError::NotFound) => {
-                tracing::debug!("no records found in store: {:?}/{}", series.host_id, series.tag);
-                return Ok(vec![]);
-            }
-            Err(e) => return Err(e),
-        };
-
-        Ok(ret)
+        .map(|records| records.into_iter().map(Into::into).collect())
+        .map_err(Into::into)
     }
 
     #[instrument(skip_all)]
     async fn status(&self, user: &User) -> DbResult<RecordStatus> {
         const STATUS_SQL: &str =
-            "select host, tag, max(idx) from store where user_id = ? group by host, tag";
+            "select host, tag, max(idx) as idx from store where user_id = ? group by host, tag";
 
-        let mut res: Vec<(Vec<u8>, String, i64)> =
-            db::query_as(STATUS_SQL).bind(user.id).fetch_all(self.read_pool()).await?;
-
-        res.sort();
-
-        let mut status = RecordStatus::new();
-
-        for i in &res {
-            let host_uuid = Uuid::from_slice(&i.0).map_err(|e| DbError::Other(e.into()))?;
-            status.set_raw(
-                RecordSeriesKey::new(HostId(host_uuid), RecordTag::from(i.1.clone())),
-                i.2 as u64,
-            );
-        }
-
-        Ok(status)
+        let points = db::query_as::<_, RecordSeriesPoint>(STATUS_SQL)
+            .bind(user.id)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(RecordStatus::from_points(points.into_iter().map(Into::into)))
     }
 }
