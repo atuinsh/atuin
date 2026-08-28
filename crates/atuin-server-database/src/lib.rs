@@ -30,7 +30,7 @@ impl From<sqlx::Error> for DbError {
 
 pub type DbResult<T> = Result<T, DbError>;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum DbType {
     Postgres,
     Sqlite,
