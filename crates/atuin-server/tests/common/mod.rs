@@ -39,7 +39,6 @@ pub async fn start_server(path: &str) -> (url::Url, oneshot::Sender<()>, JoinHan
         register_webhook_username: String::new(),
         db_settings: DbSettings {
             db_uri: db_uri.parse().expect("invalid ATUIN_DB_URI"),
-            read_db_uri: None,
         },
         metrics: atuin_server::settings::Metrics::default(),
         fake_version: None,

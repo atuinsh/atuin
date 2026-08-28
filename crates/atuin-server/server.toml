@@ -12,10 +12,6 @@
 # db_uri="sqlite:///config/atuin-server.db"
 # db_uri = "mysql://root:foobar@127.0.0.1/atuin"
 
-## Optional: URI for read replica database
-## If set, read-only queries will be routed to this database
-# read_db_uri="postgres://username:password@localhost-replica/atuin"
-
 ## Maximum size for one record entry
 ## 1024 * 1024 * 1024
 # max_record_size = 1073741824

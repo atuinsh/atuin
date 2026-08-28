@@ -29,7 +29,6 @@ fn get_settings(env_uri: Option<String>) -> eyre::Result<DbSettings> {
 
     Ok(DbSettings {
         db_uri: db_uri.parse()?,
-        read_db_uri: None,
     })
 }
 
@@ -97,7 +96,7 @@ async fn test_full_db_story() -> eyre::Result<()> {
 }
 
 async fn run_the_test<DB: Database>(url: DB::Url) -> eyre::Result<()> {
-    let db = DB::connect(url, None).await?;
+    let db = DB::connect(url).await?;
     // register a user
     let new_user = NewUser {
         username: "foo".to_owned(),

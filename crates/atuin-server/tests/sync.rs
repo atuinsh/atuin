@@ -77,7 +77,6 @@ async fn server() -> TestServer {
         register_webhook_username: String::new(),
         db_settings: DbSettings {
             db_uri: format!("sqlite://{}", db.to_str().unwrap()).parse().unwrap(),
-            read_db_uri: None,
         },
         metrics: atuin_server::settings::Metrics::default(),
         fake_version: None,

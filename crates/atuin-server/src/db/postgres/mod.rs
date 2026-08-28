@@ -13,23 +13,13 @@ const MIN_PG_VERSION: u32 = 14;
 #[derive(Clone)]
 pub struct Postgres {
     pool: sqlx::Pool<sqlx::postgres::Postgres>,
-    /// Optional read replica pool for read-only queries
-    read_pool: Option<sqlx::Pool<sqlx::postgres::Postgres>>,
-}
-
-impl Postgres {
-    /// Returns the appropriate pool for read operations.
-    /// Uses read_pool if available, otherwise falls back to the primary pool.
-    fn read_pool(&self) -> &sqlx::Pool<sqlx::postgres::Postgres> {
-        self.read_pool.as_ref().unwrap_or(&self.pool)
-    }
 }
 
 #[async_trait]
 impl Database for Postgres {
     type Url = PostgresDbUrl;
 
-    async fn connect(url: PostgresDbUrl, read_replica: Option<PostgresDbUrl>) -> DbResult<Self> {
+    async fn connect(url: PostgresDbUrl) -> DbResult<Self> {
         let pool = PgPoolOptions::new().max_connections(100).connect(url.as_str()).await?;
 
         // Call server_version_num to get the DB server's major version number
@@ -52,38 +42,14 @@ impl Database for Postgres {
             .await
             .map_err(|error| DbError::Other(error.into()))?;
 
-        // Create read replica pool if configured
-        let read_pool = if let Some(read_url) = read_replica {
-            tracing::info!("Connecting to read replica database");
-            let read_pool =
-                PgPoolOptions::new().max_connections(100).connect(read_url.as_str()).await?;
-
-            // Verify the read replica is also a supported PostgreSQL version
-            let read_pg_major_version: u32 =
-                read_pool.acquire().await?.server_version_num().ok_or(DbError::Other(
-                    eyre::Report::msg("could not get PostgreSQL version from read replica"),
-                ))? / 10000;
-
-            if read_pg_major_version < MIN_PG_VERSION {
-                return Err(DbError::Other(eyre::Report::msg(format!(
-                    "unsupported PostgreSQL version {read_pg_major_version} on read replica, \
-                     minimum required is {MIN_PG_VERSION}"
-                ))));
-            }
-
-            Some(read_pool)
-        } else {
-            None
-        };
-
-        Ok(Self { pool, read_pool })
+        Ok(Self { pool })
     }
 
     #[instrument(skip_all)]
     async fn get_session(&self, token: &str) -> DbResult<Session> {
         db::query_as("select id, user_id, token from sessions where token = $1")
             .bind(token)
-            .fetch_one(self.read_pool())
+            .fetch_one(&self.pool)
             .await
             .map_err(Into::into)
     }
@@ -92,7 +58,7 @@ impl Database for Postgres {
     async fn get_user(&self, username: &str) -> DbResult<User> {
         db::query_as("select id, username, email, password from users where username = $1")
             .bind(username)
-            .fetch_one(self.read_pool())
+            .fetch_one(&self.pool)
             .await
             .map_err(Into::into)
     }
@@ -106,7 +72,7 @@ impl Database for Postgres {
             and sessions.token = $1",
         )
         .bind(token)
-        .fetch_one(self.read_pool())
+        .fetch_one(&self.pool)
         .await
         .map_err(Into::into)
     }
@@ -192,7 +158,7 @@ impl Database for Postgres {
     async fn get_user_session(&self, u: &User) -> DbResult<Session> {
         db::query_as("select id, user_id, token from sessions where user_id = $1")
             .bind(u.id)
-            .fetch_one(self.read_pool())
+            .fetch_one(&self.pool)
             .await
             .map_err(Into::into)
     }
@@ -255,7 +221,7 @@ impl Database for Postgres {
         .bind(series.host_id)
         .bind(start as i64)
         .bind(count as i64)
-        .fetch_all(self.read_pool())
+        .fetch_all(&self.pool)
         .await
         .map(|records| records.into_iter().map(Into::into).collect())
         .map_err(Into::into)
@@ -267,7 +233,7 @@ impl Database for Postgres {
 
         let points = db::query_as::<_, RecordSeriesPoint>(STATUS_SQL)
             .bind(user.id)
-            .fetch_all(self.read_pool())
+            .fetch_all(&self.pool)
             .await?;
         Ok(RecordStatus::from_points(points.into_iter().map(Into::into)))
     }

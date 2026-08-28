@@ -42,8 +42,6 @@ pub type DbResult<T> = Result<T, DbError>;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DbSettings {
     pub db_uri: OwnedDbUrl,
-    /// Optional URI for read replicas. If set, read-only queries will use this connection.
-    pub read_db_uri: Option<OwnedDbUrl>,
 }
 
 #[async_trait]
@@ -51,7 +49,7 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
     /// The backend-specific connection URL this database is built from.
     type Url;
 
-    async fn connect(url: Self::Url, read_replica: Option<Self::Url>) -> DbResult<Self>;
+    async fn connect(url: Self::Url) -> DbResult<Self>;
 
     async fn get_session(&self, token: &str) -> DbResult<Session>;
     async fn get_session_user(&self, token: &str) -> DbResult<User>;

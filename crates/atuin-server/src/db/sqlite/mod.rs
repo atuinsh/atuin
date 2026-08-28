@@ -19,8 +19,7 @@ pub struct Sqlite {
 impl Database for Sqlite {
     type Url = SqliteDbUrl;
 
-    // sqlite has no read replica; the dispatcher rejects one before we get here.
-    async fn connect(url: SqliteDbUrl, _read_replica: Option<SqliteDbUrl>) -> DbResult<Self> {
+    async fn connect(url: SqliteDbUrl) -> DbResult<Self> {
         let opts = SqliteConnectOptions::from_str(url.as_str())?
             .journal_mode(SqliteJournalMode::Wal)
             .create_if_missing(true);

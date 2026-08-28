@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 
 use atuin_common::db::DbUrl;
 use axum::{Router, serve};
-use eyre::{Context, Result, eyre};
+use eyre::{Context, Result};
 
 use crate::db::{Database, MySql, Postgres, Sqlite};
 
@@ -73,40 +73,22 @@ pub async fn launch_with_tcp_listener(
 /// is a compile error rather than a runtime check.
 async fn connect_and_build_router(settings: Settings) -> Result<Router> {
     let db_uri = settings.db_settings.db_uri.clone();
-    let read_db_uri = settings.db_settings.read_db_uri.clone();
 
     let router = match db_uri {
         DbUrl::Sqlite(url) => {
-            if read_db_uri.is_some() {
-                return Err(eyre!("sqlite does not support a read replica (read_db_uri)"));
-            }
-            let db = Sqlite::connect(url, None)
+            let db = Sqlite::connect(url)
                 .await
                 .wrap_err_with(|| format!("failed to connect to db: {:?}", settings.db_settings))?;
             router::router(db, settings)
         }
         DbUrl::Postgres(url) => {
-            let replica = match read_db_uri {
-                None => None,
-                Some(DbUrl::Postgres(replica)) => Some(replica),
-                Some(other) => {
-                    return Err(eyre!("read replica must be a postgres:// url, got {other:?}"));
-                }
-            };
-            let db = Postgres::connect(url, replica)
+            let db = Postgres::connect(url)
                 .await
                 .wrap_err_with(|| format!("failed to connect to db: {:?}", settings.db_settings))?;
             router::router(db, settings)
         }
         DbUrl::Mysql(url) => {
-            let replica = match read_db_uri {
-                None => None,
-                Some(DbUrl::Mysql(replica)) => Some(replica),
-                Some(other) => {
-                    return Err(eyre!("read replica must be a mysql:// url, got {other:?}"));
-                }
-            };
-            let db = MySql::connect(url, replica)
+            let db = MySql::connect(url)
                 .await
                 .wrap_err_with(|| format!("failed to connect to db: {:?}", settings.db_settings))?;
             router::router(db, settings)
