@@ -68,11 +68,6 @@ pub async fn launch_with_tcp_listener(
 }
 
 /// Pick the backend from the connection URL and connect it.
-///
-/// Backend selection and connection are one and the same match: each arm hands its
-/// backend a URL of exactly the right type, so pairing the wrong backend with a URL
-/// is a compile error rather than a runtime check. The concrete backend is then
-/// erased behind `Arc<dyn Database>` so the router is monomorphized only once.
 async fn connect(db_uri: OwnedDbUrl) -> DbResult<Arc<dyn Database>> {
     Ok(match db_uri {
         DbUrl::Sqlite(url) => Arc::new(Sqlite::connect(url).await?),

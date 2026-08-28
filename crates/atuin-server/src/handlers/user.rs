@@ -16,8 +16,8 @@ use reqwest::header::CONTENT_TYPE;
 use tracing::{debug, error, info, instrument, warn};
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
-use crate::db::models::{NewSession, NewUser};
 use crate::db::DbError;
+use crate::db::models::{NewSession, NewUser};
 use crate::router::{AppState, UserAuth};
 
 pub fn verify_str(hash: &str, password: &str) -> bool {
