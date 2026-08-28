@@ -2,12 +2,13 @@ use std::str::FromStr;
 
 use async_trait::async_trait;
 use atuin_common::db;
+use atuin_common::db::SqliteDbUrl;
 use atuin_domain::record::{EncryptedData, Record, RecordIdx, RecordSeriesKey, RecordStatus};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use tracing::instrument;
 
 use super::models::{DbRecord, NewSession, NewUser, RecordSeriesPoint, Session, User};
-use super::{Database, DbError, DbResult, DbSettings};
+use super::{Database, DbError, DbResult};
 
 #[derive(Clone)]
 pub struct Sqlite {
@@ -16,8 +17,11 @@ pub struct Sqlite {
 
 #[async_trait]
 impl Database for Sqlite {
-    async fn new(settings: &DbSettings) -> DbResult<Self> {
-        let opts = SqliteConnectOptions::from_str(&settings.db_uri)?
+    type Url = SqliteDbUrl;
+
+    // sqlite has no read replica; the dispatcher rejects one before we get here.
+    async fn connect(url: SqliteDbUrl, _read_replica: Option<SqliteDbUrl>) -> DbResult<Self> {
+        let opts = SqliteConnectOptions::from_str(url.as_str())?
             .journal_mode(SqliteJournalMode::Wal)
             .create_if_missing(true);
 

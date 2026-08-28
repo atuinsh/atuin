@@ -1,11 +1,12 @@
 use async_trait::async_trait;
 use atuin_common::db;
+use atuin_common::db::PostgresDbUrl;
 use atuin_domain::record::{EncryptedData, Record, RecordIdx, RecordSeriesKey, RecordStatus};
 use sqlx::postgres::PgPoolOptions;
 use tracing::instrument;
 
 use super::models::{DbRecord, NewSession, NewUser, RecordSeriesPoint, Session, User};
-use super::{Database, DbError, DbResult, DbSettings};
+use super::{Database, DbError, DbResult};
 
 const MIN_PG_VERSION: u32 = 14;
 
@@ -26,9 +27,10 @@ impl Postgres {
 
 #[async_trait]
 impl Database for Postgres {
-    async fn new(settings: &DbSettings) -> DbResult<Self> {
-        let pool =
-            PgPoolOptions::new().max_connections(100).connect(settings.db_uri.as_str()).await?;
+    type Url = PostgresDbUrl;
+
+    async fn connect(url: PostgresDbUrl, read_replica: Option<PostgresDbUrl>) -> DbResult<Self> {
+        let pool = PgPoolOptions::new().max_connections(100).connect(url.as_str()).await?;
 
         // Call server_version_num to get the DB server's major version number
         // The call returns None for servers older than 8.x.
@@ -51,10 +53,10 @@ impl Database for Postgres {
             .map_err(|error| DbError::Other(error.into()))?;
 
         // Create read replica pool if configured
-        let read_pool = if let Some(read_db_uri) = &settings.read_db_uri {
+        let read_pool = if let Some(read_url) = read_replica {
             tracing::info!("Connecting to read replica database");
             let read_pool =
-                PgPoolOptions::new().max_connections(100).connect(read_db_uri.as_str()).await?;
+                PgPoolOptions::new().max_connections(100).connect(read_url.as_str()).await?;
 
             // Verify the read replica is also a supported PostgreSQL version
             let read_pg_major_version: u32 =

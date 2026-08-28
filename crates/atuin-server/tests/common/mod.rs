@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use atuin_client::api_client;
 use atuin_common::utils::uuid_v7;
-use atuin_server::db::{DbSettings, Postgres};
+use atuin_server::db::DbSettings;
 use atuin_server::{Settings as ServerSettings, launch_with_tcp_listener};
 use futures_util::TryFutureExt;
 use tokio::net::TcpListener;
@@ -38,7 +38,7 @@ pub async fn start_server(path: &str) -> (url::Url, oneshot::Sender<()>, JoinHan
         register_webhook_url: None,
         register_webhook_username: String::new(),
         db_settings: DbSettings {
-            db_uri,
+            db_uri: db_uri.parse().expect("invalid ATUIN_DB_URI"),
             read_db_uri: None,
         },
         metrics: atuin_server::settings::Metrics::default(),
@@ -51,12 +51,9 @@ pub async fn start_server(path: &str) -> (url::Url, oneshot::Sender<()>, JoinHan
     let server = tokio::spawn(async move {
         let _tracing_guard = dispatcher::set_default(&dispatch);
 
-        if let Err(e) = launch_with_tcp_listener::<Postgres>(
-            server_settings,
-            listener,
-            shutdown_rx.unwrap_or_else(|_| ()),
-        )
-        .await
+        if let Err(e) =
+            launch_with_tcp_listener(server_settings, listener, shutdown_rx.unwrap_or_else(|_| ()))
+                .await
         {
             tracing::error!(error=?e, "server error");
             panic!("error running server: {e:?}");

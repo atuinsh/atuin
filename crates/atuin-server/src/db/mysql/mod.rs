@@ -1,11 +1,12 @@
 use async_trait::async_trait;
 use atuin_common::db;
+use atuin_common::db::MysqlDbUrl;
 use atuin_domain::record::{EncryptedData, Record, RecordIdx, RecordSeriesKey, RecordStatus};
 use sqlx::mysql::MySqlPoolOptions;
 use tracing::instrument;
 
 use super::models::{DbRecord, NewSession, NewUser, RecordSeriesPoint, Session, User};
-use super::{Database, DbError, DbResult, DbSettings};
+use super::{Database, DbError, DbResult};
 
 #[derive(Clone)]
 pub struct MySql {
@@ -24,18 +25,19 @@ impl MySql {
 
 #[async_trait]
 impl Database for MySql {
-    async fn new(settings: &DbSettings) -> DbResult<Self> {
-        let pool =
-            MySqlPoolOptions::new().max_connections(100).connect_lazy(settings.db_uri.as_str())?;
+    type Url = MysqlDbUrl;
+
+    async fn connect(url: MysqlDbUrl, read_replica: Option<MysqlDbUrl>) -> DbResult<Self> {
+        let pool = MySqlPoolOptions::new().max_connections(100).connect_lazy(url.as_str())?;
 
         db::migrate!(&pool, "src/db/mysql/migrations")
             .await
             .map_err(|error| DbError::Other(error.into()))?;
 
-        let read_pool = if let Some(read_db_uri) = &settings.read_db_uri {
+        let read_pool = if let Some(read_url) = read_replica {
             tracing::info!("Connecting to read replica database");
             let read_pool =
-                MySqlPoolOptions::new().max_connections(100).connect(read_db_uri.as_str()).await?;
+                MySqlPoolOptions::new().max_connections(100).connect(read_url.as_str()).await?;
 
             Some(read_pool)
         } else {

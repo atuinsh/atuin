@@ -87,7 +87,7 @@ impl Shell {
         let path = if sys.contains("darwin") {
             // This works in my testing so far
             Self::Sh.run_interactive([
-                "dscl localhost -read \"/Local/Default/Users/$USER\" shell | awk '{print $2}'"
+                "dscl localhost -read \"/Local/Default/Users/$USER\" shell | awk '{print $2}'",
             ])?
         } else if cfg!(windows) {
             return Ok(Self::Powershell);
