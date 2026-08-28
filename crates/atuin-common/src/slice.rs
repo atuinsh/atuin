@@ -137,6 +137,10 @@ mod tests {
     #[case(&[2, 3, 1, 2], &[1, 2, 3], true)]
     #[case(&[2, 3, 1, 2], &[1, 2], false)]
     #[case(&[2, 3, 1, 2], &[1, 2, 3, 4], false)]
+    // `_stack_size` exists only so rstest can drive the `STACK_SIZE` const generic
+    // from each `[(); N]` value; the binding is never read (hence the underscore),
+    // but rstest's expansion references it, tripping `used_underscore_binding`.
+    #[allow(clippy::used_underscore_binding)]
     fn test_sorted_deduped_slice_comparer<const STACK_SIZE: usize>(
         #[case] iter: &[u32],
         #[case] sorted: &[u32],

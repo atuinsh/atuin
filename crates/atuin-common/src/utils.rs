@@ -352,6 +352,9 @@ mod tests {
     }
 
     #[rstest]
+    // `_n` exists only so rstest can drive the `N` const generic from each `[(); N]`
+    // value; the binding is never read, but rstest's expansion references it.
+    #[allow(clippy::used_underscore_binding)]
     fn dumb_random_test<const N: usize>(#[values([(); 8], [(); 16], [(); 32])] _n: [(); N]) {
         // Obviously not a test of randomness, but make sure we haven't made some
         // catastrophic error
