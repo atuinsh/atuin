@@ -1,14 +1,11 @@
 mod wrappers;
 
-use std::collections::HashMap;
-
 use async_trait::async_trait;
 use atuin_domain::record::{
     EncryptedData, HostId, Record, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
 };
 use atuin_server_database::models::{NewSession, NewUser, Session, User};
 use atuin_server_database::{Database, DbError, DbResult, DbSettings};
-use rand::Rng;
 use sqlx::mysql::MySqlPoolOptions;
 
 use tracing::instrument;
@@ -176,25 +173,10 @@ impl Database for MySql {
 
     #[instrument(skip_all)]
     async fn delete_store(&self, user: &User) -> DbResult<()> {
-        let mut tx = self.pool.begin().await?;
-
-        sqlx::query(
-            "delete from store
-            where user_id = ?",
-        )
-        .bind(user.id)
-        .execute(&mut *tx)
-        .await?;
-
-        sqlx::query(
-            "delete from store_idx_cache
-            where user_id = ?",
-        )
-        .bind(user.id)
-        .execute(&mut *tx)
-        .await?;
-
-        tx.commit().await?;
+        sqlx::query("delete from store where user_id = ?")
+            .bind(user.id)
+            .execute(&self.pool)
+            .await?;
 
         Ok(())
     }
@@ -203,19 +185,10 @@ impl Database for MySql {
     async fn add_records(&self, user: &User, records: &[Record<EncryptedData>]) -> DbResult<()> {
         let mut tx = self.pool.begin().await?;
 
-        // We won't have uploaded this data if it wasn't the max. Therefore, we can deduce the max
-        // idx without having to make further database queries. Doing the query on this small
-        // amount of data should be much, much faster.
-        //
-        // Worst case, say we get this wrong. We end up caching data that isn't actually the max
-        // idx, so clients upload again. The cache logic can be verified with a sql query anyway :)
-
-        let mut heads = HashMap::<(HostId, &str), u64>::new();
-
         for i in records {
             let id = atuin_common::utils::uuid_v7();
 
-            let result = sqlx::query(
+            sqlx::query(
                 "insert into store
                     (id, client_id, host, idx, timestamp, version, tag, data, cek, user_id)
                 values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -232,36 +205,6 @@ impl Database for MySql {
             .bind(&i.data.raw)
             .bind(&i.data.cek)
             .bind(user.id)
-            .execute(&mut *tx)
-            .await?;
-
-            // Only update heads if we actually inserted the record
-            if result.rows_affected() > 0 {
-                heads
-                    .entry((i.host.id, i.tag.as_str()))
-                    .and_modify(|e| {
-                        if i.idx > *e {
-                            *e = i.idx
-                        }
-                    })
-                    .or_insert(i.idx);
-            }
-        }
-
-        // we've built the map of heads for this push, so commit it to the database
-        for ((host, tag), idx) in heads {
-            sqlx::query(
-                "insert into store_idx_cache
-                    (user_id, host, tag, idx)
-                values (?, ?, ?, ?)
-                on duplicate key update idx = greatest(idx, ?)
-                ",
-            )
-            .bind(user.id)
-            .bind(host)
-            .bind(tag)
-            .bind(idx as i64)
-            .bind(idx as i64)
             .execute(&mut *tx)
             .await?;
         }
@@ -327,29 +270,10 @@ impl Database for MySql {
         const STATUS_SQL: &str =
             "select host, tag, max(idx) from store where user_id = ? group by host, tag";
 
-        // If IDX_CACHE_ROLLOUT is set, then we
-        // 1. Read the value of the var, use it as a % chance of using the cache
-        // 2. If we use the cache, just read from the cache table
-        // 3. If we don't use the cache, read from the store table
-        // IDX_CACHE_ROLLOUT should be between 0 and 100.
-
-        let idx_cache_rollout = std::env::var("IDX_CACHE_ROLLOUT").unwrap_or("0".to_string());
-        let idx_cache_rollout = idx_cache_rollout.parse::<f64>().unwrap_or(0.0);
-        let use_idx_cache = rand::thread_rng().gen_bool(idx_cache_rollout / 100.0);
-
-        let mut res: Vec<(Vec<u8>, String, i64)> = if use_idx_cache {
-            tracing::debug!("using idx cache for user {}", user.id);
-            sqlx::query_as("select host, tag, idx from store_idx_cache where user_id = ?")
-                .bind(user.id)
-                .fetch_all(self.read_pool())
-                .await?
-        } else {
-            tracing::debug!("using aggregate query for user {}", user.id);
-            sqlx::query_as(STATUS_SQL)
-                .bind(user.id)
-                .fetch_all(self.read_pool())
-                .await?
-        };
+        let mut res: Vec<(Vec<u8>, String, i64)> = sqlx::query_as(STATUS_SQL)
+            .bind(user.id)
+            .fetch_all(self.read_pool())
+            .await?;
 
         res.sort();
 
