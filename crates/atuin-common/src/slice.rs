@@ -48,13 +48,8 @@ where
     /// `sorted` must be sorted and contain no duplicates.
     pub fn new(sorted: &'a [T], iter: I) -> Self {
         debug_assert!(sorted.is_sorted_by_key(|s| s.borrow()), "`sorted` must be sorted");
-        debug_assert_eq!(
-            {
-                let mut vec = sorted.iter().collect::<Vec<_>>();
-                vec.dedup_by_key(|s| s.borrow());
-                vec.len()
-            },
-            sorted.len(),
+        debug_assert!(
+            sorted.windows(2).all(|w| w[0].borrow() != w[1].borrow()),
             "`sorted` must not contain duplicates",
         );
         Self {
