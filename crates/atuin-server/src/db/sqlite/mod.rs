@@ -133,9 +133,11 @@ impl Database for Sqlite {
     async fn delete_user(&self, u: &User) -> DbResult<()> {
         db::query("delete from sessions where user_id = $1").bind(u.id).execute(&self.pool).await?;
 
-        db::query("delete from users where id = $1").bind(u.id).execute(&self.pool).await?;
-
         db::query("delete from history where user_id = $1").bind(u.id).execute(&self.pool).await?;
+
+        db::query("delete from store where user_id = $1").bind(u.id).execute(&self.pool).await?;
+
+        db::query("delete from users where id = $1").bind(u.id).execute(&self.pool).await?;
 
         Ok(())
     }

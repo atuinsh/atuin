@@ -5,7 +5,7 @@ use atuin_domain::record::{
     EncryptedData, Host, HostId, Record, RecordIdx, RecordSeriesKey, RecordTag,
 };
 use atuin_server::db::models::{NewSession, NewUser, User};
-use atuin_server::db::{Database, DbSettings, DbType, MySql, Postgres, Sqlite};
+use atuin_server::db::{Database, DbError, DbSettings, DbType, MySql, Postgres, Sqlite};
 use rstest::rstest;
 use snowflake_uid::{Config, Generator};
 use sqlx::migrate::MigrateDatabase;
@@ -184,6 +184,19 @@ async fn run_the_test<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
         .next_records(&user, &RecordSeriesKey::new(host_a.id, RecordTag::History), Some(4), 10)
         .await?;
     assert_eq!(recs.len(), 0);
+
+    // Converged behavior: delete_user must purge the user's store rows on every
+    // backend (SQLite previously left them behind).
+    db.add_records(&user, &records).await?;
+    db.delete_user(&user).await?;
+
+    let recs = db
+        .next_records(&user, &RecordSeriesKey::new(host_a.id, RecordTag::History), None, 10)
+        .await?;
+    assert_eq!(recs.len(), 0, "delete_user must purge store rows");
+
+    let missing = db.get_user("foo").await;
+    assert!(matches!(missing, Err(DbError::NotFound)), "user should be gone after delete_user");
 
     Ok(())
 }
