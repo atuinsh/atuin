@@ -1,7 +1,6 @@
-use atuin_domain::record::{
-    EncryptedData, HostId, Record, RecordSeriesKey, RecordStatus, RecordTag,
-};
+use atuin_domain::record::{EncryptedData, Record, RecordStatus};
 
+use super::wrappers::RecordSeriesPoint;
 use super::{DbError, DbResult};
 
 /// Apply the `next_records` contract: a `NotFound` becomes an empty result, any
@@ -17,10 +16,10 @@ pub(super) fn shape_next_records(
 }
 
 /// Assemble a [`RecordStatus`] from `(host, tag, max_idx)` rows.
-pub(super) fn build_status(rows: impl IntoIterator<Item = (HostId, String, i64)>) -> RecordStatus {
+pub(super) fn build_status(points: impl IntoIterator<Item = RecordSeriesPoint>) -> RecordStatus {
     let mut status = RecordStatus::new();
-    for (host, tag, idx) in rows {
-        status.set_raw(RecordSeriesKey::new(host, RecordTag::from(tag)), idx as u64);
+    for point in points {
+        status.set_raw(point.series, point.idx);
     }
     status
 }

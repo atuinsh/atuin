@@ -1,15 +1,12 @@
 use async_trait::async_trait;
 use atuin_common::db;
-use atuin_domain::record::{
-    EncryptedData, HostId, Record, RecordIdx, RecordSeriesKey, RecordStatus,
-};
+use atuin_domain::record::{EncryptedData, Record, RecordIdx, RecordSeriesKey, RecordStatus};
 use sqlx::mysql::MySqlPoolOptions;
 use tracing::instrument;
-use uuid::Uuid;
 
 use super::models::{NewSession, NewUser, Session, User};
 use super::shared::{build_status, shape_next_records};
-use super::wrappers::DbRecord;
+use super::wrappers::{DbRecord, RecordSeriesPoint};
 use super::{Database, DbError, DbResult, DbSettings};
 
 #[derive(Clone)]
@@ -231,11 +228,11 @@ impl Database for MySql {
     #[instrument(skip_all)]
     async fn status(&self, user: &User) -> DbResult<RecordStatus> {
         const STATUS_SQL: &str =
-            "select host, tag, max(idx) from store where user_id = ? group by host, tag";
+            "select host, tag, max(idx) as idx from store where user_id = ? group by host, tag";
 
-        let res: Vec<(Uuid, String, i64)> =
+        let points: Vec<RecordSeriesPoint> =
             db::query_as(STATUS_SQL).bind(user.id).fetch_all(self.read_pool()).await?;
 
-        Ok(build_status(res.into_iter().map(|(host, tag, idx)| (HostId(host), tag, idx))))
+        Ok(build_status(points))
     }
 }
