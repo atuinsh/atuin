@@ -4,9 +4,7 @@ use atuin_domain::record::{EncryptedData, Record, RecordIdx, RecordSeriesKey, Re
 use sqlx::postgres::PgPoolOptions;
 use tracing::instrument;
 
-use super::models::{NewSession, NewUser, Session, User};
-use super::shared::{build_status, shape_next_records};
-use super::wrappers::{DbRecord, RecordSeriesPoint};
+use super::models::{DbRecord, NewSession, NewUser, RecordSeriesPoint, Session, User};
 use super::{Database, DbError, DbResult, DbSettings};
 
 const MIN_PG_VERSION: u32 = 14;
@@ -241,7 +239,7 @@ impl Database for Postgres {
         tracing::debug!("{:?} - {:?} - {:?}", series.host_id, series.tag, start);
         let start = start.unwrap_or(0);
 
-        let records: DbResult<Vec<Record<EncryptedData>>> = db::query_as::<_, DbRecord>(
+        db::query_as::<_, DbRecord>(
             "select client_id, host, idx, timestamp, version, tag, data, cek from store
                     where user_id = $1
                     and tag = $2
@@ -258,18 +256,17 @@ impl Database for Postgres {
         .fetch_all(self.read_pool())
         .await
         .map(|records| records.into_iter().map(Into::into).collect())
-        .map_err(Into::into);
-
-        shape_next_records(records)
+        .map_err(Into::into)
     }
 
     async fn status(&self, user: &User) -> DbResult<RecordStatus> {
         const STATUS_SQL: &str =
             "select host, tag, max(idx) as idx from store where user_id = $1 group by host, tag";
 
-        let points: Vec<RecordSeriesPoint> =
-            db::query_as(STATUS_SQL).bind(user.id).fetch_all(self.read_pool()).await?;
-
-        Ok(build_status(points))
+        let points = db::query_as::<_, RecordSeriesPoint>(STATUS_SQL)
+            .bind(user.id)
+            .fetch_all(self.read_pool())
+            .await?;
+        Ok(RecordStatus::from_points(points.into_iter().map(Into::into)))
     }
 }

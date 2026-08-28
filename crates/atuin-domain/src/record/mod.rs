@@ -205,6 +205,16 @@ pub struct RecordStatus {
     pub hosts: HashMap<HostId, HashMap<RecordTag, RecordIdx>>,
 }
 
+impl RecordStatus {
+    pub fn from_points(
+        points: impl IntoIterator<Item = (RecordSeriesKey, RecordIdx)>,
+    ) -> RecordStatus {
+        let mut status = RecordStatus::new();
+        status.extend(points);
+        status
+    }
+}
+
 impl Default for RecordStatus {
     fn default() -> Self {
         Self::new()

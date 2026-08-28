@@ -1,8 +1,5 @@
 pub mod models;
 
-mod shared;
-mod wrappers;
-
 pub mod postgres;
 
 pub use postgres::Postgres;
