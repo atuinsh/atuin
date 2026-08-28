@@ -368,9 +368,10 @@ impl From<rusty_paseto::Key<32>> for Key {
 }
 
 mod cek {
-    use super::{Key, PaserkV4KeyId, PaserkV4PieWrappedKey};
     use serde::{Deserialize, Serialize};
     use thiserror::Error;
+
+    use super::{Key, PaserkV4KeyId, PaserkV4PieWrappedKey};
 
     #[derive(Debug, Error)]
     pub enum EncryptionError {
