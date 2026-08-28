@@ -125,6 +125,8 @@ impl FfiInfo {
     fn query_variable_number_limit(handle: &mut LockedSqliteHandle<'_>) -> Option<usize> {
         let raw_handle = handle.as_raw_handle();
 
+        // SAFETY: `raw_handle` is a valid sqlite3 handle from the locked connection; the call
+        // only reads a configured limit and does not retain the pointer.
         #[allow(unsafe_code, reason = "FFI call to read SQLITE_LIMIT_VARIABLE_NUMBER")]
         let limit = unsafe {
             libsqlite3_sys::sqlite3_limit(
@@ -147,6 +149,8 @@ impl FfiInfo {
     }
 
     fn query_wal_path(handle: &mut LockedSqliteHandle<'_>) -> Result<PathBuf, SqlitePathError> {
+        // SAFETY: `handle` is a valid, locked sqlite3 connection; the returned pointer is checked
+        // for null before it is used.
         #[allow(unsafe_code)]
         let db_filename = unsafe {
             libsqlite3_sys::sqlite3_db_filename(handle.as_raw_handle().as_ptr(), c"main".as_ptr())
@@ -159,6 +163,8 @@ impl FfiInfo {
         // Worth noting here that you have to be careful -- sqlite docs explicitly specify that the
         // path you give this function **must** be the return pointer coming from
         // `sqlite3_db_filename`.
+        // SAFETY: `db_filename` is the exact pointer returned by `sqlite3_db_filename`, which is
+        // what `sqlite3_filename_wal` requires.
         #[allow(unsafe_code)]
         let wal_filename = unsafe { libsqlite3_sys::sqlite3_filename_wal(db_filename) };
 
@@ -166,6 +172,8 @@ impl FfiInfo {
             return Err(SqlitePathError::NullPath);
         }
 
+        // SAFETY: `wal_filename` is non-null (checked above) and points to a NUL-terminated string
+        // owned by sqlite that outlives this borrow.
         #[allow(unsafe_code)]
         let file_cstr = unsafe { CStr::from_ptr(wal_filename).to_bytes() };
 

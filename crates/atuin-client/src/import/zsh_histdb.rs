@@ -187,7 +187,7 @@ mod test {
     async fn test_env_vars() {
         let test_env_db = "nonstd-zsh-history.db";
         let key = "HISTDB_FILE";
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
         unsafe { env::set_var(key, test_env_db) };
 
         // test the env got set

@@ -17,7 +17,7 @@ pub struct Alias {
     pub value: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Var {
     pub name: String,
     pub value: String,

@@ -17,6 +17,7 @@ pub trait ChunkInt: sealed::Sealed + Copy + Ord {
     type NonZero: Copy + std::fmt::Debug;
 
     /// `self` advanced by a non-zero chunk width, saturating at the type's maximum.
+    #[must_use]
     fn saturating_advance(self, by: Self::NonZero) -> Self;
 
     /// `size` as a non-zero chunk width, falling back to `1` when it is `0`.

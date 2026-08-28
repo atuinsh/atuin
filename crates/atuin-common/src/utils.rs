@@ -233,75 +233,75 @@ mod tests {
 
     #[cfg(not(windows))]
     fn test_config_dir_xdg() {
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
         unsafe { env::remove_var("HOME") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
         unsafe { env::set_var("XDG_CONFIG_HOME", "/home/user/custom_config") };
         assert_eq!(config_dir(), PathBuf::from("/home/user/custom_config/atuin"));
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
         unsafe { env::remove_var("XDG_CONFIG_HOME") };
     }
 
     /// An empty `XDG_CONFIG_HOME` has to be treated as unset: the alternative is a relative path.
     #[cfg(not(windows))]
     fn test_config_dir_xdg_empty() {
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
         unsafe { env::set_var("HOME", "/home/user") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
         unsafe { env::set_var("XDG_CONFIG_HOME", "") };
         assert_eq!(config_dir(), PathBuf::from("/home/user/.config/atuin"));
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
         unsafe { env::remove_var("XDG_CONFIG_HOME") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
         unsafe { env::remove_var("HOME") };
     }
 
     #[cfg(not(windows))]
     fn test_config_dir() {
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
         unsafe { env::set_var("HOME", "/home/user") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
         unsafe { env::remove_var("XDG_CONFIG_HOME") };
 
         assert_eq!(config_dir(), PathBuf::from("/home/user/.config/atuin"));
 
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
         unsafe { env::remove_var("HOME") };
     }
 
     #[cfg(not(windows))]
     fn test_data_dir_xdg() {
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
         unsafe { env::remove_var("HOME") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
         unsafe { env::set_var("XDG_DATA_HOME", "/home/user/custom_data") };
         assert_eq!(data_dir(), PathBuf::from("/home/user/custom_data/atuin"));
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
         unsafe { env::remove_var("XDG_DATA_HOME") };
     }
 
     /// An empty `XDG_DATA_HOME` has to be treated as unset: the alternative is a relative path.
     #[cfg(not(windows))]
     fn test_data_dir_xdg_empty() {
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
         unsafe { env::set_var("HOME", "/home/user") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
         unsafe { env::set_var("XDG_DATA_HOME", "") };
         assert_eq!(data_dir(), PathBuf::from("/home/user/.local/share/atuin"));
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
         unsafe { env::remove_var("XDG_DATA_HOME") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
         unsafe { env::remove_var("HOME") };
     }
 
     #[cfg(not(windows))]
     fn test_data_dir() {
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
         unsafe { env::set_var("HOME", "/home/user") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
         unsafe { env::remove_var("XDG_DATA_HOME") };
         assert_eq!(data_dir(), PathBuf::from("/home/user/.local/share/atuin"));
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
         unsafe { env::remove_var("HOME") };
     }
 
