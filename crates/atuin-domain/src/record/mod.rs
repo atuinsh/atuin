@@ -257,7 +257,7 @@ impl RecordStatus {
             for (tag, idx) in tag_map {
                 match other.hosts.get(host).and_then(|m| m.get(tag)).copied() {
                     // The other store is all up to date! No diff.
-                    Some(t) if t.eq(idx) => continue,
+                    Some(t) if t.eq(idx) => {}
 
                     // The other store does exist, and it is either ahead or behind us. A diff regardless
                     Some(t) => ret.push(Diff {

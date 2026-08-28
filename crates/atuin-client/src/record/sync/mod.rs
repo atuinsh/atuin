@@ -655,7 +655,7 @@ impl Keyed<'_> {
                     downloaded.append(&mut d);
                 }
 
-                Operation::Noop { .. } => continue,
+                Operation::Noop { .. } => {}
             }
         }
 

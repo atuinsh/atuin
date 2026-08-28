@@ -430,7 +430,7 @@ impl SqliteStore {
 
         for record in &all {
             match record.clone().decrypt(key) {
-                Ok(_) => continue,
+                Ok(_) => {}
                 Err(_) => {
                     println!("Failed to decrypt {}, deleting", record.id.as_hyphenated());
 
