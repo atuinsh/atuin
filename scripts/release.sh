@@ -454,9 +454,6 @@ publish_crates() {
         atuin-daemon
         atuin-kv
         atuin-scripts
-        atuin-server-database
-        atuin-server-postgres
-        atuin-server-sqlite
         atuin-server
         atuin-pty-proxy
         atuin
