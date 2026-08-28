@@ -202,7 +202,7 @@ cd ../
             1_672_918_999,
             1_672_919_006,
             1_672_919_020,
-        ])
+        ]);
     }
 
     fn is_strictly_sorted<T>(iter: impl IntoIterator<Item = T>) -> bool

@@ -2042,7 +2042,7 @@ mod tests {
         assert_eq!(config.emacs.len(), 1);
         match &config.emacs["ctrl-c"] {
             super::KeyBindingConfig::Simple(s) => assert_eq!(s, "exit"),
-            _ => panic!("expected Simple variant"),
+            super::KeyBindingConfig::Rules(_) => panic!("expected Simple variant"),
         }
     }
 
@@ -2065,7 +2065,7 @@ mod tests {
                 assert!(rules[1].when.is_none());
                 assert_eq!(rules[1].action, "cursor-left");
             }
-            _ => panic!("expected Rules variant"),
+            super::KeyBindingConfig::Simple(_) => panic!("expected Rules variant"),
         }
     }
 
