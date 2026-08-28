@@ -1,5 +1,12 @@
 pub mod models;
 
+mod shared;
+mod wrappers;
+
+pub mod postgres;
+
+pub use postgres::Postgres;
+
 use std::fmt::Debug;
 
 use async_trait::async_trait;
