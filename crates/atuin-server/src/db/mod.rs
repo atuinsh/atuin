@@ -16,6 +16,10 @@ use atuin_domain::record::{EncryptedData, Record, RecordIdx, RecordSeriesKey, Re
 use serde::{Deserialize, Serialize};
 pub use sqlite::Sqlite;
 
+pub mod mysql;
+
+pub use mysql::MySql;
+
 use self::models::{NewSession, NewUser, Session, User};
 
 #[derive(Debug, derive_more::Display, derive_more::Error, derive_more::From)]
