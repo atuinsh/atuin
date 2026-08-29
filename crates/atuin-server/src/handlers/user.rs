@@ -6,7 +6,10 @@ use std::time::Duration;
 use argon2::password_hash::SaltString;
 use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version};
 use atuin_common::utils::crypto_random_string;
-use atuin_domain::api::*;
+use atuin_domain::api::{
+    ChangePasswordRequest, ChangePasswordResponse, DeleteUserResponse, LoginRequest, LoginResponse,
+    RegisterRequest, RegisterResponse, UserResponse,
+};
 use axum::Json;
 use axum::extract::{ConnectInfo, Path, State};
 use axum::http::StatusCode;
@@ -16,8 +19,8 @@ use reqwest::header::CONTENT_TYPE;
 use tracing::{debug, error, info, instrument, warn};
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
+use crate::db::DbError;
 use crate::db::models::{NewSession, NewUser};
-use crate::db::{Database, DbError};
 use crate::router::{AppState, UserAuth};
 
 pub fn verify_str(hash: &str, password: &str) -> bool {
@@ -53,9 +56,9 @@ async fn send_register_hook(url: &url::Url, username: String, registered: String
 }
 
 #[instrument(skip_all, err(level = "warn"), fields(user.username = username.as_str()))]
-pub async fn get<DB: Database>(
+pub async fn get(
     Path(username): Path<String>,
-    state: State<AppState<DB>>,
+    state: State<AppState>,
 ) -> Result<Json<UserResponse>, ErrorResponseStatus<'static>> {
     let db = &state.0.database;
     let user = match db.get_user(username.as_ref()).await {
@@ -77,8 +80,8 @@ pub async fn get<DB: Database>(
 }
 
 #[instrument(skip_all, err(level = "warn"), fields(user.username = register.username.as_str()))]
-pub async fn register<DB: Database>(
-    state: State<AppState<DB>>,
+pub async fn register(
+    state: State<AppState>,
     Json(register): Json<RegisterRequest>,
 ) -> Result<Json<RegisterResponse>, ErrorResponseStatus<'static>> {
     if !state.settings.open_registration {
@@ -153,9 +156,9 @@ pub async fn register<DB: Database>(
 }
 
 #[instrument(skip_all, err(level = "warn"), fields(user.id = user.id, user.username = user.username.as_str()))]
-pub async fn delete<DB: Database>(
+pub async fn delete(
     UserAuth(user): UserAuth,
-    state: State<AppState<DB>>,
+    state: State<AppState>,
 ) -> Result<Json<DeleteUserResponse>, ErrorResponseStatus<'static>> {
     debug!("request to delete user {}", user.id);
 
@@ -175,9 +178,9 @@ pub async fn delete<DB: Database>(
 }
 
 #[instrument(skip_all, err(level = "warn"), fields(user.id = user.id))]
-pub async fn change_password<DB: Database>(
+pub async fn change_password(
     UserAuth(mut user): UserAuth,
-    state: State<AppState<DB>>,
+    state: State<AppState>,
     Json(change_password): Json<ChangePasswordRequest>,
 ) -> Result<Json<ChangePasswordResponse>, ErrorResponseStatus<'static>> {
     let db = &state.0.database;
@@ -205,9 +208,9 @@ pub async fn change_password<DB: Database>(
 }
 
 #[instrument(skip_all, err(level = "warn"), fields(client.ip = %addr.ip(), user.username = login.username.as_str()))]
-pub async fn login<DB: Database>(
+pub async fn login(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    state: State<AppState<DB>>,
+    state: State<AppState>,
     login: Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, ErrorResponseStatus<'static>> {
     let db = &state.0.database;

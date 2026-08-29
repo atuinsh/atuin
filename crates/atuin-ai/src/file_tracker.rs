@@ -188,7 +188,7 @@ mod tests {
         let mut tracker = FileReadTracker::default();
         tracker.reads.insert(PathBuf::from("/some/file.toml"), FileReadState {
             content_hash: 12345,
-            mtime_ms: 1700000000000,
+            mtime_ms: 1_700_000_000_000,
         });
 
         let json = tracker.to_json().unwrap();

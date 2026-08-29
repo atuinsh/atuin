@@ -1368,7 +1368,7 @@ impl Settings {
         // Default to the current version, and if that doesn't parse, a version so high it's unlikely to ever
         // suggest upgrading.
         let current =
-            Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(Version::new(100000, 0, 0));
+            Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(Version::new(100_000, 0, 0));
 
         if !self.needs_update_check().await? {
             let meta = Self::meta_store().await?;
@@ -1401,7 +1401,7 @@ impl Settings {
         }
 
         let current =
-            Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(Version::new(100000, 0, 0));
+            Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(Version::new(100_000, 0, 0));
 
         let latest = self.latest_version().await;
 
@@ -2040,9 +2040,8 @@ mod tests {
         let json = r#"{"emacs": {"ctrl-c": "exit"}}"#;
         let config: super::KeymapConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.emacs.len(), 1);
-        match &config.emacs["ctrl-c"] {
-            super::KeyBindingConfig::Simple(s) => assert_eq!(s, "exit"),
-            _ => panic!("expected Simple variant"),
+        if let super::KeyBindingConfig::Simple(s) = &config.emacs["ctrl-c"] {
+            assert_eq!(s, "exit");
         }
     }
 
@@ -2057,15 +2056,14 @@ mod tests {
             }
         }"#;
         let config: super::KeymapConfig = serde_json::from_str(json).unwrap();
-        match &config.emacs["left"] {
-            super::KeyBindingConfig::Rules(rules) => {
-                assert_eq!(rules.len(), 2);
-                assert_eq!(rules[0].when.as_deref(), Some("cursor-at-start"));
-                assert_eq!(rules[0].action, "exit");
-                assert!(rules[1].when.is_none());
-                assert_eq!(rules[1].action, "cursor-left");
-            }
-            _ => panic!("expected Rules variant"),
+        if let super::KeyBindingConfig::Rules(rules) = &config.emacs["left"] {
+            assert_eq!(rules.len(), 2);
+            assert_eq!(rules[0].when.as_deref(), Some("cursor-at-start"));
+            assert_eq!(rules[0].action, "exit");
+            assert!(rules[1].when.is_none());
+            assert_eq!(rules[1].action, "cursor-left");
+        } else {
+            panic!("expected Rules variant");
         }
     }
 

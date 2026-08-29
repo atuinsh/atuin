@@ -159,6 +159,6 @@ mod tests {
         assert_eq!(
             secure_command("echo 'foo'"),
             "Invoke-Expression -ErrorAction Continue -Command 'echo ''foo'''\n"
-        )
+        );
     }
 }

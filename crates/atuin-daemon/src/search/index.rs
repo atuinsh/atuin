@@ -586,7 +586,7 @@ mod tests {
 
     #[test]
     fn frecency_data_compute() {
-        let now = 1000000i64;
+        let now = 1_000_000_i64;
 
         // Recent command (with default multipliers of 1.0)
         let recent = FrecencyData {
@@ -613,7 +613,7 @@ mod tests {
 
     #[test]
     fn frecency_data_compute_with_multipliers() {
-        let now = 1000000i64;
+        let now = 1_000_000_i64;
 
         let data = FrecencyData {
             count: 5,

@@ -237,7 +237,7 @@ impl RecordStatus {
 
     /// Insert a new tail record into the store
     pub fn set(&mut self, tail: Record<DecryptedData>) {
-        self.set_raw(RecordSeriesKey::new(tail.host.id, tail.tag), tail.idx)
+        self.set_raw(RecordSeriesKey::new(tail.host.id, tail.tag), tail.idx);
     }
 
     pub fn set_raw(&mut self, series: RecordSeriesKey, tail_id: RecordIdx) {
@@ -265,7 +265,7 @@ impl RecordStatus {
             for (tag, idx) in tag_map {
                 match other.hosts.get(host).and_then(|m| m.get(tag)).copied() {
                     // The other store is all up to date! No diff.
-                    Some(t) if t.eq(idx) => continue,
+                    Some(t) if t.eq(idx) => {}
 
                     // The other store does exist, and it is either ahead or behind us. A diff regardless
                     Some(t) => ret.push(Diff {
@@ -740,7 +740,8 @@ mod tests {
             id: RecordId(Uuid::from_bytes([
                 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
             ])),
-            idx: 12345678910111213141_u64,
+            #[expect(clippy::unreadable_literal)]
+            idx: 12345678910111213141u64,
             version: "  this is the \0\0\0 version\n",
             tag: "@@ \0 TAG\0",
             host: HostId(Uuid::from_bytes([

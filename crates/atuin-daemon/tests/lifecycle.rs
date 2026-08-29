@@ -86,7 +86,7 @@ mod unix {
                     loop {
                         match rx.recv().await {
                             Ok(atuin_daemon::DaemonEvent::ShutdownRequested) => break,
-                            Ok(_) => continue,
+                            Ok(_) => {}
                             Err(_) => break,
                         }
                     }

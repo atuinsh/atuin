@@ -196,13 +196,13 @@ ERROR
             };
         }
 
-        fishtory!(1639162832, "history --help");
-        fishtory!(1639162851, "cat ~/.bash_history");
-        fishtory!(1639162890, "ls ~/.local/share/fish/fish_history");
-        fishtory!(1639162893, "cat ~/.local/share/fish/fish_history");
-        fishtory!(1639162933, "echo \"foo\" \\\n'bar' baz");
-        fishtory!(1639162939, "cat ~/.local/share/fish/fish_history");
-        fishtory!(1639163063, r#"echo "\"" \\ "\\""#);
-        fishtory!(1639163066, "cat ~/.local/share/fish/fish_history");
+        fishtory!(1_639_162_832, "history --help");
+        fishtory!(1_639_162_851, "cat ~/.bash_history");
+        fishtory!(1_639_162_890, "ls ~/.local/share/fish/fish_history");
+        fishtory!(1_639_162_893, "cat ~/.local/share/fish/fish_history");
+        fishtory!(1_639_162_933, "echo \"foo\" \\\n'bar' baz");
+        fishtory!(1_639_162_939, "cat ~/.local/share/fish/fish_history");
+        fishtory!(1_639_163_063, r#"echo "\"" \\ "\\""#);
+        fishtory!(1_639_163_066, "cat ~/.local/share/fish/fish_history");
     }
 }
