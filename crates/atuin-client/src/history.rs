@@ -220,7 +220,7 @@ impl HistoryId {
 
     #[must_use]
     pub fn to_string(&self) -> String {
-        self.0.to_string()
+        self.0.as_simple().to_string()
     }
 }
 
