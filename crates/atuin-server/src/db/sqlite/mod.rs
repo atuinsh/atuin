@@ -5,8 +5,7 @@ use atuin_common::db;
 use atuin_common::db::SqliteDbUrl;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
-use super::shared::SqlxBackend;
-use super::{ConnectableDatabase, DbError, DbResult};
+use super::{Database, DbError, DbResult, OrdinalBindDb};
 
 #[derive(Clone)]
 pub struct Sqlite {
@@ -14,8 +13,13 @@ pub struct Sqlite {
 }
 
 #[async_trait]
-impl ConnectableDatabase for Sqlite {
+impl Database for Sqlite {
+    type Db = sqlx::sqlite::Sqlite;
     type Url = SqliteDbUrl;
+
+    fn pool(&self) -> &sqlx::Pool<Self::Db> {
+        &self.pool
+    }
 
     async fn connect(url: SqliteDbUrl) -> DbResult<Self> {
         let opts = SqliteConnectOptions::from_str(url.as_str())?
@@ -32,10 +36,6 @@ impl ConnectableDatabase for Sqlite {
     }
 }
 
-impl SqlxBackend for Sqlite {
-    type Db = sqlx::sqlite::Sqlite;
-
-    fn pool(&self) -> &sqlx::Pool<Self::Db> {
-        &self.pool
-    }
-}
+// SQLite uses ordinal (`$1`) placeholders, so it gets the shared `Database`
+// impl from the blanket impl in `super`.
+impl OrdinalBindDb for Sqlite {}

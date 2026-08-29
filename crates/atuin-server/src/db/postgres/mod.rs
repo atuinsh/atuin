@@ -3,8 +3,7 @@ use atuin_common::db;
 use atuin_common::db::PostgresDbUrl;
 use sqlx::postgres::PgPoolOptions;
 
-use super::shared::SqlxBackend;
-use super::{ConnectableDatabase, DbError, DbResult};
+use super::{Database, DbError, DbResult, OrdinalBindDb};
 
 const MIN_PG_VERSION: u32 = 14;
 
@@ -14,8 +13,13 @@ pub struct Postgres {
 }
 
 #[async_trait]
-impl ConnectableDatabase for Postgres {
+impl Database for Postgres {
+    type Db = sqlx::postgres::Postgres;
     type Url = PostgresDbUrl;
+
+    fn pool(&self) -> &sqlx::Pool<Self::Db> {
+        &self.pool
+    }
 
     async fn connect(url: PostgresDbUrl) -> DbResult<Self> {
         let pool = PgPoolOptions::new().max_connections(100).connect(url.as_str()).await?;
@@ -44,10 +48,6 @@ impl ConnectableDatabase for Postgres {
     }
 }
 
-impl SqlxBackend for Postgres {
-    type Db = sqlx::postgres::Postgres;
-
-    fn pool(&self) -> &sqlx::Pool<Self::Db> {
-        &self.pool
-    }
-}
+// Postgres uses ordinal (`$1`) placeholders, so it gets the shared `Database`
+// impl from the blanket impl in `super`.
+impl OrdinalBindDb for Postgres {}

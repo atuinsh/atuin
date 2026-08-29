@@ -6,16 +6,25 @@ use sqlx::mysql::MySqlPoolOptions;
 use tracing::instrument;
 
 use super::models::{DbRecord, NewSession, NewUser, RecordSeriesPoint, Session, User};
-use super::{ConnectableDatabase, Database, DbError, DbResult};
+use super::{Database, DbError, DbResult, DynDatabase};
 
 #[derive(Clone)]
 pub struct MySql {
     pool: sqlx::Pool<sqlx::mysql::MySql>,
 }
 
+// MySQL is a `SqlxDatabase` like the others, but it uses `?` placeholders and
+// diverges in `add_user`/`add_records`, so it does not implement `OrdinalBindDb`
+// and hand-writes its own `Database` impl below rather than using the blanket
+// one.
 #[async_trait]
-impl ConnectableDatabase for MySql {
+impl Database for MySql {
+    type Db = sqlx::mysql::MySql;
     type Url = MysqlDbUrl;
+
+    fn pool(&self) -> &sqlx::Pool<Self::Db> {
+        &self.pool
+    }
 
     async fn connect(url: MysqlDbUrl) -> DbResult<Self> {
         let pool = MySqlPoolOptions::new().max_connections(100).connect_lazy(url.as_str())?;
@@ -29,7 +38,7 @@ impl ConnectableDatabase for MySql {
 }
 
 #[async_trait]
-impl Database for MySql {
+impl DynDatabase for MySql {
     #[instrument(skip_all)]
     async fn get_session(&self, token: &str) -> DbResult<Session> {
         db::query_as("select id, user_id, token from sessions where token = ?")
