@@ -80,15 +80,11 @@ where
     async fn add_session(&self, session: &NewSession) -> DbResult<()> {
         let token: &str = &session.token;
 
-        db::query(
-            "insert into sessions
-                (user_id, token)
-            values($1, $2)",
-        )
-        .bind(session.user_id)
-        .bind(token)
-        .execute(self.pool())
-        .await?;
+        db::query("insert into sessions (user_id, token) values($1, $2)")
+            .bind(session.user_id)
+            .bind(token)
+            .execute(self.pool())
+            .await?;
 
         Ok(())
     }
@@ -118,10 +114,7 @@ where
         let password: &str = &user.password;
 
         let res: (i64,) = db::query_as(
-            "insert into users
-                (username, email, password)
-            values($1, $2, $3)
-            returning id",
+            "insert into users (username, email, password) values($1, $2, $3) returning id",
         )
         .bind(username)
         .bind(email)
@@ -134,15 +127,11 @@ where
 
     #[instrument(skip_all)]
     async fn update_user_password(&self, user: &User) -> DbResult<()> {
-        db::query(
-            "update users
-            set password = $1
-            where id = $2",
-        )
-        .bind(user.password.as_str())
-        .bind(user.id)
-        .execute(self.pool())
-        .await?;
+        db::query("update users set password = $1 where id = $2")
+            .bind(user.password.as_str())
+            .bind(user.id)
+            .execute(self.pool())
+            .await?;
 
         Ok(())
     }
@@ -154,20 +143,11 @@ where
             .execute(self.pool())
             .await?;
 
-        db::query("delete from history where user_id = $1")
-            .bind(u.id)
-            .execute(self.pool())
-            .await?;
+        db::query("delete from history where user_id = $1").bind(u.id).execute(self.pool()).await?;
 
-        db::query("delete from store where user_id = $1")
-            .bind(u.id)
-            .execute(self.pool())
-            .await?;
+        db::query("delete from store where user_id = $1").bind(u.id).execute(self.pool()).await?;
 
-        db::query("delete from users where id = $1")
-            .bind(u.id)
-            .execute(self.pool())
-            .await?;
+        db::query("delete from users where id = $1").bind(u.id).execute(self.pool()).await?;
 
         Ok(())
     }
