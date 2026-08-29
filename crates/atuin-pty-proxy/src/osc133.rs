@@ -462,12 +462,12 @@ mod tests {
         assert_eq!(event.zone(), expected);
     }
 
-    #[test]
+    #[rstest]
     fn zone_default_is_unknown() {
         assert_eq!(Zone::default(), Zone::Unknown);
     }
 
-    #[test]
+    #[rstest]
     fn full_zone_cycle() {
         let mut parser = Parser::new();
         let mut zones = Vec::new();
@@ -602,7 +602,7 @@ mod tests {
         assert_eq!(rebuilt, data);
     }
 
-    #[test]
+    #[rstest]
     fn a_marker_split_across_pushes_is_reported_by_the_completing_push() {
         let mut parser = Parser::new();
 
@@ -677,7 +677,7 @@ mod tests {
         assert_eq!(result.chunks[0].params, expected_params);
     }
 
-    #[test]
+    #[rstest]
     fn params_belong_to_the_most_recent_event() {
         let mut parser = Parser::new();
         let mut iter =
@@ -712,7 +712,7 @@ mod tests {
         assert_eq!(push(&mut parser, second).events(), expected);
     }
 
-    #[test]
+    #[rstest]
     fn params_split_across_push_boundary() {
         let mut parser = Parser::new();
         assert_eq!(push(&mut parser, b"\x1b]133;D;0;history_id=018f").events(), vec![]);
@@ -790,7 +790,7 @@ mod tests {
 
     // -- Fused ----------------------------------------------------------------
 
-    #[test]
+    #[rstest]
     fn params_are_empty_once_the_iterator_is_exhausted() {
         // Exhausting the iterator scans the trailing data, which can start a fresh OSC and
         // leave stale bytes in the parameter buffer. They belong to no yielded event.
@@ -804,7 +804,7 @@ mod tests {
         assert_eq!(iter.params().count(), 0);
     }
 
-    #[test]
+    #[rstest]
     fn iterator_is_fused() {
         let mut parser = Parser::new();
         let mut iter = parser.push(b"\x1b]133;A\x07tail");
@@ -817,7 +817,7 @@ mod tests {
 
     // -- Default trait --------------------------------------------------------
 
-    #[test]
+    #[rstest]
     fn parser_default_matches_new() {
         assert_eq!(push(&mut Parser::default(), b"\x1b]133;A\x07").events(), vec![
             Event::PromptStart
