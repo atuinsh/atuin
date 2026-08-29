@@ -2056,15 +2056,14 @@ mod tests {
             }
         }"#;
         let config: super::KeymapConfig = serde_json::from_str(json).unwrap();
-        match &config.emacs["left"] {
-            super::KeyBindingConfig::Rules(rules) => {
-                assert_eq!(rules.len(), 2);
-                assert_eq!(rules[0].when.as_deref(), Some("cursor-at-start"));
-                assert_eq!(rules[0].action, "exit");
-                assert!(rules[1].when.is_none());
-                assert_eq!(rules[1].action, "cursor-left");
-            }
-            super::KeyBindingConfig::Simple(_) => panic!("expected Rules variant"),
+        if let super::KeyBindingConfig::Rules(rules) = &config.emacs["left"] {
+            assert_eq!(rules.len(), 2);
+            assert_eq!(rules[0].when.as_deref(), Some("cursor-at-start"));
+            assert_eq!(rules[0].action, "exit");
+            assert!(rules[1].when.is_none());
+            assert_eq!(rules[1].action, "cursor-left");
+        } else {
+            panic!("expected Rules variant");
         }
     }
 
