@@ -38,6 +38,4 @@ impl SqlxBackend for Sqlite {
     fn pool(&self) -> &sqlx::Pool<Self::Db> {
         &self.pool
     }
-
-    // SQLite clears no tables in `delete_user` beyond the common set.
 }

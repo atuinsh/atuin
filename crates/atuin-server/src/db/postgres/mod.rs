@@ -50,10 +50,4 @@ impl SqlxBackend for Postgres {
     fn pool(&self) -> &sqlx::Pool<Self::Db> {
         &self.pool
     }
-
-    // Postgres additionally maintains `total_history_count_user`, which must be
-    // cleared alongside the common tables when a user is deleted.
-    fn delete_user_extra_statements() -> &'static [&'static str] {
-        &["delete from total_history_count_user where user_id = $1"]
-    }
 }

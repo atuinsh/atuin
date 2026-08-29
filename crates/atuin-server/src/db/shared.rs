@@ -1,10 +1,10 @@
 //! Shared [`Database`] implementation for the `$1`-dialect backends.
 //!
-//! SQLite and Postgres speak the same `$1` placeholder dialect and, apart from
-//! one table in `delete_user`, run byte-for-byte identical SQL. Rather than keep
-//! two copies in sync, each implements the private [`SqlxBackend`] trait — just
-//! a pool accessor plus a small hook — and picks up a full [`Database`] impl for
-//! free from the blanket impl below, where the shared query bodies live.
+//! SQLite and Postgres speak the same `$1` placeholder dialect and run
+//! byte-for-byte identical SQL. Rather than keep two copies in sync, each
+//! implements the private [`SqlxBackend`] trait — just a pool accessor — and
+//! picks up a full [`Database`] impl for free from the blanket impl below, where
+//! the shared query bodies live.
 //!
 //! The blanket impl is generic over the backend, so it carries the (verbose but
 //! one-off) sqlx trait bounds needed to run a query against an arbitrary
@@ -36,16 +36,6 @@ pub trait SqlxBackend {
 
     /// The connection pool the shared queries run against.
     fn pool(&self) -> &sqlx::Pool<Self::Db>;
-
-    /// Extra `delete ... where user_id = $1` statements to run in `delete_user`,
-    /// beyond the common set, before the `users` row itself is removed.
-    ///
-    /// Full statements (not table names) so they satisfy `SqlSafeStr` — a
-    /// runtime-formatted `String` would not. SQLite adds none; Postgres also
-    /// clears `total_history_count_user`.
-    fn delete_user_extra_statements() -> &'static [&'static str] {
-        &[]
-    }
 }
 
 #[async_trait]
@@ -173,10 +163,6 @@ where
             .bind(u.id)
             .execute(self.pool())
             .await?;
-
-        for statement in T::delete_user_extra_statements() {
-            db::query(*statement).bind(u.id).execute(self.pool()).await?;
-        }
 
         db::query("delete from users where id = $1")
             .bind(u.id)
