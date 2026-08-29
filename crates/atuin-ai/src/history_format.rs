@@ -66,7 +66,7 @@ fn format_duration(nanos: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::history::{History, HistoryId};
+    use atuin_client::history::History;
     use atuin_domain::record::CmdOrigin;
     use rstest::rstest;
     use time::{OffsetDateTime, UtcOffset};
@@ -75,7 +75,7 @@ mod tests {
 
     fn history(duration: i64) -> History {
         History {
-            id: HistoryId("018f011c-9a0a-7000-8000-000000000001".parse().unwrap()),
+            id: "018f011c-9a0a-7000-8000-000000000001".parse().unwrap(),
             timestamp: OffsetDateTime::UNIX_EPOCH,
             duration,
             exit: 2,

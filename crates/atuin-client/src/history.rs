@@ -190,6 +190,11 @@ const LATEST_SERIALIZED_FIELDS: u32 = 13;
 /// [`LATEST_SERIALIZED_FIELDS`].
 const V2_AUTHOR_KIND_FIELD_NUMBER: u32 = 13;
 
+// Because of how our encoding/decoding protocol worked, unlike all other UUID types in Atuin, which
+// use hyphenated encoding, this one displays as the simple (hyphen-less) representation. This
+// `Display` is the single source of that form — `.to_string()` derives from it.
+//
+// Be very, very careful changing this.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, derive_more::Display, derive_more::From)]
 #[display("{}", _0.as_simple())]
 pub struct HistoryId(uuid::Uuid);
@@ -203,18 +208,12 @@ impl std::str::FromStr for HistoryId {
 }
 
 impl HistoryId {
+    #[must_use]
     pub fn new(uuid: Uuid) -> Self {
         Self(uuid)
     }
 
-    pub fn to_string(&self) -> String {
-        // Because of how our encoding/decoding protocol worked, unlike all other UUID types in
-        // Atuin, which use hyphenated encoding, this one uses simple representation.
-        //
-        // Be very, very careful changing this.
-        self.0.as_simple().to_string()
-    }
-
+    #[must_use]
     pub fn into_bytes(self) -> [u8; 16] {
         self.0.into_bytes()
     }
@@ -959,13 +958,10 @@ mod tests {
         bytes[3] = 0x90 | 12;
         bytes.pop();
 
-        assert_eq!(
-            History::deserialize(&bytes, Version::Two.name()).unwrap(),
-            History {
-                author_kind: None,
-                ..history
-            }
-        );
+        assert_eq!(History::deserialize(&bytes, Version::Two.name()).unwrap(), History {
+            author_kind: None,
+            ..history
+        });
     }
 
     #[rstest]

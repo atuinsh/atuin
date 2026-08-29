@@ -172,7 +172,8 @@ mod unix {
     }
 
     fn ids_of(entries: &[&History]) -> Vec<String> {
-        let mut ids: Vec<String> = entries.iter().map(|h| h.id.0.to_string()).collect();
+        let mut ids: Vec<String> =
+            entries.iter().map(|h| Uuid::from_bytes(h.id.into_bytes()).to_string()).collect();
         ids.sort();
         ids
     }
