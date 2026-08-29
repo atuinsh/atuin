@@ -417,7 +417,7 @@ mod tests {
 alias k='kubectl'
 alias kgap='kubectl get pods --all-namespaces'
 "
-        )
+        );
     }
 
     #[rstest]

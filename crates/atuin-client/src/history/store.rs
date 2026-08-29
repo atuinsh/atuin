@@ -413,7 +413,7 @@ impl HistoryStore {
             ProgressStyle::with_template("{spinner:.blue} {msg}")
                 .unwrap()
                 .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
-                    write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
+                    write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap();
                 })
                 .progress_chars("#>-"),
         );

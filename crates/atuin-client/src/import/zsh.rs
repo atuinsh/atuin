@@ -168,7 +168,7 @@ fn unmetafy(line: &[u8]) -> Option<Cow<'_, str>> {
                 is_meta = false;
                 s.push(*ch ^ 32);
             } else {
-                s.push(*ch)
+                s.push(*ch);
             }
         }
         String::from_utf8(s).ok().map(Cow::Owned)

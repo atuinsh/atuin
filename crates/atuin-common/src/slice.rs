@@ -48,13 +48,8 @@ where
     /// `sorted` must be sorted and contain no duplicates.
     pub fn new(sorted: &'a [T], iter: I) -> Self {
         debug_assert!(sorted.is_sorted_by_key(|s| s.borrow()), "`sorted` must be sorted");
-        debug_assert_eq!(
-            {
-                let mut vec = sorted.iter().collect::<Vec<_>>();
-                vec.dedup_by_key(|s| s.borrow());
-                vec.len()
-            },
-            sorted.len(),
+        debug_assert!(
+            sorted.windows(2).all(|w| w[0].borrow() != w[1].borrow()),
             "`sorted` must not contain duplicates",
         );
         Self {
@@ -142,6 +137,10 @@ mod tests {
     #[case(&[2, 3, 1, 2], &[1, 2, 3], true)]
     #[case(&[2, 3, 1, 2], &[1, 2], false)]
     #[case(&[2, 3, 1, 2], &[1, 2, 3, 4], false)]
+    #[allow(
+        clippy::used_underscore_binding,
+        reason = "unused _stack_size is used to drive generic N within rstest"
+    )]
     fn test_sorted_deduped_slice_comparer<const STACK_SIZE: usize>(
         #[case] iter: &[u32],
         #[case] sorted: &[u32],

@@ -184,7 +184,7 @@ mod tests {
                 .command("echo hello world!".to_string())
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
-                .duration(2628564)
+                .duration(2_628_564)
                 .cmd_origin(CmdOrigin::try_from("box:user").unwrap())
                 .build()
                 .into(),
@@ -193,7 +193,7 @@ mod tests {
                 .command("ls -l".to_string())
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
-                .duration(9371519)
+                .duration(9_371_519)
                 .cmd_origin(CmdOrigin::try_from("box:user").unwrap())
                 .build()
                 .into(),
@@ -202,7 +202,7 @@ mod tests {
                 .command("false".to_string())
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(1)
-                .duration(17337560)
+                .duration(17_337_560)
                 .cmd_origin(CmdOrigin::try_from("box:user").unwrap())
                 .build()
                 .into(),
@@ -211,7 +211,7 @@ mod tests {
                 .command("exit".to_string())
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
-                .duration(4599094)
+                .duration(4_599_094)
                 .cmd_origin(CmdOrigin::try_from("box:user").unwrap())
                 .build()
                 .into(),

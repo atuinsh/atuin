@@ -140,7 +140,7 @@ impl<'a> SqliteBuilder<'a> {
             Some(Journaling::Wal { max_size_hint }) => {
                 opts = opts
                     .journal_mode(SqliteJournalMode::Wal)
-                    .pragma("journal_size_limit", max_size_hint.to_string())
+                    .pragma("journal_size_limit", max_size_hint.to_string());
             }
             Some(Journaling::Delete) => {
                 opts = opts.journal_mode(SqliteJournalMode::Delete);

@@ -349,7 +349,7 @@ impl Keyed<'_> {
             )
             .unwrap()
             .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
-                write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
+                write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap();
             })
             .progress_chars("#>-"),
         );
@@ -487,7 +487,7 @@ impl Keyed<'_> {
             )
             .unwrap()
             .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
-                write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
+                write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap();
             })
             .progress_chars("#>-"),
         );
@@ -639,7 +639,7 @@ impl Keyed<'_> {
                         );
                         continue;
                     }
-                    uploaded += self.sync_upload(&series, local, remote).await?
+                    uploaded += self.sync_upload(&series, local, remote).await?;
                 }
 
                 Operation::Download { series, remote } => {
@@ -652,10 +652,10 @@ impl Keyed<'_> {
                         continue;
                     }
                     let mut d = self.sync_download(&series, remote).await?;
-                    downloaded.append(&mut d)
+                    downloaded.append(&mut d);
                 }
 
-                Operation::Noop { .. } => continue,
+                Operation::Noop { .. } => {}
             }
         }
 

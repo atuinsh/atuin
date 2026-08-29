@@ -807,7 +807,7 @@ mod tests {
     #[case::basic(History {
         id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
         timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
-        duration: 49206000,
+        duration: 49_206_000,
         exit: 0,
         command: "git status".to_owned(),
         cwd: "/Users/conrad.ludgate/Documents/code/atuin".to_owned(),
@@ -822,7 +822,7 @@ mod tests {
     #[case::deleted(History {
         id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
         timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
-        duration: 49206000,
+        duration: 49_206_000,
         exit: 0,
         command: "git status".to_owned(),
         cwd: "/Users/conrad.ludgate/Documents/code/atuin".to_owned(),
@@ -837,7 +837,7 @@ mod tests {
     #[case::with_author_and_intent(History {
         id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
         timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
-        duration: 49206000,
+        duration: 49_206_000,
         exit: 0,
         command: "git status".to_owned(),
         cwd: "/Users/conrad.ludgate/Documents/code/atuin".to_owned(),
@@ -888,7 +888,7 @@ mod tests {
         History {
             id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
             timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
-            duration: 49206000,
+            duration: 49_206_000,
             exit: 0,
             command: "git status".to_owned(),
             cwd: "/Users/conrad.ludgate/Documents/code/atuin".to_owned(),
@@ -896,7 +896,7 @@ mod tests {
             cmd_origin: CmdOrigin::try_from("fvfg936c0kpf:conrad.ludgate").unwrap(),
             author: "conrad.ludgate".to_owned(),
             intent: Some("sample intent".to_owned()),
-            deleted_at: Some(time::OffsetDateTime::from_unix_timestamp(1784080673).unwrap()),
+            deleted_at: Some(time::OffsetDateTime::from_unix_timestamp(1_784_080_673).unwrap()),
             shell: Some("zsh".into()),
             author_kind: None,
         }

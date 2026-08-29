@@ -368,7 +368,10 @@ impl From<rusty_paseto::Key<32>> for Key {
 }
 
 mod cek {
-    use super::*;
+    use serde::{Deserialize, Serialize};
+    use thiserror::Error;
+
+    use super::{Key, PaserkV4KeyId, PaserkV4PieWrappedKey};
 
     #[derive(Debug, Error)]
     pub enum EncryptionError {
@@ -401,7 +404,7 @@ mod cek {
     impl Json {
         /// Create a JSON-serialized `String` for the given content encryption key.
         ///
-        /// This will encrypt the given CEK with the given parent key, create the [`cek::Json`] and
+        /// This will encrypt the given CEK with the given parent key, create the [`Json`] and
         /// serialize it into JSON.
         pub fn encrypt(cek: &Key, parent_key: &Key) -> Result<String, EncryptionError> {
             Ok(serde_json::to_string(&Self {

@@ -199,8 +199,10 @@ cd ../
             "cd ../",
         ]);
         assert_equal(loader.buf.iter().map(|h| h.timestamp.unix_timestamp()), [
-            1672918999, 1672919006, 1672919020,
-        ])
+            1_672_918_999,
+            1_672_919_006,
+            1_672_919_020,
+        ]);
     }
 
     fn is_strictly_sorted<T>(iter: impl IntoIterator<Item = T>) -> bool

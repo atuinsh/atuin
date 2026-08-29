@@ -6,7 +6,10 @@ use std::time::Duration;
 use argon2::password_hash::SaltString;
 use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version};
 use atuin_common::utils::crypto_random_string;
-use atuin_domain::api::*;
+use atuin_domain::api::{
+    ChangePasswordRequest, ChangePasswordResponse, DeleteUserResponse, LoginRequest, LoginResponse,
+    RegisterRequest, RegisterResponse, UserResponse,
+};
 use axum::Json;
 use axum::extract::{ConnectInfo, Path, State};
 use axum::http::StatusCode;

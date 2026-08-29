@@ -1,4 +1,4 @@
-use atuin_domain::api::*;
+use atuin_domain::api::MeResponse;
 use axum::Json;
 use tracing::instrument;
 

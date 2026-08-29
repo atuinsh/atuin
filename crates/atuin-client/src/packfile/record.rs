@@ -438,7 +438,7 @@ mod tests {
             manifest_id: RecordId(Uuid::from_bytes([
                 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
             ])),
-            manifest_idx: 12345678910111213141_u64,
+            manifest_idx: 12_345_678_910_111_213_141_u64,
             manifest_version: "  this is the \0\0\0 manifest version\n",
             host: HostId(Uuid::from_bytes([
                 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160,
