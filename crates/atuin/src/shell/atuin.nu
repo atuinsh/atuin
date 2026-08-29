@@ -119,6 +119,10 @@ $env.config = (
 
 $env.config = ($env.config | default [] keybindings)
 
+def _atuin_helix_edit_modes_if_supported [modes: list<string> = [helix_normal, helix_insert]] {
+    if ((version).major > 0 or (version).minor >= 115) { $modes } else { [] }
+}
+
 if (version).minor >= 104 or (version).major > 0 {
     with-env { ATUIN_SHELL: nu } {
         job spawn {
