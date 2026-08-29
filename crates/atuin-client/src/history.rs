@@ -217,6 +217,11 @@ impl HistoryId {
     pub fn into_bytes(self) -> [u8; 16] {
         self.0.into_bytes()
     }
+
+    #[must_use]
+    pub fn to_string(&self) -> String {
+        self.0.to_string()
+    }
 }
 
 /// Client-side history entry.
@@ -958,10 +963,13 @@ mod tests {
         bytes[3] = 0x90 | 12;
         bytes.pop();
 
-        assert_eq!(History::deserialize(&bytes, Version::Two.name()).unwrap(), History {
-            author_kind: None,
-            ..history
-        });
+        assert_eq!(
+            History::deserialize(&bytes, Version::Two.name()).unwrap(),
+            History {
+                author_kind: None,
+                ..history
+            }
+        );
     }
 
     #[rstest]
