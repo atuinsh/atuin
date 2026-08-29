@@ -9,6 +9,7 @@ use atuin_common::utils::{normalize_optional_string, uuid_v7};
 use atuin_domain::record::{CmdOrigin, DecryptedData, UNKNOWN_USER};
 use eyre::{Result, bail};
 use time::OffsetDateTime;
+use uuid::Uuid;
 
 use crate::secrets::SECRET_PATTERNS_RE;
 use crate::settings::Settings;
@@ -191,13 +192,31 @@ const V2_AUTHOR_KIND_FIELD_NUMBER: u32 = 13;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, derive_more::Display, derive_more::From)]
 #[display("{}", _0.as_simple())]
-pub struct HistoryId(pub uuid::Uuid);
+pub struct HistoryId(uuid::Uuid);
 
 impl std::str::FromStr for HistoryId {
     type Err = uuid::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self(uuid::Uuid::parse_str(s)?))
+    }
+}
+
+impl HistoryId {
+    pub fn new(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
+
+    pub fn to_string(&self) -> String {
+        // Because of how our encoding/decoding protocol worked, unlike all other UUID types in
+        // Atuin, which use hyphenated encoding, this one uses simple representation.
+        //
+        // Be very, very careful changing this.
+        self.0.as_simple().to_string()
+    }
+
+    pub fn into_bytes(self) -> [u8; 16] {
+        self.0.into_bytes()
     }
 }
 
@@ -940,10 +959,13 @@ mod tests {
         bytes[3] = 0x90 | 12;
         bytes.pop();
 
-        assert_eq!(History::deserialize(&bytes, Version::Two.name()).unwrap(), History {
-            author_kind: None,
-            ..history
-        });
+        assert_eq!(
+            History::deserialize(&bytes, Version::Two.name()).unwrap(),
+            History {
+                author_kind: None,
+                ..history
+            }
+        );
     }
 
     #[rstest]

@@ -596,7 +596,7 @@ mod tests {
     /// `HistoryId` is now a UUID, so the same `n` deterministically yields the same id across a
     /// capture, its history record, and a lookup — no id ever needs to be spelled out in full.
     fn hid(n: u128) -> HistoryId {
-        HistoryId(Uuid::from_u128(n))
+        HistoryId::new(Uuid::from_u128(n))
     }
 
     #[fixture]

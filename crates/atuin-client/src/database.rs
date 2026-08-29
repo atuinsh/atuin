@@ -370,7 +370,7 @@ impl Sqlite {
                 deleted_at, shell, author_kind
             ) values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         )
-        .bind(h.id.0.as_simple().to_string())
+        .bind(h.id.to_string())
         .bind(h.timestamp.unix_timestamp_nanos() as i64)
         .bind(h.duration)
         .bind(h.exit)
@@ -395,7 +395,7 @@ impl Sqlite {
         id: HistoryId,
     ) -> Result<()> {
         db::query("delete from history where id = ?1")
-            .bind(id.0.as_simple().to_string())
+            .bind(id.to_string())
             .execute(&mut **tx)
             .await?;
 
@@ -436,7 +436,7 @@ impl Sqlite {
             );
 
             builder.push_values(h.by_ref().take(rows_per_insert), |mut b, h| {
-                b.push_bind(h.id.0.as_simple().to_string())
+                b.push_bind(h.id.to_string())
                     .push_bind(h.timestamp.unix_timestamp_nanos() as i64)
                     .push_bind(h.duration)
                     .push_bind(h.exit)
@@ -513,7 +513,7 @@ impl Sqlite {
 
             let mut query = db::query_as::<_, History>(sqlx::AssertSqlSafe(sql));
             for id in &chunk {
-                query = query.bind(id.0.as_simple().to_string());
+                query = query.bind(id.to_string());
             }
 
             let rows = query.fetch_all(self.sqlite.pool()).await?;
@@ -533,7 +533,7 @@ impl Sqlite {
              ?7, hostname = ?8, author = ?9, intent = ?10, deleted_at = ?11, author_kind = ?12
                 where id = ?1",
         )
-        .bind(h.id.0.as_simple().to_string())
+        .bind(h.id.to_string())
         .bind(h.timestamp.unix_timestamp_nanos() as i64)
         .bind(h.duration)
         .bind(h.exit)
@@ -1117,7 +1117,7 @@ impl Paged {
         if res.is_empty() {
             Ok(None)
         } else {
-            self.last_id = Some(res.last().unwrap().id.0.as_simple().to_string());
+            self.last_id = Some(res.last().unwrap().id.to_string());
             Ok(Some(res))
         }
     }
@@ -1494,7 +1494,7 @@ mod test {
         let set_id = |from: HistoryId, to: &'static str| {
             db::query("update history set id = ?1 where id = ?2")
                 .bind(to)
-                .bind(from.0.as_simple().to_string())
+                .bind(from.to_string())
                 .execute(db.sqlite.pool())
         };
         set_id(upper.id, "0123456789ABCDEF0123456789ABCDEF").await.unwrap();
@@ -1525,7 +1525,7 @@ mod test {
         let loaded = db
             .load_active([
                 alpha.id,
-                HistoryId("018f011c-9a0a-7000-8000-0000000000ff".parse().unwrap()),
+                HistoryId::new("018f011c-9a0a-7000-8000-0000000000ff".parse().unwrap()),
             ])
             .await
             .unwrap();
@@ -1591,12 +1591,18 @@ mod test {
         };
 
         let results = db
-            .search(DbSearchMode::FullText, FilterMode::Global, &context, "", OptFilters {
-                after: after.as_deref(),
-                before: before.as_deref(),
-                include_duplicates: true,
-                ..Default::default()
-            })
+            .search(
+                DbSearchMode::FullText,
+                FilterMode::Global,
+                &context,
+                "",
+                OptFilters {
+                    after: after.as_deref(),
+                    before: before.as_deref(),
+                    include_duplicates: true,
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
 
@@ -1619,10 +1625,16 @@ mod test {
         let context = new_context();
 
         let hits = db
-            .search(DbSearchMode::FullText, FilterMode::Global, &context, "", OptFilters {
-                include_duplicates,
-                ..Default::default()
-            })
+            .search(
+                DbSearchMode::FullText,
+                FilterMode::Global,
+                &context,
+                "",
+                OptFilters {
+                    include_duplicates,
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
 
@@ -1739,9 +1751,13 @@ mod test {
         new_history_item(&db, "corburl").await.unwrap();
 
         // if fuzzy reordering is on, it should come back in a more sensible order
-        assert_search_commands(&db, DbSearchMode::Fuzzy, FilterMode::Global, "curl", vec![
-            "curl", "corburl",
-        ])
+        assert_search_commands(
+            &db,
+            DbSearchMode::Fuzzy,
+            FilterMode::Global,
+            "curl",
+            vec!["curl", "corburl"],
+        )
         .await;
 
         assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, "xxxx", 0).await.unwrap();
@@ -1789,9 +1805,13 @@ mod test {
         new_history_item_at(&db, "curl", Some(now - time::Duration::seconds(10))).await.unwrap();
         new_history_item_at(&db, "corburl", Some(now)).await.unwrap();
 
-        assert_search_commands(&db, mode.closest_db_mode(), FilterMode::Global, "curl", vec![
-            "curl", "corburl",
-        ])
+        assert_search_commands(
+            &db,
+            mode.closest_db_mode(),
+            FilterMode::Global,
+            "curl",
+            vec!["curl", "corburl"],
+        )
         .await;
     }
 
@@ -1854,9 +1874,13 @@ mod test {
         new_history_item_at(&db, close, Some(now - time::Duration::days(5))).await.unwrap();
         new_history_item_at(&db, far, Some(now - time::Duration::hours(1))).await.unwrap();
 
-        assert_search_commands(&db, DbSearchMode::Fuzzy, FilterMode::Global, query, vec![
-            close, far,
-        ])
+        assert_search_commands(
+            &db,
+            DbSearchMode::Fuzzy,
+            FilterMode::Global,
+            query,
+            vec![close, far],
+        )
         .await;
     }
 
@@ -1866,9 +1890,13 @@ mod test {
     async fn test_search_fuzzy_operator() {
         let db = db_with(&["use screen", "screenshot tool"]).await;
 
-        assert_search_commands(&db, DbSearchMode::Fuzzy, FilterMode::Global, "screen$", vec![
-            "use screen",
-        ])
+        assert_search_commands(
+            &db,
+            DbSearchMode::Fuzzy,
+            FilterMode::Global,
+            "screen$",
+            vec!["use screen"],
+        )
         .await;
     }
 

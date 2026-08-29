@@ -123,7 +123,7 @@ fn history_to_tail_reply(kind: HistoryEventKind, history: History) -> TailHistor
         kind: kind as i32,
         history: Some(HistoryEntry {
             timestamp: history.timestamp.unix_timestamp_nanos() as u64,
-            id: history.id.0.as_simple().to_string(),
+            id: history.id.to_string(),
             command: history.command,
             cwd: history.cwd,
             session: history.session,
