@@ -115,7 +115,7 @@ pub async fn run_grpc_server(
 
             match rx.recv().await {
                 Ok(DaemonEvent::ShutdownRequested) => break,
-                Ok(_) => continue,
+                Ok(_) => {}
                 Err(_) => break, // Channel closed
             }
         }
@@ -181,7 +181,7 @@ pub async fn run_grpc_server(
         loop {
             match rx.recv().await {
                 Ok(DaemonEvent::ShutdownRequested) => break,
-                Ok(_) => continue,
+                Ok(_) => {}
                 Err(_) => break, // Channel closed
             }
         }

@@ -52,6 +52,7 @@ pub struct SyncComponent {
 
 impl SyncComponent {
     /// Create a new sync component.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             task_handle: None,
@@ -209,6 +210,10 @@ async fn do_sync_tick(
             return SyncState::Idle;
         }
     };
+
+    if let Err(e) = handle.caps().refresh().await {
+        tracing::debug!("capability refresh failed, keeping cached document: {e}");
+    }
 
     if !logged_in {
         tracing::debug!("not logged in, skipping sync tick");

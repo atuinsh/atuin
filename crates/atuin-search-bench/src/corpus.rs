@@ -9,6 +9,7 @@
 //! comparisons). Same seed → same corpus, so results are comparable across
 //! runs and machines.
 
+#[must_use]
 pub fn generate(n: usize, seed: u64) -> Vec<String> {
     let mut rng = Rng::new(seed);
     (0..n).map(|_| gen_one(&mut rng)).collect()

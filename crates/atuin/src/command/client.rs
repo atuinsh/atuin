@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use atuin_client::database::Sqlite;
 use atuin_client::logs::FromSettings;
 use atuin_client::record::sqlite_store::SqliteStore;
@@ -29,7 +31,6 @@ mod info;
 mod init;
 mod internal;
 mod kv;
-mod lab;
 mod scripts;
 mod search;
 mod setup;
@@ -131,10 +132,6 @@ pub enum Cmd {
     #[command()]
     Mcp,
 
-    /// Experimental laboratory features
-    #[command(subcommand, hide = true)]
-    Lab(lab::Cmd),
-
     /// Internal subcommands, not for direct use by users.
     #[command(
         subcommand,
@@ -169,18 +166,6 @@ impl Cmd {
             && cmd.should_daemonize()
         {
             daemon::daemonize_current_process()?;
-        }
-
-        // Same rule for the re-exec'd `atuin lab share --active
-        // --internal-daemon` child: it must fork before the runtime exists.
-        // (`daemon::daemonize_current_process` lives behind the `daemon`
-        // feature and lab share ships in `client`-only builds, so the share's
-        // daemonize step lives in atuin-lab-share's `lifecycle`.)
-        #[cfg(unix)]
-        if let Self::Lab(ref cmd) = self
-            && cmd.should_daemonize()
-        {
-            atuin_lab_share::lifecycle::daemonize_current_process()?;
         }
 
         #[cfg(feature = "ai")]
@@ -234,7 +219,6 @@ impl Cmd {
             #[cfg(feature = "self-update")]
             Self::Update(update) => return update.run(&settings).await,
             Self::Config(config) => return config.run(&settings).await,
-            Self::Lab(cmd) => return cmd.run(&settings).await,
             Self::Internal(cmd) => return cmd.run(&settings).await,
             Self::InternalDecoy => {
                 eprintln!("error: this command is not meant to be accessed directly");
@@ -246,8 +230,12 @@ impl Cmd {
         let db_path = &settings.db_path;
         let record_store_path = &settings.record_store_path;
 
-        let db = Sqlite::new(db_path, settings.local_timeout).await?;
-        let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
+        let db = Sqlite::new(db_path, Duration::try_from_secs_f64(settings.local_timeout)?).await?;
+        let sqlite_store = SqliteStore::new(
+            record_store_path,
+            Duration::try_from_secs_f64(settings.local_timeout)?,
+        )
+        .await?;
 
         let theme_name = settings.theme.name.clone();
         let theme = theme_manager.load_theme(theme_name.as_str(), settings.theme.max_depth);
@@ -292,7 +280,6 @@ impl Cmd {
             | Self::Init(_)
             | Self::Doctor
             | Self::Config(_)
-            | Self::Lab(_)
             | Self::Internal(_)
             | Self::InternalDecoy => {
                 unreachable!()

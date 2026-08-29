@@ -131,14 +131,13 @@ pub fn events_to_messages(events: &[ConversationEvent]) -> Vec<serde_json::Value
                         "role": "assistant",
                         "content": content_blocks
                     }));
-                    i += 1;
                 } else {
                     messages.push(serde_json::json!({
                         "role": "assistant",
                         "content": content
                     }));
-                    i += 1;
                 }
+                i += 1;
             }
             ConversationEvent::ToolCall { .. } => {
                 let mut tool_uses = Vec::new();

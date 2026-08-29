@@ -13,7 +13,7 @@ pub use version::RecordVersion;
 mod cmd_origin;
 pub use cmd_origin::{CmdHost, CmdOrigin, CmdUser, UNKNOWN_USER};
 
-#[derive(Clone, Debug, PartialEq, derive_more::Deref, derive_more::From)]
+#[derive(Clone, Debug, PartialEq, Eq, derive_more::Deref, derive_more::From)]
 pub struct DecryptedData(pub Vec<u8>);
 
 #[derive(Debug, PartialEq, PartialOrd, Ord, Eq)]
@@ -23,7 +23,7 @@ pub struct Diff {
     pub remote: Option<RecordIdx>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Host {
     pub id: HostId,
     /// At some point in history, this field used to carry some meaning.
@@ -36,6 +36,7 @@ pub struct Host {
 }
 
 impl Host {
+    #[must_use]
     pub fn new(id: HostId) -> Self {
         Self { id, _name: "" }
     }
@@ -85,7 +86,7 @@ impl RecordSeriesKey {
 }
 
 /// A single record stored inside of our local database
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TypedBuilder)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TypedBuilder)]
 pub struct Record<Data> {
     /// a unique ID
     #[builder(default = RecordId(Uuid::now_v7()))]
@@ -176,6 +177,7 @@ impl<Data> Record<Data> {
 }
 
 impl Record<DecryptedData> {
+    #[must_use]
     pub fn encrypt(&self, key: &paseto_v4::Key) -> Record<paseto_v4::EncryptedData> {
         let ad = serde_json::to_string(&AdditionalData::from(self))
             .expect("could not serialize implicit assertions");
@@ -203,6 +205,14 @@ pub struct RecordStatus {
     pub hosts: HashMap<HostId, HashMap<RecordTag, RecordIdx>>,
 }
 
+impl RecordStatus {
+    pub fn from_points(points: impl IntoIterator<Item = (RecordSeriesKey, RecordIdx)>) -> Self {
+        let mut status = Self::new();
+        status.extend(points);
+        status
+    }
+}
+
 impl Default for RecordStatus {
     fn default() -> Self {
         Self::new()
@@ -218,6 +228,7 @@ impl Extend<(RecordSeriesKey, RecordIdx)> for RecordStatus {
 }
 
 impl RecordStatus {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             hosts: HashMap::new(),
@@ -226,7 +237,7 @@ impl RecordStatus {
 
     /// Insert a new tail record into the store
     pub fn set(&mut self, tail: Record<DecryptedData>) {
-        self.set_raw(RecordSeriesKey::new(tail.host.id, tail.tag), tail.idx)
+        self.set_raw(RecordSeriesKey::new(tail.host.id, tail.tag), tail.idx);
     }
 
     pub fn set_raw(&mut self, series: RecordSeriesKey, tail_id: RecordIdx) {
@@ -245,6 +256,7 @@ impl RecordStatus {
     /// then we need to do some downloading. If it is smaller, then we need to do some uploading
     /// Note that we cannot upload if we are not the owner of the record store - hosts can only
     /// write to their own store.
+    #[must_use]
     pub fn diff(&self, other: &Self) -> Vec<Diff> {
         let mut ret = Vec::new();
 
@@ -253,7 +265,7 @@ impl RecordStatus {
             for (tag, idx) in tag_map {
                 match other.hosts.get(host).and_then(|m| m.get(tag)).copied() {
                     // The other store is all up to date! No diff.
-                    Some(t) if t.eq(idx) => continue,
+                    Some(t) if t.eq(idx) => {}
 
                     // The other store does exist, and it is either ahead or behind us. A diff regardless
                     Some(t) => ret.push(Diff {
@@ -481,8 +493,6 @@ mod tests {
         // both diffs the same length
         assert_eq!(4, diff1.len());
         assert_eq!(4, diff2.len());
-
-        dbg!(&diff1, &diff2);
 
         // both diffs should be ALMOST the same. They will agree on which hosts and tags
         // require updating, but the "other" value will not be the same.
@@ -730,7 +740,8 @@ mod tests {
             id: RecordId(Uuid::from_bytes([
                 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
             ])),
-            idx: 12345678910111213141_u64,
+            #[expect(clippy::unreadable_literal)]
+            idx: 12345678910111213141u64,
             version: "  this is the \0\0\0 version\n",
             tag: "@@ \0 TAG\0",
             host: HostId(Uuid::from_bytes([

@@ -2,9 +2,7 @@ use std::sync::Arc;
 
 use atuin_domain::api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ErrorResponse};
 use atuin_domain::caps::axum::{CapabilitiesRouterExt, get as capabilities_endpoint};
-use atuin_domain::caps::{CapServer, CapabilitiesCap};
-use atuin_server_database::models::User;
-use atuin_server_database::{Database, DbError};
+use atuin_domain::caps::{CapServer, CapabilitiesCap, PageSizeCap};
 use axum::Router;
 use axum::extract::{FromRequestParts, Request};
 use axum::http::request::Parts;
@@ -17,22 +15,21 @@ use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
 
 use super::handlers;
+use crate::db::models::User;
+use crate::db::{Database, DbError};
 use crate::handlers::{ErrorResponseStatus, RespExt};
 use crate::metrics;
 use crate::settings::Settings;
 
 pub struct UserAuth(pub User);
 
-impl<DB> FromRequestParts<AppState<DB>> for UserAuth
-where
-    DB: Database + Send + Sync,
-{
+impl FromRequestParts<AppState> for UserAuth {
     type Rejection = ErrorResponseStatus<'static>;
 
     #[tracing::instrument(name = "auth", skip_all)]
     async fn from_request_parts(
         req: &mut Parts,
-        state: &AppState<DB>,
+        state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         let auth_header = req.headers.get(http::header::AUTHORIZATION).ok_or_else(|| {
             tracing::debug!("request is missing the authorization header");
@@ -99,19 +96,26 @@ async fn semver(request: Request, next: Next) -> Response {
 }
 
 #[derive(Clone)]
-pub struct AppState<DB: Database> {
-    pub database: DB,
+pub struct AppState {
+    pub database: Arc<dyn Database>,
     pub settings: Settings,
 }
 
-pub fn router<DB: Database>(database: DB, settings: Settings) -> Router {
+fn capabilities() -> CapServer {
+    CapServer::new()
+        .add(CapabilitiesCap { version: 1 })
+        .expect("CapabilitiesCap is registered exactly once")
+        .add(PageSizeCap {
+            version: 1,
+            page_size: 100,
+        })
+        .expect("PageSizeCap is registered exactly once")
+}
+
+pub fn router(database: Arc<dyn Database>, settings: Settings) -> Router {
     // Advertise the self-referential capabilities capability, so every server that speaks the
     // protocol carries at least one concrete capability a client can observe.
-    let caps = Arc::new(
-        CapServer::new()
-            .add(CapabilitiesCap { version: 1 })
-            .expect("the capabilities capability is the only one registered"),
-    );
+    let caps = Arc::new(capabilities());
 
     let negotiated = Router::new()
         .route("/", get(handlers::index))

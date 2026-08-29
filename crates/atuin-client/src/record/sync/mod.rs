@@ -19,7 +19,7 @@ use std::num::NonZeroU64;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::range::{Chunks, RangeExt};
 use atuin_common::sync::MutEagerFutureCell;
-use atuin_domain::caps::PackfileCap;
+use atuin_domain::caps::{PackfileCap, PageSizeCap};
 use atuin_domain::record::{
     Diff, EncryptedData, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
 };
@@ -130,8 +130,9 @@ pub enum Operation {
 pub struct SyncEngine {
     client: Client,
     store: SqliteStore,
-    /// How many records each sync page requests. Set via [`Self::with_page_size`].
-    page_size: NonZeroU64,
+    /// An explicit page-size override set via [`Self::with_page_size`]. When `None`, the page size
+    /// is negotiated from the server's capabilities. See [`Self::get_page_size`].
+    page_size_override: Option<NonZeroU64>,
 }
 
 /// A [`SyncEngine`] paired with an encryption key, for the operations that encrypt or decrypt.
@@ -144,14 +145,31 @@ pub struct Keyed<'k> {
 }
 
 impl SyncEngine {
-    /// Set how many records each sync page requests (default [`DEFAULT_PAGE_SIZE`]).
+    /// Set how many records each sync page requests, overriding capability negotiation.
     #[must_use]
     pub fn with_page_size(mut self, page_size: NonZeroU64) -> Self {
-        self.page_size = page_size;
+        self.page_size_override = Some(page_size);
         self
     }
 
+    /// How many records each sync page requests.
+    async fn get_page_size(&self) -> NonZeroU64 {
+        match self.page_size_override {
+            Some(page_size) => page_size,
+            None => self
+                .client
+                .caps()
+                .get_server::<PageSizeCap>()
+                .await
+                .ok()
+                .flatten()
+                .and_then(|cap| NonZeroU64::new(cap.page_size))
+                .unwrap_or(DEFAULT_PAGE_SIZE),
+        }
+    }
+
     /// Pair this engine with an encryption `key` to run the crypto-touching sync operations.
+    #[must_use]
     pub fn keyed<'k>(&'k self, key: &'k paseto_v4::Key) -> Keyed<'k> {
         let engine = self.clone();
         let key_for_check = key.clone();
@@ -306,7 +324,7 @@ impl Keyed<'_> {
     #[instrument(
         level = "trace",
         skip_all,
-        fields(host = ?series.host_id, tag = ?series.tag, local, remote = ?remote, page_size = self.engine.page_size.get()),
+        fields(host = ?series.host_id, tag = ?series.tag, local, remote = ?remote),
         err
     )]
     async fn sync_upload(
@@ -315,7 +333,7 @@ impl Keyed<'_> {
         local: RecordIdx,
         remote: Option<RecordIdx>,
     ) -> Result<u64, SyncError> {
-        let page_size = self.engine.page_size.get();
+        let page_size = self.engine.get_page_size().await.get();
         let store = &self.engine.store;
         let client = &self.engine.client;
         // The first record the remote *doesn't* have.
@@ -331,7 +349,7 @@ impl Keyed<'_> {
             )
             .unwrap()
             .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
-                write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
+                write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap();
             })
             .progress_chars("#>-"),
         );
@@ -408,7 +426,7 @@ impl Keyed<'_> {
     #[instrument(
         level = "trace",
         skip_all,
-        fields(host = ?series.host_id, tag = ?series.tag, remote = ?remote, page_size = self.engine.page_size.get()),
+        fields(host = ?series.host_id, tag = ?series.tag, remote = ?remote),
         err
     )]
     async fn sync_download(
@@ -416,7 +434,7 @@ impl Keyed<'_> {
         series: &RecordSeriesKey,
         remote: RecordIdx,
     ) -> Result<Vec<RecordId>, SyncError> {
-        let page_size = self.engine.page_size.get();
+        let page_size = self.engine.get_page_size().await.get();
         let store = &self.engine.store;
         // Scan the database to find the first missing local index, rather than assuming it's one
         // more than the highest local index. A prior packfile op for this host may have expanded a
@@ -469,7 +487,7 @@ impl Keyed<'_> {
             )
             .unwrap()
             .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
-                write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
+                write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap();
             })
             .progress_chars("#>-"),
         );
@@ -592,7 +610,7 @@ impl Keyed<'_> {
         Ok(ids)
     }
 
-    #[instrument(level = "trace", skip_all, fields(page_size = self.engine.page_size.get()), err)]
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn sync_remote(
         &self,
         operations: Vec<Operation>,
@@ -621,7 +639,7 @@ impl Keyed<'_> {
                         );
                         continue;
                     }
-                    uploaded += self.sync_upload(&series, local, remote).await?
+                    uploaded += self.sync_upload(&series, local, remote).await?;
                 }
 
                 Operation::Download { series, remote } => {
@@ -634,10 +652,10 @@ impl Keyed<'_> {
                         continue;
                     }
                     let mut d = self.sync_download(&series, remote).await?;
-                    downloaded.append(&mut d)
+                    downloaded.append(&mut d);
                 }
 
-                Operation::Noop { .. } => continue,
+                Operation::Noop { .. } => {}
             }
         }
 
@@ -719,10 +737,10 @@ mod tests {
         local_records: Vec<Record<EncryptedData>>,
         remote_records: Vec<Record<EncryptedData>>,
     ) -> (SqliteStore, Vec<Diff>) {
-        let local_store = SqliteStore::new(":memory:", test_local_timeout())
+        let local_store = SqliteStore::in_memory(test_local_timeout())
             .await
             .expect("failed to open in memory sqlite");
-        let remote_store = SqliteStore::new(":memory:", test_local_timeout())
+        let remote_store = SqliteStore::in_memory(test_local_timeout())
             .await
             .expect("failed to open in memory sqlite"); // "remote"
 
@@ -931,7 +949,7 @@ mod packfile_sync_tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
-    use crate::api_client::{AuthToken, Client, caps_client};
+    use crate::api_client::{AuthToken, Client, caps_client_anonymous};
     use crate::packfile::record::PackManifestDataV1;
     use crate::packfile::{PackManifestRecordView, try_pack};
     use crate::record::sqlite_store::SqliteStore;
@@ -951,14 +969,14 @@ mod packfile_sync_tests {
 
     /// A [`Client`] pointed at a wiremock server, authenticated with a dummy token.
     pub(super) fn mock_client(addr: &url::Url) -> Client {
-        let caps = caps_client(addr, &HashMap::new()).unwrap();
+        let caps = caps_client_anonymous(addr, &HashMap::new()).unwrap();
         Client::new(addr.clone(), &AuthToken::Token("t".into()), 30, 30, &HashMap::new(), caps)
             .unwrap()
     }
 
     /// A fresh in-memory record store.
     pub(super) async fn memory_store() -> SqliteStore {
-        SqliteStore::new(":memory:", test_local_timeout()).await.unwrap()
+        SqliteStore::in_memory(test_local_timeout()).await.unwrap()
     }
 
     /// Wrap a prebuilt client in a [`SyncEngine`] for tests.
@@ -1472,7 +1490,7 @@ mod packfile_sync_tests {
     /// network (already-local skips, parse failures) or that exercise a transport fault.
     fn dead_client() -> Client {
         let addr: url::Url = "http://127.0.0.1:1/".parse().unwrap();
-        let caps = caps_client(&addr, &HashMap::new()).unwrap();
+        let caps = caps_client_anonymous(&addr, &HashMap::new()).unwrap();
         Client::new(addr, &AuthToken::Token("t".into()), 1, 1, &HashMap::new(), caps).unwrap()
     }
 
@@ -1919,5 +1937,68 @@ mod packfile_capability_tests {
             !requests.iter().any(|r| r.url.path().starts_with("/api/v0/packfiles")),
             "no /api/v0/packfiles request must be made when packfiles are gated off"
         );
+    }
+}
+
+#[cfg(test)]
+mod page_size_tests {
+    use std::num::NonZeroU64;
+
+    use atuin_domain::caps::{CapServer, CapabilitiesCap, PageSizeCap};
+    use rstest::rstest;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::DEFAULT_PAGE_SIZE;
+    use super::packfile_sync_tests::{build_engine, memory_store, mock_client, server};
+
+    async fn mount_caps(server: &MockServer, advertised: Option<u64>) {
+        let mut caps = CapServer::new().add(CapabilitiesCap { version: 1 }).unwrap();
+        if let Some(page_size) = advertised {
+            caps = caps
+                .add(PageSizeCap {
+                    version: 1,
+                    page_size,
+                })
+                .unwrap();
+        }
+        Mock::given(method("GET"))
+            .and(path("/api/v0/capabilities"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(caps.body().to_owned()))
+            .mount(server)
+            .await;
+    }
+
+    #[rstest]
+    #[case::advertised(Some(250), NonZeroU64::new(250).unwrap())]
+    #[case::absent(None, DEFAULT_PAGE_SIZE)]
+    #[case::zero_falls_back(Some(0), DEFAULT_PAGE_SIZE)]
+    #[tokio::test]
+    async fn get_page_size_negotiates_from_capabilities(
+        #[future] server: MockServer,
+        #[case] advertised: Option<u64>,
+        #[case] expected: NonZeroU64,
+    ) {
+        let server = server.await;
+        mount_caps(&server, advertised).await;
+
+        let addr: url::Url = server.uri().parse().unwrap();
+        let engine = build_engine(mock_client(&addr), memory_store().await).await;
+
+        assert_eq!(engine.get_page_size().await, expected);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn with_page_size_overrides_negotiation(#[future] server: MockServer) {
+        let server = server.await;
+        mount_caps(&server, Some(250)).await;
+
+        let addr: url::Url = server.uri().parse().unwrap();
+        let engine = build_engine(mock_client(&addr), memory_store().await)
+            .await
+            .with_page_size(NonZeroU64::new(7).unwrap());
+
+        assert_eq!(engine.get_page_size().await, NonZeroU64::new(7).unwrap());
     }
 }

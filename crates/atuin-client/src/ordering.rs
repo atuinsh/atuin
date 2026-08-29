@@ -3,6 +3,7 @@ use minspan::minspan;
 use super::database::DbSearchMode;
 use super::history::History;
 
+#[must_use]
 pub fn reorder_fuzzy(mode: DbSearchMode, query: &str, res: Vec<History>) -> Vec<History> {
     match mode {
         DbSearchMode::Fuzzy => reorder(query, |x| &x.command, res),

@@ -2,9 +2,11 @@ use std::collections::HashMap;
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, OnceLock};
+#[cfg(test)]
+use std::time::Duration;
 
 use atuin_common::logs::LogLevel;
-use atuin_common::utils;
+use atuin_common::path::PathExt;
 use atuin_domain::record::HostId;
 use clap::ValueEnum;
 use config::builder::DefaultState;
@@ -72,6 +74,7 @@ impl RequestedSearchMode {
     ///
     /// Not all requested modes are supported; this method returns the closest supported mode for
     /// the given requested mode.
+    #[must_use]
     pub fn effective_mode(self) -> SearchMode {
         match self {
             Self::Prefix => SearchMode::Prefix,
@@ -89,6 +92,7 @@ impl From<RequestedSearchMode> for SearchMode {
 }
 
 impl SearchMode {
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Prefix => "PREFIX",
@@ -98,6 +102,7 @@ impl SearchMode {
         }
     }
 
+    #[must_use]
     pub fn next(self, settings: &Settings) -> Self {
         match self {
             Self::Prefix => Self::FullText,
@@ -134,6 +139,7 @@ pub enum FilterMode {
 }
 
 impl FilterMode {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Global => "GLOBAL",
@@ -226,6 +232,7 @@ pub enum KeymapMode {
 }
 
 impl KeymapMode {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Emacs => "EMACS",
@@ -266,6 +273,7 @@ pub enum CursorStyle {
 }
 
 impl CursorStyle {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::DefaultUserShape => "DEFAULT",
@@ -419,6 +427,7 @@ pub struct Keys {
 impl Keys {
     /// The standard default values for all `[keys]` options.
     /// These match the config defaults set in `builder_with_data_dir()`.
+    #[must_use]
     pub fn standard_defaults() -> Self {
         Self {
             scroll_exits: true,
@@ -431,6 +440,7 @@ impl Keys {
     }
 
     /// Returns true if any value differs from the standard defaults.
+    #[must_use]
     pub fn has_non_default_values(&self) -> bool {
         let d = Self::standard_defaults();
         self.scroll_exits != d.scroll_exits
@@ -481,6 +491,7 @@ pub struct KeymapConfig {
 
 impl KeymapConfig {
     /// Returns true if no keybinding overrides are configured in any mode.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.emacs.is_empty()
             && self.vim_normal.is_empty()
@@ -807,6 +818,7 @@ pub enum UiColumnType {
 impl UiColumnType {
     /// Returns the default width for this column type (in characters).
     /// The Command column returns 0 as it expands to fill remaining space.
+    #[must_use]
     pub fn default_width(&self) -> u16 {
         match self {
             Self::Duration => 5,  // "814ms"
@@ -838,6 +850,7 @@ pub struct UiColumn {
 }
 
 impl UiColumn {
+    #[must_use]
     pub fn new(column_type: UiColumnType) -> Self {
         Self {
             width: column_type.default_width(),
@@ -846,6 +859,7 @@ impl UiColumn {
         }
     }
 
+    #[must_use]
     pub fn with_width(column_type: UiColumnType, width: u16) -> Self {
         Self {
             column_type,
@@ -1109,6 +1123,7 @@ pub struct Settings {
 }
 
 impl Settings {
+    #[must_use]
     pub fn utc() -> Self {
         Self::builder()
             .expect("Could not build default")
@@ -1120,6 +1135,7 @@ impl Settings {
             .expect("Could not deserialize config")
     }
 
+    #[must_use]
     pub fn search_mode(&self) -> SearchMode {
         self.requested_search_mode.into()
     }
@@ -1134,6 +1150,7 @@ impl Settings {
     /// If Atuin was invoked from the "up" keybinding, this returns
     /// [`Self::search_mode_shell_up_key_binding`], falling back to [`Self::search_mode`] if that
     /// binding isn't defined. Otherwise, [`Self::search_mode`] is returned.
+    #[must_use]
     pub fn active_search_mode(&self) -> SearchMode {
         self.shell_up_key_binding
             .then(|| self.search_mode_shell_up_key_binding())
@@ -1153,7 +1170,11 @@ impl Settings {
                 let (db_path, timeout) = META_CONFIG.get().ok_or_else(|| {
                     eyre!("meta store config not set — Settings::new() has not been called")
                 })?;
-                crate::meta::MetaStore::new(db_path, *timeout).await
+                crate::meta::MetaStore::new(
+                    db_path,
+                    std::time::Duration::try_from_secs_f64(*timeout)?,
+                )
+                .await
             })
             .await
     }
@@ -1226,6 +1247,7 @@ impl Settings {
     /// Atuin's hosted service. This returns true when:
     /// - `sync_protocol` is explicitly set to `Hub`, OR
     /// - `sync_protocol` is `Auto` and `sync_address` is an official Atuin address
+    #[must_use]
     pub fn is_hub_sync(&self) -> bool {
         match self.sync_protocol {
             SyncProtocol::Hub => true,
@@ -1241,6 +1263,7 @@ impl Settings {
     /// `endpoint` is the resolved AI endpoint — the `--api-endpoint` flag or
     /// `ai.endpoint` setting, after defaults are applied — which is why it's a
     /// parameter rather than read from `self.ai.endpoint`.
+    #[must_use]
     pub fn is_hub_ai_endpoint(&self, endpoint: &Url) -> bool {
         match self.ai.endpoint_protocol {
             AiEndpointProtocol::Hub => true,
@@ -1266,6 +1289,7 @@ impl Settings {
     /// the correct auth strategy. Also performs cleanup of mis-stored tokens
     /// (e.g. a CLI token incorrectly saved in the Hub session slot).
     #[cfg(feature = "sync")]
+    #[must_use]
     pub async fn resolve_sync_auth(&self) -> SyncAuth {
         let meta = match Self::meta_store().await {
             Ok(m) => m,
@@ -1344,7 +1368,7 @@ impl Settings {
         // Default to the current version, and if that doesn't parse, a version so high it's unlikely to ever
         // suggest upgrading.
         let current =
-            Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(Version::new(100000, 0, 0));
+            Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(Version::new(100_000, 0, 0));
 
         if !self.needs_update_check().await? {
             let meta = Self::meta_store().await?;
@@ -1377,7 +1401,7 @@ impl Settings {
         }
 
         let current =
-            Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(Version::new(100000, 0, 0));
+            Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(Version::new(100_000, 0, 0));
 
         let latest = self.latest_version().await;
 
@@ -1394,6 +1418,7 @@ impl Settings {
         None
     }
 
+    #[must_use]
     pub fn default_filter_mode(&self, git_root: bool) -> FilterMode {
         self.filter_mode
             .filter(|x| self.search.filters.contains(x))
@@ -1664,7 +1689,7 @@ impl Settings {
     /// environment — without the side-effects of full `Settings` construction
     /// (meta store init, path expansion, etc.).
     pub fn get_config_value(key: &str) -> Result<String> {
-        use config::{Value, ValueKind};
+        use config::Value;
 
         #[cfg_attr(not(unix), allow(unused_mut))]
         let mut config = Self::build_config()?;
@@ -1677,9 +1702,9 @@ impl Settings {
         if (key == "daemon" || key == "daemon.socket_path")
             && let Ok(daemon) = config.get::<Daemon>("daemon")
             && daemon.socket_path.is_none()
-            && let ValueKind::Table(root_map) = &mut config.cache.kind
+            && let config::ValueKind::Table(root_map) = &mut config.cache.kind
             && let Some(daemon_value) = root_map.get_mut("daemon")
-            && let ValueKind::Table(daemon_map) = &mut daemon_value.kind
+            && let config::ValueKind::Table(daemon_map) = &mut daemon_value.kind
         {
             daemon_map.insert(
                 "socket_path".into(),
@@ -1762,10 +1787,12 @@ impl Settings {
             .map_err(|e| eyre!("failed to expand path: {}", e))
     }
 
+    #[must_use]
     pub fn example_config() -> &'static str {
         EXAMPLE_CONFIG
     }
 
+    #[must_use]
     pub fn paths_ok(&self) -> bool {
         let paths: [&Path; 4] = [
             self.db_path.as_path(),
@@ -1773,7 +1800,7 @@ impl Settings {
             self.key_path.as_path(),
             Path::new(&self.meta.db_path),
         ];
-        paths.iter().all(|p| !utils::broken_symlink(*p))
+        paths.iter().all(|p| !p.is_dangling_symlink())
     }
 
     /// Check that a TOML string can be successfully deserialized into a [`Settings`] object.
@@ -1833,13 +1860,14 @@ pub fn init_meta_config_for_testing(meta_db_path: impl Into<String>, local_timeo
 }
 
 #[cfg(test)]
-pub(crate) fn test_local_timeout() -> f64 {
-    std::env::var("ATUIN_TEST_LOCAL_TIMEOUT")
+pub(crate) fn test_local_timeout() -> Duration {
+    let secs = std::env::var("ATUIN_TEST_LOCAL_TIMEOUT")
         .ok()
-        .and_then(|x| x.parse().ok())
+        .and_then(|x| x.parse::<f64>().ok())
         // this hardcoded value should be replaced by a simple way to get the
         // default local_timeout of Settings if possible
-        .unwrap_or(2.0)
+        .unwrap_or(2.0);
+    Duration::try_from_secs_f64(secs).unwrap_or_else(|_| Duration::from_secs(2))
 }
 
 #[cfg(test)]
@@ -2012,9 +2040,8 @@ mod tests {
         let json = r#"{"emacs": {"ctrl-c": "exit"}}"#;
         let config: super::KeymapConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.emacs.len(), 1);
-        match &config.emacs["ctrl-c"] {
-            super::KeyBindingConfig::Simple(s) => assert_eq!(s, "exit"),
-            _ => panic!("expected Simple variant"),
+        if let super::KeyBindingConfig::Simple(s) = &config.emacs["ctrl-c"] {
+            assert_eq!(s, "exit");
         }
     }
 
@@ -2029,15 +2056,14 @@ mod tests {
             }
         }"#;
         let config: super::KeymapConfig = serde_json::from_str(json).unwrap();
-        match &config.emacs["left"] {
-            super::KeyBindingConfig::Rules(rules) => {
-                assert_eq!(rules.len(), 2);
-                assert_eq!(rules[0].when.as_deref(), Some("cursor-at-start"));
-                assert_eq!(rules[0].action, "exit");
-                assert!(rules[1].when.is_none());
-                assert_eq!(rules[1].action, "cursor-left");
-            }
-            _ => panic!("expected Rules variant"),
+        if let super::KeyBindingConfig::Rules(rules) = &config.emacs["left"] {
+            assert_eq!(rules.len(), 2);
+            assert_eq!(rules[0].when.as_deref(), Some("cursor-at-start"));
+            assert_eq!(rules[0].action, "exit");
+            assert!(rules[1].when.is_none());
+            assert_eq!(rules[1].action, "cursor-left");
+        } else {
+            panic!("expected Rules variant");
         }
     }
 

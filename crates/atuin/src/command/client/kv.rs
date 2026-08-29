@@ -66,12 +66,16 @@ pub enum Cmd {
 impl Cmd {
     #[instrument(level = "trace", skip_all, err)]
     pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
-        let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
-            .context("could not load encryption key")?;
+        let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+            .context("could not load or generate encryption key")?;
 
         let host_id = Settings::host_id().await?;
 
-        let kv_db = atuin_kv::database::Database::new(settings.kv.db_path.clone(), 1.0).await?;
+        let kv_db = atuin_kv::database::Database::new(
+            settings.kv.db_path.clone(),
+            std::time::Duration::from_secs(1),
+        )
+        .await?;
         let kv_store = KvStore::new(store.clone(), kv_db, host_id, encryption_key);
 
         match self {

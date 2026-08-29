@@ -163,6 +163,7 @@ pub struct AgentContext {
 }
 
 impl AgentContext {
+    #[must_use]
     fn next_timeout_id(&mut self) -> u64 {
         let id = self.next_timeout_id;
         self.next_timeout_id += 1;
@@ -244,6 +245,7 @@ impl AgentFsm {
     }
 
     /// Handle an event, returning effects to execute.
+    #[must_use]
     pub fn handle(&mut self, event: Event) -> Vec<Effect> {
         // From all states: if the session ID arrives and isn't set, set it, then continue as normal.
         // This event fires from the stream response headers, rather than having to wait until the end
@@ -1163,7 +1165,11 @@ impl AgentFsm {
         // Turn is complete. Check if we need to continue (tool results to send back).
         // We continue if this turn had any client tool calls (the LLM needs to see
         // the results and respond).
-        if !self.ctx.current_turn_tool_ids.is_empty() {
+        if self.ctx.current_turn_tool_ids.is_empty() {
+            // No tools — turn is done, go idle
+            self.state = AgentState::Idle { confirmation: None };
+            vec![Effect::TurnEnded, Effect::Persist]
+        } else {
             // Continue conversation with tool results.
             // Don't clear tools — they persist for rendering history.
             // Clear turn IDs so the continuation turn doesn't loop.
@@ -1178,10 +1184,6 @@ impl AgentFsm {
                 messages,
                 session_id,
             }]
-        } else {
-            // No tools — turn is done, go idle
-            self.state = AgentState::Idle { confirmation: None };
-            vec![Effect::TurnEnded, Effect::Persist]
         }
     }
 

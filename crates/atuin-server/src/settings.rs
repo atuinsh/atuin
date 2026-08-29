@@ -1,11 +1,12 @@
 use std::io::prelude::*;
 use std::path::PathBuf;
 
-use atuin_server_database::DbSettings;
 use config::{Config, Environment, File as ConfigFile, FileFormat};
 use eyre::{Result, eyre};
 use fs_err::{File, create_dir_all};
 use serde::{Deserialize, Serialize};
+
+use crate::db::DbSettings;
 
 static EXAMPLE_CONFIG: &str = include_str!("../server.toml");
 
@@ -92,6 +93,7 @@ impl Settings {
     }
 }
 
+#[must_use]
 pub fn example_config() -> &'static str {
     EXAMPLE_CONFIG
 }

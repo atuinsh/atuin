@@ -1,7 +1,6 @@
 use atuin_domain::record::{
     EncryptedData, HostId, Record, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
 };
-use atuin_server_database::Database;
 use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -13,9 +12,9 @@ use crate::handlers::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::router::{AppState, UserAuth};
 
 #[instrument(skip_all, err(level = "warn"), fields(user.id = user.id, record.count = records.len()))]
-pub async fn post<DB: Database>(
+pub async fn post(
     UserAuth(user): UserAuth,
-    state: State<AppState<DB>>,
+    state: State<AppState>,
     Json(records): Json<Vec<Record<EncryptedData>>>,
 ) -> Result<(), ErrorResponseStatus<'static>> {
     let State(AppState {
@@ -48,9 +47,9 @@ pub async fn post<DB: Database>(
 }
 
 #[instrument(skip_all, err(level = "warn"), fields(user.id = user.id))]
-pub async fn index<DB: Database>(
+pub async fn index(
     UserAuth(user): UserAuth,
-    state: State<AppState<DB>>,
+    state: State<AppState>,
 ) -> Result<Json<RecordStatus>, ErrorResponseStatus<'static>> {
     let State(AppState { database, .. }) = state;
 
@@ -78,10 +77,10 @@ pub struct NextParams {
 }
 
 #[instrument(skip_all, err(level = "warn"), fields(user.id = user.id, host.id = %params.host, tag = params.tag.as_str(), count = params.count))]
-pub async fn next<DB: Database>(
+pub async fn next(
     params: Query<NextParams>,
     UserAuth(user): UserAuth,
-    state: State<AppState<DB>>,
+    state: State<AppState>,
 ) -> Result<Json<Vec<Record<EncryptedData>>>, ErrorResponseStatus<'static>> {
     let State(AppState { database, .. }) = state;
     let params = params.0;

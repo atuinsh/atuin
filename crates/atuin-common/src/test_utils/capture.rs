@@ -10,6 +10,7 @@ use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 /// Start capturing logs from [`tracing`].
 ///
 /// Logs will continue to be captured until the returned [`CapturedLogs`] object is dropped.
+#[must_use]
 pub fn capture_logs() -> CapturedLogs {
     let logs: Arc<Mutex<Vec<LogItem>>> = Arc::default();
     let subscriber = tracing_subscriber::registry().with(CaptureLayer { logs: logs.clone() });

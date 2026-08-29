@@ -111,11 +111,13 @@ pub struct Key([u8; 32]);
 
 impl Key {
     /// Borrow the raw key bytes.
+    #[must_use]
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 
     /// Equivalent to [`rusty_paserk::Key::new_os_random()`].
+    #[must_use]
     pub fn new_os_random() -> Self {
         rusty_paserk::Key::<rusty_paserk::V4, rusty_paserk::Local>::new_os_random().into()
     }
@@ -127,12 +129,14 @@ impl Key {
     }
 
     /// Equivalent to [`rusty_paserk::Key::to_id`].
+    #[must_use]
     pub fn key_id(&self) -> PaserkV4KeyId {
         let paserk: rusty_paserk::Key<rusty_paserk::V4, rusty_paserk::Local> = self.into();
         paserk.to_id()
     }
 
     /// Equivalent to [`rusty_paserk::Key::wrap_pie`].
+    #[must_use]
     pub fn wrap_pie(&self, wrapping: &Self) -> PaserkV4PieWrappedKey {
         let p_self: rusty_paserk::Key<rusty_paserk::V4, rusty_paserk::Local> = self.into();
         let p_wrapping: rusty_paserk::Key<rusty_paserk::V4, rusty_paserk::Local> = wrapping.into();
@@ -141,11 +145,13 @@ impl Key {
     }
 
     /// Generate a new key with the XSalsa20Poly1305 algorithm.
+    #[must_use]
     pub fn generate() -> Self {
         <[u8; 32]>::from(XSalsa20Poly1305::generate_key(&mut aead::OsRng)).into()
     }
 
     /// Encode this key into a B64-encoded string, if possible.
+    #[must_use]
     pub fn encode(&self) -> PlainTextEncodedKey {
         let key_bytes = self.as_bytes();
         // A msgpack array16 header (3 bytes) followed by each byte as at most a 2-byte uint.
@@ -362,7 +368,10 @@ impl From<rusty_paseto::Key<32>> for Key {
 }
 
 mod cek {
-    use super::*;
+    use serde::{Deserialize, Serialize};
+    use thiserror::Error;
+
+    use super::{Key, PaserkV4KeyId, PaserkV4PieWrappedKey};
 
     #[derive(Debug, Error)]
     pub enum EncryptionError {
@@ -395,7 +404,7 @@ mod cek {
     impl Json {
         /// Create a JSON-serialized `String` for the given content encryption key.
         ///
-        /// This will encrypt the given CEK with the given parent key, create the [`cek::Json`] and
+        /// This will encrypt the given CEK with the given parent key, create the [`Json`] and
         /// serialize it into JSON.
         pub fn encrypt(cek: &Key, parent_key: &Key) -> Result<String, EncryptionError> {
             Ok(serde_json::to_string(&Self {

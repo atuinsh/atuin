@@ -2,6 +2,8 @@
 
 #[cfg(feature = "ansi")]
 pub mod ansi;
+#[cfg(feature = "db")]
+pub mod db;
 pub mod docs;
 pub mod encryption;
 pub mod filter;

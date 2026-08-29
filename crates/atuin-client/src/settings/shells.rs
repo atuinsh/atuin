@@ -2,7 +2,7 @@ use atuin_common::filter::{self, OrFilter};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Controls which shells' commands are included in interactive search.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Shells {
     #[default]
     /// Include commands run from the current shell, or commands that have no recorded shell.
@@ -17,6 +17,7 @@ pub enum Shells {
 
 impl Shells {
     /// Include commands from every shell.
+    #[must_use]
     pub const fn all() -> Self {
         Self::Fixed(OrFilter::all())
     }
@@ -25,6 +26,7 @@ impl Shells {
     ///
     /// This method returns a helper type that allows you to obtain a [`OrFilter`] without
     /// allocating; see [`ShellFilter::as_filter`].
+    #[must_use]
     pub fn to_filter(&self) -> ShellFilter<'_> {
         self.to_filter_with(|| std::env::var("ATUIN_SHELL").ok())
     }
@@ -63,6 +65,7 @@ enum ShellFilterInner<'a> {
 
 impl ShellFilter<'_> {
     /// View this filter as a [`OrFilter`].
+    #[must_use]
     pub fn as_filter(&self) -> OrFilter<&[String]> {
         match &self.0 {
             ShellFilterInner::Borrowed(filter) => *filter,
@@ -71,6 +74,7 @@ impl ShellFilter<'_> {
     }
 
     /// Convert this filter into an owned [`OrFilter<Vec<String>>`].
+    #[must_use]
     pub fn to_vec_filter(&self) -> OrFilter<Vec<String>> {
         self.as_filter().to_vec_filter()
     }

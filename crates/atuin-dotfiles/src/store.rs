@@ -124,6 +124,7 @@ pub struct AliasStore {
 
 impl AliasStore {
     // will want to init the actual kv store when that is done
+    #[must_use]
     pub fn new(store: SqliteStore, host_id: HostId, encryption_key: paseto_v4::Key) -> Self {
         Self {
             store,
@@ -330,13 +331,15 @@ impl AliasStore {
 }
 
 #[cfg(test)]
-pub(crate) fn test_local_timeout() -> f64 {
-    std::env::var("ATUIN_TEST_LOCAL_TIMEOUT")
+pub(crate) fn test_local_timeout() -> std::time::Duration {
+    let secs = std::env::var("ATUIN_TEST_LOCAL_TIMEOUT")
         .ok()
-        .and_then(|x| x.parse().ok())
+        .and_then(|x| x.parse::<f64>().ok())
         // this hardcoded value should be replaced by a simple way to get the
         // default local_timeout of Settings if possible
-        .unwrap_or(2.0)
+        .unwrap_or(2.0);
+    std::time::Duration::try_from_secs_f64(secs)
+        .unwrap_or_else(|_| std::time::Duration::from_secs(2))
 }
 
 #[cfg(test)]
@@ -352,7 +355,7 @@ mod tests {
 
     #[fixture]
     async fn alias_store() -> (AliasStore, SqliteStore) {
-        let store = SqliteStore::new(":memory:", test_local_timeout()).await.unwrap();
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
         let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
         let host_id = atuin_domain::record::HostId(atuin_common::utils::uuid_v7());
 
@@ -414,7 +417,7 @@ mod tests {
 alias k='kubectl'
 alias kgap='kubectl get pods --all-namespaces'
 "
-        )
+        );
     }
 
     #[rstest]

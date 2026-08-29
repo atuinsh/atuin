@@ -26,6 +26,7 @@ impl PermissionChecker {
         Self { files }
     }
 
+    #[must_use]
     pub fn check<'t>(&self, request: &'t PermissionRequest<'t>) -> PermissionResponse {
         // Files are in order from deepest to shallowest, so we can stop at the first match.
         // Within a file, the priority is ask -> deny -> allow

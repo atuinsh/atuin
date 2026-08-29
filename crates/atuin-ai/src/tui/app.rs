@@ -397,7 +397,7 @@ impl AiApp {
                     .detach();
                 }
                 Effect::CheckPermission { tool_id, tool } => {
-                    self.check_permission(tool_id, tool, ctx)
+                    self.check_permission(tool_id, tool, ctx);
                 }
                 Effect::ResolveOutputCommand {
                     tool_id,
@@ -879,6 +879,7 @@ impl AiApp {
         Some((name, args))
     }
 
+    #[must_use]
     fn resolve_slash_command(&self, command: &str) -> String {
         match command.trim() {
             "/reload" => {

@@ -127,12 +127,12 @@ CREATE TABLE test( stamp DateTime('UTC'))ENGINE = MergeTreePARTITION BY toDat
             };
         }
 
-        history!(1707603388, "select * from remote('127.0.0.1:20222', view(select 1))");
-        history!(1707603396, "select * from numbers(10)");
-        history!(1707603401, "select * from system.numbers");
-        history!(1707603568, "select 1");
+        history!(1_707_603_388, "select * from remote('127.0.0.1:20222', view(select 1))");
+        history!(1_707_603_396, "select * from numbers(10)");
+        history!(1_707_603_401, "select * from system.numbers");
+        history!(1_707_603_568, "select 1");
         history!(
-            1708600533,
+            1_708_600_533,
             "CREATE TABLE test\n( stamp DateTime('UTC'))\nENGINE = MergeTree\nPARTITION BY \
              toDate(stamp)\norder by tuple() as select toDateTime('2020-01-01')+number*60 from \
              numbers(80000);"

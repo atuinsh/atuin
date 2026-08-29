@@ -5,7 +5,7 @@ resolver = "2"
 exclude = ["ui/backend"]
 
 [workspace.package]
-version = "18.20.0-beta.3"
+version = "18.20.1"
 authors = ["Ellie Huxtable <ellie@atuin.sh>"]
 rust-version = "1.98.0"
 license = "MIT"
@@ -16,18 +16,16 @@ readme = "README.md"
 [workspace.dependencies]
 async-trait = "0.1.58"
 enum_dispatch = "0.3"
-atuin-client = { path = "crates/atuin-client", version = "18.20.0-beta.3" }
-atuin-common = { path = "crates/atuin-common", version = "18.20.0-beta.3" }
-atuin-daemon = { path = "crates/atuin-daemon", version = "18.20.0-beta.3" }
-atuin-domain = { path = "crates/atuin-domain", version = "18.20.0-beta.3" }
-atuin-dotfiles = { path = "crates/atuin-dotfiles", version = "18.20.0-beta.3" }
-atuin-history = { path = "crates/atuin-history", version = "18.20.0-beta.3" }
-atuin-kv = { path = "crates/atuin-kv", version = "18.20.0-beta.3" }
-atuin-scripts = { path = "crates/atuin-scripts", version = "18.20.0-beta.3" }
-atuin-server = { path = "crates/atuin-server", version = "18.20.0-beta.3" }
-atuin-server-database = { path = "crates/atuin-server-database", version = "18.20.0-beta.3" }
-atuin-server-postgres = { path = "crates/atuin-server-postgres", version = "18.20.0-beta.3" }
-atuin-server-sqlite = { path = "crates/atuin-server-sqlite", version = "18.20.0-beta.3" }
+atuin-client = { path = "crates/atuin-client", version = "18.20.1" }
+atuin-common = { path = "crates/atuin-common", version = "18.20.1" }
+atuin-daemon = { path = "crates/atuin-daemon", version = "18.20.1" }
+atuin-domain = { path = "crates/atuin-domain", version = "18.20.1" }
+atuin-dotfiles = { path = "crates/atuin-dotfiles", version = "18.20.1" }
+atuin-history = { path = "crates/atuin-history", version = "18.20.1" }
+atuin-kv = { path = "crates/atuin-kv", version = "18.20.1" }
+atuin-scripts = { path = "crates/atuin-scripts", version = "18.20.1" }
+atuin-server = { path = "crates/atuin-server", version = "18.20.1" }
+atuin-vt100 = "0.17"
 frizbee = "0.12.0"
 base64 = "0.22"
 crossterm = "0.29.0"
@@ -53,6 +51,7 @@ serde = { version = "1.0.202", features = ["derive"] }
 serde_json = "1.0.119"
 shellexpand = "3"
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 uuid = { version = "1.9", features = ["v4", "v7", "serde"] }
 whoami = "2.1.0"
 typed-builder = "0.23.2"
@@ -63,6 +62,8 @@ zeroize = "1"
 rstest = "0.26.1"
 thiserror = "2"
 rustix = { version = "1.1.4", features = ["process", "fs"] }
+nix = { version = "0.30.1", features = ["signal"] }
+windows-sys = { version = "0.61.2", features = ["Win32_System_Console", "Win32_System_Threading", "Win32_Foundation"] }
 tower = "0.5"
 # `release_max_level_info` compiles out trace/debug events in any build with
 # debug assertions off (release, dist, profiling). Builds that want the
@@ -83,7 +84,6 @@ minijinja = "2.9.0"
 glob-match = "0.2.1"
 imara-diff = "0.2"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
-vt100 = "0.16"
 regex = "1.10.5"
 toml_edit = "0.25.4"
 url = { version = "2.5", features = ["serde"] }
@@ -102,12 +102,17 @@ features = ["ansi", "fmt", "registry", "env-filter", "json"]
 
 [workspace.dependencies.reqwest]
 version = "0.13"
-features = ["json", "native-tls", "stream"]
+features = ["json", "native-tls", "stream", "gzip", "zstd"]
 default-features = false
 
 [workspace.dependencies.sqlx]
 version = "0.9"
 features = ["runtime-tokio", "time", "uuid"]
+
+# Version range mirrors sqlx-sqlite's so cargo unifies both to a single
+# `links = "sqlite3"` package (one bundled SQLite).
+[workspace.dependencies.libsqlite3-sys]
+version = ">=0.30.1, <0.38.0"
 
 # The profile that 'cargo dist' will build with
 [profile.dist]
@@ -144,50 +149,100 @@ debug-assertions = true
 axoasset = { path = "vendor/axoasset" }
 
 [workspace.lints.clippy]
+as_ptr_cast_mut = "warn"
 assigning_clones = "warn"
+borrow_as_ptr = "warn"
+branches_sharing_code = "warn"
+case_sensitive_file_extension_comparisons = "warn"
 cast_lossless = "warn"
+# TODO(markovejnovic): These could be enabled in a separate PR, but we should
+# first try using easy_cast.
+#cast_possible_truncation = "warn"
+#cast_possible_wrap = "warn"
+#cast_precision_loss = "warn"
+#cast_sign_loss = "warn"
+clear_with_drain = "warn"
 cloned_instead_of_copied = "warn"
 collapsible_else_if = "warn"
+collection_is_never_read = "warn"
+dbg_macro = "warn"
+debug_assert_with_mut_call = "warn"
+derive_partial_eq_without_eq = "warn"
 elidable_lifetime_names = "warn"
+empty_line_after_outer_attr = "warn"
+explicit_deref_methods = "warn"
 explicit_into_iter_loop = "warn"
 explicit_iter_loop = "warn"
+fallible_impl_from = "warn"
 filter_map_next = "warn"
 flat_map_option = "warn"
+float_cmp = "warn"
+float_cmp_const = "warn"
 fn_params_excessive_bools = "warn"
+fn_to_numeric_cast_any = "warn"
+if_not_else = "warn"
+implicit_clone = "warn"
+index_refutable_slice = "warn"
+iter_not_returning_iterator = "warn"
+iter_on_single_items = "warn"
+iter_with_drain = "warn"
+large_stack_arrays = "warn"
+large_types_passed_by_value = "warn"
+lossy_float_literal = "warn"
+manual_assert = "warn"
 manual_ilog2 = "warn"
 manual_instant_elapsed = "warn"
 manual_is_power_of_two = "warn"
 manual_is_variant_and = "warn"
 manual_let_else = "warn"
+match_wildcard_for_single_variants = "warn"
+maybe_infinite_iter = "warn"
+mem_forget = "warn"
+mismatching_type_param_order = "warn"
+multiple_unsafe_ops_per_block = "warn"
+must_use_candidate = "warn"
+mut_mut = "warn"
 needless_collect = "warn"
+needless_continue = "warn"
 needless_pass_by_ref_mut = "warn"
 needless_pass_by_value = "warn"
 needless_raw_string_hashes = "warn"
+no_effect_underscore_binding = "warn"
 non_std_lazy_statics = "warn"
 nonminimal_bool = "warn"
 option_as_ref_cloned = "warn"
 path_buf_push_overwrite = "warn"
+ptr_as_ptr = "warn"
 range_minus_one = "warn"
 range_plus_one = "warn"
+rc_mutex = "warn"
 read_zero_byte_vec = "warn"
 redundant_clone = "warn"
 redundant_pub_crate = "warn"
 ref_option = "warn"
 ref_option_ref = "warn"
+return_self_not_must_use = "warn"
 same_functions_in_if_condition = "warn"
+same_name_method = "warn"
 search_is_some = "warn"
+semicolon_if_nothing_returned = "warn"
 set_contains_or_insert = "warn"
+significant_drop_in_scrutinee = "warn"
 significant_drop_tightening = "warn"
 single_char_pattern = "warn"
 single_option_map = "warn"
 stable_sort_primitive = "warn"
 str_split_at_newline = "warn"
 string_lit_as_bytes = "warn"
+suspicious_operation_groupings = "warn"
+trailing_empty_array = "warn"
 trait_duplication_in_bounds = "warn"
 trivial_regex = "warn"
 trivially_copy_pass_by_ref = "warn"
 tuple_array_conversions = "warn"
 type_repetition_in_bounds = "warn"
+undocumented_unsafe_blocks = "warn"
+unimplemented = "warn"
 uninlined_format_args = "warn"
 unnecessary_box_returns = "warn"
 unnecessary_join = "warn"
@@ -195,10 +250,16 @@ unnecessary_literal_bound = "warn"
 unnecessary_struct_initialization = "warn"
 unnecessary_trailing_comma = "warn"
 unnecessary_wraps = "warn"
+unnested_or_patterns = "warn"
+unreadable_literal = "warn"
 unused_async = "warn"
 unused_peekable = "warn"
 unused_rounding = "warn"
 unused_self = "warn"
 use_self = "warn"
+used_underscore_binding = "warn"
 used_underscore_items = "warn"
 useless_let_if_seq = "warn"
+verbose_bit_mask = "warn"
+while_float = "warn"
+wildcard_imports = "warn"

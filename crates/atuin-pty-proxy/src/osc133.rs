@@ -576,7 +576,7 @@ mod tests {
         let mut events = Vec::new();
 
         parser.push_located(b"\x1b]133;D;127;history_id=018f;session_id=abcd;flag\x07", |event| {
-            events.push(event)
+            events.push(event);
         });
 
         assert_eq!(events.len(), 1);

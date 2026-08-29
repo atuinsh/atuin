@@ -54,6 +54,7 @@ struct HistoryComponentInner {
 
 impl HistoryComponent {
     /// Create a new history component.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             inner: Arc::new(HistoryComponentInner {
@@ -67,6 +68,7 @@ impl HistoryComponent {
     /// Get the gRPC service for this component.
     ///
     /// This returns a tonic service that can be added to a gRPC server.
+    #[must_use]
     pub fn grpc_service(&self) -> HistoryServer<HistoryGrpcService> {
         HistoryServer::new(HistoryGrpcService {
             inner: self.inner.clone(),
@@ -228,7 +230,7 @@ impl HistorySvc for HistoryGrpcService {
                 .await
                 .map_err(|e| Status::internal(format!("failed to write to db: {e:?}")))?;
 
-            tracing::info!(id = id.0.to_string(), duration = history.duration, "end history");
+            tracing::info!(id = id.0.clone(), duration = history.duration, "end history");
 
             // Push to record store
             let (record_id, idx) = history_store

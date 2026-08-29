@@ -102,6 +102,7 @@ pub struct VarStore {
 
 impl VarStore {
     // will want to init the actual kv store when that is done
+    #[must_use]
     pub fn new(store: SqliteStore, host_id: HostId, encryption_key: paseto_v4::Key) -> Self {
         Self {
             store,
@@ -385,7 +386,7 @@ mod tests {
 
     #[fixture]
     async fn var_store() -> VarStore {
-        let store = SqliteStore::new(":memory:", test_local_timeout()).await.unwrap();
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
         let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
         let host_id = atuin_domain::record::HostId(atuin_common::utils::uuid_v7());
 

@@ -72,18 +72,22 @@ pub struct Theme {
 // theme-related boilerplate minimal, the convenience functions give a color.
 impl Theme {
     // This is the base "default" color, for general text
+    #[must_use]
     pub fn get_base(&self) -> ContentStyle {
         self.styles[&Meaning::Base]
     }
 
+    #[must_use]
     pub fn get_info(&self) -> ContentStyle {
         self.get_alert(tracing::Level::INFO)
     }
 
+    #[must_use]
     pub fn get_warning(&self) -> ContentStyle {
         self.get_alert(tracing::Level::WARN)
     }
 
+    #[must_use]
     pub fn get_error(&self) -> ContentStyle {
         self.get_alert(tracing::Level::ERROR)
     }
@@ -94,6 +98,7 @@ impl Theme {
         self.styles[ALERT_TYPES.get(&severity).unwrap()]
     }
 
+    #[must_use]
     pub fn new(
         name: String,
         parent: Option<String>,
@@ -117,6 +122,7 @@ impl Theme {
     }
 
     // General access - if you have a meaning, this will give you a (crossterm) style
+    #[must_use]
     pub fn as_style(&self, meaning: Meaning) -> ContentStyle {
         self.styles[self.closest_meaning(&meaning)]
     }
@@ -126,6 +132,7 @@ impl Theme {
     // but we do not have this on in general, as it could print unfiltered text to the terminal
     // from a theme TOML file. However, it will always return a theme, falling back to
     // defaults on error, so that a TOML file does not break loading
+    #[must_use]
     pub fn from_foreground_colors(
         name: String,
         parent: Option<&Self>,
@@ -331,6 +338,18 @@ static BUILTIN_THEMES: LazyLock<HashMap<&'static str, Theme>> = LazyLock::new(||
                 (Meaning::Guidance, StyleFactory::known_fg_string("teal")),
             ]),
         ),
+        (
+            // This is the default theme with default PowerShell syntax highlighting colors.
+            "default-powershell",
+            HashMap::from([
+                (Meaning::SyntaxCommand, StyleFactory::from_fg_color(Color::Yellow)),
+                (Meaning::SyntaxFlag, StyleFactory::from_fg_color(Color::DarkGrey)),
+                (Meaning::SyntaxString, StyleFactory::from_fg_color(Color::DarkCyan)),
+                (Meaning::SyntaxVariable, StyleFactory::from_fg_color(Color::Green)),
+                (Meaning::SyntaxOperator, StyleFactory::from_fg_color(Color::DarkGrey)),
+                (Meaning::SyntaxComment, StyleFactory::from_fg_color(Color::DarkGreen)),
+            ]),
+        ),
     ])
     .iter()
     .map(|(name, theme)| (*name, Theme::from_map(name.to_string(), None, theme)))
@@ -346,6 +365,7 @@ pub struct ThemeManager {
 
 // Theme-loading logic
 impl ThemeManager {
+    #[must_use]
     pub fn new(debug: Option<bool>, theme_dir: Option<String>) -> Self {
         Self {
             loaded_themes: HashMap::new(),
@@ -451,6 +471,7 @@ impl ThemeManager {
 
     // Check if the requested theme is loaded and, if not, then attempt to get it
     // from the builtins or, if not there, from file
+    #[must_use]
     pub fn load_theme(&mut self, name: &str, max_depth: Option<u8>) -> &Theme {
         if self.loaded_themes.contains_key(name) {
             return self.loaded_themes.get(name).unwrap();
@@ -562,7 +583,7 @@ mod theme_tests {
         let mytheme = Theme::new("mytheme".to_string(), None, HashMap::from([]));
         MEANING_FALLBACKS
             .iter()
-            .for_each(|pair| assert_eq!(mytheme.closest_meaning(pair.0), &Meaning::Base))
+            .for_each(|pair| assert_eq!(mytheme.closest_meaning(pair.0), &Meaning::Base));
     }
 
     #[rstest]
@@ -572,7 +593,10 @@ mod theme_tests {
         assert_eq!(theme.get_warning().foreground_color.unwrap(), Color::DarkYellow);
         assert_eq!(theme.get_info().foreground_color.unwrap(), Color::DarkGreen);
         assert_eq!(theme.get_base().foreground_color, None);
-        assert_eq!(theme.get_alert(tracing::Level::ERROR).foreground_color.unwrap(), Color::DarkRed)
+        assert_eq!(
+            theme.get_alert(tracing::Level::ERROR).foreground_color.unwrap(),
+            Color::DarkRed
+        );
     }
 
     #[rstest]
@@ -649,7 +673,7 @@ mod theme_tests {
             "Could not load theme nonsolarized: Empty theme directory override and could not find \
              theme elsewhere"
         );
-        assert_eq!(captured_logs[0].level, tracing::Level::WARN)
+        assert_eq!(captured_logs[0].level, tracing::Level::WARN);
     }
 
     #[rstest]

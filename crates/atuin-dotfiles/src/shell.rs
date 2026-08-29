@@ -17,7 +17,7 @@ pub struct Alias {
     pub value: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Var {
     pub name: String,
     pub value: String,
@@ -75,6 +75,7 @@ impl Var {
     }
 }
 
+#[must_use]
 pub fn parse_alias(line: &str) -> Option<Alias> {
     // consider the fact we might be importing a fish alias
     // 'alias' output

@@ -2,7 +2,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use clap::Args;
-use eyre::Result;
+use eyre::{Context as _, Result};
 
 #[derive(Args, Debug)]
 pub struct Rekey {
@@ -21,7 +21,8 @@ impl Rekey {
             paseto_v4::Key::generate()
         };
 
-        let current_key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
+        let current_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+            .context("could not load encryption key")?;
 
         store.re_encrypt(&current_key, &key).await?;
 

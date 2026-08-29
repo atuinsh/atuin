@@ -1,22 +1,23 @@
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{ErrorKind, Write};
+use std::ops::ControlFlow;
 #[cfg(unix)]
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use atuin_client::database::Sqlite;
 use atuin_client::history::History;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
+use atuin_common::futures::Backoff;
 use atuin_daemon::DaemonEvent;
 use atuin_daemon::client::{ControlClient, DaemonClientErrorKind, HistoryClient, classify_error};
 use clap::Subcommand;
 #[cfg(unix)]
 use daemonize::Daemonize;
 use eyre::{Result, WrapErr, bail, eyre};
-use tokio::time::sleep;
 
 #[derive(clap::Args, Debug)]
 pub struct Cmd {
@@ -194,22 +195,24 @@ fn open_lock_file(path: &Path) -> Result<File> {
 
 async fn wait_for_lock(path: &Path, timeout: Duration) -> Result<File> {
     let file = open_lock_file(path)?;
-    let start = Instant::now();
 
-    loop {
-        match file.try_lock() {
-            Ok(()) => return Ok(file),
-            Err(TryLockError::WouldBlock) => {
-                if start.elapsed() >= timeout {
-                    bail!("timed out waiting for lock at {}", path.display());
+    let outcome = Backoff::Linear(LOCK_POLL)
+        .retry_sync(
+            || match file.try_lock() {
+                Ok(()) => ControlFlow::Break(Ok(())),
+                Err(TryLockError::WouldBlock) => ControlFlow::Continue(()),
+                Err(TryLockError::Error(err)) => {
+                    ControlFlow::Break(Err(eyre!("could not lock {}: {err}", path.display())))
                 }
+            },
+            timeout,
+        )
+        .await;
 
-                sleep(LOCK_POLL).await;
-            }
-            Err(TryLockError::Error(err)) => {
-                return Err(eyre!("could not lock {}: {err}", path.display()));
-            }
-        }
+    match outcome {
+        Ok(Ok(())) => Ok(file),
+        Ok(Err(err)) => Err(err),
+        Err(()) => bail!("timed out waiting for lock at {}", path.display()),
     }
 }
 
@@ -325,32 +328,30 @@ fn remove_stale_socket_if_present(settings: &Settings) -> Result<(), RemoveSocke
 }
 
 async fn wait_until_ready(settings: &Settings, timeout: Duration) -> Result<HistoryClient> {
-    let start = Instant::now();
-    let mut last_error = eyre!("daemon did not become ready");
-
-    loop {
-        match probe(settings).await {
-            Probe::Ready(client) => return Ok(client),
-            Probe::NeedsRestart(reason) => {
-                last_error = eyre!(reason);
-            }
-            Probe::Unreachable(err) => {
-                if is_legacy_daemon_error(&err) {
-                    return Err(err.wrap_err(LEGACY_DAEMON_RESTART_MESSAGE));
+    Backoff::Linear(STARTUP_POLL)
+        .retry(
+            || async move {
+                match probe(settings).await {
+                    Probe::Ready(client) => ControlFlow::Break(Ok(client)),
+                    Probe::NeedsRestart(reason) => ControlFlow::Continue(eyre!(reason)),
+                    Probe::Unreachable(err) => {
+                        if is_legacy_daemon_error(&err) {
+                            ControlFlow::Break(Err(err.wrap_err(LEGACY_DAEMON_RESTART_MESSAGE)))
+                        } else {
+                            ControlFlow::Continue(err)
+                        }
+                    }
                 }
-                last_error = err;
-            }
-        }
-
-        if start.elapsed() >= timeout {
-            return Err(last_error.wrap_err(format!(
+            },
+            timeout,
+        )
+        .await
+        .unwrap_or_else(|last| {
+            Err(last.wrap_err(format!(
                 "timed out waiting for daemon startup after {}ms",
                 timeout.as_millis()
-            )));
-        }
-
-        sleep(STARTUP_POLL).await;
-    }
+            )))
+        })
 }
 
 #[allow(clippy::unnecessary_wraps)]
@@ -680,7 +681,7 @@ async fn run(
     force: bool,
 ) -> Result<()> {
     if force {
-        force_cleanup(&settings);
+        force_cleanup(&settings).await;
     }
 
     let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
@@ -692,7 +693,7 @@ async fn run(
 }
 
 /// Force cleanup: kill existing daemon process and remove socket.
-fn force_cleanup(settings: &Settings) {
+async fn force_cleanup(settings: &Settings) {
     let pidfile_path = Path::new(&settings.daemon.pidfile_path);
 
     // Read and kill the existing process if pidfile exists
@@ -700,10 +701,10 @@ fn force_cleanup(settings: &Settings) {
         if let Ok(contents) = fs::read_to_string(pidfile_path)
             && let Some(pid_str) = contents.lines().next()
             && let Ok(pid) = pid_str.parse::<u32>()
+            && let Err(e) =
+                atuin_common::os::process::force_terminate(pid, Duration::from_secs(2)).await
         {
-            kill_process(pid);
-            // Give it a moment to release resources
-            std::thread::sleep(Duration::from_millis(100));
+            tracing::warn!("could not terminate existing daemon (pid {pid}): {e}");
         }
 
         // Remove the pidfile
@@ -719,28 +720,6 @@ fn force_cleanup(settings: &Settings) {
     if let Err(e) = remove_sockets(settings, |_| true) {
         tracing::warn!("{e}");
     }
-}
-
-/// Kill a process by PID.
-#[cfg(unix)]
-fn kill_process(pid: u32) {
-    // Use kill command to send SIGTERM for graceful shutdown
-    let _ = Command::new("kill")
-        .args(["-TERM", &pid.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-}
-
-/// Kill a process by PID.
-#[cfg(not(unix))]
-fn kill_process(pid: u32) {
-    // On Windows, use taskkill
-    let _ = Command::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/F"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
 }
 
 #[cfg(test)]

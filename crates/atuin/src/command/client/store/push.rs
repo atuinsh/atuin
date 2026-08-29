@@ -7,7 +7,7 @@ use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::{HostId, RecordTag};
 use clap::Args;
-use eyre::Result;
+use eyre::{Context as _, Result};
 use uuid::Uuid;
 
 #[derive(Args, Debug)]
@@ -42,10 +42,7 @@ impl Push {
             println!("Forcing remote store overwrite!");
             println!("Clearing remote store");
 
-            let caps = atuin_client::api_client::caps_client(
-                &settings.sync_address,
-                &settings.extra_headers,
-            )?;
+            let caps = atuin_client::api_client::caps_client(settings)?;
             let client = Client::new(
                 settings.sync_address.clone(),
                 &settings.sync_auth_token().await?,
@@ -66,7 +63,8 @@ impl Push {
         // 3. Filter operations by
         //  a) are they an upload op?
         //  b) are they for the host/tag we are pushing here?
-        let key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
+        let key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+            .context("could not load encryption key")?;
         let engine = SyncEngine::builder()
             .store(store)
             .client_source(ClientSource::FromSettings {

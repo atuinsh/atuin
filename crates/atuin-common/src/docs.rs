@@ -9,6 +9,7 @@
 pub const VERSION: &str = version_segment(env!("CARGO_PKG_VERSION"));
 
 /// A URL for `path` (e.g. `guide/sync/#login`) in this build's documentation.
+#[must_use]
 pub fn url(path: &str) -> String {
     format!("https://docs.atuin.sh/{VERSION}/{path}")
 }

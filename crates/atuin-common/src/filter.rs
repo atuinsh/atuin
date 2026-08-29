@@ -31,6 +31,7 @@ pub struct OrFilter<L> {
 
 impl<L: FilterStorage> OrFilter<L> {
     /// Create an "all" filter (i.e., allow all items).
+    #[must_use]
     pub const fn all() -> Self {
         Self { inner: L::EMPTY }
     }
@@ -229,6 +230,7 @@ pub trait FilterStorage: Ord + AsRef<[Self::Item]> + sealed::Sealed {
 ///
 /// This trait is implemented for [`Vec`] and mutable references to slices.
 pub trait FilterStorageMut: FilterStorage + AsMut<[Self::Item]> {
+    #[must_use]
     fn dedup(self) -> Self;
 }
 
