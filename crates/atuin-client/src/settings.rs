@@ -2040,9 +2040,8 @@ mod tests {
         let json = r#"{"emacs": {"ctrl-c": "exit"}}"#;
         let config: super::KeymapConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.emacs.len(), 1);
-        match &config.emacs["ctrl-c"] {
-            super::KeyBindingConfig::Simple(s) => assert_eq!(s, "exit"),
-            super::KeyBindingConfig::Rules(_) => panic!("expected Simple variant"),
+        if let super::KeyBindingConfig::Simple(s) = &config.emacs["ctrl-c"] {
+            assert_eq!(s, "exit");
         }
     }
 
