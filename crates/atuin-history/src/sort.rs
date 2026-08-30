@@ -23,7 +23,16 @@ pub fn sort(query: &str, search_mode: SearchMode, input: Vec<History>) -> Vec<Hi
             // buried mid-command would always rank below every prefix match no matter how old,
             // instead of being ranked primarily by recency as the docs promise.
             let score = if search_mode == SearchMode::FullText {
-                if h.command.contains(query) {
+                // Mirror the smart-case behavior of the DB-side LIKE/GLOB query
+                // (QueryToken::has_uppercase in database.rs): an all-lowercase query
+                // matches case-insensitively, so a lowercase-only query must not
+                // demote differently-cased commands that the DB already matched.
+                let matches = if query.contains(char::is_uppercase) {
+                    h.command.contains(query)
+                } else {
+                    h.command.to_lowercase().contains(&query.to_lowercase())
+                };
+                if matches {
                     2.0
                 } else {
                     1.0
@@ -99,5 +108,35 @@ mod tests {
 
         assert_eq!(sorted[0].command, old_prefix_match.command);
         assert_eq!(sorted[1].command, recent_substring_match.command);
+    }
+
+    // Regression test for a case-sensitivity bug caught in review: the DB-side fulltext query
+    // matches case-insensitively for an all-lowercase query, so a differently-cased command
+    // must not be treated as a non-match here and demoted below an older exact-case one.
+    #[test]
+    fn fulltext_lowercase_query_matches_case_insensitively() {
+        let recent_different_case = history_ago("GIT status", 10);
+        let old_exact_case = history_ago("git log", 1_000_000);
+
+        let input = vec![old_exact_case.clone(), recent_different_case.clone()];
+        let sorted = sort("git", SearchMode::FullText, input);
+
+        assert_eq!(sorted[0].command, recent_different_case.command);
+        assert_eq!(sorted[1].command, old_exact_case.command);
+    }
+
+    // A query containing uppercase opts into case-sensitive matching, mirroring the DB-side
+    // GLOB behavior for such queries (QueryToken::has_uppercase in database.rs): a differently
+    // cased command should score as a non-match, not be treated as equivalent.
+    #[test]
+    fn fulltext_uppercase_query_matches_case_sensitively() {
+        let recent_wrong_case = history_ago("git status", 10);
+        let old_exact_case = history_ago("STATUS log", 1_000_000);
+
+        let input = vec![recent_wrong_case.clone(), old_exact_case.clone()];
+        let sorted = sort("STATUS", SearchMode::FullText, input);
+
+        assert_eq!(sorted[0].command, old_exact_case.command);
+        assert_eq!(sorted[1].command, recent_wrong_case.command);
     }
 }
