@@ -113,7 +113,7 @@ impl Search {
                 state.input.as_str(),
                 OptFilters {
                     limit: Some(200),
-                    authors: all_user_author_filter(),
+                    authors: state.authors.as_slice_filter(),
                     shells: shells.as_filter(),
                     ..Default::default()
                 },
@@ -150,9 +150,11 @@ impl SearchEngine for Search {
     async fn full_query(&mut self, state: &SearchState, db: &mut Sqlite) -> Result<Vec<History>> {
         let query = state.input.as_str().to_string();
 
-        // Fall back to database for regex queries (Nucleo doesn't support regex)
-        if Self::contains_regex_pattern(&query) {
-            debug!(query = %query, "[daemon-client] regex detected, falling back to db");
+        // The daemon index deliberately excludes agent-authored commands, so author filters other
+        // than the default all-user filter must use the database to remain correct. Nucleo also
+        // does not support regex queries.
+        if Self::contains_regex_pattern(&query) || state.authors != all_user_author_filter() {
+            debug!(query = %query, "[daemon-client] unsupported filter, falling back to db");
             return self.fallback_to_db_search(state, db).await;
         }
 

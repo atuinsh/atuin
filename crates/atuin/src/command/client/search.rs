@@ -3,9 +3,9 @@ use std::io::{IsTerminal as _, Write, stderr, stdout};
 
 use atuin_client::database::{OptFilters, Sqlite, current_context};
 use atuin_client::history::store::HistoryStore;
-use atuin_client::history::{AuthorPattern, History};
+use atuin_client::history::{AuthorPattern, History, all_user_author_filter};
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::settings::{FilterMode, KeymapMode, RequestedSearchMode, Settings};
+use atuin_client::settings::{FilterMode, KeymapMode, RequestedSearchMode, Settings, Shells};
 use atuin_client::theme::Theme;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::filter::OrFilter;
@@ -242,7 +242,13 @@ impl Cmd {
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
         if self.interactive {
-            let item = interactive::history(&query, settings, db, &history_store, theme).await?;
+            let authors = OrFilter::from_list(self.author)
+                .unwrap_or_else(|| all_user_author_filter().to_vec_filter());
+            let shells = OrFilter::from_list(self.shell)
+                .map_or_else(|| settings.search.shells.clone(), Shells::Fixed);
+            let item =
+                interactive::history(&query, settings, db, &history_store, theme, authors, shells)
+                    .await?;
 
             if let Some(result_file) = self.result_file {
                 let mut file = File::create(result_file)?;
