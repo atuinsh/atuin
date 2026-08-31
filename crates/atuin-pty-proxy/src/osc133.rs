@@ -93,10 +93,6 @@ pub enum Param<'a> {
     },
 }
 
-// ---------------------------------------------------------------------------
-// State machine
-// ---------------------------------------------------------------------------
-
 /// An iterator of OSC 133 events, created by [`Parser::push`].
 ///
 /// After exhausting the iterator, you will likely want to call [`Self::trailing_data`] to get the
