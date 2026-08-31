@@ -408,11 +408,19 @@ impl Keyed<'_> {
                     })?;
             }
 
-            client.post_records(&page).await.map_err(|e| {
+            let sync_response = client.post_records(&page).await.map_err(|e| {
                 error!("failed to post records: {e:?}");
 
                 SyncError::RemoteRequestError { msg: e.to_string() }
             })?;
+            if !sync_response.failed_commands.is_empty() {
+                for failed_command in sync_response.failed_commands {
+                    println!(
+                        "failed to upload record {}: {}",
+                        failed_command.record.id, failed_command.reason
+                    );
+                }
+            }
 
             progress += u64::conv(page.len());
             pb.set_position(progress);
@@ -1869,10 +1877,13 @@ mod packfile_capability_tests {
         build_engine(client, down.clone())
             .await
             .keyed(&key)
-            .sync_remote(vec![packfile_download_op(host, 3), Operation::Download {
-                remote: 3,
-                series: RecordSeriesKey::new(host, RecordTag::History),
-            }])
+            .sync_remote(vec![
+                packfile_download_op(host, 3),
+                Operation::Download {
+                    remote: 3,
+                    series: RecordSeriesKey::new(host, RecordTag::History),
+                },
+            ])
             .await
             .unwrap();
 
