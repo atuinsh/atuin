@@ -67,7 +67,7 @@ jobs:
           persist-credentials: false
 
       - name: Test on illumos
-        uses: vmactions/omnios-vm@027e3ec08fed6fb740ab5f300c2605f9de02997a # v1.3.4
+        uses: vmactions/omnios-vm@317e4f8069dad8a65e1520808f1a68ef3fd20565 # v1.3.6
         with:
           # use the latest omnios LTS
           release: "r151054-build"
