@@ -1,19 +1,69 @@
+//! Database accessors for `atuin-server`.
+//!
+//! This module is designed around a couple interesting traits.
+//!
+//! Firstly, there is a [`DynDatabase`] trait, which is an object-safe trait defining a generic
+//! database that `atuin-server` uses. It is a shim around [`Database`], which is implemented by
+//! [`Postgres`], [`MySql`] and [`Sqlite`].
+//!
+//! The [`Database`] trait is the main one conforming backends need to implement. Fortunately, since
+//! SQL is mostly standardized, it provides sensible default implementations on all the methods.
+//!
+//! Unfortunately, _binding_ for SQL is not standardized. There are two dialects:
+//!
+//!   - Ordinal bound -- `SELECT * FROM table WHERE column = $1`
+//!   - Positional bound -- `SELECT * FROM table WHERE column = ?`
+//!
+//! [`Sqlite`] and [`Postgres`] are both ordinal-bound, while [`MySql`] is positional.
+//!
+//! To avoid duplicating code, these two dialects of SQL are generalized within the [`Dialect`]
+//! trait, which merely collects all the SQL statements as strings. The two implementations
+//! [`OrdinalBindingDialect`] and [`PositionalBindingDialect`] implement the different behaviors.
+//!
+//! With that all said, here's a minimal new backend, should you wish to implement one:
+//!
+//! ```ignore
+//! //! Note that this example will not run since sqlx does not support mssql. We're pretending it
+//! //! does.
+//!
+//! // You probably want to define this in atuin-common. Search for MysqlDbUrl.
+//! #[derive(Clone, PartialEq, Eq)]
+//! pub struct MsSqlDbUrl<T: Borrow<str> = String>(pub T);
+//!
+//! // Here's the new type.
+//! #[derive(Clone)]
+//! pub struct MsSql;
+//!
+//! struct MsSqlDialect;
+//!
+//! impl Dialect for MsSqlDialect {
+//!   const GET_SESSION: &'static str = "SELECT id, user_id, token FROM sessions WHERE token = @P1";
+//!   // repeated for all the other necessary sql statements.
+//! }
+//!
+//! #[async_trait]
+//! impl Database for MsSql {
+//!     // v-- The sqlx database to use
+//!     type Db = sqlx::mssql::MsSql;
+//!     // v-- A custom type for the database url. Might not wrap a Url, so we create new types in
+//!     //     atuin-common.
+//!     type Url = MsSqlDbUrl;
+//!
+//!     // mssql has its own dialect for bindings, so we creaed the new type.
+//!     type Dialect = MsSqlDialect;
+//! }
+//!
+//! ```
 pub mod models;
-
-pub mod postgres;
-
+mod postgres;
 pub use postgres::Postgres;
-
-pub mod sqlite;
-
+mod sqlite;
 use async_trait::async_trait;
 use atuin_common::db::OwnedDbUrl;
 use atuin_domain::record::{EncryptedData, Record, RecordIdx, RecordSeriesKey, RecordStatus};
 use serde::{Deserialize, Serialize};
 pub use sqlite::Sqlite;
-
-pub mod mysql;
-
+mod mysql;
 use atuin_common::db;
 pub use mysql::MySql;
 use sqlx::{Encode, Executor, FromRow, IntoArguments, Type};
@@ -43,13 +93,14 @@ impl From<sqlx::Error> for DbError {
 
 pub type DbResult<T> = Result<T, DbError>;
 
-// Password redaction lives on `OwnedDbUrl`'s `Debug`, so the derive is safe here.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DbSettings {
     pub db_uri: OwnedDbUrl,
 }
 
 /// The SQL a backend runs, written in its placeholder dialect.
+///
+/// Please read the module docs.
 pub trait Dialect {
     const GET_SESSION: &'static str;
     const GET_SESSION_USER: &'static str;
@@ -67,9 +118,9 @@ pub trait Dialect {
     const STATUS: &'static str;
 }
 
-/// OrdinalBindingDialect (`$1`, `$2`, …) placeholders — Postgres and SQLite. `add_user` uses
-/// `RETURNING id`.
-pub enum OrdinalBindingDialect {}
+/// The `SELECT * FROM table WHERE column = $1` dialect. See [`Dialect`] and
+/// [`PositionalBindingDialect`].
+pub struct OrdinalBindingDialect;
 
 impl Dialect for OrdinalBindingDialect {
     const GET_SESSION: &'static str = "SELECT id, user_id, token FROM sessions WHERE token = $1";
@@ -98,9 +149,9 @@ impl Dialect for OrdinalBindingDialect {
         "SELECT host, tag, MAX(idx) AS idx FROM store WHERE user_id = $1 GROUP BY host, tag";
 }
 
-/// Positional (`?`) placeholders — MySQL. `add_user` has no `RETURNING`; the new
-/// id is read from `last_insert_id()` (see [`MySql`]'s `add_user` override).
-pub enum PositionalBindingDialect {}
+/// The `SELECT * FROM table WHERE column = ?` dialect. See [`Dialect`] and
+/// [`OrdinalBindingDialect`].
+pub struct PositionalBindingDialect;
 
 impl Dialect for PositionalBindingDialect {
     const GET_SESSION: &'static str = "SELECT id, user_id, token FROM sessions WHERE token = ?";
@@ -157,12 +208,9 @@ pub trait DynDatabase: Send + Sync + 'static {
     async fn status(&self, user: &User) -> DbResult<RecordStatus>;
 }
 
-/// A concrete, sqlx-typed database backend — the un-erased form behind
-/// `Arc<dyn DynDatabase>`.
+/// Non object-safe backend for a database that atuin supports.
 ///
-/// Crate-internal: backends implement it, the blanket impl below turns it into
-/// the object-safe [`DynDatabase`], and [`connect`](crate::connect) builds one
-/// from a URL. External callers only ever see `Arc<dyn DynDatabase>`.
+/// If you are adding a new backend, this is what you should implement.
 #[async_trait]
 pub(crate) trait Database: Sized + Send + Sync + 'static
 where
@@ -216,7 +264,6 @@ where
             .bind(session.token.as_str())
             .execute(self.pool())
             .await?;
-
         Ok(())
     }
 
@@ -246,7 +293,6 @@ where
             .bind(user.password.as_str())
             .fetch_one(self.pool())
             .await?;
-
         Ok(res.0)
     }
 
@@ -257,7 +303,6 @@ where
             .bind(user.id)
             .execute(self.pool())
             .await?;
-
         Ok(())
     }
 
@@ -267,14 +312,12 @@ where
         db::query(Self::Dialect::DELETE_HISTORY_BY_USER).bind(u.id).execute(self.pool()).await?;
         db::query(Self::Dialect::DELETE_STORE_BY_USER).bind(u.id).execute(self.pool()).await?;
         db::query(Self::Dialect::DELETE_USER_BY_ID).bind(u.id).execute(self.pool()).await?;
-
         Ok(())
     }
 
     #[instrument(skip_all)]
     async fn delete_store(&self, user: &User) -> DbResult<()> {
         db::query(Self::Dialect::DELETE_STORE_BY_USER).bind(user.id).execute(self.pool()).await?;
-
         Ok(())
     }
 
@@ -338,11 +381,7 @@ where
     }
 }
 
-/// The object-safe façade the server dispatches on, forwarding to [`Database`].
-///
-/// Every method is a one-line forward; the real work lives in [`Database`]'s
-/// defaults. The blanket carries the same `where` clause as `Database` because a
-/// trait's `where` bounds are not implied for its generic users.
+/// The object-safe version of [`Database`]. Useful for dependency-injection.
 #[async_trait]
 impl<T> DynDatabase for T
 where
