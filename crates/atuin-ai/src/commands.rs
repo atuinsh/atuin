@@ -65,6 +65,8 @@ pub async fn run(command: Command, settings: &Settings) -> eyre::Result<()> {
             ..
         } => inline::run(command, args.api_endpoint, args.api_token, settings, hook).await,
         Command::Init { .. } => {
+            // This is valid comment syntax in all the shells we support and thus a no-op: bash,
+            // zsh, fish, nushell, xonsh, and powershell.
             println!(
                 "# This command is no longer necessary. If you have it in your shell init file, \
                  feel free to remove it."
