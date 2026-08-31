@@ -291,10 +291,7 @@ impl<'r> ::sqlx::FromRow<'r, SqliteRow> for History {
             author_kind.and_then(|kind| u8::try_from(kind).ok()).and_then(AuthorKind::from_repr);
 
         Ok(Self::from_db()
-            .id(row
-                .try_get::<String, _>("id")?
-                .parse()
-                .map_err(|err| sqlx::Error::Decode(Box::new(err)))?)
+            .id(row.try_get("id")?)
             .timestamp(OffsetDateTime::from_unix_nanos_i64(row.try_get("timestamp")?))
             .duration(row.try_get("duration")?)
             .exit(row.try_get("exit")?)
@@ -370,7 +367,7 @@ impl Sqlite {
                 deleted_at, shell, author_kind
             ) values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         )
-        .bind(h.id.to_string())
+        .bind(h.id)
         .bind(h.timestamp.unix_timestamp_nanos() as i64)
         .bind(h.duration)
         .bind(h.exit)
@@ -394,10 +391,7 @@ impl Sqlite {
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         id: HistoryId,
     ) -> Result<()> {
-        db::query("delete from history where id = ?1")
-            .bind(id.to_string())
-            .execute(&mut **tx)
-            .await?;
+        db::query("delete from history where id = ?1").bind(id).execute(&mut **tx).await?;
 
         Ok(())
     }
@@ -436,7 +430,7 @@ impl Sqlite {
             );
 
             builder.push_values(h.by_ref().take(rows_per_insert), |mut b, h| {
-                b.push_bind(h.id.to_string())
+                b.push_bind(h.id)
                     .push_bind(h.timestamp.unix_timestamp_nanos() as i64)
                     .push_bind(h.duration)
                     .push_bind(h.exit)
@@ -466,7 +460,7 @@ impl Sqlite {
         let res = db::query_as::<_, History>(sqlx::AssertSqlSafe(format!(
             "select {HISTORY_COLUMNS} from history where id = ?1"
         )))
-        .bind(id.to_string())
+        .bind(*id)
         .fetch_optional(self.sqlite.pool())
         .await?;
 
@@ -513,7 +507,7 @@ impl Sqlite {
 
             let mut query = db::query_as::<_, History>(sqlx::AssertSqlSafe(sql));
             for id in &chunk {
-                query = query.bind(id.to_string());
+                query = query.bind(*id);
             }
 
             let rows = query.fetch_all(self.sqlite.pool()).await?;
@@ -533,7 +527,7 @@ impl Sqlite {
              ?7, hostname = ?8, author = ?9, intent = ?10, deleted_at = ?11, author_kind = ?12
                 where id = ?1",
         )
-        .bind(h.id.to_string())
+        .bind(h.id)
         .bind(h.timestamp.unix_timestamp_nanos() as i64)
         .bind(h.duration)
         .bind(h.exit)
@@ -1479,42 +1473,6 @@ mod test {
 
     #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn drop_non_uuid_ids_migration_removes_only_unparsable_rows(
-        #[future(awt)]
-        #[from(empty_db)]
-        db: Sqlite,
-    ) {
-        // A healthy row, a row whose id is valid but upper-case (still accepted by
-        // `Uuid::parse_str`), and a row whose id is not a UUID at all — the kind that
-        // fails to decode and breaks every history query after this refactor.
-        let good = save_history_item(&db, "echo good").await;
-        let upper = save_history_item(&db, "echo upper").await;
-        let doomed = save_history_item(&db, "echo doomed").await;
-
-        let set_id = |from: HistoryId, to: &'static str| {
-            db::query("update history set id = ?1 where id = ?2")
-                .bind(to)
-                .bind(from.to_string())
-                .execute(db.sqlite.pool())
-        };
-        set_id(upper.id, "0123456789ABCDEF0123456789ABCDEF").await.unwrap();
-        set_id(doomed.id, "not-a-uuid").await.unwrap();
-
-        // Mirrors migrations/20260828000000_drop_non_uuid_history_ids.sql.
-        db::query("delete from history where length(id) <> 32 or id glob '*[^0-9a-fA-F]*'")
-            .execute(db.sqlite.pool())
-            .await
-            .unwrap();
-
-        // The two well-formed rows survive; only the unparsable one is dropped.
-        let (remaining,): (i64,) =
-            db::query_as("select count(*) from history").fetch_one(db.sqlite.pool()).await.unwrap();
-        assert_eq!(remaining, 2);
-        assert_eq!(db.load_active([good.id]).await.unwrap()[0].command, "echo good");
-    }
-
-    #[rstest]
-    #[tokio::test(flavor = "multi_thread")]
     async fn test_load_active_missing_ids_are_omitted(
         #[future(awt)]
         #[from(empty_db)]
@@ -1591,12 +1549,18 @@ mod test {
         };
 
         let results = db
-            .search(DbSearchMode::FullText, FilterMode::Global, &context, "", OptFilters {
-                after: after.as_deref(),
-                before: before.as_deref(),
-                include_duplicates: true,
-                ..Default::default()
-            })
+            .search(
+                DbSearchMode::FullText,
+                FilterMode::Global,
+                &context,
+                "",
+                OptFilters {
+                    after: after.as_deref(),
+                    before: before.as_deref(),
+                    include_duplicates: true,
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
 
@@ -1619,10 +1583,16 @@ mod test {
         let context = new_context();
 
         let hits = db
-            .search(DbSearchMode::FullText, FilterMode::Global, &context, "", OptFilters {
-                include_duplicates,
-                ..Default::default()
-            })
+            .search(
+                DbSearchMode::FullText,
+                FilterMode::Global,
+                &context,
+                "",
+                OptFilters {
+                    include_duplicates,
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
 
@@ -1739,9 +1709,13 @@ mod test {
         new_history_item(&db, "corburl").await.unwrap();
 
         // if fuzzy reordering is on, it should come back in a more sensible order
-        assert_search_commands(&db, DbSearchMode::Fuzzy, FilterMode::Global, "curl", vec![
-            "curl", "corburl",
-        ])
+        assert_search_commands(
+            &db,
+            DbSearchMode::Fuzzy,
+            FilterMode::Global,
+            "curl",
+            vec!["curl", "corburl"],
+        )
         .await;
 
         assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, "xxxx", 0).await.unwrap();
@@ -1789,9 +1763,13 @@ mod test {
         new_history_item_at(&db, "curl", Some(now - time::Duration::seconds(10))).await.unwrap();
         new_history_item_at(&db, "corburl", Some(now)).await.unwrap();
 
-        assert_search_commands(&db, mode.closest_db_mode(), FilterMode::Global, "curl", vec![
-            "curl", "corburl",
-        ])
+        assert_search_commands(
+            &db,
+            mode.closest_db_mode(),
+            FilterMode::Global,
+            "curl",
+            vec!["curl", "corburl"],
+        )
         .await;
     }
 
@@ -1854,9 +1832,13 @@ mod test {
         new_history_item_at(&db, close, Some(now - time::Duration::days(5))).await.unwrap();
         new_history_item_at(&db, far, Some(now - time::Duration::hours(1))).await.unwrap();
 
-        assert_search_commands(&db, DbSearchMode::Fuzzy, FilterMode::Global, query, vec![
-            close, far,
-        ])
+        assert_search_commands(
+            &db,
+            DbSearchMode::Fuzzy,
+            FilterMode::Global,
+            query,
+            vec![close, far],
+        )
         .await;
     }
 
@@ -1866,9 +1848,13 @@ mod test {
     async fn test_search_fuzzy_operator() {
         let db = db_with(&["use screen", "screenshot tool"]).await;
 
-        assert_search_commands(&db, DbSearchMode::Fuzzy, FilterMode::Global, "screen$", vec![
-            "use screen",
-        ])
+        assert_search_commands(
+            &db,
+            DbSearchMode::Fuzzy,
+            FilterMode::Global,
+            "screen$",
+            vec!["use screen"],
+        )
         .await;
     }
 

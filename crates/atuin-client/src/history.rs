@@ -227,6 +227,34 @@ impl<'de> Deserialize<'de> for HistoryId {
     }
 }
 
+impl sqlx::Type<sqlx::Sqlite> for HistoryId {
+    fn type_info() -> <sqlx::Sqlite as sqlx::Database>::TypeInfo {
+        <String as sqlx::Type<sqlx::Sqlite>>::type_info()
+    }
+
+    fn compatible(ty: &<sqlx::Sqlite as sqlx::Database>::TypeInfo) -> bool {
+        <String as sqlx::Type<sqlx::Sqlite>>::compatible(ty)
+    }
+}
+
+impl sqlx::Encode<'_, sqlx::Sqlite> for HistoryId {
+    fn encode_by_ref(
+        &self,
+        buf: &mut <sqlx::Sqlite as sqlx::Database>::ArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        <String as sqlx::Encode<sqlx::Sqlite>>::encode(self.to_string(), buf)
+    }
+}
+
+impl<'r> sqlx::Decode<'r, sqlx::Sqlite> for HistoryId {
+    fn decode(
+        value: <sqlx::Sqlite as sqlx::Database>::ValueRef<'r>,
+    ) -> Result<Self, sqlx::error::BoxDynError> {
+        let s = <&str as sqlx::Decode<sqlx::Sqlite>>::decode(value)?;
+        Ok(s.parse()?)
+    }
+}
+
 impl HistoryId {
     #[must_use]
     pub fn new(uuid: Uuid) -> Self {
@@ -983,10 +1011,13 @@ mod tests {
         bytes[3] = 0x90 | 12;
         bytes.pop();
 
-        assert_eq!(History::deserialize(&bytes, Version::Two.name()).unwrap(), History {
-            author_kind: None,
-            ..history
-        });
+        assert_eq!(
+            History::deserialize(&bytes, Version::Two.name()).unwrap(),
+            History {
+                author_kind: None,
+                ..history
+            }
+        );
     }
 
     #[rstest]
