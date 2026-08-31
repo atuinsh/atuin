@@ -1101,7 +1101,7 @@ impl Cmd {
             }
             Self::End {
                 id, exit, duration, ..
-            } => end_history_entry(settings, &id, exit, duration).await,
+            } => end_history_entry(settings, id, exit, duration).await,
             Self::Tail => {
                 #[cfg(feature = "daemon")]
                 {

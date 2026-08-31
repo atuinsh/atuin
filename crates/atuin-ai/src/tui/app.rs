@@ -410,9 +410,9 @@ impl AiApp {
                     ctx.perform(async move {
                         // Ids are stored in simple (no-hyphen) form today,
                         // but older or imported rows may be hyphenated.
-                        let command = match db.load(&history_id).await {
+                        let command = match db.load(history_id).await {
                             Ok(Some(h)) => Some(h.command),
-                            _ => db.load(&history_id).await.ok().flatten().map(|h| h.command),
+                            _ => db.load(history_id).await.ok().flatten().map(|h| h.command),
                         };
                         Msg::Fsm(Event::OutputCommandResolved { tool_id, command })
                     })

@@ -217,7 +217,7 @@ async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
 
             if let Ok(history_id) = std::fs::read_to_string(&id_path) {
                 if let Ok(history_id) = HistoryId::from_str(history_id.trim()) {
-                    let _ = history::end_history_entry(settings, &history_id, exit, None).await;
+                    let _ = history::end_history_entry(settings, history_id, exit, None).await;
                 }
                 let _ = std::fs::remove_file(&id_path);
             }

@@ -168,7 +168,7 @@ impl SemanticState {
             return false;
         };
 
-        let history = take_pending_history(&mut self.pending_histories, &history_id);
+        let history = take_pending_history(&mut self.pending_histories, history_id);
         let Some(session_id) = capture
             .session_id
             .as_deref()
@@ -284,7 +284,7 @@ impl SemanticState {
         for evicted in evicted {
             self.remove_history_index_if_matches(
                 session_id,
-                &evicted.history_id,
+                evicted.history_id,
                 evicted.capture_id,
             );
         }
@@ -309,7 +309,7 @@ impl SemanticState {
             };
 
             for stored in session.records {
-                self.remove_history_index_if_matches(&session_id, &stored.history_id, stored.id);
+                self.remove_history_index_if_matches(&session_id, stored.history_id, stored.id);
             }
         }
     }
@@ -320,10 +320,10 @@ impl SemanticState {
         history_id: HistoryId,
         capture_id: CaptureId,
     ) {
-        if self.history_index.get(history_id).is_some_and(|capture_ref| {
+        if self.history_index.get(&history_id).is_some_and(|capture_ref| {
             &capture_ref.session_id == session_id && capture_ref.capture_id == capture_id
         }) {
-            self.history_index.remove(history_id);
+            self.history_index.remove(&history_id);
         }
     }
 
@@ -463,7 +463,7 @@ fn take_pending_history(
     histories: &mut VecDeque<History>,
     history_id: HistoryId,
 ) -> Option<History> {
-    let index = histories.iter().position(|history| &history.id == history_id)?;
+    let index = histories.iter().position(|history| history.id == history_id)?;
     histories.remove(index)
 }
 
