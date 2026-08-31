@@ -8,7 +8,8 @@
 use std::sync::mpsc::{self, SyncSender};
 
 use crate::domain::ipc::{
-    DumpScreenRep, DumpScreenReq, GoodbyeRep, GoodbyeReq, HelloRep, HelloReq, PROTOCOL_VERSION,
+    DumpScreenRequest, DumpScreenResponse, GoodbyeRequest, GoodbyeResponse, HelloRequest,
+    HelloResponse, PROTOCOL_VERSION,
 };
 use crate::domain::screen::ScreenSnapshot;
 use crate::server::screen::Msg;
@@ -32,24 +33,24 @@ impl IpcController {
         Self { screen_tx }
     }
 
-    pub fn hello(&self, _req: HelloReq) -> HelloRep {
+    pub fn hello(&self, _req: HelloRequest) -> HelloResponse {
         let _ = self;
 
-        HelloRep {
+        HelloResponse {
             version: PROTOCOL_VERSION,
         }
     }
 
-    pub fn dump_screen(&self, _req: DumpScreenReq) -> DumpScreenRep {
-        DumpScreenRep {
+    pub fn dump_screen(&self, _req: DumpScreenRequest) -> DumpScreenResponse {
+        DumpScreenResponse {
             screen: self.get_screen(),
         }
     }
 
-    pub fn goodbye(&self, _req: GoodbyeReq) -> GoodbyeRep {
+    pub fn goodbye(&self, _req: GoodbyeRequest) -> GoodbyeResponse {
         let _ = self;
 
-        GoodbyeRep {}
+        GoodbyeResponse {}
     }
 
     fn get_screen(&self) -> ScreenSnapshot {

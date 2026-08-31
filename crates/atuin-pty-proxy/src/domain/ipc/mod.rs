@@ -10,36 +10,36 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// Associates a request type with the reply type the server sends back.
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct HelloReq {
+pub struct HelloRequest {
     pub version: u32,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HelloRep {
+pub struct HelloResponse {
     pub version: u32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct DumpScreenReq;
+pub struct DumpScreenRequest;
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DumpScreenRep {
+pub struct DumpScreenResponse {
     pub screen: ScreenSnapshot,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct GoodbyeReq;
+pub struct GoodbyeRequest;
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GoodbyeRep;
+pub struct GoodbyeResponse;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, From)]
 pub enum AnyRequest {
-    Hello(HelloReq),
-    DumpScreen(DumpScreenReq),
-    Goodbye(GoodbyeReq),
+    Hello(HelloRequest),
+    DumpScreen(DumpScreenRequest),
+    Goodbye(GoodbyeRequest),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, From, TryInto)]
 pub enum AnyResponse {
-    Hello(HelloRep),
-    DumpScreenRep(DumpScreenRep),
-    Goodbye(GoodbyeRep),
+    Hello(HelloResponse),
+    DumpScreenResponse(DumpScreenResponse),
+    Goodbye(GoodbyeResponse),
 }

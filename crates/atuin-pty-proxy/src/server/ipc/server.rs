@@ -129,7 +129,7 @@ impl IpcServerWorker {
             let rep = match req {
                 AnyRequest::Hello(req) => AnyResponse::Hello(self.controller.hello(req)),
                 AnyRequest::DumpScreen(req) => {
-                    AnyResponse::DumpScreenRep(self.controller.dump_screen(req))
+                    AnyResponse::DumpScreenResponse(self.controller.dump_screen(req))
                 }
                 AnyRequest::Goodbye(req) => AnyResponse::Goodbye(self.controller.goodbye(req)),
             };

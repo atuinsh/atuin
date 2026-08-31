@@ -10,7 +10,7 @@ use tokio::time::timeout;
 use crate::client::Request;
 use crate::domain::ipc::wire::{self, EncodeError, Header, HeaderParseError};
 use crate::domain::ipc::{
-    AnyRequest, AnyResponse, DumpScreenReq, GoodbyeReq, HelloReq, PROTOCOL_VERSION,
+    AnyRequest, AnyResponse, DumpScreenRequest, GoodbyeRequest, HelloRequest, PROTOCOL_VERSION,
 };
 use crate::domain::screen::ScreenSnapshot;
 
@@ -132,7 +132,7 @@ impl IpcClient {
         };
 
         let rep = conn
-            .call(HelloReq {
+            .call(HelloRequest {
                 version: PROTOCOL_VERSION,
             })
             .await?;
@@ -246,15 +246,15 @@ pub struct V1Connection {
 
 impl V1Connection {
     pub async fn dump_screen(&mut self) -> Result<ScreenSnapshot, IpcError> {
-        Ok(self.call(DumpScreenReq).await?.screen)
+        Ok(self.call(DumpScreenRequest).await?.screen)
     }
 
     pub async fn close(mut self) -> Result<(), IpcError> {
-        self.call(GoodbyeReq).await?;
+        self.call(GoodbyeRequest).await?;
         Ok(())
     }
 
-    async fn call<R: Request>(&mut self, op: R) -> Result<R::Rep, IpcError> {
+    async fn call<R: Request>(&mut self, op: R) -> Result<R::Response, IpcError> {
         let req: AnyRequest = op.into();
         let framed = wire::try_encode(&req).map_err(IpcError::Encode)?;
         let request_timeout = self.request_timeout;
@@ -263,7 +263,7 @@ impl V1Connection {
             .await
             .map_err(|_| IpcError::Timeout)??;
 
-        R::Rep::try_from(rep).map_err(|_| IpcError::UnexpectedReply)
+        R::Response::try_from(rep).map_err(|_| IpcError::UnexpectedReply)
     }
 
     async fn exchange(&mut self, framed: &[u8]) -> Result<AnyResponse, IpcError> {

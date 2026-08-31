@@ -1,6 +1,6 @@
 use crate::domain::ipc::{
-    AnyRequest, AnyResponse, DumpScreenRep, DumpScreenReq, GoodbyeRep, GoodbyeReq, HelloRep,
-    HelloReq,
+    AnyRequest, AnyResponse, DumpScreenRequest, DumpScreenResponse, GoodbyeRequest,
+    GoodbyeResponse, HelloRequest, HelloResponse,
 };
 
 mod ipc;
@@ -8,17 +8,17 @@ mod ipc;
 pub use ipc::{IpcClient, IpcConnectError, IpcConnection, IpcError};
 
 pub trait Request: Into<AnyRequest> {
-    type Rep: TryFrom<AnyResponse>;
+    type Response: TryFrom<AnyResponse>;
 }
 
-impl Request for HelloReq {
-    type Rep = HelloRep;
+impl Request for HelloRequest {
+    type Response = HelloResponse;
 }
 
-impl Request for DumpScreenReq {
-    type Rep = DumpScreenRep;
+impl Request for DumpScreenRequest {
+    type Response = DumpScreenResponse;
 }
 
-impl Request for GoodbyeReq {
-    type Rep = GoodbyeRep;
+impl Request for GoodbyeRequest {
+    type Response = GoodbyeResponse;
 }

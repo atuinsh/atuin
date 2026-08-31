@@ -72,7 +72,7 @@ impl Parser {
                 }
             }
             Msg::ScreenRequest(reply_tx) => {
-                let _ = reply_tx.send(self.emulator.snapshot());
+                let _ = reply_tx.send(ScreenSnapshot::snap_vt100(&self.emulator));
             }
         }
     }
@@ -96,20 +96,11 @@ pub fn spawn_parser_thread(
     })
 }
 
-trait SnapshotExt {
-    /// Snapshot the current state of the terminal emulator.
-    fn snapshot(&self) -> ScreenSnapshot;
-}
-
-impl SnapshotExt for vt100::Parser {
-    fn snapshot(&self) -> ScreenSnapshot {
-        let screen = self.screen();
+impl ScreenSnapshot {
+    fn snap_vt100(vt: &vt100::Parser) -> Self {
+        let screen = vt.screen();
         let (_, cols) = screen.size();
-        ScreenSnapshot::new(
-            screen.size(),
-            screen.cursor_position(),
-            screen.rows_formatted(0, cols).collect(),
-        )
+        Self::new(screen.size(), screen.cursor_position(), screen.rows_formatted(0, cols).collect())
     }
 }
 
@@ -152,14 +143,17 @@ mod tests {
         parser.handle_msg(Msg::Data(b"hello world".to_vec()));
 
         // Dimensions are clamped to (1, 1) because vt100 dimensions must be positive.
-        assert_eq!(parser.emulator.snapshot().screen_dims, (rows.max(1), cols.max(1)));
+        assert_eq!(
+            ScreenSnapshot::snap_vt100(&parser.emulator).screen_dims,
+            (rows.max(1), cols.max(1))
+        );
     }
 
     #[rstest]
     fn encodes_the_screen_contents_and_cursor(#[with(3, 10)] mut parser: Parser) {
         parser.handle_msg(Msg::Data(b"one\r\ntwo".to_vec()));
 
-        let snapshot = parser.emulator.snapshot();
+        let snapshot = ScreenSnapshot::snap_vt100(&parser.emulator);
         assert_eq!(snapshot.screen_dims, (3, 10));
         assert_eq!(snapshot.cursor_pos, (1, 3));
 
@@ -239,7 +233,7 @@ mod tests {
         assert_eq!(captures[0].output_observed_bytes, b"hi\r\n".len() as u64);
 
         // The screen snapshot, on the other hand, is where the labels belong.
-        let rows = parser.emulator.snapshot().rows.join("\n");
+        let rows = ScreenSnapshot::snap_vt100(&parser.emulator).rows.join("\n");
         assert!(rows.contains("[OSC133:A prompt]"), "{rows:?}");
         assert!(rows.contains("[OSC133:D exit=0]"), "{rows:?}");
     }
@@ -248,7 +242,7 @@ mod tests {
     fn a_parser_without_a_sink_still_tracks_the_screen(#[with(6, 20)] mut parser: Parser) {
         parser.handle_msg(Msg::Data(b"\x1b]133;C\x07hi\r\n\x1b]133;D;0\x07".to_vec()));
 
-        assert!(parser.emulator.snapshot().rows[0].contains("hi"));
+        assert!(ScreenSnapshot::snap_vt100(&parser.emulator).rows[0].contains("hi"));
     }
 
     fn nonzero(value: u16) -> NonZeroU16 {

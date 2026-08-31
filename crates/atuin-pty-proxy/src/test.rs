@@ -7,7 +7,7 @@ use std::thread::JoinHandle;
 
 use rstest::{fixture, rstest};
 
-use crate::ipc::domain::{AnyRequest, AnyResponse, DumpScreenRep, HelloRep, PROTOCOL_VERSION};
+use crate::ipc::domain::{AnyRequest, AnyResponse, DumpScreenResponse, HelloResponse, PROTOCOL_VERSION};
 use crate::ipc::{IpcClient, IpcConnectError, IpcController, IpcError, IpcServer, wire};
 use crate::screen::{self, Msg, ScreenSnapshot};
 
@@ -138,7 +138,7 @@ async fn drop_lets_server_serve_the_next_client(sock: TempSock) {
 #[tokio::test]
 async fn connect_rejects_version_mismatch(sock: TempSock) {
     let theirs = PROTOCOL_VERSION + 1;
-    let server = canned_server(sock.path(), AnyResponse::Hello(HelloRep { version: theirs }));
+    let server = canned_server(sock.path(), AnyResponse::Hello(HelloResponse { version: theirs }));
 
     let err = IpcClient::new(sock.path())
         .with_protocol(Some(PROTOCOL_VERSION))
@@ -157,7 +157,7 @@ async fn connect_rejects_version_mismatch(sock: TempSock) {
 #[rstest]
 #[tokio::test]
 async fn connect_rejects_wrong_reply_variant(sock: TempSock) {
-    let reply = AnyResponse::DumpScreenRep(DumpScreenRep {
+    let reply = AnyResponse::DumpScreenResponse(DumpScreenResponse {
         screen: ScreenSnapshot::default(),
     });
     let server = canned_server(sock.path(), reply);
