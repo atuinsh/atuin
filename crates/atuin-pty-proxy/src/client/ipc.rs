@@ -8,7 +8,7 @@ use tokio::net::UnixStream;
 use tokio::time::timeout;
 
 use crate::client::Request;
-use crate::domain::ipc::wire::{self, EncodeError, Header, HeaderParseError};
+use crate::domain::ipc::wire::{self, EncodeError, HeaderParseError};
 use crate::domain::ipc::{
     AnyRequest, AnyResponse, DumpScreenRequest, GoodbyeRequest, HelloRequest, PROTOCOL_VERSION,
 };
@@ -270,14 +270,18 @@ impl V1Connection {
         self.stream.write_all(framed).await.map_err(IpcError::Io)?;
         self.stream.flush().await.map_err(IpcError::Io)?;
 
-        let mut header_bytes = [0u8; Header::SERIALIZED_LEN];
-        self.stream.read_exact(&mut header_bytes).await.map_err(IpcError::Io)?;
+        wire::try_decode_async::<_, AnyResponse>(&mut self.stream)
+            .await?
+            .ok_or_else(|| IpcError::Io(std::io::ErrorKind::UnexpectedEof.into()))
+    }
+}
 
-        let header = Header::parse(header_bytes).map_err(IpcError::Header)?;
-        let body_len = (header.message_width as usize).saturating_sub(Header::SERIALIZED_LEN);
-        let mut buf = vec![0u8; body_len];
-        self.stream.read_exact(&mut buf).await.map_err(IpcError::Io)?;
-
-        wire::decode_body::<AnyResponse>(&buf).map_err(IpcError::Decode)
+impl From<wire::DecodeError> for IpcError {
+    fn from(err: wire::DecodeError) -> Self {
+        match err {
+            wire::DecodeError::Io(err) => Self::Io(err),
+            wire::DecodeError::Header(err) => Self::Header(err),
+            wire::DecodeError::Decode(err) => Self::Decode(err),
+        }
     }
 }

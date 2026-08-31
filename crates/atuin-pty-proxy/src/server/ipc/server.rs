@@ -1,4 +1,4 @@
-use std::io::{ErrorKind, Read, Write};
+use std::io::{ErrorKind, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::time::Duration;
@@ -7,7 +7,7 @@ use thiserror::Error;
 use tracing::{error, warn};
 
 use super::controller::IpcController;
-use crate::domain::ipc::wire::{self, EncodeError, Header, HeaderParseError};
+use crate::domain::ipc::wire::{self, EncodeError, HeaderParseError};
 use crate::domain::ipc::{AnyRequest, AnyResponse};
 
 #[derive(Debug, Error)]
@@ -146,21 +146,7 @@ impl IpcServerWorker {
     ///
     /// Returns [`None`] if the client aborted the connection normally.
     fn read_request(stream: &mut UnixStream) -> Result<Option<AnyRequest>, StreamServiceError> {
-        let mut header_bytes = [0u8; Header::SERIALIZED_LEN];
-        if let Err(err) = stream.read_exact(&mut header_bytes) {
-            return match err.kind() {
-                ErrorKind::UnexpectedEof => Ok(None),
-                _ => Err(err.into()),
-            };
-        }
-
-        let header = Header::parse(header_bytes)?;
-        let body_len = (header.message_width as usize).saturating_sub(Header::SERIALIZED_LEN);
-        let mut buf = vec![0u8; body_len];
-        stream.read_exact(&mut buf)?;
-
-        let req = wire::decode_body::<AnyRequest>(&buf).map_err(StreamServiceError::Decode)?;
-        Ok(Some(req))
+        Ok(wire::try_decode::<_, AnyRequest>(stream)?)
     }
 
     fn write_reply(stream: &mut UnixStream, rep: &AnyResponse) -> Result<(), StreamServiceError> {
@@ -196,6 +182,16 @@ impl From<std::io::Error> for StreamServiceError {
             ErrorKind::ConnectionReset => Self::ConnectionReset(err),
             ErrorKind::WouldBlock | ErrorKind::TimedOut => Self::Timeout(err),
             _ => Self::Io(err),
+        }
+    }
+}
+
+impl From<wire::DecodeError> for StreamServiceError {
+    fn from(err: wire::DecodeError) -> Self {
+        match err {
+            wire::DecodeError::Io(err) => err.into(),
+            wire::DecodeError::Header(err) => err.into(),
+            wire::DecodeError::Decode(err) => Self::Decode(err),
         }
     }
 }

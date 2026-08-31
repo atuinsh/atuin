@@ -17,7 +17,7 @@
 //! at versioning the body rather than the header.
 //!
 //! The header fields are all big-endian encoded.
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, Error)]
@@ -153,7 +153,56 @@ pub fn try_encode<T: Serialize>(data: &T) -> Result<Vec<u8>, EncodeError> {
     Ok(buf)
 }
 
-/// Decode a postcard-encoded body into a `T`.
-pub fn decode_body<'a, T: Deserialize<'a>>(buf: &'a [u8]) -> Result<T, postcard::Error> {
-    postcard::from_bytes(buf)
+#[derive(Debug, Error)]
+pub enum DecodeError {
+    #[error("io error while decoding frame: {0}")]
+    Io(std::io::Error),
+
+    #[error("failed to parse header: {0}")]
+    Header(HeaderParseError),
+
+    #[error("failed to decode body: {0}")]
+    Decode(postcard::Error),
+}
+
+pub fn try_decode<R: std::io::Read, T: serde::de::DeserializeOwned>(
+    reader: &mut R,
+) -> Result<Option<T>, DecodeError> {
+    let mut header_bytes = [0u8; Header::SERIALIZED_LEN];
+    if let Err(err) = reader.read_exact(&mut header_bytes) {
+        return match err.kind() {
+            std::io::ErrorKind::UnexpectedEof => Ok(None),
+            _ => Err(DecodeError::Io(err)),
+        };
+    }
+
+    let header = Header::parse(header_bytes).map_err(DecodeError::Header)?;
+    let body_len = (header.message_width as usize).saturating_sub(Header::SERIALIZED_LEN);
+    let mut buf = vec![0u8; body_len];
+    reader.read_exact(&mut buf).map_err(DecodeError::Io)?;
+
+    postcard::from_bytes(&buf).map(Some).map_err(DecodeError::Decode)
+}
+
+pub async fn try_decode_async<R, T>(reader: &mut R) -> Result<Option<T>, DecodeError>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    T: serde::de::DeserializeOwned,
+{
+    use tokio::io::AsyncReadExt as _;
+
+    let mut header_bytes = [0u8; Header::SERIALIZED_LEN];
+    if let Err(err) = reader.read_exact(&mut header_bytes).await {
+        return match err.kind() {
+            std::io::ErrorKind::UnexpectedEof => Ok(None),
+            _ => Err(DecodeError::Io(err)),
+        };
+    }
+
+    let header = Header::parse(header_bytes).map_err(DecodeError::Header)?;
+    let body_len = (header.message_width as usize).saturating_sub(Header::SERIALIZED_LEN);
+    let mut buf = vec![0u8; body_len];
+    reader.read_exact(&mut buf).await.map_err(DecodeError::Io)?;
+
+    postcard::from_bytes(&buf).map(Some).map_err(DecodeError::Decode)
 }
