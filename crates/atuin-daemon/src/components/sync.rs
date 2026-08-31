@@ -279,8 +279,7 @@ async fn do_sync_tick(
                 match batch {
                     Ok(histories) if !histories.is_empty() => {
                         // Only the IDs go on the bus; the rows themselves are already in sqlite.
-                        let ids: Arc<[HistoryId]> =
-                            histories.iter().map(|h| h.id.clone()).collect();
+                        let ids: Arc<[HistoryId]> = histories.iter().map(|h| h.id).collect();
                         handle.emit(DaemonEvent::HistorySynced(ids));
                     }
                     Ok(_) => {}

@@ -182,6 +182,9 @@ fn_params_excessive_bools = "warn"
 fn_to_numeric_cast_any = "warn"
 if_not_else = "warn"
 implicit_clone = "warn"
+# Going through `Display` is slower than shadowing `to_string`, as it avoids
+# dynamic dispatch.
+inherent_to_string_shadow_display = "allow"
 index_refutable_slice = "warn"
 iter_not_returning_iterator = "warn"
 iter_on_single_items = "warn"

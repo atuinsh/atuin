@@ -128,7 +128,7 @@ impl CommandData {
             return None;
         };
 
-        let history_id = parse_uuid_bytes(&history.id.0)?;
+        let history_id = history.id.into_bytes();
         let session = parse_uuid_bytes(&history.session)?;
         let timestamp = history.timestamp.unix_timestamp();
 
@@ -153,9 +153,7 @@ impl CommandData {
     /// Add an invocation from a history entry.
     /// Returns false if the history entry has invalid UUIDs.
     pub fn add_invocation(&mut self, history: &History, interner: &ThreadedRodeo) -> bool {
-        let Some(history_id) = parse_uuid_bytes(&history.id.0) else {
-            return false;
-        };
+        let history_id = history.id.into_bytes();
         let Some(session) = parse_uuid_bytes(&history.session) else {
             return false;
         };

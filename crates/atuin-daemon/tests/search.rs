@@ -10,7 +10,7 @@ mod unix {
     use std::time::Duration;
 
     use atuin_client::database::{Context, Sqlite};
-    use atuin_client::history::History;
+    use atuin_client::history::{History, HistoryId};
     use atuin_client::record::sqlite_store::SqliteStore;
     use atuin_client::settings::{FilterMode, Settings, init_meta_config_for_testing};
     use atuin_common::filter::OrFilter;
@@ -141,7 +141,7 @@ mod unix {
         }
     }
 
-    /// Runs one search and returns the matched history ids (hyphenated uuids).
+    /// Runs one search and returns the matched history ids.
     async fn search(
         client: &mut SearchClient,
         query_id: u64,
@@ -149,7 +149,7 @@ mod unix {
         filter_mode: FilterMode,
         context: Context,
         shells: &[&str],
-    ) -> Vec<String> {
+    ) -> Vec<HistoryId> {
         let params = SearchParams {
             query: query.to_string(),
             query_id,
@@ -166,20 +166,17 @@ mod unix {
             .iter()
             .map(|id| {
                 let bytes: [u8; 16] = id.as_slice().try_into().unwrap();
-                Uuid::from_bytes(bytes).to_string()
+                HistoryId::new(Uuid::from_bytes(bytes))
             })
             .collect()
     }
 
-    fn ids_of(entries: &[&History]) -> Vec<String> {
-        let mut ids: Vec<String> =
-            entries.iter().map(|h| Uuid::parse_str(&h.id.0).unwrap().to_string()).collect();
-        ids.sort();
-        ids
+    fn ids_of(entries: &[&History]) -> Vec<HistoryId> {
+        sorted(entries.iter().map(|e| e.id).collect())
     }
 
-    fn sorted(mut ids: Vec<String>) -> Vec<String> {
-        ids.sort();
+    fn sorted(mut ids: Vec<HistoryId>) -> Vec<HistoryId> {
+        ids.sort_by_key(|id| id.to_string());
         ids
     }
 

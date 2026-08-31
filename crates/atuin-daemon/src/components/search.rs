@@ -216,7 +216,7 @@ impl Component for SearchComponent {
                     return Ok(());
                 };
 
-                let histories = handle.history_db().load_active(ids.iter().cloned()).await?;
+                let histories = handle.history_db().load_active(ids.iter().copied()).await?;
                 self.index.read().await.add_histories(&histories);
             }
             DaemonEvent::HistoryStarted(history) => {

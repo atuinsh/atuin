@@ -5,10 +5,11 @@ use std::ops::ControlFlow;
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::str::FromStr;
 use std::time::Duration;
 
 use atuin_client::database::Sqlite;
-use atuin_client::history::History;
+use atuin_client::history::{History, HistoryId};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::futures::Backoff;
@@ -482,7 +483,7 @@ where
     Ok(resp)
 }
 
-pub async fn start_history(settings: &Settings, history: History) -> Result<String> {
+pub async fn start_history(settings: &Settings, history: History) -> Result<HistoryId> {
     let resp = try_with_restart(
         settings,
         async |client, history| client.start_history(history).await,
@@ -492,7 +493,7 @@ pub async fn start_history(settings: &Settings, history: History) -> Result<Stri
         },
     )
     .await?;
-    Ok(resp.id)
+    Ok(HistoryId::from_str(&resp.id)?)
 }
 
 pub async fn end_history(settings: &Settings, id: String, duration: u64, exit: i64) -> Result<()> {

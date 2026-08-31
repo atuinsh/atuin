@@ -367,7 +367,7 @@ impl Sqlite {
                 deleted_at, shell, author_kind
             ) values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         )
-        .bind(h.id.0.as_str())
+        .bind(h.id)
         .bind(h.timestamp.unix_timestamp_nanos() as i64)
         .bind(h.duration)
         .bind(h.exit)
@@ -391,10 +391,7 @@ impl Sqlite {
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         id: HistoryId,
     ) -> Result<()> {
-        db::query("delete from history where id = ?1")
-            .bind(id.0.as_str())
-            .execute(&mut **tx)
-            .await?;
+        db::query("delete from history where id = ?1").bind(id).execute(&mut **tx).await?;
 
         Ok(())
     }
@@ -433,7 +430,7 @@ impl Sqlite {
             );
 
             builder.push_values(h.by_ref().take(rows_per_insert), |mut b, h| {
-                b.push_bind(h.id.0.as_str())
+                b.push_bind(h.id)
                     .push_bind(h.timestamp.unix_timestamp_nanos() as i64)
                     .push_bind(h.duration)
                     .push_bind(h.exit)
@@ -457,7 +454,7 @@ impl Sqlite {
     }
 
     #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
-    pub async fn load(&self, id: &str) -> Result<Option<History>> {
+    pub async fn load(&self, id: HistoryId) -> Result<Option<History>> {
         debug!("loading history item {}", id);
 
         let res = db::query_as::<_, History>(sqlx::AssertSqlSafe(format!(
@@ -510,7 +507,7 @@ impl Sqlite {
 
             let mut query = db::query_as::<_, History>(sqlx::AssertSqlSafe(sql));
             for id in &chunk {
-                query = query.bind(id.0.as_str());
+                query = query.bind(*id);
             }
 
             let rows = query.fetch_all(self.sqlite.pool()).await?;
@@ -530,7 +527,7 @@ impl Sqlite {
              ?7, hostname = ?8, author = ?9, intent = ?10, deleted_at = ?11, author_kind = ?12
                 where id = ?1",
         )
-        .bind(h.id.0.as_str())
+        .bind(h.id)
         .bind(h.timestamp.unix_timestamp_nanos() as i64)
         .bind(h.duration)
         .bind(h.exit)
@@ -927,7 +924,7 @@ impl Sqlite {
         let mut tx = self.sqlite.pool().begin().await?;
 
         for id in ids {
-            Self::delete_row_raw(&mut tx, id.clone()).await?;
+            Self::delete_row_raw(&mut tx, id).await?;
         }
 
         tx.commit().await?;
@@ -1114,7 +1111,7 @@ impl Paged {
         if res.is_empty() {
             Ok(None)
         } else {
-            self.last_id = Some(res.last().unwrap().id.0.clone());
+            self.last_id = Some(res.last().unwrap().id.to_string());
             Ok(Some(res))
         }
     }
@@ -1431,7 +1428,7 @@ mod test {
         let bravo = save_history_item(&db, "echo bravo").await;
         let _charlie = save_history_item(&db, "echo charlie").await;
 
-        let loaded = db.load_active([alpha.id.clone(), bravo.id.clone()]).await.unwrap();
+        let loaded = db.load_active([alpha.id, bravo.id]).await.unwrap();
 
         let mut commands: Vec<String> = loaded.into_iter().map(|h| h.command).collect();
         commands.sort();
@@ -1468,7 +1465,7 @@ mod test {
         alpha.command = String::new();
         db.update(&alpha).await.unwrap();
 
-        let loaded = db.load_active([alpha.id.clone(), bravo.id.clone()]).await.unwrap();
+        let loaded = db.load_active([alpha.id, bravo.id]).await.unwrap();
 
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].command, "echo bravo");
@@ -1484,7 +1481,10 @@ mod test {
         let alpha = save_history_item(&db, "echo alpha").await;
 
         let loaded = db
-            .load_active([alpha.id.clone(), HistoryId("does-not-exist".to_string())])
+            .load_active([
+                alpha.id,
+                HistoryId::new("018f011c-9a0a-7000-8000-0000000000ff".parse().unwrap()),
+            ])
             .await
             .unwrap();
 
@@ -2110,7 +2110,7 @@ mod test {
         // the legacy shape directly.
         db::query("update history set hostname = 'pi'").execute(db.sqlite.pool()).await.unwrap();
 
-        let loaded = db.load(history.id.0.as_str()).await.unwrap().unwrap();
+        let loaded = db.load(history.id).await.unwrap().unwrap();
         assert!(!loaded.is_agent());
 
         let context = Context {
@@ -2149,7 +2149,7 @@ mod test {
             .into();
         db.save(&history).await.unwrap();
 
-        let loaded = db.load(history.id.0.as_str()).await.unwrap().unwrap();
+        let loaded = db.load(history.id).await.unwrap().unwrap();
         assert!(!loaded.is_agent());
 
         let context = Context {

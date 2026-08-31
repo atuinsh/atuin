@@ -1,15 +1,15 @@
 use std::io::BufRead;
 use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::time::Duration;
 
-use atuin_client::history::AuthorPattern;
+use atuin_client::history::{AuthorPattern, HistoryId};
 use atuin_common::ansi;
 use atuin_common::filter::OrFilter;
 use atuin_common::time::UtcOffsetExt;
 use enum_dispatch::enum_dispatch;
 use eyre::Result;
-use uuid::Uuid;
 
 const DEFAULT_FILE_READ_LINES: u64 = 100;
 const MAX_FILE_READ_LINES: u64 = 1000;
@@ -1119,7 +1119,7 @@ impl AtuinHistoryToolCall {
 
 #[derive(Debug, Clone)]
 pub struct AtuinOutputToolCall {
-    pub history_id: Uuid,
+    pub history_id: HistoryId,
     pub ranges: Vec<(i64, i64)>,
     /// The command the history entry ran, resolved from the local history
     /// db after parsing (`Effect::ResolveOutputCommand`). Display-only:
@@ -1131,11 +1131,11 @@ impl TryFrom<&serde_json::Value> for AtuinOutputToolCall {
     type Error = eyre::Error;
 
     fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
-        let history_id = value
+        let history_id: HistoryId = value
             .get("history_id")
             .and_then(|v| v.as_str())
-            .and_then(|v| Uuid::parse_str(v).ok())
-            .ok_or(eyre::eyre!("Missing or invalid history ID"))?;
+            .and_then(|s| HistoryId::from_str(s).ok())
+            .ok_or_else(|| eyre::eyre!("Missing or invalid history ID"))?;
 
         let ranges =
             value.get("ranges").and_then(|v| v.as_array()).map(Vec::as_slice).unwrap_or(&[]);
@@ -1209,8 +1209,8 @@ impl AtuinOutputToolCall {
             Err(e) => return ToolOutcome::Error(format!("Failed to connect to Atuin daemon: {e}")),
         };
 
-        let history_id = self.history_id.as_simple().to_string();
-        let response = match client.command_output(history_id.clone(), self.ranges.clone()).await {
+        let history_id = self.history_id;
+        let response = match client.command_output(history_id, self.ranges.clone()).await {
             Ok(response) => response,
             Err(e) => return ToolOutcome::Error(format!("Failed to fetch command output: {e}")),
         };
@@ -1347,7 +1347,7 @@ mod tests {
 
         let call = AtuinOutputToolCall::try_from(&input)?;
 
-        assert_eq!(call.history_id.as_simple().to_string(), "018f0000000070008000000000000000");
+        assert_eq!(call.history_id.to_string(), "018f0000000070008000000000000000");
         assert!(call.ranges.is_empty());
         Ok(())
     }
