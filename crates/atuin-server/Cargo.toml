@@ -54,7 +54,7 @@ sqlx = { workspace = true, features = ["postgres", "sqlite", "mysql", "regexp", 
 # client's api_client. atuin-client is only a dev dependency here so the client
 # binary crate stays free of server/postgres deps (see issue #2884).
 [dev-dependencies]
-atuin-client = { path = "../atuin-client", version = "18.20.1", default-features = false, features = ["sync"] }
+atuin-client = { path = "../atuin-client", version = "18.21.0", default-features = false, features = ["sync"] }
 rstest = { workspace = true }
 futures-util = "0.3"
 tracing-tree = "0.4"
