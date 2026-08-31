@@ -983,13 +983,10 @@ mod tests {
         bytes[3] = 0x90 | 12;
         bytes.pop();
 
-        assert_eq!(
-            History::deserialize(&bytes, Version::Two.name()).unwrap(),
-            History {
-                author_kind: None,
-                ..history
-            }
-        );
+        assert_eq!(History::deserialize(&bytes, Version::Two.name()).unwrap(), History {
+            author_kind: None,
+            ..history
+        });
     }
 
     #[rstest]
