@@ -3,7 +3,7 @@ use atuin_common::db;
 use atuin_common::db::PostgresDbUrl;
 use sqlx::postgres::PgPoolOptions;
 
-use super::{Database, DbError, DbResult, OrdinalBindDb};
+use super::{Database, DbError, DbResult, OrdinalBindingDialect};
 
 const MIN_PG_VERSION: u32 = 14;
 
@@ -16,6 +16,7 @@ pub struct Postgres {
 impl Database for Postgres {
     type Db = sqlx::postgres::Postgres;
     type Url = PostgresDbUrl;
+    type Dialect = OrdinalBindingDialect;
 
     fn pool(&self) -> &sqlx::Pool<Self::Db> {
         &self.pool
@@ -47,7 +48,3 @@ impl Database for Postgres {
         Ok(Self { pool })
     }
 }
-
-// Postgres uses ordinal (`$1`) placeholders, so it gets the shared `Database`
-// impl from the blanket impl in `super`.
-impl OrdinalBindDb for Postgres {}
