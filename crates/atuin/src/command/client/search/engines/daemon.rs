@@ -1,11 +1,12 @@
+use std::str::FromStr;
+
 use atuin_client::database::{DbSearchMode, OptFilters, Sqlite};
-use atuin_client::history::{History, all_user_author_filter};
+use atuin_client::history::{History, HistoryId, all_user_author_filter};
 use atuin_client::settings::Settings;
 use atuin_daemon::client::{SearchClient, SearchParams};
 use atuin_daemon::search::{normalize_diacritics, truncate_query};
 use eyre::Result;
-use tracing::{Level, debug, instrument, span};
-use uuid::Uuid;
+use tracing::{Level, debug, error, instrument, span};
 
 use super::{SearchEngine, SearchState};
 use crate::command::client::daemon;
@@ -124,7 +125,7 @@ impl Search {
     }
 
     #[instrument(skip_all, level = Level::TRACE, name = "hydrate_from_db", fields(count = ids.len()))]
-    async fn hydrate_from_db(&self, db: &Sqlite, ids: &[String]) -> Result<Vec<History>> {
+    async fn hydrate_from_db(&self, db: &Sqlite, ids: &[HistoryId]) -> Result<Vec<History>> {
         let placeholders: Vec<String> = ids.iter().map(|id| format!("'{id}'")).collect();
         let sql_query = format!(
             "SELECT {} FROM history WHERE id IN ({}) ORDER BY timestamp DESC",
@@ -175,7 +176,7 @@ impl SearchEngine for Search {
             })
             .await?;
 
-        let mut ids = Vec::with_capacity(200);
+        let mut ids: Vec<HistoryId> = Vec::with_capacity(200);
         span!(Level::TRACE, "daemon_search.resp")
             .in_scope(async || -> Result<()> {
                 while let Some(response) = stream.message().await? {
@@ -187,15 +188,32 @@ impl SearchEngine for Search {
                     let span2_guard = span2.enter();
                     // Only process if the query_id matches (prevents stale responses)
                     if response.query_id == query_id {
-                        let uuids = response
-                            .ids
-                            .iter()
-                            .map(|id| {
-                                let bytes: [u8; 16] =
-                                    id.as_slice().try_into().expect("id should be 16 bytes");
-                                Uuid::from_bytes(bytes).as_simple().to_string()
-                            })
-                            .collect::<Vec<_>>();
+                        let uuids = response.ids.iter().filter_map(|id| {
+                            let bytes: [u8; 16] =
+                                id.as_slice().try_into().expect("id should be 16 bytes");
+
+                            let id_str = str::from_utf8(&bytes)
+                                .inspect_err(|e| {
+                                    error!(
+                                        err = ?e,
+                                        ?bytes,
+                                        "failed to parse history_id bytes as utf8 string",
+                                    );
+                                })
+                                .ok()?;
+
+                            let history_id = HistoryId::from_str(id_str)
+                                .inspect_err(|e| {
+                                    error!(
+                                        err = ?e,
+                                        ?id_str,
+                                        "failed to parse history_id from string",
+                                    );
+                                })
+                                .ok()?;
+
+                            Some(history_id)
+                        });
                         ids.extend(uuids);
                     }
                     drop(span2_guard);
@@ -218,7 +236,7 @@ impl SearchEngine for Search {
         let ordered_results = span!(Level::TRACE, "reorder_results").in_scope(|| {
             let mut ordered_results = Vec::with_capacity(results.len());
             for id in &ids {
-                if let Some(history) = results.iter().find(|h| h.id.to_string() == *id) {
+                if let Some(history) = results.iter().find(|h| h.id == *id) {
                     ordered_results.push(history.clone());
                 }
             }

@@ -2,7 +2,7 @@
 use std::path::PathBuf;
 
 use atuin_client::database::Context;
-use atuin_client::history::History;
+use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::{FilterMode, Settings};
 use atuin_common::filter::{self, OrFilter};
 use eyre::{Context as EyreContext, Result};
@@ -375,11 +375,11 @@ impl SemanticClient {
 
     pub async fn command_output(
         &mut self,
-        history_id: String,
+        history_id: HistoryId,
         ranges: Vec<(i64, i64)>,
     ) -> Result<CommandOutputReply> {
         let request = CommandOutputRequest {
-            history_id,
+            history_id: history_id.to_string(),
             ranges: ranges.into_iter().map(|(start, end)| OutputRange { start, end }).collect(),
         };
 

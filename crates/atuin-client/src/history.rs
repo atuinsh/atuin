@@ -379,7 +379,7 @@ impl History {
         encode::write_u16(&mut output, Version::LATEST.as_int())?;
         encode::write_array_len(&mut output, LATEST_SERIALIZED_FIELDS)?;
 
-        encode::write_str(&mut output, &self.id.0.as_simple().to_string())?;
+        encode::write_str(&mut output, &self.id.to_string())?;
         encode::write_u64(&mut output, self.timestamp.unix_timestamp_nanos() as u64)?;
         encode::write_sint(&mut output, self.duration)?;
         encode::write_sint(&mut output, self.exit)?;
@@ -963,13 +963,10 @@ mod tests {
         bytes[3] = 0x90 | 12;
         bytes.pop();
 
-        assert_eq!(
-            History::deserialize(&bytes, Version::Two.name()).unwrap(),
-            History {
-                author_kind: None,
-                ..history
-            }
-        );
+        assert_eq!(History::deserialize(&bytes, Version::Two.name()).unwrap(), History {
+            author_kind: None,
+            ..history
+        });
     }
 
     #[rstest]

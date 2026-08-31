@@ -10,7 +10,7 @@ mod unix {
     use std::time::Duration;
 
     use atuin_client::database::{Context, Sqlite};
-    use atuin_client::history::History;
+    use atuin_client::history::{History, HistoryId};
     use atuin_client::record::sqlite_store::SqliteStore;
     use atuin_client::settings::{FilterMode, Settings, init_meta_config_for_testing};
     use atuin_common::filter::OrFilter;
@@ -171,11 +171,8 @@ mod unix {
             .collect()
     }
 
-    fn ids_of(entries: &[&History]) -> Vec<String> {
-        let mut ids: Vec<String> =
-            entries.iter().map(|h| Uuid::from_bytes(h.id.into_bytes()).to_string()).collect();
-        ids.sort();
-        ids
+    fn ids_of(entries: &[&History]) -> impl Iterator<Item = HistoryId> {
+        entries.iter().map(|e| e.id)
     }
 
     fn sorted(mut ids: Vec<String>) -> Vec<String> {

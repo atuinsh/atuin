@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use atuin_client::database::{Sqlite, current_context};
 use atuin_client::history::store::HistoryStore;
-use atuin_client::history::{AuthorKind, History, probe_author};
+use atuin_client::history::{AuthorKind, History, HistoryId, probe_author};
 #[cfg(feature = "sync")]
 use atuin_client::record;
 use atuin_client::record::sqlite_store::SqliteStore;
@@ -68,7 +68,7 @@ pub enum Cmd {
 
     /// Finishes a new command in the history (adds time, exit code)
     End {
-        id: String,
+        id: HistoryId,
         #[arg(long, short)]
         exit: i64,
         #[arg(long, short)]
@@ -444,7 +444,7 @@ async fn handle_start(
     author: Option<&str>,
     author_kind: Option<AuthorKind>,
     intent: Option<&str>,
-) -> Result<Option<String>> {
+) -> Result<Option<HistoryId>> {
     let Some(h) = make_starting_history(settings, command, author, author_kind, intent) else {
         return Ok(None);
     };
@@ -455,7 +455,7 @@ async fn handle_start(
         debug!("failed to save history: {e}");
     }
 
-    Ok(Some(h.id.to_string()))
+    Ok(Some(h.id))
 }
 
 #[cfg(feature = "daemon")]
@@ -466,12 +466,12 @@ async fn handle_daemon_start(
     author: Option<&str>,
     author_kind: Option<AuthorKind>,
     intent: Option<&str>,
-) -> Result<Option<String>> {
+) -> Result<Option<HistoryId>> {
     let Some(h) = make_starting_history(settings, command, author, author_kind, intent) else {
         return Ok(None);
     };
 
-    let local_id = h.id.to_string();
+    let local_id = h.id;
 
     // Attempt to start history via daemon, but silently ignore errors
     // to avoid breaking the shell when the daemon is unavailable or disk is full
@@ -493,14 +493,10 @@ async fn handle_end(
     store: SqliteStore,
     history_store: HistoryStore,
     settings: &Settings,
-    id: &str,
+    id: &HistoryId,
     exit: i64,
     duration: Option<u64>,
 ) -> Result<()> {
-    if id.trim() == "" {
-        return Ok(());
-    }
-
     let Some(mut h) = db.load(id).await? else {
         warn!("history entry is missing");
         return Ok(());
@@ -562,7 +558,7 @@ async fn handle_end(
 #[instrument(level = "trace", skip_all, fields(id = %id, exit, duration = ?duration), err)]
 async fn handle_daemon_end(
     settings: &Settings,
-    id: &str,
+    id: &HistoryId,
     exit: i64,
     duration: Option<u64>,
 ) -> Result<()> {
@@ -583,7 +579,7 @@ pub(super) async fn start_history_entry(
     author: Option<&str>,
     author_kind: Option<AuthorKind>,
     intent: Option<&str>,
-) -> Result<Option<String>> {
+) -> Result<Option<HistoryId>> {
     #[cfg(feature = "daemon")]
     if settings.daemon.enabled {
         return handle_daemon_start(settings, command, author, author_kind, intent).await;
@@ -597,7 +593,7 @@ pub(super) async fn start_history_entry(
 #[instrument(level = "trace", skip_all, fields(id = %id, exit, duration = ?duration), err)]
 pub(super) async fn end_history_entry(
     settings: &Settings,
-    id: &str,
+    id: &HistoryId,
     exit: i64,
     duration: Option<u64>,
 ) -> Result<()> {

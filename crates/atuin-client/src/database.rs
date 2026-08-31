@@ -460,13 +460,13 @@ impl Sqlite {
     }
 
     #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
-    pub async fn load(&self, id: &str) -> Result<Option<History>> {
+    pub async fn load(&self, id: &HistoryId) -> Result<Option<History>> {
         debug!("loading history item {}", id);
 
         let res = db::query_as::<_, History>(sqlx::AssertSqlSafe(format!(
             "select {HISTORY_COLUMNS} from history where id = ?1"
         )))
-        .bind(id)
+        .bind(id.to_string())
         .fetch_optional(self.sqlite.pool())
         .await?;
 
