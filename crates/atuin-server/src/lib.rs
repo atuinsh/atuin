@@ -67,9 +67,6 @@ pub async fn launch_with_tcp_listener(
     Ok(())
 }
 
-/// Pick the backend from the connection URL and connect it, erased behind
-/// `Arc<dyn DynDatabase>` — the crate's public entry point for opening a
-/// database.
 pub async fn connect(db_uri: OwnedDbUrl) -> DbResult<Arc<dyn DynDatabase>> {
     Ok(match db_uri {
         DbUrl::Sqlite(url) => Arc::new(Sqlite::connect(url).await?),
