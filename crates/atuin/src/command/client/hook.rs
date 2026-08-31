@@ -209,7 +209,7 @@ async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
             )
             .await?
             {
-                std::fs::write(id_file_path(&tool_use_id), &history_id.to_string())?;
+                std::fs::write(id_file_path(&tool_use_id), history_id.to_string())?;
             }
         }
         Some(HookEvent::End { tool_use_id, exit }) => {

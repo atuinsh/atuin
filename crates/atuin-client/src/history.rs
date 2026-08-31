@@ -8,6 +8,7 @@ use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils::{normalize_optional_string, uuid_v7};
 use atuin_domain::record::{CmdOrigin, DecryptedData, UNKNOWN_USER};
 use eyre::{Result, bail};
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -204,6 +205,25 @@ impl std::str::FromStr for HistoryId {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self(uuid::Uuid::parse_str(s)?))
+    }
+}
+
+impl Serialize for HistoryId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for HistoryId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = <std::borrow::Cow<'de, str>>::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
     }
 }
 
@@ -963,10 +983,13 @@ mod tests {
         bytes[3] = 0x90 | 12;
         bytes.pop();
 
-        assert_eq!(History::deserialize(&bytes, Version::Two.name()).unwrap(), History {
-            author_kind: None,
-            ..history
-        });
+        assert_eq!(
+            History::deserialize(&bytes, Version::Two.name()).unwrap(),
+            History {
+                author_kind: None,
+                ..history
+            }
+        );
     }
 
     #[rstest]

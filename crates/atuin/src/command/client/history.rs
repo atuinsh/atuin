@@ -642,7 +642,7 @@ struct TailJsonEvent<'a> {
 #[cfg(feature = "daemon")]
 #[derive(Serialize)]
 struct TailJsonHistory<'a> {
-    id: String,
+    id: HistoryId,
     timestamp: String,
     timestamp_unix_ns: u64,
     command: &'a str,
@@ -717,7 +717,7 @@ impl TailEvent {
         let payload = TailJsonEvent {
             event: self.kind.as_str(),
             history: TailJsonHistory {
-                id: self.history.id.to_string(),
+                id: self.history.id,
                 timestamp: self.history.timestamp.to_offset(tz.0).display().ymd_hms().to_string(),
                 timestamp_unix_ns: u64::try_from(self.history.timestamp.unix_timestamp_nanos())
                     .context("history timestamp predates unix epoch")?,
