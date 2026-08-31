@@ -1,12 +1,10 @@
-use std::str::FromStr;
-
 use atuin_client::database::{DbSearchMode, OptFilters, Sqlite};
 use atuin_client::history::{History, HistoryId, all_user_author_filter};
 use atuin_client::settings::Settings;
 use atuin_daemon::client::{SearchClient, SearchParams};
 use atuin_daemon::search::{normalize_diacritics, truncate_query};
 use eyre::Result;
-use tracing::{Level, debug, error, instrument, span};
+use tracing::{Level, debug, instrument, span};
 
 use super::{SearchEngine, SearchState};
 use crate::command::client::daemon;
@@ -188,31 +186,10 @@ impl SearchEngine for Search {
                     let span2_guard = span2.enter();
                     // Only process if the query_id matches (prevents stale responses)
                     if response.query_id == query_id {
-                        let uuids = response.ids.iter().filter_map(|id| {
+                        let uuids = response.ids.iter().map(|id| {
                             let bytes: [u8; 16] =
                                 id.as_slice().try_into().expect("id should be 16 bytes");
-
-                            let id_str = str::from_utf8(&bytes)
-                                .inspect_err(|e| {
-                                    error!(
-                                        err = ?e,
-                                        ?bytes,
-                                        "failed to parse history_id bytes as utf8 string",
-                                    );
-                                })
-                                .ok()?;
-
-                            let history_id = HistoryId::from_str(id_str)
-                                .inspect_err(|e| {
-                                    error!(
-                                        err = ?e,
-                                        ?id_str,
-                                        "failed to parse history_id from string",
-                                    );
-                                })
-                                .ok()?;
-
-                            Some(history_id)
+                            HistoryId::from_bytes(bytes)
                         });
                         ids.extend(uuids);
                     }

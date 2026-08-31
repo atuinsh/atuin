@@ -266,6 +266,14 @@ impl HistoryId {
         self.0.into_bytes()
     }
 
+    /// Reconstruct a [`HistoryId`] from the raw 16 bytes of its UUID.
+    ///
+    /// This is the inverse of [`HistoryId::into_bytes`].
+    #[must_use]
+    pub fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(Uuid::from_bytes(bytes))
+    }
+
     #[must_use]
     pub fn to_string(&self) -> String {
         self.0.as_simple().to_string()
