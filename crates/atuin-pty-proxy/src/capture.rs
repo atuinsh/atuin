@@ -56,6 +56,7 @@ impl CommandCapture {
     }
 }
 
+/// Type implementing [`vt100::Callbacks`], used for capturing terminal scrollback.
 struct Scrollback {
     buffer: BoundedBuffer,
     state: vt100::capture::BasicFormattedCaptureState,
@@ -81,11 +82,19 @@ impl vt100::Callbacks for Scrollback {
     }
 }
 
+/// Represents rendered terminal output.
 struct RenderedOutput {
+    /// The terminal data. This may contain SGR escape sequences.
     pub data: String,
+    /// Whether the data has been truncated (exceeded the maximum buffer size).
     pub truncated: bool,
 }
 
+/// The "core" of a [`CommandCaptureTracker`].
+///
+/// This is a separate type to satisfy Rust's borrowing rules. [`CommandCaptureTracker::push`] can't
+/// call other [`CommandCaptureTracker`] methods while [`CommandCaptureTracker::osc_parser`] is
+/// borrowed, so instead we put those methods in a separate type, [`TrackerCore`].
 struct TrackerCore {
     capture: CommandCapture,
     emulator: vt100::Parser<Scrollback>,
