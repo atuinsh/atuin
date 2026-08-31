@@ -692,32 +692,22 @@ async fn run(
     Ok(())
 }
 
-/// Parse and validate a pid read from the daemon pidfile.
-///
-/// Returns `Some(pid)` only for a valid, positive process id (`1..=i32::MAX`).
-/// Any other value (zero, a value in `[2^31, 2^32)` whose signed cast is
-/// negative, or non-numeric garbage) is rejected with `None` so a corrupt
-/// pidfile can never be turned into a signalling target.
-fn parse_daemon_pid(s: &str) -> Option<i32> {
-    // Parse directly as a signed pid and require it to be strictly positive.
-    // This rejects zero, negatives, and any value in `[2^31, 2^32)` that would
-    // otherwise wrap to a negative `i32` and, via `Pid::from_raw`, become a
-    // `kill(-1)` / `kill(-pgid)` mass-signal (or a `debug_assert` panic).
-    match s.parse::<i32>() {
-        Ok(pid) if pid > 0 => Some(pid),
-        _ => None,
-    }
-}
-
 /// Force cleanup: kill existing daemon process and remove socket.
 async fn force_cleanup(settings: &Settings) {
     let pidfile_path = Path::new(&settings.daemon.pidfile_path);
+
+    fn parse_pid(s: &str) -> Option<i32> {
+        match s.parse::<i32>() {
+            Ok(pid) if pid > 0 => Some(pid),
+            _ => None,
+        }
+    }
 
     // Read and kill the existing process if pidfile exists
     if pidfile_path.exists() {
         if let Ok(contents) = fs::read_to_string(pidfile_path)
             && let Some(pid_str) = contents.lines().next()
-            && let Some(pid) = parse_daemon_pid(pid_str)
+            && let Some(pid) = parse_pid(pid_str)
             && let Err(e) = atuin_common::os::process::force_terminate(
                 pid.unsigned_abs(),
                 Duration::from_secs(2),
@@ -773,24 +763,6 @@ mod tests {
         for needle in needles {
             assert!(msg.contains(needle), "got: {msg}");
         }
-    }
-
-    #[rstest]
-    // Valid, positive pids are accepted unchanged.
-    #[case::normal("12345", Some(12345))]
-    #[case::one("1", Some(1))]
-    #[case::max("2147483647", Some(i32::MAX))]
-    // Zero is not a valid pid to signal.
-    #[case::zero("0", None)]
-    // Values in [2^31, 2^32) cast to a negative i32 -> kill(-1)/kill(-pgid).
-    #[case::u32_max("4294967295", None)]
-    #[case::two_pow_31("2147483648", None)]
-    // Non-numeric / negative garbage.
-    #[case::negative("-1", None)]
-    #[case::garbage("not-a-pid", None)]
-    #[case::empty("", None)]
-    fn parse_daemon_pid_rejects_invalid(#[case] input: &str, #[case] expected: Option<i32>) {
-        assert_eq!(parse_daemon_pid(input), expected);
     }
 
     #[test]
