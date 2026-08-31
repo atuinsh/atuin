@@ -454,7 +454,7 @@ impl Sqlite {
     }
 
     #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
-    pub async fn load(&self, id: &HistoryId) -> Result<Option<History>> {
+    pub async fn load(&self, id: HistoryId) -> Result<Option<History>> {
         debug!("loading history item {}", id);
 
         let res = db::query_as::<_, History>(sqlx::AssertSqlSafe(format!(

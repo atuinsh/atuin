@@ -317,7 +317,7 @@ impl SemanticState {
     fn remove_history_index_if_matches(
         &mut self,
         session_id: &SessionId,
-        history_id: &HistoryId,
+        history_id: HistoryId,
         capture_id: CaptureId,
     ) {
         if self.history_index.get(history_id).is_some_and(|capture_ref| {
@@ -461,7 +461,7 @@ fn history_id_from_str(value: Option<&str>) -> Option<HistoryId> {
 
 fn take_pending_history(
     histories: &mut VecDeque<History>,
-    history_id: &HistoryId,
+    history_id: HistoryId,
 ) -> Option<History> {
     let index = histories.iter().position(|history| &history.id == history_id)?;
     histories.remove(index)

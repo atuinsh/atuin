@@ -493,7 +493,7 @@ async fn handle_end(
     store: SqliteStore,
     history_store: HistoryStore,
     settings: &Settings,
-    id: &HistoryId,
+    id: HistoryId,
     exit: i64,
     duration: Option<u64>,
 ) -> Result<()> {
@@ -558,7 +558,7 @@ async fn handle_end(
 #[instrument(level = "trace", skip_all, fields(id = %id, exit, duration = ?duration), err)]
 async fn handle_daemon_end(
     settings: &Settings,
-    id: &HistoryId,
+    id: HistoryId,
     exit: i64,
     duration: Option<u64>,
 ) -> Result<()> {
@@ -593,7 +593,7 @@ pub(super) async fn start_history_entry(
 #[instrument(level = "trace", skip_all, fields(id = %id, exit, duration = ?duration), err)]
 pub(super) async fn end_history_entry(
     settings: &Settings,
-    id: &HistoryId,
+    id: HistoryId,
     exit: i64,
     duration: Option<u64>,
 ) -> Result<()> {
