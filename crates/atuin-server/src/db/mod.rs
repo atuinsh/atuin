@@ -3,10 +3,10 @@
 //! This module is designed around a couple interesting traits.
 //!
 //! Firstly, there is a [`DynDatabase`] trait, which is an object-safe trait defining a generic
-//! database that `atuin-server` uses. It is a shim around [`Database`], which is implemented by
+//! database that `atuin-server` uses. It is a shim around `Database`, which is implemented by
 //! [`Postgres`], [`MySql`] and [`Sqlite`].
 //!
-//! The [`Database`] trait is the main one conforming backends need to implement. Fortunately, since
+//! The `Database` trait is the main one conforming backends need to implement. Fortunately, since
 //! SQL is mostly standardized, it provides sensible default implementations on all the methods.
 //!
 //! Unfortunately, _binding_ for SQL is not standardized. There are two dialects:
@@ -49,7 +49,7 @@
 //!     //     atuin-common.
 //!     type Url = MsSqlDbUrl;
 //!
-//!     // mssql has its own dialect for bindings, so we creaed the new type.
+//!     // mssql has its own dialect for bindings, so we created the new type.
 //!     type Dialect = MsSqlDialect;
 //! }
 //!
@@ -381,7 +381,7 @@ where
     }
 }
 
-/// The object-safe version of [`Database`]. Useful for dependency-injection.
+/// The object-safe version of `Database`. Useful for dependency-injection.
 #[async_trait]
 impl<T> DynDatabase for T
 where
