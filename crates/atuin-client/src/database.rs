@@ -1549,18 +1549,12 @@ mod test {
         };
 
         let results = db
-            .search(
-                DbSearchMode::FullText,
-                FilterMode::Global,
-                &context,
-                "",
-                OptFilters {
-                    after: after.as_deref(),
-                    before: before.as_deref(),
-                    include_duplicates: true,
-                    ..Default::default()
-                },
-            )
+            .search(DbSearchMode::FullText, FilterMode::Global, &context, "", OptFilters {
+                after: after.as_deref(),
+                before: before.as_deref(),
+                include_duplicates: true,
+                ..Default::default()
+            })
             .await
             .unwrap();
 
@@ -1583,16 +1577,10 @@ mod test {
         let context = new_context();
 
         let hits = db
-            .search(
-                DbSearchMode::FullText,
-                FilterMode::Global,
-                &context,
-                "",
-                OptFilters {
-                    include_duplicates,
-                    ..Default::default()
-                },
-            )
+            .search(DbSearchMode::FullText, FilterMode::Global, &context, "", OptFilters {
+                include_duplicates,
+                ..Default::default()
+            })
             .await
             .unwrap();
 
@@ -1709,13 +1697,9 @@ mod test {
         new_history_item(&db, "corburl").await.unwrap();
 
         // if fuzzy reordering is on, it should come back in a more sensible order
-        assert_search_commands(
-            &db,
-            DbSearchMode::Fuzzy,
-            FilterMode::Global,
-            "curl",
-            vec!["curl", "corburl"],
-        )
+        assert_search_commands(&db, DbSearchMode::Fuzzy, FilterMode::Global, "curl", vec![
+            "curl", "corburl",
+        ])
         .await;
 
         assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, "xxxx", 0).await.unwrap();
@@ -1763,13 +1747,9 @@ mod test {
         new_history_item_at(&db, "curl", Some(now - time::Duration::seconds(10))).await.unwrap();
         new_history_item_at(&db, "corburl", Some(now)).await.unwrap();
 
-        assert_search_commands(
-            &db,
-            mode.closest_db_mode(),
-            FilterMode::Global,
-            "curl",
-            vec!["curl", "corburl"],
-        )
+        assert_search_commands(&db, mode.closest_db_mode(), FilterMode::Global, "curl", vec![
+            "curl", "corburl",
+        ])
         .await;
     }
 
@@ -1832,13 +1812,9 @@ mod test {
         new_history_item_at(&db, close, Some(now - time::Duration::days(5))).await.unwrap();
         new_history_item_at(&db, far, Some(now - time::Duration::hours(1))).await.unwrap();
 
-        assert_search_commands(
-            &db,
-            DbSearchMode::Fuzzy,
-            FilterMode::Global,
-            query,
-            vec![close, far],
-        )
+        assert_search_commands(&db, DbSearchMode::Fuzzy, FilterMode::Global, query, vec![
+            close, far,
+        ])
         .await;
     }
 
@@ -1848,13 +1824,9 @@ mod test {
     async fn test_search_fuzzy_operator() {
         let db = db_with(&["use screen", "screenshot tool"]).await;
 
-        assert_search_commands(
-            &db,
-            DbSearchMode::Fuzzy,
-            FilterMode::Global,
-            "screen$",
-            vec!["use screen"],
-        )
+        assert_search_commands(&db, DbSearchMode::Fuzzy, FilterMode::Global, "screen$", vec![
+            "use screen",
+        ])
         .await;
     }
 
