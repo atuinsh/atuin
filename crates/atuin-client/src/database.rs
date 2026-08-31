@@ -2152,7 +2152,7 @@ mod test {
         // the legacy shape directly.
         db::query("update history set hostname = 'pi'").execute(db.sqlite.pool()).await.unwrap();
 
-        let loaded = db.load(&history.id.to_string()).await.unwrap().unwrap();
+        let loaded = db.load(&history.id).await.unwrap().unwrap();
         assert!(!loaded.is_agent());
 
         let context = Context {
@@ -2191,7 +2191,7 @@ mod test {
             .into();
         db.save(&history).await.unwrap();
 
-        let loaded = db.load(&history.id.to_string()).await.unwrap().unwrap();
+        let loaded = db.load(&history.id).await.unwrap().unwrap();
         assert!(!loaded.is_agent());
 
         let context = Context {
