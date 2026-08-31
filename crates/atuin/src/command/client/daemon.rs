@@ -700,9 +700,13 @@ async fn force_cleanup(settings: &Settings) {
     if pidfile_path.exists() {
         if let Ok(contents) = fs::read_to_string(pidfile_path)
             && let Some(pid_str) = contents.lines().next()
-            && let Ok(pid) = pid_str.parse::<u32>()
-            && let Err(e) =
-                atuin_common::os::process::force_terminate(pid, Duration::from_secs(2)).await
+            && let Some(pid) = pid_str.trim().parse::<i32>().ok()
+            && pid > 0
+            && let Err(e) = atuin_common::os::process::force_terminate(
+                pid.unsigned_abs(),
+                Duration::from_secs(2),
+            )
+            .await
         {
             tracing::warn!("could not terminate existing daemon (pid {pid}): {e}");
         }
