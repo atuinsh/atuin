@@ -127,8 +127,16 @@ impl PidfileGuard {
 
         file.set_len(0)
             .wrap_err_with(|| format!("could not truncate daemon pidfile {}", path.display()))?;
+        // Line 1: pid, line 2: version, line 3 (optional): the daemon's start_time. Persisting the
+        // start_time gives the daemon a stable identity so a later `--force` cleanup can tell
+        // whether the recorded pid still refers to *this* daemon or has been reused by an unrelated
+        // process. Older pidfiles omit line 3; readers must tolerate its absence.
         writeln!(file, "{}", std::process::id())
             .and_then(|()| writeln!(file, "{DAEMON_VERSION}"))
+            .and_then(|()| {
+                atuin_common::os::process::current_process_start_time()
+                    .map_or(Ok(()), |start_time| writeln!(file, "{start_time}"))
+            })
             .wrap_err_with(|| format!("could not write daemon pidfile {}", path.display()))?;
 
         Ok(Self { file })
@@ -701,10 +709,21 @@ async fn force_cleanup(settings: &Settings) {
         if let Ok(contents) = fs::read_to_string(pidfile_path)
             && let Some(pid_str) = contents.lines().next()
             && let Ok(pid) = pid_str.parse::<u32>()
-            && let Err(e) =
-                atuin_common::os::process::force_terminate(pid, Duration::from_secs(2)).await
         {
-            tracing::warn!("could not terminate existing daemon (pid {pid}): {e}");
+            // The recorded start_time (line 3) identifies the original daemon. When present, it
+            // lets `force_terminate` refuse to signal a process that has merely inherited a recycled
+            // pid. Older pidfiles omit it; then cleanup falls back to best-effort liveness.
+            let expected_start_time = contents.lines().nth(2).and_then(|s| s.parse::<u64>().ok());
+
+            if let Err(e) = atuin_common::os::process::force_terminate(
+                pid,
+                expected_start_time,
+                Duration::from_secs(2),
+            )
+            .await
+            {
+                tracing::warn!("could not terminate existing daemon (pid {pid}): {e}");
+            }
         }
 
         // Remove the pidfile
@@ -781,9 +800,19 @@ mod tests {
 
         let contents = std::fs::read_to_string(&pidfile).unwrap();
         let lines: Vec<&str> = contents.lines().collect();
-        assert_eq!(lines.len(), 2);
+        // Line 1: pid, line 2: version, optional line 3: start_time (present whenever it can be
+        // determined for the current process, which it can be here).
+        assert!(lines.len() == 2 || lines.len() == 3, "unexpected pidfile: {contents:?}");
         assert_eq!(lines[0], std::process::id().to_string());
         assert_eq!(lines[1], DAEMON_VERSION);
+        if let Some(start_time_line) = lines.get(2) {
+            let persisted: u64 = start_time_line.parse().expect("start_time line must parse as u64");
+            assert_eq!(
+                Some(persisted),
+                atuin_common::os::process::current_process_start_time(),
+                "persisted start_time should match the current process's identity"
+            );
+        }
 
         // After guard is dropped, lock should be released — acquiring again must succeed.
         let _guard2 = PidfileGuard::acquire(&pidfile).unwrap();
