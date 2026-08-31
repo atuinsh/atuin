@@ -211,8 +211,14 @@ impl Info {
     }
 
     async fn query_version(pool: &SqlitePool) -> Result<semver::Version, VersionError> {
+        // Acquire through the same BUSY/LOCKED retry as `FfiInfo::query`. Under contention (for
+        // example, the in-memory pool's setup DDL still holding the schema lock on a shared-cache
+        // connection) a bare acquire surfaces a transient SQLITE_BUSY/SQLITE_LOCKED here. #4000
+        // silenced that noise for the FFI/pragma path but left this version query bare, so
+        // `atuin doctor` still printed the swallowed error. Retrying the acquire keeps it quiet.
+        let mut conn = FfiInfo::acquire_retrying(pool).await?;
         let str: String =
-            crate::db::query_scalar("SELECT sqlite_version()").fetch_one(pool).await?;
+            crate::db::query_scalar("SELECT sqlite_version()").fetch_one(&mut *conn).await?;
         Ok(semver::Version::parse(&str)?)
     }
 
@@ -225,5 +231,94 @@ impl Info {
     /// Get the path to the WAL database.
     pub fn wal_path(&self) -> Result<&Path, SqlitePathError> {
         self.ffi_info.wal_path.as_deref().map_err(Clone::clone)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+    use std::time::Duration;
+
+    use sqlx::ConnectOptions;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+
+    use super::*;
+
+    /// A distinct shared-cache in-memory database URI per test invocation so the shared cache
+    /// does not leak across tests.
+    fn shared_cache_uri(name: &str) -> String {
+        format!("file:{name}?mode=memory&cache=shared")
+    }
+
+    /// Build a pool whose connections, on establishment, must take a read lock on `contended`.
+    ///
+    /// This mirrors the real-world contention that motivated #4000: a fresh connection to a
+    /// shared-cache database can transiently observe a `SQLITE_LOCKED_SHAREDCACHE` (262) while
+    /// another connection holds a write lock, so `pool.acquire()` itself fails.
+    fn contended_pool(uri: &str) -> SqlitePool {
+        let opts = SqliteConnectOptions::from_str(uri).unwrap();
+        SqlitePoolOptions::new()
+            .min_connections(0)
+            .max_connections(8)
+            .after_connect(|conn, _meta| {
+                Box::pin(async move {
+                    // Reading the contended table requires a shared read lock; while a writer
+                    // holds the table's write lock in shared-cache mode, this returns
+                    // SQLITE_LOCKED and the connection cannot be handed out.
+                    crate::db::query_scalar::<Sqlite, i64>("SELECT count(*) FROM contended")
+                        .fetch_one(&mut *conn)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect_lazy_with(opts)
+    }
+
+    #[tokio::test]
+    async fn query_version_tolerates_transient_lock_on_acquire() {
+        let uri = shared_cache_uri("d5_version_transient_lock");
+
+        // The keeper connection keeps the shared cache alive for the duration of the test and
+        // acts as the writer that produces contention. It is established directly (bypassing the
+        // pool's `after_connect`) so it can bootstrap the schema.
+        let mut keeper = SqliteConnectOptions::from_str(&uri).unwrap().connect().await.unwrap();
+        crate::db::query::<Sqlite>("CREATE TABLE contended (x INTEGER)")
+            .execute(&mut keeper)
+            .await
+            .unwrap();
+        crate::db::query::<Sqlite>("INSERT INTO contended VALUES (1)")
+            .execute(&mut keeper)
+            .await
+            .unwrap();
+
+        let pool = contended_pool(&uri);
+
+        // Hold a write lock on the schema (sqlite_master) by creating a table inside an open
+        // transaction. A fresh pool connection has no schema cache, so its first query
+        // (`after_connect`'s read of `contended`) must read sqlite_master and hits SQLITE_LOCKED.
+        crate::db::query::<Sqlite>("BEGIN IMMEDIATE").execute(&mut keeper).await.unwrap();
+        crate::db::query::<Sqlite>("CREATE TABLE blocker (y INTEGER)")
+            .execute(&mut keeper)
+            .await
+            .unwrap();
+
+        // Release the lock shortly after, well within the retry window, so a retrying acquire
+        // eventually succeeds while a bare acquire (which fired once, immediately) has failed.
+        let releaser = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(75)).await;
+            crate::db::query::<Sqlite>("COMMIT").execute(&mut keeper).await.unwrap();
+            // Keep the keeper (and thus the shared cache) alive until the test is done.
+            keeper
+        });
+
+        let version = Info::query_version(&pool).await;
+
+        // Keep the shared cache alive until after the query resolved.
+        let _keeper = releaser.await.unwrap();
+
+        assert!(
+            version.is_ok(),
+            "query_version should tolerate a transient SQLITE_LOCKED on acquire, got: {version:?}"
+        );
     }
 }
