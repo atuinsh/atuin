@@ -3,6 +3,7 @@ use std::num::NonZeroU16;
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::thread::JoinHandle;
 
 use atuin_common::os::unix::{SecureTempDirError, create_secure_temp_dir};
 
@@ -62,6 +63,9 @@ impl Parser {
                 self.emulator.process(data);
             }
             Msg::Resize { rows, cols } => {
+                // `vt100` dimensions can't be 0. Upstream would panic; now our `atuin-vt100` fork
+                // requires dimensions to be `NonZeroU16` to ensure we don't hit those panics. Clamp
+                // dimensions to 1.
                 let rows = NonZeroU16::new(rows).unwrap_or(NonZeroU16::MIN);
                 let cols = NonZeroU16::new(cols).unwrap_or(NonZeroU16::MIN);
                 self.emulator.screen_mut().set_size(rows, cols);
@@ -76,15 +80,22 @@ impl Parser {
     }
 }
 
-pub fn spawn_parser_thread(rows: u16, cols: u16, screen_rx: Receiver<Msg>, options: ParserOptions) {
+pub fn spawn_parser_thread(
+    rows: u16,
+    cols: u16,
+    screen_rx: Receiver<Msg>,
+    options: ParserOptions,
+) -> JoinHandle<()> {
     std::thread::spawn(move || {
+        // `vt100` dimensions can't be 0. Upstream would panic; now our `atuin-vt100` fork requires
+        // dimensions to be `NonZeroU16` to ensure we don't hit those panics. Clamp dimensions to 1.
         let rows = NonZeroU16::new(rows).unwrap_or(NonZeroU16::MIN);
         let cols = NonZeroU16::new(cols).unwrap_or(NonZeroU16::MIN);
         let mut parser = Parser::new(rows, cols, options);
         for msg in screen_rx {
             parser.handle_msg(msg);
         }
-    });
+    })
 }
 
 pub fn spawn_socket_server(sock_path: PathBuf, screen_tx: SyncSender<Msg>) {

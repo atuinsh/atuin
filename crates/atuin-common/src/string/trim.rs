@@ -2,7 +2,7 @@ mod sealed {
     pub trait Sealed {}
 }
 
-/// A pattern that, unlike `std::str::pattern::Pattern`, does not consume the pattern when used.
+/// A pattern that, unlike [`std::str::pattern::Pattern`], does not consume the pattern when used.
 // Because `std::str::pattern::Pattern` is unstable, we cannot implement `PatternRef` in terms of
 // it. Ideally this trait would be very simple -- an associated type `Self::Pattern<'a>` that
 // implements `std::str::pattern::Pattern`, and a method to go from `&'a mut Self` to
