@@ -10,6 +10,7 @@
 *[Kubernetes]: A system for running and scaling lots of containers across many machines; one way to self-host Atuin at larger scale
 *[LLM]: Large language model — the kind of AI (like Claude or GPT) that powers Atuin's command generation
 *[MCP]: Model Context Protocol — a shared standard that lets AI assistants plug into tools like Atuin, for example to search your history
+*[MySQL]: A popular, powerful open-source database
 *[PTY]: Pseudo-terminal — the behind-the-scenes channel a program uses to send text to and read text from your terminal
 *[PostgreSQL]: A popular, powerful open-source database; the recommended storage for a self-hosted Atuin server
 *[Postgres]: Short for PostgreSQL — a popular open-source database; the recommended storage for a self-hosted Atuin server

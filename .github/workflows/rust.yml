@@ -25,12 +25,15 @@ jobs:
 
       - name: Install OpenSSL dev libraries (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+        uses: awalsh128/cache-apt-pkgs-action@v1.6.3
+        with:
+          packages: libssl-dev pkg-config
+          version: 1.0
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.97.0
+          toolchain: 1.98.0
 
       - uses: actions/cache@v6
         with:
@@ -52,42 +55,37 @@ jobs:
       - name: Run cargo build main
         run: cargo build --all --locked --release
 
-  cross-compile:
-    strategy:
-      matrix:
-        # There was an attempt to make cross-compiles also work on FreeBSD, but that failed with:
-        #
-        # warning: libelf.so.2, needed by <...>/libkvm.so, not found (try using -rpath or -rpath-link)
-        target: [x86_64-unknown-illumos]
-    runs-on: depot-ubuntu-24.04
+  # This used to use cross compilling via `cross` but it's more reliable to just
+  # run this on a real illumos (OmniOS) system.
+  test-in-vm:
+    name: Test in VM (illumos)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Install cross
-        uses: taiki-e/install-action@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          tool: cross
+          persist-credentials: false
 
-      - uses: actions/cache@v6
+      - name: Test on illumos
+        uses: vmactions/omnios-vm@027e3ec08fed6fb740ab5f300c2605f9de02997a # v1.3.4
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ matrix.target }}-cross-compile-${{ hashFiles('**/Cargo.lock') }}
+          # use the latest omnios LTS
+          release: "r151054-build"
+          envs: "CARGO_TERM_COLOR"
+          usesh: true
+          mem: 4096
+          copyback: false
+          prepare: |
+            pkg install pkg-config openssl
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.98.0
+          run: |
+            . "$HOME/.cargo/env"
 
-      - name: Run cross build common
-        run: cross build -p atuin-common --locked --target ${{ matrix.target }}
+            banner client
+            cargo build -p atuin-client --locked --release
 
-      - name: Run cross build client
-        run: cross build -p atuin-client --locked --target ${{ matrix.target }} --features vendored-tls
-
-      - name: Run cross build server
-        run: cross build -p atuin-server --locked --target ${{ matrix.target }} --features vendored-tls
-
-      - name: Run cross build main
-        run: |
-          cross build --all --locked --target ${{ matrix.target }} --features vendored-tls
+            banner server
+            cargo build -p atuin-server --locked --release
 
   unit-test:
     strategy:
@@ -100,12 +98,15 @@ jobs:
 
       - name: Install OpenSSL dev libraries (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+        uses: awalsh128/cache-apt-pkgs-action@v1.6.3
+        with:
+          packages: libssl-dev pkg-config
+          version: 1.0
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.97.0
+          toolchain: 1.98.0
 
       - uses: taiki-e/install-action@v2
         name: Install nextest
@@ -134,12 +135,15 @@ jobs:
 
       - name: Install OpenSSL dev libraries (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+        uses: awalsh128/cache-apt-pkgs-action@v1.6.3
+        with:
+          packages: libssl-dev pkg-config
+          version: 1.0
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.97.0
+          toolchain: 1.98.0
 
       - uses: actions/cache@v6
         with:
@@ -182,12 +186,15 @@ jobs:
 
       - name: Install OpenSSL dev libraries (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+        uses: awalsh128/cache-apt-pkgs-action@v1.6.3
+        with:
+          packages: libssl-dev pkg-config
+          version: 1.0
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.97.0
+          toolchain: 1.98.0
 
       - uses: taiki-e/install-action@v2
         name: Install nextest
@@ -215,12 +222,15 @@ jobs:
 
       - name: Install OpenSSL dev libraries (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+        uses: awalsh128/cache-apt-pkgs-action@v1.6.3
+        with:
+          packages: libssl-dev pkg-config
+          version: 1.0
 
       - name: Install latest rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.97.0
+          toolchain: 1.98.0
           components: clippy
 
       - uses: actions/cache@v6
@@ -232,10 +242,10 @@ jobs:
           key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run clippy
-        run: cargo clippy -- -D warnings -D clippy::redundant_clone
+        run: cargo clippy -- -D warnings
 
       - name: Run clippy (tests)
-        run: cargo clippy --tests -- -D warnings -D clippy::redundant_clone
+        run: cargo clippy --tests -- -D warnings
 
   docs:
     runs-on: depot-ubuntu-24.04
@@ -245,12 +255,15 @@ jobs:
 
       - name: Install OpenSSL dev libraries (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+        uses: awalsh128/cache-apt-pkgs-action@v1.6.3
+        with:
+          packages: libssl-dev pkg-config
+          version: 1.0
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.97.0
+          toolchain: 1.98.0
 
       - uses: actions/cache@v6
         with:
@@ -271,14 +284,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install latest rust
+      - name: Install nightly rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.97.0
+          toolchain: nightly
           components: rustfmt
 
       - name: Format
-        run: cargo fmt -- --check
+        run: cargo +nightly fmt -- --check
 
   deny:
     runs-on: depot-ubuntu-24.04
@@ -299,7 +312,7 @@ jobs:
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.97.0
+          toolchain: 1.98.0
 
       - uses: actions/cache@v6
         with:

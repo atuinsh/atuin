@@ -1,9 +1,9 @@
-use atuin_client::history::HISTORY_TAG;
 use atuin_client::history::Version;
 use atuin_client::history::store::HistoryRecord;
-use atuin_client::record::encryption::PASETO_V4;
 use atuin_common::utils::uuid_v7;
-use atuin_domain::record::{DecryptedData, EncryptedData, Host, HostId, Record};
+use atuin_domain::record::{
+    DecryptedData, EncryptedData, Host, HostId, Record, RecordTag, RecordVersion,
+};
 
 use crate::_util::context::BenchCtx;
 use crate::history::BenchHistory;
@@ -24,7 +24,7 @@ fn encrypt(bencher: divan::Bencher, n: usize) {
     bencher.with_inputs(|| decrypted_records(n)).bench_values(
         |records: Vec<Record<DecryptedData>>| {
             for record in records {
-                divan::black_box(record.encrypt::<PASETO_V4>(&KEY));
+                divan::black_box(record.encrypt(&KEY.into()));
             }
         },
     );
@@ -36,12 +36,12 @@ fn decrypt(bencher: divan::Bencher, n: usize) {
         .with_inputs(|| {
             decrypted_records(n)
                 .into_iter()
-                .map(|record| record.encrypt::<PASETO_V4>(&KEY))
+                .map(|record| record.encrypt(&KEY.into()))
                 .collect::<Vec<Record<EncryptedData>>>()
         })
         .bench_values(|records: Vec<Record<EncryptedData>>| {
             for record in records {
-                divan::black_box(record.decrypt::<PASETO_V4>(&KEY).unwrap());
+                divan::black_box(record.decrypt(&KEY.into()).unwrap());
             }
         });
 }
@@ -59,8 +59,8 @@ fn decrypted_records(n: usize) -> Vec<Record<DecryptedData>> {
 
             Record::builder()
                 .host(host.clone())
-                .version(Version::LATEST.name().to_owned())
-                .tag(HISTORY_TAG.to_owned())
+                .version(RecordVersion::from(Version::LATEST.name()))
+                .tag(RecordTag::History)
                 .data(data)
                 .idx(idx as u64)
                 .build()

@@ -133,6 +133,7 @@ commands and any arbitrary shell command:
 | `atuin-up-search-emacs` | Search command for <kbd>up</kbd> or similar keys, with the `emacs` keymap mode      |
 | `atuin-up-search-viins` | Search command for <kbd>up</kbd> or similar keys, with the `vim-insert` keymap mode |
 | `atuin-up-search-vicmd` | Search command for <kbd>up</kbd> or similar keys, with the `vim-normal` keymap mode |
+| (other strings)         | The strings are executed as shell commands                                          |
 
 The keymap mode controls the initial keymap in the Atuin search and is
 determined in combination with the config
@@ -161,6 +162,11 @@ keybindings to the <kbd>up</kbd> key or similar keys. For the keybindings in
 the `vi` editing mode, the options `--keymap-mode=vim-insert` and the keymap
 mode `--keymap-mode=vim-normal` (`atuin >= 18.0`) can be additionally specified
 to the shell function `__atuin_history`.
+
+Inside `COMMAND`, `__atuin_accept_line "string"` can be used to execute the
+string as a command. Similarly, `__atuin_insert_line "string"` can be used to
+insert the string into the buffer of the line editor. They're designed to
+work also in Bash 3.2, where `READLINE_LINE` isn't supported.
 
 ## fish
 Edit key bindings in FISH shell by adding the following to ~/.config/fish/config.fish

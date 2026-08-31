@@ -29,12 +29,22 @@ macro_rules! new_uuid {
         #[display("{_0}")]
         pub struct $name(pub Uuid);
 
+        impl $name {
+            pub fn as_hyphenated(&self) -> &uuid::fmt::Hyphenated {
+                self.0.as_hyphenated()
+            }
+        }
+
         impl<DB: sqlx::Database> sqlx::Type<DB> for $name
         where
             Uuid: sqlx::Type<DB>,
         {
             fn type_info() -> <DB as sqlx::Database>::TypeInfo {
                 Uuid::type_info()
+            }
+
+            fn compatible(ty: &<DB as sqlx::Database>::TypeInfo) -> bool {
+                <Uuid as sqlx::Type<DB>>::compatible(ty)
             }
         }
 

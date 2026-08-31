@@ -1,6 +1,7 @@
-use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
 
 /// Log level for file logging. Maps to tracing's LevelFilter.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -15,14 +16,15 @@ pub enum LogLevel {
 }
 
 impl LogLevel {
+    #[must_use]
     pub fn to_tracing(&self) -> tracing::Level {
         use tracing::Level;
         match self {
-            LogLevel::Trace => Level::TRACE,
-            LogLevel::Debug => Level::DEBUG,
-            LogLevel::Info => Level::INFO,
-            LogLevel::Warn => Level::WARN,
-            LogLevel::Error => Level::ERROR,
+            Self::Trace => Level::TRACE,
+            Self::Debug => Level::DEBUG,
+            Self::Info => Level::INFO,
+            Self::Warn => Level::WARN,
+            Self::Error => Level::ERROR,
         }
     }
 }
@@ -35,10 +37,12 @@ pub struct FileConfig {
 }
 
 impl FileConfig {
+    #[must_use]
     pub fn directory(&self) -> &Path {
         self.path.parent().unwrap_or_else(|| Path::new(""))
     }
 
+    #[must_use]
     pub fn name(&self) -> &OsStr {
         self.path.file_name().unwrap_or_else(|| OsStr::new(""))
     }
@@ -51,6 +55,7 @@ pub struct StderrConfig {
 }
 
 impl StderrConfig {
+    #[must_use]
     pub fn verbose() -> Self {
         Self {
             show_time: true,
@@ -66,6 +71,7 @@ pub struct LogConfig {
 }
 
 impl LogConfig {
+    #[must_use]
     pub fn file_only(file: FileConfig) -> Self {
         Self {
             file: Some(file),
@@ -73,6 +79,7 @@ impl LogConfig {
         }
     }
 
+    #[must_use]
     pub fn stderr_only() -> Self {
         Self {
             file: None,

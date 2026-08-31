@@ -1,12 +1,8 @@
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::Settings;
+use atuin_common::encryption::paseto_v4;
 use clap::Args;
-use eyre::{Result, bail};
-use tokio::{fs::File, io::AsyncWriteExt};
-
-use atuin_client::{
-    encryption::{Key, decode_key, encode_key, generate_encoded_key, load_key},
-    record::sqlite_store::SqliteStore,
-    settings::Settings,
-};
+use eyre::{Context as _, Result};
 
 #[derive(Args, Debug)]
 pub struct Rekey {
@@ -16,40 +12,22 @@ pub struct Rekey {
 
 impl Rekey {
     pub async fn run(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
-        let key = if let Some(key) = self.key.clone() {
+        let key: paseto_v4::Key = if let Some(key_str) = &self.key {
             println!("Re-encrypting store with specified key");
 
-            match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
-                Ok(mnemonic) => encode_key(Key::from_slice(mnemonic.entropy()))?,
-                Err(err) => {
-                    match err {
-                        // assume they copied in the base64 key
-                        bip39::ErrorKind::InvalidWord(_) => key,
-                        bip39::ErrorKind::InvalidChecksum => {
-                            bail!("key mnemonic was not valid");
-                        }
-                        bip39::ErrorKind::InvalidKeysize(_)
-                        | bip39::ErrorKind::InvalidWordLength(_)
-                        | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
-                            bail!("key was not the correct length");
-                        }
-                    }
-                }
-            }
+            paseto_v4::Key::try_from_mnemonic(key_str)?
         } else {
             println!("Re-encrypting store with freshly-generated key");
-            let (_, encoded) = generate_encoded_key()?;
-            encoded
+            paseto_v4::Key::generate()
         };
 
-        let current_key: [u8; 32] = load_key(settings)?.into();
-        let new_key: [u8; 32] = decode_key(key.clone())?.into();
+        let current_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+            .context("could not load encryption key")?;
 
-        store.re_encrypt(&current_key, &new_key).await?;
+        store.re_encrypt(&current_key, &key).await?;
 
         println!("Store rewritten. Saving new key");
-        let mut file = File::create(settings.key_path.clone()).await?;
-        file.write_all(key.as_bytes()).await?;
+        key.overwrite_path(&settings.key_path)?;
 
         Ok(())
     }

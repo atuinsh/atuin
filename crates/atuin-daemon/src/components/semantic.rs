@@ -13,13 +13,11 @@ use tokio::sync::Mutex;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{Level, instrument};
 
-use crate::{
-    daemon::{Component, DaemonHandle},
-    events::DaemonEvent,
-    semantic::{
-        CommandCapture, CommandOutputReply, CommandOutputRequest, OutputLine, RecordCommandsReply,
-        semantic_server::{Semantic as SemanticSvc, SemanticServer},
-    },
+use crate::daemon::{Component, DaemonHandle};
+use crate::events::DaemonEvent;
+use crate::semantic::semantic_server::{Semantic as SemanticSvc, SemanticServer};
+use crate::semantic::{
+    CommandCapture, CommandOutputReply, CommandOutputRequest, OutputLine, RecordCommandsReply,
 };
 
 const MAX_SESSIONS: usize = 20;
@@ -84,6 +82,7 @@ struct SemanticCommandRecord {
 }
 
 impl SemanticComponent {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             inner: Arc::new(SemanticComponentInner {
@@ -92,6 +91,7 @@ impl SemanticComponent {
         }
     }
 
+    #[must_use]
     pub fn grpc_service(&self) -> SemanticServer<SemanticGrpcService> {
         SemanticServer::new(SemanticGrpcService {
             inner: self.inner.clone(),
@@ -137,6 +137,7 @@ impl Component for SemanticComponent {
 }
 
 impl SemanticComponentInner {
+    #[must_use]
     async fn record_capture(&self, capture: CommandCapture) -> bool {
         let mut state = self.state.lock().await;
         state.record_capture(capture)
@@ -154,6 +155,7 @@ impl SemanticComponentInner {
 }
 
 impl SemanticState {
+    #[must_use]
     fn record_capture(&mut self, mut capture: CommandCapture) -> bool {
         let Some(history_id) = history_id_from_str(capture.history_id.as_deref()) else {
             tracing::debug!(
@@ -196,7 +198,7 @@ impl SemanticState {
 
         let record = SemanticCommandRecord { capture, history };
         log_record(&record, "recorded semantic command capture");
-        self.push_record(session_id, history_id, record);
+        self.push_record(&session_id, history_id, record);
         true
     }
 
@@ -206,10 +208,7 @@ impl SemanticState {
         if let Some(capture_ref) = self.history_index.get(&history_id).cloned() {
             if let Some(stored) = self.stored_capture_mut(&capture_ref) {
                 stored.record.history = Some(history);
-                log_record(
-                    &stored.record,
-                    "associated semantic command capture with history",
-                );
+                log_record(&stored.record, "associated semantic command capture with history");
                 return;
             }
 
@@ -246,16 +245,11 @@ impl SemanticState {
         capture_ref: &CaptureRef,
         ranges: &[crate::semantic::OutputRange],
     ) -> Option<CommandOutputReply> {
-        let stored = self
-            .sessions
-            .get(&capture_ref.session_id)?
-            .stored_capture(capture_ref.capture_id)?;
+        let stored =
+            self.sessions.get(&capture_ref.session_id)?.stored_capture(capture_ref.capture_id)?;
         let output = &stored.record.capture.output;
-        let output_observed_bytes = stored
-            .record
-            .capture
-            .output_observed_bytes
-            .max(output.len() as u64);
+        let output_observed_bytes =
+            stored.record.capture.output_observed_bytes.max(output.len() as u64);
 
         Some(CommandOutputReply {
             found: true,
@@ -270,11 +264,11 @@ impl SemanticState {
 
     fn push_record(
         &mut self,
-        session_id: SessionId,
+        session_id: &SessionId,
         history_id: HistoryId,
         record: SemanticCommandRecord,
     ) {
-        self.touch_session(&session_id);
+        self.touch_session(session_id);
 
         let (capture_id, evicted) = {
             let session = self.sessions.entry(session_id.clone()).or_default();
@@ -289,7 +283,7 @@ impl SemanticState {
 
         for evicted in evicted {
             self.remove_history_index_if_matches(
-                &session_id,
+                session_id,
                 &evicted.history_id,
                 evicted.capture_id,
             );
@@ -326,45 +320,33 @@ impl SemanticState {
         history_id: &HistoryId,
         capture_id: CaptureId,
     ) {
-        if self
-            .history_index
-            .get(history_id)
-            .is_some_and(|capture_ref| {
-                &capture_ref.session_id == session_id && capture_ref.capture_id == capture_id
-            })
-        {
+        if self.history_index.get(history_id).is_some_and(|capture_ref| {
+            &capture_ref.session_id == session_id && capture_ref.capture_id == capture_id
+        }) {
             self.history_index.remove(history_id);
         }
     }
 
     fn stored_capture_mut(&mut self, capture_ref: &CaptureRef) -> Option<&mut StoredCapture> {
-        self.sessions
-            .get_mut(&capture_ref.session_id)?
-            .stored_capture_mut(capture_ref.capture_id)
+        self.sessions.get_mut(&capture_ref.session_id)?.stored_capture_mut(capture_ref.capture_id)
     }
 
     fn record_count(&self) -> usize {
-        self.sessions
-            .values()
-            .map(|session| session.records.len())
-            .sum()
+        self.sessions.values().map(|session| session.records.len()).sum()
     }
 }
 
 impl SessionCaptures {
+    #[must_use]
     fn push(
         &mut self,
         history_id: HistoryId,
         record: SemanticCommandRecord,
     ) -> (CaptureId, Vec<EvictedCapture>) {
-        self.push_with_limits(
-            history_id,
-            record,
-            MAX_COMMANDS_PER_SESSION,
-            MAX_BYTES_PER_SESSION,
-        )
+        self.push_with_limits(history_id, record, MAX_COMMANDS_PER_SESSION, MAX_BYTES_PER_SESSION)
     }
 
+    #[must_use]
     fn push_with_limits(
         &mut self,
         history_id: HistoryId,
@@ -383,12 +365,10 @@ impl SessionCaptures {
             record,
         });
 
-        (
-            capture_id,
-            self.evict_to_limits(max_commands, max_output_bytes),
-        )
+        (capture_id, self.evict_to_limits(max_commands, max_output_bytes))
     }
 
+    #[must_use]
     fn evict_to_limits(
         &mut self,
         max_commands: usize,
@@ -413,9 +393,7 @@ impl SessionCaptures {
     }
 
     fn stored_capture_mut(&mut self, capture_id: CaptureId) -> Option<&mut StoredCapture> {
-        self.records
-            .iter_mut()
-            .find(|record| record.id == capture_id)
+        self.records.iter_mut().find(|record| record.id == capture_id)
     }
 }
 
@@ -486,17 +464,12 @@ fn take_pending_history(
     histories: &mut VecDeque<History>,
     history_id: &HistoryId,
 ) -> Option<History> {
-    let index = histories
-        .iter()
-        .position(|history| &history.id == history_id)?;
+    let index = histories.iter().position(|history| &history.id == history_id)?;
     histories.remove(index)
 }
 
 fn push_pending_history(histories: &mut VecDeque<History>, history: History) {
-    if let Some(index) = histories
-        .iter()
-        .position(|pending| pending.id == history.id)
-    {
+    if let Some(index) = histories.iter().position(|pending| pending.id == history.id) {
         histories.remove(index);
     }
 
@@ -553,21 +526,26 @@ fn select_output_ranges(output: &str, ranges: &[crate::semantic::OutputRange]) -
     merged
         .into_iter()
         .flat_map(|(start, end)| {
-            lines[start..=end]
-                .iter()
-                .enumerate()
-                .map(move |(offset, line)| OutputLine {
-                    line_number: (start + offset + 1) as u64,
-                    content: (*line).to_string(),
-                })
+            lines[start..=end].iter().enumerate().map(move |(offset, line)| OutputLine {
+                line_number: (start + offset + 1) as u64,
+                content: (*line).to_string(),
+            })
         })
         .collect()
 }
 
 fn normalize_line_range(start: i64, end: i64, line_count: usize) -> Option<(usize, usize)> {
     let line_count = i64::try_from(line_count).ok()?;
-    let start = if start < 0 { line_count + start } else { start };
-    let end = if end < 0 { line_count + end } else { end };
+    let start = if start < 0 {
+        line_count + start
+    } else {
+        start
+    };
+    let end = if end < 0 {
+        line_count + end
+    } else {
+        end
+    };
 
     if end < 0 || start >= line_count {
         return None;
@@ -581,16 +559,10 @@ fn normalize_line_range(start: i64, end: i64, line_count: usize) -> Option<(usiz
 
 fn log_record(record: &SemanticCommandRecord, message: &'static str) {
     let history_id = record.capture.history_id.as_deref().unwrap_or("<missing>");
-    let associated_history_id = record
-        .history
-        .as_ref()
-        .map(|history| history.id.to_string());
+    let associated_history_id = record.history.as_ref().map(|history| history.id.to_string());
     let exit = record.history.as_ref().map(|history| history.exit);
     let duration = record.history.as_ref().map(|history| history.duration);
-    let author = record
-        .history
-        .as_ref()
-        .map(|history| history.author.as_str());
+    let author = record.history.as_ref().map(|history| history.author.as_str());
     let session_id = record.capture.session_id.as_deref();
 
     tracing::debug!(
@@ -612,9 +584,11 @@ fn log_record(record: &SemanticCommandRecord, message: &'static str) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use atuin_domain::record::CmdOrigin;
     use rstest::rstest;
     use time::OffsetDateTime;
+
+    use super::*;
 
     fn history(id: &str, session: &str, command: &str) -> History {
         History {
@@ -625,11 +599,12 @@ mod tests {
             command: command.to_string(),
             cwd: String::new(),
             session: session.to_string(),
-            hostname: String::new(),
+            cmd_origin: CmdOrigin::default(),
             author: String::new(),
             intent: None,
             deleted_at: None,
             shell: Some("bash".into()),
+            author_kind: None,
         }
     }
 
@@ -689,11 +664,7 @@ mod tests {
         state.record_history(history("id-1", "session-from-history", "cargo test"));
         assert!(state.record_capture(capture(Some("id-1"), None, "output")));
 
-        assert!(
-            state
-                .sessions
-                .contains_key(&SessionId("session-from-history".to_string()))
-        );
+        assert!(state.sessions.contains_key(&SessionId("session-from-history".to_string())));
         assert!(command_output(&mut state, "id-1").found);
     }
 
@@ -704,10 +675,7 @@ mod tests {
         assert!(state.record_capture(capture(Some("id-1"), Some("session-1"), "output")));
         state.record_history(history("id-1", "session-1", "different command"));
 
-        let capture_ref = state
-            .history_index
-            .get(&HistoryId("id-1".to_string()))
-            .unwrap();
+        let capture_ref = state.history_index.get(&HistoryId("id-1".to_string())).unwrap();
         let stored = state
             .sessions
             .get(&capture_ref.session_id)
@@ -849,10 +817,7 @@ mod tests {
 
     #[test]
     fn output_ranges_merge_overlaps_and_adjacent_ranges() {
-        let output = (0..100)
-            .map(|n| format!("line {n}"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let output = (0..100).map(|n| format!("line {n}")).collect::<Vec<_>>().join("\n");
         let ranges = vec![
             crate::semantic::OutputRange { start: 0, end: 100 },
             crate::semantic::OutputRange {
@@ -870,10 +835,7 @@ mod tests {
 
     #[test]
     fn empty_output_ranges_default_to_first_thousand_lines() {
-        let output = (0..1001)
-            .map(|n| format!("line {n}"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let output = (0..1001).map(|n| format!("line {n}")).collect::<Vec<_>>().join("\n");
 
         let selected = select_output_ranges(&output, &[]);
 

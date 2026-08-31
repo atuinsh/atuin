@@ -3,6 +3,7 @@ use std::process::Command;
 /// Detect the Linux distribution from the system,
 /// using system-specific release files and falling
 /// back to lsb_release.
+#[must_use]
 pub fn detect_linux_distribution() -> String {
     detect_from_os_release()
         .or_else(detect_from_debian_version)
@@ -27,27 +28,19 @@ fn detect_from_os_release() -> Option<String> {
 }
 
 fn detect_from_debian_version() -> Option<String> {
-    std::fs::read_to_string("/etc/debian_version")
-        .ok()
-        .map(|v| format!("Debian {}", v.trim()))
+    std::fs::read_to_string("/etc/debian_version").ok().map(|v| format!("Debian {}", v.trim()))
 }
 
 fn detect_from_centos_release() -> Option<String> {
-    std::fs::read_to_string("/etc/centos-release")
-        .ok()
-        .map(|v| v.trim().to_string())
+    std::fs::read_to_string("/etc/centos-release").ok().map(|v| v.trim().to_string())
 }
 
 fn detect_from_redhat_release() -> Option<String> {
-    std::fs::read_to_string("/etc/redhat-release")
-        .ok()
-        .map(|v| v.trim().to_string())
+    std::fs::read_to_string("/etc/redhat-release").ok().map(|v| v.trim().to_string())
 }
 
 fn detect_from_fedora_release() -> Option<String> {
-    std::fs::read_to_string("/etc/fedora-release")
-        .ok()
-        .map(|v| v.trim().to_string())
+    std::fs::read_to_string("/etc/fedora-release").ok().map(|v| v.trim().to_string())
 }
 
 fn detect_from_arch_release() -> Option<String> {
@@ -58,9 +51,7 @@ fn detect_from_arch_release() -> Option<String> {
 }
 
 fn detect_from_alpine_release() -> Option<String> {
-    std::fs::read_to_string("/etc/alpine-release")
-        .ok()
-        .map(|v| format!("Alpine {}", v.trim()))
+    std::fs::read_to_string("/etc/alpine-release").ok().map(|v| format!("Alpine {}", v.trim()))
 }
 
 fn detect_from_suse_release() -> Option<String> {

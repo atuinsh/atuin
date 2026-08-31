@@ -1,10 +1,11 @@
-use eyre::{Result, eyre};
-
-use atuin_client::record::encryption::PASETO_V4;
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx};
+use atuin_common::encryption::paseto_v4;
+use atuin_domain::record::{
+    Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag, RecordVersion,
+};
+use eyre::{Result, eyre};
 use record::ScriptRecord;
-use script::{SCRIPT_TAG, SCRIPT_VERSION, Script};
+use script::Script;
 
 use crate::database::Database;
 
@@ -15,12 +16,13 @@ pub mod script;
 pub struct ScriptStore {
     pub store: SqliteStore,
     pub host_id: HostId,
-    pub encryption_key: [u8; 32],
+    pub encryption_key: paseto_v4::Key,
 }
 
 impl ScriptStore {
-    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: [u8; 32]) -> Self {
-        ScriptStore {
+    #[must_use]
+    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: paseto_v4::Key) -> Self {
+        Self {
             store,
             host_id,
             encryption_key,
@@ -31,23 +33,21 @@ impl ScriptStore {
         let bytes = record.serialize()?;
         let idx = self
             .store
-            .last(self.host_id, SCRIPT_TAG)
+            .last(&RecordSeriesKey::new(self.host_id, RecordTag::Script))
             .await?
             .map_or(0, |p| p.idx + 1);
 
         let record = Record::builder()
             .host(Host::new(self.host_id))
-            .version(SCRIPT_VERSION.to_string())
-            .tag(SCRIPT_TAG.to_string())
+            .version(RecordVersion::V0)
+            .tag(RecordTag::Script)
             .idx(idx)
             .data(bytes)
             .build();
 
         let id = record.id;
 
-        self.store
-            .push(&record.encrypt::<PASETO_V4>(&self.encryption_key))
-            .await?;
+        self.store.push(&record.encrypt(&self.encryption_key)).await?;
 
         Ok((id, idx))
     }
@@ -71,21 +71,17 @@ impl ScriptStore {
     }
 
     pub async fn scripts(&self) -> Result<Vec<ScriptRecord>> {
-        let records = self.store.all_tagged(SCRIPT_TAG).await?;
+        let records = self.store.all_tagged(&RecordTag::Script).await?;
         let mut ret = Vec::with_capacity(records.len());
         let mut skipped = 0;
 
-        for record in records.into_iter() {
+        for record in records {
             // Skip records we can't decrypt or decode, rather than failing the entire build.
-            let script = match record.version.as_str() {
-                SCRIPT_VERSION => {
-                    record
-                        .decrypt::<PASETO_V4>(&self.encryption_key)
-                        .and_then(|decrypted| {
-                            ScriptRecord::deserialize(&decrypted.data, SCRIPT_VERSION)
-                        })
-                }
-                version => Err(eyre!("unknown script version {version:?}")),
+            let script = match record.version {
+                RecordVersion::V0 => record.decrypt(&self.encryption_key).and_then(|decrypted| {
+                    ScriptRecord::deserialize(&decrypted.data, &RecordVersion::V0)
+                }),
+                ref version => Err(eyre!("unknown script version {version:?}")),
             };
 
             match script {

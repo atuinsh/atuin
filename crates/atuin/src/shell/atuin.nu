@@ -118,3 +118,11 @@ $env.config = (
 )
 
 $env.config = ($env.config | default [] keybindings)
+
+if (version).minor >= 104 or (version).major > 0 {
+    with-env { ATUIN_SHELL: nu } {
+        job spawn {
+            atuin __internal prepare-search-index | complete
+        } | ignore
+    }
+}

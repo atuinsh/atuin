@@ -1,6 +1,6 @@
 /// Extracted command info from a shell command string.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ShellCommand {
+pub struct ShellCommand {
     /// The command name (first word), e.g. "git"
     pub name: String,
     /// The full invocation including arguments, e.g. "git commit -m msg"
@@ -9,13 +9,13 @@ pub(crate) struct ShellCommand {
 
 /// A parsed shell command with all subcommands extracted.
 #[derive(Debug)]
-pub(crate) struct ParsedShellCommand {
+pub struct ParsedShellCommand {
     pub subcommands: Vec<ShellCommand>,
 }
 
 /// Supported shell families for parsing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ShellKind {
+pub enum ShellKind {
     /// POSIX sh, bash, zsh — all share similar syntax
     Posix,
     /// fish shell
@@ -35,7 +35,7 @@ impl ShellKind {
 }
 
 /// Parse a shell command string and extract all subcommands.
-pub(crate) fn parse_shell_command(code: &str, shell: ShellKind) -> ParsedShellCommand {
+pub fn parse_shell_command(code: &str, shell: ShellKind) -> ParsedShellCommand {
     #[cfg(feature = "tree-sitter")]
     match shell {
         ShellKind::Posix => ts::parse_posix(code),
@@ -58,8 +58,9 @@ pub(crate) fn parse_shell_command(code: &str, shell: ShellKind) -> ParsedShellCo
 
 #[cfg(feature = "tree-sitter")]
 mod ts {
-    use super::{ParsedShellCommand, ShellCommand, parse_fallback};
     use tree_sitter::{Parser, Tree};
+
+    use super::{ParsedShellCommand, ShellCommand, parse_fallback};
 
     fn bash_parser() -> Parser {
         let mut parser = Parser::new();
@@ -177,9 +178,7 @@ mod ts {
 
     fn fish_parser() -> Parser {
         let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_fish::language())
-            .expect("failed to set fish language");
+        parser.set_language(&tree_sitter_fish::language()).expect("failed to set fish language");
         parser
     }
 
@@ -341,7 +340,7 @@ fn push_segment(segment: &mut String, commands: &mut Vec<ShellCommand>) {
 /// Allow rules should pass `prefix_bare: false` (strict), while deny/ask rules
 /// should pass `prefix_bare: true` (broad) so that denying `rm` also blocks
 /// `rm -rf /`.
-pub(crate) fn any_subcommand_matches(
+pub fn any_subcommand_matches(
     subcommands: &[ShellCommand],
     prefix_bare: bool,
     scope: &str,
@@ -372,9 +371,9 @@ pub(crate) fn any_subcommand_matches(
 
     if scope.contains('*') {
         // Middle wildcard: `git * amend` — each `*` matches zero or more words
-        return subcommands
-            .iter()
-            .any(|cmd| scope_matches_words(scope, cmd.full.split_whitespace().collect()));
+        return subcommands.iter().any(|cmd| {
+            scope_matches_words(scope, &cmd.full.split_whitespace().collect::<Vec<_>>())
+        });
     }
 
     // No wildcard: exact or prefix depending on context
@@ -392,7 +391,7 @@ pub(crate) fn any_subcommand_matches(
 
 /// Match a scope pattern containing `*` wildcards against a sequence of words.
 /// Each `*` matches zero or more words. Consecutive `*` collapse into one.
-fn scope_matches_words(scope: &str, words: Vec<&str>) -> bool {
+fn scope_matches_words(scope: &str, words: &[&str]) -> bool {
     let parts: Vec<&str> = scope.split('*').collect();
     if parts.len() == 1 {
         // No wildcard (shouldn't reach here, but handle it)
@@ -456,8 +455,9 @@ fn find_subslice(haystack: &[&str], needle: &[&str]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     fn names(cmds: &[ShellCommand]) -> Vec<&str> {
         cmds.iter().map(|c| c.name.as_str()).collect()
@@ -564,8 +564,9 @@ mod tests {
 
 #[cfg(all(test, feature = "tree-sitter"))]
 mod adversarial {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     fn cmd_names(cmds: &[ShellCommand]) -> Vec<&str> {
         cmds.iter().map(|c| c.name.as_str()).collect()
@@ -671,14 +672,10 @@ mod adversarial {
     ) {
         let result = parse_shell_command(code, kind);
         let mut got: Vec<&str> = result.subcommands.iter().map(|c| c.name.as_str()).collect();
-        got.sort();
+        got.sort_unstable();
         let mut want: Vec<&str> = expected.to_vec();
-        want.sort();
-        assert_eq!(
-            got, want,
-            "{:?} parse of {:?}:\n  got:  {:?}\n  want: {:?}",
-            kind, code, got, want
-        );
+        want.sort_unstable();
+        assert_eq!(got, want, "{kind:?} parse of {code:?}:\n  got:  {got:?}\n  want: {want:?}");
     }
 
     #[rstest]

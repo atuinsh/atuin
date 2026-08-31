@@ -63,6 +63,10 @@ fi
 # Use of single quotes around $() is intentional here
 # shellcheck disable=SC2016
 
+if ! grep -q "atuin init bash" "$HOME/.bashrc"; then
+  echo 'eval "$(atuin init bash)"' >> "$HOME/.bashrc"
+fi
+
 if [ -f "$HOME/.config/fish/config.fish" ]; then
   if ! grep -q "atuin init fish" "$HOME/.config/fish/config.fish"; then
     printf '\nif status is-interactive\n    atuin init fish | source\nend\n' >> "$HOME/.config/fish/config.fish"
@@ -101,6 +105,7 @@ __atuin_install_agent_hook(){
 
 __atuin_install_agent_hook "claude-code" "Claude Code" "$HOME/.claude" claude
 __atuin_install_agent_hook "codex" "Codex" "$HOME/.codex" codex
+__atuin_install_agent_hook "opencode" "opencode" "${XDG_CONFIG_HOME:-$HOME/.config}/opencode" opencode
 __atuin_install_agent_hook "pi" "pi" "$HOME/.config/pi" pi
 
 echo ""
@@ -137,22 +142,37 @@ Sync your history across all your machines with Atuin Cloud:
 
 EOF
 
-  printf "Sign up for a sync account? [Y/n] "
-  read -r sync_answer </dev/tty || sync_answer="n"
-  sync_answer="${sync_answer:-y}"
+  echo "Set up sync with an Atuin account?"
+  echo ""
+  echo "  1) Yes - create a new account"
+  echo "  2) Log in to an existing account"
+  echo "  3) Skip sync for now"
+  echo ""
+  printf "Select an option [1/2/3] (default 1): "
+  read -r sync_answer </dev/tty || sync_answer="3"
+  sync_answer="${sync_answer:-1}"
 
   case "$sync_answer" in
-    [yY]*)
+    1|[yYcC]*)
       echo ""
       if ! "$ATUIN_BIN" register </dev/tty; then
         echo ""
         echo "Registration did not complete. You can run 'atuin register' any time to try again."
       fi
       ;;
+    2|[lL]*)
+      echo ""
+      # Silences pre-#3916 401 log spam; drop once that fix is in the latest release.
+      if ! ATUIN_LOG="warn,atuin_client::hub=off" "$ATUIN_BIN" login </dev/tty; then
+        echo ""
+        echo "Login did not complete. You can run 'atuin login' any time to try again."
+      fi
+      ;;
     *)
       echo ""
-      printf "Already have an account? Log in with 'atuin login'.\n"
-      echo "You can also run 'atuin register' any time to create one."
+      echo "Skipping sync setup."
+      echo "You can run 'atuin register' any time to create an account,"
+      echo "or 'atuin login' if you already have one."
       ;;
   esac
 

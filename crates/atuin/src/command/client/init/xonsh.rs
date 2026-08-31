@@ -1,6 +1,8 @@
-use super::StaticInitOptions;
-use atuin_dotfiles::store::{AliasStore, var::VarStore};
+use atuin_dotfiles::store::AliasStore;
+use atuin_dotfiles::store::var::VarStore;
 use eyre::Result;
+
+use super::StaticInitOptions;
 
 pub fn init_static(options: &StaticInitOptions<'_>) {
     let (bind_ctrl_r, bind_up_arrow) = if std::env::var("ATUIN_NOBIND").is_ok() {
@@ -12,11 +14,19 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
     // TODO: tmux popup for xonsh
     println!(
         "_ATUIN_BIND_CTRL_R={}",
-        if bind_ctrl_r { "True" } else { "False" }
+        if bind_ctrl_r {
+            "True"
+        } else {
+            "False"
+        }
     );
     println!(
         "_ATUIN_BIND_UP_ARROW={}",
-        if bind_up_arrow { "True" } else { "False" }
+        if bind_up_arrow {
+            "True"
+        } else {
+            "False"
+        }
     );
     println!("{}", crate::shell::XONSH);
 }

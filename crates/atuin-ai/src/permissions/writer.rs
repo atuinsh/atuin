@@ -7,7 +7,7 @@ use crate::permissions::rule::Rule;
 /// Whether a rule should be added to the allow or deny list.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-pub(crate) enum RuleDisposition {
+pub enum RuleDisposition {
     Allow,
     Deny,
 }
@@ -21,11 +21,7 @@ pub(crate) enum RuleDisposition {
 /// **Not concurrent-safe.** The read-modify-write cycle is not atomic. In the
 /// current UI this is fine — the Select widget serializes permission decisions —
 /// but callers should not invoke this concurrently for the same file.
-pub(crate) async fn write_rule(
-    file_path: &Path,
-    rule: &Rule,
-    disposition: RuleDisposition,
-) -> Result<()> {
+pub async fn write_rule(file_path: &Path, rule: &Rule, disposition: RuleDisposition) -> Result<()> {
     let content = if tokio::fs::try_exists(file_path).await.unwrap_or(false) {
         tokio::fs::read_to_string(file_path).await?
     } else {
@@ -78,19 +74,20 @@ pub(crate) async fn write_rule(
 
 /// Build the path to the project-level permissions file.
 /// `project_root` is typically a git root or the current working directory.
-pub(crate) fn project_permissions_path(project_root: &Path) -> std::path::PathBuf {
+pub fn project_permissions_path(project_root: &Path) -> std::path::PathBuf {
     project_root.join(".atuin").join("permissions.ai.toml")
 }
 
 /// Build the path to the global permissions file (sibling of atuin config).
-pub(crate) fn global_permissions_path() -> std::path::PathBuf {
+pub fn global_permissions_path() -> std::path::PathBuf {
     atuin_common::utils::config_dir().join("permissions.ai.toml")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::*;
+
+    use super::*;
 
     #[fixture]
     fn perm_file() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -152,9 +149,7 @@ allow = ["AtuinHistory"]
             tool: "AtuinHistory".to_string(),
             scope: None,
         };
-        write_rule(&file, &rule, RuleDisposition::Allow)
-            .await
-            .unwrap();
+        write_rule(&file, &rule, RuleDisposition::Allow).await.unwrap();
 
         let content = tokio::fs::read_to_string(&file).await.unwrap();
         // Should appear exactly once

@@ -1,13 +1,12 @@
 use std::path::PathBuf;
 
 use crate::fsm::tools::ToolManager;
-use crate::tools::descriptor;
-use crate::tools::{ClientToolCall, HistorySearchFilterMode, ToolPreview};
+use crate::tools::{ClientToolCall, HistorySearchFilterMode, ToolPreview, descriptor};
 use crate::tui::ConversationEvent;
 
 /// Server-sent danger level for a suggested command
 #[derive(Debug)]
-pub(crate) enum DangerLevel {
+pub enum DangerLevel {
     Low(Option<String>),
     Medium(Option<String>),
     High(Option<String>),
@@ -17,10 +16,10 @@ pub(crate) enum DangerLevel {
 impl DangerLevel {
     pub(crate) fn notes(&self) -> Option<&String> {
         match self {
-            DangerLevel::Low(notes) => notes.as_ref(),
-            DangerLevel::Medium(notes) => notes.as_ref(),
-            DangerLevel::High(notes) => notes.as_ref(),
-            DangerLevel::Unknown(notes) => notes.as_ref(),
+            Self::Low(notes) => notes.as_ref(),
+            Self::Medium(notes) => notes.as_ref(),
+            Self::High(notes) => notes.as_ref(),
+            Self::Unknown(notes) => notes.as_ref(),
         }
     }
 }
@@ -30,22 +29,22 @@ impl From<(&String, &String)> for DangerLevel {
         let notes = if danger_notes.is_empty() {
             None
         } else {
-            Some(danger_notes.to_string())
+            Some(danger_notes.clone())
         };
 
         match danger_level.as_str() {
-            "low" => DangerLevel::Low(notes),
-            "medium" => DangerLevel::Medium(notes),
-            "med" => DangerLevel::Medium(notes),
-            "high" => DangerLevel::High(notes),
-            _ => DangerLevel::Unknown(notes),
+            "low" => Self::Low(notes),
+            "medium" => Self::Medium(notes),
+            "med" => Self::Medium(notes),
+            "high" => Self::High(notes),
+            _ => Self::Unknown(notes),
         }
     }
 }
 
 /// Server-sent confidence level for a suggested command
 #[derive(Debug)]
-pub(crate) enum ConfidenceLevel {
+pub enum ConfidenceLevel {
     Low(Option<String>),
     Medium(Option<String>),
     High(Option<String>),
@@ -55,10 +54,10 @@ pub(crate) enum ConfidenceLevel {
 impl ConfidenceLevel {
     pub(crate) fn notes(&self) -> Option<&String> {
         match self {
-            ConfidenceLevel::Low(notes) => notes.as_ref(),
-            ConfidenceLevel::Medium(notes) => notes.as_ref(),
-            ConfidenceLevel::High(notes) => notes.as_ref(),
-            ConfidenceLevel::Unknown(notes) => notes.as_ref(),
+            Self::Low(notes) => notes.as_ref(),
+            Self::Medium(notes) => notes.as_ref(),
+            Self::High(notes) => notes.as_ref(),
+            Self::Unknown(notes) => notes.as_ref(),
         }
     }
 }
@@ -68,21 +67,21 @@ impl From<(&String, &String)> for ConfidenceLevel {
         let notes = if confidence_notes.is_empty() {
             None
         } else {
-            Some(confidence_notes.to_string())
+            Some(confidence_notes.clone())
         };
 
         match confidence_level.as_str() {
-            "low" => ConfidenceLevel::Low(notes),
-            "medium" => ConfidenceLevel::Medium(notes),
-            "med" => ConfidenceLevel::Medium(notes),
-            "high" => ConfidenceLevel::High(notes),
-            _ => ConfidenceLevel::Unknown(notes),
+            "low" => Self::Low(notes),
+            "medium" => Self::Medium(notes),
+            "med" => Self::Medium(notes),
+            "high" => Self::High(notes),
+            _ => Self::Unknown(notes),
         }
     }
 }
 
 #[derive(Debug)]
-pub(crate) enum UiEvent {
+pub enum UiEvent {
     Text {
         content: String,
     },
@@ -98,7 +97,7 @@ pub(crate) enum UiEvent {
 
 /// A run of consecutive client-side tool calls of the same groupable kind.
 #[derive(Debug)]
-pub(crate) struct ToolGroup {
+pub struct ToolGroup {
     pub(crate) kind: ToolGroupKind,
     pub(crate) calls: Vec<ToolCallDetails>,
 }
@@ -106,9 +105,7 @@ pub(crate) struct ToolGroup {
 impl ToolGroup {
     /// True if any call in the group is still pending.
     pub(crate) fn any_pending(&self) -> bool {
-        self.calls
-            .iter()
-            .any(|c| c.status == ToolResultStatus::Pending)
+        self.calls.iter().any(|c| c.status == ToolResultStatus::Pending)
     }
 }
 
@@ -118,7 +115,7 @@ impl ToolGroup {
 /// Shell (needs its own viewport) and FileWrite (wants diffs/contents) are
 /// intentionally absent — those render as individual `UiEvent::ToolCall`s.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(crate) enum ToolGroupKind {
+pub enum ToolGroupKind {
     FileRead,
     HistorySearch,
 }
@@ -128,14 +125,16 @@ pub(crate) enum ToolGroupKind {
 /// Each variant carries the data a per-tool renderer component needs.
 /// Built by TurnBuilder from ToolTracker + ConversationEvent data.
 #[derive(Debug)]
-pub(crate) enum ToolRenderData {
+pub enum ToolRenderData {
     /// Shell command with live/cached VT100 output preview.
     Shell {
         command: String,
         preview: Option<ToolPreview>,
     },
     /// File read operation.
-    FileRead { path: PathBuf },
+    FileRead {
+        path: PathBuf,
+    },
     /// File edit (str_replace) operation.
     FileEdit {
         path: PathBuf,
@@ -152,14 +151,16 @@ pub(crate) enum ToolRenderData {
         filter_modes: Vec<HistorySearchFilterMode>,
     },
     /// Skill loading — read-only, auto-approved.
-    SkillLoad { _name: String },
+    SkillLoad {
+        _name: String,
+    },
     /// Server-side tool — no client rendering data available.
     Remote,
 }
 
 impl ToolRenderData {
     pub(crate) fn is_remote(&self) -> bool {
-        matches!(self, ToolRenderData::Remote)
+        matches!(self, Self::Remote)
     }
 
     /// The group kind this tool should collapse into, if any.
@@ -168,15 +169,15 @@ impl ToolRenderData {
     /// (shell, file writes, remote).
     pub(crate) fn group_kind(&self) -> Option<ToolGroupKind> {
         match self {
-            ToolRenderData::FileRead { .. } => Some(ToolGroupKind::FileRead),
-            ToolRenderData::HistorySearch { .. } => Some(ToolGroupKind::HistorySearch),
+            Self::FileRead { .. } => Some(ToolGroupKind::FileRead),
+            Self::HistorySearch { .. } => Some(ToolGroupKind::HistorySearch),
             _ => None,
         }
     }
 }
 
 #[derive(Debug)]
-pub(crate) struct ToolCallDetails {
+pub struct ToolCallDetails {
     pub(crate) tool_use_id: String,
     pub(crate) name: String,
     pub(crate) status: ToolResultStatus,
@@ -184,38 +185,48 @@ pub(crate) struct ToolCallDetails {
 }
 
 #[derive(Debug)]
-pub(crate) struct SuggestedCommandDetails {
+pub struct SuggestedCommandDetails {
     pub(crate) command: String,
     pub(crate) danger_level: DangerLevel,
     pub(crate) confidence_level: ConfidenceLevel,
 }
 
 #[derive(Debug)]
-pub(crate) struct OutOfBandOutputDetails {
+pub struct OutOfBandOutputDetails {
     pub(crate) command: Option<String>,
     pub(crate) content: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum ToolResultStatus {
+pub enum ToolResultStatus {
     Pending,
     Success,
-    Error,
+    /// Carries the result content so the view can label the failure
+    /// (user denial vs. anything else).
+    Error {
+        content: String,
+    },
 }
 
 #[derive(Debug)]
-pub(crate) struct UiTurn {
+pub struct UiTurn {
     pub(crate) kind: UiTurnKind,
 }
 
 #[derive(Debug)]
-pub(crate) enum UiTurnKind {
-    User { events: Vec<UiEvent> },
-    Agent { events: Vec<UiEvent> },
-    OutOfBand { events: Vec<UiEvent> },
+pub enum UiTurnKind {
+    User {
+        events: Vec<UiEvent>,
+    },
+    Agent {
+        events: Vec<UiEvent>,
+    },
+    OutOfBand {
+        events: Vec<UiEvent>,
+    },
 }
 
-pub(crate) struct TurnBuilder<'a> {
+pub struct TurnBuilder<'a> {
     turns: Vec<UiTurnKind>,
     current_turn: Option<UiTurnKind>,
     tracker: &'a ToolManager,
@@ -276,6 +287,7 @@ impl<'a> TurnBuilder<'a> {
         }
     }
 
+    #[must_use]
     pub(crate) fn build(&mut self) -> Vec<UiTurn> {
         self.commit_turn();
 
@@ -384,11 +396,7 @@ impl<'a> TurnBuilder<'a> {
     }
 
     fn add_suggested_command(&mut self, input: &serde_json::Value) {
-        let command = input
-            .get("command")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        let command = input.get("command").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
         if command.is_empty() {
             return;
@@ -397,39 +405,23 @@ impl<'a> TurnBuilder<'a> {
         self.start_agent_turn();
         {
             let events = self.current_events_mut();
-            let danger_level = input
-                .get("danger")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let danger_level =
+                input.get("danger").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
-            let confidence_level = input
-                .get("confidence")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let confidence_level =
+                input.get("confidence").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
-            let danger_notes = input
-                .get("danger_notes")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let danger_notes =
+                input.get("danger_notes").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
-            let confidence_notes = input
-                .get("confidence_notes")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let confidence_notes =
+                input.get("confidence_notes").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
             let danger = DangerLevel::from((&danger_level, &danger_notes));
             let confidence = ConfidenceLevel::from((&confidence_level, &confidence_notes));
 
             events.push(UiEvent::SuggestedCommand(SuggestedCommandDetails {
-                command: input
-                    .get("command")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
+                command: input.get("command").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 danger_level: danger,
                 confidence_level: confidence,
             }));
@@ -440,13 +432,12 @@ impl<'a> TurnBuilder<'a> {
         let render_data = self.build_render_data(id, name);
 
         self.start_agent_turn();
-        self.current_events_mut()
-            .push(UiEvent::ToolCall(ToolCallDetails {
-                tool_use_id: id.to_string(),
-                name: name.to_string(),
-                status: ToolResultStatus::Pending,
-                render_data,
-            }));
+        self.current_events_mut().push(UiEvent::ToolCall(ToolCallDetails {
+            tool_use_id: id.to_string(),
+            name: name.to_string(),
+            status: ToolResultStatus::Pending,
+            render_data,
+        }));
     }
 
     /// Build tool-type-specific render data from the ToolTracker.
@@ -487,7 +478,7 @@ impl<'a> TurnBuilder<'a> {
         }
     }
 
-    fn add_tool_result(&mut self, tool_use_id: &str, _content: &str, is_error: bool) {
+    fn add_tool_result(&mut self, tool_use_id: &str, content: &str, is_error: bool) {
         self.start_agent_turn();
         let events = self.current_events_mut();
         let event = events.iter_mut().find(|e| match e {
@@ -498,7 +489,9 @@ impl<'a> TurnBuilder<'a> {
         });
         if let Some(UiEvent::ToolCall(ToolCallDetails { status, .. })) = event {
             *status = if is_error {
-                ToolResultStatus::Error
+                ToolResultStatus::Error {
+                    content: content.to_string(),
+                }
             } else {
                 ToolResultStatus::Success
             };
@@ -507,11 +500,10 @@ impl<'a> TurnBuilder<'a> {
 
     fn add_out_of_band_output(&mut self, _name: &str, command: Option<&str>, content: &str) {
         self.start_out_of_band_turn();
-        self.current_events_mut()
-            .push(UiEvent::OutOfBandOutput(OutOfBandOutputDetails {
-                command: command.map(|c| c.to_string()),
-                content: content.to_string(),
-            }));
+        self.current_events_mut().push(UiEvent::OutOfBandOutput(OutOfBandOutputDetails {
+            command: command.map(|c| c.to_string()),
+            content: content.to_string(),
+        }));
     }
 }
 
@@ -535,7 +527,7 @@ fn flush_group(
 }
 
 #[derive(Debug)]
-pub(crate) struct ToolSummary {
+pub struct ToolSummary {
     tool_calls: Vec<ToolCallDetails>,
 }
 
@@ -547,11 +539,8 @@ impl ToolSummary {
     pub(crate) fn summary(&self) -> String {
         if self.any_pending() {
             // Find the last pending tool for the active verb
-            if let Some(pending) = self
-                .tool_calls
-                .iter()
-                .rev()
-                .find(|t| t.status == ToolResultStatus::Pending)
+            if let Some(pending) =
+                self.tool_calls.iter().rev().find(|t| t.status == ToolResultStatus::Pending)
             {
                 return Self::progressive_verb(&pending.name);
             }
@@ -566,9 +555,7 @@ impl ToolSummary {
 
     /// Determines if the spinner should be spinning
     pub(crate) fn any_pending(&self) -> bool {
-        self.tool_calls
-            .iter()
-            .any(|tool_call| tool_call.status == ToolResultStatus::Pending)
+        self.tool_calls.iter().any(|tool_call| tool_call.status == ToolResultStatus::Pending)
     }
 
     /// Present-tense progressive verb for a tool name (e.g. "Searching...")

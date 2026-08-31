@@ -1,13 +1,13 @@
+use atuin_client::database::Sqlite;
+use atuin_client::history::store::HistoryStore;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::record::sync::{ClientSource, SyncEngine};
+use atuin_client::settings::Settings;
+use atuin_common::encryption::paseto_v4;
+use atuin_domain::record::RecordTag;
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
-
-use atuin_client::{
-    database::Database,
-    encryption,
-    history::store::HistoryStore,
-    record::{sqlite_store::SqliteStore, sync},
-    settings::Settings,
-};
+use tracing::instrument;
 
 mod status;
 
@@ -44,12 +44,8 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    pub async fn run(
-        self,
-        settings: Settings,
-        db: &impl Database,
-        store: SqliteStore,
-    ) -> Result<()> {
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn run(self, settings: Settings, db: &Sqlite, store: SqliteStore) -> Result<()> {
         match self {
             Self::Sync { force } => run(&settings, force, db, store).await,
             Self::Login(l) => l.run(&settings, &store).await,
@@ -57,16 +53,13 @@ impl Cmd {
             Self::Register(r) => r.run(&settings, &store).await,
             Self::Status => status::run(&settings).await,
             Self::Key { base64 } => {
-                use atuin_client::encryption::{encode_key, load_key};
-                let key = load_key(&settings).wrap_err("could not load encryption key")?;
+                let key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+                    .wrap_err("could not load encryption key")?;
 
                 if base64 {
-                    let encode = encode_key(&key).wrap_err("could not encode encryption key")?;
-                    println!("{encode}");
+                    println!("{}", key.encode().dangerously_leak_secret());
                 } else {
-                    let mnemonic = bip39::Mnemonic::from_entropy(&key, bip39::Language::English)
-                        .map_err(|_| eyre::eyre!("invalid key"))?;
-                    println!("{mnemonic}");
+                    println!("{}", key.try_mnemonic().context("invalid key")?);
                 }
                 Ok(())
             }
@@ -74,20 +67,30 @@ impl Cmd {
     }
 }
 
-async fn run(
-    settings: &Settings,
-    force: bool,
-    db: &impl Database,
-    store: SqliteStore,
-) -> Result<()> {
-    let encryption_key: [u8; 32] = encryption::load_key(settings)
-        .context("could not load encryption key")?
-        .into();
+#[instrument(level = "trace", skip_all, fields(force), err)]
+async fn run(settings: &Settings, force: bool, db: &Sqlite, store: SqliteStore) -> Result<()> {
+    let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+        .context("could not load encryption key")?;
 
     let host_id = Settings::host_id().await?;
-    let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
+    let history_store = HistoryStore::new(store.clone(), host_id, encryption_key.clone());
 
-    let (uploaded, downloaded) = sync::sync(settings, &store, &encryption_key)
+    // Build the engine once and reuse it for both sync passes below. It owns a clone of the store
+    // (a shared pool), so the second pass sees whatever the store-init writes locally.
+    let engine = SyncEngine::builder()
+        .store(store.clone())
+        .client_source(ClientSource::FromSettings {
+            settings,
+            caps: None,
+        })
+        .build()
+        .connect()
+        .await
+        .map_err(crate::print_error::format_sync_error)?;
+
+    let (uploaded, downloaded) = engine
+        .keyed(&encryption_key)
+        .sync()
         .await
         .map_err(crate::print_error::format_sync_error)?;
 
@@ -96,7 +99,7 @@ async fn run(
     println!("{uploaded}/{} up/down to record store", downloaded.len());
 
     let history_length = db.history_count(true).await?;
-    let store_history_length = store.len_tag("history").await?;
+    let store_history_length = store.len_tag(&RecordTag::History).await?;
 
     #[allow(clippy::cast_sign_loss)]
     if history_length as u64 > store_history_length {
@@ -109,8 +112,11 @@ async fn run(
 
         println!("Re-running sync due to new records locally");
 
-        // we'll want to run sync once more, as there will now be stuff to upload
-        let (uploaded, downloaded) = sync::sync(settings, &store, &encryption_key)
+        // we'll want to run sync once more, as there will now be stuff to upload -- re-key the same
+        // engine rather than reconnecting.
+        let (uploaded, downloaded) = engine
+            .keyed(&encryption_key)
+            .sync()
             .await
             .map_err(crate::print_error::format_sync_error)?;
 

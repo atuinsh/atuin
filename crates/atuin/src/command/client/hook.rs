@@ -1,11 +1,14 @@
+use std::ffi::OsString;
 use std::io::Read;
 use std::path::PathBuf;
 
+use atuin_client::history::AuthorKind;
 use atuin_client::settings::Settings;
 use atuin_common::utils::home_dir;
 use clap::{Parser, Subcommand};
 use eyre::{Result, bail};
 use serde_json::Value;
+use tracing::instrument;
 
 use super::history;
 
@@ -16,6 +19,7 @@ use event::HookEvent;
 
 const HOOK_EVENT_TYPES: &[&str] = &["PreToolUse", "PostToolUse", "PostToolUseFailure"];
 const PI_EXTENSION_SOURCE: &str = include_str!("../../../contrib/pi/atuin.ts");
+const OPENCODE_PLUGIN_SOURCE: &str = include_str!("../../../contrib/opencode/atuin.ts");
 
 enum InstallKind {
     JsonHooks {
@@ -23,20 +27,41 @@ enum InstallKind {
         hook_command: &'static str,
         matcher: &'static str,
     },
-    PiExtension {
+    /// An agent that loads TypeScript extensions from a directory, rather than
+    /// invoking `atuin hook <agent>` from its config.
+    Extension {
         extension_path: &'static [&'static str],
+        source: &'static str,
+        /// How the user makes the agent pick the file up.
+        reload_hint: &'static str,
     },
+}
+
+/// The directory an agent's [`InstallKind`] path is relative to.
+enum PathRoot {
+    Home,
+    /// See [`xdg_config_home`].
+    XdgConfig,
+}
+
+/// Resolve `$XDG_CONFIG_HOME` the way agents' XDG libraries do, treating an
+/// empty value as unset. Taking it literally would resolve to a relative path
+/// and install under the current directory, where the agent never looks.
+fn xdg_config_home(var: Option<OsString>) -> PathBuf {
+    var.filter(|value| !value.is_empty()).map_or_else(|| home_dir().join(".config"), PathBuf::from)
 }
 
 struct AgentSpec {
     aliases: &'static [&'static str],
     actor_name: &'static str,
+    path_root: PathRoot,
     install_kind: InstallKind,
 }
 
 const CLAUDE_CODE: AgentSpec = AgentSpec {
     aliases: &["claude-code", "claude"],
     actor_name: "claude-code",
+    path_root: PathRoot::Home,
     install_kind: InstallKind::JsonHooks {
         config_path: &[".claude", "settings.json"],
         hook_command: "atuin hook claude-code",
@@ -47,6 +72,7 @@ const CLAUDE_CODE: AgentSpec = AgentSpec {
 const CODEX: AgentSpec = AgentSpec {
     aliases: &["codex"],
     actor_name: "codex",
+    path_root: PathRoot::Home,
     install_kind: InstallKind::JsonHooks {
         config_path: &[".codex", "hooks.json"],
         hook_command: "atuin hook codex",
@@ -57,34 +83,51 @@ const CODEX: AgentSpec = AgentSpec {
 const PI: AgentSpec = AgentSpec {
     aliases: &["pi"],
     actor_name: "pi",
-    install_kind: InstallKind::PiExtension {
+    path_root: PathRoot::Home,
+    install_kind: InstallKind::Extension {
         extension_path: &[".pi", "agent", "extensions", "atuin.ts"],
+        source: PI_EXTENSION_SOURCE,
+        reload_hint: "Reload pi with `/reload` or restart pi.",
     },
 };
 
-const AGENTS: &[&AgentSpec] = &[&CLAUDE_CODE, &CODEX, &PI];
+const OPENCODE: AgentSpec = AgentSpec {
+    aliases: &["opencode"],
+    actor_name: "opencode",
+    path_root: PathRoot::XdgConfig,
+    install_kind: InstallKind::Extension {
+        extension_path: &["opencode", "plugins", "atuin.ts"],
+        source: OPENCODE_PLUGIN_SOURCE,
+        reload_hint: "Restart opencode to load the plugin.",
+    },
+};
+
+const AGENTS: &[&AgentSpec] = &[&CLAUDE_CODE, &CODEX, &OPENCODE, &PI];
 
 struct Agent(&'static AgentSpec);
 
 impl Agent {
     fn from_name(name: &str) -> Result<Self> {
-        AGENTS
-            .iter()
-            .copied()
-            .find(|spec| spec.aliases.contains(&name))
-            .map(Self)
-            .ok_or_else(|| {
-                eyre::eyre!("unknown agent: {name}. Supported agents: claude-code, codex, pi")
-            })
+        AGENTS.iter().copied().find(|spec| spec.aliases.contains(&name)).map(Self).ok_or_else(
+            || {
+                eyre::eyre!(
+                    "unknown agent: {name}. Supported agents: claude-code, codex, opencode, pi"
+                )
+            },
+        )
     }
 
     fn actor_name(&self) -> &'static str {
         self.0.actor_name
     }
 
-    fn path(path: &'static [&'static str]) -> PathBuf {
-        path.iter()
-            .fold(home_dir(), |path, segment| path.join(segment))
+    fn path(&self, path: &'static [&'static str]) -> PathBuf {
+        let root = match self.0.path_root {
+            PathRoot::Home => home_dir(),
+            PathRoot::XdgConfig => xdg_config_home(std::env::var_os("XDG_CONFIG_HOME")),
+        };
+
+        path.iter().fold(root, |path, segment| path.join(segment))
     }
 
     fn install_kind(&self) -> &InstallKind {
@@ -114,6 +157,7 @@ pub struct Cmd {
 }
 
 impl Cmd {
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(self, settings: &Settings) -> Result<()> {
         match (self.action, self.agent) {
             (Some(Action::Install { agent }), None) => install(&agent),
@@ -135,8 +179,11 @@ fn id_file_path(tool_use_id: &str) -> PathBuf {
 async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
     let agent = Agent::from_name(agent_name)?;
 
-    if matches!(agent.install_kind(), InstallKind::PiExtension { .. }) {
-        bail!("`atuin hook pi` is not supported. Use `atuin hook install pi` and reload pi.");
+    if let InstallKind::Extension { reload_hint, .. } = agent.install_kind() {
+        bail!(
+            "`atuin hook {agent_name}` is not supported. Use `atuin hook install {agent_name}`. \
+             {reload_hint}"
+        );
     }
 
     let mut input = String::new();
@@ -156,6 +203,7 @@ async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
                 settings,
                 &command,
                 Some(agent.actor_name()),
+                Some(AuthorKind::Agent),
                 intent.as_deref(),
             )
             .await?
@@ -189,7 +237,7 @@ fn install(agent_name: &str) -> Result<()> {
             hook_command: _,
             matcher: _,
         } => {
-            let config_path = Agent::path(config_path);
+            let config_path = agent.path(config_path);
 
             if let Some(parent) = config_path.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -219,26 +267,30 @@ fn install(agent_name: &str) -> Result<()> {
                 config_path.display()
             );
         }
-        InstallKind::PiExtension { extension_path } => {
-            let extension_path = Agent::path(extension_path);
+        InstallKind::Extension {
+            extension_path,
+            source,
+            reload_hint,
+        } => {
+            let extension_path = agent.path(extension_path);
+            let actor_name = agent.actor_name();
 
             if let Some(parent) = extension_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
 
-            let already_installed = std::fs::read_to_string(&extension_path)
-                .is_ok_and(|existing| existing == PI_EXTENSION_SOURCE);
+            let already_installed =
+                std::fs::read_to_string(&extension_path).is_ok_and(|existing| existing == *source);
 
             if already_installed {
-                eprintln!("pi extension: already installed, skipping");
+                eprintln!("{actor_name} extension: already installed, skipping");
             } else {
-                std::fs::write(&extension_path, PI_EXTENSION_SOURCE)?;
-                eprintln!("pi extension: installed atuin extension");
+                std::fs::write(&extension_path, source)?;
+                eprintln!("{actor_name} extension: installed atuin extension");
             }
 
             eprintln!(
-                "\nAtuin extension installed for {}. Extension: {}\nReload pi with `/reload` or restart pi.",
-                agent.actor_name(),
+                "\nAtuin extension installed for {actor_name}. Extension: {}\n{reload_hint}",
                 extension_path.display()
             );
         }
@@ -269,14 +321,11 @@ fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
             .ok_or_else(|| eyre::eyre!("hooks.{event_type} is not an array"))?;
 
         let already_installed = arr.iter().any(|entry| {
-            entry
-                .get("hooks")
-                .and_then(Value::as_array)
-                .is_some_and(|hooks| {
-                    hooks.iter().any(|hook| {
-                        hook.get("command").and_then(Value::as_str) == Some(hook_command)
-                    })
-                })
+            entry.get("hooks").and_then(Value::as_array).is_some_and(|hooks| {
+                hooks
+                    .iter()
+                    .any(|hook| hook.get("command").and_then(Value::as_str) == Some(hook_command))
+            })
         });
 
         if already_installed {
@@ -296,26 +345,24 @@ fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{
-        Atuin,
-        command::{AtuinCmd, client},
-    };
+    use atuin_client::history::is_known_agent;
     use clap::Parser;
     use rstest::rstest;
+
+    use super::*;
+    use crate::Atuin;
+    use crate::command::{AtuinCmd, client};
 
     #[test]
     fn parse_hook_agent_command() {
         let cmd = Cmd::try_parse_from(["hook", "codex"]).unwrap();
 
-        assert!(matches!(
-            (cmd.action, cmd.agent.as_deref()),
-            (None, Some("codex"))
-        ));
+        assert!(matches!((cmd.action, cmd.agent.as_deref()), (None, Some("codex"))));
     }
 
     #[rstest]
     #[case::codex("codex")]
+    #[case::opencode("opencode")]
     #[case::pi("pi")]
     fn parse_hook_install_command(#[case] agent_name: &str) {
         let cmd = Cmd::try_parse_from(["hook", "install", agent_name]).unwrap();
@@ -326,14 +373,52 @@ mod tests {
         }
     }
 
+    #[rstest]
+    #[case::opencode("opencode")]
+    #[case::pi("pi")]
+    fn agent_from_name_supports_extension_agents(#[case] agent_name: &str) {
+        let agent = Agent::from_name(agent_name).unwrap();
+        assert_eq!(agent.actor_name(), agent_name);
+        assert!(matches!(agent.install_kind(), InstallKind::Extension { .. }));
+    }
+
+    /// An agent missing from `KNOWN_AGENTS` would be installable but invisible
+    /// to `$all-agent`, and would pollute `$all-user` with its commands.
     #[test]
-    fn agent_from_name_supports_pi() {
-        let agent = Agent::from_name("pi").unwrap();
-        assert_eq!(agent.actor_name(), "pi");
-        assert!(matches!(
-            agent.install_kind(),
-            InstallKind::PiExtension { .. }
-        ));
+    fn every_agent_author_is_a_known_agent() {
+        for spec in AGENTS {
+            assert!(
+                is_known_agent(spec.actor_name),
+                "{} is missing from KNOWN_AGENTS",
+                spec.actor_name
+            );
+        }
+    }
+
+    /// An empty `XDG_CONFIG_HOME` taken literally would resolve to a relative
+    /// path, installing under the current directory instead of the agent's
+    /// config directory.
+    #[rstest]
+    #[case::set(Some("/tmp/xdg"), PathBuf::from("/tmp/xdg"))]
+    #[case::empty_is_unset(Some(""), home_dir().join(".config"))]
+    #[case::unset(None, home_dir().join(".config"))]
+    fn xdg_config_home_resolves(#[case] var: Option<&str>, #[case] expected: PathBuf) {
+        assert_eq!(xdg_config_home(var.map(OsString::from)), expected);
+    }
+
+    /// opencode reads plugins from its XDG config directory, not from `$HOME`.
+    #[test]
+    fn opencode_plugin_is_rooted_in_the_xdg_config_dir() {
+        let agent = Agent::from_name("opencode").unwrap();
+        let InstallKind::Extension { extension_path, .. } = agent.install_kind() else {
+            panic!("opencode does not install an extension");
+        };
+
+        let root = xdg_config_home(std::env::var_os("XDG_CONFIG_HOME"));
+        let installed = agent.path(extension_path);
+
+        assert!(installed.starts_with(&root), "{installed:?} is not under {root:?}");
+        assert!(installed.ends_with("opencode/plugins/atuin.ts"));
     }
 
     #[test]

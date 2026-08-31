@@ -1,9 +1,7 @@
-use atuin_client::{
-    database::{Database, DbSearchMode, OptFilters},
-    history::{History, all_user_author_filter},
-    settings::Settings,
-};
-use atuin_daemon::client::{DaemonClientErrorKind, SearchClient, SearchParams, classify_error};
+use atuin_client::database::{DbSearchMode, OptFilters, Sqlite};
+use atuin_client::history::{History, all_user_author_filter};
+use atuin_client::settings::Settings;
+use atuin_daemon::client::{SearchClient, SearchParams};
 use atuin_daemon::search::{normalize_diacritics, truncate_query};
 use eyre::Result;
 use tracing::{Level, debug, instrument, span};
@@ -12,57 +10,83 @@ use uuid::Uuid;
 use super::{SearchEngine, SearchState};
 use crate::command::client::daemon;
 
+/// A lazily-initialized [`SearchClient`].
+#[derive(Default)]
+struct LazyClient(Option<SearchClient>);
+
+impl LazyClient {
+    /// Get the [`SearchClient`].
+    #[instrument(skip_all, level = Level::TRACE, name = "get_daemon_client")]
+    pub async fn get(&mut self, settings: &Settings) -> Result<&mut SearchClient> {
+        // TODO: Ideally we would write this as follows, to avoid an `unwrap`:
+        //
+        //     Ok(match self.0.as_mut() {
+        //         Some(client) => client,
+        //         None => self.0.insert(self.connect(settings).await?),
+        //     })
+        //
+        // However, Rust's borrow checker incorrectly rejects this code. This will be fixed by
+        // Polonius; see https://rust-lang.github.io/rust-project-goals/2026/polonius.html.
+
+        if self.0.is_none() {
+            return Ok(self.0.insert(self.connect(settings).await?));
+        }
+        Ok(self.0.as_mut().unwrap())
+    }
+
+    async fn connect(&self, settings: &Settings) -> Result<SearchClient> {
+        #[cfg(unix)]
+        return SearchClient::new(settings.daemon.existing_socket_path().into_owned()).await;
+
+        #[cfg(not(unix))]
+        SearchClient::new(settings.daemon.tcp_port).await
+    }
+
+    /// Call a method on [`SearchClient`], autostarting the daemon and retrying if necessary.
+    ///
+    /// `f` should call the appropriate method on the provided [`SearchClient`].
+    async fn try_with_autostart<F, R>(&mut self, settings: &Settings, mut f: F) -> Result<R>
+    where
+        F: AsyncFnMut(&mut SearchClient) -> Result<R>,
+    {
+        let err = match self.get(settings).await {
+            Ok(client) => match f(client).await {
+                Ok(result) => return Ok(result),
+                Err(err) => err,
+            },
+            Err(err) => err,
+        };
+
+        if !(settings.daemon.autostart && daemon::should_retry_after_error(&err)) {
+            return Err(err);
+        }
+
+        debug!("daemon not available, attempting auto-start");
+        self.0 = None;
+        if let Err(start_error) = daemon::ensure_daemon_running(settings).await {
+            return Err(err.wrap_err(format!("failed to auto-start daemon: {start_error:#}")));
+        }
+        let client = self.get(settings).await?;
+        f(client).await
+    }
+}
+
 pub struct Search {
-    client: Option<SearchClient>,
-    query_id: u64,
+    client: LazyClient,
     settings: Settings,
-    #[cfg(unix)]
-    socket_path: String,
-    #[cfg(not(unix))]
-    tcp_port: u64,
+    query_id: u64,
 }
 
 impl Search {
     pub fn new(settings: &Settings) -> Self {
         Search {
-            client: None,
-            query_id: 0,
+            client: LazyClient::default(),
             settings: settings.clone(),
-            #[cfg(unix)]
-            socket_path: settings.daemon.socket_path.clone(),
-            #[cfg(not(unix))]
-            tcp_port: settings.daemon.tcp_port,
+            query_id: 0,
         }
     }
 
-    #[instrument(skip_all, level = Level::TRACE, name = "get_daemon_client")]
-    async fn get_client(&mut self) -> Result<&mut SearchClient> {
-        if self.client.is_none() {
-            self.connect().await?;
-        }
-        Ok(self.client.as_mut().unwrap())
-    }
-
-    async fn connect(&mut self) -> Result<()> {
-        #[cfg(unix)]
-        let client = SearchClient::new(self.socket_path.clone()).await?;
-
-        #[cfg(not(unix))]
-        let client = SearchClient::new(self.tcp_port).await?;
-
-        self.client = Some(client);
-        Ok(())
-    }
-
-    fn should_retry(err: &eyre::Report) -> bool {
-        matches!(
-            classify_error(err),
-            DaemonClientErrorKind::Connect
-                | DaemonClientErrorKind::Unavailable
-                | DaemonClientErrorKind::Unimplemented
-        )
-    }
-
+    #[must_use]
     fn next_query_id(&mut self) -> u64 {
         self.query_id += 1;
         self.query_id
@@ -78,10 +102,10 @@ impl Search {
     async fn fallback_to_db_search(
         &self,
         state: &SearchState,
-        db: &dyn Database,
+        db: &Sqlite,
     ) -> Result<Vec<History>> {
         let shells = state.shells.to_filter();
-        let results = db
+        Ok(db
             .search(
                 DbSearchMode::FullText,
                 state.filter_mode,
@@ -94,29 +118,36 @@ impl Search {
                     ..Default::default()
                 },
             )
-            .await
-            .map_or(Vec::new(), |r| r.into_iter().collect());
-        Ok(results)
+            .await?
+            .into_iter()
+            .collect())
     }
 
     #[instrument(skip_all, level = Level::TRACE, name = "hydrate_from_db", fields(count = ids.len()))]
-    async fn hydrate_from_db(&self, db: &dyn Database, ids: &[String]) -> Result<Vec<History>> {
+    async fn hydrate_from_db(&self, db: &Sqlite, ids: &[String]) -> Result<Vec<History>> {
         let placeholders: Vec<String> = ids.iter().map(|id| format!("'{id}'")).collect();
         let sql_query = format!(
-            "SELECT * FROM history WHERE id IN ({}) ORDER BY timestamp DESC",
+            "SELECT {} FROM history WHERE id IN ({}) ORDER BY timestamp DESC",
+            atuin_client::database::HISTORY_COLUMNS,
             placeholders.join(",")
         );
         Ok(db.query_history(&sql_query).await?)
+    }
+
+    /// Tell the daemon to build the search index.
+    pub async fn prepare_index(&mut self) -> Result<()> {
+        self.client
+            .try_with_autostart(&self.settings, async |client| {
+                let shells = self.settings.search.shells.to_filter().to_vec_filter();
+                client.prepare_index(shells).await
+            })
+            .await
     }
 }
 
 impl SearchEngine for Search {
     #[instrument(skip_all, level = Level::TRACE, name = "daemon_search", fields(query = %state.input.as_str()))]
-    async fn full_query(
-        &mut self,
-        state: &SearchState,
-        db: &mut dyn Database,
-    ) -> Result<Vec<History>> {
+    async fn full_query(&mut self, state: &SearchState, db: &mut Sqlite) -> Result<Vec<History>> {
         let query = state.input.as_str().to_string();
 
         // Fall back to database for regex queries (Nucleo doesn't support regex)
@@ -130,40 +161,24 @@ impl SearchEngine for Search {
         let span =
             span!(Level::TRACE, "daemon_search.req_resp", query = %query, query_id = query_id);
 
-        let params = || SearchParams {
-            query: query.clone(),
-            query_id,
-            filter_mode: state.filter_mode,
-            context: Some(state.context.clone()),
-            shells: state.shells.to_filter().to_vec_filter(),
-        };
-
-        // Try to connect and search; if it fails with a retriable error,
-        // auto-start the daemon and retry once.
-        let first_attempt = async {
-            let client = self.get_client().await?;
-            client.search(params()).await
-        }
-        .await;
-
-        let mut stream = match first_attempt {
-            Ok(stream) => stream,
-            Err(err) if self.settings.daemon.autostart && Self::should_retry(&err) => {
-                debug!("daemon not available, attempting auto-start");
-                self.client = None;
-
-                daemon::ensure_daemon_running(&self.settings).await?;
-
-                let client = self.get_client().await?;
-                client.search(params()).await?
-            }
-            Err(err) => return Err(err),
-        };
+        let mut stream = self
+            .client
+            .try_with_autostart(&self.settings, async |client| {
+                let search_params = SearchParams {
+                    query: query.clone(),
+                    query_id,
+                    filter_mode: state.filter_mode,
+                    context: Some(state.context.clone()),
+                    shells: state.shells.to_filter().to_vec_filter(),
+                };
+                client.search(search_params).await
+            })
+            .await?;
 
         let mut ids = Vec::with_capacity(200);
         span!(Level::TRACE, "daemon_search.resp")
-            .in_scope(async || {
-                while let Ok(Some(response)) = stream.message().await {
+            .in_scope(async || -> Result<()> {
+                while let Some(response) = stream.message().await? {
                     let span2 = span!(
                         Level::TRACE,
                         "daemon_search.resp.item",
@@ -186,8 +201,9 @@ impl SearchEngine for Search {
                     drop(span2_guard);
                     drop(span2);
                 }
+                Ok(())
             })
-            .await;
+            .await?;
         drop(span);
 
         if ids.is_empty() {
@@ -254,10 +270,8 @@ impl SearchEngine for Search {
                 .enumerate()
                 .map(|(char_idx, (byte_idx, _))| (byte_idx, char_idx))
                 .collect();
-            let command_char_to_byte: Vec<usize> = command
-                .char_indices()
-                .map(|(byte_idx, _)| byte_idx)
-                .collect();
+            let command_char_to_byte: Vec<usize> =
+                command.char_indices().map(|(byte_idx, _)| byte_idx).collect();
             let mut bytes: Vec<usize> = indices
                 .into_iter()
                 .filter_map(|i| matchable_byte_to_char.get(&(i as usize)))

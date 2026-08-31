@@ -22,7 +22,16 @@ async function startHistory(
 	try {
 		const result = await pi.exec(
 			"atuin",
-			["history", "start", "--author", ATUIN_AUTHOR, "--", command],
+			[
+				"history",
+				"start",
+				"--author",
+				ATUIN_AUTHOR,
+				"--author-kind",
+				"agent",
+				"--",
+				command,
+			],
 			{ cwd, timeout: ATUIN_TIMEOUT_MS },
 		);
 

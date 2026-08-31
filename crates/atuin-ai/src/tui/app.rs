@@ -4,7 +4,9 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
+use atuin_client::settings::Settings;
 use crossterm::event::{KeyCode, KeyEventKind};
 use eye_declare::{
     App, Ctx, Element, ElementExt, Fluent, Focus, FocusHandle, InputEvent, Keymap, Task, col, key,
@@ -14,11 +16,10 @@ use ratatui_core::style::{Color, Modifier, Style};
 use tokio::sync::mpsc::UnboundedSender;
 use tui_textarea::TextArea;
 
-use crate::fsm::StreamPhase;
 use crate::fsm::effects::{Effect, ExitAction, PermissionTarget, TimeoutKind};
 use crate::fsm::events::{Event, PermissionChoice, PermissionResponse};
 use crate::fsm::tools::ToolPreviewData;
-use crate::fsm::{AgentFsm, AgentState};
+use crate::fsm::{AgentFsm, AgentState, StreamPhase};
 use crate::tools::{ClientToolCall, PermissibleToolCall};
 use crate::tui::events::PermissionResult;
 use crate::tui::persist::PersistJob;
@@ -26,13 +27,14 @@ use crate::tui::recall::RecallState;
 use crate::tui::select::{SelectMsg, SelectState};
 use crate::tui::slash::{SlashCommandRegistry, SlashCommandSearchResult};
 use crate::tui::state::ConversationEvent;
+use crate::tui::tips::{Tip, TipContext, TipRotation};
 use crate::tui::view;
 use crate::tui::view::turn::{TurnBuilder, UiTurn, UiTurnKind};
 use crate::usage::UsageSnapshot;
 
 /// What the TUI resolves to, for the shell hook.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) enum ExitOutcome {
+pub enum ExitOutcome {
     Execute(String),
     Insert(String),
     #[default]
@@ -42,7 +44,7 @@ pub(crate) enum ExitOutcome {
 /// IO resources the app's effects need. Not part of the FSM's state.
 /// Session persistence goes through the [`crate::tui::persist`] worker,
 /// which owns the `SessionManager`.
-pub(crate) struct IoContext {
+pub struct IoContext {
     pub app_ctx: crate::context::AppContext,
     pub client_ctx: crate::context::ClientContext,
     pub persist: UnboundedSender<PersistJob>,
@@ -57,7 +59,7 @@ pub(crate) struct IoContext {
 /// (rebuilt from the model every update), so each variant means exactly one
 /// thing by the time it reaches `update`.
 #[derive(Debug, Clone)]
-pub(crate) enum Msg {
+pub enum Msg {
     /// Unclaimed key/paste, routed to the editor.
     Input(InputEvent),
     /// Insert a newline (Shift+Enter / Ctrl+J).
@@ -94,7 +96,7 @@ pub(crate) enum Msg {
     UsageFetchFailed(String),
 }
 
-pub(crate) struct AiApp {
+pub struct AiApp {
     pub fsm: AgentFsm,
     /// `None` only in headless tests; every effect that needs IO degrades
     /// to a debug log without it.
@@ -138,6 +140,22 @@ pub(crate) struct AiApp {
     /// leading blank row).
     pushed_turns: usize,
     exiting: bool,
+    /// Config snapshot from startup; tip relevance predicates read it.
+    settings: Settings,
+    tips: TipRotation,
+    /// When the in-flight turn started; survives continuation streams.
+    turn_started_at: Option<Instant>,
+    /// The tip pulled for the in-flight turn, shown under the spinner.
+    turn_tip: Option<&'static Tip>,
+    /// The last turn's clean completion — "Responded in …" plus its tip.
+    /// Cleared when a new turn starts and on /new.
+    responded: Option<Responded>,
+}
+
+/// A completed turn's summary, rendered where the spinner used to be.
+struct Responded {
+    elapsed: Duration,
+    tip: Option<&'static Tip>,
 }
 
 impl AiApp {
@@ -151,6 +169,7 @@ impl AiApp {
         usage: Option<UsageSnapshot>,
         initial_prompt: Option<String>,
         usage_stale: bool,
+        settings: Settings,
     ) -> Self {
         Self {
             in_git_project: io.app_ctx.git_root.is_some(),
@@ -158,6 +177,8 @@ impl AiApp {
             usage,
             initial_prompt,
             usage_stale,
+            settings,
+            tips: TipRotation::new(),
             ..Self::headless(fsm, resume_notice, slash_registry, skill_names)
         }
     }
@@ -195,6 +216,11 @@ impl AiApp {
             pushed_events: 0,
             pushed_turns: 0,
             exiting: false,
+            settings: Settings::utc(),
+            tips: TipRotation::starting_at(0),
+            turn_started_at: None,
+            turn_tip: None,
+            responded: None,
         }
     }
 
@@ -203,12 +229,9 @@ impl AiApp {
     }
 
     fn has_confirmation(&self) -> bool {
-        matches!(
-            self.fsm.state,
-            AgentState::Idle {
-                confirmation: Some(_)
-            }
-        )
+        matches!(self.fsm.state, AgentState::Idle {
+            confirmation: Some(_)
+        })
     }
 
     fn input_active(&self) -> bool {
@@ -228,9 +251,7 @@ impl AiApp {
 
     /// Whether the visible conversation carries a suggested command.
     fn has_command(&self) -> bool {
-        self.visible_events()
-            .iter()
-            .any(|e| e.as_command().is_some())
+        self.visible_events().iter().any(|e| e.as_command().is_some())
     }
 
     fn visible_events(&self) -> &[crate::tui::state::ConversationEvent] {
@@ -260,12 +281,7 @@ impl AiApp {
     /// events past the pushed frontier.
     fn live_turns(&self) -> Vec<UiTurn> {
         let events = &self.fsm.ctx.events;
-        let start = self
-            .fsm
-            .ctx
-            .view_start_index
-            .max(self.pushed_events)
-            .min(events.len());
+        let start = self.fsm.ctx.view_start_index.max(self.pushed_events).min(events.len());
         let mut builder = TurnBuilder::new(&self.fsm.ctx.tools);
         for event in &events[start..] {
             builder.add_event(event);
@@ -292,9 +308,7 @@ impl AiApp {
             Some(query) => {
                 let mut results = self.slash_registry.search_fuzzy(&query);
                 results.sort_by(|a, b| {
-                    b.relevance
-                        .partial_cmp(&a.relevance)
-                        .unwrap_or(std::cmp::Ordering::Equal)
+                    b.relevance.partial_cmp(&a.relevance).unwrap_or(std::cmp::Ordering::Equal)
                 });
                 self.slash_results = results;
             }
@@ -307,8 +321,14 @@ impl AiApp {
         if let Event::ToolExecutionDone { tool_id, .. } = &event {
             self.tool_interrupts.remove(tool_id);
         }
+        let was_busy = self.is_busy();
         let effects = self.fsm.handle(event);
         tracing::trace!(?effects, state = ?self.fsm.state, "FSM transition");
+        if !was_busy && self.is_busy() {
+            self.turn_started_at = Some(Instant::now());
+            self.responded = None;
+            self.turn_tip = self.pull_tip();
+        }
         // The event list only shrinks when the FSM resets the session
         // (/new archives and clears it). What was pushed stays in
         // scrollback; the frontier restarts for the new list — a stale
@@ -341,7 +361,17 @@ impl AiApp {
                 // drops the HTTP stream. Esc-cancels-generation is this.
                 Effect::AbortStream => self.streaming = None,
                 Effect::Persist => self.persist(),
+                Effect::TurnEnded => {
+                    let elapsed =
+                        self.turn_started_at.take().map(|t| t.elapsed()).unwrap_or_default();
+                    self.responded = Some(Responded {
+                        elapsed,
+                        tip: self.turn_tip.take(),
+                    });
+                }
                 Effect::ArchiveSession => {
+                    self.responded = None;
+                    self.turn_tip = None;
                     if let Some(io) = &self.io {
                         let _ = io.persist.send(PersistJob::Archive);
                     }
@@ -367,16 +397,17 @@ impl AiApp {
                     .detach();
                 }
                 Effect::CheckPermission { tool_id, tool } => {
-                    self.check_permission(tool_id, tool, ctx)
+                    self.check_permission(tool_id, tool, ctx);
                 }
                 Effect::ResolveOutputCommand {
                     tool_id,
                     history_id,
                 } => {
-                    let Some(io) = &self.io else { continue };
+                    let Some(io) = &self.io else {
+                        continue;
+                    };
                     let db = io.app_ctx.history_db.clone();
                     ctx.perform(async move {
-                        use atuin_client::database::Database as _;
                         // Ids are stored in simple (no-hyphen) form today,
                         // but older or imported rows may be hyphenated.
                         let command = match db.load(&history_id.as_simple().to_string()).await {
@@ -408,7 +439,9 @@ impl AiApp {
                     rule,
                     disposition,
                 } => {
-                    let Some(io) = &self.io else { continue };
+                    let Some(io) = &self.io else {
+                        continue;
+                    };
                     let file_path = match target {
                         PermissionTarget::Project => {
                             let project_root = io
@@ -433,13 +466,11 @@ impl AiApp {
                     });
                 }
                 Effect::LoadSkill { name, arguments } => {
-                    let Some(io) = &self.io else { continue };
+                    let Some(io) = &self.io else {
+                        continue;
+                    };
                     let registry = io.skill_registry.clone();
-                    let shell = io
-                        .client_ctx
-                        .shell
-                        .clone()
-                        .unwrap_or_else(|| "sh".to_string());
+                    let shell = io.client_ctx.shell.clone().unwrap_or_else(|| "sh".to_string());
                     ctx.perform(async move {
                         let content = crate::tui::tools_exec::load_skill_content(
                             &registry,
@@ -457,7 +488,9 @@ impl AiApp {
                     .detach();
                 }
                 Effect::FetchModels => {
-                    let Some(io) = &self.io else { continue };
+                    let Some(io) = &self.io else {
+                        continue;
+                    };
                     let endpoint = io.app_ctx.endpoint.clone();
                     let token = io.app_ctx.token.clone();
                     ctx.perform(async move {
@@ -469,7 +502,9 @@ impl AiApp {
                     .detach();
                 }
                 Effect::SaveModelSelection { alias } => {
-                    let Some(_io) = &self.io else { continue };
+                    let Some(_io) = &self.io else {
+                        continue;
+                    };
                     tokio::spawn(async move {
                         if let Err(e) = crate::models::save_model_selection(&alias).await {
                             tracing::error!("Failed to save model selection: {e}");
@@ -489,12 +524,7 @@ impl AiApp {
     /// Keep the prompt cursor tied to the tool being asked about: a new
     /// question starts from the top.
     fn sync_permission_prompt(&mut self) {
-        let current = self
-            .fsm
-            .ctx
-            .tools
-            .awaiting_permission()
-            .map(|t| t.id.clone());
+        let current = self.fsm.ctx.tools.awaiting_permission().map(|t| t.id.clone());
         if current != self.permission_prompt_for {
             self.permission_prompt_for = current;
             self.permission_select = SelectState::default();
@@ -551,10 +581,10 @@ impl AiApp {
             use crate::permissions::check::PermissionResponse as Check;
             let response =
                 match crate::permissions::resolver::PermissionResolver::new(working_dir).await {
-                    Ok(resolver) => match resolver.check(&tool).await {
-                        Ok(Check::Allowed) => PermissionResponse::Allowed,
-                        Ok(Check::Denied) => PermissionResponse::Denied,
-                        Ok(Check::Ask) | Err(_) => PermissionResponse::Ask,
+                    Ok(resolver) => match resolver.check(&tool) {
+                        Check::Allowed => PermissionResponse::Allowed,
+                        Check::Denied => PermissionResponse::Denied,
+                        Check::Ask => PermissionResponse::Ask,
                     },
                     Err(_) => PermissionResponse::Ask,
                 };
@@ -572,12 +602,8 @@ impl AiApp {
             ClientToolCall::Shell(shell_call) => {
                 let (interrupt_tx, interrupt_rx) = tokio::sync::oneshot::channel();
                 self.tool_interrupts.insert(tool_id.clone(), interrupt_tx);
-                ctx.spawn(crate::tui::tools_exec::shell_stream(
-                    tool_id,
-                    shell_call,
-                    interrupt_rx,
-                ))
-                .detach();
+                ctx.spawn(crate::tui::tools_exec::shell_stream(tool_id, shell_call, interrupt_rx))
+                    .detach();
             }
             ClientToolCall::Edit(edit_call) => {
                 let resolved = edit_call.resolved_path();
@@ -600,8 +626,7 @@ impl AiApp {
                     && let Some(io) = &mut self.io
                     && let Ok(mtime) = std::fs::metadata(&resolved).and_then(|m| m.modified())
                 {
-                    io.file_tracker
-                        .update_after_edit(&resolved, new_bytes, mtime);
+                    io.file_tracker.update_after_edit(&resolved, new_bytes, mtime);
                 }
 
                 let preview = match (&old_content, &new_content) {
@@ -640,8 +665,7 @@ impl AiApp {
                     && let Some(io) = &mut self.io
                     && let Ok(mtime) = std::fs::metadata(&resolved).and_then(|m| m.modified())
                 {
-                    io.file_tracker
-                        .update_after_edit(&resolved, new_bytes, mtime);
+                    io.file_tracker.update_after_edit(&resolved, new_bytes, mtime);
                 }
 
                 let preview = (!outcome.is_error()).then(|| {
@@ -683,7 +707,9 @@ impl AiApp {
                 );
             }
             ClientToolCall::AtuinHistory(history_call) => {
-                let Some(io) = &self.io else { return };
+                let Some(io) = &self.io else {
+                    return;
+                };
                 let db = io.app_ctx.history_db.clone();
                 ctx.perform(async move {
                     let outcome = history_call.execute(&db).await;
@@ -707,13 +733,11 @@ impl AiApp {
                 .detach();
             }
             ClientToolCall::LoadSkill(skill_call) => {
-                let Some(io) = &self.io else { return };
+                let Some(io) = &self.io else {
+                    return;
+                };
                 let registry = io.skill_registry.clone();
-                let shell = io
-                    .client_ctx
-                    .shell
-                    .clone()
-                    .unwrap_or_else(|| "sh".to_string());
+                let shell = io.client_ctx.shell.clone().unwrap_or_else(|| "sh".to_string());
                 ctx.perform(async move {
                     let content = crate::tui::tools_exec::load_skill_content(
                         &registry,
@@ -768,7 +792,9 @@ impl AiApp {
     /// channel order, so a later snapshot can never be overwritten by an
     /// earlier one.
     fn persist(&self) {
-        let Some(io) = &self.io else { return };
+        let Some(io) = &self.io else {
+            return;
+        };
         let _ = io.persist.send(PersistJob::Session {
             events: self.fsm.ctx.events.clone(),
             server_session_id: self.fsm.ctx.session_id.clone(),
@@ -789,11 +815,7 @@ impl AiApp {
         if turns.is_empty() {
             return;
         }
-        if self.is_busy()
-            && matches!(
-                turns.last().map(|t| &t.kind),
-                Some(UiTurnKind::Agent { .. })
-            )
+        if self.is_busy() && matches!(turns.last().map(|t| &t.kind), Some(UiTurnKind::Agent { .. }))
         {
             // Mid-stream: the whole in-flight agent turn stays in the tail
             // (statuses and text still mutate). It seals when the FSM
@@ -806,21 +828,12 @@ impl AiApp {
             && let Some(notice) = self.resume_notice.take()
         {
             ctx.push(
-                text(notice).style(
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::ITALIC),
-                ),
+                text(notice)
+                    .style(Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
             );
         }
         for (i, turn) in turns.iter().enumerate() {
-            ctx.push(view::turn_view(
-                turn,
-                self.pushed_turns == 0 && i == 0,
-                false,
-                false,
-                None,
-            ));
+            ctx.push(view::turn_view(turn, self.pushed_turns == 0 && i == 0, None));
             self.pushed_turns += 1;
         }
         self.pushed_events = self.fsm.ctx.events.len();
@@ -866,6 +879,7 @@ impl AiApp {
         Some((name, args))
     }
 
+    #[must_use]
     fn resolve_slash_command(&self, command: &str) -> String {
         match command.trim() {
             "/reload" => {
@@ -925,6 +939,18 @@ impl AiApp {
             editor.clear();
             editor.insert_str(text);
         }
+    }
+
+    /// Pull the next relevant tip for a starting turn.
+    fn pull_tip(&mut self) -> Option<&'static Tip> {
+        let has_context_files =
+            self.io.as_ref().map(|io| io.user_context_cache.has_gathered()).unwrap_or(None);
+        let tip_ctx = TipContext {
+            settings: &self.settings,
+            model_set: self.fsm.ctx.model.is_some(),
+            has_context_files,
+        };
+        self.tips.next(&tip_ctx)
     }
 
     fn submit(&mut self, ctx: &mut Ctx<'_, Self>) {
@@ -1091,16 +1117,11 @@ impl App for AiApp {
             Some(crate::fsm::ModelPicker::Ready(list)) if asking.is_none() => Some(list),
             _ => None,
         };
-        let picker_loading = matches!(
-            self.fsm.ctx.model_picker,
-            Some(crate::fsm::ModelPicker::Loading)
-        );
+        let picker_loading =
+            matches!(self.fsm.ctx.model_picker, Some(crate::fsm::ModelPicker::Loading));
         let show_input = asking.is_none() && ready_picker.is_none() && !self.exiting;
-        let needs_pending_banner = busy
-            && !matches!(
-                turns.last().map(|t| &t.kind),
-                Some(UiTurnKind::Agent { .. })
-            );
+        let needs_pending_banner =
+            busy && !matches!(turns.last().map(|t| &t.kind), Some(UiTurnKind::Agent { .. }));
 
         let status_text = if let AgentState::Turn {
             stream: StreamPhase::Streaming {
@@ -1115,37 +1136,32 @@ impl App for AiApp {
 
         col()
             .when_some(
-                (self.pushed_turns == 0)
-                    .then_some(self.resume_notice.clone())
-                    .flatten(),
+                (self.pushed_turns == 0).then_some(self.resume_notice.clone()).flatten(),
                 |c, notice| {
                     c.child(
                         text(notice).style(
-                            Style::default()
-                                .fg(Color::DarkGray)
-                                .add_modifier(Modifier::ITALIC),
+                            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
                         ),
                     )
                 },
             )
             .children(turns.iter().enumerate().map(|(i, turn)| {
-                let status_text = ((i == last).then_some(status_text.as_deref())).flatten();
+                let working = (busy && i == last && asking.is_none()).then_some(view::Working {
+                    status: status_text.as_deref(),
+                    tip: self.turn_tip,
+                });
 
-                view::turn_view(
-                    turn,
-                    self.pushed_turns == 0 && i == 0,
-                    busy && i == last,
-                    asking.is_some(),
-                    status_text,
-                )
+                view::turn_view(turn, self.pushed_turns == 0 && i == 0, working)
             }))
             .when(needs_pending_banner, |c| {
-                c.child(view::agent_turn_view(
-                    &[],
-                    true,
-                    asking.is_some(),
-                    status_text.as_deref(),
-                ))
+                let working = asking.is_none().then_some(view::Working {
+                    status: status_text.as_deref(),
+                    tip: self.turn_tip,
+                });
+                c.child(view::agent_turn_view(&[], working))
+            })
+            .when_some(self.responded.as_ref(), |c, responded| {
+                c.child(view::responded_view(responded.elapsed, responded.tip))
             })
             .when_some(
                 match &self.fsm.state {
@@ -1191,10 +1207,7 @@ impl App for AiApp {
                     self.is_input_blank() && self.has_command() && self.input_active(),
                     &self.slash_results,
                 ))
-                .child(view::status_bar_view(
-                    self.fsm.ctx.model.as_deref(),
-                    self.usage.as_ref(),
-                ))
+                .child(view::status_bar_view(self.fsm.ctx.model.as_deref(), self.usage.as_ref()))
             })
     }
 
@@ -1224,9 +1237,7 @@ impl App for AiApp {
         );
 
         if matches!(self.fsm.state, AgentState::Error(_)) {
-            km = km
-                .on(key(KeyCode::Enter), Msg::Retry)
-                .on(key(KeyCode::Char('r')), Msg::Retry);
+            km = km.on(key(KeyCode::Enter), Msg::Retry).on(key(KeyCode::Char('r')), Msg::Retry);
         }
 
         if self.has_confirmation() {
@@ -1237,10 +1248,7 @@ impl App for AiApp {
             km = km
                 .on(key(KeyCode::Enter), Msg::ConfirmPermission)
                 .merge(SelectState::keymap().map(Msg::PermissionSelect));
-        } else if matches!(
-            self.fsm.ctx.model_picker,
-            Some(crate::fsm::ModelPicker::Ready(_))
-        ) {
+        } else if matches!(self.fsm.ctx.model_picker, Some(crate::fsm::ModelPicker::Ready(_))) {
             km = km
                 .on(key(KeyCode::Enter), Msg::ConfirmModel)
                 .merge(SelectState::keymap().map(Msg::ModelSelect));
@@ -1278,12 +1286,13 @@ fn capitalize(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::tui::state::ConversationEvent;
     use crossterm::event::{KeyEvent, KeyModifiers};
     use eye_declare::Runtime;
     use eye_declare_engine::test_terminal::TestTerminal;
     use rstest::{fixture, rstest};
+
+    use super::*;
+    use crate::tui::state::ConversationEvent;
 
     fn fixture_app() -> AiApp {
         let mut fsm = AgentFsm::new(vec![], "test-invocation".into());
@@ -1321,9 +1330,7 @@ mod tests {
         }
 
         fn press_mod(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Option<ExitOutcome> {
-            let (bytes, exit) = self
-                .rt
-                .handle(InputEvent::Key(KeyEvent::new(code, modifiers)));
+            let (bytes, exit) = self.rt.handle(InputEvent::Key(KeyEvent::new(code, modifiers)));
             self.term.feed(&bytes);
             exit
         }
@@ -1355,9 +1362,7 @@ mod tests {
 
         /// Scrollback + viewport, for content that has scrolled off.
         fn all_lines(&self) -> String {
-            [self.term.scrollback_lines(), self.term.viewport_lines()]
-                .concat()
-                .join("\n")
+            [self.term.scrollback_lines(), self.term.viewport_lines()].concat().join("\n")
         }
     }
 
@@ -1380,18 +1385,9 @@ mod tests {
     fn tail_renders_conversation_turns(#[from(harness)] h: Harness) {
         let screen = h.screen();
         assert!(screen.contains(" You"), "user label missing:\n{screen}");
-        assert!(
-            screen.contains("list my files"),
-            "user text missing:\n{screen}"
-        );
-        assert!(
-            screen.contains(" Atuin AI"),
-            "agent label missing:\n{screen}"
-        );
-        assert!(
-            screen.contains("Use ls to list files."),
-            "agent markdown missing:\n{screen}"
-        );
+        assert!(screen.contains("list my files"), "user text missing:\n{screen}");
+        assert!(screen.contains(" Atuin AI"), "agent label missing:\n{screen}");
+        assert!(screen.contains("Use ls to list files."), "agent markdown missing:\n{screen}");
     }
 
     #[rstest]
@@ -1409,8 +1405,7 @@ mod tests {
 
         h.press(KeyCode::Esc);
         assert!(
-            !h.all_lines()
-                .contains("Generate a command or ask a question"),
+            !h.all_lines().contains("Generate a command or ask a question"),
             "input box still on screen after exit:\n{}",
             h.all_lines()
         );
@@ -1475,10 +1470,7 @@ mod tests {
         h.type_str("/he");
 
         let screen = h.screen();
-        assert!(
-            screen.contains("Show help information"),
-            "suggestion missing:\n{screen}"
-        );
+        assert!(screen.contains("Show help information"), "suggestion missing:\n{screen}");
 
         h.press(KeyCode::Tab);
         assert_eq!(h.app().input.borrow().lines(), ["/help".to_string()]);
@@ -1489,10 +1481,7 @@ mod tests {
         h.type_str("a");
         h.press_mod(KeyCode::Char('j'), KeyModifiers::CONTROL);
         h.type_str("b");
-        assert_eq!(
-            h.app().input.borrow().lines(),
-            ["a".to_string(), "b".to_string()]
-        );
+        assert_eq!(h.app().input.borrow().lines(), ["a".to_string(), "b".to_string()]);
     }
 
     #[rstest]
@@ -1506,12 +1495,8 @@ mod tests {
     fn two_message_fsm() -> AgentFsm {
         let mut fsm = AgentFsm::new(vec![], "test-invocation".into());
         for (q, a) in [("first question", "one"), ("second question", "two")] {
-            fsm.ctx
-                .events
-                .push(ConversationEvent::UserMessage { content: q.into() });
-            fsm.ctx
-                .events
-                .push(ConversationEvent::Text { content: a.into() });
+            fsm.ctx.events.push(ConversationEvent::UserMessage { content: q.into() });
+            fsm.ctx.events.push(ConversationEvent::Text { content: a.into() });
         }
         fsm
     }
@@ -1631,20 +1616,96 @@ mod tests {
 
         let app = h.app();
         assert!(!app.is_busy(), "turn should be over");
-        assert!(
-            app.pushed_turns > pushed_mid,
-            "agent turn should seal to scrollback on Done"
-        );
-        assert_eq!(
-            app.pushed_events,
-            app.fsm.ctx.events.len(),
-            "frontier should cover all events"
-        );
+        assert!(app.pushed_turns > pushed_mid, "agent turn should seal to scrollback on Done");
+        assert_eq!(app.pushed_events, app.fsm.ctx.events.len(), "frontier should cover all events");
         // The sealed turn is on the terminal, and the live tail no longer
         // repeats it.
         let all = h.all_lines();
         assert!(all.contains("Atuin is a shell history tool."));
         assert!(!h.app().fsm.ctx.current_response.contains("Atuin"));
+    }
+
+    #[rstest]
+    fn tip_hangs_off_the_spinner_while_streaming() {
+        let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
+        h.type_str("hello");
+        h.press(KeyCode::Enter);
+        h.stream(Event::StreamStarted);
+
+        let screen = h.screen();
+        // Headless apps start the rotation at tip 0.
+        assert!(
+            screen.contains("└ Tip: press Esc to interrupt a response"),
+            "tip dropper missing under spinner:\n{screen}"
+        );
+    }
+
+    #[rstest]
+    fn responded_line_replaces_the_spinner_on_done() {
+        let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
+        h.type_str("hello");
+        h.press(KeyCode::Enter);
+        h.stream(Event::StreamStarted);
+        h.stream(Event::StreamChunk("Hi!".into()));
+        h.stream(Event::StreamDone {
+            session_id: "s1".into(),
+        });
+
+        let screen = h.screen();
+        assert!(screen.contains("Responded in"), "responded line missing:\n{screen}");
+        assert!(
+            screen.contains("└ Tip: press Esc to interrupt a response"),
+            "turn's tip should ride along onto the responded line:\n{screen}"
+        );
+
+        // The next submit clears it and rotates to a fresh tip.
+        h.type_str("more");
+        h.press(KeyCode::Enter);
+        h.stream(Event::StreamStarted);
+        let screen = h.screen();
+        assert!(
+            !screen.contains("Responded in"),
+            "responded line should clear on new turn:\n{screen}"
+        );
+        assert!(screen.contains("└ Tip:"), "second turn should show a tip\n{screen}");
+        assert!(
+            !screen.contains("└ Tip: press Esc to interrupt a response"),
+            "second turn should pull the next tip:\n{screen}"
+        );
+    }
+
+    #[rstest]
+    fn cancelled_turn_shows_no_responded_line() {
+        let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
+        h.type_str("hello");
+        h.press(KeyCode::Enter);
+        h.stream(Event::StreamStarted);
+        h.stream(Event::StreamChunk("partial".into()));
+        h.press(KeyCode::Esc);
+
+        assert!(!h.app().is_busy());
+        assert!(
+            !h.all_lines().contains("Responded in"),
+            "cancel is not a clean completion:\n{}",
+            h.all_lines()
+        );
+    }
+
+    #[rstest]
+    fn tips_disabled_in_settings_suppresses_the_tip_line() {
+        let mut app = app_with(AgentFsm::new(vec![], "t".into()));
+        app.settings.ai.tips = Some(false);
+        let mut h = Harness::new(app);
+        h.type_str("hello");
+        h.press(KeyCode::Enter);
+        h.stream(Event::StreamStarted);
+        h.stream(Event::StreamDone {
+            session_id: "s1".into(),
+        });
+
+        let all = h.all_lines();
+        assert!(!all.contains("Tip:"), "tips disabled but shown:\n{all}");
+        assert!(all.contains("Responded in"), "responded line should still show:\n{all}");
     }
 
     #[rstest]
@@ -1671,20 +1732,10 @@ mod tests {
         h.stream(Event::StreamError("connection lost".into()));
 
         assert!(matches!(h.app().fsm.state, AgentState::Error(_)));
-        assert_eq!(
-            h.app().pushed_turns,
-            pushed_before,
-            "failed turn must stay live for retry"
-        );
+        assert_eq!(h.app().pushed_turns, pushed_before, "failed turn must stay live for retry");
         let screen = h.screen();
-        assert!(
-            screen.contains("Error: connection lost"),
-            "error line missing:\n{screen}"
-        );
-        assert!(
-            screen.contains("[Enter]/[r] Retry"),
-            "retry footer:\n{screen}"
-        );
+        assert!(screen.contains("Error: connection lost"), "error line missing:\n{screen}");
+        assert!(screen.contains("[Enter]/[r] Retry"), "retry footer:\n{screen}");
 
         h.press(KeyCode::Char('r'));
         assert!(h.app().is_busy(), "retry should restart the turn");
@@ -1737,10 +1788,7 @@ mod tests {
         #[from(harness_awaiting_shell_permission)] h: Harness,
     ) {
         let screen = h.screen();
-        assert!(
-            screen.contains("Atuin AI would like to run: "),
-            "prompt line missing:\n{screen}"
-        );
+        assert!(screen.contains("Atuin AI would like to run: "), "prompt line missing:\n{screen}");
         assert!(screen.contains("echo hi"), "tool desc missing:\n{screen}");
         assert!(screen.contains("Allow"), "options missing:\n{screen}");
         assert!(
@@ -1786,10 +1834,7 @@ mod tests {
 
         let app = h.app();
         assert!(app.fsm.ctx.tools.awaiting_permission().is_none());
-        assert!(
-            app.tool_interrupts.is_empty(),
-            "denied tool must not execute"
-        );
+        assert!(app.tool_interrupts.is_empty(), "denied tool must not execute");
         assert!(
             app.fsm
                 .ctx
@@ -1827,10 +1872,7 @@ mod tests {
             outcome: crate::tools::ToolOutcome::Success("done".into()),
             preview: None,
         });
-        assert!(
-            h.app().tool_interrupts.is_empty(),
-            "completion must prune the interrupt sender"
-        );
+        assert!(h.app().tool_interrupts.is_empty(), "completion must prune the interrupt sender");
         // With nothing executing, Ctrl+C means quit again.
         assert_eq!(
             h.press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL),
@@ -1844,10 +1886,8 @@ mod tests {
         let mut file = tempfile::NamedTempFile::new().unwrap();
         writeln!(file, "hello from the file").unwrap();
 
-        let mut h = Harness::new(app_with(AgentFsm::new(
-            vec!["client_v1_read_file".into()],
-            "t".into(),
-        )));
+        let mut h =
+            Harness::new(app_with(AgentFsm::new(vec!["client_v1_read_file".into()], "t".into())));
         h.type_str("read it");
         h.press(KeyCode::Enter);
         h.stream(Event::StreamStarted);
@@ -1885,9 +1925,7 @@ mod tests {
 
         assert!(rt.app().is_busy(), "initial prompt should start a turn");
         assert!(rt.app().pushed_turns > 0, "user turn should be pushed");
-        let all = [term.scrollback_lines(), term.viewport_lines()]
-            .concat()
-            .join("\n");
+        let all = [term.scrollback_lines(), term.viewport_lines()].concat().join("\n");
         assert!(all.contains("what is atuin?"), "prompt missing:\n{all}");
     }
 
@@ -1916,18 +1954,11 @@ mod tests {
         h.press(KeyCode::Enter);
 
         // Headless: FetchModels degrades, picker sits in Loading.
-        assert!(
-            h.screen().contains("Loading models…"),
-            "loading spinner missing:\n{}",
-            h.screen()
-        );
+        assert!(h.screen().contains("Loading models…"), "loading spinner missing:\n{}", h.screen());
 
         h.stream(Event::ModelListLoaded(Ok(model_list())));
         let screen = h.screen();
-        assert!(
-            screen.contains("Select a model:"),
-            "picker missing:\n{screen}"
-        );
+        assert!(screen.contains("Select a model:"), "picker missing:\n{screen}");
         assert!(
             screen.contains("Smart — balanced (current)"),
             "server default should be marked current:\n{screen}"
@@ -1959,11 +1990,7 @@ mod tests {
 
         assert_eq!(h.press(KeyCode::Esc), None, "Esc closes, not exits");
         assert!(h.app().fsm.ctx.model_picker.is_none());
-        assert_eq!(
-            h.app().model_select.cursor,
-            0,
-            "cursor resets when the picker closes"
-        );
+        assert_eq!(h.app().model_select.cursor, 0, "cursor resets when the picker closes");
     }
 
     #[rstest]
@@ -1974,10 +2001,7 @@ mod tests {
         h.stream(Event::ModelListLoaded(Ok(model_list())));
 
         h.type_str("stray keys");
-        assert!(
-            h.app().is_input_blank(),
-            "editor must not receive keys while the picker is open"
-        );
+        assert!(h.app().is_input_blank(), "editor must not receive keys while the picker is open");
     }
 
     #[rstest]
@@ -2001,10 +2025,7 @@ mod tests {
 
         let screen = h.screen();
         assert!(screen.contains("92%"), "usage percent missing:\n{screen}");
-        assert!(
-            screen.contains("resets in"),
-            "reset delta missing:\n{screen}"
-        );
+        assert!(screen.contains("resets in"), "reset delta missing:\n{screen}");
     }
 
     /// Run one full exchange so the frontier is past zero, then /new.
@@ -2027,10 +2048,7 @@ mod tests {
     #[rstest]
     fn new_session_notice_renders(#[from(harness_after_new_session)] h: Harness) {
         let all = h.all_lines();
-        assert!(
-            all.contains("Started a new session."),
-            "/new notice missing:\n{all}"
-        );
+        assert!(all.contains("Started a new session."), "/new notice missing:\n{all}");
     }
 
     #[rstest]
@@ -2058,27 +2076,16 @@ mod tests {
             session_id: "s2".into(),
         });
         let all = h.all_lines();
-        assert!(
-            all.contains("the second answer"),
-            "response vanished on stream end:\n{all}"
-        );
+        assert!(all.contains("the second answer"), "response vanished on stream end:\n{all}");
     }
 
     #[rstest]
     fn skill_dispatches_even_when_registered_for_autocomplete() {
         let mut registry = SlashCommandRegistry::default();
         let mut skill_names = HashSet::new();
-        registry.register(crate::tui::slash::SlashCommand::new(
-            "release",
-            "Cut a release",
-        ));
+        registry.register(crate::tui::slash::SlashCommand::new("release", "Cut a release"));
         skill_names.insert("release".to_string());
-        let app = AiApp::headless(
-            AgentFsm::new(vec![], "t".into()),
-            None,
-            registry,
-            skill_names,
-        );
+        let app = AiApp::headless(AgentFsm::new(vec![], "t".into()), None, registry, skill_names);
 
         assert!(matches!(
             app.dispatch_submit("/release 1.2".into()),
@@ -2091,22 +2098,12 @@ mod tests {
     fn builtin_takes_precedence_over_skill_with_same_name() {
         let mut registry = SlashCommandRegistry::default();
         let mut skill_names = HashSet::new();
-        registry.register(crate::tui::slash::SlashCommand::new(
-            "reload",
-            "A skill shadowing /reload",
-        ));
+        registry
+            .register(crate::tui::slash::SlashCommand::new("reload", "A skill shadowing /reload"));
         skill_names.insert("reload".to_string());
-        let app = AiApp::headless(
-            AgentFsm::new(vec![], "t".into()),
-            None,
-            registry,
-            skill_names,
-        );
+        let app = AiApp::headless(AgentFsm::new(vec![], "t".into()), None, registry, skill_names);
 
-        assert!(matches!(
-            app.dispatch_submit("/reload".into()),
-            Event::SlashCommand { .. }
-        ));
+        assert!(matches!(app.dispatch_submit("/reload".into()), Event::SlashCommand { .. }));
     }
 
     #[rstest]
@@ -2128,10 +2125,7 @@ mod tests {
             .iter()
             .position(|l| l.contains("Continuing previous session"))
             .expect("notice missing");
-        let user_row = lines
-            .iter()
-            .position(|l| l.contains(" You"))
-            .expect("user label missing");
+        let user_row = lines.iter().position(|l| l.contains(" You")).expect("user label missing");
         assert!(notice_row < user_row);
     }
 }

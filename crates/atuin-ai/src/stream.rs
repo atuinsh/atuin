@@ -4,23 +4,20 @@
 
 use atuin_client::history::History;
 use atuin_client::settings::AiCapabilities;
-
-use crate::context::history_output_capability_available;
 use atuin_common::url::UrlAppendExt;
-
 use eventsource_stream::Eventsource;
 use eyre::Result;
 use futures::StreamExt;
 use reqwest::Url;
 use reqwest::header::USER_AGENT;
 
-use crate::context::ClientContext;
+use crate::context::{ClientContext, history_output_capability_available};
 
-pub(crate) static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"));
+pub static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"));
 
 /// Frames that alter the stream lifecycle — terminal or state-changing.
 #[derive(Debug, Clone)]
-pub(crate) enum StreamControl {
+pub enum StreamControl {
     Done {
         session_id: String,
         /// Period credit totals from the server, when it sends them.
@@ -32,7 +29,7 @@ pub(crate) enum StreamControl {
 
 /// Frames that carry conversation content — they mutate the event log.
 #[derive(Debug, Clone)]
-pub(crate) enum StreamContent {
+pub enum StreamContent {
     TextChunk(String),
     ToolCall {
         id: String,
@@ -50,14 +47,14 @@ pub(crate) enum StreamContent {
 
 /// A frame from the SSE stream, classified as control or content.
 #[derive(Debug, Clone)]
-pub(crate) enum StreamFrame {
+pub enum StreamFrame {
     SessionIdentity(String),
     Content(StreamContent),
     Control(StreamControl),
 }
 
 /// Per-turn request payload for the chat API.
-pub(crate) struct ChatRequest {
+pub struct ChatRequest {
     pub messages: Vec<serde_json::Value>,
     pub session_id: Option<String>,
     pub capabilities: Vec<String>,
@@ -76,10 +73,7 @@ impl ChatRequest {
         invocation_id: String,
         model: Option<String>,
     ) -> Self {
-        let mut caps = vec![
-            "client_invocations".to_string(),
-            "client_v1_load_skill".to_string(),
-        ];
+        let mut caps = vec!["client_invocations".to_string(), "client_v1_load_skill".to_string()];
         if capabilities.enable_history_search.unwrap_or(true) {
             caps.push("client_v1_atuin_history".to_string());
         }
@@ -97,12 +91,7 @@ impl ChatRequest {
             caps.push("client_v1_atuin_output".to_string());
         }
         if let Ok(extra) = std::env::var("ATUIN_AI__ADDITIONAL_CAPS") {
-            caps.extend(
-                extra
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty()),
-            );
+            caps.extend(extra.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
         }
 
         Self {
@@ -116,7 +105,7 @@ impl ChatRequest {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn create_chat_stream(
+pub fn create_chat_stream(
     hub_address: Url,
     token: String,
     token_from_hub_session: bool,

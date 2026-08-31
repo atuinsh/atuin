@@ -1,7 +1,9 @@
-use super::StaticInitOptions;
 use atuin_client::settings::Tmux;
-use atuin_dotfiles::store::{AliasStore, var::VarStore};
+use atuin_dotfiles::store::AliasStore;
+use atuin_dotfiles::store::var::VarStore;
 use eyre::Result;
+
+use super::StaticInitOptions;
 
 fn print_tmux_config(tmux: &Tmux) {
     if tmux.enabled {
@@ -83,8 +85,7 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
 
         #[cfg(feature = "ai")]
         if options.enable_ai {
-            let bind_ai = atuin_ai::commands::init::generate_fish_integration();
-            println!("{bind_ai}");
+            println!("{}", atuin_ai::shell::FISH_INIT);
         }
     }
 }

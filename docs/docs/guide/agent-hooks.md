@@ -1,6 +1,6 @@
 # AI Agent Hooks
 
-Atuin can capture commands run by AI coding agents (like Claude Code, Codex, and pi) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
+Atuin can capture commands run by AI coding agents (like Claude Code, Codex, opencode, and pi) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
 
 ## Quick Start
 
@@ -12,6 +12,9 @@ atuin hook install claude-code
 
 # Codex
 atuin hook install codex
+
+# opencode
+atuin hook install opencode
 
 # pi
 atuin hook install pi
@@ -29,6 +32,7 @@ When `atuin hook install` runs, it writes the agent's config file or extension t
 |-------|-------------------------|
 | Claude Code | `~/.claude/settings.json` |
 | Codex | `~/.codex/hooks.json` |
+| opencode | `~/.config/opencode/plugins/atuin.ts` |
 | pi | `~/.pi/agent/extensions/atuin.ts` |
 
 The hook lifecycle:
@@ -38,20 +42,22 @@ The hook lifecycle:
 
 Atuin only captures `Bash` tool invocations. It ignores other tool types (file writes, web fetches, etc.).
 
+Agents that load extensions rather than shelling out to a hook command -- opencode and pi -- call `atuin history start` and `atuin history end` directly instead, but record the same thing.
+
 ## Filtering by Author
 
 By default, Atuin's interactive search shows only your own commands. Agent-run commands are hidden so they don't clutter your history.
 
 Today this default is built into the search UI rather than configurable via `config.toml`. Interactive search uses the equivalent of:
 
-- `$all-user` — any author that's **not** a known AI agent
+- `$all-user` — any entry that's **not** agent-run
 
 For explicit author filtering, use the CLI `atuin search --author ...` flag. Special values:
 
 | Value | Meaning |
 |-------|---------|
-| `$all-user` | Any author that's **not** a known AI agent |
-| `$all-agent` | Any known AI agent author |
+| `$all-user` | Any entry that's **not** agent-run |
+| `$all-agent` | Any agent-run entry |
 
 You can also use literal author names:
 
@@ -92,6 +98,21 @@ atuin hook install codex
 
 This adds hook entries to `~/.codex/hooks.json`. Codex calls `atuin hook codex` on each Bash tool use matching `^Bash$`.
 
+### opencode
+
+```shell
+atuin hook install opencode
+```
+
+This writes Atuin's plugin to `~/.config/opencode/plugins/atuin.ts`, or to `$XDG_CONFIG_HOME/opencode/plugins/atuin.ts` if you have set `XDG_CONFIG_HOME`.
+
+Then restart opencode. The plugin records every `bash` tool command with author `opencode`, using the tool's description as the entry's intent when opencode supplies one.
+
+Two details are worth knowing:
+
+- Commands you deny at the permission prompt aren't recorded. The plugin waits until opencode is cleared to run a command before opening a history entry.
+- Commands you run yourself in opencode -- with the `!command` prompt prefix or in a terminal pane -- aren't recorded either, since opencode didn't run them. Use Atuin's own shell integration for those.
+
 ### pi
 
 ```shell
@@ -123,6 +144,9 @@ cat ~/.claude/settings.json | grep atuin
 # Codex
 cat ~/.codex/hooks.json | grep atuin
 
+# opencode
+ls ~/.config/opencode/plugins/atuin.ts
+
 # pi
 ls ~/.pi/agent/extensions/atuin.ts
 ```
@@ -137,4 +161,4 @@ hooks.PostToolUse: already installed, skipping
 hooks.PostToolUseFailure: already installed, skipping
 ```
 
-For pi, reinstalling will also skip if the managed extension already matches the bundled version.
+For opencode and pi, reinstalling will also skip if the installed extension already matches the bundled version.

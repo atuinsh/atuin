@@ -78,7 +78,7 @@ To turn it off, add this to `~/.config/atuin/config.toml`:
 update_check = false
 ```
 
-With the [update check](configuration/config.md#update_check) disabled and sync
+With the [update check](configuration/config.md#update_check) turned off and sync
 not set up, Atuin makes no network requests of its own.
 
 If you'd rather the code wasn't in the binary at all, build from source without

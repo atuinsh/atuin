@@ -1,10 +1,13 @@
+use atuin_client::database::Sqlite;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::Settings;
 use atuin_common::time::{OffsetDateTimeExt, UtcOffsetExt};
+use atuin_domain::record::RecordSeriesKey;
 use clap::Subcommand;
 use eyre::Result;
-
-use atuin_client::{database::Database, record::sqlite_store::SqliteStore, settings::Settings};
 use itertools::Itertools;
 use time::OffsetDateTime;
+use tracing::instrument;
 
 #[cfg(feature = "sync")]
 mod push;
@@ -45,10 +48,11 @@ pub enum Cmd {
 }
 
 impl Cmd {
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(
         &self,
         settings: &Settings,
-        database: &dyn Database,
+        database: &Sqlite,
         store: SqliteStore,
     ) -> Result<()> {
         match self {
@@ -85,8 +89,9 @@ impl Cmd {
             for (tag, idx) in st.iter().sorted_by_key(|(tag, _)| *tag) {
                 println!("\tstore: {tag}");
 
-                let first = store.first(*host, tag).await?;
-                let last = store.last(*host, tag).await?;
+                let series = RecordSeriesKey::new(*host, tag.clone());
+                let first = store.first(&series).await?;
+                let last = store.last(&series).await?;
 
                 println!("\t\tidx: {idx}");
 

@@ -1,10 +1,12 @@
-use std::{io::prelude::*, path::PathBuf};
+use std::io::prelude::*;
+use std::path::PathBuf;
 
-use atuin_server_database::DbSettings;
 use config::{Config, Environment, File as ConfigFile, FileFormat};
 use eyre::{Result, eyre};
 use fs_err::{File, create_dir_all};
 use serde::{Deserialize, Serialize};
+
+use crate::db::DbSettings;
 
 static EXAMPLE_CONFIG: &str = include_str!("../server.toml");
 
@@ -72,17 +74,11 @@ impl Settings {
             .set_default("metrics.enable", false)?
             .set_default("metrics.host", "127.0.0.1")?
             .set_default("metrics.port", 9001)?
-            .add_source(
-                Environment::with_prefix("atuin")
-                    .prefix_separator("_")
-                    .separator("__"),
-            );
+            .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__"));
 
         config_builder = if config_file.exists() {
-            config_builder.add_source(ConfigFile::new(
-                config_file.to_str().unwrap(),
-                FileFormat::Toml,
-            ))
+            config_builder
+                .add_source(ConfigFile::new(config_file.to_str().unwrap(), FileFormat::Toml))
         } else {
             create_dir_all(config_file.parent().unwrap())?;
             let mut file = File::create(config_file)?;
@@ -93,12 +89,11 @@ impl Settings {
 
         let config = config_builder.build()?;
 
-        config
-            .try_deserialize()
-            .map_err(|e| eyre!("failed to deserialize: {}", e))
+        config.try_deserialize().map_err(|e| eyre!("failed to deserialize: {}", e))
     }
 }
 
+#[must_use]
 pub fn example_config() -> &'static str {
     EXAMPLE_CONFIG
 }

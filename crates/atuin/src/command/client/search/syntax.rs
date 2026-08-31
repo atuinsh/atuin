@@ -10,7 +10,8 @@ use atuin_client::theme::Meaning;
 ///
 /// Rows are re-classified on every redraw while typing or scrolling, so
 /// results are memoized; repeat frames cost a hash lookup, not a parse.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "illumos"))]
+#[must_use]
 pub fn classify(cmd: &str, shell: Option<&str>) -> Vec<Meaning> {
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -24,23 +25,21 @@ pub fn classify(cmd: &str, shell: Option<&str>) -> Vec<Meaning> {
         if cache.len() > 4096 {
             cache.clear();
         }
-        cache
-            .entry(key)
-            .or_insert_with(|| parse(cmd, shell))
-            .clone()
+        cache.entry(key).or_insert_with(|| parse(cmd, shell)).clone()
     })
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "illumos"))]
 fn parse(cmd: &str, shell: Option<&str>) -> Vec<Meaning> {
     let mut meanings = vec![Meaning::Base; cmd.len()];
 
     let language: tree_sitter::Language = match shell {
         Some("fish") => tree_sitter_fish::language(),
+        Some("powershell" | "pwsh") => tree_sitter_powershell::LANGUAGE.into(),
         // POSIX-ish shells; entries from before the shell was recorded
         // get bash as the best guess
         None | Some("bash" | "zsh" | "sh") => tree_sitter_bash::LANGUAGE.into(),
-        // nu, xonsh, powershell, ...: no grammar available
+        // nu, xonsh, ...: no grammar available
         Some(_) => return meanings,
     };
 
@@ -48,17 +47,26 @@ fn parse(cmd: &str, shell: Option<&str>) -> Vec<Meaning> {
     if parser.set_language(&language).is_ok()
         && let Some(tree) = parser.parse(cmd, None)
     {
-        walk(tree.root_node(), cmd.as_bytes(), &mut meanings);
+        if language.name() == Some("powershell") {
+            highlight_powershell(tree.root_node(), cmd.as_bytes(), &mut meanings);
+        } else {
+            walk(tree.root_node(), cmd.as_bytes(), &mut meanings);
+        }
     }
     meanings
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "illumos"
+)))]
 pub fn classify(cmd: &str, _shell: Option<&str>) -> Vec<Meaning> {
     vec![Meaning::Base; cmd.len()]
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "illumos"))]
 fn walk(node: tree_sitter::Node, src: &[u8], meanings: &mut [Meaning]) {
     let meaning = match node.kind() {
         "comment" => Some(Meaning::SyntaxComment),
@@ -99,10 +107,7 @@ fn walk(node: tree_sitter::Node, src: &[u8], meanings: &mut [Meaning]) {
 
     // An expansion is uniformly a variable; don't let its `$`/`${`/`}` child
     // tokens overwrite it as operators.
-    if matches!(
-        node.kind(),
-        "simple_expansion" | "expansion" | "variable_expansion"
-    ) {
+    if matches!(node.kind(), "simple_expansion" | "expansion" | "variable_expansion") {
         return;
     }
 
@@ -114,10 +119,51 @@ fn walk(node: tree_sitter::Node, src: &[u8], meanings: &mut [Meaning]) {
     }
 }
 
-#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "illumos"))]
+fn highlight_powershell(node: tree_sitter::Node, src: &[u8], meanings: &mut [Meaning]) {
+    // PowerShell has a different syntax than most shells, so it's handled separately.
+
+    static HIGHLIGHTS_QUERY: std::sync::LazyLock<tree_sitter::Query> =
+        std::sync::LazyLock::new(|| {
+            let language: tree_sitter::Language = tree_sitter_powershell::LANGUAGE.into();
+            tree_sitter::Query::new(&language, include_str!("highlights/powershell.scm"))
+                .expect("invalid PowerShell highlights query")
+        });
+
+    use tree_sitter::StreamingIterator;
+
+    let mut cursor = tree_sitter::QueryCursor::new();
+    let mut captures = cursor.captures(&HIGHLIGHTS_QUERY, node, src);
+
+    while let Some((m, capture_index)) = captures.next() {
+        let capture = m.captures[*capture_index];
+        let capture_name = HIGHLIGHTS_QUERY.capture_names()[capture.index as usize];
+
+        let meaning = match capture_name {
+            "base" => Meaning::Base,
+            "command" => Meaning::SyntaxCommand,
+            "flag" => Meaning::SyntaxFlag,
+            "string" => Meaning::SyntaxString,
+            "variable" | "keyword" => Meaning::SyntaxVariable,
+            "operator" => Meaning::SyntaxOperator,
+            "comment" => Meaning::SyntaxComment,
+            _ => continue, // currently ignored: number
+        };
+
+        if let Some(range) = meanings.get_mut(capture.node.byte_range()) {
+            range.fill(meaning);
+        }
+    }
+}
+
+#[cfg(all(
+    test,
+    any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "illumos")
+))]
 mod tests {
-    use super::{Meaning, classify};
     use rstest::rstest;
+
+    use super::{Meaning, classify};
 
     /// Render the classification as one char per byte for compact assertions.
     fn render_shell(cmd: &str, shell: Option<&str>) -> String {
@@ -147,9 +193,9 @@ mod tests {
     #[case::fish_set("set -x PATH $PATH", Some("fish"), "cccaffaaaaaavvvvv")]
     #[case::fish_subshell("echo (date) | grep foo", Some("fish"), "ccccaoccccoaoaccccaaaa")]
     #[case::fish_string(r#"echo "hi $name""#, Some("fish"), "ccccassssvvvvvs")]
+    #[case::powershell("$v = rg -i 'foo' $f", Some("powershell"), "vvaoaccaffasssssavv")]
     #[case::zsh_uses_bash("ls -la", Some("zsh"), "ccafff")]
     #[case::nu_plain("ls -la", Some("nu"), "aaaaaa")]
-    #[case::powershell_plain("ls -la", Some("powershell"), "aaaaaa")]
     fn classify_renders(#[case] cmd: &str, #[case] shell: Option<&str>, #[case] expected: &str) {
         assert_eq!(render_shell(cmd, shell), expected);
     }
@@ -158,7 +204,7 @@ mod tests {
     fn odd_inputs_do_not_panic(
         // unterminated string, non-bash syntax, empty, multibyte
         #[values("echo 'oops", "if (= 1 2) { }", "", "echo héllo")] cmd: &str,
-        #[values(None, Some("fish"), Some("nu"))] shell: Option<&str>,
+        #[values(None, Some("fish"), Some("nu"), Some("powershell"))] shell: Option<&str>,
     ) {
         assert_eq!(classify(cmd, shell).len(), cmd.len());
     }

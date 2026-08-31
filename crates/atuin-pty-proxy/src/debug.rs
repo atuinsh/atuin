@@ -1,8 +1,8 @@
 use crate::osc133::{Event, Parser};
 
-pub(crate) const RESET: &[u8] = b"\x1b[0m";
+pub const RESET: &[u8] = b"\x1b[0m";
 
-pub(crate) struct Osc133DebugHighlighter {
+pub struct Osc133DebugHighlighter {
     parser: Parser,
 }
 
@@ -13,10 +13,10 @@ impl Osc133DebugHighlighter {
         }
     }
 
+    #[must_use]
     pub(crate) fn render(&mut self, data: &[u8]) -> Vec<u8> {
         let mut events = Vec::new();
-        self.parser
-            .push_located(data, |located| events.push(located));
+        self.parser.push_located(data, |located| events.push(located));
 
         if events.is_empty() {
             return data.to_vec();
@@ -31,7 +31,7 @@ impl Osc133DebugHighlighter {
                 rendered.extend_from_slice(&data[start..offset]);
             }
 
-            rendered.extend_from_slice(event_label(&located.event));
+            rendered.extend_from_slice(event_label(located.event));
             rendered.extend_from_slice(RESET);
             start = offset;
         }
@@ -41,7 +41,7 @@ impl Osc133DebugHighlighter {
     }
 }
 
-fn event_label(event: &Event) -> &'static [u8] {
+fn event_label(event: Event) -> &'static [u8] {
     match event {
         Event::PromptStart => b"\x1b[1;37;45m[OSC133:A prompt]\x1b[0m",
         Event::CommandStart => b"\x1b[1;30;43m[OSC133:B input]\x1b[0m",

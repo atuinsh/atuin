@@ -1,0 +1,14 @@
+{
+  "id": "atuin",
+  "version": "0.1.0",
+  "name": "Atuin",
+  "description": "Installs atuin, shell hooks for zsh/bash, and a sandbox-safe daemon config (fixed socket path, no XDG_RUNTIME_DIR dependency).",
+  "options": {
+    "syncAddress": {
+      "type": "string",
+      "default": "",
+      "description": "Override sync server address (empty = default)"
+    }
+  },
+  "installsAfter": ["ghcr.io/devcontainers/features/common-utils"]
+}

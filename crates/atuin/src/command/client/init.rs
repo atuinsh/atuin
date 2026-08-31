@@ -1,11 +1,13 @@
-use atuin_client::{
-    encryption,
-    record::sqlite_store::SqliteStore,
-    settings::{Settings, Tmux},
-};
-use atuin_dotfiles::store::{AliasStore, var::VarStore};
+use std::time::Duration;
+
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::{Settings, Tmux};
+use atuin_common::encryption::paseto_v4;
+use atuin_dotfiles::store::AliasStore;
+use atuin_dotfiles::store::var::VarStore;
 use clap::{Parser, ValueEnum};
 use eyre::{Result, WrapErr};
+use tracing::instrument;
 
 mod bash;
 mod fish;
@@ -85,14 +87,17 @@ impl Cmd {
 
     async fn dotfiles_init(&self, settings: &Settings) -> Result<()> {
         let record_store_path = &settings.record_store_path;
-        let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
+        let sqlite_store = SqliteStore::new(
+            record_store_path,
+            Duration::try_from_secs_f64(settings.local_timeout)?,
+        )
+        .await?;
 
-        let encryption_key: [u8; 32] = encryption::load_key(settings)
-            .context("could not load encryption key")?
-            .into();
+        let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+            .context("could not load or generate encryption key")?;
         let host_id = Settings::host_id().await?;
 
-        let alias_store = AliasStore::new(sqlite_store.clone(), host_id, encryption_key);
+        let alias_store = AliasStore::new(sqlite_store.clone(), host_id, encryption_key.clone());
         let var_store = VarStore::new(sqlite_store.clone(), host_id, encryption_key);
 
         let options = self.to_options(settings);
@@ -147,7 +152,8 @@ impl Cmd {
             Shell::Nu => atuin_pty_proxy::Shell::Nu,
             Shell::Xonsh | Shell::PowerShell => {
                 eprintln!(
-                    "atuin: pty_proxy.enabled is set, but atuin pty-proxy does not support this shell"
+                    "atuin: pty_proxy.enabled is set, but atuin pty-proxy does not support this \
+                     shell"
                 );
                 return;
             }
@@ -160,15 +166,18 @@ impl Cmd {
     fn pty_proxy_init(&self, settings: &Settings) {
         if settings.pty_proxy.enabled {
             eprintln!(
-                "atuin: pty_proxy.enabled is set, but this build of atuin does not include pty-proxy support"
+                "atuin: pty_proxy.enabled is set, but this build of atuin does not include \
+                 pty-proxy support"
             );
         }
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(self, settings: &Settings) -> Result<()> {
         if !settings.paths_ok() {
             eprintln!(
-                "Atuin settings paths are broken. Disabling atuin shell hooks. Run `atuin doctor` to diagnose."
+                "Atuin settings paths are broken. Disabling atuin shell hooks. Run `atuin doctor` \
+                 to diagnose."
             );
             return Ok(());
         }

@@ -36,7 +36,7 @@ struct CaptureBuffers {
     session_id: Option<String>,
 }
 
-pub(crate) struct CommandCaptureTracker {
+pub struct CommandCaptureTracker {
     parser: Parser,
     zone: Zone,
     buffers: CaptureBuffers,
@@ -55,8 +55,7 @@ impl CommandCaptureTracker {
 
     pub(crate) fn push(&mut self, data: &[u8], mut on_capture: impl FnMut(CommandCapture)) {
         let mut events = Vec::new();
-        self.parser
-            .push_located(data, |located| events.push(located));
+        self.parser.push_located(data, |located| events.push(located));
 
         let mut start = 0;
         for located in events {
@@ -71,9 +70,7 @@ impl CommandCaptureTracker {
         let append_end = self
             .parser
             .incomplete_osc_sequence_start()
-            .map_or(data.len(), |sequence_start| {
-                sequence_start.min(data.len()).max(start)
-            });
+            .map_or(data.len(), |sequence_start| sequence_start.min(data.len()).max(start));
         if start < append_end {
             self.append(&data[start..append_end]);
         }
@@ -89,10 +86,8 @@ impl CommandCaptureTracker {
     }
 
     fn append_output(&mut self, data: &[u8]) {
-        self.buffers.output_observed_bytes = self
-            .buffers
-            .output_observed_bytes
-            .saturating_add(data.len() as u64);
+        self.buffers.output_observed_bytes =
+            self.buffers.output_observed_bytes.saturating_add(data.len() as u64);
 
         if self.buffers.output_truncated {
             return;
@@ -172,9 +167,9 @@ impl CommandCaptureTracker {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use rstest::{fixture, rstest};
+
+    use super::*;
 
     #[fixture]
     fn tracker(#[default(80)] cols: u16) -> CommandCaptureTracker {
@@ -183,9 +178,7 @@ mod tests {
 
     fn assert_no_terminal_controls(text: &str) {
         assert!(
-            !text
-                .chars()
-                .any(|ch| ch.is_control() && ch != '\n' && ch != '\t'),
+            !text.chars().any(|ch| ch.is_control() && ch != '\n' && ch != '\t'),
             "text still contains terminal controls: {text:?}"
         );
     }
@@ -255,19 +248,16 @@ mod tests {
             },
         );
 
-        assert_eq!(
-            captures,
-            vec![CommandCapture {
-                prompt: "%".to_string(),
-                command: "ls".to_string(),
-                output: "file".to_string(),
-                exit_code: Some(1),
-                history_id: Some("hist".to_string()),
-                session_id: Some("sess".to_string()),
-                output_truncated: false,
-                output_observed_bytes: 15,
-            }]
-        );
+        assert_eq!(captures, vec![CommandCapture {
+            prompt: "%".to_string(),
+            command: "ls".to_string(),
+            output: "file".to_string(),
+            exit_code: Some(1),
+            history_id: Some("hist".to_string()),
+            session_id: Some("sess".to_string()),
+            output_truncated: false,
+            output_observed_bytes: 15,
+        }]);
     }
 
     #[rstest]
@@ -321,9 +311,7 @@ mod tests {
         tracker.push(b"\x1b]133;C\x07line one\r\n\x1b]133;D;0\x07", |capture| {
             captures.push(capture);
         });
-        tracker.push(b"\x1b]133;D;0;history_id=018f", |capture| {
-            captures.push(capture)
-        });
+        tracker.push(b"\x1b]133;D;0;history_id=018f", |capture| captures.push(capture));
 
         assert!(captures.is_empty());
 
@@ -340,12 +328,9 @@ mod tests {
     fn split_finish_marker_is_not_counted_as_output(mut tracker: CommandCaptureTracker) {
         let mut captures = Vec::new();
 
-        tracker.push(
-            b"\x1b]133;C\x07line one\r\n\x1b]133;D;0;history_id=018f",
-            |capture| {
-                captures.push(capture);
-            },
-        );
+        tracker.push(b"\x1b]133;C\x07line one\r\n\x1b]133;D;0;history_id=018f", |capture| {
+            captures.push(capture);
+        });
         assert!(captures.is_empty());
 
         tracker.push(b";session_id=abcd\x07", |capture| captures.push(capture));
@@ -366,10 +351,7 @@ mod tests {
 
         assert_eq!(captures.len(), 1);
         assert!(captures[0].output_truncated);
-        assert_eq!(
-            captures[0].output_observed_bytes,
-            (MAX_OUTPUT_CAPTURE_BYTES + 10) as u64
-        );
+        assert_eq!(captures[0].output_observed_bytes, (MAX_OUTPUT_CAPTURE_BYTES + 10) as u64);
     }
 
     #[rstest]

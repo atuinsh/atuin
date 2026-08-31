@@ -1,6 +1,8 @@
-use crate::shell::{Alias, Var};
-use crate::store::{AliasStore, var::VarStore};
 use std::path::PathBuf;
+
+use crate::shell::{Alias, Var};
+use crate::store::AliasStore;
+use crate::store::var::VarStore;
 
 async fn cached_aliases(path: PathBuf, store: &AliasStore) -> String {
     match tokio::fs::read_to_string(path).await {
@@ -10,7 +12,7 @@ async fn cached_aliases(path: PathBuf, store: &AliasStore) -> String {
             // fallback to generating new aliases on the fly
 
             store.powershell().await.unwrap_or_else(|e| {
-                format!("echo 'Atuin: failed to read and generate aliases: \n{r}\n{e}'",)
+                format!("echo 'Atuin: failed to read and generate aliases: \n{r}\n{e}'")
             })
         }
     }
@@ -24,7 +26,7 @@ async fn cached_vars(path: PathBuf, store: &VarStore) -> String {
             // fallback to generating new vars on the fly
 
             store.powershell().await.unwrap_or_else(|e| {
-                format!("echo 'Atuin: failed to read and generate vars: \n{r}\n{e}'",)
+                format!("echo 'Atuin: failed to read and generate vars: \n{r}\n{e}'")
             })
         }
     }
@@ -37,6 +39,7 @@ async fn cached_vars(path: PathBuf, store: &VarStore) -> String {
 /// In the worst case, Atuin should not function but the shell should start correctly.
 ///
 /// While currently this only returns aliases, it will be extended to also return other synced dotfiles
+#[must_use]
 pub async fn alias_config(store: &AliasStore) -> String {
     // First try to read the cached config
     let aliases = atuin_common::utils::dotfiles_cache_dir().join("aliases.ps1");
@@ -52,6 +55,7 @@ pub async fn alias_config(store: &AliasStore) -> String {
     cached_aliases(aliases, store).await
 }
 
+#[must_use]
 pub async fn var_config(store: &VarStore) -> String {
     // First try to read the cached config
     let vars = atuin_common::utils::dotfiles_cache_dir().join("vars.ps1");
@@ -67,6 +71,7 @@ pub async fn var_config(store: &VarStore) -> String {
     cached_vars(vars, store).await
 }
 
+#[must_use]
 pub fn format_alias(alias: &Alias) -> String {
     // Set-Alias doesn't support adding implicit arguments, so use a function.
     // See https://github.com/PowerShell/PowerShell/issues/12962
@@ -87,28 +92,31 @@ pub fn format_alias(alias: &Alias) -> String {
     result
 }
 
+#[must_use]
 pub fn format_var(var: &Var) -> String {
     secure_command(&format!(
         "${}{} = '{}'",
-        if var.export { "env:" } else { "" },
+        if var.export {
+            "env:"
+        } else {
+            ""
+        },
         var.name,
-        var.value.replace("'", "''")
+        var.value.replace('\'', "''")
     ))
 }
 
 /// Wraps the given command in an Invoke-Expression to ensure the outer script is not halted
 /// if the inner command contains a syntax error.
 fn secure_command(command: &str) -> String {
-    format!(
-        "Invoke-Expression -ErrorAction Continue -Command '{}'\n",
-        command.replace("'", "''")
-    )
+    format!("Invoke-Expression -ErrorAction Continue -Command '{}'\n", command.replace('\'', "''"))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     #[rstest]
     #[case::simple("gp", "git push", "function gp {\n    git push @args\n}")]
@@ -151,6 +159,6 @@ mod tests {
         assert_eq!(
             secure_command("echo 'foo'"),
             "Invoke-Expression -ErrorAction Continue -Command 'echo ''foo'''\n"
-        )
+        );
     }
 }

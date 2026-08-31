@@ -1,45 +1,39 @@
-use axum::{Json, extract::Query, extract::State, http::StatusCode};
+use atuin_domain::record::{
+    EncryptedData, HostId, Record, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
+};
+use axum::Json;
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
 use metrics::counter;
 use serde::Deserialize;
 use tracing::{error, instrument};
 
-use crate::{
-    handlers::{ErrorResponse, ErrorResponseStatus, RespExt},
-    router::{AppState, UserAuth},
-};
-use atuin_server_database::Database;
-
-use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
+use crate::handlers::{ErrorResponse, ErrorResponseStatus, RespExt};
+use crate::router::{AppState, UserAuth};
 
 #[instrument(skip_all, err(level = "warn"), fields(user.id = user.id, record.count = records.len()))]
-pub async fn post<DB: Database>(
+pub async fn post(
     UserAuth(user): UserAuth,
-    state: State<AppState<DB>>,
+    state: State<AppState>,
     Json(records): Json<Vec<Record<EncryptedData>>>,
 ) -> Result<(), ErrorResponseStatus<'static>> {
     let State(AppState {
         database, settings, ..
     }) = state;
 
-    tracing::debug!(
-        count = records.len(),
-        user = user.username,
-        "request to add records"
-    );
+    tracing::debug!(count = records.len(), user = user.username, "request to add records");
 
     counter!("atuin_record_uploaded").increment(records.len() as u64);
 
     let keep = records
         .iter()
-        .all(|r| r.data.data.len() <= settings.max_record_size || settings.max_record_size == 0);
+        .all(|r| r.data.raw.len() <= settings.max_record_size || settings.max_record_size == 0);
 
     if !keep {
         counter!("atuin_record_too_large").increment(1);
 
-        return Err(
-            ErrorResponse::reply("could not add records; record too large")
-                .with_status(StatusCode::BAD_REQUEST),
-        );
+        return Err(ErrorResponse::reply("could not add records; record too large")
+            .with_status(StatusCode::BAD_REQUEST));
     }
 
     if let Err(e) = database.add_records(&user, &records).await {
@@ -53,9 +47,9 @@ pub async fn post<DB: Database>(
 }
 
 #[instrument(skip_all, err(level = "warn"), fields(user.id = user.id))]
-pub async fn index<DB: Database>(
+pub async fn index(
     UserAuth(user): UserAuth,
-    state: State<AppState<DB>>,
+    state: State<AppState>,
 ) -> Result<Json<RecordStatus>, ErrorResponseStatus<'static>> {
     let State(AppState { database, .. }) = state;
 
@@ -77,24 +71,22 @@ pub async fn index<DB: Database>(
 #[derive(Deserialize)]
 pub struct NextParams {
     host: HostId,
-    tag: String,
+    tag: RecordTag,
     start: Option<RecordIdx>,
     count: u64,
 }
 
 #[instrument(skip_all, err(level = "warn"), fields(user.id = user.id, host.id = %params.host, tag = params.tag.as_str(), count = params.count))]
-pub async fn next<DB: Database>(
+pub async fn next(
     params: Query<NextParams>,
     UserAuth(user): UserAuth,
-    state: State<AppState<DB>>,
+    state: State<AppState>,
 ) -> Result<Json<Vec<Record<EncryptedData>>>, ErrorResponseStatus<'static>> {
     let State(AppState { database, .. }) = state;
     let params = params.0;
+    let series = RecordSeriesKey::new(params.host, params.tag);
 
-    let records = match database
-        .next_records(&user, params.host, params.tag, params.start, params.count)
-        .await
-    {
+    let records = match database.next_records(&user, &series, params.start, params.count).await {
         Ok(records) => records,
         Err(e) => {
             error!("failed to get record index: {}", e);

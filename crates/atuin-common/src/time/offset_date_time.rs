@@ -2,7 +2,9 @@
 
 use core::fmt;
 
-use time::{OffsetDateTime, format_description::FormatItem, macros::format_description};
+use time::OffsetDateTime;
+use time::format_description::FormatItem;
+use time::macros::format_description;
 
 /// Lowest `time::OffsetDateTime` can represent (unix) `-9999-01-01 00:00:00 UTC`.
 const MIN_UNIX_NANOS: i128 = -377_705_116_800 * 1_000_000_000;
@@ -113,14 +115,7 @@ impl fmt::Display for OffsetDateTimeDisplay {
             write!(f, "{year:04}")?;
         }
 
-        write!(
-            f,
-            "-{:02}-{:02} {:02}:{:02}",
-            t.month() as u8,
-            t.day(),
-            t.hour(),
-            t.minute()
-        )?;
+        write!(f, "-{:02}-{:02} {:02}:{:02}", t.month() as u8, t.day(), t.hour(), t.minute())?;
 
         match self.style {
             OffsetDateTimeStyle::YmdHms => write!(f, ":{:02}", t.second()),
@@ -143,7 +138,7 @@ impl OffsetDateTimeExt for OffsetDateTime {
             return Err(TimestampOutOfRange { nanos });
         }
 
-        OffsetDateTime::from_unix_timestamp_nanos(nanos).map_err(|_| TimestampOutOfRange { nanos })
+        Self::from_unix_timestamp_nanos(nanos).map_err(|_| TimestampOutOfRange { nanos })
     }
 
     fn from_unix_nanos_i64(nanos: i64) -> OffsetDateTime {
@@ -199,10 +194,11 @@ pub static YMD_HM: &[FormatItem<'_>] =
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use proptest::prelude::*;
     use rstest::rstest;
     use time::macros::datetime;
+
+    use super::*;
 
     fn expected_nanos(secs: i128, nsecs: i128) -> Option<i128> {
         secs.checked_mul(1_000_000_000)?.checked_add(nsecs)
@@ -237,10 +233,7 @@ mod tests {
     #[case::i128_overflow_low(i128::MIN, 0, false)]
     #[case::i128_overflow_nsecs(0, i128::MAX, false)]
     fn from_timespec_range(#[case] secs: i128, #[case] nsecs: i128, #[case] representable: bool) {
-        assert_eq!(
-            OffsetDateTime::from_timespec(secs, nsecs).is_ok(),
-            representable
-        );
+        assert_eq!(OffsetDateTime::from_timespec(secs, nsecs).is_ok(), representable);
     }
 
     #[rstest]
@@ -280,10 +273,7 @@ mod tests {
     ) {
         let now = OffsetDateTime::from_unix_nanos_i64(now_secs * 1_000_000_000);
         let earlier = OffsetDateTime::from_unix_nanos_i64(earlier_secs * 1_000_000_000);
-        assert_eq!(
-            now.saturating_duration_since(earlier).as_secs(),
-            expected_secs
-        );
+        assert_eq!(now.saturating_duration_since(earlier).as_secs(), expected_secs);
     }
 
     #[rstest]
@@ -330,10 +320,7 @@ mod tests {
     #[case::negative_year(datetime!(-0044-03-15 00:00:00 UTC))]
     #[case::max(datetime!(9999-12-31 23:59:59 UTC))]
     fn display_matches_the_format_descriptors(#[case] t: OffsetDateTime) {
-        assert_eq!(
-            t.display().ymd_hms().to_string(),
-            t.format(YMD_HMS).unwrap()
-        );
+        assert_eq!(t.display().ymd_hms().to_string(), t.format(YMD_HMS).unwrap());
         assert_eq!(t.display().ymd_hm().to_string(), t.format(YMD_HM).unwrap());
     }
 

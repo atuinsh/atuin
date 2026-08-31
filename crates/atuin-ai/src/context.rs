@@ -9,7 +9,7 @@ use atuin_common::time::UtcOffsetExt;
 /// Session-scoped context for the AI chat session.
 /// Holds the API configuration and client settings needed by the event loop and stream task.
 #[derive(Clone, Debug)]
-pub(crate) struct AppContext {
+pub struct AppContext {
     pub endpoint: reqwest::Url,
     /// Bearer token for `endpoint`. Empty means unauthenticated — no
     /// Authorization header is sent (an OSS server may not require auth).
@@ -33,7 +33,7 @@ pub(crate) struct AppContext {
     pub yolo: bool,
 }
 
-pub(crate) fn history_output_capability_available(daemon_enabled: bool) -> bool {
+pub fn history_output_capability_available(daemon_enabled: bool) -> bool {
     cfg!(feature = "daemon") && daemon_enabled
 }
 
@@ -58,12 +58,7 @@ impl AppContext {
         }
         caps.push("client_v1_load_skill".to_string());
         if let Ok(extra) = std::env::var("ATUIN_AI__ADDITIONAL_CAPS") {
-            caps.extend(
-                extra
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty()),
-            );
+            caps.extend(extra.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
         }
         caps
     }
@@ -71,7 +66,7 @@ impl AppContext {
 
 /// Machine identity — computed once per session.
 #[derive(Clone, Debug)]
-pub(crate) struct ClientContext {
+pub struct ClientContext {
     pub os: String,
     pub shell: Option<String>,
     pub distro: Option<String>,
@@ -80,7 +75,7 @@ pub(crate) struct ClientContext {
 impl ClientContext {
     pub(crate) fn detect() -> Self {
         let os = detect_os();
-        let shell = crate::commands::detect_shell();
+        let shell = Some(crate::commands::detect_shell());
         let distro = if os == "linux" {
             Some(detect_linux_distribution())
         } else {

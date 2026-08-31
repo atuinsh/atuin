@@ -1,19 +1,19 @@
-use clap::Args;
-use eyre::Result;
+use std::num::NonZeroU64;
 
-use atuin_client::{
-    database::Database,
-    encryption::load_key,
-    record::sync::Operation,
-    record::{sqlite_store::SqliteStore, sync},
-    settings::Settings,
-};
+use atuin_client::database::Sqlite;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::record::sync::{ClientSource, Operation, SyncEngine};
+use atuin_client::settings::Settings;
+use atuin_common::encryption::paseto_v4;
+use atuin_domain::record::RecordTag;
+use clap::Args;
+use eyre::{Context as _, Result};
 
 #[derive(Args, Debug)]
 pub struct Pull {
     /// The tag to push (eg, 'history'). Defaults to all tags
     #[arg(long, short)]
-    pub tag: Option<String>,
+    pub tag: Option<RecordTag>,
 
     /// Force push records
     ///
@@ -25,16 +25,11 @@ pub struct Pull {
     ///
     /// How many records to download at once. Defaults to 100
     #[arg(long, default_value = "100")]
-    pub page: u64,
+    pub page: NonZeroU64,
 }
 
 impl Pull {
-    pub async fn run(
-        &self,
-        settings: &Settings,
-        store: SqliteStore,
-        db: &dyn Database,
-    ) -> Result<()> {
+    pub async fn run(&self, settings: &Settings, store: SqliteStore, db: &Sqlite) -> Result<()> {
         if self.force {
             println!("Forcing local overwrite!");
             println!("Clearing local store");
@@ -48,18 +43,30 @@ impl Pull {
         // 3. Filter operations by
         //  a) are they a download op?
         //  b) are they for the host/tag we are pushing here?
-        let client = sync::build_client(settings).await?;
-        let (diff, remote_index) = sync::diff(&client, &store).await?;
+        let key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+            .context("could not load encryption key")?;
+        let engine = SyncEngine::builder()
+            .store(store.clone())
+            .client_source(ClientSource::FromSettings {
+                settings,
+                caps: None,
+            })
+            .build()
+            .connect()
+            .await?
+            .with_page_size(self.page);
+
+        let keyed = engine.keyed(&key);
+        let (diff, remote_index) = engine.diff().await?;
 
         // Skip on --force: local was already wiped above, mismatch is the user's call.
-        if !self.force {
-            let key: [u8; 32] = load_key(settings)?.into();
-            sync::check_encryption_key(&client, &remote_index, &key)
-                .await
-                .map_err(crate::print_error::format_sync_error)?;
+        if !self.force
+            && let Some(err) = keyed.key_valid_against(&remote_index).await
+        {
+            return Err(crate::print_error::format_sync_error(err));
         }
 
-        let operations = sync::operations(diff, &store).await?;
+        let operations = SyncEngine::operations(diff)?;
 
         let operations = operations
             .into_iter()
@@ -68,13 +75,13 @@ impl Pull {
                 Operation::Noop { .. } | Operation::Upload { .. } => false,
 
                 // pull, so yes plz to downloads!
-                Operation::Download { tag, .. } => {
+                Operation::Download { series, .. } => {
                     if self.force {
                         return true;
                     }
 
                     if let Some(t) = self.tag.clone()
-                        && t != *tag
+                        && t != series.tag
                     {
                         return false;
                     }
@@ -84,7 +91,7 @@ impl Pull {
             })
             .collect();
 
-        let (_, downloaded) = sync::sync_remote(&client, operations, &store, self.page).await?;
+        let (_, downloaded) = keyed.sync_remote(operations).await?;
 
         println!("Downloaded {} records", downloaded.len());
 

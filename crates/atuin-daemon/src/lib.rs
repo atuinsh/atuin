@@ -1,6 +1,7 @@
 use atuin_client::database::Sqlite as HistoryDatabase;
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::settings::{Settings, watcher::global_settings_watcher};
+use atuin_client::settings::Settings;
+use atuin_client::settings::watcher::global_settings_watcher;
 use eyre::Result;
 
 pub mod client;
@@ -14,14 +15,12 @@ pub mod semantic;
 pub mod server;
 
 // Re-export core daemon types for convenience
-pub use daemon::{AnyComponent, Daemon, DaemonBuilder, DaemonHandle};
-pub use events::DaemonEvent;
-
-// Re-export components
-pub use components::{HistoryComponent, SearchComponent, SemanticComponent, SyncComponent};
-
 // Re-export client helpers
 pub use client::{ControlClient, SemanticClient, emit_event, emit_event_with_settings};
+// Re-export components
+pub use components::{HistoryComponent, SearchComponent, SemanticComponent, SyncComponent};
+pub use daemon::{AnyComponent, Daemon, DaemonBuilder, DaemonHandle};
+pub use events::DaemonEvent;
 
 /// Boot the daemon using the new component-based architecture.
 ///
@@ -52,8 +51,7 @@ pub async fn boot(
         .component(search_component)
         .component(semantic_component)
         .component(sync_component)
-        .build()
-        .await?;
+        .build()?;
 
     // Get a handle for the control service and gRPC server shutdown
     let handle = daemon.handle();
@@ -130,7 +128,5 @@ async fn shutdown_signal() {
 /// Wait for a shutdown signal (Ctrl+C).
 #[cfg(not(unix))]
 async fn shutdown_signal() {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("failed to listen for ctrl+c");
+    tokio::signal::ctrl_c().await.expect("failed to listen for ctrl+c");
 }

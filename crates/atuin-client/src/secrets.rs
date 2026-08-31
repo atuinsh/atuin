@@ -1,7 +1,8 @@
 // This file will probably trigger a lot of scanners. Sorry.
 
-use regex::RegexSet;
 use std::sync::LazyLock;
+
+use regex::RegexSet;
 
 pub enum TestValue<'a> {
     Single(&'a str),
@@ -10,11 +11,7 @@ pub enum TestValue<'a> {
 
 /// A list of `(name, regex, test)`, where `test` should match against `regex`.
 pub static SECRET_PATTERNS: &[(&str, &str, TestValue)] = &[
-    (
-        "AWS Access Key ID",
-        "A[KS]IA[0-9A-Z]{16}",
-        TestValue::Single("AKIAIOSFODNN7EXAMPLE"),
-    ),
+    ("AWS Access Key ID", "A[KS]IA[0-9A-Z]{16}", TestValue::Single("AKIAIOSFODNN7EXAMPLE")),
     (
         "AWS Secret Access Key env var",
         "AWS_SECRET_ACCESS_KEY",
@@ -85,11 +82,7 @@ pub static SECRET_PATTERNS: &[(&str, &str, TestValue)] = &[
         "v1\\.[0-9A-Fa-f]{40}",
         TestValue::Single("v1.1234567890abcdef1234567890abcdef12345678"), // not a real token
     ),
-    (
-        "GitLab PAT",
-        "glpat-[a-zA-Z0-9_]{20}",
-        TestValue::Single("glpat-RkE_BG5p_bbjML21WSfy"),
-    ),
+    ("GitLab PAT", "glpat-[a-zA-Z0-9_]{20}", TestValue::Single("glpat-RkE_BG5p_bbjML21WSfy")),
     (
         "Slack OAuth v2 bot",
         "xoxb-[0-9]{11}-[0-9]{11}-[0-9a-zA-Z]{24}",
@@ -153,7 +146,11 @@ mod tests {
             let re =
                 Regex::new(regex).unwrap_or_else(|_| panic!("Failed to compile regex for {name}"));
 
-            let label = if embed { "embedded test" } else { "test" };
+            let label = if embed {
+                "embedded test"
+            } else {
+                "test"
+            };
             let wrap = |s: &str| {
                 if embed {
                     format!("some random text {s} some more random text")
@@ -167,7 +164,7 @@ mod tests {
                     assert!(re.is_match(&wrap(test)), "{name} {label} failed!");
                 }
                 TestValue::Multiple(tests) => {
-                    for test_str in tests.iter() {
+                    for test_str in *tests {
                         assert!(
                             re.is_match(&wrap(test_str)),
                             "{name} {label} with value \"{test_str}\" failed!"

@@ -59,10 +59,7 @@ impl ServerHandler for AtuinMcp {
                     .await
             }
             name => {
-                return Err(ErrorData::invalid_params(
-                    format!("unknown tool: {name}"),
-                    None,
-                ));
+                return Err(ErrorData::invalid_params(format!("unknown tool: {name}"), None));
             }
         };
 
@@ -83,13 +80,7 @@ impl ServerHandler for AtuinMcp {
 /// stdout carries only JSON-RPC messages; anything else (logs, errors) must
 /// go to stderr or it will corrupt the protocol stream.
 pub async fn run(db: &Sqlite) -> Result<()> {
-    let server = AtuinMcp {
-        db: Sqlite {
-            pool: db.pool.clone(),
-        },
-    }
-    .serve(rmcp::transport::stdio())
-    .await?;
+    let server = AtuinMcp { db: db.clone() }.serve(rmcp::transport::stdio()).await?;
     server.waiting().await?;
     Ok(())
 }
@@ -139,8 +130,8 @@ fn tool_definitions() -> Vec<Tool> {
                 "description": format!(
                     "Filter by who ran the command: '{AUTHOR_FILTER_ALL_USER}' for \
                      human-run commands, '{AUTHOR_FILTER_ALL_AGENT}' for commands run \
-                     by AI agents, or a literal agent name (one of: {}). Multiple \
-                     entries are OR-ed. Omit for everything.",
+                     by AI agents, or any literal author name (well-known agents: {}). \
+                     Multiple entries are OR-ed. Omit for everything.",
                     KNOWN_AGENTS.join(", ")
                 ),
             },
@@ -180,21 +171,19 @@ fn tool_definitions() -> Vec<Tool> {
     vec![
         Tool::new(
             "atuin_history",
-            "Search the user's shell command history, recorded by Atuin. \
-             Fuzzy-matches the query against past commands and returns the most relevant \
-             entries, each with a history ID, timestamp, working directory, exit code, \
-             and duration. Commands run by AI agents are annotated with the agent's name \
-             and stated intent. Pass a history ID to atuin_output to see what a command \
-             printed.",
+            "Search the user's shell command history, recorded by Atuin. Fuzzy-matches the query \
+             against past commands and returns the most relevant entries, each with a history ID, \
+             timestamp, working directory, exit code, and duration. Commands run by AI agents are \
+             annotated with the agent's name and stated intent. Pass a history ID to atuin_output \
+             to see what a command printed.",
             history_schema,
         )
         .annotate(ToolAnnotations::new().read_only(true)),
         Tool::new(
             "atuin_output",
-            "Fetch the captured terminal output of a previously executed \
-             command, identified by a history ID from atuin_history results. Output \
-             capture requires the Atuin daemon; output is only available for recent \
-             commands captured while the daemon was running.",
+            "Fetch the captured terminal output of a previously executed command, identified by a \
+             history ID from atuin_history results. Output capture requires the Atuin daemon; \
+             output is only available for recent commands captured while the daemon was running.",
             output_schema,
         )
         .annotate(ToolAnnotations::new().read_only(true)),
@@ -212,10 +201,7 @@ mod tests {
         assert_eq!(names, ["atuin_history", "atuin_output"]);
 
         for tool in &tools {
-            assert_eq!(
-                tool.annotations.as_ref().unwrap().read_only_hint,
-                Some(true)
-            );
+            assert_eq!(tool.annotations.as_ref().unwrap().read_only_hint, Some(true));
             assert!(tool.input_schema.contains_key("required"));
         }
     }

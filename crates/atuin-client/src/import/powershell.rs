@@ -1,7 +1,8 @@
+use std::path::PathBuf;
+
 use async_trait::async_trait;
 use directories::BaseDirs;
 use eyre::{Result, eyre};
-use std::path::PathBuf;
 use time::{Duration, OffsetDateTime};
 
 use super::{Importer, Loader, count_lines, unix_byte_lines};
@@ -27,17 +28,10 @@ fn get_history_path() -> Result<PathBuf> {
     // > or `$Env:HOME/.local/share/powershell/PSReadLine`.
 
     let dir = if cfg!(windows) {
-        base.data_dir()
-            .join("Microsoft")
-            .join("Windows")
-            .join("PowerShell")
-            .join("PSReadLine")
+        base.data_dir().join("Microsoft").join("Windows").join("PowerShell").join("PSReadLine")
     } else {
         std::env::var("XDG_DATA_HOME")
-            .map_or_else(
-                |_| base.home_dir().join(".local").join("share"),
-                PathBuf::from,
-            )
+            .map_or_else(|_| base.home_dir().join(".local").join("share"), PathBuf::from)
             .join("powershell")
             .join("PSReadLine")
     };
@@ -113,10 +107,8 @@ impl Importer for PowerShell {
             let offset = Duration::milliseconds(counter);
             counter += 1;
 
-            let entry = History::import()
-                .shell("powershell")
-                .timestamp(start + offset)
-                .command(cmd);
+            let entry =
+                History::import().shell("powershell").timestamp(start + offset).command(cmd);
             h.push(entry.build().into()).await?;
         }
 
@@ -135,10 +127,11 @@ fn read_line(s: &[u8]) -> Result<&str> {
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use crate::import::tests::TestLoader;
     use itertools::assert_equal;
     use rstest::rstest;
+
+    use super::*;
+    use crate::import::tests::TestLoader;
 
     const INPUT: &str = r#"cargo install atuin
 cargo update
@@ -163,7 +156,7 @@ echo baz
 
     #[rstest]
     #[case::lf(INPUT.to_string())]
-    #[case::crlf(INPUT.replace("\n", "\r\n"))]
+    #[case::crlf(INPUT.replace('\n', "\r\n"))]
     #[tokio::test]
     async fn imports_commands(#[case] input: String) {
         let loader = import(input.as_str()).await;

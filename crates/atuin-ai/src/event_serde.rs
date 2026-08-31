@@ -11,16 +11,14 @@ use crate::tui::ConversationEvent;
 
 /// Serialize a ConversationEvent into an (event_type, event_data_json) pair
 /// suitable for database storage.
-pub(crate) fn serialize_event(event: &ConversationEvent) -> (String, String) {
+pub fn serialize_event(event: &ConversationEvent) -> (String, String) {
     match event {
-        ConversationEvent::UserMessage { content } => (
-            "user_message".to_string(),
-            serde_json::json!({ "content": content }).to_string(),
-        ),
-        ConversationEvent::Text { content } => (
-            "text".to_string(),
-            serde_json::json!({ "content": content }).to_string(),
-        ),
+        ConversationEvent::UserMessage { content } => {
+            ("user_message".to_string(), serde_json::json!({ "content": content }).to_string())
+        }
+        ConversationEvent::Text { content } => {
+            ("text".to_string(), serde_json::json!({ "content": content }).to_string())
+        }
         ConversationEvent::ToolCall { id, name, input } => (
             "tool_call".to_string(),
             serde_json::json!({
@@ -60,10 +58,9 @@ pub(crate) fn serialize_event(event: &ConversationEvent) -> (String, String) {
             })
             .to_string(),
         ),
-        ConversationEvent::SystemContext { content } => (
-            "system_context".to_string(),
-            serde_json::json!({ "content": content }).to_string(),
-        ),
+        ConversationEvent::SystemContext { content } => {
+            ("system_context".to_string(), serde_json::json!({ "content": content }).to_string())
+        }
         ConversationEvent::SkillInvocation {
             name,
             arguments,
@@ -82,7 +79,7 @@ pub(crate) fn serialize_event(event: &ConversationEvent) -> (String, String) {
 
 /// Deserialize an (event_type, event_data_json) pair from storage back into a
 /// ConversationEvent.
-pub(crate) fn deserialize_event(event_type: &str, event_data: &str) -> Result<ConversationEvent> {
+pub fn deserialize_event(event_type: &str, event_data: &str) -> Result<ConversationEvent> {
     let data: Value = serde_json::from_str(event_data)
         .map_err(|e| eyre!("failed to parse event_data JSON: {e}"))?;
 
@@ -109,16 +106,19 @@ pub(crate) fn deserialize_event(event_type: &str, event_data: &str) -> Result<Co
                 .and_then(Value::as_bool)
                 .ok_or_else(|| eyre!("tool_result missing 'is_error' field"))?,
             remote: data.get("remote").and_then(Value::as_bool).unwrap_or(false),
-            content_length: data
-                .get("content_length")
-                .and_then(Value::as_u64)
-                .map(|v| v as usize),
+            content_length: data.get("content_length").and_then(Value::as_u64).map(|v| v as usize),
         }),
         "out_of_band_output" => Ok(ConversationEvent::OutOfBandOutput {
             name: json_string(&data, "name")?,
             command: data
                 .get("command")
-                .and_then(|v| if v.is_null() { None } else { v.as_str() })
+                .and_then(|v| {
+                    if v.is_null() {
+                        None
+                    } else {
+                        v.as_str()
+                    }
+                })
                 .map(String::from),
             content: json_string(&data, "content")?,
         }),
@@ -129,7 +129,13 @@ pub(crate) fn deserialize_event(event_type: &str, event_data: &str) -> Result<Co
             name: json_string(&data, "name")?,
             arguments: data
                 .get("arguments")
-                .and_then(|v| if v.is_null() { None } else { v.as_str() })
+                .and_then(|v| {
+                    if v.is_null() {
+                        None
+                    } else {
+                        v.as_str()
+                    }
+                })
                 .map(String::from),
             content: json_string(&data, "content")?,
         }),
@@ -146,8 +152,9 @@ fn json_string(data: &Value, field: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     fn round_trip(event: &ConversationEvent) -> ConversationEvent {
         let (event_type, event_data) = serialize_event(event);

@@ -6,38 +6,47 @@
 //! The FSM owns the conversation event log and tool lifecycle state.
 //! It never performs IO directly.
 
-pub(crate) mod effects;
-pub(crate) mod events;
-pub(crate) mod tools;
+pub mod effects;
+pub mod events;
+pub mod tools;
 
 #[cfg(test)]
 mod tests;
 
 use std::collections::HashMap;
 
+use effects::{Effect, ExitAction, PermissionTarget, TimeoutKind};
+use events::{Event, PermissionChoice, PermissionResponse};
 use serde_json::Value;
+use tools::{ToolManager, ToolState};
 
 use crate::context_window::ContextWindowBuilder;
 use crate::tui::state::ConversationEvent;
-
-use effects::{Effect, ExitAction, PermissionTarget, TimeoutKind};
-use events::{Event, PermissionChoice, PermissionResponse};
-use tools::{ToolManager, ToolState};
 
 // ============================================================================
 // State
 // ============================================================================
 
+/// Result contents for tool calls the FSM resolves without executing them.
+/// These are persisted in the event log, and the transcript view matches on
+/// them to label the failure ("denied", "cancelled"), so they live as
+/// constants rather than inline strings.
+pub const RESULT_USER_CANCELLED: &str = "Error: user cancelled this operation";
+pub const RESULT_DENIED_BY_RULES: &str = "Permission denied on the user's system";
+pub const RESULT_DENIED_BY_USER: &str = "Permission denied by the user";
+
 /// The discrete states of the agent FSM.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum AgentState {
+pub enum AgentState {
     /// Waiting for user input.
     Idle {
         confirmation: Option<PendingConfirmation>,
     },
 
     /// A conversation turn is in progress.
-    Turn { stream: StreamPhase },
+    Turn {
+        stream: StreamPhase,
+    },
 
     /// Unrecoverable error. User can retry or exit.
     Error(String),
@@ -45,18 +54,20 @@ pub(crate) enum AgentState {
 
 /// Stream connection lifecycle within a Turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum StreamPhase {
+pub enum StreamPhase {
     /// Request sent, awaiting first stream frame.
     Connecting,
     /// Actively receiving streamed response.
-    Streaming { status: Option<StreamingStatus> },
+    Streaming {
+        status: Option<StreamingStatus>,
+    },
     /// Stream connection has ended (Done received).
     Done,
 }
 
 /// Streaming status indicators from server.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum StreamingStatus {
+pub enum StreamingStatus {
     Processing,
     Searching,
     Thinking,
@@ -77,17 +88,17 @@ impl StreamingStatus {
 impl StreamingStatus {
     pub(crate) fn to_str(&self) -> &str {
         match &self {
-            StreamingStatus::Processing => "processing",
-            StreamingStatus::Searching => "searching",
-            StreamingStatus::Thinking => "thinking",
-            StreamingStatus::WaitingForTools => "waiting for tools",
+            Self::Processing => "processing",
+            Self::Searching => "searching",
+            Self::Thinking => "thinking",
+            Self::WaitingForTools => "waiting for tools",
         }
     }
 }
 
 /// Pending dangerous command confirmation state.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PendingConfirmation {
+pub struct PendingConfirmation {
     pub command: String,
     pub timeout_id: u64,
 }
@@ -97,7 +108,7 @@ pub(crate) struct PendingConfirmation {
 /// While `Loading` the input box stays visible (there'd be no focusable
 /// component otherwise); `Ready` swaps it for the selection list.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ModelPicker {
+pub enum ModelPicker {
     Loading,
     Ready(crate::models::ModelList),
 }
@@ -108,7 +119,7 @@ pub(crate) enum ModelPicker {
 
 /// Shared context owned by the FSM.
 #[derive(Debug, Clone)]
-pub(crate) struct AgentContext {
+pub struct AgentContext {
     /// The full conversation event log (source of truth for API + persistence).
     pub events: Vec<ConversationEvent>,
     /// Server-assigned session ID.
@@ -152,6 +163,7 @@ pub(crate) struct AgentContext {
 }
 
 impl AgentContext {
+    #[must_use]
     fn next_timeout_id(&mut self) -> u64 {
         let id = self.next_timeout_id;
         self.next_timeout_id += 1;
@@ -168,7 +180,7 @@ impl AgentContext {
 /// Pure state machine — `handle()` takes an event, mutates internal state,
 /// and returns effects as data for the driver to execute.
 #[derive(Debug, Clone)]
-pub(crate) struct AgentFsm {
+pub struct AgentFsm {
     pub state: AgentState,
     pub ctx: AgentContext,
 }
@@ -233,14 +245,13 @@ impl AgentFsm {
     }
 
     /// Handle an event, returning effects to execute.
+    #[must_use]
     pub fn handle(&mut self, event: Event) -> Vec<Effect> {
         // From all states: if the session ID arrives and isn't set, set it, then continue as normal.
         // This event fires from the stream response headers, rather than having to wait until the end
         // of a turn when StreamDone arrives, which can be lost for cancelled turns.
         if let Event::SessionIdReceived(session_id) = &event {
-            self.ctx
-                .session_id
-                .get_or_insert_with(|| session_id.clone());
+            self.ctx.session_id.get_or_insert_with(|| session_id.clone());
         }
 
         match (&self.state, event) {
@@ -321,10 +332,7 @@ impl AgentFsm {
             }
 
             (AgentState::Idle { .. }, Event::ConfirmationTimeout { timeout_id }) => {
-                if self
-                    .state_confirmation()
-                    .is_some_and(|c| c.timeout_id == timeout_id)
-                {
+                if self.state_confirmation().is_some_and(|c| c.timeout_id == timeout_id) {
                     self.state = AgentState::Idle { confirmation: None };
                 }
                 vec![]
@@ -476,7 +484,7 @@ impl AgentFsm {
                     input,
                 });
                 self.state = AgentState::Idle { confirmation: None };
-                vec![Effect::Persist]
+                vec![Effect::TurnEnded, Effect::Persist]
             }
 
             (
@@ -549,7 +557,7 @@ impl AgentFsm {
                     outcome,
                     preview,
                 },
-            ) => self.handle_tool_done(tool_id, outcome, preview),
+            ) => self.handle_tool_done(tool_id, &outcome, preview),
 
             (
                 AgentState::Turn { .. },
@@ -591,9 +599,7 @@ impl AgentFsm {
                     // Clear any pending execution timeout for this tool
                     self.ctx.tool_timeout_ids.retain(|_, tid| tid != id);
                 }
-                ids.into_iter()
-                    .map(|tool_id| Effect::AbortTool { tool_id })
-                    .collect()
+                ids.into_iter().map(|tool_id| Effect::AbortTool { tool_id }).collect()
             }
 
             (
@@ -626,7 +632,7 @@ impl AgentFsm {
                     }
                     self.ctx.events.push(ConversationEvent::ToolResult {
                         tool_use_id: id.clone(),
-                        content: "Error: user cancelled this operation".to_string(),
+                        content: RESULT_USER_CANCELLED.to_string(),
                         is_error: true,
                         remote: false,
                         content_length: None,
@@ -639,7 +645,9 @@ impl AgentFsm {
                 // Add context so the LLM knows what happened
                 if !pending.is_empty() {
                     self.ctx.events.push(ConversationEvent::SystemContext {
-                        content: "The user cancelled the previous generation. Tool calls that were in progress have been aborted.".to_string(),
+                        content: "The user cancelled the previous generation. Tool calls that \
+                                  were in progress have been aborted."
+                            .to_string(),
                     });
                 }
 
@@ -758,9 +766,7 @@ impl AgentFsm {
     fn start_turn(&mut self, msg: String) -> Vec<Effect> {
         // A message submitted while the picker was loading dismisses it.
         self.ctx.model_picker = None;
-        self.ctx
-            .events
-            .push(ConversationEvent::UserMessage { content: msg });
+        self.ctx.events.push(ConversationEvent::UserMessage { content: msg });
         // Don't clear tools — completed tools persist for rendering history.
         // Tools are only cleared on /new (session reset).
         self.ctx.current_response.clear();
@@ -787,9 +793,7 @@ impl AgentFsm {
         let text = std::mem::take(&mut self.ctx.current_response);
         let trimmed = text.trim_start().to_string();
         if !trimmed.is_empty() {
-            self.ctx
-                .events
-                .push(ConversationEvent::Text { content: trimmed });
+            self.ctx.events.push(ConversationEvent::Text { content: trimmed });
         }
     }
 
@@ -809,11 +813,26 @@ impl AgentFsm {
         // Parse the tool call
         let tool = match crate::tools::ClientToolCall::try_from((name.as_str(), &input)) {
             Ok(tool) => tool,
-            Err(_) => {
-                // Unknown tool — push as event but don't track
-                self.ctx
-                    .events
-                    .push(ConversationEvent::ToolCall { id, name, input });
+            Err(err) => {
+                // Unknown tool or malformed input — answer with an error
+                // result rather than leaving the tool_use dangling. Some
+                // providers reject a history where a tool call has no
+                // result, and the error text lets the model correct itself.
+                self.ctx.events.push(ConversationEvent::ToolCall {
+                    id: id.clone(),
+                    name,
+                    input,
+                });
+                self.ctx.events.push(ConversationEvent::ToolResult {
+                    tool_use_id: id.clone(),
+                    content: format!("Error: {err}"),
+                    is_error: true,
+                    remote: false,
+                    content_length: None,
+                });
+                // Counts toward the turn like any resolved tool, so the
+                // continuation fires and the model can retry immediately.
+                self.ctx.current_turn_tool_ids.push(id);
                 return vec![];
             }
         };
@@ -828,14 +847,16 @@ impl AgentFsm {
                 input,
             });
             self.ctx.events.push(ConversationEvent::ToolResult {
-                tool_use_id: id,
+                tool_use_id: id.clone(),
                 content: format!(
-                    "Tool not enabled: capability '{required_cap}' was not advertised by this client"
+                    "Tool not enabled: capability '{required_cap}' was not advertised by this \
+                     client"
                 ),
                 is_error: true,
                 remote: false,
                 content_length: None,
             });
+            self.ctx.current_turn_tool_ids.push(id);
             return vec![];
         }
 
@@ -899,7 +920,7 @@ impl AgentFsm {
             PermissionResponse::Allowed | PermissionResponse::SessionGranted => {
                 tracked.state = ToolState::Executing;
                 let tool = tracked.tool.clone();
-                self.emit_execute_tool(tool_id, tool)
+                self.emit_execute_tool(tool_id, &tool)
             }
             PermissionResponse::Ask => {
                 tracked.state = ToolState::AwaitingPermission;
@@ -909,7 +930,7 @@ impl AgentFsm {
                 tracked.state = ToolState::Denied;
                 self.ctx.events.push(ConversationEvent::ToolResult {
                     tool_use_id: tool_id,
-                    content: "Permission denied on the user's system".to_string(),
+                    content: RESULT_DENIED_BY_RULES.to_string(),
                     is_error: true,
                     remote: false,
                     content_length: None,
@@ -937,12 +958,12 @@ impl AgentFsm {
             PermissionChoice::Allow => {
                 tracked.state = ToolState::Executing;
                 let tool = tracked.tool.clone();
-                self.emit_execute_tool(tool_id, tool)
+                self.emit_execute_tool(tool_id, &tool)
             }
             PermissionChoice::AllowForSession => {
                 tracked.state = ToolState::Executing;
                 let tool = tracked.tool.clone();
-                let mut effects = self.emit_execute_tool(tool_id, tool.clone());
+                let mut effects = self.emit_execute_tool(tool_id, &tool);
                 if let Some(path) = tool.resolved_file_path() {
                     effects.push(Effect::CacheSessionGrant { path });
                 }
@@ -955,7 +976,7 @@ impl AgentFsm {
                     tool: tool.rule_name().to_string(),
                     scope: None, // project file provides the scoping
                 };
-                let mut effects = self.emit_execute_tool(tool_id, tool);
+                let mut effects = self.emit_execute_tool(tool_id, &tool);
                 effects.push(Effect::WritePermissionRule {
                     target: PermissionTarget::Project,
                     rule,
@@ -966,14 +987,12 @@ impl AgentFsm {
             PermissionChoice::AlwaysAllow => {
                 tracked.state = ToolState::Executing;
                 let tool = tracked.tool.clone();
-                let scope = tool
-                    .resolved_file_path()
-                    .map(|p| p.to_string_lossy().to_string());
+                let scope = tool.resolved_file_path().map(|p| p.to_string_lossy().to_string());
                 let rule = crate::permissions::rule::Rule {
                     tool: tool.rule_name().to_string(),
                     scope,
                 };
-                let mut effects = self.emit_execute_tool(tool_id, tool);
+                let mut effects = self.emit_execute_tool(tool_id, &tool);
                 effects.push(Effect::WritePermissionRule {
                     target: PermissionTarget::Global,
                     rule,
@@ -985,7 +1004,7 @@ impl AgentFsm {
                 tracked.state = ToolState::Denied;
                 self.ctx.events.push(ConversationEvent::ToolResult {
                     tool_use_id: tool_id,
-                    content: "Permission denied by the user".to_string(),
+                    content: RESULT_DENIED_BY_USER.to_string(),
                     is_error: true,
                     remote: false,
                     content_length: None,
@@ -999,7 +1018,7 @@ impl AgentFsm {
     fn handle_tool_done(
         &mut self,
         tool_id: String,
-        outcome: crate::tools::ToolOutcome,
+        outcome: &crate::tools::ToolOutcome,
         preview: Option<tools::ToolPreviewData>,
     ) -> Vec<Effect> {
         let Some(tracked) = self.ctx.tools.get_mut(&tool_id) else {
@@ -1018,7 +1037,7 @@ impl AgentFsm {
         let reason = tracked.interrupt_reason.take().or({
             if let crate::tools::ToolOutcome::Structured {
                 interrupted: true, ..
-            } = &outcome
+            } = outcome
             {
                 Some(tools::InterruptReason::User)
             } else {
@@ -1042,7 +1061,7 @@ impl AgentFsm {
                 }),
             ) => {
                 *exit_code = final_exit;
-                *interrupted = reason.clone();
+                interrupted.clone_from(&reason);
             }
             (_, Some(mut p)) => {
                 if let tools::ToolPreviewData::Shell {
@@ -1050,7 +1069,7 @@ impl AgentFsm {
                     ..
                 } = p
                 {
-                    *interrupted = reason.clone();
+                    interrupted.clone_from(&reason);
                 }
                 tracked.preview = Some(p);
             }
@@ -1108,18 +1127,16 @@ impl AgentFsm {
     fn emit_execute_tool(
         &mut self,
         tool_id: String,
-        tool: crate::tools::ClientToolCall,
+        tool: &crate::tools::ClientToolCall,
     ) -> Vec<Effect> {
         let mut effects = vec![Effect::ExecuteTool {
             tool_id: tool_id.clone(),
             tool: tool.clone(),
         }];
 
-        if let crate::tools::ClientToolCall::Shell(ref shell) = tool {
+        if let crate::tools::ClientToolCall::Shell(shell) = tool {
             let timeout_id = self.ctx.next_timeout_id();
-            self.ctx
-                .tool_timeout_ids
-                .insert(timeout_id, tool_id.clone());
+            self.ctx.tool_timeout_ids.insert(timeout_id, tool_id.clone());
             effects.push(Effect::ScheduleTimeout {
                 timeout_id,
                 duration: std::time::Duration::from_secs(shell.timeout_secs),
@@ -1134,12 +1151,9 @@ impl AgentFsm {
     /// If so, either continue the conversation or go Idle.
     fn check_turn_completion(&mut self) -> Vec<Effect> {
         // Stream must be done
-        if !matches!(
-            self.state,
-            AgentState::Turn {
-                stream: StreamPhase::Done
-            }
-        ) {
+        if !matches!(self.state, AgentState::Turn {
+            stream: StreamPhase::Done
+        }) {
             return vec![];
         }
 
@@ -1151,7 +1165,11 @@ impl AgentFsm {
         // Turn is complete. Check if we need to continue (tool results to send back).
         // We continue if this turn had any client tool calls (the LLM needs to see
         // the results and respond).
-        if !self.ctx.current_turn_tool_ids.is_empty() {
+        if self.ctx.current_turn_tool_ids.is_empty() {
+            // No tools — turn is done, go idle
+            self.state = AgentState::Idle { confirmation: None };
+            vec![Effect::TurnEnded, Effect::Persist]
+        } else {
             // Continue conversation with tool results.
             // Don't clear tools — they persist for rendering history.
             // Clear turn IDs so the continuation turn doesn't loop.
@@ -1166,10 +1184,6 @@ impl AgentFsm {
                 messages,
                 session_id,
             }]
-        } else {
-            // No tools — turn is done, go idle
-            self.state = AgentState::Idle { confirmation: None };
-            vec![Effect::Persist]
         }
     }
 
@@ -1188,10 +1202,7 @@ impl AgentFsm {
     /// Get the most recent suggested command from the conversation.
     /// Get the most recent command from the current invocation only.
     fn current_command(&self) -> Option<String> {
-        self.current_invocation_events()
-            .rev()
-            .find_map(|e| e.as_command())
-            .map(|s| s.to_string())
+        self.current_invocation_events().rev().find_map(|e| e.as_command()).map(|s| s.to_string())
     }
 
     /// Check if the most recent command is dangerous.
@@ -1202,10 +1213,7 @@ impl AgentFsm {
                 if let ConversationEvent::ToolCall { name, input, .. } = e
                     && name == "suggest_command"
                 {
-                    let danger = input
-                        .get("danger")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("low");
+                    let danger = input.get("danger").and_then(|v| v.as_str()).unwrap_or("low");
                     Some(danger == "high" || danger == "medium" || danger == "med")
                 } else {
                     None

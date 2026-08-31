@@ -1,5 +1,7 @@
+use atuin_dotfiles::store::AliasStore;
+use atuin_dotfiles::store::var::VarStore;
+
 use super::StaticInitOptions;
-use atuin_dotfiles::store::{AliasStore, var::VarStore};
 
 pub fn init_static(options: &StaticInitOptions<'_>) {
     let (bind_ctrl_r, bind_up_arrow) = if std::env::var("ATUIN_NOBIND").is_ok() {
@@ -34,5 +36,9 @@ pub async fn init(
 }
 
 fn ps_bool(value: bool) -> &'static str {
-    if value { "$true" } else { "$false" }
+    if value {
+        "$true"
+    } else {
+        "$false"
+    }
 }

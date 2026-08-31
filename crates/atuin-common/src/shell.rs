@@ -1,10 +1,12 @@
-use std::{ffi::OsStr, path::Path, process::Command};
+use std::ffi::OsStr;
+use std::path::Path;
+use std::process::Command;
 
 use serde::Serialize;
 use sysinfo::{Process, System, get_current_pid};
 use thiserror::Error;
 
-#[derive(PartialEq, derive_more::Display)]
+#[derive(PartialEq, Eq, derive_more::Display)]
 pub enum Shell {
     #[display("sh")]
     Sh,
@@ -34,7 +36,8 @@ pub enum ShellError {
 }
 
 impl Shell {
-    pub fn current() -> Shell {
+    #[must_use]
+    pub fn current() -> Self {
         let sys = System::new_all();
 
         let process = sys
@@ -48,23 +51,24 @@ impl Shell {
         let shell = parent.name().trim().to_lowercase();
         let shell = shell.strip_prefix('-').unwrap_or(&shell);
 
-        Shell::from_string(shell.to_string())
+        Self::from_string(shell)
     }
 
-    pub fn from_env() -> Shell {
-        std::env::var("ATUIN_SHELL").map_or(Shell::Unknown, |shell| {
-            Shell::from_string(shell.trim().to_lowercase())
-        })
+    #[must_use]
+    pub fn from_env() -> Self {
+        std::env::var("ATUIN_SHELL")
+            .map_or(Self::Unknown, |shell| Self::from_string(&shell.trim().to_lowercase()))
     }
 
+    #[must_use]
     pub fn config_file(&self) -> Option<std::path::PathBuf> {
         let mut path = directories::BaseDirs::new()?.home_dir().to_owned();
 
         // TODO: handle all shells
         match self {
-            Shell::Bash => path.push(".bashrc"),
-            Shell::Zsh => path.push(".zshrc"),
-            Shell::Fish => path.push(".config/fish/config.fish"),
+            Self::Bash => path.push(".bashrc"),
+            Self::Zsh => path.push(".zshrc"),
+            Self::Fish => path.push(".config/fish/config.fish"),
 
             _ => return None,
         };
@@ -75,20 +79,20 @@ impl Shell {
     /// Best-effort attempt to determine the default shell
     /// This implementation will be different across different platforms
     /// Caller should ensure to handle Shell::Unknown correctly
-    pub fn default_shell() -> Result<Shell, ShellError> {
+    pub fn default_shell() -> Result<Self, ShellError> {
         let sys = System::name().unwrap_or("".to_string()).to_lowercase();
 
         // TODO: Support Linux
         // I'm pretty sure we can use /etc/passwd there, though there will probably be some issues
         let path = if sys.contains("darwin") {
             // This works in my testing so far
-            Shell::Sh.run_interactive([
-                "dscl localhost -read \"/Local/Default/Users/$USER\" shell | awk '{print $2}'",
+            Self::Sh.run_interactive([
+                "dscl localhost -read \"/Local/Default/Users/$USER\" shell | awk '{print $2}'"
             ])?
         } else if cfg!(windows) {
-            return Ok(Shell::Powershell);
+            return Ok(Self::Powershell);
         } else {
-            Shell::Sh.run_interactive(["getent passwd $LOGNAME | cut -d: -f7"])?
+            Self::Sh.run_interactive(["getent passwd $LOGNAME | cut -d: -f7"])?
         };
 
         let path = Path::new(path.trim());
@@ -98,30 +102,30 @@ impl Shell {
             return Err(ShellError::NotSupported);
         }
 
-        Ok(Shell::from_string(
-            shell.unwrap().to_string_lossy().to_string(),
-        ))
+        Ok(Self::from_string(&shell.unwrap().to_string_lossy()))
     }
 
-    pub fn from_string(name: String) -> Shell {
-        match name.as_str() {
-            "bash" => Shell::Bash,
-            "fish" => Shell::Fish,
-            "zsh" => Shell::Zsh,
-            "xonsh" => Shell::Xonsh,
-            "nu" => Shell::Nu,
-            "sh" => Shell::Sh,
-            "powershell" => Shell::Powershell,
+    #[must_use]
+    pub fn from_string(name: &str) -> Self {
+        match name {
+            "bash" => Self::Bash,
+            "fish" => Self::Fish,
+            "zsh" => Self::Zsh,
+            "xonsh" => Self::Xonsh,
+            "nu" => Self::Nu,
+            "sh" => Self::Sh,
+            "powershell" => Self::Powershell,
 
-            _ => Shell::Unknown,
+            _ => Self::Unknown,
         }
     }
 
     /// Returns true if the shell is posix-like
     /// Note that while fish is not posix compliant, it behaves well enough for our current
     /// featureset that this does not matter.
+    #[must_use]
     pub fn is_posixish(&self) -> bool {
-        matches!(self, Shell::Bash | Shell::Fish | Shell::Zsh)
+        matches!(self, Self::Bash | Self::Fish | Self::Zsh)
     }
 
     pub fn run_interactive<I, S>(&self, args: I) -> Result<String, ShellError>
@@ -147,6 +151,7 @@ impl Shell {
     }
 }
 
+#[must_use]
 pub fn shell_name(parent: Option<&Process>) -> String {
     let sys = System::new_all();
 

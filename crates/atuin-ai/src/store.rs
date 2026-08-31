@@ -1,18 +1,19 @@
-use std::path::Path;
-use std::str::FromStr;
+use std::ffi::OsStr;
 use std::time::Duration;
 
-use eyre::{Result, eyre};
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
+use atuin_common::db;
+use atuin_common::db::sqlite::{Sqlite, SqliteBuilder};
+use eyre::Result;
 use time::OffsetDateTime;
 
-use crate::{session::CachedUsageSnapshot, usage::UsageSnapshot};
+use crate::session::CachedUsageSnapshot;
+use crate::usage::UsageSnapshot;
 
 // Database row mappings — all columns are kept even if not yet read in
 // non-test code, since they're part of the schema and used in tests.
-#[derive(Debug)]
+#[derive(Debug, sqlx::FromRow)]
 #[allow(dead_code)]
-pub(crate) struct StoredSession {
+pub struct StoredSession {
     pub id: String,
     pub head_id: Option<String>,
     pub server_session_id: Option<String>,
@@ -23,9 +24,9 @@ pub(crate) struct StoredSession {
     pub archived_at: Option<i64>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, sqlx::FromRow)]
 #[allow(dead_code)]
-pub(crate) struct StoredEvent {
+pub struct StoredEvent {
     pub id: String,
     pub session_id: String,
     pub parent_id: Option<String>,
@@ -35,61 +36,27 @@ pub(crate) struct StoredEvent {
     pub created_at: i64,
 }
 
-/// Row type returned by session queries (avoids clippy::type_complexity).
-type SessionRow = (
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    i64,
-    i64,
-    Option<i64>,
-);
-
-/// Row type returned by event queries.
-type EventRow = (String, String, Option<String>, String, String, String, i64);
-
-pub(crate) struct AiSessionStore {
-    pool: SqlitePool,
+pub struct AiSessionStore {
+    sqlite: Sqlite,
 }
 
 impl AiSessionStore {
-    pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
-        let path = path.as_ref();
-        let path_str = path
-            .as_os_str()
-            .to_str()
-            .ok_or_else(|| eyre!("AI session database path is not valid UTF-8: {path:?}"))?;
+    pub async fn new(path: impl AsRef<OsStr>, timeout: Duration) -> Result<Self> {
+        Self::from_builder(Sqlite::builder(path.as_ref()), timeout).await
+    }
 
-        let is_memory = path_str.contains(":memory:");
+    #[cfg(test)]
+    pub async fn in_memory(timeout: Duration) -> Result<Self> {
+        Self::from_builder(Sqlite::builder_in_memory(), timeout).await
+    }
 
-        if !is_memory
-            && !path.exists()
-            && let Some(dir) = path.parent()
-        {
-            fs_err::create_dir_all(dir)?;
-        }
+    async fn from_builder(builder: SqliteBuilder<'_>, timeout: Duration) -> Result<Self> {
+        let sqlite =
+            builder.timeout(timeout).foreign_keys(false).restrict_permissions().open().await?;
 
-        let opts = SqliteConnectOptions::from_str(path_str)?
-            .journal_mode(SqliteJournalMode::Wal)
-            .optimize_on_close(true, None)
-            .create_if_missing(true);
+        db::migrate!(sqlite.pool(), "./migrations").await?;
 
-        let pool = SqlitePoolOptions::new()
-            .acquire_timeout(Duration::try_from_secs_f64(timeout)?)
-            .connect_with(opts)
-            .await?;
-
-        sqlx::migrate!("./migrations").run(&pool).await?;
-
-        #[cfg(unix)]
-        if !is_memory {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-        }
-
-        Ok(Self { pool })
+        Ok(Self { sqlite })
     }
 
     pub async fn create_session(
@@ -100,7 +67,7 @@ impl AiSessionStore {
     ) -> Result<StoredSession> {
         let now = OffsetDateTime::now_utc().unix_timestamp();
 
-        sqlx::query(
+        db::query(
             "INSERT INTO sessions (id, directory, git_root, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?4)",
         )
@@ -108,7 +75,7 @@ impl AiSessionStore {
         .bind(directory)
         .bind(git_root)
         .bind(now)
-        .execute(&self.pool)
+        .execute(self.sqlite.pool())
         .await?;
 
         Ok(StoredSession {
@@ -125,38 +92,16 @@ impl AiSessionStore {
 
     #[allow(dead_code)] // used in tests; will be used by daemon service
     pub async fn get_session(&self, id: &str) -> Result<Option<StoredSession>> {
-        let row: Option<SessionRow> = sqlx::query_as(
+        let session = db::query_as::<_, StoredSession>(
             "SELECT id, head_id, server_session_id, directory, git_root,
                     created_at, updated_at, archived_at
              FROM sessions WHERE id = ?1",
         )
         .bind(id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.sqlite.pool())
         .await?;
 
-        Ok(row.map(
-            |(
-                id,
-                head_id,
-                server_session_id,
-                directory,
-                git_root,
-                created_at,
-                updated_at,
-                archived_at,
-            )| {
-                StoredSession {
-                    id,
-                    head_id,
-                    server_session_id,
-                    directory,
-                    git_root,
-                    created_at,
-                    updated_at,
-                    archived_at,
-                }
-            },
-        ))
+        Ok(session)
     }
 
     /// Find the most recent non-archived session matching the given directory or git
@@ -169,7 +114,7 @@ impl AiSessionStore {
     ) -> Result<Option<StoredSession>> {
         let cutoff = OffsetDateTime::now_utc().unix_timestamp() - max_age_secs;
 
-        let row: Option<SessionRow> = sqlx::query_as(
+        let session = db::query_as::<_, StoredSession>(
             "SELECT id, head_id, server_session_id, directory, git_root,
                     created_at, updated_at, archived_at
              FROM sessions
@@ -182,32 +127,10 @@ impl AiSessionStore {
         .bind(cutoff)
         .bind(directory)
         .bind(git_root)
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.sqlite.pool())
         .await?;
 
-        Ok(row.map(
-            |(
-                id,
-                head_id,
-                server_session_id,
-                directory,
-                git_root,
-                created_at,
-                updated_at,
-                archived_at,
-            )| {
-                StoredSession {
-                    id,
-                    head_id,
-                    server_session_id,
-                    directory,
-                    git_root,
-                    created_at,
-                    updated_at,
-                    archived_at,
-                }
-            },
-        ))
+        Ok(session)
     }
 
     /// Append a single event and update the session's `head_id` and `updated_at`.
@@ -222,10 +145,11 @@ impl AiSessionStore {
     ) -> Result<()> {
         let now = OffsetDateTime::now_utc().unix_timestamp();
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.sqlite.pool().begin().await?;
 
-        sqlx::query(
-            "INSERT INTO session_events (id, session_id, parent_id, invocation_id, event_type, event_data, created_at)
+        db::query(
+            "INSERT INTO session_events (id, session_id, parent_id, invocation_id, event_type, \
+             event_data, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )
         .bind(event_id)
@@ -238,7 +162,7 @@ impl AiSessionStore {
         .execute(&mut *tx)
         .await?;
 
-        sqlx::query("UPDATE sessions SET head_id = ?1, updated_at = ?2 WHERE id = ?3")
+        db::query("UPDATE sessions SET head_id = ?1, updated_at = ?2 WHERE id = ?3")
             .bind(event_id)
             .bind(now)
             .bind(session_id)
@@ -251,32 +175,17 @@ impl AiSessionStore {
 
     /// Load all events for a session, ordered chronologically.
     pub async fn load_events(&self, session_id: &str) -> Result<Vec<StoredEvent>> {
-        let rows: Vec<EventRow> = sqlx::query_as(
+        let events = db::query_as::<_, StoredEvent>(
             "SELECT id, session_id, parent_id, invocation_id, event_type, event_data, created_at
                  FROM session_events
                  WHERE session_id = ?1
                  ORDER BY created_at ASC, rowid ASC",
         )
         .bind(session_id)
-        .fetch_all(&self.pool)
+        .fetch_all(self.sqlite.pool())
         .await?;
 
-        Ok(rows
-            .into_iter()
-            .map(
-                |(id, session_id, parent_id, invocation_id, event_type, event_data, created_at)| {
-                    StoredEvent {
-                        id,
-                        session_id,
-                        parent_id,
-                        invocation_id,
-                        event_type,
-                        event_data,
-                        created_at,
-                    }
-                },
-            )
-            .collect())
+        Ok(events)
     }
 
     pub async fn update_server_session_id(
@@ -284,20 +193,20 @@ impl AiSessionStore {
         session_id: &str,
         server_session_id: &str,
     ) -> Result<()> {
-        sqlx::query("UPDATE sessions SET server_session_id = ?1 WHERE id = ?2")
+        db::query("UPDATE sessions SET server_session_id = ?1 WHERE id = ?2")
             .bind(server_session_id)
             .bind(session_id)
-            .execute(&self.pool)
+            .execute(self.sqlite.pool())
             .await?;
         Ok(())
     }
 
     pub async fn archive_session(&self, session_id: &str) -> Result<()> {
         let now = OffsetDateTime::now_utc().unix_timestamp();
-        sqlx::query("UPDATE sessions SET archived_at = ?1 WHERE id = ?2")
+        db::query("UPDATE sessions SET archived_at = ?1 WHERE id = ?2")
             .bind(now)
             .bind(session_id)
-            .execute(&self.pool)
+            .execute(self.sqlite.pool())
             .await?;
         Ok(())
     }
@@ -308,10 +217,10 @@ impl AiSessionStore {
     /// exist or the session hasn't been persisted yet.
     pub async fn get_metadata(&self, session_id: &str, key: &str) -> Result<Option<String>> {
         let row: Option<(String,)> =
-            sqlx::query_as("SELECT value FROM session_metadata WHERE session_id = ?1 AND key = ?2")
+            db::query_as("SELECT value FROM session_metadata WHERE session_id = ?1 AND key = ?2")
                 .bind(session_id)
                 .bind(key)
-                .fetch_optional(&self.pool)
+                .fetch_optional(self.sqlite.pool())
                 .await?;
 
         Ok(row.map(|(v,)| v))
@@ -320,7 +229,7 @@ impl AiSessionStore {
     /// Write a metadata value for a session (upsert).
     pub async fn set_metadata(&self, session_id: &str, key: &str, value: &str) -> Result<()> {
         let now = OffsetDateTime::now_utc().unix_timestamp();
-        sqlx::query(
+        db::query(
             "INSERT INTO session_metadata (session_id, key, value, updated_at)
              VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT (session_id, key) DO UPDATE SET value = ?3, updated_at = ?4",
@@ -329,7 +238,7 @@ impl AiSessionStore {
         .bind(key)
         .bind(value)
         .bind(now)
-        .execute(&self.pool)
+        .execute(self.sqlite.pool())
         .await?;
         Ok(())
     }
@@ -340,9 +249,9 @@ impl AiSessionStore {
     /// JSON and the unix timestamp it was written at.
     pub async fn get_usage(&self, user_key: &str) -> Result<Option<CachedUsageSnapshot>> {
         let row: Option<(String, i64)> =
-            sqlx::query_as("SELECT snapshot, updated_at FROM usage WHERE user_key = ?1")
+            db::query_as("SELECT snapshot, updated_at FROM usage WHERE user_key = ?1")
                 .bind(user_key)
-                .fetch_optional(&self.pool)
+                .fetch_optional(self.sqlite.pool())
                 .await?;
 
         let Some((snapshot, written_at)) = row else {
@@ -360,7 +269,7 @@ impl AiSessionStore {
     pub async fn set_usage(&self, user_key: &str, snapshot: &UsageSnapshot) -> Result<()> {
         let snapshot_json = serde_json::to_string(snapshot)?;
         let now = OffsetDateTime::now_utc().unix_timestamp();
-        sqlx::query(
+        db::query(
             "INSERT INTO usage (user_key, snapshot, updated_at)
              VALUES (?1, ?2, ?3)
              ON CONFLICT (user_key) DO UPDATE SET snapshot = ?2, updated_at = ?3",
@@ -368,7 +277,7 @@ impl AiSessionStore {
         .bind(user_key)
         .bind(snapshot_json)
         .bind(now)
-        .execute(&self.pool)
+        .execute(self.sqlite.pool())
         .await?;
         Ok(())
     }
@@ -376,22 +285,20 @@ impl AiSessionStore {
 
 #[cfg(test)]
 mod tests {
+    use rstest::*;
+
     use super::*;
     use crate::usage::UsageSnapshot;
-    use rstest::*;
 
     #[fixture]
     async fn store() -> AiSessionStore {
-        AiSessionStore::new("sqlite::memory:", 2.0).await.unwrap()
+        AiSessionStore::in_memory(Duration::from_secs(2)).await.unwrap()
     }
 
     #[fixture]
     async fn store_with_s1(#[future] store: AiSessionStore) -> AiSessionStore {
         let store = store.await;
-        store
-            .create_session("s1", Some("/tmp"), None)
-            .await
-            .unwrap();
+        store.create_session("s1", Some("/tmp"), None).await.unwrap();
         store
     }
 
@@ -426,25 +333,11 @@ mod tests {
         let store = store_with_s1.await;
 
         store
-            .append_event(
-                "s1",
-                "e1",
-                None,
-                "inv1",
-                "user_message",
-                r#"{"content":"hello"}"#,
-            )
+            .append_event("s1", "e1", None, "inv1", "user_message", r#"{"content":"hello"}"#)
             .await
             .unwrap();
         store
-            .append_event(
-                "s1",
-                "e2",
-                Some("e1"),
-                "inv1",
-                "text",
-                r#"{"content":"hi there"}"#,
-            )
+            .append_event("s1", "e2", Some("e1"), "inv1", "text", r#"{"content":"hi there"}"#)
             .await
             .unwrap();
 
@@ -464,15 +357,10 @@ mod tests {
     #[tokio::test]
     async fn test_find_resumable_session(#[future] store: AiSessionStore) {
         let store = store.await;
-        store
-            .create_session("s1", Some("/home/user/project"), None)
-            .await
-            .unwrap();
+        store.create_session("s1", Some("/home/user/project"), None).await.unwrap();
 
-        let found = store
-            .find_resumable_session(Some("/home/user/project"), None, 3600)
-            .await
-            .unwrap();
+        let found =
+            store.find_resumable_session(Some("/home/user/project"), None, 3600).await.unwrap();
         assert!(found.is_some());
         assert_eq!(found.unwrap().id, "s1");
     }
@@ -482,11 +370,7 @@ mod tests {
     async fn test_find_resumable_by_git_root(#[future] store: AiSessionStore) {
         let store = store.await;
         store
-            .create_session(
-                "s1",
-                Some("/home/user/project/sub"),
-                Some("/home/user/project"),
-            )
+            .create_session("s1", Some("/home/user/project/sub"), Some("/home/user/project"))
             .await
             .unwrap();
 
@@ -502,16 +386,10 @@ mod tests {
     #[tokio::test]
     async fn test_find_resumable_skips_archived(#[future] store: AiSessionStore) {
         let store = store.await;
-        store
-            .create_session("s1", Some("/tmp"), None)
-            .await
-            .unwrap();
+        store.create_session("s1", Some("/tmp"), None).await.unwrap();
         store.archive_session("s1").await.unwrap();
 
-        let found = store
-            .find_resumable_session(Some("/tmp"), None, 3600)
-            .await
-            .unwrap();
+        let found = store.find_resumable_session(Some("/tmp"), None, 3600).await.unwrap();
         assert!(found.is_none());
     }
 
@@ -519,15 +397,9 @@ mod tests {
     #[tokio::test]
     async fn test_find_resumable_no_match_different_dir(#[future] store: AiSessionStore) {
         let store = store.await;
-        store
-            .create_session("s1", Some("/home/user/project"), None)
-            .await
-            .unwrap();
+        store.create_session("s1", Some("/home/user/project"), None).await.unwrap();
 
-        let found = store
-            .find_resumable_session(Some("/other/dir"), None, 3600)
-            .await
-            .unwrap();
+        let found = store.find_resumable_session(Some("/other/dir"), None, 3600).await.unwrap();
         assert!(found.is_none());
     }
 
@@ -547,10 +419,7 @@ mod tests {
     async fn test_update_server_session_id(#[future] store_with_s1: AiSessionStore) {
         let store = store_with_s1.await;
 
-        store
-            .update_server_session_id("s1", "server-abc")
-            .await
-            .unwrap();
+        store.update_server_session_id("s1", "server-abc").await.unwrap();
 
         let session = store.get_session("s1").await.unwrap().unwrap();
         assert_eq!(session.server_session_id.as_deref(), Some("server-abc"));
@@ -562,11 +431,7 @@ mod tests {
         let store = store_with_s1.await;
 
         let before = store.get_session("s1").await.unwrap().unwrap();
-        store
-            .find_resumable_session(Some("/tmp"), None, 3600)
-            .await
-            .unwrap()
-            .unwrap();
+        store.find_resumable_session(Some("/tmp"), None, 3600).await.unwrap().unwrap();
         let after = store.get_session("s1").await.unwrap().unwrap();
 
         assert_eq!(before.updated_at, after.updated_at);
@@ -613,18 +478,9 @@ mod tests {
     async fn test_events_ordered_chronologically(#[future] store_with_s1: AiSessionStore) {
         let store = store_with_s1.await;
 
-        store
-            .append_event("s1", "e1", None, "inv1", "user_message", "{}")
-            .await
-            .unwrap();
-        store
-            .append_event("s1", "e2", Some("e1"), "inv1", "text", "{}")
-            .await
-            .unwrap();
-        store
-            .append_event("s1", "e3", Some("e2"), "inv2", "user_message", "{}")
-            .await
-            .unwrap();
+        store.append_event("s1", "e1", None, "inv1", "user_message", "{}").await.unwrap();
+        store.append_event("s1", "e2", Some("e1"), "inv1", "text", "{}").await.unwrap();
+        store.append_event("s1", "e3", Some("e2"), "inv2", "user_message", "{}").await.unwrap();
 
         let events = store.load_events("s1").await.unwrap();
         assert_eq!(events.len(), 3);

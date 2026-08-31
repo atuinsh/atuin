@@ -5,15 +5,14 @@
 use std::collections::BTreeMap;
 
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_domain::record::{DecryptedData, Host, HostId};
+use atuin_common::encryption::paseto_v4;
+use atuin_domain::record::{
+    DecryptedData, Host, HostId, RecordSeriesKey, RecordTag, RecordVersion,
+};
 use eyre::{Result, bail, ensure, eyre};
-
-use atuin_client::record::encryption::PASETO_V4;
 
 use crate::shell::Var;
 
-const DOTFILES_VAR_VERSION: &str = "v0";
-const DOTFILES_VAR_TAG: &str = "dotfiles-var";
 const DOTFILES_VAR_LEN: usize = 20000; // 20kb max total len, way more than should be needed.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,12 +28,12 @@ impl VarRecord {
         let mut output = vec![];
 
         match self {
-            VarRecord::Create(env) => {
+            Self::Create(env) => {
                 encode::write_u8(&mut output, 0)?; // create
 
                 env.serialize(&mut output)?;
             }
-            VarRecord::Delete(env) => {
+            Self::Delete(env) => {
                 encode::write_u8(&mut output, 1)?; // delete
                 encode::write_array_len(&mut output, 1)?; // 1 field
 
@@ -45,7 +44,7 @@ impl VarRecord {
         Ok(DecryptedData(output))
     }
 
-    pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
+    pub fn deserialize(data: &DecryptedData, version: &RecordVersion) -> Result<Self> {
         use rmp::decode;
 
         fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
@@ -53,7 +52,7 @@ impl VarRecord {
         }
 
         match version {
-            DOTFILES_VAR_VERSION => {
+            RecordVersion::V0 => {
                 let mut bytes = decode::Bytes::new(&data.0);
 
                 let record_type = decode::read_u8(&mut bytes).map_err(error_report)?;
@@ -62,16 +61,13 @@ impl VarRecord {
                     // create
                     0 => {
                         let env = Var::deserialize(&mut bytes)?;
-                        Ok(VarRecord::Create(env))
+                        Ok(Self::Create(env))
                     }
 
                     // delete
                     1 => {
                         let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
-                        ensure!(
-                            nfields == 1,
-                            "too many entries in v0 dotfiles var delete record"
-                        );
+                        ensure!(nfields == 1, "too many entries in v0 dotfiles var delete record");
 
                         let bytes = bytes.remaining_slice();
 
@@ -82,7 +78,7 @@ impl VarRecord {
                             bail!("trailing bytes in encoded dotfiles var record. malformed");
                         }
 
-                        Ok(VarRecord::Delete(key.to_owned()))
+                        Ok(Self::Delete(key.to_owned()))
                     }
 
                     n => {
@@ -90,8 +86,8 @@ impl VarRecord {
                     }
                 }
             }
-            _ => {
-                bail!("unknown version {version:?}");
+            other => {
+                bail!("unknown var record version {other:?}");
             }
         }
     }
@@ -101,13 +97,14 @@ impl VarRecord {
 pub struct VarStore {
     pub store: SqliteStore,
     pub host_id: HostId,
-    pub encryption_key: [u8; 32],
+    pub encryption_key: paseto_v4::Key,
 }
 
 impl VarStore {
     // will want to init the actual kv store when that is done
-    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: [u8; 32]) -> VarStore {
-        VarStore {
+    #[must_use]
+    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: paseto_v4::Key) -> Self {
+        Self {
             store,
             host_id,
             encryption_key,
@@ -265,10 +262,7 @@ impl VarStore {
 
     pub async fn set(&self, name: &str, value: &str, export: bool) -> Result<()> {
         if name.len() + value.len() > DOTFILES_VAR_LEN {
-            return Err(eyre!(
-                "var record too large: max len {} bytes",
-                DOTFILES_VAR_LEN
-            ));
+            return Err(eyre!("var record too large: max len {} bytes", DOTFILES_VAR_LEN));
         }
 
         let record = VarRecord::Create(Var {
@@ -281,21 +275,19 @@ impl VarStore {
 
         let idx = self
             .store
-            .last(self.host_id, DOTFILES_VAR_TAG)
+            .last(&RecordSeriesKey::new(self.host_id, RecordTag::DotfilesVar))
             .await?
             .map_or(0, |entry| entry.idx + 1);
 
         let record = atuin_domain::record::Record::builder()
             .host(Host::new(self.host_id))
-            .version(DOTFILES_VAR_VERSION.to_string())
-            .tag(DOTFILES_VAR_TAG.to_string())
+            .version(RecordVersion::V0)
+            .tag(RecordTag::DotfilesVar)
             .idx(idx)
             .data(bytes)
             .build();
 
-        self.store
-            .push(&record.encrypt::<PASETO_V4>(&self.encryption_key))
-            .await?;
+        self.store.push(&record.encrypt(&self.encryption_key)).await?;
 
         // set mutates shell config, so build again
         self.build().await?;
@@ -305,10 +297,7 @@ impl VarStore {
 
     pub async fn delete(&self, name: &str) -> Result<()> {
         if name.len() > DOTFILES_VAR_LEN {
-            return Err(eyre!(
-                "var record too large: max len {} bytes",
-                DOTFILES_VAR_LEN,
-            ));
+            return Err(eyre!("var record too large: max len {} bytes", DOTFILES_VAR_LEN,));
         }
 
         let record = VarRecord::Delete(name.to_string());
@@ -317,21 +306,19 @@ impl VarStore {
 
         let idx = self
             .store
-            .last(self.host_id, DOTFILES_VAR_TAG)
+            .last(&RecordSeriesKey::new(self.host_id, RecordTag::DotfilesVar))
             .await?
             .map_or(0, |entry| entry.idx + 1);
 
         let record = atuin_domain::record::Record::builder()
             .host(Host::new(self.host_id))
-            .version(DOTFILES_VAR_VERSION.to_string())
-            .tag(DOTFILES_VAR_TAG.to_string())
+            .version(RecordVersion::V0)
+            .tag(RecordTag::DotfilesVar)
             .idx(idx)
             .data(bytes)
             .build();
 
-        self.store
-            .push(&record.encrypt::<PASETO_V4>(&self.encryption_key))
-            .await?;
+        self.store.push(&record.encrypt(&self.encryption_key)).await?;
 
         // delete mutates shell config, so build again
         self.build().await?;
@@ -343,22 +330,19 @@ impl VarStore {
         let mut build = BTreeMap::new();
 
         // this is sorted, oldest to newest
-        let tagged = self.store.all_tagged(DOTFILES_VAR_TAG).await?;
+        let tagged = self.store.all_tagged(&RecordTag::DotfilesVar).await?;
         let mut skipped = 0;
 
         for record in tagged {
             let version = record.version.clone();
 
             // Skip records we can't decrypt or decode, rather than failing the entire build.
-            let ar =
-                match version.as_str() {
-                    DOTFILES_VAR_VERSION => record
-                        .decrypt::<PASETO_V4>(&self.encryption_key)
-                        .and_then(|decrypted| {
-                            VarRecord::deserialize(&decrypted.data, version.as_str())
-                        }),
-                    version => Err(eyre!("unknown version {version:?}")),
-                };
+            let ar = match version {
+                RecordVersion::V0 => record.decrypt(&self.encryption_key).and_then(|decrypted| {
+                    VarRecord::deserialize(&decrypted.data, &RecordVersion::V0)
+                }),
+                ref version => Err(eyre!("unknown version {version:?}")),
+            };
 
             let ar = match ar {
                 Ok(ar) => ar,
@@ -390,28 +374,26 @@ impl VarStore {
 
 #[cfg(test)]
 mod tests {
-    use rand::rngs::OsRng;
-
     use atuin_client::record::sqlite_store::SqliteStore;
-
-    use crate::{shell::Var, store::test_local_timeout};
-
-    use super::{DOTFILES_VAR_VERSION, VarRecord, VarStore};
+    use atuin_domain::record::RecordVersion;
     use crypto_secretbox::{KeyInit, XSalsa20Poly1305};
+    use rand::rngs::OsRng;
     use rstest::*;
+
+    use super::{VarRecord, VarStore};
+    use crate::shell::Var;
+    use crate::store::test_local_timeout;
 
     #[fixture]
     async fn var_store() -> VarStore {
-        let store = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
         let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
         let host_id = atuin_domain::record::HostId(atuin_common::utils::uuid_v7());
 
-        VarStore::new(store, host_id, key)
+        VarStore::new(store, host_id, key.into())
     }
 
-    #[test]
+    #[rstest]
     fn encode_decode() {
         let record = Var {
             name: "BEEP".to_owned(),
@@ -420,12 +402,10 @@ mod tests {
         };
         let record = VarRecord::Create(record);
 
-        let snapshot = [
-            204, 0, 147, 164, 66, 69, 69, 80, 164, 98, 111, 111, 112, 194,
-        ];
+        let snapshot = [204, 0, 147, 164, 66, 69, 69, 80, 164, 98, 111, 111, 112, 194];
 
         let encoded = record.serialize().unwrap();
-        let decoded = VarRecord::deserialize(&encoded, DOTFILES_VAR_VERSION).unwrap();
+        let decoded = VarRecord::deserialize(&encoded, &RecordVersion::V0).unwrap();
 
         assert_eq!(encoded.0, &snapshot);
         assert_eq!(decoded, record);
@@ -489,23 +469,17 @@ mod tests {
 
         assert_eq!(env_vars.len(), 2);
 
-        assert_eq!(
-            env_vars[0],
-            Var {
-                name: String::from("BEEP"),
-                value: String::from("boop"),
-                export: false,
-            }
-        );
+        assert_eq!(env_vars[0], Var {
+            name: String::from("BEEP"),
+            value: String::from("boop"),
+            export: false,
+        });
 
-        assert_eq!(
-            env_vars[1],
-            Var {
-                name: String::from("HOMEBREW_NO_AUTO_UPDATE"),
-                value: String::from("1"),
-                export: true,
-            }
-        );
+        assert_eq!(env_vars[1], Var {
+            name: String::from("HOMEBREW_NO_AUTO_UPDATE"),
+            value: String::from("1"),
+            export: true,
+        });
     }
 
     #[rstest]

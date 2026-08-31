@@ -16,14 +16,14 @@ use eyre::Result;
 use serde::{Deserialize, Serialize};
 
 /// Session metadata key for persistence.
-pub(crate) const METADATA_KEY: &str = "edit_permissions";
+pub const METADATA_KEY: &str = "edit_permissions";
 
 /// How long a session-scoped edit permission remains valid.
 const TTL_MS: i64 = 60 * 60 * 1000; // 1 hour
 
 /// Cache of per-file edit permission grants within a session.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub(crate) struct EditPermissionCache {
+pub struct EditPermissionCache {
     /// Maps canonical file paths to the grant timestamp (unix millis).
     grants: HashMap<PathBuf, i64>,
 }

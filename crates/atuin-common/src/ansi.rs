@@ -18,8 +18,6 @@ pub fn to_plain_text(input: impl AsRef<[u8]>, cols: NonZeroU16) -> String {
         return String::new();
     }
 
-    let cols = cols.get();
-
     let mut newlines = 0usize;
     let normalized: Vec<u8> = onlcr(bytes)
         .inspect(|&b| {
@@ -35,11 +33,12 @@ pub fn to_plain_text(input: impl AsRef<[u8]>, cols: NonZeroU16) -> String {
     // We then add the bytes/cols case for the extra rows created due to soft-wrapping.
     // Note this overshoots, but that's OK, we'll clean up later.
     let newline_rows = newlines + 1;
-    let wrapped_rows = normalized.len() / cols as usize;
+    let wrapped_rows = normalized.len() / usize::from(cols.get());
     let rows = newline_rows
         .saturating_add(wrapped_rows)
         .saturating_add(1)
-        .clamp(1, MAX_ROWS.min(u16::MAX as usize)) as u16;
+        .clamp(1, MAX_ROWS.min(usize::from(u16::MAX))) as u16;
+    let rows = NonZeroU16::new(rows).expect("`rows` is always at least 1 due to `clamp`");
 
     let mut parser = vt100::Parser::new(rows, cols, 0);
     parser.process(&normalized);
@@ -74,10 +73,12 @@ pub fn onlcr<B: Borrow<u8>>(bytes: impl IntoIterator<Item = B>) -> impl Iterator
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::num::NonZeroU16;
+
     use proptest::prelude::*;
     use rstest::rstest;
-    use std::num::NonZeroU16;
+
+    use super::*;
 
     fn nz(cols: u16) -> NonZeroU16 {
         NonZeroU16::new(cols).expect("test column width must be nonzero")
@@ -85,9 +86,7 @@ mod tests {
 
     fn assert_no_terminal_controls(text: &str) {
         assert!(
-            !text
-                .chars()
-                .any(|ch| ch.is_control() && ch != '\n' && ch != '\t'),
+            !text.chars().any(|ch| ch.is_control() && ch != '\n' && ch != '\t'),
             "text still contains terminal controls: {text:?}"
         );
     }
@@ -119,12 +118,20 @@ mod tests {
         assert_eq!(to_plain_text(b"", cols), "");
     }
 
-    #[test]
+    #[rstest]
+    fn wide_character_on_a_one_column_screen() {
+        // A double-width character on a one-column screen used to panic inside vt100 ("attempt to
+        // subtract with overflow"); found by never_panics_and_strips_controls. A one-column screen
+        // cannot actually render a wide character, so we expect an empty snapshot.
+        assert_eq!(to_plain_text("⺀".as_bytes(), nz(1)), "");
+    }
+
+    #[rstest]
     fn trailing_blank_lines_are_trimmed() {
         assert_eq!(to_plain_text(b"hi\r\n\r\n\r\n", nz(80)), "hi");
     }
 
-    #[test]
+    #[rstest]
     fn long_lines_wrap_at_the_column_boundary() {
         let wrapped = to_plain_text(b"abcdefghij", nz(4));
         assert_eq!(wrapped, "abcdefghij");

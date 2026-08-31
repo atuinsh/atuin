@@ -2,18 +2,22 @@
 
 use std::future::Future;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
-use atuin_server_database::Database;
+use atuin_common::db::{DbUrl, OwnedDbUrl};
 use axum::{Router, serve};
 use eyre::{Context, Result};
+
+use crate::db::{ConnectableDatabase, Database, DbResult, MySql, Postgres, Sqlite};
 
 mod handlers;
 mod metrics;
 mod router;
 mod trace;
 
-pub use settings::Settings;
-pub use settings::example_config;
+pub mod db;
+
+pub use settings::{Settings, example_config};
 
 pub mod settings;
 
@@ -36,47 +40,54 @@ async fn shutdown_signal() {
 
 #[cfg(target_family = "windows")]
 async fn shutdown_signal() {
-    signal::windows::ctrl_c()
-        .expect("failed to register signal handler")
-        .recv()
-        .await;
+    signal::windows::ctrl_c().expect("failed to register signal handler").recv().await;
     eprintln!("Shutting down gracefully...");
 }
 
-pub async fn launch<Db: Database>(settings: Settings, addr: SocketAddr) -> Result<()> {
-    launch_with_tcp_listener::<Db>(
+pub async fn launch(settings: Settings, addr: SocketAddr) -> Result<()> {
+    launch_with_tcp_listener(
         settings,
-        TcpListener::bind(addr)
-            .await
-            .context("could not connect to socket")?,
+        TcpListener::bind(addr).await.context("could not connect to socket")?,
         shutdown_signal(),
     )
     .await
 }
 
-pub async fn launch_with_tcp_listener<Db: Database>(
+pub async fn launch_with_tcp_listener(
     settings: Settings,
     listener: TcpListener,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<()> {
-    let r = make_router::<Db>(settings).await?;
+    let router = connect_and_build_router(settings).await?;
 
-    serve(
-        listener,
-        r.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown)
-    .await?;
+    serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
+        .with_graceful_shutdown(shutdown)
+        .await?;
 
     Ok(())
+}
+
+/// Pick the backend from the connection URL and connect it.
+async fn connect(db_uri: OwnedDbUrl) -> DbResult<Arc<dyn Database>> {
+    Ok(match db_uri {
+        DbUrl::Sqlite(url) => Arc::new(Sqlite::connect(url).await?),
+        DbUrl::Postgres(url) => Arc::new(Postgres::connect(url).await?),
+        DbUrl::Mysql(url) => Arc::new(MySql::connect(url).await?),
+    })
+}
+
+async fn connect_and_build_router(settings: Settings) -> Result<Router> {
+    let database = connect(settings.db_settings.db_uri.clone())
+        .await
+        .wrap_err_with(|| format!("failed to connect to db: {:?}", settings.db_settings))?;
+
+    Ok(router::router(database, settings))
 }
 
 // The separate listener means it's much easier to ensure metrics are not accidentally exposed to
 // the public.
 pub async fn launch_metrics_server(host: String, port: u16) -> Result<()> {
-    let listener = TcpListener::bind((host, port))
-        .await
-        .context("failed to bind metrics tcp")?;
+    let listener = TcpListener::bind((host, port)).await.context("failed to bind metrics tcp")?;
 
     let recorder_handle = metrics::setup_metrics_recorder();
 
@@ -85,17 +96,7 @@ pub async fn launch_metrics_server(host: String, port: u16) -> Result<()> {
         axum::routing::get(move || std::future::ready(recorder_handle.render())),
     );
 
-    serve(listener, router.into_make_service())
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    serve(listener, router.into_make_service()).with_graceful_shutdown(shutdown_signal()).await?;
 
     Ok(())
-}
-
-async fn make_router<Db: Database>(settings: Settings) -> Result<Router, eyre::Error> {
-    let db = Db::new(&settings.db_settings)
-        .await
-        .wrap_err_with(|| format!("failed to connect to db: {:?}", settings.db_settings))?;
-    let r = router::router(db, settings);
-    Ok(r)
 }

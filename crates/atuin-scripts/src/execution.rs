@@ -1,15 +1,18 @@
-use crate::store::script::Script;
-use eyre::Result;
 use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
+
+use eyre::Result;
 use tempfile::NamedTempFile;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 use tokio::task;
 use tracing::debug;
 
+use crate::store::script::Script;
+
 // Helper function to build a complete script with shebang
-pub fn build_executable_script(script: String, shebang: String) -> String {
+#[must_use]
+pub fn build_executable_script(script: &str, shebang: &str) -> String {
     if shebang.is_empty() {
         // Default to bash if no shebang is provided
         format!("#!/usr/bin/env bash\n{script}")
@@ -80,14 +83,14 @@ pub async fn execute_script_interactive(
     debug!("creating temp file at {}", temp_path.display());
 
     // Extract interpreter from shebang for fallback execution
-    let interpreter = if !shebang.is_empty() {
-        shebang.trim_start_matches("#!").trim().to_string()
-    } else {
+    let interpreter = if shebang.is_empty() {
         "/usr/bin/env bash".to_string()
+    } else {
+        shebang.trim_start_matches("#!").trim().to_string()
     };
 
     // Write script content to the temp file, including the shebang
-    let full_script_content = build_executable_script(script.clone(), shebang.clone());
+    let full_script_content = build_executable_script(&script, &shebang);
 
     debug!("writing script content to temp file");
     tokio::fs::write(&temp_path, &full_script_content).await?;
@@ -104,7 +107,7 @@ pub async fn execute_script_interactive(
 
     // Store the temp_file to prevent it from being dropped
     // This ensures it won't be deleted while the script is running
-    let _keep_temp_file = temp_file;
+    let keep_temp_file = temp_file;
 
     debug!("attempting direct script execution");
     let mut child_result = tokio::process::Command::new(temp_path.to_str().unwrap())
@@ -136,11 +139,8 @@ pub async fn execute_script_interactive(
             cmd.arg(temp_path.to_str().unwrap());
 
             // Try with the interpreter
-            child_result = cmd
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn();
+            child_result =
+                cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
         }
     }
 
@@ -153,18 +153,12 @@ pub async fn execute_script_interactive(
     };
 
     // Get handles to stdin, stdout, stderr
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "Failed to open child process stdin".to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Failed to open child process stdout".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "Failed to open child process stderr".to_string())?;
+    let mut stdin =
+        child.stdin.take().ok_or_else(|| "Failed to open child process stdin".to_string())?;
+    let stdout =
+        child.stdout.take().ok_or_else(|| "Failed to open child process stdout".to_string())?;
+    let stderr =
+        child.stderr.take().ok_or_else(|| "Failed to open child process stderr".to_string())?;
 
     // Create channels for the interactive session
     let (stdin_tx, mut stdin_rx) = mpsc::channel::<String>(32);
@@ -244,10 +238,9 @@ pub async fn execute_script_interactive(
 
     // Spawn a task to wait for the child process to complete
     debug!("spawning exit code handler");
-    let _keep_temp_file_clone = _keep_temp_file;
     tokio::spawn(async move {
         // Keep the temp file alive until the process completes
-        let _temp_file_ref = _keep_temp_file_clone;
+        let _temp_file_ref = keep_temp_file;
 
         // Wait for the child process to complete
         let status = match child.wait().await {

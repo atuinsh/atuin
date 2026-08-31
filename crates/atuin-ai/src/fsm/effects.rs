@@ -13,7 +13,7 @@ use crate::tools::ClientToolCall;
 
 /// Where to write a permission rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PermissionTarget {
+pub enum PermissionTarget {
     /// Project-level: `<git_root_or_cwd>/.atuin/permissions.ai.toml`
     Project,
     /// Global: `~/.config/atuin/permissions.ai.toml`
@@ -22,7 +22,7 @@ pub(crate) enum PermissionTarget {
 
 /// Side effects the driver should execute after a state transition.
 #[derive(Debug, Clone)]
-pub(crate) enum Effect {
+pub enum Effect {
     // ─── Network ────────────────────────────────────────────────
     /// Start a new streaming request to the server.
     StartStream {
@@ -44,7 +44,9 @@ pub(crate) enum Effect {
         tool: ClientToolCall,
     },
     /// Kill a running tool (send interrupt to shell command).
-    AbortTool { tool_id: String },
+    AbortTool {
+        tool_id: String,
+    },
     /// Look up the command string behind an atuin_output call's history id
     /// in the local history db, for display (the model only passes a UUID).
     /// Resolves via `Event::OutputCommandResolved`.
@@ -70,11 +72,20 @@ pub(crate) enum Effect {
         disposition: RuleDisposition,
     },
     /// Cache a session-scoped file permission grant.
-    CacheSessionGrant { path: PathBuf },
+    CacheSessionGrant {
+        path: PathBuf,
+    },
     /// Persist the selected model alias to `ai.model` in config.toml.
-    SaveModelSelection { alias: String },
+    SaveModelSelection {
+        alias: String,
+    },
     /// Archive current session and start fresh (IO only — state already updated by FSM).
     ArchiveSession,
+
+    // ─── Turn lifecycle ─────────────────────────────────────────
+    /// A turn finished cleanly (stream done and all tools resolved, or the
+    /// turn ended in a suggested command). Not emitted on cancel or error.
+    TurnEnded,
 
     // ─── Timers ─────────────────────────────────────────────────
     /// Schedule a timer that fires an event after the given delay.
@@ -91,16 +102,18 @@ pub(crate) enum Effect {
 
 /// What kind of timeout was scheduled.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum TimeoutKind {
+pub enum TimeoutKind {
     /// Dangerous command confirmation dialog auto-dismiss.
     Confirmation,
     /// Shell tool execution timeout — abort the tool if it's still running.
-    ToolExecution { tool_id: String },
+    ToolExecution {
+        tool_id: String,
+    },
 }
 
 /// What to do when exiting the TUI.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ExitAction {
+pub enum ExitAction {
     /// Run the suggested command.
     Execute(String),
     /// Insert the command into the shell without running.

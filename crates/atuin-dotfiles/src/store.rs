@@ -1,20 +1,19 @@
 use std::collections::BTreeMap;
 
 use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_common::encryption::paseto_v4;
 // Sync aliases
 // This will be noticeable similar to the kv store, though I expect the two shall diverge
 // While we will support a range of shell config, I'd rather have a larger number of small records
 // + stores, rather than one mega config store.
 use atuin_common::utils::unquote;
-use atuin_domain::record::{DecryptedData, Host, HostId};
+use atuin_domain::record::{
+    DecryptedData, Host, HostId, RecordSeriesKey, RecordTag, RecordVersion,
+};
 use eyre::{Result, bail, ensure, eyre};
-
-use atuin_client::record::encryption::PASETO_V4;
 
 use crate::shell::Alias;
 
-const CONFIG_SHELL_ALIAS_VERSION: &str = "v0";
-const CONFIG_SHELL_ALIAS_TAG: &str = "config-shell-alias";
 const CONFIG_SHELL_ALIAS_FIELD_MAX_LEN: usize = 20000; // 20kb max total len, way more than should be needed.
 
 mod alias;
@@ -33,14 +32,14 @@ impl AliasRecord {
         let mut output = vec![];
 
         match self {
-            AliasRecord::Create(alias) => {
+            Self::Create(alias) => {
                 encode::write_u8(&mut output, 0)?; // create
                 encode::write_array_len(&mut output, 2)?; // 2 fields
 
                 encode::write_str(&mut output, alias.name.as_str())?;
                 encode::write_str(&mut output, alias.value.as_str())?;
             }
-            AliasRecord::Delete(name) => {
+            Self::Delete(name) => {
                 encode::write_u8(&mut output, 1)?; // delete
                 encode::write_array_len(&mut output, 1)?; // 1 field
 
@@ -51,7 +50,7 @@ impl AliasRecord {
         Ok(DecryptedData(output))
     }
 
-    pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
+    pub fn deserialize(data: &DecryptedData, version: &RecordVersion) -> Result<Self> {
         use rmp::decode;
 
         fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
@@ -59,7 +58,7 @@ impl AliasRecord {
         }
 
         match version {
-            CONFIG_SHELL_ALIAS_VERSION => {
+            RecordVersion::V0 => {
                 let mut bytes = decode::Bytes::new(&data.0);
 
                 let record_type = decode::read_u8(&mut bytes).map_err(error_report)?;
@@ -68,10 +67,7 @@ impl AliasRecord {
                     // create
                     0 => {
                         let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
-                        ensure!(
-                            nfields == 2,
-                            "too many entries in v0 shell alias create record"
-                        );
+                        ensure!(nfields == 2, "too many entries in v0 shell alias create record");
 
                         let bytes = bytes.remaining_slice();
 
@@ -84,7 +80,7 @@ impl AliasRecord {
                             bail!("trailing bytes in encoded shell alias record. malformed");
                         }
 
-                        Ok(AliasRecord::Create(Alias {
+                        Ok(Self::Create(Alias {
                             name: key.to_owned(),
                             value: value.to_owned(),
                         }))
@@ -93,10 +89,7 @@ impl AliasRecord {
                     // delete
                     1 => {
                         let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
-                        ensure!(
-                            nfields == 1,
-                            "too many entries in v0 shell alias delete record"
-                        );
+                        ensure!(nfields == 1, "too many entries in v0 shell alias delete record");
 
                         let bytes = bytes.remaining_slice();
 
@@ -107,7 +100,7 @@ impl AliasRecord {
                             bail!("trailing bytes in encoded shell alias record. malformed");
                         }
 
-                        Ok(AliasRecord::Delete(key.to_owned()))
+                        Ok(Self::Delete(key.to_owned()))
                     }
 
                     n => {
@@ -115,8 +108,8 @@ impl AliasRecord {
                     }
                 }
             }
-            _ => {
-                bail!("unknown version {version:?}");
+            other => {
+                bail!("unknown alias record version {other:?}");
             }
         }
     }
@@ -126,13 +119,14 @@ impl AliasRecord {
 pub struct AliasStore {
     pub store: SqliteStore,
     pub host_id: HostId,
-    pub encryption_key: [u8; 32],
+    pub encryption_key: paseto_v4::Key,
 }
 
 impl AliasStore {
     // will want to init the actual kv store when that is done
-    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: [u8; 32]) -> AliasStore {
-        AliasStore {
+    #[must_use]
+    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: paseto_v4::Key) -> Self {
+        Self {
             store,
             host_id,
             encryption_key,
@@ -234,21 +228,19 @@ impl AliasStore {
 
         let idx = self
             .store
-            .last(self.host_id, CONFIG_SHELL_ALIAS_TAG)
+            .last(&RecordSeriesKey::new(self.host_id, RecordTag::ConfigShellAlias))
             .await?
             .map_or(0, |entry| entry.idx + 1);
 
         let record = atuin_domain::record::Record::builder()
             .host(Host::new(self.host_id))
-            .version(CONFIG_SHELL_ALIAS_VERSION.to_string())
-            .tag(CONFIG_SHELL_ALIAS_TAG.to_string())
+            .version(RecordVersion::V0)
+            .tag(RecordTag::ConfigShellAlias)
             .idx(idx)
             .data(bytes)
             .build();
 
-        self.store
-            .push(&record.encrypt::<PASETO_V4>(&self.encryption_key))
-            .await?;
+        self.store.push(&record.encrypt(&self.encryption_key)).await?;
 
         // set mutates shell config, so build again
         self.build().await?;
@@ -270,21 +262,19 @@ impl AliasStore {
 
         let idx = self
             .store
-            .last(self.host_id, CONFIG_SHELL_ALIAS_TAG)
+            .last(&RecordSeriesKey::new(self.host_id, RecordTag::ConfigShellAlias))
             .await?
             .map_or(0, |entry| entry.idx + 1);
 
         let record = atuin_domain::record::Record::builder()
             .host(Host::new(self.host_id))
-            .version(CONFIG_SHELL_ALIAS_VERSION.to_string())
-            .tag(CONFIG_SHELL_ALIAS_TAG.to_string())
+            .version(RecordVersion::V0)
+            .tag(RecordTag::ConfigShellAlias)
             .idx(idx)
             .data(bytes)
             .build();
 
-        self.store
-            .push(&record.encrypt::<PASETO_V4>(&self.encryption_key))
-            .await?;
+        self.store.push(&record.encrypt(&self.encryption_key)).await?;
 
         // delete mutates shell config, so build again
         self.build().await?;
@@ -296,20 +286,18 @@ impl AliasStore {
         let mut build = BTreeMap::new();
 
         // this is sorted, oldest to newest
-        let tagged = self.store.all_tagged(CONFIG_SHELL_ALIAS_TAG).await?;
+        let tagged = self.store.all_tagged(&RecordTag::ConfigShellAlias).await?;
         let mut skipped = 0;
 
         for record in tagged {
             let version = record.version.clone();
 
             // Skip records we can't decrypt or decode, rather than failing the entire build.
-            let ar = match version.as_str() {
-                CONFIG_SHELL_ALIAS_VERSION => record
-                    .decrypt::<PASETO_V4>(&self.encryption_key)
-                    .and_then(|decrypted| {
-                        AliasRecord::deserialize(&decrypted.data, version.as_str())
-                    }),
-                version => Err(eyre!("unknown version {version:?}")),
+            let ar = match version {
+                RecordVersion::V0 => record.decrypt(&self.encryption_key).and_then(|decrypted| {
+                    AliasRecord::deserialize(&decrypted.data, &RecordVersion::V0)
+                }),
+                ref version => Err(eyre!("unknown version {version:?}")),
             };
 
             let ar = match ar {
@@ -343,39 +331,38 @@ impl AliasStore {
 }
 
 #[cfg(test)]
-pub(crate) fn test_local_timeout() -> f64 {
-    std::env::var("ATUIN_TEST_LOCAL_TIMEOUT")
+pub(crate) fn test_local_timeout() -> std::time::Duration {
+    let secs = std::env::var("ATUIN_TEST_LOCAL_TIMEOUT")
         .ok()
-        .and_then(|x| x.parse().ok())
+        .and_then(|x| x.parse::<f64>().ok())
         // this hardcoded value should be replaced by a simple way to get the
         // default local_timeout of Settings if possible
-        .unwrap_or(2.0)
+        .unwrap_or(2.0);
+    std::time::Duration::try_from_secs_f64(secs)
+        .unwrap_or_else(|_| std::time::Duration::from_secs(2))
 }
 
 #[cfg(test)]
 mod tests {
+    use atuin_client::record::sqlite_store::SqliteStore;
+    use atuin_domain::record::{RecordTag, RecordVersion};
+    use crypto_secretbox::{KeyInit, XSalsa20Poly1305};
     use rand::rngs::OsRng;
     use rstest::*;
 
-    use atuin_client::record::sqlite_store::SqliteStore;
-
+    use super::{AliasRecord, AliasStore, test_local_timeout};
     use crate::shell::Alias;
-
-    use super::{AliasRecord, AliasStore, CONFIG_SHELL_ALIAS_VERSION, test_local_timeout};
-    use crypto_secretbox::{KeyInit, XSalsa20Poly1305};
 
     #[fixture]
     async fn alias_store() -> (AliasStore, SqliteStore) {
-        let store = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
         let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
         let host_id = atuin_domain::record::HostId(atuin_common::utils::uuid_v7());
 
-        (AliasStore::new(store.clone(), host_id, key), store)
+        (AliasStore::new(store.clone(), host_id, key.into()), store)
     }
 
-    #[test]
+    #[rstest]
     fn encode_decode() {
         let record = Alias {
             name: "k".to_owned(),
@@ -386,7 +373,7 @@ mod tests {
         let snapshot = [204, 0, 146, 161, 107, 167, 107, 117, 98, 101, 99, 116, 108];
 
         let encoded = record.serialize().unwrap();
-        let decoded = AliasRecord::deserialize(&encoded, CONFIG_SHELL_ALIAS_VERSION).unwrap();
+        let decoded = AliasRecord::deserialize(&encoded, &RecordVersion::V0).unwrap();
 
         assert_eq!(encoded.0, &snapshot);
         assert_eq!(decoded, record);
@@ -399,10 +386,7 @@ mod tests {
 
         alias.set("k", "kubectl").await.unwrap();
         alias.set("gp", "git push").await.unwrap();
-        alias
-            .set("kgap", "'kubectl get pods --all-namespaces'")
-            .await
-            .unwrap();
+        alias.set("kgap", "'kubectl get pods --all-namespaces'").await.unwrap();
 
         let mut aliases = alias.aliases().await.unwrap();
 
@@ -410,29 +394,20 @@ mod tests {
 
         assert_eq!(aliases.len(), 3);
 
-        assert_eq!(
-            aliases[0],
-            Alias {
-                name: String::from("gp"),
-                value: String::from("git push")
-            }
-        );
+        assert_eq!(aliases[0], Alias {
+            name: String::from("gp"),
+            value: String::from("git push")
+        });
 
-        assert_eq!(
-            aliases[1],
-            Alias {
-                name: String::from("k"),
-                value: String::from("kubectl")
-            }
-        );
+        assert_eq!(aliases[1], Alias {
+            name: String::from("k"),
+            value: String::from("kubectl")
+        });
 
-        assert_eq!(
-            aliases[2],
-            Alias {
-                name: String::from("kgap"),
-                value: String::from("'kubectl get pods --all-namespaces'")
-            }
-        );
+        assert_eq!(aliases[2], Alias {
+            name: String::from("kgap"),
+            value: String::from("'kubectl get pods --all-namespaces'")
+        });
 
         let build = alias.posix().await.expect("failed to build aliases");
 
@@ -442,16 +417,13 @@ mod tests {
 alias k='kubectl'
 alias kgap='kubectl get pods --all-namespaces'
 "
-        )
+        );
     }
 
     #[rstest]
     #[tokio::test]
     async fn build_aliases_skips_corrupt_records(#[future] alias_store: (AliasStore, SqliteStore)) {
-        use atuin_client::record::encryption::PASETO_V4;
         use atuin_domain::record::{DecryptedData, Host};
-
-        use super::CONFIG_SHELL_ALIAS_TAG;
 
         let (alias, store) = alias_store.await;
 
@@ -462,26 +434,20 @@ alias kgap='kubectl get pods --all-namespaces'
         let corrupt_key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
         let corrupt = atuin_domain::record::Record::builder()
             .host(Host::new(alias.host_id))
-            .version(CONFIG_SHELL_ALIAS_VERSION.to_string())
-            .tag(CONFIG_SHELL_ALIAS_TAG.to_string())
+            .version(RecordVersion::V0)
+            .tag(RecordTag::ConfigShellAlias)
             .idx(1)
             .data(DecryptedData(vec![1, 2, 3]))
             .build();
 
-        store
-            .push(&corrupt.encrypt::<PASETO_V4>(&corrupt_key))
-            .await
-            .unwrap();
+        store.push(&corrupt.encrypt(&corrupt_key.into())).await.unwrap();
 
         let aliases = alias.aliases().await.unwrap();
 
         assert_eq!(aliases.len(), 1);
-        assert_eq!(
-            aliases[0],
-            Alias {
-                name: String::from("k"),
-                value: String::from("kubectl")
-            }
-        );
+        assert_eq!(aliases[0], Alias {
+            name: String::from("k"),
+            value: String::from("kubectl")
+        });
     }
 }

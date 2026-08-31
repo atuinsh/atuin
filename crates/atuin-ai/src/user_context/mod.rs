@@ -7,17 +7,18 @@
 //! The result is cached for the rest of the invocation; `/reload` clears
 //! the cache so the next request re-gathers.
 
-pub(crate) mod interpolate;
+pub mod interpolate;
 mod walker;
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-pub(crate) use walker::global_context_path;
+use parking_lot::{Mutex, MutexGuard};
+pub use walker::global_context_path;
 
 /// A fully resolved user context, ready to include in an API request.
 #[derive(Debug, Clone, serde::Serialize)]
-pub(crate) struct UserContext {
+pub struct UserContext {
     /// The path to the context file on disk.
     pub path: String,
     /// The interpolated content.
@@ -30,7 +31,7 @@ pub(crate) struct UserContext {
 /// requests reuse the cached result. `/reload` invalidates the cache so the
 /// next request re-gathers.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct UserContextCache {
+pub struct UserContextCache {
     inner: Arc<Mutex<CacheSlot>>,
 }
 
@@ -80,13 +81,16 @@ impl UserContextCache {
         slot.contexts = None;
     }
 
-    /// A poisoned lock means another thread panicked while holding it, but
-    /// the cached value is only ever replaced wholesale — it can't be torn.
-    /// Recover with the inner value rather than propagating the panic.
-    fn lock(&self) -> std::sync::MutexGuard<'_, CacheSlot> {
-        self.inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    /// Whether context files have been gathered and cached for this
+    /// invocation. `None` when nothing has been gathered yet (no request has
+    /// completed). Doesn't trigger a gather.
+    pub fn has_gathered(&self) -> Option<bool> {
+        let slot = self.lock();
+        slot.contexts.as_ref().map(|ctxs| !ctxs.is_empty())
+    }
+
+    fn lock(&self) -> MutexGuard<'_, CacheSlot> {
+        self.inner.lock()
     }
 }
 
@@ -95,11 +99,7 @@ impl UserContextCache {
 /// Walks from `start` up to the filesystem root looking for
 /// `.atuin/TERMINAL.md`, then checks `global_path`. Returns contexts
 /// ordered from most general (global/root) to most specific (deepest).
-pub(crate) async fn gather(
-    start: &Path,
-    global_path: Option<&Path>,
-    shell: &str,
-) -> Vec<UserContext> {
+pub async fn gather(start: &Path, global_path: Option<&Path>, shell: &str) -> Vec<UserContext> {
     let raw_files = match walker::walk(start, global_path).await {
         Ok(files) => files,
         Err(e) => {
@@ -168,13 +168,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(target_os = "windows"))]
     async fn invalidate_during_gather_is_not_lost() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("TERMINAL.md");
         // The embedded sleep holds the gather open while we invalidate.
-        tokio::fs::write(&file, "!`sleep 0.5 && echo one`")
-            .await
-            .unwrap();
+        tokio::fs::write(&file, "!`sleep 0.5 && echo one`").await.unwrap();
 
         let cache = UserContextCache::default();
 
@@ -201,12 +200,11 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(target_os = "windows"))]
     async fn slow_gather_does_not_overwrite_concurrent_result() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("TERMINAL.md");
-        tokio::fs::write(&file, "!`sleep 0.5 && echo one`")
-            .await
-            .unwrap();
+        tokio::fs::write(&file, "!`sleep 0.5 && echo one`").await.unwrap();
 
         let cache = UserContextCache::default();
 
