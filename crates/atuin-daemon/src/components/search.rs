@@ -46,17 +46,20 @@ where
     info!("Loading history into search index; page size = {}", PAGE_SIZE);
     let db = handle.history_db();
     let mut pager = db.all_paged(PAGE_SIZE, false, true);
+    let mut saw_rows = false;
     loop {
         match pager.next().await {
             Ok(Some(histories)) => {
                 info!("Loading {} history entries into search index", histories.len());
+                saw_rows = true;
                 index().await.add_histories(&histories);
             }
             Ok(None) => {
-                info!(
-                    "History load complete; {} unique commands indexed",
-                    index().await.command_count()
-                );
+                let index = index().await;
+                if saw_rows {
+                    index.mark_loaded();
+                }
+                info!("History load complete; {} unique commands indexed", index.command_count());
                 return Ok(());
             }
             Err(e) => {
@@ -292,11 +295,14 @@ impl SearchGrpcService {
         &self,
         shells: OrFilter<Vec<String>>,
     ) -> Result<Option<SearchIndex>, ()> {
-        if self.index.read().await.shells == shells {
-            return Ok(None);
+        {
+            let index = self.index.read().await;
+            if index.shells == shells && index.is_loaded() {
+                return Ok(None);
+            }
         }
 
-        info!("Rebuilding search index from database after shell filter change");
+        info!("Rebuilding search index from database");
 
         let new_index = SearchIndex::new(shells);
         build_index(async || &new_index, &self.handle).await?;
