@@ -707,7 +707,8 @@ async fn force_cleanup(settings: &Settings) {
     if pidfile_path.exists() {
         if let Ok(contents) = fs::read_to_string(pidfile_path)
             && let Some(pid_str) = contents.lines().next()
-            && let Some(pid) = parse_pid(pid_str)
+            && let Some(pid) = pid_str.trim().parse::<i32>().ok()
+            && pid > 0
             && let Err(e) = atuin_common::os::process::force_terminate(
                 pid.unsigned_abs(),
                 Duration::from_secs(2),
