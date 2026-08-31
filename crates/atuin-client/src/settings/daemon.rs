@@ -98,7 +98,7 @@ impl Daemon {
             return SocketPath::Default(path);
         }
 
-        SocketPath::Default(ctx.default_socket_path())
+        SocketPath::Default(ctx.default_socket_path().primary)
     }
 
     fn existing_socket_path_ctx(&self, ctx: impl SocketCtx) -> Cow<'_, Path> {
@@ -365,7 +365,7 @@ mod unix_tests {
             ..TestCtx::default()
         };
 
-        assert_eq!(ctx.default_socket_path(), Path::new(expected));
+        assert_eq!(ctx.default_socket_path().primary, Path::new(expected));
     }
 
     #[rstest]
