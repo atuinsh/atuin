@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## 18.21.0
+
+### Bug Fixes
+
+- *(daemon)* Check for socket in `/tmp` even when `$TMPDIR` is set ([#4036](https://github.com/atuinsh/atuin/issues/4036))
+- *(daemon)* Reject invalid pidfile pids before signalling ([#4031](https://github.com/atuinsh/atuin/issues/4031))
+- *(deps)* Update unsound/yanked dependencies ([#4005](https://github.com/atuinsh/atuin/issues/4005))
+- *(docs)* Disambiguate sqlx intra-doc links to functions ([#4007](https://github.com/atuinsh/atuin/issues/4007))
+- *(server)* Connect eagerly to MySQL so a bad db_uri fails fast ([#4032](https://github.com/atuinsh/atuin/issues/4032))
+- *(sqlite)* Prevent stale prepared-statement panic across migrations ([#4006](https://github.com/atuinsh/atuin/issues/4006))
+
+### Features
+
+- MySQL for Atuin server ([#3541](https://github.com/atuinsh/atuin/pull/3541))
+- Refactor/improve output capturing mechanism ([#4017](https://github.com/atuinsh/atuin/issues/4017))
+
+### Miscellaneous Tasks
+
+- Enable more clippy checks ([#3997](https://github.com/atuinsh/atuin/issues/3997), [#4008](https://github.com/atuinsh/atuin/issues/4008), [#4011](https://github.com/atuinsh/atuin/issues/4011))
+
+### Refactor
+
+- *(deps)* Bump shlex from v1 to v2 ([#4024](https://github.com/atuinsh/atuin/issues/4024))
+- *(server)* Merge server database crates into atuin-server ([#4009](https://github.com/atuinsh/atuin/issues/4009))
+- *(server)* Polymorphic database ([#4014](https://github.com/atuinsh/atuin/issues/4014))
+- *(server)* Share SQLite + Postgres Database impls via a blanket impl ([#4015](https://github.com/atuinsh/atuin/issues/4015))
+
 ## 18.20.1
 
 ### Bug Fixes
