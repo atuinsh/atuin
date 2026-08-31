@@ -878,6 +878,11 @@ impl State {
         );
 
         let show_help = settings.show_help && (compactness == Compactness::Full || area.height > 1);
+        let help_height = if show_help && self.tab_index == 0 {
+            2
+        } else {
+            1
+        };
         let warnings = self.build_warnings(settings, theme);
         let warning_height = u16::try_from(warnings.height()).unwrap_or(u16::MAX);
 
@@ -900,7 +905,7 @@ impl State {
                             0
                         }), // tabs
                         Constraint::Length(if show_help {
-                            1
+                            help_height
                         } else {
                             0
                         }), // header (sic)
@@ -910,7 +915,7 @@ impl State {
                     match compactness {
                         Compactness::Ultracompact => [
                             Constraint::Length(if show_help {
-                                1
+                                help_height
                             } else {
                                 0
                             }), // header
@@ -922,7 +927,7 @@ impl State {
                         ],
                         _ => [
                             Constraint::Length(if show_help {
-                                1
+                                help_height
                             } else {
                                 0
                             }), // header
@@ -1178,23 +1183,30 @@ impl State {
     fn build_help(&self, settings: &Settings, theme: &Theme) -> Paragraph<'_> {
         match self.tab_index {
             // search
-            0 => Paragraph::new(Text::from(Line::from(vec![
-                Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": exit"),
-                Span::raw(", "),
-                Span::styled("<tab>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": edit"),
-                Span::raw(", "),
-                Span::styled("<enter>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(if settings.enter_accept {
-                    ": run"
-                } else {
-                    ": edit"
+            0 => Paragraph::new(Text::from(vec![
+                Line::from(vec![
+                    Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(": exit"),
+                    Span::raw(", "),
+                    Span::styled("<tab>", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(": edit"),
+                    Span::raw(", "),
+                    Span::styled("<enter>", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(if settings.enter_accept {
+                        ": run"
+                    } else {
+                        ": edit"
+                    }),
+                ]),
+                Line::from({
+                    let mut help = vec![
+                        Span::styled("<ctrl-o>", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::raw(": inspect, "),
+                    ];
+                    help.extend(Self::delete_help(settings));
+                    help
                 }),
-                Span::raw(", "),
-                Span::styled("<ctrl-o>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": inspect"),
-            ]))),
+            ])),
 
             1 => Paragraph::new(Text::from(Line::from(vec![
                 Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
@@ -1211,6 +1223,16 @@ impl State {
         }
         .style(Style::from_crossterm(theme.as_style(Meaning::Annotation)))
         .alignment(Alignment::Center)
+    }
+
+    fn delete_help(settings: &Settings) -> Vec<Span<'static>> {
+        let prefix = settings.keys.prefix.chars().next().unwrap_or('a');
+        vec![
+            Span::styled(format!("<ctrl-{prefix}>"), Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(" then "),
+            Span::styled("<d>", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": delete"),
+        ]
     }
 
     fn build_warnings(&self, settings: &Settings, theme: &Theme) -> Text<'static> {
@@ -2300,6 +2322,19 @@ mod tests {
             s.max_preview_height = m;
         }
         s
+    }
+
+    #[rstest]
+    #[case::default_prefix("a", "<ctrl-a> then <d>: delete")]
+    #[case::custom_prefix("x", "<ctrl-x> then <d>: delete")]
+    fn delete_help_uses_configured_prefix(#[case] prefix: &str, #[case] expected: &str) {
+        let mut settings = Settings::utc();
+        settings.keys.prefix = prefix.to_string();
+
+        let help = State::delete_help(&settings);
+        let rendered = help.iter().map(|span| span.content.as_ref()).collect::<Vec<_>>().concat();
+
+        assert_eq!(rendered, expected);
     }
 
     // The border space (`border_size * 2`) is 2 in every case below.
