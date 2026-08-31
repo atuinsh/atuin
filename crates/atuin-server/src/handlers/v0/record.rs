@@ -1,3 +1,5 @@
+use atuin_domain::api::ServerConfigSyncError;
+use atuin_domain::api::{FailedSyncRecord, SyncResponse};
 use atuin_domain::record::{
     EncryptedData, HostId, Record, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
 };
@@ -12,12 +14,6 @@ use tracing::{error, instrument};
 use crate::{
     handlers::{ErrorResponse, ErrorResponseStatus, RespExt},
     router::{AppState, UserAuth},
-};
-
-use atuin_domain::api::{FailedSyncRecord, SyncResponse};
-use atuin_domain::{
-    api::ServerConfigSyncError,
-    record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus, RecordTag},
 };
 
 #[instrument(skip_all, err(level = "warn"), fields(user.id = user.id, record.count = records.len()))]
