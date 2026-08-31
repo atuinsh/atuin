@@ -131,14 +131,9 @@ impl Daemon {
         // (both pointing to `$XDG_RUNTIME_DIR`), so don't include the legacy path in that case.
         let legacy_path = runtime_path.is_none().then(|| ctx.legacy_socket_path());
         let default_socket_path = ctx.default_socket_path();
-        [
-            runtime_path,
-            Some(default_socket_path.primary),
-            legacy_path,
-            default_socket_path.envless,
-        ]
-        .into_iter()
-        .flatten()
+        [runtime_path, Some(default_socket_path.primary), legacy_path, default_socket_path.envless]
+            .into_iter()
+            .flatten()
     }
 }
 
