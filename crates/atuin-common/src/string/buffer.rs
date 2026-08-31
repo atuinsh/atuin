@@ -90,6 +90,7 @@ impl fmt::Write for BoundedBuffer {
 mod tests {
     use std::fmt::Write as _;
 
+    use proptest::prelude::*;
     use rstest::{fixture, rstest};
 
     use super::BoundedBuffer;
@@ -207,5 +208,114 @@ mod tests {
     fn into_data_returns_what_was_kept(mut buffer: BoundedBuffer) {
         let _ = buffer.write_str("abcdefghij");
         assert_eq!(buffer.into_data(), "abcdefgh");
+    }
+
+    /// Feed `writes` into a fresh buffer of `limit` bytes, ignoring the write results.
+    fn filled(limit: usize, writes: &[String]) -> BoundedBuffer {
+        let mut buffer = BoundedBuffer::new(limit);
+        for write in writes {
+            let _ = buffer.write_str(write);
+        }
+        buffer
+    }
+
+    prop_compose! {
+        /// A limit small enough that the writes below regularly overflow it.
+        fn limit_and_writes()(
+            limit in 0usize..24,
+            writes in prop::collection::vec("(?s).{0,8}", 0..8),
+        ) -> (usize, Vec<String>) {
+            (limit, writes)
+        }
+    }
+
+    proptest! {
+        /// The whole point of the type: whatever it is fed, it never grows past its limit.
+        #[test]
+        fn never_exceeds_the_limit((limit, writes) in limit_and_writes()) {
+            let buffer = filled(limit, &writes);
+            prop_assert!(buffer.data().len() <= limit);
+            prop_assert_eq!(buffer.limit(), limit);
+        }
+
+        /// What is kept is exactly the longest prefix of everything written that fits, cut on a
+        /// character boundary. `data()` being a `&str` at all also proves the cut kept it UTF-8.
+        #[test]
+        fn keeps_the_longest_prefix_that_fits((limit, writes) in limit_and_writes()) {
+            let all = writes.concat();
+            let buffer = filled(limit, &writes);
+            prop_assert_eq!(buffer.data(), &all[..all.floor_char_boundary(limit)]);
+        }
+
+        /// How the data is split across writes cannot change the result.
+        #[test]
+        fn chunking_does_not_matter((limit, writes) in limit_and_writes()) {
+            let chunked = filled(limit, &writes);
+            let at_once = filled(limit, &[writes.concat()]);
+
+            prop_assert_eq!(chunked.data(), at_once.data());
+            prop_assert_eq!(chunked.is_truncated(), at_once.is_truncated());
+        }
+
+        /// Truncation is reported if and only if something was actually dropped.
+        #[test]
+        fn reports_truncation_exactly_when_data_was_dropped((limit, writes) in limit_and_writes()) {
+            let all = writes.concat();
+            let buffer = filled(limit, &writes);
+            prop_assert_eq!(buffer.is_truncated(), all.len() > limit);
+        }
+
+        /// A write fails only once the buffer has given up, and from then on every write fails.
+        #[test]
+        fn writes_fail_only_after_truncation((limit, writes) in limit_and_writes()) {
+            let mut buffer = BoundedBuffer::new(limit);
+            for write in &writes {
+                let was_truncated = buffer.is_truncated();
+                prop_assert_eq!(buffer.write_str(write).is_err(), was_truncated);
+            }
+        }
+
+        /// `take` hands the whole state over and leaves a buffer indistinguishable from a new one.
+        #[test]
+        fn take_moves_the_state_out((limit, writes) in limit_and_writes()) {
+            let mut buffer = filled(limit, &writes);
+            let before = buffer.data().to_string();
+            let was_truncated = buffer.is_truncated();
+
+            let taken = buffer.take();
+            prop_assert_eq!(taken.data(), before);
+            prop_assert_eq!(taken.is_truncated(), was_truncated);
+            prop_assert_eq!(taken.limit(), limit);
+
+            prop_assert_eq!(buffer.data(), "");
+            prop_assert!(!buffer.is_truncated());
+            prop_assert_eq!(buffer.limit(), limit);
+        }
+
+        /// So does `clear`, minus the handing over.
+        #[test]
+        fn clear_is_as_good_as_a_new_buffer((limit, writes) in limit_and_writes()) {
+            let mut buffer = filled(limit, &writes);
+            buffer.clear();
+
+            prop_assert_eq!(buffer.data(), "");
+            prop_assert!(!buffer.is_truncated());
+            prop_assert_eq!(buffer.limit(), limit);
+
+            // And it takes writes again just like a fresh one would.
+            for write in &writes {
+                let _ = buffer.write_str(write);
+            }
+            let fresh = filled(limit, &writes);
+            prop_assert_eq!(buffer.data(), fresh.data());
+        }
+
+        /// Consuming the buffer returns what inspecting it showed.
+        #[test]
+        fn into_data_matches_data((limit, writes) in limit_and_writes()) {
+            let buffer = filled(limit, &writes);
+            let seen = buffer.data().to_string();
+            prop_assert_eq!(buffer.into_data(), seen);
+        }
     }
 }
