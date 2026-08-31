@@ -9,19 +9,19 @@
 //!
 //! The [`CmdRegistry`] is responsible for managing the lifecycle of this command. The main
 //! entrypoint is [`CmdRegistry::start_cmd`] which marks the beginning of a command. This returns a
-//! new object [`CmdInFlight`] which represents a command which has been started, but not finished.
+//! new object [`CmdInFlightId`] which represents a command which has been started, but not finished.
 //!
-//! ## [`CmdInFlight`]
+//! ## Commands in flight
 //!
-//! [`CmdInFlight`]s can be terminated in one of two ways:
+//! Commands-in-flight are commands which ahve been started but have just started running. These
+//! commands are uniquely identified by a [`CmdInFlightId`].
 //!
-//!   - [`CmdInFlight::finish`] marks the command as finished, which will create and store a new
+//! Commands in flight can be terminated in one of two ways:
+//!
+//!   - [`CmdRegistry::finish`] marks the command as finished, which will create and store a new
 //!     history entry.
-//!   - [`CmdInFlight::cancel`] cancels the command, disposing of any in-memory resources, but
+//!   - [`CmdRegistry::cancel`] cancels the command, disposing of any in-memory resources, but
 //!     without the logic of persisting the history entry.
-//!
-//! The user of this library is responsible for keeping [`CmdInFlight`] alive. [`Drop`] of
-//! [`CmdInFlight`] is equivalent to calling [`CmdInFlight::cancel`].
 //!
 //! ## Streaming
 //!
@@ -59,58 +59,46 @@
 //! ```
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use atuin_client::database::Sqlite as HistoryDatabase;
 use atuin_client::history::store::HistoryStore;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::packfile;
-use atuin_domain::caps::{CapClient, CapServer, PackfileCap};
+use atuin_common::time::OffsetDateTimeExt;
+use atuin_domain::caps::{CapClient, PackfileCap};
 use atuin_domain::record::{RecordSeriesKey, RecordTag};
 use dashmap::DashMap;
+use time::OffsetDateTime;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::SemanticComponent;
 use crate::search::SearchIndex;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct CmdInFlightId {
+/// Uniquely identifies a command that has been started but not yet terminated.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CmdInFlightId {
     history_id: HistoryId,
 }
 
-/// Represents an active session for a command.
-#[derive(Debug, Clone, Copy)]
-pub struct CmdInFlight<'eng> {
-    id: CmdInFlightId,
-    engine: &'eng CmdRegistry,
+impl From<HistoryId> for CmdInFlightId {
+    fn from(value: HistoryId) -> Self {
+        CmdInFlightId { history_id: value }
+    }
 }
 
-impl<'eng> CmdInFlight<'eng> {
-    /// Consume the command session, marking the command as complete and storing it into the
-    /// long-term storage.
-    ///
-    /// Failing to call this will result in the command data never being persisted into storage. It
-    /// is not considered terminal.
-    pub async fn finish(
-        self,
-        timestamp: Instant,
-        exit_code: i64,
-    ) -> Result<(), CmdFinishError<'eng>> {
-        self.engine.finish_cmd(self, timestamp, exit_code).await
-    }
-
-    pub async fn cancel(self) -> Result<(), CmdCancelError<'eng>> {
-        self.engine.cancel_cmd(self).await
+impl std::fmt::Display for CmdInFlightId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.history_id)
     }
 }
 
 #[derive(Debug)]
 struct CmdInFlightOwned {
-    /// TODO(markovejnovic): Why do we need this?
     history: History,
 }
 
+/// An event describing a change in the lifecycle of a command.
 #[derive(Debug, Clone)]
 pub enum CmdEvent {
     Started(History),
@@ -134,59 +122,97 @@ pub struct CmdRegistry {
     broadcast: broadcast::Sender<CmdEvent>,
 }
 
-#[derive(Debug, Clone, thiserror::Error)]
-pub enum CmdFinishError<'eng> {
+#[derive(Debug, thiserror::Error)]
+pub enum CmdFinishError {
     #[error("command {0} is not in flight")]
-    NotFound(CmdInFlight<'eng>),
+    NotFound(CmdInFlightId),
     #[error("storing into history store failed: {0}")]
     HistoryStoreFailed(eyre::Report),
     #[error("storing into history db failed: {0}")]
-    HistoryDbFailed(sqlx::Error),
+    HistoryDbFailed(eyre::Report),
 }
 
-#[derive(Debug, Clone, Copy, thiserror::Error)]
-pub enum CmdCancelError<'eng> {
+#[derive(Debug, thiserror::Error)]
+pub enum CmdCancelError {
     #[error("command {0} is not in flight")]
-    NotFound(CmdInFlight<'eng>),
+    NotFound(CmdInFlightId),
 }
 
 impl CmdRegistry {
-    /// Create a new output capture engine.
-    pub fn new(history_store: HistoryStore) -> Self {
+    /// Create a new command registry.
+    pub fn new(
+        caps: Arc<CapClient>,
+        history_store: HistoryStore,
+        history_db: HistoryDatabase,
+        semantic_component: SemanticComponent,
+        search_index: Arc<tokio::sync::RwLock<SearchIndex>>,
+    ) -> Self {
+        let (broadcast, _) = broadcast::channel(128);
         Self {
+            caps,
             history_store,
+            history_db,
             active_sessions: DashMap::new(),
+            semantic_component,
+            search_index,
+            broadcast,
         }
     }
 
-    /// Notify the output capture engine that a command has been started.
+    /// Notify the registry that a command has been started.
     ///
-    /// It is intended that this be called by a client.
-    ///
-    /// TODO(markovejnovic): Docs suck.
-    pub async fn start_cmd(&self, history: History) -> CmdInFlight {}
+    /// Returns the [`CmdInFlightId`] identifying the in-flight command, which is later used to
+    /// [`CmdRegistry::finish`] or [`CmdRegistry::cancel`] it.
+    pub async fn start_cmd(&self, history: History) -> CmdInFlightId {
+        let id = CmdInFlightId::from(history.id.clone());
+        self.active_sessions.insert(id.clone(), CmdInFlightOwned {
+            history: history.clone(),
+        });
+        let _ = self.broadcast.send(CmdEvent::Started(history));
+        id
+    }
 
-    async fn finish_cmd<'s>(
+    /// Mark a command as finished, persisting it to the history store and database.
+    ///
+    /// `duration` is in nanoseconds; a value of `0` means "compute it from the command's start
+    /// timestamp".
+    pub async fn finish(
         &self,
-        session: CmdInFlight<'s>,
-        timestamp: Instant,
+        session_id: CmdInFlightId,
         exit_code: i64,
-    ) -> Result<(), CmdFinishError<'s>> {
-        let (_sess_id, session) = match self.active_sessions.remove(&session.id) {
+        duration: i64,
+    ) -> Result<(), CmdFinishError> {
+        let (_sess_id, mut session) = match self.active_sessions.remove(&session_id) {
             Some(s) => s,
-            None => return Err(CmdFinishError::NotFound(session)),
+            None => return Err(CmdFinishError::NotFound(session_id)),
         };
 
         session.history.exit = exit_code;
-        session.history.duration = timestamp - session.history.timestamp;
+        session.history.duration = if duration == 0 {
+            i64::try_from(
+                OffsetDateTime::now_utc()
+                    .saturating_duration_since(session.history.timestamp)
+                    .as_nanos(),
+            )
+            .unwrap_or(i64::MAX)
+        } else {
+            duration
+        };
+
+        let history = session.history;
 
         // TODO(markovejnovic): The following DB operations can be parallelized.
         // They're on different DBs.
-        self.history_store
-            .push(session.history)
+        self.history_db
+            .save(&history)
             .await
-            .map_err(CmdFinishError::HistoryStoreFailed)?;
-        self.history_db.save(&session.history).await.map_err(CmdFinishError::HistoryDbFailed)?;
+            .map_err(|e| CmdFinishError::HistoryDbFailed(e.into()))?;
+        // TODO(markovejnovic): surface the returned (RecordId, RecordIdx) so end_history can report
+        // the real record id and idx rather than the placeholder history id.
+        self.history_store
+            .push(history.clone())
+            .await
+            .map_err(|e| CmdFinishError::HistoryStoreFailed(e.into()))?;
 
         // TODO(markovejnovic): This is a little bit hacked-together. I'm thinking it would be good
         // to have a Packer type for this kind of logic. It can wraps the Caps.
@@ -200,10 +226,22 @@ impl CmdRegistry {
             tracing::warn!("packing failed: {e}");
         }
 
-        self.search_index.read().await.add_history(&session.history);
-        self.semantic_component.record_history(session.history).await;
+        self.search_index.read().await.add_history(&history);
+        self.semantic_component.record_history(history.clone()).await;
 
-        self.broadcast.send(CmdEvent::Finished(session.history));
+        let _ = self.broadcast.send(CmdEvent::Finished(history));
+
+        Ok(())
+    }
+
+    /// Cancel a command, discarding its in-memory state without persisting a history entry.
+    pub async fn cancel(&self, session_id: CmdInFlightId) -> Result<(), CmdCancelError> {
+        let (_sess_id, session) = match self.active_sessions.remove(&session_id) {
+            Some(s) => s,
+            None => return Err(CmdCancelError::NotFound(session_id)),
+        };
+
+        let _ = self.broadcast.send(CmdEvent::Cancelled(session.history));
 
         Ok(())
     }
@@ -211,16 +249,5 @@ impl CmdRegistry {
     /// Create a new stream of [`CmdEvent`] objects.
     pub fn subscribe(&self) -> BroadcastStream<CmdEvent> {
         BroadcastStream::new(self.broadcast.subscribe())
-    }
-
-    async fn cancel_cmd<'s>(&self, session: CmdInFlight<'s>) -> Result<(), CmdCancelError<'s>> {
-        let (_sess_id, session) = match self.active_sessions.remove(&session.id) {
-            Some(s) => s,
-            None => return Err(CmdCancelError::NotFound(session)),
-        };
-
-        self.broadcast.send(CmdEvent::Cancelled(session.history));
-
-        Ok(())
     }
 }

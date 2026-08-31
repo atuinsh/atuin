@@ -142,6 +142,15 @@ impl SearchComponent {
         }
     }
 
+    /// Get a shared handle to the live search index.
+    ///
+    /// Used by the [`CmdRegistry`](crate::cmd_registry::CmdRegistry) to index commands into the
+    /// same index this component serves searches from.
+    #[must_use]
+    pub fn index(&self) -> Arc<RwLock<SearchIndex>> {
+        self.index.clone()
+    }
+
     /// Rebuild the entire search index from the database without updating the frecency map.
     async fn rebuild_index_only(&self) {
         let Some(handle) = self.handle.as_ref() else {

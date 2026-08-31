@@ -26,7 +26,7 @@ const MAX_BYTES_PER_SESSION: usize = 32 * 1024 * 1024;
 const MAX_PENDING_HISTORIES: usize = 128;
 
 /// Stores completed command captures and associates them with history events.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SemanticComponent {
     inner: Arc<SemanticComponentInner>,
 }

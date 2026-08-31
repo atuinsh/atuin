@@ -1,8 +1,14 @@
+use std::sync::Arc;
+
 use atuin_client::database::Sqlite as HistoryDatabase;
+use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::settings::watcher::global_settings_watcher;
 use eyre::Result;
+
+use crate::grpc::history::HistoryService;
+use crate::history::history_server::HistoryServer;
 
 pub mod client;
 pub(crate) mod cmd_registry;
@@ -19,6 +25,7 @@ pub mod server;
 // Re-export core daemon types for convenience
 // Re-export client helpers
 pub use client::{ControlClient, SemanticClient, emit_event, emit_event_with_settings};
+pub use cmd_registry::CmdRegistry;
 // Re-export components
 pub use components::{SearchComponent, SemanticComponent, SyncComponent};
 pub use daemon::{AnyComponent, Daemon, DaemonBuilder, DaemonHandle};
@@ -43,6 +50,11 @@ pub async fn boot(
     let search_service = search_component.grpc_service();
     let semantic_service = semantic_component.grpc_service();
 
+    // Grab shared handles the command registry needs before the components are moved into the
+    // daemon. Both are Arc-backed, so these share state with the live components.
+    let search_index = search_component.index();
+    let semantic_handle = semantic_component.clone();
+
     // Build the daemon
     let mut daemon = Daemon::builder(settings.clone())
         .store(store)
@@ -54,6 +66,19 @@ pub async fn boot(
 
     // Get a handle for the control service and gRPC server shutdown
     let handle = daemon.handle();
+
+    // Build the command registry and the History gRPC service that drives it.
+    let host_id = Settings::host_id().await?;
+    let history_store =
+        HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
+    let cmd_registry = Arc::new(CmdRegistry::new(
+        handle.caps().clone(),
+        history_store,
+        handle.history_db().clone(),
+        semantic_handle,
+        search_index,
+    ));
+    let history_service = HistoryServer::new(HistoryService::new(cmd_registry));
 
     // Create the control service
     let control_service = control::ControlService::new(handle.clone());

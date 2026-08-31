@@ -5,14 +5,17 @@
 
 #[cfg(unix)]
 mod unix {
+    use std::sync::Arc;
     use std::time::Duration;
 
     use atuin_client::database::Sqlite;
+    use atuin_client::history::store::HistoryStore;
     use atuin_client::record::sqlite_store::SqliteStore;
     use atuin_client::settings::{Settings, init_meta_config_for_testing};
     use atuin_daemon::client::HistoryClient;
-    use atuin_daemon::components::HistoryComponent;
-    use atuin_daemon::{Daemon, DaemonHandle};
+    use atuin_daemon::grpc::history::HistoryService;
+    use atuin_daemon::history::history_server::HistoryServer;
+    use atuin_daemon::{CmdRegistry, Daemon, DaemonHandle, SearchComponent, SemanticComponent};
     use rstest::*;
     use tempfile::TempDir;
     use tokio::net::UnixListener;
@@ -56,21 +59,31 @@ mod unix {
         let history_db = Sqlite::new(&db_path, Duration::from_secs(5)).await.unwrap();
         let store = SqliteStore::new(&record_path, Duration::from_secs(5)).await.unwrap();
 
-        // Create the history component and get its gRPC service
-        let history_component = HistoryComponent::new();
-        let history_service = history_component.grpc_service();
+        // Dependencies the command registry needs (Arc-backed, shared with the components).
+        let semantic_component = SemanticComponent::new();
+        let search_index = SearchComponent::new().index();
 
         // Build and start the daemon
-        let mut daemon = Daemon::builder(settings)
-            .store(store)
-            .history_db(history_db)
-            .component(history_component)
-            .build()
-            .unwrap();
+        let mut daemon =
+            Daemon::builder(settings).store(store).history_db(history_db).build().unwrap();
 
         let handle = daemon.handle();
 
-        // Start components (this initializes the history component with the handle)
+        // Build the command registry and the History gRPC service that drives it
+        // (mirrors atuin_daemon::boot).
+        let host_id = Settings::host_id().await.unwrap();
+        let history_store =
+            HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
+        let cmd_registry = Arc::new(CmdRegistry::new(
+            handle.caps().clone(),
+            history_store,
+            handle.history_db().clone(),
+            semantic_component,
+            search_index,
+        ));
+        let history_service = HistoryServer::new(HistoryService::new(cmd_registry));
+
+        // Start components (none registered, but keeps the lifecycle identical to production).
         daemon.start_components().await.unwrap();
 
         // Start the gRPC server

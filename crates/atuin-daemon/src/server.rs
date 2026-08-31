@@ -7,6 +7,7 @@ use crate::control::ControlService;
 use crate::control::control_server::ControlServer;
 use crate::daemon::DaemonHandle;
 use crate::grpc;
+use crate::history::history_server::HistoryServer;
 use crate::search::search_server::SearchServer;
 use crate::semantic::semantic_server::SemanticServer;
 
@@ -23,7 +24,7 @@ const SOCKET_KEEPALIVE_INTERVAL: std::time::Duration = std::time::Duration::from
 #[allow(clippy::unused_async, reason = "needs to match the cfg(not(unix)) version")]
 pub async fn run_grpc_server(
     settings: Settings,
-    history_service: grpc::history::HistoryService,
+    history_service: HistoryServer<grpc::history::HistoryService>,
     search_service: SearchServer<SearchGrpcService>,
     semantic_service: SemanticServer<SemanticGrpcService>,
     control_service: ControlServer<ControlService>,
@@ -155,7 +156,7 @@ pub async fn run_grpc_server(
 #[cfg(not(unix))]
 pub async fn run_grpc_server(
     settings: Settings,
-    history_service: HistoryService,
+    history_service: HistoryServer<grpc::history::HistoryService>,
     search_service: SearchServer<SearchGrpcService>,
     semantic_service: SemanticServer<SemanticGrpcService>,
     control_service: ControlServer<ControlService>,
