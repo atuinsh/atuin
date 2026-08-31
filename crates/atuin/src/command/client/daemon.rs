@@ -696,13 +696,6 @@ async fn run(
 async fn force_cleanup(settings: &Settings) {
     let pidfile_path = Path::new(&settings.daemon.pidfile_path);
 
-    fn parse_pid(s: &str) -> Option<i32> {
-        match s.parse::<i32>() {
-            Ok(pid) if pid > 0 => Some(pid),
-            _ => None,
-        }
-    }
-
     // Read and kill the existing process if pidfile exists
     if pidfile_path.exists() {
         if let Ok(contents) = fs::read_to_string(pidfile_path)
