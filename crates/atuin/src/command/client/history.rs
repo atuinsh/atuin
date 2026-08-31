@@ -564,9 +564,9 @@ async fn handle_daemon_end(
 ) -> Result<()> {
     if !settings.store_failed && exit > 0 {
         debug!("history has non-zero exit code, and store_failed is false");
-        daemon::cancel_history(settings, id.to_string()).await?;
+        daemon::cancel_history(settings, id).await?;
     } else {
-        daemon::end_history(settings, id.to_string(), duration.unwrap_or(0), exit).await?;
+        daemon::end_history(settings, id, duration.unwrap_or(0), exit).await?;
     }
 
     Ok(())
@@ -685,7 +685,10 @@ impl TailEvent {
         Ok(Self {
             kind,
             history: History {
-                id: history.id.parse()?,
+                id: history
+                    .id
+                    .ok_or_else(|| eyre::eyre!("daemon tail event is missing the history id"))?
+                    .try_into()?,
                 timestamp,
                 duration: history.duration,
                 exit: history.exit,

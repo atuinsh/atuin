@@ -2,6 +2,7 @@ pub mod model;
 
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use atuin_client::history::{History, HistoryId};
 use futures::StreamExt;
@@ -42,7 +43,7 @@ fn history_to_tail_reply(kind: HistoryEventKind, history: History) -> TailHistor
         kind: kind as i32,
         history: Some(HistoryEntry {
             timestamp: history.timestamp.unix_timestamp_nanos() as u64,
-            id: history.id.to_string(),
+            id: Some(history.id.into()),
             command: history.command,
             cwd: history.cwd,
             session: history.session,
@@ -69,10 +70,9 @@ impl GrpcService for HistoryService {
         let history: History = request.into_inner().try_into()?;
 
         let id = self.cmd_registry.start_cmd(history).await;
-        tracing::info!(id = %id, "start history");
 
         Ok(Response::new(StartHistoryReply {
-            id: id.to_string(),
+            id: Some(id.history_id().into()),
             version: env!("CARGO_PKG_VERSION").to_string(),
             protocol: DAEMON_PROTOCOL_VERSION,
         }))
@@ -84,27 +84,23 @@ impl GrpcService for HistoryService {
         request: Request<EndHistoryRequest>,
     ) -> Result<Response<EndHistoryReply>, Status> {
         let req = request.into_inner();
-        let id: HistoryId = req
-            .id
-            .parse()
-            .map_err(|_| Status::invalid_argument(format!("invalid history id: {}", req.id)))?;
 
-        let duration = i64::try_from(req.duration).unwrap_or(i64::MAX);
-        self.cmd_registry.finish(id.clone().into(), req.exit, duration).await.map_err(
-            |e| match e {
-                CmdFinishError::NotFound(_) => {
-                    Status::not_found(format!("could not find history with id: {id}"))
-                }
-                other => Status::internal(other.to_string()),
-            },
-        )?;
+        let id: HistoryId =
+            req.id.ok_or_else(|| Status::invalid_argument("missing history id"))?.try_into()?;
+        // The client sends 0 when it doesn't know the duration; let the registry measure it.
+        let duration = (req.duration != 0).then(|| Duration::from_nanos(req.duration));
 
-        tracing::info!(id = %id, "end history");
+        self.cmd_registry.finish(id.into(), req.exit, duration).await.map_err(|e| match e {
+            CmdFinishError::NotFound(_) => {
+                Status::not_found(format!("could not find history with id: {id}"))
+            }
+            other => Status::internal(other.to_string()),
+        })?;
 
         Ok(Response::new(EndHistoryReply {
             // TODO(markovejnovic): return the record store's real record id and idx once
             // CmdRegistry::finish surfaces them.
-            id: id.to_string(),
+            id: Some(id.into()),
             idx: 0,
             version: env!("CARGO_PKG_VERSION").to_string(),
             protocol: DAEMON_PROTOCOL_VERSION,
@@ -117,12 +113,10 @@ impl GrpcService for HistoryService {
         request: Request<CancelHistoryRequest>,
     ) -> Result<Response<CancelHistoryReply>, Status> {
         let req = request.into_inner();
-        let id: HistoryId = req
-            .id
-            .parse()
-            .map_err(|_| Status::invalid_argument(format!("invalid history id: {}", req.id)))?;
+        let id: HistoryId =
+            req.id.ok_or_else(|| Status::invalid_argument("missing history id"))?.try_into()?;
 
-        self.cmd_registry.cancel(id.clone().into()).await.map_err(|e| match e {
+        self.cmd_registry.cancel(id.into()).await.map_err(|e| match e {
             CmdCancelError::NotFound(_) => {
                 Status::not_found(format!("could not find history with id: {id}"))
             }
@@ -194,6 +188,6 @@ impl GrpcService for HistoryService {
     ) -> Result<Response<ShutdownReply>, Status> {
         // TODO(markovejnovic): wire a real shutdown signal through to the daemon. HistoryService
         // currently only holds the CmdRegistry, which has no way to request daemon shutdown.
-        Ok(Response::new(ShutdownReply { accepted: true }))
+        unimplemented!("daemon shutdown via the History service is not wired up yet")
     }
 }

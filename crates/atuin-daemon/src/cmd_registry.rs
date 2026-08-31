@@ -59,6 +59,7 @@
 //! ```
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use atuin_client::database::Sqlite as HistoryDatabase;
 use atuin_client::history::store::HistoryStore;
@@ -84,6 +85,14 @@ pub struct CmdInFlightId {
 impl From<HistoryId> for CmdInFlightId {
     fn from(value: HistoryId) -> Self {
         CmdInFlightId { history_id: value }
+    }
+}
+
+impl CmdInFlightId {
+    /// The [`HistoryId`] this in-flight command is keyed by.
+    #[must_use]
+    pub fn history_id(&self) -> HistoryId {
+        self.history_id
     }
 }
 
@@ -165,39 +174,37 @@ impl CmdRegistry {
     /// [`CmdRegistry::finish`] or [`CmdRegistry::cancel`] it.
     pub async fn start_cmd(&self, history: History) -> CmdInFlightId {
         let id = CmdInFlightId::from(history.id.clone());
-        self.active_sessions.insert(id.clone(), CmdInFlightOwned {
-            history: history.clone(),
-        });
+        self.active_sessions.insert(
+            id.clone(),
+            CmdInFlightOwned {
+                history: history.clone(),
+            },
+        );
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
     }
 
     /// Mark a command as finished, persisting it to the history store and database.
     ///
-    /// `duration` is in nanoseconds; a value of `0` means "compute it from the command's start
-    /// timestamp".
+    /// Pass the measured command `duration`, or `None` to measure it from the command's start
+    /// timestamp.
     pub async fn finish(
         &self,
         session_id: CmdInFlightId,
         exit_code: i64,
-        duration: i64,
+        duration: Option<Duration>,
     ) -> Result<(), CmdFinishError> {
         let (_sess_id, mut session) = match self.active_sessions.remove(&session_id) {
             Some(s) => s,
             None => return Err(CmdFinishError::NotFound(session_id)),
         };
 
+        let duration = duration.unwrap_or_else(|| {
+            OffsetDateTime::now_utc().saturating_duration_since(session.history.timestamp)
+        });
+
         session.history.exit = exit_code;
-        session.history.duration = if duration == 0 {
-            i64::try_from(
-                OffsetDateTime::now_utc()
-                    .saturating_duration_since(session.history.timestamp)
-                    .as_nanos(),
-            )
-            .unwrap_or(i64::MAX)
-        } else {
-            duration
-        };
+        session.history.duration = i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX);
 
         let history = session.history;
 

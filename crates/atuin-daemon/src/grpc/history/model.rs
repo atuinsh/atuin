@@ -1,10 +1,10 @@
-use atuin_client::history::History;
+use atuin_client::history::{History, HistoryId};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::record::{CmdOrigin, CmdOriginParseError};
 use thiserror::Error;
 use time::OffsetDateTime;
 
-use crate::history::StartHistoryRequest;
+use crate::history::{Id, StartHistoryRequest};
 
 macro_rules! grpc_invalid_argument {
     ($err:ty) => {
@@ -42,5 +42,31 @@ impl TryFrom<StartHistoryRequest> for History {
             .author_kind(author_kind.into())
             .build()
             .into())
+    }
+}
+
+impl From<HistoryId> for Id {
+    fn from(value: HistoryId) -> Self {
+        Self {
+            uuid: value.into_bytes().to_vec(),
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum IdParseError {
+    #[error("history id must be exactly 16 bytes, got {0}")]
+    BadLength(usize),
+}
+
+grpc_invalid_argument!(IdParseError);
+
+impl TryFrom<Id> for HistoryId {
+    type Error = IdParseError;
+
+    fn try_from(value: Id) -> Result<Self, Self::Error> {
+        let len = value.uuid.len();
+        let bytes: [u8; 16] = value.uuid.try_into().map_err(|_| IdParseError::BadLength(len))?;
+        Ok(HistoryId::from_bytes(bytes))
     }
 }

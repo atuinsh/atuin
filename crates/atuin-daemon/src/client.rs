@@ -139,17 +139,21 @@ impl HistoryClient {
 
     pub async fn end_history(
         &mut self,
-        id: String,
+        id: HistoryId,
         duration: u64,
         exit: i64,
     ) -> Result<EndHistoryReply> {
-        let req = EndHistoryRequest { id, duration, exit };
+        let req = EndHistoryRequest {
+            id: Some(id.into()),
+            duration,
+            exit,
+        };
 
         Ok(self.client.end_history(req).await?.into_inner())
     }
 
-    pub async fn cancel_history(&mut self, id: String) -> Result<CancelHistoryReply> {
-        let req = CancelHistoryRequest { id };
+    pub async fn cancel_history(&mut self, id: HistoryId) -> Result<CancelHistoryReply> {
+        let req = CancelHistoryRequest { id: Some(id.into()) };
 
         Ok(self.client.cancel_history(req).await?.into_inner())
     }

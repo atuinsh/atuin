@@ -1,6 +1,11 @@
 syntax = "proto3";
 package history;
 
+// Represents a singular history Id.
+message Id {
+  bytes uuid = 1;
+}
+
 // Whether a human or an agent ran a command. Unspecified means the caller did
 // not say, and the author name is all the receiver has to go on. Unspecified is
 // also what keeps this backwards compatible: it is proto3's zero value, so a
@@ -25,24 +30,24 @@ message StartHistoryRequest {
 }
 
 message EndHistoryRequest {
-  string id = 1;
+  Id id = 1;
   int64 exit = 2;
   uint64 duration = 3;
 }
 
 // Cancel an in-progress history entry without adding it to the database.
 message CancelHistoryRequest {
-  string id = 1;
+  Id id = 1;
 }
 
 message StartHistoryReply {
-  string id = 1;
+  Id id = 1;
   string version = 2;
   uint32 protocol = 3;
 }
 
 message EndHistoryReply {
-  string id = 1;
+  Id id = 1;
   uint64 idx = 2;
   string version = 3;
   uint32 protocol = 4;
@@ -78,7 +83,7 @@ enum HistoryEventKind {
 
 message HistoryEntry {
   uint64 timestamp = 1; // nanosecond unix epoch
-  string id = 2;
+  Id id = 2;
   string command = 3;
   string cwd = 4;
   string session = 5;

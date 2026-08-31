@@ -5,7 +5,6 @@ use std::ops::ControlFlow;
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::str::FromStr;
 use std::time::Duration;
 
 use atuin_client::database::Sqlite;
@@ -493,10 +492,16 @@ pub async fn start_history(settings: &Settings, history: History) -> Result<Hist
         },
     )
     .await?;
-    Ok(HistoryId::from_str(&resp.id)?)
+    let id = resp.id.ok_or_else(|| eyre::eyre!("daemon reply is missing the history id"))?;
+    Ok(HistoryId::try_from(id)?)
 }
 
-pub async fn end_history(settings: &Settings, id: String, duration: u64, exit: i64) -> Result<()> {
+pub async fn end_history(
+    settings: &Settings,
+    id: HistoryId,
+    duration: u64,
+    exit: i64,
+) -> Result<()> {
     try_with_restart(
         settings,
         async |client, id| client.end_history(id, duration, exit).await,
@@ -509,7 +514,7 @@ pub async fn end_history(settings: &Settings, id: String, duration: u64, exit: i
     Ok(())
 }
 
-pub async fn cancel_history(settings: &Settings, id: String) -> Result<()> {
+pub async fn cancel_history(settings: &Settings, id: HistoryId) -> Result<()> {
     try_with_restart(
         settings,
         async |client, id| client.cancel_history(id).await,
