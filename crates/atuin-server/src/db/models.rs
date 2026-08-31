@@ -30,7 +30,7 @@ pub struct NewSession {
 }
 
 #[derive(derive_more::Into)]
-pub(super) struct DbRecord(pub Record<EncryptedData>);
+pub(crate) struct DbRecord(pub Record<EncryptedData>);
 
 macro_rules! impl_db_record_from_row {
     ($row:ty) => {
@@ -63,7 +63,7 @@ impl_db_record_from_row!(sqlx::sqlite::SqliteRow);
 impl_db_record_from_row!(sqlx::mysql::MySqlRow);
 
 #[derive(derive_more::Into)]
-pub(super) struct RecordSeriesPoint {
+pub(crate) struct RecordSeriesPoint {
     pub(super) series: RecordSeriesKey,
     pub(super) idx: RecordIdx,
 }

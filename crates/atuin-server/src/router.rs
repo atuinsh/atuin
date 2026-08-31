@@ -16,7 +16,7 @@ use tower_http::trace::TraceLayer;
 
 use super::handlers;
 use crate::db::models::User;
-use crate::db::{Database, DbError};
+use crate::db::{DbError, DynDatabase};
 use crate::handlers::{ErrorResponseStatus, RespExt};
 use crate::metrics;
 use crate::settings::Settings;
@@ -97,7 +97,7 @@ async fn semver(request: Request, next: Next) -> Response {
 
 #[derive(Clone)]
 pub struct AppState {
-    pub database: Arc<dyn Database>,
+    pub database: Arc<dyn DynDatabase>,
     pub settings: Settings,
 }
 
@@ -112,7 +112,7 @@ fn capabilities() -> CapServer {
         .expect("PageSizeCap is registered exactly once")
 }
 
-pub fn router(database: Arc<dyn Database>, settings: Settings) -> Router {
+pub fn router(database: Arc<dyn DynDatabase>, settings: Settings) -> Router {
     // Advertise the self-referential capabilities capability, so every server that speaks the
     // protocol carries at least one concrete capability a client can observe.
     let caps = Arc::new(capabilities());

@@ -1,12 +1,11 @@
 use async_trait::async_trait;
 use atuin_common::db;
 use atuin_common::db::MysqlDbUrl;
-use atuin_domain::record::{EncryptedData, Record, RecordIdx, RecordSeriesKey, RecordStatus};
 use sqlx::mysql::MySqlPoolOptions;
 use tracing::instrument;
 
-use super::models::{DbRecord, NewSession, NewUser, RecordSeriesPoint, Session, User};
-use super::{ConnectableDatabase, Database, DbError, DbResult};
+use super::models::NewUser;
+use super::{Database, DbError, DbResult, Dialect, PositionalBindingDialect};
 
 #[derive(Clone)]
 pub struct MySql {
@@ -14,8 +13,14 @@ pub struct MySql {
 }
 
 #[async_trait]
-impl ConnectableDatabase for MySql {
+impl Database for MySql {
+    type Db = sqlx::mysql::MySql;
     type Url = MysqlDbUrl;
+    type Dialect = PositionalBindingDialect;
+
+    fn pool(&self) -> &sqlx::Pool<Self::Db> {
+        &self.pool
+    }
 
     async fn connect(url: MysqlDbUrl) -> DbResult<Self> {
         let pool = MySqlPoolOptions::new().max_connections(100).connect_lazy(url.as_str())?;
@@ -26,196 +31,18 @@ impl ConnectableDatabase for MySql {
 
         Ok(Self { pool })
     }
-}
 
-#[async_trait]
-impl Database for MySql {
-    #[instrument(skip_all)]
-    async fn get_session(&self, token: &str) -> DbResult<Session> {
-        db::query_as("select id, user_id, token from sessions where token = ?")
-            .bind(token)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(Into::into)
-    }
-
-    #[instrument(skip_all)]
-    async fn get_session_user(&self, token: &str) -> DbResult<User> {
-        db::query_as(
-            "select users.id, users.username, users.email, users.password from users
-            inner join sessions
-            on users.id = sessions.user_id
-            and sessions.token = ?",
-        )
-        .bind(token)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(Into::into)
-    }
-
-    #[instrument(skip_all)]
-    async fn add_session(&self, session: &NewSession) -> DbResult<()> {
-        let token: &str = &session.token;
-
-        db::query(
-            "insert into sessions
-                (user_id, token)
-            values(?, ?)",
-        )
-        .bind(session.user_id)
-        .bind(token)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    #[instrument(skip_all)]
-    async fn get_user(&self, username: &str) -> DbResult<User> {
-        db::query_as("select id, username, email, password from users where username = ?")
-            .bind(username)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(Into::into)
-    }
-
-    #[instrument(skip_all)]
-    async fn get_user_session(&self, u: &User) -> DbResult<Session> {
-        db::query_as("select id, user_id, token from sessions where user_id = ?")
-            .bind(u.id)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(Into::into)
-    }
-
+    // MySQL has no `RETURNING`, so unlike the default it reads the new id from
+    // `last_insert_id()` off the query result.
     #[instrument(skip_all)]
     async fn add_user(&self, user: &NewUser) -> DbResult<i64> {
-        let email: &str = &user.email;
-        let username: &str = &user.username;
-        let password: &str = &user.password;
-
-        let res = db::query(
-            "insert into users
-                (username, email, password)
-            values(?, ?, ?)",
-        )
-        .bind(username)
-        .bind(email)
-        .bind(password)
-        .execute(&self.pool)
-        .await?;
+        let res = db::query(<Self::Dialect as Dialect>::ADD_USER)
+            .bind(user.username.as_str())
+            .bind(user.email.as_str())
+            .bind(user.password.as_str())
+            .execute(self.pool())
+            .await?;
 
         Ok(res.last_insert_id() as i64)
-    }
-
-    #[instrument(skip_all)]
-    async fn update_user_password(&self, u: &User) -> DbResult<()> {
-        db::query(
-            "update users
-            set password = ?
-            where id = ?",
-        )
-        .bind(&u.password)
-        .bind(u.id)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    #[instrument(skip_all)]
-    async fn delete_user(&self, u: &User) -> DbResult<()> {
-        db::query("delete from sessions where user_id = ?").bind(u.id).execute(&self.pool).await?;
-
-        db::query("delete from history where user_id = ?").bind(u.id).execute(&self.pool).await?;
-
-        db::query("delete from store where user_id = ?").bind(u.id).execute(&self.pool).await?;
-
-        db::query("delete from users where id = ?").bind(u.id).execute(&self.pool).await?;
-
-        Ok(())
-    }
-
-    #[instrument(skip_all)]
-    async fn delete_store(&self, user: &User) -> DbResult<()> {
-        db::query("delete from store where user_id = ?").bind(user.id).execute(&self.pool).await?;
-
-        Ok(())
-    }
-
-    #[instrument(skip_all)]
-    async fn add_records(&self, user: &User, records: &[Record<EncryptedData>]) -> DbResult<()> {
-        let mut tx = self.pool.begin().await?;
-
-        for i in records {
-            let id = atuin_common::utils::uuid_v7();
-
-            db::query(
-                "insert into store
-                    (id, client_id, host, idx, timestamp, version, tag, data, cek, user_id)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                on duplicate key update id = id
-                ",
-            )
-            .bind(id)
-            .bind(i.id)
-            .bind(i.host.id)
-            .bind(i.idx as i64)
-            .bind(i.timestamp as i64) // throwing away some data, but i64 is still big in terms of time
-            .bind(i.version.as_str())
-            .bind(i.tag.as_str())
-            .bind(&i.data.raw)
-            .bind(&i.data.cek)
-            .bind(user.id)
-            .execute(&mut *tx)
-            .await?;
-        }
-
-        tx.commit().await?;
-
-        Ok(())
-    }
-
-    #[instrument(skip_all)]
-    async fn next_records(
-        &self,
-        user: &User,
-        series: &RecordSeriesKey,
-        start: Option<RecordIdx>,
-        count: u64,
-    ) -> DbResult<Vec<Record<EncryptedData>>> {
-        tracing::debug!("{:?} - {:?} - {:?}", series.host_id, series.tag, start);
-        let start = start.unwrap_or(0);
-
-        db::query_as::<_, DbRecord>(
-            "select client_id, host, idx, timestamp, version, tag, data, cek from store
-                    where user_id = ?
-                    and tag = ?
-                    and host = ?
-                    and idx >= ?
-                    order by idx asc
-                    limit ?",
-        )
-        .bind(user.id)
-        .bind(series.tag.as_str())
-        .bind(series.host_id)
-        .bind(start as i64)
-        .bind(count as i64)
-        .fetch_all(&self.pool)
-        .await
-        .map(|records| records.into_iter().map(Into::into).collect())
-        .map_err(Into::into)
-    }
-
-    #[instrument(skip_all)]
-    async fn status(&self, user: &User) -> DbResult<RecordStatus> {
-        const STATUS_SQL: &str =
-            "select host, tag, max(idx) as idx from store where user_id = ? group by host, tag";
-
-        let points = db::query_as::<_, RecordSeriesPoint>(STATUS_SQL)
-            .bind(user.id)
-            .fetch_all(&self.pool)
-            .await?;
-        Ok(RecordStatus::from_points(points.into_iter().map(Into::into)))
     }
 }
