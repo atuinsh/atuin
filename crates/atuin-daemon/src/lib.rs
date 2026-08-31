@@ -5,10 +5,12 @@ use atuin_client::settings::watcher::global_settings_watcher;
 use eyre::Result;
 
 pub mod client;
+pub(crate) mod cmd_registry;
 pub mod components;
 pub mod control;
 pub mod daemon;
 pub mod events;
+pub mod grpc;
 pub mod history;
 pub mod search;
 pub mod semantic;
@@ -18,7 +20,7 @@ pub mod server;
 // Re-export client helpers
 pub use client::{ControlClient, SemanticClient, emit_event, emit_event_with_settings};
 // Re-export components
-pub use components::{HistoryComponent, SearchComponent, SemanticComponent, SyncComponent};
+pub use components::{SearchComponent, SemanticComponent, SyncComponent};
 pub use daemon::{AnyComponent, Daemon, DaemonBuilder, DaemonHandle};
 pub use events::DaemonEvent;
 
@@ -32,14 +34,12 @@ pub async fn boot(
     history_db: HistoryDatabase,
 ) -> Result<()> {
     // Create the components
-    let history_component = HistoryComponent::new();
     let search_component = SearchComponent::new();
     let semantic_component = SemanticComponent::new();
     let sync_component = SyncComponent::new();
 
     // Get the gRPC services before moving components into the daemon
     // (The services share state with the components via Arc)
-    let history_service = history_component.grpc_service();
     let search_service = search_component.grpc_service();
     let semantic_service = semantic_component.grpc_service();
 
@@ -47,7 +47,6 @@ pub async fn boot(
     let mut daemon = Daemon::builder(settings.clone())
         .store(store)
         .history_db(history_db)
-        .component(history_component)
         .component(search_component)
         .component(semantic_component)
         .component(sync_component)

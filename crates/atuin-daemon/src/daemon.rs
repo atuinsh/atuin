@@ -21,7 +21,7 @@ use enum_dispatch::enum_dispatch;
 use eyre::{Context, Result};
 use tokio::sync::{RwLock, broadcast};
 
-use crate::components::{HistoryComponent, SearchComponent, SemanticComponent, SyncComponent};
+use crate::components::{SearchComponent, SemanticComponent, SyncComponent};
 use crate::events::DaemonEvent;
 
 // ============================================================================
@@ -260,7 +260,6 @@ pub trait Component: Send + Sync + Into<AnyComponent> {
 /// Static-dispatch enum over the daemon components.
 #[enum_dispatch(Component)]
 pub enum AnyComponent {
-    History(HistoryComponent),
     Search(SearchComponent),
     Semantic(SemanticComponent),
     Sync(SyncComponent),
@@ -403,7 +402,6 @@ impl Daemon {
 /// let daemon = Daemon::builder(settings)
 ///     .store(store)
 ///     .history_db(history_db)
-///     .component(HistoryComponent::new())
 ///     .component(SearchComponent::new())
 ///     .component(SyncComponent::new())
 ///     .build()

@@ -1,13 +1,12 @@
 use atuin_client::settings::Settings;
 use eyre::{Context, Result};
 
-use crate::components::history::HistoryGrpcService;
 use crate::components::search::SearchGrpcService;
 use crate::components::semantic::SemanticGrpcService;
 use crate::control::ControlService;
 use crate::control::control_server::ControlServer;
 use crate::daemon::DaemonHandle;
-use crate::history::history_server::HistoryServer;
+use crate::grpc;
 use crate::search::search_server::SearchServer;
 use crate::semantic::semantic_server::SemanticServer;
 
@@ -24,7 +23,7 @@ const SOCKET_KEEPALIVE_INTERVAL: std::time::Duration = std::time::Duration::from
 #[allow(clippy::unused_async, reason = "needs to match the cfg(not(unix)) version")]
 pub async fn run_grpc_server(
     settings: Settings,
-    history_service: HistoryServer<HistoryGrpcService>,
+    history_service: grpc::history::HistoryService,
     search_service: SearchServer<SearchGrpcService>,
     semantic_service: SemanticServer<SemanticGrpcService>,
     control_service: ControlServer<ControlService>,
@@ -156,7 +155,7 @@ pub async fn run_grpc_server(
 #[cfg(not(unix))]
 pub async fn run_grpc_server(
     settings: Settings,
-    history_service: HistoryServer<HistoryGrpcService>,
+    history_service: HistoryService,
     search_service: SearchServer<SearchGrpcService>,
     semantic_service: SemanticServer<SemanticGrpcService>,
     control_service: ControlServer<ControlService>,

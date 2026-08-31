@@ -19,6 +19,7 @@ parking_lot = { workspace = true }
 atuin-domain = { path = "../atuin-domain", version = "18.21.0" }
 enum_dispatch = { workspace = true }
 derive_more = { workspace = true }
+thiserror = { workspace = true }
 atuin-dotfiles = { path = "../atuin-dotfiles", version = "18.21.0" }
 atuin-history = { path = "../atuin-history", version = "18.21.0" }
 
@@ -38,7 +39,7 @@ tonic = "0.14"
 tonic-prost = "0.14"
 prost = "0.14"
 prost-types = "0.14"
-tokio-stream = { version = "0.1.14", features = ["net"] }
+tokio-stream = { version = "0.1.14", features = ["net", "sync"] }
 futures = "0.3"
 hyper-util = "0.1"
 
