@@ -23,7 +23,7 @@ impl Database for MySql {
     }
 
     async fn connect(url: MysqlDbUrl) -> DbResult<Self> {
-        let pool = MySqlPoolOptions::new().max_connections(100).connect_lazy(url.as_str())?;
+        let pool = MySqlPoolOptions::new().max_connections(100).connect(url.as_str()).await?;
 
         db::migrate!(&pool, "src/db/mysql/migrations")
             .await
