@@ -7,8 +7,14 @@ service Semantic {
 }
 
 message CommandCapture {
+  // The shell prompt, as rendered by the terminal. May contain SGR escape
+  // sequences.
   string prompt = 1;
+  // The command typed by the user, as rendered by the terminal. May contain
+  // SGR escape sequences.
   string command = 2;
+  // The rendered output of the command itself. May contain SGR escape
+  // sequences.
   string output = 3;
   optional int32 exit_code = 4;
   optional string history_id = 5;

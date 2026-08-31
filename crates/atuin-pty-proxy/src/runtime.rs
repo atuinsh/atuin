@@ -1,11 +1,9 @@
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::mpsc;
 
 use crossterm::terminal;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
-use crate::capture::CommandCaptureTracker;
 use crate::debug::{Osc133DebugHighlighter, RESET};
 use crate::pty_proxy::RuntimeOptions;
 use crate::screen::{self, Msg};
@@ -72,53 +70,44 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     }
 
     let mut child = pair.slave.spawn_command(cmd).map_err(|e| eyre::eyre!("{e:#}"))?;
-
     drop(pair.slave);
 
     let mut pty_reader = pair.master.try_clone_reader().map_err(|e| eyre::eyre!("{e:#}"))?;
     let mut pty_writer = pair.master.take_writer().map_err(|e| eyre::eyre!("{e:#}"))?;
 
     let (msg_tx, msg_rx) = mpsc::sync_channel::<Msg>(64);
-    let current_cols = Arc::new(AtomicU16::new(cols.max(1)));
-
-    screen::spawn_parser_thread(rows, cols, msg_rx);
+    let _parser_handle = screen::spawn_parser_thread(rows, cols, msg_rx, screen::ParserOptions {
+        sink: options.command_capture_sink,
+        debug_osc133: options.debug_osc133,
+    });
     if let Some(path) = &sock_path {
         screen::spawn_socket_server(path.clone(), msg_tx.clone());
     }
-    spawn_resize_handler(pair.master, msg_tx.clone(), current_cols.clone())?;
-
+    spawn_resize_handler(pair.master, msg_tx.clone())?;
     terminal::enable_raw_mode()?;
 
     let stdout_thread = std::thread::spawn(move || {
         let mut stdout = std::io::stdout();
         let mut highlighter = options.debug_osc133.then(Osc133DebugHighlighter::new);
-        let mut capture_tracker =
-            options.command_capture_sink.as_ref().map(|_| CommandCaptureTracker::new(current_cols));
         let mut buf = [0u8; 8192];
 
         loop {
             match pty_reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if let (Some(tracker), Some(sink)) =
-                        (capture_tracker.as_mut(), options.command_capture_sink.as_ref())
-                    {
-                        tracker.push(&buf[..n], sink);
-                    }
+                    let raw_data = &buf[..n];
+                    let _ = msg_tx.send(Msg::Data(raw_data.to_vec()));
 
-                    if let Some(highlighter) = highlighter.as_mut() {
-                        let rendered = highlighter.render(&buf[..n]);
-                        let _ = msg_tx.send(Msg::Data(rendered.clone()));
-
-                        if stdout.write_all(&rendered).is_err() {
-                            break;
-                        }
+                    let highlighted;
+                    let data: &[u8] = if let Some(highlighter) = &mut highlighter {
+                        highlighted = highlighter.render(raw_data);
+                        &highlighted
                     } else {
-                        let _ = msg_tx.send(Msg::Data(buf[..n].to_vec()));
+                        raw_data
+                    };
 
-                        if stdout.write_all(&buf[..n]).is_err() {
-                            break;
-                        }
+                    if stdout.write_all(data).is_err() {
+                        break;
                     }
                     let _ = stdout.flush();
                 }
@@ -160,7 +149,6 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
 fn spawn_resize_handler(
     master: Box<dyn portable_pty::MasterPty + Send>,
     resize_tx: mpsc::SyncSender<Msg>,
-    current_cols: Arc<AtomicU16>,
 ) -> eyre::Result<()> {
     use signal_hook::consts::SIGWINCH;
     use signal_hook::iterator::Signals;
@@ -170,7 +158,6 @@ fn spawn_resize_handler(
     std::thread::spawn(move || {
         for _ in signals.forever() {
             if let Ok((cols, rows)) = terminal::size() {
-                current_cols.store(cols.max(1), Ordering::Relaxed);
                 let _ = master.resize(PtySize {
                     rows,
                     cols,

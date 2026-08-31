@@ -1,22 +1,29 @@
 //! String-related utilities and extension traits.
+
 use std::fmt::{self, Write as _};
+
+#[cfg(feature = "unicode")]
+use unicode_width::UnicodeWidthStr;
+use url::{Position, Url};
 
 #[cfg(feature = "unicode")]
 pub mod align;
 #[cfg(feature = "unicode")]
 pub mod ellipsis;
+pub mod trim;
+
+mod buffer;
 mod escape_non_printable_posix_ext;
 mod non_nul_str;
 
 #[cfg(feature = "unicode")]
 pub use align::{AlignExt, Alignment};
+pub use buffer::BoundedBuffer;
 #[cfg(feature = "unicode")]
 pub use ellipsis::EllipsizeExt;
 pub use escape_non_printable_posix_ext::EscapeNonPrintablePosixExt;
 pub use non_nul_str::{ContainsNul, NonNulStr};
-#[cfg(feature = "unicode")]
-use unicode_width::UnicodeWidthStr;
-use url::{Position, Url};
+pub use trim::TrimExt;
 
 /// Extension trait for [`Url`] to render a `Debug` representation with any
 /// password redacted.
