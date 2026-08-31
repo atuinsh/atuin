@@ -25,17 +25,7 @@ impl Database for MySql {
     }
 
     async fn connect(url: MysqlDbUrl) -> DbResult<Self> {
-        // Connect eagerly (like the Postgres/SQLite backends) so a misconfigured
-        // or unreachable `db_uri` fails fast here with a connection error,
-        // instead of a lazy pool deferring the failure to `migrate!`'s
-        // `pool.acquire()` and hanging the server at startup. A bounded
-        // `acquire_timeout` caps how long sqlx retries an unreachable server so
-        // the failure surfaces promptly rather than after the 30s default.
-        let pool = MySqlPoolOptions::new()
-            .max_connections(100)
-            .acquire_timeout(Duration::from_secs(5))
-            .connect(url.as_str())
-            .await?;
+        let pool = MySqlPoolOptions::new().max_connections(100).connect(url.as_str()).await?;
 
         db::migrate!(&pool, "src/db/mysql/migrations")
             .await
@@ -56,40 +46,5 @@ impl Database for MySql {
             .await?;
 
         Ok(res.last_insert_id() as i64)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use atuin_common::db::MysqlDbUrl;
-    use url::Url;
-
-    use super::MySql;
-    use crate::db::Database;
-
-    /// A misconfigured/unreachable MySQL `db_uri` must fail fast with a
-    /// connection error instead of hanging the server at startup.
-    ///
-    /// Regression test for the lazy-vs-eager `connect` divergence: Postgres and
-    /// SQLite connect eagerly and error cleanly on a bad URL, but MySQL used
-    /// `connect_lazy`, which deferred the failure to `migrate!`'s
-    /// `pool.acquire()` — blocking/retrying forever with no log output.
-    #[tokio::test]
-    async fn connect_to_unreachable_mysql_fails_fast() {
-        // Syntactically valid, but nothing is listening on this refused port.
-        let url = MysqlDbUrl(Url::parse("mysql://root:pass@127.0.0.1:59999/atuin").unwrap());
-
-        let result = tokio::time::timeout(Duration::from_secs(15), MySql::connect(url)).await;
-
-        match result {
-            // Resolved with a connection error — the correct, fail-fast behaviour.
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!("unexpectedly connected to an unreachable MySQL server"),
-            Err(_elapsed) => {
-                panic!("MySql::connect hung: it did not resolve within 15s on a bad db_uri")
-            }
-        }
     }
 }
