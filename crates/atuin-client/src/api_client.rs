@@ -10,7 +10,7 @@ use atuin_common::url::UrlAppendExt;
 use atuin_domain::api::{
     ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION, ChangePasswordRequest, ErrorResponse,
     LoginRequest, LoginResponse, MeResponse, PackfileDownloadResponse, PackfileResponse,
-    RegisterResponse,
+    RegisterResponse, SyncResponse,
 };
 use atuin_domain::caps::{AuthHeaderProvider, CapClient, CapMismatch, CapabilitiesExt};
 use atuin_domain::record::{
@@ -488,15 +488,14 @@ impl Client {
     }
 
     #[instrument(level = "trace", skip_all, fields(count = records.len()), err)]
-    pub async fn post_records(&self, records: &[Record<EncryptedData>]) -> Result<()> {
+    pub async fn post_records(&self, records: &[Record<EncryptedData>]) -> Result<SyncResponse> {
         let url = self.sync_addr.append_path("api/v0/record")?;
 
         debug!("uploading {} records to {url}", records.len());
 
         let resp = self.client.post(url).json(records).send().await?;
-        handle_resp_error(resp).await?;
-
-        Ok(())
+        let content = handle_resp_error(resp).await?.json::<SyncResponse>().await?;
+        Ok(content)
     }
 
     /// Upload a stream of packfile blobs, transferring several concurrently.

@@ -1,6 +1,11 @@
+use crate::record::Record;
+use atuin_common::encryption::paseto_v4::EncryptedData;
+use semver::Version;
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::LazyLock;
+use thiserror::Error;
 
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -66,6 +71,22 @@ pub struct ErrorResponse<'a> {
     pub reason: Cow<'a, str>,
 }
 
+/// These are Sync Error that have happened as an intended choice
+#[derive(Error, Debug, serde::Serialize, serde::Deserialize)]
+pub enum ServerConfigSyncError {
+    #[error("could not add record; record too large")]
+    RequestTooLarge,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FailedSyncRecord {
+    pub reason: ServerConfigSyncError,
+    pub record: Record<EncryptedData>,
+}
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncResponse {
+    pub failed_commands: Vec<FailedSyncRecord>,
+}
 #[derive(Debug, Serialize, Deserialize)]
 pub struct IndexResponse {
     pub homage: String,
