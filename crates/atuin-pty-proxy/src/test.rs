@@ -7,7 +7,9 @@ use std::thread::JoinHandle;
 
 use rstest::{fixture, rstest};
 
-use crate::ipc::domain::{AnyRequest, AnyResponse, DumpScreenResponse, HelloResponse, PROTOCOL_VERSION};
+use crate::ipc::domain::{
+    AnyRequest, AnyResponse, DumpScreenResponse, HelloResponse, PROTOCOL_VERSION,
+};
 use crate::ipc::{IpcClient, IpcConnectError, IpcController, IpcError, IpcServer, wire};
 use crate::screen::{self, Msg, ScreenSnapshot};
 
@@ -34,10 +36,15 @@ fn sock() -> TempSock {
 
 fn serve(sock: &Path, rows: u16, cols: u16, seed: &[u8]) {
     let (msg_tx, msg_rx) = sync_channel::<Msg>(64);
-    screen::spawn_parser_thread(rows, cols, msg_rx, screen::ParserOptions {
-        sink: None,
-        debug_osc133: false,
-    });
+    screen::spawn_parser_thread(
+        rows,
+        cols,
+        msg_rx,
+        screen::ParserOptions {
+            sink: None,
+            debug_osc133: false,
+        },
+    );
     msg_tx.send(Msg::Data(seed.to_vec())).unwrap();
     IpcServer::spawn(sock, IpcController::new(msg_tx)).unwrap();
 }
@@ -105,9 +112,9 @@ async fn dump_screen_reflects_live_screen(
     assert_eq!((snap.row_count(), snap.col_count()), (rows, cols));
     assert_eq!((snap.cursor_row(), usize::from(snap.cursor_col())), (0, seed.len()));
     assert!(
-        snap.formatted_rows().iter().any(|row| row.contains(seed)),
+        snap.rows.iter().any(|row| row.contains(seed)),
         "screen missing seeded text {seed:?}: {:?}",
-        snap.formatted_rows()
+        snap.rows
     );
 
     conn.close().await.expect("close");
@@ -197,7 +204,7 @@ async fn v0_client_reads_legacy_push(sock: TempSock) {
 
     assert_eq!((snap.row_count(), snap.col_count()), (10, 40));
     assert_eq!((snap.cursor_row(), snap.cursor_col()), (2, 5));
-    let got: Vec<&str> = snap.formatted_rows().iter().map(String::as_str).collect();
+    let got: Vec<&str> = snap.rows.iter().map(String::as_str).collect();
     assert_eq!(got, ["hello", "world"]);
 
     server.join().unwrap();

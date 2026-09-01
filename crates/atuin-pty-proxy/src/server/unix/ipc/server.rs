@@ -26,7 +26,7 @@ pub enum IpcServerError {
 }
 
 #[derive(Debug, Error)]
-enum StreamServiceError {
+enum StreamServicingError {
     #[error("connection with peer reset: {0}")]
     ConnectionReset(std::io::Error),
 
@@ -110,7 +110,8 @@ impl IpcServerWorker {
         Ok(())
     }
 
-    fn service_stream(&self, stream: &mut UnixStream) -> Result<(), StreamServiceError> {
+    /// Services (verb) the stream from the Unix connection.
+    fn service_stream(&self, stream: &mut UnixStream) -> Result<(), StreamServicingError> {
         // The following protocol is very naive, but might just be good enough.
         //
         // The client needs to respond to us within 200ms. If the client does not respond within
@@ -145,11 +146,11 @@ impl IpcServerWorker {
     /// Reads a request from the server and parses it into an [`AnyRequest`] structure.
     ///
     /// Returns [`None`] if the client aborted the connection normally.
-    fn read_request(stream: &mut UnixStream) -> Result<Option<AnyRequest>, StreamServiceError> {
+    fn read_request(stream: &mut UnixStream) -> Result<Option<AnyRequest>, StreamServicingError> {
         Ok(wire::try_decode::<_, AnyRequest>(stream)?)
     }
 
-    fn write_reply(stream: &mut UnixStream, rep: &AnyResponse) -> Result<(), StreamServiceError> {
+    fn write_reply(stream: &mut UnixStream, rep: &AnyResponse) -> Result<(), StreamServicingError> {
         let framed = wire::try_encode(rep)?;
         stream.write_all(&framed)?;
         stream.flush()?;
@@ -158,7 +159,7 @@ impl IpcServerWorker {
     }
 }
 
-impl From<EncodeError> for StreamServiceError {
+impl From<EncodeError> for StreamServicingError {
     fn from(err: EncodeError) -> Self {
         match err {
             EncodeError::DataEncodingErr(err) => Self::Encode(err),
@@ -167,7 +168,7 @@ impl From<EncodeError> for StreamServiceError {
     }
 }
 
-impl From<HeaderParseError> for StreamServiceError {
+impl From<HeaderParseError> for StreamServicingError {
     fn from(err: HeaderParseError) -> Self {
         match err {
             HeaderParseError::MessageTooLong(len, _) => Self::TooLarge(len as usize),
@@ -176,7 +177,7 @@ impl From<HeaderParseError> for StreamServiceError {
     }
 }
 
-impl From<std::io::Error> for StreamServiceError {
+impl From<std::io::Error> for StreamServicingError {
     fn from(err: std::io::Error) -> Self {
         match err.kind() {
             ErrorKind::ConnectionReset => Self::ConnectionReset(err),
@@ -186,7 +187,7 @@ impl From<std::io::Error> for StreamServiceError {
     }
 }
 
-impl From<wire::DecodeError> for StreamServiceError {
+impl From<wire::DecodeError> for StreamServicingError {
     fn from(err: wire::DecodeError) -> Self {
         match err {
             wire::DecodeError::Io(err) => err.into(),

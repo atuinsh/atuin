@@ -37,9 +37,4 @@ impl ScreenSnapshot {
     pub fn cursor_col(&self) -> u16 {
         self.cursor_pos.1
     }
-
-    #[must_use]
-    pub fn formatted_rows(&self) -> &[String] {
-        &self.rows
-    }
 }

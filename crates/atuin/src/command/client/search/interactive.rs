@@ -1506,7 +1506,7 @@ async fn fetch_screen_state(socket_path: &str) -> Option<SavedScreen> {
         cols: snap.col_count(),
         cursor_row: snap.cursor_row(),
         cursor_col: snap.cursor_col(),
-        rows_data: snap.formatted_rows().iter().map(|row| row.as_bytes().to_vec()).collect(),
+        rows_data: snap.rows.iter().map(|row| row.as_bytes().to_vec()).collect(),
     })
 }
 
