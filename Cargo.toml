@@ -98,8 +98,6 @@ rusty_paserk = { version = "0.5.0", default-features = false, features = [
 strum = { version = "0.27", features = ["strum_macros"] }
 strum_macros = "0.28"
 
-# tracing-appender is pinned to 0.2.4 (the tighter of the two requirements it
-# previously had across crates) so both consumers resolve to one version.
 tracing-appender = "0.2.4"
 tracing-futures = { version = "0.2", features = ["futures-03"] }
 tracing-tree = "0.4"
