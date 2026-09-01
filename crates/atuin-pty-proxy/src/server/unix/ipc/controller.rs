@@ -1,9 +1,9 @@
-//! The main controller responsible for servicing the [`crate::ipc::IpcServer`].
+//! The main controller responsible for servicing the `IpcServer`.
 //!
 //! A controller is a piece of code which receives typed request messages, does something with them,
 //! and then returns typed response messages.
 //!
-//! This controller is injected into [`crate::ipc::IpcServer::spawn`] and is responsible for
+//! This controller is injected into `IpcServer::spawn` and is responsible for
 //! servicing client requests.
 use std::sync::mpsc::{self, SyncSender};
 
