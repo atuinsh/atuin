@@ -63,6 +63,7 @@ impl GrpcService for Service {
 
         Ok(Response::new(StartHistoryReply {
             id: Some(id.into()),
+            // TODO(markovejnovic): Pull this from one constant, well-defined spot.
             version: env!("CARGO_PKG_VERSION").to_string(),
             protocol: DAEMON_PROTOCOL_VERSION,
         }))
@@ -88,13 +89,12 @@ impl GrpcService for Service {
             }
         };
 
-        self.journal.finish(id, exit, duration).await?;
+        let finished_cmd = self.journal.finish(id, exit, duration).await?;
 
         Ok(Response::new(EndHistoryReply {
-            // TODO(markovejnovic): return the record store's real record id and idx once
-            // HistoryJournal::finish surfaces them.
-            id: Some(id.into()),
-            idx: 0,
+            record_id: Some(finished_cmd.history_record_id.into()),
+            record_idx: finished_cmd.history_record_idx,
+            // TODO(markovejnovic): Pull this from one constant, well-defined spot.
             version: env!("CARGO_PKG_VERSION").to_string(),
             protocol: DAEMON_PROTOCOL_VERSION,
         }))
@@ -133,6 +133,9 @@ impl GrpcService for Service {
         Ok(Response::new(Box::pin(stream)))
     }
 
+    /// Returns the active status of the daemon. Has nothing to do with history.
+    ///
+    /// TODO(markovejnovic): This probably doesn't belong in this service.
     #[instrument(skip_all, level = Level::TRACE)]
     async fn status(
         &self,
@@ -140,12 +143,20 @@ impl GrpcService for Service {
     ) -> Result<Response<StatusReply>, Status> {
         Ok(Response::new(StatusReply {
             healthy: true,
+            // TODO(markovejnovic): Pull this from one constant, well-defined spot.
             version: env!("CARGO_PKG_VERSION").to_string(),
             pid: std::process::id(),
             protocol: DAEMON_PROTOCOL_VERSION,
         }))
     }
 
+    /// Requests the daemon shut down. Has nothing to do with history.
+    ///
+    /// Note:
+    ///  - A misbehaving daemon will likely not respect this request.
+    ///  - The shutdown request is sent asynchronously, but this RPC immediately returns.
+    ///
+    /// TODO(markovejnovic): This probably doesn't belong in this service.
     #[instrument(skip_all, level = Level::TRACE)]
     async fn shutdown(
         &self,

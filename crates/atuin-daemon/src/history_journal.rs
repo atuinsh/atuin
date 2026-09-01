@@ -36,7 +36,7 @@ use atuin_client::history::store::HistoryStore;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::packfile;
 use atuin_domain::caps::{CapClient, PackfileCap};
-use atuin_domain::record::{RecordSeriesKey, RecordTag};
+use atuin_domain::record::{RecordId, RecordIdx, RecordSeriesKey, RecordTag};
 use dashmap::DashMap;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
@@ -77,6 +77,12 @@ pub enum CmdEvent {
     Finished(History),
     /// A command has been cancelled. See [`HistoryJournal::cancel`].
     Cancelled(History),
+}
+
+/// Structure which defines
+pub struct FinishedCmd {
+    pub history_record_id: RecordId,
+    pub history_record_idx: RecordIdx,
 }
 
 /// Registry of in-flight commands which performs output capture, management, storage and
@@ -196,7 +202,7 @@ impl HistoryJournal {
         history_id: HistoryId,
         exit_code: i64,
         duration: Duration,
-    ) -> Result<(), CmdFinishError> {
+    ) -> Result<FinishedCmd, CmdFinishError> {
         let Some((_id, mut session)) = self.active_sessions.remove(&history_id) else {
             return Err(CmdFinishError::NotFound(history_id));
         };
@@ -210,9 +216,8 @@ impl HistoryJournal {
             .save(&history)
             .await
             .map_err(|e| CmdFinishError::HistoryDbFailed(e.into()))?;
-        // TODO(markovejnovic): surface the returned (RecordId, RecordIdx) so end_history can report
-        // the real record id and idx rather than the placeholder history id.
-        self.history_store
+        let (history_record_id, history_record_idx) = self
+            .history_store
             .push(history.clone())
             .await
             .map_err(CmdFinishError::HistoryStoreFailed)?;
@@ -234,7 +239,10 @@ impl HistoryJournal {
 
         let _ = self.broadcast.send(CmdEvent::Finished(history));
 
-        Ok(())
+        Ok(FinishedCmd {
+            history_record_id,
+            history_record_idx,
+        })
     }
 
     /// Cancel a command, discarding its in-memory state without persisting a history entry.

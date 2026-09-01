@@ -159,7 +159,7 @@ mod unix {
         let id: HistoryId = start_reply.id.unwrap().try_into().unwrap();
         let end_reply =
             client.end_history(id, Some(Duration::from_nanos(1_000_000)), 0).await.unwrap();
-        assert!(end_reply.id.is_some());
+        assert!(end_reply.record_id.is_some());
     }
 
     #[rstest]

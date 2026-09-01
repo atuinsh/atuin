@@ -3,12 +3,12 @@ use std::time::Duration;
 
 use atuin_client::history::{History, HistoryId};
 use atuin_common::time::OffsetDateTimeExt;
-use atuin_domain::record::{CmdOrigin, CmdOriginParseError};
+use atuin_domain::record::{CmdOrigin, CmdOriginParseError, RecordId};
 use thiserror::Error;
 use time::OffsetDateTime;
 use tonic::Status;
 
-use crate::history::common::Uuid;
+use crate::history::common::{RecordId as RecordIdProto, Uuid};
 use crate::history::{
     AuthorKind, CancelHistoryRequest, EndHistoryRequest, HistoryEntry, HistoryId as HistoryIdProto,
     StartHistoryRequest,
@@ -31,6 +31,16 @@ impl From<HistoryId> for HistoryIdProto {
         Self {
             uuid: Some(Uuid {
                 value: value.into_bytes().to_vec(),
+            }),
+        }
+    }
+}
+
+impl From<RecordId> for RecordIdProto {
+    fn from(value: RecordId) -> Self {
+        Self {
+            uuid: Some(Uuid {
+                value: value.0.into_bytes().to_vec(),
             }),
         }
     }
