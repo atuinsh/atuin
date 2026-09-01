@@ -1,7 +1,6 @@
 [workspace]
-members = ["crates/*"]
-
 resolver = "2"
+members = ["crates/*"]
 exclude = ["ui/backend"]
 
 [workspace.package]
@@ -14,8 +13,6 @@ repository = "https://github.com/atuinsh/atuin"
 readme = "README.md"
 
 [workspace.dependencies]
-async-trait = "0.1.58"
-enum_dispatch = "0.3"
 atuin-ai = { path = "crates/atuin-ai", version = "18.21.0", default-features = false }
 atuin-client = { path = "crates/atuin-client", version = "18.21.0" }
 atuin-common = { path = "crates/atuin-common", version = "18.21.0" }
@@ -28,162 +25,158 @@ atuin-pty-proxy = { path = "crates/atuin-pty-proxy", version = "18.21.0", defaul
 atuin-scripts = { path = "crates/atuin-scripts", version = "18.21.0" }
 atuin-server = { path = "crates/atuin-server", version = "18.21.0" }
 atuin-vt100 = "0.17"
-frizbee = "0.12.0"
+
+arboard = { version = "3.4", default-features = false }
+argon2 = "0.5"
+async-stream = "0.3"
+async-trait = "0.1.58"
+axoupdater = "0.10"
+axum = "0.8"
 base64 = "0.22"
-crossterm = "0.29.0"
-time = { version = "0.3.47", features = [
-  "serde-human-readable",
-  "macros",
-  "local-offset",
-] }
+chrono = "0.4"
+chrono-humanize = "0.2"
 clap = { version = "4.5.7", features = ["derive"] }
+clap_complete = "4.6.1"
+clap_complete_nushell = "4.5.4"
+colored = "2.0.4"
 config = { version = "0.15.8", default-features = false, features = ["toml"] }
-derive_more = { version = "2", features = ["as_ref", "deref", "display", "error", "from", "into", "debug"] }
+crossterm = "0.29.0"
+crypto_secretbox = "0.1.1"
+daemonize = "0.5.0"
+dashmap = "6.1.0"
+derive_more = {
+    version = "2",
+    features = ["as_ref", "deref", "display", "error", "from", "into", "debug"],
+}
 directories = "6.0.0"
+divan = { version = "5.0.1", package = "codspeed-divan-compat" }
 easy-cast = "0.7.1"
+enum_dispatch = "0.3"
+eventsource-stream = "0.2"
+eye_declare = "0.6.4"
+eye_declare_engine = { version = "0.6.4", features = ["test-util"] }
 eyre = "0.6"
+frizbee = "0.12.0"
 fs-err = "3.1"
+futures = "0.3"
+futures-util = "0.3"
+getrandom = "0.4"
+glob-match = "0.2.1"
 http = "1.5"
-reqwest-middleware = "0.5"
-wiremock = "0.6"
+humantime = "2.1.0"
+hyper-util = "0.1"
+imara-diff = "0.2"
+indicatif = "0.18.0"
 interim = { version = "0.2.0", features = ["time_0_3"] }
 itertools = "0.15.0"
-rand = { version = "0.8.5", features = ["std"] }
-semver = "1.0.20"
-serde = { version = "1.0.202", features = ["derive"] }
-serde_json = "1.0.119"
-shellexpand = "3"
-tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0.7", features = ["rt"] }
-uuid = { version = "1.9", features = ["v4", "v7", "serde"] }
-whoami = "2.1.0"
-typed-builder = "0.23.2"
+lasso = { version = "0.7", features = ["multi-threaded"] }
+# Version range mirrors sqlx-sqlite's so cargo unifies both to a single
+# `links = "sqlite3"` package (one bundled SQLite).
+libsqlite3-sys = ">=0.30.1, <0.38.0"
+listenfd = "1.0.1"
+memchr = "2.7"
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.18", default-features = false }
+minijinja = "2.9.0"
+minspan = "0.1.5"
+nix = { version = "0.30.1", features = ["signal"] }
+norm = { version = "0.1.1", features = ["fzf-v2"] }
+notify = "8"
+opentelemetry = "0.32"
+opentelemetry-otlp = "0.32"
+opentelemetry_sdk = "0.32"
+palette = { version = "0.7.5", features = ["serializing"] }
+parking_lot = "0.12.5"
+portable-pty = "0.9"
 pretty_assertions = "1.3.0"
 proptest = "1.11.0"
-parking_lot = "0.12.5"
-zeroize = "1"
+prost = "0.14"
+prost-types = "0.14"
+protox = "0.9"
+pulldown-cmark = "0.13.0"
+rand = { version = "0.8.5", features = ["std"] }
+ratatui = "0.30.0"
+ratatui-core = "0.1"
+ratatui-widgets = "0.3"
+regex = "1.10.5"
+reqwest = {
+    version = "0.13",
+    default-features = false,
+    features = ["json", "native-tls", "stream", "gzip", "zstd"],
+}
+reqwest-middleware = "0.5"
+rmcp = { version = "2.1.0", default-features = false, features = ["server", "transport-io"] }
+rmp = "0.8.14"
+rpassword = "7.0"
 rstest = "0.26.1"
-thiserror = "2"
+runtime-format = "0.1.3"
 rustix = { version = "1.1.4", features = ["process", "fs"] }
-nix = { version = "0.30.1", features = ["signal"] }
-windows-sys = { version = "0.61.2", features = ["Win32_System_Console", "Win32_System_Threading", "Win32_Foundation"] }
-tower = "0.5"
+rusty_paserk = { version = "0.5.0", default-features = false, features = ["v4", "serde"] }
+# rusty_paserk 0.5.0 (latest) requires rusty_paseto 0.8.0 unfortunately
+rusty_paseto = { version = "0.8.0", default-features = false }
+semver = "1.0.20"
+serde = { version = "1.0.202", features = ["derive"] }
+serde_bytes = "0.11"
+serde_json = "1.0.119"
+serde_regex = "1.1.0"
+serde_with = "3.8.1"
+shellexpand = "3"
+shlex = "2.0.1"
+signal-hook = "0.3"
+sql-builder = "3"
+sqlx = { version = "0.9", features = ["runtime-tokio", "time", "uuid"] }
+strum = { version = "0.27", features = ["strum_macros"] }
+strum_macros = "0.28"
+sysinfo = "0.30.7"
+tempfile = { version = "3.19" }
+thiserror = "2"
+time = { version = "0.3.47", features = ["serde-human-readable", "macros", "local-offset"] }
+tiny-bip39 = "2"
 # `release_max_level_info` compiles out trace/debug events in any build with
 # debug assertions off (release, dist, profiling). Builds that want the
 # `#[instrument(level = "trace")]` spans back must turn debug assertions on --
 # see the `profiling-traced` profile below.
 tracing = { version = "0.1", features = ["release_max_level_info"] }
-tree-sitter = "0.26.8"
-tree-sitter-bash = "0.25.1"
-crypto_secretbox = "0.1.1"
-tiny-bip39 = "2"
-tree-sitter-fish = "3.6.0"
-tree-sitter-powershell = "0.26.4"
-rmp = "0.8.14"
-ratatui = "0.30.0"
-sql-builder = "3"
-tempfile = { version = "3.19" }
-minijinja = "2.9.0"
-glob-match = "0.2.1"
-imara-diff = "0.2"
-xxhash-rust = { version = "0.8", features = ["xxh3"] }
-regex = "1.10.5"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = { version = "0.1.14", features = ["net"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+toml = "1.1"
 toml_edit = "0.25.4"
-url = { version = "2.5", features = ["serde"] }
-# rusty_paserk 0.5.0 (latest) requires rusty_paseto 0.8.0 unfortunately
-rusty_paseto = { version = "0.8.0", default-features = false }
-rusty_paserk = { version = "0.5.0", default-features = false, features = [
-  "v4",
-  "serde",
-] }
-strum = { version = "0.27", features = ["strum_macros"] }
-strum_macros = "0.28"
-
+tonic = "0.14"
+tonic-build = "0.14"
+tonic-prost = "0.14"
+tonic-prost-build = "0.14"
+tonic-types = "0.14"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace"] }
 tracing-appender = "0.2.4"
 tracing-futures = { version = "0.2", features = ["futures-03"] }
-tracing-tree = "0.4"
 tracing-opentelemetry = "0.33"
-opentelemetry = "0.32"
-opentelemetry_sdk = "0.32"
-opentelemetry-otlp = "0.32"
-futures = "0.3"
-futures-util = "0.3"
-async-stream = "0.3"
-eventsource-stream = "0.2"
-pulldown-cmark = "0.13.0"
+tracing-subscriber = {
+    version = "0.3",
+    features = ["ansi", "fmt", "registry", "env-filter", "json"],
+}
+tracing-tree = "0.4"
+tree-sitter = "0.26.8"
+tree-sitter-bash = "0.25.1"
+tree-sitter-fish = "3.6.0"
+tree-sitter-powershell = "0.26.4"
 tui-textarea-2 = "0.10.2"
-unicode-width = "0.2"
+typed-builder = "0.23.2"
 unicode-segmentation = "1.11.0"
-eye_declare = "0.6.4"
-eye_declare_engine = { version = "0.6.4", features = ["test-util"] }
-ratatui-core = "0.1"
-ratatui-widgets = "0.3"
-toml = "1.1"
+unicode-width = "0.2"
+url = { version = "2.5", features = ["serde"] }
+uuid = { version = "1.9", features = ["v4", "v7", "serde"] }
+whoami = "2.1.0"
+windows-sys = {
+    version = "0.61.2",
+    features = ["Win32_System_Console", "Win32_System_Threading", "Win32_Foundation"],
+}
+wiremock = "0.6"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 yaml-rust2 = "0.11"
-chrono = "0.4"
-chrono-humanize = "0.2"
-rmcp = { version = "2.1.0", default-features = false, features = ["server", "transport-io"] }
-humantime = "2.1.0"
-minspan = "0.1.5"
-serde_regex = "1.1.0"
-serde_with = "3.8.1"
-serde_bytes = "0.11"
-memchr = "2.7"
-notify = "8"
-indicatif = "0.18.0"
-palette = { version = "0.7.5", features = ["serializing"] }
+zeroize = "1"
 zstd = "0.13"
-divan = { version = "5.0.1", package = "codspeed-divan-compat" }
-sysinfo = "0.30.7"
-getrandom = "0.4"
-dashmap = "6.1.0"
-lasso = { version = "0.7", features = ["multi-threaded"] }
-tonic = "0.14"
-tonic-types = "0.14"
-tonic-prost = "0.14"
-tonic-build = "0.14"
-tonic-prost-build = "0.14"
-prost = "0.14"
-prost-types = "0.14"
-protox = "0.9"
-tokio-stream = { version = "0.1.14", features = ["net"] }
-hyper-util = "0.1"
-listenfd = "1.0.1"
-axum = "0.8"
-portable-pty = "0.9"
-signal-hook = "0.3"
-tower-http = { version = "0.6", features = ["trace"] }
-argon2 = "0.5"
-metrics = "0.24"
-metrics-exporter-prometheus = { version = "0.18", default-features = false }
-clap_complete = "4.6.1"
-clap_complete_nushell = "4.5.4"
-rpassword = "7.0"
-runtime-format = "0.1.3"
-colored = "2.0.4"
-norm = { version = "0.1.1", features = ["fzf-v2"] }
-shlex = "2.0.1"
-arboard = { version = "3.4", default-features = false }
-daemonize = "0.5.0"
-axoupdater = "0.10"
-
-[workspace.dependencies.tracing-subscriber]
-version = "0.3"
-features = ["ansi", "fmt", "registry", "env-filter", "json"]
-
-[workspace.dependencies.reqwest]
-version = "0.13"
-features = ["json", "native-tls", "stream", "gzip", "zstd"]
-default-features = false
-
-[workspace.dependencies.sqlx]
-version = "0.9"
-features = ["runtime-tokio", "time", "uuid"]
-
-# Version range mirrors sqlx-sqlite's so cargo unifies both to a single
-# `links = "sqlite3"` package (one bundled SQLite).
-[workspace.dependencies.libsqlite3-sys]
-version = ">=0.30.1, <0.38.0"
 
 # The profile that 'cargo dist' will build with
 [profile.dist]
