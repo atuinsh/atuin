@@ -564,11 +564,7 @@ async fn handle_daemon_end(
         debug!("history has non-zero exit code, and store_failed is false");
         daemon::cancel_history(settings, id).await?;
     } else {
-        // Historically, a duration of `0` had the semantics of [`Option::None`] on the daemon.
-        //
-        // TODO(markovejnovic): When we figure out a way to update shell hooks, we should remove
-        //                      this.
-        let duration = duration.filter(|ns| *ns != 0).map(Duration::from_nanos);
+        let duration = duration.map(Duration::from_nanos);
         daemon::end_history(settings, id, duration, exit).await?;
     }
 

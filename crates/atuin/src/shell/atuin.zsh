@@ -93,7 +93,7 @@ _atuin_precmd() {
     local duration=""
     if [[ -n $__atuin_preexec_time && -n $__atuin_precmd_time ]]; then
         printf -v duration %.0f $(((__atuin_precmd_time - __atuin_preexec_time) * 1000000000))
-        ((duration < 0)) && duration=""
+        ((duration < 0)) && duration=0
     fi
 
     __atuin_osc133_command_finished "$EXIT"
@@ -118,9 +118,7 @@ _atuin_zshaddhistory() {
     [[ $line == \#* && $line != *$'\n'* ]] || return 0
     local id
     id=$(ATUIN_SHELL=zsh atuin history start --hook -- "$line" 2>/dev/null)
-    # Omit --duration: a comment line has no measured runtime, so let the daemon derive it rather
-    # than sending a literal 0.
-    [[ -n $id ]] && (atuin history end --hook --exit 0 -- "$id" >/dev/null 2>&1 &)
+    [[ -n $id ]] && (atuin history end --hook --exit 0 --duration=0 -- "$id" >/dev/null 2>&1 &)
     return 0
 }
 

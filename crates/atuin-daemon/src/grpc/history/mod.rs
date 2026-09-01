@@ -80,7 +80,7 @@ impl GrpcService for Service {
         let duration = match duration {
             Some(duration) => duration,
             None => {
-                OffsetDateTime::now_utc().saturating_duration_since(self.journal.started_at(id)?)
+                OffsetDateTime::now_utc().saturating_duration_since(self.journal.get(id)?.timestamp)
             }
         };
 
@@ -117,6 +117,8 @@ impl GrpcService for Service {
     ) -> Result<Response<Self::TailHistoryStream>, Status> {
         // A cancelled command maps to a reply with no `event`; drop those so the tail only carries
         // real started/ended/lagged notices.
+        // This is legacy behavior.
+        // TODO(markovejnovic): Should we continue with this behavior?
         let stream = self.journal.subscribe().filter_map(|event| async move {
             let reply = TailHistoryReply::from(event);
             reply.event.is_some().then_some(Ok::<_, Status>(reply))

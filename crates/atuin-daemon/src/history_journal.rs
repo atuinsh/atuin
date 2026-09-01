@@ -38,7 +38,6 @@ use atuin_client::packfile;
 use atuin_domain::caps::{CapClient, PackfileCap};
 use atuin_domain::record::{RecordId, RecordIdx, RecordSeriesKey, RecordTag};
 use dashmap::DashMap;
-use time::OffsetDateTime;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 
@@ -118,19 +117,11 @@ pub enum CmdCancelError {
     NotFound(HistoryId),
 }
 
-/// Errors returned by [`HistoryJournal::started_at`].
+/// Errors returned by [`HistoryJournal::get`].
 #[derive(Debug, thiserror::Error)]
 pub enum GetCmdInFlightError {
     #[error("command {0} is not in flight")]
     NotFound(HistoryId),
-}
-
-/// Narrow a measured runtime to the `i64` nanoseconds stored on a history entry.
-///
-/// Saturates at `i64::MAX` (~292 years) for durations too large to represent, rather than wrapping
-/// to a negative value as a plain `as i64` cast would.
-fn duration_nanos_i64(duration: Duration) -> i64 {
-    i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX)
 }
 
 impl HistoryJournal {
@@ -166,21 +157,21 @@ impl HistoryJournal {
         id
     }
 
-    /// The start timestamp recorded for an in-flight command.
+    /// The in-flight command recorded under `history_id`.
     ///
-    /// Copies the value out and releases the map's shard lock before returning, so callers never
+    /// Returns an owned clone, releasing the map's shard lock before returning, so callers never
     /// hold a borrow into the journal across [`HistoryJournal::finish`] / [`HistoryJournal::cancel`].
-    pub fn started_at(&self, history_id: HistoryId) -> Result<OffsetDateTime, GetCmdInFlightError> {
+    pub fn get(&self, history_id: HistoryId) -> Result<History, GetCmdInFlightError> {
         self.active_sessions
             .get(&history_id)
-            .map(|history| history.timestamp)
+            .map(|history| history.clone())
             .ok_or(GetCmdInFlightError::NotFound(history_id))
     }
 
     /// Mark a command as finished, persisting it to the history store and database.
     ///
     /// `duration` is the measured runtime of the command; callers that don't have one can derive it
-    /// from the start timestamp via [`HistoryJournal::started_at`].
+    /// from the start timestamp via [`HistoryJournal::get`].
     pub async fn finish(
         &self,
         history_id: HistoryId,
@@ -192,7 +183,7 @@ impl HistoryJournal {
         };
 
         history.exit = exit_code;
-        history.duration = duration_nanos_i64(duration);
+        history.duration = i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX);
 
         self.history_db
             .save(&history)
@@ -248,28 +239,5 @@ impl HistoryJournal {
     #[must_use]
     pub fn subscribe(&self) -> BroadcastStream<CmdEvent> {
         BroadcastStream::new(self.broadcast.subscribe())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use proptest::prelude::*;
-
-    use super::duration_nanos_i64;
-
-    proptest! {
-        /// The nanos of any measurable duration narrow to a non-negative i64, saturating at
-        /// i64::MAX rather than wrapping negative like a plain `as` cast. Guards the stored
-        /// duration on every finished command.
-        #[test]
-        fn duration_nanos_i64_saturates(nanos in any::<u64>()) {
-            // from_nanos(u64::MAX) exceeds i64::MAX nanos, so this reaches the saturating branch.
-            let d = Duration::from_nanos(nanos);
-            let v = duration_nanos_i64(d);
-            prop_assert!(v >= 0);
-            prop_assert_eq!(v as u128, d.as_nanos().min(i64::MAX as u128));
-        }
     }
 }
