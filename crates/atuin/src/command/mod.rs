@@ -24,7 +24,7 @@ pub enum AtuinCmd {
     /// PTY proxy for atuin
     #[cfg(feature = "pty-proxy")]
     #[command(alias = "hex")]
-    PtyProxy(atuin_pty_proxy::PtyProxy),
+    PtyProxy(atuin_pty_proxy::cli::PtyProxy),
 
     /// Generate a UUID
     Uuid,
@@ -84,7 +84,7 @@ impl AtuinCmd {
 }
 
 #[cfg(all(feature = "pty-proxy", unix))]
-fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy, prev_umask: Mode) {
+fn run_pty_proxy(proxy: atuin_pty_proxy::cli::PtyProxy, prev_umask: Mode) {
     // `Mode::bits()` returns u16 on macOS/BSD but u32 on Linux, where this
     // conversion is a no-op.
     #[allow(clippy::useless_conversion)]

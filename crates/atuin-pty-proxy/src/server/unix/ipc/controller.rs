@@ -7,12 +7,12 @@
 //! servicing client requests.
 use std::sync::mpsc::{self, SyncSender};
 
+use super::super::screen::Msg;
 use crate::domain::ipc::{
     DumpScreenRequest, DumpScreenResponse, GoodbyeRequest, GoodbyeResponse, HelloRequest,
     HelloResponse, PROTOCOL_VERSION,
 };
 use crate::domain::screen::ScreenSnapshot;
-use crate::server::screen::Msg;
 
 #[derive(Debug, Clone)]
 pub struct IpcController {

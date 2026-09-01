@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
+use super::super::cli::PtyProxy;
 use super::capture::CommandCaptureSink;
-use super::cli::PtyProxy;
 use super::runtime;
 use crate::cli::{Cmd, Init, Shell};
 

@@ -19,7 +19,7 @@ mod client;
 
 #[cfg(all(unix, feature = "client"))]
 pub use client::{IpcClient, IpcConnectError, IpcConnection, IpcError};
-#[cfg(all(unix, feature = "domain"))]
+#[cfg(feature = "domain")]
 pub use domain::ScreenSnapshot;
-#[cfg(all(unix, feature = "server"))]
-pub use server::{CommandCapture, CommandCaptureSink, Shell, cli, init_script};
+#[cfg(feature = "server")]
+pub use server::{CommandCapture, CommandCaptureSink, cli, cli::Shell, init_script};

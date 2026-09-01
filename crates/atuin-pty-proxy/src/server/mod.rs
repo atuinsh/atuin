@@ -1,12 +1,10 @@
 pub mod cli;
 
-mod capture;
-mod debug;
-mod ipc;
-mod osc133;
-mod pty_proxy;
-mod runtime;
-mod screen;
+#[cfg(unix)]
+mod unix;
 
-pub use capture::{CommandCapture, CommandCaptureSink};
-pub use pty_proxy::{Shell, init_script};
+#[cfg(unix)]
+pub use unix::{
+    capture::{CommandCapture, CommandCaptureSink},
+    pty_proxy::init_script,
+};
