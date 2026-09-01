@@ -28,6 +28,7 @@
 //! It is possible to stream events out of [`HistoryJournal`] via [`HistoryJournal::subscribe`]
 //! which returns a new [`futures::Stream`] of [`CmdEvent`] events.
 
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -124,6 +125,63 @@ pub enum GetCmdInFlightError {
     NotFound(HistoryId),
 }
 
+/// A session temporarily checked out of a [`HistoryJournal`]'s in-flight map.
+///
+/// While the guard is alive the session has been removed from the map. If it is dropped without
+/// [`CheckedOutSession::commit`] -- via an early `?` return, a panic, or a cancelled future -- the
+/// session is re-inserted, keeping the command in flight rather than silently losing it. This makes
+/// the "do fallible work, but put it back if anything goes wrong" pattern hard to get wrong.
+///
+/// Deref-ing the guard yields the underlying [`History`], so callers can read and mutate the
+/// checked-out session directly (e.g. `session.exit = ...`).
+struct CheckedOutSession<'a> {
+    map: &'a DashMap<HistoryId, History>,
+    /// The checked-out session. Present for the guard's entire lifetime until it is committed or
+    /// dropped, at which point it is taken exactly once.
+    history: Option<History>,
+}
+
+impl<'a> CheckedOutSession<'a> {
+    /// Remove the session identified by `id` from `map`, returning a guard that restores it on drop
+    /// unless [`Self::commit`] is called. Returns [`None`] when no such session is in flight.
+    fn take(map: &'a DashMap<HistoryId, History>, id: HistoryId) -> Option<Self> {
+        map.remove(&id).map(|(_id, history)| Self {
+            map,
+            history: Some(history),
+        })
+    }
+
+    /// Consume the guard, keeping the session out of the map and returning ownership of it.
+    ///
+    /// Call this once all fallible work has succeeded and the command should no longer be considered
+    /// in flight.
+    fn commit(mut self) -> History {
+        self.history.take().expect("history is present until commit or drop")
+    }
+}
+
+impl Deref for CheckedOutSession<'_> {
+    type Target = History;
+
+    fn deref(&self) -> &Self::Target {
+        self.history.as_ref().expect("history is present until commit or drop")
+    }
+}
+
+impl DerefMut for CheckedOutSession<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.history.as_mut().expect("history is present until commit or drop")
+    }
+}
+
+impl Drop for CheckedOutSession<'_> {
+    fn drop(&mut self) {
+        if let Some(history) = self.history.take() {
+            self.map.insert(history.id, history);
+        }
+    }
+}
+
 impl HistoryJournal {
     /// Create a new command registry.
     pub fn new(
@@ -157,6 +215,15 @@ impl HistoryJournal {
         id
     }
 
+    /// Borrows an in-flight session from [`Self::active_sessions`] with a [`CheckedOutSession`]
+    /// guard, which achieves two things:
+    ///
+    ///   - [`CheckedOutSession::commit`] removes it from [`Self::active_sessions`].
+    ///   - [`Drop`] "rolls the session back", placing it back into [`Self::active_sessions`].
+    fn checkout(&self, history_id: HistoryId) -> Option<CheckedOutSession<'_>> {
+        CheckedOutSession::take(&self.active_sessions, history_id)
+    }
+
     /// The in-flight command recorded under `history_id`.
     ///
     /// Returns an owned clone, releasing the map's shard lock before returning, so callers never
@@ -178,22 +245,26 @@ impl HistoryJournal {
         exit_code: i64,
         duration: Duration,
     ) -> Result<FinishedCmd, CmdFinishError> {
-        let Some((_id, mut history)) = self.active_sessions.remove(&history_id) else {
-            return Err(CmdFinishError::NotFound(history_id));
-        };
+        let mut session = self.checkout(history_id).ok_or(CmdFinishError::NotFound(history_id))?;
 
-        history.exit = exit_code;
-        history.duration = i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX);
+        session.exit = exit_code;
+        session.duration = i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX);
 
+        // Each `?` below drops `session`, which restores it to the in-flight map, so a failed (or
+        // cancelled) persistence leaves the command in flight instead of dropping it.
         self.history_db
-            .save(&history)
+            .save(&session)
             .await
             .map_err(|e| CmdFinishError::HistoryDbFailed(e.into()))?;
+
         let (history_record_id, history_record_idx) = self
             .history_store
-            .push(history.clone())
+            .push(session.clone())
             .await
             .map_err(CmdFinishError::HistoryStoreFailed)?;
+
+        // Persistence succeeded; take ownership and stop treating the command as in flight.
+        let history = session.commit();
 
         // TODO(markovejnovic): This is a little bit hacked-together. I'm thinking it would be good
         // to have a Packer type for this kind of logic. It can wraps the Caps.

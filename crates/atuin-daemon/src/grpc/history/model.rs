@@ -4,6 +4,7 @@ use std::time::Duration;
 use atuin_client::history::{History, HistoryId};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::record::{CmdOrigin, CmdOriginParseError, RecordId};
+use easy_cast::Conv;
 use thiserror::Error;
 use time::OffsetDateTime;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
@@ -51,7 +52,7 @@ impl From<RecordId> for RecordIdProto {
 impl From<History> for HistoryEntry {
     fn from(history: History) -> Self {
         Self {
-            timestamp: history.timestamp.unix_timestamp_nanos() as u64,
+            timestamp: u64::conv(history.timestamp.unix_timestamp_nanos()),
             id: Some(history.id.into()),
             command: history.command,
             cwd: history.cwd,
