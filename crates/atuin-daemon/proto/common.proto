@@ -8,8 +8,7 @@ message Uuid {
   bytes value = 1;
 }
 
-// Identifies a single record in the record store. Wraps the generic Uuid so it stays a distinct
-// type from other id kinds (e.g. a history entry's id) while sharing the same wire representation.
+// Identifies a single record in the record store.
 message RecordId {
   Uuid uuid = 1;
 }
