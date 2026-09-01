@@ -68,10 +68,6 @@ impl From<History> for HistoryEntry {
 }
 
 /// Map a single journal event to its tail-stream reply.
-///
-/// A cancelled command never became history, so it is invisible on the tail and produces a reply
-/// with no `event` (the stream drops those). A lag is surfaced in-band as a `Lagged` notice rather
-/// than terminating the stream, so a slow consumer learns it fell behind but keeps receiving events.
 impl From<Result<CmdEvent, BroadcastStreamRecvError>> for TailHistoryReply {
     fn from(event: Result<CmdEvent, BroadcastStreamRecvError>) -> Self {
         let event = match event {
@@ -331,8 +327,6 @@ mod tests {
         assert_eq!((h.exit, h.duration), (-1, -1));
     }
 
-    // --- EndHistoryRequest -> (id, exit, duration) ---
-
     #[rstest]
     fn end_request_none_duration_is_preserved() {
         let (_, exit, duration) = parse_end(end_req(Some(good_id_proto()), 5, None)).unwrap();
@@ -402,8 +396,6 @@ mod tests {
     fn journal_not_found_maps_to_not_found(#[case] status: Status) {
         assert_eq!(status.code(), Code::NotFound);
     }
-
-    // --- journal event -> tail reply ---
 
     fn history_fixture() -> History {
         History::from_db()
