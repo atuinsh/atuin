@@ -6,14 +6,16 @@ use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::record::{CmdOrigin, CmdOriginParseError, RecordId};
 use thiserror::Error;
 use time::OffsetDateTime;
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::Status;
 
 use crate::history::common::{RecordId as RecordIdProto, Uuid};
+use crate::history::tail_history_reply::Event;
 use crate::history::{
     AuthorKind, CancelHistoryRequest, EndHistoryRequest, HistoryEntry, HistoryId as HistoryIdProto,
-    StartHistoryRequest,
+    Lagged, StartHistoryRequest, TailHistoryReply,
 };
-use crate::history_journal::{CmdCancelError, CmdFinishError, GetCmdInFlightError};
+use crate::history_journal::{CmdCancelError, CmdEvent, CmdFinishError, GetCmdInFlightError};
 
 /// Mark an error as a [`tonic::Status::invalid_argument`].
 macro_rules! grpc_invalid_argument {
@@ -62,6 +64,25 @@ impl From<History> for HistoryEntry {
             shell: history.shell.unwrap_or_default(),
             author_kind: AuthorKind::from(history.author_kind) as i32,
         }
+    }
+}
+
+/// Map a single journal event to its tail-stream reply.
+///
+/// A cancelled command never became history, so it is invisible on the tail and produces a reply
+/// with no `event` (the stream drops those). A lag is surfaced in-band as a `Lagged` notice rather
+/// than terminating the stream, so a slow consumer learns it fell behind but keeps receiving events.
+impl From<Result<CmdEvent, BroadcastStreamRecvError>> for TailHistoryReply {
+    fn from(event: Result<CmdEvent, BroadcastStreamRecvError>) -> Self {
+        let event = match event {
+            Ok(CmdEvent::Started(history)) => Some(Event::Started(history.into())),
+            Ok(CmdEvent::Finished(history)) => Some(Event::Ended(history.into())),
+            Ok(CmdEvent::Cancelled(_)) => None,
+            Err(BroadcastStreamRecvError::Lagged(dropped)) => {
+                Some(Event::Lagged(Lagged { dropped }))
+            }
+        };
+        Self { event }
     }
 }
 
@@ -252,7 +273,7 @@ mod tests {
         assert!(err.to_string().contains(fragment), "{err}");
     }
 
-    #[test]
+    #[rstest]
     fn history_entry_field_routing() {
         let h: History = History::from_db()
             .id(HistoryId::from_bytes([7u8; 16]))
@@ -298,13 +319,13 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn start_request_rejects_colonless_hostname() {
         let err = History::try_from(start_req("nocolon")).unwrap_err();
         assert!(matches!(err, StartHistoryRequestParseError::BadCmdOrigin(_)));
     }
 
-    #[test]
+    #[rstest]
     fn start_request_defaults_exit_and_duration_to_unmeasured() {
         let h = History::try_from(start_req("host:user")).unwrap();
         assert_eq!((h.exit, h.duration), (-1, -1));
@@ -312,14 +333,14 @@ mod tests {
 
     // --- EndHistoryRequest -> (id, exit, duration) ---
 
-    #[test]
+    #[rstest]
     fn end_request_none_duration_is_preserved() {
         let (_, exit, duration) = parse_end(end_req(Some(good_id_proto()), 5, None)).unwrap();
         assert_eq!(exit, 5);
         assert!(duration.is_none());
     }
 
-    #[test]
+    #[rstest]
     fn end_request_some_duration_is_parsed() {
         let d = prost_types::Duration {
             seconds: 0,
@@ -329,7 +350,7 @@ mod tests {
         assert_eq!(duration, Some(Duration::from_nanos(3)));
     }
 
-    #[test]
+    #[rstest]
     fn end_request_negative_duration_errs_without_panic() {
         let d = prost_types::Duration {
             seconds: -1,
@@ -339,7 +360,7 @@ mod tests {
         assert!(matches!(err, EndHistoryRequestParseError::InvalidDuration(_)));
     }
 
-    #[test]
+    #[rstest]
     fn end_request_missing_id_errs() {
         let err = parse_end(end_req(None, 0, None)).unwrap_err();
         assert!(matches!(err, EndHistoryRequestParseError::MissingHistory));
@@ -352,7 +373,7 @@ mod tests {
         assert!(HistoryId::try_from(CancelHistoryRequest { id }).is_err());
     }
 
-    #[test]
+    #[rstest]
     fn cancel_request_good_id_ok() {
         assert!(
             HistoryId::try_from(CancelHistoryRequest {
@@ -370,7 +391,7 @@ mod tests {
         assert_eq!(Status::from(err).code(), code);
     }
 
-    #[test]
+    #[rstest]
     fn id_parse_error_maps_to_invalid_argument() {
         assert_eq!(Status::from(IdParseError::MissingUuid).code(), Code::InvalidArgument);
     }
@@ -380,5 +401,51 @@ mod tests {
     #[case::get(Status::from(GetCmdInFlightError::NotFound(HistoryId::from_bytes([0u8; 16]))))]
     fn journal_not_found_maps_to_not_found(#[case] status: Status) {
         assert_eq!(status.code(), Code::NotFound);
+    }
+
+    // --- journal event -> tail reply ---
+
+    fn history_fixture() -> History {
+        History::from_db()
+            .id(HistoryId::from_bytes([1u8; 16]))
+            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .command("c".into())
+            .cwd("/".into())
+            .exit(0)
+            .duration(0)
+            .session("s".into())
+            .hostname("h:u".into())
+            .author("a".into())
+            .intent(None)
+            .deleted_at(None)
+            .shell(None)
+            .author_kind(None)
+            .build()
+            .into()
+    }
+
+    #[rstest]
+    fn tail_started_maps_to_started() {
+        let reply = TailHistoryReply::from(Ok(CmdEvent::Started(history_fixture())));
+        assert!(matches!(reply.event, Some(Event::Started(_))));
+    }
+
+    #[rstest]
+    fn tail_finished_maps_to_ended() {
+        let reply = TailHistoryReply::from(Ok(CmdEvent::Finished(history_fixture())));
+        assert!(matches!(reply.event, Some(Event::Ended(_))));
+    }
+
+    /// A cancelled command produces a reply with no event, so the tail stream drops it.
+    #[rstest]
+    fn tail_cancelled_has_no_event() {
+        let reply = TailHistoryReply::from(Ok(CmdEvent::Cancelled(history_fixture())));
+        assert!(reply.event.is_none());
+    }
+
+    #[rstest]
+    fn tail_lag_maps_to_lagged_with_count() {
+        let reply = TailHistoryReply::from(Err(BroadcastStreamRecvError::Lagged(7)));
+        assert!(matches!(reply.event, Some(Event::Lagged(l)) if l.dropped == 7));
     }
 }
