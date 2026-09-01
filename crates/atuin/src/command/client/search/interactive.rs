@@ -758,7 +758,6 @@ impl State {
         }
     }
 
-    #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::bool_to_int_with_if)]
     fn calc_preview_height(
         settings: &Settings,
@@ -1705,7 +1704,7 @@ fn compute_popup_placement(
 
 // for now, it works. But it'd be great if it were more easily readable, and
 // modular. I'd like to add some more stats and stuff at some point
-#[allow(clippy::cast_possible_truncation, clippy::too_many_lines, clippy::cognitive_complexity)]
+#[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
 pub async fn history(
     query: &[String],
     settings: &Settings,
