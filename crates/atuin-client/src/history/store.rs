@@ -10,6 +10,7 @@ use atuin_domain::record::{
     DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag,
     RecordVersion,
 };
+use easy_cast::Conv;
 use eyre::{Result, bail, eyre};
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
@@ -184,7 +185,7 @@ impl HistoryStore {
                 .host(Host::new(self.host_id))
                 .version(RecordVersion::from(Version::LATEST.name()))
                 .tag(RecordTag::History)
-                .idx(idx + n as u64)
+                .idx(idx + u64::conv(n))
                 .data(bytes)
                 .build();
 
@@ -462,6 +463,7 @@ mod tests {
     use atuin_domain::record::{
         CmdOrigin, DecryptedData, Host, HostId, Record, RecordTag, RecordVersion,
     };
+    use easy_cast::Conv;
     use futures::TryStreamExt;
     use rstest::*;
     use time::Duration;
@@ -621,7 +623,8 @@ mod tests {
     fn history_n(n: usize) -> History {
         History {
             id: format!("{n:032x}").parse().unwrap(),
-            timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00) + Duration::seconds(n as i64),
+            timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00)
+                + Duration::seconds(i64::conv(n)),
             command: format!("command {n}"),
             ..sample_history()
         }

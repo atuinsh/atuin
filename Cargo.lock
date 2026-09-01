@@ -264,6 +264,7 @@ dependencies = [
  "crossterm",
  "daemonize",
  "derive_more",
+ "easy-cast",
  "enum_dispatch",
  "eyre",
  "frizbee",
@@ -324,6 +325,7 @@ dependencies = [
  "crossterm",
  "derive_more",
  "directories",
+ "easy-cast",
  "enum_dispatch",
  "eventsource-stream",
  "eye_declare",
@@ -382,6 +384,7 @@ dependencies = [
  "crossterm",
  "derive_more",
  "directories",
+ "easy-cast",
  "enum_dispatch",
  "eyre",
  "fs-err",
@@ -441,6 +444,7 @@ dependencies = [
  "crypto_secretbox",
  "derive_more",
  "directories",
+ "easy-cast",
  "eyre",
  "fs-err",
  "futures",
@@ -488,6 +492,7 @@ dependencies = [
  "atuin-history",
  "dashmap",
  "derive_more",
+ "easy-cast",
  "enum_dispatch",
  "eyre",
  "frizbee",
@@ -525,6 +530,7 @@ dependencies = [
  "atuin-common",
  "axum",
  "derive_more",
+ "easy-cast",
  "eyre",
  "http",
  "parking_lot",
@@ -576,6 +582,7 @@ dependencies = [
  "atuin-client",
  "codspeed-divan-compat",
  "crossterm",
+ "easy-cast",
  "rand 0.8.7",
  "rstest",
  "serde",
@@ -611,6 +618,7 @@ dependencies = [
  "atuin-vt100",
  "clap",
  "crossterm",
+ "easy-cast",
  "eyre",
  "portable-pty",
  "rstest",
@@ -625,6 +633,7 @@ dependencies = [
  "atuin-common",
  "atuin-domain",
  "derive_more",
+ "easy-cast",
  "eyre",
  "minijinja",
  "pretty_assertions",
@@ -651,6 +660,7 @@ dependencies = [
  "atuin-common",
  "atuin-daemon",
  "codspeed-divan-compat",
+ "easy-cast",
  "parking_lot",
  "time",
  "tokio",
@@ -669,6 +679,7 @@ dependencies = [
  "clap",
  "config",
  "derive_more",
+ "easy-cast",
  "eyre",
  "fs-err",
  "futures-util",
@@ -1752,6 +1763,12 @@ name = "dyn-clone"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
+
+[[package]]
+name = "easy-cast"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eae1c5aaf1bfdc24a9b5bf6daf3afee62c478afe08706a6bd9fd996f73630494"
 
 [[package]]
 name = "ed25519"
@@ -5531,7 +5548,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

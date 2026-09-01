@@ -6,6 +6,7 @@ use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread::JoinHandle;
 
 use atuin_common::os::unix::{SecureTempDirError, create_secure_temp_dir};
+use easy_cast::Conv;
 
 use crate::capture::{CommandCaptureSink, CommandCaptureTracker};
 use crate::debug::Osc133DebugHighlighter;
@@ -149,7 +150,7 @@ fn encode_screen(parser: &vt100::Parser) -> Vec<u8> {
     buf.extend_from_slice(&cursor_col.to_be_bytes());
 
     for row_data in screen.rows_formatted(0, cols) {
-        let len = row_data.len() as u32;
+        let len = u32::conv(row_data.len());
         buf.extend_from_slice(&len.to_be_bytes());
         buf.extend_from_slice(row_data.as_bytes());
     }
@@ -185,7 +186,7 @@ mod tests {
         (0..rows)
             .map(|_| {
                 let (len, body) = rest.split_at(4);
-                let len = u32::from_be_bytes(len.try_into().expect("4 bytes")) as usize;
+                let len = usize::conv(u32::from_be_bytes(len.try_into().expect("4 bytes")));
                 let (row, remainder) = body.split_at(len);
                 rest = remainder;
                 String::from_utf8(row.to_vec()).expect("rows are valid UTF-8")
@@ -304,7 +305,7 @@ mod tests {
         assert_eq!(captures[0].prompt, "$");
         assert_eq!(captures[0].command, "echo hi");
         assert_eq!(captures[0].output, "hi");
-        assert_eq!(captures[0].output_observed_bytes, b"hi\r\n".len() as u64);
+        assert_eq!(captures[0].output_observed_bytes, u64::conv(b"hi\r\n".len()));
 
         // The screen snapshot, on the other hand, is where the labels belong.
         let rows = rows_of(&encode_screen(&parser.emulator)).join("\n");

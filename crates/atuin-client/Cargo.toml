@@ -24,6 +24,7 @@ check-update = []
 vendored-tls = ["reqwest?/native-tls-vendored"]
 
 [dependencies]
+easy-cast = { workspace = true }
 derive_more = { workspace = true }
 tracing = { workspace = true }
 tracing-futures = { workspace = true }

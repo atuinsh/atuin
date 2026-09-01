@@ -24,6 +24,7 @@ path = "src/bin/main.rs"
 vendored-tls = ["reqwest/native-tls-vendored"]
 
 [dependencies]
+easy-cast = { workspace = true }
 atuin-common = { workspace = true, features = ["db"] }
 atuin-domain = { workspace = true, features = ["axum"] }
 

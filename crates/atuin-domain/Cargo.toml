@@ -13,6 +13,7 @@ repository = { workspace = true }
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+easy-cast = { workspace = true }
 serde = { workspace = true }
 atuin-common = { workspace = true }
 whoami = { workspace = true }

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 pub use atuin_common::encryption::paseto_v4::{self, EncryptedData};
+use easy_cast::Conv;
 use eyre::WrapErr;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
@@ -102,7 +103,7 @@ pub struct Record<Data> {
     pub host: Host,
 
     /// The creation time in nanoseconds since unix epoch
-    #[builder(default = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as u64)]
+    #[builder(default = u64::conv(time::OffsetDateTime::now_utc().unix_timestamp_nanos()))]
     pub timestamp: u64,
 
     /// The version the data in the entry conforms to

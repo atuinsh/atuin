@@ -15,6 +15,7 @@ readme.workspace = true
 
 [dependencies]
 atuin-client = { workspace = true }
+easy-cast = { workspace = true }
 
 time = { workspace = true }
 serde = { workspace = true }

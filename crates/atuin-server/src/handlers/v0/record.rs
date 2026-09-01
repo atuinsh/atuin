@@ -4,6 +4,7 @@ use atuin_domain::record::{
 use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
+use easy_cast::Conv;
 use metrics::counter;
 use serde::Deserialize;
 use tracing::{error, instrument};
@@ -23,7 +24,7 @@ pub async fn post(
 
     tracing::debug!(count = records.len(), user = user.username, "request to add records");
 
-    counter!("atuin_record_uploaded").increment(records.len() as u64);
+    counter!("atuin_record_uploaded").increment(u64::conv(records.len()));
 
     let keep = records
         .iter()
@@ -96,7 +97,7 @@ pub async fn next(
         }
     };
 
-    counter!("atuin_record_downloaded").increment(records.len() as u64);
+    counter!("atuin_record_downloaded").increment(u64::conv(records.len()));
 
     Ok(Json(records))
 }

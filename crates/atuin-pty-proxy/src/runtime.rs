@@ -178,6 +178,7 @@ fn process_exit_code(code: u32) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    use easy_cast::Conv;
     use rstest::rstest;
 
     use super::process_exit_code;
@@ -185,8 +186,8 @@ mod tests {
     #[rstest]
     #[case::zero(0, 0)]
     #[case::mid_range(127, 127)]
-    #[case::max_i32(i32::MAX as u32, i32::MAX)]
-    #[case::overflow_defaults_to_one(i32::MAX as u32 + 1, 1)]
+    #[case::max_i32(u32::conv(i32::MAX), i32::MAX)]
+    #[case::overflow_defaults_to_one(u32::conv(i32::MAX) + 1, 1)]
     fn maps_exit_code(#[case] input: u32, #[case] expected: i32) {
         assert_eq!(process_exit_code(input), expected);
     }

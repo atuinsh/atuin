@@ -73,6 +73,7 @@ profiling-traced = [
 ]
 
 [dependencies]
+easy-cast = { workspace = true }
 atuin-ai = { workspace = true, optional = true }
 # default-features = false cannot be set on a workspace-inherited dependency, and
 # atuin-client's defaults (sync/hub/daemon) are needed by its other consumers, so

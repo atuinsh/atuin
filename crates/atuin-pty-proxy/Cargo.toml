@@ -11,6 +11,7 @@ homepage = { workspace = true }
 repository = { workspace = true }
 
 [dependencies]
+easy-cast = { workspace = true }
 clap = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]

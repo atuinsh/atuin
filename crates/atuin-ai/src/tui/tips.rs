@@ -2,6 +2,7 @@
 //! line. One tip is pulled per turn and rides through both.
 
 use atuin_client::settings::Settings;
+use easy_cast::Conv;
 
 /// Facts a tip's relevance predicate may consult. Assembled fresh at each
 /// pull so predicates see current session state, not startup state.
@@ -98,7 +99,7 @@ impl TipRotation {
     pub(crate) fn new() -> Self {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos() as usize)
+            .map(|d| usize::conv(d.subsec_nanos()))
             .unwrap_or(0);
         Self::starting_at(nanos % TIPS.len().max(1))
     }

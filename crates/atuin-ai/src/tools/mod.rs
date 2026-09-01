@@ -8,6 +8,7 @@ use atuin_client::history::{AuthorPattern, HistoryId};
 use atuin_common::ansi;
 use atuin_common::filter::OrFilter;
 use atuin_common::time::UtcOffsetExt;
+use easy_cast::Conv;
 use enum_dispatch::enum_dispatch;
 use eyre::Result;
 
@@ -335,15 +336,15 @@ impl ReadToolCall {
 
         let raw_lines = reader
             .lines()
-            .skip(self.offset as usize)
-            .take(self.limit as usize)
+            .skip(usize::conv(self.offset))
+            .take(usize::conv(self.limit))
             .collect::<Result<Vec<_>, _>>();
 
         match raw_lines {
             Ok(lines) => {
-                let first_line_no = self.offset as usize + 1;
+                let first_line_no = usize::conv(self.offset) + 1;
                 let last_line_no = first_line_no + lines.len().saturating_sub(1);
-                let width = last_line_no.max(1).ilog10() as usize + 1;
+                let width = usize::conv(last_line_no.max(1).ilog10()) + 1;
 
                 let numbered: String = lines
                     .iter()
@@ -799,9 +800,9 @@ const PREVIEW_WIDTH: NonZeroU16 = NonZeroU16::new(120).unwrap();
 /// instead of the real output.
 fn vt100_screen_lines(screen: &vt100::Screen) -> Vec<String> {
     let (rows, cols) = screen.size();
-    let mut lines = Vec::with_capacity(rows as usize);
+    let mut lines = Vec::with_capacity(usize::conv(rows));
     for row in 0..rows {
-        let mut line = String::with_capacity(cols as usize);
+        let mut line = String::with_capacity(usize::conv(cols));
         for col in 0..cols {
             if let Some(cell) = screen.cell(row, col) {
                 line.push_str(cell.contents());
@@ -952,7 +953,7 @@ pub async fn execute_shell_command_streaming(
         stdout: stdout_text,
         stderr: stderr_text,
         exit_code,
-        duration_ms: duration.as_millis() as u64,
+        duration_ms: u64::conv(duration.as_millis()),
         interrupted,
     }
 }
@@ -1178,7 +1179,8 @@ impl PermissibleToolCall for AtuinOutputToolCall {
 
 fn format_output_lines_for_llm(lines: &[atuin_daemon::semantic::OutputLine]) -> String {
     let width =
-        lines.iter().map(|line| line.line_number).max().unwrap_or(1).max(1).ilog10() as usize + 1;
+        usize::conv(lines.iter().map(|line| line.line_number).max().unwrap_or(1).max(1).ilog10())
+            + 1;
     let mut formatted = Vec::with_capacity(lines.len());
     let mut previous_line_number = None;
 

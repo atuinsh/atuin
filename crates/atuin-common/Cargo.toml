@@ -21,6 +21,7 @@ db = ["dep:sqlx"]
 sqlite = ["db", "sqlx/sqlite", "sqlx/regexp", "dep:libsqlite3-sys", "dep:tokio-util"]
 
 [dependencies]
+easy-cast = { workspace = true }
 atuin-vt100 = { workspace = true, optional = true }
 derive_more = { workspace = true }
 tiny-bip39 = { workspace = true }

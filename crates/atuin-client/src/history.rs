@@ -7,6 +7,7 @@ use atuin_common::rmp::encode::{self, ByteBuf, EncodeError};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils::{normalize_optional_string, uuid_v7};
 use atuin_domain::record::{CmdOrigin, DecryptedData, UNKNOWN_USER};
+use easy_cast::Conv;
 use eyre::{Result, bail};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -436,7 +437,7 @@ impl History {
         encode::write_array_len(&mut output, LATEST_SERIALIZED_FIELDS)?;
 
         encode::write_str(&mut output, &self.id.to_string())?;
-        encode::write_u64(&mut output, self.timestamp.unix_timestamp_nanos() as u64)?;
+        encode::write_u64(&mut output, u64::conv(self.timestamp.unix_timestamp_nanos()))?;
         encode::write_sint(&mut output, self.duration)?;
         encode::write_sint(&mut output, self.exit)?;
         encode::write_str(&mut output, &self.command)?;
@@ -446,7 +447,7 @@ impl History {
 
         encode::write_optional(
             &mut output,
-            self.deleted_at.map(|d| d.unix_timestamp_nanos() as u64),
+            self.deleted_at.map(|d| u64::conv(d.unix_timestamp_nanos())),
             encode::write_u64,
         )?;
         encode::write_str(&mut output, self.author.as_str())?;

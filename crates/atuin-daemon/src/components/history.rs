@@ -13,6 +13,7 @@ use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::caps::PackfileCap;
 use atuin_domain::record::{CmdOrigin, RecordSeriesKey, RecordTag};
 use dashmap::DashMap;
+use easy_cast::Conv;
 use eyre::Result;
 use time::OffsetDateTime;
 use tokio_stream::Stream;
@@ -122,7 +123,7 @@ fn history_to_tail_reply(kind: HistoryEventKind, history: History) -> TailHistor
     TailHistoryReply {
         kind: kind as i32,
         history: Some(HistoryEntry {
-            timestamp: history.timestamp.unix_timestamp_nanos() as u64,
+            timestamp: u64::conv(history.timestamp.unix_timestamp_nanos()),
             id: history.id.to_string(),
             command: history.command,
             cwd: history.cwd,
