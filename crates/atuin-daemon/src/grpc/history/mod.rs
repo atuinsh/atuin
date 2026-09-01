@@ -23,7 +23,7 @@ use crate::history::{
 };
 use crate::history_journal::{CmdEvent, HistoryJournal};
 
-const DAEMON_PROTOCOL_VERSION: u32 = 1;
+const DAEMON_PROTOCOL_VERSION: u32 = 2;
 
 /// The History gRPC service.
 ///
