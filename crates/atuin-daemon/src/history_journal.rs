@@ -148,6 +148,14 @@ pub enum GetCmdInFlightError {
     NotFound(HistoryId),
 }
 
+/// Narrow a measured runtime to the `i64` nanoseconds stored on a history entry.
+///
+/// Saturates at `i64::MAX` (~292 years) for durations too large to represent, rather than wrapping
+/// to a negative value as a plain `as i64` cast would.
+fn duration_nanos_i64(duration: Duration) -> i64 {
+    i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX)
+}
+
 impl HistoryJournal {
     /// Create a new command registry.
     pub fn new(
@@ -212,7 +220,7 @@ impl HistoryJournal {
         };
 
         session.history.exit = exit_code;
-        session.history.duration = i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX);
+        session.history.duration = duration_nanos_i64(duration);
 
         let history = session.history;
 
@@ -270,5 +278,28 @@ impl HistoryJournal {
     #[must_use]
     pub fn subscribe(&self) -> BroadcastStream<CmdEvent> {
         BroadcastStream::new(self.broadcast.subscribe())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use proptest::prelude::*;
+
+    use super::duration_nanos_i64;
+
+    proptest! {
+        /// The nanos of any measurable duration narrow to a non-negative i64, saturating at
+        /// i64::MAX rather than wrapping negative like a plain `as` cast. Guards the stored
+        /// duration on every finished command.
+        #[test]
+        fn duration_nanos_i64_saturates(nanos in any::<u64>()) {
+            // from_nanos(u64::MAX) exceeds i64::MAX nanos, so this reaches the saturating branch.
+            let d = Duration::from_nanos(nanos);
+            let v = duration_nanos_i64(d);
+            prop_assert!(v >= 0);
+            prop_assert_eq!(v as u128, d.as_nanos().min(i64::MAX as u128));
+        }
     }
 }

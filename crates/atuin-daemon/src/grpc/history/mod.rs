@@ -48,6 +48,21 @@ impl Service {
     }
 }
 
+/// Map one journal event to its tail-stream reply.
+///
+/// A cancelled command never became history, so it is invisible on the tail and maps to `None`
+/// (filtered out downstream). A lag is surfaced in-band as a `Lagged` notice rather than
+/// terminating the stream, so a slow consumer learns it fell behind but keeps receiving events.
+fn map_tail_event(event: Result<CmdEvent, BroadcastStreamRecvError>) -> Option<TailHistoryReply> {
+    let event = match event {
+        Ok(CmdEvent::Started(history)) => Event::Started(history.into()),
+        Ok(CmdEvent::Finished(history)) => Event::Ended(history.into()),
+        Err(BroadcastStreamRecvError::Lagged(dropped)) => Event::Lagged(Lagged { dropped }),
+        Ok(CmdEvent::Cancelled(_)) => return None,
+    };
+    Some(TailHistoryReply { event: Some(event) })
+}
+
 #[tonic::async_trait]
 impl GrpcService for Service {
     type TailHistoryStream = Pin<Box<dyn Stream<Item = Result<TailHistoryReply, Status>> + Send>>;
@@ -120,15 +135,10 @@ impl GrpcService for Service {
         &self,
         _request: Request<TailHistoryRequest>,
     ) -> Result<Response<Self::TailHistoryStream>, Status> {
-        let stream = self.journal.subscribe().filter_map(|event| async move {
-            let event = match event {
-                Ok(CmdEvent::Started(history)) => Event::Started(history.into()),
-                Ok(CmdEvent::Finished(history)) => Event::Ended(history.into()),
-                Err(BroadcastStreamRecvError::Lagged(dropped)) => Event::Lagged(Lagged { dropped }),
-                Ok(CmdEvent::Cancelled(_)) => return None,
-            };
-            Some(Ok(TailHistoryReply { event: Some(event) }))
-        });
+        let stream = self
+            .journal
+            .subscribe()
+            .filter_map(|event| async move { map_tail_event(event).map(Ok) });
 
         Ok(Response::new(Box::pin(stream)))
     }
@@ -164,5 +174,58 @@ impl GrpcService for Service {
     ) -> Result<Response<ShutdownReply>, Status> {
         self.daemon_handle.shutdown();
         Ok(Response::new(ShutdownReply { accepted: true }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use atuin_client::history::History;
+
+    use super::*;
+
+    fn history_fixture() -> History {
+        History::from_db()
+            .id(atuin_client::history::HistoryId::from_bytes([1u8; 16]))
+            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .command("c".into())
+            .cwd("/".into())
+            .exit(0)
+            .duration(0)
+            .session("s".into())
+            .hostname("h:u".into())
+            .author("a".into())
+            .intent(None)
+            .deleted_at(None)
+            .shell(None)
+            .author_kind(None)
+            .build()
+            .into()
+    }
+
+    /// The tail wire contract: started/finished commands become Started/Ended replies, a lag
+    /// becomes an in-band Lagged notice carrying its count, and a cancelled command is invisible.
+    /// The Cancelled-maps-to-None policy lives only here.
+    #[test]
+    fn started_maps_to_started() {
+        let reply = map_tail_event(Ok(CmdEvent::Started(history_fixture())));
+        assert!(matches!(reply.and_then(|r| r.event), Some(Event::Started(_))));
+    }
+
+    #[test]
+    fn finished_maps_to_ended() {
+        let reply = map_tail_event(Ok(CmdEvent::Finished(history_fixture())));
+        assert!(matches!(reply.and_then(|r| r.event), Some(Event::Ended(_))));
+    }
+
+    #[test]
+    fn cancelled_is_dropped() {
+        let reply = map_tail_event(Ok(CmdEvent::Cancelled(history_fixture())));
+        assert!(reply.is_none());
+    }
+
+    #[test]
+    fn lag_maps_to_lagged_with_count() {
+        let reply = map_tail_event(Err(BroadcastStreamRecvError::Lagged(7)));
+        assert!(matches!(reply.and_then(|r| r.event), Some(Event::Lagged(l)) if l.dropped == 7));
     }
 }

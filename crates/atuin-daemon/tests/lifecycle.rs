@@ -164,6 +164,42 @@ mod unix {
 
     #[rstest]
     #[tokio::test]
+    async fn end_history_without_duration_derives_and_does_not_deadlock(
+        #[future] daemon: (HistoryClient, DaemonHandle, TempDir),
+    ) {
+        use atuin_client::history::History;
+
+        let (mut client, _handle, _tmp) = daemon.await;
+
+        let history: History = History::daemon()
+            .timestamp(time::OffsetDateTime::now_utc() - Duration::from_millis(20))
+            .command("sleep 0".to_string())
+            .cwd("/tmp".to_string())
+            .session("no-duration-session".to_string())
+            .cmd_origin(
+                atuin_domain::record::CmdOrigin::try_from("test-host:ellie".to_string()).unwrap(),
+            )
+            .build()
+            .into();
+
+        let start_reply = client.start_history(history).await.unwrap();
+        let id: HistoryId = start_reply.id.unwrap().try_into().unwrap();
+
+        // Omitting the duration makes the daemon read the start timestamp through a CmdInFlight
+        // borrow and then finish() the same entry. If that shard-read borrow is not dropped before
+        // finish() removes the entry, the DashMap shard lock deadlocks -- so this must complete
+        // well within the timeout. Every other lifecycle case passes an explicit duration, leaving
+        // this borrow-then-remove path otherwise uncovered.
+        let end_reply =
+            tokio::time::timeout(Duration::from_secs(5), client.end_history(id, None, 0))
+                .await
+                .expect("end_history deadlocked on the in-flight borrow")
+                .unwrap();
+        assert!(end_reply.record_id.is_some());
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn test_tail_history_streams_started_and_ended_events(
         #[future] daemon: (HistoryClient, DaemonHandle, TempDir),
     ) {
