@@ -5,6 +5,7 @@ use protox::prost::Message;
 
 fn main() -> std::io::Result<()> {
     let proto_paths = [
+        "proto/common.proto",
         "proto/history.proto",
         "proto/search.proto",
         "proto/control.proto",

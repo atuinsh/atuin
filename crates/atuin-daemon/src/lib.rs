@@ -60,10 +60,8 @@ pub async fn boot(
         .component(sync_component)
         .build()?;
 
-    // Get a handle for the control service and gRPC server shutdown
     let handle = daemon.handle();
 
-    // Build the command journal and the History gRPC service that drives it.
     let host_id = Settings::host_id().await?;
     let history_store =
         HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
@@ -74,8 +72,7 @@ pub async fn boot(
         semantic_handle,
         search_index,
     ));
-    let history_service =
-        HistoryServer::new(grpc::history::Service::new(journal, handle.clone()));
+    let history_service = HistoryServer::new(grpc::history::Service::new(journal, handle.clone()));
 
     // Create the control service
     let control_service = control::ControlService::new(handle.clone());

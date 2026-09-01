@@ -2,7 +2,14 @@
 //!
 //! This module contains the proto-generated types for the history gRPC service.
 
-// Include the generated proto code
+// Include the generated proto code. `common` holds the shared primitive types (e.g. `Uuid`) that
+// `history` imports; the generated `history` code refers to them via `super::common`, so `common`
+// must sit alongside `proto` here.
+pub mod common {
+    #![allow(clippy::must_use_candidate, reason = "prost-generated code")]
+
+    tonic::include_proto!("common");
+}
 mod proto {
     #![allow(clippy::must_use_candidate, reason = "prost-generated code")]
 

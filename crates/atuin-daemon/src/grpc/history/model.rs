@@ -8,7 +8,10 @@ use time::OffsetDateTime;
 use tonic::Status;
 
 use crate::history_journal::{CmdCancelError, CmdFinishError};
-use crate::history::{CancelHistoryRequest, EndHistoryRequest, Id, StartHistoryRequest};
+use crate::history::common::Uuid;
+use crate::history::{
+    CancelHistoryRequest, EndHistoryRequest, HistoryId as HistoryIdProto, StartHistoryRequest,
+};
 
 macro_rules! grpc_invalid_argument {
     ($err:ty) => {
@@ -20,26 +23,31 @@ macro_rules! grpc_invalid_argument {
     };
 }
 
-impl From<HistoryId> for Id {
+impl From<HistoryId> for HistoryIdProto {
     fn from(value: HistoryId) -> Self {
         Self {
-            uuid: value.into_bytes().to_vec(),
+            uuid: Some(Uuid {
+                value: value.into_bytes().to_vec(),
+            }),
         }
     }
 }
 
 #[derive(Debug, Error)]
 pub enum IdParseError {
+    #[error("history id is missing its uuid")]
+    MissingUuid,
     #[error("history id must be exactly 16 bytes, got {0}")]
     BadLength(usize),
 }
 
-impl TryFrom<Id> for HistoryId {
+impl TryFrom<HistoryIdProto> for HistoryId {
     type Error = IdParseError;
 
-    fn try_from(value: Id) -> Result<Self, Self::Error> {
-        let len = value.uuid.len();
-        let bytes: [u8; 16] = value.uuid.try_into().map_err(|_| IdParseError::BadLength(len))?;
+    fn try_from(value: HistoryIdProto) -> Result<Self, Self::Error> {
+        let uuid = value.uuid.ok_or(IdParseError::MissingUuid)?;
+        let len = uuid.value.len();
+        let bytes: [u8; 16] = uuid.value.try_into().map_err(|_| IdParseError::BadLength(len))?;
         Ok(Self::from_bytes(bytes))
     }
 }
