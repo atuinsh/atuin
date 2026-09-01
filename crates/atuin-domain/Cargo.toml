@@ -33,7 +33,7 @@ reqwest-middleware = { workspace = true }
 http = { workspace = true }
 xxhash-rust = { workspace = true }
 tokio = { workspace = true }
-axum = { version = "0.8", optional = true }
+axum = { workspace = true, optional = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 

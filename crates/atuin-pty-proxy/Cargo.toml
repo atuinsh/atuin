@@ -18,8 +18,8 @@ atuin-common = { workspace = true, features = ["ansi", "os"] }
 atuin-vt100 = { workspace = true }
 crossterm = { workspace = true }
 eyre = { workspace = true }
-portable-pty = "0.9"
-signal-hook = "0.3"
+portable-pty = { workspace = true }
+signal-hook = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }

@@ -14,15 +14,15 @@ readme.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-atuin-client = { path = "../atuin-client", version = "18.21.0" }
+atuin-client = { workspace = true }
 
 time = { workspace = true }
 serde = { workspace = true }
 crossterm = { workspace = true, features = ["use-dev-tty"] }
-unicode-segmentation = "1.11.0"
+unicode-segmentation = { workspace = true }
 
 [dev-dependencies]
-divan = { version = "5.0.1", package = "codspeed-divan-compat" }
+divan = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }
 
