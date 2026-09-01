@@ -52,8 +52,6 @@ message StartHistoryReply {
 }
 
 message EndHistoryReply {
-  // The record store id and index of the persisted history record. This is a RecordId, distinct
-  // from the entry's HistoryId: the record store mints a fresh id when the entry is pushed.
   common.RecordId record_id = 1;
   uint64 record_idx = 2;
   string version = 3;
