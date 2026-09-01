@@ -11,6 +11,7 @@ use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};
 use tracing::{Level, instrument};
 
+use crate::DaemonHandle;
 use crate::command_journal::{CmdEvent, CommandJournal};
 use crate::history::history_server::History as GrpcService;
 use crate::history::{
@@ -29,11 +30,20 @@ const DAEMON_PROTOCOL_VERSION: u32 = 1;
 #[derive(Clone)]
 pub struct HistoryService {
     journal: Arc<CommandJournal>,
+    /// TODO(markovejnovic): Revisit whether we need to hold this handle. At the moment, the only
+    /// reason why this exists is to be able to service the [`GrpcService::shutdown`] request, but
+    /// perhaps that function does not belong in the history service -- perhaps we should have a
+    /// Control service.
+    daemon_handle: DaemonHandle,
 }
 
 impl HistoryService {
-    pub fn new(journal: Arc<CommandJournal>) -> Self {
-        Self { journal }
+    #[must_use]
+    pub fn new(journal: Arc<CommandJournal>, daemon_handle: DaemonHandle) -> Self {
+        Self {
+            journal,
+            daemon_handle,
+        }
     }
 }
 
@@ -41,6 +51,7 @@ impl HistoryService {
 fn history_to_tail_reply(kind: HistoryEventKind, history: History) -> TailHistoryReply {
     TailHistoryReply {
         kind: kind as i32,
+        dropped: 0,
         history: Some(HistoryEntry {
             timestamp: history.timestamp.unix_timestamp_nanos() as u64,
             id: Some(history.id.into()),
@@ -69,7 +80,7 @@ impl GrpcService for HistoryService {
     ) -> Result<Response<StartHistoryReply>, Status> {
         let history: History = request.into_inner().try_into()?;
 
-        let id = self.journal.start_cmd(history).await;
+        let id = self.journal.start_cmd(history);
 
         Ok(Response::new(StartHistoryReply {
             id: Some(id.history_id().into()),
@@ -105,7 +116,7 @@ impl GrpcService for HistoryService {
     ) -> Result<Response<CancelHistoryReply>, Status> {
         let id: HistoryId = request.into_inner().try_into()?;
 
-        self.journal.cancel(id.into()).await?;
+        self.journal.cancel(id.into())?;
 
         Ok(Response::new(CancelHistoryReply {
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -118,38 +129,26 @@ impl GrpcService for HistoryService {
         &self,
         _request: Request<TailHistoryRequest>,
     ) -> Result<Response<Self::TailHistoryStream>, Status> {
-        let mut events = self.journal.subscribe();
-        let (tx, out_rx) = tokio::sync::mpsc::channel::<Result<TailHistoryReply, Status>>(128);
-
-        tokio::spawn(async move {
-            while let Some(event) = events.next().await {
-                let reply = match event {
-                    Ok(CmdEvent::Started(history)) => {
-                        Some(history_to_tail_reply(HistoryEventKind::Started, history))
-                    }
-                    Ok(CmdEvent::Finished(history)) => {
-                        Some(history_to_tail_reply(HistoryEventKind::Ended, history))
-                    }
-                    Ok(CmdEvent::Cancelled(_)) => None,
-                    Err(BroadcastStreamRecvError::Lagged(skipped)) => {
-                        let _ = tx
-                            .send(Err(Status::resource_exhausted(format!(
-                                "tail stream lagged behind and dropped {skipped} events"
-                            ))))
-                            .await;
-                        break;
-                    }
-                };
-
-                if let Some(reply) = reply
-                    && tx.send(Ok(reply)).await.is_err()
-                {
-                    break;
+        // Adapt the journal's broadcast stream directly. A lag is reported as an in-band
+        // `LAGGED` reply rather than a terminating `Status`, so the tail survives it and the
+        // client can surface the drop (to stderr) while continuing to receive events.
+        let stream = self.journal.subscribe().filter_map(|event| async move {
+            match event {
+                Ok(CmdEvent::Started(history)) => {
+                    Some(Ok(history_to_tail_reply(HistoryEventKind::Started, history)))
                 }
+                Ok(CmdEvent::Finished(history)) => {
+                    Some(Ok(history_to_tail_reply(HistoryEventKind::Ended, history)))
+                }
+                Ok(CmdEvent::Cancelled(_)) => None,
+                Err(BroadcastStreamRecvError::Lagged(skipped)) => Some(Ok(TailHistoryReply {
+                    kind: HistoryEventKind::Lagged as i32,
+                    dropped: skipped,
+                    history: None,
+                })),
             }
         });
 
-        let stream = tokio_stream::wrappers::ReceiverStream::new(out_rx);
         Ok(Response::new(Box::pin(stream)))
     }
 
@@ -171,8 +170,7 @@ impl GrpcService for HistoryService {
         &self,
         _request: Request<ShutdownRequest>,
     ) -> Result<Response<ShutdownReply>, Status> {
-        // TODO(markovejnovic): wire a real shutdown signal through to the daemon. HistoryService
-        // currently only holds the CommandJournal, which has no way to request daemon shutdown.
-        unimplemented!("daemon shutdown via the History service is not wired up yet")
+        self.daemon_handle.shutdown();
+        Ok(Response::new(ShutdownReply { accepted: true }))
     }
 }

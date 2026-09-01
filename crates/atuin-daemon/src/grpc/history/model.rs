@@ -7,10 +7,8 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use tonic::Status;
 
-use crate::{
-    command_journal::{CmdCancelError, CmdFinishError},
-    history::{CancelHistoryRequest, EndHistoryRequest, Id, StartHistoryRequest},
-};
+use crate::command_journal::{CmdCancelError, CmdFinishError};
+use crate::history::{CancelHistoryRequest, EndHistoryRequest, Id, StartHistoryRequest};
 
 macro_rules! grpc_invalid_argument {
     ($err:ty) => {
@@ -42,7 +40,7 @@ impl TryFrom<Id> for HistoryId {
     fn try_from(value: Id) -> Result<Self, Self::Error> {
         let len = value.uuid.len();
         let bytes: [u8; 16] = value.uuid.try_into().map_err(|_| IdParseError::BadLength(len))?;
-        Ok(HistoryId::from_bytes(bytes))
+        Ok(Self::from_bytes(bytes))
     }
 }
 
@@ -62,7 +60,7 @@ impl TryFrom<StartHistoryRequest> for History {
     fn try_from(req: StartHistoryRequest) -> Result<Self, Self::Error> {
         // `author_kind()` borrows `req`, so read it before moving fields out.
         let author_kind = req.author_kind();
-        Ok(History::daemon()
+        Ok(Self::daemon()
             .timestamp(OffsetDateTime::from_unix_nanos_u64(req.timestamp))
             .command(req.command)
             .cwd(req.cwd)

@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use atuin_client::history::{History, HistoryId};
+use atuin_client::history::HistoryId;
 
 /// Events that flow through the daemon's event bus.
 ///

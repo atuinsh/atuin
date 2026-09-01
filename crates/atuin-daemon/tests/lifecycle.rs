@@ -82,7 +82,7 @@ mod unix {
             semantic_component,
             search_index,
         ));
-        let history_service = HistoryServer::new(HistoryService::new(journal));
+        let history_service = HistoryServer::new(HistoryService::new(journal, handle.clone()));
 
         // Start components (none registered, but keeps the lifecycle identical to production).
         daemon.start_components().await.unwrap();

@@ -1,15 +1,16 @@
 //! Exposes logic for managing the lifecycle of commands.
 //!
-//! The core structure is [`CommandJournal`]. The [`CommandJournal`] handles the creation and termination
-//! of new commands.
+//! The core structure is [`CommandJournal`]. The [`CommandJournal`] handles the creation and
+//! termination of new commands.
 //!
 //! When users run new commands in the client, the client sends requests to the GPRC server. The
 //! `HistoryService` then "forwards" the request down into [`CommandJournal`] -- requesting the
 //! start of a new shell command.
 //!
 //! The [`CommandJournal`] is responsible for managing the lifecycle of this command. The main
-//! entrypoint is [`CommandJournal::start_cmd`] which marks the beginning of a command. This returns a
-//! new object [`CmdInFlightId`] which represents a command which has been started, but not finished.
+//! entrypoint is [`CommandJournal::start_cmd`] which marks the beginning of a command. This returns
+//! a new object [`CmdInFlightId`] which represents a command which has been started, but not
+//! finished.
 //!
 //! ## Commands in flight
 //!
@@ -25,38 +26,8 @@
 //!
 //! ## Streaming
 //!
-//! It is possible to stream events out of [`CommandJournal`] via [`CommandJournal::subscribe`] which
-//! returns a new [`futures::Stream`] of [`CmdEvent`] events.
-//!
-//! ```mermaid
-//! sequenceDiagram
-//!   actor C as Client
-//!
-//!   box Daemon Process
-//!     participant D as GRPC Server
-//!     participant R as CommandJournal
-//!   end
-//!   participant DB@{ "type" : "database" }
-//!   participant P as PTY Proxy
-//!
-//!   note over C,P: Finishing the command means notifying the<br/>daemon that a command has been completed.
-//!   C->>+D: Finish Command
-//!   D-->>+R: finish_cmd
-//!   note over R,P: Get the command output from the pty proxy.
-//!   R->>+P: Request(CommandOutput)
-//!   P->>-R:
-//!   note over R,DB: Storing data into the database<br/>involves multiple database stores:<br/>one for RecordStore, HistoryDb,<br/>and CommandDb.
-//!   R->>+DB: Store Command Output
-//!   DB->>-R:
-//!   R->>+DB: Store History Entry
-//!   DB->>-R:
-//!   R->>+DB: Store Record
-//!   DB->>-R:
-//!
-//!   R-->>-D:
-//!
-//!   D->>-C:
-//! ```
+//! It is possible to stream events out of [`CommandJournal`] via [`CommandJournal::subscribe`]
+//! which returns a new [`futures::Stream`] of [`CmdEvent`] events.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -84,7 +55,7 @@ pub struct CmdInFlightId {
 
 impl From<HistoryId> for CmdInFlightId {
     fn from(value: HistoryId) -> Self {
-        CmdInFlightId { history_id: value }
+        Self { history_id: value }
     }
 }
 
@@ -172,14 +143,12 @@ impl CommandJournal {
     ///
     /// Returns the [`CmdInFlightId`] identifying the in-flight command, which is later used to
     /// [`CommandJournal::finish`] or [`CommandJournal::cancel`] it.
-    pub async fn start_cmd(&self, history: History) -> CmdInFlightId {
-        let id = CmdInFlightId::from(history.id.clone());
-        self.active_sessions.insert(
-            id.clone(),
-            CmdInFlightOwned {
-                history: history.clone(),
-            },
-        );
+    #[must_use]
+    pub fn start_cmd(&self, history: History) -> CmdInFlightId {
+        let id = CmdInFlightId::from(history.id);
+        self.active_sessions.insert(id.clone(), CmdInFlightOwned {
+            history: history.clone(),
+        });
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
     }
@@ -194,9 +163,8 @@ impl CommandJournal {
         exit_code: i64,
         duration: Option<Duration>,
     ) -> Result<(), CmdFinishError> {
-        let (_sess_id, mut session) = match self.active_sessions.remove(&session_id) {
-            Some(s) => s,
-            None => return Err(CmdFinishError::NotFound(session_id)),
+        let Some((_sess_id, mut session)) = self.active_sessions.remove(&session_id) else {
+            return Err(CmdFinishError::NotFound(session_id));
         };
 
         let duration = duration.unwrap_or_else(|| {
@@ -217,7 +185,7 @@ impl CommandJournal {
         self.history_store
             .push(history.clone())
             .await
-            .map_err(|e| CmdFinishError::HistoryStoreFailed(e.into()))?;
+            .map_err(CmdFinishError::HistoryStoreFailed)?;
 
         // TODO(markovejnovic): This is a little bit hacked-together. I'm thinking it would be good
         // to have a Packer type for this kind of logic. It can wraps the Caps.
@@ -240,10 +208,9 @@ impl CommandJournal {
     }
 
     /// Cancel a command, discarding its in-memory state without persisting a history entry.
-    pub async fn cancel(&self, session_id: CmdInFlightId) -> Result<(), CmdCancelError> {
-        let (_sess_id, session) = match self.active_sessions.remove(&session_id) {
-            Some(s) => s,
-            None => return Err(CmdCancelError::NotFound(session_id)),
+    pub fn cancel(&self, session_id: CmdInFlightId) -> Result<(), CmdCancelError> {
+        let Some((_sess_id, session)) = self.active_sessions.remove(&session_id) else {
+            return Err(CmdCancelError::NotFound(session_id));
         };
 
         let _ = self.broadcast.send(CmdEvent::Cancelled(session.history));
@@ -252,6 +219,7 @@ impl CommandJournal {
     }
 
     /// Create a new stream of [`CmdEvent`] objects.
+    #[must_use]
     pub fn subscribe(&self) -> BroadcastStream<CmdEvent> {
         BroadcastStream::new(self.broadcast.subscribe())
     }

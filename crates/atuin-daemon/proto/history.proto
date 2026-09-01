@@ -79,6 +79,10 @@ enum HistoryEventKind {
   HISTORY_EVENT_KIND_UNSPECIFIED = 0;
   HISTORY_EVENT_KIND_STARTED = 1;
   HISTORY_EVENT_KIND_ENDED = 2;
+  // The consumer fell behind and the daemon dropped events for it. This is an
+  // in-band notice (not a terminating gRPC status), so the tail stream keeps
+  // running. `history` is unset; `dropped` carries the number of lost events.
+  HISTORY_EVENT_KIND_LAGGED = 3;
 }
 
 message HistoryEntry {
@@ -99,6 +103,8 @@ message HistoryEntry {
 message TailHistoryReply {
   HistoryEventKind kind = 1;
   HistoryEntry history = 2;
+  // Number of events dropped, only meaningful when kind == LAGGED.
+  uint64 dropped = 3;
 }
 
 service History {

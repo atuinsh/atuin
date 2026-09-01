@@ -102,7 +102,7 @@ impl SemanticComponent {
     }
 
     pub async fn record_history(&self, history: History) {
-        self.inner.record_history(history).await
+        self.inner.record_history(history).await;
     }
 }
 
@@ -122,7 +122,7 @@ impl Component for SemanticComponent {
         Ok(())
     }
 
-    async fn handle_event(&mut self, event: &DaemonEvent) -> Result<()> {
+    async fn handle_event(&mut self, _event: &DaemonEvent) -> Result<()> {
         Ok(())
     }
 
