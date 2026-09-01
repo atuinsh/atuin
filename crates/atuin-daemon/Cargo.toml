@@ -14,7 +14,6 @@ readme.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-easy-cast = { workspace = true }
 atuin-client = { workspace = true }
 parking_lot = { workspace = true }
 atuin-domain = { workspace = true }
@@ -45,6 +44,7 @@ hyper-util = { workspace = true }
 
 rand.workspace = true
 frizbee = { workspace = true }
+easy-cast = { workspace = true }
 
 [dependencies.atuin-common]
 workspace = true

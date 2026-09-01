@@ -18,7 +18,6 @@ daemon = []
 tree-sitter = ["dep:tree-sitter", "dep:tree-sitter-bash", "dep:tree-sitter-fish"]
 
 [dependencies]
-easy-cast = { workspace = true }
 atuin-client = { workspace = true }
 atuin-domain = { workspace = true }
 atuin-common = { workspace = true, features = ["unicode", "ansi", "sqlite"] }
@@ -77,6 +76,7 @@ tempfile = { workspace = true }
 chrono = { workspace = true }
 chrono-humanize = { workspace = true }
 rmcp = { workspace = true }
+easy-cast = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

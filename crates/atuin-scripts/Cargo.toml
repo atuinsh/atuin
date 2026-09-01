@@ -14,7 +14,6 @@ readme.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-easy-cast = { workspace = true }
 atuin-client = { workspace = true }
 atuin-common = { workspace = true, features = ["sqlite"] }
 atuin-domain = { workspace = true }
@@ -35,6 +34,7 @@ tempfile = { workspace = true }
 minijinja = { workspace = true }
 serde_json = { workspace = true }
 semver = { workspace = true }
+easy-cast = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }

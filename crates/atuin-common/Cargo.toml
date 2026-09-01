@@ -21,7 +21,6 @@ db = ["dep:sqlx"]
 sqlite = ["db", "sqlx/sqlite", "sqlx/regexp", "dep:libsqlite3-sys", "dep:tokio-util"]
 
 [dependencies]
-easy-cast = { workspace = true }
 atuin-vt100 = { workspace = true, optional = true }
 derive_more = { workspace = true }
 tiny-bip39 = { workspace = true }
@@ -55,6 +54,7 @@ fs-err = { workspace = true }
 semver = { workspace = true }
 sqlx = { workspace = true, optional = true }
 libsqlite3-sys = { workspace = true, optional = true }
+easy-cast = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, optional = true }

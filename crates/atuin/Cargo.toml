@@ -73,7 +73,6 @@ profiling-traced = [
 ]
 
 [dependencies]
-easy-cast = { workspace = true }
 atuin-ai = { workspace = true, optional = true }
 # default-features = false cannot be set on a workspace-inherited dependency, and
 # atuin-client's defaults (sync/hub/daemon) are needed by its other consumers, so
@@ -129,6 +128,7 @@ frizbee = { workspace = true }
 tempfile = { workspace = true }
 shlex = { workspace = true }
 thiserror = { workspace = true }
+easy-cast = { workspace = true }
 
 # settings editor with comment and relative ordering preservation
 toml_edit = { workspace = true }

@@ -15,12 +15,12 @@ readme.workspace = true
 
 [dependencies]
 atuin-client = { workspace = true }
-easy-cast = { workspace = true }
 
 time = { workspace = true }
 serde = { workspace = true }
 crossterm = { workspace = true, features = ["use-dev-tty"] }
 unicode-segmentation = { workspace = true }
+easy-cast = { workspace = true }
 
 [dev-dependencies]
 divan = { workspace = true }

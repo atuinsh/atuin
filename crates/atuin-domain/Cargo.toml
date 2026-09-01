@@ -13,7 +13,6 @@ repository = { workspace = true }
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-easy-cast = { workspace = true }
 serde = { workspace = true }
 atuin-common = { workspace = true }
 whoami = { workspace = true }
@@ -37,6 +36,7 @@ tokio = { workspace = true }
 axum = { workspace = true, optional = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
+easy-cast = { workspace = true }
 
 [features]
 # Feature-gated axum integration for the server-side capability handlers (`caps::axum`).
