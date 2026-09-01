@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use atuin_client::history::{AuthorKind, HistoryId};
@@ -25,7 +25,6 @@ const OPENCODE_PLUGIN_SOURCE: &str = include_str!("../../../contrib/opencode/atu
 enum InstallKind {
     JsonHooks {
         config_path: &'static [&'static str],
-        hook_command: &'static str,
         matcher: &'static str,
     },
     /// An agent that loads TypeScript extensions from a directory, rather than
@@ -65,7 +64,6 @@ const CLAUDE_CODE: AgentSpec = AgentSpec {
     path_root: PathRoot::Home,
     install_kind: InstallKind::JsonHooks {
         config_path: &[".claude", "settings.json"],
-        hook_command: "atuin hook claude-code",
         matcher: "Bash",
     },
 };
@@ -76,7 +74,6 @@ const CODEX: AgentSpec = AgentSpec {
     path_root: PathRoot::Home,
     install_kind: InstallKind::JsonHooks {
         config_path: &[".codex", "hooks.json"],
-        hook_command: "atuin hook codex",
         matcher: "^Bash$",
     },
 };
@@ -177,6 +174,34 @@ fn id_file_path(tool_use_id: &str) -> PathBuf {
     std::env::temp_dir().join(format!("atuin-hook-{tool_use_id}"))
 }
 
+fn hook_command(agent: &Agent, executable: &Path) -> Result<String> {
+    let executable = executable
+        .to_str()
+        .ok_or_else(|| eyre::eyre!("atuin executable path is not valid UTF-8"))?;
+
+    #[cfg(windows)]
+    let executable = format!(r#""{executable}""#);
+
+    #[cfg(not(windows))]
+    let executable = format!("'{}'", executable.replace('\'', "'\"'\"'"));
+
+    Ok(format!("{executable} hook {}", agent.actor_name()))
+}
+
+fn invokes_atuin_hook(command: &str, agent: &Agent) -> bool {
+    let Some(parts) = shlex::split(command) else {
+        return false;
+    };
+
+    parts.len() == 3
+        && Path::new(&parts[0])
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("atuin"))
+        && parts[1] == "hook"
+        && parts[2] == agent.actor_name()
+}
+
 async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
     let agent = Agent::from_name(agent_name)?;
 
@@ -234,10 +259,11 @@ fn install(agent_name: &str) -> Result<()> {
     match agent.install_kind() {
         InstallKind::JsonHooks {
             config_path,
-            hook_command: _,
             matcher: _,
         } => {
             let config_path = agent.path(config_path);
+            let executable = std::env::current_exe()?;
+            let hook_command = hook_command(&agent, &executable)?;
 
             if let Some(parent) = config_path.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -256,7 +282,7 @@ fn install(agent_name: &str) -> Result<()> {
                 .entry("hooks")
                 .or_insert_with(|| Value::Object(serde_json::Map::new()));
 
-            add_hook_entries(hooks, &agent)?;
+            add_hook_entries(hooks, &agent, &hook_command)?;
 
             let content = serde_json::to_string_pretty(&root)?;
             std::fs::write(&config_path, content)?;
@@ -299,10 +325,9 @@ fn install(agent_name: &str) -> Result<()> {
     Ok(())
 }
 
-fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
+fn add_hook_entries(hooks: &mut Value, agent: &Agent, hook_command: &str) -> Result<()> {
     let InstallKind::JsonHooks {
         config_path: _,
-        hook_command,
         matcher,
     } = agent.install_kind()
     else {
@@ -320,16 +345,61 @@ fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
             .as_array_mut()
             .ok_or_else(|| eyre::eyre!("hooks.{event_type} is not an array"))?;
 
-        let already_installed = arr.iter().any(|entry| {
-            entry.get("hooks").and_then(Value::as_array).is_some_and(|hooks| {
-                hooks
-                    .iter()
-                    .any(|hook| hook.get("command").and_then(Value::as_str) == Some(hook_command))
-            })
-        });
+        let mut already_installed = false;
+        let mut updated_command = false;
+
+        for entry in arr.iter_mut() {
+            if entry.get("matcher").and_then(Value::as_str) != Some(matcher) {
+                continue;
+            }
+
+            let remove_entry = {
+                let Some(installed_hooks) = entry.get_mut("hooks").and_then(Value::as_array_mut)
+                else {
+                    continue;
+                };
+                let had_hooks = !installed_hooks.is_empty();
+
+                installed_hooks.retain_mut(|installed_hook| {
+                    let Some(command) = installed_hook.get_mut("command") else {
+                        return true;
+                    };
+                    let Some(command_str) = command.as_str() else {
+                        return true;
+                    };
+
+                    if !invokes_atuin_hook(command_str, agent) {
+                        return true;
+                    }
+
+                    if already_installed {
+                        updated_command = true;
+                        return false;
+                    }
+
+                    already_installed = true;
+                    if command_str != hook_command {
+                        *command = Value::String(hook_command.to_owned());
+                        updated_command = true;
+                    }
+                    true
+                });
+
+                had_hooks && installed_hooks.is_empty()
+            };
+
+            if remove_entry {
+                *entry = Value::Null;
+            }
+        }
+        arr.retain(|entry| !entry.is_null());
 
         if already_installed {
-            eprintln!("hooks.{event_type}: already installed, skipping");
+            if updated_command {
+                eprintln!("hooks.{event_type}: updated atuin executable path");
+            } else {
+                eprintln!("hooks.{event_type}: already installed, skipping");
+            }
             continue;
         }
 
@@ -353,7 +423,7 @@ mod tests {
     use crate::Atuin;
     use crate::command::{AtuinCmd, client};
 
-    #[test]
+    #[rstest]
     fn parse_hook_agent_command() {
         let cmd = Cmd::try_parse_from(["hook", "codex"]).unwrap();
 
@@ -384,7 +454,7 @@ mod tests {
 
     /// An agent missing from `KNOWN_AGENTS` would be installable but invisible
     /// to `$all-agent`, and would pollute `$all-user` with its commands.
-    #[test]
+    #[rstest]
     fn every_agent_author_is_a_known_agent() {
         for spec in AGENTS {
             assert!(
@@ -407,7 +477,7 @@ mod tests {
     }
 
     /// opencode reads plugins from its XDG config directory, not from `$HOME`.
-    #[test]
+    #[rstest]
     fn opencode_plugin_is_rooted_in_the_xdg_config_dir() {
         let agent = Agent::from_name("opencode").unwrap();
         let InstallKind::Extension { extension_path, .. } = agent.install_kind() else {
@@ -421,7 +491,7 @@ mod tests {
         assert!(installed.ends_with("opencode/plugins/atuin.ts"));
     }
 
-    #[test]
+    #[rstest]
     fn parse_top_level_hook_command() {
         let cmd = Atuin::try_parse_from(["atuin", "hook", "codex"]).unwrap();
 
@@ -430,5 +500,69 @@ mod tests {
             AtuinCmd::Client(client::Cmd::Hook(Cmd { action: None, agent: Some(agent) }))
                 if agent == "codex"
         ));
+    }
+
+    #[rstest]
+    fn add_hook_entries_updates_legacy_commands_without_duplicates() {
+        let agent = Agent::from_name("claude-code").unwrap();
+        let command = "'/opt/atuin/bin/atuin' hook claude-code";
+        let mut hooks = serde_json::json!({
+            "PreToolUse": [{
+                "matcher": "Bash",
+                "hooks": [
+                    {"type": "command", "command": "\"$HOME/.atuin/bin/atuin\" hook claude-code"},
+                    {"type": "command", "command": "printf keep-me"},
+                ],
+            }, {
+                "matcher": "Bash",
+                "hooks": [{"type": "command", "command": "atuin hook claude-code"}],
+            }, {
+                "matcher": "Read",
+                "hooks": [{"type": "command", "command": "atuin hook claude-code"}],
+            }],
+        });
+
+        add_hook_entries(&mut hooks, &agent, command).unwrap();
+        add_hook_entries(&mut hooks, &agent, command).unwrap();
+
+        for event_type in HOOK_EVENT_TYPES {
+            let entries = hooks[event_type].as_array().unwrap();
+            let commands: Vec<_> = entries
+                .iter()
+                .flat_map(|entry| entry["hooks"].as_array().unwrap())
+                .filter_map(|hook| hook["command"].as_str())
+                .collect();
+
+            assert_eq!(commands.iter().filter(|value| **value == command).count(), 1);
+            if event_type == &"PreToolUse" {
+                assert!(commands.contains(&"printf keep-me"));
+                assert!(commands.contains(&"atuin hook claude-code"));
+                assert_eq!(entries.len(), 2);
+            } else {
+                assert_eq!(entries.len(), 1);
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[rstest]
+    fn hook_command_quotes_posix_executable_paths() {
+        let agent = Agent::from_name("codex").unwrap();
+        let executable = Path::new("/opt/Atuin's bin/atuin");
+        let command = hook_command(&agent, executable).unwrap();
+
+        assert_eq!(command, "'/opt/Atuin'\"'\"'s bin/atuin' hook codex");
+        assert!(invokes_atuin_hook(&command, &agent));
+    }
+
+    #[cfg(windows)]
+    #[rstest]
+    fn hook_command_quotes_windows_executable_paths() {
+        let agent = Agent::from_name("codex").unwrap();
+        let executable = Path::new(r"C:\Program Files\Atuin\atuin.exe");
+        let command = hook_command(&agent, executable).unwrap();
+
+        assert_eq!(command, r#""C:\Program Files\Atuin\atuin.exe" hook codex"#);
+        assert!(invokes_atuin_hook(&command, &agent));
     }
 }
