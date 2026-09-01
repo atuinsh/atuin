@@ -27,9 +27,7 @@ const DAEMON_PROTOCOL_VERSION: u32 = 1;
 
 /// The History gRPC service.
 ///
-/// This is a thin adapter over [`HistoryJournal`]: it translates gRPC requests into journal calls
-/// and journal state/events back into gRPC replies. All command-lifecycle logic lives in the
-/// journal.
+/// Clients request operations on history via this service.
 #[derive(Clone)]
 pub struct Service {
     journal: Arc<HistoryJournal>,
