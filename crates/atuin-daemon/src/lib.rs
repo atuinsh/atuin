@@ -29,8 +29,7 @@ pub use components::{SearchComponent, SemanticComponent, SyncComponent};
 pub use daemon::{AnyComponent, Daemon, DaemonBuilder, DaemonHandle};
 pub use events::DaemonEvent;
 pub use history_journal::{
-    CmdCancelError, CmdEvent, CmdFinishError, CmdInFlight, FinishedCmd, GetCmdInFlightError,
-    HistoryJournal,
+    CmdCancelError, CmdEvent, CmdFinishError, FinishedCmd, GetCmdInFlightError, HistoryJournal,
 };
 
 /// Boot the daemon using the new component-based architecture.

@@ -38,35 +38,12 @@ use atuin_client::packfile;
 use atuin_domain::caps::{CapClient, PackfileCap};
 use atuin_domain::record::{RecordId, RecordIdx, RecordSeriesKey, RecordTag};
 use dashmap::DashMap;
+use time::OffsetDateTime;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::SemanticComponent;
 use crate::search::SearchIndex;
-
-/// Newtype which wraps the managed state for types which are actively managed by the journal.
-#[derive(Debug)]
-struct CmdInFlightOwned {
-    history: History,
-}
-
-/// A borrowed handle to a command that is currently in flight.
-///
-/// It holds a read borrow into the journal's in-flight map (a [`DashMap`] shard read lock), so it
-/// must be dropped before the same command is removed: holding it across
-/// [`HistoryJournal::finish`] or [`HistoryJournal::cancel`] for that command would deadlock on the
-/// shard lock.
-pub struct CmdInFlight<'journal> {
-    inner: dashmap::mapref::one::Ref<'journal, HistoryId, CmdInFlightOwned>,
-}
-
-impl CmdInFlight<'_> {
-    /// The command's history entry, as recorded when it was started.
-    #[must_use]
-    pub fn history(&self) -> &History {
-        &self.inner.history
-    }
-}
 
 /// An event describing a change in the lifecycle of a command.
 #[derive(Debug, Clone)]
@@ -108,7 +85,7 @@ pub struct HistoryJournal {
     ///
     /// An "in-flight" command is a command which has been started, but we're still waiting for it
     /// to be completed.
-    active_sessions: DashMap<HistoryId, CmdInFlightOwned>,
+    active_sessions: DashMap<HistoryId, History>,
 
     /// We hold a reference to the search index which allows us to add a new history record into it.
     ///
@@ -141,7 +118,7 @@ pub enum CmdCancelError {
     NotFound(HistoryId),
 }
 
-/// Errors returned by [`HistoryJournal::get`].
+/// Errors returned by [`HistoryJournal::started_at`].
 #[derive(Debug, thiserror::Error)]
 pub enum GetCmdInFlightError {
     #[error("command {0} is not in flight")]
@@ -184,42 +161,38 @@ impl HistoryJournal {
     #[must_use]
     pub fn start_cmd(&self, history: History) -> HistoryId {
         let id = history.id;
-        self.active_sessions.insert(id, CmdInFlightOwned {
-            history: history.clone(),
-        });
+        self.active_sessions.insert(id, history.clone());
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
     }
 
-    /// Borrow an in-flight command by id.
+    /// The start timestamp recorded for an in-flight command.
     ///
-    /// The returned [`CmdInFlight`] holds a read borrow into the journal; see its docs for the
-    /// deadlock caveat around [`HistoryJournal::finish`] / [`HistoryJournal::cancel`].
-    pub fn get(&self, history_id: HistoryId) -> Result<CmdInFlight<'_>, GetCmdInFlightError> {
+    /// Copies the value out and releases the map's shard lock before returning, so callers never
+    /// hold a borrow into the journal across [`HistoryJournal::finish`] / [`HistoryJournal::cancel`].
+    pub fn started_at(&self, history_id: HistoryId) -> Result<OffsetDateTime, GetCmdInFlightError> {
         self.active_sessions
             .get(&history_id)
-            .map(|inner| CmdInFlight { inner })
+            .map(|history| history.timestamp)
             .ok_or(GetCmdInFlightError::NotFound(history_id))
     }
 
     /// Mark a command as finished, persisting it to the history store and database.
     ///
     /// `duration` is the measured runtime of the command; callers that don't have one can derive it
-    /// from the start timestamp via [`HistoryJournal::get`].
+    /// from the start timestamp via [`HistoryJournal::started_at`].
     pub async fn finish(
         &self,
         history_id: HistoryId,
         exit_code: i64,
         duration: Duration,
     ) -> Result<FinishedCmd, CmdFinishError> {
-        let Some((_id, mut session)) = self.active_sessions.remove(&history_id) else {
+        let Some((_id, mut history)) = self.active_sessions.remove(&history_id) else {
             return Err(CmdFinishError::NotFound(history_id));
         };
 
-        session.history.exit = exit_code;
-        session.history.duration = duration_nanos_i64(duration);
-
-        let history = session.history;
+        history.exit = exit_code;
+        history.duration = duration_nanos_i64(duration);
 
         self.history_db
             .save(&history)
@@ -259,11 +232,11 @@ impl HistoryJournal {
 
     /// Cancel a command, discarding its in-memory state without persisting a history entry.
     pub fn cancel(&self, history_id: HistoryId) -> Result<(), CmdCancelError> {
-        let Some((_id, session)) = self.active_sessions.remove(&history_id) else {
+        let Some((_id, history)) = self.active_sessions.remove(&history_id) else {
             return Err(CmdCancelError::NotFound(history_id));
         };
 
-        let _ = self.broadcast.send(CmdEvent::Cancelled(session.history));
+        let _ = self.broadcast.send(CmdEvent::Cancelled(history));
 
         Ok(())
     }

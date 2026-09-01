@@ -76,13 +76,12 @@ impl GrpcService for Service {
             req.into_inner().try_into()?;
 
         // The client may omit the duration, in which case we measure it from the command's start
-        // timestamp. `get`'s `CmdInFlight` borrow is a temporary that drops at the end of this
-        // statement, before `finish` removes the entry -- holding it across `finish` would deadlock
-        // on the shard lock.
+        // timestamp, which the journal tracks for us.
         let duration = match duration {
             Some(duration) => duration,
-            None => OffsetDateTime::now_utc()
-                .saturating_duration_since(self.journal.get(id)?.history().timestamp),
+            None => {
+                OffsetDateTime::now_utc().saturating_duration_since(self.journal.started_at(id)?)
+            }
         };
 
         let finished_cmd = self.journal.finish(id, exit, duration).await?;
