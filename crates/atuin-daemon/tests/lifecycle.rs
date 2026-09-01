@@ -130,7 +130,7 @@ mod unix {
         let status = client.status().await.unwrap();
         assert!(status.healthy);
         assert_eq!(status.version, env!("CARGO_PKG_VERSION"));
-        assert_eq!(status.protocol, 1);
+        assert_eq!(status.protocol, 2);
         assert!(status.pid > 0);
     }
 
