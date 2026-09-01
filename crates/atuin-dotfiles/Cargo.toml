@@ -14,15 +14,15 @@ readme.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.21.0" }
-atuin-domain = { path = "../atuin-domain", version = "18.21.0" }
-atuin-client = { path = "../atuin-client", version = "18.21.0" }
+atuin-common = { workspace = true }
+atuin-domain = { workspace = true }
+atuin-client = { workspace = true }
 derive_more = { workspace = true }
 
 eyre = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-rmp = { version = "0.8.14" }
+rmp = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 crypto_secretbox = { workspace = true }
