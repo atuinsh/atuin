@@ -15,10 +15,11 @@ use tracing::{Level, instrument};
 
 use crate::DaemonHandle;
 use crate::history::history_server::History as GrpcService;
+use crate::history::tail_history_reply::Event;
 use crate::history::{
-    AuthorKind, CancelHistoryReply, CancelHistoryRequest, EndHistoryReply, EndHistoryRequest,
-    HistoryEntry, HistoryEventKind, ShutdownReply, ShutdownRequest, StartHistoryReply,
-    StartHistoryRequest, StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
+    CancelHistoryReply, CancelHistoryRequest, EndHistoryReply, EndHistoryRequest, Lagged,
+    ShutdownReply, ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply,
+    StatusRequest, TailHistoryReply, TailHistoryRequest,
 };
 use crate::history_journal::{CmdEvent, HistoryJournal};
 
@@ -46,28 +47,6 @@ impl Service {
             journal,
             daemon_handle,
         }
-    }
-}
-
-/// Build a [`TailHistoryReply`] from a lifecycle event and its history entry.
-fn history_to_tail_reply(kind: HistoryEventKind, history: History) -> TailHistoryReply {
-    TailHistoryReply {
-        kind: kind as i32,
-        dropped: 0,
-        history: Some(HistoryEntry {
-            timestamp: history.timestamp.unix_timestamp_nanos() as u64,
-            id: Some(history.id.into()),
-            command: history.command,
-            cwd: history.cwd,
-            session: history.session,
-            hostname: history.cmd_origin.into_string(),
-            author: history.author,
-            intent: history.intent.unwrap_or_default(),
-            exit: history.exit,
-            duration: history.duration,
-            shell: history.shell.unwrap_or_default(),
-            author_kind: AuthorKind::from(history.author_kind) as i32,
-        }),
     }
 }
 
@@ -143,24 +122,14 @@ impl GrpcService for Service {
         &self,
         _request: Request<TailHistoryRequest>,
     ) -> Result<Response<Self::TailHistoryStream>, Status> {
-        // Adapt the journal's broadcast stream directly. A lag is reported as an in-band
-        // `LAGGED` reply rather than a terminating `Status`, so the tail survives it and the
-        // client can surface the drop (to stderr) while continuing to receive events.
         let stream = self.journal.subscribe().filter_map(|event| async move {
-            match event {
-                Ok(CmdEvent::Started(history)) => {
-                    Some(Ok(history_to_tail_reply(HistoryEventKind::Started, history)))
-                }
-                Ok(CmdEvent::Finished(history)) => {
-                    Some(Ok(history_to_tail_reply(HistoryEventKind::Ended, history)))
-                }
-                Ok(CmdEvent::Cancelled(_)) => None,
-                Err(BroadcastStreamRecvError::Lagged(skipped)) => Some(Ok(TailHistoryReply {
-                    kind: HistoryEventKind::Lagged as i32,
-                    dropped: skipped,
-                    history: None,
-                })),
-            }
+            let event = match event {
+                Ok(CmdEvent::Started(history)) => Event::Started(history.into()),
+                Ok(CmdEvent::Finished(history)) => Event::Ended(history.into()),
+                Err(BroadcastStreamRecvError::Lagged(dropped)) => Event::Lagged(Lagged { dropped }),
+                Ok(CmdEvent::Cancelled(_)) => return None,
+            };
+            Some(Ok(TailHistoryReply { event: Some(event) }))
         });
 
         Ok(Response::new(Box::pin(stream)))

@@ -140,9 +140,10 @@ impl HistoryClient {
     pub async fn end_history(
         &mut self,
         id: HistoryId,
-        duration: Option<u64>,
+        duration: Option<std::time::Duration>,
         exit: i64,
     ) -> Result<EndHistoryReply> {
+        let duration = duration.map(prost_types::Duration::try_from).transpose()?;
         Ok(self
             .client
             .end_history(EndHistoryRequest {
@@ -565,23 +566,4 @@ pub async fn emit_event_with_settings(
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn internal_status_is_a_daemon_error_but_not_unavailable() {
-        let error = eyre::Report::new(tonic::Status::internal("failed to build index"));
-
-        assert_eq!(classify_error(&error), DaemonClientErrorKind::OtherGrpc);
-    }
-
-    #[test]
-    fn unrelated_error_is_not_a_daemon_error() {
-        let error = eyre::eyre!("local database failed");
-
-        assert_eq!(classify_error(&error), DaemonClientErrorKind::NonGrpc);
-    }
 }

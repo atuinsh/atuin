@@ -10,7 +10,8 @@ use tonic::Status;
 
 use crate::history::common::Uuid;
 use crate::history::{
-    CancelHistoryRequest, EndHistoryRequest, HistoryId as HistoryIdProto, StartHistoryRequest,
+    AuthorKind, CancelHistoryRequest, EndHistoryRequest, HistoryEntry, HistoryId as HistoryIdProto,
+    StartHistoryRequest,
 };
 use crate::history_journal::{CmdCancelError, CmdFinishError, GetCmdInFlightError};
 
@@ -31,6 +32,25 @@ impl From<HistoryId> for HistoryIdProto {
             uuid: Some(Uuid {
                 value: value.into_bytes().to_vec(),
             }),
+        }
+    }
+}
+
+impl From<History> for HistoryEntry {
+    fn from(history: History) -> Self {
+        Self {
+            timestamp: history.timestamp.unix_timestamp_nanos() as u64,
+            id: Some(history.id.into()),
+            command: history.command,
+            cwd: history.cwd,
+            session: history.session,
+            hostname: history.cmd_origin.into_string(),
+            author: history.author,
+            intent: history.intent.unwrap_or_default(),
+            exit: history.exit,
+            duration: history.duration,
+            shell: history.shell.unwrap_or_default(),
+            author_kind: AuthorKind::from(history.author_kind) as i32,
         }
     }
 }
@@ -94,6 +114,8 @@ pub enum EndHistoryRequestParseError {
     MissingHistory,
     #[error("invalid id field: {0}")]
     InvalidId(#[from] IdParseError),
+    #[error("invalid duration: {0}")]
+    InvalidDuration(#[from] prost_types::DurationError),
 }
 
 grpc_invalid_argument!(EndHistoryRequestParseError);
@@ -106,7 +128,7 @@ impl TryFrom<EndHistoryRequest> for (HistoryId, i64, Option<Duration>) {
         let id: HistoryId =
             value.id.ok_or(EndHistoryRequestParseError::MissingHistory)?.try_into()?;
         let exit_code = value.exit;
-        let duration = value.duration.map(Duration::from_nanos);
+        let duration = value.duration.map(Duration::try_from).transpose()?;
         Ok((id, exit_code, duration))
     }
 }

@@ -17,7 +17,7 @@ use atuin_common::time::{DurationExt, OffsetDateTimeExt, UtcOffsetSpec};
 use atuin_common::utils;
 use atuin_common::utils::normalize_optional_string;
 #[cfg(feature = "daemon")]
-use atuin_daemon::history::{HistoryEventKind, TailHistoryReply};
+use atuin_daemon::history::{TailHistoryReply, tail_history_reply::Event as TailEventProto};
 use atuin_domain::record::CmdOrigin;
 use clap::Subcommand;
 #[cfg(feature = "daemon")]
@@ -566,7 +566,7 @@ async fn handle_daemon_end(
         debug!("history has non-zero exit code, and store_failed is false");
         daemon::cancel_history(settings, id).await?;
     } else {
-        daemon::end_history(settings, id, duration, exit).await?;
+        daemon::end_history(settings, id, duration.map(Duration::from_nanos), exit).await?;
     }
 
     Ok(())
@@ -669,19 +669,16 @@ struct TailJsonHistory<'a> {
 #[cfg(feature = "daemon")]
 impl TailEvent {
     fn from_proto(reply: TailHistoryReply) -> Result<Self> {
-        let history = reply
-            .history
-            .ok_or_else(|| eyre::eyre!("daemon sent a history tail event without history"))?;
+        let (kind, history) = match reply.event {
+            Some(TailEventProto::Started(history)) => (TailKind::Started, history),
+            Some(TailEventProto::Ended(history)) => (TailKind::Ended, history),
+            Some(TailEventProto::Lagged(_)) => {
+                bail!("daemon sent a lag notice as a history event")
+            }
+            None => bail!("daemon sent an unspecified history tail event"),
+        };
         let timestamp = OffsetDateTime::from_unix_nanos_u64(history.timestamp);
         let author_kind = history.author_kind();
-        let kind = match HistoryEventKind::try_from(reply.kind)
-            .unwrap_or(HistoryEventKind::Unspecified)
-        {
-            HistoryEventKind::Started => TailKind::Started,
-            HistoryEventKind::Ended => TailKind::Ended,
-            HistoryEventKind::Unspecified => bail!("daemon sent an unspecified history tail event"),
-            HistoryEventKind::Lagged => bail!("daemon sent a lag notice as a history event"),
-        };
 
         Ok(Self {
             kind,
@@ -904,10 +901,10 @@ impl Cmd {
         let stdout = std::io::stdout();
 
         while let Some(reply) = stream.message().await? {
-            if HistoryEventKind::try_from(reply.kind) == Ok(HistoryEventKind::Lagged) {
+            if let Some(TailEventProto::Lagged(lagged)) = &reply.event {
                 eprintln!(
                     "WARNING: atuin daemon dropped {} history events; tail fell behind",
-                    reply.dropped
+                    lagged.dropped
                 );
                 continue;
             }

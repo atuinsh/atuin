@@ -1,11 +1,8 @@
 syntax = "proto3";
+
 package common;
 
 // A UUID, carried as its 16 raw bytes.
-//
-// This is the generic id primitive shared across the daemon's protos. Higher-level, domain-specific
-// id types (e.g. history.HistoryId) wrap this so they stay nominally distinct on the Rust side while
-// sharing one wire representation.
 message Uuid {
   bytes value = 1;
 }

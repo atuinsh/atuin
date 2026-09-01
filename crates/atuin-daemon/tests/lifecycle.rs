@@ -157,7 +157,8 @@ mod unix {
         assert!(start_reply.id.is_some());
 
         let id: HistoryId = start_reply.id.unwrap().try_into().unwrap();
-        let end_reply = client.end_history(id, Some(1_000_000), 0).await.unwrap();
+        let end_reply =
+            client.end_history(id, Some(Duration::from_nanos(1_000_000)), 0).await.unwrap();
         assert!(end_reply.id.is_some());
     }
 
@@ -167,7 +168,7 @@ mod unix {
         #[future] daemon: (HistoryClient, DaemonHandle, TempDir),
     ) {
         use atuin_client::history::History;
-        use atuin_daemon::history::HistoryEventKind;
+        use atuin_daemon::history::tail_history_reply::Event;
 
         let (mut client, _handle, _tmp) = daemon.await;
         let mut stream = client.tail_history().await.unwrap();
@@ -187,8 +188,10 @@ mod unix {
         let start_reply = client.start_history(history).await.unwrap();
 
         let started = stream.message().await.unwrap().unwrap();
-        assert_eq!(HistoryEventKind::try_from(started.kind).unwrap(), HistoryEventKind::Started);
-        let started_history = started.history.unwrap();
+        let started_history = match started.event {
+            Some(Event::Started(history)) => history,
+            other => panic!("expected a Started event, got {other:?}"),
+        };
         assert_eq!(started_history.id, start_reply.id);
         assert_eq!(started_history.command, "git status");
         assert_eq!(started_history.cwd, "/tmp/repo");
@@ -197,11 +200,13 @@ mod unix {
         assert_eq!(started_history.intent, "inspect repository state");
 
         let end_id: HistoryId = start_reply.id.clone().unwrap().try_into().unwrap();
-        client.end_history(end_id, Some(1_000_000), 0).await.unwrap();
+        client.end_history(end_id, Some(Duration::from_nanos(1_000_000)), 0).await.unwrap();
 
         let ended = stream.message().await.unwrap().unwrap();
-        assert_eq!(HistoryEventKind::try_from(ended.kind).unwrap(), HistoryEventKind::Ended);
-        let ended_history = ended.history.unwrap();
+        let ended_history = match ended.event {
+            Some(Event::Ended(history)) => history,
+            other => panic!("expected an Ended event, got {other:?}"),
+        };
         assert_eq!(ended_history.id, start_reply.id);
         assert_eq!(ended_history.exit, 0);
         assert_eq!(ended_history.duration, 1_000_000);
@@ -214,7 +219,9 @@ mod unix {
     ) {
         let (mut client, _handle, _tmp) = daemon.await;
 
-        let result = client.end_history(HistoryId::from_bytes([0u8; 16]), Some(1000), 0).await;
+        let result = client
+            .end_history(HistoryId::from_bytes([0u8; 16]), Some(Duration::from_nanos(1000)), 0)
+            .await;
         assert!(result.is_err());
     }
 
