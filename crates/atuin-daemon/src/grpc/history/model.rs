@@ -187,3 +187,210 @@ impl From<GetCmdInFlightError> for Status {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use atuin_client::history::AuthorKind as ClientAuthorKind;
+    use proptest::prelude::*;
+    use rstest::rstest;
+    use time::OffsetDateTime;
+    use tonic::Code;
+
+    use super::*;
+
+    fn good_id_proto() -> HistoryIdProto {
+        HistoryIdProto::from(HistoryId::from_bytes([1u8; 16]))
+    }
+
+    fn end_req(
+        id: Option<HistoryIdProto>,
+        exit: i64,
+        duration: Option<prost_types::Duration>,
+    ) -> EndHistoryRequest {
+        EndHistoryRequest { id, exit, duration }
+    }
+
+    fn parse_end(
+        req: EndHistoryRequest,
+    ) -> Result<(HistoryId, i64, Option<Duration>), EndHistoryRequestParseError> {
+        req.try_into()
+    }
+
+    // --- HistoryId <-> proto ---
+
+    proptest! {
+        /// A HistoryId survives the proto round trip for every possible id, and the proto carries
+        /// the id's raw 16 bytes verbatim -- pinning byte order against a symmetric from/into swap.
+        #[test]
+        fn history_id_round_trips_and_wire_bytes(b in proptest::array::uniform16(any::<u8>())) {
+            let proto = HistoryIdProto::from(HistoryId::from_bytes(b));
+            prop_assert_eq!(proto.uuid.as_ref().unwrap().value.clone(), b.to_vec());
+            prop_assert_eq!(HistoryId::try_from(proto).unwrap().into_bytes(), b);
+        }
+
+        /// Any uuid payload whose length is not 16 is rejected as BadLength reporting the real length,
+        /// never a panic.
+        #[test]
+        fn history_id_rejects_wrong_length(
+            v in proptest::collection::vec(any::<u8>(), 0..40usize).prop_filter("not 16", |v| v.len() != 16),
+        ) {
+            let proto = HistoryIdProto { uuid: Some(Uuid { value: v.clone() }) };
+            match HistoryId::try_from(proto) {
+                Err(IdParseError::BadLength(len)) => prop_assert_eq!(len, v.len()),
+                other => prop_assert!(false, "expected BadLength, got {:?}", other),
+            }
+        }
+    }
+
+    #[rstest]
+    #[case::missing(None, "missing its uuid")]
+    #[case::short(Some(vec![0u8; 15]), "got 15")]
+    #[case::long(Some(vec![0u8; 17]), "got 17")]
+    fn history_id_parse_errors(#[case] value: Option<Vec<u8>>, #[case] fragment: &str) {
+        let proto = HistoryIdProto {
+            uuid: value.map(|value| Uuid { value }),
+        };
+        let err = HistoryId::try_from(proto).unwrap_err();
+        assert!(err.to_string().contains(fragment), "{err}");
+    }
+
+    // --- History -> HistoryEntry ---
+
+    /// Every source field routes to its correct proto slot, absent intent/shell collapse to "",
+    /// and author_kind lands as its i32 discriminant. Distinct sentinels make any field swap fail.
+    #[test]
+    fn history_entry_field_routing() {
+        let h: History = History::from_db()
+            .id(HistoryId::from_bytes([7u8; 16]))
+            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .command("CMD".into())
+            .cwd("CWD".into())
+            .exit(3)
+            .duration(42)
+            .session("SES".into())
+            .hostname("hostx:usery".into())
+            .author("AUTH".into())
+            .intent(None)
+            .deleted_at(None)
+            .shell(None)
+            .author_kind(Some(ClientAuthorKind::Agent))
+            .build()
+            .into();
+
+        let e = HistoryEntry::from(h);
+
+        assert_eq!(e.command, "CMD");
+        assert_eq!(e.cwd, "CWD");
+        assert_eq!(e.session, "SES");
+        assert_eq!(e.author, "AUTH");
+        assert_eq!(e.hostname, "hostx:usery");
+        assert_eq!((e.exit, e.duration), (3, 42));
+        assert_eq!((e.intent.as_str(), e.shell.as_str()), ("", ""));
+        assert_eq!(e.id.unwrap().uuid.unwrap().value, [7u8; 16].to_vec());
+        assert_eq!(e.author_kind, AuthorKind::Agent as i32);
+    }
+
+    // --- StartHistoryRequest -> History ---
+
+    fn start_req(hostname: &str) -> StartHistoryRequest {
+        StartHistoryRequest {
+            timestamp: 0,
+            command: "cmd".into(),
+            cwd: "/".into(),
+            session: "ses".into(),
+            hostname: hostname.into(),
+            author: "auth".into(),
+            intent: "intent".into(),
+            shell: "bash".into(),
+            author_kind: 0,
+        }
+    }
+
+    #[test]
+    fn start_request_rejects_colonless_hostname() {
+        let err = History::try_from(start_req("nocolon")).unwrap_err();
+        assert!(matches!(err, StartHistoryRequestParseError::BadCmdOrigin(_)));
+    }
+
+    #[test]
+    fn start_request_defaults_exit_and_duration_to_unmeasured() {
+        let h = History::try_from(start_req("host:user")).unwrap();
+        assert_eq!((h.exit, h.duration), (-1, -1));
+    }
+
+    // --- EndHistoryRequest -> (id, exit, duration) ---
+
+    #[test]
+    fn end_request_none_duration_is_preserved() {
+        let (_, exit, duration) = parse_end(end_req(Some(good_id_proto()), 5, None)).unwrap();
+        assert_eq!(exit, 5);
+        assert!(duration.is_none());
+    }
+
+    #[test]
+    fn end_request_some_duration_is_parsed() {
+        let d = prost_types::Duration {
+            seconds: 0,
+            nanos: 3,
+        };
+        let (_, _, duration) = parse_end(end_req(Some(good_id_proto()), 0, Some(d))).unwrap();
+        assert_eq!(duration, Some(Duration::from_nanos(3)));
+    }
+
+    #[test]
+    fn end_request_negative_duration_errs_without_panic() {
+        let d = prost_types::Duration {
+            seconds: -1,
+            nanos: 0,
+        };
+        let err = parse_end(end_req(Some(good_id_proto()), 0, Some(d))).unwrap_err();
+        assert!(matches!(err, EndHistoryRequestParseError::InvalidDuration(_)));
+    }
+
+    #[test]
+    fn end_request_missing_id_errs() {
+        let err = parse_end(end_req(None, 0, None)).unwrap_err();
+        assert!(matches!(err, EndHistoryRequestParseError::MissingHistory));
+    }
+
+    // --- CancelHistoryRequest -> id ---
+
+    #[rstest]
+    #[case::missing(None)]
+    #[case::bad_len(Some(HistoryIdProto { uuid: Some(Uuid { value: vec![0u8; 15] }) }))]
+    fn cancel_request_rejects_bad_id(#[case] id: Option<HistoryIdProto>) {
+        assert!(HistoryId::try_from(CancelHistoryRequest { id }).is_err());
+    }
+
+    #[test]
+    fn cancel_request_good_id_ok() {
+        assert!(
+            HistoryId::try_from(CancelHistoryRequest {
+                id: Some(good_id_proto())
+            })
+            .is_ok()
+        );
+    }
+
+    // --- errors -> tonic::Status codes (the client-facing contract) ---
+
+    #[rstest]
+    #[case(CmdFinishError::NotFound(HistoryId::from_bytes([0u8; 16])), Code::NotFound)]
+    #[case(CmdFinishError::HistoryStoreFailed(eyre::eyre!("x")), Code::Internal)]
+    #[case(CmdFinishError::HistoryDbFailed(eyre::eyre!("x")), Code::Internal)]
+    fn finish_error_status_codes(#[case] err: CmdFinishError, #[case] code: Code) {
+        assert_eq!(Status::from(err).code(), code);
+    }
+
+    #[test]
+    fn id_parse_error_maps_to_invalid_argument() {
+        assert_eq!(Status::from(IdParseError::MissingUuid).code(), Code::InvalidArgument);
+    }
+
+    #[rstest]
+    #[case::cancel(Status::from(CmdCancelError::NotFound(HistoryId::from_bytes([0u8; 16]))))]
+    #[case::get(Status::from(GetCmdInFlightError::NotFound(HistoryId::from_bytes([0u8; 16]))))]
+    fn journal_not_found_maps_to_not_found(#[case] status: Status) {
+        assert_eq!(status.code(), Code::NotFound);
+    }
+}
