@@ -22,4 +22,4 @@ pub use client::{IpcClient, IpcConnectError, IpcConnection, IpcError};
 #[cfg(all(unix, feature = "domain"))]
 pub use domain::ScreenSnapshot;
 #[cfg(all(unix, feature = "server"))]
-pub use server::{CommandCapture, CommandCaptureSink, PtyProxy, Shell, init_script};
+pub use server::{CommandCapture, CommandCaptureSink, Shell, cli, init_script};

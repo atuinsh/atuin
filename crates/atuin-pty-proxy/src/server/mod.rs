@@ -1,3 +1,5 @@
+pub mod cli;
+
 mod capture;
 mod debug;
 mod ipc;
@@ -7,4 +9,4 @@ mod runtime;
 mod screen;
 
 pub use capture::{CommandCapture, CommandCaptureSink};
-pub use pty_proxy::{PtyProxy, Shell, init_script};
+pub use pty_proxy::{Shell, init_script};
