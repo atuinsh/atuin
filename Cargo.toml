@@ -16,8 +16,6 @@ readme = "README.md"
 [workspace.dependencies]
 async-trait = "0.1.58"
 enum_dispatch = "0.3"
-# default-features is disabled here (not in the consuming crate) because a
-# workspace-inherited dependency cannot turn off default features itself.
 atuin-ai = { path = "crates/atuin-ai", version = "18.21.0", default-features = false }
 atuin-client = { path = "crates/atuin-client", version = "18.21.0" }
 atuin-common = { path = "crates/atuin-common", version = "18.21.0" }
