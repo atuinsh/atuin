@@ -33,15 +33,15 @@ config = { workspace = true }
 serde = { workspace = true }
 rand = { workspace = true }
 tokio = { workspace = true }
-axum = "0.8"
+axum = { workspace = true }
 fs-err = { workspace = true }
 tower = { workspace = true }
-tower-http = { version = "0.6", features = ["trace"] }
+tower-http = { workspace = true }
 reqwest = { workspace = true }
 url = { workspace = true }
-argon2 = "0.5"
-metrics-exporter-prometheus = { version = "0.18", default-features = false }
-metrics = "0.24"
+argon2 = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+metrics = { workspace = true }
 clap = { workspace = true }
 tracing-subscriber = { workspace = true }
 async-trait = { workspace = true }
@@ -49,6 +49,7 @@ derive_more = { workspace = true }
 time = { workspace = true }
 uuid = { workspace = true }
 sqlx = { workspace = true, features = ["postgres", "sqlite", "mysql", "regexp", "tls-native-tls"] }
+easy-cast = { workspace = true }
 
 # Integration tests in tests/ spin up a real server and drive it with the
 # client's api_client. atuin-client is only a dev dependency here so the client
@@ -56,8 +57,8 @@ sqlx = { workspace = true, features = ["postgres", "sqlite", "mysql", "regexp", 
 [dev-dependencies]
 atuin-client = { path = "../atuin-client", version = "18.21.0", default-features = false, features = ["sync"] }
 rstest = { workspace = true }
-futures-util = "0.3"
-tracing-tree = "0.4"
+futures-util = { workspace = true }
+tracing-tree = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 regex = { workspace = true }
 

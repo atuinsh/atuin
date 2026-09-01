@@ -5,6 +5,7 @@ use atuin_client::database::Context;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::{FilterMode, Settings};
 use atuin_common::filter::{self, OrFilter};
+use easy_cast::Conv;
 use eyre::{Context as EyreContext, Result};
 use hyper_util::rt::TokioIo;
 #[cfg(windows)]
@@ -127,7 +128,7 @@ impl HistoryClient {
             cwd: h.cwd,
             hostname: h.cmd_origin.into_string(),
             session: h.session,
-            timestamp: h.timestamp.unix_timestamp_nanos() as u64,
+            timestamp: u64::conv(h.timestamp.unix_timestamp_nanos()),
             author: h.author,
             intent: h.intent.unwrap_or_default(),
             shell: h.shell.unwrap_or_default(),

@@ -8,6 +8,7 @@ use atuin_common::filter::{self, OrFilter};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::{db, utils};
 use atuin_domain::record::{CmdOrigin, UNKNOWN_USER};
+use easy_cast::Conv;
 use itertools::Itertools;
 use sql_builder::bind::Bind;
 use sql_builder::{SqlBuilder, SqlName, esc, quote};
@@ -368,7 +369,7 @@ impl Sqlite {
             ) values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         )
         .bind(h.id)
-        .bind(h.timestamp.unix_timestamp_nanos() as i64)
+        .bind(i64::conv(h.timestamp.unix_timestamp_nanos()))
         .bind(h.duration)
         .bind(h.exit)
         .bind(h.command.as_str())
@@ -377,7 +378,7 @@ impl Sqlite {
         .bind(h.cmd_origin.as_str())
         .bind(h.author.as_str())
         .bind(h.intent.as_deref())
-        .bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
+        .bind(h.deleted_at.map(|t| i64::conv(t.unix_timestamp_nanos())))
         .bind(h.shell.as_deref())
         .bind(h.author_kind.map(|kind| i64::from(kind.as_u8())))
         .execute(&mut **tx)
@@ -431,7 +432,7 @@ impl Sqlite {
 
             builder.push_values(h.by_ref().take(rows_per_insert), |mut b, h| {
                 b.push_bind(h.id)
-                    .push_bind(h.timestamp.unix_timestamp_nanos() as i64)
+                    .push_bind(i64::conv(h.timestamp.unix_timestamp_nanos()))
                     .push_bind(h.duration)
                     .push_bind(h.exit)
                     .push_bind(h.command.as_str())
@@ -440,7 +441,7 @@ impl Sqlite {
                     .push_bind(h.cmd_origin.as_str())
                     .push_bind(h.author.as_str())
                     .push_bind(h.intent.as_deref())
-                    .push_bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
+                    .push_bind(h.deleted_at.map(|t| i64::conv(t.unix_timestamp_nanos())))
                     .push_bind(h.shell.as_deref())
                     .push_bind(h.author_kind.map(|kind| i64::from(kind.as_u8())));
             });
@@ -528,7 +529,7 @@ impl Sqlite {
                 where id = ?1",
         )
         .bind(h.id)
-        .bind(h.timestamp.unix_timestamp_nanos() as i64)
+        .bind(i64::conv(h.timestamp.unix_timestamp_nanos()))
         .bind(h.duration)
         .bind(h.exit)
         .bind(h.command.as_str())
@@ -537,7 +538,7 @@ impl Sqlite {
         .bind(h.cmd_origin.as_str())
         .bind(h.author.as_str())
         .bind(h.intent.as_deref())
-        .bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
+        .bind(h.deleted_at.map(|t| i64::conv(t.unix_timestamp_nanos())))
         .bind(h.author_kind.map(|kind| i64::from(kind.as_u8())))
         .execute(self.sqlite.pool())
         .await?;
@@ -600,8 +601,8 @@ impl Sqlite {
         // Inclusive on both ends, matching `range()`. `stats` relies on this to count a
         // command recorded exactly on a period boundary (e.g. at midnight).
         if let Some((from, to)) = range {
-            query.and_where_ge("timestamp", from.unix_timestamp_nanos() as i64);
-            query.and_where_le("timestamp", to.unix_timestamp_nanos() as i64);
+            query.and_where_ge("timestamp", i64::conv(from.unix_timestamp_nanos()));
+            query.and_where_le("timestamp", i64::conv(to.unix_timestamp_nanos()));
         }
 
         let query = query.sql().expect("bug in list query. please report");
@@ -621,8 +622,8 @@ impl Sqlite {
             "select {HISTORY_COLUMNS} from history where timestamp >= ?1 and timestamp <= ?2 \
              order by timestamp asc"
         )))
-        .bind(from.unix_timestamp_nanos() as i64)
-        .bind(to.unix_timestamp_nanos() as i64)
+        .bind(i64::conv(from.unix_timestamp_nanos()))
+        .bind(i64::conv(to.unix_timestamp_nanos()))
         .fetch_all(self.sqlite.pool())
         .await?;
 
@@ -647,7 +648,7 @@ impl Sqlite {
             "select {HISTORY_COLUMNS} from history where timestamp < ?1 order by timestamp desc \
              limit ?2"
         )))
-        .bind(timestamp.unix_timestamp_nanos() as i64)
+        .bind(i64::conv(timestamp.unix_timestamp_nanos()))
         .bind(count)
         .fetch_all(self.sqlite.pool())
         .await?;
@@ -783,7 +784,7 @@ impl Sqlite {
                             format!("invalid `before` filter {before:?}: {e}").into(),
                         )
                     })?;
-            sql.and_where_lt("timestamp", quote(parsed.unix_timestamp_nanos() as i64));
+            sql.and_where_lt("timestamp", quote(i64::conv(parsed.unix_timestamp_nanos())));
         }
 
         if let Some(after) = filter_options.after {
@@ -792,7 +793,7 @@ impl Sqlite {
                     .map_err(|e| {
                         sqlx::Error::Decode(format!("invalid `after` filter {after:?}: {e}").into())
                     })?;
-            sql.and_where_gt("timestamp", quote(parsed.unix_timestamp_nanos() as i64));
+            sql.and_where_gt("timestamp", quote(i64::conv(parsed.unix_timestamp_nanos())));
         }
 
         apply_author_filter(&mut sql, filter_options.authors);
@@ -1007,11 +1008,11 @@ impl Sqlite {
             Vec<(String, f64)>,
         ) = tokio::try_join!(
             db::query_as::<_, History>(sqlx::AssertSqlSafe(prev))
-                .bind(h.timestamp.unix_timestamp_nanos() as i64)
+                .bind(i64::conv(h.timestamp.unix_timestamp_nanos()))
                 .bind(&h.session)
                 .fetch_optional(self.sqlite.pool()),
             db::query_as::<_, History>(sqlx::AssertSqlSafe(next))
-                .bind(h.timestamp.unix_timestamp_nanos() as i64)
+                .bind(i64::conv(h.timestamp.unix_timestamp_nanos()))
                 .bind(&h.session)
                 .fetch_optional(self.sqlite.pool()),
             db::query_as(sqlx::AssertSqlSafe(total)).bind(&h.command).fetch_one(self.sqlite.pool()),
@@ -1033,7 +1034,7 @@ impl Sqlite {
         Ok(HistoryStats {
             next,
             previous: prev,
-            total: total.0 as u64,
+            total: u64::conv(total.0),
             average_duration: average.0 as u64,
             exits,
             day_of_week,

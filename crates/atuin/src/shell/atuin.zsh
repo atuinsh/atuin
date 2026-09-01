@@ -93,8 +93,6 @@ _atuin_precmd() {
     local duration=""
     if [[ -n $__atuin_preexec_time && -n $__atuin_precmd_time ]]; then
         printf -v duration %.0f $(((__atuin_precmd_time - __atuin_preexec_time) * 1000000000))
-        # A rounded-to-zero delta is not a usable measurement; clear it so the flag is omitted
-        # below and the daemon derives the duration from the start timestamp instead of storing 0.
         [[ $duration == 0 ]] && duration=""
     fi
 

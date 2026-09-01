@@ -13,6 +13,7 @@ use atuin_domain::record::{
     Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
     RecordVersion,
 };
+use easy_cast::Conv;
 use eyre::{Result, eyre};
 use sqlx::Row;
 use sqlx::sqlite::{SqlitePool, SqliteRow};
@@ -49,9 +50,9 @@ impl<'r> ::sqlx::FromRow<'r, SqliteRow> for DbRecord {
 
         Ok(Self(Record {
             id: RecordId(parse_uuid("id")?),
-            idx: idx as u64,
+            idx: u64::conv(idx),
             host: Host::new(HostId(parse_uuid("host")?)),
-            timestamp: timestamp as u64,
+            timestamp: u64::conv(timestamp),
             tag: RecordTag::from(row.try_get::<String, _>("tag")?),
             version: RecordVersion::from(row.try_get::<String, _>("version")?),
             data: paseto_v4::EncryptedData {
@@ -103,10 +104,10 @@ impl SqliteStore {
                 values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
         .bind(r.id.as_hyphenated().to_string())
-        .bind(r.idx as i64)
+        .bind(i64::conv(r.idx))
         .bind(r.host.id.as_hyphenated().to_string())
         .bind(r.tag.as_str())
-        .bind(r.timestamp as i64)
+        .bind(i64::conv(r.timestamp))
         .bind(r.version.as_str())
         .bind(r.data.raw.as_str())
         .bind(r.data.cek.as_str())
@@ -153,10 +154,10 @@ impl SqliteStore {
 
             builder.push_values(records.by_ref().take(rows_per_insert), |mut b, r| {
                 b.push_bind(r.id.0.as_hyphenated().to_string())
-                    .push_bind(r.idx as i64)
+                    .push_bind(i64::conv(r.idx))
                     .push_bind(r.host.id.0.as_hyphenated().to_string())
                     .push_bind(r.tag.as_str())
-                    .push_bind(r.timestamp as i64)
+                    .push_bind(i64::conv(r.timestamp))
                     .push_bind(r.version.as_str())
                     .push_bind(r.data.raw.as_str())
                     .push_bind(r.data.cek.as_str());
@@ -233,7 +234,7 @@ impl SqliteStore {
             db::query_as("select count(*) from store").fetch_one(self.sqlite.pool()).await;
         match res {
             Err(e) => Err(eyre!("failed to fetch local store len: {}", e)),
-            Ok(v) => Ok(v.0 as u64),
+            Ok(v) => Ok(u64::conv(v.0)),
         }
     }
 
@@ -246,7 +247,7 @@ impl SqliteStore {
                 .await;
         match res {
             Err(e) => Err(eyre!("failed to fetch local store len: {}", e)),
-            Ok(v) => Ok(v.0 as u64),
+            Ok(v) => Ok(u64::conv(v.0)),
         }
     }
 
@@ -278,7 +279,7 @@ impl SqliteStore {
         .fetch_one(self.sqlite.pool())
         .await?;
 
-        Ok(gap.unwrap_or(0) as u64)
+        Ok(u64::conv(gap.unwrap_or(0)))
     }
 
     #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag, idx, limit), err)]
@@ -292,10 +293,10 @@ impl SqliteStore {
             "select {STORE_COLUMNS} from store where idx >= ?1 and host = ?2 and tag = ?3 order \
              by idx asc limit ?4"
         )))
-        .bind(idx as i64)
+        .bind(i64::conv(idx))
         .bind(series.host_id.as_hyphenated().to_string())
         .bind(series.tag.as_str())
-        .bind(limit as i64)
+        .bind(i64::conv(limit))
         .fetch_all(self.sqlite.pool())
         .await?;
 
@@ -311,7 +312,7 @@ impl SqliteStore {
         let res = db::query_as::<_, DbRecord>(sqlx::AssertSqlSafe(format!(
             "select {STORE_COLUMNS} from store where idx = ?1 and host = ?2 and tag = ?3"
         )))
-        .bind(idx as i64)
+        .bind(i64::conv(idx))
         .bind(series.host_id.as_hyphenated().to_string())
         .bind(series.tag.as_str())
         .fetch_one(self.sqlite.pool())
@@ -343,7 +344,7 @@ impl SqliteStore {
                 Uuid::from_str(i.0.as_str()).expect("failed to parse uuid for local store status"),
             );
 
-            status.set_raw(RecordSeriesKey::new(host, RecordTag::from(i.1)), i.2 as u64);
+            status.set_raw(RecordSeriesKey::new(host, RecordTag::from(i.1)), u64::conv(i.2));
         }
 
         Ok(status)

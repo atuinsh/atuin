@@ -216,8 +216,6 @@ mod tests {
         req.try_into()
     }
 
-    // --- HistoryId <-> proto ---
-
     proptest! {
         /// A HistoryId survives the proto round trip for every possible id, and the proto carries
         /// the id's raw 16 bytes verbatim -- pinning byte order against a symmetric from/into swap.
@@ -254,10 +252,6 @@ mod tests {
         assert!(err.to_string().contains(fragment), "{err}");
     }
 
-    // --- History -> HistoryEntry ---
-
-    /// Every source field routes to its correct proto slot, absent intent/shell collapse to "",
-    /// and author_kind lands as its i32 discriminant. Distinct sentinels make any field swap fail.
     #[test]
     fn history_entry_field_routing() {
         let h: History = History::from_db()
@@ -289,8 +283,6 @@ mod tests {
         assert_eq!(e.id.unwrap().uuid.unwrap().value, [7u8; 16].to_vec());
         assert_eq!(e.author_kind, AuthorKind::Agent as i32);
     }
-
-    // --- StartHistoryRequest -> History ---
 
     fn start_req(hostname: &str) -> StartHistoryRequest {
         StartHistoryRequest {
@@ -353,8 +345,6 @@ mod tests {
         assert!(matches!(err, EndHistoryRequestParseError::MissingHistory));
     }
 
-    // --- CancelHistoryRequest -> id ---
-
     #[rstest]
     #[case::missing(None)]
     #[case::bad_len(Some(HistoryIdProto { uuid: Some(Uuid { value: vec![0u8; 15] }) }))]
@@ -371,8 +361,6 @@ mod tests {
             .is_ok()
         );
     }
-
-    // --- errors -> tonic::Status codes (the client-facing contract) ---
 
     #[rstest]
     #[case(CmdFinishError::NotFound(HistoryId::from_bytes([0u8; 16])), Code::NotFound)]

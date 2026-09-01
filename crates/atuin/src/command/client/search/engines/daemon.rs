@@ -3,6 +3,7 @@ use atuin_client::history::{History, HistoryId, all_user_author_filter};
 use atuin_client::settings::Settings;
 use atuin_daemon::client::{SearchClient, SearchParams};
 use atuin_daemon::search::{normalize_diacritics, truncate_query};
+use easy_cast::Conv;
 use eyre::Result;
 use tracing::{Level, debug, instrument, span};
 
@@ -258,7 +259,7 @@ impl SearchEngine for Search {
         indices.sort_unstable();
         indices.dedup();
         if command.is_ascii() {
-            indices.into_iter().map(|i| i as usize).collect()
+            indices.into_iter().map(usize::conv).collect()
         } else {
             let matchable_byte_to_char: std::collections::HashMap<usize, usize> = matchable
                 .char_indices()
@@ -269,7 +270,7 @@ impl SearchEngine for Search {
                 command.char_indices().map(|(byte_idx, _)| byte_idx).collect();
             let mut bytes: Vec<usize> = indices
                 .into_iter()
-                .filter_map(|i| matchable_byte_to_char.get(&(i as usize)))
+                .filter_map(|i| matchable_byte_to_char.get(&usize::conv(i)))
                 .filter_map(|&char_idx| command_char_to_byte.get(char_idx).copied())
                 .collect();
             bytes.dedup();

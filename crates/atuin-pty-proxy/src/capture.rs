@@ -322,6 +322,7 @@ impl CommandCaptureTracker {
 mod tests {
     use std::sync::mpsc::{self, Receiver};
 
+    use easy_cast::Conv;
     use rstest::{fixture, rstest};
 
     use super::*;
@@ -427,7 +428,7 @@ mod tests {
             exit_code: Some(0),
             history_id: Some("hist".to_string()),
             session_id: Some("sess".to_string()),
-            output_observed_bytes: b"hi\r\n".len() as u64,
+            output_observed_bytes: u64::conv(b"hi\r\n".len()),
             output_truncated: false,
         },
     )]
@@ -441,7 +442,7 @@ mod tests {
             exit_code: Some(0),
             history_id: Some("018f".to_string()),
             session_id: Some("abcd".to_string()),
-            output_observed_bytes: b"line one\r\n".len() as u64,
+            output_observed_bytes: u64::conv(b"line one\r\n".len()),
             output_truncated: false,
         },
     )]
@@ -576,7 +577,7 @@ mod tests {
         assert_eq!(capture.output, "");
         // The bytes were still observed, even though none of them were captured.
         let drawn = b"\x1b[?1049hEDITOR\r\nSCREEN\x1b[?1049l".len();
-        assert_eq!(capture.output_observed_bytes, drawn as u64);
+        assert_eq!(capture.output_observed_bytes, u64::conv(drawn));
     }
 
     #[rstest]
@@ -702,7 +703,7 @@ mod tests {
         let capture = tracker.only_capture();
         assert_eq!(capture.command, "echo hi");
         assert_eq!(capture.output, "hi");
-        assert_eq!(capture.output_observed_bytes, b"hi\r\n".len() as u64);
+        assert_eq!(capture.output_observed_bytes, u64::conv(b"hi\r\n".len()));
     }
 
     #[rstest]
@@ -739,7 +740,7 @@ mod tests {
 
         let capture = tracker.only_capture();
         assert_eq!(capture.output, "fresh");
-        assert_eq!(capture.output_observed_bytes, b"fresh\r\n".len() as u64);
+        assert_eq!(capture.output_observed_bytes, u64::conv(b"fresh\r\n".len()));
     }
 
     #[rstest]
@@ -759,7 +760,7 @@ mod tests {
             session_id: Some("abcd".to_string()),
             // The first `D` ends the output zone and is discounted; the second arrives
             // after it, in the unknown zone, so it was never counted to begin with.
-            output_observed_bytes: b"line one\r\n".len() as u64,
+            output_observed_bytes: u64::conv(b"line one\r\n".len()),
             output_truncated: false,
         });
     }
@@ -790,7 +791,7 @@ mod tests {
         assert_eq!(capture.prompt, "$");
         assert_eq!(capture.command, "echo hi");
         assert_eq!(capture.output, "hi");
-        assert_eq!(capture.output_observed_bytes, b"hi\r\n".len() as u64);
+        assert_eq!(capture.output_observed_bytes, u64::conv(b"hi\r\n".len()));
     }
 
     #[rstest]
@@ -801,7 +802,7 @@ mod tests {
 
         // The same total as if the whole marker had arrived in one push: the marker is
         // discounted in full, however it was split up.
-        assert_eq!(tracker.only_capture().output_observed_bytes, b"line one\r\n".len() as u64);
+        assert_eq!(tracker.only_capture().output_observed_bytes, u64::conv(b"line one\r\n".len()));
     }
 
     #[rstest]
@@ -815,7 +816,7 @@ mod tests {
         assert_eq!(capture.prompt, "$");
         assert_eq!(capture.command, "echo hi");
         assert_eq!(capture.output, "hi");
-        assert_eq!(capture.output_observed_bytes, b"hi\r\n".len() as u64);
+        assert_eq!(capture.output_observed_bytes, u64::conv(b"hi\r\n".len()));
     }
 
     // -- Limits ---------------------------------------------------------------
@@ -836,7 +837,7 @@ mod tests {
         let capture = tracker.only_capture();
         assert!(capture.output_truncated);
         assert_eq!(capture.output.len(), MAX_CAPTURE_BYTES);
-        assert_eq!(capture.output_observed_bytes, ((LINE_LEN + 2) * LINES) as u64);
+        assert_eq!(capture.output_observed_bytes, u64::conv((LINE_LEN + 2) * LINES));
     }
 
     #[rstest]

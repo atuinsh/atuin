@@ -436,7 +436,7 @@ fn ensure_reply_compatible(settings: &Settings, version: &str, protocol: u32) ->
 ///
 /// TODO(markovejnovic): This is egregious slop, but not worse than the original solution. I want to
 ///                      remove this in a future PR: <https://github.com/atuinsh/atuin/pull/4002>
-async fn ready_client(settings: &Settings) -> Result<HistoryClient> {
+pub async fn ready_client(settings: &Settings) -> Result<HistoryClient> {
     match probe(settings).await {
         Probe::Ready(client) => return Ok(client),
         Probe::NeedsRestart(reason) if !settings.daemon.autostart => {
@@ -530,10 +530,6 @@ pub async fn emit_event(settings: &Settings, event: DaemonEvent) {
             eprintln!("Daemon started but failed to connect: {e}");
         }
     }
-}
-
-pub async fn tail_client(settings: &Settings) -> Result<HistoryClient> {
-    ready_client(settings).await
 }
 
 async fn status_cmd(settings: &Settings) -> Result<()> {

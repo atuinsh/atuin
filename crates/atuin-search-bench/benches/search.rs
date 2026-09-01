@@ -34,6 +34,7 @@ use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
 use atuin_daemon::search::{IndexFilterMode, SearchIndex};
 use atuin_search_bench::corpus;
+use easy_cast::Conv;
 use parking_lot::Mutex;
 use time::OffsetDateTime;
 
@@ -149,7 +150,7 @@ fn commands() -> &'static Vec<String> {
             }
             lines
         } else {
-            let seed = env_usize("BENCH_SEED", 42) as u64;
+            let seed = u64::conv(env_usize("BENCH_SEED", 42));
             eprintln!("corpus: generating {max_scale} synthetic history lines (seed {seed})...");
             corpus::generate(max_scale, seed)
         }
@@ -176,7 +177,7 @@ fn index(scale: usize) -> Arc<SearchIndex> {
     let now = OffsetDateTime::now_utc();
     for (i, command) in commands()[..scale].iter().enumerate() {
         let history: History = History::import()
-            .timestamp(now - time::Duration::seconds(((i * 37) % 31_536_000) as i64))
+            .timestamp(now - time::Duration::seconds(i64::conv((i * 37) % 31_536_000)))
             .command(command.as_str())
             .cwd(DIRS[i % DIRS.len()])
             .build()

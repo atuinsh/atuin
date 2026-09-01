@@ -4,6 +4,7 @@ use atuin_client::history::History;
 use atuin_client::settings::Settings;
 use atuin_client::theme::{Meaning, Theme};
 use crossterm::style::{Color, ResetColor, SetAttribute, SetForegroundColor};
+use easy_cast::Conv;
 use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -165,7 +166,7 @@ fn strip_leading_env_vars(command: &str) -> &str {
 
 pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
     let max = stats.top.iter().map(|x| x.1).max().unwrap();
-    let num_pad = max.ilog10() as usize + 1;
+    let num_pad = usize::conv(max.ilog10()) + 1;
 
     // Find the length of the longest command name for each column
     let column_widths = stats

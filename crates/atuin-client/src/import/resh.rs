@@ -107,14 +107,12 @@ impl Importer for Resh {
             };
 
             #[allow(clippy::cast_possible_truncation)]
-            #[allow(clippy::cast_sign_loss)]
             let start = {
                 let secs = entry.realtime_before.floor() as i64;
                 let nanosecs = (entry.realtime_before.fract() * 1_000_000_000_f64).round() as i64;
                 OffsetDateTime::from_timespec(i128::from(secs), i128::from(nanosecs))
             };
             #[allow(clippy::cast_possible_truncation)]
-            #[allow(clippy::cast_sign_loss)]
             let end = {
                 let secs = entry.realtime_after.floor() as i64;
                 let nanosecs = (entry.realtime_after.fract() * 1_000_000_000_f64).round() as i64;

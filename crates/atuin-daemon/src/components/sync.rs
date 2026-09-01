@@ -11,6 +11,7 @@ use atuin_client::record::sync::{ClientSource, SyncEngine};
 use atuin_client::settings::Settings;
 use atuin_dotfiles::store::AliasStore;
 use atuin_dotfiles::store::var::VarStore;
+use easy_cast::Conv;
 use eyre::Result;
 use futures::StreamExt;
 use rand::Rng;
@@ -293,7 +294,7 @@ async fn do_sync_tick(
 
             // Emit sync completed event
             handle.emit(DaemonEvent::SyncCompleted {
-                uploaded: uploaded_count as usize,
+                uploaded: usize::conv(uploaded_count),
                 downloaded: downloaded_records.len(),
             });
 
