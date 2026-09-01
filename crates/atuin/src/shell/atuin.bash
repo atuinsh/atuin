@@ -121,10 +121,12 @@ __atuin_precmd() {
         # non-digit characters because the decimal point is not necessarily a
         # period depending on the locale.
         duration=$((${__atuin_precmd_time//[!0-9]} - ${__atuin_preexec_time//[!0-9]}))
-        if ((duration >= 0)); then
+        if ((duration > 0)); then
             duration=${duration}000
         else
-            duration="" # clear the result on overflow
+            # <= 0 means clock overflow or a sub-tick command with no usable measurement; leave
+            # duration empty so the flag is omitted and the daemon derives it from the start time.
+            duration=""
         fi
     fi
 

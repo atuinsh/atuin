@@ -3,7 +3,7 @@
 //! The core structure is [`HistoryJournal`]. The [`HistoryJournal`] handles the creation and
 //! termination of new commands.
 //!
-//! When users run new commands in the client, the client sends requests to the GPRC server. The
+//! When users run new commands in the client, the client sends requests to the GRPC server. The
 //! [`crate::grpc::history::Service`] then "forwards" the request down into [`HistoryJournal`] --
 //! requesting the start of a new shell command.
 //!
@@ -79,7 +79,8 @@ pub enum CmdEvent {
     Cancelled(History),
 }
 
-/// Structure which defines
+/// Structure returned by [`HistoryJournal::finish`] which encodes the stored record identifier
+/// and index.
 pub struct FinishedCmd {
     pub history_record_id: RecordId,
     pub history_record_idx: RecordIdx,
@@ -175,9 +176,12 @@ impl HistoryJournal {
     #[must_use]
     pub fn start_cmd(&self, history: History) -> HistoryId {
         let id = history.id;
-        self.active_sessions.insert(id, CmdInFlightOwned {
-            history: history.clone(),
-        });
+        self.active_sessions.insert(
+            id,
+            CmdInFlightOwned {
+                history: history.clone(),
+            },
+        );
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
     }

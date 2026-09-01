@@ -27,12 +27,15 @@ def _atuin_postcommand(cmd: str, rtn: int, out, ts):
     duration = ts[1] - ts[0]
     # Duration is float representing seconds, but atuin expects integer of nanoseconds
     nanos = round(duration * 10 ** 9)
+    # A rounded-to-zero (or negative) duration is not a usable measurement; omit the flag so the
+    # daemon derives it from the start timestamp instead of recording a literal 0.
+    duration_args = ["--duration", str(nanos)] if nanos > 0 else []
 
     # This causes the entire .xonshrc to be re-executed, which is incredibly slow
     # This happens when using a subshell and using output redirection at the same time
     # For more details, see https://github.com/xonsh/xonsh/issues/5224
     # (atuin history end --hook --exit @(rtn) -- $ATUIN_HISTORY_ID &) > /dev/null 2>&1
-    atuin history end --hook --exit @(rtn) --duration @(nanos) -- $ATUIN_HISTORY_ID > @(os.devnull) 2>&1
+    atuin history end --hook --exit @(rtn) @(duration_args) -- $ATUIN_HISTORY_ID > @(os.devnull) 2>&1
     del $ATUIN_HISTORY_ID
 
 
