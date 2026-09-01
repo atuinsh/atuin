@@ -29,7 +29,7 @@ pub async fn post(
     tracing::debug!(count = records.len(), user = user.username, "request to add records");
 
     counter!("atuin_record_uploaded").increment(u64::conv(records.len()));
-    let (valid_len_commands, invalid_len_commands): (
+    let (mut valid_len_commands, invalid_len_commands): (
         Vec<Record<EncryptedData>>,
         Vec<Record<EncryptedData>>,
     ) = records.into_iter().partition(|r| {
@@ -39,6 +39,24 @@ pub async fn post(
     for _ in 0..invalid_len_commands.len() {
         counter!("atuin_record_too_large").increment(1);
     }
+    let failed_commands_ids = invalid_len_commands
+        .iter()
+        .map(|r| FailedSyncRecord {
+            reason: ServerConfigSyncError::RequestTooLarge,
+            record_id: r.id,
+        })
+        .collect();
+
+    let mut transformed_invalid_command: Vec<Record<EncryptedData>> = invalid_len_commands
+        .into_iter()
+        .map(|command| {
+            command.with_data(EncryptedData {
+                raw: "b".to_string(),
+                cek: "b".to_string(),
+            })
+        })
+        .collect();
+    valid_len_commands.append(&mut transformed_invalid_command);
 
     if let Err(e) = database.add_records(&user, &valid_len_commands).await {
         error!("failed to add record: {}", e);
@@ -47,13 +65,7 @@ pub async fn post(
             .with_status(StatusCode::INTERNAL_SERVER_ERROR));
     };
     let res = SyncResponse {
-        failed_commands: invalid_len_commands
-            .into_iter()
-            .map(|req| FailedSyncRecord {
-                reason: ServerConfigSyncError::RequestTooLarge,
-                record: req,
-            })
-            .collect(),
+        failed_commands: failed_commands_ids,
     };
     Ok(Json(res))
 }

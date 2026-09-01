@@ -1,5 +1,4 @@
-use crate::record::Record;
-use atuin_common::encryption::paseto_v4::EncryptedData;
+use crate::record::RecordId;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -78,7 +77,7 @@ pub enum ServerConfigSyncError {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FailedSyncRecord {
     pub reason: ServerConfigSyncError,
-    pub record: Record<EncryptedData>,
+    pub record_id: RecordId,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncResponse {

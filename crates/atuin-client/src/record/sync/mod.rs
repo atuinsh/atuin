@@ -415,9 +415,9 @@ impl Keyed<'_> {
             })?;
             if !sync_response.failed_commands.is_empty() {
                 for failed_command in sync_response.failed_commands {
-                    println!(
-                        "failed to upload record {}: {}",
-                        failed_command.record.id, failed_command.reason
+                    warn!(
+                        "failed to upload record with id : {} and reason: {}",
+                        failed_command.record_id, failed_command.reason
                     );
                 }
             }
