@@ -499,7 +499,7 @@ pub async fn start_history(settings: &Settings, history: History) -> Result<Hist
 pub async fn end_history(
     settings: &Settings,
     id: HistoryId,
-    duration: u64,
+    duration: Option<u64>,
     exit: i64,
 ) -> Result<()> {
     try_with_restart(

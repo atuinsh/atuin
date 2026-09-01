@@ -140,7 +140,7 @@ impl HistoryClient {
     pub async fn end_history(
         &mut self,
         id: HistoryId,
-        duration: u64,
+        duration: Option<u64>,
         exit: i64,
     ) -> Result<EndHistoryReply> {
         Ok(self

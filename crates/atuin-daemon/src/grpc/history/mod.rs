@@ -99,15 +99,14 @@ impl GrpcService for Service {
         let (id, exit, duration): (HistoryId, i64, Option<Duration>) =
             req.into_inner().try_into()?;
 
-        // The client may omit the duration (wire zero), in which case we measure it from the
-        // command's start timestamp, which the journal tracks for us.
+        // The client may omit the duration, in which case we measure it from the command's start
+        // timestamp, which the journal tracks for us.
         let duration = match duration {
             Some(duration) => duration,
             None => {
-                let started_at = self
-                    .journal
-                    .started_at(id)
-                    .ok_or_else(|| Status::not_found(format!("command {id} is not in flight")))?;
+                // Read the start time and drop the borrow before `finish` removes the entry --
+                // holding a `CmdInFlight` across `finish` would deadlock on the shard lock.
+                let started_at = self.journal.get(id)?.history().timestamp;
                 OffsetDateTime::now_utc().saturating_duration_since(started_at)
             }
         };

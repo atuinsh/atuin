@@ -38,7 +38,6 @@ use atuin_client::packfile;
 use atuin_domain::caps::{CapClient, PackfileCap};
 use atuin_domain::record::{RecordSeriesKey, RecordTag};
 use dashmap::DashMap;
-use time::OffsetDateTime;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 
@@ -49,6 +48,24 @@ use crate::search::SearchIndex;
 #[derive(Debug)]
 struct CmdInFlightOwned {
     history: History,
+}
+
+/// A borrowed handle to a command that is currently in flight.
+///
+/// It holds a read borrow into the journal's in-flight map (a [`DashMap`] shard read lock), so it
+/// must be dropped before the same command is removed: holding it across
+/// [`HistoryJournal::finish`] or [`HistoryJournal::cancel`] for that command would deadlock on the
+/// shard lock.
+pub struct CmdInFlight<'journal> {
+    inner: dashmap::mapref::one::Ref<'journal, HistoryId, CmdInFlightOwned>,
+}
+
+impl CmdInFlight<'_> {
+    /// The command's history entry, as recorded when it was started.
+    #[must_use]
+    pub fn history(&self) -> &History {
+        &self.inner.history
+    }
 }
 
 /// An event describing a change in the lifecycle of a command.
@@ -117,6 +134,13 @@ pub enum CmdCancelError {
     NotFound(HistoryId),
 }
 
+/// Errors returned by [`HistoryJournal::get`].
+#[derive(Debug, thiserror::Error)]
+pub enum GetCmdInFlightError {
+    #[error("command {0} is not in flight")]
+    NotFound(HistoryId),
+}
+
 impl HistoryJournal {
     /// Create a new command registry.
     pub fn new(
@@ -152,19 +176,21 @@ impl HistoryJournal {
         id
     }
 
-    /// The start timestamp of an in-flight command, if it is currently tracked.
+    /// Borrow an in-flight command by id.
     ///
-    /// Exposed so callers can measure a command's duration (`now - started_at`) when the client
-    /// does not supply one; see [`HistoryJournal::finish`].
-    #[must_use]
-    pub fn started_at(&self, history_id: HistoryId) -> Option<OffsetDateTime> {
-        self.active_sessions.get(&history_id).map(|s| s.history.timestamp)
+    /// The returned [`CmdInFlight`] holds a read borrow into the journal; see its docs for the
+    /// deadlock caveat around [`HistoryJournal::finish`] / [`HistoryJournal::cancel`].
+    pub fn get(&self, history_id: HistoryId) -> Result<CmdInFlight<'_>, GetCmdInFlightError> {
+        self.active_sessions
+            .get(&history_id)
+            .map(|inner| CmdInFlight { inner })
+            .ok_or(GetCmdInFlightError::NotFound(history_id))
     }
 
     /// Mark a command as finished, persisting it to the history store and database.
     ///
     /// `duration` is the measured runtime of the command; callers that don't have one can derive it
-    /// from [`HistoryJournal::started_at`].
+    /// from the start timestamp via [`HistoryJournal::get`].
     pub async fn finish(
         &self,
         history_id: HistoryId,

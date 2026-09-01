@@ -1,3 +1,4 @@
+//! Model conversion utilities for the `history` gRPC protobuf.
 use std::time::Duration;
 
 use atuin_client::history::{History, HistoryId};
@@ -11,8 +12,9 @@ use crate::history::common::Uuid;
 use crate::history::{
     CancelHistoryRequest, EndHistoryRequest, HistoryId as HistoryIdProto, StartHistoryRequest,
 };
-use crate::history_journal::{CmdCancelError, CmdFinishError};
+use crate::history_journal::{CmdCancelError, CmdFinishError, GetCmdInFlightError};
 
+/// Mark an error as a [`tonic::Status::invalid_argument`].
 macro_rules! grpc_invalid_argument {
     ($err:ty) => {
         impl From<$err> for tonic::Status {
@@ -33,6 +35,7 @@ impl From<HistoryId> for HistoryIdProto {
     }
 }
 
+/// Errors thrown parsing the [`HistoryIdProto`].
 #[derive(Debug, Error)]
 pub enum IdParseError {
     #[error("history id is missing its uuid")]
@@ -54,6 +57,7 @@ impl TryFrom<HistoryIdProto> for HistoryId {
 
 grpc_invalid_argument!(IdParseError);
 
+/// Errors thrown parsing the [`StartHistoryRequest`].
 #[derive(Debug, Error)]
 pub enum StartHistoryRequestParseError {
     #[error("the given cmd origin is malformed: {0}")]
@@ -83,6 +87,7 @@ impl TryFrom<StartHistoryRequest> for History {
     }
 }
 
+/// Errors thrown parsing the [`EndHistoryRequest`].
 #[derive(Debug, Error)]
 pub enum EndHistoryRequestParseError {
     #[error("missing history id")]
@@ -93,6 +98,7 @@ pub enum EndHistoryRequestParseError {
 
 grpc_invalid_argument!(EndHistoryRequestParseError);
 
+/// Errors thrown parsing the [`EndHistoryRequest`].
 impl TryFrom<EndHistoryRequest> for (HistoryId, i64, Option<Duration>) {
     type Error = EndHistoryRequestParseError;
 
@@ -100,7 +106,7 @@ impl TryFrom<EndHistoryRequest> for (HistoryId, i64, Option<Duration>) {
         let id: HistoryId =
             value.id.ok_or(EndHistoryRequestParseError::MissingHistory)?.try_into()?;
         let exit_code = value.exit;
-        let duration = (value.duration != 0).then(|| Duration::from_nanos(value.duration));
+        let duration = value.duration.map(Duration::from_nanos);
         Ok((id, exit_code, duration))
     }
 }
@@ -115,6 +121,7 @@ impl From<CmdFinishError> for Status {
     }
 }
 
+/// Errors thrown parsing the [`CancelHistoryRequest`].
 #[derive(Debug, Error)]
 pub enum CancelHistoryRequestParseError {
     #[error("missing history id")]
@@ -137,6 +144,14 @@ impl From<CmdCancelError> for Status {
     fn from(value: CmdCancelError) -> Self {
         match value {
             CmdCancelError::NotFound(_) => Self::not_found(value.to_string()),
+        }
+    }
+}
+
+impl From<GetCmdInFlightError> for Status {
+    fn from(value: GetCmdInFlightError) -> Self {
+        match value {
+            GetCmdInFlightError::NotFound(_) => Self::not_found(value.to_string()),
         }
     }
 }

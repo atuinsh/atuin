@@ -157,7 +157,7 @@ mod unix {
         assert!(start_reply.id.is_some());
 
         let id: HistoryId = start_reply.id.unwrap().try_into().unwrap();
-        let end_reply = client.end_history(id, 1_000_000, 0).await.unwrap();
+        let end_reply = client.end_history(id, Some(1_000_000), 0).await.unwrap();
         assert!(end_reply.id.is_some());
     }
 
@@ -197,7 +197,7 @@ mod unix {
         assert_eq!(started_history.intent, "inspect repository state");
 
         let end_id: HistoryId = start_reply.id.clone().unwrap().try_into().unwrap();
-        client.end_history(end_id, 1_000_000, 0).await.unwrap();
+        client.end_history(end_id, Some(1_000_000), 0).await.unwrap();
 
         let ended = stream.message().await.unwrap().unwrap();
         assert_eq!(HistoryEventKind::try_from(ended.kind).unwrap(), HistoryEventKind::Ended);
@@ -214,7 +214,7 @@ mod unix {
     ) {
         let (mut client, _handle, _tmp) = daemon.await;
 
-        let result = client.end_history(HistoryId::from_bytes([0u8; 16]), 1000, 0).await;
+        let result = client.end_history(HistoryId::from_bytes([0u8; 16]), Some(1000), 0).await;
         assert!(result.is_err());
     }
 

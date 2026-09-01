@@ -566,7 +566,7 @@ async fn handle_daemon_end(
         debug!("history has non-zero exit code, and store_failed is false");
         daemon::cancel_history(settings, id).await?;
     } else {
-        daemon::end_history(settings, id, duration.unwrap_or(0), exit).await?;
+        daemon::end_history(settings, id, duration, exit).await?;
     }
 
     Ok(())

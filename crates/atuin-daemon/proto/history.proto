@@ -35,7 +35,9 @@ message StartHistoryRequest {
 message EndHistoryRequest {
   HistoryId id = 1;
   int64 exit = 2;
-  uint64 duration = 3;
+  // Measured command runtime in nanoseconds. Absent means the client didn't measure it; the daemon
+  // then derives it from the command's start timestamp.
+  optional uint64 duration = 3;
 }
 
 // Cancel an in-progress history entry without adding it to the database.
