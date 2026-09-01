@@ -566,7 +566,7 @@ async fn handle_daemon_end(
     } else {
         // Historically, a duration of `0` had the semantics of [`Option::None`] on the daemon.
         //
-        // TODO(markovejnovic): When we figure out a way to update shell hooks, we shold remove
+        // TODO(markovejnovic): When we figure out a way to update shell hooks, we should remove
         //                      this.
         let duration = duration.filter(|ns| *ns != 0).map(Duration::from_nanos);
         daemon::end_history(settings, id, duration, exit).await?;
