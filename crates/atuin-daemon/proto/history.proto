@@ -101,9 +101,7 @@ message Lagged {
   uint64 dropped = 1;
 }
 
-// A single event on the history tail stream. Exactly one variant is set; an
-// unset `event` means the daemon sent nothing recognisable and is treated as an
-// error by the consumer.
+// The reply event returned by the TailHistoryRequest.
 message TailHistoryReply {
   oneof event {
     // A command started running.
