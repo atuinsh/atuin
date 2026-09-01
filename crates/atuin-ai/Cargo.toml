@@ -3,14 +3,13 @@ name = "atuin-ai"
 edition = "2024"
 description = "AI integration for Atuin CLI"
 
-rust-version = { workspace = true }
-version = { workspace = true }
-authors = { workspace = true }
-license = { workspace = true }
-homepage = { workspace = true }
-repository = { workspace = true }
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+authors.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [features]
 default = []
@@ -19,64 +18,59 @@ tree-sitter = ["dep:tree-sitter", "dep:tree-sitter-bash", "dep:tree-sitter-fish"
 
 [dependencies]
 atuin-client = { workspace = true }
-atuin-domain = { workspace = true }
 atuin-common = { workspace = true, features = ["unicode", "ansi", "sqlite"] }
 atuin-daemon = { workspace = true }
+atuin-domain = { workspace = true }
 atuin-vt100 = { workspace = true }
-enum_dispatch = { workspace = true }
-parking_lot = { workspace = true }
-async-trait = { workspace = true }
-derive_more = { workspace = true }
-tokio = { workspace = true }
-eyre = { workspace = true }
-clap = { workspace = true, features = ["derive", "env"] }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true, features = [
-  "ansi",
-  "fmt",
-  "registry",
-  "env-filter",
-] }
-directories = { workspace = true }
-tracing-appender = { workspace = true }
-reqwest = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-crossterm = { workspace = true, features = ["use-dev-tty", "event-stream"] }
-ratatui = { workspace = true }
-fs-err = { workspace = true }
-futures = { workspace = true }
-eventsource-stream = { workspace = true }
-pulldown-cmark = { workspace = true }
+
 async-stream = { workspace = true }
-uuid = { workspace = true }
-tui-textarea-2 = { workspace = true }
-unicode-width = { workspace = true }
-# Path dependency until eye_declare 0.6.0 publishes; then just a version.
+async-trait = { workspace = true }
+chrono = { workspace = true }
+chrono-humanize = { workspace = true }
+clap = { workspace = true, features = ["derive", "env"] }
+crossterm = { workspace = true, features = ["use-dev-tty", "event-stream"] }
+derive_more = { workspace = true }
+directories = { workspace = true }
+easy-cast = { workspace = true }
+enum_dispatch = { workspace = true }
+eventsource-stream = { workspace = true }
 eye_declare = { workspace = true }
 eye_declare_engine = { workspace = true }
+eyre = { workspace = true }
+fs-err = { workspace = true }
+futures = { workspace = true }
+glob-match = { workspace = true }
+imara-diff = { workspace = true }
+parking_lot = { workspace = true }
+pulldown-cmark = { workspace = true }
+ratatui = { workspace = true }
 ratatui-core = { workspace = true }
 ratatui-widgets = { workspace = true }
-thiserror = { workspace = true }
-glob-match = { workspace = true }
 regex = { workspace = true }
+reqwest = { workspace = true }
+rmcp = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+shellexpand = { workspace = true }
+sqlx = { workspace = true, features = ["sqlite"] }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
 time = { workspace = true }
+tokio = { workspace = true }
 toml = { workspace = true }
 toml_edit = { workspace = true }
+tracing = { workspace = true }
+tracing-appender = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["ansi", "fmt", "registry", "env-filter"] }
 tree-sitter = { workspace = true, optional = true }
 tree-sitter-bash = { workspace = true, optional = true }
 tree-sitter-fish = { workspace = true, optional = true }
-sqlx = { workspace = true, features = ["sqlite"] }
+tui-textarea-2 = { workspace = true }
 typed-builder = { workspace = true }
-shellexpand = { workspace = true }
-imara-diff = { workspace = true }
+unicode-width = { workspace = true }
+uuid = { workspace = true }
 xxhash-rust = { workspace = true }
 yaml-rust2 = { workspace = true }
-tempfile = { workspace = true }
-chrono = { workspace = true }
-chrono-humanize = { workspace = true }
-rmcp = { workspace = true }
-easy-cast = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
