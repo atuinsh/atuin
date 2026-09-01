@@ -184,12 +184,9 @@ impl HistoryJournal {
     #[must_use]
     pub fn start_cmd(&self, history: History) -> HistoryId {
         let id = history.id;
-        self.active_sessions.insert(
-            id,
-            CmdInFlightOwned {
-                history: history.clone(),
-            },
-        );
+        self.active_sessions.insert(id, CmdInFlightOwned {
+            history: history.clone(),
+        });
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
     }
