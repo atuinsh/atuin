@@ -1,3 +1,4 @@
+// Shared protobuf utilities used across atuin's code.
 syntax = "proto3";
 
 package common;
