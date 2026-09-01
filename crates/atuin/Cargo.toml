@@ -4,12 +4,12 @@ edition = "2024"
 description = "atuin - magical shell history"
 readme = "./README.md"
 
-rust-version = { workspace = true }
-version = { workspace = true }
-authors = { workspace = true }
-license = { workspace = true }
-homepage = { workspace = true }
-repository = { workspace = true }
+authors.workspace = true
+homepage.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 exclude = ["vendor/bash-preexec/.github", "vendor/bash-preexec/test"]
 
@@ -74,64 +74,66 @@ profiling-traced = [
 
 [dependencies]
 atuin-ai = { workspace = true, optional = true }
-# default-features = false cannot be set on a workspace-inherited dependency, and
-# atuin-client's defaults (sync/hub/daemon) are needed by its other consumers, so
-# the workspace entry keeps them on. This crate opts out via a direct path dep.
-atuin-client = { path = "../atuin-client", version = "18.21.0", optional = true, default-features = false }
+# TODO(taylordotfish): in Rust 1.99 we can change this to `workspace = true`
+atuin-client = {
+    path = "../atuin-client",
+    version = "18.21.0",
+    optional = true,
+    default-features = false,
+}
 atuin-common = { workspace = true, features = ["unicode", "os"] }
+atuin-daemon = { workspace = true, optional = true }
 atuin-domain = { workspace = true }
 atuin-dotfiles = { workspace = true }
 atuin-history = { workspace = true }
-atuin-daemon = { workspace = true, optional = true }
+atuin-kv = { workspace = true }
 atuin-pty-proxy = { workspace = true, optional = true }
 atuin-scripts = { workspace = true }
-atuin-kv = { workspace = true }
-axoupdater = { workspace = true, optional = true }
-derive_more = { workspace = true }
 
-time = { workspace = true }
-eyre = { workspace = true }
-url = { workspace = true }
-indicatif = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-crossterm = { workspace = true, features = ["use-dev-tty"] }
-unicode-width = { workspace = true }
-itertools = { workspace = true }
-tokio = { workspace = true }
-enum_dispatch = { workspace = true }
 async-trait = { workspace = true }
-interim = { workspace = true }
+axoupdater = { workspace = true, optional = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }
 clap_complete_nushell = { workspace = true }
-rpassword = { workspace = true }
-semver = { workspace = true }
-rustix = { workspace = true }
-runtime-format = { workspace = true }
-tiny-bip39 = { workspace = true }
-futures-util = { workspace = true }
 colored = { workspace = true }
-ratatui = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-tracing-appender = { workspace = true }
-tracing-opentelemetry = { workspace = true, optional = true }
-opentelemetry = { workspace = true, optional = true }
-opentelemetry_sdk = { workspace = true, optional = true }
-opentelemetry-otlp = { workspace = true, optional = true }
-uuid = { workspace = true }
-sysinfo = { workspace = true }
-regex = { workspace = true }
-norm = { workspace = true }
-frizbee = { workspace = true }
-tempfile = { workspace = true }
-shlex = { workspace = true }
-thiserror = { workspace = true }
+crossterm = { workspace = true, features = ["use-dev-tty"] }
+derive_more = { workspace = true }
 easy-cast = { workspace = true }
-
+enum_dispatch = { workspace = true }
+eyre = { workspace = true }
+frizbee = { workspace = true }
+futures-util = { workspace = true }
+indicatif = { workspace = true }
+interim = { workspace = true }
+itertools = { workspace = true }
+norm = { workspace = true }
+opentelemetry = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+ratatui = { workspace = true }
+regex = { workspace = true }
+rpassword = { workspace = true }
+runtime-format = { workspace = true }
+rustix = { workspace = true }
+semver = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+shlex = { workspace = true }
+sysinfo = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+tiny-bip39 = { workspace = true }
+tokio = { workspace = true }
 # settings editor with comment and relative ordering preservation
 toml_edit = { workspace = true }
+tracing = { workspace = true }
+tracing-appender = { workspace = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true }
+unicode-width = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 arboard = { workspace = true, optional = true }

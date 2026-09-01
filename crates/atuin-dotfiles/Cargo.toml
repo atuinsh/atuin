@@ -2,30 +2,28 @@
 name = "atuin-dotfiles"
 description = "The dotfiles crate for Atuin"
 edition = "2024"
-version = { workspace = true }
 
 authors.workspace = true
-rust-version.workspace = true
-license.workspace = true
 homepage.workspace = true
-repository.workspace = true
+license.workspace = true
 readme.workspace = true
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [dependencies]
+atuin-client = { workspace = true }
 atuin-common = { workspace = true }
 atuin-domain = { workspace = true }
-atuin-client = { workspace = true }
-derive_more = { workspace = true }
 
+crypto_secretbox = { workspace = true }
+derive_more = { workspace = true }
 eyre = { workspace = true }
+rand = { workspace = true }
+rmp = { workspace = true }
+serde = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-rmp = { workspace = true }
-rand = { workspace = true }
-serde = { workspace = true }
-crypto_secretbox = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }
