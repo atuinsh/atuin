@@ -11,7 +11,7 @@
 #[cfg(all(unix, feature = "domain"))]
 mod domain;
 
-#[cfg(all(unix, feature = "server"))]
+#[cfg(feature = "server")]
 mod server;
 
 #[cfg(all(unix, feature = "client"))]
@@ -19,7 +19,9 @@ mod client;
 
 #[cfg(all(unix, feature = "client"))]
 pub use client::{IpcClient, IpcConnectError, IpcConnection, IpcError};
-#[cfg(feature = "domain")]
+#[cfg(all(unix, feature = "domain"))]
 pub use domain::ScreenSnapshot;
 #[cfg(feature = "server")]
-pub use server::{CommandCapture, CommandCaptureSink, cli, cli::Shell, init_script};
+pub use server::cli;
+#[cfg(all(unix, feature = "server"))]
+pub use server::{CommandCapture, CommandCaptureSink, cli::Shell, init_script};

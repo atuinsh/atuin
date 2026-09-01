@@ -112,7 +112,7 @@ mod tests {
     use rstest::{fixture, rstest};
 
     use super::*;
-    use crate::server::capture::CommandCapture;
+    use crate::server::unix::capture::CommandCapture;
 
     const TIMEOUT: Duration = Duration::from_secs(5);
 
