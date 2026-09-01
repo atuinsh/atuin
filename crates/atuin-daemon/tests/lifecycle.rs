@@ -220,9 +220,6 @@ mod unix {
 
     #[rstest]
     #[tokio::test]
-    // TODO(markovejnovic): the History service's shutdown RPC is `unimplemented!()` for now
-    // (HistoryService has no way to signal daemon shutdown). Re-enable once it's wired up.
-    #[ignore = "shutdown RPC is not implemented yet"]
     async fn test_shutdown(#[future] daemon: (HistoryClient, DaemonHandle, TempDir)) {
         let (mut client, _handle, _tmp) = daemon.await;
 
