@@ -235,9 +235,12 @@ impl HistoryJournal {
         }
 
         self.search_index.read().await.add_history(&history);
-        self.semantic_component.record_history(history.clone()).await;
 
-        let _ = self.broadcast.send(CmdEvent::Finished(history));
+        if self.broadcast.receiver_count() > 0 {
+            let _ = self.broadcast.send(CmdEvent::Finished(history.clone()));
+        }
+
+        self.semantic_component.record_history(history).await;
 
         Ok(FinishedCmd {
             history_record_id,
