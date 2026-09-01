@@ -4,8 +4,7 @@ package history;
 import "common.proto";
 import "google/protobuf/duration.proto";
 
-// Identifies a single history entry. Wraps the generic common.Uuid so it stays a distinct type
-// from other id kinds while sharing the same wire representation.
+// Identifies a single history entry.
 message HistoryId {
   common.Uuid uuid = 1;
 }
