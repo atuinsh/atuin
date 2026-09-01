@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use super::InstallHookError;
 
@@ -14,20 +14,23 @@ const HOOK_EVENT_TYPES: &[&str] = &["PreToolUse", "PostToolUse", "PostToolUseFai
 
 /// Merge atuin's command hooks into a Claude-Code-style JSON hook config at `config_path`, leaving
 /// the user's existing keys, values, and ordering intact.
+///
+/// The hooks invoke the running executable by absolute path, since harnesses do not necessarily
+/// run them with the user's shell `PATH`.
 pub async fn install(
     config_path: &Path,
     matcher: &str,
-    hook_command: &str,
+    harness: &str,
 ) -> Result<(), InstallHookError> {
+    let hook_command = hook_command(&std::env::current_exe()?, harness)?;
+
     if let Some(parent) = config_path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
 
     let mut root: Value = match tokio::fs::read_to_string(config_path).await {
         Ok(content) => serde_json::from_str(&content)?,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            Value::Object(serde_json::Map::new())
-        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Value::Object(Map::new()),
         Err(err) => return Err(err.into()),
     };
 
@@ -35,11 +38,30 @@ pub async fn install(
         .as_object_mut()
         .ok_or(InstallHookError::Malformed("root is not an object"))?
         .entry("hooks")
-        .or_insert_with(|| Value::Object(serde_json::Map::new()))
+        .or_insert_with(|| Value::Object(Map::new()))
         .as_object_mut()
         .ok_or(InstallHookError::Malformed("`hooks` is not an object"))?;
 
-    let mut installed_any = false;
+    if !add_hook_entries(hooks, matcher, harness, &hook_command)? {
+        return Err(InstallHookError::AlreadyInstalled);
+    }
+
+    tokio::fs::write(config_path, serde_json::to_string_pretty(&root)?).await?;
+
+    Ok(())
+}
+
+/// Point every event's atuin hook at `hook_command`, returning whether `hooks` changed.
+///
+/// An existing atuin hook is rewritten in place under whatever matcher it was installed with, and
+/// any duplicates are dropped, so reinstalling from a moved binary never double-records commands.
+fn add_hook_entries(
+    hooks: &mut Map<String, Value>,
+    matcher: &str,
+    harness: &str,
+    hook_command: &str,
+) -> Result<bool, InstallHookError> {
+    let mut changed = false;
     for event_type in HOOK_EVENT_TYPES {
         let entries = hooks
             .entry(*event_type)
@@ -47,12 +69,39 @@ pub async fn install(
             .as_array_mut()
             .ok_or(InstallHookError::Malformed("a hook event is not an array"))?;
 
-        let already_installed = entries.iter().any(|entry| {
-            entry.get("hooks").and_then(Value::as_array).is_some_and(|hooks| {
-                hooks
-                    .iter()
-                    .any(|hook| hook.get("command").and_then(Value::as_str) == Some(hook_command))
-            })
+        let mut already_installed = false;
+        entries.retain_mut(|entry| {
+            let Some(installed_hooks) = entry.get_mut("hooks").and_then(Value::as_array_mut) else {
+                return true;
+            };
+            let had_hooks = !installed_hooks.is_empty();
+
+            installed_hooks.retain_mut(|installed_hook| {
+                let Some(command) = installed_hook.get_mut("command") else {
+                    return true;
+                };
+                let Some(command_str) = command.as_str() else {
+                    return true;
+                };
+
+                if !invokes_atuin_hook(command_str, harness) {
+                    return true;
+                }
+
+                if already_installed {
+                    changed = true;
+                    return false;
+                }
+
+                already_installed = true;
+                if command_str != hook_command {
+                    *command = Value::String(hook_command.to_owned());
+                    changed = true;
+                }
+                true
+            });
+
+            !had_hooks || !installed_hooks.is_empty()
         });
 
         if already_installed {
@@ -63,14 +112,110 @@ pub async fn install(
             "matcher": matcher,
             "hooks": [{"type": "command", "command": hook_command}],
         }));
-        installed_any = true;
+        changed = true;
     }
 
-    if !installed_any {
-        return Err(InstallHookError::AlreadyInstalled);
+    Ok(changed)
+}
+
+/// Build the shell command that runs `atuin hook <harness>` through `executable`.
+fn hook_command(executable: &Path, harness: &str) -> Result<String, InstallHookError> {
+    let executable = executable
+        .to_str()
+        .ok_or_else(|| InstallHookError::NonUtf8Executable(executable.to_owned()))?;
+
+    #[cfg(windows)]
+    let executable = format!(r#""{executable}""#);
+
+    #[cfg(not(windows))]
+    let executable = format!("'{}'", executable.replace('\'', "'\"'\"'"));
+
+    Ok(format!("{executable} hook {harness}"))
+}
+
+/// Whether `command` runs `atuin hook <harness>`, through any path to the atuin executable.
+fn invokes_atuin_hook(command: &str, harness: &str) -> bool {
+    let Some(parts) = shlex::split(command) else {
+        return false;
+    };
+
+    parts.len() == 3
+        && Path::new(&parts[0])
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("atuin"))
+        && parts[1] == "hook"
+        && parts[2] == harness
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    fn add_hook_entries_updates_legacy_commands_without_duplicates() {
+        let command = "'/opt/atuin/bin/atuin' hook claude-code";
+        let mut hooks = json!({
+            "PreToolUse": [{
+                "matcher": "Bash",
+                "hooks": [
+                    {"type": "command", "command": "\"$HOME/.atuin/bin/atuin\" hook claude-code"},
+                    {"type": "command", "command": "printf keep-me"},
+                ],
+            }, {
+                "matcher": "^Bash$",
+                "hooks": [{"type": "command", "command": "atuin hook claude-code"}],
+            }, {
+                "matcher": "^Bash$",
+                "hooks": [{"type": "command", "command": "atuin hook codex"}],
+            }],
+        });
+        let hooks_map = hooks.as_object_mut().unwrap();
+
+        assert!(add_hook_entries(hooks_map, "^Bash$", "claude-code", command).unwrap());
+        assert!(!add_hook_entries(hooks_map, "^Bash$", "claude-code", command).unwrap());
+
+        let installed = json!([{
+            "matcher": "^Bash$",
+            "hooks": [{"type": "command", "command": command}],
+        }]);
+        assert_eq!(
+            hooks,
+            json!({
+                "PreToolUse": [{
+                    "matcher": "Bash",
+                    "hooks": [
+                        {"type": "command", "command": command},
+                        {"type": "command", "command": "printf keep-me"},
+                    ],
+                }, {
+                    "matcher": "^Bash$",
+                    "hooks": [{"type": "command", "command": "atuin hook codex"}],
+                }],
+                "PostToolUse": installed,
+                "PostToolUseFailure": installed,
+            })
+        );
     }
 
-    tokio::fs::write(config_path, serde_json::to_string_pretty(&root)?).await?;
+    #[cfg(not(windows))]
+    #[rstest]
+    fn hook_command_quotes_posix_executable_paths() {
+        let command = hook_command(Path::new("/opt/Atuin's bin/atuin"), "codex").unwrap();
 
-    Ok(())
+        assert_eq!(command, "'/opt/Atuin'\"'\"'s bin/atuin' hook codex");
+        assert!(invokes_atuin_hook(&command, "codex"));
+    }
+
+    #[cfg(windows)]
+    #[rstest]
+    fn hook_command_quotes_windows_executable_paths() {
+        let command =
+            hook_command(Path::new(r"C:\Program Files\Atuin\atuin.exe"), "codex").unwrap();
+
+        assert_eq!(command, r#""C:\Program Files\Atuin\atuin.exe" hook codex"#);
+        assert!(invokes_atuin_hook(&command, "codex"));
+    }
 }

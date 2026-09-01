@@ -12,7 +12,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
-ai = []
+ai = ["dep:shlex"]
 ansi = ["dep:atuin-vt100", "dep:memchr"]
 db = ["dep:sqlx"]
 os = ["dep:rustix", "dep:windows-sys"]
@@ -51,6 +51,7 @@ semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
+shlex = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
 sysinfo = { workspace = true }
 thiserror = { workspace = true }
