@@ -5,20 +5,22 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use atuin_client::history::{History, HistoryId};
+use atuin_common::time::OffsetDateTimeExt;
 use futures::StreamExt;
+use time::OffsetDateTime;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};
 use tracing::{Level, instrument};
 
 use crate::DaemonHandle;
-use crate::history_journal::{CmdEvent, HistoryJournal};
 use crate::history::history_server::History as GrpcService;
 use crate::history::{
     AuthorKind, CancelHistoryReply, CancelHistoryRequest, EndHistoryReply, EndHistoryRequest,
     HistoryEntry, HistoryEventKind, ShutdownReply, ShutdownRequest, StartHistoryReply,
     StartHistoryRequest, StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
 };
+use crate::history_journal::{CmdEvent, HistoryJournal};
 
 const DAEMON_PROTOCOL_VERSION: u32 = 1;
 
@@ -96,6 +98,19 @@ impl GrpcService for Service {
     ) -> Result<Response<EndHistoryReply>, Status> {
         let (id, exit, duration): (HistoryId, i64, Option<Duration>) =
             req.into_inner().try_into()?;
+
+        // The client may omit the duration (wire zero), in which case we measure it from the
+        // command's start timestamp, which the journal tracks for us.
+        let duration = match duration {
+            Some(duration) => duration,
+            None => {
+                let started_at = self
+                    .journal
+                    .started_at(id)
+                    .ok_or_else(|| Status::not_found(format!("command {id} is not in flight")))?;
+                OffsetDateTime::now_utc().saturating_duration_since(started_at)
+            }
+        };
 
         self.journal.finish(id, exit, duration).await?;
 

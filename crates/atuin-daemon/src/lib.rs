@@ -24,11 +24,11 @@ pub mod server;
 // Re-export core daemon types for convenience
 // Re-export client helpers
 pub use client::{ControlClient, SemanticClient, emit_event, emit_event_with_settings};
-pub use history_journal::HistoryJournal;
 // Re-export components
 pub use components::{SearchComponent, SemanticComponent, SyncComponent};
 pub use daemon::{AnyComponent, Daemon, DaemonBuilder, DaemonHandle};
 pub use events::DaemonEvent;
+pub use history_journal::HistoryJournal;
 
 /// Boot the daemon using the new component-based architecture.
 ///

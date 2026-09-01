@@ -7,11 +7,11 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use tonic::Status;
 
-use crate::history_journal::{CmdCancelError, CmdFinishError};
 use crate::history::common::Uuid;
 use crate::history::{
     CancelHistoryRequest, EndHistoryRequest, HistoryId as HistoryIdProto, StartHistoryRequest,
 };
+use crate::history_journal::{CmdCancelError, CmdFinishError};
 
 macro_rules! grpc_invalid_argument {
     ($err:ty) => {

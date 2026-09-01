@@ -35,7 +35,6 @@ use atuin_client::database::Sqlite as HistoryDatabase;
 use atuin_client::history::store::HistoryStore;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::packfile;
-use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::caps::{CapClient, PackfileCap};
 use atuin_domain::record::{RecordSeriesKey, RecordTag};
 use dashmap::DashMap;
@@ -46,6 +45,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use crate::SemanticComponent;
 use crate::search::SearchIndex;
 
+/// Newtype which wraps the managed state for types which are actively maanged by the journal.
 #[derive(Debug)]
 struct CmdInFlightOwned {
     history: History,
@@ -54,8 +54,11 @@ struct CmdInFlightOwned {
 /// An event describing a change in the lifecycle of a command.
 #[derive(Debug, Clone)]
 pub enum CmdEvent {
+    /// A command has been started. See [`HistoryJournal::start_cmd`].
     Started(History),
+    /// A command has been successfully finished. See [`HistoryJournal::finish`].
     Finished(History),
+    /// A command has been cancelled. See [`HistoryJournal::cancel`].
     Cancelled(History),
 }
 
@@ -63,10 +66,24 @@ pub enum CmdEvent {
 /// retrieval.
 #[derive(Debug)]
 pub struct HistoryJournal {
+    /// Capabilities client used for packing.
+    ///
+    /// TODO(markovejnovic): This probably shouldn't be injected in [`HistoryJournal`]. Perhaps a
+    /// better option is to have a type "`Packer`" which is the type we inject, rather than this
+    /// `caps` field.
     caps: Arc<CapClient>,
+
+    /// WAL-style database used to store history entries.
     history_store: HistoryStore,
+
+    /// Database used for storing history entries. This is a rich, typed, CRUD database which
+    /// manages the history.
     history_db: HistoryDatabase,
 
+    /// Map which holds all commands which are considered to be in flight.
+    ///
+    /// An "in-flight" command is a command which has been started, but we're still waiting for it
+    /// to be completed.
     active_sessions: DashMap<HistoryId, CmdInFlightOwned>,
 
     /// We hold a reference to the search index which allows us to add a new history record into it.
@@ -82,6 +99,7 @@ pub struct HistoryJournal {
     broadcast: broadcast::Sender<CmdEvent>,
 }
 
+/// Errors returned by [`HistoryJournal::finish`].
 #[derive(Debug, thiserror::Error)]
 pub enum CmdFinishError {
     #[error("command {0} is not in flight")]
@@ -92,6 +110,7 @@ pub enum CmdFinishError {
     HistoryDbFailed(eyre::Report),
 }
 
+/// Errors returned by [`HistoryJournal::cancel`].
 #[derive(Debug, thiserror::Error)]
 pub enum CmdCancelError {
     #[error("command {0} is not in flight")]
@@ -126,33 +145,35 @@ impl HistoryJournal {
     #[must_use]
     pub fn start_cmd(&self, history: History) -> HistoryId {
         let id = history.id;
-        self.active_sessions.insert(
-            id,
-            CmdInFlightOwned {
-                history: history.clone(),
-            },
-        );
+        self.active_sessions.insert(id, CmdInFlightOwned {
+            history: history.clone(),
+        });
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
     }
 
+    /// The start timestamp of an in-flight command, if it is currently tracked.
+    ///
+    /// Exposed so callers can measure a command's duration (`now - started_at`) when the client
+    /// does not supply one; see [`HistoryJournal::finish`].
+    #[must_use]
+    pub fn started_at(&self, history_id: HistoryId) -> Option<OffsetDateTime> {
+        self.active_sessions.get(&history_id).map(|s| s.history.timestamp)
+    }
+
     /// Mark a command as finished, persisting it to the history store and database.
     ///
-    /// Pass the measured command `duration`, or `None` to measure it from the command's start
-    /// timestamp.
+    /// `duration` is the measured runtime of the command; callers that don't have one can derive it
+    /// from [`HistoryJournal::started_at`].
     pub async fn finish(
         &self,
         history_id: HistoryId,
         exit_code: i64,
-        duration: Option<Duration>,
+        duration: Duration,
     ) -> Result<(), CmdFinishError> {
         let Some((_id, mut session)) = self.active_sessions.remove(&history_id) else {
             return Err(CmdFinishError::NotFound(history_id));
         };
-
-        let duration = duration.unwrap_or_else(|| {
-            OffsetDateTime::now_utc().saturating_duration_since(session.history.timestamp)
-        });
 
         session.history.exit = exit_code;
         session.history.duration = i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX);
