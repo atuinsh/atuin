@@ -680,7 +680,6 @@ impl TailEvent {
             HistoryEventKind::Started => TailKind::Started,
             HistoryEventKind::Ended => TailKind::Ended,
             HistoryEventKind::Unspecified => bail!("daemon sent an unspecified history tail event"),
-            // Lag notices are handled before we get here (they carry no history entry).
             HistoryEventKind::Lagged => bail!("daemon sent a lag notice as a history event"),
         };
 
@@ -905,8 +904,6 @@ impl Cmd {
         let stdout = std::io::stdout();
 
         while let Some(reply) = stream.message().await? {
-            // A lag notice is an in-band message, not a stream-ending error: warn on stderr
-            // and keep tailing so we don't lose the connection over a transient backlog.
             if HistoryEventKind::try_from(reply.kind) == Ok(HistoryEventKind::Lagged) {
                 eprintln!(
                     "WARNING: atuin daemon dropped {} history events; tail fell behind",
