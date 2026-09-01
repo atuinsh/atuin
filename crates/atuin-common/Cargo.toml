@@ -54,6 +54,7 @@ fs-err = { workspace = true }
 semver = { workspace = true }
 sqlx = { workspace = true, optional = true }
 libsqlite3-sys = { workspace = true, optional = true }
+easy-cast = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, optional = true }

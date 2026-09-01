@@ -61,6 +61,7 @@ mod sqlite;
 use async_trait::async_trait;
 use atuin_common::db::OwnedDbUrl;
 use atuin_domain::record::{EncryptedData, Record, RecordIdx, RecordSeriesKey, RecordStatus};
+use easy_cast::Conv;
 use serde::{Deserialize, Serialize};
 pub use sqlite::Sqlite;
 mod mysql;
@@ -332,8 +333,9 @@ where
                 .bind(id)
                 .bind(i.id)
                 .bind(i.host.id)
-                .bind(i.idx as i64)
-                .bind(i.timestamp as i64) // throwing away some data, but i64 is still big in terms of time
+                .bind(i64::conv(i.idx))
+                // throwing away some data, but i64 is still big in terms of time
+                .bind(i64::conv(i.timestamp))
                 .bind(i.version.as_str())
                 .bind(i.tag.as_str())
                 .bind(i.data.raw.as_str())
@@ -363,8 +365,8 @@ where
             .bind(user.id)
             .bind(series.tag.as_str())
             .bind(series.host_id)
-            .bind(start as i64)
-            .bind(count as i64)
+            .bind(i64::conv(start))
+            .bind(i64::conv(count))
             .fetch_all(self.pool())
             .await
             .map(|records| records.into_iter().map(Into::into).collect())

@@ -128,6 +128,7 @@ frizbee = { workspace = true }
 tempfile = { workspace = true }
 shlex = { workspace = true }
 thiserror = { workspace = true }
+easy-cast = { workspace = true }
 
 # settings editor with comment and relative ordering preservation
 toml_edit = { workspace = true }

@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use atuin_common::db;
 use atuin_common::db::MysqlDbUrl;
+use easy_cast::Conv;
 use sqlx::mysql::MySqlPoolOptions;
 use tracing::instrument;
 
@@ -43,6 +44,6 @@ impl Database for MySql {
             .execute(self.pool())
             .await?;
 
-        Ok(res.last_insert_id() as i64)
+        Ok(i64::conv(res.last_insert_id()))
     }
 }

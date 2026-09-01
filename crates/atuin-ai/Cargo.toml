@@ -76,6 +76,7 @@ tempfile = { workspace = true }
 chrono = { workspace = true }
 chrono-humanize = { workspace = true }
 rmcp = { workspace = true }
+easy-cast = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

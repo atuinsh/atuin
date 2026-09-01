@@ -6,6 +6,7 @@ use atuin_common::db;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::record::CmdOrigin;
 use directories::BaseDirs;
+use easy_cast::Conv;
 use eyre::{Result, eyre};
 use futures::TryStreamExt;
 use sqlx::sqlite::SqlitePool;
@@ -101,7 +102,7 @@ impl Importer for XonshSqlite {
         let query = "SELECT COUNT(*) FROM xonsh_history";
         let row = db::query(query).fetch_one(&self.pool).await?;
         let count: u32 = row.get(0);
-        Ok(count as usize)
+        Ok(usize::conv(count))
     }
 
     async fn load(self, loader: &mut impl Loader) -> Result<()> {

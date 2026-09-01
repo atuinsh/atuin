@@ -13,6 +13,9 @@ dist = false
 [lib]
 bench = false
 
+[dependencies]
+easy-cast = { workspace = true }
+
 [dev-dependencies]
 atuin-client = { workspace = true }
 atuin-common = { workspace = true }

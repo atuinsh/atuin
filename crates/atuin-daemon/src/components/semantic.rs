@@ -8,6 +8,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use atuin_client::history::{History, HistoryId};
+use easy_cast::Conv;
 use eyre::Result;
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status, Streaming};
@@ -193,7 +194,7 @@ impl SemanticState {
         capture.history_id = Some(history_id.to_string());
         capture.session_id = Some(session_id.to_string());
         if capture.output_observed_bytes == 0 {
-            capture.output_observed_bytes = capture.output.len() as u64;
+            capture.output_observed_bytes = u64::conv(capture.output.len());
         }
 
         let record = SemanticCommandRecord { capture, history };
@@ -249,13 +250,13 @@ impl SemanticState {
             self.sessions.get(&capture_ref.session_id)?.stored_capture(capture_ref.capture_id)?;
         let output = &stored.record.capture.output;
         let output_observed_bytes =
-            stored.record.capture.output_observed_bytes.max(output.len() as u64);
+            stored.record.capture.output_observed_bytes.max(u64::conv(output.len()));
 
         Some(CommandOutputReply {
             found: true,
             output: String::new(),
-            total_bytes: output.len() as u64,
-            total_lines: output.lines().count() as u64,
+            total_bytes: u64::conv(output.len()),
+            total_lines: u64::conv(output.lines().count()),
             lines: select_output_ranges(output, ranges),
             output_truncated: stored.record.capture.output_truncated,
             output_observed_bytes,
@@ -526,7 +527,7 @@ fn select_output_ranges(output: &str, ranges: &[crate::semantic::OutputRange]) -
         .into_iter()
         .flat_map(|(start, end)| {
             lines[start..=end].iter().enumerate().map(move |(offset, line)| OutputLine {
-                line_number: (start + offset + 1) as u64,
+                line_number: u64::conv(start + offset + 1),
                 content: (*line).to_string(),
             })
         })
@@ -553,7 +554,7 @@ fn normalize_line_range(start: i64, end: i64, line_count: usize) -> Option<(usiz
     let start = start.max(0);
     let end = end.min(line_count - 1);
 
-    (start <= end).then_some((start as usize, end as usize))
+    (start <= end).then_some((usize::conv(start), usize::conv(end)))
 }
 
 fn log_record(record: &SemanticCommandRecord, message: &'static str) {
@@ -636,7 +637,7 @@ mod tests {
             history_id: id.map(|id| id.to_string()),
             session_id: session.map(str::to_string),
             output_truncated: false,
-            output_observed_bytes: output.len() as u64,
+            output_observed_bytes: u64::conv(output.len()),
         }
     }
 
@@ -712,18 +713,18 @@ mod tests {
 
     #[rstest]
     fn evicts_oldest_command_when_session_ring_is_full(mut state: SemanticState) {
-        for index in 0..=MAX_COMMANDS_PER_SESSION as u128 {
+        for index in 0..=u128::conv(MAX_COMMANDS_PER_SESSION) {
             assert!(state.record_capture(capture(Some(hid(index)), Some("session-1"), "output")));
         }
 
         assert!(!output_for(&mut state, hid(0)).found);
-        assert!(output_for(&mut state, hid(MAX_COMMANDS_PER_SESSION as u128)).found);
+        assert!(output_for(&mut state, hid(u128::conv(MAX_COMMANDS_PER_SESSION))).found);
         assert_eq!(state.record_count(), MAX_COMMANDS_PER_SESSION);
     }
 
     #[rstest]
     fn evicts_oldest_session_after_lru_limit(mut state: SemanticState) {
-        for index in 0..MAX_SESSIONS as u128 {
+        for index in 0..u128::conv(MAX_SESSIONS) {
             assert!(state.record_capture(capture(
                 Some(hid(index)),
                 Some(&format!("session-{index}")),

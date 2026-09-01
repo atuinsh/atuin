@@ -194,7 +194,6 @@ impl ListMode {
     }
 }
 
-#[allow(clippy::cast_sign_loss)]
 #[instrument(level = "trace", skip_all, fields(count = h.len()))]
 pub fn print_list(
     h: &[History],
@@ -318,7 +317,6 @@ impl CmdFormat {
 
 /// defines how to format the history
 impl FormatKey for FmtHistory<'_> {
-    #[allow(clippy::cast_sign_loss)]
     fn fmt(&self, key: &str, f: &mut fmt::Formatter<'_>) -> Result<(), FormatKeyError> {
         match key {
             "command" => match self.cmd_format {
@@ -914,7 +912,7 @@ impl Cmd {
         Ok(())
     }
 
-    #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
+    #[allow(clippy::too_many_lines)]
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::fn_params_excessive_bools)]
     #[instrument(level = "trace", skip_all, err)]

@@ -5,6 +5,7 @@
 use atuin_client::history::History;
 use atuin_client::settings::AiCapabilities;
 use atuin_common::url::UrlAppendExt;
+use easy_cast::Conv;
 use eventsource_stream::Eventsource;
 use eyre::Result;
 use futures::StreamExt;
@@ -241,7 +242,10 @@ pub fn create_chat_stream(
                                 let content = json.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                 let is_error = json.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false);
                                 let remote = json.get("remote").and_then(|v| v.as_bool()).unwrap_or(false);
-                                let content_length = json.get("content_length").and_then(|v| v.as_u64()).map(|v| v as usize);
+                                let content_length = json
+                                    .get("content_length")
+                                    .and_then(|v| v.as_u64())
+                                    .map(usize::conv);
                                 yield Ok(StreamFrame::Content(StreamContent::ToolResult { tool_use_id, content, is_error, remote, content_length }));
                             }
                         }
