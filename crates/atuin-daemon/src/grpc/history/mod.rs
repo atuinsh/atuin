@@ -28,7 +28,7 @@ const DAEMON_PROTOCOL_VERSION: u32 = 1;
 /// and journal state/events back into gRPC replies. All command-lifecycle logic lives in the
 /// journal.
 #[derive(Clone)]
-pub struct HistoryService {
+pub struct Service {
     journal: Arc<CommandJournal>,
     /// TODO(markovejnovic): Revisit whether we need to hold this handle. At the moment, the only
     /// reason why this exists is to be able to service the [`GrpcService::shutdown`] request, but
@@ -37,7 +37,7 @@ pub struct HistoryService {
     daemon_handle: DaemonHandle,
 }
 
-impl HistoryService {
+impl Service {
     #[must_use]
     pub fn new(journal: Arc<CommandJournal>, daemon_handle: DaemonHandle) -> Self {
         Self {
@@ -70,7 +70,7 @@ fn history_to_tail_reply(kind: HistoryEventKind, history: History) -> TailHistor
 }
 
 #[tonic::async_trait]
-impl GrpcService for HistoryService {
+impl GrpcService for Service {
     type TailHistoryStream = Pin<Box<dyn Stream<Item = Result<TailHistoryReply, Status>> + Send>>;
 
     #[instrument(skip_all, level = Level::TRACE)]

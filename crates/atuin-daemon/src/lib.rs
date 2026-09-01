@@ -7,7 +7,6 @@ use atuin_client::settings::Settings;
 use atuin_client::settings::watcher::global_settings_watcher;
 use eyre::Result;
 
-use crate::grpc::history::HistoryService;
 use crate::history::history_server::HistoryServer;
 
 pub mod client;
@@ -49,9 +48,6 @@ pub async fn boot(
     // (The services share state with the components via Arc)
     let search_service = search_component.grpc_service();
     let semantic_service = semantic_component.grpc_service();
-
-    // Grab shared handles the command registry needs before the components are moved into the
-    // daemon. Both are Arc-backed, so these share state with the live components.
     let search_index = search_component.index();
     let semantic_handle = semantic_component.clone();
 
@@ -78,7 +74,8 @@ pub async fn boot(
         semantic_handle,
         search_index,
     ));
-    let history_service = HistoryServer::new(HistoryService::new(journal, handle.clone()));
+    let history_service =
+        HistoryServer::new(grpc::history::Service::new(journal, handle.clone()));
 
     // Create the control service
     let control_service = control::ControlService::new(handle.clone());

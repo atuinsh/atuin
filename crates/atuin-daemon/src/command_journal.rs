@@ -4,7 +4,8 @@
 //! termination of new commands.
 //!
 //! When users run new commands in the client, the client sends requests to the GPRC server. The
-//! `HistoryService` then "forwards" the request down into [`CommandJournal`] -- requesting the
+//! [`crate::grpc::history::Service`] then "forwards" the request down into [`CommandJournal`] --
+//! requesting the
 //! start of a new shell command.
 //!
 //! The [`CommandJournal`] is responsible for managing the lifecycle of this command. The main
@@ -96,9 +97,16 @@ pub struct CommandJournal {
 
     active_sessions: DashMap<CmdInFlightId, CmdInFlightOwned>,
 
-    semantic_component: SemanticComponent,
+    /// We hold a reference to the search index which allows us to add a new history record into it.
+    ///
+    /// Do note that the [`tokio::sync::RwLock`] is only ever used in reader mode.
     search_index: Arc<tokio::sync::RwLock<SearchIndex>>,
 
+    /// Just like the search_index, we need to notify the SemanticComponent of added history.
+    semantic_component: SemanticComponent,
+
+    /// Channel used to broadcast command events to other threads. See [`CmdEvent`] and
+    /// [`Self::subscribe`].
     broadcast: broadcast::Sender<CmdEvent>,
 }
 
@@ -146,9 +154,12 @@ impl CommandJournal {
     #[must_use]
     pub fn start_cmd(&self, history: History) -> CmdInFlightId {
         let id = CmdInFlightId::from(history.id);
-        self.active_sessions.insert(id.clone(), CmdInFlightOwned {
-            history: history.clone(),
-        });
+        self.active_sessions.insert(
+            id.clone(),
+            CmdInFlightOwned {
+                history: history.clone(),
+            },
+        );
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
     }
@@ -219,6 +230,9 @@ impl CommandJournal {
     }
 
     /// Create a new stream of [`CmdEvent`] objects.
+    ///
+    /// Note that the resulting channel is potentially lossy -- if there is too much backpressure on
+    /// any subscriber, there is potential for loss of data.
     #[must_use]
     pub fn subscribe(&self) -> BroadcastStream<CmdEvent> {
         BroadcastStream::new(self.broadcast.subscribe())
