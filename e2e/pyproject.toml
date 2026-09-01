@@ -1,0 +1,39 @@
+[project]
+name = "atuin-e2e"
+version = "0.0.0"
+description = "End-to-end tests for atuin: real shells + binaries + sync, driven through containers."
+requires-python = ">=3.11"
+dependencies = [
+    "pytest>=8.0",
+    "pexpect>=4.9",
+    "pyte>=0.8.2",
+    "testcontainers>=4.8",
+    "docker>=7.1",
+    # Reliability + reporting (see DESIGN.md "Tooling"):
+    "pytest-timeout>=2.4",       # kill a hung PTY expect instead of hanging CI
+    "pytest-rerunfailures>=16.4",# retry only transient pexpect TIMEOUT/EOF, surgically
+    "pytest-html>=4.2",          # self-contained failure report (screen + container logs)
+    "pytest-icdiff>=0.9",        # side-by-side diffs for failed pyte-screen assertions
+    # GitHub Actions integration (auto-activate under GITHUB_ACTIONS; no-op locally):
+    "pytest-github-actions-annotate-failures>=0.4.1",  # inline PR-diff annotations
+    "pytest-md-report>=0.8",     # pass/fail markdown table for $GITHUB_STEP_SUMMARY
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# --timeout caps the test *body* only (timeout_func_only), so slow container/image
+# fixture setup on the first run isn't counted. signal method interrupts the blocked
+# PTY read and fails just that test (never use thread here -- it kills the whole run).
+addopts = "-ra --timeout=120 --timeout-method=signal"
+timeout_func_only = true
+filterwarnings = [
+    # pexpect uses forkpty(); testcontainers runs threads. Benign here, and noisy.
+    "ignore:.*forkpty.*:DeprecationWarning",
+]
+markers = [
+    "sync: multi-client sync scenarios (need the server fixture)",
+    "tui: interactive TUI scenarios driven through a PTY",
+]
+
+[tool.ruff]
+line-length = 100
