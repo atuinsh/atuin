@@ -44,7 +44,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use crate::SemanticComponent;
 use crate::search::SearchIndex;
 
-/// Newtype which wraps the managed state for types which are actively maanged by the journal.
+/// Newtype which wraps the managed state for types which are actively managed by the journal.
 #[derive(Debug)]
 struct CmdInFlightOwned {
     history: History,
