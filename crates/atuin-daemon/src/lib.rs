@@ -10,13 +10,13 @@ use eyre::Result;
 use crate::history::history_server::HistoryServer;
 
 pub mod client;
-pub(crate) mod command_journal;
 pub mod components;
 pub mod control;
 pub mod daemon;
 pub mod events;
 pub mod grpc;
 pub mod history;
+pub(crate) mod history_journal;
 pub mod search;
 pub mod semantic;
 pub mod server;
@@ -24,7 +24,7 @@ pub mod server;
 // Re-export core daemon types for convenience
 // Re-export client helpers
 pub use client::{ControlClient, SemanticClient, emit_event, emit_event_with_settings};
-pub use command_journal::CommandJournal;
+pub use history_journal::HistoryJournal;
 // Re-export components
 pub use components::{SearchComponent, SemanticComponent, SyncComponent};
 pub use daemon::{AnyComponent, Daemon, DaemonBuilder, DaemonHandle};
@@ -67,7 +67,7 @@ pub async fn boot(
     let host_id = Settings::host_id().await?;
     let history_store =
         HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
-    let journal = Arc::new(CommandJournal::new(
+    let journal = Arc::new(HistoryJournal::new(
         handle.caps().clone(),
         history_store,
         handle.history_db().clone(),

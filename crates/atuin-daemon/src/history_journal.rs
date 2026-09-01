@@ -1,33 +1,31 @@
 //! Exposes logic for managing the lifecycle of commands.
 //!
-//! The core structure is [`CommandJournal`]. The [`CommandJournal`] handles the creation and
+//! The core structure is [`HistoryJournal`]. The [`HistoryJournal`] handles the creation and
 //! termination of new commands.
 //!
 //! When users run new commands in the client, the client sends requests to the GPRC server. The
-//! [`crate::grpc::history::Service`] then "forwards" the request down into [`CommandJournal`] --
-//! requesting the
-//! start of a new shell command.
+//! [`crate::grpc::history::Service`] then "forwards" the request down into [`HistoryJournal`] --
+//! requesting the start of a new shell command.
 //!
-//! The [`CommandJournal`] is responsible for managing the lifecycle of this command. The main
-//! entrypoint is [`CommandJournal::start_cmd`] which marks the beginning of a command. This returns
-//! a new object [`CmdInFlightId`] which represents a command which has been started, but not
-//! finished.
+//! The [`HistoryJournal`] is responsible for managing the lifecycle of this command. The main
+//! entrypoint is [`HistoryJournal::start_cmd`] which marks the beginning of a command. This returns
+//! the [`HistoryId`] of the command which has been started, but not finished.
 //!
 //! ## Commands in flight
 //!
-//! Commands-in-flight are commands which ahve been started but have just started running. These
-//! commands are uniquely identified by a [`CmdInFlightId`].
+//! Commands-in-flight are commands which have been started but have just started running. These
+//! commands are uniquely identified by their [`HistoryId`].
 //!
 //! Commands in flight can be terminated in one of two ways:
 //!
-//!   - [`CommandJournal::finish`] marks the command as finished, which will create and store a new
+//!   - [`HistoryJournal::finish`] marks the command as finished, which will create and store a new
 //!     history entry.
-//!   - [`CommandJournal::cancel`] cancels the command, disposing of any in-memory resources, but
+//!   - [`HistoryJournal::cancel`] cancels the command, disposing of any in-memory resources, but
 //!     without the logic of persisting the history entry.
 //!
 //! ## Streaming
 //!
-//! It is possible to stream events out of [`CommandJournal`] via [`CommandJournal::subscribe`]
+//! It is possible to stream events out of [`HistoryJournal`] via [`HistoryJournal::subscribe`]
 //! which returns a new [`futures::Stream`] of [`CmdEvent`] events.
 
 use std::sync::Arc;
@@ -48,32 +46,6 @@ use tokio_stream::wrappers::BroadcastStream;
 use crate::SemanticComponent;
 use crate::search::SearchIndex;
 
-/// Uniquely identifies a command that has been started but not yet terminated.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CmdInFlightId {
-    history_id: HistoryId,
-}
-
-impl From<HistoryId> for CmdInFlightId {
-    fn from(value: HistoryId) -> Self {
-        Self { history_id: value }
-    }
-}
-
-impl CmdInFlightId {
-    /// The [`HistoryId`] this in-flight command is keyed by.
-    #[must_use]
-    pub fn history_id(&self) -> HistoryId {
-        self.history_id
-    }
-}
-
-impl std::fmt::Display for CmdInFlightId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.history_id)
-    }
-}
-
 #[derive(Debug)]
 struct CmdInFlightOwned {
     history: History,
@@ -90,12 +62,12 @@ pub enum CmdEvent {
 /// Registry of in-flight commands which performs output capture, management, storage and
 /// retrieval.
 #[derive(Debug)]
-pub struct CommandJournal {
+pub struct HistoryJournal {
     caps: Arc<CapClient>,
     history_store: HistoryStore,
     history_db: HistoryDatabase,
 
-    active_sessions: DashMap<CmdInFlightId, CmdInFlightOwned>,
+    active_sessions: DashMap<HistoryId, CmdInFlightOwned>,
 
     /// We hold a reference to the search index which allows us to add a new history record into it.
     ///
@@ -113,7 +85,7 @@ pub struct CommandJournal {
 #[derive(Debug, thiserror::Error)]
 pub enum CmdFinishError {
     #[error("command {0} is not in flight")]
-    NotFound(CmdInFlightId),
+    NotFound(HistoryId),
     #[error("storing into history store failed: {0}")]
     HistoryStoreFailed(eyre::Report),
     #[error("storing into history db failed: {0}")]
@@ -123,10 +95,10 @@ pub enum CmdFinishError {
 #[derive(Debug, thiserror::Error)]
 pub enum CmdCancelError {
     #[error("command {0} is not in flight")]
-    NotFound(CmdInFlightId),
+    NotFound(HistoryId),
 }
 
-impl CommandJournal {
+impl HistoryJournal {
     /// Create a new command registry.
     pub fn new(
         caps: Arc<CapClient>,
@@ -149,13 +121,13 @@ impl CommandJournal {
 
     /// Notify the registry that a command has been started.
     ///
-    /// Returns the [`CmdInFlightId`] identifying the in-flight command, which is later used to
-    /// [`CommandJournal::finish`] or [`CommandJournal::cancel`] it.
+    /// Returns the [`HistoryId`] identifying the in-flight command, which is later used to
+    /// [`HistoryJournal::finish`] or [`HistoryJournal::cancel`] it.
     #[must_use]
-    pub fn start_cmd(&self, history: History) -> CmdInFlightId {
-        let id = CmdInFlightId::from(history.id);
+    pub fn start_cmd(&self, history: History) -> HistoryId {
+        let id = history.id;
         self.active_sessions.insert(
-            id.clone(),
+            id,
             CmdInFlightOwned {
                 history: history.clone(),
             },
@@ -170,12 +142,12 @@ impl CommandJournal {
     /// timestamp.
     pub async fn finish(
         &self,
-        session_id: CmdInFlightId,
+        history_id: HistoryId,
         exit_code: i64,
         duration: Option<Duration>,
     ) -> Result<(), CmdFinishError> {
-        let Some((_sess_id, mut session)) = self.active_sessions.remove(&session_id) else {
-            return Err(CmdFinishError::NotFound(session_id));
+        let Some((_id, mut session)) = self.active_sessions.remove(&history_id) else {
+            return Err(CmdFinishError::NotFound(history_id));
         };
 
         let duration = duration.unwrap_or_else(|| {
@@ -219,9 +191,9 @@ impl CommandJournal {
     }
 
     /// Cancel a command, discarding its in-memory state without persisting a history entry.
-    pub fn cancel(&self, session_id: CmdInFlightId) -> Result<(), CmdCancelError> {
-        let Some((_sess_id, session)) = self.active_sessions.remove(&session_id) else {
-            return Err(CmdCancelError::NotFound(session_id));
+    pub fn cancel(&self, history_id: HistoryId) -> Result<(), CmdCancelError> {
+        let Some((_id, session)) = self.active_sessions.remove(&history_id) else {
+            return Err(CmdCancelError::NotFound(history_id));
         };
 
         let _ = self.broadcast.send(CmdEvent::Cancelled(session.history));

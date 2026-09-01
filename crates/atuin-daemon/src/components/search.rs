@@ -143,9 +143,6 @@ impl SearchComponent {
     }
 
     /// Get a shared handle to the live search index.
-    ///
-    /// Used by the [`CommandJournal`](crate::command_journal::CommandJournal) to index commands into the
-    /// same index this component serves searches from.
     #[must_use]
     pub fn index(&self) -> Arc<RwLock<SearchIndex>> {
         self.index.clone()

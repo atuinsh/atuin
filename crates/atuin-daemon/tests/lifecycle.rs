@@ -16,7 +16,7 @@ mod unix {
     use atuin_daemon::client::HistoryClient;
     use atuin_daemon::grpc::history::Service as HistoryService;
     use atuin_daemon::history::history_server::HistoryServer;
-    use atuin_daemon::{CommandJournal, Daemon, DaemonHandle, SearchComponent, SemanticComponent};
+    use atuin_daemon::{Daemon, DaemonHandle, HistoryJournal, SearchComponent, SemanticComponent};
     use rstest::*;
     use tempfile::TempDir;
     use tokio::net::UnixListener;
@@ -75,7 +75,7 @@ mod unix {
         let host_id = Settings::host_id().await.unwrap();
         let history_store =
             HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
-        let journal = Arc::new(CommandJournal::new(
+        let journal = Arc::new(HistoryJournal::new(
             handle.caps().clone(),
             history_store,
             handle.history_db().clone(),

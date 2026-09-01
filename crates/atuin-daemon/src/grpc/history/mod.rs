@@ -12,7 +12,7 @@ use tonic::{Request, Response, Status};
 use tracing::{Level, instrument};
 
 use crate::DaemonHandle;
-use crate::command_journal::{CmdEvent, CommandJournal};
+use crate::history_journal::{CmdEvent, HistoryJournal};
 use crate::history::history_server::History as GrpcService;
 use crate::history::{
     AuthorKind, CancelHistoryReply, CancelHistoryRequest, EndHistoryReply, EndHistoryRequest,
@@ -24,12 +24,12 @@ const DAEMON_PROTOCOL_VERSION: u32 = 1;
 
 /// The History gRPC service.
 ///
-/// This is a thin adapter over [`CommandJournal`]: it translates gRPC requests into journal calls
+/// This is a thin adapter over [`HistoryJournal`]: it translates gRPC requests into journal calls
 /// and journal state/events back into gRPC replies. All command-lifecycle logic lives in the
 /// journal.
 #[derive(Clone)]
 pub struct Service {
-    journal: Arc<CommandJournal>,
+    journal: Arc<HistoryJournal>,
     /// TODO(markovejnovic): Revisit whether we need to hold this handle. At the moment, the only
     /// reason why this exists is to be able to service the [`GrpcService::shutdown`] request, but
     /// perhaps that function does not belong in the history service -- perhaps we should have a
@@ -39,7 +39,7 @@ pub struct Service {
 
 impl Service {
     #[must_use]
-    pub fn new(journal: Arc<CommandJournal>, daemon_handle: DaemonHandle) -> Self {
+    pub fn new(journal: Arc<HistoryJournal>, daemon_handle: DaemonHandle) -> Self {
         Self {
             journal,
             daemon_handle,
@@ -83,7 +83,7 @@ impl GrpcService for Service {
         let id = self.journal.start_cmd(history);
 
         Ok(Response::new(StartHistoryReply {
-            id: Some(id.history_id().into()),
+            id: Some(id.into()),
             version: env!("CARGO_PKG_VERSION").to_string(),
             protocol: DAEMON_PROTOCOL_VERSION,
         }))
@@ -97,11 +97,11 @@ impl GrpcService for Service {
         let (id, exit, duration): (HistoryId, i64, Option<Duration>) =
             req.into_inner().try_into()?;
 
-        self.journal.finish(id.into(), exit, duration).await?;
+        self.journal.finish(id, exit, duration).await?;
 
         Ok(Response::new(EndHistoryReply {
             // TODO(markovejnovic): return the record store's real record id and idx once
-            // CommandJournal::finish surfaces them.
+            // HistoryJournal::finish surfaces them.
             id: Some(id.into()),
             idx: 0,
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -116,7 +116,7 @@ impl GrpcService for Service {
     ) -> Result<Response<CancelHistoryReply>, Status> {
         let id: HistoryId = request.into_inner().try_into()?;
 
-        self.journal.cancel(id.into())?;
+        self.journal.cancel(id)?;
 
         Ok(Response::new(CancelHistoryReply {
             version: env!("CARGO_PKG_VERSION").to_string(),
