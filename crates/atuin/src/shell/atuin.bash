@@ -124,7 +124,7 @@ __atuin_precmd() {
         if ((duration >= 0)); then
             duration=${duration}000
         else
-            duration=0 # clamp a negative (clock-skew/overflow) delta to an explicit zero
+            duration=0
         fi
     fi
 
