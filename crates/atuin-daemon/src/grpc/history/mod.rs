@@ -11,7 +11,7 @@ use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};
 use tracing::{Level, instrument};
 
-use crate::cmd_registry::{CmdCancelError, CmdEvent, CmdFinishError, CmdRegistry};
+use crate::command_journal::{CmdEvent, CommandJournal};
 use crate::history::history_server::History as GrpcService;
 use crate::history::{
     AuthorKind, CancelHistoryReply, CancelHistoryRequest, EndHistoryReply, EndHistoryRequest,
@@ -23,17 +23,17 @@ const DAEMON_PROTOCOL_VERSION: u32 = 1;
 
 /// The History gRPC service.
 ///
-/// This is a thin adapter over [`CmdRegistry`]: it translates gRPC requests into registry calls
-/// and registry state/events back into gRPC replies. All command-lifecycle logic lives in the
-/// registry.
+/// This is a thin adapter over [`CommandJournal`]: it translates gRPC requests into journal calls
+/// and journal state/events back into gRPC replies. All command-lifecycle logic lives in the
+/// journal.
 #[derive(Clone)]
 pub struct HistoryService {
-    cmd_registry: Arc<CmdRegistry>,
+    journal: Arc<CommandJournal>,
 }
 
 impl HistoryService {
-    pub fn new(cmd_registry: Arc<CmdRegistry>) -> Self {
-        Self { cmd_registry }
+    pub fn new(journal: Arc<CommandJournal>) -> Self {
+        Self { journal }
     }
 }
 
@@ -62,14 +62,14 @@ fn history_to_tail_reply(kind: HistoryEventKind, history: History) -> TailHistor
 impl GrpcService for HistoryService {
     type TailHistoryStream = Pin<Box<dyn Stream<Item = Result<TailHistoryReply, Status>> + Send>>;
 
-    #[instrument(skip_all, level = Level::INFO)]
+    #[instrument(skip_all, level = Level::TRACE)]
     async fn start_history(
         &self,
         request: Request<StartHistoryRequest>,
     ) -> Result<Response<StartHistoryReply>, Status> {
         let history: History = request.into_inner().try_into()?;
 
-        let id = self.cmd_registry.start_cmd(history).await;
+        let id = self.journal.start_cmd(history).await;
 
         Ok(Response::new(StartHistoryReply {
             id: Some(id.history_id().into()),
@@ -78,28 +78,19 @@ impl GrpcService for HistoryService {
         }))
     }
 
-    #[instrument(skip_all, level = Level::INFO)]
+    #[instrument(skip_all, level = Level::TRACE)]
     async fn end_history(
         &self,
-        request: Request<EndHistoryRequest>,
+        req: Request<EndHistoryRequest>,
     ) -> Result<Response<EndHistoryReply>, Status> {
-        let req = request.into_inner();
+        let (id, exit, duration): (HistoryId, i64, Option<Duration>) =
+            req.into_inner().try_into()?;
 
-        let id: HistoryId =
-            req.id.ok_or_else(|| Status::invalid_argument("missing history id"))?.try_into()?;
-        // The client sends 0 when it doesn't know the duration; let the registry measure it.
-        let duration = (req.duration != 0).then(|| Duration::from_nanos(req.duration));
-
-        self.cmd_registry.finish(id.into(), req.exit, duration).await.map_err(|e| match e {
-            CmdFinishError::NotFound(_) => {
-                Status::not_found(format!("could not find history with id: {id}"))
-            }
-            other => Status::internal(other.to_string()),
-        })?;
+        self.journal.finish(id.into(), exit, duration).await?;
 
         Ok(Response::new(EndHistoryReply {
             // TODO(markovejnovic): return the record store's real record id and idx once
-            // CmdRegistry::finish surfaces them.
+            // CommandJournal::finish surfaces them.
             id: Some(id.into()),
             idx: 0,
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -107,20 +98,14 @@ impl GrpcService for HistoryService {
         }))
     }
 
-    #[instrument(skip_all, level = Level::INFO)]
+    #[instrument(skip_all, level = Level::TRACE)]
     async fn cancel_history(
         &self,
         request: Request<CancelHistoryRequest>,
     ) -> Result<Response<CancelHistoryReply>, Status> {
-        let req = request.into_inner();
-        let id: HistoryId =
-            req.id.ok_or_else(|| Status::invalid_argument("missing history id"))?.try_into()?;
+        let id: HistoryId = request.into_inner().try_into()?;
 
-        self.cmd_registry.cancel(id.into()).await.map_err(|e| match e {
-            CmdCancelError::NotFound(_) => {
-                Status::not_found(format!("could not find history with id: {id}"))
-            }
-        })?;
+        self.journal.cancel(id.into()).await?;
 
         Ok(Response::new(CancelHistoryReply {
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -128,12 +113,12 @@ impl GrpcService for HistoryService {
         }))
     }
 
-    #[instrument(skip_all, level = Level::INFO)]
+    #[instrument(skip_all, level = Level::TRACE)]
     async fn tail_history(
         &self,
         _request: Request<TailHistoryRequest>,
     ) -> Result<Response<Self::TailHistoryStream>, Status> {
-        let mut events = self.cmd_registry.subscribe();
+        let mut events = self.journal.subscribe();
         let (tx, out_rx) = tokio::sync::mpsc::channel::<Result<TailHistoryReply, Status>>(128);
 
         tokio::spawn(async move {
@@ -168,7 +153,7 @@ impl GrpcService for HistoryService {
         Ok(Response::new(Box::pin(stream)))
     }
 
-    #[instrument(skip_all, level = Level::INFO)]
+    #[instrument(skip_all, level = Level::TRACE)]
     async fn status(
         &self,
         _request: Request<StatusRequest>,
@@ -181,13 +166,13 @@ impl GrpcService for HistoryService {
         }))
     }
 
-    #[instrument(skip_all, level = Level::INFO)]
+    #[instrument(skip_all, level = Level::TRACE)]
     async fn shutdown(
         &self,
         _request: Request<ShutdownRequest>,
     ) -> Result<Response<ShutdownReply>, Status> {
         // TODO(markovejnovic): wire a real shutdown signal through to the daemon. HistoryService
-        // currently only holds the CmdRegistry, which has no way to request daemon shutdown.
+        // currently only holds the CommandJournal, which has no way to request daemon shutdown.
         unimplemented!("daemon shutdown via the History service is not wired up yet")
     }
 }

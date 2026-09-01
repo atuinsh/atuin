@@ -16,7 +16,7 @@ mod unix {
     use atuin_daemon::client::HistoryClient;
     use atuin_daemon::grpc::history::HistoryService;
     use atuin_daemon::history::history_server::HistoryServer;
-    use atuin_daemon::{CmdRegistry, Daemon, DaemonHandle, SearchComponent, SemanticComponent};
+    use atuin_daemon::{CommandJournal, Daemon, DaemonHandle, SearchComponent, SemanticComponent};
     use rstest::*;
     use tempfile::TempDir;
     use tokio::net::UnixListener;
@@ -75,14 +75,14 @@ mod unix {
         let host_id = Settings::host_id().await.unwrap();
         let history_store =
             HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
-        let cmd_registry = Arc::new(CmdRegistry::new(
+        let journal = Arc::new(CommandJournal::new(
             handle.caps().clone(),
             history_store,
             handle.history_db().clone(),
             semantic_component,
             search_index,
         ));
-        let history_service = HistoryServer::new(HistoryService::new(cmd_registry));
+        let history_service = HistoryServer::new(HistoryService::new(journal));
 
         // Start components (none registered, but keeps the lifecycle identical to production).
         daemon.start_components().await.unwrap();

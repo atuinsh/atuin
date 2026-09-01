@@ -1,14 +1,14 @@
 //! Exposes logic for managing the lifecycle of commands.
 //!
-//! The core structure is [`CmdRegistry`]. The [`CmdRegistry`] handles the creation and termination
+//! The core structure is [`CommandJournal`]. The [`CommandJournal`] handles the creation and termination
 //! of new commands.
 //!
 //! When users run new commands in the client, the client sends requests to the GPRC server. The
-//! `HistoryService` then "forwards" the request down into [`CmdRegistry`] -- requesting the
+//! `HistoryService` then "forwards" the request down into [`CommandJournal`] -- requesting the
 //! start of a new shell command.
 //!
-//! The [`CmdRegistry`] is responsible for managing the lifecycle of this command. The main
-//! entrypoint is [`CmdRegistry::start_cmd`] which marks the beginning of a command. This returns a
+//! The [`CommandJournal`] is responsible for managing the lifecycle of this command. The main
+//! entrypoint is [`CommandJournal::start_cmd`] which marks the beginning of a command. This returns a
 //! new object [`CmdInFlightId`] which represents a command which has been started, but not finished.
 //!
 //! ## Commands in flight
@@ -18,14 +18,14 @@
 //!
 //! Commands in flight can be terminated in one of two ways:
 //!
-//!   - [`CmdRegistry::finish`] marks the command as finished, which will create and store a new
+//!   - [`CommandJournal::finish`] marks the command as finished, which will create and store a new
 //!     history entry.
-//!   - [`CmdRegistry::cancel`] cancels the command, disposing of any in-memory resources, but
+//!   - [`CommandJournal::cancel`] cancels the command, disposing of any in-memory resources, but
 //!     without the logic of persisting the history entry.
 //!
 //! ## Streaming
 //!
-//! It is possible to stream events out of [`CmdRegistry`] via [`CmdRegistry::subscribe`] which
+//! It is possible to stream events out of [`CommandJournal`] via [`CommandJournal::subscribe`] which
 //! returns a new [`futures::Stream`] of [`CmdEvent`] events.
 //!
 //! ```mermaid
@@ -34,7 +34,7 @@
 //!
 //!   box Daemon Process
 //!     participant D as GRPC Server
-//!     participant R as CmdRegistry
+//!     participant R as CommandJournal
 //!   end
 //!   participant DB@{ "type" : "database" }
 //!   participant P as PTY Proxy
@@ -118,7 +118,7 @@ pub enum CmdEvent {
 /// Registry of in-flight commands which performs output capture, management, storage and
 /// retrieval.
 #[derive(Debug)]
-pub struct CmdRegistry {
+pub struct CommandJournal {
     caps: Arc<CapClient>,
     history_store: HistoryStore,
     history_db: HistoryDatabase,
@@ -147,7 +147,7 @@ pub enum CmdCancelError {
     NotFound(CmdInFlightId),
 }
 
-impl CmdRegistry {
+impl CommandJournal {
     /// Create a new command registry.
     pub fn new(
         caps: Arc<CapClient>,
@@ -171,7 +171,7 @@ impl CmdRegistry {
     /// Notify the registry that a command has been started.
     ///
     /// Returns the [`CmdInFlightId`] identifying the in-flight command, which is later used to
-    /// [`CmdRegistry::finish`] or [`CmdRegistry::cancel`] it.
+    /// [`CommandJournal::finish`] or [`CommandJournal::cancel`] it.
     pub async fn start_cmd(&self, history: History) -> CmdInFlightId {
         let id = CmdInFlightId::from(history.id.clone());
         self.active_sessions.insert(
@@ -208,8 +208,6 @@ impl CmdRegistry {
 
         let history = session.history;
 
-        // TODO(markovejnovic): The following DB operations can be parallelized.
-        // They're on different DBs.
         self.history_db
             .save(&history)
             .await

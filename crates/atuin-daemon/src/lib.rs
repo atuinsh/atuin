@@ -11,7 +11,7 @@ use crate::grpc::history::HistoryService;
 use crate::history::history_server::HistoryServer;
 
 pub mod client;
-pub(crate) mod cmd_registry;
+pub(crate) mod command_journal;
 pub mod components;
 pub mod control;
 pub mod daemon;
@@ -25,7 +25,7 @@ pub mod server;
 // Re-export core daemon types for convenience
 // Re-export client helpers
 pub use client::{ControlClient, SemanticClient, emit_event, emit_event_with_settings};
-pub use cmd_registry::CmdRegistry;
+pub use command_journal::CommandJournal;
 // Re-export components
 pub use components::{SearchComponent, SemanticComponent, SyncComponent};
 pub use daemon::{AnyComponent, Daemon, DaemonBuilder, DaemonHandle};
@@ -67,18 +67,18 @@ pub async fn boot(
     // Get a handle for the control service and gRPC server shutdown
     let handle = daemon.handle();
 
-    // Build the command registry and the History gRPC service that drives it.
+    // Build the command journal and the History gRPC service that drives it.
     let host_id = Settings::host_id().await?;
     let history_store =
         HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
-    let cmd_registry = Arc::new(CmdRegistry::new(
+    let journal = Arc::new(CommandJournal::new(
         handle.caps().clone(),
         history_store,
         handle.history_db().clone(),
         semantic_handle,
         search_index,
     ));
-    let history_service = HistoryServer::new(HistoryService::new(cmd_registry));
+    let history_service = HistoryServer::new(HistoryService::new(journal));
 
     // Create the control service
     let control_service = control::ControlService::new(handle.clone());
