@@ -24,7 +24,7 @@ const BIND_UP_ARROW: &str = r"$env.config = (
             event: {
                 until: [
                     {send: menuup}
-                    {send: executehostcommand cmd: (_atuin_search_cmd '--shell-up-key-binding') }
+                    {send: executehostcommand cmd: (_atuin_search_cmd true) }
                 ]
             }
         }
