@@ -40,7 +40,7 @@ use crate::history_journal::HistoryJournal;
 /// will restart the daemon if the daemon has a mismatched version in the following cases:
 ///
 /// `atuin::command::client::daemon:ready_client` is the function responsible for fetching a valid
-/// client. Each client->daemon connection goes through this function, which:
+/// client. Each **history** client->daemon connection goes through this function, which:
 ///
 ///   1. Probes the daemon via the `history.Status` RPC.
 ///   2. Checks that the response version `DAEMON_VERSION` (ie. the Atuin version) matches that of
@@ -51,10 +51,11 @@ use crate::history_journal::HistoryJournal;
 ///     b) If `daemon.autostart = true`, then we try to restart the daemon. This means one of
 ///        multiple things:
 ///
-///        - If `daemon.systemd_socket` is set to some value, we tell the user to restart the
-///          daemon, and we bail out.
+///        - If `daemon.systemd_socket` is set to false, we tell the user to restart the daemon, and
+///          we bail out.
 ///        - Otherwise, we send a `history.Shutdown` RPC (version unchecked) to the daemon which
-///          causes the daemon to restart. We then spinloop until the daemon is back online.
+///          causes the daemon to shut down. The client then brings it back up, and spinloops until
+///          the daemon is back online.
 ///
 ///   4. At this point, either:
 ///     - We were unable to restart the daemon and have told the user to manually restart or
@@ -63,10 +64,13 @@ use crate::history_journal::HistoryJournal;
 /// ### Transport Layer
 ///
 /// I would like to note that restarting the daemon causes the UNIX socket file to be completely
-/// erased, effectively flushing any messages that are enqueued to the daemon.
+/// erased (in the non-systemd path), effectively flushing any messages that are enqueued to the
+/// daemon.
 ///
 /// One of the concerns was that the daemon would receive old data, even if both the client **and**
 /// the daemon were to be restarted, since stale data could be queued. Luckily, that's not the case!
+///
+/// TODO(markovejnovic): Is this a concern in the systemd case?
 ///
 /// ### Different Package Managers
 ///
@@ -75,22 +79,36 @@ use crate::history_journal::HistoryJournal;
 ///
 /// #### curl Install Script
 ///
-/// - If `daemon.autostart = true` (default), the daemon will gracefully be restarted when
-///   `DAEMON_PROTOCOL_VERSION` changes. Wire incompatibility is a-ok in this case.
+/// - If `daemon.autostart = true` (default when the daemon is enabled in the setup), the daemon
+///   will gracefully be restarted when `DAEMON_PROTOCOL_VERSION` changes. Wire incompatibility is
+///   a-ok in this case.
 /// - If `daemon.autostart = false`, we will tell the user to restart Atuin.
 ///
 /// #### Homebrew
 ///
 /// <https://raw.githubusercontent.com/Homebrew/homebrew-core/master/Formula/a/atuin.rb> presents
-/// the user with a `homebrew service`. This means the user can run `homebrew service start` to run
+/// the user with a homebrew service. This means the user can run `brew services start atuin` to run
 /// a new atuin daemon.
 ///
-/// We will try to restart it via the `Shutdown` RPC. When the daemon attempts to game end, the
-/// `keep_alive` flag in the homebrew service will restart it.
+/// We will try to restart it via the `Shutdown` RPC. When the daemon attempts to game end, it will
+/// terminate, and the client will immediately to try to run another daemon:
 ///
-/// This means that, by default, we'll get a new version up and running after an update.
+///   - Either `keep_alive` (on macOS launchd) wins, which means a new version of the daemon is
+///     spawned, and managed by launchd.
+///   - Or, more likely, the client-spawned daemon wins, which means a new version of the daemon is
+///     managed by the client.
 ///
-/// #### home-manager
+/// **In effect, if the user updates via brew, the next command we send to the daemon will hit that
+/// `DAEMON_PROTOCOL_VERSION` mismatch and the daemon will get restarted, one way or another.**
+///
+/// The only exception to this rule is if they:
+///  - Ran `brew service start atuin`
+///  - And also said **no** to the daemon during setup.
+///
+/// But in that case, we won't even try to talk to the daemon, so a mismatched version doesn't
+/// matter.
+///
+/// #### home-manager (Nix)
 ///
 /// <https://github.com/nix-community/home-manager/blob/master/modules/programs/atuin.nix>
 ///
@@ -159,8 +177,6 @@ use crate::history_journal::HistoryJournal;
 /// **Note that you should never change the `Shutdown` and `Status` RPCs as they do not have the
 /// protocol version guards.** They are **assumed** to be stable and if you want to modify them, you
 /// **must** use the `reserved` keyword.
-///
-/// ## Conclusion
 const DAEMON_PROTOCOL_VERSION: u32 = 2;
 
 /// The History gRPC service.
