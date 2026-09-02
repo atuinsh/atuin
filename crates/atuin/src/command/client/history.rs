@@ -1,48 +1,36 @@
-use std::{
-    fmt::{self, Display},
-    io::{self, IsTerminal, Write},
-    time::Duration,
-};
+use std::fmt::{self, Display};
+use std::io::{self, IsTerminal, Write};
+use std::time::Duration;
 
+use atuin_client::database::{Sqlite, current_context};
+use atuin_client::history::store::HistoryStore;
+use atuin_client::history::{AuthorKind, History, HistoryId, probe_author};
+#[cfg(feature = "sync")]
+use atuin_client::record;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::FilterMode::{Directory, Global, Session};
+use atuin_client::settings::Settings;
+use atuin_common::encryption::paseto_v4;
 use atuin_common::logs::LogConfig;
+use atuin_common::string::{EscapeNonPrintablePosixExt as _, NonNulStr};
 use atuin_common::time::{DurationExt, OffsetDateTimeExt, UtcOffsetSpec};
-use atuin_common::{
-    string::{EscapeNonPrintablePosixExt as _, NonNulStr},
-    utils,
-};
-use clap::Subcommand;
-use eyre::{Context, Result, bail};
-use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
-
-#[cfg(feature = "daemon")]
-use super::daemon as daemon_cmd;
-#[cfg(feature = "daemon")]
-use colored::Colorize;
-#[cfg(feature = "daemon")]
-use serde::Serialize;
-
-#[cfg(feature = "daemon")]
+use atuin_common::utils;
 use atuin_common::utils::normalize_optional_string;
 #[cfg(feature = "daemon")]
 use atuin_daemon::history::{HistoryEventKind, TailHistoryReply};
-
-use atuin_client::{
-    database::{Database, Sqlite, current_context},
-    history::{History, store::HistoryStore},
-    record::sqlite_store::SqliteStore,
-    settings::{
-        FilterMode::{Directory, Global, Session},
-        Settings,
-    },
-};
-use atuin_common::encryption::paseto_v4;
-
-#[cfg(feature = "sync")]
-use atuin_client::record;
-
+use atuin_domain::record::CmdOrigin;
+use clap::Subcommand;
+#[cfg(feature = "daemon")]
+use colored::Colorize;
+use eyre::{Context, Result, bail};
+use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
+#[cfg(feature = "daemon")]
+use serde::Serialize;
 use time::OffsetDateTime;
-use tracing::{debug, warn};
+use tracing::{debug, instrument, warn};
 
+#[cfg(feature = "daemon")]
+use super::daemon as daemon_cmd;
 #[cfg(feature = "daemon")]
 use super::daemon;
 
@@ -60,6 +48,12 @@ pub enum Cmd {
         #[arg(long)]
         author: Option<String>,
 
+        /// Whether a human or an AI agent ran this command
+        ///
+        /// [`Option::None`] will cause us to perform a best-guess effort.
+        #[arg(long, value_enum)]
+        author_kind: Option<AuthorKind>,
+
         /// Optional intent/rationale for running this command
         #[arg(long)]
         intent: Option<String>,
@@ -74,7 +68,7 @@ pub enum Cmd {
 
     /// Finishes a new command in the history (adds time, exit code)
     End {
-        id: String,
+        id: HistoryId,
         #[arg(long, short)]
         exit: i64,
         #[arg(long, short)]
@@ -200,7 +194,7 @@ impl ListMode {
     }
 }
 
-#[allow(clippy::cast_sign_loss)]
+#[instrument(level = "trace", skip_all, fields(count = h.len()))]
 pub fn print_list(
     h: &[History],
     list_mode: ListMode,
@@ -213,12 +207,8 @@ pub fn print_list(
     let mut w = w.lock();
 
     let fmt_str = match list_mode {
-        ListMode::Human => format
-            .unwrap_or("{time} · {duration}\t{command}")
-            .replace("\\t", "\t"),
-        ListMode::Regular => format
-            .unwrap_or("{time}\t{command}\t{duration}")
-            .replace("\\t", "\t"),
+        ListMode::Human => format.unwrap_or("{time} · {duration}\t{command}").replace("\\t", "\t"),
+        ListMode::Regular => format.unwrap_or("{time}\t{command}\t{duration}").replace("\\t", "\t"),
         // not used
         ListMode::CmdOnly => String::new(),
     };
@@ -234,7 +224,11 @@ pub fn print_list(
         Box::new(h.iter()) as Box<dyn Iterator<Item = &History>>
     };
 
-    let entry_terminator = if print0 { "\0" } else { "\n" };
+    let entry_terminator = if print0 {
+        "\0"
+    } else {
+        "\n"
+    };
     let flush_each_line = print0;
 
     for history in iterator {
@@ -268,10 +262,12 @@ pub fn print_list(
             Err(_) => {
                 eprintln!("ERROR: Format string caused a formatting error.");
                 eprintln!(
-                    "This may be due to an unsupported format string containing special characters."
+                    "This may be due to an unsupported format string containing special \
+                     characters."
                 );
                 eprintln!(
-                    "Please check your format string syntax and ensure literal braces are properly escaped."
+                    "Please check your format string syntax and ensure literal braces are \
+                     properly escaped."
                 );
                 std::process::exit(1);
             }
@@ -321,7 +317,6 @@ impl CmdFormat {
 
 /// defines how to format the history
 impl FormatKey for FmtHistory<'_> {
-    #[allow(clippy::cast_sign_loss)]
     fn fmt(&self, key: &str, f: &mut fmt::Formatter<'_>) -> Result<(), FormatKeyError> {
         match key {
             "command" => match self.cmd_format {
@@ -337,33 +332,18 @@ impl FormatKey for FmtHistory<'_> {
                 write!(f, "{}", dur.display().largest_unit())?;
             }
             "time" => {
-                self.history
-                    .timestamp
-                    .to_offset(self.tz.0)
-                    .display()
-                    .ymd_hms()
-                    .fmt(f)?;
+                self.history.timestamp.to_offset(self.tz.0).display().ymd_hms().fmt(f)?;
             }
             "relativetime" => {
                 let d = OffsetDateTime::now_utc().saturating_duration_since(self.history.timestamp);
                 write!(f, "{}", d.display().largest_unit())?;
             }
-            "host" => f.write_str(
-                self.history
-                    .hostname
-                    .split_once(':')
-                    .map_or(&self.history.hostname, |(host, _)| host),
-            )?,
+            "host" => f.write_str(self.history.cmd_origin.host().into_inner())?,
             "author" => f.write_str(&self.history.author)?,
             "intent" => f.write_str(self.history.intent.as_deref().unwrap_or_default())?,
-            "user" => f.write_str(
-                self.history
-                    .hostname
-                    .split_once(':')
-                    .map_or("", |(_, user)| user),
-            )?,
+            "user" => f.write_str(self.history.cmd_origin.user().into_inner())?,
             "session" => f.write_str(&self.history.session)?,
-            "uuid" => f.write_str(&self.history.id.0)?,
+            "uuid" => write!(f, "{}", self.history.id)?,
             _ => return Err(FormatKeyError::UnknownKey),
         }
         Ok(())
@@ -382,7 +362,8 @@ fn parse_fmt(format: &str) -> ParsedFmt<'_> {
                 eprintln!("Example: '{{\"command\":\"{{command}}\",\"time\":\"{{time}}\"}}'");
             } else {
                 eprintln!(
-                    "If your formatting string contains literal curly braces, you need to escape them by doubling:"
+                    "If your formatting string contains literal curly braces, you need to escape \
+                     them by doubling:"
                 );
                 eprintln!("Use {{{{ for literal {{ and }}}} for literal }}");
             }
@@ -401,12 +382,8 @@ fn normalize_command_for_storage<'a>(command: &'a str, settings: &Settings) -> &
         return command;
     }
 
-    let trailing_backslashes = trimmed
-        .as_bytes()
-        .iter()
-        .rev()
-        .take_while(|&&byte| byte == b'\\')
-        .count();
+    let trailing_backslashes =
+        trimmed.as_bytes().iter().rev().take_while(|&&byte| byte == b'\\').count();
 
     if trailing_backslashes % 2 == 1 {
         command
@@ -419,6 +396,7 @@ fn make_starting_history(
     settings: &Settings,
     command: &str,
     author: Option<&str>,
+    author_kind: Option<AuthorKind>,
     intent: Option<&str>,
 ) -> Option<History> {
     // It's better for atuin to silently fail here and attempt to
@@ -430,18 +408,24 @@ fn make_starting_history(
     // (argv entries are C strings), so it can only come from a broken caller such
     // as an agent hook. Drop it rather than committing garbage to history.
     if let Err(err) = NonNulStr::new(command) {
-        debug!(
-            "dropping command containing a NUL byte at index {}",
-            err.index
-        );
+        debug!("dropping command containing a NUL byte at index {}", err.index);
         return None;
     }
+
+    // When the flags didn't state an identity, fall back to the one the invoking integration
+    // exported to the environment. The env kind only qualifies a stated author: a stray
+    // ATUIN_HISTORY_AUTHOR_KIND inherited by a nested interactive shell must not stamp the
+    // human's own commands.
+    let author = normalize_optional_string(author.map(String::from)).or_else(probe_author);
+    let author_kind =
+        author_kind.or_else(|| author.is_some().then(AuthorKind::probe_current).flatten());
 
     let h: History = History::capture()
         .timestamp(OffsetDateTime::now_utc())
         .command(command)
         .cwd(cwd)
-        .author_opt(author.map(String::from))
+        .author_opt(author)
+        .author_kind_opt(author_kind)
         .intent_opt(intent.map(String::from))
         .shell_opt(std::env::var("ATUIN_SHELL").ok())
         .build()
@@ -450,14 +434,16 @@ fn make_starting_history(
     h.should_save(settings).then_some(h)
 }
 
+#[instrument(level = "trace", skip_all, err)]
 async fn handle_start(
-    db: &impl Database,
+    db: &Sqlite,
     settings: &Settings,
     command: &str,
     author: Option<&str>,
+    author_kind: Option<AuthorKind>,
     intent: Option<&str>,
-) -> Result<Option<String>> {
-    let Some(h) = make_starting_history(settings, command, author, intent) else {
+) -> Result<Option<HistoryId>> {
+    let Some(h) = make_starting_history(settings, command, author, author_kind, intent) else {
         return Ok(None);
     };
 
@@ -467,21 +453,23 @@ async fn handle_start(
         debug!("failed to save history: {e}");
     }
 
-    Ok(Some(h.id.0.clone()))
+    Ok(Some(h.id))
 }
 
 #[cfg(feature = "daemon")]
+#[instrument(level = "trace", skip_all, err)]
 async fn handle_daemon_start(
     settings: &Settings,
     command: &str,
     author: Option<&str>,
+    author_kind: Option<AuthorKind>,
     intent: Option<&str>,
-) -> Result<Option<String>> {
-    let Some(h) = make_starting_history(settings, command, author, intent) else {
+) -> Result<Option<HistoryId>> {
+    let Some(h) = make_starting_history(settings, command, author, author_kind, intent) else {
         return Ok(None);
     };
 
-    let local_id = h.id.0.clone();
+    let local_id = h.id;
 
     // Attempt to start history via daemon, but silently ignore errors
     // to avoid breaking the shell when the daemon is unavailable or disk is full
@@ -497,19 +485,16 @@ async fn handle_daemon_start(
 }
 
 #[allow(unused_variables)]
+#[instrument(level = "trace", skip_all, fields(id = %id, exit, duration = ?duration), err)]
 async fn handle_end(
-    db: &impl Database,
+    db: &Sqlite,
     store: SqliteStore,
     history_store: HistoryStore,
     settings: &Settings,
-    id: &str,
+    id: HistoryId,
     exit: i64,
     duration: Option<u64>,
 ) -> Result<()> {
-    if id.trim() == "" {
-        return Ok(());
-    }
-
     let Some(mut h) = db.load(id).await? else {
         warn!("history entry is missing");
         return Ok(());
@@ -544,8 +529,16 @@ async fn handle_end(
     if settings.should_sync().await? {
         #[cfg(feature = "sync")]
         {
-            let (_, downloaded) =
-                record::sync::sync(settings, &store, &history_store.encryption_key).await?;
+            let engine = record::sync::SyncEngine::builder()
+                .store(store.clone())
+                .client_source(record::sync::ClientSource::FromSettings {
+                    settings,
+                    caps: None,
+                })
+                .build()
+                .connect()
+                .await?;
+            let (_, downloaded) = engine.keyed(&history_store.encryption_key).sync().await?;
             Settings::save_sync_time().await?;
 
             crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
@@ -560,9 +553,10 @@ async fn handle_end(
 }
 
 #[cfg(feature = "daemon")]
+#[instrument(level = "trace", skip_all, fields(id = %id, exit, duration = ?duration), err)]
 async fn handle_daemon_end(
     settings: &Settings,
-    id: &str,
+    id: HistoryId,
     exit: i64,
     duration: Option<u64>,
 ) -> Result<()> {
@@ -576,25 +570,28 @@ async fn handle_daemon_end(
     Ok(())
 }
 
+#[instrument(level = "trace", skip_all, err)]
 pub(super) async fn start_history_entry(
     settings: &Settings,
     command: &str,
     author: Option<&str>,
+    author_kind: Option<AuthorKind>,
     intent: Option<&str>,
-) -> Result<Option<String>> {
+) -> Result<Option<HistoryId>> {
     #[cfg(feature = "daemon")]
     if settings.daemon.enabled {
-        return handle_daemon_start(settings, command, author, intent).await;
+        return handle_daemon_start(settings, command, author, author_kind, intent).await;
     }
 
     let db_path = &settings.db_path;
-    let db = Sqlite::new(db_path, settings.local_timeout).await?;
-    handle_start(&db, settings, command, author, intent).await
+    let db = Sqlite::new(db_path, Duration::try_from_secs_f64(settings.local_timeout)?).await?;
+    handle_start(&db, settings, command, author, author_kind, intent).await
 }
 
+#[instrument(level = "trace", skip_all, fields(id = %id, exit, duration = ?duration), err)]
 pub(super) async fn end_history_entry(
     settings: &Settings,
-    id: &str,
+    id: HistoryId,
     exit: i64,
     duration: Option<u64>,
 ) -> Result<()> {
@@ -606,11 +603,13 @@ pub(super) async fn end_history_entry(
     let db_path = &settings.db_path;
     let record_store_path = &settings.record_store_path;
 
-    let db = Sqlite::new(db_path, settings.local_timeout).await?;
-    let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
+    let db = Sqlite::new(db_path, Duration::try_from_secs_f64(settings.local_timeout)?).await?;
+    let store =
+        SqliteStore::new(record_store_path, Duration::try_from_secs_f64(settings.local_timeout)?)
+            .await?;
 
-    let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
-        .context("could not load encryption key")?;
+    let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+        .context("could not load or generate encryption key")?;
     let host_id = Settings::host_id().await?;
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
@@ -641,7 +640,7 @@ struct TailJsonEvent<'a> {
 #[cfg(feature = "daemon")]
 #[derive(Serialize)]
 struct TailJsonHistory<'a> {
-    id: &'a str,
+    id: HistoryId,
     timestamp: String,
     timestamp_unix_ns: u64,
     command: &'a str,
@@ -672,6 +671,7 @@ impl TailEvent {
             .history
             .ok_or_else(|| eyre::eyre!("daemon sent a history tail event without history"))?;
         let timestamp = OffsetDateTime::from_unix_nanos_u64(history.timestamp);
+        let author_kind = history.author_kind();
         let kind = match HistoryEventKind::try_from(reply.kind)
             .unwrap_or(HistoryEventKind::Unspecified)
         {
@@ -683,18 +683,20 @@ impl TailEvent {
         Ok(Self {
             kind,
             history: History {
-                id: history.id.into(),
+                id: history.id.parse()?,
                 timestamp,
                 duration: history.duration,
                 exit: history.exit,
                 command: history.command,
                 cwd: history.cwd,
                 session: history.session,
-                hostname: history.hostname,
+                #[allow(deprecated)]
+                cmd_origin: CmdOrigin::parse_lenient(history.hostname),
                 author: history.author,
                 intent: normalize_optional_string(history.intent),
                 shell: normalize_optional_string(history.shell),
                 deleted_at: None,
+                author_kind: author_kind.into(),
             },
         })
     }
@@ -713,20 +715,14 @@ impl TailEvent {
         let payload = TailJsonEvent {
             event: self.kind.as_str(),
             history: TailJsonHistory {
-                id: &self.history.id.0,
-                timestamp: self
-                    .history
-                    .timestamp
-                    .to_offset(tz.0)
-                    .display()
-                    .ymd_hms()
-                    .to_string(),
+                id: self.history.id,
+                timestamp: self.history.timestamp.to_offset(tz.0).display().ymd_hms().to_string(),
                 timestamp_unix_ns: u64::try_from(self.history.timestamp.unix_timestamp_nanos())
                     .context("history timestamp predates unix epoch")?,
                 command: &self.history.command,
                 cwd: &self.history.cwd,
                 session: &self.history.session,
-                hostname: &self.history.hostname,
+                hostname: self.history.cmd_origin.as_str(),
                 host: self.host(),
                 user: self.user(),
                 author: &self.history.author,
@@ -734,10 +730,7 @@ impl TailEvent {
                 exit: self.exit_value(),
                 duration_ns: self.duration_value(),
                 duration: self.duration_value().map(|d| {
-                    Duration::saturating_from_nanos_i64(d)
-                        .display()
-                        .largest_unit()
-                        .to_string()
+                    Duration::saturating_from_nanos_i64(d).display().largest_unit().to_string()
                 }),
                 success: self.success_value(),
                 finished_at: self
@@ -780,15 +773,9 @@ impl TailEvent {
         push_pretty_field(
             &mut out,
             "start",
-            &self
-                .history
-                .timestamp
-                .to_offset(tz.0)
-                .display()
-                .ymd_hms()
-                .to_string(),
+            &self.history.timestamp.to_offset(tz.0).display().ymd_hms().to_string(),
         );
-        push_pretty_field(&mut out, "history", &self.history.id.0);
+        push_pretty_field(&mut out, "history", &self.history.id.to_string());
         push_pretty_field(&mut out, "session", &self.history.session);
         push_pretty_field(&mut out, "exit", &self.exit_display());
         push_pretty_field(&mut out, "duration", &self.duration_display());
@@ -796,7 +783,7 @@ impl TailEvent {
         out.push('\n');
 
         push_pretty_field(&mut out, "cwd", &self.history.cwd);
-        push_pretty_field(&mut out, "hostname", &self.history.hostname);
+        push_pretty_field(&mut out, "hostname", self.history.cmd_origin.as_str());
         push_pretty_field(&mut out, "host", self.host());
         push_pretty_field(&mut out, "user", self.user());
         push_pretty_field(&mut out, "author", &self.history.author);
@@ -816,17 +803,11 @@ impl TailEvent {
     }
 
     fn host(&self) -> &str {
-        self.history
-            .hostname
-            .split_once(':')
-            .map_or(self.history.hostname.as_str(), |(host, _)| host)
+        self.history.cmd_origin.host().into_inner()
     }
 
     fn user(&self) -> &str {
-        self.history
-            .hostname
-            .split_once(':')
-            .map_or("", |(_, user)| user)
+        self.history.cmd_origin.user().into_inner()
     }
 
     fn exit_value(&self) -> Option<i64> {
@@ -858,10 +839,9 @@ impl TailEvent {
 
     fn duration_display(&self) -> String {
         match self.duration_value() {
-            Some(duration) if duration >= 0 => Duration::saturating_from_nanos_i64(duration)
-                .display()
-                .largest_unit()
-                .to_string(),
+            Some(duration) if duration >= 0 => {
+                Duration::saturating_from_nanos_i64(duration).display().largest_unit().to_string()
+            }
             Some(_) => "unknown".bright_yellow().to_string(),
             None => "running".bright_yellow().to_string(),
         }
@@ -910,6 +890,7 @@ fn push_pretty_field(out: &mut String, label: &str, value: &str) {
 
 impl Cmd {
     #[cfg(feature = "daemon")]
+    #[instrument(level = "trace", skip_all, err)]
     async fn handle_tail(settings: &Settings) -> Result<()> {
         let tty = std::io::stdout().is_terminal();
         let mut client = daemon::tail_client(settings).await?;
@@ -931,11 +912,12 @@ impl Cmd {
         Ok(())
     }
 
-    #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
+    #[allow(clippy::too_many_lines)]
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::fn_params_excessive_bools)]
+    #[instrument(level = "trace", skip_all, err)]
     async fn handle_list(
-        db: &impl Database,
+        db: &Sqlite,
         settings: &Settings,
         context: atuin_client::database::Context,
         session: bool,
@@ -951,15 +933,10 @@ impl Cmd {
             (true, true) => [Session, Directory],
             (true, false) => [Session, Global],
             (false, true) => [Global, Directory],
-            (false, false) => [
-                settings.default_filter_mode(context.git_root.is_some()),
-                Global,
-            ],
+            (false, false) => [settings.default_filter_mode(context.git_root.is_some()), Global],
         };
 
-        let history = db
-            .list(&filters, &context, None, false, include_deleted, None)
-            .await?;
+        let history = db.list(filters, &context, None, false, include_deleted, None).await?;
 
         print_list(
             &history,
@@ -976,8 +953,9 @@ impl Cmd {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, fields(dry_run), err)]
     async fn handle_prune(
-        db: &impl Database,
+        db: &Sqlite,
         settings: &Settings,
         store: SqliteStore,
         context: atuin_client::database::Context,
@@ -986,7 +964,7 @@ impl Cmd {
         // Grab all executed commands and filter them using History::should_save.
         // We could iterate or paginate here if memory usage becomes an issue.
         let matches: Vec<History> = db
-            .list(&[Global], &context, None, false, false, None)
+            .list([Global], &context, None, false, false, None)
             .await?
             .into_iter()
             .filter(|h| !h.should_save(settings))
@@ -1011,14 +989,14 @@ impl Cmd {
                 settings.timezone,
             );
         } else {
-            let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
-                .context("could not load encryption key")?;
+            let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+                .context("could not load or generate encryption key")?;
             let host_id = Settings::host_id().await?;
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
             for entry in matches {
                 eprintln!("deleting {}", entry.id);
-                let (id, _) = history_store.delete(entry.id.clone()).await?;
+                let (id, _) = history_store.delete(entry.id).await?;
                 history_store.build_all(db, &[id]).await?;
             }
 
@@ -1028,8 +1006,9 @@ impl Cmd {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, fields(dry_run, dupkeep), err)]
     async fn handle_dedup(
-        db: &impl Database,
+        db: &Sqlite,
         settings: &Settings,
         store: SqliteStore,
         before: i64,
@@ -1038,7 +1017,8 @@ impl Cmd {
     ) -> Result<()> {
         if dupkeep == 0 {
             eprintln!(
-                "\"--dupkeep 0\" would keep 0 copies of duplicate commands and thus delete all of them! Use \"atuin search --delete ...\" if you really want that."
+                "\"--dupkeep 0\" would keep 0 copies of duplicate commands and thus delete all of \
+                 them! Use \"atuin search --delete ...\" if you really want that."
             );
             std::process::exit(1);
         }
@@ -1064,13 +1044,13 @@ impl Cmd {
                 settings.timezone,
             );
         } else {
-            let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
-                .context("could not load encryption key")?;
+            let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+                .context("could not load or generate encryption key")?;
             let host_id = Settings::host_id().await?;
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
             #[cfg(feature = "daemon")]
-            let ids = matches.iter().map(|h| h.id.clone()).collect::<Vec<_>>();
+            let ids = matches.iter().map(|h| h.id).collect::<Vec<_>>();
 
             for entry in matches {
                 eprintln!("deleting {}", entry.id);
@@ -1086,11 +1066,13 @@ impl Cmd {
     }
 
     #[allow(clippy::too_many_lines)]
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(self, settings: &Settings) -> Result<()> {
         match self {
             Self::Start {
                 cmd_env,
                 author,
+                author_kind,
                 intent,
                 command,
                 ..
@@ -1101,9 +1083,14 @@ impl Cmd {
                     command.join(" ")
                 };
 
-                if let Some(id) =
-                    start_history_entry(settings, &command, author.as_deref(), intent.as_deref())
-                        .await?
+                if let Some(id) = start_history_entry(
+                    settings,
+                    &command,
+                    author.as_deref(),
+                    author_kind,
+                    intent.as_deref(),
+                )
+                .await?
                 {
                     println!("{id}");
                 }
@@ -1112,7 +1099,7 @@ impl Cmd {
             }
             Self::End {
                 id, exit, duration, ..
-            } => end_history_entry(settings, &id, exit, duration).await,
+            } => end_history_entry(settings, id, exit, duration).await,
             Self::Tail => {
                 #[cfg(feature = "daemon")]
                 {
@@ -1128,11 +1115,16 @@ impl Cmd {
                 let db_path = &settings.db_path;
                 let record_store_path = &settings.record_store_path;
 
-                let db = Sqlite::new(db_path, settings.local_timeout).await?;
-                let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
+                let db = Sqlite::new(db_path, Duration::try_from_secs_f64(settings.local_timeout)?)
+                    .await?;
+                let store = SqliteStore::new(
+                    record_store_path,
+                    Duration::try_from_secs_f64(settings.local_timeout)?,
+                )
+                .await?;
 
-                let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
-                    .context("could not load encryption key")?;
+                let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+                    .context("could not load or generate encryption key")?;
 
                 let host_id = Settings::host_id().await?;
                 let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
@@ -1224,15 +1216,15 @@ impl Cmd {
 
 #[cfg(test)]
 mod tests {
+    use rstest::{fixture, rstest};
     #[cfg(feature = "daemon")]
     use time::macros::datetime;
 
     use super::*;
-    use rstest::{fixture, rstest};
 
     #[fixture]
     async fn db() -> Sqlite {
-        Sqlite::new("sqlite::memory:", 2.0).await.unwrap()
+        Sqlite::in_memory(Duration::from_secs(2)).await.unwrap()
     }
 
     #[fixture]
@@ -1268,9 +1260,7 @@ mod tests {
             ..Settings::utc()
         };
 
-        handle_start(&db, &settings, "ls   \t", None, None)
-            .await
-            .unwrap();
+        handle_start(&db, &settings, "ls   \t", None, None, None).await.unwrap();
 
         let history = db
             .before(OffsetDateTime::now_utc() + time::Duration::SECOND, 1)
@@ -1288,15 +1278,11 @@ mod tests {
 
         // A command containing a NUL byte can never have been executed by a shell;
         // it should be dropped rather than committed to history.
-        let id = handle_start(&db, &settings, "hello\0world", None, None)
-            .await
-            .unwrap();
+        let id = handle_start(&db, &settings, "hello\0world", None, None, None).await.unwrap();
         assert!(id.is_none());
 
-        let stored = db
-            .before(OffsetDateTime::now_utc() + time::Duration::SECOND, 1)
-            .await
-            .unwrap();
+        let stored =
+            db.before(OffsetDateTime::now_utc() + time::Duration::SECOND, 1).await.unwrap();
         assert!(stored.is_empty());
     }
 
@@ -1315,18 +1301,19 @@ mod tests {
         TailEvent {
             kind,
             history: History {
-                id: "history-id".to_owned().into(),
+                id: "018f011c-9a0a-7000-8000-000000000001".parse().unwrap(),
                 timestamp: datetime!(2026-04-09 17:18:19 UTC),
                 duration: 12_345_678,
                 exit: 0,
                 command: "git status".to_owned(),
                 cwd: "/tmp/repo".to_owned(),
                 session: "session-id".to_owned(),
-                hostname: "host:ellie".to_owned(),
+                cmd_origin: CmdOrigin::try_from("host:ellie").unwrap(),
                 author: "claude".to_owned(),
                 intent: Some("inspect repository state".to_owned()),
                 deleted_at: None,
                 shell: Some("zsh".into()),
+                author_kind: Some(AuthorKind::Agent),
             },
         }
     }
@@ -1334,13 +1321,11 @@ mod tests {
     #[cfg(feature = "daemon")]
     #[rstest]
     fn test_tail_json_output_contains_history_fields(tail_event: TailEvent) {
-        let json = tail_event
-            .render(false, UtcOffsetSpec(time::UtcOffset::UTC))
-            .unwrap();
+        let json = tail_event.render(false, UtcOffsetSpec(time::UtcOffset::UTC)).unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(value["event"], "ended");
-        assert_eq!(value["history"]["id"], "history-id");
+        assert_eq!(value["history"]["id"], "018f011c9a0a70008000000000000001");
         assert_eq!(value["history"]["duration_ns"], 12_345_678);
         assert_eq!(value["history"]["success"], true);
         assert!(value.get("record").is_none());
@@ -1351,12 +1336,8 @@ mod tests {
     fn test_tail_pretty_output_shows_pending_fields_for_started_events(
         #[with(TailKind::Started)] tail_event: TailEvent,
     ) {
-        let rendered = tail_event
-            .render(true, UtcOffsetSpec(time::UtcOffset::UTC))
-            .unwrap();
-        let plain = regex::Regex::new(r"\x1b\[[0-9;]*m")
-            .unwrap()
-            .replace_all(&rendered, "");
+        let rendered = tail_event.render(true, UtcOffsetSpec(time::UtcOffset::UTC)).unwrap();
+        let plain = regex::Regex::new(r"\x1b\[[0-9;]*m").unwrap().replace_all(&rendered, "");
 
         assert!(plain.contains("STARTED git status"));
         assert!(plain.contains("exit:"));

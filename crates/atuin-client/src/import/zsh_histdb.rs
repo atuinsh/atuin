@@ -36,16 +36,18 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use atuin_common::db;
 use atuin_common::utils::uuid_v7;
+use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
 use directories::UserDirs;
 use eyre::{Result, eyre};
-use sqlx::{Pool, sqlite::SqlitePool};
+use sqlx::Pool;
+use sqlx::sqlite::SqlitePool;
 use time::PrimitiveDateTime;
 
 use super::Importer;
 use crate::history::History;
 use crate::import::Loader;
-use crate::utils::{get_hostname, get_username};
 
 #[derive(sqlx::FromRow, Debug)]
 pub struct HistDbEntryCount {
@@ -67,23 +69,20 @@ pub struct HistDbEntry {
 #[derive(Debug)]
 pub struct ZshHistDb {
     histdb: Vec<HistDbEntry>,
-    username: String,
+    username: CmdUser,
 }
 
 /// Read db at given file, return vector of entries.
 async fn hist_from_db(dbpath: PathBuf) -> Result<Vec<HistDbEntry>> {
-    let connection_str = dbpath.to_str().ok_or_else(|| {
-        eyre!(
-            "Invalid path for SQLite database: {}",
-            dbpath.to_string_lossy()
-        )
-    })?;
+    let connection_str = dbpath
+        .to_str()
+        .ok_or_else(|| eyre!("Invalid path for SQLite database: {}", dbpath.to_string_lossy()))?;
     let pool = SqlitePool::connect(connection_str).await?;
     hist_from_db_conn(pool).await
 }
 
 async fn hist_from_db_conn(pool: Pool<sqlx::Sqlite>) -> Result<Vec<HistDbEntry>> {
-    let query = r#"
+    let query = r"
         SELECT
             history.id, history.start_time, history.duration, places.host, places.dir,
             commands.argv, history.exit_status, history.session
@@ -91,10 +90,9 @@ async fn hist_from_db_conn(pool: Pool<sqlx::Sqlite>) -> Result<Vec<HistDbEntry>>
         LEFT JOIN commands ON history.command_id = commands.id
         LEFT JOIN places ON history.place_id = places.id
         ORDER BY history.start_time
-    "#;
-    let histdb_vec: Vec<HistDbEntry> = sqlx::query_as::<_, HistDbEntry>(query)
-        .fetch_all(&pool)
-        .await?;
+    ";
+    let histdb_vec: Vec<HistDbEntry> =
+        db::query_as::<_, HistDbEntry>(query).fetch_all(&pool).await?;
     Ok(histdb_vec)
 }
 
@@ -114,13 +112,11 @@ impl ZshHistDb {
     }
 
     pub fn histpath() -> Result<PathBuf> {
-        let histdb_path = ZshHistDb::histpath_candidate()?;
+        let histdb_path = Self::histpath_candidate()?;
         if histdb_path.exists() {
             Ok(histdb_path)
         } else {
-            Err(eyre!(
-                "Could not find history file. Try setting $HISTDB_FILE"
-            ))
+            Err(eyre!("Could not find history file. Try setting $HISTDB_FILE"))
         }
     }
 }
@@ -133,11 +129,11 @@ impl Importer for ZshHistDb {
     /// Creates a new ZshHistDb and populates the history based on the pre-populated data
     /// structure.
     async fn new() -> Result<Self> {
-        let dbpath = ZshHistDb::histpath()?;
+        let dbpath = Self::histpath()?;
         let histdb_entry_vec = hist_from_db(dbpath).await?;
         Ok(Self {
             histdb: histdb_entry_vec,
-            username: get_username(),
+            username: CmdUser::probe_current(),
         })
     }
 
@@ -156,11 +152,10 @@ impl Importer for ZshHistDb {
                 Ok(s) => s.trim_end(),
                 Err(_) => continue, // we can skip past things like invalid utf8
             };
-            let hostname = format!(
-                "{}:{}",
-                String::from_utf8(entry.host).unwrap_or_else(|_e| get_hostname()),
-                self.username
-            );
+            let hostname = String::from_utf8(entry.host)
+                .map(CmdHost::from)
+                .unwrap_or_else(|_e| CmdHost::probe_current());
+            let cmd_origin = CmdOrigin::new(&hostname, &self.username);
             let session = session_map.entry(entry.session).or_insert_with(uuid_v7);
 
             let imported = History::import()
@@ -171,7 +166,7 @@ impl Importer for ZshHistDb {
                 .duration(entry.duration.saturating_mul(1_000_000_000))
                 .exit(entry.exit_status)
                 .session(session.as_simple().to_string())
-                .hostname(hostname)
+                .cmd_origin(cmd_origin)
                 .build();
             h.push(imported.into()).await?;
         }
@@ -182,15 +177,17 @@ impl Importer for ZshHistDb {
 #[cfg(test)]
 mod test {
 
-    use super::*;
-    use sqlx::sqlite::SqlitePoolOptions;
     use std::env;
+
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    use super::*;
     #[tokio::test(flavor = "multi_thread")]
     #[allow(unsafe_code)]
     async fn test_env_vars() {
         let test_env_db = "nonstd-zsh-history.db";
         let key = "HISTDB_FILE";
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
         unsafe { env::set_var(key, test_env_db) };
 
         // test the env got set
@@ -203,8 +200,9 @@ mod test {
 
     #[tokio::test]
     async fn duration_saturates_instead_of_overflowing() {
-        use crate::import::tests::TestLoader;
         use time::macros::datetime;
+
+        use crate::import::tests::TestLoader;
 
         // a corrupt duration column must not overflow when scaled to nanoseconds
         let histdb = ZshHistDb {
@@ -218,14 +216,11 @@ mod test {
                 exit_status: 0,
                 session: 0,
             }],
-            username: "user".to_string(),
+            username: "user".to_string().into(),
         };
 
         let mut loader = TestLoader::default();
-        histdb
-            .load(&mut loader)
-            .await
-            .expect("import must not fail");
+        histdb.load(&mut loader).await.expect("import must not fail");
 
         assert_eq!(loader.buf.len(), 1);
         assert_eq!(loader.buf[0].command, "echo hello");
@@ -234,14 +229,11 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_import() {
-        let pool: SqlitePool = SqlitePoolOptions::new()
-            .min_connections(2)
-            .connect(":memory:")
-            .await
-            .unwrap();
+        let pool: SqlitePool =
+            SqlitePoolOptions::new().min_connections(2).connect(":memory:").await.unwrap();
 
         // sql dump directly from a test database.
-        let db_sql = r#"
+        let db_sql = r"
         PRAGMA foreign_keys=OFF;
         BEGIN TRANSACTION;
         CREATE TABLE commands (id integer primary key autoincrement, argv text, unique(argv) on conflict ignore);
@@ -268,15 +260,15 @@ mod test {
         CREATE INDEX place_dir on places(dir);
         CREATE INDEX place_host on places(host);
         CREATE INDEX history_command_place on history(command_id, place_id);
-        COMMIT; "#;
+        COMMIT; ";
 
-        sqlx::query(db_sql).execute(&pool).await.unwrap();
+        db::query(db_sql).execute(&pool).await.unwrap();
 
         // test histdb iterator
         let histdb_vec = hist_from_db_conn(pool).await.unwrap();
         let histdb = ZshHistDb {
             histdb: histdb_vec,
-            username: get_username(),
+            username: CmdUser::probe_current(),
         };
 
         println!("h: {:#?}", histdb.histdb);

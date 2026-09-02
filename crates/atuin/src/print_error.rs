@@ -3,6 +3,7 @@ use std::io::IsTerminal;
 use atuin_client::record::sync::SyncError;
 use colored::Colorize;
 use crossterm::terminal;
+use easy_cast::Conv;
 
 /// Print a prominent error to stderr. Colored and box-bordered when stderr is
 /// a TTY, plain "Error: ..." header otherwise. The description is word-wrapped
@@ -10,7 +11,7 @@ use crossterm::terminal;
 pub fn print_error(title: &str, description: &str) {
     let is_tty = std::io::stderr().is_terminal();
     let width = if is_tty {
-        terminal::size().map_or(80, |(w, _)| w as usize)
+        terminal::size().map_or(80, |(w, _)| usize::conv(w))
     } else {
         80
     }
@@ -40,10 +41,10 @@ pub fn format_sync_error(e: SyncError) -> eyre::Report {
     if matches!(e, SyncError::WrongKey) {
         print_error(
             "Wrong encryption key",
-            "Your local encryption key cannot decrypt the data on the server. \
-             This usually means another machine wrote records with a different key.\n\n\
-             To fix this, find the correct key by running `atuin key` on a machine that \
-             already syncs successfully, then run `atuin store rekey <key>` here.",
+            "Your local encryption key cannot decrypt the data on the server. This usually means \
+             another machine wrote records with a different key.\n\nTo fix this, find the correct \
+             key by running `atuin key` on a machine that already syncs successfully, then run \
+             `atuin store rekey <key>` here.",
         );
         std::process::exit(1);
     }
@@ -83,8 +84,9 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::wrap_text;
     use rstest::rstest;
+
+    use super::wrap_text;
 
     #[rstest]
     #[case::width_20(20)]

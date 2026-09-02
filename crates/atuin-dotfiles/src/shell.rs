@@ -1,8 +1,7 @@
+use atuin_common::shell::{Shell, ShellError};
 use eyre::{Result, ensure, eyre};
 use rmp::{decode, encode};
 use serde::Serialize;
-
-use atuin_common::shell::{Shell, ShellError};
 
 use crate::store::AliasStore;
 
@@ -18,7 +17,7 @@ pub struct Alias {
     pub value: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Var {
     pub name: String,
     pub value: String,
@@ -68,7 +67,7 @@ impl Var {
             "trailing bytes in encoded dotfiles env record, malformed"
         );
 
-        Ok(Var {
+        Ok(Self {
             name: key.to_owned(),
             value: value.to_owned(),
             export,
@@ -76,6 +75,7 @@ impl Var {
     }
 }
 
+#[must_use]
 pub fn parse_alias(line: &str) -> Option<Alias> {
     // consider the fact we might be importing a fish alias
     // 'alias' output
@@ -87,7 +87,13 @@ pub fn parse_alias(line: &str) -> Option<Alias> {
     let parts: Vec<&str> = if is_fish {
         line.split(' ')
             .enumerate()
-            .filter_map(|(n, i)| if n == 0 { None } else { Some(i) })
+            .filter_map(|(n, i)| {
+                if n == 0 {
+                    None
+                } else {
+                    Some(i)
+                }
+            })
             .collect()
     } else {
         line.split('=').collect()
@@ -165,15 +171,13 @@ mod tests {
 
     #[rstest]
     #[case::simple("foo=bar", "foo", "bar")]
-    #[case::quoted(
-        "emacs='TERM=xterm-24bits emacs -nw'",
-        "emacs",
-        "'TERM=xterm-24bits emacs -nw'"
-    )]
+    #[case::quoted("emacs='TERM=xterm-24bits emacs -nw'", "emacs", "'TERM=xterm-24bits emacs -nw'")]
     #[case::quoted_git(
-        "gwip='git add -A; git rm $(git ls-files --deleted) 2> /dev/null; git commit --no-verify --no-gpg-sign --message \"--wip-- [skip ci]\"'",
+        "gwip='git add -A; git rm $(git ls-files --deleted) 2> /dev/null; git commit --no-verify \
+         --no-gpg-sign --message \"--wip-- [skip ci]\"'",
         "gwip",
-        "'git add -A; git rm $(git ls-files --deleted) 2> /dev/null; git commit --no-verify --no-gpg-sign --message \"--wip-- [skip ci]\"'"
+        "'git add -A; git rm $(git ls-files --deleted) 2> /dev/null; git commit --no-verify \
+         --no-gpg-sign --message \"--wip-- [skip ci]\"'"
     )]
     #[case::quoted_equals(
         "emacs='TERM=xterm-24bits emacs -nw --foo=bar'",

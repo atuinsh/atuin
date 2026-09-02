@@ -1,6 +1,7 @@
 /// Reimplementation of the standard library's `slice::partition_dedup`, which is currently
 /// unstable.
 // TODO: Replace this with the standard library implementation when it's stabilized.
+#[must_use]
 pub fn partition_dedup<T>(slice: &mut [T]) -> (&mut [T], &mut [T])
 where
     T: PartialEq,
@@ -46,17 +47,9 @@ where
     ///
     /// `sorted` must be sorted and contain no duplicates.
     pub fn new(sorted: &'a [T], iter: I) -> Self {
+        debug_assert!(sorted.is_sorted_by_key(|s| s.borrow()), "`sorted` must be sorted");
         debug_assert!(
-            sorted.is_sorted_by_key(|s| s.borrow()),
-            "`sorted` must be sorted",
-        );
-        debug_assert_eq!(
-            {
-                let mut vec = sorted.iter().collect::<Vec<_>>();
-                vec.dedup_by_key(|s| s.borrow());
-                vec.len()
-            },
-            sorted.len(),
+            sorted.windows(2).all(|w| w[0].borrow() != w[1].borrow()),
             "`sorted` must not contain duplicates",
         );
         Self {
@@ -78,13 +71,12 @@ where
     // value of `STACK_SIZE`.
     fn eq_with_buffer(self, buffer: &mut [bool]) -> bool {
         let mut seen_heap;
-        let seen;
-        if self.slice.len() <= buffer.len() {
-            seen = &mut buffer[..self.slice.len()];
+        let seen = if self.slice.len() <= buffer.len() {
+            &mut buffer[..self.slice.len()]
         } else {
             seen_heap = vec![false; self.slice.len()];
-            seen = seen_heap.as_mut_slice();
-        }
+            seen_heap.as_mut_slice()
+        };
         for item in self.iter {
             match self.slice.binary_search_by_key(&item, |s| s.borrow()) {
                 Ok(pos) => seen[pos] = true,
@@ -97,10 +89,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::BTreeSet;
+
     use proptest::prelude::*;
     use rstest::rstest;
-    use std::collections::BTreeSet;
+
+    use super::*;
 
     #[rstest]
     #[case(&[], &[], &[])]
@@ -143,6 +137,10 @@ mod tests {
     #[case(&[2, 3, 1, 2], &[1, 2, 3], true)]
     #[case(&[2, 3, 1, 2], &[1, 2], false)]
     #[case(&[2, 3, 1, 2], &[1, 2, 3, 4], false)]
+    #[allow(
+        clippy::used_underscore_binding,
+        reason = "unused _stack_size is used to drive generic N within rstest"
+    )]
     fn test_sorted_deduped_slice_comparer<const STACK_SIZE: usize>(
         #[case] iter: &[u32],
         #[case] sorted: &[u32],
@@ -157,10 +155,7 @@ mod tests {
         )]
         _stack_size: [(); STACK_SIZE],
     ) {
-        assert_eq!(
-            SortedDedupedSliceComparer::new(sorted, iter).eq::<STACK_SIZE>(),
-            expected,
-        );
+        assert_eq!(SortedDedupedSliceComparer::new(sorted, iter).eq::<STACK_SIZE>(), expected,);
     }
 
     fn sorted_deduped_slice() -> impl Strategy<Value = Vec<u8>> {

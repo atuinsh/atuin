@@ -1,14 +1,14 @@
-use atuin_dotfiles::store::{AliasStore, var::VarStore};
-use atuin_scripts::store::ScriptStore;
-use eyre::{Context, Result};
-
-use atuin_client::{
-    database::Database, history::store::HistoryStore, record::sqlite_store::SqliteStore,
-    settings::Settings,
-};
+use atuin_client::database::Sqlite;
+use atuin_client::history::store::HistoryStore;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::RecordId;
+use atuin_dotfiles::store::AliasStore;
+use atuin_dotfiles::store::var::VarStore;
 use atuin_kv::store::KvStore;
+use atuin_scripts::store::ScriptStore;
+use eyre::{Context, Result};
 
 // This is the only crate that ties together all other crates.
 // Therefore, it's the only crate where functions tying together all stores can live
@@ -19,7 +19,7 @@ use atuin_kv::store::KvStore;
 pub async fn build(
     settings: &Settings,
     store: &SqliteStore,
-    db: &dyn Database,
+    db: &Sqlite,
     downloaded: Option<&[RecordId]>,
 ) -> Result<()> {
     let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
@@ -29,7 +29,11 @@ pub async fn build(
 
     let downloaded = downloaded.unwrap_or(&[]);
 
-    let kv_db = atuin_kv::database::Database::new(settings.kv.db_path.clone(), 1.0).await?;
+    let kv_db = atuin_kv::database::Database::new(
+        settings.kv.db_path.clone(),
+        std::time::Duration::from_secs(1),
+    )
+    .await?;
 
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key.clone());
     let alias_store = AliasStore::new(store.clone(), host_id, encryption_key.clone());
@@ -55,8 +59,11 @@ pub async fn build(
         eprintln!("Warning: failed to build kv: {e}");
     }
 
-    let script_db =
-        atuin_scripts::database::Database::new(settings.scripts.db_path.clone(), 1.0).await?;
+    let script_db = atuin_scripts::database::Database::new(
+        settings.scripts.db_path.clone(),
+        std::time::Duration::from_secs(1),
+    )
+    .await?;
 
     if let Err(e) = script_store.build(script_db).await {
         eprintln!("Warning: failed to build scripts: {e}");

@@ -1,13 +1,17 @@
+use std::time::Duration;
+
+use atuin_client::database::Sqlite;
+use easy_cast::Conv;
+use eyre::{Context as _, Result, bail};
+use tracing::{debug, info};
+
 use crate::context::{AppContext, ClientContext};
 use crate::fsm::AgentFsm;
 use crate::session::{LocalSessionService, SessionManager, SessionService};
 use crate::tui::app::{AiApp, ExitOutcome, IoContext};
 use crate::tui::state::ConversationEvent;
-use atuin_client::database::{Database, Sqlite};
-use eyre::{Context as _, Result, bail};
-use tracing::{debug, info};
 
-pub(crate) async fn run(
+pub async fn run(
     initial_command: Option<String>,
     api_endpoint: Option<String>,
     api_token: Option<String>,
@@ -55,9 +59,10 @@ pub(crate) async fn run(
     };
 
     let history_db_path = &settings.db_path;
-    let history_db = Sqlite::new(history_db_path, settings.local_timeout)
-        .await
-        .context("failed to open history database for AI")?;
+    let history_db =
+        Sqlite::new(history_db_path, Duration::try_from_secs_f64(settings.local_timeout)?)
+            .await
+            .context("failed to open history database for AI")?;
 
     // Support both legacy [ai] send_cwd and new [ai.opening] send_cwd
     let send_cwd =
@@ -107,11 +112,13 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
     println!("Atuin AI requires authenticating with Atuin Hub.");
     if will_sync {
         println!(
-            "Once logged in, your shell history will be synchronized via Atuin Hub if auto_sync is enabled or when manually syncing."
+            "Once logged in, your shell history will be synchronized via Atuin Hub if auto_sync \
+             is enabled or when manually syncing."
         );
     }
     println!(
-        "If you have an existing Atuin sync account, you can log in with your existing credentials."
+        "If you have an existing Atuin sync account, you can log in with your existing \
+         credentials."
     );
     println!("Press enter to begin (or esc to cancel).");
     if !wait_for_login_confirmation()? {
@@ -159,23 +166,24 @@ async fn run_inline_tui(
     let client_ctx = ClientContext::detect();
 
     // Open the session service and check for a resumable session
-    let service = LocalSessionService::open(&settings.ai.db_path, settings.local_timeout)
-        .await
-        .context("failed to open AI session database")?;
+    let service = LocalSessionService::open(
+        &settings.ai.db_path,
+        Duration::try_from_secs_f64(settings.local_timeout)?,
+    )
+    .await
+    .context("failed to open AI session database")?;
 
     // Cached usage renders immediately; a background fetch (spawned below,
     // once the event channel exists) replaces it unless it's fresh. OSS
     // endpoints have no usage API, so both are skipped ("fresh" suppresses
     // the fetch).
-    let (cached_usage, usage_is_fresh) = if !ctx.endpoint_is_hub {
-        (None, true)
-    } else {
+    let (cached_usage, usage_is_fresh) = if ctx.endpoint_is_hub {
         let usage_key = crate::usage::cache_key(&ctx.token);
         match service.get_cached_usage(&usage_key).await {
             Ok(Some(cached_snapshot)) => {
                 let age =
                     time::OffsetDateTime::now_utc().unix_timestamp() - cached_snapshot.written_at;
-                let fresh = age < crate::usage::REFRESH_AFTER.as_secs() as i64;
+                let fresh = age < i64::conv(crate::usage::REFRESH_AFTER.as_secs());
                 (Some(cached_snapshot.snapshot), fresh)
             }
             Ok(None) => (None, false),
@@ -184,22 +192,18 @@ async fn run_inline_tui(
                 (None, false)
             }
         }
+    } else {
+        (None, true)
     };
 
-    let cwd = std::env::current_dir()
-        .ok()
-        .map(|p| p.to_string_lossy().into_owned());
-    let git_root_str = ctx
-        .git_root
-        .as_ref()
-        .map(|p| p.to_string_lossy().into_owned());
+    let cwd = std::env::current_dir().ok().map(|p| p.to_string_lossy().into_owned());
+    let git_root_str = ctx.git_root.as_ref().map(|p| p.to_string_lossy().into_owned());
 
     let session_window_mins = settings.ai.session_continue_minutes.max(0); // treat negative values as 0 to avoid confusion
     let max_age_secs: i64 = session_window_mins * 60;
 
-    let resumable = service
-        .find_resumable(cwd.as_deref(), git_root_str.as_deref(), max_age_secs)
-        .await?;
+    let resumable =
+        service.find_resumable(cwd.as_deref(), git_root_str.as_deref(), max_age_secs).await?;
 
     // ─── Build FSM ───────────────────────────────────────────────
     let (session_mgr, mut fsm, file_tracker, edit_permissions) = if let Some(stored) = resumable {
@@ -211,8 +215,10 @@ async fn run_inline_tui(
 
         if has_api_content {
             events.push(ConversationEvent::SystemContext {
-                    content: "[Note: The user has started a new invocation of Atuin AI. Prior messages from this session are from an earlier invocation.]".to_string(),
-                });
+                content: "[Note: The user has started a new invocation of Atuin AI. Prior \
+                          messages from this session are from an earlier invocation.]"
+                    .to_string(),
+            });
             let view_start = events.len();
             let last_time = last_event_ts.and_then(|ts| chrono::DateTime::from_timestamp(ts, 0));
 
@@ -225,9 +231,8 @@ async fn run_inline_tui(
                 Default::default()
             };
 
-            let ep = if let Ok(Some(json)) = mgr
-                .get_metadata(crate::edit_permissions::METADATA_KEY)
-                .await
+            let ep = if let Ok(Some(json)) =
+                mgr.get_metadata(crate::edit_permissions::METADATA_KEY).await
                 && let Ok(cache) = crate::edit_permissions::EditPermissionCache::from_json(&json)
             {
                 cache
@@ -264,26 +269,16 @@ async fn run_inline_tui(
 
     // `ai.model` is read once at startup, so /model in another running
     // session doesn't retarget this one mid-conversation.
-    fsm.ctx.model = settings
-        .ai
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(String::from);
+    fsm.ctx.model =
+        settings.ai.model.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(String::from);
 
     // ─── Snapshot store ─────────────────────────────────────────
-    let snapshot_dir = atuin_common::utils::data_dir()
-        .join("ai")
-        .join("snapshots")
-        .join(session_mgr.session_id());
+    let snapshot_dir =
+        atuin_common::utils::data_dir().join("ai").join("snapshots").join(session_mgr.session_id());
     let snapshot_store = crate::snapshots::SnapshotStore::open(snapshot_dir).ok();
 
     // ─── Discover skills ───────────────────────────────────────
-    let project_root = ctx
-        .git_root
-        .clone()
-        .or_else(|| std::env::current_dir().ok());
+    let project_root = ctx.git_root.clone().or_else(|| std::env::current_dir().ok());
     let skill_registry = crate::skills::SkillRegistry::discover(project_root.as_deref()).await;
 
     // ─── Resume notice (frozen at startup) ──────────────────────
@@ -291,7 +286,8 @@ async fn run_inline_tui(
         Some(t) => {
             let human = chrono_humanize::HumanTime::from(t - chrono::Utc::now());
             format!(
-                "  Continuing previous session (last active {human}) - type /new to start a new session"
+                "  Continuing previous session (last active {human}) - type /new to start a new \
+                 session"
             )
         }
         None => "  Continuing previous session - type /new to start a new session".to_string(),
@@ -301,10 +297,8 @@ async fn run_inline_tui(
     let mut slash_registry = crate::tui::slash::SlashCommandRegistry::default();
     let mut skill_names = std::collections::HashSet::new();
     for skill in skill_registry.all() {
-        slash_registry.register(crate::tui::slash::SlashCommand::new(
-            &skill.name,
-            &skill.description,
-        ));
+        slash_registry
+            .register(crate::tui::slash::SlashCommand::new(&skill.name, &skill.description));
         skill_names.insert(skill.name.clone());
     }
 
@@ -338,9 +332,8 @@ async fn run_inline_tui(
     );
     let options =
         eye_declare::RunOptions::default().keyboard(eye_declare::KeyboardProtocol::Enhanced);
-    let outcome = eye_declare::driver_tokio::run_with(app, options)
-        .await
-        .context("failed running AI TUI")?;
+    let outcome =
+        eye_declare::driver_tokio::run_with(app, options).await.context("failed running AI TUI")?;
 
     // The app (and with it the last persist sender) dropped when the run
     // loop returned; wait for the worker to drain its queue so the final
@@ -361,11 +354,8 @@ enum SetupChoice {
 }
 
 fn prompt_ai_setup() -> Result<SetupChoice> {
-    use crossterm::{
-        cursor,
-        event::{self, Event, KeyCode, KeyEventKind},
-        terminal,
-    };
+    use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+    use crossterm::{cursor, terminal};
 
     let options = ["Enable Atuin AI", "Disable ? Keybind", "Cancel"];
     let mut selected: usize = 0;
@@ -394,7 +384,7 @@ fn prompt_ai_setup() -> Result<SetupChoice> {
 
         let ev = event::read().context("failed to read key event")?;
 
-        crossterm::execute!(stdout, cursor::MoveUp(options.len() as u16))?;
+        crossterm::execute!(stdout, cursor::MoveUp(u16::conv(options.len())))?;
 
         if let Event::Key(key) = ev {
             if key.kind != KeyEventKind::Press {
@@ -433,10 +423,8 @@ fn render_setup_options(
     options: &[&str],
     selected: usize,
 ) -> Result<()> {
-    use crossterm::{
-        style::Stylize,
-        terminal::{Clear, ClearType},
-    };
+    use crossterm::style::Stylize;
+    use crossterm::terminal::{Clear, ClearType};
 
     for (i, option) in options.iter().enumerate() {
         if i == selected {
@@ -477,10 +465,8 @@ async fn set_ai_enabled(enabled: bool) -> Result<()> {
 }
 
 fn wait_for_login_confirmation() -> Result<bool> {
-    use crossterm::{
-        event::{self, Event, KeyCode},
-        terminal::{disable_raw_mode, enable_raw_mode},
-    };
+    use crossterm::event::{self, Event, KeyCode};
+    use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
     enable_raw_mode().context("failed enabling raw mode for login prompt")?;
     struct Guard;

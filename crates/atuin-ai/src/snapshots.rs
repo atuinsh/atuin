@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use easy_cast::Conv;
 use eyre::{Result, eyre};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -25,7 +26,7 @@ use time::OffsetDateTime;
 /// canonical paths, alongside a `manifest.json` that maps filenames
 /// back to original paths with timestamps.
 #[derive(Debug)]
-pub(crate) struct SnapshotStore {
+pub struct SnapshotStore {
     session_dir: PathBuf,
     manifest: SnapshotManifest,
 }
@@ -84,7 +85,7 @@ impl SnapshotStore {
         let entry = SnapshotEntry {
             original_path: canonical_path.to_string_lossy().into_owned(),
             snapshot_at: format_iso8601(now),
-            size_bytes: content.len() as u64,
+            size_bytes: u64::conv(content.len()),
         };
 
         self.manifest.files.insert(filename, entry);
@@ -114,7 +115,7 @@ impl SnapshotStore {
 ///
 /// Example (Unix): `/Users/me/.config/foo.toml` → `Users%2Fme%2F.config%2Ffoo.toml`
 /// Example (Windows): `C:\Users\me\config.toml` → `Users%5Cme%5Cconfig.toml`
-pub(crate) fn sanitize_path(path: &Path) -> String {
+pub fn sanitize_path(path: &Path) -> String {
     let s = path.to_string_lossy();
     // Strip drive letter prefix on Windows (e.g. "C:\")
     let s = s.strip_prefix('/').unwrap_or_else(|| {
@@ -129,9 +130,7 @@ pub(crate) fn sanitize_path(path: &Path) -> String {
             &s
         }
     });
-    s.replace('%', "%25")
-        .replace('/', "%2F")
-        .replace('\\', "%5C")
+    s.replace('%', "%25").replace('/', "%2F").replace('\\', "%5C")
 }
 
 /// Write a file atomically using temp-file-then-rename.
@@ -139,10 +138,8 @@ pub(crate) fn sanitize_path(path: &Path) -> String {
 /// Creates a temporary file in the same directory as `target`, writes
 /// content, fsyncs, then renames into place. Preserves permissions from
 /// the original file if it exists.
-pub(crate) fn atomic_write_file(target: &Path, content: &[u8]) -> Result<()> {
-    let dir = target
-        .parent()
-        .ok_or_else(|| eyre!("target path has no parent directory"))?;
+pub fn atomic_write_file(target: &Path, content: &[u8]) -> Result<()> {
+    let dir = target.parent().ok_or_else(|| eyre!("target path has no parent directory"))?;
     fs_err::create_dir_all(dir)?;
 
     let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
@@ -154,13 +151,8 @@ pub(crate) fn atomic_write_file(target: &Path, content: &[u8]) -> Result<()> {
         std::fs::set_permissions(tmp.path(), meta.permissions())?;
     }
 
-    tmp.persist(target).map_err(|e| {
-        eyre!(
-            "failed to persist atomic write to {}: {}",
-            target.display(),
-            e
-        )
-    })?;
+    tmp.persist(target)
+        .map_err(|e| eyre!("failed to persist atomic write to {}: {}", target.display(), e))?;
     Ok(())
 }
 
@@ -178,8 +170,9 @@ fn format_iso8601(dt: OffsetDateTime) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::*;
+
+    use super::*;
 
     // ── sanitize_path ──────────────────────────────────────────
 
@@ -299,9 +292,7 @@ mod tests {
         ),
     ) {
         let file_path = Path::new("/Users/me/.config/foo.toml");
-        let created = store
-            .ensure_snapshot(file_path, b"[key]\nval = 1\n")
-            .unwrap();
+        let created = store.ensure_snapshot(file_path, b"[key]\nval = 1\n").unwrap();
 
         assert!(created);
         assert!(store.has_snapshot(file_path));
@@ -309,10 +300,7 @@ mod tests {
         // Snapshot file on disk
         let expected_file = session_dir.join("Users%2Fme%2F.config%2Ffoo.toml");
         assert!(expected_file.exists());
-        assert_eq!(
-            std::fs::read_to_string(&expected_file).unwrap(),
-            "[key]\nval = 1\n"
-        );
+        assert_eq!(std::fs::read_to_string(&expected_file).unwrap(), "[key]\nval = 1\n");
 
         // Manifest on disk
         let manifest_path = session_dir.join("manifest.json");
@@ -322,10 +310,7 @@ mod tests {
         let files = manifest["files"].as_object().unwrap();
         assert_eq!(files.len(), 1);
         let entry = &files["Users%2Fme%2F.config%2Ffoo.toml"];
-        assert_eq!(
-            entry["original_path"].as_str().unwrap(),
-            "/Users/me/.config/foo.toml"
-        );
+        assert_eq!(entry["original_path"].as_str().unwrap(), "/Users/me/.config/foo.toml");
         assert_eq!(entry["size_bytes"].as_u64().unwrap(), 14);
     }
 
@@ -346,10 +331,7 @@ mod tests {
 
         // Original content preserved, not overwritten
         let snapshot_file = session_dir.join("etc%2Fhosts");
-        assert_eq!(
-            std::fs::read_to_string(snapshot_file).unwrap(),
-            "first content"
-        );
+        assert_eq!(std::fs::read_to_string(snapshot_file).unwrap(), "first content");
     }
 
     #[test]
@@ -360,9 +342,7 @@ mod tests {
         // First store: create a snapshot
         {
             let mut store = SnapshotStore::open(session_dir.clone()).unwrap();
-            store
-                .ensure_snapshot(Path::new("/etc/hosts"), b"127.0.0.1")
-                .unwrap();
+            store.ensure_snapshot(Path::new("/etc/hosts"), b"127.0.0.1").unwrap();
         }
 
         // Second store (simulates new CLI invocation): should see existing snapshot
@@ -370,9 +350,7 @@ mod tests {
             let mut store = SnapshotStore::open(session_dir).unwrap();
             assert!(store.has_snapshot(Path::new("/etc/hosts")));
 
-            let created = store
-                .ensure_snapshot(Path::new("/etc/hosts"), b"new content")
-                .unwrap();
+            let created = store.ensure_snapshot(Path::new("/etc/hosts"), b"new content").unwrap();
             assert!(!created);
         }
     }
@@ -385,12 +363,8 @@ mod tests {
             SnapshotStore,
         ),
     ) {
-        store
-            .ensure_snapshot(Path::new("/etc/hosts"), b"hosts content")
-            .unwrap();
-        store
-            .ensure_snapshot(Path::new("/Users/me/.bashrc"), b"bashrc content")
-            .unwrap();
+        store.ensure_snapshot(Path::new("/etc/hosts"), b"hosts content").unwrap();
+        store.ensure_snapshot(Path::new("/Users/me/.bashrc"), b"bashrc content").unwrap();
 
         assert!(store.has_snapshot(Path::new("/etc/hosts")));
         assert!(store.has_snapshot(Path::new("/Users/me/.bashrc")));
@@ -410,7 +384,7 @@ mod tests {
 
     #[test]
     fn format_iso8601_produces_valid_format() {
-        let dt = OffsetDateTime::from_unix_timestamp(1700000000).unwrap();
+        let dt = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
         let formatted = format_iso8601(dt);
         assert_eq!(formatted.len(), 20);
         assert!(formatted.starts_with("2023-"));

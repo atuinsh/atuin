@@ -61,17 +61,14 @@ impl Importer for Nu {
             let current_timestamp = timestamp;
             timestamp += timestamp_increment;
 
-            let s = match std::str::from_utf8(b) {
-                Ok(s) => s,
-                Err(_) => continue, // we can skip past things like invalid utf8
+            // we can skip past things like invalid utf8
+            let Ok(s) = std::str::from_utf8(b) else {
+                continue;
             };
 
             let cmd: String = s.replace("<\\n>", "\n");
 
-            let entry = History::import()
-                .shell("nu")
-                .timestamp(current_timestamp)
-                .command(cmd);
+            let entry = History::import().shell("nu").timestamp(current_timestamp).command(cmd);
 
             h.push(entry.build().into()).await?;
         }

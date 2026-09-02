@@ -2,7 +2,9 @@ use atuin_common::encryption::paseto_v4;
 use atuin_domain::api::LoginRequest;
 use eyre::Result;
 
-use crate::{api_client, record::sqlite_store::SqliteStore, settings::Settings};
+use crate::api_client;
+use crate::record::sqlite_store::SqliteStore;
+use crate::settings::Settings;
 
 pub async fn login(
     settings: &Settings,
@@ -16,9 +18,7 @@ pub async fn login(
 
     let key_path = &settings.key_path;
 
-    if !key_path.exists() {
-        key.try_write_path(key_path)?;
-    } else {
+    if key_path.exists() {
         // we now know that the user has logged in specifying a key, AND that the key path
         // exists
 
@@ -34,6 +34,8 @@ pub async fn login(
             println!("Writing new key");
             key.overwrite_path(key_path)?;
         }
+    } else {
+        key.try_write_path(key_path)?;
     }
 
     let session = api_client::login(
@@ -43,10 +45,7 @@ pub async fn login(
     )
     .await?;
 
-    Settings::meta_store()
-        .await?
-        .save_session(&session.session)
-        .await?;
+    Settings::meta_store().await?.save_session(&session.session).await?;
 
     Ok(session.session)
 }

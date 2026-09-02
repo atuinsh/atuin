@@ -1,13 +1,11 @@
+use atuin_client::auth::{self, AuthClient, AuthResponse};
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::{Settings, SyncAuth};
+use atuin_common::encryption::paseto_v4;
 use clap::Parser;
 use eyre::{Result, bail};
 
 use super::login::or_user_input;
-use atuin_client::{
-    auth::{self, AuthClient, AuthResponse},
-    record::sqlite_store::SqliteStore,
-    settings::{Settings, SyncAuth},
-};
-use atuin_common::encryption::paseto_v4;
 
 #[derive(Parser, Debug)]
 pub struct Cmd {
@@ -37,8 +35,8 @@ impl Cmd {
             }
             SyncAuth::HubViaCli { .. } => {
                 println!(
-                    "You already have a sync session. \
-                     Run 'atuin login' to upgrade to full Hub authentication."
+                    "You already have a sync session. Run 'atuin login' to upgrade to full Hub \
+                     authentication."
                 );
                 println!("Run 'atuin logout' first if you want to register a new account.");
                 return Ok(());
@@ -48,17 +46,14 @@ impl Cmd {
 
         if settings.is_hub_sync() {
             let required_for_headless = 3;
-            let provided = [
-                self.username.is_some(),
-                self.email.is_some(),
-                self.password.is_some(),
-            ]
-            .iter()
-            .filter(|&b| *b)
-            .count();
+            let provided = [self.username.is_some(), self.email.is_some(), self.password.is_some()]
+                .iter()
+                .filter(|&b| *b)
+                .count();
             if provided < required_for_headless {
                 println!(
-                    "Username, password, and email are all required for headless registration. Continuing with interactive registration.\n"
+                    "Username, password, and email are all required for headless registration. \
+                     Continuing with interactive registration.\n"
                 );
             }
 
@@ -88,8 +83,9 @@ impl Cmd {
                                 "\nNote: Your account has not been fully migrated to Atuin Hub."
                             );
                             println!(
-                                "Sync will continue to work, but you can visit hub.atuin.sh \
-                                to create a new Hub account and link it to your existing CLI account."
+                                "Sync will continue to work, but you can visit hub.atuin.sh to \
+                                 create a new Hub account and link it to your existing CLI \
+                                 account."
                             );
                         }
                     }
@@ -101,10 +97,12 @@ impl Cmd {
                 let _key = paseto_v4::Key::try_load_or_generate(&settings.key_path)?;
 
                 println!(
-                    "Registration successful! Please make a note of your key (run 'atuin key') and keep it safe."
+                    "Registration successful! Please make a note of your key (run 'atuin key') \
+                     and keep it safe."
                 );
                 println!(
-                    "You will need it to log in on other devices, and we cannot help recover it if you lose it."
+                    "You will need it to log in on other devices, and we cannot help recover it \
+                     if you lose it."
                 );
             } else {
                 // Interactive registration: delegate to the browser OAuth flow.
@@ -126,10 +124,7 @@ impl Cmd {
 
             let username = or_user_input(self.username.clone(), "username");
             let email = or_user_input(self.email.clone(), "email");
-            let password = self
-                .password
-                .clone()
-                .unwrap_or_else(super::login::read_user_password);
+            let password = self.password.clone().unwrap_or_else(super::login::read_user_password);
 
             if password.is_empty() {
                 bail!("please provide a password");
@@ -150,10 +145,12 @@ impl Cmd {
             let _key = paseto_v4::Key::try_load_or_generate(&settings.key_path)?;
 
             println!(
-                "Registration successful! Please make a note of your key (run 'atuin key') and keep it safe."
+                "Registration successful! Please make a note of your key (run 'atuin key') and \
+                 keep it safe."
             );
             println!(
-                "You will need it to log in on other devices, and we cannot help recover it if you lose it."
+                "You will need it to log in on other devices, and we cannot help recover it if \
+                 you lose it."
             );
         }
 

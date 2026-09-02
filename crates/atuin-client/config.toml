@@ -14,11 +14,6 @@
 ## windows: %USERPROFILE%/.local/share/atuin/key
 # key_path = "~/.key"
 
-## where to store your auth session token, default is your system data directory
-## linux/mac: ~/.local/share/atuin/session
-## windows: %USERPROFILE%/.local/share/atuin/session
-# session_path = "~/.session"
-
 ## date format used, either "us" or "uk"
 # dialect = "us"
 
@@ -201,7 +196,7 @@ enter_accept = true
 # extra_headers = { "CF-Access-Client-Id" = "...", "CF-Access-Client-Secret" = "..." }
 
 ## Timeout (in seconds) for acquiring a local database connection (sqlite)
-# local_timeout = 5
+# local_timeout = 2
 
 ## Set this to true and Atuin will minimize motion in the UI - timers will not update live, etc.
 ## Alternatively, set env NO_MOTION=true

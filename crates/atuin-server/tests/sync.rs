@@ -1,15 +1,17 @@
-use atuin_client::api_client;
-use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::record::sync;
-use atuin_common::utils::uuid_v7;
-use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag};
-use atuin_server::{Settings as ServerSettings, launch_with_tcp_listener};
-use atuin_server_database::DbSettings;
-use atuin_server_sqlite::Sqlite;
-use futures_util::TryFutureExt;
-use rstest::{fixture, rstest};
 use std::env::temp_dir;
 use std::time::Duration;
+
+use atuin_client::api_client;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::record::sync::{ClientSource, SyncEngine};
+use atuin_common::encryption::paseto_v4;
+use atuin_common::utils::uuid_v7;
+use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag};
+use atuin_server::db::DbSettings;
+use atuin_server::{Settings as ServerSettings, launch_with_tcp_listener};
+use easy_cast::Conv;
+use futures_util::TryFutureExt;
+use rstest::{fixture, rstest};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -29,22 +31,18 @@ impl TestServer {
         let password = uuid_v7().as_simple().to_string();
         let email = format!("{}@example.com", uuid_v7().as_simple());
 
-        let resp = api_client::register(
-            &self.address,
-            &username,
-            &email,
-            &password,
-            &Default::default(),
-        )
-        .await
-        .unwrap();
+        let resp =
+            api_client::register(&self.address, &username, &email, &password, &Default::default())
+                .await
+                .unwrap();
 
         api_client::Client::new(
             self.address.clone(),
-            api_client::AuthToken::Token(resp.session),
+            &api_client::AuthToken::Token(resp.session),
             5,
             30,
             &Default::default(),
+            api_client::caps_client_anonymous(&self.address, &Default::default()).unwrap(),
         )
         .unwrap()
     }
@@ -79,8 +77,7 @@ async fn server() -> TestServer {
         register_webhook_url: None,
         register_webhook_username: String::new(),
         db_settings: DbSettings {
-            db_uri: format!("sqlite://{}", db.to_str().unwrap()),
-            read_db_uri: None,
+            db_uri: format!("sqlite://{}", db.to_str().unwrap()).parse().unwrap(),
         },
         metrics: atuin_server::settings::Metrics::default(),
         fake_version: None,
@@ -91,12 +88,9 @@ async fn server() -> TestServer {
     let addr = listener.local_addr().unwrap();
 
     let handle = tokio::spawn(async move {
-        if let Err(e) = launch_with_tcp_listener::<Sqlite>(
-            server_settings,
-            listener,
-            shutdown_rx.unwrap_or_else(|_| ()),
-        )
-        .await
+        if let Err(e) =
+            launch_with_tcp_listener(server_settings, listener, shutdown_rx.unwrap_or_else(|_| ()))
+                .await
         {
             panic!("error running server: {e:?}");
         }
@@ -110,6 +104,11 @@ async fn server() -> TestServer {
         shutdown: Some(shutdown_tx),
         handle,
     }
+}
+
+fn key() -> paseto_v4::Key {
+    // Arbitrary key; doesn't matter for these tests.
+    paseto_v4::Key::from([7u8; 32])
 }
 
 fn record(host: HostId, tag: &RecordTag, idx: RecordIdx) -> Record<EncryptedData> {
@@ -141,25 +140,28 @@ async fn download(
     let host = HostId(uuid_v7());
     let tag = RecordTag::Other(uuid_v7().as_simple().to_string());
 
-    let records: Vec<Record<EncryptedData>> = (0..=remote_max)
-        .map(|idx| record(host, &tag, idx))
-        .collect();
+    let records: Vec<Record<EncryptedData>> =
+        (0..=remote_max).map(|idx| record(host, &tag, idx)).collect();
 
     client.post_records(&records).await.unwrap();
 
-    let store = SqliteStore::new(":memory:", 2.0).await.unwrap();
+    let store = SqliteStore::in_memory(Duration::from_secs(2)).await.unwrap();
     if let Some(local_max) = local_max {
-        store
-            .push_batch(records.iter().take(local_max as usize + 1))
-            .await
-            .unwrap();
+        store.push_batch(records.iter().take(usize::conv(local_max) + 1)).await.unwrap();
     }
 
-    let (diff, _) = sync::diff(&client, &store).await.unwrap();
-    let operations = sync::operations(diff, &store).await.unwrap();
-    let (_, downloaded) = sync::sync_remote(&client, operations, &store, page_size)
+    let key = key();
+    let engine = SyncEngine::builder()
+        .store(store.clone())
+        .client_source(ClientSource::FromClient(client))
+        .build()
+        .connect()
         .await
-        .unwrap();
+        .unwrap()
+        .with_page_size(std::num::NonZeroU64::new(page_size).unwrap());
+    let (diff, _) = engine.diff().await.unwrap();
+    let operations = SyncEngine::operations(diff).unwrap();
+    let (_, downloaded) = engine.keyed(&key).sync_remote(operations).await.unwrap();
 
     let status = store.status().await.unwrap();
     let local_idx = *status.hosts.get(&host).unwrap().get(&tag).unwrap();
@@ -208,23 +210,27 @@ async fn upload(
     let records: Vec<Record<EncryptedData>> =
         (0..=local_max).map(|idx| record(host, &tag, idx)).collect();
 
-    let store = SqliteStore::new(":memory:", 2.0).await.unwrap();
+    let store = SqliteStore::in_memory(Duration::from_secs(2)).await.unwrap();
     store.push_batch(records.iter()).await.unwrap();
 
     if let Some(remote_max) = remote_max {
-        client
-            .post_records(&records[..=remote_max as usize])
-            .await
-            .unwrap();
+        client.post_records(&records[..=usize::conv(remote_max)]).await.unwrap();
     }
 
-    let (diff, _) = sync::diff(&client, &store).await.unwrap();
-    let operations = sync::operations(diff, &store).await.unwrap();
-    let (uploaded, _) = sync::sync_remote(&client, operations, &store, page_size)
+    let key = key();
+    let engine = SyncEngine::builder()
+        .store(store)
+        .client_source(ClientSource::FromClient(client))
+        .build()
+        .connect()
         .await
-        .unwrap();
+        .unwrap()
+        .with_page_size(std::num::NonZeroU64::new(page_size).unwrap());
+    let (diff, _) = engine.diff().await.unwrap();
+    let operations = SyncEngine::operations(diff).unwrap();
+    let (uploaded, _) = engine.keyed(&key).sync_remote(operations).await.unwrap();
 
-    let status = client.record_status().await.unwrap();
+    let status = engine.record_status().await.unwrap();
     let remote_idx = *status.hosts.get(&host).unwrap().get(&tag).unwrap();
 
     // The PR that added these tests also changed the type of `uploaded` from `i64` to `u64`; the

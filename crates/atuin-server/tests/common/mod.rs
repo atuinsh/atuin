@@ -1,14 +1,17 @@
-use std::{env, time::Duration};
+use std::env;
+use std::time::Duration;
 
 use atuin_client::api_client;
 use atuin_common::utils::uuid_v7;
+use atuin_server::db::DbSettings;
 use atuin_server::{Settings as ServerSettings, launch_with_tcp_listener};
-use atuin_server_database::DbSettings;
-use atuin_server_postgres::Postgres;
 use futures_util::TryFutureExt;
-use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
+use tokio::net::TcpListener;
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tracing::{Dispatch, dispatcher};
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt};
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
 
 pub async fn start_server(path: &str) -> (url::Url, oneshot::Sender<()>, JoinHandle<()>) {
     let formatting_layer = tracing_tree::HierarchicalLayer::default()
@@ -35,8 +38,7 @@ pub async fn start_server(path: &str) -> (url::Url, oneshot::Sender<()>, JoinHan
         register_webhook_url: None,
         register_webhook_username: String::new(),
         db_settings: DbSettings {
-            db_uri,
-            read_db_uri: None,
+            db_uri: db_uri.parse().expect("invalid ATUIN_DB_URI"),
         },
         metrics: atuin_server::settings::Metrics::default(),
         fake_version: None,
@@ -48,12 +50,9 @@ pub async fn start_server(path: &str) -> (url::Url, oneshot::Sender<()>, JoinHan
     let server = tokio::spawn(async move {
         let _tracing_guard = dispatcher::set_default(&dispatch);
 
-        if let Err(e) = launch_with_tcp_listener::<Postgres>(
-            server_settings,
-            listener,
-            shutdown_rx.unwrap_or_else(|_| ()),
-        )
-        .await
+        if let Err(e) =
+            launch_with_tcp_listener(server_settings, listener, shutdown_rx.unwrap_or_else(|_| ()))
+                .await
         {
             tracing::error!(error=?e, "server error");
             panic!("error running server: {e:?}");
@@ -82,12 +81,14 @@ pub async fn register_inner(
             .await
             .unwrap();
 
+    let caps = api_client::caps_client_anonymous(address, &Default::default()).unwrap();
     api_client::Client::new(
         address.clone(),
-        api_client::AuthToken::Token(registration_response.session),
+        &api_client::AuthToken::Token(registration_response.session),
         5,
         30,
         &Default::default(),
+        caps,
     )
     .unwrap()
 }
@@ -103,12 +104,14 @@ pub async fn login(address: &url::Url, username: String, password: String) -> ap
     .await
     .unwrap();
 
+    let caps = api_client::caps_client_anonymous(address, &Default::default()).unwrap();
     api_client::Client::new(
         address.clone(),
-        api_client::AuthToken::Token(login_response.session),
+        &api_client::AuthToken::Token(login_response.session),
         5,
         30,
         &Default::default(),
+        caps,
     )
     .unwrap()
 }

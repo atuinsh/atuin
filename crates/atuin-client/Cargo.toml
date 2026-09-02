@@ -4,18 +4,17 @@ edition = "2024"
 description = "client library for atuin"
 autobenches = false
 
-rust-version = { workspace = true }
-version = { workspace = true }
-authors = { workspace = true }
-license = { workspace = true }
-homepage = { workspace = true }
-repository = { workspace = true }
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+authors.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [features]
 default = ["sync", "hub", "daemon"]
-sync = ["reqwest"]
+sync = ["reqwest", "dep:reqwest-middleware"]
 hub = ["reqwest"]
 daemon = []
 check-update = []
@@ -24,84 +23,84 @@ check-update = []
 vendored-tls = ["reqwest?/native-tls-vendored"]
 
 [dependencies]
-derive_more = { workspace = true }
-tracing = { workspace = true }
+atuin-common = { workspace = true, features = ["os", "sqlite"] }
+atuin-domain = { workspace = true }
+
+async-stream = { workspace = true }
+async-trait = { workspace = true }
 base64 = { workspace = true }
-zeroize = { workspace = true }
-time = { workspace = true, features = ["macros", "formatting", "parsing"] }
 clap = { workspace = true }
-eyre = { workspace = true }
-directories = { workspace = true }
-uuid = { workspace = true }
-whoami = { workspace = true }
-interim = { workspace = true }
 config = { workspace = true }
+derive_more = { workspace = true }
+directories = { workspace = true }
+easy-cast = { workspace = true }
+enum_dispatch = { workspace = true }
+eyre = { workspace = true }
+fs-err = { workspace = true }
+futures = { workspace = true }
+humantime = { workspace = true }
+interim = { workspace = true }
+itertools = { workspace = true }
+libsqlite3-sys = { workspace = true }
+memchr = { workspace = true }
+minspan = { workspace = true }
+notify = { workspace = true }
+rand = { workspace = true }
+regex = { workspace = true }
+semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-url = { workspace = true }
-humantime = "2.1.0"
-enum_dispatch = { workspace = true }
-async-trait = { workspace = true }
-itertools = { workspace = true }
-rand = { workspace = true }
+serde_regex = { workspace = true }
+serde_with = { workspace = true }
 shellexpand = { workspace = true }
-sqlx = { workspace = true, features = ["sqlite", "regexp"] }
-minspan = "0.1.5"
-regex = { workspace = true }
-serde_regex = "1.1.0"
-fs-err = { workspace = true }
 sql-builder = { workspace = true }
-memchr = "2.7"
-rmp = { workspace = true }
-typed-builder = { workspace = true }
-tokio = { workspace = true }
-semver = { workspace = true }
+sqlx = { workspace = true, features = ["sqlite", "regexp"] }
 thiserror = { workspace = true }
-futures = "0.3"
-notify = "8"
-serde_with = "3.8.1"
+time = { workspace = true, features = ["macros", "formatting", "parsing"] }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-futures = { workspace = true }
+typed-builder = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+whoami = { workspace = true }
+zeroize = { workspace = true }
 
 # encryption
-rusty_paseto = { version = "0.8.0", default-features = false }
-rusty_paserk = { version = "0.5.0", default-features = false, features = [
-  "v4",
-  "serde",
-] }
+rusty_paserk = { workspace = true }
+rusty_paseto = { workspace = true }
 
 # sync
+indicatif = { workspace = true }
 reqwest = { workspace = true, optional = true }
-indicatif = "0.18.0"
+reqwest-middleware = { workspace = true, optional = true, features = ["json", "query"] }
 tiny-bip39 = { workspace = true }
 
 # theme
 crossterm = { workspace = true, features = ["serde"] }
-palette = { version = "0.7.5", features = ["serializing"] }
+palette = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 
-[dependencies.atuin-common]
-path = "../atuin-common"
-version = "18.20.0-beta.3"
-features = ["os"]
-
-[dependencies.atuin-domain]
-path = "../atuin-domain"
-version = "18.20.0-beta.3"
+# packfile
+zstd = { workspace = true }
+serde_bytes = { workspace = true }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["full"] }
-pretty_assertions = { workspace = true }
-rstest = { workspace = true }
-divan = { version = "5.0.1", package = "codspeed-divan-compat" }
-tempfile = "3"
-toml = "1.1"
-
 # This crate's tests require the `test-utils` feature in atuin-common.
-[dev-dependencies.atuin-common]
-path = "../atuin-common"
-version = "18.20.0-beta.3"
-features = ["test-utils"]
+atuin-common = { workspace = true, features = ["test-utils"] }
+divan = { workspace = true }
+pretty_assertions = { workspace = true }
+proptest = { workspace = true }
+rstest = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+toml = { workspace = true }
+wiremock = { workspace = true }
 
 [[bench]]
 name = "benchmarks"
 harness = false
+
+[lints]
+workspace = true

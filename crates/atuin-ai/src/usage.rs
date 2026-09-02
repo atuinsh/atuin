@@ -14,19 +14,19 @@ use reqwest::header::USER_AGENT;
 use serde::{Deserialize, Serialize};
 
 /// Cached usage older than this triggers a background refresh on TUI open.
-pub(crate) const REFRESH_AFTER: Duration = Duration::from_secs(60);
+pub const REFRESH_AFTER: Duration = Duration::from_secs(60);
 
 /// Used/limit pair in credits (billable tokens × model multiplier).
 /// Limits use the server's sentinels: -1 unlimited, 0 disabled.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct UsageBucket {
+pub struct UsageBucket {
     pub used: i64,
     pub limit: i64,
 }
 
 /// The user's credit totals against their limits for the current period.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct UsageSnapshot {
+pub struct UsageSnapshot {
     /// e.g. "calendar_monthly"
     pub period: String,
     /// RFC 3339 timestamp of the next period reset.
@@ -69,7 +69,7 @@ impl UsageSnapshot {
 
 /// Format a reset delta as its largest sensible unit: "4d", "23h", or "56m".
 /// Sub-minute deltas render as "1m" — "0m" would read as already reset.
-pub(crate) fn format_reset_delta(delta: Duration) -> String {
+pub fn format_reset_delta(delta: Duration) -> String {
     let minutes = delta.as_secs() / 60;
     if minutes >= 24 * 60 {
         format!("{}d", minutes / (24 * 60))
@@ -83,13 +83,13 @@ pub(crate) fn format_reset_delta(delta: Duration) -> String {
 /// Key for the local usage cache. The client never learns its hub user id,
 /// so rows are keyed by a hash of the auth token: a different login (or a
 /// rotated token) simply misses the cache and refetches.
-pub(crate) fn cache_key(token: &str) -> String {
+pub fn cache_key(token: &str) -> String {
     format!("{:016x}", xxhash_rust::xxh3::xxh3_64(token.as_bytes()))
 }
 
 /// Fetch current usage from the hub. Mirrors the `credits` object on the
 /// chat `done` event, for refreshing without starting a chat.
-pub(crate) async fn fetch_usage(endpoint: &reqwest::Url, token: &str) -> Result<UsageSnapshot> {
+pub async fn fetch_usage(endpoint: &reqwest::Url, token: &str) -> Result<UsageSnapshot> {
     let url = endpoint.append_path("api/cli/usage")?;
 
     let response = reqwest::Client::new()
@@ -106,16 +106,14 @@ pub(crate) async fn fetch_usage(endpoint: &reqwest::Url, token: &str) -> Result<
         eyre::bail!("usage request failed ({status})");
     }
 
-    response
-        .json::<UsageSnapshot>()
-        .await
-        .context("failed to parse usage response")
+    response.json::<UsageSnapshot>().await.context("failed to parse usage response")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     #[test]
     fn deserializes_server_payload() {
@@ -146,10 +144,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&snapshot).unwrap();
-        assert_eq!(
-            serde_json::from_str::<UsageSnapshot>(&json).unwrap(),
-            snapshot
-        );
+        assert_eq!(serde_json::from_str::<UsageSnapshot>(&json).unwrap(), snapshot);
     }
 
     #[test]

@@ -2,6 +2,7 @@ use atuin_client::settings::{Settings, UpdateChannel};
 use axoupdater::{AxoUpdater, UpdateRequest};
 use clap::Parser;
 use eyre::{Result, bail, eyre};
+use tracing::instrument;
 
 #[derive(Parser, Debug)]
 pub struct Cmd {
@@ -16,6 +17,7 @@ pub struct Cmd {
 }
 
 impl Cmd {
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(self, settings: &Settings) -> Result<()> {
         let current = env!("CARGO_PKG_VERSION");
 
@@ -40,7 +42,8 @@ impl Cmd {
             let current_exe = std::env::current_exe()?;
             let receipt_prefix = updater.install_prefix_root()?;
             bail!(
-                "This atuin binary ({}) is not the one the standalone installer installed to {}. Are multiple copies of atuin installed?",
+                "This atuin binary ({}) is not the one the standalone installer installed to {}. \
+                 Are multiple copies of atuin installed?",
                 current_exe.display(),
                 receipt_prefix,
             );

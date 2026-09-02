@@ -1,15 +1,15 @@
-use eyre::Result;
+use atuin_client::settings::Settings;
+use eyre::{Context, Result};
 
 use crate::components::history::HistoryGrpcService;
 use crate::components::search::SearchGrpcService;
 use crate::components::semantic::SemanticGrpcService;
-use crate::control::{ControlService, control_server::ControlServer};
+use crate::control::ControlService;
+use crate::control::control_server::ControlServer;
 use crate::daemon::DaemonHandle;
 use crate::history::history_server::HistoryServer;
 use crate::search::search_server::SearchServer;
 use crate::semantic::semantic_server::SemanticServer;
-
-use atuin_client::settings::Settings;
 
 /// How often to update the socket's modification time so it doesn't get automatically deleted by
 /// temporary file cleaners.
@@ -21,6 +21,7 @@ const SOCKET_KEEPALIVE_INTERVAL: std::time::Duration = std::time::Duration::from
 /// This starts the gRPC server in the background and returns immediately.
 /// The server will shut down when a ShutdownRequested event is received.
 #[cfg(unix)]
+#[allow(clippy::unused_async, reason = "needs to match the cfg(not(unix)) version")]
 pub async fn run_grpc_server(
     settings: Settings,
     history_service: HistoryServer<HistoryGrpcService>,
@@ -37,9 +38,10 @@ pub async fn run_grpc_server(
     let (uds, cleanup_path) = if cfg!(target_os = "linux") && settings.daemon.systemd_socket {
         #[cfg(target_os = "linux")]
         {
-            use eyre::{OptionExt, WrapErr};
             use std::os::unix::net::SocketAddr;
             use std::path::PathBuf;
+
+            use eyre::{OptionExt, WrapErr};
             tracing::info!("getting systemd socket");
             let listener = listenfd::ListenFd::from_env()
                 .take_unix_listener(0)?
@@ -66,7 +68,7 @@ pub async fn run_grpc_server(
                 Err(err) => {
                     tracing::warn!(
                         "could not detect systemd socket path, ensure that it's at the configured \
-                        path: {:?}, error: {err:?}",
+                         path: {:?}, error: {err:?}",
                         socket_path.as_path(),
                     );
                 }
@@ -76,10 +78,15 @@ pub async fn run_grpc_server(
         #[cfg(not(target_os = "linux"))]
         unreachable!()
     } else {
+        use atuin_common::path::DisplayRichExt;
+
         socket_path.create_default_dir_if_needed()?;
         tracing::info!("listening on unix socket {:?}", socket_path.as_path());
         (
-            UnixListener::bind(&socket_path)?,
+            UnixListener::bind(&socket_path).context(format!(
+                "reading socket: {}",
+                socket_path.display_rich().relative_to_cwd()
+            ))?,
             Some(socket_path.into_owned()),
         )
     };
@@ -88,7 +95,6 @@ pub async fn run_grpc_server(
 
     // Periodically update the socket's modification time so it doesn't get automatically deleted by
     // temporary file cleaners.
-    #[cfg(unix)]
     let socket_updater = cleanup_path.clone().map(|path| {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(SOCKET_KEEPALIVE_INTERVAL);
@@ -109,11 +115,10 @@ pub async fn run_grpc_server(
 
             match rx.recv().await {
                 Ok(DaemonEvent::ShutdownRequested) => break,
-                Ok(_) => continue,
+                Ok(_) => {}
                 Err(_) => break, // Channel closed
             }
         }
-        #[cfg(unix)]
         if let Some(handle) = socket_updater {
             handle.abort();
         }
@@ -176,7 +181,7 @@ pub async fn run_grpc_server(
         loop {
             match rx.recv().await {
                 Ok(DaemonEvent::ShutdownRequested) => break,
-                Ok(_) => continue,
+                Ok(_) => {}
                 Err(_) => break, // Channel closed
             }
         }

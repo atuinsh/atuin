@@ -1,60 +1,58 @@
 [package]
 name = "atuin-daemon"
 edition = "2024"
-version = { workspace = true }
 description = "The daemon crate for Atuin"
 
 authors.workspace = true
-rust-version.workspace = true
-license.workspace = true
 homepage.workspace = true
-repository.workspace = true
+license.workspace = true
 readme.workspace = true
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [dependencies]
-atuin-client = { path = "../atuin-client", version = "18.20.0-beta.3" }
-enum_dispatch = { workspace = true }
+atuin-client = { workspace = true }
+atuin-common = { workspace = true, features = ["os"] }
+atuin-domain = { workspace = true }
+atuin-dotfiles = { workspace = true }
+atuin-history = { workspace = true }
+dashmap = { workspace = true }
 derive_more = { workspace = true }
-atuin-dotfiles = { path = "../atuin-dotfiles", version = "18.20.0-beta.3" }
-atuin-history = { path = "../atuin-history", version = "18.20.0-beta.3" }
-
-time = { workspace = true }
-uuid = { workspace = true }
-tokio = { workspace = true }
-tower = { workspace = true }
+easy-cast = { workspace = true }
+enum_dispatch = { workspace = true }
 eyre = { workspace = true }
+frizbee = { workspace = true }
+futures = { workspace = true }
+hyper-util = { workspace = true }
+lasso = { workspace = true }
+parking_lot = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
+rand = { workspace = true }
+reqwest = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tonic = { workspace = true }
+tonic-prost = { workspace = true }
+tonic-types = { workspace = true }
+tower = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-
-dashmap = "6.1.0"
-lasso = { version = "0.7", features = ["multi-threaded"] }
-tonic-types = "0.14"
-tonic = "0.14"
-tonic-prost = "0.14"
-prost = "0.14"
-prost-types = "0.14"
-tokio-stream = { version = "0.1.14", features = ["net"] }
-futures = "0.3"
-hyper-util = "0.1"
-
-rand.workspace = true
-frizbee = { workspace = true }
-
-[dependencies.atuin-common]
-path = "../atuin-common"
-version = "18.20.0-beta.3"
-features = ["os"]
+uuid = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-listenfd = "1.0.1"
+listenfd = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 rstest = { workspace = true }
 
 [build-dependencies]
-protox = "0.9"
-tonic-build = "0.14"
-tonic-prost-build = "0.14"
+protox = { workspace = true }
+tonic-build = { workspace = true }
+tonic-prost-build = { workspace = true }
+
+[lints]
+workspace = true

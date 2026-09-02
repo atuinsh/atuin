@@ -1,10 +1,42 @@
-use super::{CapKey, Capability, CapsBundle, DuplicateCapability};
-use crate::api::CapabilitiesResponse;
+use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
 use parking_lot::RwLock;
 use serde::de::DeserializeOwned;
-use std::{collections::HashMap, sync::Arc};
 use tokio;
 use url::Url;
+
+use super::{CapKey, Capability, CapsBundle, DuplicateCapability};
+use crate::api::CapabilitiesResponse;
+
+/// The future an [`AuthHeaderProvider`] resolves an Authorization header with.
+pub type AuthHeaderFuture = Pin<Box<dyn Future<Output = Option<String>> + Send>>;
+
+/// Resolves the `Authorization` header value for each capability fetch.
+///
+/// Returning `None` fetches anonymously. Auth is resolved per fetch, not at
+/// construction, so a long-lived reader (e.g. the daemon's) follows login,
+/// logout, and token rotation without a rebuild.
+#[derive(Clone)]
+pub struct AuthHeaderProvider(Arc<dyn Fn() -> AuthHeaderFuture + Send + Sync>);
+
+impl AuthHeaderProvider {
+    pub fn new(f: impl Fn() -> AuthHeaderFuture + Send + Sync + 'static) -> Self {
+        Self(Arc::new(f))
+    }
+
+    async fn resolve(&self) -> Option<String> {
+        (self.0)().await
+    }
+}
+
+impl std::fmt::Debug for AuthHeaderProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AuthHeaderProvider")
+    }
+}
 
 /// Client-side capability set: advertises its own capabilities and can read the server's.
 ///
@@ -26,6 +58,8 @@ pub struct CapClient {
     capabilities_url: Url,
     /// Bare client used to fetch `capabilities_url`.
     http: reqwest::Client,
+    /// Per-fetch Authorization resolution; `None` always fetches anonymously.
+    auth: Option<AuthHeaderProvider>,
     warmed: tokio::sync::watch::Receiver<bool>,
 }
 
@@ -70,7 +104,22 @@ pub enum ServerSupportError {
 
 impl CapClient {
     /// Create a client that will negotiate against the given capabilities endpoint.
+    ///
+    /// Fetches anonymously; see [`CapClient::new_with_auth`] for per-user documents.
+    #[must_use]
     pub fn new(capabilities_url: Url, http: reqwest::Client) -> Arc<Self> {
+        Self::new_with_auth(capabilities_url, http, None)
+    }
+
+    /// Like [`CapClient::new`], but each capability fetch carries the
+    /// `Authorization` header the provider resolves at fetch time, letting the
+    /// server scope the advertised document to the current user.
+    #[must_use]
+    pub fn new_with_auth(
+        capabilities_url: Url,
+        http: reqwest::Client,
+        auth: Option<AuthHeaderProvider>,
+    ) -> Arc<Self> {
         let (tx, rx) = tokio::sync::watch::channel(false);
         let new = Arc::new(Self {
             own: CapsBundle::default(),
@@ -78,6 +127,7 @@ impl CapClient {
             fetching: tokio::sync::Mutex::new(()),
             capabilities_url,
             http,
+            auth,
             warmed: rx,
         });
 
@@ -131,20 +181,24 @@ impl CapClient {
 
     /// Whether our cached server token differs from `available` (or we have not fetched yet).
     fn is_stale(&self, available: &str) -> bool {
-        self.server
-            .read()
-            .as_ref()
-            .map(|caps| caps.version.as_str())
-            != Some(available)
+        self.server.read().as_ref().map(|caps| caps.version.as_str()) != Some(available)
     }
 
     /// Fetch and decode the server's capabilities document.
     async fn fetch_server_caps(&self) -> reqwest::Result<ServerCaps> {
-        let resp: CapabilitiesResponse = self
-            .http
-            .get(self.capabilities_url.clone())
+        let mut req = self.http.get(self.capabilities_url.clone());
+        if let Some(auth) = &self.auth
+            && let Some(header) = auth.resolve().await
+        {
+            req = req.header(reqwest::header::AUTHORIZATION, header);
+        }
+
+        let resp: CapabilitiesResponse = req
             .send()
             .await?
+            // Surface auth/server rejections (e.g. a 401 on an authenticated
+            // fetch) as their status instead of an opaque JSON decode error.
+            .error_for_status()?
             .json()
             .await?;
         Ok(ServerCaps::from(resp))
@@ -162,20 +216,20 @@ impl CapClient {
     ) -> Result<Option<C>, ServerSupportError> {
         let _ = self.warmed.clone().wait_for(|&done| done).await;
 
-        let server = self.server.read();
-        let Some(server) = server.as_ref() else {
+        let server_guard = self.server.read();
+        let Some(server) = server_guard.as_ref() else {
             return Err(ServerSupportError::NotFetched);
         };
-        let Some(raw) = server.caps.get(C::static_name()) else {
+        let Some(raw) = server.caps.get(C::static_name()).cloned() else {
             return Ok(None);
         };
 
-        serde_json::from_value(raw.clone())
-            .map(Some)
-            .map_err(|source| ServerSupportError::Malformed {
-                name: C::static_name(),
-                source,
-            })
+        // Release the server lock
+        drop(server_guard);
+        serde_json::from_value(raw).map(Some).map_err(|source| ServerSupportError::Malformed {
+            name: C::static_name(),
+            source,
+        })
     }
 
     /// Whether the server's capabilities have been fetched at least once.
@@ -194,11 +248,12 @@ impl CapClient {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::caps::{CapServer, CapabilitiesCap};
     use rstest::{fixture, rstest};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::*;
+    use crate::caps::{CapServer, CapabilitiesCap};
 
     /// A plain reqwest client for the network tests.
     #[fixture]
@@ -219,9 +274,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let caps_url: Url = format!("{}/api/v0/capabilities", server.uri())
-            .parse()
-            .unwrap();
+        let caps_url: Url = format!("{}/api/v0/capabilities", server.uri()).parse().unwrap();
         let client = CapClient::new(caps_url, http_client);
 
         // Nothing fetched yet.
@@ -237,9 +290,7 @@ mod tests {
     #[tokio::test]
     async fn client_observes_the_capability_the_server_advertises(http_client: reqwest::Client) {
         // Serve the exact wire body a real server would produce for the capabilities capability.
-        let advertised = CapServer::new()
-            .add(CapabilitiesCap { version: 1 })
-            .unwrap();
+        let advertised = CapServer::new().add(CapabilitiesCap { version: 1 }).unwrap();
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/v0/capabilities"))
@@ -247,9 +298,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let caps_url: Url = format!("{}/api/v0/capabilities", server.uri())
-            .parse()
-            .unwrap();
+        let caps_url: Url = format!("{}/api/v0/capabilities", server.uri()).parse().unwrap();
         let client = CapClient::new(caps_url, http_client);
 
         assert_eq!(

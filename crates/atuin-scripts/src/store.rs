@@ -1,8 +1,9 @@
-use eyre::{Result, eyre};
-
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4;
-use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx, RecordTag, RecordVersion};
+use atuin_domain::record::{
+    Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag, RecordVersion,
+};
+use eyre::{Result, eyre};
 use record::ScriptRecord;
 use script::Script;
 
@@ -19,8 +20,9 @@ pub struct ScriptStore {
 }
 
 impl ScriptStore {
+    #[must_use]
     pub fn new(store: SqliteStore, host_id: HostId, encryption_key: paseto_v4::Key) -> Self {
-        ScriptStore {
+        Self {
             store,
             host_id,
             encryption_key,
@@ -31,7 +33,7 @@ impl ScriptStore {
         let bytes = record.serialize()?;
         let idx = self
             .store
-            .last(self.host_id, &RecordTag::Script)
+            .last(&RecordSeriesKey::new(self.host_id, RecordTag::Script))
             .await?
             .map_or(0, |p| p.idx + 1);
 
@@ -45,9 +47,7 @@ impl ScriptStore {
 
         let id = record.id;
 
-        self.store
-            .push(&record.encrypt(&self.encryption_key))
-            .await?;
+        self.store.push(&record.encrypt(&self.encryption_key)).await?;
 
         Ok((id, idx))
     }
@@ -75,7 +75,7 @@ impl ScriptStore {
         let mut ret = Vec::with_capacity(records.len());
         let mut skipped = 0;
 
-        for record in records.into_iter() {
+        for record in records {
             // Skip records we can't decrypt or decode, rather than failing the entire build.
             let script = match record.version {
                 RecordVersion::V0 => record.decrypt(&self.encryption_key).and_then(|decrypted| {

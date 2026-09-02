@@ -11,10 +11,12 @@
 
 use std::sync::Arc;
 
-use atuin_client::{
-    database::Sqlite as HistoryDatabase, record::sqlite_store::SqliteStore, settings::Settings,
-};
+use atuin_client::api_client::caps_client;
+use atuin_client::database::Sqlite as HistoryDatabase;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
+use atuin_domain::caps::CapClient;
 use enum_dispatch::enum_dispatch;
 use eyre::{Context, Result};
 use tokio::sync::{RwLock, broadcast};
@@ -43,6 +45,9 @@ pub struct DaemonState {
     // Database handles
     history_db: HistoryDatabase,
     store: SqliteStore,
+
+    // Reads the server's advertised capabilities (e.g. the packfile record count).
+    caps: Arc<CapClient>,
 }
 
 // ============================================================================
@@ -97,6 +102,7 @@ impl DaemonHandle {
     /// Returns a receiver that will receive all events emitted after this call.
     /// Useful for components that need to listen for events outside of the
     /// normal `handle_event` callback flow.
+    #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<DaemonEvent> {
         self.state.event_tx.subscribe()
     }
@@ -137,6 +143,7 @@ impl DaemonHandle {
     }
 
     /// Get the encryption key.
+    #[must_use]
     pub fn encryption_key(&self) -> &paseto_v4::Key {
         &self.state.encryption_key
     }
@@ -144,13 +151,23 @@ impl DaemonHandle {
     // ---- Database ----
 
     /// Get a reference to the history database.
+    #[must_use]
     pub fn history_db(&self) -> &HistoryDatabase {
         &self.state.history_db
     }
 
     /// Get a reference to the record store.
+    #[must_use]
     pub fn store(&self) -> &SqliteStore {
         &self.state.store
+    }
+
+    // ---- Capabilities ----
+
+    /// Get the capability reader for the configured sync server.
+    #[must_use]
+    pub fn caps(&self) -> &Arc<CapClient> {
+        &self.state.caps
     }
 }
 
@@ -215,10 +232,7 @@ impl std::fmt::Debug for DaemonHandle {
 /// }
 /// ```
 #[enum_dispatch]
-#[allow(
-    async_fn_in_trait,
-    reason = "only used within our code and we don't need it to be Send"
-)]
+#[allow(async_fn_in_trait, reason = "only used within our code and we don't need it to be Send")]
 pub trait Component: Send + Sync + Into<AnyComponent> {
     /// Human-readable name for logging and debugging.
     fn name(&self) -> &'static str;
@@ -279,6 +293,7 @@ pub struct Daemon {
 
 impl Daemon {
     /// Create a new daemon builder.
+    #[must_use]
     pub fn builder(settings: Settings) -> DaemonBuilder {
         DaemonBuilder::new(settings)
     }
@@ -286,6 +301,7 @@ impl Daemon {
     /// Get a clone of the daemon handle.
     ///
     /// The handle can be used to emit events, access settings, etc.
+    #[must_use]
     pub fn handle(&self) -> DaemonHandle {
         self.handle.clone()
     }
@@ -322,10 +338,7 @@ impl Daemon {
                     self.dispatch_event(&event).await;
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(
-                        skipped = n,
-                        "event receiver lagged, some events were dropped"
-                    );
+                    tracing::warn!(skipped = n, "event receiver lagged, some events were dropped");
                 }
                 Err(broadcast::error::RecvError::Closed) => {
                     tracing::info!("event bus closed, stopping daemon");
@@ -407,6 +420,7 @@ pub struct DaemonBuilder {
 
 impl DaemonBuilder {
     /// Create a new daemon builder with the given settings.
+    #[must_use]
     pub fn new(settings: Settings) -> Self {
         Self {
             settings,
@@ -417,12 +431,14 @@ impl DaemonBuilder {
     }
 
     /// Set the record store.
+    #[must_use]
     pub fn store(mut self, store: SqliteStore) -> Self {
         self.store = Some(store);
         self
     }
 
     /// Set the history database.
+    #[must_use]
     pub fn history_db(mut self, db: HistoryDatabase) -> Self {
         self.history_db = Some(db);
         self
@@ -431,6 +447,7 @@ impl DaemonBuilder {
     /// Register a component.
     ///
     /// Components are started in registration order and stopped in reverse order.
+    #[must_use]
     pub fn component(mut self, component: impl Component) -> Self {
         self.components.push(component.into());
         self
@@ -439,11 +456,9 @@ impl DaemonBuilder {
     /// Build the daemon.
     ///
     /// This loads the encryption key and creates the daemon state.
-    pub async fn build(self) -> Result<Daemon> {
+    pub fn build(self) -> Result<Daemon> {
         let store = self.store.ok_or_else(|| eyre::eyre!("store is required"))?;
-        let history_db = self
-            .history_db
-            .ok_or_else(|| eyre::eyre!("history_db is required"))?;
+        let history_db = self.history_db.ok_or_else(|| eyre::eyre!("history_db is required"))?;
 
         // Load encryption key
         let encryption_key = paseto_v4::Key::try_load_or_generate(&self.settings.key_path)
@@ -452,6 +467,11 @@ impl DaemonBuilder {
         // Create the event bus
         let (event_tx, _) = broadcast::channel(64);
 
+        // One capability reader for the whole daemon: shared by the history component's packing
+        // path and injected into every sync tick's client, so the server is only polled by one
+        // warmer.
+        let caps = caps_client(&self.settings).context("failed to build the capability reader")?;
+
         // Create the shared state
         let state = Arc::new(DaemonState {
             event_tx,
@@ -459,6 +479,7 @@ impl DaemonBuilder {
             encryption_key,
             history_db,
             store,
+            caps,
         });
 
         // Create the handle (just a reference to the state)

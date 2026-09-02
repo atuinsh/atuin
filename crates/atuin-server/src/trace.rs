@@ -19,10 +19,8 @@ pub fn make_request_span(request: &Request) -> Span {
         .get::<MatchedPath>()
         .map_or_else(|| request.uri().path(), MatchedPath::as_str);
 
-    let client_ip = request
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|ConnectInfo(addr)| addr.ip());
+    let client_ip =
+        request.extensions().get::<ConnectInfo<SocketAddr>>().map(|ConnectInfo(addr)| addr.ip());
 
     let span = if route.ends_with("/healthz") {
         tracing::debug_span!(

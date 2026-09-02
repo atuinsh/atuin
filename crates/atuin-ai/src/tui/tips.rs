@@ -2,10 +2,11 @@
 //! line. One tip is pulled per turn and rides through both.
 
 use atuin_client::settings::Settings;
+use easy_cast::Conv;
 
 /// Facts a tip's relevance predicate may consult. Assembled fresh at each
 /// pull so predicates see current session state, not startup state.
-pub(crate) struct TipContext<'a> {
+pub struct TipContext<'a> {
     pub settings: &'a Settings,
     /// A model is pinned — via `ai.model` or /model this session.
     pub model_set: bool,
@@ -14,7 +15,7 @@ pub(crate) struct TipContext<'a> {
     pub has_context_files: Option<bool>,
 }
 
-pub(crate) struct Tip {
+pub struct Tip {
     /// Stable key — the hook for cross-session "already seen" persistence.
     #[cfg_attr(not(test), allow(dead_code))]
     pub id: &'static str,
@@ -24,7 +25,7 @@ pub(crate) struct Tip {
     pub relevant: Option<fn(&TipContext) -> bool>,
 }
 
-pub(crate) const TIPS: &[Tip] = &[
+pub const TIPS: &[Tip] = &[
     Tip {
         id: "esc-interrupt",
         text: "press Esc to interrupt a response",
@@ -33,13 +34,7 @@ pub(crate) const TIPS: &[Tip] = &[
     Tip {
         id: "ctrl-c-interrupt",
         text: "Ctrl+C interrupts a running command",
-        relevant: Some(|ctx| {
-            ctx.settings
-                .ai
-                .capabilities
-                .enable_command_execution
-                .unwrap_or(true)
-        }),
+        relevant: Some(|ctx| ctx.settings.ai.capabilities.enable_command_execution.unwrap_or(true)),
     },
     Tip {
         id: "model",
@@ -58,7 +53,8 @@ pub(crate) const TIPS: &[Tip] = &[
     },
     Tip {
         id: "send-cwd",
-        text: "You can include your working directory in AI requests automatically: `atuin config set ai.opening.send_cwd true`",
+        text: "You can include your working directory in AI requests automatically: `atuin config \
+               set ai.opening.send_cwd true`",
         relevant: Some(|ctx| {
             let ai = &ctx.settings.ai;
             !ai.opening.send_cwd.or(ai.send_cwd).unwrap_or(false)
@@ -71,7 +67,8 @@ pub(crate) const TIPS: &[Tip] = &[
     },
     Tip {
         id: "send-last-command",
-        text: "Send your last command to Atuin AI automatically with `atuin config set ai.opening.send_last_command true`",
+        text: "Send your last command to Atuin AI automatically with `atuin config set \
+               ai.opening.send_last_command true`",
         relevant: Some(|ctx| !ctx.settings.ai.opening.send_last_command.unwrap_or(false)),
     },
     Tip {
@@ -94,7 +91,7 @@ pub(crate) const TIPS: &[Tip] = &[
 /// Walks `TIPS` in order, skipping tips whose predicate says no. The start
 /// offset is randomized per session so long-running users don't always see
 /// the head of the list.
-pub(crate) struct TipRotation {
+pub struct TipRotation {
     cursor: usize,
 }
 
@@ -102,7 +99,7 @@ impl TipRotation {
     pub(crate) fn new() -> Self {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos() as usize)
+            .map(|d| usize::conv(d.subsec_nanos()))
             .unwrap_or(0);
         Self::starting_at(nanos % TIPS.len().max(1))
     }
@@ -165,10 +162,7 @@ mod tests {
             .filter(|t| t.relevant.is_none_or(|applies| applies(&c)))
             .map(|t| t.id)
             .collect();
-        assert!(
-            relevant_ids.len() >= 2,
-            "test needs at least two relevant tips"
-        );
+        assert!(relevant_ids.len() >= 2, "test needs at least two relevant tips");
 
         let mut rotation = TipRotation::starting_at(0);
         // Pull two full cycles: tips come back in order, then wrap.

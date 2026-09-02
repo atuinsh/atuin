@@ -2,25 +2,24 @@
 //!
 //! Handles periodic synchronization with the Atuin cloud server.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
+use std::time::Duration;
 
+use atuin_client::history::HistoryId;
+use atuin_client::history::store::HistoryStore;
+use atuin_client::record::sync::{ClientSource, SyncEngine};
+use atuin_client::settings::Settings;
+use atuin_dotfiles::store::AliasStore;
+use atuin_dotfiles::store::var::VarStore;
+use easy_cast::Conv;
 use eyre::Result;
-use futures::{StreamExt, TryStreamExt, stream::TryChunksError};
+use futures::StreamExt;
 use rand::Rng;
 use tokio::sync::mpsc;
 use tokio::time::{self, MissedTickBehavior};
 
-use atuin_client::{
-    history::{HistoryId, store::HistoryStore},
-    record::sync,
-    settings::Settings,
-};
-use atuin_dotfiles::store::{AliasStore, var::VarStore};
-
-use crate::{
-    daemon::{Component, DaemonHandle},
-    events::DaemonEvent,
-};
+use crate::daemon::{Component, DaemonHandle};
+use crate::events::DaemonEvent;
 
 /// Commands that can be sent to the sync task.
 enum SyncCommand {
@@ -54,6 +53,7 @@ pub struct SyncComponent {
 
 impl SyncComponent {
     /// Create a new sync component.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             task_handle: None,
@@ -149,6 +149,7 @@ async fn sync_loop(handle: DaemonHandle, mut cmd_rx: mpsc::Receiver<SyncCommand>
                 // Skip periodic ticks if auto_sync is disabled AND we're not retrying
                 // a previous failure. Retries must continue regardless of auto_sync.
                 if !settings.auto_sync && sync_state == SyncState::Idle {
+                    drop(settings);
                     tracing::debug!("auto_sync disabled, skipping periodic sync tick");
                     continue;
                 }
@@ -211,13 +212,29 @@ async fn do_sync_tick(
         }
     };
 
+    if let Err(e) = handle.caps().refresh().await {
+        tracing::debug!("capability refresh failed, keeping cached document: {e}");
+    }
+
     if !logged_in {
         tracing::debug!("not logged in, skipping sync tick");
         return SyncState::Idle;
     }
 
     // Perform the sync
-    let res = sync::sync(settings, handle.store(), handle.encryption_key()).await;
+    let res = async {
+        let engine = SyncEngine::builder()
+            .store(handle.store().clone())
+            .client_source(ClientSource::FromSettings {
+                settings,
+                caps: Some(handle.caps().clone()),
+            })
+            .build()
+            .connect()
+            .await?;
+        engine.keyed(handle.encryption_key()).sync().await
+    }
+    .await;
 
     match res {
         Err(e) => {
@@ -236,11 +253,10 @@ async fn do_sync_tick(
                 new_interval = max_interval;
             }
 
-            *ticker = time::interval_at(
-                tokio::time::Instant::now() + Duration::from_secs(new_interval as u64),
-                time::Duration::from_secs(new_interval as u64),
-            );
-            ticker.reset_after(time::Duration::from_secs(new_interval as u64));
+            let backoff =
+                Duration::try_from_secs_f64(new_interval).unwrap_or_else(|_| ticker.period());
+            *ticker = time::interval_at(tokio::time::Instant::now() + backoff, backoff);
+            ticker.reset_after(backoff);
             ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
             tracing::error!("backing off, next sync tick in {new_interval}");
@@ -248,45 +264,36 @@ async fn do_sync_tick(
             SyncState::Retrying
         }
         Ok((uploaded_count, downloaded_records)) => {
-            // Controls how large of a Vec<History> we should try to process at a time.
-            // This is used limit how much memory we use at a time.
-            //
-            // An initial sync (on backfill, eg.), risks being dozens of GB of RAM
-            const HISTORY_BATCH_SIZE: usize = 5000;
-
             tracing::info!(
                 uploaded = uploaded_count,
                 downloaded = downloaded_records.len(),
                 "sync complete"
             );
 
-            let batches = history_store
-                .incremental_build(handle.history_db(), &downloaded_records)
-                // intentional try_chunks -- legacy behavior was to abort on the first error.
-                .try_chunks(HISTORY_BATCH_SIZE);
+            // `incremental_build` already yields in bounded batches - an initial sync (on
+            // backfill, eg.) risks being dozens of GB of RAM otherwise.
+            let batches = history_store.incremental_build(handle.history_db(), &downloaded_records);
             futures::pin_mut!(batches);
 
             while let Some(batch) = batches.next().await {
-                let (histories, failure) = match batch {
-                    Ok(histories) => (histories, None),
-                    Err(TryChunksError(histories, e)) => (histories, Some(e)),
-                };
-
-                if !histories.is_empty() {
-                    // Only the IDs go on the bus; the rows themselves are already in sqlite.
-                    let ids: Arc<[HistoryId]> = histories.iter().map(|h| h.id.clone()).collect();
-                    handle.emit(DaemonEvent::HistorySynced(ids));
-                }
-
-                if let Some(e) = failure {
-                    tracing::error!("failed to build history from downloaded records: {e}");
-                    break;
+                match batch {
+                    Ok(histories) if !histories.is_empty() => {
+                        // Only the IDs go on the bus; the rows themselves are already in sqlite.
+                        let ids: Arc<[HistoryId]> = histories.iter().map(|h| h.id).collect();
+                        handle.emit(DaemonEvent::HistorySynced(ids));
+                    }
+                    Ok(_) => {}
+                    // Legacy behavior was to abort on the first error.
+                    Err(e) => {
+                        tracing::error!("failed to build history from downloaded records: {e}");
+                        break;
+                    }
                 }
             }
 
             // Emit sync completed event
             handle.emit(DaemonEvent::SyncCompleted {
-                uploaded: uploaded_count as usize,
+                uploaded: usize::conv(uploaded_count),
                 downloaded: downloaded_records.len(),
             });
 

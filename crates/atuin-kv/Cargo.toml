@@ -1,32 +1,34 @@
 [package]
 name = "atuin-kv"
 edition = "2024"
-version = { workspace = true }
 description = "The kv crate for Atuin"
 
 authors.workspace = true
-rust-version.workspace = true
-license.workspace = true
 homepage.workspace = true
-repository.workspace = true
+license.workspace = true
 readme.workspace = true
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [dependencies]
-atuin-client = { path = "../atuin-client", version = "18.20.0-beta.3" }
-atuin-common = { path = "../atuin-common", version = "18.20.0-beta.3" }
-atuin-domain = { path = "../atuin-domain", version = "18.20.0-beta.3" }
-derive_more = { workspace = true }
+atuin-client = { workspace = true }
+atuin-common = { workspace = true, features = ["sqlite"] }
+atuin-domain = { workspace = true }
 
+derive_more = { workspace = true }
+eyre = { workspace = true }
+pretty_assertions = { workspace = true }
+rmp = { workspace = true }
+semver = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-rmp = { version = "0.8.14" }
-eyre = { workspace = true }
-tokio = { workspace = true }
 typed-builder = { workspace = true }
-pretty_assertions = { workspace = true }
-sqlx = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }
+
+[lints]
+workspace = true

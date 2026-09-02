@@ -1,12 +1,15 @@
 use std::ffi::OsString;
 use std::io::Read;
 use std::path::PathBuf;
+use std::str::FromStr;
 
+use atuin_client::history::{AuthorKind, HistoryId};
 use atuin_client::settings::Settings;
 use atuin_common::utils::home_dir;
 use clap::{Parser, Subcommand};
 use eyre::{Result, bail};
 use serde_json::Value;
+use tracing::instrument;
 
 use super::history;
 
@@ -46,8 +49,7 @@ enum PathRoot {
 /// empty value as unset. Taking it literally would resolve to a relative path
 /// and install under the current directory, where the agent never looks.
 fn xdg_config_home(var: Option<OsString>) -> PathBuf {
-    var.filter(|value| !value.is_empty())
-        .map_or_else(|| home_dir().join(".config"), PathBuf::from)
+    var.filter(|value| !value.is_empty()).map_or_else(|| home_dir().join(".config"), PathBuf::from)
 }
 
 struct AgentSpec {
@@ -107,16 +109,13 @@ struct Agent(&'static AgentSpec);
 
 impl Agent {
     fn from_name(name: &str) -> Result<Self> {
-        AGENTS
-            .iter()
-            .copied()
-            .find(|spec| spec.aliases.contains(&name))
-            .map(Self)
-            .ok_or_else(|| {
+        AGENTS.iter().copied().find(|spec| spec.aliases.contains(&name)).map(Self).ok_or_else(
+            || {
                 eyre::eyre!(
                     "unknown agent: {name}. Supported agents: claude-code, codex, opencode, pi"
                 )
-            })
+            },
+        )
     }
 
     fn actor_name(&self) -> &'static str {
@@ -159,6 +158,7 @@ pub struct Cmd {
 }
 
 impl Cmd {
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(self, settings: &Settings) -> Result<()> {
         match (self.action, self.agent) {
             (Some(Action::Install { agent }), None) => install(&agent),
@@ -182,7 +182,8 @@ async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
 
     if let InstallKind::Extension { reload_hint, .. } = agent.install_kind() {
         bail!(
-            "`atuin hook {agent_name}` is not supported. Use `atuin hook install {agent_name}`. {reload_hint}"
+            "`atuin hook {agent_name}` is not supported. Use `atuin hook install {agent_name}`. \
+             {reload_hint}"
         );
     }
 
@@ -203,19 +204,19 @@ async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
                 settings,
                 &command,
                 Some(agent.actor_name()),
+                Some(AuthorKind::Agent),
                 intent.as_deref(),
             )
             .await?
             {
-                std::fs::write(id_file_path(&tool_use_id), &history_id)?;
+                std::fs::write(id_file_path(&tool_use_id), history_id.to_string())?;
             }
         }
         Some(HookEvent::End { tool_use_id, exit }) => {
             let id_path = id_file_path(&tool_use_id);
 
             if let Ok(history_id) = std::fs::read_to_string(&id_path) {
-                let history_id = history_id.trim();
-                if !history_id.is_empty() {
+                if let Ok(history_id) = HistoryId::from_str(history_id.trim()) {
                     let _ = history::end_history_entry(settings, history_id, exit, None).await;
                 }
                 let _ = std::fs::remove_file(&id_path);
@@ -320,14 +321,11 @@ fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
             .ok_or_else(|| eyre::eyre!("hooks.{event_type} is not an array"))?;
 
         let already_installed = arr.iter().any(|entry| {
-            entry
-                .get("hooks")
-                .and_then(Value::as_array)
-                .is_some_and(|hooks| {
-                    hooks.iter().any(|hook| {
-                        hook.get("command").and_then(Value::as_str) == Some(hook_command)
-                    })
-                })
+            entry.get("hooks").and_then(Value::as_array).is_some_and(|hooks| {
+                hooks
+                    .iter()
+                    .any(|hook| hook.get("command").and_then(Value::as_str) == Some(hook_command))
+            })
         });
 
         if already_installed {
@@ -347,23 +345,19 @@ fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{
-        Atuin,
-        command::{AtuinCmd, client},
-    };
     use atuin_client::history::is_known_agent;
     use clap::Parser;
     use rstest::rstest;
+
+    use super::*;
+    use crate::Atuin;
+    use crate::command::{AtuinCmd, client};
 
     #[test]
     fn parse_hook_agent_command() {
         let cmd = Cmd::try_parse_from(["hook", "codex"]).unwrap();
 
-        assert!(matches!(
-            (cmd.action, cmd.agent.as_deref()),
-            (None, Some("codex"))
-        ));
+        assert!(matches!((cmd.action, cmd.agent.as_deref()), (None, Some("codex"))));
     }
 
     #[rstest]
@@ -385,10 +379,7 @@ mod tests {
     fn agent_from_name_supports_extension_agents(#[case] agent_name: &str) {
         let agent = Agent::from_name(agent_name).unwrap();
         assert_eq!(agent.actor_name(), agent_name);
-        assert!(matches!(
-            agent.install_kind(),
-            InstallKind::Extension { .. }
-        ));
+        assert!(matches!(agent.install_kind(), InstallKind::Extension { .. }));
     }
 
     /// An agent missing from `KNOWN_AGENTS` would be installable but invisible
@@ -426,10 +417,7 @@ mod tests {
         let root = xdg_config_home(std::env::var_os("XDG_CONFIG_HOME"));
         let installed = agent.path(extension_path);
 
-        assert!(
-            installed.starts_with(&root),
-            "{installed:?} is not under {root:?}"
-        );
+        assert!(installed.starts_with(&root), "{installed:?} is not under {root:?}");
         assert!(installed.ends_with("opencode/plugins/atuin.ts"));
     }
 

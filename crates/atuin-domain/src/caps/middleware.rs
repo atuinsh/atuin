@@ -57,16 +57,13 @@ impl Middleware for CapMiddleware {
         // rather than panicking the request path.
         let known = self.caps.known_token();
         if let Some(value) = known.as_deref().and_then(|t| HeaderValue::from_str(t).ok()) {
-            req.headers_mut()
-                .insert(HeaderName::from_static(KNOWN_HEADER), value);
+            req.headers_mut().insert(HeaderName::from_static(KNOWN_HEADER), value);
         }
 
         // In `Error` mode, ask the server to reject a stale token rather than serve the request.
         if self.on_mismatch == CapMismatch::Error {
-            req.headers_mut().insert(
-                HeaderName::from_static(ENFORCE_HEADER),
-                HeaderValue::from_static("1"),
-            );
+            req.headers_mut()
+                .insert(HeaderName::from_static(ENFORCE_HEADER), HeaderValue::from_static("1"));
         }
 
         let response = next.run(req, ext).await?;
@@ -112,21 +109,19 @@ impl CapabilitiesExt for Client {
         caps: Arc<CapClient>,
         on_mismatch: CapMismatch,
     ) -> ClientWithMiddleware {
-        let middleware = CapMiddleware::builder()
-            .caps(caps)
-            .on_mismatch(on_mismatch)
-            .build();
+        let middleware = CapMiddleware::builder().caps(caps).on_mismatch(on_mismatch).build();
         ClientBuilder::new(self).with(middleware).build()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::caps::CapClient;
     use rstest::{fixture, rstest};
     use wiremock::matchers::{header, header_exists, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::*;
+    use crate::caps::CapClient;
 
     /// A plain reqwest client for the network tests.
     #[fixture]
@@ -203,9 +198,7 @@ mod tests {
     }
 
     fn cap_client(server: &MockServer) -> Arc<CapClient> {
-        let caps_url = format!("{}/api/v0/capabilities", server.uri())
-            .parse()
-            .unwrap();
+        let caps_url = format!("{}/api/v0/capabilities", server.uri()).parse().unwrap();
         CapClient::new(caps_url, reqwest::Client::new())
     }
 
@@ -219,11 +212,7 @@ mod tests {
         let client = http_client.with_capabilities(cap_client(&server), CapMismatch::Continue);
 
         // Our token is unknown -> stale, but the server serves the request anyway.
-        let response = client
-            .get(format!("{}/protected", server.uri()))
-            .send()
-            .await
-            .unwrap();
+        let response = client.get(format!("{}/protected", server.uri())).send().await.unwrap();
         assert_eq!(response.status(), 200);
         assert_eq!(response.text().await.unwrap(), "ok");
 
@@ -241,11 +230,7 @@ mod tests {
         let server = negotiating_server.await;
         let client = http_client.with_capabilities(cap_client(&server), CapMismatch::Error);
 
-        let response = client
-            .get(format!("{}/protected", server.uri()))
-            .send()
-            .await
-            .unwrap();
+        let response = client.get(format!("{}/protected", server.uri())).send().await.unwrap();
         assert_eq!(response.status(), 412);
 
         // The only caps fetch is the eager warm-up on construction; `Error` mode adds no refresh.
@@ -262,9 +247,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(404))
             .mount(&server)
             .await;
-        let caps_url = format!("{}/api/v0/capabilities", server.uri())
-            .parse()
-            .unwrap();
+        let caps_url = format!("{}/api/v0/capabilities", server.uri()).parse().unwrap();
 
         let middleware = CapMiddleware::builder()
             .caps(CapClient::new(caps_url, http_client.clone()))
@@ -272,11 +255,7 @@ mod tests {
             .build();
         let client = ClientBuilder::new(http_client).with(middleware).build();
 
-        let response = client
-            .get(format!("{}/missing", server.uri()))
-            .send()
-            .await
-            .unwrap();
+        let response = client.get(format!("{}/missing", server.uri())).send().await.unwrap();
 
         assert_eq!(response.status(), 404);
         // The eager warm-up is the only caps fetch; a plain 404 adds no further refresh.
@@ -299,9 +278,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(412))
             .mount(&server)
             .await;
-        let caps_url = format!("{}/api/v0/capabilities", server.uri())
-            .parse()
-            .unwrap();
+        let caps_url = format!("{}/api/v0/capabilities", server.uri()).parse().unwrap();
 
         let middleware = CapMiddleware::builder()
             .caps(CapClient::new(caps_url, http_client.clone()))
@@ -309,11 +286,7 @@ mod tests {
             .build();
         let client = ClientBuilder::new(http_client).with(middleware).build();
 
-        let response = client
-            .get(format!("{}/precondition", server.uri()))
-            .send()
-            .await
-            .unwrap();
+        let response = client.get(format!("{}/precondition", server.uri())).send().await.unwrap();
 
         assert_eq!(response.status(), 412);
         // The eager warm-up is the only caps fetch; a 412 without the caps header adds no refresh.
@@ -334,11 +307,7 @@ mod tests {
         let server = negotiating_server.await;
         let client = http_client.with_capabilities(cap_client(&server), CapMismatch::Continue);
 
-        let response = client
-            .get(format!("{}/protected", server.uri()))
-            .send()
-            .await
-            .unwrap();
+        let response = client.get(format!("{}/protected", server.uri())).send().await.unwrap();
 
         assert_eq!(response.status(), 200);
         assert_eq!(response.text().await.unwrap(), "ok");
@@ -357,9 +326,8 @@ mod tests {
         for _ in 0..20 {
             let client = client.clone();
             let url = format!("{}/protected", server.uri());
-            handles.push(tokio::spawn(async move {
-                client.get(url).send().await.unwrap().status()
-            }));
+            handles
+                .push(tokio::spawn(async move { client.get(url).send().await.unwrap().status() }));
         }
         for handle in handles {
             assert_eq!(handle.await.unwrap(), 200);

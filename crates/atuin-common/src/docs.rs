@@ -9,6 +9,7 @@
 pub const VERSION: &str = version_segment(env!("CARGO_PKG_VERSION"));
 
 /// A URL for `path` (e.g. `guide/sync/#login`) in this build's documentation.
+#[must_use]
 pub fn url(path: &str) -> String {
     format!("https://docs.atuin.sh/{VERSION}/{path}")
 }
@@ -44,8 +45,9 @@ const fn version_segment(version: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     #[rstest]
     #[case::stable_patch_zero("18.17.0", "18.17")]

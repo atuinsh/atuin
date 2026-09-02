@@ -8,18 +8,17 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use atuin_client::history::{History, HistoryId};
+use easy_cast::Conv;
 use eyre::Result;
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{Level, instrument};
 
-use crate::{
-    daemon::{Component, DaemonHandle},
-    events::DaemonEvent,
-    semantic::{
-        CommandCapture, CommandOutputReply, CommandOutputRequest, OutputLine, RecordCommandsReply,
-        semantic_server::{Semantic as SemanticSvc, SemanticServer},
-    },
+use crate::daemon::{Component, DaemonHandle};
+use crate::events::DaemonEvent;
+use crate::semantic::semantic_server::{Semantic as SemanticSvc, SemanticServer};
+use crate::semantic::{
+    CommandCapture, CommandOutputReply, CommandOutputRequest, OutputLine, RecordCommandsReply,
 };
 
 const MAX_SESSIONS: usize = 20;
@@ -84,6 +83,7 @@ struct SemanticCommandRecord {
 }
 
 impl SemanticComponent {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             inner: Arc::new(SemanticComponentInner {
@@ -92,6 +92,7 @@ impl SemanticComponent {
         }
     }
 
+    #[must_use]
     pub fn grpc_service(&self) -> SemanticServer<SemanticGrpcService> {
         SemanticServer::new(SemanticGrpcService {
             inner: self.inner.clone(),
@@ -137,6 +138,7 @@ impl Component for SemanticComponent {
 }
 
 impl SemanticComponentInner {
+    #[must_use]
     async fn record_capture(&self, capture: CommandCapture) -> bool {
         let mut state = self.state.lock().await;
         state.record_capture(capture)
@@ -154,6 +156,7 @@ impl SemanticComponentInner {
 }
 
 impl SemanticState {
+    #[must_use]
     fn record_capture(&mut self, mut capture: CommandCapture) -> bool {
         let Some(history_id) = history_id_from_str(capture.history_id.as_deref()) else {
             tracing::debug!(
@@ -166,7 +169,7 @@ impl SemanticState {
             return false;
         };
 
-        let history = take_pending_history(&mut self.pending_histories, &history_id);
+        let history = take_pending_history(&mut self.pending_histories, history_id);
         let Some(session_id) = capture
             .session_id
             .as_deref()
@@ -191,25 +194,22 @@ impl SemanticState {
         capture.history_id = Some(history_id.to_string());
         capture.session_id = Some(session_id.to_string());
         if capture.output_observed_bytes == 0 {
-            capture.output_observed_bytes = capture.output.len() as u64;
+            capture.output_observed_bytes = u64::conv(capture.output.len());
         }
 
         let record = SemanticCommandRecord { capture, history };
         log_record(&record, "recorded semantic command capture");
-        self.push_record(session_id, history_id, record);
+        self.push_record(&session_id, history_id, record);
         true
     }
 
     fn record_history(&mut self, history: History) {
-        let history_id = history.id.clone();
+        let history_id = history.id;
 
         if let Some(capture_ref) = self.history_index.get(&history_id).cloned() {
             if let Some(stored) = self.stored_capture_mut(&capture_ref) {
                 stored.record.history = Some(history);
-                log_record(
-                    &stored.record,
-                    "associated semantic command capture with history",
-                );
+                log_record(&stored.record, "associated semantic command capture with history");
                 return;
             }
 
@@ -246,22 +246,17 @@ impl SemanticState {
         capture_ref: &CaptureRef,
         ranges: &[crate::semantic::OutputRange],
     ) -> Option<CommandOutputReply> {
-        let stored = self
-            .sessions
-            .get(&capture_ref.session_id)?
-            .stored_capture(capture_ref.capture_id)?;
+        let stored =
+            self.sessions.get(&capture_ref.session_id)?.stored_capture(capture_ref.capture_id)?;
         let output = &stored.record.capture.output;
-        let output_observed_bytes = stored
-            .record
-            .capture
-            .output_observed_bytes
-            .max(output.len() as u64);
+        let output_observed_bytes =
+            stored.record.capture.output_observed_bytes.max(u64::conv(output.len()));
 
         Some(CommandOutputReply {
             found: true,
             output: String::new(),
-            total_bytes: output.len() as u64,
-            total_lines: output.lines().count() as u64,
+            total_bytes: u64::conv(output.len()),
+            total_lines: u64::conv(output.lines().count()),
             lines: select_output_ranges(output, ranges),
             output_truncated: stored.record.capture.output_truncated,
             output_observed_bytes,
@@ -270,15 +265,15 @@ impl SemanticState {
 
     fn push_record(
         &mut self,
-        session_id: SessionId,
+        session_id: &SessionId,
         history_id: HistoryId,
         record: SemanticCommandRecord,
     ) {
-        self.touch_session(&session_id);
+        self.touch_session(session_id);
 
         let (capture_id, evicted) = {
             let session = self.sessions.entry(session_id.clone()).or_default();
-            session.push(history_id.clone(), record)
+            session.push(history_id, record)
         };
 
         let capture_ref = CaptureRef {
@@ -289,8 +284,8 @@ impl SemanticState {
 
         for evicted in evicted {
             self.remove_history_index_if_matches(
-                &session_id,
-                &evicted.history_id,
+                session_id,
+                evicted.history_id,
                 evicted.capture_id,
             );
         }
@@ -315,7 +310,7 @@ impl SemanticState {
             };
 
             for stored in session.records {
-                self.remove_history_index_if_matches(&session_id, &stored.history_id, stored.id);
+                self.remove_history_index_if_matches(&session_id, stored.history_id, stored.id);
             }
         }
     }
@@ -323,48 +318,36 @@ impl SemanticState {
     fn remove_history_index_if_matches(
         &mut self,
         session_id: &SessionId,
-        history_id: &HistoryId,
+        history_id: HistoryId,
         capture_id: CaptureId,
     ) {
-        if self
-            .history_index
-            .get(history_id)
-            .is_some_and(|capture_ref| {
-                &capture_ref.session_id == session_id && capture_ref.capture_id == capture_id
-            })
-        {
-            self.history_index.remove(history_id);
+        if self.history_index.get(&history_id).is_some_and(|capture_ref| {
+            &capture_ref.session_id == session_id && capture_ref.capture_id == capture_id
+        }) {
+            self.history_index.remove(&history_id);
         }
     }
 
     fn stored_capture_mut(&mut self, capture_ref: &CaptureRef) -> Option<&mut StoredCapture> {
-        self.sessions
-            .get_mut(&capture_ref.session_id)?
-            .stored_capture_mut(capture_ref.capture_id)
+        self.sessions.get_mut(&capture_ref.session_id)?.stored_capture_mut(capture_ref.capture_id)
     }
 
     fn record_count(&self) -> usize {
-        self.sessions
-            .values()
-            .map(|session| session.records.len())
-            .sum()
+        self.sessions.values().map(|session| session.records.len()).sum()
     }
 }
 
 impl SessionCaptures {
+    #[must_use]
     fn push(
         &mut self,
         history_id: HistoryId,
         record: SemanticCommandRecord,
     ) -> (CaptureId, Vec<EvictedCapture>) {
-        self.push_with_limits(
-            history_id,
-            record,
-            MAX_COMMANDS_PER_SESSION,
-            MAX_BYTES_PER_SESSION,
-        )
+        self.push_with_limits(history_id, record, MAX_COMMANDS_PER_SESSION, MAX_BYTES_PER_SESSION)
     }
 
+    #[must_use]
     fn push_with_limits(
         &mut self,
         history_id: HistoryId,
@@ -383,12 +366,10 @@ impl SessionCaptures {
             record,
         });
 
-        (
-            capture_id,
-            self.evict_to_limits(max_commands, max_output_bytes),
-        )
+        (capture_id, self.evict_to_limits(max_commands, max_output_bytes))
     }
 
+    #[must_use]
     fn evict_to_limits(
         &mut self,
         max_commands: usize,
@@ -413,9 +394,7 @@ impl SessionCaptures {
     }
 
     fn stored_capture_mut(&mut self, capture_id: CaptureId) -> Option<&mut StoredCapture> {
-        self.records
-            .iter_mut()
-            .find(|record| record.id == capture_id)
+        self.records.iter_mut().find(|record| record.id == capture_id)
     }
 }
 
@@ -478,25 +457,19 @@ impl SemanticSvc for SemanticGrpcService {
 }
 
 fn history_id_from_str(value: Option<&str>) -> Option<HistoryId> {
-    let value = value?.trim();
-    (!value.is_empty()).then(|| HistoryId(value.to_string()))
+    value?.trim().parse().ok()
 }
 
 fn take_pending_history(
     histories: &mut VecDeque<History>,
-    history_id: &HistoryId,
+    history_id: HistoryId,
 ) -> Option<History> {
-    let index = histories
-        .iter()
-        .position(|history| &history.id == history_id)?;
+    let index = histories.iter().position(|history| history.id == history_id)?;
     histories.remove(index)
 }
 
 fn push_pending_history(histories: &mut VecDeque<History>, history: History) {
-    if let Some(index) = histories
-        .iter()
-        .position(|pending| pending.id == history.id)
-    {
+    if let Some(index) = histories.iter().position(|pending| pending.id == history.id) {
         histories.remove(index);
     }
 
@@ -553,21 +526,26 @@ fn select_output_ranges(output: &str, ranges: &[crate::semantic::OutputRange]) -
     merged
         .into_iter()
         .flat_map(|(start, end)| {
-            lines[start..=end]
-                .iter()
-                .enumerate()
-                .map(move |(offset, line)| OutputLine {
-                    line_number: (start + offset + 1) as u64,
-                    content: (*line).to_string(),
-                })
+            lines[start..=end].iter().enumerate().map(move |(offset, line)| OutputLine {
+                line_number: u64::conv(start + offset + 1),
+                content: (*line).to_string(),
+            })
         })
         .collect()
 }
 
 fn normalize_line_range(start: i64, end: i64, line_count: usize) -> Option<(usize, usize)> {
     let line_count = i64::try_from(line_count).ok()?;
-    let start = if start < 0 { line_count + start } else { start };
-    let end = if end < 0 { line_count + end } else { end };
+    let start = if start < 0 {
+        line_count + start
+    } else {
+        start
+    };
+    let end = if end < 0 {
+        line_count + end
+    } else {
+        end
+    };
 
     if end < 0 || start >= line_count {
         return None;
@@ -576,21 +554,15 @@ fn normalize_line_range(start: i64, end: i64, line_count: usize) -> Option<(usiz
     let start = start.max(0);
     let end = end.min(line_count - 1);
 
-    (start <= end).then_some((start as usize, end as usize))
+    (start <= end).then_some((usize::conv(start), usize::conv(end)))
 }
 
 fn log_record(record: &SemanticCommandRecord, message: &'static str) {
     let history_id = record.capture.history_id.as_deref().unwrap_or("<missing>");
-    let associated_history_id = record
-        .history
-        .as_ref()
-        .map(|history| history.id.to_string());
+    let associated_history_id = record.history.as_ref().map(|history| history.id.to_string());
     let exit = record.history.as_ref().map(|history| history.exit);
     let duration = record.history.as_ref().map(|history| history.duration);
-    let author = record
-        .history
-        .as_ref()
-        .map(|history| history.author.as_str());
+    let author = record.history.as_ref().map(|history| history.author.as_str());
     let session_id = record.capture.session_id.as_deref();
 
     tracing::debug!(
@@ -612,43 +584,66 @@ fn log_record(record: &SemanticCommandRecord, message: &'static str) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use rstest::rstest;
+    use atuin_domain::record::CmdOrigin;
+    use rstest::{fixture, rstest};
     use time::OffsetDateTime;
+    use uuid::Uuid;
 
-    fn history(id: &str, session: &str, command: &str) -> History {
+    use super::*;
+    use crate::semantic::OutputRange;
+
+    /// A distinct [`HistoryId`] for a test, derived from a small integer.
+    ///
+    /// `HistoryId` is now a UUID, so the same `n` deterministically yields the same id across a
+    /// capture, its history record, and a lookup — no id ever needs to be spelled out in full.
+    fn hid(n: u128) -> HistoryId {
+        HistoryId::new(Uuid::from_u128(n))
+    }
+
+    #[fixture]
+    fn state() -> SemanticState {
+        SemanticState::default()
+    }
+
+    #[fixture]
+    fn session() -> SessionCaptures {
+        SessionCaptures::default()
+    }
+
+    fn history(id: HistoryId, session: &str, command: &str) -> History {
         History {
-            id: HistoryId(id.to_string()),
+            id,
             timestamp: OffsetDateTime::UNIX_EPOCH,
             duration: 0,
             exit: 0,
             command: command.to_string(),
             cwd: String::new(),
             session: session.to_string(),
-            hostname: String::new(),
+            cmd_origin: CmdOrigin::default(),
             author: String::new(),
             intent: None,
             deleted_at: None,
             shell: Some("bash".into()),
+            author_kind: None,
         }
     }
 
-    fn capture(history_id: Option<&str>, session_id: Option<&str>, output: &str) -> CommandCapture {
+    fn capture(id: Option<HistoryId>, session: Option<&str>, output: &str) -> CommandCapture {
         CommandCapture {
             prompt: String::new(),
             command: String::new(),
             output: output.to_string(),
             exit_code: None,
-            history_id: history_id.map(str::to_string),
-            session_id: session_id.map(str::to_string),
+            history_id: id.map(|id| id.to_string()),
+            session_id: session.map(str::to_string),
             output_truncated: false,
-            output_observed_bytes: output.len() as u64,
+            output_observed_bytes: u64::conv(output.len()),
         }
     }
 
-    fn command_output(state: &mut SemanticState, history_id: &str) -> CommandOutputReply {
+    fn output_for(state: &mut SemanticState, id: HistoryId) -> CommandOutputReply {
         state.command_output(&CommandOutputRequest {
-            history_id: history_id.to_string(),
+            history_id: id.to_string(),
             ranges: Vec::new(),
         })
     }
@@ -660,54 +655,53 @@ mod tests {
         }
     }
 
-    #[test]
-    fn drops_capture_without_history_id() {
-        let mut state = SemanticState::default();
-
+    #[rstest]
+    fn drops_capture_without_history_id(mut state: SemanticState) {
         assert!(!state.record_capture(capture(None, Some("session-1"), "output")));
-        assert!(!command_output(&mut state, "id-1").found);
+        assert!(!output_for(&mut state, hid(1)).found);
         assert_eq!(state.record_count(), 0);
     }
 
-    #[test]
-    fn stores_capture_by_session_and_history_id() {
-        let mut state = SemanticState::default();
+    #[rstest]
+    fn stores_capture_by_session_and_history_id(mut state: SemanticState) {
+        assert!(state.record_capture(capture(Some(hid(1)), Some("session-1"), "output")));
 
-        assert!(state.record_capture(capture(Some("id-1"), Some("session-1"), "output")));
-
-        let reply = command_output(&mut state, "id-1");
+        let reply = output_for(&mut state, hid(1));
         assert!(reply.found);
         assert_eq!(reply.total_bytes, 6);
         assert_eq!(reply.output_observed_bytes, 6);
         assert_eq!(reply.lines, vec![output_line(1, "output")]);
     }
 
-    #[test]
-    fn uses_pending_history_session_when_capture_session_is_missing() {
-        let mut state = SemanticState::default();
+    #[rstest]
+    fn command_output_reports_truncation_metadata(mut state: SemanticState) {
+        let mut cap = capture(Some(hid(1)), Some("session-1"), "partial");
+        cap.output_truncated = true;
+        cap.output_observed_bytes = 1024;
 
-        state.record_history(history("id-1", "session-from-history", "cargo test"));
-        assert!(state.record_capture(capture(Some("id-1"), None, "output")));
+        assert!(state.record_capture(cap));
 
-        assert!(
-            state
-                .sessions
-                .contains_key(&SessionId("session-from-history".to_string()))
-        );
-        assert!(command_output(&mut state, "id-1").found);
+        let reply = output_for(&mut state, hid(1));
+        assert!(reply.output_truncated);
+        assert_eq!(reply.total_bytes, 7);
+        assert_eq!(reply.output_observed_bytes, 1024);
     }
 
-    #[test]
-    fn associates_history_by_id_after_capture_arrives() {
-        let mut state = SemanticState::default();
+    #[rstest]
+    fn uses_pending_history_session_when_capture_session_is_missing(mut state: SemanticState) {
+        state.record_history(history(hid(1), "session-from-history", "cargo test"));
+        assert!(state.record_capture(capture(Some(hid(1)), None, "output")));
 
-        assert!(state.record_capture(capture(Some("id-1"), Some("session-1"), "output")));
-        state.record_history(history("id-1", "session-1", "different command"));
+        assert!(state.sessions.contains_key(&SessionId("session-from-history".to_string())));
+        assert!(output_for(&mut state, hid(1)).found);
+    }
 
-        let capture_ref = state
-            .history_index
-            .get(&HistoryId("id-1".to_string()))
-            .unwrap();
+    #[rstest]
+    fn associates_history_by_id_after_capture_arrives(mut state: SemanticState) {
+        assert!(state.record_capture(capture(Some(hid(1)), Some("session-1"), "output")));
+        state.record_history(history(hid(1), "session-1", "different command"));
+
+        let capture_ref = state.history_index.get(&hid(1)).unwrap();
         let stored = state
             .sessions
             .get(&capture_ref.session_id)
@@ -717,98 +711,65 @@ mod tests {
         assert!(stored.record.history.is_some());
     }
 
-    #[test]
-    fn evicts_oldest_command_when_session_ring_is_full() {
-        let mut state = SemanticState::default();
-
-        for index in 0..=MAX_COMMANDS_PER_SESSION {
-            assert!(state.record_capture(capture(
-                Some(&format!("id-{index}")),
-                Some("session-1"),
-                "output",
-            )));
+    #[rstest]
+    fn evicts_oldest_command_when_session_ring_is_full(mut state: SemanticState) {
+        for index in 0..=u128::conv(MAX_COMMANDS_PER_SESSION) {
+            assert!(state.record_capture(capture(Some(hid(index)), Some("session-1"), "output")));
         }
 
-        assert!(!command_output(&mut state, "id-0").found);
-        assert!(command_output(&mut state, &format!("id-{MAX_COMMANDS_PER_SESSION}")).found);
+        assert!(!output_for(&mut state, hid(0)).found);
+        assert!(output_for(&mut state, hid(u128::conv(MAX_COMMANDS_PER_SESSION))).found);
         assert_eq!(state.record_count(), MAX_COMMANDS_PER_SESSION);
     }
 
-    #[test]
-    fn evicts_oldest_session_after_lru_limit() {
-        let mut state = SemanticState::default();
-
-        for index in 0..MAX_SESSIONS {
+    #[rstest]
+    fn evicts_oldest_session_after_lru_limit(mut state: SemanticState) {
+        for index in 0..u128::conv(MAX_SESSIONS) {
             assert!(state.record_capture(capture(
-                Some(&format!("id-{index}")),
+                Some(hid(index)),
                 Some(&format!("session-{index}")),
                 "output",
             )));
         }
-        assert!(command_output(&mut state, "id-0").found);
+        // Touching session 0 keeps it warm, so session 1 becomes the eviction victim below.
+        assert!(output_for(&mut state, hid(0)).found);
 
-        assert!(state.record_capture(capture(Some("new-id"), Some("new-session"), "output",)));
+        assert!(state.record_capture(capture(Some(hid(999)), Some("new-session"), "output")));
 
-        assert!(command_output(&mut state, "id-0").found);
-        assert!(!command_output(&mut state, "id-1").found);
-        assert!(command_output(&mut state, "new-id").found);
+        assert!(output_for(&mut state, hid(0)).found);
+        assert!(!output_for(&mut state, hid(1)).found);
+        assert!(output_for(&mut state, hid(999)).found);
         assert_eq!(state.sessions.len(), MAX_SESSIONS);
     }
 
-    #[test]
-    fn evicts_by_session_byte_limit() {
-        let mut session = SessionCaptures::default();
-        let first_output = "x".repeat(10);
-        let second_output = "y";
+    #[rstest]
+    fn evicts_by_session_byte_limit(mut session: SessionCaptures) {
+        let record = |id: HistoryId, output: &str| SemanticCommandRecord {
+            capture: capture(Some(id), Some("session-1"), output),
+            history: None,
+        };
+
         let (_, evicted_first) = session.push_with_limits(
-            HistoryId("first".to_string()),
-            SemanticCommandRecord {
-                capture: capture(Some("first"), Some("session-1"), &first_output),
-                history: None,
-            },
+            hid(1),
+            record(hid(1), &"x".repeat(10)),
             MAX_COMMANDS_PER_SESSION,
             10,
         );
         assert!(evicted_first.is_empty());
 
-        let (_, evicted_second) = session.push_with_limits(
-            HistoryId("second".to_string()),
-            SemanticCommandRecord {
-                capture: capture(Some("second"), Some("session-1"), second_output),
-                history: None,
-            },
-            MAX_COMMANDS_PER_SESSION,
-            10,
-        );
+        let (_, evicted_second) =
+            session.push_with_limits(hid(2), record(hid(2), "y"), MAX_COMMANDS_PER_SESSION, 10);
 
         assert_eq!(evicted_second.len(), 1);
-        assert_eq!(evicted_second[0].history_id, HistoryId("first".to_string()));
+        assert_eq!(evicted_second[0].history_id, hid(1));
         assert_eq!(session.records.len(), 1);
         assert_eq!(session.output_bytes, 1);
-    }
-
-    #[test]
-    fn command_output_reports_truncation_metadata() {
-        let mut state = SemanticState::default();
-        let mut capture = capture(Some("id-1"), Some("session-1"), "partial");
-        capture.output_truncated = true;
-        capture.output_observed_bytes = 1024;
-
-        assert!(state.record_capture(capture));
-
-        let reply = command_output(&mut state, "id-1");
-        assert!(reply.output_truncated);
-        assert_eq!(reply.total_bytes, 7);
-        assert_eq!(reply.output_observed_bytes, 1024);
     }
 
     #[rstest]
     #[case::line_based_inclusive_with_negative_offsets(
         "zero\none\ntwo\nthree\nfour",
-        vec![
-            crate::semantic::OutputRange { start: 1, end: 2 },
-            crate::semantic::OutputRange { start: -2, end: -1 },
-        ],
+        vec![OutputRange { start: 1, end: 2 }, OutputRange { start: -2, end: -1 }],
         vec![
             output_line(2, "one"),
             output_line(3, "two"),
@@ -818,67 +779,50 @@ mod tests {
     )]
     #[case::can_leave_gaps_for_client_formatting(
         "zero\none\ntwo\nthree\nfour",
-        vec![
-            crate::semantic::OutputRange { start: 0, end: 1 },
-            crate::semantic::OutputRange { start: 4, end: 4 },
-        ],
-        vec![
-            output_line(1, "zero"),
-            output_line(2, "one"),
-            output_line(5, "four"),
-        ]
+        vec![OutputRange { start: 0, end: 1 }, OutputRange { start: 4, end: 4 }],
+        vec![output_line(1, "zero"), output_line(2, "one"), output_line(5, "four")]
     )]
     #[case::skip_ranges_fully_outside_output(
         "zero\none\ntwo",
-        vec![
-            crate::semantic::OutputRange { start: 10, end: 20 },
-            crate::semantic::OutputRange {
-                start: -20,
-                end: -10,
-            },
-        ],
+        vec![OutputRange { start: 10, end: 20 }, OutputRange { start: -20, end: -10 }],
         Vec::new()
     )]
     fn selects_output_ranges(
         #[case] output: &str,
-        #[case] ranges: Vec<crate::semantic::OutputRange>,
+        #[case] ranges: Vec<OutputRange>,
         #[case] expected: Vec<OutputLine>,
     ) {
         assert_eq!(select_output_ranges(output, &ranges), expected);
     }
 
-    #[test]
-    fn output_ranges_merge_overlaps_and_adjacent_ranges() {
-        let output = (0..100)
-            .map(|n| format!("line {n}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let ranges = vec![
-            crate::semantic::OutputRange { start: 0, end: 100 },
-            crate::semantic::OutputRange {
-                start: -100,
-                end: -1,
-            },
-        ];
+    #[rstest]
+    #[case::merges_overlapping_and_adjacent(
+        100,
+        vec![OutputRange { start: 0, end: 100 }, OutputRange { start: -100, end: -1 }],
+        100,
+        output_line(1, "line 0"),
+        output_line(100, "line 99")
+    )]
+    #[case::empty_ranges_default_to_first_thousand(
+        1001,
+        Vec::new(),
+        1000,
+        output_line(1, "line 0"),
+        output_line(1000, "line 999")
+    )]
+    fn selects_output_ranges_over_large_output(
+        #[case] line_count: usize,
+        #[case] ranges: Vec<OutputRange>,
+        #[case] expected_len: usize,
+        #[case] expected_first: OutputLine,
+        #[case] expected_last: OutputLine,
+    ) {
+        let output = (0..line_count).map(|n| format!("line {n}")).collect::<Vec<_>>().join("\n");
 
         let selected = select_output_ranges(&output, &ranges);
 
-        assert_eq!(selected.len(), 100);
-        assert_eq!(selected.first(), Some(&output_line(1, "line 0")));
-        assert_eq!(selected.last(), Some(&output_line(100, "line 99")));
-    }
-
-    #[test]
-    fn empty_output_ranges_default_to_first_thousand_lines() {
-        let output = (0..1001)
-            .map(|n| format!("line {n}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let selected = select_output_ranges(&output, &[]);
-
-        assert_eq!(selected.len(), 1000);
-        assert_eq!(selected.first(), Some(&output_line(1, "line 0")));
-        assert_eq!(selected.last(), Some(&output_line(1000, "line 999")));
+        assert_eq!(selected.len(), expected_len);
+        assert_eq!(selected.first(), Some(&expected_first));
+        assert_eq!(selected.last(), Some(&expected_last));
     }
 }

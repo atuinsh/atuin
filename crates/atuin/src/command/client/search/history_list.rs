@@ -1,28 +1,24 @@
 use std::time::Duration;
 
-use super::engines::{AnySearchEngine, SearchEngine};
-use super::syntax;
-use atuin_client::{
-    history::History,
-    settings::{UiColumn, UiColumnType},
-    theme::{Meaning, Theme},
-};
-use atuin_common::string::EllipsizeExt as _;
-use atuin_common::string::EscapeNonPrintablePosixExt as _;
-use atuin_common::string::Measure;
+use atuin_client::history::History;
+use atuin_client::settings::{UiColumn, UiColumnType};
+use atuin_client::theme::{Meaning, Theme};
 use atuin_common::string::align::Alignment;
 use atuin_common::string::ellipsis::{Indicator, Pos};
+use atuin_common::string::{EllipsizeExt as _, EscapeNonPrintablePosixExt as _, Measure};
 use atuin_common::time::{DurationExt, OffsetDateTimeExt};
+use easy_cast::Conv;
 use itertools::Itertools;
-use ratatui::{
-    backend::FromCrossterm,
-    buffer::Buffer,
-    crossterm::style,
-    layout::Rect,
-    style::{Modifier, Style},
-    widgets::{Block, StatefulWidget, Widget},
-};
+use ratatui::backend::FromCrossterm;
+use ratatui::buffer::Buffer;
+use ratatui::crossterm::style;
+use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
+use ratatui::widgets::{Block, StatefulWidget, Widget};
 use time::{OffsetDateTime, UtcOffset};
+
+use super::engines::{AnySearchEngine, SearchEngine};
+use super::syntax;
 
 pub struct HistoryHighlighter<'a> {
     pub engine: &'a AnySearchEngine,
@@ -31,8 +27,7 @@ pub struct HistoryHighlighter<'a> {
 
 impl HistoryHighlighter<'_> {
     pub fn get_highlight_indices(&self, command: &str) -> Vec<usize> {
-        self.engine
-            .get_highlight_indices(command, self.search_input)
+        self.engine.get_highlight_indices(command, self.search_input)
     }
 }
 
@@ -93,7 +88,7 @@ impl StatefulWidget for HistoryList<'_> {
         if list_area.width < 1 || list_area.height < 1 || self.history.is_empty() {
             return;
         }
-        let list_height = list_area.height as usize;
+        let list_height = usize::conv(list_area.height);
 
         let (start, end) = self.get_items_bounds(state.selected, state.offset, list_height);
         state.offset = start;
@@ -211,16 +206,8 @@ impl DrawState<'_> {
         // Calculate the width for the expanding column
         // Fixed columns use their configured width + 1 (trailing space)
         let indicator_width: u16 = 3;
-        let fixed_width: u16 = self
-            .columns
-            .iter()
-            .filter(|c| !c.expand)
-            .map(|c| c.width + 1)
-            .sum();
-        let expand_width = self
-            .list_area
-            .width
-            .saturating_sub(indicator_width + fixed_width);
+        let fixed_width: u16 = self.columns.iter().filter(|c| !c.expand).map(|c| c.width + 1).sum();
+        let expand_width = self.list_area.width.saturating_sub(indicator_width + fixed_width);
 
         let style = self.theme.as_style(Meaning::Base);
         // Render each configured column
@@ -248,9 +235,13 @@ impl DrawState<'_> {
 
     fn index(&mut self) {
         if !self.show_numeric_shortcuts {
-            let i = self.y as usize + self.state.offset;
+            let i = usize::conv(self.y) + self.state.offset;
             let is_selected = i == self.state.selected();
-            let prompt: &str = if is_selected { self.indicator } else { "   " };
+            let prompt: &str = if is_selected {
+                self.indicator
+            } else {
+                "   "
+            };
             self.draw(prompt, Style::default());
             return;
         }
@@ -258,7 +249,7 @@ impl DrawState<'_> {
         // these encode the slices of `" > "`, `" {n} "`, or `"   "` in a compact form.
         // Yes, this is a hack, but it makes me feel happy
 
-        let i = self.y as usize + self.state.offset;
+        let i = usize::conv(self.y) + self.state.offset;
         let i = i.checked_sub(self.state.selected);
         let i = i.unwrap_or(10).min(10) * 2;
         let prompt: &str = if i == 0 {
@@ -277,7 +268,7 @@ impl DrawState<'_> {
         });
         let duration = Duration::saturating_from_nanos_i64(h.duration);
         let formatted = duration.display().largest_unit().to_string();
-        let w = width as usize;
+        let w = usize::conv(width);
         // Right-align within the column, ellipsizing if it somehow overflows.
         let display = formatted.pad_ellipsize(
             Measure::Columns(w),
@@ -291,13 +282,10 @@ impl DrawState<'_> {
     fn time(&mut self, h: &History, width: u16) {
         let style = self.theme.as_style(Meaning::Guidance);
 
-        let time = (self.now)()
-            .saturating_duration_since(h.timestamp)
-            .display()
-            .largest_unit();
+        let time = (self.now)().saturating_duration_since(h.timestamp).display().largest_unit();
 
         // Format as "Xs ago" right-aligned within column width
-        let w = width as usize;
+        let w = usize::conv(width);
         let time_str = format!("{time} ago");
 
         let display = time_str.pad_ellipsize(
@@ -312,7 +300,8 @@ impl DrawState<'_> {
     fn command(&mut self, h: &History, _width: u16) {
         let mut style = self.theme.as_style(Meaning::Base);
         let mut row_highlighted = false;
-        if !self.alternate_highlight && (self.y as usize + self.state.offset == self.state.selected)
+        if !self.alternate_highlight
+            && (usize::conv(self.y) + self.state.offset == self.state.selected)
         {
             row_highlighted = true;
             // if not applying alternative highlighting to the whole row, color the command
@@ -321,11 +310,8 @@ impl DrawState<'_> {
         }
 
         // Build the normalized command string (whitespace-collapsed, control chars escaped)
-        let normalized: String = h
-            .command
-            .escape_non_printable()
-            .split_ascii_whitespace()
-            .join(" ");
+        let normalized: String =
+            h.command.escape_non_printable().split_ascii_whitespace().join(" ");
 
         let highlight_indices = self.history_highlighter.get_highlight_indices(&normalized);
 
@@ -339,7 +325,7 @@ impl DrawState<'_> {
         // Calculate the available width for the command text.
         // `self.x` is already past the indicator and any preceding columns,
         // so the remaining width is how far we can draw.
-        let avail = (self.list_area.width.saturating_sub(self.x)) as usize;
+        let avail = usize::conv(self.list_area.width.saturating_sub(self.x));
 
         // Truncate long commands from the middle to show both start and end,
         // so users can identify commands even in narrow terminals (issue #3596).
@@ -371,13 +357,8 @@ impl DrawState<'_> {
     /// Render the absolute datetime column (e.g., "2025-01-22 14:35")
     fn datetime(&mut self, h: &History, width: u16) {
         let style = self.theme.as_style(Meaning::Annotation);
-        let formatted = h
-            .timestamp
-            .to_offset(self.tz)
-            .display()
-            .ymd_hm()
-            .to_string();
-        let w = width as usize;
+        let formatted = h.timestamp.to_offset(self.tz).display().ymd_hm().to_string();
+        let w = usize::conv(width);
         let display = formatted.pad_ellipsize(
             Measure::Columns(w),
             Pos::End,
@@ -390,7 +371,7 @@ impl DrawState<'_> {
     /// Render the directory column (working directory, truncated)
     fn directory(&mut self, h: &History, width: u16) {
         let style = self.theme.as_style(Meaning::Annotation);
-        let w = width as usize;
+        let w = usize::conv(width);
         let cwd = &h.cwd;
         // Elide from the left with "…" so the leaf directory stays visible;
         // pad to the column width when it already fits.
@@ -406,30 +387,22 @@ impl DrawState<'_> {
     /// Render the host column (just the hostname)
     fn host(&mut self, h: &History, width: u16) {
         let style = self.theme.as_style(Meaning::Annotation);
-        let w = width as usize;
+        let w = usize::conv(width);
         // Database stores hostname as "hostname:username"
-        let host = h.hostname.split(':').next().unwrap_or(&h.hostname);
-        let display = host.pad_ellipsize(
-            Measure::Columns(w),
-            Pos::End,
-            Indicator::UNICODE,
-            Alignment::Start,
-        );
+        let host = h.cmd_origin.host().into_inner();
+        let display =
+            host.pad_ellipsize(Measure::Columns(w), Pos::End, Indicator::UNICODE, Alignment::Start);
         self.draw(&display, Style::from_crossterm(style));
     }
 
     /// Render the user column
     fn user(&mut self, h: &History, width: u16) {
         let style = self.theme.as_style(Meaning::Annotation);
-        let w = width as usize;
+        let w = usize::conv(width);
         // Database stores hostname as "hostname:username"
-        let user = h.hostname.split(':').nth(1).unwrap_or("");
-        let display = user.pad_ellipsize(
-            Measure::Columns(w),
-            Pos::End,
-            Indicator::UNICODE,
-            Alignment::Start,
-        );
+        let user = h.cmd_origin.user().into_inner();
+        let display =
+            user.pad_ellipsize(Measure::Columns(w), Pos::End, Indicator::UNICODE, Alignment::Start);
         self.draw(&display, Style::from_crossterm(style));
     }
 
@@ -440,7 +413,7 @@ impl DrawState<'_> {
         } else {
             self.theme.as_style(Meaning::AlertError)
         };
-        let w = width as usize;
+        let w = usize::conv(width);
         let display = format!("{:>w$}", h.exit);
         self.draw(&display, Style::from_crossterm(style));
     }
@@ -454,12 +427,13 @@ impl DrawState<'_> {
             self.list_area.bottom() - self.y - 1
         };
 
-        if self.alternate_highlight && (self.y as usize + self.state.offset == self.state.selected)
+        if self.alternate_highlight
+            && (usize::conv(self.y) + self.state.offset == self.state.selected)
         {
             style = style.add_modifier(Modifier::REVERSED);
         }
 
-        let w = (self.list_area.width - self.x) as usize;
+        let w = usize::conv(self.list_area.width - self.x);
         self.x += self.buf.set_stringn(cx, cy, s, w, style).0 - cx;
     }
 }

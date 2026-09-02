@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 pub use atuin_common::encryption::paseto_v4::{self, EncryptedData};
+use easy_cast::Conv;
 use eyre::WrapErr;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
@@ -10,34 +11,41 @@ mod tag;
 pub use tag::RecordTag;
 mod version;
 pub use version::RecordVersion;
+mod cmd_origin;
+pub use cmd_origin::{CmdHost, CmdOrigin, CmdUser, UNKNOWN_USER};
 
-#[derive(Clone, Debug, PartialEq, derive_more::Deref, derive_more::From)]
+#[derive(Clone, Debug, PartialEq, Eq, derive_more::Deref, derive_more::From)]
 pub struct DecryptedData(pub Vec<u8>);
 
 #[derive(Debug, PartialEq, PartialOrd, Ord, Eq)]
 pub struct Diff {
-    pub host: HostId,
-    pub tag: RecordTag,
+    pub series: RecordSeriesKey,
     pub local: Option<RecordIdx>,
     pub remote: Option<RecordIdx>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Host {
     pub id: HostId,
-    pub name: String,
+    /// At some point in history, this field used to carry some meaning.
+    ///
+    /// But the protocol requires we carry it around, so we carry an empty string here.
+    ///
+    /// TODO(ATU-589): Remove the field.
+    #[serde(rename = "name", skip_deserializing)]
+    _name: &'static str,
 }
 
 impl Host {
+    #[must_use]
     pub fn new(id: HostId) -> Self {
-        Host {
-            id,
-            name: String::new(),
-        }
+        Self { id, _name: "" }
     }
 }
 
-/// Note that the order of items matters here -- `serde` serializes in order.
+/// Do *not* modify this struct. It gets serialized to JSON during encryption, and we rely on the
+/// serialization staying the same across versions. Field order, types, and even names all must stay
+/// the same!
 #[derive(Debug, Copy, Clone, Serialize)]
 pub struct AdditionalData<'a> {
     pub id: RecordId,
@@ -64,8 +72,22 @@ new_uuid!(HostId);
 
 pub type RecordIdx = u64;
 
+/// The composite key identifying record WAL journal uniqueness.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RecordSeriesKey {
+    pub host_id: HostId,
+    pub tag: RecordTag,
+}
+
+impl RecordSeriesKey {
+    #[must_use]
+    pub fn new(host: HostId, tag: RecordTag) -> Self {
+        Self { host_id: host, tag }
+    }
+}
+
 /// A single record stored inside of our local database
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TypedBuilder)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TypedBuilder)]
 pub struct Record<Data> {
     /// a unique ID
     #[builder(default = RecordId(Uuid::now_v7()))]
@@ -81,7 +103,7 @@ pub struct Record<Data> {
     pub host: Host,
 
     /// The creation time in nanoseconds since unix epoch
-    #[builder(default = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as u64)]
+    #[builder(default = u64::conv(time::OffsetDateTime::now_utc().unix_timestamp_nanos()))]
     pub timestamp: u64,
 
     /// The version the data in the entry conforms to
@@ -96,6 +118,15 @@ pub struct Record<Data> {
 }
 
 impl<Data> Record<Data> {
+    /// The [`RecordSeriesKey`] of the append-only stream this record belongs to.
+    #[must_use]
+    pub fn series_key(&self) -> RecordSeriesKey {
+        RecordSeriesKey {
+            host_id: self.host.id,
+            tag: self.tag.clone(),
+        }
+    }
+
     pub fn append(&self, data: Vec<u8>) -> Record<DecryptedData> {
         Record::builder()
             .host(self.host.clone())
@@ -107,14 +138,29 @@ impl<Data> Record<Data> {
     }
 
     pub fn with_data<New>(self, data: New) -> Record<New> {
-        Record {
-            id: self.id,
-            idx: self.idx,
-            host: self.host,
-            timestamp: self.timestamp,
-            version: self.version,
-            tag: self.tag,
+        self.map_data(|_| data)
+    }
+
+    /// Apply a transformation to the data, creating a new record with it.
+    pub fn map_data<New>(self, f: impl FnOnce(Data) -> New) -> Record<New> {
+        let Self {
+            id,
+            idx,
+            host,
+            timestamp,
+            version,
+            tag,
             data,
+        } = self;
+
+        Record {
+            id,
+            idx,
+            host,
+            timestamp,
+            version,
+            tag,
+            data: f(data),
         }
     }
 
@@ -132,6 +178,7 @@ impl<Data> Record<Data> {
 }
 
 impl Record<DecryptedData> {
+    #[must_use]
     pub fn encrypt(&self, key: &paseto_v4::Key) -> Record<paseto_v4::EncryptedData> {
         let ad = serde_json::to_string(&AdditionalData::from(self))
             .expect("could not serialize implicit assertions");
@@ -159,38 +206,48 @@ pub struct RecordStatus {
     pub hosts: HashMap<HostId, HashMap<RecordTag, RecordIdx>>,
 }
 
+impl RecordStatus {
+    pub fn from_points(points: impl IntoIterator<Item = (RecordSeriesKey, RecordIdx)>) -> Self {
+        let mut status = Self::new();
+        status.extend(points);
+        status
+    }
+}
+
 impl Default for RecordStatus {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Extend<(HostId, RecordTag, RecordIdx)> for RecordStatus {
-    fn extend<T: IntoIterator<Item = (HostId, RecordTag, RecordIdx)>>(&mut self, iter: T) {
-        for (host, tag, tail_idx) in iter {
-            self.set_raw(host, tag, tail_idx);
+impl Extend<(RecordSeriesKey, RecordIdx)> for RecordStatus {
+    fn extend<T: IntoIterator<Item = (RecordSeriesKey, RecordIdx)>>(&mut self, iter: T) {
+        for (series, tail_idx) in iter {
+            self.set_raw(series, tail_idx);
         }
     }
 }
 
 impl RecordStatus {
-    pub fn new() -> RecordStatus {
-        RecordStatus {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
             hosts: HashMap::new(),
         }
     }
 
     /// Insert a new tail record into the store
     pub fn set(&mut self, tail: Record<DecryptedData>) {
-        self.set_raw(tail.host.id, tail.tag, tail.idx)
+        self.set_raw(RecordSeriesKey::new(tail.host.id, tail.tag), tail.idx);
     }
 
-    pub fn set_raw(&mut self, host: HostId, tag: RecordTag, tail_id: RecordIdx) {
-        self.hosts.entry(host).or_default().insert(tag, tail_id);
+    pub fn set_raw(&mut self, series: RecordSeriesKey, tail_id: RecordIdx) {
+        self.hosts.entry(series.host_id).or_default().insert(series.tag, tail_id);
     }
 
-    pub fn get(&self, host: HostId, tag: &RecordTag) -> Option<RecordIdx> {
-        self.hosts.get(&host).and_then(|v| v.get(tag)).cloned()
+    #[must_use]
+    pub fn get(&self, series: &RecordSeriesKey) -> Option<RecordIdx> {
+        self.hosts.get(&series.host_id).and_then(|v| v.get(&series.tag)).copied()
     }
 
     /// Diff this index with another, likely remote index.
@@ -200,28 +257,27 @@ impl RecordStatus {
     /// then we need to do some downloading. If it is smaller, then we need to do some uploading
     /// Note that we cannot upload if we are not the owner of the record store - hosts can only
     /// write to their own store.
+    #[must_use]
     pub fn diff(&self, other: &Self) -> Vec<Diff> {
         let mut ret = Vec::new();
 
         // First, we check if other has everything that self has
-        for (host, tag_map) in self.hosts.iter() {
-            for (tag, idx) in tag_map.iter() {
-                match other.get(*host, tag) {
+        for (host, tag_map) in &self.hosts {
+            for (tag, idx) in tag_map {
+                match other.hosts.get(host).and_then(|m| m.get(tag)).copied() {
                     // The other store is all up to date! No diff.
-                    Some(t) if t.eq(idx) => continue,
+                    Some(t) if t.eq(idx) => {}
 
                     // The other store does exist, and it is either ahead or behind us. A diff regardless
                     Some(t) => ret.push(Diff {
-                        host: *host,
-                        tag: tag.clone(),
+                        series: RecordSeriesKey::new(*host, tag.clone()),
                         local: Some(*idx),
                         remote: Some(t),
                     }),
 
                     // The other store does not exist :O
                     None => ret.push(Diff {
-                        host: *host,
-                        tag: tag.clone(),
+                        series: RecordSeriesKey::new(*host, tag.clone()),
                         local: Some(*idx),
                         remote: None,
                     }),
@@ -233,19 +289,18 @@ impl RecordStatus {
         // If the other store knows of a tag that we are not yet aware of, then the diff will be missed
 
         // account for that!
-        for (host, tag_map) in other.hosts.iter() {
-            for (tag, idx) in tag_map.iter() {
-                match self.get(*host, tag) {
-                    // If we have this host/tag combo, the comparison and diff will have already happened above
-                    Some(_) => continue,
+        for (host, tag_map) in &other.hosts {
+            for (tag, idx) in tag_map {
+                // If we have this host/tag combo, the comparison and diff will have already happened above
+                if self.hosts.get(host).is_some_and(|m| m.contains_key(tag)) {
+                    continue;
+                }
 
-                    None => ret.push(Diff {
-                        host: *host,
-                        tag: tag.clone(),
-                        remote: Some(*idx),
-                        local: None,
-                    }),
-                };
+                ret.push(Diff {
+                    series: RecordSeriesKey::new(*host, tag.clone()),
+                    remote: Some(*idx),
+                    local: None,
+                });
             }
         }
 
@@ -257,16 +312,14 @@ impl RecordStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use atuin_common::encryption::paseto_v4;
     use atuin_common::utils::uuid_v7;
-
-    use super::{DecryptedData, Diff, Record, RecordStatus};
+    use paseto_v4::ImplicitAssertion;
     use pretty_assertions::assert_eq;
     use rstest::{fixture, rstest};
     use uuid::Uuid;
 
-    use paseto_v4::ImplicitAssertion;
+    use super::{DecryptedData, Diff, Record, RecordStatus, *};
 
     /// Serialize `AdditionalData` into the JSON used as the paseto implicit assertion.
     ///
@@ -342,9 +395,7 @@ mod tests {
             },
         };
 
-        let decrypted = record
-            .decrypt(&key)
-            .expect("frozen record blob must still decrypt");
+        let decrypted = record.decrypt(&key).expect("frozen record blob must still decrypt");
         assert_eq!(decrypted.data.0, [1, 2, 3, 4, 5]);
     }
 
@@ -354,13 +405,9 @@ mod tests {
 
         index.set(record.clone());
 
-        let tail = index.get(record.host.id, &record.tag);
+        let tail = index.get(&record.series_key());
 
-        assert_eq!(
-            record.idx,
-            tail.expect("tail not in store"),
-            "tail in store did not match"
-        );
+        assert_eq!(record.idx, tail.expect("tail not in store"), "tail in store did not match");
     }
 
     #[rstest]
@@ -371,13 +418,9 @@ mod tests {
         index.set(record.clone());
         index.set(child.clone());
 
-        let tail = index.get(record.host.id, &record.tag);
+        let tail = index.get(&record.series_key());
 
-        assert_eq!(
-            child.idx,
-            tail.expect("tail not in store"),
-            "tail in store did not match"
-        );
+        assert_eq!(child.idx, tail.expect("tail not in store"), "tail in store did not match");
     }
 
     #[rstest]
@@ -410,15 +453,11 @@ mod tests {
         let diff = index1.diff(&index2);
 
         assert_eq!(1, diff.len(), "expected single diff");
-        assert_eq!(
-            diff[0],
-            Diff {
-                host: record2.host.id,
-                tag: record2.tag,
-                remote: Some(1),
-                local: Some(0)
-            }
-        );
+        assert_eq!(diff[0], Diff {
+            series: record2.series_key(),
+            remote: Some(1),
+            local: Some(0)
+        });
     }
 
     #[rstest]
@@ -456,14 +495,12 @@ mod tests {
         assert_eq!(4, diff1.len());
         assert_eq!(4, diff2.len());
 
-        dbg!(&diff1, &diff2);
-
         // both diffs should be ALMOST the same. They will agree on which hosts and tags
         // require updating, but the "other" value will not be the same.
         let smol_diff_1: Vec<(HostId, RecordTag)> =
-            diff1.iter().map(|v| (v.host, v.tag.clone())).collect();
+            diff1.iter().map(|v| (v.series.host_id, v.series.tag.clone())).collect();
         let smol_diff_2: Vec<(HostId, RecordTag)> =
-            diff1.iter().map(|v| (v.host, v.tag.clone())).collect();
+            diff1.iter().map(|v| (v.series.host_id, v.series.tag.clone())).collect();
 
         assert_eq!(smol_diff_1, smol_diff_2);
 
@@ -551,10 +588,7 @@ mod tests {
         .unwrap_err();
         let message = error.to_string();
 
-        assert!(
-            message.contains("bad key"),
-            "unexpected error message: {message}"
-        );
+        assert!(message.contains("bad key"), "unexpected error message: {message}");
         assert!(
             message.contains(&format!(
                 "encrypted key id: {}, given decryption key: {}",
@@ -580,9 +614,7 @@ mod tests {
             paseto_v4::decrypt_sync(&encrypted, None::<ImplicitAssertion>, &key).unwrap_err();
 
         assert!(
-            error
-                .to_string()
-                .contains("failed to deserialize the given key"),
+            error.to_string().contains("failed to deserialize the given key"),
             "unexpected error message: {error}"
         );
     }
@@ -645,12 +677,9 @@ mod tests {
         assert_eq!(encrypted1.raw, encrypted2.raw);
         assert_ne!(encrypted1.cek, encrypted2.cek);
 
-        let decrypted = paseto_v4::decrypt_sync(
-            &encrypted2,
-            Some(ImplicitAssertion::from(aj.as_str())),
-            &key2,
-        )
-        .unwrap();
+        let decrypted =
+            paseto_v4::decrypt_sync(&encrypted2, Some(ImplicitAssertion::from(aj.as_str())), &key2)
+                .unwrap();
 
         assert_eq!(DecryptedData(decrypted), data);
     }
@@ -675,23 +704,21 @@ mod tests {
 
         let mut enc1 = encrypted.clone();
         enc1.host = Host::new(HostId(uuid_v7()));
-        let _ = enc1
-            .decrypt(&key)
-            .expect_err("tampering with the host should result in auth failure");
+        let _ =
+            enc1.decrypt(&key).expect_err("tampering with the host should result in auth failure");
 
         let mut enc2 = encrypted;
         enc2.id = RecordId(uuid_v7());
-        let _ = enc2
-            .decrypt(&key)
-            .expect_err("tampering with the id should result in auth failure");
+        let _ =
+            enc2.decrypt(&key).expect_err("tampering with the id should result in auth failure");
     }
 
     #[test]
     fn record_status_serializes_with_bare_string_tag_keys() {
         let host = HostId(Uuid::from_u128(0xabc));
         let mut status = RecordStatus::new();
-        status.set_raw(host, RecordTag::History, 6);
-        status.set_raw(host, RecordTag::Other("custom".to_owned()), 2);
+        status.set_raw(RecordSeriesKey::new(host, RecordTag::History), 6);
+        status.set_raw(RecordSeriesKey::new(host, RecordTag::Other("custom".to_owned())), 2);
 
         let json = serde_json::to_string(&status).unwrap();
         // Tag keys are bare strings, identical to the pre-refactor String-keyed shape.
@@ -699,10 +726,35 @@ mod tests {
         assert!(json.contains(r#""custom":2"#), "got {json}");
 
         let round: RecordStatus = serde_json::from_str(&json).unwrap();
-        assert_eq!(round.get(host, &RecordTag::History), Some(6));
+        assert_eq!(round.get(&RecordSeriesKey::new(host, RecordTag::History)), Some(6));
         assert_eq!(
-            round.get(host, &RecordTag::Other("custom".to_owned())),
+            round.get(&RecordSeriesKey::new(host, RecordTag::Other("custom".to_owned()))),
             Some(2)
         );
+    }
+
+    /// Do *not* modify this test if it fails! It means the serialization of [`AdditionalData`]
+    /// changed which **must not happen**.
+    #[rstest]
+    #[case(
+        AdditionalData {
+            id: RecordId(Uuid::from_bytes([
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+            ])),
+            #[expect(clippy::unreadable_literal)]
+            idx: 12345678910111213141u64,
+            version: "  this is the \0\0\0 version\n",
+            tag: "@@ \0 TAG\0",
+            host: HostId(Uuid::from_bytes([
+                10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160,
+            ])),
+        },
+        r#"{"id":"01020304-0506-0708-090a-0b0c0d0e0f10","idx":12345678910111213141,"version":"  this is the \u0000\u0000\u0000 version\n","tag":"@@ \u0000 TAG\u0000","host":"0a141e28-323c-4650-5a64-6e78828c96a0"}"#
+    )]
+    fn additional_data_serialization_is_stable(
+        #[case] value: AdditionalData,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(serde_json::to_string(&value).unwrap(), expected);
     }
 }

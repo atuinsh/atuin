@@ -24,6 +24,8 @@ pub enum RecordTag {
     DotfilesVar,
     #[strum(serialize = "config-shell-alias")]
     ConfigShellAlias,
+    #[strum(serialize = "packfile")]
+    Packfile,
     /// Legacy code supported arbitrary types, so we need to support this.
     #[strum(default, transparent)]
     Other(String),
@@ -37,12 +39,13 @@ impl RecordTag {
 
     fn variant_rank(&self) -> u8 {
         match self {
-            RecordTag::History => 0,
-            RecordTag::Kv => 1,
-            RecordTag::Script => 2,
-            RecordTag::DotfilesVar => 3,
-            RecordTag::ConfigShellAlias => 4,
-            RecordTag::Other(_) => 5,
+            Self::History => 0,
+            Self::Kv => 1,
+            Self::Script => 2,
+            Self::DotfilesVar => 3,
+            Self::ConfigShellAlias => 4,
+            Self::Packfile => 5,
+            Self::Other(_) => 6,
         }
     }
 }

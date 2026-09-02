@@ -23,7 +23,7 @@ const FROZEN_PREFIX_TURNS: usize = 1;
 
 /// Builds API messages from conversation events while respecting a character
 /// budget using frozen prefix + live tail truncation.
-pub(crate) struct ContextWindowBuilder {
+pub struct ContextWindowBuilder {
     budget: usize,
 }
 
@@ -49,10 +49,8 @@ impl ContextWindowBuilder {
         // This is safe because the combining logic (Text + ToolCall merging)
         // only operates within a single assistant response, which never
         // spans turn boundaries.
-        let turn_messages: Vec<Vec<serde_json::Value>> = turns
-            .iter()
-            .map(|range| events_to_messages(&events[range.clone()]))
-            .collect();
+        let turn_messages: Vec<Vec<serde_json::Value>> =
+            turns.iter().map(|range| events_to_messages(&events[range.clone()])).collect();
 
         let turn_chars: Vec<usize> = turn_messages.iter().map(|m| estimate_chars(m)).collect();
         let total_chars: usize = turn_chars.iter().sum();
@@ -154,8 +152,9 @@ fn estimate_chars(messages: &[serde_json::Value]) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     fn user(content: &str) -> ConversationEvent {
         ConversationEvent::UserMessage {
@@ -342,10 +341,7 @@ mod tests {
         let messages = builder.build(&events);
 
         // Should have prefix (turn 1) + marker + last turn (turn 3)
-        assert!(
-            messages.len() >= 3,
-            "should have at least prefix + marker + tail"
-        );
+        assert!(messages.len() >= 3, "should have at least prefix + marker + tail");
 
         // First message should be from turn 1
         assert_eq!(messages[0]["content"], "first");
@@ -393,9 +389,7 @@ mod tests {
 
         // Verify turn 2 (the tool call turn) was dropped
         let has_tool_use = messages.iter().any(|m| {
-            m["content"]
-                .as_array()
-                .is_some_and(|arr| arr.iter().any(|b| b["type"] == "tool_use"))
+            m["content"].as_array().is_some_and(|arr| arr.iter().any(|b| b["type"] == "tool_use"))
         });
         assert!(!has_tool_use, "tool call turn should have been truncated");
 
@@ -427,10 +421,7 @@ mod tests {
 
         let marker_cost = estimate_chars(std::slice::from_ref(&truncation_marker()));
         let budget = total - turn2_chars + marker_cost + 5;
-        assert!(
-            budget < total,
-            "budget must be less than total for truncation to trigger"
-        );
+        assert!(budget < total, "budget must be less than total for truncation to trigger");
 
         let builder = ContextWindowBuilder::new(budget);
         let messages = builder.build(&events);
@@ -438,43 +429,13 @@ mod tests {
         // Should have: prefix (t1: 2 msgs) + marker (1 msg) + t3 (2 msgs) + t4 (2 msgs) = 7
         // (turn 2 dropped)
         assert_eq!(messages.len(), 7);
-        assert!(
-            messages[0]["content"]
-                .as_str()
-                .unwrap()
-                .starts_with("turn-1-user-")
-        );
-        assert!(
-            messages[1]["content"]
-                .as_str()
-                .unwrap()
-                .starts_with("turn-1-response-")
-        );
+        assert!(messages[0]["content"].as_str().unwrap().starts_with("turn-1-user-"));
+        assert!(messages[1]["content"].as_str().unwrap().starts_with("turn-1-response-"));
         assert!(messages[2]["content"].as_str().unwrap().contains("omitted"));
-        assert!(
-            messages[3]["content"]
-                .as_str()
-                .unwrap()
-                .starts_with("turn-3-user-")
-        );
-        assert!(
-            messages[4]["content"]
-                .as_str()
-                .unwrap()
-                .starts_with("turn-3-response-")
-        );
-        assert!(
-            messages[5]["content"]
-                .as_str()
-                .unwrap()
-                .starts_with("turn-4-user-")
-        );
-        assert!(
-            messages[6]["content"]
-                .as_str()
-                .unwrap()
-                .starts_with("turn-4-response-")
-        );
+        assert!(messages[3]["content"].as_str().unwrap().starts_with("turn-3-user-"));
+        assert!(messages[4]["content"].as_str().unwrap().starts_with("turn-3-response-"));
+        assert!(messages[5]["content"].as_str().unwrap().starts_with("turn-4-user-"));
+        assert!(messages[6]["content"].as_str().unwrap().starts_with("turn-4-response-"));
     }
 
     #[test]
@@ -488,9 +449,7 @@ mod tests {
         // No truncation marker
         assert_eq!(messages.len(), 4);
         assert!(
-            !messages
-                .iter()
-                .any(|m| m["content"].as_str().is_some_and(|s| s.contains("omitted")))
+            !messages.iter().any(|m| m["content"].as_str().is_some_and(|s| s.contains("omitted")))
         );
     }
 
@@ -548,9 +507,6 @@ mod tests {
         );
 
         // Turn 2 was dropped entirely, so no tool IDs should be present
-        assert!(
-            !tool_use_ids.contains(&"tc1"),
-            "dropped turn's tool_use should not appear"
-        );
+        assert!(!tool_use_ids.contains(&"tc1"), "dropped turn's tool_use should not appear");
     }
 }

@@ -1,7 +1,8 @@
-use crate::_util::context::BenchCtx;
-use crate::history::BenchHistory;
 use atuin_client::database::DbSearchMode;
 use atuin_client::ordering::reorder_fuzzy;
+
+use crate::_util::context::BenchCtx;
+use crate::history::BenchHistory;
 
 /// reorder_fuzzy is invoked on every keystroke during interactive fuzzy search, so keeping the
 /// performance in check is important.

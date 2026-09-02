@@ -1,12 +1,13 @@
-use config::{Config, File as ConfigFile, FileFormat};
-use palette::named;
-use serde::{Deserialize, Serialize};
-use serde_json;
 use std::collections::HashMap;
 use std::error;
 use std::io::{Error, ErrorKind};
 use std::path::PathBuf;
 use std::sync::LazyLock;
+
+use config::{Config, File as ConfigFile, FileFormat};
+use palette::named;
+use serde::{Deserialize, Serialize};
+use serde_json;
 use strum_macros;
 
 static DEFAULT_MAX_DEPTH: u8 = 10;
@@ -71,18 +72,22 @@ pub struct Theme {
 // theme-related boilerplate minimal, the convenience functions give a color.
 impl Theme {
     // This is the base "default" color, for general text
+    #[must_use]
     pub fn get_base(&self) -> ContentStyle {
         self.styles[&Meaning::Base]
     }
 
+    #[must_use]
     pub fn get_info(&self) -> ContentStyle {
         self.get_alert(tracing::Level::INFO)
     }
 
+    #[must_use]
     pub fn get_warning(&self) -> ContentStyle {
         self.get_alert(tracing::Level::WARN)
     }
 
+    #[must_use]
     pub fn get_error(&self) -> ContentStyle {
         self.get_alert(tracing::Level::ERROR)
     }
@@ -93,12 +98,13 @@ impl Theme {
         self.styles[ALERT_TYPES.get(&severity).unwrap()]
     }
 
+    #[must_use]
     pub fn new(
         name: String,
         parent: Option<String>,
         styles: HashMap<Meaning, ContentStyle>,
-    ) -> Theme {
-        Theme {
+    ) -> Self {
+        Self {
             name,
             parent,
             styles,
@@ -116,6 +122,7 @@ impl Theme {
     }
 
     // General access - if you have a meaning, this will give you a (crossterm) style
+    #[must_use]
     pub fn as_style(&self, meaning: Meaning) -> ContentStyle {
         self.styles[self.closest_meaning(&meaning)]
     }
@@ -125,12 +132,13 @@ impl Theme {
     // but we do not have this on in general, as it could print unfiltered text to the terminal
     // from a theme TOML file. However, it will always return a theme, falling back to
     // defaults on error, so that a TOML file does not break loading
+    #[must_use]
     pub fn from_foreground_colors(
         name: String,
-        parent: Option<&Theme>,
-        foreground_colors: HashMap<Meaning, String>,
+        parent: Option<&Self>,
+        foreground_colors: &HashMap<Meaning, String>,
         debug: bool,
-    ) -> Theme {
+    ) -> Self {
         let styles: HashMap<Meaning, ContentStyle> = foreground_colors
             .iter()
             .map(|(name, color)| {
@@ -138,23 +146,26 @@ impl Theme {
                     *name,
                     StyleFactory::from_fg_string(color).unwrap_or_else(|err| {
                         if debug {
-                            tracing::warn!("Tried to load string as a color unsuccessfully: ({name}={color}) {err}");
+                            tracing::warn!(
+                                "Tried to load string as a color unsuccessfully: ({name}={color}) \
+                                 {err}"
+                            );
                         }
                         ContentStyle::default()
                     }),
                 )
             })
             .collect();
-        Theme::from_map(name, parent, &styles)
+        Self::from_map(name, parent, &styles)
     }
 
     // Boil down a meaning-color hashmap into a theme, by taking the defaults
     // for any unknown colors
     fn from_map(
         name: String,
-        parent: Option<&Theme>,
+        parent: Option<&Self>,
         overrides: &HashMap<Meaning, ContentStyle>,
-    ) -> Theme {
+    ) -> Self {
         let styles = match parent {
             Some(theme) => Box::new(theme.styles.clone()),
             None => Box::new(DEFAULT_THEME.styles.clone()),
@@ -165,7 +176,7 @@ impl Theme {
             None => (*name, *color),
         })
         .collect();
-        Theme::new(name, parent.map(|p| p.name.clone()), styles)
+        Self::new(name, parent.map(|p| p.name.clone()), styles)
     }
 }
 
@@ -268,26 +279,11 @@ static DEFAULT_THEME: LazyLock<Theme> = LazyLock::new(|| {
         "default".to_string(),
         None,
         HashMap::from([
-            (
-                Meaning::AlertError,
-                StyleFactory::from_fg_color(Color::DarkRed),
-            ),
-            (
-                Meaning::AlertWarn,
-                StyleFactory::from_fg_color(Color::DarkYellow),
-            ),
-            (
-                Meaning::AlertInfo,
-                StyleFactory::from_fg_color(Color::DarkGreen),
-            ),
-            (
-                Meaning::Annotation,
-                StyleFactory::from_fg_color(Color::DarkGrey),
-            ),
-            (
-                Meaning::Guidance,
-                StyleFactory::from_fg_color(Color::DarkBlue),
-            ),
+            (Meaning::AlertError, StyleFactory::from_fg_color(Color::DarkRed)),
+            (Meaning::AlertWarn, StyleFactory::from_fg_color(Color::DarkYellow)),
+            (Meaning::AlertInfo, StyleFactory::from_fg_color(Color::DarkGreen)),
+            (Meaning::Annotation, StyleFactory::from_fg_color(Color::DarkGrey)),
+            (Meaning::Guidance, StyleFactory::from_fg_color(Color::DarkBlue)),
             (
                 Meaning::Important,
                 StyleFactory::from_fg_color_and_attributes(
@@ -299,28 +295,13 @@ static DEFAULT_THEME: LazyLock<Theme> = LazyLock::new(|| {
             (Meaning::Base, ContentStyle::default()),
             // Syntax highlighting uses ANSI palette colors, so they follow
             // the user's terminal color scheme out of the box.
-            (
-                Meaning::SyntaxCommand,
-                StyleFactory::from_fg_color(Color::Green),
-            ),
-            (
-                Meaning::SyntaxFlag,
-                StyleFactory::from_fg_color(Color::DarkCyan),
-            ),
-            (
-                Meaning::SyntaxString,
-                StyleFactory::from_fg_color(Color::DarkYellow),
-            ),
-            (
-                Meaning::SyntaxVariable,
-                StyleFactory::from_fg_color(Color::Magenta),
-            ),
+            (Meaning::SyntaxCommand, StyleFactory::from_fg_color(Color::Green)),
+            (Meaning::SyntaxFlag, StyleFactory::from_fg_color(Color::DarkCyan)),
+            (Meaning::SyntaxString, StyleFactory::from_fg_color(Color::DarkYellow)),
+            (Meaning::SyntaxVariable, StyleFactory::from_fg_color(Color::Magenta)),
             // Operators keep the terminal's default foreground
             (Meaning::SyntaxOperator, ContentStyle::default()),
-            (
-                Meaning::SyntaxComment,
-                StyleFactory::from_fg_color(Color::DarkGrey),
-            ),
+            (Meaning::SyntaxComment, StyleFactory::from_fg_color(Color::DarkGrey)),
         ]),
     )
 });
@@ -339,43 +320,34 @@ static BUILTIN_THEMES: LazyLock<HashMap<&'static str, Theme>> = LazyLock::new(||
         (
             "autumn",
             HashMap::from([
-                (
-                    Meaning::AlertError,
-                    StyleFactory::known_fg_string("saddlebrown"),
-                ),
-                (
-                    Meaning::AlertWarn,
-                    StyleFactory::known_fg_string("darkorange"),
-                ),
+                (Meaning::AlertError, StyleFactory::known_fg_string("saddlebrown")),
+                (Meaning::AlertWarn, StyleFactory::known_fg_string("darkorange")),
                 (Meaning::AlertInfo, StyleFactory::known_fg_string("gold")),
-                (
-                    Meaning::Annotation,
-                    StyleFactory::from_fg_color(Color::DarkGrey),
-                ),
+                (Meaning::Annotation, StyleFactory::from_fg_color(Color::DarkGrey)),
                 (Meaning::Guidance, StyleFactory::known_fg_string("brown")),
             ]),
         ),
         (
             "marine",
             HashMap::from([
-                (
-                    Meaning::AlertError,
-                    StyleFactory::known_fg_string("yellowgreen"),
-                ),
+                (Meaning::AlertError, StyleFactory::known_fg_string("yellowgreen")),
                 (Meaning::AlertWarn, StyleFactory::known_fg_string("cyan")),
-                (
-                    Meaning::AlertInfo,
-                    StyleFactory::known_fg_string("turquoise"),
-                ),
-                (
-                    Meaning::Annotation,
-                    StyleFactory::known_fg_string("steelblue"),
-                ),
-                (
-                    Meaning::Base,
-                    StyleFactory::known_fg_string("lightsteelblue"),
-                ),
+                (Meaning::AlertInfo, StyleFactory::known_fg_string("turquoise")),
+                (Meaning::Annotation, StyleFactory::known_fg_string("steelblue")),
+                (Meaning::Base, StyleFactory::known_fg_string("lightsteelblue")),
                 (Meaning::Guidance, StyleFactory::known_fg_string("teal")),
+            ]),
+        ),
+        (
+            // This is the default theme with default PowerShell syntax highlighting colors.
+            "default-powershell",
+            HashMap::from([
+                (Meaning::SyntaxCommand, StyleFactory::from_fg_color(Color::Yellow)),
+                (Meaning::SyntaxFlag, StyleFactory::from_fg_color(Color::DarkGrey)),
+                (Meaning::SyntaxString, StyleFactory::from_fg_color(Color::DarkCyan)),
+                (Meaning::SyntaxVariable, StyleFactory::from_fg_color(Color::Green)),
+                (Meaning::SyntaxOperator, StyleFactory::from_fg_color(Color::DarkGrey)),
+                (Meaning::SyntaxComment, StyleFactory::from_fg_color(Color::DarkGreen)),
             ]),
         ),
     ])
@@ -393,6 +365,7 @@ pub struct ThemeManager {
 
 // Theme-loading logic
 impl ThemeManager {
+    #[must_use]
     pub fn new(debug: Option<bool>, theme_dir: Option<String>) -> Self {
         Self {
             loaded_themes: HashMap::new(),
@@ -437,10 +410,8 @@ impl ThemeManager {
 
         let mut config_builder = Config::builder();
 
-        config_builder = config_builder.add_source(ConfigFile::new(
-            theme_file.to_str().unwrap(),
-            FileFormat::Toml,
-        ));
+        config_builder = config_builder
+            .add_source(ConfigFile::new(theme_file.to_str().unwrap(), FileFormat::Toml));
 
         let config = config_builder.build()?;
         self.load_theme_from_config(name, config, max_depth)
@@ -491,7 +462,7 @@ impl ThemeManager {
             );
         }
 
-        let theme = Theme::from_foreground_colors(theme_config.theme.name, parent, colors, debug);
+        let theme = Theme::from_foreground_colors(theme_config.theme.name, parent, &colors, debug);
         let name = name.to_string();
         self.loaded_themes.insert(name.clone(), theme);
         let theme = self.loaded_themes.get(&name).unwrap();
@@ -500,6 +471,7 @@ impl ThemeManager {
 
     // Check if the requested theme is loaded and, if not, then attempt to get it
     // from the builtins or, if not there, from file
+    #[must_use]
     pub fn load_theme(&mut self, name: &str, max_depth: Option<u8>) -> &Theme {
         if self.loaded_themes.contains_key(name) {
             return self.loaded_themes.get(name).unwrap();
@@ -520,9 +492,10 @@ impl ThemeManager {
 
 #[cfg(test)]
 mod theme_tests {
-    use super::*;
     use atuin_common::test_utils::capture_logs;
     use rstest::*;
+
+    use super::*;
 
     #[fixture]
     fn manager(#[default(false)] debug: bool) -> ThemeManager {
@@ -530,19 +503,13 @@ mod theme_tests {
     }
 
     fn theme_config(toml: &str) -> Config {
-        Config::builder()
-            .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
-            .build()
-            .unwrap()
+        Config::builder().add_source(ConfigFile::from_str(toml, FileFormat::Toml)).build().unwrap()
     }
 
     #[rstest]
     fn test_can_load_builtin_theme(mut manager: ThemeManager) {
         let theme = manager.load_theme("autumn", None);
-        assert_eq!(
-            theme.as_style(Meaning::Guidance).foreground_color,
-            from_string("brown").ok()
-        );
+        assert_eq!(theme.as_style(Meaning::Guidance).foreground_color, from_string("brown").ok());
     }
 
     #[rstest]
@@ -550,10 +517,7 @@ mod theme_tests {
         let mytheme = Theme::new(
             "mytheme".to_string(),
             None,
-            HashMap::from([(
-                Meaning::AlertError,
-                StyleFactory::known_fg_string("yellowgreen"),
-            )]),
+            HashMap::from([(Meaning::AlertError, StyleFactory::known_fg_string("yellowgreen"))]),
         );
         manager.loaded_themes.insert("mytheme".to_string(), mytheme);
         let theme = manager.load_theme("mytheme", None);
@@ -579,15 +543,10 @@ mod theme_tests {
         AlertInfo = \"zomp\"
         ",
         );
-        let theme = manager
-            .load_theme_from_config("config_theme", config, 1)
-            .unwrap();
+        let theme = manager.load_theme_from_config("config_theme", config, 1).unwrap();
 
         // Correctly picks overridden color.
-        assert_eq!(
-            theme.as_style(Meaning::Guidance).foreground_color,
-            from_string("white").ok()
-        );
+        assert_eq!(theme.as_style(Meaning::Guidance).foreground_color, from_string("white").ok());
 
         // Does not fall back to any color.
         assert_eq!(theme.as_style(Meaning::AlertInfo).foreground_color, None);
@@ -596,10 +555,7 @@ mod theme_tests {
         assert_eq!(theme.as_style(Meaning::Base).foreground_color, None);
 
         // Falls back to red as meaning missing from theme, so picks base default.
-        assert_eq!(
-            theme.as_style(Meaning::AlertError).foreground_color,
-            Some(Color::DarkRed)
-        );
+        assert_eq!(theme.as_style(Meaning::AlertError).foreground_color, Some(Color::DarkRed));
 
         // Falls back to Important as Title not available.
         assert_eq!(
@@ -617,14 +573,9 @@ mod theme_tests {
         AlertInfo = \"zomp\"
         ",
         );
-        let title_theme = manager
-            .load_theme_from_config("title_theme", title_config, 1)
-            .unwrap();
+        let title_theme = manager.load_theme_from_config("title_theme", title_config, 1).unwrap();
 
-        assert_eq!(
-            title_theme.as_style(Meaning::Title).foreground_color,
-            Some(Color::White)
-        );
+        assert_eq!(title_theme.as_style(Meaning::Title).foreground_color, Some(Color::White));
     }
 
     #[test]
@@ -632,26 +583,20 @@ mod theme_tests {
         let mytheme = Theme::new("mytheme".to_string(), None, HashMap::from([]));
         MEANING_FALLBACKS
             .iter()
-            .for_each(|pair| assert_eq!(mytheme.closest_meaning(pair.0), &Meaning::Base))
+            .for_each(|pair| assert_eq!(mytheme.closest_meaning(pair.0), &Meaning::Base));
     }
 
     #[rstest]
     fn test_can_get_colors_via_convenience_functions(#[with(true)] mut manager: ThemeManager) {
         let theme = manager.load_theme("default", None);
         assert_eq!(theme.get_error().foreground_color.unwrap(), Color::DarkRed);
-        assert_eq!(
-            theme.get_warning().foreground_color.unwrap(),
-            Color::DarkYellow
-        );
+        assert_eq!(theme.get_warning().foreground_color.unwrap(), Color::DarkYellow);
         assert_eq!(theme.get_info().foreground_color.unwrap(), Color::DarkGreen);
         assert_eq!(theme.get_base().foreground_color, None);
         assert_eq!(
-            theme
-                .get_alert(tracing::Level::ERROR)
-                .foreground_color
-                .unwrap(),
+            theme.get_alert(tracing::Level::ERROR).foreground_color.unwrap(),
             Color::DarkRed
-        )
+        );
     }
 
     #[rstest]
@@ -669,14 +614,10 @@ mod theme_tests {
         AlertInfo = \"pink\"
         ",
         );
-        let solarized_theme = manager
-            .load_theme_from_config("solarized", solarized, 1)
-            .unwrap();
+        let solarized_theme = manager.load_theme_from_config("solarized", solarized, 1).unwrap();
 
         assert_eq!(
-            solarized_theme
-                .as_style(Meaning::AlertInfo)
-                .foreground_color,
+            solarized_theme.as_style(Meaning::AlertInfo).foreground_color,
             from_string("pink").ok()
         );
 
@@ -691,23 +632,18 @@ mod theme_tests {
         AlertInfo = \"red\"
         ",
         );
-        let unsolarized_theme = manager
-            .load_theme_from_config("unsolarized", unsolarized, 1)
-            .unwrap();
+        let unsolarized_theme =
+            manager.load_theme_from_config("unsolarized", unsolarized, 1).unwrap();
 
         // It will take its own values
         assert_eq!(
-            unsolarized_theme
-                .as_style(Meaning::AlertInfo)
-                .foreground_color,
+            unsolarized_theme.as_style(Meaning::AlertInfo).foreground_color,
             from_string("red").ok()
         );
 
         // ...or fall back to the parent
         assert_eq!(
-            unsolarized_theme
-                .as_style(Meaning::Guidance)
-                .foreground_color,
+            unsolarized_theme.as_style(Meaning::Guidance).foreground_color,
             from_string("white").ok()
         );
 
@@ -725,24 +661,19 @@ mod theme_tests {
         AlertInfo = \"red\"
         ",
         );
-        let nunsolarized_theme = manager
-            .load_theme_from_config("nunsolarized", nunsolarized, 1)
-            .unwrap();
+        let nunsolarized_theme =
+            manager.load_theme_from_config("nunsolarized", nunsolarized, 1).unwrap();
 
-        assert_eq!(
-            nunsolarized_theme
-                .as_style(Meaning::Guidance)
-                .foreground_color,
-            None
-        );
+        assert_eq!(nunsolarized_theme.as_style(Meaning::Guidance).foreground_color, None);
 
         let captured_logs = logs.get();
         assert_eq!(captured_logs.len(), 1);
         assert_eq!(
             captured_logs[0].message,
-            "Could not load theme nonsolarized: Empty theme directory override and could not find theme elsewhere"
+            "Could not load theme nonsolarized: Empty theme directory override and could not find \
+             theme elsewhere"
         );
-        assert_eq!(captured_logs[0].level, tracing::Level::WARN)
+        assert_eq!(captured_logs[0].level, tracing::Level::WARN);
     }
 
     #[rstest]
@@ -760,24 +691,25 @@ mod theme_tests {
         AlertInfo = \"xinetic\"
         ",
         );
-        manager
-            .load_theme_from_config("config_theme", config, 1)
-            .unwrap();
-        let captured_logs = logs.get();
+        manager.load_theme_from_config("config_theme", config, 1).unwrap();
         if debug {
+            let captured_logs = logs.get();
             assert_eq!(captured_logs.len(), 2);
             assert_eq!(
                 captured_logs[0].message,
-                "Your theme config name is not the name of your loaded theme config_theme != mytheme"
+                "Your theme config name is not the name of your loaded theme config_theme != \
+                 mytheme"
             );
             assert_eq!(captured_logs[0].level, tracing::Level::WARN);
             assert_eq!(
                 captured_logs[1].message,
-                "Tried to load string as a color unsuccessfully: (AlertInfo=xinetic) No such color in palette"
+                "Tried to load string as a color unsuccessfully: (AlertInfo=xinetic) No such \
+                 color in palette"
             );
             assert_eq!(captured_logs[1].level, tracing::Level::WARN);
+            drop(captured_logs);
         } else {
-            assert_eq!(captured_logs.len(), 0);
+            assert_eq!(logs.get().len(), 0);
         }
     }
 
@@ -812,9 +744,7 @@ mod theme_tests {
     fn rejects_at_prefixed_color_string(#[case] input: &str) {
         assert_eq!(
             from_string(input),
-            Err(format!(
-                "Could not convert color name {input} to Crossterm color"
-            ))
+            Err(format!("Could not convert color name {input} to Crossterm color"))
         );
     }
 }

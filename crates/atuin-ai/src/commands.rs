@@ -3,7 +3,6 @@ use atuin_client::settings::Settings;
 use atuin_common::logs::{FileConfig, LogConfig, StderrConfig};
 use atuin_common::shell::Shell;
 use clap::{Args, Subcommand};
-pub mod init;
 pub(crate) mod inline;
 
 #[derive(Args, Debug)]
@@ -23,13 +22,6 @@ pub struct AiArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Initialize shell integration
-    Init {
-        /// Shell to generate integration for; defaults to "auto"
-        #[arg(value_name = "SHELL", default_value = "auto")]
-        shell: String,
-    },
-
     /// Inline completion mode with small TUI overlay
     Inline {
         #[command(flatten)]
@@ -43,32 +35,47 @@ pub enum Command {
         #[arg(long, hide = true)]
         hook: bool,
     },
+    #[command(hide = true)]
+    /// This command is no longer necessary. If you have it in your shell init file, feel free to
+    /// remove it.
+    Init {
+        #[arg(hide = true)]
+        _shell: Option<std::ffi::OsString>,
+    },
 }
 
 impl Command {
-    pub fn log_config(&self, settings: &Settings) -> LogConfig {
+    pub fn log_config(&self, settings: &Settings) -> Option<LogConfig> {
         match self {
-            Self::Inline { args, .. } => LogConfig {
+            Self::Inline { args, .. } => Some(LogConfig {
                 file: FileConfig::from_settings(&settings.logs, &settings.logs.ai),
                 stderr: args.verbose.then(StderrConfig::default),
-            },
-            _ => LogConfig::stderr_only(),
+            }),
+            Self::Init { .. } => None,
         }
     }
 }
 
 pub async fn run(command: Command, settings: &Settings) -> eyre::Result<()> {
     match command {
-        Command::Init { shell } => init::run(shell).await,
         Command::Inline {
             command,
             hook,
             args,
             ..
         } => inline::run(command, args.api_endpoint, args.api_token, settings, hook).await,
+        Command::Init { .. } => {
+            // This is valid comment syntax in all the shells we support and thus a no-op: bash,
+            // zsh, fish, nushell, xonsh, and powershell.
+            println!(
+                "# This command is no longer necessary. If you have it in your shell init file, \
+                 feel free to remove it."
+            );
+            Ok(())
+        }
     }
 }
 
-pub(crate) fn detect_shell() -> Option<String> {
-    Some(Shell::current().to_string())
+pub(crate) fn detect_shell() -> String {
+    Shell::current().to_string()
 }

@@ -5,11 +5,15 @@
 
 /// Conversation event types matching the API protocol.
 #[derive(Debug, Clone)]
-pub(crate) enum ConversationEvent {
+pub enum ConversationEvent {
     /// User message (what the user typed)
-    UserMessage { content: String },
+    UserMessage {
+        content: String,
+    },
     /// Text content from assistant (streamed or complete)
-    Text { content: String },
+    Text {
+        content: String,
+    },
     /// Tool call from assistant
     ToolCall {
         id: String,
@@ -35,7 +39,9 @@ pub(crate) enum ConversationEvent {
     },
     /// Context injected for the LLM that is not rendered in the TUI.
     /// Converted to a user message in the API protocol.
-    SystemContext { content: String },
+    SystemContext {
+        content: String,
+    },
     /// A skill was loaded and its content injected into the conversation.
     /// Serialized as a full user message for the API but rendered compactly
     /// in the TUI (just the `/name args` invocation line).
@@ -50,19 +56,19 @@ impl ConversationEvent {
     /// Whether this event represents actual conversation content sent to the API.
     pub(crate) fn is_api_content(&self) -> bool {
         match self {
-            ConversationEvent::UserMessage { .. } => true,
-            ConversationEvent::Text { .. } => true,
-            ConversationEvent::ToolCall { .. } => true,
-            ConversationEvent::ToolResult { .. } => true,
-            ConversationEvent::OutOfBandOutput { .. } => false,
-            ConversationEvent::SystemContext { .. } => false,
-            ConversationEvent::SkillInvocation { .. } => true,
+            Self::UserMessage { .. } => true,
+            Self::Text { .. } => true,
+            Self::ToolCall { .. } => true,
+            Self::ToolResult { .. } => true,
+            Self::OutOfBandOutput { .. } => false,
+            Self::SystemContext { .. } => false,
+            Self::SkillInvocation { .. } => true,
         }
     }
 
     /// Extract command from a suggest_command tool call.
     pub(crate) fn as_command(&self) -> Option<&str> {
-        if let ConversationEvent::ToolCall { name, input, .. } = self
+        if let Self::ToolCall { name, input, .. } = self
             && name == "suggest_command"
         {
             return input.get("command").and_then(|v| v.as_str());
@@ -77,7 +83,7 @@ impl ConversationEvent {
 /// builder to convert turn slices independently. The logic handles combining
 /// adjacent Text + ToolCall events into single assistant messages with mixed
 /// content blocks.
-pub(crate) fn events_to_messages(events: &[ConversationEvent]) -> Vec<serde_json::Value> {
+pub fn events_to_messages(events: &[ConversationEvent]) -> Vec<serde_json::Value> {
     let mut messages = Vec::new();
     let mut i = 0;
 
@@ -125,14 +131,13 @@ pub(crate) fn events_to_messages(events: &[ConversationEvent]) -> Vec<serde_json
                         "role": "assistant",
                         "content": content_blocks
                     }));
-                    i += 1;
                 } else {
                     messages.push(serde_json::json!({
                         "role": "assistant",
                         "content": content
                     }));
-                    i += 1;
                 }
+                i += 1;
             }
             ConversationEvent::ToolCall { .. } => {
                 let mut tool_uses = Vec::new();

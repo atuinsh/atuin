@@ -2,30 +2,31 @@
 //!
 //! Handles command history lifecycle (start/end) and provides the History gRPC service.
 
-use std::{pin::Pin, sync::Arc};
+use std::pin::Pin;
+use std::sync::Arc;
 
-use atuin_client::{
-    database::Database,
-    history::{History, HistoryId, store::HistoryStore},
-    settings::Settings,
-};
+use atuin_client::history::store::HistoryStore;
+use atuin_client::history::{History, HistoryId};
+use atuin_client::packfile;
+use atuin_client::settings::Settings;
 use atuin_common::time::OffsetDateTimeExt;
+use atuin_domain::caps::PackfileCap;
+use atuin_domain::record::{CmdOrigin, RecordSeriesKey, RecordTag};
 use dashmap::DashMap;
+use easy_cast::Conv;
 use eyre::Result;
 use time::OffsetDateTime;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 use tracing::{Level, instrument};
 
-use crate::{
-    daemon::{Component, DaemonHandle},
-    events::DaemonEvent,
-    history::{
-        CancelHistoryReply, CancelHistoryRequest, EndHistoryReply, EndHistoryRequest, HistoryEntry,
-        HistoryEventKind, ShutdownReply, ShutdownRequest, StartHistoryReply, StartHistoryRequest,
-        StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
-        history_server::{History as HistorySvc, HistoryServer},
-    },
+use crate::daemon::{Component, DaemonHandle};
+use crate::events::DaemonEvent;
+use crate::history::history_server::{History as HistorySvc, HistoryServer};
+use crate::history::{
+    AuthorKind, CancelHistoryReply, CancelHistoryRequest, EndHistoryReply, EndHistoryRequest,
+    HistoryEntry, HistoryEventKind, ShutdownReply, ShutdownRequest, StartHistoryReply,
+    StartHistoryRequest, StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
 };
 
 const DAEMON_PROTOCOL_VERSION: u32 = 1;
@@ -54,6 +55,7 @@ struct HistoryComponentInner {
 
 impl HistoryComponent {
     /// Create a new history component.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             inner: Arc::new(HistoryComponentInner {
@@ -67,6 +69,7 @@ impl HistoryComponent {
     /// Get the gRPC service for this component.
     ///
     /// This returns a tonic service that can be added to a gRPC server.
+    #[must_use]
     pub fn grpc_service(&self) -> HistoryServer<HistoryGrpcService> {
         HistoryServer::new(HistoryGrpcService {
             inner: self.inner.clone(),
@@ -88,11 +91,8 @@ impl Component for HistoryComponent {
     async fn start(&mut self, handle: DaemonHandle) -> Result<()> {
         // Create the history store
         let host_id = Settings::host_id().await?;
-        let history_store = HistoryStore::new(
-            handle.store().clone(),
-            host_id,
-            handle.encryption_key().clone(),
-        );
+        let history_store =
+            HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
 
         *self.inner.history_store.write().await = Some(history_store);
         *self.inner.handle.write().await = Some(handle);
@@ -123,17 +123,18 @@ fn history_to_tail_reply(kind: HistoryEventKind, history: History) -> TailHistor
     TailHistoryReply {
         kind: kind as i32,
         history: Some(HistoryEntry {
-            timestamp: history.timestamp.unix_timestamp_nanos() as u64,
-            id: history.id.0,
+            timestamp: u64::conv(history.timestamp.unix_timestamp_nanos()),
+            id: history.id.to_string(),
             command: history.command,
             cwd: history.cwd,
             session: history.session,
-            hostname: history.hostname,
+            hostname: history.cmd_origin.into_string(),
             author: history.author,
             intent: history.intent.unwrap_or_default(),
             exit: history.exit,
             duration: history.duration,
             shell: history.shell.unwrap_or_default(),
+            author_kind: AuthorKind::from(history.author_kind) as i32,
         }),
     }
 }
@@ -150,16 +151,20 @@ impl HistorySvc for HistoryGrpcService {
         let req = request.into_inner();
 
         let timestamp = OffsetDateTime::from_unix_nanos_u64(req.timestamp);
+        let author_kind = req.author_kind();
 
+        let cmd_origin = CmdOrigin::try_from(req.hostname)
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
         let h: History = History::daemon()
             .timestamp(timestamp)
             .command(req.command)
             .cwd(req.cwd)
             .session(req.session)
-            .hostname(req.hostname)
+            .cmd_origin(cmd_origin)
             .author(req.author)
             .intent(req.intent)
             .shell(req.shell)
+            .author_kind(author_kind.into())
             .build()
             .into();
 
@@ -168,9 +173,9 @@ impl HistorySvc for HistoryGrpcService {
             handle.emit(DaemonEvent::HistoryStarted(h.clone()));
         }
 
-        let id = h.id.clone();
+        let id = h.id;
         tracing::info!(id = id.to_string(), "start history");
-        self.inner.running.insert(id.clone(), h);
+        self.inner.running.insert(id, h);
 
         let reply = StartHistoryReply {
             id: id.to_string(),
@@ -187,7 +192,10 @@ impl HistorySvc for HistoryGrpcService {
         request: Request<EndHistoryRequest>,
     ) -> Result<Response<EndHistoryReply>, Status> {
         let req = request.into_inner();
-        let id = HistoryId(req.id);
+        let id: HistoryId = req
+            .id
+            .parse()
+            .map_err(|_| Status::invalid_argument(format!("invalid history id: {}", req.id)))?;
 
         if let Some((_, mut history)) = self.inner.running.remove(&id) {
             history.exit = req.exit;
@@ -201,15 +209,22 @@ impl HistorySvc for HistoryGrpcService {
                 value => i64::try_from(value).unwrap_or(i64::MAX),
             };
 
-            // Get the handle and store to save the history
-            let handle_guard = self.inner.handle.read().await;
-            let handle = handle_guard
-                .as_ref()
+            // Get the handle and store to save the history. Clone the handles to avoid holding the
+            // `RwLock`s for a long period of time.
+            let handle = self
+                .inner
+                .handle
+                .read()
+                .await
+                .clone()
                 .ok_or_else(|| Status::internal("component not initialized"))?;
 
-            let store_guard = self.inner.history_store.read().await;
-            let history_store = store_guard
-                .as_ref()
+            let history_store = self
+                .inner
+                .history_store
+                .read()
+                .await
+                .clone()
                 .ok_or_else(|| Status::internal("component not initialized"))?;
 
             // Save to database
@@ -219,17 +234,23 @@ impl HistorySvc for HistoryGrpcService {
                 .await
                 .map_err(|e| Status::internal(format!("failed to write to db: {e:?}")))?;
 
-            tracing::info!(
-                id = id.0.to_string(),
-                duration = history.duration,
-                "end history"
-            );
+            tracing::info!(id = %id, duration = history.duration, "end history");
 
             // Push to record store
             let (record_id, idx) = history_store
                 .push(history.clone())
                 .await
                 .map_err(|e| Status::internal(format!("failed to push record to store: {e:?}")))?;
+
+            if let Err(e) = packfile::try_pack(
+                &history_store.store,
+                &RecordSeriesKey::new(history_store.host_id, RecordTag::History),
+                handle.caps().get_server::<PackfileCap>().await.ok().flatten(),
+            )
+            .await
+            {
+                tracing::warn!("packing failed: {e}");
+            }
 
             // Emit the event
             handle.emit(DaemonEvent::HistoryEnded(history));
@@ -244,9 +265,7 @@ impl HistorySvc for HistoryGrpcService {
             return Ok(Response::new(reply));
         }
 
-        Err(Status::not_found(format!(
-            "could not find history with id: {id}"
-        )))
+        Err(Status::not_found(format!("could not find history with id: {id}")))
     }
 
     #[instrument(skip_all, level = Level::INFO)]
@@ -255,16 +274,17 @@ impl HistorySvc for HistoryGrpcService {
         request: Request<CancelHistoryRequest>,
     ) -> Result<Response<CancelHistoryReply>, Status> {
         let req = request.into_inner();
-        let id = HistoryId(req.id);
+        let id: HistoryId = req
+            .id
+            .parse()
+            .map_err(|_| Status::invalid_argument(format!("invalid history id: {}", req.id)))?;
         if self.inner.running.remove(&id).is_some() {
             Ok(Response::new(CancelHistoryReply {
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 protocol: DAEMON_PROTOCOL_VERSION,
             }))
         } else {
-            Err(Status::not_found(format!(
-                "could not find history with id: {id}"
-            )))
+            Err(Status::not_found(format!("could not find history with id: {id}")))
         }
     }
 
@@ -273,10 +293,12 @@ impl HistorySvc for HistoryGrpcService {
         &self,
         _request: Request<TailHistoryRequest>,
     ) -> Result<Response<Self::TailHistoryStream>, Status> {
-        let handle_guard = self.inner.handle.read().await;
-        let handle = handle_guard
-            .as_ref()
-            .cloned()
+        let handle = self
+            .inner
+            .handle
+            .read()
+            .await
+            .clone()
             .ok_or_else(|| Status::internal("component not initialized"))?;
 
         let mut rx = handle.subscribe();

@@ -1,6 +1,8 @@
-use crate::settings;
-use atuin_common::logs::{FileConfig, LogConfig};
 use std::path::PathBuf;
+
+use atuin_common::logs::{FileConfig, LogConfig};
+
+use crate::settings;
 
 pub trait FromSettings: Sized {
     type Output;

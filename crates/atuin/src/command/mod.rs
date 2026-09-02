@@ -1,7 +1,6 @@
 use atuin_common::logs::LogConfig;
 use clap::Subcommand;
 use eyre::Result;
-
 #[cfg(not(windows))]
 use rustix::{fs::Mode, process::umask};
 
@@ -48,12 +47,11 @@ impl AtuinCmd {
         #[cfg(not(windows))]
         let prev_umask = umask(Mode::RWXG | Mode::RWXO);
 
-        match self {
-            // Client commands initialize their own logging
+        let _log_guard = match &self {
             #[cfg(feature = "client")]
-            Self::Client(_) => {}
-            _ => crate::logs::init_logging(&LogConfig::stderr_only()),
-        }
+            Self::Client(_) => None,
+            _ => Some(crate::logs::LogCtx::try_enable("atuin", &LogConfig::stderr_only())?),
+        };
 
         match self {
             #[cfg(feature = "client")]
@@ -112,10 +110,7 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
     let (tx, rx) = mpsc::sync_channel::<atuin_pty_proxy::CommandCapture>(128);
 
     std::thread::spawn(move || {
-        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        else {
+        let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
             return;
         };
 

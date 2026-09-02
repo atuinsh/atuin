@@ -9,8 +9,8 @@
 mod unix {
     use std::time::Duration;
 
-    use atuin_client::database::{Context, Database, Sqlite};
-    use atuin_client::history::History;
+    use atuin_client::database::{Context, Sqlite};
+    use atuin_client::history::{History, HistoryId};
     use atuin_client::record::sqlite_store::SqliteStore;
     use atuin_client::settings::{FilterMode, Settings, init_meta_config_for_testing};
     use atuin_common::filter::OrFilter;
@@ -37,7 +37,10 @@ mod unix {
             .timestamp(time::OffsetDateTime::now_utc())
             .command(command)
             .cwd(cwd)
-            .hostname(hostname.to_string())
+            .cmd_origin(
+                #[allow(deprecated)]
+                atuin_domain::record::CmdOrigin::parse_lenient(hostname),
+            )
             .session(session.to_string())
             .build()
             .into();
@@ -75,11 +78,11 @@ mod unix {
             .try_deserialize()
             .expect("could not deserialize settings");
 
-        let history_db = Sqlite::new(&db_path, 5.0).await.unwrap();
+        let history_db = Sqlite::new(&db_path, Duration::from_secs(5)).await.unwrap();
         for history in seeded {
             history_db.save(history).await.unwrap();
         }
-        let store = SqliteStore::new(&record_path, 5.0).await.unwrap();
+        let store = SqliteStore::new(&record_path, Duration::from_secs(5)).await.unwrap();
 
         let search_component = SearchComponent::new();
         let search_service = search_component.grpc_service();
@@ -89,7 +92,6 @@ mod unix {
             .history_db(history_db)
             .component(search_component)
             .build()
-            .await
             .unwrap();
 
         let handle = daemon.handle();
@@ -108,7 +110,7 @@ mod unix {
                     loop {
                         match rx.recv().await {
                             Ok(atuin_daemon::DaemonEvent::ShutdownRequested) => break,
-                            Ok(_) => continue,
+                            Ok(_) => {}
                             Err(_) => break,
                         }
                     }
@@ -132,13 +134,14 @@ mod unix {
         Context {
             session: session.to_string(),
             cwd: cwd.to_string(),
-            hostname: hostname.to_string(),
+            #[allow(deprecated)]
+            cmd_origin: atuin_domain::record::CmdOrigin::parse_lenient(hostname),
             host_id: "test-host-id".to_string(),
             git_root: git_root.map(Into::into),
         }
     }
 
-    /// Runs one search and returns the matched history ids (hyphenated uuids).
+    /// Runs one search and returns the matched history ids.
     async fn search(
         client: &mut SearchClient,
         query_id: u64,
@@ -146,7 +149,7 @@ mod unix {
         filter_mode: FilterMode,
         context: Context,
         shells: &[&str],
-    ) -> Vec<String> {
+    ) -> Vec<HistoryId> {
         let params = SearchParams {
             query: query.to_string(),
             query_id,
@@ -163,22 +166,17 @@ mod unix {
             .iter()
             .map(|id| {
                 let bytes: [u8; 16] = id.as_slice().try_into().unwrap();
-                Uuid::from_bytes(bytes).to_string()
+                HistoryId::new(Uuid::from_bytes(bytes))
             })
             .collect()
     }
 
-    fn ids_of(entries: &[&History]) -> Vec<String> {
-        let mut ids: Vec<String> = entries
-            .iter()
-            .map(|h| Uuid::parse_str(&h.id.0).unwrap().to_string())
-            .collect();
-        ids.sort();
-        ids
+    fn ids_of(entries: &[&History]) -> Vec<HistoryId> {
+        sorted(entries.iter().map(|e| e.id).collect())
     }
 
-    fn sorted(mut ids: Vec<String>) -> Vec<String> {
-        ids.sort();
+    fn sorted(mut ids: Vec<HistoryId>) -> Vec<HistoryId> {
+        ids.sort_by_key(|id| id.to_string());
         ids
     }
 
@@ -187,13 +185,7 @@ mod unix {
         // alpha: bash, host-a, session A, inside the workspace
         // beta:  zsh, host-b, session B, outside the workspace
         // gamma: unknown shell, host-a, session A, workspace root
-        let alpha = seed_history(
-            "echo alpha",
-            "/work/repo/sub",
-            "host-a",
-            SESSION_A,
-            Some("bash"),
-        );
+        let alpha = seed_history("echo alpha", "/work/repo/sub", "host-a", SESSION_A, Some("bash"));
         let beta = seed_history("echo beta", "/elsewhere", "host-b", SESSION_B, Some("zsh"));
         let gamma = seed_history("echo gamma", "/work/repo", "host-a", SESSION_A, None);
         let seeded = [alpha.clone(), beta.clone(), gamma.clone()];
@@ -206,15 +198,8 @@ mod unix {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {
             query_id += 1;
-            let results = search(
-                &mut client,
-                query_id,
-                "echo",
-                FilterMode::Global,
-                ctx(),
-                &[],
-            )
-            .await;
+            let results =
+                search(&mut client, query_id, "echo", FilterMode::Global, ctx(), &[]).await;
             if results.len() == 3 {
                 break;
             }
@@ -227,15 +212,8 @@ mod unix {
 
         // Directory: exact cwd match only.
         query_id += 1;
-        let results = search(
-            &mut client,
-            query_id,
-            "echo",
-            FilterMode::Directory,
-            ctx(),
-            &[],
-        )
-        .await;
+        let results =
+            search(&mut client, query_id, "echo", FilterMode::Directory, ctx(), &[]).await;
         assert_eq!(sorted(results), ids_of(&[&gamma]), "directory filter");
 
         // Workspace: everything under the git root.
@@ -266,15 +244,7 @@ mod unix {
 
         // Session: both session-A commands.
         query_id += 1;
-        let results = search(
-            &mut client,
-            query_id,
-            "echo",
-            FilterMode::Session,
-            ctx(),
-            &[],
-        )
-        .await;
+        let results = search(&mut client, query_id, "echo", FilterMode::Session, ctx(), &[]).await;
         assert_eq!(sorted(results), ids_of(&[&alpha, &gamma]), "session");
 
         // Unknown filter targets match nothing rather than erroring.
@@ -299,15 +269,8 @@ mod unix {
             (vec![], ids_of(&[&alpha, &beta, &gamma]), "back to all"),
         ] {
             query_id += 1;
-            let results = search(
-                &mut client,
-                query_id,
-                "echo",
-                FilterMode::Global,
-                ctx(),
-                &shells,
-            )
-            .await;
+            let results =
+                search(&mut client, query_id, "echo", FilterMode::Global, ctx(), &shells).await;
             assert_eq!(sorted(results), expected, "shell filter: {label}");
         }
 

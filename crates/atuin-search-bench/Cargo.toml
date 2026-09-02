@@ -13,14 +13,21 @@ dist = false
 [lib]
 bench = false
 
+[dependencies]
+easy-cast = { workspace = true }
+
 [dev-dependencies]
 atuin-client = { workspace = true }
 atuin-common = { workspace = true }
 atuin-daemon = { workspace = true }
-divan = { version = "5.0.1", package = "codspeed-divan-compat" }
+divan = { workspace = true }
+parking_lot = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
 
 [[bench]]
 name = "search"
 harness = false
+
+[lints]
+workspace = true

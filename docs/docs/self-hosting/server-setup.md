@@ -1,12 +1,19 @@
-# Server setup
+# Atuin Server
 
-While we offer a public sync server, and can't view your data (as it's encrypted), you may still wish to self host your own Atuin sync server.
+While we offer a hosted, encrypted and secure server at [Atuin
+Hub](https://hub.atuin.sh/), you may still wish to host your own Atuin server.
 
-The requirements to do so are pretty minimal! You need to be able to run a binary or docker container, and have a PostgreSQL database set up. Atuin requires PostgreSQL 14 or above.
+## Requirements
 
-Alternatively, the server can use SQLite (version 3 or above) instead of PostgreSQL.
+- You need to be able to run a binary or Docker container on a server.
+- You must have either a PostgreSQL, MySQL or SQLite database.
 
-The server is distributed as a separate binary, `atuin-server`. Prebuilt binaries and an installer are published with every release on the [GitHub releases page](https://github.com/atuinsh/atuin/releases). For example, to install the latest release:
+## Quickstart
+
+The server is distributed as a separate binary, `atuin-server`. Prebuilt
+binaries and an installer are published with every release on the [GitHub
+releases page](https://github.com/atuinsh/atuin/releases). You can install the
+latest version with:
 
 ```shell
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/atuinsh/atuin/releases/latest/download/atuin-server-installer.sh | sh
@@ -17,9 +24,6 @@ Once installed, start the server with:
 ```shell
 atuin-server start
 ```
-
-!!! note
-    Before v18.12.0, the server was bundled into the main `atuin` binary and started with `atuin server start`. If you're upgrading from an older release, you will need to install the new `atuin-server` binary and update any service files (systemd, docker, k8s) to invoke `atuin-server` instead of `atuin server`. See the [release notes](https://github.com/atuinsh/atuin/releases) for details.
 
 ## Configuration
 
@@ -44,30 +48,74 @@ ATUIN_OPEN_REGISTRATION=true
 ATUIN_DB_URI="postgres://user:password@hostname/database"
 ```
 
-| Parameter           | Description                                                    |
-| ------------------- | -------------------------------------------------------------- |
-| `host`              | The host to listen on (default: 127.0.0.1)                     |
-| `port`              | The TCP port to listen on (default: 8888)                      |
-| `open_registration` | If `true`, accept new user registrations (default: false)      |
-| `db_uri`            | A valid PostgreSQL or SQLite URI, for saving history (required, no default) |
-| `path`              | A path to prepend to all routes of the server (default: empty) |
+| Parameter           | Description                                                     |
+| ------------------- | --------------------------------------------------------------- |
+| `db_uri`            | A valid database URI, for saving history (required, no default) |
+| `host`              | The host to listen on (default: 127.0.0.1)                      |
+| `port`              | The TCP port to listen on (default: 8888)                       |
+| `open_registration` | If `true`, accept new user registrations (default: false)       |
+| `path`              | A path to prepend to all routes of the server (default: empty)  |
 
-For SQLite, use the following in your server.toml:
+## Database
 
-```toml
-db_uri="sqlite:///config/atuin.db"
-```
+You **must** configure the database as Atuin can't proceed without one. You
+can do so either in `server.toml` or via the environment variable:
 
-Alternatively, provide the Database URI via an environment variable
+=== "Postgres"
 
-```sh
-ATUIN_DB_URI="sqlite:///config/atuin.db"
-```
+    Using `server.toml`:
 
-These will create the database in the `/config` directory. Be sure to map a persistent volume to the `/config` directory that's writable by the Atuin server.
+    ```toml
+    db_uri="postgres://user:password@hostname/database"
+    ```
 
-### TLS
+    Using the `ATUIN_DB_URI` environment variable:
 
-For TLS/HTTPS support, we recommend using a reverse proxy such as nginx, Caddy, or Traefik in front of the Atuin server. This is the standard approach for containerized applications and provides better flexibility for certificate management.
+    ```bash
+    ATUIN_DB_URI="postgres://user:password@hostname/database"
+    ```
 
-> **Note:** The built-in `[tls]` configuration option has been removed. If you were previously using it, please migrate to a reverse proxy setup. Any existing `[tls]` sections in your config will be ignored.
+=== "SQLite"
+
+    Using `server.toml`:
+
+    ```toml
+    db_uri="sqlite:///config/atuin.db"
+    ```
+
+    Using the `ATUIN_DB_URI` environment variable:
+
+    ```bash
+    ATUIN_DB_URI="sqlite:///config/atuin.db"
+    ```
+
+    **Note that atuin will create this file if it does not exist.**
+
+=== "MySQL"
+
+    Using `server.toml`:
+
+    ```toml
+    db_uri="mysql://user:password@hostname/database"
+    ```
+
+    Using the `ATUIN_DB_URI` environment variable:
+
+    ```bash
+    ATUIN_DB_URI="mysql://user:password@hostname/database"
+    ```
+
+    !!! warn "Support"
+
+        MySQL is currently considered a tier-two database meaning that,
+        although we support it, issues are deprioritized in favor of tier-one
+        databases -- PostgreSQL and SQLite.
+
+## TLS
+
+We strongly urge you enable TLS with Atuin. Without TLS, passwords are sent
+plaintext, which is wildly insecure.
+
+For TLS/HTTPS support, we recommend using a reverse proxy such as
+[nginx](https://nginx.org/), [Caddy](https://caddyserver.com/), or
+[Traefik](https://traefik.io/traefik) in front of the Atuin server.

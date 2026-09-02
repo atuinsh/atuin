@@ -11,7 +11,7 @@ struct FoundRuleFile {
     file: RuleFile,
 }
 
-pub(crate) struct PermissionWalker {
+pub struct PermissionWalker {
     start: PathBuf,
     /// Direct path to the global permissions file (e.g. `~/.config/atuin/permissions.ai.toml`).
     global_permissions_file: Option<PathBuf>,
@@ -76,15 +76,12 @@ impl PermissionWalker {
                 Ok(Some(FoundRuleFile { depth, file })) => {
                     found.push((depth, file));
                 }
-                Ok(None) => {
-                    continue;
-                }
+                Ok(None) => {}
                 Err(e) => {
                     tracing::error!(
                         "Error while walking filesystem for permissions check; skipping: {}",
                         e
                     );
-                    continue;
                 }
             }
         }
@@ -112,10 +109,7 @@ async fn load_permissions_file(file_path: &Path) -> Result<Option<RuleFile>> {
     let content: RuleFileContent = toml::from_str(&raw)?;
 
     // Use the file's parent as the rule file path (for logging/debugging)
-    let path = file_path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| file_path.to_path_buf());
+    let path = file_path.parent().map(Path::to_path_buf).unwrap_or_else(|| file_path.to_path_buf());
 
     Ok(Some(RuleFile { path, content }))
 }

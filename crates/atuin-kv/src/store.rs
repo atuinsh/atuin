@@ -1,11 +1,12 @@
 use std::collections::HashSet;
 
-use eyre::{Result, eyre};
-
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4;
-use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx, RecordTag, RecordVersion};
+use atuin_domain::record::{
+    Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag, RecordVersion,
+};
 use entry::KvEntry;
+use eyre::{Result, eyre};
 use record::KvRecord;
 
 use crate::database::Database;
@@ -22,13 +23,14 @@ pub struct KvStore {
 }
 
 impl KvStore {
+    #[must_use]
     pub fn new(
         record_store: SqliteStore,
         kv_db: Database,
         host_id: HostId,
         encryption_key: paseto_v4::Key,
     ) -> Self {
-        KvStore {
+        Self {
             record_store,
             kv_db,
             host_id,
@@ -45,11 +47,11 @@ impl KvStore {
 
         self.push_record(kv_record).await?;
 
-        let kv = KvEntry::builder()
-            .namespace(namespace.to_string())
-            .key(key.to_string())
-            .value(value.to_string())
-            .build();
+        let kv = KvEntry {
+            namespace: namespace.to_string(),
+            key: key.to_string(),
+            value: value.to_string(),
+        };
 
         self.kv_db.save(&kv).await?;
 
@@ -65,7 +67,7 @@ impl KvStore {
         for key in keys {
             let record = KvRecord::builder()
                 .namespace(namespace.to_string())
-                .key(key.to_string())
+                .key(key.clone())
                 .value(None)
                 .build();
 
@@ -86,7 +88,7 @@ impl KvStore {
         let bytes = record.serialize()?;
         let idx = self
             .record_store
-            .last(self.host_id, &RecordTag::Kv)
+            .last(&RecordSeriesKey::new(self.host_id, RecordTag::Kv))
             .await?
             .map_or(0, |p| p.idx + 1);
 
@@ -100,9 +102,7 @@ impl KvStore {
 
         let id = record.id;
 
-        self.record_store
-            .push(&record.encrypt(&self.encryption_key))
-            .await?;
+        self.record_store.push(&record.encrypt(&self.encryption_key)).await?;
 
         Ok((id, idx))
     }
@@ -144,19 +144,15 @@ impl KvStore {
                 match kv.value {
                     Some(value) => {
                         self.kv_db
-                            .save(
-                                &KvEntry::builder()
-                                    .namespace(kv.namespace.clone())
-                                    .key(kv.key.clone())
-                                    .value(value)
-                                    .build(),
-                            )
+                            .save(&KvEntry {
+                                namespace: kv.namespace.clone(),
+                                key: kv.key.clone(),
+                                value,
+                            })
                             .await?;
                     }
                     None => {
-                        self.kv_db
-                            .delete(kv.namespace.as_str(), kv.key.as_str())
-                            .await?;
+                        self.kv_db.delete(kv.namespace.as_str(), kv.key.as_str()).await?;
                     }
                 }
             }
@@ -167,9 +163,7 @@ impl KvStore {
         // but just in case because ** S O F T W A R E **
         for kv in cached {
             if !visited.contains(&format!("{}.{}", kv.namespace, kv.key)) {
-                self.kv_db
-                    .delete(kv.namespace.as_str(), kv.key.as_str())
-                    .await?;
+                self.kv_db.delete(kv.namespace.as_str(), kv.key.as_str()).await?;
             }
         }
 
@@ -184,13 +178,14 @@ impl KvStore {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::{fixture, rstest};
+
+    use super::*;
 
     #[fixture]
     async fn store() -> KvStore {
-        let record_store = SqliteStore::new("sqlite::memory:", 1.0).await.unwrap();
-        let kv_db = Database::new("sqlite::memory:", 1.0).await.unwrap();
+        let record_store = SqliteStore::in_memory(std::time::Duration::from_secs(1)).await.unwrap();
+        let kv_db = Database::in_memory(std::time::Duration::from_secs(1)).await.unwrap();
         let host_id = atuin_domain::record::HostId(atuin_common::utils::uuid_v7());
         let encryption_key = paseto_v4::Key::from([0; 32]);
         KvStore::new(record_store, kv_db, host_id, encryption_key)
@@ -207,13 +202,11 @@ mod tests {
         assert_eq!(records.len(), 1);
 
         let list = store.list(Some("test")).await.unwrap();
-        let expected = vec![
-            KvEntry::builder()
-                .namespace("test".to_string())
-                .key("key".to_string())
-                .value("value".to_string())
-                .build(),
-        ];
+        let expected = vec![KvEntry {
+            namespace: "test".to_string(),
+            key: "key".to_string(),
+            value: "value".to_string(),
+        }];
         assert_eq!(list, expected);
 
         let ns_list = store.list(None).await.unwrap();

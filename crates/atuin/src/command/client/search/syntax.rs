@@ -3,6 +3,7 @@
 //! build (see the note in Cargo.toml), commands are left unhighlighted.
 
 use atuin_client::theme::Meaning;
+use easy_cast::Conv;
 
 /// Style every byte of `cmd` with a `Syntax*` meaning, parsing with the
 /// grammar for the entry's shell. Anything unrecognized (plain arguments,
@@ -10,12 +11,8 @@ use atuin_client::theme::Meaning;
 ///
 /// Rows are re-classified on every redraw while typing or scrolling, so
 /// results are memoized; repeat frames cost a hash lookup, not a parse.
-#[cfg(any(
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows",
-    target_os = "illumos"
-))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "illumos"))]
+#[must_use]
 pub fn classify(cmd: &str, shell: Option<&str>) -> Vec<Meaning> {
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -29,19 +26,11 @@ pub fn classify(cmd: &str, shell: Option<&str>) -> Vec<Meaning> {
         if cache.len() > 4096 {
             cache.clear();
         }
-        cache
-            .entry(key)
-            .or_insert_with(|| parse(cmd, shell))
-            .clone()
+        cache.entry(key).or_insert_with(|| parse(cmd, shell)).clone()
     })
 }
 
-#[cfg(any(
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows",
-    target_os = "illumos"
-))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "illumos"))]
 fn parse(cmd: &str, shell: Option<&str>) -> Vec<Meaning> {
     let mut meanings = vec![Meaning::Base; cmd.len()];
 
@@ -78,12 +67,7 @@ pub fn classify(cmd: &str, _shell: Option<&str>) -> Vec<Meaning> {
     vec![Meaning::Base; cmd.len()]
 }
 
-#[cfg(any(
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows",
-    target_os = "illumos"
-))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "illumos"))]
 fn walk(node: tree_sitter::Node, src: &[u8], meanings: &mut [Meaning]) {
     let meaning = match node.kind() {
         "comment" => Some(Meaning::SyntaxComment),
@@ -124,10 +108,7 @@ fn walk(node: tree_sitter::Node, src: &[u8], meanings: &mut [Meaning]) {
 
     // An expansion is uniformly a variable; don't let its `$`/`${`/`}` child
     // tokens overwrite it as operators.
-    if matches!(
-        node.kind(),
-        "simple_expansion" | "expansion" | "variable_expansion"
-    ) {
+    if matches!(node.kind(), "simple_expansion" | "expansion" | "variable_expansion") {
         return;
     }
 
@@ -139,19 +120,14 @@ fn walk(node: tree_sitter::Node, src: &[u8], meanings: &mut [Meaning]) {
     }
 }
 
-#[cfg(any(
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows",
-    target_os = "illumos"
-))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "illumos"))]
 fn highlight_powershell(node: tree_sitter::Node, src: &[u8], meanings: &mut [Meaning]) {
     // PowerShell has a different syntax than most shells, so it's handled separately.
 
     static HIGHLIGHTS_QUERY: std::sync::LazyLock<tree_sitter::Query> =
         std::sync::LazyLock::new(|| {
             let language: tree_sitter::Language = tree_sitter_powershell::LANGUAGE.into();
-            tree_sitter::Query::new(&language, tree_sitter_powershell::HIGHLIGHTS_QUERY)
+            tree_sitter::Query::new(&language, include_str!("highlights/powershell.scm"))
                 .expect("invalid PowerShell highlights query")
         });
 
@@ -162,15 +138,17 @@ fn highlight_powershell(node: tree_sitter::Node, src: &[u8], meanings: &mut [Mea
 
     while let Some((m, capture_index)) = captures.next() {
         let capture = m.captures[*capture_index];
-        let capture_name = HIGHLIGHTS_QUERY.capture_names()[capture.index as usize];
+        let capture_name = HIGHLIGHTS_QUERY.capture_names()[usize::conv(capture.index)];
 
         let meaning = match capture_name {
-            "comment" => Meaning::SyntaxComment,
-            "function" => Meaning::SyntaxCommand,
+            "base" => Meaning::Base,
+            "command" => Meaning::SyntaxCommand,
+            "flag" => Meaning::SyntaxFlag,
             "string" => Meaning::SyntaxString,
-            "operator" | "delimiter" | "keyword" => Meaning::SyntaxOperator,
-            "variable" | "type" | "property" => Meaning::SyntaxVariable,
-            _ => continue, // ignored: array, assignvalue, number
+            "variable" | "keyword" => Meaning::SyntaxVariable,
+            "operator" => Meaning::SyntaxOperator,
+            "comment" => Meaning::SyntaxComment,
+            _ => continue, // currently ignored: number
         };
 
         if let Some(range) = meanings.get_mut(capture.node.byte_range()) {
@@ -181,16 +159,12 @@ fn highlight_powershell(node: tree_sitter::Node, src: &[u8], meanings: &mut [Mea
 
 #[cfg(all(
     test,
-    any(
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows",
-        target_os = "illumos"
-    )
+    any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "illumos")
 ))]
 mod tests {
-    use super::{Meaning, classify};
     use rstest::rstest;
+
+    use super::{Meaning, classify};
 
     /// Render the classification as one char per byte for compact assertions.
     fn render_shell(cmd: &str, shell: Option<&str>) -> String {
@@ -220,7 +194,7 @@ mod tests {
     #[case::fish_set("set -x PATH $PATH", Some("fish"), "cccaffaaaaaavvvvv")]
     #[case::fish_subshell("echo (date) | grep foo", Some("fish"), "ccccaoccccoaoaccccaaaa")]
     #[case::fish_string(r#"echo "hi $name""#, Some("fish"), "ccccassssvvvvvs")]
-    #[case::powershell("$v = rg -i 'foo' $f", Some("powershell"), "vvaaaccaaaasssssavv")]
+    #[case::powershell("$v = rg -i 'foo' $f", Some("powershell"), "vvaoaccaffasssssavv")]
     #[case::zsh_uses_bash("ls -la", Some("zsh"), "ccafff")]
     #[case::nu_plain("ls -la", Some("nu"), "aaaaaa")]
     fn classify_renders(#[case] cmd: &str, #[case] shell: Option<&str>, #[case] expected: &str) {

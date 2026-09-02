@@ -73,14 +73,12 @@ impl UrlAppendExt for Url {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        let trailing_empty = self.path_segments().map_or(0, |segments| {
-            segments.rev().take_while(|s| s.is_empty()).count()
-        });
+        let trailing_empty = self
+            .path_segments()
+            .map_or(0, |segments| segments.rev().take_while(|s| s.is_empty()).count());
 
         let mut url = self.clone();
-        let mut path = url
-            .path_segments_mut()
-            .map_err(|()| UrlAppendError::NonSplittable)?;
+        let mut path = url.path_segments_mut().map_err(|()| UrlAppendError::NonSplittable)?;
 
         for _ in 0..trailing_empty {
             path.pop_if_empty();
@@ -101,8 +99,9 @@ impl UrlAppendExt for Url {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     fn parse(s: &str) -> Url {
         Url::parse(s).unwrap()
@@ -114,24 +113,12 @@ mod tests {
     #[case("https://host.example/atuin", "api", "https://host.example/atuin/api")]
     #[case("https://host.example/atuin/", "api", "https://host.example/atuin/api")]
     #[case("https://h.example", "a/b", "https://h.example/a%2Fb")]
-    #[case(
-        "https://h.example/x",
-        "../../etc",
-        "https://h.example/x/..%2F..%2Fetc"
-    )]
+    #[case("https://h.example/x", "../../etc", "https://h.example/x/..%2F..%2Fetc")]
     #[case("https://h.example", "john doe", "https://h.example/john%20doe")]
     #[case("https://h.example", "a?b#c", "https://h.example/a%3Fb%23c")]
     #[case("https://h.example:8443/x", "y", "https://h.example:8443/x/y")]
-    #[case(
-        "https://host.example/atuin//",
-        "api",
-        "https://host.example/atuin/api"
-    )]
-    #[case(
-        "https://host.example/atuin////",
-        "api",
-        "https://host.example/atuin/api"
-    )]
+    #[case("https://host.example/atuin//", "api", "https://host.example/atuin/api")]
+    #[case("https://host.example/atuin////", "api", "https://host.example/atuin/api")]
     #[case("https://h.example//", "me", "https://h.example/me")]
     #[case("https://h.example////", "me", "https://h.example/me")]
     #[case("https://h.example/a//b", "me", "https://h.example/a//b/me")]
@@ -165,10 +152,7 @@ mod tests {
     #[test]
     fn dot_lookalikes_are_still_appended() {
         assert_eq!(
-            parse("https://h.example")
-                .append(["...", ".hidden", "a.b"])
-                .unwrap()
-                .as_str(),
+            parse("https://h.example").append(["...", ".hidden", "a.b"]).unwrap().as_str(),
             "https://h.example/.../.hidden/a.b",
         );
     }
@@ -178,44 +162,26 @@ mod tests {
         // Two segments: each is encoded on its own, so the space in "john doe"
         // becomes %20 but does not merge with "user".
         assert_eq!(
-            parse("https://h.example")
-                .append(["user", "john doe"])
-                .unwrap()
-                .as_str(),
+            parse("https://h.example").append(["user", "john doe"]).unwrap().as_str(),
             "https://h.example/user/john%20doe",
         );
 
         // A `/` inside one element still doesn't act as a separator: it's
         // encoded to %2F, landing as part of that single segment.
         assert_eq!(
-            parse("https://h.example")
-                .append(["a", "b/c"])
-                .unwrap()
-                .as_str(),
+            parse("https://h.example").append(["a", "b/c"]).unwrap().as_str(),
             "https://h.example/a/b%2Fc",
         );
     }
 
     #[rstest]
     #[case("https://api.atuin.sh", "api/v0/me", "https://api.atuin.sh/api/v0/me")]
-    #[case(
-        "https://host.example/atuin",
-        "api/v0/me",
-        "https://host.example/atuin/api/v0/me"
-    )]
-    #[case(
-        "https://host.example/atuin/",
-        "api/v0/me",
-        "https://host.example/atuin/api/v0/me"
-    )]
+    #[case("https://host.example/atuin", "api/v0/me", "https://host.example/atuin/api/v0/me")]
+    #[case("https://host.example/atuin/", "api/v0/me", "https://host.example/atuin/api/v0/me")]
     #[case("https://h.example", "/api/v0/me", "https://h.example/api/v0/me")]
     #[case("https://h.example", "account", "https://h.example/account")]
     #[case("https://h.example//", "api/v0/me", "https://h.example/api/v0/me")]
-    #[case(
-        "https://host.example/atuin//",
-        "api/v0/me",
-        "https://host.example/atuin/api/v0/me"
-    )]
+    #[case("https://host.example/atuin//", "api/v0/me", "https://host.example/atuin/api/v0/me")]
     fn append_path_cases(#[case] base: &str, #[case] path: &'static str, #[case] expected: &str) {
         assert_eq!(parse(base).append_path(path).unwrap().as_str(), expected);
     }

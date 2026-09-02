@@ -1,4 +1,5 @@
-use std::{path::PathBuf, str};
+use std::path::PathBuf;
+use std::str;
 
 use async_trait::async_trait;
 use directories::UserDirs;
@@ -67,33 +68,29 @@ impl Importer for Bash {
         let backfill = timestamp_increment
             * u32::try_from(commands_before_first_timestamp).unwrap_or(u32::MAX);
         // a timestamp near the start of the representable range would underflow
-        let mut next_timestamp = first_timestamp
-            .checked_sub(backfill)
-            .unwrap_or(first_timestamp);
+        let mut next_timestamp = first_timestamp.checked_sub(backfill).unwrap_or(first_timestamp);
 
-        for line in lines.into_iter() {
+        for line in lines {
             match line {
                 LineType::NotUtf8 => unreachable!(), // already filtered
                 LineType::Empty => {}                // do nothing
                 LineType::Timestamp(t) => {
                     if t < next_timestamp {
                         warn!(
-                            "Time reversal detected in Bash history! Commands may be ordered incorrectly."
+                            "Time reversal detected in Bash history! Commands may be ordered \
+                             incorrectly."
                         );
                     }
                     next_timestamp = t;
                 }
                 LineType::Command(c) => {
-                    let imported = History::import()
-                        .shell("bash")
-                        .timestamp(next_timestamp)
-                        .command(c);
+                    let imported =
+                        History::import().shell("bash").timestamp(next_timestamp).command(c);
 
                     h.push(imported.build().into()).await?;
                     // a timestamp near the end of the representable range would overflow
-                    next_timestamp = next_timestamp
-                        .checked_add(timestamp_increment)
-                        .unwrap_or(next_timestamp);
+                    next_timestamp =
+                        next_timestamp.checked_add(timestamp_increment).unwrap_or(next_timestamp);
                 }
             }
         }
@@ -141,9 +138,9 @@ mod test {
     use itertools::{Itertools, assert_equal};
     use rstest::rstest;
 
-    use crate::import::{Importer, tests::TestLoader};
-
     use super::Bash;
+    use crate::import::Importer;
+    use crate::import::tests::TestLoader;
 
     #[rstest]
     #[case::no_timestamps(
@@ -174,10 +171,7 @@ mod test {
         let mut loader = TestLoader::default();
         bash.load(&mut loader).await.unwrap();
 
-        assert_equal(
-            loader.buf.iter().map(|h| h.command.as_str()),
-            expected_commands,
-        );
+        assert_equal(loader.buf.iter().map(|h| h.command.as_str()), expected_commands);
         assert!(is_strictly_sorted(loader.buf.iter().map(|h| h.timestamp)));
     }
 
@@ -199,14 +193,16 @@ cd ../
         let mut loader = TestLoader::default();
         bash.load(&mut loader).await.unwrap();
 
-        assert_equal(
-            loader.buf.iter().map(|h| h.command.as_str()),
-            ["git reset", "git clean -dxf", "cd ../"],
-        );
-        assert_equal(
-            loader.buf.iter().map(|h| h.timestamp.unix_timestamp()),
-            [1672918999, 1672919006, 1672919020],
-        )
+        assert_equal(loader.buf.iter().map(|h| h.command.as_str()), [
+            "git reset",
+            "git clean -dxf",
+            "cd ../",
+        ]);
+        assert_equal(loader.buf.iter().map(|h| h.timestamp.unix_timestamp()), [
+            1_672_918_999,
+            1_672_919_006,
+            1_672_919_020,
+        ]);
     }
 
     fn is_strictly_sorted<T>(iter: impl IntoIterator<Item = T>) -> bool
@@ -235,10 +231,10 @@ cargo update
         let mut loader = TestLoader::default();
         bash.load(&mut loader).await.unwrap();
 
-        assert_equal(
-            loader.buf.iter().map(|h| h.command.as_str()),
-            ["cargo install atuin", "cargo update"],
-        );
+        assert_equal(loader.buf.iter().map(|h| h.command.as_str()), [
+            "cargo install atuin",
+            "cargo update",
+        ]);
     }
 
     #[rstest]
@@ -264,9 +260,6 @@ cargo update
 
         // the increment saturates at the maximum representable instant rather than
         // wrapping or resetting to the epoch
-        assert_eq!(
-            loader.buf.last().unwrap().timestamp.unix_timestamp(),
-            253_402_300_799
-        );
+        assert_eq!(loader.buf.last().unwrap().timestamp.unix_timestamp(), 253_402_300_799);
     }
 }
