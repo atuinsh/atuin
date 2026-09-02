@@ -125,19 +125,14 @@ pub enum GetCmdInFlightError {
     NotFound(HistoryId),
 }
 
-/// A session temporarily checked out of a [`HistoryJournal`]'s in-flight map.
+/// RAII guard of a temporarily checked-out a [`HistoryJournal`]'s in-flight map entry.
 ///
 /// While the guard is alive the session has been removed from the map. If it is dropped without
-/// [`CheckedOutSession::commit`] -- via an early `?` return, a panic, or a cancelled future -- the
-/// session is re-inserted, keeping the command in flight rather than silently losing it. This makes
-/// the "do fallible work, but put it back if anything goes wrong" pattern hard to get wrong.
-///
+/// [`CheckedOutSession::commit`].
 /// Deref-ing the guard yields the underlying [`History`], so callers can read and mutate the
 /// checked-out session directly (e.g. `session.exit = ...`).
 struct CheckedOutSession<'a> {
     map: &'a DashMap<HistoryId, History>,
-    /// The checked-out session. Present for the guard's entire lifetime until it is committed or
-    /// dropped, at which point it is taken exactly once.
     history: Option<History>,
 }
 

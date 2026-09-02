@@ -103,6 +103,7 @@ impl GrpcService for Service {
         self.journal.cancel(id)?;
 
         Ok(Response::new(CancelHistoryReply {
+            // TODO(markovejnovic): Pull this from one constant, well-defined spot.
             version: env!("CARGO_PKG_VERSION").to_string(),
             protocol: DAEMON_PROTOCOL_VERSION,
         }))
