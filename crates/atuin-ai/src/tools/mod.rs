@@ -1119,7 +1119,9 @@ impl AtuinHistoryToolCall {
             Ok(results) => results,
             Err(e) => return ToolOutcome::Error(format!("History search failed: {e}")),
         };
-        let page_size = self.limit.clamp(1, MAX_HISTORY_RESULTS) as usize;
+        // The clamp keeps this in 1..=MAX_HISTORY_RESULTS, so the conversion
+        // never fails; the fallback only exists to keep it infallible.
+        let page_size = usize::try_from(self.limit.clamp(1, MAX_HISTORY_RESULTS)).unwrap_or(1);
         let truncated = results.len() > page_size;
         results.truncate(page_size);
 
