@@ -5,14 +5,25 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use atuin_client::history::{AuthorPattern, HistoryId};
+use atuin_client::settings::FilterMode;
 use atuin_common::ansi;
 use atuin_common::filter::OrFilter;
 use atuin_common::time::UtcOffsetExt;
 use enum_dispatch::enum_dispatch;
 use eyre::Result;
+use strum_macros::{EnumIter, EnumString, IntoStaticStr};
 
 const DEFAULT_FILE_READ_LINES: u64 = 100;
 const MAX_FILE_READ_LINES: u64 = 1000;
+/// Page-size bounds for `atuin_history`; mirrored in the MCP schema.
+pub const DEFAULT_HISTORY_RESULTS: i64 = 10;
+pub const MAX_HISTORY_RESULTS: i64 = 50;
+/// Advice appended to `atuin_output` failures. Hedged on safety: telling the
+/// model to re-run unconditionally would invite re-executing destructive
+/// commands — the very thing output capture exists to avoid.
+const NO_OUTPUT_ADVICE: &str = "If the command is safe and cheap to repeat, re-run it to see its \
+                                output; otherwise rely on history metadata (exit code, duration) \
+                                instead.";
 
 pub mod descriptor;
 
@@ -966,7 +977,8 @@ pub struct AtuinHistoryToolCall {
     pub authors: OrFilter<Vec<AuthorPattern>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, EnumString, IntoStaticStr)]
+#[strum(serialize_all = "lowercase")]
 pub enum HistorySearchFilterMode {
     Global,
     Host,
@@ -975,8 +987,15 @@ pub enum HistorySearchFilterMode {
     Workspace,
 }
 
-impl From<&HistorySearchFilterMode> for atuin_client::settings::FilterMode {
-    fn from(mode: &HistorySearchFilterMode) -> Self {
+impl HistorySearchFilterMode {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+}
+
+impl From<HistorySearchFilterMode> for FilterMode {
+    fn from(mode: HistorySearchFilterMode) -> Self {
         match mode {
             HistorySearchFilterMode::Global => Self::Global,
             HistorySearchFilterMode::Host => Self::Host,
@@ -991,42 +1010,46 @@ impl TryFrom<&serde_json::Value> for AtuinHistoryToolCall {
     type Error = eyre::Error;
 
     fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
-        let filter_modes = value
-            .get("filter_modes")
-            .and_then(|v| v.as_array())
-            .ok_or(eyre::eyre!("Missing filter_modes"))?;
+        // Optional; JSON null counts as omitted because models often send
+        // null for optional params. A missing scope means a global search —
+        // evals showed that forcing the model to pick a scope on every call
+        // made it stop calling the tool at all.
+        let filter_modes = match value.get("filter_modes") {
+            None | Some(serde_json::Value::Null) => Vec::new(),
+            Some(v) => v
+                .as_array()
+                .ok_or_else(|| eyre::eyre!("filter_modes must be an array"))?
+                .iter()
+                .map(|v| {
+                    let mode = v.as_str().ok_or_else(|| eyre::eyre!("Invalid filter mode"))?;
+                    mode.parse::<HistorySearchFilterMode>()
+                        .map_err(|_| eyre::eyre!("Invalid filter mode: {mode}"))
+                })
+                .collect::<Result<Vec<HistorySearchFilterMode>>>()?,
+        };
 
-        let filter_modes = filter_modes
-            .iter()
-            .map(|v| {
-                let mode = v.as_str().ok_or(eyre::eyre!("Invalid filter mode"))?;
-                match mode {
-                    "global" => Ok(HistorySearchFilterMode::Global),
-                    "host" => Ok(HistorySearchFilterMode::Host),
-                    "session" => Ok(HistorySearchFilterMode::Session),
-                    "directory" => Ok(HistorySearchFilterMode::Directory),
-                    "workspace" => Ok(HistorySearchFilterMode::Workspace),
-                    _ => Err(eyre::eyre!("Invalid filter mode: {mode}")),
-                }
-            })
-            .collect::<Result<Vec<HistorySearchFilterMode>>>()?;
+        let query = value
+            .get("query")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre::eyre!("Missing query"))?;
 
-        let query =
-            value.get("query").and_then(|v| v.as_str()).ok_or(eyre::eyre!("Missing query"))?;
-
-        let limit = value.get("limit").and_then(|v| v.as_i64()).unwrap_or(10).clamp(1, 50);
+        let limit = value
+            .get("limit")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(DEFAULT_HISTORY_RESULTS)
+            .clamp(1, MAX_HISTORY_RESULTS);
 
         let only_failed = value.get("only_failed").and_then(|v| v.as_bool()).unwrap_or(false);
 
         let authors = match value.get("authors") {
             Some(authors) => authors
                 .as_array()
-                .ok_or(eyre::eyre!("authors must be an array of strings"))?
+                .ok_or_else(|| eyre::eyre!("authors must be an array of strings"))?
                 .iter()
                 .map(|v| {
                     v.as_str()
                         .map(AuthorPattern::from)
-                        .ok_or(eyre::eyre!("authors entries must be strings"))
+                        .ok_or_else(|| eyre::eyre!("authors entries must be strings"))
                 })
                 .collect::<Result<Vec<AuthorPattern>>>()?,
             None => Vec::new(),
@@ -1065,18 +1088,13 @@ impl AtuinHistoryToolCall {
             Err(e) => return ToolOutcome::Error(format!("Failed to get history context: {e}")),
         };
 
-        let filter_mode = self
-            .filter_modes
-            .first()
-            .map(atuin_client::settings::FilterMode::from)
-            .unwrap_or(atuin_client::settings::FilterMode::Global);
+        let search_mode =
+            self.filter_modes.first().copied().unwrap_or(HistorySearchFilterMode::Global);
 
         // An empty session would silently match nothing; error instead so a
         // missing $ATUIN_SESSION (e.g. MCP server launched outside a hooked
         // shell) isn't mistaken for empty history.
-        if matches!(filter_mode, atuin_client::settings::FilterMode::Session)
-            && context.session.is_empty()
-        {
+        if matches!(search_mode, HistorySearchFilterMode::Session) && context.session.is_empty() {
             return ToolOutcome::Error(
                 "Session-scoped search is unavailable: $ATUIN_SESSION is not set, so there is no \
                  shell session to scope to. Use another filter mode."
@@ -1085,33 +1103,76 @@ impl AtuinHistoryToolCall {
         }
 
         let filter_options = OptFilters {
-            limit: Some(self.limit),
+            // Fetch one row beyond the requested limit so the truncation
+            // notice appended to the results below can say "more exist" as a
+            // fact rather than a guess.
+            limit: Some(self.limit + 1),
             only_failed: self.only_failed,
             authors: self.authors.as_slice_filter(),
             ..Default::default()
         };
 
-        let results = match db
-            .search(DbSearchMode::Fuzzy, filter_mode, &context, &self.query, filter_options)
+        let mut results = match db
+            .search(DbSearchMode::Fuzzy, search_mode.into(), &context, &self.query, filter_options)
             .await
         {
             Ok(results) => results,
             Err(e) => return ToolOutcome::Error(format!("History search failed: {e}")),
         };
+        let page_size = self.limit.clamp(1, MAX_HISTORY_RESULTS) as usize;
+        let truncated = results.len() > page_size;
+        results.truncate(page_size);
 
         if results.is_empty() {
-            return ToolOutcome::Success("No matching history entries found.".to_string());
+            // An unadorned "no results" reads to the model as "this tool is
+            // useless". List which search parameters are worth loosening so
+            // its retry has somewhere to go.
+            let mut hints = Vec::new();
+            if !self.query.is_empty() {
+                hints.push("query terms are AND-ed, so try fewer or shorter terms");
+            }
+            if !matches!(search_mode, HistorySearchFilterMode::Global) {
+                hints.push("widen the scope to 'global'");
+            }
+            if self.only_failed {
+                hints.push("drop only_failed (the command may have succeeded)");
+            }
+            if !self.authors.is_all() {
+                hints.push("drop the authors filter");
+            }
+            let mut msg = format!(
+                "No history entries matched query {query:?} (scope: {scope}).",
+                query = self.query,
+                scope = search_mode.as_str(),
+            );
+            if !hints.is_empty() {
+                msg.push_str(&format!(" To find more: {}.", hints.join("; ")));
+            }
+            return ToolOutcome::Success(msg);
         }
 
         let local_offset = time::UtcOffset::local_or_utc();
 
-        let formatted: Vec<String> = results
+        let mut formatted: Vec<String> = results
             .iter()
             .enumerate()
             .map(|(i, history)| {
                 crate::history_format::format_history_search_result(i + 1, history, local_offset)
             })
             .collect();
+
+        if truncated {
+            // The parser clamps `limit` to MAX_HISTORY_RESULTS, so a model
+            // that retries with a larger limit at the cap would just get the
+            // identical page back; only suggest raising it below the cap.
+            let advice = if self.limit < MAX_HISTORY_RESULTS {
+                "Refine the query or raise `limit` to see others."
+            } else {
+                "That is the maximum page size; refine the query to narrow them."
+            };
+            formatted
+                .push(format!("[Showing the first {page_size} matches; more exist. {advice}]"));
+        }
 
         ToolOutcome::Success(formatted.join("\n"))
     }
@@ -1206,7 +1267,12 @@ impl AtuinOutputToolCall {
 
         let mut client = match atuin_daemon::SemanticClient::from_settings(&settings).await {
             Ok(client) => client,
-            Err(e) => return ToolOutcome::Error(format!("Failed to connect to Atuin daemon: {e}")),
+            Err(e) => {
+                return ToolOutcome::Error(format!(
+                    "Captured output is unavailable: could not connect to the Atuin daemon ({e}). \
+                     History search still works. {NO_OUTPUT_ADVICE}"
+                ));
+            }
         };
 
         let history_id = self.history_id;
@@ -1217,7 +1283,9 @@ impl AtuinOutputToolCall {
 
         if !response.found {
             return ToolOutcome::Success(format!(
-                "No captured output found for history ID {history_id}."
+                "No captured output found for history ID {history_id}. Output is only captured \
+                 for commands run in an Atuin-enabled terminal while the daemon was running; \
+                 older output may also have been dropped. {NO_OUTPUT_ADVICE}"
             ));
         }
 
@@ -1316,12 +1384,31 @@ mod tests {
 
     // ── Cross-platform tests ──
 
-    #[test]
-    fn atuin_history_filters_are_optional() {
-        let input = serde_json::json!({
-            "query": "cargo",
-            "filter_modes": ["global"],
-        });
+    #[rstest]
+    #[case::omitted(serde_json::json!({ "query": "cargo" }))]
+    #[case::null(serde_json::json!({ "query": "cargo", "filter_modes": null }))]
+    fn atuin_history_filter_modes_are_optional(#[case] input: serde_json::Value) {
+        let call = AtuinHistoryToolCall::try_from(&input).unwrap();
+        assert!(call.filter_modes.is_empty());
+    }
+
+    #[rstest]
+    fn filter_mode_names_round_trip() {
+        use strum::IntoEnumIterator;
+        for mode in HistorySearchFilterMode::iter() {
+            assert_eq!(mode.as_str().parse::<HistorySearchFilterMode>(), Ok(mode));
+        }
+    }
+
+    #[rstest]
+    fn atuin_history_filter_modes_reject_non_arrays() {
+        let input = serde_json::json!({ "query": "cargo", "filter_modes": "global" });
+        assert!(AtuinHistoryToolCall::try_from(&input).is_err());
+    }
+
+    #[rstest]
+    fn atuin_history_author_and_failure_filters_parse() {
+        let input = serde_json::json!({ "query": "cargo" });
 
         let call = AtuinHistoryToolCall::try_from(&input).unwrap();
         assert!(!call.only_failed);
@@ -1329,7 +1416,6 @@ mod tests {
 
         let input = serde_json::json!({
             "query": "cargo",
-            "filter_modes": ["global"],
             "only_failed": true,
             "authors": ["$all-agent"],
         });

@@ -77,6 +77,9 @@ chrono = "0.4"
 chrono-humanize = "0.2"
 rmcp = { version = "2.1.0", default-features = false, features = ["server", "transport-io"] }
 
+strum = { workspace = true }
+strum_macros = { workspace = true }
+
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 rstest = { workspace = true }

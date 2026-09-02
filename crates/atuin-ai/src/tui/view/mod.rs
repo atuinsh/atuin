@@ -558,23 +558,14 @@ fn history_search_row(is_first: bool, details: &ToolCallDetails) -> AnyElement<'
     group_row_view(is_first, &details.status, content)
 }
 
-fn filter_mode_label(mode: &HistorySearchFilterMode) -> &'static str {
-    match mode {
-        HistorySearchFilterMode::Global => "global",
-        HistorySearchFilterMode::Host => "host",
-        HistorySearchFilterMode::Session => "session",
-        HistorySearchFilterMode::Directory => "directory",
-        HistorySearchFilterMode::Workspace => "workspace",
-    }
-}
-
 /// Format a list of filter modes as `"(global, workspace)"`, or an empty
 /// string if the list is empty.
 fn format_filter_modes(modes: &[HistorySearchFilterMode]) -> String {
     if modes.is_empty() {
         return String::new();
     }
-    let parts: Vec<&'static str> = modes.iter().map(filter_mode_label).collect();
+    let parts: Vec<&'static str> =
+        modes.iter().copied().map(HistorySearchFilterMode::as_str).collect();
     format!("({})", parts.join(", "))
 }
 

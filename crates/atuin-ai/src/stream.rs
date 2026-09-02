@@ -11,7 +11,7 @@ use futures::StreamExt;
 use reqwest::Url;
 use reqwest::header::USER_AGENT;
 
-use crate::context::{ClientContext, history_output_capability_available};
+use crate::context::{ClientContext, capability_strings};
 
 pub static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"));
 
@@ -73,26 +73,7 @@ impl ChatRequest {
         invocation_id: String,
         model: Option<String>,
     ) -> Self {
-        let mut caps = vec!["client_invocations".to_string(), "client_v1_load_skill".to_string()];
-        if capabilities.enable_history_search.unwrap_or(true) {
-            caps.push("client_v1_atuin_history".to_string());
-        }
-        if capabilities.enable_file_tools.unwrap_or(true) {
-            caps.push("client_v1_read_file".to_string());
-            caps.push("client_v1_edit_file".to_string());
-            caps.push("client_v1_write_file".to_string());
-        }
-        if capabilities.enable_command_execution.unwrap_or(true) {
-            caps.push("client_v1_execute_shell_command".to_string());
-        }
-        if history_output_capability_available(history_output_available)
-            && capabilities.enable_history_output.unwrap_or(true)
-        {
-            caps.push("client_v1_atuin_output".to_string());
-        }
-        if let Ok(extra) = std::env::var("ATUIN_AI__ADDITIONAL_CAPS") {
-            caps.extend(extra.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
-        }
+        let caps = capability_strings(capabilities, history_output_available);
 
         Self {
             messages,
