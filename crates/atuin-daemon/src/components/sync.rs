@@ -253,11 +253,10 @@ async fn do_sync_tick(
                 new_interval = max_interval;
             }
 
-            *ticker = time::interval_at(
-                tokio::time::Instant::now() + Duration::from_secs(new_interval as u64),
-                time::Duration::from_secs(new_interval as u64),
-            );
-            ticker.reset_after(time::Duration::from_secs(new_interval as u64));
+            let backoff =
+                Duration::try_from_secs_f64(new_interval).unwrap_or_else(|_| ticker.period());
+            *ticker = time::interval_at(tokio::time::Instant::now() + backoff, backoff);
+            ticker.reset_after(backoff);
             ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
             tracing::error!("backing off, next sync tick in {new_interval}");

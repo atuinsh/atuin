@@ -90,7 +90,14 @@ impl FrecencyData {
         let frequency_score = (f64::from(self.count).ln() * 20.0).min(100.0);
 
         // Apply multipliers and combine scores, then round to u32
-        ((recency_score * recency_mul) + (frequency_score * frequency_mul)).round() as u32
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "frecency is used for ordering only -- saturating is ok"
+        )]
+        {
+            ((recency_score * recency_mul) + (frequency_score * frequency_mul)).round() as u32
+        }
     }
 }
 
@@ -558,7 +565,14 @@ impl SearchIndex {
                         let frecency =
                             data.global_frecency.compute(now, recency_mul, frequency_mul);
                         // Apply overall frecency multiplier and round to u32
-                        (f64::from(frecency) * frecency_mul).round() as u32
+                        #[allow(
+                            clippy::cast_possible_truncation,
+                            clippy::cast_sign_loss,
+                            reason = "frecency is used for ordering only -- saturating is ok"
+                        )]
+                        {
+                            (f64::from(frecency) * frecency_mul).round() as u32
+                        }
                     })
                 })
                 .collect()

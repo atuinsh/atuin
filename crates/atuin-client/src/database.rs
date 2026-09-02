@@ -8,7 +8,7 @@ use atuin_common::filter::{self, OrFilter};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::{db, utils};
 use atuin_domain::record::{CmdOrigin, UNKNOWN_USER};
-use easy_cast::Conv;
+use easy_cast::{CastTo, Conv, Nearest, Trunc};
 use itertools::Itertools;
 use sql_builder::bind::Bind;
 use sql_builder::{SqlBuilder, SqlName, esc, quote};
@@ -1029,13 +1029,13 @@ impl Sqlite {
         )?;
 
         let duration_over_time =
-            duration_over_time.iter().map(|f| (f.0.clone(), f.1.round() as i64)).collect();
+            duration_over_time.iter().map(|f| (f.0.clone(), f.1.cast_to(Nearest))).collect();
 
         Ok(HistoryStats {
             next,
             previous: prev,
             total: u64::conv(total.0),
-            average_duration: average.0 as u64,
+            average_duration: average.0.cast_to(Trunc),
             exits,
             day_of_week,
             duration_over_time,

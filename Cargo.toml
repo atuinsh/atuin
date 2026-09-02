@@ -219,12 +219,11 @@ borrow_as_ptr = "warn"
 branches_sharing_code = "warn"
 case_sensitive_file_extension_comparisons = "warn"
 cast_lossless = "warn"
-# TODO(markovejnovic): These could be enabled in a separate PR, but we should
-# first try using easy_cast.
-#cast_possible_truncation = "warn"
-#cast_possible_wrap = "warn"
+cast_possible_truncation = "warn"
+cast_possible_wrap = "warn"
+cast_sign_loss = "warn"
+# TODO(markovejnovic): This could be enabled in a separate PR.
 #cast_precision_loss = "warn"
-#cast_sign_loss = "warn"
 clear_with_drain = "warn"
 cloned_instead_of_copied = "warn"
 collapsible_else_if = "warn"
