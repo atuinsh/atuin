@@ -7,7 +7,7 @@ use atuin_client::settings::Settings;
 use atuin_client::settings::watcher::global_settings_watcher;
 use eyre::Result;
 
-use crate::history::history_server::HistoryServer;
+use crate::grpc::history::pb::history_server::HistoryServer;
 
 pub mod client;
 pub mod components;
@@ -15,7 +15,6 @@ pub mod control;
 pub mod daemon;
 pub mod events;
 pub mod grpc;
-pub mod history;
 pub(crate) mod history_journal;
 pub mod search;
 pub mod semantic;

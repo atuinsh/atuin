@@ -458,7 +458,7 @@ pub async fn ready_client(settings: &Settings) -> Result<HistoryClient> {
 async fn try_with_restart<C, F, R>(settings: &Settings, send_request: F, context: C) -> Result<R>
 where
     F: AsyncFn(&mut HistoryClient, C) -> Result<R> + Sync,
-    R: atuin_daemon::history::VersionedReply,
+    R: atuin_daemon::grpc::VersionedReply,
 {
     let mut client = ready_client(settings).await?;
     let resp = send_request(&mut client, context).await?;

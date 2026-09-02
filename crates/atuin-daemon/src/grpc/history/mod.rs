@@ -13,8 +13,8 @@ use tonic::{Request, Response, Status};
 use tracing::{Level, instrument};
 
 use crate::DaemonHandle;
-use crate::history::history_server::History as GrpcService;
-use crate::history::{
+use crate::grpc::history::pb::history_server::History as GrpcService;
+use crate::grpc::history::pb::{
     CancelHistoryReply, CancelHistoryRequest, EndHistoryReply, EndHistoryRequest, ShutdownReply,
     ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest,
     TailHistoryReply, TailHistoryRequest,

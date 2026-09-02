@@ -7,7 +7,7 @@ use crate::control::ControlService;
 use crate::control::control_server::ControlServer;
 use crate::daemon::DaemonHandle;
 use crate::grpc;
-use crate::history::history_server::HistoryServer;
+use crate::grpc::history::pb::history_server::HistoryServer;
 use crate::search::search_server::SearchServer;
 use crate::semantic::semantic_server::SemanticServer;
 

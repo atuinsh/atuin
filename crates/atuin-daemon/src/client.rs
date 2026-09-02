@@ -23,8 +23,8 @@ use crate::control::{
     SettingsReloadedEvent, ShutdownEvent,
 };
 use crate::events::DaemonEvent;
-use crate::history::history_client::HistoryClient as HistoryServiceClient;
-use crate::history::{
+use crate::grpc::history::pb::history_client::HistoryClient as HistoryServiceClient;
+use crate::grpc::history::pb::{
     AuthorKind, CancelHistoryReply, CancelHistoryRequest, EndHistoryReply, EndHistoryRequest,
     ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest,
     TailHistoryReply, TailHistoryRequest,

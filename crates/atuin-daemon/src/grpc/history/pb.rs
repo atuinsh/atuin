@@ -3,15 +3,17 @@ use std::time::Duration;
 
 use atuin_client::history::{History, HistoryId as DomainHistoryId};
 use atuin_common::time::OffsetDateTimeExt;
-use atuin_domain::record::{CmdOrigin, CmdOriginParseError, RecordId};
+use atuin_domain::record::{CmdOrigin, CmdOriginParseError};
 use easy_cast::Conv;
 use thiserror::Error;
 use time::OffsetDateTime;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::Status;
 
+// The generated history code refers to the shared common protobuf types as `super::common`, so
+// expose `crate::grpc::common::pb` under that name for the `codegen` module below.
+use crate::grpc::common::pb as common;
 use crate::grpc::common::pb::Uuid;
-use crate::history::tail_history_reply::Event;
 use crate::history_journal::{CmdCancelError, CmdEvent, CmdFinishError, GetCmdInFlightError};
 
 mod codegen {
@@ -20,6 +22,8 @@ mod codegen {
 }
 
 pub use codegen::*;
+
+use self::tail_history_reply::Event;
 
 impl From<Option<atuin_client::history::AuthorKind>> for AuthorKind {
     fn from(kind: Option<atuin_client::history::AuthorKind>) -> Self {
@@ -200,7 +204,14 @@ impl From<GetCmdInFlightError> for Status {
     }
 }
 
-invalid_argument_errors!(StartHistoryRequestParseError,);
+invalid_argument_errors!(
+    IdParseError,
+    StartHistoryRequestParseError,
+    EndHistoryRequestParseError,
+    CancelHistoryRequestParseError,
+);
+
+versioned_messages!(StartHistoryReply, EndHistoryReply, CancelHistoryReply);
 
 #[cfg(test)]
 mod tests {

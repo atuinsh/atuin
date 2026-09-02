@@ -17,7 +17,9 @@ use atuin_common::time::{DurationExt, OffsetDateTimeExt, UtcOffsetSpec};
 use atuin_common::utils;
 use atuin_common::utils::normalize_optional_string;
 #[cfg(feature = "daemon")]
-use atuin_daemon::history::{TailHistoryReply, tail_history_reply::Event as TailEventProto};
+use atuin_daemon::grpc::history::pb::{
+    TailHistoryReply, tail_history_reply::Event as TailEventProto,
+};
 use atuin_domain::record::CmdOrigin;
 use clap::Subcommand;
 #[cfg(feature = "daemon")]

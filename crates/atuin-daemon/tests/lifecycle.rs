@@ -15,7 +15,7 @@ mod unix {
     use atuin_client::settings::{Settings, init_meta_config_for_testing};
     use atuin_daemon::client::HistoryClient;
     use atuin_daemon::grpc::HistoryService;
-    use atuin_daemon::history::history_server::HistoryServer;
+    use atuin_daemon::grpc::history::pb::history_server::HistoryServer;
     use atuin_daemon::{Daemon, DaemonHandle, HistoryJournal, SearchComponent, SemanticComponent};
     use rstest::*;
     use tempfile::TempDir;
@@ -203,7 +203,7 @@ mod unix {
         #[future] daemon: (HistoryClient, DaemonHandle, TempDir),
     ) {
         use atuin_client::history::History;
-        use atuin_daemon::history::tail_history_reply::Event;
+        use atuin_daemon::grpc::history::pb::tail_history_reply::Event;
 
         let (mut client, _handle, _tmp) = daemon.await;
         let mut stream = client.tail_history().await.unwrap();
