@@ -9,8 +9,6 @@ use atuin_common::time::{OffsetDateTimeExt, UtcOffsetSpec};
 use atuin_common::{db, utils};
 use atuin_domain::record::{CmdOrigin, UNKNOWN_USER};
 use easy_cast::{CastTo, Conv, Nearest, Trunc};
-use fs_err as fs;
-
 use itertools::Itertools;
 use sql_builder::bind::Bind;
 use sql_builder::{SqlBuilder, SqlName, esc, quote};
@@ -1262,8 +1260,10 @@ impl<'a> Iterator for QueryTokenizer<'a> {
 #[cfg(test)]
 mod test {
     use std::time::{Duration, Instant};
-    use time::{Date, Month, Time, UtcOffset, format_description::well_known::Rfc3339};
+
     use rstest::{fixture, rstest};
+    use time::format_description::well_known::Rfc3339;
+    use time::{Date, Month, Time, UtcOffset};
 
     use super::*;
     use crate::settings::test_local_timeout;
@@ -1589,29 +1589,19 @@ mod test {
             UtcOffset::from_hms(-4, 0, 0).unwrap(),
         );
 
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
-        new_history_item_at(&mut db, "ls /home/ellie", Some(item_time))
-            .await
-            .unwrap();
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+        new_history_item_at(&db, "ls /home/ellie", Some(item_time)).await.unwrap();
 
         let context = new_context();
 
         let results = db
-            .search(
-                DbSearchMode::FullText,
-                FilterMode::Global,
-                &context,
-                "",
-                OptFilters {
-                    after,
-                    before,
-                    timezone: UtcOffsetSpec(UtcOffset::from_hms(-4, 0, 0).unwrap()),
-                    include_duplicates: true,
-                    ..Default::default()
-                },
-            )
+            .search(DbSearchMode::FullText, FilterMode::Global, &context, "", OptFilters {
+                after,
+                before,
+                timezone: UtcOffsetSpec(UtcOffset::from_hms(-4, 0, 0).unwrap()),
+                include_duplicates: true,
+                ..Default::default()
+            })
             .await
             .unwrap();
 

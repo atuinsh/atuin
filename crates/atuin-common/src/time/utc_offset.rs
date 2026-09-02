@@ -80,7 +80,7 @@ impl FromStr for UtcOffsetSpec {
 }
 impl Default for UtcOffsetSpec {
     fn default() -> Self {
-        UtcOffsetSpec(UtcOffset::UTC)
+        Self(UtcOffset::UTC)
     }
 }
 
