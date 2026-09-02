@@ -41,6 +41,8 @@ use atuin_domain::record::{RecordId, RecordIdx, RecordSeriesKey, RecordTag};
 use dashmap::DashMap;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
+use tracing::field::Empty;
+use tracing::{Instrument, Span};
 
 use crate::SemanticComponent;
 use crate::search::SearchIndex;
@@ -61,6 +63,18 @@ pub enum CmdEvent {
 pub struct FinishedCmd {
     pub history_record_id: RecordId,
     pub history_record_idx: RecordIdx,
+}
+
+/// In-flight command state held in [`HistoryJournal::active_cmds`].
+///
+/// Bundles the [`History`] entry with the tracing [`Span`] that traces the command's lifetime. The
+/// span is created when the command is started and closes when this value is dropped -- i.e. when
+/// the command stops being in flight (finished or cancelled) -- so its open-to-close duration is the
+/// command's lifetime.
+#[derive(Debug)]
+struct InFlightCmd {
+    history: History,
+    span: Span,
 }
 
 /// Registry of in-flight commands which performs output capture, management, storage and
@@ -85,7 +99,7 @@ pub struct HistoryJournal {
     ///
     /// An "in-flight" command is a command which has been started, but we're still waiting for it
     /// to be completed.
-    active_sessions: DashMap<HistoryId, History>,
+    active_cmds: DashMap<HistoryId, InFlightCmd>,
 
     /// We hold a reference to the search index which allows us to add a new history record into it.
     ///
@@ -125,54 +139,60 @@ pub enum GetCmdInFlightError {
     NotFound(HistoryId),
 }
 
-/// RAII guard of a temporarily checked-out a [`HistoryJournal`]'s in-flight map entry.
+/// RAII lease of a temporarily checked-out [`HistoryJournal`]'s in-flight map entry.
 ///
-/// While the guard is alive the session has been removed from the map. If it is dropped without
-/// [`CheckedOutSession::commit`].
-/// Deref-ing the guard yields the underlying [`History`], so callers can read and mutate the
-/// checked-out session directly (e.g. `session.exit = ...`).
-struct CheckedOutSession<'a> {
-    map: &'a DashMap<HistoryId, History>,
-    history: Option<History>,
+/// While the lease is alive the command has been removed from the map. If it is dropped without
+/// [`ActiveCmdLease::commit`], the command is returned to the map (rolled back).
+/// Deref-ing the lease yields the underlying [`History`], so callers can read and mutate the
+/// checked-out command directly (e.g. `session.exit = ...`); [`Self::span`] exposes the command's
+/// tracing span.
+struct ActiveCmdLease<'a> {
+    map: &'a DashMap<HistoryId, InFlightCmd>,
+    cmd: Option<InFlightCmd>,
 }
 
-impl<'a> CheckedOutSession<'a> {
-    /// Remove the session identified by `id` from `map`, returning a guard that restores it on drop
-    /// unless [`Self::commit`] is called. Returns [`None`] when no such session is in flight.
-    fn take(map: &'a DashMap<HistoryId, History>, id: HistoryId) -> Option<Self> {
-        map.remove(&id).map(|(_id, history)| Self {
+impl<'a> ActiveCmdLease<'a> {
+    /// Remove the command identified by `id` from `map`, returning a lease that restores it on drop
+    /// unless [`Self::commit`] is called. Returns [`None`] when no such command is in flight.
+    fn take(map: &'a DashMap<HistoryId, InFlightCmd>, id: HistoryId) -> Option<Self> {
+        map.remove(&id).map(|(_id, cmd)| Self {
             map,
-            history: Some(history),
+            cmd: Some(cmd),
         })
     }
 
-    /// Consume the guard, keeping the session out of the map and returning ownership of it.
+    /// The command's tracing span, which traces its lifetime.
+    fn span(&self) -> &Span {
+        &self.cmd.as_ref().expect("command is present until commit or drop").span
+    }
+
+    /// Consume the lease, keeping the command out of the map and returning ownership of it.
     ///
     /// Call this once all fallible work has succeeded and the command should no longer be considered
     /// in flight.
-    fn commit(mut self) -> History {
-        self.history.take().expect("history is present until commit or drop")
+    fn commit(mut self) -> InFlightCmd {
+        self.cmd.take().expect("command is present until commit or drop")
     }
 }
 
-impl Deref for CheckedOutSession<'_> {
+impl Deref for ActiveCmdLease<'_> {
     type Target = History;
 
     fn deref(&self) -> &Self::Target {
-        self.history.as_ref().expect("history is present until commit or drop")
+        &self.cmd.as_ref().expect("command is present until commit or drop").history
     }
 }
 
-impl DerefMut for CheckedOutSession<'_> {
+impl DerefMut for ActiveCmdLease<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.history.as_mut().expect("history is present until commit or drop")
+        &mut self.cmd.as_mut().expect("command is present until commit or drop").history
     }
 }
 
-impl Drop for CheckedOutSession<'_> {
+impl Drop for ActiveCmdLease<'_> {
     fn drop(&mut self) {
-        if let Some(history) = self.history.take() {
-            self.map.insert(history.id, history);
+        if let Some(cmd) = self.cmd.take() {
+            self.map.insert(cmd.history.id, cmd);
         }
     }
 }
@@ -191,7 +211,7 @@ impl HistoryJournal {
             caps,
             history_store,
             history_db,
-            active_sessions: DashMap::new(),
+            active_cmds: DashMap::new(),
             semantic_component,
             search_index,
             broadcast,
@@ -205,7 +225,23 @@ impl HistoryJournal {
     #[must_use]
     pub fn start_cmd(&self, history: History) -> HistoryId {
         let id = history.id;
-        self.active_sessions.insert(id, history.clone());
+
+        // This span traces the command's whole lifetime: it is entered by `finish`/`cancel` and
+        // closes when the command leaves `active_cmds`. `exit_code`/`duration` are filled in later
+        // by `finish`.
+        let span = tracing::info_span!(
+            "command",
+            history_id = %id,
+            command = %history.command,
+            exit_code = Empty,
+            duration = Empty,
+        );
+        span.in_scope(|| tracing::debug!("command started"));
+
+        self.active_cmds.insert(id, InFlightCmd {
+            history: history.clone(),
+            span,
+        });
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
     }
@@ -215,8 +251,8 @@ impl HistoryJournal {
     ///
     ///   - [`CheckedOutSession::commit`] removes it from [`Self::active_sessions`].
     ///   - [`Drop`] "rolls the session back", placing it back into [`Self::active_sessions`].
-    fn checkout(&self, history_id: HistoryId) -> Option<CheckedOutSession<'_>> {
-        CheckedOutSession::take(&self.active_sessions, history_id)
+    fn checkout(&self, history_id: HistoryId) -> Option<ActiveCmdLease<'_>> {
+        ActiveCmdLease::take(&self.active_cmds, history_id)
     }
 
     /// The in-flight command recorded under `history_id`.
@@ -224,9 +260,9 @@ impl HistoryJournal {
     /// Returns an owned clone, releasing the map's shard lock before returning, so callers never
     /// hold a borrow into the journal across [`HistoryJournal::finish`] / [`HistoryJournal::cancel`].
     pub fn get(&self, history_id: HistoryId) -> Result<History, GetCmdInFlightError> {
-        self.active_sessions
+        self.active_cmds
             .get(&history_id)
-            .map(|history| history.clone())
+            .map(|cmd| cmd.history.clone())
             .ok_or(GetCmdInFlightError::NotFound(history_id))
     }
 
@@ -245,21 +281,30 @@ impl HistoryJournal {
         session.exit = exit_code;
         session.duration = i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX);
 
+        // Record the outcome on the command's lifetime span and use it to nest the persistence work
+        // below. Held until the end of the function so the span closes once the command is fully
+        // finished.
+        let span = session.span().clone();
+        span.record("exit_code", exit_code);
+        span.record("duration", session.duration);
+
         // Each `?` below drops `session`, which restores it to the in-flight map, so a failed (or
         // cancelled) persistence leaves the command in flight instead of dropping it.
         self.history_db
             .save(&session)
+            .instrument(span.clone())
             .await
             .map_err(|e| CmdFinishError::HistoryDbFailed(e.into()))?;
 
         let (history_record_id, history_record_idx) = self
             .history_store
             .push(session.clone())
+            .instrument(span.clone())
             .await
             .map_err(CmdFinishError::HistoryStoreFailed)?;
 
         // Persistence succeeded; take ownership and stop treating the command as in flight.
-        let history = session.commit();
+        let history = session.commit().history;
 
         // TODO(markovejnovic): This is a little bit hacked-together. I'm thinking it would be good
         // to have a Packer type for this kind of logic. It can wraps the Caps.
@@ -268,6 +313,7 @@ impl HistoryJournal {
             &RecordSeriesKey::new(self.history_store.host_id, RecordTag::History),
             self.caps.get_server::<PackfileCap>().await.ok().flatten(),
         )
+        .instrument(span.clone())
         .await
         {
             tracing::warn!("packing failed: {e}");
@@ -279,7 +325,9 @@ impl HistoryJournal {
             let _ = self.broadcast.send(CmdEvent::Finished(history.clone()));
         }
 
-        self.semantic_component.record_history(history).await;
+        span.in_scope(|| tracing::debug!(record_idx = ?history_record_idx, "command finished"));
+
+        self.semantic_component.record_history(history).instrument(span).await;
 
         Ok(FinishedCmd {
             history_record_id,
@@ -289,13 +337,16 @@ impl HistoryJournal {
 
     /// Cancel a command, discarding its in-memory state without persisting a history entry.
     pub fn cancel(&self, history_id: HistoryId) -> Result<(), CmdCancelError> {
-        let Some((_id, history)) = self.active_sessions.remove(&history_id) else {
+        let Some((_id, cmd)) = self.active_cmds.remove(&history_id) else {
             return Err(CmdCancelError::NotFound(history_id));
         };
 
-        let _ = self.broadcast.send(CmdEvent::Cancelled(history));
+        cmd.span.in_scope(|| tracing::debug!("command cancelled"));
+
+        let _ = self.broadcast.send(CmdEvent::Cancelled(cmd.history));
 
         Ok(())
+        // `cmd.span` drops here → the command span closes.
     }
 
     /// Create a new stream of [`CmdEvent`] objects.

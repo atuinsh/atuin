@@ -21,6 +21,146 @@ use crate::grpc::history::pb::{
 };
 use crate::history_journal::HistoryJournal;
 
+/// TL;DR:
+///
+///   - If you change the proto files, ensure you use the `reserved` proto keyword for modifying
+///     anything related to the `Shutdown` and `Status` RPCs.
+///   - Go ham on breaking wire compatibility on every other RPC. **Make sure you update
+///     `DAEMON_PROTOCOL_VERSION` both in here, and in the client. It is defined in two spots, yes.
+///
+/// # Breaking Wire Compatibility
+///
+/// Changing this version impacts the grpc version and at first glance risks incompatibility
+/// changes. This documentation aims to instill some confidence in making sure this prevents
+/// breakages.
+///
+/// ## Restart Behavior
+///
+/// First and foremost, let us consider how the client restarts the daemon. Nominally, the client
+/// will restart the daemon if the daemon has a mismatched version in the following cases:
+///
+/// `atuin::command::client::daemon:ready_client` is the function responsible for fetching a valid
+/// client. Each client->daemon connection goes through this function, which:
+///
+///   1. Probes the daemon via the `history.Status` RPC.
+///   2. Checks that the response version `DAEMON_VERSION` (ie. the Atuin version) matches that of
+///      the client and also that `DAEMON_PROTOCOL_VERSION` matches that of the client.
+///   3. If there is a mismatch, one of two things will happen:
+///     a) If `daemon.autostart = false`, then we kindly ask the user to restart the daemon and
+///        return an error.
+///     b) If `daemon.autostart = true`, then we try to restart the daemon. This means one of
+///        multiple things:
+///
+///        - If `daemon.systemd_socket` is set to some value, we tell the user to restart the
+///          daemon, and we bail out.
+///        - Otherwise, we send a `history.Shutdown` RPC (version unchecked) to the daemon which
+///          causes the daemon to restart. We then spinloop until the daemon is back online.
+///
+///   4. At this point, either:
+///     - We were unable to restart the daemon and have told the user to manually restart or
+///     - We have restarted the daemon.
+///
+/// ### Transport Layer
+///
+/// I would like to note that restarting the daemon causes the UNIX socket file to be completely
+/// erased, effectively flushing any messages that are enqueued to the daemon.
+///
+/// One of the concerns was that the daemon would receive old data, even if both the client **and**
+/// the daemon were to be restarted, since stale data could be queued. Luckily, that's not the case!
+///
+/// ### Different Package Managers
+///
+/// There are many ways to install Atuin and consequently let's analyze which installation method
+/// hits which code path.
+///
+/// #### curl Install Script
+///
+/// - If `daemon.autostart = true` (default), the daemon will gracefully be restarted when
+///   `DAEMON_PROTOCOL_VERSION` changes. Wire incompatibility is a-ok in this case.
+/// - If `daemon.autostart = false`, we will tell the user to restart Atuin.
+///
+/// #### Homebrew
+///
+/// <https://raw.githubusercontent.com/Homebrew/homebrew-core/master/Formula/a/atuin.rb> presents
+/// the user with a `homebrew service`. This means the user can run `homebrew service start` to run
+/// a new atuin daemon.
+///
+/// We will try to restart it via the `Shutdown` RPC. When the daemon attempts to game end, the
+/// `keep_alive` flag in the homebrew service will restart it.
+///
+/// This means that, by default, we'll get a new version up and running after an update.
+///
+/// #### home-manager
+///
+/// <https://github.com/nix-community/home-manager/blob/master/modules/programs/atuin.nix>
+///
+/// #### Gentoo
+///
+/// <https://github.com/gentoo/gentoo/blob/master/app-shells/atuin/files/atuin-daemon.service>
+///
+/// #### Debian
+///
+/// <https://packages.debian.org/sid/amd64/atuin/filelist>
+///
+/// #### Ubuntu
+///
+/// <https://packages.ubuntu.com/questing/amd64/atuin/filelist>
+///
+/// #### Fedora
+///
+/// <https://packages.fedoraproject.org/pkgs/atuin/atuin/>
+///
+/// #### Arch
+///
+/// <https://archlinux.org/packages/extra/x86_64/atuin/files/>
+///
+/// #### Alpine
+///
+/// <https://pkgs.alpinelinux.org/package/edge/community/x86_64/atuin>
+///
+/// #### Void
+///
+/// <https://raw.githubusercontent.com/void-linux/void-packages/master/srcpkgs/atuin/template>
+///
+/// ## Evil Cases
+///
+/// Let's consider some cases that severely risk breaking wire compatibility.
+///
+/// ### Mismatched Daemon & Client Versions
+///
+/// If the daemon and client are not running the same daemon protocol version, then a breakage in
+/// wire compatibility means one of three things:
+///
+/// ### You have used the `reserved` keyword
+///
+/// Modifying the `.proto` by changing existing fields is **heavily advised against**.
+/// <https://protobuf.dev/programming-guides/proto3/#assigning> **heavily** urges you to delete
+/// fields and mark the deleted field numbers as reserved.
+///
+/// Consider the case of an updated client and an old server. The old server, as per
+/// <https://protobuf.dev/programming-guides/encoding/#structure>, will **skip** old fields, which
+/// means that old fields will receive the **default** value. In most cases, this is `Option::None`.
+///
+/// ### You have modified (or removed) a field
+///
+/// If you change the type of the field (or remove a field) **without** changing the field number,
+/// then one of two things can happen:
+///
+///   - Either gRPC recognizes the change and returns an error on the mismatched request, or
+///   - gRPC is oblivious to the change you've made, in which case it will misinterpret the data.
+///     Hopefully your domain conversion catches it, and if it doesn't, the daemon will get
+///     mangled data. See <https://protobuf.dev/programming-guides/encoding/#structure> for more
+///     info on when gRPC will misinterpret your data (an example is string -> bytes conversions).
+///
+/// **This can only happen if the `DAEMON_PROTOCOL_VERSION` on the daemon (this one) and the
+/// `DAEMON_PROTOCOL_VERSION` on the client (`crates/atuin/src/command/client/daemon.rs`) are
+/// mismatched**, as that avoids the restart path described above.
+///
+/// **Note that you should never change the `Shutdown` and `Status` RPCs as they do not have the
+/// protocol version guards.** They are **assumed** to be stable and if you want to modify them, you
+/// **must** use the `reserved` keyword.
+///
+/// ## Conclusion
 const DAEMON_PROTOCOL_VERSION: u32 = 2;
 
 /// The History gRPC service.

@@ -132,6 +132,7 @@ pub enum EndHistoryRequestParseError {
 ///
 /// [`EndHistoryRequest`] does not cleanly map into any particular domain type, so we create a new
 /// "view" type for it here.
+#[derive(Debug)]
 pub struct EndHistoryRequestView {
     /// The ID of the history entry.
     pub history_id: DomainHistoryId,
@@ -243,8 +244,8 @@ mod tests {
 
     fn parse_end(
         req: EndHistoryRequest,
-    ) -> Result<(DomainHistoryId, i64, Option<Duration>), EndHistoryRequestParseError> {
-        req.try_into()
+    ) -> Result<EndHistoryRequestView, EndHistoryRequestParseError> {
+        req.view()
     }
 
     proptest! {
@@ -343,9 +344,9 @@ mod tests {
 
     #[rstest]
     fn end_request_none_duration_is_preserved() {
-        let (_, exit, duration) = parse_end(end_req(Some(good_id_proto()), 5, None)).unwrap();
-        assert_eq!(exit, 5);
-        assert!(duration.is_none());
+        let view = parse_end(end_req(Some(good_id_proto()), 5, None)).unwrap();
+        assert_eq!(view.exit_code, 5);
+        assert!(view.duration.is_none());
     }
 
     #[rstest]
@@ -354,8 +355,8 @@ mod tests {
             seconds: 0,
             nanos: 3,
         };
-        let (_, _, duration) = parse_end(end_req(Some(good_id_proto()), 0, Some(d))).unwrap();
-        assert_eq!(duration, Some(Duration::from_nanos(3)));
+        let view = parse_end(end_req(Some(good_id_proto()), 0, Some(d))).unwrap();
+        assert_eq!(view.duration, Some(Duration::from_nanos(3)));
     }
 
     #[rstest]
