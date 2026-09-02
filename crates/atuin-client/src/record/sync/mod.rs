@@ -1877,13 +1877,10 @@ mod packfile_capability_tests {
         build_engine(client, down.clone())
             .await
             .keyed(&key)
-            .sync_remote(vec![
-                packfile_download_op(host, 3),
-                Operation::Download {
-                    remote: 3,
-                    series: RecordSeriesKey::new(host, RecordTag::History),
-                },
-            ])
+            .sync_remote(vec![packfile_download_op(host, 3), Operation::Download {
+                remote: 3,
+                series: RecordSeriesKey::new(host, RecordTag::History),
+            }])
             .await
             .unwrap();
 

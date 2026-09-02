@@ -1,11 +1,13 @@
-use crate::record::RecordId;
-use semver::Version;
-use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::LazyLock;
+
+use semver::Version;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use url::Url;
+
+use crate::record::RecordId;
 
 // the usage of X- has been deprecated for quite along time, it turns out
 pub static ATUIN_HEADER_VERSION: &str = "Atuin-Version";
