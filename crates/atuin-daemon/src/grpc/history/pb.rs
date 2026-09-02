@@ -1,7 +1,7 @@
 //! Model conversion utilities for the `history` gRPC protobuf.
 use std::time::Duration;
 
-use atuin_client::history::{History, HistoryId};
+use atuin_client::history::{History, HistoryId as DomainHistoryId};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::record::{CmdOrigin, CmdOriginParseError, RecordId};
 use easy_cast::Conv;
@@ -10,40 +10,42 @@ use time::OffsetDateTime;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::Status;
 
-use crate::history::common::{RecordId as RecordIdProto, Uuid};
+use crate::grpc::common::pb::Uuid;
 use crate::history::tail_history_reply::Event;
-use crate::history::{
-    AuthorKind, CancelHistoryRequest, EndHistoryRequest, HistoryEntry, HistoryId as HistoryIdProto,
-    Lagged, StartHistoryRequest, TailHistoryReply,
-};
 use crate::history_journal::{CmdCancelError, CmdEvent, CmdFinishError, GetCmdInFlightError};
 
-/// Mark an error as a [`tonic::Status::invalid_argument`].
-macro_rules! grpc_invalid_argument {
-    ($err:ty) => {
-        impl From<$err> for tonic::Status {
-            fn from(value: $err) -> Self {
-                Self::invalid_argument(value.to_string())
-            }
-        }
-    };
+mod codegen {
+    #![allow(clippy::must_use_candidate, reason = "prost-generated code")]
+    tonic::include_proto!("history");
 }
 
-impl From<HistoryId> for HistoryIdProto {
-    fn from(value: HistoryId) -> Self {
-        Self {
-            uuid: Some(Uuid {
-                value: value.into_bytes().to_vec(),
-            }),
+pub use codegen::*;
+
+impl From<Option<atuin_client::history::AuthorKind>> for AuthorKind {
+    fn from(kind: Option<atuin_client::history::AuthorKind>) -> Self {
+        match kind {
+            None => Self::Unspecified,
+            Some(atuin_client::history::AuthorKind::User) => Self::User,
+            Some(atuin_client::history::AuthorKind::Agent) => Self::Agent,
         }
     }
 }
 
-impl From<RecordId> for RecordIdProto {
-    fn from(value: RecordId) -> Self {
+impl From<AuthorKind> for Option<atuin_client::history::AuthorKind> {
+    fn from(kind: AuthorKind) -> Self {
+        match kind {
+            AuthorKind::Unspecified => None,
+            AuthorKind::User => Some(atuin_client::history::AuthorKind::User),
+            AuthorKind::Agent => Some(atuin_client::history::AuthorKind::Agent),
+        }
+    }
+}
+
+impl From<DomainHistoryId> for HistoryId {
+    fn from(value: DomainHistoryId) -> Self {
         Self {
             uuid: Some(Uuid {
-                value: value.0.into_bytes().to_vec(),
+                value: value.into_bytes().to_vec(),
             }),
         }
     }
@@ -83,7 +85,7 @@ impl From<Result<CmdEvent, BroadcastStreamRecvError>> for TailHistoryReply {
     }
 }
 
-/// Errors thrown parsing the [`HistoryIdProto`].
+/// Errors thrown parsing the [`HistoryId`].
 #[derive(Debug, Error)]
 pub enum IdParseError {
     #[error("history id is missing its uuid")]
@@ -92,10 +94,10 @@ pub enum IdParseError {
     BadLength(usize),
 }
 
-impl TryFrom<HistoryIdProto> for HistoryId {
+impl TryFrom<HistoryId> for DomainHistoryId {
     type Error = IdParseError;
 
-    fn try_from(value: HistoryIdProto) -> Result<Self, Self::Error> {
+    fn try_from(value: HistoryId) -> Result<Self, Self::Error> {
         let uuid = value.uuid.ok_or(IdParseError::MissingUuid)?;
         let len = uuid.value.len();
         let bytes: [u8; 16] = uuid.value.try_into().map_err(|_| IdParseError::BadLength(len))?;
@@ -103,16 +105,12 @@ impl TryFrom<HistoryIdProto> for HistoryId {
     }
 }
 
-grpc_invalid_argument!(IdParseError);
-
 /// Errors thrown parsing the [`StartHistoryRequest`].
 #[derive(Debug, Error)]
 pub enum StartHistoryRequestParseError {
     #[error("the given cmd origin is malformed: {0}")]
     BadCmdOrigin(#[from] CmdOriginParseError),
 }
-
-grpc_invalid_argument!(StartHistoryRequestParseError);
 
 impl TryFrom<StartHistoryRequest> for History {
     type Error = StartHistoryRequestParseError;
@@ -146,14 +144,12 @@ pub enum EndHistoryRequestParseError {
     InvalidDuration(#[from] prost_types::DurationError),
 }
 
-grpc_invalid_argument!(EndHistoryRequestParseError);
-
 /// Errors thrown parsing the [`EndHistoryRequest`].
-impl TryFrom<EndHistoryRequest> for (HistoryId, i64, Option<Duration>) {
+impl TryFrom<EndHistoryRequest> for (DomainHistoryId, i64, Option<Duration>) {
     type Error = EndHistoryRequestParseError;
 
     fn try_from(value: EndHistoryRequest) -> Result<Self, Self::Error> {
-        let id: HistoryId =
+        let id: DomainHistoryId =
             value.id.ok_or(EndHistoryRequestParseError::MissingHistory)?.try_into()?;
         let exit_code = value.exit;
         let duration = value.duration.map(Duration::try_from).transpose()?;
@@ -180,9 +176,7 @@ pub enum CancelHistoryRequestParseError {
     InvalidId(#[from] IdParseError),
 }
 
-grpc_invalid_argument!(CancelHistoryRequestParseError);
-
-impl TryFrom<CancelHistoryRequest> for HistoryId {
+impl TryFrom<CancelHistoryRequest> for DomainHistoryId {
     type Error = CancelHistoryRequestParseError;
 
     fn try_from(value: CancelHistoryRequest) -> Result<Self, Self::Error> {
@@ -206,6 +200,8 @@ impl From<GetCmdInFlightError> for Status {
     }
 }
 
+invalid_argument_errors!(StartHistoryRequestParseError,);
+
 #[cfg(test)]
 mod tests {
     use atuin_client::history::AuthorKind as ClientAuthorKind;
@@ -216,12 +212,12 @@ mod tests {
 
     use super::*;
 
-    fn good_id_proto() -> HistoryIdProto {
-        HistoryIdProto::from(HistoryId::from_bytes([1u8; 16]))
+    fn good_id_proto() -> HistoryId {
+        HistoryId::from(DomainHistoryId::from_bytes([1u8; 16]))
     }
 
     fn end_req(
-        id: Option<HistoryIdProto>,
+        id: Option<HistoryId>,
         exit: i64,
         duration: Option<prost_types::Duration>,
     ) -> EndHistoryRequest {
@@ -230,18 +226,18 @@ mod tests {
 
     fn parse_end(
         req: EndHistoryRequest,
-    ) -> Result<(HistoryId, i64, Option<Duration>), EndHistoryRequestParseError> {
+    ) -> Result<(DomainHistoryId, i64, Option<Duration>), EndHistoryRequestParseError> {
         req.try_into()
     }
 
     proptest! {
-        /// A HistoryId survives the proto round trip for every possible id, and the proto carries
+        /// A DomainHistoryId survives the proto round trip for every possible id, and the proto carries
         /// the id's raw 16 bytes verbatim -- pinning byte order against a symmetric from/into swap.
         #[test]
         fn history_id_round_trips_and_wire_bytes(b in proptest::array::uniform16(any::<u8>())) {
-            let proto = HistoryIdProto::from(HistoryId::from_bytes(b));
+            let proto = HistoryId::from(DomainHistoryId::from_bytes(b));
             prop_assert_eq!(proto.uuid.as_ref().unwrap().value.clone(), b.to_vec());
-            prop_assert_eq!(HistoryId::try_from(proto).unwrap().into_bytes(), b);
+            prop_assert_eq!(DomainHistoryId::try_from(proto).unwrap().into_bytes(), b);
         }
 
         /// Any uuid payload whose length is not 16 is rejected as BadLength reporting the real length,
@@ -250,8 +246,8 @@ mod tests {
         fn history_id_rejects_wrong_length(
             v in proptest::collection::vec(any::<u8>(), 0..40usize).prop_filter("not 16", |v| v.len() != 16),
         ) {
-            let proto = HistoryIdProto { uuid: Some(Uuid { value: v.clone() }) };
-            match HistoryId::try_from(proto) {
+            let proto = HistoryId { uuid: Some(Uuid { value: v.clone() }) };
+            match DomainHistoryId::try_from(proto) {
                 Err(IdParseError::BadLength(len)) => prop_assert_eq!(len, v.len()),
                 other => prop_assert!(false, "expected BadLength, got {:?}", other),
             }
@@ -263,17 +259,17 @@ mod tests {
     #[case::short(Some(vec![0u8; 15]), "got 15")]
     #[case::long(Some(vec![0u8; 17]), "got 17")]
     fn history_id_parse_errors(#[case] value: Option<Vec<u8>>, #[case] fragment: &str) {
-        let proto = HistoryIdProto {
+        let proto = HistoryId {
             uuid: value.map(|value| Uuid { value }),
         };
-        let err = HistoryId::try_from(proto).unwrap_err();
+        let err = DomainHistoryId::try_from(proto).unwrap_err();
         assert!(err.to_string().contains(fragment), "{err}");
     }
 
     #[rstest]
     fn history_entry_field_routing() {
         let h: History = History::from_db()
-            .id(HistoryId::from_bytes([7u8; 16]))
+            .id(DomainHistoryId::from_bytes([7u8; 16]))
             .timestamp(OffsetDateTime::UNIX_EPOCH)
             .command("CMD".into())
             .cwd("CWD".into())
@@ -363,15 +359,15 @@ mod tests {
 
     #[rstest]
     #[case::missing(None)]
-    #[case::bad_len(Some(HistoryIdProto { uuid: Some(Uuid { value: vec![0u8; 15] }) }))]
-    fn cancel_request_rejects_bad_id(#[case] id: Option<HistoryIdProto>) {
-        assert!(HistoryId::try_from(CancelHistoryRequest { id }).is_err());
+    #[case::bad_len(Some(HistoryId { uuid: Some(Uuid { value: vec![0u8; 15] }) }))]
+    fn cancel_request_rejects_bad_id(#[case] id: Option<HistoryId>) {
+        assert!(DomainHistoryId::try_from(CancelHistoryRequest { id }).is_err());
     }
 
     #[rstest]
     fn cancel_request_good_id_ok() {
         assert!(
-            HistoryId::try_from(CancelHistoryRequest {
+            DomainHistoryId::try_from(CancelHistoryRequest {
                 id: Some(good_id_proto())
             })
             .is_ok()
@@ -379,7 +375,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case(CmdFinishError::NotFound(HistoryId::from_bytes([0u8; 16])), Code::NotFound)]
+    #[case(CmdFinishError::NotFound(DomainHistoryId::from_bytes([0u8; 16])), Code::NotFound)]
     #[case(CmdFinishError::HistoryStoreFailed(eyre::eyre!("x")), Code::Internal)]
     #[case(CmdFinishError::HistoryDbFailed(eyre::eyre!("x")), Code::Internal)]
     fn finish_error_status_codes(#[case] err: CmdFinishError, #[case] code: Code) {
@@ -392,15 +388,15 @@ mod tests {
     }
 
     #[rstest]
-    #[case::cancel(Status::from(CmdCancelError::NotFound(HistoryId::from_bytes([0u8; 16]))))]
-    #[case::get(Status::from(GetCmdInFlightError::NotFound(HistoryId::from_bytes([0u8; 16]))))]
+    #[case::cancel(Status::from(CmdCancelError::NotFound(DomainHistoryId::from_bytes([0u8; 16]))))]
+    #[case::get(Status::from(GetCmdInFlightError::NotFound(DomainHistoryId::from_bytes([0u8; 16]))))]
     fn journal_not_found_maps_to_not_found(#[case] status: Status) {
         assert_eq!(status.code(), Code::NotFound);
     }
 
     fn history_fixture() -> History {
         History::from_db()
-            .id(HistoryId::from_bytes([1u8; 16]))
+            .id(DomainHistoryId::from_bytes([1u8; 16]))
             .timestamp(OffsetDateTime::UNIX_EPOCH)
             .command("c".into())
             .cwd("/".into())

@@ -1,4 +1,4 @@
-pub mod model;
+pub mod pb;
 
 use std::pin::Pin;
 use std::sync::Arc;

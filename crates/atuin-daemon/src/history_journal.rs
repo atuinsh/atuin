@@ -4,7 +4,7 @@
 //! termination of new commands.
 //!
 //! When users run new commands in the client, the client sends requests to the GRPC server. The
-//! [`crate::grpc::history::Service`] then "forwards" the request down into [`HistoryJournal`] --
+//! [`crate::grpc::HistoryService`] then "forwards" the request down into [`HistoryJournal`] --
 //! requesting the start of a new shell command.
 //!
 //! The [`HistoryJournal`] is responsible for managing the lifecycle of this command. The main

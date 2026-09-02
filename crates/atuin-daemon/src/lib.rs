@@ -74,7 +74,7 @@ pub async fn boot(
         semantic_handle,
         search_index,
     ));
-    let history_service = HistoryServer::new(grpc::history::Service::new(journal, handle.clone()));
+    let history_service = HistoryServer::new(grpc::HistoryService::new(journal, handle.clone()));
 
     // Create the control service
     let control_service = control::ControlService::new(handle.clone());
