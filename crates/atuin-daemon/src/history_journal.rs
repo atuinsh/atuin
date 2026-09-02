@@ -66,11 +66,6 @@ pub struct FinishedCmd {
 }
 
 /// In-flight command state held in [`HistoryJournal::active_cmds`].
-///
-/// Bundles the [`History`] entry with the tracing [`Span`] that traces the command's lifetime. The
-/// span is created when the command is started and closes when this value is dropped -- i.e. when
-/// the command stops being in flight (finished or cancelled) -- so its open-to-close duration is the
-/// command's lifetime.
 #[derive(Debug)]
 struct InFlightCmd {
     history: History,
@@ -143,9 +138,6 @@ pub enum GetCmdInFlightError {
 ///
 /// While the lease is alive the command has been removed from the map. If it is dropped without
 /// [`ActiveCmdLease::commit`], the command is returned to the map (rolled back).
-/// Deref-ing the lease yields the underlying [`History`], so callers can read and mutate the
-/// checked-out command directly (e.g. `session.exit = ...`); [`Self::span`] exposes the command's
-/// tracing span.
 struct ActiveCmdLease<'a> {
     map: &'a DashMap<HistoryId, InFlightCmd>,
     cmd: Option<InFlightCmd>,
@@ -226,22 +218,21 @@ impl HistoryJournal {
     pub fn start_cmd(&self, history: History) -> HistoryId {
         let id = history.id;
 
-        // This span traces the command's whole lifetime: it is entered by `finish`/`cancel` and
-        // closes when the command leaves `active_cmds`. `exit_code`/`duration` are filled in later
-        // by `finish`.
-        let span = tracing::info_span!(
+        let span = tracing::trace_span!(
             "command",
             history_id = %id,
             command = %history.command,
             exit_code = Empty,
             duration = Empty,
         );
-        span.in_scope(|| tracing::debug!("command started"));
 
-        self.active_cmds.insert(id, InFlightCmd {
-            history: history.clone(),
-            span,
-        });
+        self.active_cmds.insert(
+            id,
+            InFlightCmd {
+                history: history.clone(),
+                span,
+            },
+        );
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
     }
@@ -281,9 +272,6 @@ impl HistoryJournal {
         session.exit = exit_code;
         session.duration = i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX);
 
-        // Record the outcome on the command's lifetime span and use it to nest the persistence work
-        // below. Held until the end of the function so the span closes once the command is fully
-        // finished.
         let span = session.span().clone();
         span.record("exit_code", exit_code);
         span.record("duration", session.duration);
@@ -325,8 +313,6 @@ impl HistoryJournal {
             let _ = self.broadcast.send(CmdEvent::Finished(history.clone()));
         }
 
-        span.in_scope(|| tracing::debug!(record_idx = ?history_record_idx, "command finished"));
-
         self.semantic_component.record_history(history).instrument(span).await;
 
         Ok(FinishedCmd {
@@ -341,12 +327,9 @@ impl HistoryJournal {
             return Err(CmdCancelError::NotFound(history_id));
         };
 
-        cmd.span.in_scope(|| tracing::debug!("command cancelled"));
-
         let _ = self.broadcast.send(CmdEvent::Cancelled(cmd.history));
 
         Ok(())
-        // `cmd.span` drops here → the command span closes.
     }
 
     /// Create a new stream of [`CmdEvent`] objects.
