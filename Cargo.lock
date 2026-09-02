@@ -349,6 +349,8 @@ dependencies = [
  "serde_json",
  "shellexpand",
  "sqlx",
+ "strum 0.27.2",
+ "strum_macros 0.28.0",
  "tempfile",
  "thiserror 2.0.19",
  "time",

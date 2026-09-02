@@ -72,6 +72,9 @@ uuid = { workspace = true }
 xxhash-rust = { workspace = true }
 yaml-rust2 = { workspace = true }
 
+strum = { workspace = true }
+strum_macros = { workspace = true }
+
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 rstest = { workspace = true }
