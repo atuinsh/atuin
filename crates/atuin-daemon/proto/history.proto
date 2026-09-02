@@ -108,8 +108,10 @@ message TailHistoryReply {
     HistoryEntry started = 1;
     // A command finished; the entry now carries its exit code and duration.
     HistoryEntry ended = 2;
+    // A command has been "cancelled", ie. no histroy has been recorded.
+    HistoryEntry cancelled = 3;
     // An in-band notice that the consumer fell behind and lost events.
-    Lagged lagged = 3;
+    Lagged lagged = 4;
   }
 }
 

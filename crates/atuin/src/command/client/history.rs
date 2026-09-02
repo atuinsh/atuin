@@ -624,6 +624,7 @@ pub(super) async fn end_history_entry(
 enum TailKind {
     Started,
     Ended,
+    Cancelled,
 }
 
 #[cfg(feature = "daemon")]
@@ -673,6 +674,7 @@ impl TailEvent {
         let (kind, history) = match reply.event {
             Some(TailEventProto::Started(history)) => (TailKind::Started, history),
             Some(TailEventProto::Ended(history)) => (TailKind::Ended, history),
+            Some(TailEventProto::Cancelled(history)) => (TailKind::Cancelled, history),
             Some(TailEventProto::Lagged(_)) => {
                 bail!("daemon sent a lag notice as a history event")
             }
@@ -752,6 +754,7 @@ impl TailEvent {
             TailKind::Started => "-".repeat(72).bright_blue().to_string(),
             TailKind::Ended if self.history.exit == 0 => "-".repeat(72).bright_green().to_string(),
             TailKind::Ended => "-".repeat(72).bright_red().to_string(),
+            TailKind::Cancelled => "-".repeat(72).bright_yellow().to_string(),
         };
 
         out.push_str(&border);
@@ -858,6 +861,7 @@ impl TailKind {
         match self {
             Self::Started => "started",
             Self::Ended => "ended",
+            Self::Cancelled => "cancelled",
         }
     }
 
@@ -866,6 +870,7 @@ impl TailKind {
             Self::Started => "STARTED".bold().bright_blue(),
             Self::Ended if exit == 0 => "ENDED".bold().bright_green(),
             Self::Ended => "ENDED".bold().bright_red(),
+            Self::Cancelled => "CANCELLED".bold().bright_yellow(),
         }
     }
 }

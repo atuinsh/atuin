@@ -2,22 +2,22 @@ pub mod pb;
 
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
 
 use atuin_client::history::{History, HistoryId};
 use atuin_common::time::OffsetDateTimeExt;
 use futures::StreamExt;
 use time::OffsetDateTime;
 use tokio_stream::Stream;
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};
 use tracing::{Level, instrument};
 
 use crate::DaemonHandle;
 use crate::grpc::history::pb::history_server::History as GrpcService;
 use crate::grpc::history::pb::{
-    CancelHistoryReply, CancelHistoryRequest, EndHistoryReply, EndHistoryRequest, ShutdownReply,
-    ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest,
-    TailHistoryReply, TailHistoryRequest,
+    CancelHistoryReply, CancelHistoryRequest, EndHistoryReply, EndHistoryRequest, Lagged,
+    ShutdownReply, ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply,
+    StatusRequest, TailHistoryEvent, TailHistoryReply, TailHistoryRequest,
 };
 use crate::history_journal::HistoryJournal;
 
@@ -72,19 +72,17 @@ impl GrpcService for Service {
         &self,
         req: Request<EndHistoryRequest>,
     ) -> Result<Response<EndHistoryReply>, Status> {
-        let (id, exit, duration): (HistoryId, i64, Option<Duration>) =
-            req.into_inner().try_into()?;
+        let req = req.into_inner().view()?;
 
         // The client may omit the duration, in which case we measure it from the command's start
         // timestamp, which the journal tracks for us.
-        let duration = match duration {
+        let duration = match req.duration {
             Some(duration) => duration,
-            None => {
-                OffsetDateTime::now_utc().saturating_duration_since(self.journal.get(id)?.timestamp)
-            }
+            None => OffsetDateTime::now_utc()
+                .saturating_duration_since(self.journal.get(req.history_id)?.timestamp),
         };
 
-        let finished_cmd = self.journal.finish(id, exit, duration).await?;
+        let finished_cmd = self.journal.finish(req.history_id, req.exit_code, duration).await?;
 
         Ok(Response::new(EndHistoryReply {
             record_id: Some(finished_cmd.history_record_id.into()),
@@ -115,13 +113,17 @@ impl GrpcService for Service {
         &self,
         _request: Request<TailHistoryRequest>,
     ) -> Result<Response<Self::TailHistoryStream>, Status> {
-        // A cancelled command maps to a reply with no `event`; drop those so the tail only carries
-        // real started/ended/lagged notices.
-        // This is legacy behavior.
-        // TODO(markovejnovic): Should we continue with this behavior?
-        let stream = self.journal.subscribe().filter_map(|event| async move {
-            let reply = TailHistoryReply::from(event);
-            reply.event.is_some().then_some(Ok::<_, Status>(reply))
+        // Every journal event (started, ended, cancelled) and any lag notice becomes a reply on the
+        // tail stream.
+        let stream = self.journal.subscribe().map(|event| {
+            Ok::<_, Status>(TailHistoryReply {
+                event: Some(match event {
+                    Ok(event) => event.into(),
+                    Err(BroadcastStreamRecvError::Lagged(dropped)) => {
+                        TailHistoryEvent::Lagged(Lagged { dropped })
+                    }
+                }),
+            })
         });
 
         Ok(Response::new(Box::pin(stream)))

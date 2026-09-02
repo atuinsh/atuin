@@ -1,29 +1,54 @@
 //! Model conversion utilities for the `history` gRPC protobuf.
-use std::time::Duration;
-
-use atuin_client::history::{History, HistoryId as DomainHistoryId};
-use atuin_common::time::OffsetDateTimeExt;
-use atuin_domain::record::{CmdOrigin, CmdOriginParseError};
-use easy_cast::Conv;
-use thiserror::Error;
-use time::OffsetDateTime;
-use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
-use tonic::Status;
-
-// The generated history code refers to the shared common protobuf types as `super::common`, so
-// expose `crate::grpc::common::pb` under that name for the `codegen` module below.
-use crate::grpc::common::pb as common;
-use crate::grpc::common::pb::Uuid;
-use crate::history_journal::{CmdCancelError, CmdEvent, CmdFinishError, GetCmdInFlightError};
-
 mod codegen {
     #![allow(clippy::must_use_candidate, reason = "prost-generated code")]
     tonic::include_proto!("history");
 }
 
-pub use codegen::*;
+use std::time::Duration;
 
-use self::tail_history_reply::Event;
+use atuin_client::history::{History, HistoryId as DomainHistoryId};
+use atuin_common::time::OffsetDateTimeExt;
+use atuin_domain::record::{CmdOrigin, CmdOriginParseError};
+pub use codegen::*;
+use easy_cast::Conv;
+use thiserror::Error;
+use time::OffsetDateTime;
+use tonic::Status;
+
+pub use self::tail_history_reply::Event as TailHistoryEvent;
+use crate::grpc::common::pb as common;
+use crate::grpc::common::pb::Uuid;
+use crate::history_journal::{CmdCancelError, CmdEvent, CmdFinishError, GetCmdInFlightError};
+
+impl From<DomainHistoryId> for HistoryId {
+    fn from(value: DomainHistoryId) -> Self {
+        Self {
+            uuid: Some(Uuid {
+                value: value.into_bytes().to_vec(),
+            }),
+        }
+    }
+}
+
+/// Errors thrown parsing the [`HistoryId`].
+#[derive(Debug, Error)]
+pub enum IdParseError {
+    #[error("history id is missing its uuid")]
+    MissingUuid,
+    #[error("history id must be exactly 16 bytes, got {0}")]
+    BadLength(usize),
+}
+
+impl TryFrom<HistoryId> for DomainHistoryId {
+    type Error = IdParseError;
+
+    fn try_from(value: HistoryId) -> Result<Self, Self::Error> {
+        let uuid = value.uuid.ok_or(IdParseError::MissingUuid)?;
+        let len = uuid.value.len();
+        let bytes: [u8; 16] = uuid.value.try_into().map_err(|_| IdParseError::BadLength(len))?;
+        Ok(Self::from_bytes(bytes))
+    }
+}
 
 impl From<Option<atuin_client::history::AuthorKind>> for AuthorKind {
     fn from(kind: Option<atuin_client::history::AuthorKind>) -> Self {
@@ -45,16 +70,6 @@ impl From<AuthorKind> for Option<atuin_client::history::AuthorKind> {
     }
 }
 
-impl From<DomainHistoryId> for HistoryId {
-    fn from(value: DomainHistoryId) -> Self {
-        Self {
-            uuid: Some(Uuid {
-                value: value.into_bytes().to_vec(),
-            }),
-        }
-    }
-}
-
 impl From<History> for HistoryEntry {
     fn from(history: History) -> Self {
         Self {
@@ -71,41 +86,6 @@ impl From<History> for HistoryEntry {
             shell: history.shell.unwrap_or_default(),
             author_kind: AuthorKind::from(history.author_kind) as i32,
         }
-    }
-}
-
-/// Map a single journal event to its tail-stream reply.
-impl From<Result<CmdEvent, BroadcastStreamRecvError>> for TailHistoryReply {
-    fn from(event: Result<CmdEvent, BroadcastStreamRecvError>) -> Self {
-        let event = match event {
-            Ok(CmdEvent::Started(history)) => Some(Event::Started(history.into())),
-            Ok(CmdEvent::Finished(history)) => Some(Event::Ended(history.into())),
-            Ok(CmdEvent::Cancelled(_)) => None,
-            Err(BroadcastStreamRecvError::Lagged(dropped)) => {
-                Some(Event::Lagged(Lagged { dropped }))
-            }
-        };
-        Self { event }
-    }
-}
-
-/// Errors thrown parsing the [`HistoryId`].
-#[derive(Debug, Error)]
-pub enum IdParseError {
-    #[error("history id is missing its uuid")]
-    MissingUuid,
-    #[error("history id must be exactly 16 bytes, got {0}")]
-    BadLength(usize),
-}
-
-impl TryFrom<HistoryId> for DomainHistoryId {
-    type Error = IdParseError;
-
-    fn try_from(value: HistoryId) -> Result<Self, Self::Error> {
-        let uuid = value.uuid.ok_or(IdParseError::MissingUuid)?;
-        let len = uuid.value.len();
-        let bytes: [u8; 16] = uuid.value.try_into().map_err(|_| IdParseError::BadLength(len))?;
-        Ok(Self::from_bytes(bytes))
     }
 }
 
@@ -140,7 +120,7 @@ impl TryFrom<StartHistoryRequest> for History {
 /// Errors thrown parsing the [`EndHistoryRequest`].
 #[derive(Debug, Error)]
 pub enum EndHistoryRequestParseError {
-    #[error("missing history id")]
+    #[error("invalid history id")]
     MissingHistory,
     #[error("invalid id field: {0}")]
     InvalidId(#[from] IdParseError),
@@ -148,26 +128,31 @@ pub enum EndHistoryRequestParseError {
     InvalidDuration(#[from] prost_types::DurationError),
 }
 
-/// Errors thrown parsing the [`EndHistoryRequest`].
-impl TryFrom<EndHistoryRequest> for (DomainHistoryId, i64, Option<Duration>) {
-    type Error = EndHistoryRequestParseError;
-
-    fn try_from(value: EndHistoryRequest) -> Result<Self, Self::Error> {
-        let id: DomainHistoryId =
-            value.id.ok_or(EndHistoryRequestParseError::MissingHistory)?.try_into()?;
-        let exit_code = value.exit;
-        let duration = value.duration.map(Duration::try_from).transpose()?;
-        Ok((id, exit_code, duration))
-    }
+/// A deserialized view into the [`EndHistoryRequest`] request.
+///
+/// [`EndHistoryRequest`] does not cleanly map into any particular domain type, so we create a new
+/// "view" type for it here.
+pub struct EndHistoryRequestView {
+    /// The ID of the history entry.
+    pub history_id: DomainHistoryId,
+    /// The exit code of the command.
+    pub exit_code: i64,
+    /// The duration the command took. [`None`] means the daemon will perform a best-guess estimate
+    /// of the length of the command.
+    pub duration: Option<Duration>,
 }
 
-impl From<CmdFinishError> for Status {
-    fn from(value: CmdFinishError) -> Self {
-        match value {
-            CmdFinishError::NotFound(_) => Self::not_found(value.to_string()),
-            CmdFinishError::HistoryStoreFailed(_) => Self::internal(value.to_string()),
-            CmdFinishError::HistoryDbFailed(_) => Self::internal(value.to_string()),
-        }
+impl EndHistoryRequest {
+    pub fn view(&self) -> Result<EndHistoryRequestView, EndHistoryRequestParseError> {
+        Ok(EndHistoryRequestView {
+            history_id: self
+                .id
+                .clone()
+                .ok_or(EndHistoryRequestParseError::MissingHistory)?
+                .try_into()?,
+            exit_code: self.exit,
+            duration: self.duration.map(Duration::try_from).transpose()?,
+        })
     }
 }
 
@@ -185,6 +170,27 @@ impl TryFrom<CancelHistoryRequest> for DomainHistoryId {
 
     fn try_from(value: CancelHistoryRequest) -> Result<Self, Self::Error> {
         Ok(value.id.ok_or(CancelHistoryRequestParseError::MissingHistory)?.try_into()?)
+    }
+}
+
+/// Map a single journal event to its tail-stream reply.
+impl From<CmdEvent> for TailHistoryEvent {
+    fn from(event: CmdEvent) -> Self {
+        match event {
+            CmdEvent::Started(history) => Self::Started(history.into()),
+            CmdEvent::Finished(history) => Self::Ended(history.into()),
+            CmdEvent::Cancelled(history) => Self::Cancelled(history.into()),
+        }
+    }
+}
+
+impl From<CmdFinishError> for Status {
+    fn from(value: CmdFinishError) -> Self {
+        match value {
+            CmdFinishError::NotFound(_) => Self::not_found(value.to_string()),
+            CmdFinishError::HistoryStoreFailed(_) => Self::internal(value.to_string()),
+            CmdFinishError::HistoryDbFailed(_) => Self::internal(value.to_string()),
+        }
     }
 }
 
@@ -426,26 +432,19 @@ mod tests {
 
     #[rstest]
     fn tail_started_maps_to_started() {
-        let reply = TailHistoryReply::from(Ok(CmdEvent::Started(history_fixture())));
-        assert!(matches!(reply.event, Some(Event::Started(_))));
+        let event = TailHistoryEvent::from(CmdEvent::Started(history_fixture()));
+        assert!(matches!(event, TailHistoryEvent::Started(_)));
     }
 
     #[rstest]
     fn tail_finished_maps_to_ended() {
-        let reply = TailHistoryReply::from(Ok(CmdEvent::Finished(history_fixture())));
-        assert!(matches!(reply.event, Some(Event::Ended(_))));
-    }
-
-    /// A cancelled command produces a reply with no event, so the tail stream drops it.
-    #[rstest]
-    fn tail_cancelled_has_no_event() {
-        let reply = TailHistoryReply::from(Ok(CmdEvent::Cancelled(history_fixture())));
-        assert!(reply.event.is_none());
+        let event = TailHistoryEvent::from(CmdEvent::Finished(history_fixture()));
+        assert!(matches!(event, TailHistoryEvent::Ended(_)));
     }
 
     #[rstest]
-    fn tail_lag_maps_to_lagged_with_count() {
-        let reply = TailHistoryReply::from(Err(BroadcastStreamRecvError::Lagged(7)));
-        assert!(matches!(reply.event, Some(Event::Lagged(l)) if l.dropped == 7));
+    fn tail_cancelled_maps_to_cancelled() {
+        let event = TailHistoryEvent::from(CmdEvent::Cancelled(history_fixture()));
+        assert!(matches!(event, TailHistoryEvent::Cancelled(_)));
     }
 }
