@@ -194,10 +194,9 @@ fn invokes_atuin_hook(command: &str, agent: &Agent) -> bool {
     };
 
     parts.len() == 3
-        && Path::new(&parts[0])
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.eq_ignore_ascii_case("atuin"))
+        && Path::new(&parts[0]).file_name().and_then(|name| name.to_str()).is_some_and(|name| {
+            name.eq_ignore_ascii_case("atuin") || name.eq_ignore_ascii_case("atuin.exe")
+        })
         && parts[1] == "hook"
         && parts[2] == agent.actor_name()
 }
@@ -564,5 +563,18 @@ mod tests {
 
         assert_eq!(command, r#""C:\Program Files\Atuin\atuin.exe" hook codex"#);
         assert!(invokes_atuin_hook(&command, &agent));
+    }
+
+    #[rstest]
+    #[case::bare("atuin hook codex", true)]
+    #[case::absolute("'/opt/atuin/bin/atuin' hook codex", true)]
+    #[case::windows_suffix("'/opt/atuin/bin/atuin.exe' hook codex", true)]
+    #[case::wrapper("'/opt/atuin/bin/atuin.sh' hook codex", false)]
+    #[case::backup("'/opt/atuin/bin/atuin.backup' hook codex", false)]
+    #[case::different_agent("atuin hook claude-code", false)]
+    fn recognizes_only_atuin_executables(#[case] command: &str, #[case] expected: bool) {
+        let agent = Agent::from_name("codex").unwrap();
+
+        assert_eq!(invokes_atuin_hook(command, &agent), expected);
     }
 }
