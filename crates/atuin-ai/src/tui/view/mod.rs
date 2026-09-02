@@ -6,7 +6,7 @@
 //! app's keymap, not here — elements are display-only.
 
 use atuin_common::path::DisplayRichExt;
-use easy_cast::{Cast, Conv};
+use easy_cast::{Cast, CastTo, Conv, Nearest};
 use eye_declare::{
     AnyElement, Element, ElementExt, Fluent, Markdown, MarkdownStyles, Spinner, col, empty,
     markdown, row, spinner, text, viewport,
@@ -161,7 +161,7 @@ fn format_elapsed(elapsed: std::time::Duration) -> String {
     if secs < 10.0 {
         format!("{secs:.1} seconds")
     } else if secs < 60.0 {
-        format!("{} seconds", secs.round() as u64)
+        format!("{secs:.0} seconds")
     } else {
         let total = elapsed.as_secs();
         format!("{}m {:02}s", total / 60, total % 60)
@@ -799,10 +799,11 @@ pub fn status_bar_view(
         return left.any();
     };
 
-    let filled = ((pct / 100.0).clamp(0.0, 1.0) * USAGE_BAR_WIDTH as f64).round() as usize;
+    let filled: usize =
+        ((pct / 100.0).clamp(0.0, 1.0) * f64::conv(USAGE_BAR_WIDTH)).cast_to(Nearest);
     let bar_filled = "█".repeat(filled);
     let bar_empty = "░".repeat(USAGE_BAR_WIDTH - filled);
-    let pct_text = format!(" {}%", pct.round() as i64);
+    let pct_text = format!(" {pct:.0}%");
     let resets_text = resets_in
         .map(|d| format!(" · resets in {} ", crate::usage::format_reset_delta(d)))
         .unwrap_or_default();
