@@ -43,7 +43,7 @@ Searches your shell history, using the same fuzzy matching as the search TUI. Ea
 
 Searches can be narrowed down in a few ways:
 
-- **Filter mode**: the same scopes as [interactive search](https://docs.atuin.sh/guide/advanced-usage/index.md) — `global`, `host`, `directory`, `workspace`, or `session`. The `directory` and `workspace` scopes are relative to the directory your MCP client launched the server in, which for most editors is your project directory.
+- **Filter mode**: the same scopes as [interactive search](https://docs.atuin.sh/guide/advanced-usage/index.md) — `global` (the default), `host`, `directory`, `workspace`, or `session`. The `directory` and `workspace` scopes are relative to the directory your MCP client launched the server in, which for most editors is your project directory.
 - **Failed commands only**: return only commands that exited with a non-zero exit code.
 - **Author**: filter to commands you ran yourself, commands run by AI agents, or commands run by one specific agent. See [AI Agent Hooks](https://docs.atuin.sh/guide/agent-hooks/index.md) for how Atuin records agent-run commands.
 
