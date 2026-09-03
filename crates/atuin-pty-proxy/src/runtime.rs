@@ -66,7 +66,10 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     // umask the user launched us with. Applied in the child between fork and
     // exec, so the proxy's own umask stays restrictive.
     if let Some(mask) = options.child_umask {
-        #[allow(clippy::cast_possible_truncation)]
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "mode_t is u16 on macOS and u32 on Linux. nop on linux, narrowing on macOS."
+        )]
         cmd.umask(Some(mask as _));
     }
 
@@ -77,10 +80,15 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     let mut pty_writer = pair.master.take_writer().map_err(|e| eyre::eyre!("{e:#}"))?;
 
     let (msg_tx, msg_rx) = mpsc::sync_channel::<Msg>(64);
-    let _parser_handle = screen::spawn_parser_thread(rows, cols, msg_rx, screen::ParserOptions {
-        sink: options.command_capture_sink,
-        debug_osc133: options.debug_osc133,
-    });
+    let _parser_handle = screen::spawn_parser_thread(
+        rows,
+        cols,
+        msg_rx,
+        screen::ParserOptions {
+            sink: options.command_capture_sink,
+            debug_osc133: options.debug_osc133,
+        },
+    );
     if let Some(path) = &sock_path {
         screen::spawn_socket_server(path.clone(), msg_tx.clone());
     }
