@@ -322,10 +322,12 @@ impl GrpcService for Service {
         &self,
         request: Request<DeleteHistoryRequest>,
     ) -> Result<Response<DeleteHistoryReply>, Status> {
-        // Unfortunately we need to collect here, and since `try_history_ids` returns an iterator of
-        // `Result`s. [`HistoryJournal::delete`] needs to accept validated and correct HistoryIds.
+        // We collect here to validate every id up front: `into_history_ids` yields an iterator of
+        // `Result`s, and [`HistoryJournal::delete`] needs validated, correct HistoryIds. Consuming
+        // the request (rather than borrowing + cloning each proto id) keeps this to a single
+        // allocation, and a malformed request deletes nothing.
         let ids: Vec<HistoryId> =
-            request.into_inner().try_history_ids().collect::<Result<Vec<_>, _>>()?;
+            request.into_inner().into_history_ids().collect::<Result<Vec<_>, _>>()?;
 
         let deleted = self.journal.delete(ids).await?;
 

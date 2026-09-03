@@ -178,8 +178,8 @@ impl TryFrom<CancelHistoryRequest> for DomainHistoryId {
 }
 
 impl DeleteHistoryRequest {
-    pub fn try_history_ids(&self) -> impl Iterator<Item = Result<DomainHistoryId, IdParseError>> {
-        self.ids.iter().map(|id| DomainHistoryId::try_from(id.clone()))
+    pub fn into_history_ids(self) -> impl Iterator<Item = Result<DomainHistoryId, IdParseError>> {
+        self.ids.into_iter().map(DomainHistoryId::try_from)
     }
 }
 

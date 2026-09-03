@@ -358,7 +358,7 @@ impl HistoryJournal {
         //
         // This happens as a result of the fact that [`HistoryJournal`] might be tracking started,
         // but not finished commands. These get cancelled via [`HistoryJournal::cancel`].
-        let delete_records = || async {
+        let delete_records = async || {
             let mut deleted: usize = 0;
             let mut record_ids = Vec::new();
             for id in ids {
