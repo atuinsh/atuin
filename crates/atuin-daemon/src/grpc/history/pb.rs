@@ -20,7 +20,7 @@ use tonic::Status;
 use crate::grpc::common::pb as common;
 use crate::grpc::common::pb::Uuid;
 use crate::history_journal::{
-    CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, GetCmdInFlightError,
+    CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, CmdRebuildError, GetCmdInFlightError,
 };
 
 impl From<DomainHistoryId> for HistoryId {
@@ -222,6 +222,14 @@ impl From<CmdDeleteError> for Status {
     }
 }
 
+impl From<CmdRebuildError> for Status {
+    fn from(value: CmdRebuildError) -> Self {
+        match value {
+            CmdRebuildError::HistoryStoreFailed(_) => Self::internal(value.to_string()),
+        }
+    }
+}
+
 impl From<GetCmdInFlightError> for Status {
     fn from(value: GetCmdInFlightError) -> Self {
         match value {
@@ -237,7 +245,13 @@ invalid_argument_errors!(
     CancelHistoryRequestParseError,
 );
 
-versioned_messages!(StartHistoryReply, EndHistoryReply, CancelHistoryReply, DeleteHistoryReply);
+versioned_messages!(
+    StartHistoryReply,
+    EndHistoryReply,
+    CancelHistoryReply,
+    DeleteHistoryReply,
+    RebuildHistoryReply,
+);
 
 #[cfg(test)]
 mod tests {

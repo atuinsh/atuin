@@ -23,8 +23,6 @@ use crate::events::DaemonEvent;
 
 /// Commands that can be sent to the sync task.
 enum SyncCommand {
-    /// Trigger an immediate sync.
-    ForceSync,
     /// Stop the sync loop.
     Stop,
 }
@@ -44,7 +42,6 @@ enum SyncState {
 /// This component:
 /// - Runs a background sync loop on a configurable interval
 /// - Implements exponential backoff on sync failures
-/// - Responds to ForceSync events for immediate sync
 /// - Emits SyncCompleted/SyncFailed events
 pub struct SyncComponent {
     task_handle: Option<tokio::task::JoinHandle<()>>,
@@ -84,13 +81,7 @@ impl Component for SyncComponent {
         Ok(())
     }
 
-    async fn handle_event(&mut self, event: &DaemonEvent) -> Result<()> {
-        if let DaemonEvent::ForceSync = event {
-            tracing::info!("force sync requested");
-            if let Some(tx) = &self.command_tx {
-                let _ = tx.send(SyncCommand::ForceSync).await;
-            }
-        }
+    async fn handle_event(&mut self, _event: &DaemonEvent) -> Result<()> {
         Ok(())
     }
 
@@ -109,8 +100,7 @@ impl Component for SyncComponent {
 
 /// The main sync loop.
 ///
-/// This runs in a spawned task and handles periodic sync as well as
-/// force sync requests.
+/// This runs in a spawned task and handles periodic sync.
 async fn sync_loop(handle: DaemonHandle, mut cmd_rx: mpsc::Receiver<SyncCommand>) {
     tracing::info!("sync loop starting");
 
@@ -166,19 +156,6 @@ async fn sync_loop(handle: DaemonHandle, mut cmd_rx: mpsc::Receiver<SyncCommand>
             }
             cmd = cmd_rx.recv() => {
                 match cmd {
-                    Some(SyncCommand::ForceSync) => {
-                        tracing::info!("executing force sync");
-                        let settings = handle.settings().await;
-                        sync_state = do_sync_tick(
-                            &handle,
-                            &history_store,
-                            &alias_store,
-                            &var_store,
-                            &mut ticker,
-                            max_interval,
-                            &settings,
-                        ).await;
-                    }
                     Some(SyncCommand::Stop) | None => {
                         tracing::info!("sync loop stopping");
                         break;

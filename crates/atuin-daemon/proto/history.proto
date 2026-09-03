@@ -75,6 +75,14 @@ message DeleteHistoryReply {
   uint32 protocol = 3;
 }
 
+// The daemon rebuilds the history db from the record store and reloads its search index.
+message RebuildHistoryRequest {}
+
+message RebuildHistoryReply {
+  string version = 1;
+  uint32 protocol = 2;
+}
+
 // Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
 message StatusRequest {}
 
@@ -136,6 +144,7 @@ service History {
   rpc EndHistory(EndHistoryRequest) returns (EndHistoryReply);
   rpc CancelHistory(CancelHistoryRequest) returns (CancelHistoryReply);
   rpc DeleteHistory(DeleteHistoryRequest) returns (DeleteHistoryReply);
+  rpc RebuildHistory(RebuildHistoryRequest) returns (RebuildHistoryReply);
   rpc TailHistory(TailHistoryRequest) returns (stream TailHistoryReply);
   // Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
   rpc Status(StatusRequest) returns (StatusReply);

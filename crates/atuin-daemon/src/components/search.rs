@@ -147,27 +147,6 @@ impl SearchComponent {
     pub fn index(&self) -> Arc<RwLock<SearchIndex>> {
         self.index.clone()
     }
-
-    /// Rebuild the entire search index from the database without updating the frecency map.
-    async fn rebuild_index_only(&self) {
-        let Some(handle) = self.handle.as_ref() else {
-            error!("Component not initialized");
-            return;
-        };
-        info!("Rebuilding search index from database");
-
-        // Create a new index
-        // TODO(#4052): This is inherently racy -- any add_history operations added between this
-        //              .read() and the subsequent .write() are completely discarded from the new
-        //              index.
-        let new_index = SearchIndex::new(self.index.read().await.shells.clone());
-        if build_index_only(async || &new_index, handle).await.is_err() {
-            return;
-        }
-
-        info!("Search index rebuild complete; {} unique commands", new_index.command_count());
-        *self.index.write().await = new_index;
-    }
 }
 
 impl Default for SearchComponent {
@@ -231,10 +210,6 @@ impl Component for SearchComponent {
                 let histories = handle.history_db().load_active(ids.iter().copied()).await?;
                 self.index.read().await.add_histories(&histories);
             }
-            DaemonEvent::HistoryRebuilt => {
-                info!("History store rebuilt, rebuilding search index");
-                self.rebuild_index_only().await;
-            }
             DaemonEvent::SettingsReloaded => {
                 if let Some(handle) = self.handle.as_ref() {
                     info!("Rebuilding frecency map after settings update");
@@ -244,7 +219,6 @@ impl Component for SearchComponent {
             // Events we don't care about
             DaemonEvent::SyncCompleted { .. }
             | DaemonEvent::SyncFailed { .. }
-            | DaemonEvent::ForceSync
             | DaemonEvent::ShutdownRequested => {}
         }
         Ok(())
