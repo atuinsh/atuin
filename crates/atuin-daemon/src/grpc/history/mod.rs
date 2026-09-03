@@ -46,20 +46,19 @@ use crate::history_journal::HistoryJournal;
 ///   2. Checks that the response version `DAEMON_VERSION` (ie. the Atuin version) matches that of
 ///      the client and also that `DAEMON_PROTOCOL_VERSION` matches that of the client.
 ///   3. If there is a mismatch, one of two things will happen:
-///     a) If `daemon.autostart = false`, then we kindly ask the user to restart the daemon and
-///        return an error.
-///     b) If `daemon.autostart = true`, then we try to restart the daemon. This means one of
-///        multiple things:
-///
-///        - If `daemon.systemd_socket` is set to false, we tell the user to restart the daemon, and
-///          we bail out.
-///        - Otherwise, we send a `history.Shutdown` RPC (version unchecked) to the daemon which
-///          causes the daemon to shut down. The client then brings it back up, and spinloops until
-///          the daemon is back online.
+///      a) If `daemon.autostart = false`, then we kindly ask the user to restart the daemon and
+///      return an error.
+///      b) If `daemon.autostart = true`, then we try to restart the daemon. This means one of
+///      multiple things:
+///      - If `daemon.systemd_socket` is set to false, we tell the user to restart the daemon, and
+///        we bail out.
+///      - Otherwise, we send a `history.Shutdown` RPC (version unchecked) to the daemon which
+///        causes the daemon to shut down. The client then brings it back up, and spinloops until
+///        the daemon is back online.
 ///
 ///   4. At this point, either:
-///     - We were unable to restart the daemon and have told the user to manually restart or
-///     - We have restarted the daemon.
+///      - We were unable to restart the daemon and have told the user to manually restart or
+///      - We have restarted the daemon.
 ///
 /// ### Transport Layer
 ///

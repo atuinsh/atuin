@@ -243,7 +243,7 @@ mod tests {
     }
 
     fn parse_end(
-        req: EndHistoryRequest,
+        req: &EndHistoryRequest,
     ) -> Result<EndHistoryRequestView, EndHistoryRequestParseError> {
         req.view()
     }
@@ -344,7 +344,7 @@ mod tests {
 
     #[rstest]
     fn end_request_none_duration_is_preserved() {
-        let view = parse_end(end_req(Some(good_id_proto()), 5, None)).unwrap();
+        let view = parse_end(&end_req(Some(good_id_proto()), 5, None)).unwrap();
         assert_eq!(view.exit_code, 5);
         assert!(view.duration.is_none());
     }
@@ -355,7 +355,7 @@ mod tests {
             seconds: 0,
             nanos: 3,
         };
-        let view = parse_end(end_req(Some(good_id_proto()), 0, Some(d))).unwrap();
+        let view = parse_end(&end_req(Some(good_id_proto()), 0, Some(d))).unwrap();
         assert_eq!(view.duration, Some(Duration::from_nanos(3)));
     }
 
@@ -365,13 +365,13 @@ mod tests {
             seconds: -1,
             nanos: 0,
         };
-        let err = parse_end(end_req(Some(good_id_proto()), 0, Some(d))).unwrap_err();
+        let err = parse_end(&end_req(Some(good_id_proto()), 0, Some(d))).unwrap_err();
         assert!(matches!(err, EndHistoryRequestParseError::InvalidDuration(_)));
     }
 
     #[rstest]
     fn end_request_missing_id_errs() {
-        let err = parse_end(end_req(None, 0, None)).unwrap_err();
+        let err = parse_end(&end_req(None, 0, None)).unwrap_err();
         assert!(matches!(err, EndHistoryRequestParseError::MissingHistory));
     }
 

@@ -63,8 +63,10 @@ message CancelHistoryReply {
   uint32 protocol = 2;
 }
 
+// Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
 message StatusRequest {}
 
+// Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
 message StatusReply {
   bool healthy = 1;
   string version = 2;
@@ -72,8 +74,10 @@ message StatusReply {
   uint32 protocol = 4;
 }
 
+// Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
 message ShutdownRequest {}
 
+// Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
 message ShutdownReply {
   bool accepted = 1;
 }
@@ -120,6 +124,8 @@ service History {
   rpc EndHistory(EndHistoryRequest) returns (EndHistoryReply);
   rpc CancelHistory(CancelHistoryRequest) returns (CancelHistoryReply);
   rpc TailHistory(TailHistoryRequest) returns (stream TailHistoryReply);
+  // Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
   rpc Status(StatusRequest) returns (StatusReply);
+  // Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
   rpc Shutdown(ShutdownRequest) returns (ShutdownReply);
 }
