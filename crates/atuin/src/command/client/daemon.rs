@@ -12,7 +12,8 @@ use atuin_client::history::{History, HistoryId};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::futures::Backoff;
-use atuin_daemon::client::{DaemonClientErrorKind, HistoryClient, classify_error};
+use atuin_daemon::client::{DaemonClientErrorKind, classify_error};
+use atuin_daemon::grpc::history::client::HistoryClient;
 use clap::Subcommand;
 #[cfg(unix)]
 use daemonize::Daemonize;
@@ -222,13 +223,13 @@ async fn wait_for_pidfile_available(path: &Path, timeout: Duration) -> Result<()
 }
 
 async fn connect_client(settings: &Settings) -> Result<HistoryClient> {
-    HistoryClient::new(
+    Ok(HistoryClient::new(
         #[cfg(not(unix))]
         settings.daemon.tcp_port,
         #[cfg(unix)]
         settings.daemon.existing_socket_path().into_owned(),
     )
-    .await
+    .await?)
 }
 
 async fn probe(settings: &Settings) -> Probe {
@@ -245,7 +246,7 @@ async fn probe(settings: &Settings) -> Probe {
                 Probe::NeedsRestart(daemon_mismatch_message(&status.version, status.protocol))
             }
         }
-        Err(err) => Probe::Unreachable(err),
+        Err(err) => Probe::Unreachable(err.into()),
     }
 }
 
@@ -468,7 +469,7 @@ where
 pub async fn start_history(settings: &Settings, history: History) -> Result<HistoryId> {
     let resp = try_with_restart(
         settings,
-        async |client, history| client.start_history(history).await,
+        async |client, history| client.start_history(history).await.map_err(eyre::Report::from),
         history,
     )
     .await?;
@@ -482,25 +483,42 @@ pub async fn end_history(
     duration: Option<std::time::Duration>,
     exit: i64,
 ) -> Result<()> {
-    try_with_restart(settings, async |client, id| client.end_history(id, duration, exit).await, id)
-        .await?;
+    try_with_restart(
+        settings,
+        async |client, id| client.end_history(id, duration, exit).await.map_err(eyre::Report::from),
+        id,
+    )
+    .await?;
     Ok(())
 }
 
 pub async fn cancel_history(settings: &Settings, id: HistoryId) -> Result<()> {
-    try_with_restart(settings, async |client, id| client.cancel_history(id).await, id).await?;
+    try_with_restart(
+        settings,
+        async |client, id| client.cancel_history(id).await.map_err(eyre::Report::from),
+        id,
+    )
+    .await?;
     Ok(())
 }
 
 pub async fn delete_history(settings: &Settings, ids: Vec<HistoryId>) -> Result<u64> {
-    let reply =
-        try_with_restart(settings, async |client, ids| client.delete_history(ids).await, ids)
-            .await?;
+    let reply = try_with_restart(
+        settings,
+        async |client, ids| client.delete_history(ids).await.map_err(eyre::Report::from),
+        ids,
+    )
+    .await?;
     Ok(reply.deleted)
 }
 
 pub async fn rebuild_history(settings: &Settings) -> Result<()> {
-    try_with_restart(settings, async |client, ()| client.rebuild_history().await, ()).await?;
+    try_with_restart(
+        settings,
+        async |client, ()| client.rebuild_history().await.map_err(eyre::Report::from),
+        (),
+    )
+    .await?;
     Ok(())
 }
 
@@ -550,7 +568,7 @@ async fn stop_cmd(settings: &Settings) -> Result<()> {
             Ok(())
         }
         Ok(false) => bail!("Daemon rejected shutdown request"),
-        Err(err) => Err(err.wrap_err("Failed to send shutdown request")),
+        Err(err) => Err(err).wrap_err("Failed to send shutdown request"),
     }
 }
 

@@ -1,3 +1,4 @@
+pub mod client;
 pub mod pb;
 
 use std::pin::Pin;

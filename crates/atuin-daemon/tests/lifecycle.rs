@@ -13,8 +13,8 @@ mod unix {
     use atuin_client::history::{History, HistoryId};
     use atuin_client::record::sqlite_store::SqliteStore;
     use atuin_client::settings::{Settings, init_meta_config_for_testing};
-    use atuin_daemon::client::HistoryClient;
     use atuin_daemon::grpc::HistoryService;
+    use atuin_daemon::grpc::history::client::HistoryClient;
     use atuin_daemon::grpc::history::pb::history_server::HistoryServer;
     use atuin_daemon::search::{IndexFilterMode, SearchIndex};
     use atuin_daemon::{Daemon, DaemonHandle, HistoryJournal, SearchComponent, SemanticComponent};

@@ -2,10 +2,9 @@
 use std::path::PathBuf;
 
 use atuin_client::database::Context;
-use atuin_client::history::{History, HistoryId};
+use atuin_client::history::HistoryId;
 use atuin_client::settings::{FilterMode, Settings};
 use atuin_common::filter::{self, OrFilter};
-use easy_cast::Conv;
 use eyre::{Context as EyreContext, Result};
 use hyper_util::rt::TokioIo;
 #[cfg(windows)]
@@ -17,13 +16,6 @@ use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
 use tracing::{Level, instrument, span};
 
-use crate::grpc::history::pb::history_client::HistoryClient as HistoryServiceClient;
-use crate::grpc::history::pb::{
-    AuthorKind, CancelHistoryReply, CancelHistoryRequest, DeleteHistoryReply, DeleteHistoryRequest,
-    EndHistoryReply, EndHistoryRequest, RebuildHistoryReply, RebuildHistoryRequest,
-    ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest,
-    TailHistoryReply, TailHistoryRequest,
-};
 use crate::search::search_client::SearchClient as SearchServiceClient;
 use crate::search::{
     FilterMode as RpcFilterMode, PrepareIndexRequest, SearchContext as RpcSearchContext,
@@ -33,10 +25,6 @@ use crate::semantic::semantic_client::SemanticClient as SemanticServiceClient;
 use crate::semantic::{
     CommandCapture, CommandOutputReply, CommandOutputRequest, OutputRange, RecordCommandsReply,
 };
-
-pub struct HistoryClient {
-    client: HistoryServiceClient<Channel>,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DaemonClientErrorKind {
@@ -64,129 +52,6 @@ pub fn classify_error(error: &eyre::Report) -> DaemonClientErrorKind {
     }
 
     DaemonClientErrorKind::NonGrpc
-}
-
-// Wrap the grpc client
-impl HistoryClient {
-    #[cfg(unix)]
-    pub async fn new(path: PathBuf) -> Result<Self> {
-        use eyre::Context;
-
-        let log_path = path.clone();
-        let channel =
-            Endpoint::try_from("http://atuin_local_daemon:0")?
-                .connect_with_connector(service_fn(move |_: Uri| {
-                    let path = path.clone();
-
-                    async move {
-                        Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?))
-                    }
-                }))
-                .await
-                .wrap_err_with(|| {
-                    format!(
-                        "failed to connect to local atuin daemon at {}. Is it running?",
-                        log_path.display()
-                    )
-                })?;
-
-        let client = HistoryServiceClient::new(channel);
-
-        Ok(Self { client })
-    }
-
-    #[cfg(not(unix))]
-    pub async fn new(port: u64) -> Result<Self> {
-        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
-            .connect_with_connector(service_fn(move |_: Uri| {
-                let url = format!("127.0.0.1:{port}");
-
-                async move {
-                    Ok::<_, std::io::Error>(TokioIo::new(TcpStream::connect(url.clone()).await?))
-                }
-            }))
-            .await
-            .wrap_err_with(|| {
-                format!(
-                    "failed to connect to local atuin daemon at 127.0.0.1:{port}. Is it running?"
-                )
-            })?;
-
-        let client = HistoryServiceClient::new(channel);
-
-        Ok(HistoryClient { client })
-    }
-
-    pub async fn start_history(&mut self, h: History) -> Result<StartHistoryReply> {
-        let req = StartHistoryRequest {
-            command: h.command,
-            cwd: h.cwd,
-            hostname: h.cmd_origin.into_string(),
-            session: h.session,
-            timestamp: u64::conv(h.timestamp.unix_timestamp_nanos()),
-            author: h.author,
-            intent: h.intent.unwrap_or_default(),
-            shell: h.shell.unwrap_or_default(),
-            author_kind: AuthorKind::from(h.author_kind) as i32,
-        };
-
-        Ok(self.client.start_history(req).await?.into_inner())
-    }
-
-    pub async fn end_history(
-        &mut self,
-        id: HistoryId,
-        duration: Option<std::time::Duration>,
-        exit: i64,
-    ) -> Result<EndHistoryReply> {
-        let duration = duration.map(prost_types::Duration::try_from).transpose()?;
-        Ok(self
-            .client
-            .end_history(EndHistoryRequest {
-                id: Some(id.into()),
-                duration,
-                exit,
-            })
-            .await?
-            .into_inner())
-    }
-
-    pub async fn cancel_history(&mut self, id: HistoryId) -> Result<CancelHistoryReply> {
-        Ok(self
-            .client
-            .cancel_history(CancelHistoryRequest {
-                id: Some(id.into()),
-            })
-            .await?
-            .into_inner())
-    }
-
-    pub async fn delete_history(&mut self, ids: Vec<HistoryId>) -> Result<DeleteHistoryReply> {
-        Ok(self
-            .client
-            .delete_history(DeleteHistoryRequest {
-                ids: ids.into_iter().map(Into::into).collect(),
-            })
-            .await?
-            .into_inner())
-    }
-
-    pub async fn rebuild_history(&mut self) -> Result<RebuildHistoryReply> {
-        Ok(self.client.rebuild_history(RebuildHistoryRequest {}).await?.into_inner())
-    }
-
-    pub async fn status(&mut self) -> Result<StatusReply> {
-        Ok(self.client.status(StatusRequest {}).await?.into_inner())
-    }
-
-    pub async fn tail_history(&mut self) -> Result<tonic::Streaming<TailHistoryReply>> {
-        Ok(self.client.tail_history(TailHistoryRequest {}).await?.into_inner())
-    }
-
-    pub async fn shutdown(&mut self) -> Result<bool> {
-        let resp = self.client.shutdown(ShutdownRequest {}).await?.into_inner();
-        Ok(resp.accepted)
-    }
 }
 
 #[derive(Clone)]
