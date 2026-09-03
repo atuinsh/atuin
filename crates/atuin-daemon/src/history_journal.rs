@@ -399,6 +399,16 @@ impl HistoryJournal {
         match rebuilt {
             Ok(new_index) => *self.search_index.write().await = new_index,
             Err(e) => {
+                // TODO(markovejnovic): This is obviously incorrect behavior, keeping the previous
+                //                      index is almost certainly wrong, however, is the legacy
+                //                      behavior we had.
+                //
+                //                      Arguably, we could completely delete the index/crash the
+                //                      daemon, since at this point, Atuin is as good as useless.
+                //
+                //                      We could also just mark the index as hot garbo and have the
+                //                      next request attempt to rebuild it. Not sure why the next
+                //                      request would succeed but a retry is always good.
                 tracing::error!("failed to reload search index; keeping previous index: {e}");
             }
         }
