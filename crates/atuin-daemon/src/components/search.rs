@@ -27,35 +27,6 @@ const RESULTS_LIMIT: u32 = 200;
 /// How often to rebuild the frecency map (in seconds).
 const FRECENCY_REFRESH_INTERVAL_SECS: u64 = 60;
 
-/// Build the search index without building the frecency map.
-///
-/// The read guard is re-acquired per page rather than held across the whole load, so concurrent
-/// index operations aren't blocked while this does its expensive work.
-#[instrument(skip_all, level = Level::TRACE)]
-async fn build_index_only(index: &RwLock<SearchIndex>, handle: &DaemonHandle) -> Result<(), ()> {
-    info!("Loading history into search index; page size = {}", SearchIndex::HISTORY_LOAD_PAGE_SIZE);
-    let mut pages = pin!(SearchIndex::history_pages(handle.history_db()));
-    while let Some(histories) =
-        pages.try_next().await.map_err(|e| error!("Failed to load history: {e}"))?
-    {
-        info!("Loading {} history entries into search index", histories.len());
-        index.read().await.add_histories(&histories);
-    }
-
-    info!("History load complete; {} unique commands indexed", index.read().await.command_count());
-    Ok(())
-}
-
-/// Build the frecency map.
-#[instrument(skip_all, level = Level::TRACE)]
-async fn build_frecency(index: &RwLock<SearchIndex>, handle: &DaemonHandle) {
-    {
-        let settings = handle.settings().await;
-        index.read().await.rebuild_frecency(&settings.search);
-    }
-    info!("Frecency map built");
-}
-
 /// Search component - provides fuzzy search over command history.
 ///
 /// This component:
@@ -95,6 +66,42 @@ impl SearchComponent {
     pub fn index(&self) -> Arc<RwLock<SearchIndex>> {
         self.index.clone()
     }
+
+    #[instrument(skip_all, level = Level::TRACE)]
+    async fn rebuild_frecency(handle: &DaemonHandle, index: &RwLock<SearchIndex>) {
+        let settings = handle.settings().await;
+        index.read().await.rebuild_frecency(&settings.search);
+    }
+
+    /// Rebuild the search index from the database, then its frecency map.
+    ///
+    /// The read guard is re-acquired per page rather than held across the whole load, so concurrent
+    /// index operations aren't blocked while this does its expensive work.
+    #[instrument(skip_all, level = Level::TRACE)]
+    async fn rebuild_index(
+        handle: &DaemonHandle,
+        index: &RwLock<SearchIndex>,
+    ) -> Result<(), eyre::Error> {
+        info!(
+            "Loading history into search index; page size = {}",
+            SearchIndex::HISTORY_LOAD_PAGE_SIZE
+        );
+        let mut pages = pin!(SearchIndex::history_pages(handle.history_db()));
+        while let Some(histories) =
+            pages.try_next().await.inspect_err(|e| error!("Failed to load history: {e}"))?
+        {
+            info!("Loading {} history entries into search index", histories.len());
+            index.read().await.add_histories(&histories);
+        }
+
+        info!(
+            "History load complete; {} unique commands indexed",
+            index.read().await.command_count()
+        );
+
+        Self::rebuild_frecency(handle, index).await;
+        Ok(())
+    }
 }
 
 impl Default for SearchComponent {
@@ -126,12 +133,13 @@ impl Component for SearchComponent {
             let shells =
                 handle_for_loader.settings().await.search.shells.to_filter().to_vec_filter();
             index.write().await.shells = shells;
-            if build_index_only(&index, &handle_for_loader).await.is_ok() {
-                build_frecency(&index, &handle_for_loader).await;
-            }
+            let _ = Self::rebuild_index(&handle_for_loader, &index).await.inspect_err(|err| {
+                error!(?err, "failed to rebuild the index.");
+            });
         }));
 
         // Spawn background task to periodically refresh frecency
+        let handle_for_frecency = handle;
         let index_for_frecency = self.index.clone();
         self.frecency_handle = Some(tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(
@@ -140,7 +148,7 @@ impl Component for SearchComponent {
             loop {
                 interval.tick().await;
                 trace!("Refreshing frecency map");
-                build_frecency(&index_for_frecency, &handle).await;
+                Self::rebuild_frecency(&handle_for_frecency, &index_for_frecency).await;
             }
         }));
 
@@ -187,7 +195,7 @@ impl Component for SearchComponent {
             DaemonEvent::SettingsReloaded => {
                 if let Some(handle) = self.handle.as_ref() {
                     info!("Rebuilding frecency map after settings update");
-                    build_frecency(&self.index, handle).await;
+                    Self::rebuild_frecency(handle, &self.index).await;
                 }
             }
             // Events we don't care about
