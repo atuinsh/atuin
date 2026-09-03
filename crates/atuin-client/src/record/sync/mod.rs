@@ -23,6 +23,7 @@ use atuin_domain::caps::{PackfileCap, PageSizeCap};
 use atuin_domain::record::{
     Diff, EncryptedData, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
 };
+use easy_cast::Conv;
 use eyre::Result;
 use futures::{StreamExt, TryStreamExt, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
@@ -349,7 +350,7 @@ impl Keyed<'_> {
             )
             .unwrap()
             .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
-                write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
+                write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap();
             })
             .progress_chars("#>-"),
         );
@@ -413,7 +414,7 @@ impl Keyed<'_> {
                 SyncError::RemoteRequestError { msg: e.to_string() }
             })?;
 
-            progress += page.len() as u64;
+            progress += u64::conv(page.len());
             pb.set_position(progress);
         }
 
@@ -487,7 +488,7 @@ impl Keyed<'_> {
             )
             .unwrap()
             .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
-                write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
+                write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap();
             })
             .progress_chars("#>-"),
         );
@@ -570,7 +571,7 @@ impl Keyed<'_> {
 
             ret.extend(page.iter().map(|f| f.id));
 
-            progress += page.len() as u64;
+            progress += u64::conv(page.len());
             pb.set_position(progress);
         }
 
@@ -639,7 +640,7 @@ impl Keyed<'_> {
                         );
                         continue;
                     }
-                    uploaded += self.sync_upload(&series, local, remote).await?
+                    uploaded += self.sync_upload(&series, local, remote).await?;
                 }
 
                 Operation::Download { series, remote } => {
@@ -652,10 +653,10 @@ impl Keyed<'_> {
                         continue;
                     }
                     let mut d = self.sync_download(&series, remote).await?;
-                    downloaded.append(&mut d)
+                    downloaded.append(&mut d);
                 }
 
-                Operation::Noop { .. } => continue,
+                Operation::Noop { .. } => {}
             }
         }
 
@@ -1325,15 +1326,13 @@ mod packfile_sync_tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            down.next(&RecordSeriesKey::new(host, RecordTag::History), 0, count)
-                .await
-                .unwrap()
-                .len() as u64,
-            count,
-            "every page must be reassembled, none skipped"
-        );
-        assert_eq!(returned.len() as u64, count);
+        let len = down
+            .next(&RecordSeriesKey::new(host, RecordTag::History), 0, count)
+            .await
+            .unwrap()
+            .len();
+        assert_eq!(u64::conv(len), count, "every page must be reassembled, none skipped");
+        assert_eq!(u64::conv(returned.len()), count);
     }
 
     /// Build `num_packs` contiguous packfiles of `per` history records each for a single host,
@@ -1362,7 +1361,7 @@ mod packfile_sync_tests {
         let manifests =
             up.next(&RecordSeriesKey::new(host, RecordTag::Packfile), 0, num_packs).await.unwrap();
         assert_eq!(
-            manifests.len() as u64,
+            u64::conv(manifests.len()),
             num_packs,
             "fixture expects exactly one manifest per pack"
         );
@@ -1466,7 +1465,7 @@ mod packfile_sync_tests {
         );
         let history =
             down.next(&RecordSeriesKey::new(host, RecordTag::History), 0, total).await.unwrap();
-        assert_eq!(history.len() as u64, total, "all covered history must be populated");
+        assert_eq!(u64::conv(history.len()), total, "all covered history must be populated");
         assert_eq!(history[0].clone().decrypt(&key).unwrap().data.0, b"cmd 0");
         for id in &history_ids {
             assert!(

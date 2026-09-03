@@ -5,13 +5,14 @@
 use atuin_client::history::History;
 use atuin_client::settings::AiCapabilities;
 use atuin_common::url::UrlAppendExt;
+use easy_cast::Conv;
 use eventsource_stream::Eventsource;
 use eyre::Result;
 use futures::StreamExt;
 use reqwest::Url;
 use reqwest::header::USER_AGENT;
 
-use crate::context::{ClientContext, history_output_capability_available};
+use crate::context::{ClientContext, capability_strings};
 
 pub static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"));
 
@@ -73,26 +74,7 @@ impl ChatRequest {
         invocation_id: String,
         model: Option<String>,
     ) -> Self {
-        let mut caps = vec!["client_invocations".to_string(), "client_v1_load_skill".to_string()];
-        if capabilities.enable_history_search.unwrap_or(true) {
-            caps.push("client_v1_atuin_history".to_string());
-        }
-        if capabilities.enable_file_tools.unwrap_or(true) {
-            caps.push("client_v1_read_file".to_string());
-            caps.push("client_v1_edit_file".to_string());
-            caps.push("client_v1_write_file".to_string());
-        }
-        if capabilities.enable_command_execution.unwrap_or(true) {
-            caps.push("client_v1_execute_shell_command".to_string());
-        }
-        if history_output_capability_available(history_output_available)
-            && capabilities.enable_history_output.unwrap_or(true)
-        {
-            caps.push("client_v1_atuin_output".to_string());
-        }
-        if let Ok(extra) = std::env::var("ATUIN_AI__ADDITIONAL_CAPS") {
-            caps.extend(extra.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
-        }
+        let caps = capability_strings(capabilities, history_output_available);
 
         Self {
             messages,
@@ -241,7 +223,10 @@ pub fn create_chat_stream(
                                 let content = json.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                 let is_error = json.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false);
                                 let remote = json.get("remote").and_then(|v| v.as_bool()).unwrap_or(false);
-                                let content_length = json.get("content_length").and_then(|v| v.as_u64()).map(|v| v as usize);
+                                let content_length = json
+                                    .get("content_length")
+                                    .and_then(|v| v.as_u64())
+                                    .map(usize::conv);
                                 yield Ok(StreamFrame::Content(StreamContent::ToolResult { tool_use_id, content, is_error, remote, content_length }));
                             }
                         }

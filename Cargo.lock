@@ -242,7 +242,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "atuin"
-version = "18.20.1"
+version = "18.21.0"
 dependencies = [
  "arboard",
  "async-trait",
@@ -264,6 +264,7 @@ dependencies = [
  "crossterm",
  "daemonize",
  "derive_more",
+ "easy-cast",
  "enum_dispatch",
  "eyre",
  "frizbee",
@@ -285,7 +286,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "shlex 1.3.0",
+ "shlex",
  "sysinfo",
  "tempfile",
  "thiserror 2.0.19",
@@ -309,7 +310,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-ai"
-version = "18.20.1"
+version = "18.21.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -324,6 +325,7 @@ dependencies = [
  "crossterm",
  "derive_more",
  "directories",
+ "easy-cast",
  "enum_dispatch",
  "eventsource-stream",
  "eye_declare",
@@ -347,6 +349,8 @@ dependencies = [
  "serde_json",
  "shellexpand",
  "sqlx",
+ "strum 0.27.2",
+ "strum_macros 0.28.0",
  "tempfile",
  "thiserror 2.0.19",
  "time",
@@ -369,7 +373,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-client"
-version = "18.20.1"
+version = "18.21.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -382,6 +386,7 @@ dependencies = [
  "crossterm",
  "derive_more",
  "directories",
+ "easy-cast",
  "enum_dispatch",
  "eyre",
  "fs-err",
@@ -434,13 +439,14 @@ dependencies = [
 
 [[package]]
 name = "atuin-common"
-version = "18.20.1"
+version = "18.21.0"
 dependencies = [
  "atuin-vt100",
  "base64",
  "crypto_secretbox",
  "derive_more",
  "directories",
+ "easy-cast",
  "eyre",
  "fs-err",
  "futures",
@@ -479,7 +485,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-daemon"
-version = "18.20.1"
+version = "18.21.0"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -488,6 +494,7 @@ dependencies = [
  "atuin-history",
  "dashmap",
  "derive_more",
+ "easy-cast",
  "enum_dispatch",
  "eyre",
  "frizbee",
@@ -496,6 +503,7 @@ dependencies = [
  "lasso",
  "listenfd",
  "parking_lot",
+ "proptest",
  "prost",
  "prost-types",
  "protox",
@@ -503,6 +511,7 @@ dependencies = [
  "reqwest",
  "rstest",
  "tempfile",
+ "thiserror 2.0.19",
  "time",
  "tokio",
  "tokio-stream",
@@ -519,12 +528,13 @@ dependencies = [
 
 [[package]]
 name = "atuin-domain"
-version = "18.20.1"
+version = "18.21.0"
 dependencies = [
  "async-trait",
  "atuin-common",
  "axum",
  "derive_more",
+ "easy-cast",
  "eyre",
  "http",
  "parking_lot",
@@ -553,7 +563,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-dotfiles"
-version = "18.20.1"
+version = "18.21.0"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -571,11 +581,12 @@ dependencies = [
 
 [[package]]
 name = "atuin-history"
-version = "18.20.1"
+version = "18.21.0"
 dependencies = [
  "atuin-client",
  "codspeed-divan-compat",
  "crossterm",
+ "easy-cast",
  "rand 0.8.7",
  "rstest",
  "serde",
@@ -585,7 +596,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-kv"
-version = "18.20.1"
+version = "18.21.0"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -605,12 +616,13 @@ dependencies = [
 
 [[package]]
 name = "atuin-pty-proxy"
-version = "18.20.1"
+version = "18.21.0"
 dependencies = [
  "atuin-common",
  "atuin-vt100",
  "clap",
  "crossterm",
+ "easy-cast",
  "eyre",
  "portable-pty",
  "rstest",
@@ -619,12 +631,13 @@ dependencies = [
 
 [[package]]
 name = "atuin-scripts"
-version = "18.20.1"
+version = "18.21.0"
 dependencies = [
  "atuin-client",
  "atuin-common",
  "atuin-domain",
  "derive_more",
+ "easy-cast",
  "eyre",
  "minijinja",
  "pretty_assertions",
@@ -651,6 +664,7 @@ dependencies = [
  "atuin-common",
  "atuin-daemon",
  "codspeed-divan-compat",
+ "easy-cast",
  "parking_lot",
  "time",
  "tokio",
@@ -658,28 +672,30 @@ dependencies = [
 
 [[package]]
 name = "atuin-server"
-version = "18.20.1"
+version = "18.21.0"
 dependencies = [
  "argon2",
+ "async-trait",
  "atuin-client",
  "atuin-common",
  "atuin-domain",
- "atuin-server-database",
- "atuin-server-mysql",
- "atuin-server-postgres",
- "atuin-server-sqlite",
  "axum",
  "clap",
  "config",
+ "derive_more",
+ "easy-cast",
  "eyre",
  "fs-err",
  "futures-util",
  "metrics",
  "metrics-exporter-prometheus",
  "rand 0.8.7",
+ "regex",
  "reqwest",
  "rstest",
  "serde",
+ "sqlx",
+ "time",
  "tokio",
  "tower",
  "tower-http",
@@ -687,85 +703,14 @@ dependencies = [
  "tracing-subscriber",
  "tracing-tree",
  "url",
-]
-
-[[package]]
-name = "atuin-server-database"
-version = "18.20.1"
-dependencies = [
- "async-trait",
- "atuin-common",
- "atuin-domain",
- "derive_more",
- "eyre",
- "rstest",
- "serde",
- "sqlx",
- "time",
- "url",
-]
-
-[[package]]
-name = "atuin-server-mysql"
-version = "18.20.1"
-dependencies = [
- "async-trait",
- "atuin-common",
- "atuin-domain",
- "atuin-server-database",
- "derive_more",
- "eyre",
- "metrics",
- "rand 0.8.7",
- "serde",
- "sqlx",
- "time",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "atuin-server-postgres"
-version = "18.20.1"
-dependencies = [
- "async-trait",
- "atuin-common",
- "atuin-domain",
- "atuin-server-database",
- "derive_more",
- "eyre",
- "metrics",
- "rand 0.8.7",
- "serde",
- "sqlx",
- "time",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "atuin-server-sqlite"
-version = "18.20.1"
-dependencies = [
- "async-trait",
- "atuin-common",
- "atuin-domain",
- "atuin-server-database",
- "derive_more",
- "eyre",
- "metrics",
- "serde",
- "sqlx",
- "time",
- "tracing",
  "uuid",
 ]
 
 [[package]]
 name = "atuin-vt100"
-version = "0.17.0"
+version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f1f37e21bb3cc6e1244deb0e7999c0a18da5e3e58caf92befc19ce53f6367e6"
+checksum = "5e1ab415760f579e398bed1931668a5a6866b5c1c7cf3718c889605534a76bab"
 dependencies = [
  "itoa",
  "unicode-width 0.2.2",
@@ -1050,7 +995,7 @@ dependencies = [
  "find-msvc-tools",
  "jobserver",
  "libc",
- "shlex 2.0.1",
+ "shlex",
 ]
 
 [[package]]
@@ -1707,12 +1652,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "deunicode"
-version = "1.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "abd57806937c9cc163efc8ea3910e00a62e2aeb0b8119f1793a978088f8f6b04"
-
-[[package]]
 name = "diff"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1828,6 +1767,12 @@ name = "dyn-clone"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
+
+[[package]]
+name = "easy-cast"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eae1c5aaf1bfdc24a9b5bf6daf3afee62c478afe08706a6bd9fd996f73630494"
 
 [[package]]
 name = "ed25519"
@@ -1988,18 +1933,6 @@ checksum = "7cd915d99f24784cdc19fd37ef22b97e3ff0ae756c7e492e9fbfe897d61e2aec"
 dependencies = [
  "indenter",
  "once_cell",
-]
-
-[[package]]
-name = "fake"
-version = "5.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea6be833b323a56361118a747470a45a1bcd5c52a2ec9b1e40c83dafe687e453"
-dependencies = [
- "deunicode",
- "either",
- "rand 0.10.1",
- "time",
 ]
 
 [[package]]
@@ -5148,12 +5081,6 @@ dependencies = [
 
 [[package]]
 name = "shlex"
-version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
-
-[[package]]
-name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
@@ -5230,12 +5157,6 @@ checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 dependencies = [
  "serde",
 ]
-
-[[package]]
-name = "snowflake_uid"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "167e0bc9777318b7b2168046f75fa9cdd1211c37cc5079847f3fec58088a0853"
 
 [[package]]
 name = "socket2"
@@ -5631,7 +5552,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -5708,33 +5629,6 @@ dependencies = [
  "wezterm-dynamic",
  "wezterm-input-types",
  "winapi",
-]
-
-[[package]]
-name = "tests-database"
-version = "18.20.1"
-dependencies = [
- "async-trait",
- "atuin-common",
- "atuin-domain",
- "atuin-server-database",
- "atuin-server-mysql",
- "atuin-server-postgres",
- "atuin-server-sqlite",
- "eyre",
- "fake",
- "futures-util",
- "metrics",
- "regex",
- "rstest",
- "serde",
- "snowflake_uid",
- "sqlx",
- "time",
- "tokio",
- "tracing",
- "url",
- "uuid",
 ]
 
 [[package]]
@@ -5907,6 +5801,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

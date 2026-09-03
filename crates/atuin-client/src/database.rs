@@ -8,6 +8,7 @@ use atuin_common::filter::{self, OrFilter};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::{db, utils};
 use atuin_domain::record::{CmdOrigin, UNKNOWN_USER};
+use easy_cast::{CastTo, Conv, Nearest, Trunc};
 use itertools::Itertools;
 use sql_builder::bind::Bind;
 use sql_builder::{SqlBuilder, SqlName, esc, quote};
@@ -91,8 +92,8 @@ impl Context {
     #[must_use]
     pub fn from_history(entry: &History) -> Self {
         Self {
-            session: entry.session.to_string(),
-            cwd: entry.cwd.to_string(),
+            session: entry.session.clone(),
+            cwd: entry.cwd.clone(),
             cmd_origin: entry.cmd_origin.clone(),
             host_id: String::new(),
             git_root: utils::in_git_repo(entry.cwd.as_str()),
@@ -367,8 +368,8 @@ impl Sqlite {
                 deleted_at, shell, author_kind
             ) values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         )
-        .bind(h.id.0.as_str())
-        .bind(h.timestamp.unix_timestamp_nanos() as i64)
+        .bind(h.id)
+        .bind(i64::conv(h.timestamp.unix_timestamp_nanos()))
         .bind(h.duration)
         .bind(h.exit)
         .bind(h.command.as_str())
@@ -377,7 +378,7 @@ impl Sqlite {
         .bind(h.cmd_origin.as_str())
         .bind(h.author.as_str())
         .bind(h.intent.as_deref())
-        .bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
+        .bind(h.deleted_at.map(|t| i64::conv(t.unix_timestamp_nanos())))
         .bind(h.shell.as_deref())
         .bind(h.author_kind.map(|kind| i64::from(kind.as_u8())))
         .execute(&mut **tx)
@@ -391,10 +392,7 @@ impl Sqlite {
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         id: HistoryId,
     ) -> Result<()> {
-        db::query("delete from history where id = ?1")
-            .bind(id.0.as_str())
-            .execute(&mut **tx)
-            .await?;
+        db::query("delete from history where id = ?1").bind(id).execute(&mut **tx).await?;
 
         Ok(())
     }
@@ -433,8 +431,8 @@ impl Sqlite {
             );
 
             builder.push_values(h.by_ref().take(rows_per_insert), |mut b, h| {
-                b.push_bind(h.id.0.as_str())
-                    .push_bind(h.timestamp.unix_timestamp_nanos() as i64)
+                b.push_bind(h.id)
+                    .push_bind(i64::conv(h.timestamp.unix_timestamp_nanos()))
                     .push_bind(h.duration)
                     .push_bind(h.exit)
                     .push_bind(h.command.as_str())
@@ -443,7 +441,7 @@ impl Sqlite {
                     .push_bind(h.cmd_origin.as_str())
                     .push_bind(h.author.as_str())
                     .push_bind(h.intent.as_deref())
-                    .push_bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
+                    .push_bind(h.deleted_at.map(|t| i64::conv(t.unix_timestamp_nanos())))
                     .push_bind(h.shell.as_deref())
                     .push_bind(h.author_kind.map(|kind| i64::from(kind.as_u8())));
             });
@@ -457,7 +455,7 @@ impl Sqlite {
     }
 
     #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
-    pub async fn load(&self, id: &str) -> Result<Option<History>> {
+    pub async fn load(&self, id: HistoryId) -> Result<Option<History>> {
         debug!("loading history item {}", id);
 
         let res = db::query_as::<_, History>(sqlx::AssertSqlSafe(format!(
@@ -510,7 +508,7 @@ impl Sqlite {
 
             let mut query = db::query_as::<_, History>(sqlx::AssertSqlSafe(sql));
             for id in &chunk {
-                query = query.bind(id.0.as_str());
+                query = query.bind(*id);
             }
 
             let rows = query.fetch_all(self.sqlite.pool()).await?;
@@ -530,8 +528,8 @@ impl Sqlite {
              ?7, hostname = ?8, author = ?9, intent = ?10, deleted_at = ?11, author_kind = ?12
                 where id = ?1",
         )
-        .bind(h.id.0.as_str())
-        .bind(h.timestamp.unix_timestamp_nanos() as i64)
+        .bind(h.id)
+        .bind(i64::conv(h.timestamp.unix_timestamp_nanos()))
         .bind(h.duration)
         .bind(h.exit)
         .bind(h.command.as_str())
@@ -540,7 +538,7 @@ impl Sqlite {
         .bind(h.cmd_origin.as_str())
         .bind(h.author.as_str())
         .bind(h.intent.as_deref())
-        .bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
+        .bind(h.deleted_at.map(|t| i64::conv(t.unix_timestamp_nanos())))
         .bind(h.author_kind.map(|kind| i64::from(kind.as_u8())))
         .execute(self.sqlite.pool())
         .await?;
@@ -603,8 +601,8 @@ impl Sqlite {
         // Inclusive on both ends, matching `range()`. `stats` relies on this to count a
         // command recorded exactly on a period boundary (e.g. at midnight).
         if let Some((from, to)) = range {
-            query.and_where_ge("timestamp", from.unix_timestamp_nanos() as i64);
-            query.and_where_le("timestamp", to.unix_timestamp_nanos() as i64);
+            query.and_where_ge("timestamp", i64::conv(from.unix_timestamp_nanos()));
+            query.and_where_le("timestamp", i64::conv(to.unix_timestamp_nanos()));
         }
 
         let query = query.sql().expect("bug in list query. please report");
@@ -624,8 +622,8 @@ impl Sqlite {
             "select {HISTORY_COLUMNS} from history where timestamp >= ?1 and timestamp <= ?2 \
              order by timestamp asc"
         )))
-        .bind(from.unix_timestamp_nanos() as i64)
-        .bind(to.unix_timestamp_nanos() as i64)
+        .bind(i64::conv(from.unix_timestamp_nanos()))
+        .bind(i64::conv(to.unix_timestamp_nanos()))
         .fetch_all(self.sqlite.pool())
         .await?;
 
@@ -650,7 +648,7 @@ impl Sqlite {
             "select {HISTORY_COLUMNS} from history where timestamp < ?1 order by timestamp desc \
              limit ?2"
         )))
-        .bind(timestamp.unix_timestamp_nanos() as i64)
+        .bind(i64::conv(timestamp.unix_timestamp_nanos()))
         .bind(count)
         .fetch_all(self.sqlite.pool())
         .await?;
@@ -729,11 +727,11 @@ impl Sqlite {
                             continue;
                         }
                         QueryToken::Or => {
-                            if !is_or {
+                            if is_or {
+                                format!("{glob}|{glob}")
+                            } else {
                                 is_or = true;
                                 continue;
-                            } else {
-                                format!("{glob}|{glob}")
                             }
                         }
                         QueryToken::MatchStart(term, _) => {
@@ -786,7 +784,7 @@ impl Sqlite {
                             format!("invalid `before` filter {before:?}: {e}").into(),
                         )
                     })?;
-            sql.and_where_lt("timestamp", quote(parsed.unix_timestamp_nanos() as i64));
+            sql.and_where_lt("timestamp", quote(i64::conv(parsed.unix_timestamp_nanos())));
         }
 
         if let Some(after) = filter_options.after {
@@ -795,7 +793,7 @@ impl Sqlite {
                     .map_err(|e| {
                         sqlx::Error::Decode(format!("invalid `after` filter {after:?}: {e}").into())
                     })?;
-            sql.and_where_gt("timestamp", quote(parsed.unix_timestamp_nanos() as i64));
+            sql.and_where_gt("timestamp", quote(i64::conv(parsed.unix_timestamp_nanos())));
         }
 
         apply_author_filter(&mut sql, filter_options.authors);
@@ -927,7 +925,7 @@ impl Sqlite {
         let mut tx = self.sqlite.pool().begin().await?;
 
         for id in ids {
-            Self::delete_row_raw(&mut tx, id.clone()).await?;
+            Self::delete_row_raw(&mut tx, id).await?;
         }
 
         tx.commit().await?;
@@ -1010,11 +1008,11 @@ impl Sqlite {
             Vec<(String, f64)>,
         ) = tokio::try_join!(
             db::query_as::<_, History>(sqlx::AssertSqlSafe(prev))
-                .bind(h.timestamp.unix_timestamp_nanos() as i64)
+                .bind(i64::conv(h.timestamp.unix_timestamp_nanos()))
                 .bind(&h.session)
                 .fetch_optional(self.sqlite.pool()),
             db::query_as::<_, History>(sqlx::AssertSqlSafe(next))
-                .bind(h.timestamp.unix_timestamp_nanos() as i64)
+                .bind(i64::conv(h.timestamp.unix_timestamp_nanos()))
                 .bind(&h.session)
                 .fetch_optional(self.sqlite.pool()),
             db::query_as(sqlx::AssertSqlSafe(total)).bind(&h.command).fetch_one(self.sqlite.pool()),
@@ -1031,13 +1029,13 @@ impl Sqlite {
         )?;
 
         let duration_over_time =
-            duration_over_time.iter().map(|f| (f.0.clone(), f.1.round() as i64)).collect();
+            duration_over_time.iter().map(|f| (f.0.clone(), f.1.cast_to(Nearest))).collect();
 
         Ok(HistoryStats {
             next,
             previous: prev,
-            total: total.0 as u64,
-            average_duration: average.0 as u64,
+            total: u64::conv(total.0),
+            average_duration: average.0.cast_to(Trunc),
             exits,
             day_of_week,
             duration_over_time,
@@ -1114,7 +1112,7 @@ impl Paged {
         if res.is_empty() {
             Ok(None)
         } else {
-            self.last_id = Some(res.last().unwrap().id.0.clone());
+            self.last_id = Some(res.last().unwrap().id.to_string());
             Ok(Some(res))
         }
     }
@@ -1431,7 +1429,7 @@ mod test {
         let bravo = save_history_item(&db, "echo bravo").await;
         let _charlie = save_history_item(&db, "echo charlie").await;
 
-        let loaded = db.load_active([alpha.id.clone(), bravo.id.clone()]).await.unwrap();
+        let loaded = db.load_active([alpha.id, bravo.id]).await.unwrap();
 
         let mut commands: Vec<String> = loaded.into_iter().map(|h| h.command).collect();
         commands.sort();
@@ -1468,7 +1466,7 @@ mod test {
         alpha.command = String::new();
         db.update(&alpha).await.unwrap();
 
-        let loaded = db.load_active([alpha.id.clone(), bravo.id.clone()]).await.unwrap();
+        let loaded = db.load_active([alpha.id, bravo.id]).await.unwrap();
 
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].command, "echo bravo");
@@ -1484,7 +1482,10 @@ mod test {
         let alpha = save_history_item(&db, "echo alpha").await;
 
         let loaded = db
-            .load_active([alpha.id.clone(), HistoryId("does-not-exist".to_string())])
+            .load_active([
+                alpha.id,
+                HistoryId::new("018f011c-9a0a-7000-8000-0000000000ff".parse().unwrap()),
+            ])
             .await
             .unwrap();
 
@@ -1534,7 +1535,7 @@ mod test {
         #[case] expected: usize,
         #[case] expect_ellie_match: bool,
     ) {
-        let t = OffsetDateTime::from_unix_timestamp(1708330400).unwrap();
+        let t = OffsetDateTime::from_unix_timestamp(1_708_330_400).unwrap();
 
         let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
         new_history_item_at(&db, "ls /home/ellie", Some(t)).await.unwrap();
@@ -2110,7 +2111,7 @@ mod test {
         // the legacy shape directly.
         db::query("update history set hostname = 'pi'").execute(db.sqlite.pool()).await.unwrap();
 
-        let loaded = db.load(history.id.0.as_str()).await.unwrap().unwrap();
+        let loaded = db.load(history.id).await.unwrap().unwrap();
         assert!(!loaded.is_agent());
 
         let context = Context {
@@ -2149,7 +2150,7 @@ mod test {
             .into();
         db.save(&history).await.unwrap();
 
-        let loaded = db.load(history.id.0.as_str()).await.unwrap().unwrap();
+        let loaded = db.load(history.id).await.unwrap().unwrap();
         assert!(!loaded.is_agent());
 
         let context = Context {

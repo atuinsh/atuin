@@ -2,9 +2,10 @@
 use std::path::PathBuf;
 
 use atuin_client::database::Context;
-use atuin_client::history::History;
+use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::{FilterMode, Settings};
 use atuin_common::filter::{self, OrFilter};
+use easy_cast::Conv;
 use eyre::{Context as EyreContext, Result};
 use hyper_util::rt::TokioIo;
 #[cfg(windows)]
@@ -22,8 +23,8 @@ use crate::control::{
     SettingsReloadedEvent, ShutdownEvent,
 };
 use crate::events::DaemonEvent;
-use crate::history::history_client::HistoryClient as HistoryServiceClient;
-use crate::history::{
+use crate::grpc::history::pb::history_client::HistoryClient as HistoryServiceClient;
+use crate::grpc::history::pb::{
     AuthorKind, CancelHistoryReply, CancelHistoryRequest, EndHistoryReply, EndHistoryRequest,
     ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest,
     TailHistoryReply, TailHistoryRequest,
@@ -127,7 +128,7 @@ impl HistoryClient {
             cwd: h.cwd,
             hostname: h.cmd_origin.into_string(),
             session: h.session,
-            timestamp: h.timestamp.unix_timestamp_nanos() as u64,
+            timestamp: u64::conv(h.timestamp.unix_timestamp_nanos()),
             author: h.author,
             intent: h.intent.unwrap_or_default(),
             shell: h.shell.unwrap_or_default(),
@@ -139,19 +140,30 @@ impl HistoryClient {
 
     pub async fn end_history(
         &mut self,
-        id: String,
-        duration: u64,
+        id: HistoryId,
+        duration: Option<std::time::Duration>,
         exit: i64,
     ) -> Result<EndHistoryReply> {
-        let req = EndHistoryRequest { id, duration, exit };
-
-        Ok(self.client.end_history(req).await?.into_inner())
+        let duration = duration.map(prost_types::Duration::try_from).transpose()?;
+        Ok(self
+            .client
+            .end_history(EndHistoryRequest {
+                id: Some(id.into()),
+                duration,
+                exit,
+            })
+            .await?
+            .into_inner())
     }
 
-    pub async fn cancel_history(&mut self, id: String) -> Result<CancelHistoryReply> {
-        let req = CancelHistoryRequest { id };
-
-        Ok(self.client.cancel_history(req).await?.into_inner())
+    pub async fn cancel_history(&mut self, id: HistoryId) -> Result<CancelHistoryReply> {
+        Ok(self
+            .client
+            .cancel_history(CancelHistoryRequest {
+                id: Some(id.into()),
+            })
+            .await?
+            .into_inner())
     }
 
     pub async fn status(&mut self) -> Result<StatusReply> {
@@ -375,11 +387,11 @@ impl SemanticClient {
 
     pub async fn command_output(
         &mut self,
-        history_id: String,
+        history_id: HistoryId,
         ranges: Vec<(i64, i64)>,
     ) -> Result<CommandOutputReply> {
         let request = CommandOutputRequest {
-            history_id,
+            history_id: history_id.to_string(),
             ranges: ranges.into_iter().map(|(start, end)| OutputRange { start, end }).collect(),
         };
 
@@ -479,15 +491,13 @@ fn daemon_event_to_proto(event: DaemonEvent) -> crate::control::send_event_reque
         DaemonEvent::HistoryPruned => Event::HistoryPruned(HistoryPrunedEvent {}),
         DaemonEvent::HistoryRebuilt => Event::HistoryRebuilt(HistoryRebuiltEvent {}),
         DaemonEvent::HistoryDeleted { ids } => Event::HistoryDeleted(HistoryDeletedEvent {
-            ids: ids.into_iter().map(|id| id.0).collect(),
+            ids: ids.into_iter().map(|id| id.to_string()).collect(),
         }),
         DaemonEvent::ForceSync => Event::ForceSync(ForceSyncEvent {}),
         DaemonEvent::SettingsReloaded => Event::SettingsReloaded(SettingsReloadedEvent {}),
         DaemonEvent::ShutdownRequested => Event::Shutdown(ShutdownEvent {}),
         // These events are internal and not sent via the control service
-        DaemonEvent::HistoryStarted(_)
-        | DaemonEvent::HistoryEnded(_)
-        | DaemonEvent::HistorySynced(_)
+        DaemonEvent::HistorySynced(_)
         | DaemonEvent::SyncCompleted { .. }
         | DaemonEvent::SyncFailed { .. } => {
             // Use shutdown as a fallback, though this shouldn't happen
@@ -557,23 +567,4 @@ pub async fn emit_event_with_settings(
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn internal_status_is_a_daemon_error_but_not_unavailable() {
-        let error = eyre::Report::new(tonic::Status::internal("failed to build index"));
-
-        assert_eq!(classify_error(&error), DaemonClientErrorKind::OtherGrpc);
-    }
-
-    #[test]
-    fn unrelated_error_is_not_a_daemon_error() {
-        let error = eyre::eyre!("local database failed");
-
-        assert_eq!(classify_error(&error), DaemonClientErrorKind::NonGrpc);
-    }
 }

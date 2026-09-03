@@ -3,39 +3,40 @@ name = "atuin-domain"
 edition = "2024"
 description = "Core domain and API types shared across Atuin's client, daemon, and server"
 
-rust-version = { workspace = true }
-version = { workspace = true }
-authors = { workspace = true }
-license = { workspace = true }
-homepage = { workspace = true }
-repository = { workspace = true }
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+authors.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [dependencies]
-serde = { workspace = true }
 atuin-common = { workspace = true }
-whoami = { workspace = true }
-uuid = { workspace = true }
-time = { workspace = true }
-semver = { workspace = true }
-typed-builder = { workspace = true }
-derive_more = { workspace = true }
-eyre = { workspace = true }
-sqlx = { workspace = true }
-thiserror = { workspace = true }
-url = { workspace = true }
-serde_json = { workspace = true }
-reqwest = { workspace = true }
+
 async-trait = { workspace = true }
-parking_lot = { workspace = true }
-reqwest-middleware = { workspace = true }
+axum = { workspace = true, optional = true }
+derive_more = { workspace = true }
+easy-cast = { workspace = true }
+eyre = { workspace = true }
 http = { workspace = true }
-xxhash-rust = { workspace = true }
-tokio = { workspace = true }
-axum = { version = "0.8", optional = true }
+parking_lot = { workspace = true }
+reqwest = { workspace = true }
+reqwest-middleware = { workspace = true }
+semver = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true }
+typed-builder = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+whoami = { workspace = true }
+xxhash-rust = { workspace = true }
 
 [features]
 # Feature-gated axum integration for the server-side capability handlers (`caps::axum`).
@@ -43,10 +44,10 @@ axum = ["dep:axum"]
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
-rstest = { workspace = true }
 proptest = { workspace = true }
-wiremock = { workspace = true }
+rstest = { workspace = true }
 tower = { workspace = true, features = ["util"] }
+wiremock = { workspace = true }
 
 [lints]
 workspace = true

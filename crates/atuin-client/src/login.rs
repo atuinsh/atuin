@@ -18,9 +18,7 @@ pub async fn login(
 
     let key_path = &settings.key_path;
 
-    if !key_path.exists() {
-        key.try_write_path(key_path)?;
-    } else {
+    if key_path.exists() {
         // we now know that the user has logged in specifying a key, AND that the key path
         // exists
 
@@ -36,6 +34,8 @@ pub async fn login(
             println!("Writing new key");
             key.overwrite_path(key_path)?;
         }
+    } else {
+        key.try_write_path(key_path)?;
     }
 
     let session = api_client::login(

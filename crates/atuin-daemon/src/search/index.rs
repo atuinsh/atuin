@@ -17,6 +17,7 @@ use atuin_client::settings::Search;
 use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
 use dashmap::DashMap;
+use easy_cast::Conv;
 use lasso::{Spur, ThreadedRodeo};
 use parking_lot::RwLock;
 use time::OffsetDateTime;
@@ -67,7 +68,7 @@ impl FrecencyData {
         }
 
         // Time-based decay: score decreases as time passes
-        let age_seconds = (now - self.last_used).max(0) as u64;
+        let age_seconds = u64::conv((now - self.last_used).max(0));
         let age_hours = age_seconds / 3600;
 
         // Decay factor: recent commands get higher scores
@@ -89,11 +90,19 @@ impl FrecencyData {
         let frequency_score = (f64::from(self.count).ln() * 20.0).min(100.0);
 
         // Apply multipliers and combine scores, then round to u32
-        ((recency_score * recency_mul) + (frequency_score * frequency_mul)).round() as u32
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "frecency is used for ordering only -- saturating is ok"
+        )]
+        {
+            ((recency_score * recency_mul) + (frequency_score * frequency_mul)).round() as u32
+        }
     }
 }
 
 /// Data for a unique command.
+#[derive(Debug)]
 pub struct CommandData {
     /// History ID of the most recent invocation (16-byte UUID).
     most_recent_id: [u8; 16],
@@ -128,7 +137,7 @@ impl CommandData {
             return None;
         };
 
-        let history_id = parse_uuid_bytes(&history.id.0)?;
+        let history_id = history.id.into_bytes();
         let session = parse_uuid_bytes(&history.session)?;
         let timestamp = history.timestamp.unix_timestamp();
 
@@ -153,9 +162,7 @@ impl CommandData {
     /// Add an invocation from a history entry.
     /// Returns false if the history entry has invalid UUIDs.
     pub fn add_invocation(&mut self, history: &History, interner: &ThreadedRodeo) -> bool {
-        let Some(history_id) = parse_uuid_bytes(&history.id.0) else {
-            return false;
-        };
+        let history_id = history.id.into_bytes();
         let Some(session) = parse_uuid_bytes(&history.session) else {
             return false;
         };
@@ -263,6 +270,7 @@ type FrecencyMap = Arc<Vec<u32>>;
 
 /// One entry in the fuzzy matcher's haystack: the original string plus the normalized version
 /// (diacritics removed) we actually match against.
+#[derive(Debug)]
 struct HaystackEntry {
     /// The original text of the entry.
     pub original: Arc<str>,
@@ -324,6 +332,7 @@ impl PartialOrd for Score {
 /// Global frecency is precomputed by a background task and used for scoring.
 /// If frecency data is not available, search still works but without frecency ranking;
 /// although this should never happen due to precomputing the frecency map.
+#[derive(Debug)]
 pub struct SearchIndex {
     /// Map from command text to command data.
     ///
@@ -440,13 +449,13 @@ impl SearchIndex {
         // Filter pre-pass: collect the candidate commands for this filter mode. This is sorted
         // vector of haystack indices.
         let get_candidates = || match &filter {
-            CompiledFilter::All => haystack.iter().enumerate().map(|(i, _)| i as u32).collect(),
+            CompiledFilter::All => haystack.iter().enumerate().map(|(i, _)| u32::conv(i)).collect(),
             CompiledFilter::Nothing => Vec::new(),
             _ => {
                 let mut indices: Vec<u32> = self
                     .commands
                     .iter()
-                    .filter(|entry| (entry.haystack_index as usize) < haystack.len())
+                    .filter(|entry| usize::conv(entry.haystack_index) < haystack.len())
                     .filter(|entry| match &filter {
                         CompiledFilter::All | CompiledFilter::Nothing => unreachable!(),
                         CompiledFilter::Directory(dir) => entry.has_invocation_in_dir(*dir),
@@ -469,7 +478,7 @@ impl SearchIndex {
             tracing::span!(Level::TRACE, "index_search_filter").in_scope(get_candidates);
 
         let candidate_frecency = |candidate_index: usize| {
-            let hay_idx = candidates[candidate_index] as usize;
+            let hay_idx = usize::conv(candidates[candidate_index]);
             frecency_map.as_ref().and_then(|f| f.get(hay_idx).copied()).unwrap_or(0)
         };
 
@@ -485,14 +494,14 @@ impl SearchIndex {
                 .map(|i| Score {
                     fuzzy_score: 0,
                     frecency: candidate_frecency(i),
-                    index: i as u32,
+                    index: u32::conv(i),
                 })
                 .collect()
         } else {
             // This is a vec of `&Arc<str>` instead of `&str` because `&Arc<str>` is the size of one
             // pointer while `&str` is the size of two.
             let normalized_commands: Vec<&Arc<str>> =
-                candidates.iter().map(|i| &haystack[*i as usize].normalized).collect();
+                candidates.iter().map(|i| &haystack[usize::conv(*i)].normalized).collect();
             // Use all cores when the number of commands is sufficiently large.
             let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
             let matches = tracing::span!(Level::TRACE, "index_search_match").in_scope(|| {
@@ -506,7 +515,7 @@ impl SearchIndex {
                 .iter()
                 .map(|m| Score {
                     fuzzy_score: m.score,
-                    frecency: candidate_frecency(m.index as usize),
+                    frecency: candidate_frecency(usize::conv(m.index)),
                     index: m.index,
                 })
                 .collect()
@@ -515,16 +524,16 @@ impl SearchIndex {
         tracing::span!(Level::TRACE, "index_search_results").in_scope(|| {
             // only the top `limit` results are returned, so partition them
             // out before sorting instead of sorting every match
-            let limit = limit as usize;
+            let limit = usize::conv(limit);
             if scored.len() > limit {
                 scored.select_nth_unstable(limit);
                 scored.truncate(limit);
             }
             scored.sort_unstable();
             scored.into_iter().filter_map(move |score| {
-                let haystack_index = candidates[score.index as usize];
+                let haystack_index = candidates[usize::conv(score.index)];
                 self.commands
-                    .get(haystack[haystack_index as usize].original.as_ref())
+                    .get(haystack[usize::conv(haystack_index)].original.as_ref())
                     .map(|data| data.most_recent_id())
             })
         })
@@ -559,7 +568,14 @@ impl SearchIndex {
                         let frecency =
                             data.global_frecency.compute(now, recency_mul, frequency_mul);
                         // Apply overall frecency multiplier and round to u32
-                        (f64::from(frecency) * frecency_mul).round() as u32
+                        #[allow(
+                            clippy::cast_possible_truncation,
+                            clippy::cast_sign_loss,
+                            reason = "frecency is used for ordering only -- saturating is ok"
+                        )]
+                        {
+                            (f64::from(frecency) * frecency_mul).round() as u32
+                        }
                     })
                 })
                 .collect()
@@ -588,7 +604,7 @@ mod tests {
 
     #[test]
     fn frecency_data_compute() {
-        let now = 1000000i64;
+        let now = 1_000_000_i64;
 
         // Recent command (with default multipliers of 1.0)
         let recent = FrecencyData {
@@ -615,7 +631,7 @@ mod tests {
 
     #[test]
     fn frecency_data_compute_with_multipliers() {
-        let now = 1000000i64;
+        let now = 1_000_000_i64;
 
         let data = FrecencyData {
             count: 5,
@@ -900,7 +916,7 @@ mod tests {
         let index = SearchIndex::default();
         for (i, command) in equivalence_corpus().iter().enumerate() {
             // spread timestamps so frecency scores actually differ
-            let ts = datetime!(2024-01-01 00:00 UTC) + time::Duration::minutes((i % 1440) as i64);
+            let ts = datetime!(2024-01-01 00:00 UTC) + time::Duration::minutes(i64::conv(i % 1440));
             index.add_history(&make_history(command, "/tmp", ts));
         }
         assert!(index.command_count() > 10_000, "corpus must cross threshold");

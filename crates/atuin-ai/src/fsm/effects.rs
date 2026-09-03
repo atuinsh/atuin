@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use atuin_client::history::HistoryId;
 use serde_json::Value;
 
 use crate::permissions::rule::Rule;
@@ -52,7 +53,7 @@ pub enum Effect {
     /// Resolves via `Event::OutputCommandResolved`.
     ResolveOutputCommand {
         tool_id: String,
-        history_id: uuid::Uuid,
+        history_id: HistoryId,
     },
     /// Load a skill's content asynchronously (read + interpolate).
     LoadSkill {

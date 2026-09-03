@@ -12,6 +12,7 @@ use atuin_client::settings::{
 };
 use atuin_common::shell::Shell;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
+use easy_cast::Conv;
 use eyre::Result;
 use futures_util::FutureExt;
 use ratatui::backend::{CrosstermBackend, FromCrossterm};
@@ -67,13 +68,13 @@ pub struct InspectingState {
 
 impl InspectingState {
     pub fn move_to_previous(&mut self) {
-        let previous = self.previous.clone();
+        let previous = self.previous;
         self.reset();
         self.current = previous;
     }
 
     pub fn move_to_next(&mut self) {
-        let next = self.next.clone();
+        let next = self.next;
         self.reset();
         self.current = next;
     }
@@ -659,7 +660,7 @@ impl State {
             }
             Action::AcceptNth(n) => {
                 self.accept = true;
-                InputAction::Accept(self.results_state.selected() + *n as usize)
+                InputAction::Accept(self.results_state.selected() + usize::conv(*n))
             }
             Action::ReturnSelection => {
                 if self.tab_index == 1 {
@@ -668,7 +669,7 @@ impl State {
                 InputAction::Accept(self.results_state.selected())
             }
             Action::ReturnSelectionNth(n) => {
-                InputAction::Accept(self.results_state.selected() + *n as usize)
+                InputAction::Accept(self.results_state.selected() + usize::conv(*n))
             }
             Action::Copy => InputAction::Copy(self.results_state.selected()),
             Action::Delete => InputAction::Delete(self.results_state.selected()),
@@ -757,7 +758,6 @@ impl State {
         }
     }
 
-    #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::bool_to_int_with_if)]
     fn calc_preview_height(
         settings: &Settings,
@@ -773,10 +773,10 @@ impl State {
             && tab_index == 0
             && !results.is_empty()
         {
-            let length_current_cmd = results[selected].command.width() as u16;
+            let length_current_cmd = u16::conv(results[selected].command.width());
             // calculate the number of newlines in the command
             let num_newlines =
-                results[selected].command.chars().filter(|&c| c == '\n').count() as u16;
+                u16::conv(results[selected].command.chars().filter(|&c| c == '\n').count());
             if num_newlines > 0 {
                 std::cmp::min(
                     settings.max_preview_height,
@@ -784,7 +784,7 @@ impl State {
                         .command
                         .split('\n')
                         .map(|line| {
-                            (line.len() as u16 + preview_width - 1 - border_size)
+                            (u16::conv(line.len()) + preview_width - 1 - border_size)
                                 / (preview_width - border_size)
                         })
                         .sum(),
@@ -812,7 +812,7 @@ impl State {
                     v.command
                         .split('\n')
                         .map(|line| {
-                            (line.len() as u16 + preview_width - 1 - border_size)
+                            (u16::conv(line.len()) + preview_width - 1 - border_size)
                                 / (preview_width - border_size)
                         })
                         .sum(),
@@ -1105,7 +1105,6 @@ impl State {
                 preview_chunk.width.into(),
                 theme,
             );
-            #[allow(clippy::cast_possible_truncation)]
             let prefix_width = settings
                 .ui
                 .columns
@@ -1113,9 +1112,8 @@ impl State {
                 .take_while(|col| !col.expand)
                 .map(|col| col.width + 1)
                 .sum::<u16>()
-                + " > ".len() as u16;
-            #[allow(clippy::cast_possible_truncation)]
-            let min_prefix_width = "[ SRCH: FULLTXT ] ".len() as u16;
+                + u16::conv(" > ".len());
+            let min_prefix_width = u16::conv("[ SRCH: FULLTXT ] ".len());
             self.draw_preview(
                 f,
                 style,
@@ -1128,7 +1126,7 @@ impl State {
         }
     }
 
-    #[allow(clippy::cast_possible_truncation, clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn draw_preview(
         &self,
         f: &mut Frame,
@@ -1152,7 +1150,7 @@ impl State {
         };
         f.set_cursor_position((
             // Put cursor past the end of the input text
-            input_chunk.x + extra_width as u16 + prefix_width + cursor_offset,
+            input_chunk.x + u16::conv(extra_width) + prefix_width + cursor_offset,
             input_chunk.y + cursor_offset,
         ));
     }
@@ -1525,15 +1523,15 @@ fn fetch_screen_state(socket_path: &str) -> Option<SavedScreen> {
     let cursor_col = u16::from_be_bytes([data[6], data[7]]);
 
     // Parse length-prefixed rows
-    let mut rows_data = Vec::with_capacity(rows as usize);
+    let mut rows_data = Vec::with_capacity(usize::conv(rows));
     let mut offset = 8;
     while offset + 4 <= data.len() {
-        let row_len = u32::from_be_bytes([
+        let row_len = usize::conv(u32::from_be_bytes([
             data[offset],
             data[offset + 1],
             data[offset + 2],
             data[offset + 3],
-        ]) as usize;
+        ]));
         offset += 4;
         if offset + row_len > data.len() {
             break;
@@ -1564,7 +1562,7 @@ fn restore_popup_area(saved: &SavedScreen, popup_rect: Rect, scroll_offset: u16)
 
     for dy in 0..popup_rect.height {
         let target_row = popup_rect.y + dy;
-        let source_row = (target_row + scroll_offset) as usize;
+        let source_row = usize::conv(target_row + scroll_offset);
 
         // Clear only the popup region. The server-side rows_formatted() skips
         // default cells (spaces with default attributes) using cursor jumps, so
@@ -1577,7 +1575,7 @@ fn restore_popup_area(saved: &SavedScreen, popup_rect: Rect, scroll_offset: u16)
             MoveTo(popup_rect.x, target_row),
             ratatui::crossterm::style::SetAttribute(ratatui::crossterm::style::Attribute::Reset),
         );
-        let _ = write!(stdout, "{:width$}", "", width = popup_rect.width as usize);
+        let _ = write!(stdout, "{:width$}", "", width = usize::conv(popup_rect.width));
         let _ = execute!(stdout, MoveTo(popup_rect.x, target_row));
 
         if let Some(row_bytes) = saved.rows_data.get(source_row) {
@@ -1706,7 +1704,7 @@ fn compute_popup_placement(
 
 // for now, it works. But it'd be great if it were more easily readable, and
 // modular. I'd like to add some more stats and stuff at some point
-#[allow(clippy::cast_possible_truncation, clippy::too_many_lines, clippy::cognitive_complexity)]
+#[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
 pub async fn history(
     query: &[String],
     settings: &Settings,
@@ -1796,7 +1794,7 @@ pub async fn history(
         );
         for row in popup_rect.y..popup_rect.y.saturating_add(popup_rect.height) {
             let _ = queue!(raw_stdout, MoveTo(popup_rect.x, row));
-            let _ = write!(raw_stdout, "{:width$}", "", width = popup_rect.width as usize);
+            let _ = write!(raw_stdout, "{:width$}", "", width = usize::conv(popup_rect.width));
         }
         let _ = raw_stdout.flush();
     }
@@ -1918,7 +1916,7 @@ pub async fn history(
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;
         let initial_search_mode = app.search_mode();
-        let initial_custom_context = app.search.custom_context.clone();
+        let initial_custom_context = app.search.custom_context;
 
         let event_ready = tokio::task::spawn_blocking(|| event::poll(Duration::from_millis(250)));
 
@@ -1975,7 +1973,7 @@ pub async fn history(
                             },
                             InputAction::SwitchContext(index) => {
                                 if let Some(index) = index && let Some(entry) = results.get(index) {
-                                    app.search.custom_context = Some(entry.id.clone());
+                                    app.search.custom_context = Some(entry.id);
                                     app.search.context = Context::from_history(entry);
                                     app.search.filter_mode = FilterMode::Session;
                                     app.search.input = Cursor::from(String::new());
@@ -2029,7 +2027,7 @@ pub async fn history(
             && app.search.input.as_str().is_empty()
             && (initial_custom_context != app.search.custom_context
                 || initial_filter_mode != app.search.filter_mode)
-            && let Some(history_id) = app.search.custom_context.clone()
+            && let Some(history_id) = app.search.custom_context
             && let Some(pos) = results.iter().position(|entry| entry.id == history_id)
         {
             app.results_state.select(pos);
@@ -2040,7 +2038,7 @@ pub async fn history(
         match inspecting_id {
             Some(inspecting_id) => {
                 if inspecting.is_none() || inspecting_id != inspecting.clone().unwrap().id {
-                    inspecting = db.load(inspecting_id.0.as_str()).await?;
+                    inspecting = db.load(inspecting_id).await?;
                 }
             }
             _ => {
@@ -2064,7 +2062,7 @@ pub async fn history(
                 stats
             } else {
                 let stats = db.stats(&selected).await?;
-                stats_for = Some(selected.id.clone());
+                stats_for = Some(selected.id);
                 app.inspecting_state.current = Some(selected.id);
                 app.inspecting_state.previous = match stats.previous.clone() {
                     Some(p) => Some(p.id),

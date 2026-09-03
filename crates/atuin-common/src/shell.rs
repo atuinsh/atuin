@@ -6,7 +6,7 @@ use serde::Serialize;
 use sysinfo::{Process, System, get_current_pid};
 use thiserror::Error;
 
-#[derive(PartialEq, derive_more::Display)]
+#[derive(PartialEq, Eq, derive_more::Display)]
 pub enum Shell {
     #[display("sh")]
     Sh,

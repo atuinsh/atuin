@@ -11,6 +11,7 @@ use atuin_client::record::sync::{ClientSource, SyncEngine};
 use atuin_client::settings::Settings;
 use atuin_dotfiles::store::AliasStore;
 use atuin_dotfiles::store::var::VarStore;
+use easy_cast::Conv;
 use eyre::Result;
 use futures::StreamExt;
 use rand::Rng;
@@ -252,11 +253,10 @@ async fn do_sync_tick(
                 new_interval = max_interval;
             }
 
-            *ticker = time::interval_at(
-                tokio::time::Instant::now() + Duration::from_secs(new_interval as u64),
-                time::Duration::from_secs(new_interval as u64),
-            );
-            ticker.reset_after(time::Duration::from_secs(new_interval as u64));
+            let backoff =
+                Duration::try_from_secs_f64(new_interval).unwrap_or_else(|_| ticker.period());
+            *ticker = time::interval_at(tokio::time::Instant::now() + backoff, backoff);
+            ticker.reset_after(backoff);
             ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
             tracing::error!("backing off, next sync tick in {new_interval}");
@@ -279,8 +279,7 @@ async fn do_sync_tick(
                 match batch {
                     Ok(histories) if !histories.is_empty() => {
                         // Only the IDs go on the bus; the rows themselves are already in sqlite.
-                        let ids: Arc<[HistoryId]> =
-                            histories.iter().map(|h| h.id.clone()).collect();
+                        let ids: Arc<[HistoryId]> = histories.iter().map(|h| h.id).collect();
                         handle.emit(DaemonEvent::HistorySynced(ids));
                     }
                     Ok(_) => {}
@@ -294,7 +293,7 @@ async fn do_sync_tick(
 
             // Emit sync completed event
             handle.emit(DaemonEvent::SyncCompleted {
-                uploaded: uploaded_count as usize,
+                uploaded: usize::conv(uploaded_count),
                 downloaded: downloaded_records.len(),
             });
 

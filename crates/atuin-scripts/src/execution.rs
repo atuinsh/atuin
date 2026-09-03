@@ -83,10 +83,10 @@ pub async fn execute_script_interactive(
     debug!("creating temp file at {}", temp_path.display());
 
     // Extract interpreter from shebang for fallback execution
-    let interpreter = if !shebang.is_empty() {
-        shebang.trim_start_matches("#!").trim().to_string()
-    } else {
+    let interpreter = if shebang.is_empty() {
         "/usr/bin/env bash".to_string()
+    } else {
+        shebang.trim_start_matches("#!").trim().to_string()
     };
 
     // Write script content to the temp file, including the shebang
@@ -107,7 +107,7 @@ pub async fn execute_script_interactive(
 
     // Store the temp_file to prevent it from being dropped
     // This ensures it won't be deleted while the script is running
-    let _keep_temp_file = temp_file;
+    let keep_temp_file = temp_file;
 
     debug!("attempting direct script execution");
     let mut child_result = tokio::process::Command::new(temp_path.to_str().unwrap())
@@ -238,10 +238,9 @@ pub async fn execute_script_interactive(
 
     // Spawn a task to wait for the child process to complete
     debug!("spawning exit code handler");
-    let _keep_temp_file_clone = _keep_temp_file;
     tokio::spawn(async move {
         // Keep the temp file alive until the process completes
-        let _temp_file_ref = _keep_temp_file_clone;
+        let _temp_file_ref = keep_temp_file;
 
         // Wait for the child process to complete
         let status = match child.wait().await {

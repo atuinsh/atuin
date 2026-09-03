@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use atuin_client::history::{History, HistoryId};
+use atuin_client::history::HistoryId;
 
 /// Events that flow through the daemon's event bus.
 ///
@@ -17,13 +17,6 @@ use atuin_client::history::{History, HistoryId};
 /// events it cares about in its `handle_event` implementation.
 #[derive(Debug, Clone)]
 pub enum DaemonEvent {
-    // ---- History lifecycle ----
-    /// A command has started running.
-    HistoryStarted(History),
-
-    /// A command has finished running.
-    HistoryEnded(History),
-
     // ---- Sync ----
     /// History entries were built from records synced from the server.
     ///

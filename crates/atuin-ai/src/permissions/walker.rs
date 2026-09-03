@@ -76,15 +76,12 @@ impl PermissionWalker {
                 Ok(Some(FoundRuleFile { depth, file })) => {
                     found.push((depth, file));
                 }
-                Ok(None) => {
-                    continue;
-                }
+                Ok(None) => {}
                 Err(e) => {
                     tracing::error!(
                         "Error while walking filesystem for permissions check; skipping: {}",
                         e
                     );
-                    continue;
                 }
             }
         }

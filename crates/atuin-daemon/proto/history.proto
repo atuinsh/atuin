@@ -1,6 +1,14 @@
 syntax = "proto3";
 package history;
 
+import "common.proto";
+import "google/protobuf/duration.proto";
+
+// Identifies a single history entry.
+message HistoryId {
+  common.Uuid uuid = 1;
+}
+
 // Whether a human or an agent ran a command. Unspecified means the caller did
 // not say, and the author name is all the receiver has to go on. Unspecified is
 // also what keeps this backwards compatible: it is proto3's zero value, so a
@@ -25,25 +33,27 @@ message StartHistoryRequest {
 }
 
 message EndHistoryRequest {
-  string id = 1;
+  HistoryId id = 1;
   int64 exit = 2;
-  uint64 duration = 3;
+  // Measured command runtime. Absent means the client didn't measure it; the daemon then derives
+  // it from the command's start timestamp.
+  google.protobuf.Duration duration = 3;
 }
 
 // Cancel an in-progress history entry without adding it to the database.
 message CancelHistoryRequest {
-  string id = 1;
+  HistoryId id = 1;
 }
 
 message StartHistoryReply {
-  string id = 1;
+  HistoryId id = 1;
   string version = 2;
   uint32 protocol = 3;
 }
 
 message EndHistoryReply {
-  string id = 1;
-  uint64 idx = 2;
+  common.RecordId record_id = 1;
+  uint64 record_idx = 2;
   string version = 3;
   uint32 protocol = 4;
 }
@@ -53,8 +63,10 @@ message CancelHistoryReply {
   uint32 protocol = 2;
 }
 
+// Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
 message StatusRequest {}
 
+// Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
 message StatusReply {
   bool healthy = 1;
   string version = 2;
@@ -62,23 +74,19 @@ message StatusReply {
   uint32 protocol = 4;
 }
 
+// Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
 message ShutdownRequest {}
 
+// Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
 message ShutdownReply {
   bool accepted = 1;
 }
 
 message TailHistoryRequest {}
 
-enum HistoryEventKind {
-  HISTORY_EVENT_KIND_UNSPECIFIED = 0;
-  HISTORY_EVENT_KIND_STARTED = 1;
-  HISTORY_EVENT_KIND_ENDED = 2;
-}
-
 message HistoryEntry {
   uint64 timestamp = 1; // nanosecond unix epoch
-  string id = 2;
+  HistoryId id = 2;
   string command = 3;
   string cwd = 4;
   string session = 5;
@@ -91,9 +99,24 @@ message HistoryEntry {
   AuthorKind author_kind = 12;
 }
 
+// The consumer fell behind the daemon's stream and events were dropped.
+message Lagged {
+  // Number of events dropped before the consumer caught back up.
+  uint64 dropped = 1;
+}
+
+// The reply event returned by the TailHistoryRequest.
 message TailHistoryReply {
-  HistoryEventKind kind = 1;
-  HistoryEntry history = 2;
+  oneof event {
+    // A command started running.
+    HistoryEntry started = 1;
+    // A command finished; the entry now carries its exit code and duration.
+    HistoryEntry ended = 2;
+    // A command has been "cancelled", ie. no history has been recorded.
+    HistoryEntry cancelled = 3;
+    // An in-band notice that the consumer fell behind and lost events.
+    Lagged lagged = 4;
+  }
 }
 
 service History {
@@ -101,6 +124,8 @@ service History {
   rpc EndHistory(EndHistoryRequest) returns (EndHistoryReply);
   rpc CancelHistory(CancelHistoryRequest) returns (CancelHistoryReply);
   rpc TailHistory(TailHistoryRequest) returns (stream TailHistoryReply);
+  // Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
   rpc Status(StatusRequest) returns (StatusReply);
+  // Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
   rpc Shutdown(ShutdownRequest) returns (ShutdownReply);
 }

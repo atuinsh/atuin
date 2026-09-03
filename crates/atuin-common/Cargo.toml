@@ -3,14 +3,13 @@ name = "atuin-common"
 edition = "2024"
 description = "common library for atuin"
 
-rust-version = { workspace = true }
-version = { workspace = true }
-authors = { workspace = true }
-license = { workspace = true }
-homepage = { workspace = true }
-repository = { workspace = true }
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+authors.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [features]
 test-utils = ["dep:tracing-subscriber"]
@@ -22,38 +21,40 @@ sqlite = ["db", "sqlx/sqlite", "sqlx/regexp", "dep:libsqlite3-sys", "dep:tokio-u
 
 [dependencies]
 atuin-vt100 = { workspace = true, optional = true }
-derive_more = { workspace = true }
-tiny-bip39 = { workspace = true }
-crypto_secretbox = { workspace = true }
-time = { workspace = true, features = ["formatting", "parsing"] }
-serde = { workspace = true }
-serde_with = "3.8.1"
-uuid = { workspace = true }
-eyre = { workspace = true }
-url = { workspace = true }
-thiserror = { workspace = true }
-directories = { workspace = true }
-sysinfo = "0.30.7"
+
 base64 = { workspace = true }
-getrandom = "0.4"
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true, optional = true }
-unicode-width = { version = "0.2", optional = true }
-unicode-segmentation = { version = "1.11.0", optional = true }
+crypto_secretbox = { workspace = true }
+derive_more = { workspace = true }
+directories = { workspace = true }
+easy-cast = { workspace = true }
+eyre = { workspace = true }
+fs-err = { workspace = true }
+futures = { workspace = true }
+getrandom = { workspace = true }
 itertools = { workspace = true }
-rusty_paseto = { workspace = true }
+libsqlite3-sys = { workspace = true, optional = true }
+parking_lot = { workspace = true }
+rmp = { workspace = true }
 rusty_paserk = { workspace = true }
+rusty_paseto = { workspace = true }
+semver = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_with = { workspace = true }
+sqlx = { workspace = true, optional = true }
+sysinfo = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true, features = ["formatting", "parsing"] }
+tiny-bip39 = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true, optional = true }
-parking_lot = { workspace = true }
-futures = "0.3"
-serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, optional = true }
+unicode-segmentation = { workspace = true, optional = true }
+unicode-width = { workspace = true, optional = true }
+url = { workspace = true }
+uuid = { workspace = true }
 zeroize = { workspace = true }
-rmp = { workspace = true }
-fs-err = { workspace = true }
-semver = { workspace = true }
-sqlx = { workspace = true, optional = true }
-libsqlite3-sys = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, optional = true }

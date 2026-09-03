@@ -1,4 +1,3 @@
-use atuin_server_database::Database;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use metrics::counter;
@@ -12,10 +11,10 @@ use crate::router::{AppState, UserAuth};
 pub struct DeleteParams {}
 
 #[instrument(skip_all, err(level = "warn"), fields(user.id = user.id))]
-pub async fn delete<DB: Database>(
+pub async fn delete(
     _params: Query<DeleteParams>,
     UserAuth(user): UserAuth,
-    state: State<AppState<DB>>,
+    state: State<AppState>,
 ) -> Result<(), ErrorResponseStatus<'static>> {
     let State(AppState { database, .. }) = state;
 

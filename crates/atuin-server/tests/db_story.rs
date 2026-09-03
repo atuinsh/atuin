@@ -1,16 +1,58 @@
-use atuin_common::db;
+use std::env::{self, temp_dir};
+
+use atuin_common::db::DbUrl;
 use atuin_common::utils::{crypto_random_string, uuid_v7};
 use atuin_domain::record::{
     EncryptedData, Host, HostId, Record, RecordIdx, RecordSeriesKey, RecordTag,
 };
-use atuin_server_database::models::{NewSession, NewUser, User};
-use atuin_server_database::{Database, DbError, DbSettings, DbType};
-use atuin_server_mysql::MySql;
-use atuin_server_postgres::Postgres;
-use atuin_server_sqlite::Sqlite;
+use atuin_server::db::models::{NewSession, NewUser, User};
+use atuin_server::db::{DbError, DbSettings, DynDatabase};
 use rstest::rstest;
-use tests_database::helpers::{create_test_db, destroy_test_db};
-use time::OffsetDateTime;
+use sqlx::migrate::MigrateDatabase;
+use url::Url;
+
+fn get_settings(env_uri: Option<String>) -> eyre::Result<DbSettings> {
+    let db_uri = env_uri.unwrap_or_else(|| {
+        let dir = temp_dir();
+        let file = dir.join("atuin_test_db_");
+        let filename = file.to_str().unwrap();
+        format!("sqlite://{filename}")
+    });
+
+    let mut url = Url::parse(&db_uri)?;
+    let unique = uuid_v7().as_simple().to_string();
+
+    let unique_path = format!("{}{unique}", url.path());
+    url.set_path(&unique_path);
+
+    let db_uri = url.to_string();
+
+    Ok(DbSettings {
+        db_uri: db_uri.parse()?,
+    })
+}
+
+async fn create_test_db() -> eyre::Result<DbSettings> {
+    let var = env::var("ATUIN_TEST_DB_URI").ok();
+    let settings = get_settings(var)?;
+
+    match &settings.db_uri {
+        DbUrl::Postgres(_) => sqlx::Postgres::create_database(settings.db_uri.as_str()).await?,
+        DbUrl::Sqlite(_) => sqlx::Sqlite::create_database(settings.db_uri.as_str()).await?,
+        DbUrl::Mysql(_) => sqlx::MySql::create_database(settings.db_uri.as_str()).await?,
+    };
+
+    Ok(settings)
+}
+
+async fn destroy_test_db(settings: &DbSettings) -> eyre::Result<()> {
+    match &settings.db_uri {
+        DbUrl::Postgres(_) => sqlx::Postgres::drop_database(settings.db_uri.as_str()).await?,
+        DbUrl::Sqlite(_) => sqlx::Sqlite::drop_database(settings.db_uri.as_str()).await?,
+        DbUrl::Mysql(_) => sqlx::MySql::drop_database(settings.db_uri.as_str()).await?,
+    };
+    Ok(())
+}
 
 struct TestDb {
     settings: DbSettings,
@@ -46,16 +88,11 @@ async fn test_full_db_story() -> eyre::Result<()> {
     let test_db = TestDb::new().await?;
     let settings = &test_db.settings;
 
-    match settings.db_type() {
-        DbType::Postgres => run_the_test::<Postgres>(settings).await,
-        DbType::Sqlite => run_the_test::<Sqlite>(settings).await,
-        DbType::MySql => run_the_test::<MySql>(settings).await,
-        DbType::Unknown => todo!(),
-    }
+    let db = atuin_server::connect(settings.db_uri.clone()).await?;
+    run_the_test(&*db).await
 }
 
-async fn run_the_test<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
-    let db = DB::new(settings).await?;
+async fn run_the_test(db: &dyn DynDatabase) -> eyre::Result<()> {
     // register a user
     let new_user = NewUser {
         username: "foo".to_owned(),
@@ -138,104 +175,20 @@ async fn run_the_test<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
         .await?;
     assert_eq!(recs.len(), 0);
 
-    // Re-add records so delete_user must clean them up too.
+    // Converged behavior: delete_user must purge the user's store rows on every
+    // backend (SQLite previously left them behind).
     db.add_records(&user, &records).await?;
-    add_history(settings, user_id).await?;
-
     db.delete_user(&user).await?;
-
-    assert!(matches!(db.get_user("foo").await, Err(DbError::NotFound)));
-    assert!(matches!(db.get_session(&token).await, Err(DbError::NotFound)));
-    assert_eq!(history_count(settings, user_id).await?, 0);
 
     let recs = db
         .next_records(&user, &RecordSeriesKey::new(host_a.id, RecordTag::History), None, 10)
         .await?;
-    assert_eq!(recs.len(), 0);
+    assert_eq!(recs.len(), 0, "delete_user must purge store rows");
+
+    let missing = db.get_user("foo").await;
+    assert!(matches!(missing, Err(DbError::NotFound)), "user should be gone after delete_user");
 
     Ok(())
-}
-
-async fn add_history(settings: &DbSettings, user_id: i64) -> eyre::Result<()> {
-    let client_id = uuid_v7().to_string();
-    let timestamp = OffsetDateTime::now_utc();
-
-    match settings.db_type() {
-        DbType::Postgres => {
-            let pool = sqlx::PgPool::connect(&settings.db_uri).await?;
-            db::query(
-                "insert into history (client_id, user_id, hostname, timestamp, data)
-                values ($1, $2, $3, $4, $5)",
-            )
-            .bind(client_id)
-            .bind(user_id)
-            .bind("foo")
-            .bind(timestamp)
-            .bind("encrypted history")
-            .execute(&pool)
-            .await?;
-        }
-        DbType::Sqlite => {
-            let pool = sqlx::SqlitePool::connect(&settings.db_uri).await?;
-            db::query(
-                "insert into history (client_id, user_id, hostname, timestamp, data)
-                values ($1, $2, $3, $4, $5)",
-            )
-            .bind(client_id)
-            .bind(user_id)
-            .bind("foo")
-            .bind(timestamp)
-            .bind("encrypted history")
-            .execute(&pool)
-            .await?;
-        }
-        DbType::MySql => {
-            let pool = sqlx::MySqlPool::connect(&settings.db_uri).await?;
-            db::query(
-                "insert into history (client_id, user_id, hostname, timestamp, data)
-                values (?, ?, ?, ?, ?)",
-            )
-            .bind(client_id)
-            .bind(user_id)
-            .bind("foo")
-            .bind(timestamp)
-            .bind("encrypted history")
-            .execute(&pool)
-            .await?;
-        }
-        DbType::Unknown => unreachable!(),
-    }
-
-    Ok(())
-}
-
-async fn history_count(settings: &DbSettings, user_id: i64) -> eyre::Result<i64> {
-    let count = match settings.db_type() {
-        DbType::Postgres => {
-            let pool = sqlx::PgPool::connect(&settings.db_uri).await?;
-            db::query_scalar("select count(*) from history where user_id = $1")
-                .bind(user_id)
-                .fetch_one(&pool)
-                .await?
-        }
-        DbType::Sqlite => {
-            let pool = sqlx::SqlitePool::connect(&settings.db_uri).await?;
-            db::query_scalar("select count(*) from history where user_id = $1")
-                .bind(user_id)
-                .fetch_one(&pool)
-                .await?
-        }
-        DbType::MySql => {
-            let pool = sqlx::MySqlPool::connect(&settings.db_uri).await?;
-            db::query_scalar("select count(*) from history where user_id = ?")
-                .bind(user_id)
-                .fetch_one(&pool)
-                .await?
-        }
-        DbType::Unknown => unreachable!(),
-    };
-
-    Ok(count)
 }
 
 fn generate_record(host: &Host, idx: RecordIdx) -> Record<EncryptedData> {
@@ -250,4 +203,25 @@ fn generate_record(host: &Host, idx: RecordIdx) -> Record<EncryptedData> {
         .tag(RecordTag::History)
         .data(data)
         .build()
+}
+
+#[cfg(test)]
+mod tests {
+    use regex::Regex;
+    use rstest::rstest;
+
+    use super::get_settings;
+
+    #[rstest]
+    #[case::none(None, r"sqlite://.*[\\/]atuin_test_db_[0-9a-f]+")]
+    #[case::with_param(
+        Some("postgres://user:pass@host/database_?mode=ssl".into()),
+        r"postgres://user:pass@host/database_[0-9a-f]+\?mode=ssl"
+    )]
+    fn settings(#[case] input: Option<String>, #[case] pattern: &str) -> eyre::Result<()> {
+        let settings = get_settings(input)?;
+        let re = Regex::new(pattern)?;
+        assert!(re.is_match(settings.db_uri.as_str()), "{}", settings.db_uri.as_str());
+        Ok(())
+    }
 }

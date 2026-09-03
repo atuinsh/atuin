@@ -1,0 +1,14 @@
+// Shared protobuf utilities used across atuin's code.
+syntax = "proto3";
+
+package common;
+
+// A UUID, carried as its 16 raw bytes.
+message Uuid {
+  bytes value = 1;
+}
+
+// Identifies a single record in the record store.
+message RecordId {
+  Uuid uuid = 1;
+}

@@ -5,6 +5,7 @@ use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
 use directories::UserDirs;
+use easy_cast::{CastTo, Floor, Nearest};
 use eyre::{Result, eyre};
 use serde::Deserialize;
 use time::OffsetDateTime;
@@ -106,20 +107,14 @@ impl Importer for Resh {
                 continue;
             };
 
-            #[allow(clippy::cast_possible_truncation)]
-            #[allow(clippy::cast_sign_loss)]
-            let start = {
-                let secs = entry.realtime_before.floor() as i64;
-                let nanosecs = (entry.realtime_before.fract() * 1_000_000_000_f64).round() as i64;
-                OffsetDateTime::from_timespec(i128::from(secs), i128::from(nanosecs))
+            let try_to_time = |realtime: f64| {
+                let secs: i64 = realtime.try_cast_to(Floor).ok()?;
+                let nanosecs: i64 =
+                    (realtime.fract() * 1_000_000_000_f64).try_cast_to(Nearest).ok()?;
+                OffsetDateTime::from_timespec(i128::from(secs), i128::from(nanosecs)).ok()
             };
-            #[allow(clippy::cast_possible_truncation)]
-            #[allow(clippy::cast_sign_loss)]
-            let end = {
-                let secs = entry.realtime_after.floor() as i64;
-                let nanosecs = (entry.realtime_after.fract() * 1_000_000_000_f64).round() as i64;
-                OffsetDateTime::from_timespec(i128::from(secs), i128::from(nanosecs))
-            };
+            let start = try_to_time(entry.realtime_before);
+            let end = try_to_time(entry.realtime_after);
 
             // a corrupt entry must not abort the whole import. only report a duration when
             // both ends are representable - measuring against the epoch sentinel would
@@ -127,10 +122,12 @@ impl Importer for Resh {
             // can also make realtime_after precede realtime_before; a negative duration is
             // just as meaningless as an unrepresentable one, so it falls back the same way
             let duration = match (start, end) {
-                (Ok(start), Ok(end)) => match i64::try_from((end - start).whole_nanoseconds()) {
-                    Ok(nanos) if nanos >= 0 => nanos,
-                    _ => HistoryImported::DEFAULT_DURATION,
-                },
+                (Some(start), Some(end)) => {
+                    match i64::try_from((end - start).whole_nanoseconds()) {
+                        Ok(nanos) if nanos >= 0 => nanos,
+                        _ => HistoryImported::DEFAULT_DURATION,
+                    }
+                }
                 _ => HistoryImported::DEFAULT_DURATION,
             };
             let timestamp = start.unwrap_or(OffsetDateTime::UNIX_EPOCH);

@@ -93,6 +93,7 @@ _atuin_precmd() {
     local duration=""
     if [[ -n $__atuin_preexec_time && -n $__atuin_precmd_time ]]; then
         printf -v duration %.0f $(((__atuin_precmd_time - __atuin_preexec_time) * 1000000000))
+        ((duration < 0)) && duration=0
     fi
 
     __atuin_osc133_command_finished "$EXIT"

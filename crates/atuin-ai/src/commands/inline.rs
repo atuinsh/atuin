@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use atuin_client::database::Sqlite;
+use easy_cast::Conv;
 use eyre::{Context as _, Result, bail};
 use tracing::{debug, info};
 
@@ -176,15 +177,13 @@ async fn run_inline_tui(
     // once the event channel exists) replaces it unless it's fresh. OSS
     // endpoints have no usage API, so both are skipped ("fresh" suppresses
     // the fetch).
-    let (cached_usage, usage_is_fresh) = if !ctx.endpoint_is_hub {
-        (None, true)
-    } else {
+    let (cached_usage, usage_is_fresh) = if ctx.endpoint_is_hub {
         let usage_key = crate::usage::cache_key(&ctx.token);
         match service.get_cached_usage(&usage_key).await {
             Ok(Some(cached_snapshot)) => {
                 let age =
                     time::OffsetDateTime::now_utc().unix_timestamp() - cached_snapshot.written_at;
-                let fresh = age < crate::usage::REFRESH_AFTER.as_secs() as i64;
+                let fresh = age < i64::conv(crate::usage::REFRESH_AFTER.as_secs());
                 (Some(cached_snapshot.snapshot), fresh)
             }
             Ok(None) => (None, false),
@@ -193,6 +192,8 @@ async fn run_inline_tui(
                 (None, false)
             }
         }
+    } else {
+        (None, true)
     };
 
     let cwd = std::env::current_dir().ok().map(|p| p.to_string_lossy().into_owned());
@@ -383,7 +384,7 @@ fn prompt_ai_setup() -> Result<SetupChoice> {
 
         let ev = event::read().context("failed to read key event")?;
 
-        crossterm::execute!(stdout, cursor::MoveUp(options.len() as u16))?;
+        crossterm::execute!(stdout, cursor::MoveUp(u16::conv(options.len())))?;
 
         if let Event::Key(key) = ev {
             if key.kind != KeyEventKind::Press {

@@ -1,8 +1,9 @@
 use std::ffi::OsString;
 use std::io::Read;
 use std::path::PathBuf;
+use std::str::FromStr;
 
-use atuin_client::history::AuthorKind;
+use atuin_client::history::{AuthorKind, HistoryId};
 use atuin_client::settings::Settings;
 use atuin_common::utils::home_dir;
 use clap::{Parser, Subcommand};
@@ -208,15 +209,14 @@ async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
             )
             .await?
             {
-                std::fs::write(id_file_path(&tool_use_id), &history_id)?;
+                std::fs::write(id_file_path(&tool_use_id), history_id.to_string())?;
             }
         }
         Some(HookEvent::End { tool_use_id, exit }) => {
             let id_path = id_file_path(&tool_use_id);
 
             if let Ok(history_id) = std::fs::read_to_string(&id_path) {
-                let history_id = history_id.trim();
-                if !history_id.is_empty() {
+                if let Ok(history_id) = HistoryId::from_str(history_id.trim()) {
                     let _ = history::end_history_entry(settings, history_id, exit, None).await;
                 }
                 let _ = std::fs::remove_file(&id_path);

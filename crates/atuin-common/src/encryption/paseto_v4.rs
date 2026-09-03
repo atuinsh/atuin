@@ -11,6 +11,7 @@ use base64::engine::general_purpose::{
     STANDARD as B64_STANDARD, URL_SAFE_NO_PAD as B64_URL_SAFE_NO_PAD,
 };
 use crypto_secretbox::{KeyInit, XSalsa20Poly1305, aead};
+use easy_cast::Conv;
 use rusty_paseto::{Paseto, core as rusty_paseto};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -157,7 +158,7 @@ impl Key {
         // A msgpack array16 header (3 bytes) followed by each byte as at most a 2-byte uint.
         let mut buf = Vec::with_capacity(3 + 2 * key_bytes.len());
         // Writing to a `Vec` is infallible, so neither of these can actually error.
-        rmp::encode::write_array_len(&mut buf, key_bytes.len() as u32)
+        rmp::encode::write_array_len(&mut buf, u32::conv(key_bytes.len()))
             .expect("writing to a Vec is infallible");
         for b in key_bytes {
             rmp::encode::write_uint(&mut buf, u64::from(*b))
@@ -368,7 +369,10 @@ impl From<rusty_paseto::Key<32>> for Key {
 }
 
 mod cek {
-    use super::*;
+    use serde::{Deserialize, Serialize};
+    use thiserror::Error;
+
+    use super::{Key, PaserkV4KeyId, PaserkV4PieWrappedKey};
 
     #[derive(Debug, Error)]
     pub enum EncryptionError {
@@ -401,7 +405,7 @@ mod cek {
     impl Json {
         /// Create a JSON-serialized `String` for the given content encryption key.
         ///
-        /// This will encrypt the given CEK with the given parent key, create the [`cek::Json`] and
+        /// This will encrypt the given CEK with the given parent key, create the [`Json`] and
         /// serialize it into JSON.
         pub fn encrypt(cek: &Key, parent_key: &Key) -> Result<String, EncryptionError> {
             Ok(serde_json::to_string(&Self {

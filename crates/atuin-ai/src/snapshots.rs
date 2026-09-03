@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use easy_cast::Conv;
 use eyre::{Result, eyre};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -84,7 +85,7 @@ impl SnapshotStore {
         let entry = SnapshotEntry {
             original_path: canonical_path.to_string_lossy().into_owned(),
             snapshot_at: format_iso8601(now),
-            size_bytes: content.len() as u64,
+            size_bytes: u64::conv(content.len()),
         };
 
         self.manifest.files.insert(filename, entry);
@@ -383,7 +384,7 @@ mod tests {
 
     #[test]
     fn format_iso8601_produces_valid_format() {
-        let dt = OffsetDateTime::from_unix_timestamp(1700000000).unwrap();
+        let dt = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
         let formatted = format_iso8601(dt);
         assert_eq!(formatted.len(), 20);
         assert!(formatted.starts_with("2023-"));

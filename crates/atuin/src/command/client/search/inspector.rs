@@ -4,6 +4,7 @@ use atuin_client::history::{History, HistoryStats};
 use atuin_client::settings::Settings;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
 use atuin_common::time::{DurationExt, UtcOffsetSpec};
+use easy_cast::Conv;
 use ratatui::Frame;
 use ratatui::backend::FromCrossterm;
 use ratatui::layout::Rect;
@@ -16,12 +17,11 @@ use time::macros::format_description;
 use super::super::theme::{Meaning, Theme};
 use super::interactive::{Compactness, to_compactness};
 
-#[allow(clippy::cast_sign_loss)]
 fn u64_or_zero(num: i64) -> u64 {
     if num < 0 {
         0
     } else {
-        num as u64
+        u64::conv(num)
     }
 }
 
@@ -311,7 +311,7 @@ pub fn draw_full(
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::history::{History, HistoryId, HistoryStats};
+    use atuin_client::history::{History, HistoryStats};
     use atuin_client::theme::ThemeManager;
     use atuin_domain::record::CmdOrigin;
     use ratatui::backend::TestBackend;
@@ -324,7 +324,7 @@ mod tests {
     #[fixture]
     fn mock_history_stats() -> (History, HistoryStats) {
         let history = History {
-            id: HistoryId::from("test1".to_string()),
+            id: "018f011c-9a0a-7000-8000-000000000001".parse().unwrap(),
             timestamp: OffsetDateTime::now_utc(),
             duration: 3,
             exit: 0,
@@ -340,7 +340,7 @@ mod tests {
             author_kind: None,
         };
         let next = History {
-            id: HistoryId::from("test2".to_string()),
+            id: "018f011c-9a0a-7000-8000-000000000002".parse().unwrap(),
             timestamp: OffsetDateTime::now_utc(),
             duration: 2,
             exit: 0,
@@ -356,7 +356,7 @@ mod tests {
             author_kind: None,
         };
         let prev = History {
-            id: HistoryId::from("test3".to_string()),
+            id: "018f011c-9a0a-7000-8000-000000000003".parse().unwrap(),
             timestamp: OffsetDateTime::now_utc(),
             duration: 1,
             exit: 0,

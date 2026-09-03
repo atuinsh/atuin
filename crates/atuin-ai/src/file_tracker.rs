@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use easy_cast::Conv;
 use eyre::Result;
 use serde::{Deserialize, Serialize};
 
@@ -114,7 +115,7 @@ impl FileReadTracker {
 }
 
 fn system_time_to_ms(t: SystemTime) -> i64 {
-    t.duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+    t.duration_since(SystemTime::UNIX_EPOCH).map(|d| i64::conv(d.as_millis())).unwrap_or(0)
 }
 
 fn hash_content(content: &[u8]) -> u64 {
@@ -188,7 +189,7 @@ mod tests {
         let mut tracker = FileReadTracker::default();
         tracker.reads.insert(PathBuf::from("/some/file.toml"), FileReadState {
             content_hash: 12345,
-            mtime_ms: 1700000000000,
+            mtime_ms: 1_700_000_000_000,
         });
 
         let json = tracker.to_json().unwrap();

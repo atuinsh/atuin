@@ -583,7 +583,7 @@ mod theme_tests {
         let mytheme = Theme::new("mytheme".to_string(), None, HashMap::from([]));
         MEANING_FALLBACKS
             .iter()
-            .for_each(|pair| assert_eq!(mytheme.closest_meaning(pair.0), &Meaning::Base))
+            .for_each(|pair| assert_eq!(mytheme.closest_meaning(pair.0), &Meaning::Base));
     }
 
     #[rstest]
@@ -593,7 +593,10 @@ mod theme_tests {
         assert_eq!(theme.get_warning().foreground_color.unwrap(), Color::DarkYellow);
         assert_eq!(theme.get_info().foreground_color.unwrap(), Color::DarkGreen);
         assert_eq!(theme.get_base().foreground_color, None);
-        assert_eq!(theme.get_alert(tracing::Level::ERROR).foreground_color.unwrap(), Color::DarkRed)
+        assert_eq!(
+            theme.get_alert(tracing::Level::ERROR).foreground_color.unwrap(),
+            Color::DarkRed
+        );
     }
 
     #[rstest]
@@ -670,7 +673,7 @@ mod theme_tests {
             "Could not load theme nonsolarized: Empty theme directory override and could not find \
              theme elsewhere"
         );
-        assert_eq!(captured_logs[0].level, tracing::Level::WARN)
+        assert_eq!(captured_logs[0].level, tracing::Level::WARN);
     }
 
     #[rstest]
