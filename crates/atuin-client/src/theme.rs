@@ -282,7 +282,7 @@ static DEFAULT_THEME: LazyLock<Theme> = LazyLock::new(|| {
             (Meaning::AlertError, StyleFactory::from_fg_color(Color::DarkRed)),
             (Meaning::AlertWarn, StyleFactory::from_fg_color(Color::DarkYellow)),
             (Meaning::AlertInfo, StyleFactory::from_fg_color(Color::DarkGreen)),
-            (Meaning::Annotation, StyleFactory::from_fg_color(Color::DarkGrey)),
+            (Meaning::Annotation, StyleFactory::known_fg_string("steelblue")),
             (Meaning::Guidance, StyleFactory::from_fg_color(Color::DarkBlue)),
             (
                 Meaning::Important,
@@ -323,7 +323,7 @@ static BUILTIN_THEMES: LazyLock<HashMap<&'static str, Theme>> = LazyLock::new(||
                 (Meaning::AlertError, StyleFactory::known_fg_string("saddlebrown")),
                 (Meaning::AlertWarn, StyleFactory::known_fg_string("darkorange")),
                 (Meaning::AlertInfo, StyleFactory::known_fg_string("gold")),
-                (Meaning::Annotation, StyleFactory::from_fg_color(Color::DarkGrey)),
+                (Meaning::Annotation, StyleFactory::known_fg_string("steelblue")),
                 (Meaning::Guidance, StyleFactory::known_fg_string("brown")),
             ]),
         ),
@@ -510,6 +510,22 @@ mod theme_tests {
     fn test_can_load_builtin_theme(mut manager: ThemeManager) {
         let theme = manager.load_theme("autumn", None);
         assert_eq!(theme.as_style(Meaning::Guidance).foreground_color, from_string("brown").ok());
+    }
+
+    // Annotation is used for the directory/user/host columns in the history popup, so it
+    // needs to stay readable on dark terminal backgrounds. DarkGrey was too close to the
+    // background on those terminals (see #3539), so default and autumn should use the same
+    // steelblue that marine already uses.
+    #[rstest]
+    fn test_annotation_has_contrast_in_builtin_themes(mut manager: ThemeManager) {
+        for name in ["default", "autumn", "marine"] {
+            let theme = manager.load_theme(name, None);
+            assert_eq!(
+                theme.as_style(Meaning::Annotation).foreground_color,
+                from_string("steelblue").ok(),
+                "unexpected Annotation color for {name} theme"
+            );
+        }
     }
 
     #[rstest]
