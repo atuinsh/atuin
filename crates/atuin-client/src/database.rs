@@ -39,9 +39,9 @@ pub struct OptFilters<'a> {
     pub exit: &'a [i64],
     /// Exclude all of these exit codes. An empty slice means no restriction.
     pub exclude_exit: &'a [i64],
-    /// Only commands that recorded a non-zero exit. Unlike `exclude_exit: &[0]`,
-    /// this also skips the `exit = -1` sentinel rows for commands still
-    /// running (or whose end hook never fired).
+    /// Only commands that recorded a non-zero exit. Like `exclude_exit: &[0]`,
+    /// this skips the `exit = -1` sentinel rows for commands still running
+    /// (or whose end hook never fired).
     pub only_failed: bool,
     pub cwd: Option<&'a str>,
     pub exclude_cwd: Option<&'a str>,
@@ -810,6 +810,12 @@ impl Sqlite {
                 "exit not in ({})",
                 filter_options.exclude_exit.iter().join(", ")
             ));
+            // A command that is still running (or whose end hook never fired) is
+            // stored with exit -1. Excluding successes asks for failures, and an
+            // unfinished command is not one of those, see `History::success`.
+            if filter_options.exclude_exit.contains(&0) {
+                sql.and_where_ne("exit", -1);
+            }
         }
 
         if filter_options.only_failed {
@@ -1709,9 +1715,10 @@ mod test {
     #[rstest]
     #[case::default(&[], &[], false, &[-1, 0, 1, 2, 130])]
     #[case::single(&[1], &[], false, &[1])]
-    #[case::single_exclusion(&[], &[0], false, &[-1, 1, 2, 130])]
+    #[case::single_exclusion(&[], &[0], false, &[1, 2, 130])]
+    #[case::exclude_nonzero(&[], &[130], false, &[-1, 0, 1, 2])]
     #[case::include_union(&[1, 2], &[], false, &[1, 2])]
-    #[case::exclude_multiple(&[], &[0, 130], false, &[-1, 1, 2])]
+    #[case::exclude_multiple(&[], &[0, 130], false, &[1, 2])]
     #[case::overlap(&[0, 1, 2], &[0, 2], false, &[1])]
     #[case::all_excluded(&[1, 2], &[1, 2], false, &[])]
     #[case::duplicates(&[1, 1, 2], &[2, 2], false, &[1])]
