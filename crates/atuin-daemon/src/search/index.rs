@@ -382,7 +382,7 @@ impl SearchIndex {
 
     /// Take the existing [`SearchIndex`], clone it without the data, and populate it with new data
     /// from the given `db`.
-    pub(crate) async fn rebuild(&self, db: &Sqlite) -> Result<Self, LoadFromDbError> {
+    pub async fn rebuild(&self, db: &Sqlite) -> Result<Self, LoadFromDbError> {
         let shells = self.shells.clone();
         let new_index = Self::new(shells);
         new_index.load_from_db(db).await?;
@@ -390,7 +390,7 @@ impl SearchIndex {
     }
 
     /// Load every history entry from `db` into this index.
-    pub(crate) async fn load_from_db(&self, db: &Sqlite) -> Result<(), LoadFromDbError> {
+    pub async fn load_from_db(&self, db: &Sqlite) -> Result<(), LoadFromDbError> {
         /// Number of history rows loaded per page when (re)building an index from the database.
         const INDEX_LOAD_PAGE_SIZE: usize = 5000;
 
