@@ -11,6 +11,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
 use atuin_client::history::History;
 use atuin_client::settings::Search;
@@ -360,6 +361,11 @@ pub struct SearchIndex {
 
     /// Controls which shells' commands are included.
     pub shells: OrFilter<Vec<String>>,
+
+    /// Whether this index has been successfully populated from the database.
+    ///
+    /// Stays false if the load failed or returned no rows, so a later request retries it.
+    loaded: AtomicBool,
 }
 
 impl SearchIndex {
@@ -372,7 +378,19 @@ impl SearchIndex {
             frecency_map: RwLock::new(None),
             interner: Arc::new(ThreadedRodeo::new()),
             shells,
+            loaded: AtomicBool::new(false),
         }
+    }
+
+    /// Whether this index has been successfully populated from the database.
+    #[must_use]
+    pub fn is_loaded(&self) -> bool {
+        self.loaded.load(AtomicOrdering::Relaxed)
+    }
+
+    /// Mark this index as successfully populated from the database.
+    pub fn mark_loaded(&self) {
+        self.loaded.store(true, AtomicOrdering::Relaxed);
     }
 
     /// Add a history entry to the index.
