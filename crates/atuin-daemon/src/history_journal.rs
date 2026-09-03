@@ -36,6 +36,7 @@ use atuin_client::database::Sqlite as HistoryDatabase;
 use atuin_client::history::store::HistoryStore;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::packfile;
+use atuin_client::settings::Search;
 use atuin_domain::caps::{CapClient, PackfileCap};
 use atuin_domain::record::{RecordId, RecordIdx, RecordSeriesKey, RecordTag};
 use dashmap::DashMap;
@@ -341,10 +342,14 @@ impl HistoryJournal {
 
     /// Delete the given history entries from Atuin's memory completely.
     ///
+    /// `search_settings` is needed to rebuild the search index's frecency map after the deletion,
+    /// so the swapped-in index has correct rankings immediately rather than after the next refresh.
+    ///
     /// Returns how many history entries Atuin forgot.
     pub async fn delete(
         &self,
         ids: impl IntoIterator<Item = HistoryId>,
+        search_settings: &Search,
     ) -> Result<usize, CmdDeleteError> {
         // Remove records from the record store.
         //
@@ -392,7 +397,8 @@ impl HistoryJournal {
             .await
             .map_err(CmdDeleteError::HistoryDbFailed)?;
 
-        let rebuilt = self.search_index.read().await.rebuild(&self.history_db).await;
+        let rebuilt =
+            self.search_index.read().await.rebuild(&self.history_db, search_settings).await;
         match rebuilt {
             Ok(new_index) => *self.search_index.write().await = new_index,
             Err(e) => {

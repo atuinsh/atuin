@@ -329,7 +329,8 @@ impl GrpcService for Service {
         let ids: Vec<HistoryId> =
             request.into_inner().into_history_ids().collect::<Result<Vec<_>, _>>()?;
 
-        let deleted = self.journal.delete(ids).await?;
+        let search_settings = self.daemon_handle.settings().await.search.clone();
+        let deleted = self.journal.delete(ids, &search_settings).await?;
 
         Ok(Response::new(DeleteHistoryReply {
             deleted: deleted.cast(),

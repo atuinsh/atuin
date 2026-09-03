@@ -384,7 +384,8 @@ mod unix {
 
         assert_eq!(search_index.read().await.command_count(), 2);
 
-        let deleted = journal.delete([id_a]).await.unwrap();
+        let deleted =
+            journal.delete([id_a], &atuin_client::settings::Search::default()).await.unwrap();
         assert_eq!(deleted, 1);
 
         let index = search_index.read().await;

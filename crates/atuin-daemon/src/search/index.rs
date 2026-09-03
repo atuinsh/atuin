@@ -10,6 +10,7 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
+use std::pin::pin;
 use std::sync::Arc;
 
 use atuin_client::database::Sqlite;
@@ -19,6 +20,7 @@ use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
 use dashmap::DashMap;
 use easy_cast::Conv;
+use futures::{Stream, TryStreamExt, stream};
 use lasso::{Spur, ThreadedRodeo};
 use parking_lot::RwLock;
 use time::OffsetDateTime;
@@ -380,28 +382,52 @@ impl SearchIndex {
         }
     }
 
-    /// Take the existing [`SearchIndex`], clone it without the data, and populate it with new data
-    /// from the given `db`.
-    pub async fn rebuild(&self, db: &Sqlite) -> Result<Self, LoadFromDbError> {
-        let shells = self.shells.clone();
+    /// Build a fresh index for `shells`, populated from `db` and with its frecency map ready.
+    pub async fn from_db(
+        shells: OrFilter<Vec<String>>,
+        db: &Sqlite,
+        search_settings: &Search,
+    ) -> Result<Self, LoadFromDbError> {
         let new_index = Self::new(shells);
         new_index.load_from_db(db).await?;
+        new_index.rebuild_frecency(search_settings);
         Ok(new_index)
     }
 
+    /// Take the existing [`SearchIndex`], clone it without the data, and populate it with new data
+    /// from the given `db`.
+    pub async fn rebuild(
+        &self,
+        db: &Sqlite,
+        search_settings: &Search,
+    ) -> Result<Self, LoadFromDbError> {
+        Self::from_db(self.shells.clone(), db, search_settings).await
+    }
+
+    /// Number of history rows loaded per page when (re)building an index from the database.
+    pub const HISTORY_LOAD_PAGE_SIZE: usize = 5000;
+
     /// Load every history entry from `db` into this index.
     pub async fn load_from_db(&self, db: &Sqlite) -> Result<(), LoadFromDbError> {
-        /// Number of history rows loaded per page when (re)building an index from the database.
-        const INDEX_LOAD_PAGE_SIZE: usize = 5000;
-
-        let mut pager = db.all_paged(INDEX_LOAD_PAGE_SIZE, false, true);
-        loop {
-            match pager.next().await {
-                Ok(Some(histories)) => self.add_histories(&histories),
-                Ok(None) => return Ok(()),
-                Err(e) => return Err(LoadFromDbError(e.into())),
-            }
+        let mut pages = pin!(Self::history_pages(db));
+        while let Some(histories) = pages.try_next().await? {
+            self.add_histories(&histories);
         }
+        Ok(())
+    }
+
+    /// Stream every history entry in `db`, one page at a time.
+    pub fn history_pages(db: &Sqlite) -> impl Stream<Item = Result<Vec<History>, LoadFromDbError>> {
+        stream::try_unfold(
+            db.all_paged(Self::HISTORY_LOAD_PAGE_SIZE, false, true),
+            |mut pager| async move {
+                match pager.next().await {
+                    Ok(Some(histories)) => Ok(Some((histories, pager))),
+                    Ok(None) => Ok(None),
+                    Err(e) => Err(LoadFromDbError(e.into())),
+                }
+            },
+        )
     }
 
     /// Add a history entry to the index.
