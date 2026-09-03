@@ -394,16 +394,6 @@ impl SearchIndex {
         Ok(new_index)
     }
 
-    /// Take the existing [`SearchIndex`], clone it without the data, and populate it with new data
-    /// from the given `db`.
-    pub async fn rebuild(
-        &self,
-        db: &Sqlite,
-        search_settings: &Search,
-    ) -> Result<Self, LoadFromDbError> {
-        Self::from_db(self.shells.clone(), db, search_settings).await
-    }
-
     /// Number of history rows loaded per page when (re)building an index from the database.
     pub const HISTORY_LOAD_PAGE_SIZE: usize = 5000;
 

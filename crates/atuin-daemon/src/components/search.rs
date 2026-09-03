@@ -3,7 +3,6 @@
 //! Provides fuzzy search over command history using the Nucleo search library
 //! with frecency-based ranking and dynamic filtering.
 
-use std::ops::Deref;
 use std::pin::{Pin, pin};
 use std::sync::Arc;
 
@@ -30,50 +29,29 @@ const FRECENCY_REFRESH_INTERVAL_SECS: u64 = 60;
 
 /// Build the search index without building the frecency map.
 ///
-/// `index` is a closure to support both shared `RwLock` indices and owned indices:
-///
-/// * Owned: `async || &my_owned_index`
-/// * Shared: `|| my_rwlock_index.read()`
-///
-/// In the shared case, this ensures that the lock isn't held while this function does expensive
-/// computation.
+/// The read guard is re-acquired per page rather than held across the whole load, so concurrent
+/// index operations aren't blocked while this does its expensive work.
 #[instrument(skip_all, level = Level::TRACE)]
-async fn build_index_only<F, R>(index: F, handle: &DaemonHandle) -> Result<(), ()>
-where
-    F: Fn() -> R,
-    R: Future<Output: Deref<Target = SearchIndex>>,
-{
+async fn build_index_only(index: &RwLock<SearchIndex>, handle: &DaemonHandle) -> Result<(), ()> {
     info!("Loading history into search index; page size = {}", SearchIndex::HISTORY_LOAD_PAGE_SIZE);
     let mut pages = pin!(SearchIndex::history_pages(handle.history_db()));
     while let Some(histories) =
         pages.try_next().await.map_err(|e| error!("Failed to load history: {e}"))?
     {
         info!("Loading {} history entries into search index", histories.len());
-        index().await.add_histories(&histories);
+        index.read().await.add_histories(&histories);
     }
 
-    info!("History load complete; {} unique commands indexed", index().await.command_count());
+    info!("History load complete; {} unique commands indexed", index.read().await.command_count());
     Ok(())
 }
 
 /// Build the frecency map.
-///
-/// `index` is a closure to support both shared `RwLock` indices and owned indices:
-///
-/// * Owned: `async || &my_owned_index`
-/// * Shared: `|| my_rwlock_index.read()`
-///
-/// In the shared case, this ensures that the lock isn't held while this function does expensive
-/// computation.
 #[instrument(skip_all, level = Level::TRACE)]
-async fn build_frecency<F, R>(index: F, handle: &DaemonHandle)
-where
-    F: Fn() -> R,
-    R: Future<Output: Deref<Target = SearchIndex>>,
-{
+async fn build_frecency(index: &RwLock<SearchIndex>, handle: &DaemonHandle) {
     {
         let settings = handle.settings().await;
-        index().await.rebuild_frecency(&settings.search);
+        index.read().await.rebuild_frecency(&settings.search);
     }
     info!("Frecency map built");
 }
@@ -148,8 +126,8 @@ impl Component for SearchComponent {
             let shells =
                 handle_for_loader.settings().await.search.shells.to_filter().to_vec_filter();
             index.write().await.shells = shells;
-            if build_index_only(|| index.read(), &handle_for_loader).await.is_ok() {
-                build_frecency(|| index.read(), &handle_for_loader).await;
+            if build_index_only(&index, &handle_for_loader).await.is_ok() {
+                build_frecency(&index, &handle_for_loader).await;
             }
         }));
 
@@ -162,7 +140,7 @@ impl Component for SearchComponent {
             loop {
                 interval.tick().await;
                 trace!("Refreshing frecency map");
-                build_frecency(|| index_for_frecency.read(), &handle).await;
+                build_frecency(&index_for_frecency, &handle).await;
             }
         }));
 
@@ -209,7 +187,7 @@ impl Component for SearchComponent {
             DaemonEvent::SettingsReloaded => {
                 if let Some(handle) = self.handle.as_ref() {
                     info!("Rebuilding frecency map after settings update");
-                    build_frecency(|| self.index.read(), handle).await;
+                    build_frecency(&self.index, handle).await;
                 }
             }
             // Events we don't care about

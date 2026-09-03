@@ -397,8 +397,10 @@ impl HistoryJournal {
             .await
             .map_err(CmdDeleteError::HistoryDbFailed)?;
 
-        let rebuilt =
-            self.search_index.read().await.rebuild(&self.history_db, search_settings).await;
+        // Clone the shell filter and drop the read guard before the (full) reload, so the scan
+        // doesn't hold the search-index lock across the database load.
+        let shells = self.search_index.read().await.shells.clone();
+        let rebuilt = SearchIndex::from_db(shells, &self.history_db, search_settings).await;
         match rebuilt {
             Ok(new_index) => *self.search_index.write().await = new_index,
             Err(e) => {
