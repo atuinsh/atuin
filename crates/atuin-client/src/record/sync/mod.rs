@@ -208,9 +208,9 @@ impl SyncEngine {
             .flat_map(|(host, tags)| {
                 tags.keys().map(move |tag| RecordSeriesKey::new(*host, tag.clone()))
             })
-            // Note we have to skip `Packfile`s here because packfiles _aren't_ actually encrypted,
-            // so using the default CEK would fail decryption.
-            .find(|series| series.tag != RecordTag::Packfile);
+            // Plaintext series (packfile manifests) would fail decryption with any key, so they
+            // can't be used to check whether the local key matches the remote.
+            .find(|series| !series.tag.is_plaintext());
 
         let series = sample?;
 
