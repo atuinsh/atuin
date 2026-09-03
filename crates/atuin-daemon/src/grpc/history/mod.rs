@@ -108,37 +108,88 @@ use crate::history_journal::HistoryJournal;
 /// But in that case, we won't even try to talk to the daemon, so a mismatched version doesn't
 /// matter.
 ///
-/// #### home-manager (Nix)
-///
-/// <https://github.com/nix-community/home-manager/blob/master/modules/programs/atuin.nix>
-///
-/// #### Gentoo
-///
-/// <https://github.com/gentoo/gentoo/blob/master/app-shells/atuin/files/atuin-daemon.service>
-///
 /// #### Debian
 ///
-/// <https://packages.debian.org/sid/amd64/atuin/filelist>
+/// <https://packages.debian.org/sid/amd64/atuin/filelist> is not managed by systemctl and is
+/// therefore identical to the curl Install Script case above, governed entirely by
+/// `enabled`/`autostart`.
 ///
 /// #### Ubuntu
 ///
-/// <https://packages.ubuntu.com/questing/amd64/atuin/filelist>
+/// <https://packages.ubuntu.com/questing/amd64/atuin/filelist> is the same as the curl Install
+/// Script case above.
 ///
 /// #### Fedora
 ///
-/// <https://packages.fedoraproject.org/pkgs/atuin/atuin/>
+/// <https://packages.fedoraproject.org/pkgs/atuin/atuin/> seems identical to the curl Install
+/// Script case.
 ///
 /// #### Arch
 ///
-/// <https://archlinux.org/packages/extra/x86_64/atuin/files/>
+/// <https://archlinux.org/packages/extra/x86_64/atuin/> is identical to the curl Install Script
+/// case -- we manage the daemon.
 ///
 /// #### Alpine
 ///
-/// <https://pkgs.alpinelinux.org/package/edge/community/x86_64/atuin>
+/// <https://pkgs.alpinelinux.org/package/edge/community/x86_64/atuin> -- the main package install
+/// matches the curl Install Script case.
 ///
 /// #### Void
 ///
-/// <https://raw.githubusercontent.com/void-linux/void-packages/master/srcpkgs/atuin/template>
+/// <https://raw.githubusercontent.com/void-linux/void-packages/master/srcpkgs/atuin/template> --
+/// binary-only: the template installs the binary, license, and completions, and the `srcpkgs/atuin`
+/// dir contains only `template` (no `patches/`, no `files/`). Void is runit-based with no daemon
+/// service, so `systemd_socket` is irrelevant and behavior matches the curl Install Script case.
+///
+/// #### home-manager (Nix)
+///
+/// <https://github.com/nix-community/home-manager/blob/master/modules/programs/atuin.nix> exposes
+/// `programs.atuin.daemon.enable`. When enabled it generates a `systemd.user.services.atuin-daemon`
+/// + `systemd.user.sockets.atuin-daemon` pair on Linux, or a `launchd.agents.atuin-daemon` on
+/// macOS. Crucially, it also WRITES our config into `config.toml`:
+///
+///   - `daemon.enabled = true` (always),
+///   - `daemon.systemd_socket = true` on systemd, `false` on launchd,
+///   - `daemon.socket_path = $XDG_DATA_HOME/atuin/daemon.sock` on launchd only.
+///
+/// It never sets `daemon.autostart`, so it stays `false`. That means the client ALWAYS takes the
+/// bail-on-mismatch path -- it never sends `Shutdown` and never respawns the daemon itself.
+/// Replacing the daemon is left to the service manager plus `home-manager switch`.
+///
+///   - On Linux (`systemd_socket = true`, `autostart = false`), the `.socket` listens on
+///     `%t/atuin.sock` (`$XDG_RUNTIME_DIR/atuin.sock`), exactly our socket-activation path. On a
+///     mismatch the client bails. A rebuild changes the unit's `ExecStart` store path, so
+///     activation (the default `sd-switch` backend) restarts the unit; the next connection then
+///     socket-activates the new binary.
+///   - On macOS (`systemd_socket = false`, `autostart = false`), the launchd agent uses a
+///     conditional `KeepAlive` (`Crashed = true; SuccessfulExit = false`), so launchd will NOT
+///     respawn a cleanly-exited daemon -- a stale-version daemon persists until `home-manager
+///     switch` reloads the agent (its `ProgramArguments` store path changes).
+///
+/// Caveat: these settings only land if home-manager can write `config.toml` -- it is generated with
+/// `force = forceOverwriteSettings` (default `false`), and since atuin rewrites its own config, a
+/// pre-existing real `config.toml` blocks them unless `forceOverwriteSettings = true`.
+///
+/// #### Gentoo
+///
+/// The `app-shells/atuin` ebuild, behind the default-on `daemon` USE flag, installs two systemd
+/// USER units via `systemd_douserunit` (it patches nothing and writes no config):
+/// <https://github.com/gentoo/gentoo/blob/master/app-shells/atuin/files/atuin-daemon.socket> and
+/// <https://github.com/gentoo/gentoo/blob/master/app-shells/atuin/files/atuin-daemon.service>.
+///
+/// The socket listens on `%t/atuin.sock` (`$XDG_RUNTIME_DIR/atuin.sock`, our socket-activation
+/// path) with `RemoveOnStop=true`. The service is pure socket-activation: `Requires=` the socket,
+/// `ExecStart=atuin daemon` (the deprecated bare form; we warn in favor of `atuin daemon start`),
+/// and it sets no `Restart=`, so systemd defaults to `Restart=no` and never supervise-restarts it.
+///
+/// Because the ebuild sets no config, the user must set `daemon.systemd_socket = true` (and
+/// `enabled = true`) themselves; the intended pairing is `systemd_socket = true` + `autostart =
+/// false`. On a mismatch the client therefore bails and defers to systemd (autostart is
+/// incompatible with `systemd_socket`).
+///
+/// **In effect an `emerge` upgrade leaves the stale daemon running until it is stopped; the next
+/// client connection then socket-activates a fresh daemon from the new binary.**
+///
 ///
 /// ## Evil Cases
 ///
