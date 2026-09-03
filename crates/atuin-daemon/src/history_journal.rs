@@ -234,11 +234,11 @@ impl HistoryJournal {
         id
     }
 
-    /// Borrows an in-flight session from [`Self::active_sessions`] with a [`CheckedOutSession`]
+    /// Borrows an in-flight command from [`Self::active_cmds`] with an [`ActiveCmdLease`]
     /// guard, which achieves two things:
     ///
-    ///   - [`CheckedOutSession::commit`] removes it from [`Self::active_sessions`].
-    ///   - [`Drop`] "rolls the session back", placing it back into [`Self::active_sessions`].
+    ///   - [`ActiveCmdLease::commit`] removes it from [`Self::active_cmds`].
+    ///   - [`Drop`] "rolls the command back", placing it back into [`Self::active_cmds`].
     fn checkout(&self, history_id: HistoryId) -> Option<ActiveCmdLease<'_>> {
         ActiveCmdLease::take(&self.active_cmds, history_id)
     }

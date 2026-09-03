@@ -143,8 +143,8 @@ use crate::history_journal::HistoryJournal;
 /// #### home-manager (Nix)
 ///
 /// <https://github.com/nix-community/home-manager/blob/master/modules/programs/atuin.nix> exposes
-/// `programs.atuin.daemon.enable`. When enabled it generates a `systemd.user.services.atuin-daemon`
-/// + `systemd.user.sockets.atuin-daemon` pair on Linux, or a `launchd.agents.atuin-daemon` on
+/// `programs.atuin.daemon.enable`. When enabled it generates a `systemd.user.services.atuin-daemon` +
+/// `systemd.user.sockets.atuin-daemon` pair on Linux, or a `launchd.agents.atuin-daemon` on
 /// macOS. Crucially, it also WRITES our config into `config.toml`:
 ///
 ///   - `daemon.enabled = true` (always),

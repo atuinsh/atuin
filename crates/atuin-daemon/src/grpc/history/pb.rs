@@ -11,11 +11,11 @@ use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::record::{CmdOrigin, CmdOriginParseError};
 pub use codegen::*;
 use easy_cast::Conv;
+pub use tail_history_reply::Event as TailHistoryEvent;
 use thiserror::Error;
 use time::OffsetDateTime;
 use tonic::Status;
 
-pub use self::tail_history_reply::Event as TailHistoryEvent;
 use crate::grpc::common::pb as common;
 use crate::grpc::common::pb::Uuid;
 use crate::history_journal::{CmdCancelError, CmdEvent, CmdFinishError, GetCmdInFlightError};
