@@ -12,6 +12,7 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use atuin_client::database::Sqlite;
 use atuin_client::history::History;
 use atuin_client::settings::Search;
 use atuin_common::filter::OrFilter;
@@ -24,7 +25,12 @@ use time::OffsetDateTime;
 use tracing::{Level, instrument};
 use uuid::Uuid;
 
-use super::normalize_diacritics;
+/// Failure to (re)build a [`SearchIndex`] from the history database.
+#[derive(Debug, thiserror::Error)]
+#[error("failed to load history from the database: {0}")]
+pub struct LoadFromDbError(eyre::Report);
+
+use atuin_common::string::NormalizeDiacriticsExt;
 
 /// Parse a UUID string into a 16-byte array.
 /// Returns None if the string is not a valid UUID.
@@ -274,14 +280,15 @@ type FrecencyMap = Arc<Vec<u32>>;
 struct HaystackEntry {
     /// The original text of the entry.
     pub original: Arc<str>,
-    /// The [normalized](normalize_diacritics) version of the text, with diacritics removed.
+    /// The [normalized](NormalizeDiacriticsExt::normalize_diacritics) version of the text, with
+    /// diacritics removed.
     pub normalized: Arc<str>,
 }
 
 impl HaystackEntry {
     /// Create a new [`HaystackEntry`] from an [`Arc<str>`].
     pub fn new(text: Arc<str>) -> Self {
-        let normalized = match normalize_diacritics(&text) {
+        let normalized = match text.normalize_diacritics() {
             Cow::Borrowed(_) => text.clone(),
             Cow::Owned(normalized) => normalized.into(),
         };
@@ -375,6 +382,30 @@ impl SearchIndex {
         }
     }
 
+    /// Take the existing [`SearchIndex`], clone it without the data, and populate it with new data
+    /// from the given `db`.
+    pub(crate) async fn rebuild(&self, db: &Sqlite) -> Result<Self, LoadFromDbError> {
+        let shells = self.shells.clone();
+        let new_index = Self::new(shells);
+        new_index.load_from_db(db).await?;
+        Ok(new_index)
+    }
+
+    /// Load every history entry from `db` into this index.
+    pub(crate) async fn load_from_db(&self, db: &Sqlite) -> Result<(), LoadFromDbError> {
+        /// Number of history rows loaded per page when (re)building an index from the database.
+        const INDEX_LOAD_PAGE_SIZE: usize = 5000;
+
+        let mut pager = db.all_paged(INDEX_LOAD_PAGE_SIZE, false, true);
+        loop {
+            match pager.next().await {
+                Ok(Some(histories)) => self.add_histories(&histories),
+                Ok(None) => return Ok(()),
+                Err(e) => return Err(LoadFromDbError(e.into())),
+            }
+        }
+    }
+
     /// Add a history entry to the index.
     ///
     /// If the command already exists, updates its invocation data.
@@ -441,7 +472,7 @@ impl SearchIndex {
         let query = super::truncate_query(query);
         // Match accent-insensitively: the haystack side is normalized in
         // add_history, so an accented query must be normalized too
-        let query = normalize_diacritics(query);
+        let query = query.normalize_diacritics();
 
         let haystack = self.haystack.read();
         let filter = filter_mode.compile(&self.interner);

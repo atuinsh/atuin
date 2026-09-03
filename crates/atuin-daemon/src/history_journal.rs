@@ -97,8 +97,6 @@ pub struct HistoryJournal {
     active_cmds: DashMap<HistoryId, InFlightCmd>,
 
     /// We hold a reference to the search index which allows us to add a new history record into it.
-    ///
-    /// Do note that the [`tokio::sync::RwLock`] is only ever used in reader mode.
     search_index: Arc<tokio::sync::RwLock<SearchIndex>>,
 
     /// Just like the search_index, we need to notify the SemanticComponent of added history.
@@ -117,6 +115,15 @@ pub enum CmdFinishError {
     #[error("storing into history store failed: {0}")]
     HistoryStoreFailed(eyre::Report),
     #[error("storing into history db failed: {0}")]
+    HistoryDbFailed(eyre::Report),
+}
+
+/// Errors returned by [`HistoryJournal::delete`].
+#[derive(Debug, thiserror::Error)]
+pub enum CmdDeleteError {
+    #[error("deleting from history store failed: {0}")]
+    HistoryStoreFailed(eyre::Report),
+    #[error("applying deletion to history db failed: {0}")]
     HistoryDbFailed(eyre::Report),
 }
 
@@ -327,6 +334,70 @@ impl HistoryJournal {
         let _ = self.broadcast.send(CmdEvent::Cancelled(cmd.history));
 
         Ok(())
+    }
+
+    /// Delete the given history entries from Atuin's memory completely.
+    ///
+    /// Returns how many history entries Atuin forgot.
+    pub async fn delete(
+        &self,
+        ids: impl IntoIterator<Item = HistoryId>,
+    ) -> Result<usize, CmdDeleteError> {
+        // Remove records from the record store.
+        //
+        // This returns a tuple where the first element is the total number of history elements that
+        // were erased from Atuin's memory, and the second element is a vector of [`RecordId`]s that
+        // must be subsequently removed from the history database via [`HistoryStore::build_all`].
+        // Note the passed database argument.
+        //
+        // Furthermore, note that `.0 != .1.len()`, because there may very well be history entries
+        // that atuin has forgotten about that were never in the record store.
+        //
+        // This happens as a result of the fact that [`HistoryJournal`] might be tracking started,
+        // but not finished commands. These get cancelled via [`HistoryJournal::cancel`].
+        let delete_records = || async {
+            let mut deleted: usize = 0;
+            let mut record_ids = Vec::new();
+            for id in ids {
+                if let Some((_id, cmd)) = self.active_cmds.remove(&id) {
+                    let _ = self.broadcast.send(CmdEvent::Cancelled(cmd.history));
+                    deleted += 1;
+                    continue;
+                }
+
+                match self.history_store.delete(id).await {
+                    Ok((record_id, _)) => {
+                        record_ids.push(record_id);
+                        deleted += 1;
+                    }
+                    Err(e) => {
+                        return Err(CmdDeleteError::HistoryStoreFailed(e));
+                    }
+                }
+            }
+
+            Ok((deleted, record_ids))
+        };
+
+        let (deleted, record_ids) = delete_records().await?;
+        if record_ids.is_empty() {
+            return Ok(deleted);
+        }
+
+        self.history_store
+            .build_all(&self.history_db, &record_ids)
+            .await
+            .map_err(CmdDeleteError::HistoryDbFailed)?;
+
+        let rebuilt = self.search_index.read().await.rebuild(&self.history_db).await;
+        match rebuilt {
+            Ok(new_index) => *self.search_index.write().await = new_index,
+            Err(e) => {
+                tracing::error!("failed to reload search index; keeping previous index: {e}");
+            }
+        }
+
+        Ok(deleted)
     }
 
     /// Create a new stream of [`CmdEvent`] objects.

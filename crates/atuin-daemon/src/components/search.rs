@@ -225,14 +225,8 @@ impl Component for SearchComponent {
                 let histories = handle.history_db().load_active(ids.iter().copied()).await?;
                 self.index.read().await.add_histories(&histories);
             }
-            DaemonEvent::HistoryPruned | DaemonEvent::HistoryRebuilt => {
-                info!("History store pruned or rebuilt, rebuilding search index");
-                self.rebuild_index_only().await;
-            }
-            DaemonEvent::HistoryDeleted { ids } => {
-                info!(count = ids.len(), "History deleted, rebuilding search index");
-                // For now, just rebuild the entire index. A more efficient implementation
-                // would remove specific items from the index.
+            DaemonEvent::HistoryRebuilt => {
+                info!("History store rebuilt, rebuilding search index");
                 self.rebuild_index_only().await;
             }
             DaemonEvent::SettingsReloaded => {

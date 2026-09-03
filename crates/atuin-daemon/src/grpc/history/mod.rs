@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use atuin_client::history::{History, HistoryId};
 use atuin_common::time::OffsetDateTimeExt;
+use easy_cast::Cast;
 use futures::StreamExt;
 use time::OffsetDateTime;
 use tokio_stream::Stream;
@@ -15,9 +16,10 @@ use tracing::{Level, instrument};
 use crate::DaemonHandle;
 use crate::grpc::history::pb::history_server::History as GrpcService;
 use crate::grpc::history::pb::{
-    CancelHistoryReply, CancelHistoryRequest, EndHistoryReply, EndHistoryRequest, Lagged,
-    ShutdownReply, ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply,
-    StatusRequest, TailHistoryEvent, TailHistoryReply, TailHistoryRequest,
+    CancelHistoryReply, CancelHistoryRequest, DeleteHistoryReply, DeleteHistoryRequest,
+    EndHistoryReply, EndHistoryRequest, Lagged, ShutdownReply, ShutdownRequest, StartHistoryReply,
+    StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent, TailHistoryReply,
+    TailHistoryRequest,
 };
 use crate::history_journal::HistoryJournal;
 
@@ -310,6 +312,22 @@ impl GrpcService for Service {
 
         Ok(Response::new(CancelHistoryReply {
             // TODO(markovejnovic): Pull this from one constant, well-defined spot.
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            protocol: DAEMON_PROTOCOL_VERSION,
+        }))
+    }
+
+    #[instrument(skip_all, level = Level::TRACE)]
+    async fn delete_history(
+        &self,
+        request: Request<DeleteHistoryRequest>,
+    ) -> Result<Response<DeleteHistoryReply>, Status> {
+        let ids: Vec<HistoryId> = request.into_inner().try_into()?;
+
+        let deleted = self.journal.delete(ids).await?;
+
+        Ok(Response::new(DeleteHistoryReply {
+            deleted: deleted.cast(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             protocol: DAEMON_PROTOCOL_VERSION,
         }))
