@@ -3,9 +3,6 @@
 //! Events are the primary communication mechanism within the daemon.
 //! Components emit events to notify others of state changes, and handle
 //! events to react to changes elsewhere in the system.
-//!
-//! External processes (like CLI commands) can also inject events via the
-//! Control gRPC service.
 
 use std::sync::Arc;
 
@@ -38,15 +35,7 @@ pub enum DaemonEvent {
         error: String,
     },
 
-    /// Request an immediate sync (external trigger).
-    ForceSync,
-
-    // ---- External commands ----
-    /// History was rebuilt - search index needs a full rebuild.
-    ///
-    /// Emitted when the user runs `atuin store rebuild history` or similar.
-    HistoryRebuilt,
-
+    // ---- Settings ----
     /// Settings have changed, components should reload if needed.
     SettingsReloaded,
 

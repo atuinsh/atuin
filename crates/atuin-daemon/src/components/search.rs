@@ -168,30 +168,6 @@ impl Component for SearchComponent {
                 let histories = handle.history_db().load_active(ids.iter().copied()).await?;
                 self.index.read().await.add_histories(&histories);
             }
-            DaemonEvent::HistoryRebuilt => {
-                info!("History store rebuilt, rebuilding search index");
-
-                let Some(handle) = self.handle.as_ref() else {
-                    error!("Component not initialized");
-                    return Ok(());
-                };
-
-                // TODO(#4052): This is inherently racy -- any add_history operations added between
-                //              this .read() and the subsequent .write() are completely discarded
-                //              from the new index.
-                let shells = self.index.read().await.shells.clone();
-                let search = handle.settings().await.search.clone();
-                match SearchIndex::from_db(shells, handle.history_db(), &search).await {
-                    Ok(new_index) => {
-                        info!(
-                            "Search index rebuild complete; {} unique commands",
-                            new_index.command_count()
-                        );
-                        *self.index.write().await = new_index;
-                    }
-                    Err(e) => error!("Failed to rebuild search index: {e}"),
-                }
-            }
             DaemonEvent::SettingsReloaded => {
                 if let Some(handle) = self.handle.as_ref() {
                     info!("Rebuilding frecency map after settings update");
@@ -201,7 +177,6 @@ impl Component for SearchComponent {
             // Events we don't care about
             DaemonEvent::SyncCompleted { .. }
             | DaemonEvent::SyncFailed { .. }
-            | DaemonEvent::ForceSync
             | DaemonEvent::ShutdownRequested => {}
         }
         Ok(())

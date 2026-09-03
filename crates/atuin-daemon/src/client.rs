@@ -17,16 +17,12 @@ use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
 use tracing::{Level, instrument, span};
 
-use crate::control::control_client::ControlClient as ControlServiceClient;
-use crate::control::{
-    ForceSyncEvent, HistoryRebuiltEvent, SendEventRequest, SettingsReloadedEvent, ShutdownEvent,
-};
-use crate::events::DaemonEvent;
 use crate::grpc::history::pb::history_client::HistoryClient as HistoryServiceClient;
 use crate::grpc::history::pb::{
     AuthorKind, CancelHistoryReply, CancelHistoryRequest, DeleteHistoryReply, DeleteHistoryRequest,
-    EndHistoryReply, EndHistoryRequest, ShutdownRequest, StartHistoryReply, StartHistoryRequest,
-    StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
+    EndHistoryReply, EndHistoryRequest, RebuildHistoryReply, RebuildHistoryRequest,
+    ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest,
+    TailHistoryReply, TailHistoryRequest,
 };
 use crate::search::search_client::SearchClient as SearchServiceClient;
 use crate::search::{
@@ -173,6 +169,10 @@ impl HistoryClient {
             })
             .await?
             .into_inner())
+    }
+
+    pub async fn rebuild_history(&mut self) -> Result<RebuildHistoryReply> {
+        Ok(self.client.rebuild_history(RebuildHistoryRequest {}).await?.into_inner())
     }
 
     pub async fn status(&mut self) -> Result<StatusReply> {
@@ -406,167 +406,4 @@ impl SemanticClient {
 
         Ok(self.client.command_output(request).await?.into_inner())
     }
-}
-
-// ============================================================================
-// Control Client
-// ============================================================================
-
-/// Client for the Control gRPC service.
-///
-/// Used to inject events into a running daemon from external processes.
-pub struct ControlClient {
-    client: ControlServiceClient<Channel>,
-}
-
-impl ControlClient {
-    /// Connect to the daemon's control service.
-    #[cfg(unix)]
-    pub async fn new(path: PathBuf) -> Result<Self> {
-        let log_path = path.clone();
-        let channel =
-            Endpoint::try_from("http://atuin_local_daemon:0")?
-                .connect_with_connector(service_fn(move |_: Uri| {
-                    let path = path.clone();
-
-                    async move {
-                        Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?))
-                    }
-                }))
-                .await
-                .wrap_err_with(|| {
-                    format!(
-                        "failed to connect to local atuin daemon at {}. Is it running?",
-                        log_path.display()
-                    )
-                })?;
-
-        let client = ControlServiceClient::new(channel);
-
-        Ok(Self { client })
-    }
-
-    /// Connect to the daemon's control service.
-    #[cfg(not(unix))]
-    pub async fn new(port: u64) -> Result<Self> {
-        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
-            .connect_with_connector(service_fn(move |_: Uri| {
-                let url = format!("127.0.0.1:{port}");
-
-                async move {
-                    Ok::<_, std::io::Error>(TokioIo::new(TcpStream::connect(url.clone()).await?))
-                }
-            }))
-            .await
-            .wrap_err_with(|| {
-                format!(
-                    "failed to connect to local atuin daemon at 127.0.0.1:{port}. Is it running?"
-                )
-            })?;
-
-        let client = ControlServiceClient::new(channel);
-
-        Ok(ControlClient { client })
-    }
-
-    /// Connect using settings.
-    #[cfg(unix)]
-    pub async fn from_settings(settings: &Settings) -> Result<Self> {
-        Self::new(settings.daemon.existing_socket_path().into_owned()).await
-    }
-
-    /// Connect using settings.
-    #[cfg(not(unix))]
-    pub async fn from_settings(settings: &Settings) -> Result<Self> {
-        Self::new(settings.daemon.tcp_port).await
-    }
-
-    /// Send an event to the daemon.
-    pub async fn send_event(&mut self, event: DaemonEvent) -> Result<()> {
-        let proto_event = daemon_event_to_proto(&event);
-        let request = SendEventRequest {
-            event: Some(proto_event),
-        };
-        self.client.send_event(request).await?;
-        Ok(())
-    }
-}
-
-/// Convert a daemon event to its proto representation.
-fn daemon_event_to_proto(event: &DaemonEvent) -> crate::control::send_event_request::Event {
-    use crate::control::send_event_request::Event;
-
-    match event {
-        DaemonEvent::HistoryRebuilt => Event::HistoryRebuilt(HistoryRebuiltEvent {}),
-        DaemonEvent::ForceSync => Event::ForceSync(ForceSyncEvent {}),
-        DaemonEvent::SettingsReloaded => Event::SettingsReloaded(SettingsReloadedEvent {}),
-        DaemonEvent::ShutdownRequested => Event::Shutdown(ShutdownEvent {}),
-        // These events are internal and not sent via the control service
-        DaemonEvent::HistorySynced(_)
-        | DaemonEvent::SyncCompleted { .. }
-        | DaemonEvent::SyncFailed { .. } => {
-            // Use shutdown as a fallback, though this shouldn't happen
-            tracing::warn!("attempted to send internal event via control service");
-            Event::Shutdown(ShutdownEvent {})
-        }
-    }
-}
-
-// ============================================================================
-// Convenience Functions
-// ============================================================================
-
-/// Emit an event to the daemon.
-///
-/// This is a fire-and-forget helper for sending events to the daemon from
-/// external processes like CLI commands. If the daemon isn't running, this
-/// will silently succeed (returns Ok).
-///
-/// # Example
-///
-/// ```ignore
-/// // After history was rebuilt
-/// emit_event(DaemonEvent::HistoryRebuilt).await?;
-///
-/// // Request immediate sync
-/// emit_event(DaemonEvent::ForceSync).await?;
-/// ```
-pub async fn emit_event(event: DaemonEvent) -> Result<()> {
-    emit_event_with_settings(event, None).await
-}
-
-/// Emit an event to the daemon with explicit settings.
-///
-/// If settings are not provided, they will be loaded from the default location.
-/// If the daemon isn't running, this will silently succeed.
-pub async fn emit_event_with_settings(
-    event: DaemonEvent,
-    settings: Option<&Settings>,
-) -> Result<()> {
-    // Load settings if not provided
-    let owned_settings;
-    let settings = match settings {
-        Some(s) => s,
-        None => {
-            owned_settings = Settings::new()?;
-            &owned_settings
-        }
-    };
-
-    // Try to connect - if daemon isn't running, that's fine
-    let mut client = match ControlClient::from_settings(settings).await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::debug!(?e, "daemon not running, skipping event emission");
-            return Ok(());
-        }
-    };
-
-    // Send the event
-    if let Err(e) = client.send_event(event).await {
-        tracing::debug!(?e, "failed to send event to daemon");
-        // Don't fail - this is fire-and-forget
-    }
-
-    Ok(())
 }

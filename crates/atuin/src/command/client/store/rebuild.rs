@@ -10,7 +10,7 @@ use clap::Args;
 use eyre::{Context as _, Result, bail};
 
 #[cfg(feature = "daemon")]
-use crate::command::client::daemon as daemon_cmd;
+use crate::command::client::daemon;
 
 #[derive(Args, Debug)]
 pub struct Rebuild {
@@ -49,12 +49,19 @@ impl Rebuild {
         Ok(())
     }
 
+    /// The daemon owns the rebuild when enabled; otherwise we rebuild locally.
     async fn rebuild_history(
         &self,
         settings: &Settings,
         store: SqliteStore,
         database: &Sqlite,
     ) -> Result<()> {
+        #[cfg(feature = "daemon")]
+        if settings.daemon.enabled {
+            daemon::rebuild_history(settings).await?;
+            return Ok(());
+        }
+
         let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
             .context("could not load encryption key")?;
 
@@ -62,9 +69,6 @@ impl Rebuild {
         let history_store = HistoryStore::new(store, host_id, encryption_key);
 
         history_store.build(database).await?;
-
-        #[cfg(feature = "daemon")]
-        daemon_cmd::emit_event(settings, atuin_daemon::DaemonEvent::HistoryRebuilt).await;
 
         Ok(())
     }
