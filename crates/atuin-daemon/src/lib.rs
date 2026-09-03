@@ -1,15 +1,21 @@
+use std::sync::Arc;
+
 use atuin_client::database::Sqlite as HistoryDatabase;
+use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::settings::watcher::global_settings_watcher;
 use eyre::Result;
+
+use crate::grpc::history::pb::history_server::HistoryServer;
 
 pub mod client;
 pub mod components;
 pub mod control;
 pub mod daemon;
 pub mod events;
-pub mod history;
+pub mod grpc;
+pub(crate) mod history_journal;
 pub mod search;
 pub mod semantic;
 pub mod server;
@@ -18,9 +24,12 @@ pub mod server;
 // Re-export client helpers
 pub use client::{ControlClient, SemanticClient, emit_event, emit_event_with_settings};
 // Re-export components
-pub use components::{HistoryComponent, SearchComponent, SemanticComponent, SyncComponent};
+pub use components::{SearchComponent, SemanticComponent, SyncComponent};
 pub use daemon::{AnyComponent, Daemon, DaemonBuilder, DaemonHandle};
 pub use events::DaemonEvent;
+pub use history_journal::{
+    CmdCancelError, CmdEvent, CmdFinishError, FinishedCmd, GetCmdInFlightError, HistoryJournal,
+};
 
 /// Boot the daemon using the new component-based architecture.
 ///
@@ -32,29 +41,39 @@ pub async fn boot(
     history_db: HistoryDatabase,
 ) -> Result<()> {
     // Create the components
-    let history_component = HistoryComponent::new();
     let search_component = SearchComponent::new();
     let semantic_component = SemanticComponent::new();
     let sync_component = SyncComponent::new();
 
     // Get the gRPC services before moving components into the daemon
     // (The services share state with the components via Arc)
-    let history_service = history_component.grpc_service();
     let search_service = search_component.grpc_service();
     let semantic_service = semantic_component.grpc_service();
+    let search_index = search_component.index();
+    let semantic_handle = semantic_component.clone();
 
     // Build the daemon
     let mut daemon = Daemon::builder(settings.clone())
         .store(store)
         .history_db(history_db)
-        .component(history_component)
         .component(search_component)
         .component(semantic_component)
         .component(sync_component)
         .build()?;
 
-    // Get a handle for the control service and gRPC server shutdown
     let handle = daemon.handle();
+
+    let host_id = Settings::host_id().await?;
+    let history_store =
+        HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
+    let journal = Arc::new(HistoryJournal::new(
+        handle.caps().clone(),
+        history_store,
+        handle.history_db().clone(),
+        semantic_handle,
+        search_index,
+    ));
+    let history_service = HistoryServer::new(grpc::HistoryService::new(journal, handle.clone()));
 
     // Create the control service
     let control_service = control::ControlService::new(handle.clone());

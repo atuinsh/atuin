@@ -142,6 +142,12 @@ impl SearchComponent {
         }
     }
 
+    /// Get a shared handle to the live search index.
+    #[must_use]
+    pub fn index(&self) -> Arc<RwLock<SearchIndex>> {
+        self.index.clone()
+    }
+
     /// Rebuild the entire search index from the database without updating the frecency map.
     async fn rebuild_index_only(&self) {
         let Some(handle) = self.handle.as_ref() else {
@@ -218,16 +224,6 @@ impl Component for SearchComponent {
 
                 let histories = handle.history_db().load_active(ids.iter().copied()).await?;
                 self.index.read().await.add_histories(&histories);
-            }
-            DaemonEvent::HistoryStarted(history) => {
-                debug!(id = %history.id, command = %history.command, "History started (no index action)");
-            }
-            DaemonEvent::HistoryEnded(history) => {
-                span!(Level::TRACE, "inject_history_ended")
-                    .in_scope(async || {
-                        self.index.read().await.add_history(history);
-                    })
-                    .await;
             }
             DaemonEvent::HistoryPruned | DaemonEvent::HistoryRebuilt => {
                 info!("History store pruned or rebuilt, rebuilding search index");

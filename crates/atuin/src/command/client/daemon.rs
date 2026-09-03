@@ -5,7 +5,6 @@ use std::ops::ControlFlow;
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::str::FromStr;
 use std::time::Duration;
 
 use atuin_client::database::Sqlite;
@@ -102,7 +101,7 @@ impl Cmd {
 }
 
 const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
-const DAEMON_PROTOCOL_VERSION: u32 = 1;
+const DAEMON_PROTOCOL_VERSION: u32 = 2;
 const STARTUP_POLL: Duration = Duration::from_millis(40);
 const LOCK_POLL: Duration = Duration::from_millis(20);
 const LEGACY_DAEMON_RESTART_MESSAGE: &str = "legacy daemon detected; restart daemon manually";
@@ -431,54 +430,38 @@ fn ensure_reply_compatible(settings: &Settings, version: &str, protocol: u32) ->
     bail!("{message}. Enable `daemon.autostart = true` or restart the daemon manually");
 }
 
-#[derive(Clone, Copy)]
-struct TryWithRestartOptions {
-    /// Whether to resend the command if the daemon isn't the expected version.
-    pub retry_on_version_mismatch: bool,
-}
-
-/// Try to send a request to the daemon, restarting it and retrying if necessary.
+/// Acquire a [`HistoryClient`] connected to a daemon we expect to understand us, probing over the
+/// wire-stable Status RPC first and restarting the daemon if it is absent or version/protocol
+/// skewed.
 ///
-/// `context` will be passed to the closure. Compared to capturing the needed context in the
-/// closure, this may reduce the number of required clones.
-async fn try_with_restart<C, F, R>(
-    settings: &Settings,
-    send_request: F,
-    context: C,
-    options: TryWithRestartOptions,
-) -> Result<R>
-where
-    C: Clone + Sync,
-    F: AsyncFn(&mut HistoryClient, C) -> Result<R> + Sync,
-    R: atuin_daemon::history::VersionedReply,
-{
-    match async { send_request(&mut connect_client(settings).await?, context.clone()).await }.await
-    {
-        Ok(resp) => {
-            if daemon_matches_expected(resp.version(), resp.protocol()) {
-                return Ok(resp);
-            }
-
-            if !settings.daemon.autostart {
-                return Err(eyre!(
-                    "{}. Enable `daemon.autostart = true` or restart the daemon manually",
-                    daemon_mismatch_message(resp.version(), resp.protocol())
-                ));
-            }
-
-            if !options.retry_on_version_mismatch {
-                // We don't need to retry the request, so only restart to make subsequent hook calls
-                // target the expected version.
-                let _ = restart_daemon(settings).await;
-                return Ok(resp);
-            }
+/// TODO(markovejnovic): This is egregious slop, but not worse than the original solution. I want to
+///                      remove this in a future PR: <https://github.com/atuinsh/atuin/pull/4002>
+pub async fn ready_client(settings: &Settings) -> Result<HistoryClient> {
+    match probe(settings).await {
+        Probe::Ready(client) => return Ok(client),
+        Probe::NeedsRestart(reason) if !settings.daemon.autostart => {
+            bail!("{reason}. Enable `daemon.autostart = true` or restart the daemon manually");
         }
-        Err(err) if !settings.daemon.autostart => return Err(err),
-        Err(err) if !should_retry_after_error(&err) => return Err(err),
-        Err(_) => {}
+        Probe::Unreachable(err) if is_legacy_daemon_error(&err) => {
+            return Err(err.wrap_err(LEGACY_DAEMON_RESTART_MESSAGE));
+        }
+        Probe::Unreachable(err) if !settings.daemon.autostart => return Err(err),
+        Probe::Unreachable(err) if !should_retry_after_error(&err) => return Err(err),
+        Probe::NeedsRestart(_) | Probe::Unreachable(_) => {}
     }
 
-    let resp = send_request(&mut restart_daemon(settings).await?, context).await?;
+    restart_daemon(settings).await
+}
+
+/// Send a request to the daemon, first ensuring (via [`ready_client`]) that it is running and
+/// speaks our version.
+async fn try_with_restart<C, F, R>(settings: &Settings, send_request: F, context: C) -> Result<R>
+where
+    F: AsyncFn(&mut HistoryClient, C) -> Result<R> + Sync,
+    R: atuin_daemon::grpc::VersionedReply,
+{
+    let mut client = ready_client(settings).await?;
+    let resp = send_request(&mut client, context).await?;
     ensure_reply_compatible(settings, resp.version(), resp.protocol())?;
     Ok(resp)
 }
@@ -488,37 +471,25 @@ pub async fn start_history(settings: &Settings, history: History) -> Result<Hist
         settings,
         async |client, history| client.start_history(history).await,
         history,
-        TryWithRestartOptions {
-            retry_on_version_mismatch: true,
-        },
     )
     .await?;
-    Ok(HistoryId::from_str(&resp.id)?)
+    let id = resp.id.ok_or_else(|| eyre::eyre!("daemon reply is missing the history id"))?;
+    Ok(HistoryId::try_from(id)?)
 }
 
-pub async fn end_history(settings: &Settings, id: String, duration: u64, exit: i64) -> Result<()> {
-    try_with_restart(
-        settings,
-        async |client, id| client.end_history(id, duration, exit).await,
-        id,
-        TryWithRestartOptions {
-            retry_on_version_mismatch: false,
-        },
-    )
-    .await?;
+pub async fn end_history(
+    settings: &Settings,
+    id: HistoryId,
+    duration: Option<std::time::Duration>,
+    exit: i64,
+) -> Result<()> {
+    try_with_restart(settings, async |client, id| client.end_history(id, duration, exit).await, id)
+        .await?;
     Ok(())
 }
 
-pub async fn cancel_history(settings: &Settings, id: String) -> Result<()> {
-    try_with_restart(
-        settings,
-        async |client, id| client.cancel_history(id).await,
-        id,
-        TryWithRestartOptions {
-            retry_on_version_mismatch: false,
-        },
-    )
-    .await?;
+pub async fn cancel_history(settings: &Settings, id: HistoryId) -> Result<()> {
+    try_with_restart(settings, async |client, id| client.cancel_history(id).await, id).await?;
     Ok(())
 }
 
@@ -559,23 +530,6 @@ pub async fn emit_event(settings: &Settings, event: DaemonEvent) {
             eprintln!("Daemon started but failed to connect: {e}");
         }
     }
-}
-
-pub async fn tail_client(settings: &Settings) -> Result<HistoryClient> {
-    match probe(settings).await {
-        Probe::Ready(client) => return Ok(client),
-        Probe::NeedsRestart(reason) if !settings.daemon.autostart => {
-            bail!("{reason}. Enable `daemon.autostart = true` or restart the daemon manually");
-        }
-        Probe::Unreachable(err) if is_legacy_daemon_error(&err) => {
-            return Err(err.wrap_err(LEGACY_DAEMON_RESTART_MESSAGE));
-        }
-        Probe::Unreachable(err) if !settings.daemon.autostart => return Err(err),
-        Probe::Unreachable(err) if !should_retry_after_error(&err) => return Err(err),
-        Probe::NeedsRestart(_) | Probe::Unreachable(_) => {}
-    }
-
-    restart_daemon(settings).await
 }
 
 async fn status_cmd(settings: &Settings) -> Result<()> {

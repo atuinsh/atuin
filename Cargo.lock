@@ -503,6 +503,7 @@ dependencies = [
  "lasso",
  "listenfd",
  "parking_lot",
+ "proptest",
  "prost",
  "prost-types",
  "protox",
@@ -510,6 +511,7 @@ dependencies = [
  "reqwest",
  "rstest",
  "tempfile",
+ "thiserror 2.0.19",
  "time",
  "tokio",
  "tokio-stream",
@@ -5799,6 +5801,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

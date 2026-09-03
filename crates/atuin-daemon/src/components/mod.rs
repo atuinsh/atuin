@@ -9,17 +9,14 @@
 //!
 //! Available components:
 //!
-//! - [`history::HistoryComponent`]: Command history lifecycle management
 //! - [`search::SearchComponent`]: Fuzzy search over history
 //! - [`semantic::SemanticComponent`]: In-memory semantic command captures
 //! - [`sync::SyncComponent`]: Cloud sync
 
-pub mod history;
 pub mod search;
 pub mod semantic;
 pub mod sync;
 
-pub use history::HistoryComponent;
 pub use search::SearchComponent;
 pub use semantic::SemanticComponent;
 pub use sync::SyncComponent;

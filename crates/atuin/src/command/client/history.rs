@@ -17,7 +17,9 @@ use atuin_common::time::{DurationExt, OffsetDateTimeExt, UtcOffsetSpec};
 use atuin_common::utils;
 use atuin_common::utils::normalize_optional_string;
 #[cfg(feature = "daemon")]
-use atuin_daemon::history::{HistoryEventKind, TailHistoryReply};
+use atuin_daemon::grpc::history::pb::{
+    TailHistoryReply, tail_history_reply::Event as TailEventProto,
+};
 use atuin_domain::record::CmdOrigin;
 use clap::Subcommand;
 #[cfg(feature = "daemon")]
@@ -562,9 +564,10 @@ async fn handle_daemon_end(
 ) -> Result<()> {
     if !settings.store_failed && exit > 0 {
         debug!("history has non-zero exit code, and store_failed is false");
-        daemon::cancel_history(settings, id.to_string()).await?;
+        daemon::cancel_history(settings, id).await?;
     } else {
-        daemon::end_history(settings, id.to_string(), duration.unwrap_or(0), exit).await?;
+        let duration = duration.map(Duration::from_nanos);
+        daemon::end_history(settings, id, duration, exit).await?;
     }
 
     Ok(())
@@ -621,6 +624,7 @@ pub(super) async fn end_history_entry(
 enum TailKind {
     Started,
     Ended,
+    Cancelled,
 }
 
 #[cfg(feature = "daemon")]
@@ -667,23 +671,25 @@ struct TailJsonHistory<'a> {
 #[cfg(feature = "daemon")]
 impl TailEvent {
     fn from_proto(reply: TailHistoryReply) -> Result<Self> {
-        let history = reply
-            .history
-            .ok_or_else(|| eyre::eyre!("daemon sent a history tail event without history"))?;
+        let (kind, history) = match reply.event {
+            Some(TailEventProto::Started(history)) => (TailKind::Started, history),
+            Some(TailEventProto::Ended(history)) => (TailKind::Ended, history),
+            Some(TailEventProto::Cancelled(history)) => (TailKind::Cancelled, history),
+            Some(TailEventProto::Lagged(_)) => {
+                bail!("daemon sent a lag notice as a history event")
+            }
+            None => bail!("daemon sent an unspecified history tail event"),
+        };
         let timestamp = OffsetDateTime::from_unix_nanos_u64(history.timestamp);
         let author_kind = history.author_kind();
-        let kind = match HistoryEventKind::try_from(reply.kind)
-            .unwrap_or(HistoryEventKind::Unspecified)
-        {
-            HistoryEventKind::Started => TailKind::Started,
-            HistoryEventKind::Ended => TailKind::Ended,
-            HistoryEventKind::Unspecified => bail!("daemon sent an unspecified history tail event"),
-        };
 
         Ok(Self {
             kind,
             history: History {
-                id: history.id.parse()?,
+                id: history
+                    .id
+                    .ok_or_else(|| eyre::eyre!("daemon tail event is missing the history id"))?
+                    .try_into()?,
                 timestamp,
                 duration: history.duration,
                 exit: history.exit,
@@ -748,6 +754,7 @@ impl TailEvent {
             TailKind::Started => "-".repeat(72).bright_blue().to_string(),
             TailKind::Ended if self.history.exit == 0 => "-".repeat(72).bright_green().to_string(),
             TailKind::Ended => "-".repeat(72).bright_red().to_string(),
+            TailKind::Cancelled => "-".repeat(72).bright_yellow().to_string(),
         };
 
         out.push_str(&border);
@@ -854,6 +861,7 @@ impl TailKind {
         match self {
             Self::Started => "started",
             Self::Ended => "ended",
+            Self::Cancelled => "cancelled",
         }
     }
 
@@ -862,6 +870,7 @@ impl TailKind {
             Self::Started => "STARTED".bold().bright_blue(),
             Self::Ended if exit == 0 => "ENDED".bold().bright_green(),
             Self::Ended => "ENDED".bold().bright_red(),
+            Self::Cancelled => "CANCELLED".bold().bright_yellow(),
         }
     }
 }
@@ -893,11 +902,19 @@ impl Cmd {
     #[instrument(level = "trace", skip_all, err)]
     async fn handle_tail(settings: &Settings) -> Result<()> {
         let tty = std::io::stdout().is_terminal();
-        let mut client = daemon::tail_client(settings).await?;
+        let mut client = daemon::ready_client(settings).await?;
         let mut stream = client.tail_history().await?;
         let stdout = std::io::stdout();
 
         while let Some(reply) = stream.message().await? {
+            if let Some(TailEventProto::Lagged(lagged)) = &reply.event {
+                eprintln!(
+                    "WARNING: atuin daemon dropped {} history events; tail fell behind",
+                    lagged.dropped
+                );
+                continue;
+            }
+
             let event = TailEvent::from_proto(reply)?;
             let rendered = event.render(tty, settings.timezone)?;
             let mut out = stdout.lock();

@@ -5,14 +5,18 @@
 
 #[cfg(unix)]
 mod unix {
+    use std::sync::Arc;
     use std::time::Duration;
 
     use atuin_client::database::Sqlite;
+    use atuin_client::history::HistoryId;
+    use atuin_client::history::store::HistoryStore;
     use atuin_client::record::sqlite_store::SqliteStore;
     use atuin_client::settings::{Settings, init_meta_config_for_testing};
     use atuin_daemon::client::HistoryClient;
-    use atuin_daemon::components::HistoryComponent;
-    use atuin_daemon::{Daemon, DaemonHandle};
+    use atuin_daemon::grpc::HistoryService;
+    use atuin_daemon::grpc::history::pb::history_server::HistoryServer;
+    use atuin_daemon::{Daemon, DaemonHandle, HistoryJournal, SearchComponent, SemanticComponent};
     use rstest::*;
     use tempfile::TempDir;
     use tokio::net::UnixListener;
@@ -56,21 +60,31 @@ mod unix {
         let history_db = Sqlite::new(&db_path, Duration::from_secs(5)).await.unwrap();
         let store = SqliteStore::new(&record_path, Duration::from_secs(5)).await.unwrap();
 
-        // Create the history component and get its gRPC service
-        let history_component = HistoryComponent::new();
-        let history_service = history_component.grpc_service();
+        // Dependencies the command registry needs (Arc-backed, shared with the components).
+        let semantic_component = SemanticComponent::new();
+        let search_index = SearchComponent::new().index();
 
         // Build and start the daemon
-        let mut daemon = Daemon::builder(settings)
-            .store(store)
-            .history_db(history_db)
-            .component(history_component)
-            .build()
-            .unwrap();
+        let mut daemon =
+            Daemon::builder(settings).store(store).history_db(history_db).build().unwrap();
 
         let handle = daemon.handle();
 
-        // Start components (this initializes the history component with the handle)
+        // Build the command registry and the History gRPC service that drives it
+        // (mirrors atuin_daemon::boot).
+        let host_id = Settings::host_id().await.unwrap();
+        let history_store =
+            HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
+        let journal = Arc::new(HistoryJournal::new(
+            handle.caps().clone(),
+            history_store,
+            handle.history_db().clone(),
+            semantic_component,
+            search_index,
+        ));
+        let history_service = HistoryServer::new(HistoryService::new(journal, handle.clone()));
+
+        // Start components (none registered, but keeps the lifecycle identical to production).
         daemon.start_components().await.unwrap();
 
         // Start the gRPC server
@@ -116,7 +130,7 @@ mod unix {
         let status = client.status().await.unwrap();
         assert!(status.healthy);
         assert_eq!(status.version, env!("CARGO_PKG_VERSION"));
-        assert_eq!(status.protocol, 1);
+        assert_eq!(status.protocol, 2);
         assert!(status.pid > 0);
     }
 
@@ -140,10 +154,47 @@ mod unix {
             .into();
 
         let start_reply = client.start_history(history).await.unwrap();
-        assert!(!start_reply.id.is_empty());
+        assert!(start_reply.id.is_some());
 
-        let end_reply = client.end_history(start_reply.id, 1_000_000, 0).await.unwrap();
-        assert!(!end_reply.id.is_empty());
+        let id: HistoryId = start_reply.id.unwrap().try_into().unwrap();
+        let end_reply =
+            client.end_history(id, Some(Duration::from_nanos(1_000_000)), 0).await.unwrap();
+        assert!(end_reply.record_id.is_some());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn end_history_without_duration_derives_from_start(
+        #[future] daemon: (HistoryClient, DaemonHandle, TempDir),
+    ) {
+        use atuin_client::history::History;
+
+        let (mut client, _handle, _tmp) = daemon.await;
+
+        let history: History = History::daemon()
+            .timestamp(time::OffsetDateTime::now_utc() - Duration::from_millis(20))
+            .command("sleep 0".to_string())
+            .cwd("/tmp".to_string())
+            .session("no-duration-session".to_string())
+            .cmd_origin(
+                atuin_domain::record::CmdOrigin::try_from("test-host:ellie".to_string()).unwrap(),
+            )
+            .build()
+            .into();
+
+        let start_reply = client.start_history(history).await.unwrap();
+        let id: HistoryId = start_reply.id.unwrap().try_into().unwrap();
+
+        // Omitting the duration makes the daemon derive it from the command's start timestamp.
+        // Every other lifecycle case passes an explicit duration, leaving this path uncovered. The
+        // timeout guards against a regression that hangs while reading the start time and finishing
+        // the same entry.
+        let end_reply =
+            tokio::time::timeout(Duration::from_secs(5), client.end_history(id, None, 0))
+                .await
+                .expect("end_history deadlocked on the in-flight borrow")
+                .unwrap();
+        assert!(end_reply.record_id.is_some());
     }
 
     #[rstest]
@@ -152,7 +203,7 @@ mod unix {
         #[future] daemon: (HistoryClient, DaemonHandle, TempDir),
     ) {
         use atuin_client::history::History;
-        use atuin_daemon::history::HistoryEventKind;
+        use atuin_daemon::grpc::history::pb::tail_history_reply::Event;
 
         let (mut client, _handle, _tmp) = daemon.await;
         let mut stream = client.tail_history().await.unwrap();
@@ -172,8 +223,10 @@ mod unix {
         let start_reply = client.start_history(history).await.unwrap();
 
         let started = stream.message().await.unwrap().unwrap();
-        assert_eq!(HistoryEventKind::try_from(started.kind).unwrap(), HistoryEventKind::Started);
-        let started_history = started.history.unwrap();
+        let started_history = match started.event {
+            Some(Event::Started(history)) => history,
+            other => panic!("expected a Started event, got {other:?}"),
+        };
         assert_eq!(started_history.id, start_reply.id);
         assert_eq!(started_history.command, "git status");
         assert_eq!(started_history.cwd, "/tmp/repo");
@@ -181,11 +234,14 @@ mod unix {
         assert_eq!(started_history.author, "claude");
         assert_eq!(started_history.intent, "inspect repository state");
 
-        client.end_history(start_reply.id.clone(), 1_000_000, 0).await.unwrap();
+        let end_id: HistoryId = start_reply.id.clone().unwrap().try_into().unwrap();
+        client.end_history(end_id, Some(Duration::from_nanos(1_000_000)), 0).await.unwrap();
 
         let ended = stream.message().await.unwrap().unwrap();
-        assert_eq!(HistoryEventKind::try_from(ended.kind).unwrap(), HistoryEventKind::Ended);
-        let ended_history = ended.history.unwrap();
+        let ended_history = match ended.event {
+            Some(Event::Ended(history)) => history,
+            other => panic!("expected an Ended event, got {other:?}"),
+        };
         assert_eq!(ended_history.id, start_reply.id);
         assert_eq!(ended_history.exit, 0);
         assert_eq!(ended_history.duration, 1_000_000);
@@ -198,7 +254,9 @@ mod unix {
     ) {
         let (mut client, _handle, _tmp) = daemon.await;
 
-        let result = client.end_history("nonexistent-id".to_string(), 1000, 0).await;
+        let result = client
+            .end_history(HistoryId::from_bytes([0u8; 16]), Some(Duration::from_nanos(1000)), 0)
+            .await;
         assert!(result.is_err());
     }
 

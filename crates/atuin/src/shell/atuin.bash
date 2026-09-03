@@ -124,7 +124,7 @@ __atuin_precmd() {
         if ((duration >= 0)); then
             duration=${duration}000
         else
-            duration="" # clear the result on overflow
+            duration=0
         fi
     fi
 
