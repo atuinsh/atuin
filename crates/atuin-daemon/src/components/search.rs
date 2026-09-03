@@ -117,31 +117,6 @@ impl SearchComponent {
     pub fn index(&self) -> Arc<RwLock<SearchIndex>> {
         self.index.clone()
     }
-
-    /// Rebuild the entire search index from the database without updating the frecency map.
-    async fn rebuild_index_only(&self) {
-        let Some(handle) = self.handle.as_ref() else {
-            error!("Component not initialized");
-            return;
-        };
-        info!("Rebuilding search index from database");
-
-        // TODO(#4052): This is inherently racy -- any add_history operations added between this
-        //              .read() and the subsequent .write() are completely discarded from the new
-        //              index.
-        let shells = self.index.read().await.shells.clone();
-        let search = handle.settings().await.search.clone();
-        let new_index = match SearchIndex::from_db(shells, handle.history_db(), &search).await {
-            Ok(new_index) => new_index,
-            Err(e) => {
-                error!("Failed to rebuild search index: {e}");
-                return;
-            }
-        };
-
-        info!("Search index rebuild complete; {} unique commands", new_index.command_count());
-        *self.index.write().await = new_index;
-    }
 }
 
 impl Default for SearchComponent {
@@ -209,7 +184,27 @@ impl Component for SearchComponent {
             }
             DaemonEvent::HistoryRebuilt => {
                 info!("History store rebuilt, rebuilding search index");
-                self.rebuild_index_only().await;
+
+                let Some(handle) = self.handle.as_ref() else {
+                    error!("Component not initialized");
+                    return Ok(());
+                };
+
+                // TODO(#4052): This is inherently racy -- any add_history operations added between
+                //              this .read() and the subsequent .write() are completely discarded
+                //              from the new index.
+                let shells = self.index.read().await.shells.clone();
+                let search = handle.settings().await.search.clone();
+                match SearchIndex::from_db(shells, handle.history_db(), &search).await {
+                    Ok(new_index) => {
+                        info!(
+                            "Search index rebuild complete; {} unique commands",
+                            new_index.command_count()
+                        );
+                        *self.index.write().await = new_index;
+                    }
+                    Err(e) => error!("Failed to rebuild search index: {e}"),
+                }
             }
             DaemonEvent::SettingsReloaded => {
                 if let Some(handle) = self.handle.as_ref() {
