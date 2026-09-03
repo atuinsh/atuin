@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use atuin_client::database::Sqlite;
-use atuin_client::history::History;
+use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::Search;
 use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
@@ -35,7 +35,7 @@ use atuin_common::string::NormalizeDiacriticsExt;
 /// Parse a UUID string into a 16-byte array.
 /// Returns None if the string is not a valid UUID.
 fn parse_uuid_bytes(s: &str) -> Option<[u8; 16]> {
-    Uuid::parse_str(s).ok().map(|u| *u.as_bytes())
+    Uuid::parse_str(s).ok().map(Uuid::into_bytes)
 }
 
 /// Pre-computed frecency data for O(1) lookup.
@@ -110,8 +110,8 @@ impl FrecencyData {
 /// Data for a unique command.
 #[derive(Debug)]
 pub struct CommandData {
-    /// History ID of the most recent invocation (16-byte UUID).
-    most_recent_id: [u8; 16],
+    /// History ID of the most recent invocation.
+    most_recent_id: HistoryId,
     /// Timestamp of the most recent invocation.
     most_recent_timestamp: i64,
     /// Pre-computed global frecency.
@@ -143,7 +143,6 @@ impl CommandData {
             return None;
         };
 
-        let history_id = history.id.into_bytes();
         let session = parse_uuid_bytes(&history.session)?;
         let timestamp = history.timestamp.unix_timestamp();
 
@@ -155,7 +154,7 @@ impl CommandData {
         global_frecency.record_use(timestamp);
 
         Some(Self {
-            most_recent_id: history_id,
+            most_recent_id: history.id,
             most_recent_timestamp: timestamp,
             global_frecency,
             directories: HashSet::from([dir_key]),
@@ -168,7 +167,6 @@ impl CommandData {
     /// Add an invocation from a history entry.
     /// Returns false if the history entry has invalid UUIDs.
     pub fn add_invocation(&mut self, history: &History, interner: &ThreadedRodeo) -> bool {
-        let history_id = history.id.into_bytes();
         let Some(session) = parse_uuid_bytes(&history.session) else {
             return false;
         };
@@ -187,7 +185,7 @@ impl CommandData {
 
         // Update most recent if this invocation is newer
         if timestamp > self.most_recent_timestamp {
-            self.most_recent_id = history_id;
+            self.most_recent_id = history.id;
             self.most_recent_timestamp = timestamp;
         }
 
@@ -195,7 +193,7 @@ impl CommandData {
     }
 
     /// Get the most recent history ID for this command.
-    pub fn most_recent_id(&self) -> [u8; 16] {
+    pub fn most_recent_id(&self) -> HistoryId {
         self.most_recent_id
     }
 
@@ -465,7 +463,7 @@ impl SearchIndex {
         query: &str,
         filter_mode: &IndexFilterMode,
         limit: u32,
-    ) -> impl Iterator<Item = [u8; 16]> {
+    ) -> impl Iterator<Item = HistoryId> {
         // Get precomputed frecency map (may be None if not yet computed)
         let frecency_map = self.frecency_map.read().clone();
 

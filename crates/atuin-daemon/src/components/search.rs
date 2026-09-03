@@ -357,7 +357,10 @@ impl SearchSvc for SearchGrpcService {
                 // Perform the search
                 let history_ids: Vec<Vec<u8>> =
                     span!(Level::TRACE, "daemon_search_query", %query, query_id).in_scope(|| {
-                        index.search(&query, &index_filter, RESULTS_LIMIT).map(Vec::from).collect()
+                        index
+                            .search(&query, &index_filter, RESULTS_LIMIT)
+                            .map(|id| id.into_bytes().to_vec())
+                            .collect()
                     });
                 drop(index);
 

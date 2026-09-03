@@ -177,11 +177,9 @@ impl TryFrom<CancelHistoryRequest> for DomainHistoryId {
     }
 }
 
-impl TryFrom<DeleteHistoryRequest> for Vec<DomainHistoryId> {
-    type Error = IdParseError;
-
-    fn try_from(value: DeleteHistoryRequest) -> Result<Self, Self::Error> {
-        value.ids.into_iter().map(DomainHistoryId::try_from).collect()
+impl DeleteHistoryRequest {
+    pub fn try_history_ids(&self) -> impl Iterator<Item = Result<DomainHistoryId, IdParseError>> {
+        self.ids.iter().map(|id| DomainHistoryId::try_from(id.clone()))
     }
 }
 
