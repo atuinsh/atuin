@@ -218,7 +218,7 @@ impl State {
         self.results_len = results.len();
 
         if settings.smart_sort {
-            Ok(atuin_history::sort::sort(self.search.input.as_str(), results))
+            Ok(atuin_history::sort::sort(self.search.input.as_str(), self.search_mode(), results))
         } else {
             Ok(results)
         }
