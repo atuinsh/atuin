@@ -30,7 +30,7 @@ macro_rules! versioned_messages {
 
 /// Mark a [`thiserror::Error`] type as an invalid argument error.
 ///
-/// Invalid arument errors receive an [`Into`] implementation into [`tonic::Status`] which returns
+/// Invalid argument errors receive an [`Into`] implementation into [`tonic::Status`] which returns
 /// the error as [`tonic::Status::invalid_argument`].
 macro_rules! invalid_argument_errors {
     ($($err:ty),* $(,)?) => {
