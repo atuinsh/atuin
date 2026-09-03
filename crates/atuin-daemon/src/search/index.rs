@@ -10,26 +10,34 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
+use std::pin::pin;
 use std::sync::Arc;
 
-use atuin_client::history::History;
+use atuin_client::database::Sqlite;
+use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::Search;
 use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
 use dashmap::DashMap;
 use easy_cast::Conv;
+use futures::{Stream, TryStreamExt, stream};
 use lasso::{Spur, ThreadedRodeo};
 use parking_lot::RwLock;
 use time::OffsetDateTime;
 use tracing::{Level, instrument};
 use uuid::Uuid;
 
-use super::normalize_diacritics;
+/// Failure to (re)build a [`SearchIndex`] from the history database.
+#[derive(Debug, thiserror::Error)]
+#[error("failed to load history from the database: {0}")]
+pub struct LoadFromDbError(eyre::Report);
+
+use atuin_common::string::NormalizeDiacriticsExt;
 
 /// Parse a UUID string into a 16-byte array.
 /// Returns None if the string is not a valid UUID.
 fn parse_uuid_bytes(s: &str) -> Option<[u8; 16]> {
-    Uuid::parse_str(s).ok().map(|u| *u.as_bytes())
+    Uuid::parse_str(s).ok().map(Uuid::into_bytes)
 }
 
 /// Pre-computed frecency data for O(1) lookup.
@@ -104,8 +112,8 @@ impl FrecencyData {
 /// Data for a unique command.
 #[derive(Debug)]
 pub struct CommandData {
-    /// History ID of the most recent invocation (16-byte UUID).
-    most_recent_id: [u8; 16],
+    /// History ID of the most recent invocation.
+    most_recent_id: HistoryId,
     /// Timestamp of the most recent invocation.
     most_recent_timestamp: i64,
     /// Pre-computed global frecency.
@@ -137,7 +145,6 @@ impl CommandData {
             return None;
         };
 
-        let history_id = history.id.into_bytes();
         let session = parse_uuid_bytes(&history.session)?;
         let timestamp = history.timestamp.unix_timestamp();
 
@@ -149,7 +156,7 @@ impl CommandData {
         global_frecency.record_use(timestamp);
 
         Some(Self {
-            most_recent_id: history_id,
+            most_recent_id: history.id,
             most_recent_timestamp: timestamp,
             global_frecency,
             directories: HashSet::from([dir_key]),
@@ -162,7 +169,6 @@ impl CommandData {
     /// Add an invocation from a history entry.
     /// Returns false if the history entry has invalid UUIDs.
     pub fn add_invocation(&mut self, history: &History, interner: &ThreadedRodeo) -> bool {
-        let history_id = history.id.into_bytes();
         let Some(session) = parse_uuid_bytes(&history.session) else {
             return false;
         };
@@ -181,7 +187,7 @@ impl CommandData {
 
         // Update most recent if this invocation is newer
         if timestamp > self.most_recent_timestamp {
-            self.most_recent_id = history_id;
+            self.most_recent_id = history.id;
             self.most_recent_timestamp = timestamp;
         }
 
@@ -189,7 +195,7 @@ impl CommandData {
     }
 
     /// Get the most recent history ID for this command.
-    pub fn most_recent_id(&self) -> [u8; 16] {
+    pub fn most_recent_id(&self) -> HistoryId {
         self.most_recent_id
     }
 
@@ -274,14 +280,15 @@ type FrecencyMap = Arc<Vec<u32>>;
 struct HaystackEntry {
     /// The original text of the entry.
     pub original: Arc<str>,
-    /// The [normalized](normalize_diacritics) version of the text, with diacritics removed.
+    /// The [normalized](NormalizeDiacriticsExt::normalize_diacritics) version of the text, with
+    /// diacritics removed.
     pub normalized: Arc<str>,
 }
 
 impl HaystackEntry {
     /// Create a new [`HaystackEntry`] from an [`Arc<str>`].
     pub fn new(text: Arc<str>) -> Self {
-        let normalized = match normalize_diacritics(&text) {
+        let normalized = match text.normalize_diacritics() {
             Cow::Borrowed(_) => text.clone(),
             Cow::Owned(normalized) => normalized.into(),
         };
@@ -375,6 +382,44 @@ impl SearchIndex {
         }
     }
 
+    /// Build a fresh index for `shells`, populated from `db` and with its frecency map ready.
+    pub async fn from_db(
+        shells: OrFilter<Vec<String>>,
+        db: &Sqlite,
+        search_settings: &Search,
+    ) -> Result<Self, LoadFromDbError> {
+        let new_index = Self::new(shells);
+        new_index.load_from_db(db).await?;
+        new_index.rebuild_frecency(search_settings);
+        Ok(new_index)
+    }
+
+    /// Number of history rows loaded per page when (re)building an index from the database.
+    pub const HISTORY_LOAD_PAGE_SIZE: usize = 5000;
+
+    /// Load every history entry from `db` into this index.
+    pub async fn load_from_db(&self, db: &Sqlite) -> Result<(), LoadFromDbError> {
+        let mut pages = pin!(Self::history_pages(db));
+        while let Some(histories) = pages.try_next().await? {
+            self.add_histories(&histories);
+        }
+        Ok(())
+    }
+
+    /// Stream every history entry in `db`, one page at a time.
+    pub fn history_pages(db: &Sqlite) -> impl Stream<Item = Result<Vec<History>, LoadFromDbError>> {
+        stream::try_unfold(
+            db.all_paged(Self::HISTORY_LOAD_PAGE_SIZE, false, true),
+            |mut pager| async move {
+                match pager.next().await {
+                    Ok(Some(histories)) => Ok(Some((histories, pager))),
+                    Ok(None) => Ok(None),
+                    Err(e) => Err(LoadFromDbError(e.into())),
+                }
+            },
+        )
+    }
+
     /// Add a history entry to the index.
     ///
     /// If the command already exists, updates its invocation data.
@@ -434,14 +479,14 @@ impl SearchIndex {
         query: &str,
         filter_mode: &IndexFilterMode,
         limit: u32,
-    ) -> impl Iterator<Item = [u8; 16]> {
+    ) -> impl Iterator<Item = HistoryId> {
         // Get precomputed frecency map (may be None if not yet computed)
         let frecency_map = self.frecency_map.read().clone();
 
         let query = super::truncate_query(query);
         // Match accent-insensitively: the haystack side is normalized in
         // add_history, so an accented query must be normalized too
-        let query = normalize_diacritics(query);
+        let query = query.normalize_diacritics();
 
         let haystack = self.haystack.read();
         let filter = filter_mode.compile(&self.interner);

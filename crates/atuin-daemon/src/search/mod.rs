@@ -2,11 +2,7 @@
 //!
 //! This module provides fuzzy search over command history using frizbee.
 
-use std::borrow::Cow;
-
 mod index;
-#[allow(clippy::manual_range_contains, reason = "this is a vendored file")]
-mod normalize;
 
 // Include the generated proto code
 mod proto {
@@ -26,25 +22,8 @@ const MAX_QUERY_LEN: usize = 512;
 /// client-side highlighting) must apply this.
 #[must_use]
 pub fn truncate_query(query: &str) -> &str {
-    // O(1) happy path -- query cannot exceed `MAX_QUERY_LEN` chars if it doesn't even have that
-    // many bytes.
-    if query.len() <= MAX_QUERY_LEN {
-        return query;
-    }
-    match query.char_indices().nth(MAX_QUERY_LEN) {
-        Some((end, _)) => &query[..end],
-        None => query,
-    }
-}
-
-/// Normalize Latin diacritics to their ASCII equivalents (`é` → `e`) so unaccented queries match
-/// accented history entries. Maps char to char so char positions are preserved.
-pub fn normalize_diacritics(s: &str) -> Cow<'_, str> {
-    use normalize::normalize;
-    if s.is_ascii() || !s.chars().any(|c| normalize(c) != c) {
-        return Cow::Borrowed(s);
-    }
-    Cow::Owned(s.chars().map(normalize).collect())
+    use atuin_common::string::TruncateCharsExt;
+    query.truncate_chars(MAX_QUERY_LEN)
 }
 
 // Re-export the index and related types

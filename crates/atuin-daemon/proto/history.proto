@@ -63,6 +63,18 @@ message CancelHistoryReply {
   uint32 protocol = 2;
 }
 
+message DeleteHistoryRequest {
+  // History entries to delete, by id.
+  repeated HistoryId ids = 1;
+}
+
+message DeleteHistoryReply {
+  // Number of entries processed for deletion.
+  uint64 deleted = 1;
+  string version = 2;
+  uint32 protocol = 3;
+}
+
 // Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
 message StatusRequest {}
 
@@ -123,6 +135,7 @@ service History {
   rpc StartHistory(StartHistoryRequest) returns (StartHistoryReply);
   rpc EndHistory(EndHistoryRequest) returns (EndHistoryReply);
   rpc CancelHistory(CancelHistoryRequest) returns (CancelHistoryReply);
+  rpc DeleteHistory(DeleteHistoryRequest) returns (DeleteHistoryReply);
   rpc TailHistory(TailHistoryRequest) returns (stream TailHistoryReply);
   // Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
   rpc Status(StatusRequest) returns (StatusReply);

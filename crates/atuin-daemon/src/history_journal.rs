@@ -36,6 +36,7 @@ use atuin_client::database::Sqlite as HistoryDatabase;
 use atuin_client::history::store::HistoryStore;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::packfile;
+use atuin_client::settings::Search;
 use atuin_domain::caps::{CapClient, PackfileCap};
 use atuin_domain::record::{RecordId, RecordIdx, RecordSeriesKey, RecordTag};
 use dashmap::DashMap;
@@ -97,8 +98,6 @@ pub struct HistoryJournal {
     active_cmds: DashMap<HistoryId, InFlightCmd>,
 
     /// We hold a reference to the search index which allows us to add a new history record into it.
-    ///
-    /// Do note that the [`tokio::sync::RwLock`] is only ever used in reader mode.
     search_index: Arc<tokio::sync::RwLock<SearchIndex>>,
 
     /// Just like the search_index, we need to notify the SemanticComponent of added history.
@@ -117,6 +116,15 @@ pub enum CmdFinishError {
     #[error("storing into history store failed: {0}")]
     HistoryStoreFailed(eyre::Report),
     #[error("storing into history db failed: {0}")]
+    HistoryDbFailed(eyre::Report),
+}
+
+/// Errors returned by [`HistoryJournal::delete`].
+#[derive(Debug, thiserror::Error)]
+pub enum CmdDeleteError {
+    #[error("deleting from history store failed: {0}")]
+    HistoryStoreFailed(eyre::Report),
+    #[error("applying deletion to history db failed: {0}")]
     HistoryDbFailed(eyre::Report),
 }
 
@@ -304,6 +312,9 @@ impl HistoryJournal {
             tracing::warn!("packing failed: {e}");
         }
 
+        // TODO(#4052): This is inherently racy -- any add_history operations added between this
+        //              .read() and the subsequent .write() are completely discarded from the new
+        //              index.
         self.search_index.read().await.add_history(&history);
 
         if self.broadcast.receiver_count() > 0 {
@@ -327,6 +338,87 @@ impl HistoryJournal {
         let _ = self.broadcast.send(CmdEvent::Cancelled(cmd.history));
 
         Ok(())
+    }
+
+    /// Delete the given history entries from Atuin's memory completely.
+    ///
+    /// `search_settings` is needed to rebuild the search index's frecency map after the deletion,
+    /// so the swapped-in index has correct rankings immediately rather than after the next refresh.
+    ///
+    /// Returns how many history entries Atuin forgot.
+    pub async fn delete(
+        &self,
+        ids: impl IntoIterator<Item = HistoryId>,
+        search_settings: &Search,
+    ) -> Result<usize, CmdDeleteError> {
+        // Remove records from the record store.
+        //
+        // This returns a tuple where the first element is the total number of history elements that
+        // were erased from Atuin's memory, and the second element is a vector of [`RecordId`]s that
+        // must be subsequently removed from the history database via [`HistoryStore::build_all`].
+        // Note the passed database argument.
+        //
+        // Furthermore, note that `.0 != .1.len()`, because there may very well be history entries
+        // that atuin has forgotten about that were never in the record store.
+        //
+        // This happens as a result of the fact that [`HistoryJournal`] might be tracking started,
+        // but not finished commands. These get cancelled via [`HistoryJournal::cancel`].
+        let delete_records = async || {
+            let mut deleted: usize = 0;
+            let mut record_ids = Vec::new();
+            for id in ids {
+                if let Some((_id, cmd)) = self.active_cmds.remove(&id) {
+                    let _ = self.broadcast.send(CmdEvent::Cancelled(cmd.history));
+                    deleted += 1;
+                    continue;
+                }
+
+                match self.history_store.delete(id).await {
+                    Ok((record_id, _)) => {
+                        record_ids.push(record_id);
+                        deleted += 1;
+                    }
+                    Err(e) => {
+                        return Err(CmdDeleteError::HistoryStoreFailed(e));
+                    }
+                }
+            }
+
+            Ok((deleted, record_ids))
+        };
+
+        let (deleted, record_ids) = delete_records().await?;
+        if record_ids.is_empty() {
+            return Ok(deleted);
+        }
+
+        self.history_store
+            .build_all(&self.history_db, &record_ids)
+            .await
+            .map_err(CmdDeleteError::HistoryDbFailed)?;
+
+        // Clone the shell filter and drop the read guard before the (full) reload, so the scan
+        // doesn't hold the search-index lock across the database load.
+        let shells = self.search_index.read().await.shells.clone();
+        let rebuilt = SearchIndex::from_db(shells, &self.history_db, search_settings).await;
+        match rebuilt {
+            Ok(new_index) => *self.search_index.write().await = new_index,
+            Err(e) => {
+                // TODO(markovejnovic): This is obviously incorrect behavior, keeping the previous
+                //                      index is almost certainly wrong, however, is the legacy
+                //                      behavior we had.
+                //
+                //                      Arguably, we could completely delete the index/crash the
+                //                      daemon, since at this point, Atuin is as good as useless.
+                //
+                //                      We could also just mark the index as hot garbo and have the
+                //                      next request attempt to rebuild it. Not sure why the next
+                //                      request would succeed but a retry is always good.
+                tracing::error!("failed to reload search index; keeping previous index: {e}");
+            }
+        }
+
+        Ok(deleted)
     }
 
     /// Create a new stream of [`CmdEvent`] objects.

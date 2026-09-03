@@ -19,15 +19,14 @@ use tracing::{Level, instrument, span};
 
 use crate::control::control_client::ControlClient as ControlServiceClient;
 use crate::control::{
-    ForceSyncEvent, HistoryDeletedEvent, HistoryPrunedEvent, HistoryRebuiltEvent, SendEventRequest,
-    SettingsReloadedEvent, ShutdownEvent,
+    ForceSyncEvent, HistoryRebuiltEvent, SendEventRequest, SettingsReloadedEvent, ShutdownEvent,
 };
 use crate::events::DaemonEvent;
 use crate::grpc::history::pb::history_client::HistoryClient as HistoryServiceClient;
 use crate::grpc::history::pb::{
-    AuthorKind, CancelHistoryReply, CancelHistoryRequest, EndHistoryReply, EndHistoryRequest,
-    ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest,
-    TailHistoryReply, TailHistoryRequest,
+    AuthorKind, CancelHistoryReply, CancelHistoryRequest, DeleteHistoryReply, DeleteHistoryRequest,
+    EndHistoryReply, EndHistoryRequest, ShutdownRequest, StartHistoryReply, StartHistoryRequest,
+    StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
 };
 use crate::search::search_client::SearchClient as SearchServiceClient;
 use crate::search::{
@@ -161,6 +160,16 @@ impl HistoryClient {
             .client
             .cancel_history(CancelHistoryRequest {
                 id: Some(id.into()),
+            })
+            .await?
+            .into_inner())
+    }
+
+    pub async fn delete_history(&mut self, ids: Vec<HistoryId>) -> Result<DeleteHistoryReply> {
+        Ok(self
+            .client
+            .delete_history(DeleteHistoryRequest {
+                ids: ids.into_iter().map(Into::into).collect(),
             })
             .await?
             .into_inner())
@@ -474,7 +483,7 @@ impl ControlClient {
 
     /// Send an event to the daemon.
     pub async fn send_event(&mut self, event: DaemonEvent) -> Result<()> {
-        let proto_event = daemon_event_to_proto(event);
+        let proto_event = daemon_event_to_proto(&event);
         let request = SendEventRequest {
             event: Some(proto_event),
         };
@@ -484,15 +493,11 @@ impl ControlClient {
 }
 
 /// Convert a daemon event to its proto representation.
-fn daemon_event_to_proto(event: DaemonEvent) -> crate::control::send_event_request::Event {
+fn daemon_event_to_proto(event: &DaemonEvent) -> crate::control::send_event_request::Event {
     use crate::control::send_event_request::Event;
 
     match event {
-        DaemonEvent::HistoryPruned => Event::HistoryPruned(HistoryPrunedEvent {}),
         DaemonEvent::HistoryRebuilt => Event::HistoryRebuilt(HistoryRebuiltEvent {}),
-        DaemonEvent::HistoryDeleted { ids } => Event::HistoryDeleted(HistoryDeletedEvent {
-            ids: ids.into_iter().map(|id| id.to_string()).collect(),
-        }),
         DaemonEvent::ForceSync => Event::ForceSync(ForceSyncEvent {}),
         DaemonEvent::SettingsReloaded => Event::SettingsReloaded(SettingsReloadedEvent {}),
         DaemonEvent::ShutdownRequested => Event::Shutdown(ShutdownEvent {}),
@@ -520,11 +525,8 @@ fn daemon_event_to_proto(event: DaemonEvent) -> crate::control::send_event_reque
 /// # Example
 ///
 /// ```ignore
-/// // After pruning history
-/// emit_event(DaemonEvent::HistoryPruned).await?;
-///
-/// // After deleting specific history items
-/// emit_event(DaemonEvent::HistoryDeleted { ids: vec![...] }).await?;
+/// // After history was rebuilt
+/// emit_event(DaemonEvent::HistoryRebuilt).await?;
 ///
 /// // Request immediate sync
 /// emit_event(DaemonEvent::ForceSync).await?;

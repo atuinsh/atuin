@@ -1,6 +1,7 @@
 //! Model conversion utilities for the `history` gRPC protobuf.
 mod codegen {
     #![allow(clippy::must_use_candidate, reason = "prost-generated code")]
+    #![allow(clippy::derive_partial_eq_without_eq, reason = "prost-generated code")]
     tonic::include_proto!("history");
 }
 
@@ -18,7 +19,9 @@ use tonic::Status;
 
 use crate::grpc::common::pb as common;
 use crate::grpc::common::pb::Uuid;
-use crate::history_journal::{CmdCancelError, CmdEvent, CmdFinishError, GetCmdInFlightError};
+use crate::history_journal::{
+    CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, GetCmdInFlightError,
+};
 
 impl From<DomainHistoryId> for HistoryId {
     fn from(value: DomainHistoryId) -> Self {
@@ -174,6 +177,12 @@ impl TryFrom<CancelHistoryRequest> for DomainHistoryId {
     }
 }
 
+impl DeleteHistoryRequest {
+    pub fn into_history_ids(self) -> impl Iterator<Item = Result<DomainHistoryId, IdParseError>> {
+        self.ids.into_iter().map(DomainHistoryId::try_from)
+    }
+}
+
 /// Map a single journal event to its tail-stream reply.
 impl From<CmdEvent> for TailHistoryEvent {
     fn from(event: CmdEvent) -> Self {
@@ -203,6 +212,16 @@ impl From<CmdCancelError> for Status {
     }
 }
 
+impl From<CmdDeleteError> for Status {
+    fn from(value: CmdDeleteError) -> Self {
+        match value {
+            CmdDeleteError::HistoryStoreFailed(_) | CmdDeleteError::HistoryDbFailed(_) => {
+                Self::internal(value.to_string())
+            }
+        }
+    }
+}
+
 impl From<GetCmdInFlightError> for Status {
     fn from(value: GetCmdInFlightError) -> Self {
         match value {
@@ -218,7 +237,7 @@ invalid_argument_errors!(
     CancelHistoryRequestParseError,
 );
 
-versioned_messages!(StartHistoryReply, EndHistoryReply, CancelHistoryReply);
+versioned_messages!(StartHistoryReply, EndHistoryReply, CancelHistoryReply, DeleteHistoryReply);
 
 #[cfg(test)]
 mod tests {

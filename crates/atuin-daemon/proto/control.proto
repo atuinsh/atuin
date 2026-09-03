@@ -10,12 +10,6 @@ service Control {
 
 message SendEventRequest {
   oneof event {
-    // History was pruned - search index needs full rebuild
-    HistoryPrunedEvent history_pruned = 1;
-
-    // Specific history items were deleted
-    HistoryDeletedEvent history_deleted = 2;
-
     // Request immediate sync
     ForceSyncEvent force_sync = 3;
 
@@ -36,17 +30,8 @@ message SendEventResponse {
 
 // Individual event message types
 
-message HistoryPrunedEvent {
-  // No fields needed - just signals that pruning happened
-}
-
 message HistoryRebuiltEvent {
   // No fields needed - just signals that rebuilding happened
-}
-
-message HistoryDeletedEvent {
-  // IDs of deleted history items (UUIDs as strings)
-  repeated string ids = 1;
 }
 
 message ForceSyncEvent {

@@ -32,8 +32,6 @@ use time::OffsetDateTime;
 use tracing::{debug, instrument, warn};
 
 #[cfg(feature = "daemon")]
-use super::daemon as daemon_cmd;
-#[cfg(feature = "daemon")]
 use super::daemon;
 
 #[derive(Subcommand, Debug)]
@@ -619,6 +617,30 @@ pub(super) async fn end_history_entry(
     handle_end(&db, store, history_store, settings, id, exit, duration).await
 }
 
+/// Delete history entries, routing through the daemon when it owns the store.
+///
+/// When `daemon.enabled`, the daemon performs the deletion and updates its in-memory search index;
+/// otherwise (or if the daemon is unreachable) we delete directly via the record store and rebuild
+/// the affected rows locally.
+#[cfg_attr(not(feature = "daemon"), allow(unused_variables))]
+pub(super) async fn delete_history_entries(
+    settings: &Settings,
+    history_store: &HistoryStore,
+    db: &Sqlite,
+    entries: impl IntoIterator<Item = History>,
+) -> Result<()> {
+    #[cfg(feature = "daemon")]
+    if settings.daemon.enabled {
+        let ids: Vec<HistoryId> = entries.into_iter().map(|h| h.id).collect();
+        daemon::delete_history(settings, ids).await?;
+        return Ok(());
+    }
+
+    let ids = history_store.delete_entries(entries).await?;
+    history_store.build_all(db, &ids).await?;
+    Ok(())
+}
+
 #[cfg(feature = "daemon")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TailKind {
@@ -1011,14 +1033,11 @@ impl Cmd {
             let host_id = Settings::host_id().await?;
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
-            for entry in matches {
+            for entry in &matches {
                 eprintln!("deleting {}", entry.id);
-                let (id, _) = history_store.delete(entry.id).await?;
-                history_store.build_all(db, &[id]).await?;
             }
 
-            #[cfg(feature = "daemon")]
-            daemon_cmd::emit_event(settings, atuin_daemon::DaemonEvent::HistoryPruned).await;
+            delete_history_entries(settings, &history_store, db, matches).await?;
         }
         Ok(())
     }
@@ -1066,18 +1085,11 @@ impl Cmd {
             let host_id = Settings::host_id().await?;
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
-            #[cfg(feature = "daemon")]
-            let ids = matches.iter().map(|h| h.id).collect::<Vec<_>>();
-
-            for entry in matches {
+            for entry in &matches {
                 eprintln!("deleting {}", entry.id);
-                let (id, _) = history_store.delete(entry.id).await?;
-                history_store.build_all(db, &[id]).await?;
             }
 
-            #[cfg(feature = "daemon")]
-            daemon_cmd::emit_event(settings, atuin_daemon::DaemonEvent::HistoryDeleted { ids })
-                .await;
+            delete_history_entries(settings, &history_store, db, matches).await?;
         }
         Ok(())
     }

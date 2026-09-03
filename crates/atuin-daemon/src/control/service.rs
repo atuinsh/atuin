@@ -57,11 +57,7 @@ impl Control for ControlService {
 /// Convert a proto event to a daemon event.
 fn proto_event_to_daemon_event(event: Event) -> DaemonEvent {
     match event {
-        Event::HistoryPruned(_) => DaemonEvent::HistoryPruned,
         Event::HistoryRebuilt(_) => DaemonEvent::HistoryRebuilt,
-        Event::HistoryDeleted(e) => DaemonEvent::HistoryDeleted {
-            ids: e.ids.iter().filter_map(|id| id.parse().ok()).collect(),
-        },
         Event::ForceSync(_) => DaemonEvent::ForceSync,
         Event::SettingsReloaded(_) => DaemonEvent::SettingsReloaded,
         Event::Shutdown(_) => DaemonEvent::ShutdownRequested,

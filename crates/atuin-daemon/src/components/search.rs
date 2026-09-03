@@ -3,13 +3,13 @@
 //! Provides fuzzy search over command history using the Nucleo search library
 //! with frecency-based ranking and dynamic filtering.
 
-use std::ops::Deref;
-use std::pin::Pin;
+use std::pin::{Pin, pin};
 use std::sync::Arc;
 
 use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
 use eyre::Result;
+use futures::TryStreamExt;
 use tokio::sync::RwLock;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
@@ -23,90 +23,9 @@ use crate::search::{
     SearchRequest, SearchResponse,
 };
 
-const PAGE_SIZE: usize = 5000;
 const RESULTS_LIMIT: u32 = 200;
 /// How often to rebuild the frecency map (in seconds).
 const FRECENCY_REFRESH_INTERVAL_SECS: u64 = 60;
-
-/// Build the search index without building the frecency map.
-///
-/// `index` is a closure to support both shared `RwLock` indices and owned indices:
-///
-/// * Owned: `async || &my_owned_index`
-/// * Shared: `|| my_rwlock_index.read()`
-///
-/// In the shared case, this ensures that the lock isn't held while this function does expensive
-/// computation.
-#[instrument(skip_all, level = Level::TRACE)]
-async fn build_index_only<F, R>(index: F, handle: &DaemonHandle) -> Result<(), ()>
-where
-    F: Fn() -> R,
-    R: Future<Output: Deref<Target = SearchIndex>>,
-{
-    info!("Loading history into search index; page size = {}", PAGE_SIZE);
-    let db = handle.history_db();
-    let mut pager = db.all_paged(PAGE_SIZE, false, true);
-    loop {
-        match pager.next().await {
-            Ok(Some(histories)) => {
-                info!("Loading {} history entries into search index", histories.len());
-                index().await.add_histories(&histories);
-            }
-            Ok(None) => {
-                info!(
-                    "History load complete; {} unique commands indexed",
-                    index().await.command_count()
-                );
-                return Ok(());
-            }
-            Err(e) => {
-                error!("Failed to load history: {}", e);
-                return Err(());
-            }
-        }
-    }
-}
-
-/// Build the frecency map.
-///
-/// `index` is a closure to support both shared `RwLock` indices and owned indices:
-///
-/// * Owned: `async || &my_owned_index`
-/// * Shared: `|| my_rwlock_index.read()`
-///
-/// In the shared case, this ensures that the lock isn't held while this function does expensive
-/// computation.
-#[instrument(skip_all, level = Level::TRACE)]
-async fn build_frecency<F, R>(index: F, handle: &DaemonHandle)
-where
-    F: Fn() -> R,
-    R: Future<Output: Deref<Target = SearchIndex>>,
-{
-    {
-        let settings = handle.settings().await;
-        index().await.rebuild_frecency(&settings.search);
-    }
-    info!("Frecency map built");
-}
-
-/// Build the search index and frecency map.
-///
-/// `index` is a closure to support both shared `RwLock` indices and owned indices:
-///
-/// * Owned: `async || &my_owned_index`
-/// * Shared: `|| my_rwlock_index.read()`
-///
-/// In the shared case, this ensures that the lock isn't held while this function does expensive
-/// computation.
-async fn build_index<F, R>(index: F, handle: &DaemonHandle) -> Result<(), ()>
-where
-    F: Fn() -> R,
-    R: Future<Output: Deref<Target = SearchIndex>>,
-{
-    build_index_only(&index, handle).await?;
-    build_frecency(index, handle).await;
-    Ok(())
-}
 
 /// Search component - provides fuzzy search over command history.
 ///
@@ -148,22 +67,40 @@ impl SearchComponent {
         self.index.clone()
     }
 
-    /// Rebuild the entire search index from the database without updating the frecency map.
-    async fn rebuild_index_only(&self) {
-        let Some(handle) = self.handle.as_ref() else {
-            error!("Component not initialized");
-            return;
-        };
-        info!("Rebuilding search index from database");
+    #[instrument(skip_all, level = Level::TRACE)]
+    async fn rebuild_frecency(handle: &DaemonHandle, index: &RwLock<SearchIndex>) {
+        let settings = handle.settings().await;
+        index.read().await.rebuild_frecency(&settings.search);
+    }
 
-        // Create a new index
-        let new_index = SearchIndex::new(self.index.read().await.shells.clone());
-        if build_index_only(async || &new_index, handle).await.is_err() {
-            return;
+    /// Rebuild the search index from the database, then its frecency map.
+    ///
+    /// The read guard is re-acquired per page rather than held across the whole load, so concurrent
+    /// index operations aren't blocked while this does its expensive work.
+    #[instrument(skip_all, level = Level::TRACE)]
+    async fn rebuild_index(
+        handle: &DaemonHandle,
+        index: &RwLock<SearchIndex>,
+    ) -> Result<(), eyre::Error> {
+        info!(
+            "Loading history into search index; page size = {}",
+            SearchIndex::HISTORY_LOAD_PAGE_SIZE
+        );
+        let mut pages = pin!(SearchIndex::history_pages(handle.history_db()));
+        while let Some(histories) =
+            pages.try_next().await.inspect_err(|e| error!("Failed to load history: {e}"))?
+        {
+            info!("Loading {} history entries into search index", histories.len());
+            index.read().await.add_histories(&histories);
         }
 
-        info!("Search index rebuild complete; {} unique commands", new_index.command_count());
-        *self.index.write().await = new_index;
+        info!(
+            "History load complete; {} unique commands indexed",
+            index.read().await.command_count()
+        );
+
+        Self::rebuild_frecency(handle, index).await;
+        Ok(())
     }
 }
 
@@ -181,6 +118,9 @@ impl Component for SearchComponent {
     async fn start(&mut self, handle: DaemonHandle) -> Result<()> {
         self.handle = Some(handle.clone());
 
+        // TODO(#4052): This is inherently racy -- any add_history operations added between this
+        //              .read() and the subsequent .write() are completely discarded from the new
+        //              index.
         // Spawn background task to load history into index
         let index = self.index.clone();
         let handle_for_loader = handle.clone();
@@ -193,10 +133,13 @@ impl Component for SearchComponent {
             let shells =
                 handle_for_loader.settings().await.search.shells.to_filter().to_vec_filter();
             index.write().await.shells = shells;
-            let _ = build_index(|| index.read(), &handle_for_loader).await;
+            let _ = Self::rebuild_index(&handle_for_loader, &index).await.inspect_err(|err| {
+                error!(?err, "failed to rebuild the index.");
+            });
         }));
 
         // Spawn background task to periodically refresh frecency
+        let handle_for_frecency = handle;
         let index_for_frecency = self.index.clone();
         self.frecency_handle = Some(tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(
@@ -205,7 +148,7 @@ impl Component for SearchComponent {
             loop {
                 interval.tick().await;
                 trace!("Refreshing frecency map");
-                build_frecency(|| index_for_frecency.read(), &handle).await;
+                Self::rebuild_frecency(&handle_for_frecency, &index_for_frecency).await;
             }
         }));
 
@@ -225,20 +168,34 @@ impl Component for SearchComponent {
                 let histories = handle.history_db().load_active(ids.iter().copied()).await?;
                 self.index.read().await.add_histories(&histories);
             }
-            DaemonEvent::HistoryPruned | DaemonEvent::HistoryRebuilt => {
-                info!("History store pruned or rebuilt, rebuilding search index");
-                self.rebuild_index_only().await;
-            }
-            DaemonEvent::HistoryDeleted { ids } => {
-                info!(count = ids.len(), "History deleted, rebuilding search index");
-                // For now, just rebuild the entire index. A more efficient implementation
-                // would remove specific items from the index.
-                self.rebuild_index_only().await;
+            DaemonEvent::HistoryRebuilt => {
+                info!("History store rebuilt, rebuilding search index");
+
+                let Some(handle) = self.handle.as_ref() else {
+                    error!("Component not initialized");
+                    return Ok(());
+                };
+
+                // TODO(#4052): This is inherently racy -- any add_history operations added between
+                //              this .read() and the subsequent .write() are completely discarded
+                //              from the new index.
+                let shells = self.index.read().await.shells.clone();
+                let search = handle.settings().await.search.clone();
+                match SearchIndex::from_db(shells, handle.history_db(), &search).await {
+                    Ok(new_index) => {
+                        info!(
+                            "Search index rebuild complete; {} unique commands",
+                            new_index.command_count()
+                        );
+                        *self.index.write().await = new_index;
+                    }
+                    Err(e) => error!("Failed to rebuild search index: {e}"),
+                }
             }
             DaemonEvent::SettingsReloaded => {
                 if let Some(handle) = self.handle.as_ref() {
                     info!("Rebuilding frecency map after settings update");
-                    build_frecency(|| self.index.read(), handle).await;
+                    Self::rebuild_frecency(handle, &self.index).await;
                 }
             }
             // Events we don't care about
@@ -294,8 +251,10 @@ impl SearchGrpcService {
 
         info!("Rebuilding search index from database after shell filter change");
 
-        let new_index = SearchIndex::new(shells);
-        build_index(async || &new_index, &self.handle).await?;
+        let search = self.handle.settings().await.search.clone();
+        let new_index = SearchIndex::from_db(shells, self.handle.history_db(), &search)
+            .await
+            .map_err(|e| error!("Failed to rebuild search index: {e}"))?;
 
         info!("Search index rebuild complete; {} unique commands", new_index.command_count());
         Ok(Some(new_index))
@@ -347,6 +306,9 @@ impl SearchSvc for SearchGrpcService {
 
                 // An empty list in `SearchRequest::shells` means "all".
                 let shells = OrFilter::from_list(search_req.shells).unwrap_or_default();
+                // TODO(#4052): This is inherently racy -- any add_history operations added between
+                //              this .maybe_rebuild_index() and the subsequent .write() are
+                //              completely discarded from the new index.
                 let index = match this.maybe_rebuild_index(shells).await {
                     Ok(Some(new_index)) => {
                         let mut guard = this.index.write().await;
@@ -363,7 +325,10 @@ impl SearchSvc for SearchGrpcService {
                 // Perform the search
                 let history_ids: Vec<Vec<u8>> =
                     span!(Level::TRACE, "daemon_search_query", %query, query_id).in_scope(|| {
-                        index.search(&query, &index_filter, RESULTS_LIMIT).map(Vec::from).collect()
+                        index
+                            .search(&query, &index_filter, RESULTS_LIMIT)
+                            .map(|id| id.into_bytes().to_vec())
+                            .collect()
                     });
                 drop(index);
 
@@ -390,6 +355,9 @@ impl SearchSvc for SearchGrpcService {
         request: Request<PrepareIndexRequest>,
     ) -> Result<Response<PrepareIndexResponse>, Status> {
         // Same as `SearchRequest::shells` -- empty list means "all".
+        // TODO(#4052): This is inherently racy -- any add_history operations added between this
+        //              .maybe_rebuild_index() and the subsequent .write() are completely discarded
+        //              from the new index.
         let shells = OrFilter::from_list(request.into_inner().shells).unwrap_or_default();
         if let Some(index) = self
             .maybe_rebuild_index(shells)

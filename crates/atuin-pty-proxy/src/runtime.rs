@@ -66,6 +66,10 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     // umask the user launched us with. Applied in the child between fork and
     // exec, so the proxy's own umask stays restrictive.
     if let Some(mask) = options.child_umask {
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "mode_t is u16 on macOS and u32 on Linux. nop on linux, narrowing on macOS."
+        )]
         cmd.umask(Some(mask as _));
     }
 

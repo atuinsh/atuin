@@ -70,7 +70,7 @@ pub struct DaemonState {
 ///
 /// ```ignore
 /// // Emit an event
-/// handle.emit(DaemonEvent::HistoryPruned);
+/// handle.emit(DaemonEvent::HistoryRebuilt);
 ///
 /// // Access settings
 /// let settings = handle.settings().await;

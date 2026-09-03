@@ -1,8 +1,9 @@
 use atuin_client::database::{DbSearchMode, OptFilters, Sqlite};
 use atuin_client::history::{History, HistoryId, all_user_author_filter};
 use atuin_client::settings::Settings;
+use atuin_common::string::NormalizeDiacriticsExt;
 use atuin_daemon::client::{SearchClient, SearchParams};
-use atuin_daemon::search::{normalize_diacritics, truncate_query};
+use atuin_daemon::search::truncate_query;
 use easy_cast::Conv;
 use eyre::Result;
 use tracing::{Level, debug, instrument, span};
@@ -240,8 +241,8 @@ impl SearchEngine for Search {
         // Mirror the daemon's query handling: truncate before frizbee sees
         // the query (a long enough atom panics Matcher::from_query) and
         // normalize diacritics so highlighting agrees with matching
-        let search_input = normalize_diacritics(truncate_query(search_input));
-        let matchable = normalize_diacritics(command);
+        let search_input = truncate_query(search_input).normalize_diacritics();
+        let matchable = command.normalize_diacritics();
 
         let config = frizbee::Config::default().casing(frizbee::CaseMatching::Smart);
         let mut matcher = frizbee::Matcher::from_query(&search_input, &config);

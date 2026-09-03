@@ -493,6 +493,13 @@ pub async fn cancel_history(settings: &Settings, id: HistoryId) -> Result<()> {
     Ok(())
 }
 
+pub async fn delete_history(settings: &Settings, ids: Vec<HistoryId>) -> Result<u64> {
+    let reply =
+        try_with_restart(settings, async |client, ids| client.delete_history(ids).await, ids)
+            .await?;
+    Ok(reply.deleted)
+}
+
 /// Emit a daemon event, auto-starting the daemon if it is not running.
 ///
 /// If the daemon is not reachable and `daemon.autostart` is enabled, this
