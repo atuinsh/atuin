@@ -385,6 +385,10 @@ impl SqliteStore {
         let re_encrypted = all
             .into_iter()
             .map(|record| {
+                if record.tag.is_plaintext() {
+                    return Ok(record);
+                }
+
                 let data = paseto_v4::reencrypt_sync(&record.data, old_key, new_key)?;
                 Ok(record.with_data(data))
             })
@@ -418,7 +422,10 @@ impl SqliteStore {
     pub async fn verify(&self, key: &paseto_v4::Key) -> Result<()> {
         let all = self.load_all().await?;
 
-        all.into_iter().map(|record| record.decrypt(key)).collect::<Result<Vec<_>>>()?;
+        all.into_iter()
+            .filter(|record| !record.tag.is_plaintext())
+            .map(|record| record.decrypt(key))
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(())
     }
@@ -430,6 +437,10 @@ impl SqliteStore {
         let all = self.load_all().await?;
 
         for record in &all {
+            if record.tag.is_plaintext() {
+                continue;
+            }
+
             match record.clone().decrypt(key) {
                 Ok(_) => {}
                 Err(_) => {
@@ -674,5 +685,49 @@ mod tests {
                 .unwrap(),
             10
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn verify_purge_and_rekey_skip_plaintext_packfile_manifests(
+        #[future(awt)] store: SqliteStore,
+    ) {
+        let key = paseto_v4::Key::new_os_random();
+        let host = HostId(uuid_v7());
+
+        let history = Record::builder()
+            .host(Host::new(host))
+            .version(RecordVersion::V1)
+            .tag(RecordTag::History)
+            .idx(0)
+            .data(DecryptedData(b"history".to_vec()))
+            .build()
+            .encrypt(&key);
+
+        // Packfile manifests are plaintext with an empty cek, as written by the packer.
+        let manifest = Record::builder()
+            .host(Host::new(host))
+            .version(RecordVersion::V1)
+            .tag(RecordTag::Packfile)
+            .idx(0)
+            .data(paseto_v4::EncryptedData {
+                raw: "001{}".into(),
+                cek: String::new(),
+            })
+            .build();
+
+        store.push(&history).await.unwrap();
+        store.push(&manifest).await.unwrap();
+
+        store.verify(&key).await.expect("verify should skip packfile manifests");
+
+        store.purge(&key).await.expect("purge should skip packfile manifests");
+        assert_eq!(store.len_all().await.unwrap(), 2, "purge must not delete the manifest");
+
+        let new_key = paseto_v4::Key::new_os_random();
+        store.re_encrypt(&key, &new_key).await.expect("rekey should skip packfile manifests");
+        assert_eq!(store.get(manifest.id).await.unwrap(), manifest, "manifest must be untouched");
+        store.get(history.id).await.unwrap().decrypt(&new_key).expect("history was rekeyed");
+        store.verify(&new_key).await.unwrap();
     }
 }
