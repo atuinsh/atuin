@@ -233,10 +233,13 @@ impl HistoryJournal {
             duration = Empty,
         );
 
-        self.active_cmds.insert(id, InFlightCmd {
-            history: history.clone(),
-            span,
-        });
+        self.active_cmds.insert(
+            id,
+            InFlightCmd {
+                history: history.clone(),
+                span,
+            },
+        );
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
     }
@@ -311,6 +314,9 @@ impl HistoryJournal {
             tracing::warn!("packing failed: {e}");
         }
 
+        // TODO(#4052): This is inherently racy -- any add_history operations added between this
+        //              .read() and the subsequent .write() are completely discarded from the new
+        //              index.
         self.search_index.read().await.add_history(&history);
 
         if self.broadcast.receiver_count() > 0 {

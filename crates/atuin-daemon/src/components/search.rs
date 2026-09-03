@@ -157,6 +157,9 @@ impl SearchComponent {
         info!("Rebuilding search index from database");
 
         // Create a new index
+        // TODO(#4052): This is inherently racy -- any add_history operations added between this
+        //              .read() and the subsequent .write() are completely discarded from the new
+        //              index.
         let new_index = SearchIndex::new(self.index.read().await.shells.clone());
         if build_index_only(async || &new_index, handle).await.is_err() {
             return;
@@ -181,6 +184,9 @@ impl Component for SearchComponent {
     async fn start(&mut self, handle: DaemonHandle) -> Result<()> {
         self.handle = Some(handle.clone());
 
+        // TODO(#4052): This is inherently racy -- any add_history operations added between this
+        //              .read() and the subsequent .write() are completely discarded from the new
+        //              index.
         // Spawn background task to load history into index
         let index = self.index.clone();
         let handle_for_loader = handle.clone();
@@ -341,6 +347,9 @@ impl SearchSvc for SearchGrpcService {
 
                 // An empty list in `SearchRequest::shells` means "all".
                 let shells = OrFilter::from_list(search_req.shells).unwrap_or_default();
+                // TODO(#4052): This is inherently racy -- any add_history operations added between
+                //              this .maybe_rebuild_index() and the subsequent .write() are
+                //              completely discarded from the new index.
                 let index = match this.maybe_rebuild_index(shells).await {
                     Ok(Some(new_index)) => {
                         let mut guard = this.index.write().await;
@@ -387,6 +396,9 @@ impl SearchSvc for SearchGrpcService {
         request: Request<PrepareIndexRequest>,
     ) -> Result<Response<PrepareIndexResponse>, Status> {
         // Same as `SearchRequest::shells` -- empty list means "all".
+        // TODO(#4052): This is inherently racy -- any add_history operations added between this
+        //              .maybe_rebuild_index() and the subsequent .write() are completely discarded
+        //              from the new index.
         let shells = OrFilter::from_list(request.into_inner().shells).unwrap_or_default();
         if let Some(index) = self
             .maybe_rebuild_index(shells)
