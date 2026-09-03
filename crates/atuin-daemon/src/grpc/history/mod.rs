@@ -322,9 +322,8 @@ impl GrpcService for Service {
         &self,
         request: Request<DeleteHistoryRequest>,
     ) -> Result<Response<DeleteHistoryReply>, Status> {
-        // Unfortunately we need the Result type here, and since `try_history_ids` returns an
-        // iterator of `Result`s, we need to collect it. [`HistoryJournal::delete`] needs to accept
-        // validated and correct HistoryIds.
+        // Unfortunately we need to collect here, and since `try_history_ids` returns an iterator of
+        // `Result`s. [`HistoryJournal::delete`] needs to accept validated and correct HistoryIds.
         let ids: Vec<HistoryId> =
             request.into_inner().try_history_ids().collect::<Result<Vec<_>, _>>()?;
 

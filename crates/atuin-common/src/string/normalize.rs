@@ -8,8 +8,6 @@
 //! covered by MPL-2.0 (<https://mozilla.org/MPL/2.0/>) independently of the
 //! crate's license.
 
-#![allow(clippy::manual_range_contains, clippy::must_use_candidate, reason = "vendored file")]
-
 /// Normalize a Unicode character by converting Latin characters which are variants
 /// of ASCII characters to their latin equivalent.
 ///

@@ -9,8 +9,6 @@ service Control {
 }
 
 message SendEventRequest {
-  reserved 1, 2; // previously history_pruned / history_deleted, now handled via DeleteHistory RPC
-
   oneof event {
     // Request immediate sync
     ForceSyncEvent force_sync = 3;

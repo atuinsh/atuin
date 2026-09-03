@@ -16,6 +16,8 @@ pub mod trim;
 mod buffer;
 mod escape_non_printable_posix_ext;
 mod non_nul_str;
+
+#[allow(clippy::manual_range_contains, clippy::must_use_candidate, reason = "vendored file")]
 mod normalize;
 
 #[cfg(feature = "unicode")]
