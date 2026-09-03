@@ -80,15 +80,10 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     let mut pty_writer = pair.master.take_writer().map_err(|e| eyre::eyre!("{e:#}"))?;
 
     let (msg_tx, msg_rx) = mpsc::sync_channel::<Msg>(64);
-    let _parser_handle = screen::spawn_parser_thread(
-        rows,
-        cols,
-        msg_rx,
-        screen::ParserOptions {
-            sink: options.command_capture_sink,
-            debug_osc133: options.debug_osc133,
-        },
-    );
+    let _parser_handle = screen::spawn_parser_thread(rows, cols, msg_rx, screen::ParserOptions {
+        sink: options.command_capture_sink,
+        debug_osc133: options.debug_osc133,
+    });
     if let Some(path) = &sock_path {
         screen::spawn_socket_server(path.clone(), msg_tx.clone());
     }
