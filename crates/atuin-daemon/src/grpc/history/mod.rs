@@ -413,7 +413,9 @@ impl GrpcService for Service {
         request: Request<RegisterCommandOutputRequest>,
     ) -> Result<Response<RegisterCommandOutputResponse>, Status> {
         let request = request.into_inner();
-        self.journal.register_command_output(request.history_id()?, request.capture()?).await?;
+        let history_id = request.history_id()?;
+        let capture = request.capture()?.into_domain(history_id);
+        self.journal.register_command_output(capture).await?;
         Ok(Response::new(RegisterCommandOutputResponse {}))
     }
 
@@ -430,6 +432,9 @@ impl GrpcService for Service {
                 Status::not_found(format!("no captured output for history id {id}"))
             })?;
 
-        Ok(Response::new(GetCommandOutputResponse::build(capture, request.output_ranges())))
+        Ok(Response::new(GetCommandOutputResponse::build(
+            capture.into(),
+            request.output_ranges(),
+        )))
     }
 }

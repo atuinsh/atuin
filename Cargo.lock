@@ -512,6 +512,7 @@ dependencies = [
  "rand 0.8.7",
  "reqwest",
  "rstest",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.19",
  "time",

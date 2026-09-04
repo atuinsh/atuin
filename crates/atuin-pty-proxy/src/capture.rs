@@ -3,6 +3,8 @@ use std::num::NonZeroU16;
 use atuin_client::history::HistoryId;
 use atuin_common::string::{BoundedBuffer, TrimExt as _};
 
+pub use atuin_client::history::CommandCapture;
+
 use crate::osc133::{self, Event, EventChunk, EventChunks, Param, Zone};
 
 /// Clears the screen while maintaining cursor position.
@@ -15,7 +17,6 @@ const CLEAR_SCREEN_CONTENTS: &[u8] = b"\x1b7\x1b[m\x1b[2J\x1b8";
 const DISABLE_ALTERNATE_SCREEN: &[u8] = b"\x1b[?1049l";
 
 const HISTORY_ID_PARAM: &[u8] = b"history_id";
-const SESSION_ID_PARAM: &[u8] = b"session_id";
 
 /// The maximum number of bytes captured per zone.
 ///
@@ -25,29 +26,12 @@ const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
 
 pub type CommandCaptureSink = Box<dyn Fn(CommandCapture) + Send + 'static>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CommandCapture {
-    /// The rendered output of the command.
-    ///
-    /// Contains SGR escape sequences. Contains no other escape sequences, and no control characters
-    /// except `'\n'`.
-    pub output: String,
-    pub exit_code: Option<i32>,
-    pub history_id: HistoryId,
-    pub session_id: Option<String>,
-    pub output_observed_bytes: u64,
-    pub output_truncated: bool,
-    pub terminal_width: u16,
-    pub terminal_height: u16,
-}
-
 /// The state of an in-progress command capture.
 #[derive(Default)]
 struct CaptureState {
     output: String,
     output_truncated: bool,
     output_observed_bytes: u64,
-    session_id: Option<String>,
     exit_code: Option<i32>,
 }
 
@@ -60,7 +44,6 @@ impl CaptureState {
         self.output.clear();
         self.output_truncated = false;
         self.output_observed_bytes = 0;
-        self.session_id = None;
         self.exit_code = None;
     }
 }
@@ -217,30 +200,18 @@ impl TrackerCore {
         }
 
         let mut history_id = None;
-        let mut session_id = None;
         for param in params {
-            match param {
-                Param::KeyValue {
-                    key: HISTORY_ID_PARAM,
-                    value,
-                } => {
-                    history_id = Some(value);
-                }
-                Param::KeyValue {
-                    key: SESSION_ID_PARAM,
-                    value,
-                } => {
-                    session_id = Some(value);
-                }
-                _ => {}
+            if let Param::KeyValue {
+                key: HISTORY_ID_PARAM,
+                value,
+            } = param
+            {
+                history_id = Some(value);
             }
         }
 
         if let Some(code) = exit_code {
             self.capture.exit_code = Some(code);
-        }
-        if let Some(id) = session_id {
-            self.capture.session_id = Some(String::from_utf8_lossy(id).into_owned());
         }
         let Some(history_id) = history_id
             .and_then(|bytes| std::str::from_utf8(bytes).ok())
@@ -257,7 +228,6 @@ impl TrackerCore {
             output: state.output,
             exit_code: state.exit_code,
             history_id,
-            session_id: state.session_id,
             output_observed_bytes: state.output_observed_bytes,
             output_truncated: state.output_truncated,
             terminal_width: cols.get(),
@@ -427,7 +397,6 @@ mod tests {
             output: "hi".to_string(),
             exit_code: Some(0),
             history_id: hid(HID),
-            session_id: Some("sess".to_string()),
             output_observed_bytes: u64::conv(b"hi\r\n".len()),
             output_truncated: false,
             terminal_width: COLS,
@@ -441,7 +410,6 @@ mod tests {
             output: "line one".to_string(),
             exit_code: Some(0),
             history_id: hid(HID),
-            session_id: Some("abcd".to_string()),
             output_observed_bytes: u64::conv(b"line one\r\n".len()),
             output_truncated: false,
             terminal_width: COLS,
@@ -740,7 +708,6 @@ mod tests {
             output: "line one".to_string(),
             exit_code: Some(0),
             history_id: hid(HID),
-            session_id: Some("abcd".to_string()),
             // The first `D` ends the output zone and is discounted; the second arrives
             // after it, in the unknown zone, so it was never counted to begin with.
             output_observed_bytes: u64::conv(b"line one\r\n".len()),
@@ -763,7 +730,6 @@ mod tests {
         let capture = tracker.only_capture();
         assert_eq!(capture.output, "line one");
         assert_eq!(capture.history_id, hid(HID));
-        assert_eq!(capture.session_id.as_deref(), Some("abcd"));
     }
 
     #[rstest]

@@ -13,15 +13,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use atuin_client::history::HistoryId;
+use atuin_client::history::{CommandCapture, HistoryId};
 use fjall::config::CompressionPolicy;
 use fjall::{OptimisticTxDatabase, OptimisticTxKeyspace, PersistMode, Readable};
-use prost::Message;
 use thiserror::Error;
 use tokio::task::JoinHandle;
 use tracing::error;
 
-use crate::grpc::history::pb::CommandCapture;
+use keyspace::{Keyspace as _, KeyspaceV1};
 
 /// fjall keyspace name for stored output.
 const KEYSPACE_NAME: &str = "command_output";
@@ -179,16 +178,14 @@ impl OutputCapture {
         })
     }
 
-    /// Capture a command and associate it with the given history id.
-    pub async fn capture(
-        &self,
-        id: HistoryId,
-        capture: CommandCapture,
-    ) -> Result<(), CaptureError> {
+    /// Capture a command and store it, keyed by its [`CommandCapture::history_id`].
+    pub async fn capture(&self, capture: CommandCapture) -> Result<(), CaptureError> {
         let db = self.db.clone();
         let keyspace = self.keyspace.clone();
-        let key = id.into_bytes();
-        let value = capture.encode_to_vec();
+        let key = KeyspaceV1::serialize_key(capture.history_id)
+            .expect("history id serialization is infallible");
+        let value =
+            KeyspaceV1::serialize_value(capture).expect("a CommandCapture serializes to JSON");
 
         let flusher = self.flusher.clone();
         tokio::task::spawn_blocking(move || {
@@ -213,11 +210,11 @@ impl OutputCapture {
 
     pub async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError> {
         let keyspace = self.keyspace.clone();
-        let key = id.into_bytes();
+        let key = KeyspaceV1::serialize_key(id).expect("history id serialization is infallible");
 
         tokio::task::spawn_blocking(move || match keyspace.get(key)? {
             Some(slice) => {
-                let capture = CommandCapture::decode(&*slice)
+                let capture = KeyspaceV1::deserialize_value(slice.to_vec())
                     .expect("stored value is a valid CommandCapture");
                 Ok(Some(capture))
             }
@@ -234,7 +231,6 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::grpc::history::pb::CommandCaptureMeta;
 
     fn temp_capture() -> (OutputCapture, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -246,25 +242,25 @@ mod tests {
         HistoryId::from_bytes(*Uuid::from_u128(n).as_bytes())
     }
 
-    fn cap(output: &str) -> CommandCapture {
+    fn cap(id: HistoryId, output: &str) -> CommandCapture {
         CommandCapture {
             output: output.to_string(),
-            meta: Some(CommandCaptureMeta {
-                output_truncated: false,
-                output_observed_bytes: u64::conv(output.len()),
-                terminal_width: 80,
-                terminal_height: 24,
-            }),
+            exit_code: None,
+            history_id: id,
+            output_observed_bytes: u64::conv(output.len()),
+            output_truncated: false,
+            terminal_width: 80,
+            terminal_height: 24,
         }
     }
 
     #[tokio::test]
     async fn round_trips_output_by_history_id() {
         let (store, _dir) = temp_capture();
-        store.capture(hid(1), cap("hello")).await.expect("capture");
+        store.capture(cap(hid(1), "hello")).await.expect("capture");
         let got = store.get(hid(1)).await.expect("get").expect("present");
         assert_eq!(got.output, "hello");
-        assert_eq!(got.meta.expect("meta").output_observed_bytes, 5);
+        assert_eq!(got.output_observed_bytes, 5);
     }
 
     #[tokio::test]
@@ -276,8 +272,8 @@ mod tests {
     #[tokio::test]
     async fn second_capture_for_same_id_is_rejected() {
         let (store, _dir) = temp_capture();
-        store.capture(hid(1), cap("first")).await.expect("first");
-        let err = store.capture(hid(1), cap("second")).await.unwrap_err();
+        store.capture(cap(hid(1), "first")).await.expect("first");
+        let err = store.capture(cap(hid(1), "second")).await.unwrap_err();
         assert!(matches!(err, CaptureError::AlreadyExists));
         // The first write survives.
         assert_eq!(store.get(hid(1)).await.expect("get").expect("present").output, "first");
@@ -291,7 +287,7 @@ mod tests {
         for n in 0..16u8 {
             let store = store.clone();
             handles.push(tokio::spawn(async move {
-                store.capture(hid(1), cap(&format!("w{n}"))).await
+                store.capture(cap(hid(1), &format!("w{n}"))).await
             }));
         }
         let mut ok = 0;

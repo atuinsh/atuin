@@ -1,10 +1,8 @@
 use std::convert::Infallible;
 
-use atuin_client::history::HistoryId;
-use prost::Message;
+use atuin_client::history::{CommandCapture, HistoryId};
 
 use super::Keyspace as KeyspaceTrait;
-use crate::grpc::history::pb::CommandCapture;
 
 pub struct Keyspace;
 
@@ -14,7 +12,7 @@ impl KeyspaceTrait for Keyspace {
     type Key = HistoryId;
     type Value = CommandCapture;
 
-    // Keys are the 16 raw UUID bytes; values are prost-encoded.
+    // Keys are the 16 raw UUID bytes; values are serde_json-encoded.
     type KeySerialized = [u8; 16];
     type ValueSerialized = Vec<u8>;
 
@@ -31,17 +29,17 @@ impl KeyspaceTrait for Keyspace {
         Ok(HistoryId::from_bytes(serialized))
     }
 
-    type ValueSerializationError = Infallible;
+    type ValueSerializationError = serde_json::Error;
     fn serialize_value(
         value: Self::Value,
     ) -> Result<Self::ValueSerialized, Self::ValueSerializationError> {
-        Ok(value.encode_to_vec())
+        serde_json::to_vec(&value)
     }
 
-    type ValueDeserializationError = prost::DecodeError;
+    type ValueDeserializationError = serde_json::Error;
     fn deserialize_value(
         serialized: Self::ValueSerialized,
     ) -> Result<Self::Value, Self::ValueDeserializationError> {
-        CommandCapture::decode(&serialized[..])
+        serde_json::from_slice(&serialized)
     }
 }

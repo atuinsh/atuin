@@ -7,7 +7,9 @@ mod codegen {
 
 use std::time::Duration;
 
-use atuin_client::history::{History, HistoryId as DomainHistoryId};
+use atuin_client::history::{
+    CommandCapture as DomainCommandCapture, History, HistoryId as DomainHistoryId,
+};
 use atuin_common::range::PyStyleIdxRange;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::record::{CmdOrigin, CmdOriginParseError};
@@ -282,6 +284,40 @@ impl RegisterCommandOutputRequest {
             return Err(RegisterCommandOutputRequestParseError::MissingCaptureMeta);
         }
         Ok(capture)
+    }
+}
+
+impl From<DomainCommandCapture> for CommandCapture {
+    fn from(capture: DomainCommandCapture) -> Self {
+        Self {
+            output: capture.output,
+            meta: Some(CommandCaptureMeta {
+                output_truncated: capture.output_truncated,
+                output_observed_bytes: capture.output_observed_bytes,
+                terminal_width: u32::from(capture.terminal_width),
+                terminal_height: u32::from(capture.terminal_height),
+            }),
+        }
+    }
+}
+
+impl CommandCapture {
+    /// Convert a wire capture into its domain representation, associating it with `history_id`.
+    ///
+    /// The wire type carries neither the history id nor the exit code: the id travels separately in
+    /// the request envelope (and is supplied here by the caller), and the exit code is left unset.
+    #[must_use]
+    pub fn into_domain(self, history_id: DomainHistoryId) -> DomainCommandCapture {
+        let meta = self.meta.unwrap_or_default();
+        DomainCommandCapture {
+            output: self.output,
+            exit_code: None,
+            history_id,
+            output_observed_bytes: meta.output_observed_bytes,
+            output_truncated: meta.output_truncated,
+            terminal_width: u16::try_from(meta.terminal_width).unwrap_or(u16::MAX),
+            terminal_height: u16::try_from(meta.terminal_height).unwrap_or(u16::MAX),
+        }
     }
 }
 
