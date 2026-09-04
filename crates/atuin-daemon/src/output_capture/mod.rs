@@ -7,6 +7,7 @@
 //! `spawn_blocking`.
 //!
 //! TODO(retention): the store grows unbounded; no eviction yet. See the design doc.
+mod keyspace;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
