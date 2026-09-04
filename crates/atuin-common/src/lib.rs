@@ -15,6 +15,7 @@ pub mod path;
 pub mod range;
 pub mod rmp;
 pub mod shell;
+pub mod size;
 pub mod slice;
 pub mod string;
 pub mod sync;
