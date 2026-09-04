@@ -293,16 +293,15 @@ mod tests {
 
         let captures: Vec<_> = captures.try_iter().collect();
         assert_eq!(captures.len(), 1);
-        assert_eq!(captures[0].command, "echo hi");
         assert_eq!(captures[0].output, "hi");
-        assert_eq!(captures[0].history_id.as_deref(), Some("hist"));
+        assert_eq!(captures[0].history_id, "hist");
     }
 
     #[rstest]
     fn debug_highlighting_reaches_the_screen_but_not_the_capture() {
         // The highlighter's labels are a debugging aid for the terminal and the screen
         // snapshot. They are not terminal output the shell produced, so the capture tracker
-        // has to see the raw stream -- otherwise every captured field is prefixed with a
+        // has to see the raw stream -- otherwise the captured output is prefixed with a
         // label and `output_observed_bytes` counts them.
         let (sink, captures) = capture_sink();
         let mut parser = Parser::new(nonzero(6), nonzero(40), ParserOptions {
@@ -320,8 +319,6 @@ mod tests {
 
         let captures: Vec<_> = captures.try_iter().collect();
         assert_eq!(captures.len(), 1);
-        assert_eq!(captures[0].prompt, "$");
-        assert_eq!(captures[0].command, "echo hi");
         assert_eq!(captures[0].output, "hi");
         assert_eq!(captures[0].output_observed_bytes, u64::conv(b"hi\r\n".len()));
 

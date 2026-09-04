@@ -152,8 +152,6 @@ async fn send_semantic_command_captures(
     let captures = batch
         .into_iter()
         .map(|capture| atuin_daemon::semantic::CommandCapture {
-            prompt: capture.prompt,
-            command: capture.command,
             output: capture.output,
             exit_code: capture.exit_code,
             history_id: capture.history_id,

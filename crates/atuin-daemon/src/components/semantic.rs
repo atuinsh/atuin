@@ -161,10 +161,8 @@ impl SemanticComponentInner {
 impl SemanticState {
     #[must_use]
     fn record_capture(&mut self, mut capture: CommandCapture) -> bool {
-        let Some(history_id) = history_id_from_str(capture.history_id.as_deref()) else {
+        let Some(history_id) = history_id_from_str(&capture.history_id) else {
             tracing::debug!(
-                command_bytes = capture.command.len(),
-                prompt_bytes = capture.prompt.len(),
                 output_bytes = capture.output.len(),
                 output_truncated = capture.output_truncated,
                 "dropping semantic command capture without history id"
@@ -185,8 +183,6 @@ impl SemanticState {
         else {
             tracing::debug!(
                 history_id = %history_id,
-                command_bytes = capture.command.len(),
-                prompt_bytes = capture.prompt.len(),
                 output_bytes = capture.output.len(),
                 output_truncated = capture.output_truncated,
                 "dropping semantic command capture without session id"
@@ -194,7 +190,7 @@ impl SemanticState {
             return false;
         };
 
-        capture.history_id = Some(history_id.to_string());
+        capture.history_id = history_id.to_string();
         capture.session_id = Some(session_id.to_string());
         if capture.output_observed_bytes == 0 {
             capture.output_observed_bytes = u64::conv(capture.output.len());
@@ -228,7 +224,7 @@ impl SemanticState {
     }
 
     fn command_output(&mut self, request: &CommandOutputRequest) -> CommandOutputReply {
-        let Some(history_id) = history_id_from_str(Some(&request.history_id)) else {
+        let Some(history_id) = history_id_from_str(&request.history_id) else {
             return command_output_not_found();
         };
         let Some(capture_ref) = self.history_index.get(&history_id).cloned() else {
@@ -459,8 +455,8 @@ impl SemanticSvc for SemanticGrpcService {
     }
 }
 
-fn history_id_from_str(value: Option<&str>) -> Option<HistoryId> {
-    value?.trim().parse().ok()
+fn history_id_from_str(value: &str) -> Option<HistoryId> {
+    value.trim().parse().ok()
 }
 
 fn take_pending_history(
@@ -561,7 +557,7 @@ fn normalize_line_range(start: i64, end: i64, line_count: usize) -> Option<(usiz
 }
 
 fn log_record(record: &SemanticCommandRecord, message: &'static str) {
-    let history_id = record.capture.history_id.as_deref().unwrap_or("<missing>");
+    let history_id = record.capture.history_id.as_str();
     let associated_history_id = record.history.as_ref().map(|history| history.id.to_string());
     let exit = record.history.as_ref().map(|history| history.exit);
     let duration = record.history.as_ref().map(|history| history.duration);
@@ -572,8 +568,6 @@ fn log_record(record: &SemanticCommandRecord, message: &'static str) {
         history_id = %history_id,
         associated_history_id = ?associated_history_id,
         session_id = ?session_id,
-        command_bytes = record.capture.command.len(),
-        prompt_bytes = record.capture.prompt.len(),
         output_bytes = record.capture.output.len(),
         output_truncated = record.capture.output_truncated,
         output_observed_bytes = record.capture.output_observed_bytes,
@@ -631,13 +625,11 @@ mod tests {
         }
     }
 
-    fn capture(id: Option<HistoryId>, session: Option<&str>, output: &str) -> CommandCapture {
+    fn capture(id: HistoryId, session: Option<&str>, output: &str) -> CommandCapture {
         CommandCapture {
-            prompt: String::new(),
-            command: String::new(),
             output: output.to_string(),
             exit_code: None,
-            history_id: id.map(|id| id.to_string()),
+            history_id: id.to_string(),
             session_id: session.map(str::to_string),
             output_truncated: false,
             output_observed_bytes: u64::conv(output.len()),
@@ -659,15 +651,26 @@ mod tests {
     }
 
     #[rstest]
-    fn drops_capture_without_history_id(mut state: SemanticState) {
-        assert!(!state.record_capture(capture(None, Some("session-1"), "output")));
+    // `history_id` is a plain string on the wire, so an absent field arrives as an empty one.
+    #[case::empty("")]
+    #[case::not_a_uuid("nonsense")]
+    fn drops_capture_with_an_unusable_history_id(
+        mut state: SemanticState,
+        #[case] history_id: &str,
+    ) {
+        let capture = CommandCapture {
+            history_id: history_id.to_string(),
+            ..capture(hid(1), Some("session-1"), "output")
+        };
+
+        assert!(!state.record_capture(capture));
         assert!(!output_for(&mut state, hid(1)).found);
         assert_eq!(state.record_count(), 0);
     }
 
     #[rstest]
     fn stores_capture_by_session_and_history_id(mut state: SemanticState) {
-        assert!(state.record_capture(capture(Some(hid(1)), Some("session-1"), "output")));
+        assert!(state.record_capture(capture(hid(1), Some("session-1"), "output")));
 
         let reply = output_for(&mut state, hid(1));
         assert!(reply.found);
@@ -678,7 +681,7 @@ mod tests {
 
     #[rstest]
     fn command_output_reports_truncation_metadata(mut state: SemanticState) {
-        let mut cap = capture(Some(hid(1)), Some("session-1"), "partial");
+        let mut cap = capture(hid(1), Some("session-1"), "partial");
         cap.output_truncated = true;
         cap.output_observed_bytes = 1024;
 
@@ -693,7 +696,7 @@ mod tests {
     #[rstest]
     fn uses_pending_history_session_when_capture_session_is_missing(mut state: SemanticState) {
         state.record_history(history(hid(1), "session-from-history", "cargo test"));
-        assert!(state.record_capture(capture(Some(hid(1)), None, "output")));
+        assert!(state.record_capture(capture(hid(1), None, "output")));
 
         assert!(state.sessions.contains_key(&SessionId("session-from-history".to_string())));
         assert!(output_for(&mut state, hid(1)).found);
@@ -701,7 +704,7 @@ mod tests {
 
     #[rstest]
     fn associates_history_by_id_after_capture_arrives(mut state: SemanticState) {
-        assert!(state.record_capture(capture(Some(hid(1)), Some("session-1"), "output")));
+        assert!(state.record_capture(capture(hid(1), Some("session-1"), "output")));
         state.record_history(history(hid(1), "session-1", "different command"));
 
         let capture_ref = state.history_index.get(&hid(1)).unwrap();
@@ -717,7 +720,7 @@ mod tests {
     #[rstest]
     fn evicts_oldest_command_when_session_ring_is_full(mut state: SemanticState) {
         for index in 0..=u128::conv(MAX_COMMANDS_PER_SESSION) {
-            assert!(state.record_capture(capture(Some(hid(index)), Some("session-1"), "output")));
+            assert!(state.record_capture(capture(hid(index), Some("session-1"), "output")));
         }
 
         assert!(!output_for(&mut state, hid(0)).found);
@@ -729,7 +732,7 @@ mod tests {
     fn evicts_oldest_session_after_lru_limit(mut state: SemanticState) {
         for index in 0..u128::conv(MAX_SESSIONS) {
             assert!(state.record_capture(capture(
-                Some(hid(index)),
+                hid(index),
                 Some(&format!("session-{index}")),
                 "output",
             )));
@@ -737,7 +740,7 @@ mod tests {
         // Touching session 0 keeps it warm, so session 1 becomes the eviction victim below.
         assert!(output_for(&mut state, hid(0)).found);
 
-        assert!(state.record_capture(capture(Some(hid(999)), Some("new-session"), "output")));
+        assert!(state.record_capture(capture(hid(999), Some("new-session"), "output")));
 
         assert!(output_for(&mut state, hid(0)).found);
         assert!(!output_for(&mut state, hid(1)).found);
@@ -748,7 +751,7 @@ mod tests {
     #[rstest]
     fn evicts_by_session_byte_limit(mut session: SessionCaptures) {
         let record = |id: HistoryId, output: &str| SemanticCommandRecord {
-            capture: capture(Some(id), Some("session-1"), output),
+            capture: capture(id, Some("session-1"), output),
             history: None,
         };
 
