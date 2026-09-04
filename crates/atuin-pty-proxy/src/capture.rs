@@ -120,7 +120,10 @@ impl TrackerCore {
         let mut buffer = scrollback.buffer.take();
         let mut state = std::mem::take(&mut scrollback.state);
 
-        let _ = self.emulator.screen().write_contents_formatted_basic(&mut buffer, &mut state);
+        let _ = self.emulator.screen().write_contents_formatted_basic(
+            &mut buffer,
+            vt100::capture::BasicFormattedCaptureRange::Full(&mut state),
+        );
 
         RenderedOutput {
             truncated: buffer.is_truncated(),

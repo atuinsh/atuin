@@ -39,9 +39,24 @@ struct Parser {
 }
 
 impl Parser {
+    /// How many lines of scrollback the snapshot emulator can hold.
+    ///
+    /// Scrollback allows for better handling of terminal resizes: without scrollback, if the
+    /// terminal height shrinks and then grows again, we'll know that lines from the scrollback got
+    /// added back to the top of the terminal, but we won't actually know what they contain, so we
+    /// won't be able to restore them when the search UI is opened and closed.
+    ///
+    /// Note that there is a best-effort fallback in the case where the terminal is resized by a
+    /// larger amount than our scrollback capacity -- atuin-vt100 tracks how much scrollback there
+    /// *would* be if the capacity were unbounded, and will fall back to inserting blank rows at the
+    /// top. Compared to inserting blank rows at the bottom, which is what a terminal emulator would
+    /// do when it genuinely ran of scrollback, this maintains the correct positioning of everything
+    /// in the terminal -- otherwise our emulator would badly drift from the parent terminal.
+    const SCROLLBACK_CAPACITY: usize = 50;
+
     fn new(rows: NonZeroU16, cols: NonZeroU16, options: ParserOptions) -> Self {
         Self {
-            emulator: vt100::Parser::new(rows, cols, 0),
+            emulator: vt100::Parser::new(rows, cols, Self::SCROLLBACK_CAPACITY),
             tracker: options.sink.map(|f| CommandCaptureTracker::new(rows, cols, f)),
             highlighter: options.debug_osc133.then(Osc133DebugHighlighter::new),
         }
@@ -142,6 +157,9 @@ fn encode_screen(parser: &vt100::Parser) -> Vec<u8> {
     let screen = parser.screen();
     let (rows, cols) = screen.size();
     let (cursor_row, cursor_col) = screen.cursor_position();
+
+    let rows = rows.get();
+    let cols = cols.get();
 
     let mut buf = Vec::with_capacity(256 + (usize::from(rows) * usize::from(cols)));
     buf.extend_from_slice(&rows.to_be_bytes());

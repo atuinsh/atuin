@@ -24,7 +24,7 @@ atuin-kv = { path = "crates/atuin-kv", version = "18.21.0" }
 atuin-pty-proxy = { path = "crates/atuin-pty-proxy", version = "18.21.0", default-features = false }
 atuin-scripts = { path = "crates/atuin-scripts", version = "18.21.0" }
 atuin-server = { path = "crates/atuin-server", version = "18.21.0" }
-atuin-vt100 = "0.17"
+atuin-vt100 = "0.19"
 
 arboard = { version = "3.4", default-features = false }
 argon2 = "0.5"
