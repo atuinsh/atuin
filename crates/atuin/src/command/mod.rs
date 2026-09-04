@@ -125,6 +125,8 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
                         capture.output,
                         capture.output_truncated,
                         capture.output_observed_bytes,
+                        capture.terminal_width,
+                        capture.terminal_height,
                     )
                     .await;
             }

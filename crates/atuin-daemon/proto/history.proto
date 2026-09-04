@@ -156,6 +156,10 @@ message CommandCaptureMeta {
   // Think about this example -- a command outputs "hello\rhello\rhello\rhello". What is rendered?
   // "hello". `output_observed_bytes` will be 23 -- ie. how many bytes the terminal saw.
   uint64 output_observed_bytes = 2;
+  // The width of the terminal when the command finished.
+  uint32 terminal_width = 3;
+  // The height of the terminal when the command finished.
+  uint32 terminal_height = 4;
 }
 
 // A completed command's captured output.
