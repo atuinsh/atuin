@@ -229,16 +229,34 @@ impl OutputCapture {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Deref;
+
     use easy_cast::Conv;
+    use rstest::{fixture, rstest};
     use uuid::Uuid;
 
     use super::*;
     use crate::grpc::history::pb::CommandCaptureMeta;
 
-    fn temp_capture() -> (OutputCapture, tempfile::TempDir) {
+    /// An [`OutputCapture`] over a fresh temp dir. Dropping the guard removes the dir.
+    struct TempStore {
+        store: OutputCapture,
+        _dir: tempfile::TempDir,
+    }
+
+    impl Deref for TempStore {
+        type Target = OutputCapture;
+
+        fn deref(&self) -> &Self::Target {
+            &self.store
+        }
+    }
+
+    #[fixture]
+    fn store() -> TempStore {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = OutputCapture::open(dir.path()).expect("open");
-        (store, dir)
+        TempStore { store, _dir: dir }
     }
 
     fn hid(n: u128) -> HistoryId {
@@ -257,24 +275,24 @@ mod tests {
         }
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn round_trips_output_by_history_id() {
-        let (store, _dir) = temp_capture();
+    async fn round_trips_output_by_history_id(store: TempStore) {
         store.capture(hid(1), cap("hello")).await.expect("capture");
         let got = store.get(hid(1)).await.expect("get").expect("present");
         assert_eq!(got.output, "hello");
         assert_eq!(got.meta.expect("meta").output_observed_bytes, 5);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn missing_id_returns_none() {
-        let (store, _dir) = temp_capture();
+    async fn missing_id_returns_none(store: TempStore) {
         assert!(store.get(hid(9)).await.expect("get").is_none());
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn second_capture_for_same_id_is_rejected() {
-        let (store, _dir) = temp_capture();
+    async fn second_capture_for_same_id_is_rejected(store: TempStore) {
         store.capture(hid(1), cap("first")).await.expect("first");
         let err = store.capture(hid(1), cap("second")).await.unwrap_err();
         assert!(matches!(err, CaptureError::AlreadyExists));
@@ -282,9 +300,9 @@ mod tests {
         assert_eq!(store.get(hid(1)).await.expect("get").expect("present").output, "first");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn concurrent_writers_store_exactly_one() {
-        let (store, _dir) = temp_capture();
+    async fn concurrent_writers_store_exactly_one(store: TempStore) {
         let store = std::sync::Arc::new(store);
         let mut handles = Vec::new();
         for n in 0..16u8 {
