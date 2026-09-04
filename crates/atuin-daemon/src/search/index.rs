@@ -34,12 +34,6 @@ pub struct LoadFromDbError(eyre::Report);
 
 use atuin_common::string::NormalizeDiacriticsExt;
 
-/// Parse a UUID string into a 16-byte array.
-/// Returns None if the string is not a valid UUID.
-fn parse_uuid_bytes(s: &str) -> Option<[u8; 16]> {
-    Uuid::parse_str(s).ok().map(Uuid::into_bytes)
-}
-
 /// Pre-computed frecency data for O(1) lookup.
 #[derive(Debug, Clone, Default)]
 pub struct FrecencyData {
@@ -126,7 +120,7 @@ pub struct CommandData {
     /// All hostnames where this command has been run (interned keys).
     hosts: HashSet<Spur>,
     /// All sessions where this command has been run (as 16-byte UUIDs).
-    sessions: HashSet<[u8; 16]>,
+    sessions: HashSet<Uuid>,
     /// Position of this command in `SearchIndex::haystack`, so filtered
     /// searches can walk the command map without hashing command strings.
     haystack_index: u32,
@@ -145,7 +139,7 @@ impl CommandData {
             return None;
         };
 
-        let session = parse_uuid_bytes(&history.session)?;
+        let session = Uuid::parse_str(&history.session).ok()?;
         let timestamp = history.timestamp.unix_timestamp();
 
         let dir_key =
@@ -169,7 +163,7 @@ impl CommandData {
     /// Add an invocation from a history entry.
     /// Returns false if the history entry has invalid UUIDs.
     pub fn add_invocation(&mut self, history: &History, interner: &ThreadedRodeo) -> bool {
-        let Some(session) = parse_uuid_bytes(&history.session) else {
+        let Some(session) = Uuid::parse_str(&history.session).ok() else {
             return false;
         };
 
@@ -221,7 +215,7 @@ impl CommandData {
 
     /// Check if any invocation matches a session (as parsed UUID bytes).
     /// O(1) lookup; the caller parses the session string once per search.
-    pub fn has_invocation_in_session(&self, session: &[u8; 16]) -> bool {
+    pub fn has_invocation_in_session(&self, session: &Uuid) -> bool {
         self.sessions.contains(session)
     }
 }
@@ -247,7 +241,7 @@ enum CompiledFilter<'a> {
     Directory(Spur),
     Workspace(&'a str),
     Host(Spur),
-    Session([u8; 16]),
+    Session(Uuid),
     /// Used when a target (host/dir/session) has never been seen by the index -- nothing can match.
     Nothing,
 }
@@ -265,7 +259,7 @@ impl IndexFilterMode {
                 interner.get(hostname).map_or(CompiledFilter::Nothing, CompiledFilter::Host)
             }
             Self::Session(session) => {
-                parse_uuid_bytes(session).map_or(CompiledFilter::Nothing, CompiledFilter::Session)
+                Uuid::parse_str(session).map_or(CompiledFilter::Nothing, CompiledFilter::Session)
             }
         }
     }

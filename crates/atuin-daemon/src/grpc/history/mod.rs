@@ -17,9 +17,11 @@ use crate::DaemonHandle;
 use crate::grpc::history::pb::history_server::History as GrpcService;
 use crate::grpc::history::pb::{
     CancelHistoryReply, CancelHistoryRequest, DeleteHistoryReply, DeleteHistoryRequest,
-    EndHistoryReply, EndHistoryRequest, Lagged, RebuildHistoryReply, RebuildHistoryRequest,
-    ShutdownReply, ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply,
-    StatusRequest, TailHistoryEvent, TailHistoryReply, TailHistoryRequest,
+    EndHistoryReply, EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse, Lagged,
+    RebuildHistoryReply, RebuildHistoryRequest, RegisterCommandOutputRequest,
+    RegisterCommandOutputResponse, ShutdownReply, ShutdownRequest, StartHistoryReply,
+    StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent, TailHistoryReply,
+    TailHistoryRequest,
 };
 use crate::history_journal::HistoryJournal;
 
@@ -403,5 +405,31 @@ impl GrpcService for Service {
     ) -> Result<Response<ShutdownReply>, Status> {
         self.daemon_handle.shutdown();
         Ok(Response::new(ShutdownReply { accepted: true }))
+    }
+
+    #[instrument(skip_all, level = Level::TRACE)]
+    async fn register_command_output(
+        &self,
+        request: Request<RegisterCommandOutputRequest>,
+    ) -> Result<Response<RegisterCommandOutputResponse>, Status> {
+        let request = request.into_inner();
+        self.journal.register_command_output(request.history_id()?, request.capture()?).await?;
+        Ok(Response::new(RegisterCommandOutputResponse {}))
+    }
+
+    #[instrument(skip_all, level = Level::TRACE)]
+    async fn get_command_output(
+        &self,
+        request: Request<GetCommandOutputRequest>,
+    ) -> Result<Response<GetCommandOutputResponse>, Status> {
+        let request = request.into_inner();
+        let id = request.history_id()?;
+
+        let capture =
+            self.journal.get_command_output(id).await?.ok_or_else(|| {
+                Status::not_found(format!("no captured output for history id {id}"))
+            })?;
+
+        Ok(Response::new(GetCommandOutputResponse::build(capture, request.output_ranges())))
     }
 }

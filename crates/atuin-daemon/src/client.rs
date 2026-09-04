@@ -5,6 +5,7 @@ use atuin_client::database::Context;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::{FilterMode, Settings};
 use atuin_common::filter::{self, OrFilter};
+use atuin_common::range::PyStyleIdxRange;
 use easy_cast::Conv;
 use eyre::{Context as EyreContext, Result};
 use hyper_util::rt::TokioIo;
@@ -19,19 +20,16 @@ use tracing::{Level, instrument, span};
 
 use crate::grpc::history::pb::history_client::HistoryClient as HistoryServiceClient;
 use crate::grpc::history::pb::{
-    AuthorKind, CancelHistoryReply, CancelHistoryRequest, DeleteHistoryReply, DeleteHistoryRequest,
-    EndHistoryReply, EndHistoryRequest, RebuildHistoryReply, RebuildHistoryRequest,
-    ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest,
-    TailHistoryReply, TailHistoryRequest,
+    AuthorKind, CancelHistoryReply, CancelHistoryRequest, CommandCapture, CommandCaptureMeta,
+    DeleteHistoryReply, DeleteHistoryRequest, EndHistoryReply, EndHistoryRequest,
+    GetCommandOutputRequest, GetCommandOutputResponse, RebuildHistoryReply, RebuildHistoryRequest,
+    RegisterCommandOutputRequest, ShutdownRequest, StartHistoryReply, StartHistoryRequest,
+    StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
 };
 use crate::search::search_client::SearchClient as SearchServiceClient;
 use crate::search::{
     FilterMode as RpcFilterMode, PrepareIndexRequest, SearchContext as RpcSearchContext,
     SearchRequest, SearchResponse,
-};
-use crate::semantic::semantic_client::SemanticClient as SemanticServiceClient;
-use crate::semantic::{
-    CommandCapture, CommandOutputReply, CommandOutputRequest, OutputRange, RecordCommandsReply,
 };
 
 pub struct HistoryClient {
@@ -117,6 +115,16 @@ impl HistoryClient {
         Ok(HistoryClient { client })
     }
 
+    #[cfg(unix)]
+    pub async fn from_settings(settings: &Settings) -> Result<Self> {
+        Self::new(settings.daemon.existing_socket_path().into_owned()).await
+    }
+
+    #[cfg(not(unix))]
+    pub async fn from_settings(settings: &Settings) -> Result<Self> {
+        Self::new(settings.daemon.tcp_port).await
+    }
+
     pub async fn start_history(&mut self, h: History) -> Result<StartHistoryReply> {
         let req = StartHistoryRequest {
             command: h.command,
@@ -186,6 +194,47 @@ impl HistoryClient {
     pub async fn shutdown(&mut self) -> Result<bool> {
         let resp = self.client.shutdown(ShutdownRequest {}).await?.into_inner();
         Ok(resp.accepted)
+    }
+
+    pub async fn register_command_output(
+        &mut self,
+        id: HistoryId,
+        output: String,
+        output_truncated: bool,
+        output_observed_bytes: u64,
+    ) -> Result<()> {
+        let capture = CommandCapture {
+            output,
+            meta: Some(CommandCaptureMeta {
+                output_truncated,
+                output_observed_bytes,
+            }),
+        };
+        self.client
+            .register_command_output(RegisterCommandOutputRequest {
+                history_id: Some(id.into()),
+                capture: Some(capture),
+            })
+            .await?;
+        Ok(())
+    }
+
+    /// Fetch a command's captured output for the requested line ranges. Returns [`None`] when the
+    /// daemon has no output stored for `id` (the daemon signals this with a `NOT_FOUND` status).
+    pub async fn get_command_output(
+        &mut self,
+        id: HistoryId,
+        ranges: Vec<PyStyleIdxRange>,
+    ) -> Result<Option<GetCommandOutputResponse>> {
+        let request = GetCommandOutputRequest {
+            id: Some(id.into()),
+            line_ranges: ranges,
+        };
+        match self.client.get_command_output(request).await {
+            Ok(response) => Ok(Some(response.into_inner())),
+            Err(status) if status.code() == Code::NotFound => Ok(None),
+            Err(status) => Err(status.into()),
+        }
     }
 }
 
@@ -321,89 +370,5 @@ impl From<Context> for RpcSearchContext {
             host_id: context.host_id,
             git_root: context.git_root.map(|path| path.to_string_lossy().to_string()),
         }
-    }
-}
-
-pub struct SemanticClient {
-    client: SemanticServiceClient<Channel>,
-}
-
-impl SemanticClient {
-    #[cfg(unix)]
-    pub async fn new(path: PathBuf) -> Result<Self> {
-        let log_path = path.clone();
-        let channel =
-            Endpoint::try_from("http://atuin_local_daemon:0")?
-                .connect_with_connector(service_fn(move |_: Uri| {
-                    let path = path.clone();
-
-                    async move {
-                        Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?))
-                    }
-                }))
-                .await
-                .wrap_err_with(|| {
-                    format!(
-                        "failed to connect to local atuin daemon at {}. Is it running?",
-                        log_path.display()
-                    )
-                })?;
-
-        let client = SemanticServiceClient::new(channel);
-
-        Ok(Self { client })
-    }
-
-    #[cfg(not(unix))]
-    pub async fn new(port: u64) -> Result<Self> {
-        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
-            .connect_with_connector(service_fn(move |_: Uri| {
-                let url = format!("127.0.0.1:{port}");
-
-                async move {
-                    Ok::<_, std::io::Error>(TokioIo::new(TcpStream::connect(url.clone()).await?))
-                }
-            }))
-            .await
-            .wrap_err_with(|| {
-                format!(
-                    "failed to connect to local atuin daemon at 127.0.0.1:{port}. Is it running?"
-                )
-            })?;
-
-        let client = SemanticServiceClient::new(channel);
-
-        Ok(SemanticClient { client })
-    }
-
-    #[cfg(unix)]
-    pub async fn from_settings(settings: &Settings) -> Result<Self> {
-        Self::new(settings.daemon.existing_socket_path().into_owned()).await
-    }
-
-    #[cfg(not(unix))]
-    pub async fn from_settings(settings: &Settings) -> Result<Self> {
-        Self::new(settings.daemon.tcp_port).await
-    }
-
-    pub async fn record_commands(
-        &mut self,
-        captures: Vec<CommandCapture>,
-    ) -> Result<RecordCommandsReply> {
-        let stream = tokio_stream::iter(captures);
-        Ok(self.client.record_commands(stream).await?.into_inner())
-    }
-
-    pub async fn command_output(
-        &mut self,
-        history_id: HistoryId,
-        ranges: Vec<(i64, i64)>,
-    ) -> Result<CommandOutputReply> {
-        let request = CommandOutputRequest {
-            history_id: history_id.to_string(),
-            ranges: ranges.into_iter().map(|(start, end)| OutputRange { start, end }).collect(),
-        };
-
-        Ok(self.client.command_output(request).await?.into_inner())
     }
 }

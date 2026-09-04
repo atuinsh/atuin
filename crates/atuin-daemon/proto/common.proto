@@ -12,3 +12,15 @@ message Uuid {
 message RecordId {
   Uuid uuid = 1;
 }
+
+// A pair of signed indices delimiting a range in Python-slice style: both ends inclusive,
+// negatives count from the end.
+//
+// Rust codegen maps this message onto `atuin_common::range::PyStyleIdxRange` (see the daemon's
+// `build.rs`), so the resolution rules live in one place. Keep the field numbers in step with the
+// `prost` attributes on that struct.
+message PyStyleIdxRange { int64 start = 1; int64 end = 2; }
+
+// A pair of unsigned indices delimiting an already-resolved, concrete `[start, end)` half-open
+// span.
+message UnsignedIdxRange { uint64 start = 1; uint64 end = 2; }

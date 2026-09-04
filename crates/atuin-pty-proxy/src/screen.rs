@@ -180,12 +180,19 @@ fn encode_screen(parser: &vt100::Parser) -> Vec<u8> {
 mod tests {
     use std::time::Duration;
 
+    use atuin_client::history::HistoryId;
     use rstest::{fixture, rstest};
 
     use super::*;
     use crate::capture::CommandCapture;
 
     const TIMEOUT: Duration = Duration::from_secs(5);
+
+    const HID: &str = "00000000-0000-0000-0000-0000000000a1";
+
+    fn hid(s: &str) -> HistoryId {
+        s.parse().expect("valid history id")
+    }
 
     /// Get the `rows` and `cols` values from an [`encode_screen`] blob.
     fn size_of(blob: &[u8]) -> (u16, u16) {
@@ -266,7 +273,9 @@ mod tests {
 
         parser.handle_msg(Msg::Data(b"\x1b]133;C\x07abcdefghij".to_vec()));
         parser.handle_msg(Msg::Resize { rows: 6, cols: 5 });
-        parser.handle_msg(Msg::Data(b"klmno\r\n\x1b]133;D;0;history_id=hist\x07".to_vec()));
+        parser.handle_msg(Msg::Data(
+            format!("klmno\r\n\x1b]133;D;0;history_id={HID}\x07").into_bytes(),
+        ));
 
         let captures: Vec<_> = captures.try_iter().collect();
         assert_eq!(captures.len(), 1);
@@ -284,7 +293,11 @@ mod tests {
 
         msg_tx
             .send(Msg::Data(
-                b"\x1b]133;A\x07$ \x1b]133;B\x07echo hi\r\n\x1b]133;C\x07hi\r\n\x1b]133;D;0;history_id=hist;session_id=sess\x07".to_vec(),
+                format!(
+                    "\x1b]133;A\x07$ \x1b]133;B\x07echo \
+                     hi\r\n\x1b]133;C\x07hi\r\n\x1b]133;D;0;history_id={HID};session_id=sess\x07"
+                )
+                .into_bytes(),
             ))
             .expect("parser thread alive");
         // A screen request only comes back once the data above has been handled.
@@ -295,7 +308,7 @@ mod tests {
         assert_eq!(captures.len(), 1);
         assert_eq!(captures[0].command, "echo hi");
         assert_eq!(captures[0].output, "hi");
-        assert_eq!(captures[0].history_id.as_deref(), Some("hist"));
+        assert_eq!(captures[0].history_id, Some(hid(HID)));
     }
 
     #[rstest]
@@ -313,7 +326,8 @@ mod tests {
         parser.handle_msg(Msg::Data(
             [
                 b"\x1b]133;A\x07$ \x1b]133;B\x07echo hi\r\n".as_slice(),
-                b"\x1b]133;C\x07hi\r\n\x1b]133;D;0;history_id=hist;session_id=sess\x07",
+                format!("\x1b]133;C\x07hi\r\n\x1b]133;D;0;history_id={HID};session_id=sess\x07")
+                    .as_bytes(),
             ]
             .concat(),
         ));

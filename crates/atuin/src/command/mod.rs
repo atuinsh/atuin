@@ -100,7 +100,6 @@ fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy, prev_umask: Mode) {
 #[cfg(all(feature = "daemon", feature = "pty-proxy", unix))]
 fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink> {
     use std::sync::mpsc;
-    use std::time::Duration;
 
     if is_truthy_env("ATUIN_TERMINAL") {
         return None;
@@ -114,20 +113,25 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
             return;
         };
 
-        while let Ok(first) = rx.recv() {
-            let mut batch = vec![first];
+        runtime.block_on(async move {
+            let Ok(mut client) = atuin_daemon::HistoryClient::from_settings(&settings).await else {
+                return;
+            };
 
-            while batch.len() < 64 {
-                match rx.recv_timeout(Duration::from_millis(25)) {
-                    Ok(capture) => batch.push(capture),
-                    Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {
-                        break;
-                    }
-                }
+            while let Ok(capture) = rx.recv() {
+                let Some(id) = capture.history_id else {
+                    continue;
+                };
+                let _ = client
+                    .register_command_output(
+                        id,
+                        capture.output,
+                        capture.output_truncated,
+                        capture.output_observed_bytes,
+                    )
+                    .await;
             }
-
-            runtime.block_on(send_semantic_command_captures(&settings, batch));
-        }
+        });
     });
 
     Some(Box::new(move |capture| {
@@ -142,28 +146,4 @@ fn is_truthy_env(name: &str) -> bool {
         .ok()
         .as_ref()
         .is_some_and(|value| !value.trim().is_empty() && value.trim() != "false")
-}
-
-#[cfg(all(feature = "daemon", feature = "pty-proxy", unix))]
-async fn send_semantic_command_captures(
-    settings: &atuin_client::settings::Settings,
-    batch: Vec<atuin_pty_proxy::CommandCapture>,
-) {
-    let captures = batch
-        .into_iter()
-        .map(|capture| atuin_daemon::semantic::CommandCapture {
-            prompt: capture.prompt,
-            command: capture.command,
-            output: capture.output,
-            exit_code: capture.exit_code,
-            history_id: capture.history_id,
-            session_id: capture.session_id,
-            output_truncated: capture.output_truncated,
-            output_observed_bytes: capture.output_observed_bytes,
-        })
-        .collect();
-
-    if let Ok(mut client) = atuin_daemon::SemanticClient::from_settings(settings).await {
-        let _ = client.record_commands(captures).await;
-    }
 }
