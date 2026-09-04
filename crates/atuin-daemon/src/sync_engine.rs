@@ -147,8 +147,8 @@ impl Stores {
         }
     }
 
-    /// Fold freshly downloaded records into the local databases, announcing new history on the bus.
-    async fn rebuild(&self, handle: &DaemonHandle, downloaded: &[RecordId]) {
+    /// Fold freshly downloaded records into the history database, announcing new history on the bus.
+    async fn rebuild_history(&self, handle: &DaemonHandle, downloaded: &[RecordId]) {
         // `incremental_build` already yields in bounded batches - an initial sync (on backfill,
         // eg.) risks being dozens of GB of RAM otherwise.
         let mut batches =
@@ -168,7 +168,10 @@ impl Stores {
                 }
             }
         }
+    }
 
+    /// Rebuild the alias and var stores from the record store.
+    async fn rebuild_dotfiles(&self) {
         if let Err(e) = self.alias.build().await {
             tracing::error!("failed to rebuild alias store: {e}");
         }
@@ -218,12 +221,14 @@ async fn sync_once(
 
     tracing::info!(uploaded, downloaded = downloaded.len(), "sync complete");
 
-    stores.rebuild(handle, &downloaded).await;
+    stores.rebuild_history(handle, &downloaded).await;
 
     handle.emit(DaemonEvent::SyncCompleted {
         uploaded: usize::conv(uploaded),
         downloaded: downloaded.len(),
     });
+
+    stores.rebuild_dotfiles().await;
 
     if let Err(e) = Settings::save_sync_time().await {
         tracing::error!("failed to save sync time: {e}");
