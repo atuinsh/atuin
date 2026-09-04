@@ -97,6 +97,9 @@ impl Flusher {
                 // so must be seq-cst-ordered?
                 //
                 // Unsure but would be curious to learn more.
+                //
+                // @taylordotfish mentioned we shouldn't rely on the internal implementation
+                // details.
                 if !dirty.swap(false, Ordering::Acquire) {
                     continue;
                 }
