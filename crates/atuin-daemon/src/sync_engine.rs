@@ -52,7 +52,7 @@ async fn run(handle: DaemonHandle, mut events: broadcast::Receiver<DaemonEvent>)
     let host_id = match Settings::host_id().await {
         Ok(id) => id,
         Err(e) => {
-            tracing::error!("failed to get host id, sync disabled: {e}");
+            tracing::error!("failed to get host id, sync engine disabled for this daemon run: {e}");
             return;
         }
     };
@@ -89,6 +89,7 @@ async fn run(handle: DaemonHandle, mut events: broadcast::Receiver<DaemonEvent>)
                     period = new_period;
                     ticker = new_ticker(period);
                     ticker.reset_after(period);
+                    backoff.set_base(new_period);
                 }
             }
             Err(e) => {
@@ -96,7 +97,7 @@ async fn run(handle: DaemonHandle, mut events: broadcast::Receiver<DaemonEvent>)
                 handle.emit(DaemonEvent::SyncFailed {
                     error: e.to_string(),
                 });
-                let delay = backoff.next();
+                let delay = backoff.next_delay();
                 tracing::error!("backing off, next sync tick in {delay:?}");
                 ticker.reset_after(delay);
             }
@@ -113,13 +114,21 @@ async fn shutdown_requested(events: &mut broadcast::Receiver<DaemonEvent>) {
     loop {
         match events.recv().await {
             Ok(DaemonEvent::ShutdownRequested) | Err(RecvError::Closed) => return,
+            // This is only polled between ticks (raced in `select!` against `ticker.tick()`), so
+            // if more than the bus capacity worth of events arrive during one long-running sync, a
+            // `ShutdownRequested` can be dropped along with the rest of the lagged batch. The only
+            // event this engine emits at any real rate is its own `HistorySynced`, and `boot()`
+            // bounds the wait on this task with `SHUTDOWN_GRACE` as the backstop, so a lost event
+            // here just means shutdown takes up to that long rather than hanging.
             Ok(_) | Err(RecvError::Lagged(_)) => {}
         }
     }
 }
 
 fn sync_period(settings: &Settings) -> Duration {
-    Duration::from_secs(settings.daemon.sync_frequency)
+    // `tokio::time::interval` panics if given a zero period, and `sync_frequency` isn't validated
+    // elsewhere, so clamp to at least one second.
+    Duration::from_secs(settings.daemon.sync_frequency.max(1))
 }
 
 /// A ticker whose first tick fires immediately, and which never tries to "catch up" on ticks
@@ -277,10 +286,20 @@ impl Backoff {
         self.current = None;
     }
 
+    /// The configured sync period changed; later retries grow from the new value.
+    ///
+    /// Deliberately does not touch `max`, so the per-engine jitter is drawn only once.
+    fn set_base(&mut self, base: Duration) {
+        self.base = base;
+    }
+
     /// The sync failed: compute and record how long to wait before the next attempt.
-    fn next(&mut self) -> Duration {
+    fn next_delay(&mut self) -> Duration {
         let prev = self.current.unwrap_or(self.base);
-        let delay = prev.mul_f64(rand::thread_rng().gen_range(Self::GROWTH)).min(self.max);
+        // `base` (and thus `prev`) is derived from an unvalidated `u64` config value, so clamp to
+        // `max` before multiplying to keep the multiply itself from overflowing `Duration`.
+        let delay =
+            prev.min(self.max).mul_f64(rand::thread_rng().gen_range(Self::GROWTH)).min(self.max);
         self.current = Some(delay);
         delay
     }
@@ -291,8 +310,10 @@ mod tests {
     use std::time::Duration;
 
     use rstest::{fixture, rstest};
+    use tokio::sync::broadcast;
 
-    use super::Backoff;
+    use super::{Backoff, shutdown_requested};
+    use crate::events::DaemonEvent;
 
     const BASE: Duration = Duration::from_secs(300);
 
@@ -314,15 +335,15 @@ mod tests {
 
     #[rstest]
     fn first_delay_grows_from_base(mut backoff: Backoff) {
-        let delay = backoff.next();
+        let delay = backoff.next_delay();
         assert_within(delay, BASE);
         assert!(backoff.is_retrying());
     }
 
     #[rstest]
     fn delays_grow_geometrically(mut backoff: Backoff) {
-        let first = backoff.next();
-        let second = backoff.next();
+        let first = backoff.next_delay();
+        let second = backoff.next_delay();
         assert_within(second, first);
     }
 
@@ -331,7 +352,7 @@ mod tests {
         let mut backoff = Backoff::new(Duration::from_secs(20 * 60));
         // 20 min * 2.0 already exceeds the 30-31 min cap, so every delay is the cap.
         for _ in 0..4 {
-            assert_eq!(backoff.next(), backoff.max);
+            assert_eq!(backoff.next_delay(), backoff.max);
         }
         assert!(backoff.max >= Backoff::MAX_BASE);
         assert!(backoff.max < Backoff::MAX_BASE + Backoff::MAX_JITTER);
@@ -339,10 +360,52 @@ mod tests {
 
     #[rstest]
     fn reset_returns_to_idle_and_restarts_from_base(mut backoff: Backoff) {
-        backoff.next();
-        backoff.next();
+        backoff.next_delay();
+        backoff.next_delay();
         backoff.reset();
         assert!(!backoff.is_retrying());
-        assert_within(backoff.next(), BASE);
+        assert_within(backoff.next_delay(), BASE);
+    }
+
+    #[rstest]
+    fn set_base_changes_where_retries_grow_from(mut backoff: Backoff) {
+        let new_base = Duration::from_secs(60);
+        backoff.set_base(new_base);
+        assert_within(backoff.next_delay(), new_base);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn shutdown_requested_returns_on_shutdown_event() {
+        let (tx, mut rx) = broadcast::channel(4);
+        tx.send(DaemonEvent::ShutdownRequested).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), shutdown_requested(&mut rx))
+            .await
+            .expect("should return once ShutdownRequested is received");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn shutdown_requested_returns_when_bus_closes() {
+        let (tx, mut rx) = broadcast::channel::<DaemonEvent>(4);
+        drop(tx);
+        tokio::time::timeout(Duration::from_secs(1), shutdown_requested(&mut rx))
+            .await
+            .expect("should return once the sender is gone");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn shutdown_requested_ignores_other_events() {
+        let (tx, mut rx) = broadcast::channel(4);
+        tx.send(DaemonEvent::SettingsReloaded).unwrap();
+        tx.send(DaemonEvent::SyncCompleted {
+            uploaded: 0,
+            downloaded: 0,
+        })
+        .unwrap();
+        let waited =
+            tokio::time::timeout(Duration::from_millis(50), shutdown_requested(&mut rx)).await;
+        assert!(waited.is_err(), "must keep waiting through non-shutdown events");
     }
 }
