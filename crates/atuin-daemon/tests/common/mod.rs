@@ -29,7 +29,7 @@ use atuin_daemon::grpc::history::pb;
 use atuin_daemon::grpc::history::pb::history_server::HistoryServer;
 use atuin_daemon::search::{IndexFilterMode, SearchIndex};
 use atuin_daemon::{
-    Daemon, DaemonEvent, DaemonHandle, HistoryJournal, SearchComponent, SemanticComponent,
+    Daemon, DaemonEvent, DaemonHandle, HistoryJournal, OutputCapture, SearchComponent,
 };
 use atuin_domain::record::{CmdOrigin, HostId, RecordTag};
 use corpus::{HistoryGen, Seeded};
@@ -132,7 +132,7 @@ impl TestEnvBuilder {
         let history_db = Sqlite::new(&db_path, self.db_timeout).await.unwrap();
         let store = SqliteStore::new(&record_path, self.db_timeout).await.unwrap();
 
-        let semantic = SemanticComponent::new();
+        let output_capture = OutputCapture::open(tmp.path().join("capture")).unwrap();
         let search_component = SearchComponent::new();
         let index = search_component.index();
         let search_service = search_component.grpc_service();
@@ -169,8 +169,8 @@ impl TestEnvBuilder {
             handle.caps().clone(),
             history_store.clone(),
             history_db.clone(),
-            semantic,
             index.clone(),
+            output_capture,
         ));
         let history_service =
             HistoryServer::new(HistoryService::new(journal.clone(), handle.clone()));
