@@ -16,8 +16,9 @@ use tracing::{Level, instrument};
 use crate::DaemonHandle;
 use crate::grpc::history::pb::history_server::History as GrpcService;
 use crate::grpc::history::pb::{
-    CancelHistoryReply, CancelHistoryRequest, DeleteHistoryReply, DeleteHistoryRequest,
-    EndHistoryReply, EndHistoryRequest, GetCommandOutputReply, GetCommandOutputRequest, Lagged,
+    CancelHistoryReply, CancelHistoryRequest, ChunkedOutput, CommandOutput, DeleteHistoryReply,
+    DeleteHistoryRequest, EndHistoryReply, EndHistoryRequest, GetChunkedOutputRequest,
+    GetChunkedOutputResponse, GetCommandOutputRequest, GetCommandOutputResponse, Lagged,
     RebuildHistoryReply, RebuildHistoryRequest, RegisterCommandOutputRequest,
     RegisterCommandOutputResponse, ShutdownReply, ShutdownRequest, StartHistoryReply,
     StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent, TailHistoryReply,
@@ -421,16 +422,35 @@ impl GrpcService for Service {
     async fn get_command_output(
         &self,
         request: Request<GetCommandOutputRequest>,
-    ) -> Result<Response<GetCommandOutputReply>, Status> {
+    ) -> Result<Response<GetCommandOutputResponse>, Status> {
         let request = request.into_inner();
         let id = request.history_id()?;
-        let ranges: Vec<_> = request.output_ranges().collect();
 
         let capture =
             self.journal.get_command_output(id).await?.ok_or_else(|| {
                 Status::not_found(format!("no captured output for history id {id}"))
             })?;
 
-        Ok(Response::new(GetCommandOutputReply::build(capture, &ranges)))
+        Ok(Response::new(GetCommandOutputResponse {
+            output: Some(CommandOutput::from(capture)),
+        }))
+    }
+
+    #[instrument(skip_all, level = Level::TRACE)]
+    async fn get_chunked_output(
+        &self,
+        request: Request<GetChunkedOutputRequest>,
+    ) -> Result<Response<GetChunkedOutputResponse>, Status> {
+        let request = request.into_inner();
+        let id = request.history_id()?;
+
+        let capture =
+            self.journal.get_command_output(id).await?.ok_or_else(|| {
+                Status::not_found(format!("no captured output for history id {id}"))
+            })?;
+
+        Ok(Response::new(GetChunkedOutputResponse {
+            chunked: Some(ChunkedOutput::build(capture, request.output_ranges())),
+        }))
     }
 }

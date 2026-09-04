@@ -18,14 +18,13 @@ use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
 use tracing::{Level, instrument, span};
 
-use crate::grpc::common::pb::SignedIdxRange;
 use crate::grpc::history::pb::history_client::HistoryClient as HistoryServiceClient;
 use crate::grpc::history::pb::{
-    AuthorKind, CancelHistoryReply, CancelHistoryRequest, CommandCapture, CommandCaptureMeta,
-    DeleteHistoryReply, DeleteHistoryRequest, EndHistoryReply, EndHistoryRequest,
-    GetCommandOutputReply, GetCommandOutputRequest, RebuildHistoryReply, RebuildHistoryRequest,
-    RegisterCommandOutputRequest, ShutdownRequest, StartHistoryReply, StartHistoryRequest,
-    StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
+    AuthorKind, CancelHistoryReply, CancelHistoryRequest, ChunkedOutput, CommandCapture,
+    CommandCaptureMeta, CommandOutput, DeleteHistoryReply, DeleteHistoryRequest, EndHistoryReply,
+    EndHistoryRequest, GetChunkedOutputRequest, GetCommandOutputRequest, RebuildHistoryReply,
+    RebuildHistoryRequest, RegisterCommandOutputRequest, ShutdownRequest, StartHistoryReply,
+    StartHistoryRequest, StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
 };
 use crate::search::search_client::SearchClient as SearchServiceClient;
 use crate::search::{
@@ -222,17 +221,28 @@ impl HistoryClient {
 
     /// Fetch a command's captured output. Returns [`None`] when the daemon has no output stored for
     /// `id` (the daemon signals this with a `NOT_FOUND` status).
-    pub async fn get_command_output(
+    pub async fn get_command_output(&mut self, id: HistoryId) -> Result<Option<CommandOutput>> {
+        let request = GetCommandOutputRequest {
+            id: Some(id.into()),
+        };
+        match self.client.get_command_output(request).await {
+            Ok(response) => Ok(response.into_inner().output),
+            Err(status) if status.code() == Code::NotFound => Ok(None),
+            Err(status) => Err(status.into()),
+        }
+    }
+
+    pub async fn get_chunked_output(
         &mut self,
         id: HistoryId,
         ranges: Vec<PyStyleIdxRange>,
-    ) -> Result<Option<GetCommandOutputReply>> {
-        let request = GetCommandOutputRequest {
+    ) -> Result<Option<ChunkedOutput>> {
+        let request = GetChunkedOutputRequest {
             id: Some(id.into()),
-            line_ranges: ranges.into_iter().map(SignedIdxRange::from).collect(),
+            line_ranges: ranges,
         };
-        match self.client.get_command_output(request).await {
-            Ok(response) => Ok(Some(response.into_inner())),
+        match self.client.get_chunked_output(request).await {
+            Ok(response) => Ok(response.into_inner().chunked),
             Err(status) if status.code() == Code::NotFound => Ok(None),
             Err(status) => Err(status.into()),
         }

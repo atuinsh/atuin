@@ -8,9 +8,13 @@ use easy_cast::Conv;
 ///
 /// Resolve it against a slice (or a length) with [`resolve_for`](Self::resolve_for) to get a plain
 /// half-open [`Range<usize>`] that is always valid to index that slice with.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "proto", derive(prost::Message))]
+#[cfg_attr(not(feature = "proto"), derive(Debug))]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub struct PyStyleIdxRange {
+    #[cfg_attr(feature = "proto", prost(int64, tag = "1"))]
     start: i64,
+    #[cfg_attr(feature = "proto", prost(int64, tag = "2"))]
     end: i64,
 }
 

@@ -456,6 +456,7 @@ dependencies = [
  "parking_lot",
  "pretty_assertions",
  "proptest",
+ "prost",
  "rmp",
  "rstest",
  "rustix",

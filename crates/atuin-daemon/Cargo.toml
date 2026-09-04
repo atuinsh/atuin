@@ -13,7 +13,7 @@ version.workspace = true
 
 [dependencies]
 atuin-client = { workspace = true }
-atuin-common = { workspace = true, features = ["os"] }
+atuin-common = { workspace = true, features = ["os", "proto"] }
 atuin-domain = { workspace = true }
 atuin-dotfiles = { workspace = true }
 atuin-history = { workspace = true }

@@ -253,6 +253,8 @@ impl From<CaptureError> for Status {
 pub enum RegisterCommandOutputRequestParseError {
     #[error("missing capture")]
     MissingCapture,
+    #[error("missing capture metadata")]
+    MissingCaptureMeta,
     #[error("missing history id")]
     MissingHistory,
     #[error("invalid id field: {0}")]
@@ -268,14 +270,24 @@ impl RegisterCommandOutputRequest {
             .try_into()?)
     }
 
+    /// The capture to store, rejected unless it carries its [`CommandCaptureMeta`].
+    ///
+    /// `meta` is logically required, and nothing downstream can tell an omitted one from an
+    /// all-defaults one: a capture stored without it reads back as `output_truncated = false`, so
+    /// truncated output would be presented as complete. Reject it at the edge instead.
     pub fn capture(&self) -> Result<CommandCapture, RegisterCommandOutputRequestParseError> {
-        self.capture.clone().ok_or(RegisterCommandOutputRequestParseError::MissingCapture)
+        let capture =
+            self.capture.clone().ok_or(RegisterCommandOutputRequestParseError::MissingCapture)?;
+        if capture.meta.is_none() {
+            return Err(RegisterCommandOutputRequestParseError::MissingCaptureMeta);
+        }
+        Ok(capture)
     }
 }
 
-/// Errors thrown parsing the [`GetCommandOutputRequest`].
+/// Errors thrown parsing a command-output request.
 #[derive(Debug, Error)]
-pub enum GetCommandOutputRequestParseError {
+pub enum GetOutputRequestParseError {
     #[error("missing history id")]
     MissingHistory,
     #[error("invalid id field: {0}")]
@@ -283,13 +295,22 @@ pub enum GetCommandOutputRequestParseError {
 }
 
 impl GetCommandOutputRequest {
-    /// Fetch the history ID to associate the output with.
-    pub fn history_id(&self) -> Result<DomainHistoryId, GetCommandOutputRequestParseError> {
-        Ok(self.id.clone().ok_or(GetCommandOutputRequestParseError::MissingHistory)?.try_into()?)
+    /// Fetch the history ID whose output is being requested.
+    pub fn history_id(&self) -> Result<DomainHistoryId, GetOutputRequestParseError> {
+        Ok(self.id.clone().ok_or(GetOutputRequestParseError::MissingHistory)?.try_into()?)
+    }
+}
+
+impl GetChunkedOutputRequest {
+    /// Fetch the history ID whose output is being requested.
+    pub fn history_id(&self) -> Result<DomainHistoryId, GetOutputRequestParseError> {
+        Ok(self.id.clone().ok_or(GetOutputRequestParseError::MissingHistory)?.try_into()?)
     }
 
-    pub fn output_ranges(&self) -> impl Iterator<Item = PyStyleIdxRange> + '_ {
-        self.line_ranges.iter().copied().map(PyStyleIdxRange::from)
+    /// The requested line ranges.
+    #[must_use]
+    pub fn output_ranges(&self) -> &[PyStyleIdxRange] {
+        &self.line_ranges
     }
 }
 
@@ -303,7 +324,8 @@ pub struct ChunkedOutputLineView<'a> {
 impl ChunkedOutput {
     /// Build a chunked output from an output and a set of signed line ranges.
     #[must_use]
-    pub fn build(output: &str, ranges: &[PyStyleIdxRange]) -> Self {
+    pub fn build(capture: CommandCapture, ranges: &[PyStyleIdxRange]) -> Self {
+        let output = &capture.output;
         let lines: Vec<&str> = output.lines().collect();
 
         let chunks = ranges
@@ -322,6 +344,7 @@ impl ChunkedOutput {
             chunks,
             total_bytes: u64::conv(output.len()),
             total_lines: u64::conv(lines.len()),
+            meta: capture.meta,
         }
     }
 
@@ -338,19 +361,11 @@ impl ChunkedOutput {
     }
 }
 
-impl GetCommandOutputReply {
-    #[must_use]
-    pub fn build(capture: CommandCapture, ranges: &[PyStyleIdxRange]) -> Self {
-        let meta = capture.meta;
-        let data = if ranges.is_empty() {
-            get_command_output_reply::Data::Full(capture.output)
-        } else {
-            get_command_output_reply::Data::Chunked(ChunkedOutput::build(&capture.output, ranges))
-        };
-
+impl From<CommandCapture> for CommandOutput {
+    fn from(capture: CommandCapture) -> Self {
         Self {
-            data: Some(data),
-            meta,
+            output: capture.output,
+            meta: capture.meta,
         }
     }
 }
@@ -361,7 +376,7 @@ invalid_argument_errors!(
     EndHistoryRequestParseError,
     CancelHistoryRequestParseError,
     RegisterCommandOutputRequestParseError,
-    GetCommandOutputRequestParseError,
+    GetOutputRequestParseError,
 );
 
 versioned_messages!(
@@ -408,27 +423,47 @@ mod tests {
         PyStyleIdxRange::new(start, end)
     }
 
-    #[test]
-    fn command_output_empty_ranges_return_the_full_output() {
-        let reply = GetCommandOutputReply::build(capture_of("a\nb\nc"), &[]);
-        assert!(reply.meta.is_some());
-        match reply.data.unwrap() {
-            get_command_output_reply::Data::Full(output) => assert_eq!(output, "a\nb\nc"),
-            get_command_output_reply::Data::Chunked(_) => panic!("expected the full output"),
+    fn register_req(capture: Option<CommandCapture>) -> RegisterCommandOutputRequest {
+        RegisterCommandOutputRequest {
+            history_id: Some(good_id_proto()),
+            capture,
         }
+    }
+
+    #[test]
+    fn register_command_output_accepts_a_capture_carrying_its_meta() {
+        let capture = register_req(Some(capture_of("hello"))).capture().expect("capture");
+        assert_eq!(capture.output, "hello");
+        assert!(capture.meta.is_some());
+    }
+
+    #[rstest]
+    // A capture with no `meta` would read back as `output_truncated = false`, so truncated output
+    // would be presented as complete. Both omissions are rejected as invalid arguments instead.
+    #[case::no_meta(Some(CommandCapture { output: "hi".to_string(), meta: None }))]
+    #[case::no_capture(None)]
+    fn register_command_output_rejects_an_incomplete_capture(
+        #[case] capture: Option<CommandCapture>,
+    ) {
+        let err = register_req(capture).capture().expect_err("should be rejected");
+        assert_eq!(Status::from(err).code(), Code::InvalidArgument);
+    }
+
+    #[test]
+    fn command_output_carries_the_full_output_and_meta() {
+        let output = CommandOutput::from(capture_of("a\nb\nc"));
+        assert_eq!(output.output, "a\nb\nc");
+        assert!(output.meta.is_some());
     }
 
     #[test]
     fn command_output_ranges_are_inclusive_with_negative_offsets() {
         // [1, 2] inclusive -> "one", "two"; [-1, -1] -> the last line, "four" (no sentinel needed).
-        let reply = GetCommandOutputReply::build(capture_of("zero\none\ntwo\nthree\nfour"), &[
+        let chunked = ChunkedOutput::build(capture_of("zero\none\ntwo\nthree\nfour"), &[
             py_range(1, 2),
             py_range(-1, -1),
         ]);
-        let chunked = match reply.data.unwrap() {
-            get_command_output_reply::Data::Chunked(chunked) => chunked,
-            get_command_output_reply::Data::Full(_) => panic!("expected chunks"),
-        };
+        assert!(chunked.meta.is_some());
         assert_eq!(chunked.total_lines, 5);
         let contents: Vec<&str> = chunked.chunks.iter().map(|c| c.content.as_str()).collect();
         assert_eq!(contents, vec!["one\ntwo", "four"]);
@@ -441,15 +476,11 @@ mod tests {
     fn command_output_returns_one_chunk_per_requested_range() {
         // Every requested range yields a chunk, in order: [2, 1] is backwards (empty), [10, 20] is
         // past the end (both empty content), [0, 0] selects "a". Nothing is dropped.
-        let reply = GetCommandOutputReply::build(capture_of("a\nb\nc"), &[
+        let chunked = ChunkedOutput::build(capture_of("a\nb\nc"), &[
             py_range(2, 1),
             py_range(10, 20),
             py_range(0, 0),
         ]);
-        let chunked = match reply.data.unwrap() {
-            get_command_output_reply::Data::Chunked(chunked) => chunked,
-            get_command_output_reply::Data::Full(_) => panic!("expected chunks"),
-        };
         let contents: Vec<&str> = chunked.chunks.iter().map(|c| c.content.as_str()).collect();
         assert_eq!(contents, vec!["", "", "a"]);
     }

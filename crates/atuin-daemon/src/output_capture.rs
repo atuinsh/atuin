@@ -9,6 +9,7 @@
 //! TODO(retention): the store grows unbounded; no eviction yet. See the design doc.
 
 use atuin_client::history::HistoryId;
+use fjall::config::CompressionPolicy;
 use fjall::{OptimisticTxDatabase, OptimisticTxKeyspace, Readable};
 use prost::Message;
 use thiserror::Error;
@@ -58,7 +59,11 @@ impl OutputCapture {
 
     /// Create a new [`OutputCapture`] system.
     pub fn new(db: OptimisticTxDatabase) -> fjall::Result<Self> {
-        let keyspace = db.keyspace(KEYSPACE_NAME, fjall::KeyspaceCreateOptions::default)?;
+        let keyspace = db.keyspace(KEYSPACE_NAME, || {
+            fjall::KeyspaceCreateOptions::default()
+                .data_block_compression_policy(CompressionPolicy::all(fjall::CompressionType::Lz4))
+                .with_kv_separation(Some(fjall::KvSeparationOptions::default()))
+        })?;
         Ok(Self { db, keyspace })
     }
 

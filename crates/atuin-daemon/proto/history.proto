@@ -178,20 +178,43 @@ message RegisterCommandOutputRequest  {
 
 message RegisterCommandOutputResponse {}
 
-// Request to fetch the command output for a given `id`.
+// A command's full captured output.
+message CommandOutput {
+  // The full output.
+  string output = 1;
+  // The original metadata of the captured output. Logically required.
+  CommandCaptureMeta meta = 2;
+}
+
+// Request to fetch the full command output for a given `id`.
+message GetCommandOutputRequest {
+  // The history ID you're searching for. Logically required.
+  HistoryId id = 1;
+}
+
+message GetCommandOutputResponse {
+  // The captured output. Logically required.
+  CommandOutput output = 1;
+}
+
+// Request to fetch specific line ranges of the command output for a given `id`.
 //
 // You can request specific ranges, expressed within the `line_ranges` field. In effect, you can
 // say, I want ranges `[0, 3), [8, 10)`, and you will get the content of the lines `0, 1, 2, 8, 9`
 // of the output.
-message GetCommandOutputRequest {
+message GetChunkedOutputRequest {
   // The history ID you're searching for. Logically required.
   HistoryId id = 1;
   // An or-filter for requesting specific lines.
   //
-  // Passing no values returns the full output.
   // Passing one value returns that range explicitly.
   // Passing multiple values returns the multiple values.
-  repeated common.SignedIdxRange line_ranges = 2;
+  repeated common.PyStyleIdxRange line_ranges = 2;
+}
+
+message GetChunkedOutputResponse {
+  // The requested per-line chunks. Logically required.
+  ChunkedOutput chunked = 1;
 }
 
 // Encodes one single chunk of an output.
@@ -203,8 +226,8 @@ message OutputChunk {
   string content = 2;
 }
 
-// When `GetCommandOutputReply` replies with multiple chunks (ie. when you requested specific
-// `line_ranges` in `GetCommandOutputRequest`, you get this output.
+// When `GetChunkedOutput` replies with per-line chunks for the requested `line_ranges`, you get
+// this output.
 message ChunkedOutput {
   repeated OutputChunk chunks = 1;
   // The total number of bytes in the stored output.
@@ -217,18 +240,7 @@ message ChunkedOutput {
   // The chunks you get will always uphold:
   // `sum(chunk.line_range.len() for chunk in chunks) <= total_lines`.
   uint64 total_lines = 3;
-}
-
-message GetCommandOutputReply {
-  // The output payload. Logically required (the daemon always sets one variant).
-  oneof data {
-    // You did not pass any filters, here's the full output.
-    string full = 1;
-    // You requested per-line chunks. You get that.
-    ChunkedOutput chunked = 2;
-  }
-  // The original metadata of the captured output. Logically required.
-  CommandCaptureMeta meta = 3;
+  CommandCaptureMeta meta = 4;
 }
 
 service History {
@@ -244,11 +256,16 @@ service History {
   rpc Shutdown(ShutdownRequest) returns (ShutdownReply);
   // Store a completed command's captured output. Errors if output already exists for this id.
   rpc RegisterCommandOutput(RegisterCommandOutputRequest) returns (RegisterCommandOutputResponse);
-  // Retrieve a command's captured output, optionally sliced by line ranges.
-  //
-  // See the docs for `GetCommandOutputRequest` for the calling convention.
+  // Retrieve a command's full captured output.
   //
   // Returns:
   //  - `tonic::Status::not_found` if the given output is not found.
-  rpc GetCommandOutput(GetCommandOutputRequest) returns (GetCommandOutputReply);
+  rpc GetCommandOutput(GetCommandOutputRequest) returns (GetCommandOutputResponse);
+  // Retrieve a command's captured output, sliced by line ranges.
+  //
+  // See the docs for `GetChunkedOutputRequest` for the calling convention.
+  //
+  // Returns:
+  //  - `tonic::Status::not_found` if the given output is not found.
+  rpc GetChunkedOutput(GetChunkedOutputRequest) returns (GetChunkedOutputResponse);
 }
