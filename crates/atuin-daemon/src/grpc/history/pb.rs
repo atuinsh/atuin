@@ -77,7 +77,7 @@ impl From<AuthorKind> for Option<atuin_client::history::AuthorKind> {
 impl From<History> for HistoryEntry {
     fn from(history: History) -> Self {
         Self {
-            timestamp: u64::conv(history.timestamp.unix_timestamp_nanos()),
+            timestamp: i64::conv(history.timestamp.unix_timestamp_nanos()),
             id: Some(history.id.into()),
             command: history.command,
             cwd: history.cwd,
@@ -106,8 +106,10 @@ impl TryFrom<StartHistoryRequest> for History {
     fn try_from(req: StartHistoryRequest) -> Result<Self, Self::Error> {
         // `author_kind()` borrows `req`, so read it before moving fields out.
         let author_kind = req.author_kind();
+        // The wire carries a signed i64 nanosecond timestamp, matching the history db's column, so
+        // every value round-trips without a range check.
         Ok(Self::daemon()
-            .timestamp(OffsetDateTime::from_unix_nanos_u64(req.timestamp))
+            .timestamp(OffsetDateTime::from_unix_nanos_i64(req.timestamp))
             .command(req.command)
             .cwd(req.cwd)
             .session(req.session)

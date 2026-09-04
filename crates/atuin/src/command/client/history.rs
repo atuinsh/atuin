@@ -703,7 +703,7 @@ impl TailEvent {
             }
             None => bail!("daemon sent an unspecified history tail event"),
         };
-        let timestamp = OffsetDateTime::from_unix_nanos_u64(history.timestamp);
+        let timestamp = OffsetDateTime::from_unix_nanos_i64(history.timestamp);
         let author_kind = history.author_kind();
 
         Ok(Self {

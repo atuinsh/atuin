@@ -23,7 +23,7 @@ use tonic::Code;
 
 fn tame_request() -> StartHistoryRequest {
     StartHistoryRequest {
-        timestamp: u64::try_from(time::OffsetDateTime::now_utc().unix_timestamp_nanos()).unwrap(),
+        timestamp: i64::try_from(time::OffsetDateTime::now_utc().unix_timestamp_nanos()).unwrap(),
         command: "echo tame".into(),
         cwd: "/tmp".into(),
         session: uuid::Uuid::now_v7().as_simple().to_string(),
@@ -85,7 +85,7 @@ proptest! {
             prop_assert_eq!(&row.session, &req.session);
             prop_assert_eq!(row.cmd_origin.as_str(), req.hostname.as_str());
             prop_assert_eq!(row.exit, exit);
-            prop_assert_eq!(row.timestamp, time::OffsetDateTime::from_unix_nanos_u64(req.timestamp));
+            prop_assert_eq!(row.timestamp, time::OffsetDateTime::from_unix_nanos_i64(req.timestamp));
             // `History::new` falls back to `ATUIN_HISTORY_AUTHOR`/`ATUIN_HISTORY_INTENT` when the
             // wire field is unset, so a developer shell exporting either must not fail this test.
             let expected_intent = normalize_optional_string(Some(req.intent.clone()))
@@ -201,38 +201,36 @@ proptest! {
     }
 }
 
-/// Field-level boundaries a proptest can miss because they depend on one exact value.
+/// Field-level boundaries a proptest can miss because they depend on one exact value. The wire and
+/// the history db share the same signed i64 nanosecond column, so both edges of the supported
+/// `[0, i64::MAX]` domain round-trip through start + end and persist, and the daemon never crashes
+/// on the cast.
 #[rstest]
-#[case::epoch(0, Code::Ok)]
-#[case::i64_max(u64::try_from(i64::MAX).unwrap(), Code::Ok)]
-#[case::just_past_i64(u64::try_from(i64::MAX).unwrap() + 1, Code::Ok)]
-#[case::u64_max(u64::MAX, Code::Ok)]
+#[case::epoch(0)]
+#[case::i64_max(i64::MAX)]
 #[tokio::test]
-async fn timestamp_edges_never_crash_the_daemon(#[case] timestamp: u64, #[case] expected: Code) {
+async fn timestamp_edges_never_crash_the_daemon(#[case] timestamp: i64) {
     let env = TestEnv::builder().build().await;
     let mut raw = env.raw_history_client().await;
     let req = StartHistoryRequest {
         timestamp,
         ..tame_request()
     };
+
     let id: HistoryId =
         raw.start_history(req).await.unwrap().into_inner().id.unwrap().try_into().unwrap();
+    raw.end_history(EndHistoryRequest {
+        id: Some(id.into()),
+        exit: 0,
+        duration: None,
+    })
+    .await
+    .unwrap();
+    assert!(env.history_db.load(id).await.unwrap().is_some());
 
-    let ended = raw
-        .end_history(EndHistoryRequest {
-            id: Some(id.into()),
-            exit: 0,
-            duration: None,
-        })
-        .await;
-    let code = ended.as_ref().map_or_else(tonic::Status::code, |_| Code::Ok);
-    assert_eq!(code, expected, "{ended:?}");
-    // Whatever happened, the daemon is still alive and serving.
+    // The daemon is still alive and serving.
     let mut client = env.history_client().await;
     assert!(client.status().await.unwrap().healthy);
-    if code == Code::Ok {
-        assert!(env.history_db.load(id).await.unwrap().is_some());
-    }
 }
 
 /// Command payload sizes: comfortably inside the 4 MiB gRPC default, and just past it, which must

@@ -70,17 +70,17 @@ pub fn author() -> impl Strategy<Value = String> {
     ]
 }
 
-/// Nanosecond timestamps, weighted toward the edges: epoch, now, the i64 boundary (where the
-/// history db's integer column stops fitting), and u64::MAX.
-pub fn timestamp_nanos() -> impl Strategy<Value = u64> {
-    let now = u64::try_from(time::OffsetDateTime::now_utc().unix_timestamp_nanos()).unwrap();
+/// Nanosecond timestamps across the supported `[0, i64::MAX]` domain, weighted toward the edges:
+/// epoch, now, and the i64 max (~year 2262). The wire and the history db share a signed i64 column
+/// and the record store a u64 one, so every non-negative value up to `i64::MAX` round-trips through
+/// all three; there is no unstorable value left to probe.
+pub fn timestamp_nanos() -> impl Strategy<Value = i64> {
+    let now = i64::try_from(time::OffsetDateTime::now_utc().unix_timestamp_nanos()).unwrap();
     prop_oneof![
         4 => now - 86_400_000_000_000..now + 86_400_000_000_000,
-        1 => Just(0u64),
-        1 => Just(u64::try_from(i64::MAX).unwrap()),
-        1 => Just(u64::try_from(i64::MAX).unwrap() + 1),
-        1 => Just(u64::MAX),
-        1 => any::<u64>(),
+        1 => Just(0i64),
+        1 => Just(i64::MAX),
+        1 => 0i64..=i64::MAX,
     ]
 }
 

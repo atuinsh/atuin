@@ -20,8 +20,9 @@ enum AuthorKind {
 }
 
 message StartHistoryRequest {
-  // If people are still using my software in ~530 years, they can figure out a u128 migration
-  uint64 timestamp = 1; // nanosecond unix epoch
+  // Signed to match the history db's i64 nanosecond column exactly. If people are still using my
+  // software in ~290 years, they can figure out an i128 migration.
+  int64 timestamp = 1; // nanosecond unix epoch
   string command = 2;
   string cwd = 3;
   string session = 4;
@@ -105,7 +106,7 @@ message ShutdownReply {
 message TailHistoryRequest {}
 
 message HistoryEntry {
-  uint64 timestamp = 1; // nanosecond unix epoch
+  int64 timestamp = 1; // nanosecond unix epoch, signed to match the history db's i64 column
   HistoryId id = 2;
   string command = 3;
   string cwd = 4;
