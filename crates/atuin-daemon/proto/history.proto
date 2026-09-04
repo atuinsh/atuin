@@ -20,9 +20,13 @@ enum AuthorKind {
 }
 
 message StartHistoryRequest {
-  // Signed to match the history db's i64 nanosecond column exactly. If people are still using my
-  // software in ~290 years, they can figure out an i128 migration.
-  int64 timestamp = 1; // nanosecond unix epoch
+  // Nanosecond UNIX epoch
+  //
+  // Please note this **must** be an i64.
+  // The database timestamp is also an i64, so it is better for this to be an i64 too.
+  //
+  // TODO(markovejnovic): Make a type-safe wrapper.
+  int64 timestamp = 1;
   string command = 2;
   string cwd = 3;
   string session = 4;
@@ -106,7 +110,13 @@ message ShutdownReply {
 message TailHistoryRequest {}
 
 message HistoryEntry {
-  int64 timestamp = 1; // nanosecond unix epoch, signed to match the history db's i64 column
+  // Nanosecond UNIX epoch
+  //
+  // Please note this **must** be an i64.
+  // The database timestamp is also an i64, so it is better for this to be an i64 too.
+  //
+  // TODO(markovejnovic): Make a type-safe wrapper.
+  int64 timestamp = 1;
   HistoryId id = 2;
   string command = 3;
   string cwd = 4;
