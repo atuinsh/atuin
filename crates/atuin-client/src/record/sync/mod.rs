@@ -408,11 +408,19 @@ impl Keyed<'_> {
                     })?;
             }
 
-            client.post_records(&page).await.map_err(|e| {
+            let sync_response = client.post_records(&page).await.map_err(|e| {
                 error!("failed to post records: {e:?}");
 
                 SyncError::RemoteRequestError { msg: e.to_string() }
             })?;
+            if !sync_response.failed_commands.is_empty() {
+                for failed_command in sync_response.failed_commands {
+                    warn!(
+                        "failed to upload record with id : {} and reason: {}",
+                        failed_command.record_id, failed_command.reason
+                    );
+                }
+            }
 
             progress += u64::conv(page.len());
             pb.set_position(progress);

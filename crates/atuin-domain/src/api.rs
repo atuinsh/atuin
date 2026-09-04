@@ -4,7 +4,10 @@ use std::sync::LazyLock;
 
 use semver::Version;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use url::Url;
+
+use crate::record::RecordId;
 
 // the usage of X- has been deprecated for quite along time, it turns out
 pub static ATUIN_HEADER_VERSION: &str = "Atuin-Version";
@@ -66,6 +69,22 @@ pub struct ErrorResponse<'a> {
     pub reason: Cow<'a, str>,
 }
 
+/// These are Sync Error that have happened as an intended choice
+#[derive(Error, Debug, serde::Serialize, serde::Deserialize)]
+pub enum ServerConfigSyncError {
+    #[error("could not add record; record too large")]
+    RequestTooLarge,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FailedSyncRecord {
+    pub reason: ServerConfigSyncError,
+    pub record_id: RecordId,
+}
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncResponse {
+    pub failed_commands: Vec<FailedSyncRecord>,
+}
 #[derive(Debug, Serialize, Deserialize)]
 pub struct IndexResponse {
     pub homage: String,

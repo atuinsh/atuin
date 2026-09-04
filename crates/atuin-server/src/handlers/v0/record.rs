@@ -1,3 +1,4 @@
+use atuin_domain::api::{FailedSyncRecord, ServerConfigSyncError, SyncResponse};
 use atuin_domain::record::{
     EncryptedData, HostId, Record, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
 };
@@ -17,7 +18,7 @@ pub async fn post(
     UserAuth(user): UserAuth,
     state: State<AppState>,
     Json(records): Json<Vec<Record<EncryptedData>>>,
-) -> Result<(), ErrorResponseStatus<'static>> {
+) -> Result<Json<SyncResponse>, ErrorResponseStatus<'static>> {
     let State(AppState {
         database, settings, ..
     }) = state;
@@ -25,26 +26,45 @@ pub async fn post(
     tracing::debug!(count = records.len(), user = user.username, "request to add records");
 
     counter!("atuin_record_uploaded").increment(u64::conv(records.len()));
+    let (mut valid_len_commands, invalid_len_commands): (
+        Vec<Record<EncryptedData>>,
+        Vec<Record<EncryptedData>>,
+    ) = records.into_iter().partition(|r| {
+        r.data.raw.len() <= settings.max_record_size || settings.max_record_size == 0
+    });
 
-    let keep = records
-        .iter()
-        .all(|r| r.data.raw.len() <= settings.max_record_size || settings.max_record_size == 0);
-
-    if !keep {
+    for _ in 0..invalid_len_commands.len() {
         counter!("atuin_record_too_large").increment(1);
-
-        return Err(ErrorResponse::reply("could not add records; record too large")
-            .with_status(StatusCode::BAD_REQUEST));
     }
+    let failed_commands_ids = invalid_len_commands
+        .iter()
+        .map(|r| FailedSyncRecord {
+            reason: ServerConfigSyncError::RequestTooLarge,
+            record_id: r.id,
+        })
+        .collect();
 
-    if let Err(e) = database.add_records(&user, &records).await {
+    let mut transformed_invalid_command: Vec<Record<EncryptedData>> = invalid_len_commands
+        .into_iter()
+        .map(|command| {
+            command.with_data(EncryptedData {
+                raw: "b".to_string(),
+                cek: "b".to_string(),
+            })
+        })
+        .collect();
+    valid_len_commands.append(&mut transformed_invalid_command);
+
+    if let Err(e) = database.add_records(&user, &valid_len_commands).await {
         error!("failed to add record: {}", e);
 
         return Err(ErrorResponse::reply("failed to add record")
             .with_status(StatusCode::INTERNAL_SERVER_ERROR));
     };
-
-    Ok(())
+    let res = SyncResponse {
+        failed_commands: failed_commands_ids,
+    };
+    Ok(Json(res))
 }
 
 #[instrument(skip_all, err(level = "warn"), fields(user.id = user.id))]
