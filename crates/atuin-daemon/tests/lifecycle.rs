@@ -17,7 +17,7 @@ mod unix {
     use atuin_daemon::grpc::HistoryService;
     use atuin_daemon::grpc::history::pb::history_server::HistoryServer;
     use atuin_daemon::search::{IndexFilterMode, SearchIndex};
-    use atuin_daemon::{Daemon, DaemonHandle, HistoryJournal, SearchComponent, SemanticComponent};
+    use atuin_daemon::{Daemon, DaemonHandle, HistoryJournal, OutputCapture, SearchComponent};
     use rstest::*;
     use tempfile::TempDir;
     use tokio::net::UnixListener;
@@ -63,8 +63,8 @@ mod unix {
         let store = SqliteStore::new(&record_path, Duration::from_secs(5)).await.unwrap();
 
         // Dependencies the command registry needs (Arc-backed, shared with the components).
-        let semantic_component = SemanticComponent::new();
         let search_index = SearchComponent::new().index();
+        let output_capture = OutputCapture::open(tmp.path().join("output-capture")).unwrap();
 
         // Build and start the daemon
         let mut daemon =
@@ -81,8 +81,8 @@ mod unix {
             handle.caps().clone(),
             history_store,
             handle.history_db().clone(),
-            semantic_component,
             search_index,
+            output_capture,
         ));
         let history_service = HistoryServer::new(HistoryService::new(journal, handle.clone()));
 
@@ -359,13 +359,14 @@ mod unix {
         let caps = atuin_client::api_client::caps_client(&settings).unwrap();
 
         let search_index = Arc::new(RwLock::new(SearchIndex::default()));
+        let output_capture = OutputCapture::open(tmp.path().join("output-capture")).unwrap();
         let history_store = HistoryStore::new(store, host_id, key);
         let journal = HistoryJournal::new(
             caps,
             history_store,
             history_db.clone(),
-            SemanticComponent::new(),
             search_index.clone(),
+            output_capture,
         );
 
         (journal, history_db, search_index, tmp)

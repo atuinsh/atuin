@@ -139,6 +139,91 @@ message TailHistoryReply {
   }
 }
 
+// Some metadata associated with every command capture.
+message CommandCaptureMeta {
+  // Whether the `output` field is considered truncated.
+  //
+  // The field is considered truncated iff `output` would have exceeded a maximal limit.
+  bool output_truncated = 1;
+  // The total number of bytes that were pushed to the virtual terminal.
+  //
+  // Note that there's an easy misconception to make: `output_truncated := output.len() !=
+  // output_observed_bytes`. Unfortunately, this is **NOT** true.
+  //
+  // `output_observed_bytes` counts the total number of bytes that were pushed to the virtual
+  // terminal **BEFORE** rasterizing the terminal.
+  //
+  // Think about this example -- a command outputs "hello\rhello\rhello\rhello". What is rendered?
+  // "hello". `output_observed_bytes` will be 23 -- ie. how many bytes the terminal saw.
+  uint64 output_observed_bytes = 2;
+}
+
+// A completed command's captured output.
+message CommandCapture {
+  // Rendered output which may contain SGR escapes.
+  //
+  // Note this output is mostly *VISIBLE* output. Many characters are stripped, including, but not
+  // limited to `\r` characters, some control bytes and newlines trimmed at the end of the output.
+  string output = 1;
+  // Metadata on this particular command capture. Logically required.
+  CommandCaptureMeta meta = 2;
+}
+
+// Request which associates a command capture with a history ID.
+message RegisterCommandOutputRequest  {
+  // The history id to associate with the command. Logically required.
+  HistoryId history_id = 1;
+  // The command capture itself. Logically required.
+  CommandCapture capture = 2;
+}
+
+message RegisterCommandOutputResponse {}
+
+// Request to fetch specific line ranges of the command output for a given `id`.
+//
+// You can request specific ranges, expressed within the `line_ranges` field. Those ranges are
+// `PyStyleIdxRange`s, so **both ends are inclusive**: asking for `[0, 3]` and `[8, 10]` returns the
+// content of lines `0, 1, 2, 3` and `8, 9, 10`. Lines are 0-offset, and a trailing newline
+// terminates its line rather than starting an empty one, so `"a\nb\n"` is two lines, not three.
+//
+// Note the reply speaks a different dialect: each chunk reports the resolved span it covers as an
+// `UnsignedIdxRange`, which is half-open.
+message GetCommandOutputRequest {
+  // The history ID you're searching for. Logically required.
+  HistoryId id = 1;
+  // An or-filter for requesting specific lines.
+  //
+  // Passing one value returns that range explicitly.
+  // Passing multiple values returns the multiple values.
+  // Request the whole output with a single `[0, -1]` range.
+  repeated common.PyStyleIdxRange line_ranges = 2;
+}
+
+// The per-line chunks for the requested `line_ranges`.
+message GetCommandOutputResponse {
+  repeated OutputChunk chunks = 1;
+  // The total number of bytes in the stored output.
+  //
+  // The chunks you get will always uphold:
+  // `sum(chunk.content.len() for chunk in chunks) <= total_bytes`.
+  uint64 total_bytes = 2;
+  // The total number of lines in the stored output.
+  //
+  // The chunks you get will always uphold:
+  // `sum(chunk.line_range.len() for chunk in chunks) <= total_lines`.
+  uint64 total_lines = 3;
+  CommandCaptureMeta meta = 4;
+}
+
+// Encodes one single chunk of an output.
+message OutputChunk {
+  // The already-resolved, non-negative range of lines that this content encapsulates.
+  // Logically required.
+  common.UnsignedIdxRange line_range = 1;
+  // The content of the chunk itself.
+  string content = 2;
+}
+
 service History {
   rpc StartHistory(StartHistoryRequest) returns (StartHistoryReply);
   rpc EndHistory(EndHistoryRequest) returns (EndHistoryReply);
@@ -150,4 +235,13 @@ service History {
   rpc Status(StatusRequest) returns (StatusReply);
   // Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
   rpc Shutdown(ShutdownRequest) returns (ShutdownReply);
+  // Store a completed command's captured output. Errors if output already exists for this id.
+  rpc RegisterCommandOutput(RegisterCommandOutputRequest) returns (RegisterCommandOutputResponse);
+  // Retrieve a command's captured output, sliced by line ranges.
+  //
+  // See the docs for `GetCommandOutputRequest` for the calling convention.
+  //
+  // Returns:
+  //  - `tonic::Status::not_found` if the given output is not found.
+  rpc GetCommandOutput(GetCommandOutputRequest) returns (GetCommandOutputResponse);
 }

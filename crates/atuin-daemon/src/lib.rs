@@ -15,21 +15,22 @@ pub mod daemon;
 pub mod events;
 pub mod grpc;
 pub(crate) mod history_journal;
+mod output_capture;
 pub mod search;
-pub mod semantic;
 pub mod server;
 
 // Re-export core daemon types for convenience
 // Re-export client helpers
-pub use client::SemanticClient;
+pub use client::HistoryClient;
 // Re-export components
-pub use components::{SearchComponent, SemanticComponent, SyncComponent};
+pub use components::{SearchComponent, SyncComponent};
 pub use daemon::{AnyComponent, Daemon, DaemonBuilder, DaemonHandle};
 pub use events::DaemonEvent;
 pub use history_journal::{
     CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, CmdRebuildError, FinishedCmd,
     GetCmdInFlightError, HistoryJournal,
 };
+pub use output_capture::OutputCapture;
 
 /// Boot the daemon using the new component-based architecture.
 ///
@@ -42,22 +43,18 @@ pub async fn boot(
 ) -> Result<()> {
     // Create the components
     let search_component = SearchComponent::new();
-    let semantic_component = SemanticComponent::new();
     let sync_component = SyncComponent::new();
 
     // Get the gRPC services before moving components into the daemon
     // (The services share state with the components via Arc)
     let search_service = search_component.grpc_service();
-    let semantic_service = semantic_component.grpc_service();
     let search_index = search_component.index();
-    let semantic_handle = semantic_component.clone();
 
     // Build the daemon
     let mut daemon = Daemon::builder(settings.clone())
         .store(store)
         .history_db(history_db)
         .component(search_component)
-        .component(semantic_component)
         .component(sync_component)
         .build()?;
 
@@ -66,12 +63,13 @@ pub async fn boot(
     let host_id = Settings::host_id().await?;
     let history_store =
         HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
+    let output_capture = OutputCapture::open(Settings::command_capture_dir())?;
     let journal = Arc::new(HistoryJournal::new(
         handle.caps().clone(),
         history_store,
         handle.history_db().clone(),
-        semantic_handle,
         search_index,
+        output_capture,
     ));
     let history_service = HistoryServer::new(grpc::HistoryService::new(journal, handle.clone()));
 
@@ -111,7 +109,6 @@ pub async fn boot(
         settings,
         history_service,
         search_service.build(handle.clone()),
-        semantic_service,
         handle,
     )
     .await?;
