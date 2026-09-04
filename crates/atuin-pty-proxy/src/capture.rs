@@ -54,7 +54,9 @@ impl CaptureState {
     /// the capacity of [`Self::output`].
     fn clear(&mut self) {
         self.output.clear();
+        self.output_truncated = false;
         self.output_observed_bytes = 0;
+        self.session_id = None;
     }
 }
 
