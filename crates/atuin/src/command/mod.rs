@@ -99,6 +99,7 @@ fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy, prev_umask: Mode) {
 
 #[cfg(all(feature = "daemon", feature = "pty-proxy", unix))]
 fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink> {
+    use std::borrow::Cow;
     use std::sync::mpsc;
 
     if is_truthy_env("ATUIN_TERMINAL") {
@@ -122,10 +123,20 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
             };
 
             while let Ok((history_id, capture)) = rx.recv() {
+                // Output can carry credentials the command line never showed, e.g. `cat .env`.
+                // Swap the string only when something was actually taken out, so that clean
+                // output -- nearly all of it -- reaches the daemon without being copied.
+                let mut output = capture.output;
+                if settings.secrets_filter
+                    && let Cow::Owned(redacted) = atuin_common::secrets::redact(&output)
+                {
+                    output = redacted;
+                }
+
                 let _ = client
                     .register_command_output(
                         history_id,
-                        capture.output,
+                        output,
                         capture.output_truncated,
                         capture.output_observed_bytes,
                         capture.terminal_width,
