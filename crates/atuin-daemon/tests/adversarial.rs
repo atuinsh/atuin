@@ -79,7 +79,16 @@ proptest! {
                 Ok(_) => prop_assert!(valid_duration, "an invalid duration must be rejected"),
             }
 
-            let row = env.history_db.load(id).await.unwrap().expect("accepted command is persisted");
+            // The history table has `unique(timestamp, cwd, command)` and is written with `insert
+            // or ignore`, so an accepted command that exactly repeats an earlier row's triple is
+            // deduped by the schema rather than stored twice (see
+            // `an_exact_repeat_is_deduped_by_the_history_db`). Edge timestamps make that likely
+            // across cases; a deduped command is still accounted for by the row it collided with.
+            let Some(row) = env.history_db.load(id).await.unwrap() else {
+                let twins = env.rows_with_triple(req.timestamp, &req.cwd, &req.command).await;
+                prop_assert!(twins >= 1, "accepted command is neither persisted nor deduped");
+                return Ok(());
+            };
             prop_assert_eq!(&row.command, &req.command);
             prop_assert_eq!(&row.cwd, &req.cwd);
             prop_assert_eq!(&row.session, &req.session);
@@ -370,4 +379,35 @@ enum Target {
     Cancelled,
     Malformed,
     Missing,
+}
+
+/// Two accepted commands with the same `(timestamp, cwd, command)`: the history table's unique
+/// index on that triple plus `insert or ignore` (both older than the daemon) mean the second is
+/// reported as recorded but never lands in the db. Pinned here so the proptest above can rely on
+/// it; if the daemon ever starts rejecting or replacing the duplicate, update both.
+#[tokio::test]
+async fn an_exact_repeat_is_deduped_by_the_history_db() {
+    let env = TestEnv::builder().build().await;
+    let mut raw = env.raw_history_client().await;
+    let mut req = tame_request();
+    req.timestamp = 0;
+    req.cwd = String::new();
+    req.command = String::new();
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let reply = raw.start_history(req.clone()).await.unwrap().into_inner();
+        let id: HistoryId = reply.id.unwrap().try_into().unwrap();
+        raw.end_history(EndHistoryRequest {
+            id: Some(id.into()),
+            exit: 0,
+            duration: None,
+        })
+        .await
+        .unwrap();
+        ids.push(id);
+    }
+    assert_ne!(ids[0], ids[1]);
+    assert!(env.history_db.load(ids[0]).await.unwrap().is_some(), "first row is stored");
+    assert!(env.history_db.load(ids[1]).await.unwrap().is_none(), "exact repeat is deduped");
+    assert_eq!(env.rows_with_triple(0, "", "").await, 1);
 }

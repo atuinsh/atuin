@@ -306,6 +306,26 @@ impl TestEnv {
         self.history_db.history_count(false).await.unwrap()
     }
 
+    /// Rows in the history db with exactly this `(timestamp, cwd, command)`: the triple the
+    /// table's unique index dedups on. Uses its own connection because [`Sqlite`] keeps its pool
+    /// private.
+    pub async fn rows_with_triple(&self, timestamp: i64, cwd: &str, command: &str) -> i64 {
+        let db = CommonSqlite::builder(self.settings.db_path.as_os_str())
+            .timeout(Duration::from_secs(5))
+            .open()
+            .await
+            .expect("open a second connection to the history db");
+        atuin_common::db::query_scalar(
+            "select count(1) from history where timestamp = ?1 and cwd = ?2 and command = ?3",
+        )
+        .bind(timestamp)
+        .bind(cwd)
+        .bind(command)
+        .fetch_one(db.pool())
+        .await
+        .unwrap()
+    }
+
     pub async fn active_ids(&self) -> HashSet<HistoryId> {
         let mut ids = HashSet::new();
         let mut pager = self.history_db.all_paged(corpus::SEED_BATCH, false, false);
