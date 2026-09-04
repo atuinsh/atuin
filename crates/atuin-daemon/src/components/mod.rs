@@ -11,12 +11,11 @@
 //!
 //! - [`search::SearchComponent`]: Fuzzy search over history
 //! - [`semantic::SemanticComponent`]: In-memory semantic command captures
-//! - [`sync::SyncComponent`]: Cloud sync
+//!
+//! Cloud sync is intentionally not a component; see the `sync_engine` module.
 
 pub mod search;
 pub mod semantic;
-pub mod sync;
 
 pub use search::SearchComponent;
 pub use semantic::SemanticComponent;
-pub use sync::SyncComponent;
