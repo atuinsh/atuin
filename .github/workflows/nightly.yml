@@ -1,0 +1,51 @@
+name: Nightly
+
+on:
+  schedule:
+    # 02:00 PST (UTC-8) => 10:00 UTC. GitHub cron is always UTC and does not observe DST, so this
+    # fires at 03:00 Pacific during PDT (Mar-Nov). Scheduled runs only ever fire from main.
+    - cron: "0 10 * * *"
+  workflow_dispatch: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  nightly-tests:
+    # The long daemon scale tiers (1M rows / 100k record writes) are `#[ignore]`d and too slow for
+    # per-push CI. Run them here via the `nightly` nextest profile (allowlist in
+    # .config/nextest.toml). Tiers that document unfixed defects (H2 bulk-delete, the M2
+    # index-reload lost-update) stay ignored and out of the profile, so this job is green.
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install OpenSSL dev libraries (Linux)
+        if: runner.os == 'Linux'
+        uses: awalsh128/cache-apt-pkgs-action@v1.6.3
+        with:
+          packages: libssl-dev pkg-config
+          version: 1.0
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.0
+
+      - uses: taiki-e/install-action@v2
+        name: Install nextest
+        with:
+          tool: cargo-nextest
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+             ~/.cargo/git
+             target
+          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run nightly tests
+        run: cargo nextest run -p atuin-daemon --profile nightly --run-ignored ignored-only
