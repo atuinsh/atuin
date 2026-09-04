@@ -918,6 +918,12 @@ environment variables, so **restart your shell after changing them**. To disable
 the popup for a single session without touching your config, set
 `ATUIN_POPUP_ENABLED=false` after running `atuin init`.
 
+After successfully loading a config that contains `[tmux]` but not `[popup]`,
+Atuin automatically renames the old section to `[popup]`. If the config cannot
+be updated, the old section remains supported in memory. If both sections are
+present, the file is left unchanged and `[popup]` takes precedence without
+merging individual settings.
+
 ### `enabled`
 
 Default: `false`

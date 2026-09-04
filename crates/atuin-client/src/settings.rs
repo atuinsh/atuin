@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use time::OffsetDateTime;
 use tokio::sync::OnceCell;
+use toml_edit::DocumentMut;
 use tracing::instrument;
 use url::Url;
 
@@ -1597,6 +1598,50 @@ impl Settings {
             .set_override("popup.height", popup.height)
     }
 
+    /// Rename an unambiguous legacy `[tmux]` table while preserving its formatting.
+    fn migrate_popup_config_str(
+        toml: &str,
+    ) -> std::result::Result<Option<String>, toml_edit::TomlError> {
+        let mut document = toml.parse::<DocumentMut>()?;
+        if document.contains_key("popup")
+            || document.get("tmux").is_none_or(|item| item.as_table_like().is_none())
+        {
+            return Ok(None);
+        }
+
+        let tmux = document.remove("tmux").expect("checked above");
+        document.insert("popup", tmux);
+        Ok(Some(document.to_string()))
+    }
+
+    /// Best-effort on-disk migration for the legacy `[tmux]` table.
+    fn migrate_popup_config_file(config_file: &Path) -> Result<()> {
+        // Follow a dotfiles symlink and replace its target, not the symlink itself.
+        let target = fs_err::canonicalize(config_file)?;
+        let original = fs_err::read_to_string(&target)?;
+        let Some(migrated) = Self::migrate_popup_config_str(&original)? else {
+            return Ok(());
+        };
+
+        let parent = target.parent().ok_or_else(|| eyre!("config file has no parent directory"))?;
+        let permissions = fs_err::metadata(&target)?.permissions();
+        let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+        temporary.write_all(migrated.as_bytes())?;
+        temporary.as_file().set_permissions(permissions)?;
+        temporary.as_file().sync_all()?;
+
+        // Another Atuin process or the user may have edited the file while the replacement was
+        // being prepared. In that case, leave the newer contents alone.
+        if fs_err::read_to_string(&target)? != original {
+            return Ok(());
+        }
+
+        temporary
+            .persist(&target)
+            .map_err(|error| eyre!("could not persist popup config migration: {error}"))?;
+        Ok(())
+    }
+
     pub fn get_config_path() -> Result<PathBuf> {
         let config_dir = atuin_common::utils::config_dir();
 
@@ -1795,11 +1840,19 @@ impl Settings {
 
     pub fn new() -> Result<Self> {
         let config = Self::build_config()?;
+        let has_legacy_tmux_config = config.get::<Popup>("tmux").is_ok();
         let settings: Self =
             config.try_deserialize().map_err(|e| eyre!("failed to deserialize: {}", e))?;
 
         // Validate UI settings
         settings.ui.validate()?;
+
+        if has_legacy_tmux_config
+            && let Ok(config_file) = Self::get_config_path()
+            && let Err(error) = Self::migrate_popup_config_file(&config_file)
+        {
+            tracing::debug!(%error, "could not migrate legacy tmux config");
+        }
 
         // Register meta store config for lazy initialization on first access
         META_CONFIG.set((settings.meta.db_path.clone(), settings.local_timeout)).ok();
@@ -2174,6 +2227,64 @@ mod tests {
         let toml = "[popup]\nenabled = [true]\n\n[tmux]\nenabled = true\n";
 
         assert!(Settings::validate_str(toml).is_err());
+    }
+
+    #[rstest]
+    fn legacy_tmux_config_is_migrated_without_losing_formatting() {
+        let toml = concat!(
+            "auto_sync = true\n\n",
+            "# Legacy popup settings.\n",
+            "[tmux] # Keep this comment.\n",
+            "enabled = true\n",
+            "width = \"75%\"\n",
+            "height = \"55%\"\n\n",
+            "[logs]\n",
+            "enabled = false\n",
+        );
+
+        let migrated = Settings::migrate_popup_config_str(toml)
+            .unwrap()
+            .expect("legacy table should be migrated");
+
+        assert!(!migrated.contains("[tmux]"));
+        assert!(migrated.contains("# Legacy popup settings."));
+        assert!(migrated.contains("[popup] # Keep this comment."));
+        assert!(migrated.contains("width = \"75%\""));
+        assert!(migrated.find("auto_sync").unwrap() < migrated.find("[popup]").unwrap());
+        assert!(migrated.find("[popup]").unwrap() < migrated.find("[logs]").unwrap());
+    }
+
+    #[rstest]
+    #[case::popup_only("[popup]\nenabled = true\n")]
+    #[case::both("[popup]\nenabled = true\n\n[tmux]\nenabled = false\n")]
+    #[case::neither("auto_sync = true\n")]
+    #[case::legacy_key_is_not_a_table("tmux = true\n")]
+    fn popup_config_migration_leaves_ambiguous_or_current_config_unchanged(#[case] toml: &str) {
+        assert_eq!(Settings::migrate_popup_config_str(toml).unwrap(), None);
+    }
+
+    #[rstest]
+    fn invalid_toml_is_not_migrated() {
+        assert!(Settings::migrate_popup_config_str("[tmux\nenabled = true\n").is_err());
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    fn popup_config_migration_preserves_symlink_and_permissions() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("atuin.toml");
+        let config_file = directory.path().join("config.toml");
+        fs_err::write(&target, "[tmux]\nenabled = true\n").unwrap();
+        fs_err::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
+        symlink(&target, &config_file).unwrap();
+
+        Settings::migrate_popup_config_file(&config_file).unwrap();
+
+        assert!(fs_err::symlink_metadata(&config_file).unwrap().file_type().is_symlink());
+        assert_eq!(fs_err::read_to_string(target).unwrap(), "[popup]\nenabled = true\n");
+        assert_eq!(fs_err::metadata(config_file).unwrap().permissions().mode() & 0o777, 0o640);
     }
 
     #[test]
