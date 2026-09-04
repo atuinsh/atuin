@@ -18,12 +18,13 @@ pub(crate) mod history_journal;
 pub mod search;
 pub mod semantic;
 pub mod server;
+pub(crate) mod sync_engine;
 
 // Re-export core daemon types for convenience
 // Re-export client helpers
 pub use client::SemanticClient;
 // Re-export components
-pub use components::{SearchComponent, SemanticComponent, SyncComponent};
+pub use components::{SearchComponent, SemanticComponent};
 pub use daemon::{AnyComponent, Daemon, DaemonBuilder, DaemonHandle};
 pub use events::DaemonEvent;
 pub use history_journal::{
@@ -31,10 +32,10 @@ pub use history_journal::{
     GetCmdInFlightError, HistoryJournal,
 };
 
-/// Boot the daemon using the new component-based architecture.
+/// Boot the daemon.
 ///
-/// This creates a daemon with the standard components (history, search, sync),
-/// starts the gRPC server with their services, and runs the event loop.
+/// This creates a daemon with the standard components (search, semantic), spawns the sync
+/// engine, starts the gRPC server with the components' services, and runs the event loop.
 pub async fn boot(
     settings: Settings,
     store: SqliteStore,
@@ -43,7 +44,6 @@ pub async fn boot(
     // Create the components
     let search_component = SearchComponent::new();
     let semantic_component = SemanticComponent::new();
-    let sync_component = SyncComponent::new();
 
     // Get the gRPC services before moving components into the daemon
     // (The services share state with the components via Arc)
@@ -58,7 +58,6 @@ pub async fn boot(
         .history_db(history_db)
         .component(search_component)
         .component(semantic_component)
-        .component(sync_component)
         .build()?;
 
     let handle = daemon.handle();
@@ -77,6 +76,9 @@ pub async fn boot(
 
     // Start all components first (so gRPC services can work)
     daemon.start_components().await?;
+
+    // Background cloud sync. Not a component: it only needs the handle and the shutdown event.
+    let sync_task = sync_engine::spawn(handle.clone());
 
     // Spawn config file watcher to reload settings on changes
     if let Ok(watcher) = global_settings_watcher() {
@@ -121,6 +123,11 @@ pub async fn boot(
 
     // Stop all components on shutdown
     daemon.stop_components().await;
+
+    // The sync engine saw ShutdownRequested itself; give an in-flight tick a moment to finish.
+    if tokio::time::timeout(sync_engine::SHUTDOWN_GRACE, sync_task).await.is_err() {
+        tracing::warn!("sync engine did not stop within {:?}", sync_engine::SHUTDOWN_GRACE);
+    }
 
     tracing::info!("daemon shut down complete");
     Ok(())
