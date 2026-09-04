@@ -25,7 +25,7 @@ message StartHistoryRequest {
   // Please note this **must** be an i64.
   // The database timestamp is also an i64, so it is better for this to be an i64 too.
   //
-  // TODO(markovejnovic): Make a type-safe wrapper.
+  // TODO(markovejnovic): Use google.Duration.
   int64 timestamp = 1;
   string command = 2;
   string cwd = 3;
@@ -115,7 +115,7 @@ message HistoryEntry {
   // Please note this **must** be an i64.
   // The database timestamp is also an i64, so it is better for this to be an i64 too.
   //
-  // TODO(markovejnovic): Make a type-safe wrapper.
+  // TODO(markovejnovic): Use google.Duration.
   int64 timestamp = 1;
   HistoryId id = 2;
   string command = 3;
