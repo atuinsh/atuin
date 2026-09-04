@@ -342,12 +342,6 @@ impl ChunkedOutput {
     }
 
     /// Every chunk's lines, each tagged with its absolute 0-offset line number.
-    ///
-    /// A chunk's `line_range` is authoritative for how many lines the chunk holds. `content` is
-    /// those lines joined with `\n`, and that join cannot be undone by itself: [`str::lines`] reads
-    /// both `"a"` and `"a\n"` as the single line `"a"`, so a chunk whose last line is blank would
-    /// lose it, and every later line would then look like it followed a gap. Splitting on `\n` and
-    /// taking exactly as many lines as the range declares keeps content and line numbers in step.
     pub fn lines(&self) -> impl Iterator<Item = ChunkedOutputLineView<'_>> + Clone {
         self.chunks.iter().flat_map(|chunk| {
             let (start, count) = chunk.line_range.map_or((0, 0), |range| {
@@ -459,10 +453,10 @@ mod tests {
     #[test]
     fn command_output_ranges_are_inclusive_with_negative_offsets() {
         // [1, 2] inclusive -> "one", "two"; [-1, -1] -> the last line, "four" (no sentinel needed).
-        let chunked = ChunkedOutput::build(capture_of("zero\none\ntwo\nthree\nfour"), &[
-            py_range(1, 2),
-            py_range(-1, -1),
-        ]);
+        let chunked = ChunkedOutput::build(
+            capture_of("zero\none\ntwo\nthree\nfour"),
+            &[py_range(1, 2), py_range(-1, -1)],
+        );
         assert!(chunked.meta.is_some());
         assert_eq!(chunked.total_lines, 5);
         let contents: Vec<&str> = chunked.chunks.iter().map(|c| c.content.as_str()).collect();
@@ -476,11 +470,10 @@ mod tests {
     fn command_output_returns_one_chunk_per_requested_range() {
         // Every requested range yields a chunk, in order: [2, 1] is backwards (empty), [10, 20] is
         // past the end (both empty content), [0, 0] selects "a". Nothing is dropped.
-        let chunked = ChunkedOutput::build(capture_of("a\nb\nc"), &[
-            py_range(2, 1),
-            py_range(10, 20),
-            py_range(0, 0),
-        ]);
+        let chunked = ChunkedOutput::build(
+            capture_of("a\nb\nc"),
+            &[py_range(2, 1), py_range(10, 20), py_range(0, 0)],
+        );
         let contents: Vec<&str> = chunked.chunks.iter().map(|c| c.content.as_str()).collect();
         assert_eq!(contents, vec!["", "", "a"]);
     }
@@ -534,11 +527,10 @@ mod tests {
         // Two chunks, the first ending on blank line 1. Readers infer skipped lines from jumps in
         // these numbers, so losing line 1 would report a three-line gap where only lines 2 and 3
         // are genuinely missing.
-        let chunked =
-            ChunkedOutput::build(capture_of("alpha\n\ncharlie\ndelta\necho\nfoxtrot"), &[
-                py_range(0, 1),
-                py_range(4, 5),
-            ]);
+        let chunked = ChunkedOutput::build(
+            capture_of("alpha\n\ncharlie\ndelta\necho\nfoxtrot"),
+            &[py_range(0, 1), py_range(4, 5)],
+        );
         assert_eq!(views_of(&chunked), vec![(0, "alpha"), (1, ""), (4, "echo"), (5, "foxtrot"),]);
     }
 
