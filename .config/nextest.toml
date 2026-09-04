@@ -1,0 +1,26 @@
+# cargo-nextest configuration.
+#
+# The `scale` profile below selects the expensive daemon scale tiers that are `#[ignore]`d purely
+# for run time (1M rows / 100k record writes take minutes in a debug build) but otherwise pass.
+# CI runs them in a dedicated job:
+#
+#     cargo nextest run -p atuin-daemon --profile scale --run-ignored ignored-only
+#
+# The allowlist is intentional and explicit: the other `#[ignore]`d tests document *unfixed*
+# defects and are expected to fail, so they must stay out of CI --
+#   - `deleting_everything_in_one_request_{two_hundred_k,one_m}`: H2, a whole-batch delete past
+#     tonic's 4 MiB decode limit is rejected before any row is deleted (needs client-side chunking).
+#   - the `*_reload_*` / `concurrent_deletes_both_leave_the_index` concurrency tests: the M2
+#     index-reload lost-update.
+# When one of those defects is fixed, move its tier into this allowlist.
+
+[profile.scale]
+default-filter = """
+    binary(scale) & (
+        test(=index_matches_db_after_seeding_one_m)
+        | test(=deleting_a_sample_leaves_everything_else_one_m)
+        | test(=deleting_everything_in_one_request_hundred_k)
+        | test(=rebuild_from_a_large_store_hundred_k)
+        | test(=rebuild_from_a_large_store_one_m)
+    )
+"""
