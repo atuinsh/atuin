@@ -31,14 +31,13 @@ async fn seeded_env() -> TestEnv {
 /// Every shell that got `Ok` from `EndHistory` has its command in the db, in the record store,
 /// and in the index -- however many shells finish at once.
 ///
-/// EXPECTED TO FAIL: `HistoryStore::push_record` reads `last().idx` then inserts with
-/// `insert or ignore` on `(host, tag, idx)`, so concurrent finishes collide on `idx` and the loser's
-/// record is silently dropped while `finish` still returns `Ok`.
+/// `HistoryStore::push_record` reads `last().idx` then inserts with `insert or ignore` on
+/// `(host, tag, idx)`, so concurrent finishes would collide on `idx` and silently drop the loser's
+/// record; `HistoryJournal::finish` now holds `record_write` across the push, serializing that
+/// read-modify-write so every record lands.
 #[rstest]
 #[case::eight_shells(8)]
 #[case::sixty_four_shells(64)]
-#[ignore = "documents an unfixed defect (#4052: record-store idx collision on concurrent finish); \
-            run with --run-ignored. See module docs."]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_shells_never_lose_records(#[case] shells: usize) {
     let env = TestEnv::builder().build().await;
@@ -127,12 +126,11 @@ enum Second {
 /// Deleting a command while its shell is finishing it (TUI delete key vs. the precmd hook) leaves
 /// no trace of it anywhere: not in the db, and not on another machine replaying the store.
 ///
-/// EXPECTED TO FAIL (intermittently): `finish` takes the lease out of the map, so a concurrent
-/// `delete` tombstones the id and runs `delete_rows` *before* `finish` saves the row and appends
-/// its `Create` record; the row survives locally and a replay applies Delete-then-Create, so the
-/// row is resurrected elsewhere.
-#[ignore = "documents an unfixed defect (#4052: delete vs. finish race resurrects a row on \
-            replay); run with --run-ignored. See module docs."]
+/// `finish` checks the lease out of the map before it persists, so a `delete` landing in that
+/// window used to tombstone the id and run `delete_rows` *before* `finish` saved the row and
+/// appended its `Create` -- leaving the row live locally and resurrecting it on replay
+/// (Delete-then-Create). `finish` and `delete` now hold `record_write` across that transition, so
+/// the delete either cancels the still-in-flight id or tombstones the fully-persisted row.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn delete_racing_finish_leaves_no_row_anywhere() {
     let env = TestEnv::builder().build().await;
@@ -265,10 +263,9 @@ async fn concurrent_deletes_both_leave_the_index() {
 /// Several processes deleting disjoint sets at once: every row goes, every tombstone lands, and a
 /// replay of the store agrees.
 ///
-/// EXPECTED TO FAIL: same `idx` collision as `concurrent_shells_never_lose_records`, now on
-/// tombstones; a replay resurrects rows whose tombstone was dropped.
-#[ignore = "documents an unfixed defect (#4052: record-store idx collision drops tombstones); run \
-            with --run-ignored. See module docs."]
+/// This is the same record-store `idx` collision as `concurrent_shells_never_lose_records`, now on
+/// tombstones -- a dropped tombstone resurrects its row on replay. Serializing the record-store
+/// writes under `record_write` keeps every tombstone's `idx` distinct, so none is dropped.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn disjoint_concurrent_deletes_all_reach_the_store() {
     let env = TestEnv::builder().build().await;
