@@ -64,7 +64,40 @@ impl Flusher {
             loop {
                 interval.tick().await;
 
-                if !dirty.swap(false, Ordering::Relaxed) {
+                // TODO(markovejnovic): @taylordotfish and I were wondering whether it is possible
+                // to use relaxed here. @taylordotfish claims that's not possible and I am more and
+                // more convinced by her argument.
+                //
+                // The concern is that one thread may perform some writes
+                //
+                // db-write
+                // db-write
+                // dirty-set
+                //
+                // while another thread does
+                //
+                // dirty-load
+                // persist
+                //
+                // In the pathological case, the db writes can be re-ordered after the dirty-set
+                // (under relaxed semantics):
+                //
+                // dirty-set
+                // db-write
+                // db-write
+                //
+                // while the other thread does
+                //
+                // dirty-load
+                // persist
+                //
+                // Well the persist won't observe those db-writes.
+                //
+                // The counter-argument is that both db-write and persist acquire the same mutex,
+                // so must be seq-cst-ordered?
+                //
+                // Unsure but would be curious to learn more.
+                if !dirty.swap(false, Ordering::Acquire) {
                     continue;
                 }
 
@@ -91,7 +124,7 @@ impl Flusher {
     /// Generally, this should be called on every mutation.
     fn kick(&self) {
         // Relaxed _should_ be OK here since fjall is handling actual memory ordering and concurrency.
-        self.dirty.store(true, Ordering::Relaxed);
+        self.dirty.store(true, Ordering::Release);
     }
 }
 
