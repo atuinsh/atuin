@@ -64,6 +64,9 @@ pub async fn boot(
     let history_store =
         HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
     let output_capture = OutputCapture::open(Settings::command_capture_dir())?;
+    // Keep a flush handle before the store is moved into the journal, so we can
+    // drive periodic and shutdown flushes.
+    let output_sync = output_capture.sync_handle();
     let journal = Arc::new(HistoryJournal::new(
         handle.caps().clone(),
         history_store,
@@ -75,6 +78,13 @@ pub async fn boot(
 
     // Start all components first (so gRPC services can work)
     daemon.start_components().await?;
+
+    // Periodically fsync captured command output so it survives power loss, not
+    // just a daemon restart. Idle ticks issue no syscall.
+    tokio::spawn(output_capture::run_periodic_sync(
+        output_sync.clone(),
+        OutputCapture::SYNC_INTERVAL,
+    ));
 
     // Spawn config file watcher to reload settings on changes
     if let Ok(watcher) = global_settings_watcher() {
@@ -118,6 +128,11 @@ pub async fn boot(
 
     // Stop all components on shutdown
     daemon.stop_components().await;
+
+    // Final durable flush: guarantee everything captured this session is on disk.
+    if let Err(e) = output_sync.sync_now().await {
+        tracing::warn!("final output-capture flush failed: {e}");
+    }
 
     tracing::info!("daemon shut down complete");
     Ok(())

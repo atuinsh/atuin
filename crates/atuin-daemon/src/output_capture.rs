@@ -207,7 +207,6 @@ impl OutputSyncHandle {
 /// Flushes at most once per `period`, and issues no `fdatasync` on ticks where
 /// nothing was captured. Intended to be `tokio::spawn`ed for the life of the
 /// daemon.
-#[allow(dead_code)] // used in tests; will be wired into the daemon by a follow-up task
 pub async fn run_periodic_sync(handle: OutputSyncHandle, period: Duration) {
     let mut ticker = tokio::time::interval(period);
     // If a flush (or the whole runtime) stalls, don't fire a burst of catch-up
