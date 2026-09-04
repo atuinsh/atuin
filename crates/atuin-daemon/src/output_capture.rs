@@ -64,7 +64,6 @@ impl Flusher {
 
         let dirty = dirty_outer.clone();
         let task = tokio::task::spawn(async move || {
-
             let mut interval = tokio::time::interval(Self::SYNC_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
@@ -74,10 +73,11 @@ impl Flusher {
                     continue;
                 }
 
-                match tokio::task::spawn_blocking(move || {
-                    db.persist(PersistMode::SyncAll)
-                }).await.expect("persistence task shouldn't panic") {
-                    Ok() => {},
+                match tokio::task::spawn_blocking(move || db.persist(PersistMode::SyncAll))
+                    .await
+                    .expect("persistence task shouldn't panic")
+                {
+                    Ok() => {}
                     Err(err) => {
                         error!(?err, "failed to persist data on disk");
                         dirty.store(true, Ordering::Relaxed);
@@ -110,7 +110,7 @@ pub struct OutputCapture {
     db: OptimisticTxDatabase,
     #[debug(skip)]
     keyspace: OptimisticTxKeyspace,
-    flusher: Flusher,
+    flusher: Arc<Flusher>,
 }
 
 impl OutputCapture {
@@ -134,17 +134,12 @@ impl OutputCapture {
                 .with_kv_separation(Some(fjall::KvSeparationOptions::default()))
         })?;
 
-        let flush
-
         Ok(Self {
             db,
             keyspace,
-            flusher: Flusher::spawn(db),
+            flusher: Arc::new(Flusher::spawn(db)),
         })
     }
-
-    /// How often the background flusher persists the journal to disk.
-    pub const SYNC_INTERVAL: Duration = Duration::from_secs(1);
 
     /// Capture a command and associate it with the given history id.
     pub async fn capture(
@@ -154,10 +149,10 @@ impl OutputCapture {
     ) -> Result<(), CaptureError> {
         let db = self.db.clone();
         let keyspace = self.keyspace.clone();
-        let dirty = self.dirty.clone();
         let key = id.into_bytes();
         let value = capture.encode_to_vec();
 
+        let flusher = self.flusher.clone();
         tokio::task::spawn_blocking(move || {
             let mut tx = db.write_tx()?;
             if tx.contains_key(&keyspace, key)? {
@@ -167,9 +162,7 @@ impl OutputCapture {
             tx.insert(&keyspace, key, value);
             match tx.commit()? {
                 Ok(()) => {
-                    // A new capture is now in the journal buffer but not yet
-                    // fsynced; the periodic flusher will pick it up.
-                    dirty.store(true, Ordering::SeqCst);
+                    flusher.kick();
                     Ok(())
                 }
                 // Another writer committed this key first, so it's already captured.
