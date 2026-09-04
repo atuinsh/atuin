@@ -45,7 +45,7 @@ use tracing::field::Empty;
 use tracing::{Instrument, Span};
 
 use crate::grpc::history::pb::CommandCapture;
-use crate::output_capture::{CaptureError, GetOutputError, OutputCapture};
+use crate::output_capture::{CaptureError, DeleteOutputError, GetOutputError, OutputCapture};
 use crate::search::SearchIndex;
 
 /// An event describing a change in the lifecycle of a command.
@@ -151,6 +151,8 @@ pub enum CmdFinishError {
 /// Errors returned by [`HistoryJournal::delete`].
 #[derive(Debug, thiserror::Error)]
 pub enum CmdDeleteError {
+    #[error("deleting captured output failed: {0}")]
+    OutputCaptureFailed(#[from] DeleteOutputError),
     #[error("deleting from history store failed: {0}")]
     HistoryStoreFailed(eyre::Report),
     #[error("applying deletion to history db failed: {0}")]
@@ -330,7 +332,8 @@ impl HistoryJournal {
         Ok(())
     }
 
-    /// Delete the given history entries from Atuin's memory completely.
+    /// Delete the given history entries from Atuin's memory completely, including any captured
+    /// output they have.
     ///
     /// `search_settings` is needed to rebuild the search index's frecency map after the deletion,
     /// so the swapped-in index has correct rankings immediately rather than after the next refresh.
@@ -341,6 +344,15 @@ impl HistoryJournal {
         ids: impl IntoIterator<Item = HistoryId>,
         search_settings: &Search,
     ) -> Result<usize, CmdDeleteError> {
+        let ids: Vec<HistoryId> = ids.into_iter().collect();
+
+        // Forget captured output before the history records. Both halves are idempotent, so a
+        // failure part-way through is fixed by retrying. This order means a failed call can leave
+        // an entry without its output but never output without its entry: an orphaned capture
+        // would silently keep (possibly sensitive) output around with nothing left to delete it
+        // through, and nothing reclaims it yet (see `TODO(retention)` in `output_capture`).
+        self.output_capture.delete(ids.iter().copied()).await?;
+
         // Remove records from the record store.
         //
         // This returns a tuple where the first element is the total number of history elements that
