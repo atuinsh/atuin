@@ -33,11 +33,13 @@ pub mod daemon;
 mod dotfiles;
 mod kv;
 pub(crate) mod meta;
+pub mod output_capture;
 mod scripts;
 pub mod shells;
 pub mod watcher;
 
 pub use daemon::Daemon;
+pub use output_capture::OutputCapture;
 pub use shells::Shells;
 
 /// Default sync address for Atuin's hosted service, parsed once.
@@ -1095,6 +1097,9 @@ pub struct Settings {
     pub pty_proxy: PtyProxy,
 
     #[serde(default)]
+    pub output_capture: OutputCapture,
+
+    #[serde(default)]
     pub search: Search,
 
     #[serde(default)]
@@ -1476,6 +1481,10 @@ impl Settings {
         let key_path = data_dir.join("key");
         let meta_path = data_dir.join("meta.db");
 
+        // The struct's `Default` is the single source of truth; the builder needs the same values
+        // so that `atuin config get --resolved output_capture` can show them.
+        let output_capture = OutputCapture::default();
+
         Ok(Config::builder()
             .set_default("history_format", "{time}\t{command}\t{duration}")?
             .set_default("db_path", db_path.to_str())?
@@ -1541,6 +1550,16 @@ impl Settings {
             .set_default("daemon.pidfile_path", pidfile_path.to_str())?
             .set_default("daemon.systemd_socket", false)?
             .set_default("daemon.tcp_port", 8889)?
+            .set_default("output_capture.enabled", output_capture.enabled)?
+            .set_default(
+                "output_capture.max_output_size",
+                output_capture.max_output_size.to_string(),
+            )?
+            .set_default("output_capture.sync", output_capture.sync)?
+            .set_default(
+                "output_capture.max_disk_usage",
+                output_capture.max_disk_usage.to_string(),
+            )?
             .set_default("logs.enabled", true)?
             .set_default("logs.dir", logs_dir.to_str())?
             .set_default("logs.level", "info")?
@@ -1885,15 +1904,17 @@ pub(crate) fn test_local_timeout() -> Duration {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::str::FromStr;
 
+    use atuin_common::size::{ByteSize, DiskUsageLimit, Percent};
     use eyre::Result;
     use rstest::rstest;
     use url::Url;
 
     use super::{
-        AiEndpointProtocol, ConfigFile, FileFormat, FilterMode, RequestedSearchMode, SearchMode,
-        Settings, UtcOffsetSpec,
+        AiEndpointProtocol, ConfigFile, Environment, FileFormat, FilterMode, RequestedSearchMode,
+        SearchMode, Settings, UtcOffsetSpec,
     };
 
     #[rstest]
@@ -2015,6 +2036,13 @@ mod tests {
     #[case::valid_config("search_mode = \"fuzzy\"\n")]
     #[case::empty_config("")]
     #[case::plain_data_dir("data_dir = \"/tmp/atuin-test\"\n")]
+    #[case::output_capture_section(
+        "[output_capture]\nenabled = true\nmax_output_size = \"1MB\"\nsync = \
+         false\nmax_disk_usage = \"10%\"\n"
+    )]
+    #[case::output_capture_sizes_as_bytes(
+        "[output_capture]\nmax_output_size = 1048576\nmax_disk_usage = 10737418240\n"
+    )]
     fn validate_accepts(#[case] toml: &str) {
         assert!(Settings::validate_str(toml).is_ok());
     }
@@ -2032,6 +2060,18 @@ mod tests {
         "[ui]\ncolumns = [{ type = \"duration\", expand = true }, { type = \"command\", expand = \
          true }]\n",
         "expand"
+    )]
+    #[case::output_size_with_an_unknown_unit(
+        "[output_capture]\nmax_output_size = \"1 parsec\"\n",
+        "output_capture.max_output_size"
+    )]
+    #[case::disk_usage_over_100_percent(
+        "[output_capture]\nmax_disk_usage = \"150%\"\n",
+        "output_capture.max_disk_usage"
+    )]
+    #[case::negative_output_size(
+        "[output_capture]\nmax_output_size = -1\n",
+        "output_capture.max_output_size"
     )]
     fn validate_rejects(#[case] toml: &str, #[case] expected_err: &str) {
         let err = Settings::validate_str(toml).expect_err("config should not validate").to_string();
@@ -2119,6 +2159,88 @@ mod tests {
             .expect("could not build config")
             .try_deserialize()
             .expect("could not deserialize config")
+    }
+
+    /// Output capture is opt-in, bounded per command, unsynced, and bounded on disk by default.
+    #[rstest]
+    fn output_capture_defaults() {
+        let settings = parse_settings("");
+        let capture = &settings.output_capture;
+
+        assert!(!capture.enabled);
+        assert_eq!(capture.max_output_size, ByteSize::MIB);
+        assert!(!capture.sync);
+        assert_eq!(capture.max_disk_usage, DiskUsageLimit::Percent(Percent::new(10).unwrap()));
+        // The struct's own `Default` must agree with the builder's defaults.
+        let default = super::OutputCapture::default();
+        assert_eq!(default.enabled, capture.enabled);
+        assert_eq!(default.max_output_size, capture.max_output_size);
+        assert_eq!(default.sync, capture.sync);
+        assert_eq!(default.max_disk_usage, capture.max_disk_usage);
+    }
+
+    #[rstest]
+    #[case::sizes_as_text(
+        "max_output_size = \"512KB\"\nmax_disk_usage = \"10GB\"",
+        ByteSize::from_bytes(512 << 10),
+        DiskUsageLimit::Bytes(ByteSize::from_bytes(10 << 30))
+    )]
+    #[case::sizes_as_bytes(
+        "max_output_size = 4096\nmax_disk_usage = 1048576",
+        ByteSize::from_bytes(4096),
+        DiskUsageLimit::Bytes(ByteSize::MIB)
+    )]
+    #[case::percent_and_unlimited(
+        "max_output_size = \"1MB\"\nmax_disk_usage = \"unlimited\"",
+        ByteSize::MIB,
+        DiskUsageLimit::Unlimited
+    )]
+    #[case::percent_disk_usage(
+        "max_output_size = \"2MB\"\nmax_disk_usage = \"25%\"",
+        ByteSize::from_bytes(2 << 20),
+        DiskUsageLimit::Percent(Percent::new(25).unwrap())
+    )]
+    fn output_capture_parses_sizes(
+        #[case] body: &str,
+        #[case] max_output_size: ByteSize,
+        #[case] max_disk_usage: DiskUsageLimit,
+    ) {
+        let settings =
+            parse_settings(&format!("[output_capture]\nenabled = true\nsync = true\n{body}\n"));
+        let capture = &settings.output_capture;
+
+        assert!(capture.enabled);
+        assert!(capture.sync);
+        assert_eq!(capture.max_output_size, max_output_size);
+        assert_eq!(capture.max_disk_usage, max_disk_usage);
+    }
+
+    /// `enable` is accepted as an alias, as it is for `[daemon]` and `[pty_proxy]`.
+    #[rstest]
+    fn output_capture_accepts_the_enable_alias() {
+        let settings = parse_settings("[output_capture]\nenable = true\n");
+        assert!(settings.output_capture.enabled);
+    }
+
+    /// Environment overrides arrive as strings, so the text forms must parse from there too.
+    #[rstest]
+    fn output_capture_sizes_can_come_from_the_environment() {
+        let env = Environment::with_prefix("atuin").prefix_separator("_").separator("__").source(
+            Some(HashMap::from([
+                ("ATUIN_OUTPUT_CAPTURE__MAX_OUTPUT_SIZE".to_owned(), "512KB".to_owned()),
+                ("ATUIN_OUTPUT_CAPTURE__MAX_DISK_USAGE".to_owned(), "unlimited".to_owned()),
+            ])),
+        );
+        let settings: Settings = Settings::builder_with_data_dir(&atuin_common::utils::data_dir())
+            .expect("could not build settings builder")
+            .add_source(env)
+            .build()
+            .expect("could not build config")
+            .try_deserialize()
+            .expect("could not deserialize config");
+
+        assert_eq!(settings.output_capture.max_output_size, ByteSize::from_bytes(512 << 10));
+        assert_eq!(settings.output_capture.max_disk_usage, DiskUsageLimit::Unlimited);
     }
 
     #[test]
