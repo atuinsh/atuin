@@ -64,9 +64,6 @@ pub async fn boot(
     let history_store =
         HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
     let output_capture = OutputCapture::open(Settings::command_capture_dir())?;
-    // Keep a flush handle before the store is moved into the journal, so we can
-    // drive periodic and shutdown flushes.
-    let output_sync = output_capture.sync_handle();
     let journal = Arc::new(HistoryJournal::new(
         handle.caps().clone(),
         history_store,
@@ -128,14 +125,6 @@ pub async fn boot(
 
     // Stop all components on shutdown
     daemon.stop_components().await;
-
-    // Final flush: best-effort attempt to get everything captured so far onto
-    // disk. A capture still in flight when this runs may land after this
-    // fsync; it would still survive a daemon restart (page cache) but not a
-    // power loss in that sub-second window.
-    if let Err(e) = output_sync.sync_now().await {
-        tracing::warn!("final output-capture flush failed: {e}");
-    }
 
     tracing::info!("daemon shut down complete");
     Ok(())
