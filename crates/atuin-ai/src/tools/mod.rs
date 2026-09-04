@@ -811,6 +811,9 @@ const PREVIEW_WIDTH: NonZeroU16 = NonZeroU16::new(120).unwrap();
 /// instead of the real output.
 fn vt100_screen_lines(screen: &vt100::Screen) -> Vec<String> {
     let (rows, cols) = screen.size();
+    let rows = rows.get();
+    let cols = cols.get();
+
     let mut lines = Vec::with_capacity(usize::conv(rows));
     for row in 0..rows {
         let mut line = String::with_capacity(usize::conv(cols));

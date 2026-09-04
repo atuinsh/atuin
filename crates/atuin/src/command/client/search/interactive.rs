@@ -1557,6 +1557,8 @@ fn fetch_screen_state(socket_path: &str) -> Option<SavedScreen> {
 #[cfg(unix)]
 fn restore_popup_area(saved: &SavedScreen, popup_rect: Rect, scroll_offset: u16) {
     use ratatui::crossterm::cursor::MoveTo;
+    use ratatui::crossterm::style::{Attribute, SetAttribute};
+    use ratatui::crossterm::terminal::{Clear, ClearType};
 
     let mut stdout = stdout();
 
@@ -1564,19 +1566,15 @@ fn restore_popup_area(saved: &SavedScreen, popup_rect: Rect, scroll_offset: u16)
         let target_row = popup_rect.y + dy;
         let source_row = usize::conv(target_row + scroll_offset);
 
-        // Clear only the popup region. The server-side rows_formatted() skips
-        // default cells (spaces with default attributes) using cursor jumps, so
-        // any popup content at those positions would remain if not cleared
-        // beforehand. We write `popup_rect.width` spaces instead of
-        // ClearType::CurrentLine so that only the popup area is cleared, not
-        // the entire terminal line.
+        // The snapshot from the server spans the full width of the terminal, not just the popup
+        // area, so move to the start of the line and clear the whole line before we write the row
+        // contents.
         let _ = execute!(
             stdout,
-            MoveTo(popup_rect.x, target_row),
-            ratatui::crossterm::style::SetAttribute(ratatui::crossterm::style::Attribute::Reset),
+            MoveTo(0, target_row),
+            SetAttribute(Attribute::Reset),
+            Clear(ClearType::CurrentLine),
         );
-        let _ = write!(stdout, "{:width$}", "", width = usize::conv(popup_rect.width));
-        let _ = execute!(stdout, MoveTo(popup_rect.x, target_row));
 
         if let Some(row_bytes) = saved.rows_data.get(source_row) {
             let _ = stdout.write_all(row_bytes);

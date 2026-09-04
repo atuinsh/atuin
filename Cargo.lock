@@ -708,9 +708,9 @@ dependencies = [
 
 [[package]]
 name = "atuin-vt100"
-version = "0.17.1"
+version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e1ab415760f579e398bed1931668a5a6866b5c1c7cf3718c889605534a76bab"
+checksum = "4865fe19f666db926b68f57ed09b58af0a5da97ade148687c2c695fffad0765a"
 dependencies = [
  "itoa",
  "unicode-width 0.2.2",

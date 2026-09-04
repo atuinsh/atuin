@@ -116,12 +116,14 @@ impl TrackerCore {
     /// buffers but not the screen. Most likely, you will not want to call this method again until
     /// you clear the screen.
     fn take_rendered(&mut self) -> RenderedOutput {
-        let scrollback = self.emulator.callbacks_mut();
-        let mut buffer = scrollback.buffer.take();
-        let mut state = std::mem::take(&mut scrollback.state);
+        let (screen, scrollback) = self.emulator.screen_and_callbacks_mut();
+        let _ = screen.write_contents_formatted_basic(
+            &mut scrollback.buffer,
+            vt100::capture::BasicFormattedCaptureRange::Full(&mut scrollback.state),
+        );
 
-        let _ = self.emulator.screen().write_contents_formatted_basic(&mut buffer, &mut state);
-
+        let buffer = scrollback.buffer.take();
+        scrollback.state = Default::default();
         RenderedOutput {
             truncated: buffer.is_truncated(),
             data: buffer.into_data(),
