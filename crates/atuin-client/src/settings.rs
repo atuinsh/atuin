@@ -811,13 +811,12 @@ pub enum UiColumnType {
     User,
     /// Exit code
     Exit,
-    /// The command itself (should be last, expands to fill)
+    /// The command itself (expands to fill by default)
     Command,
 }
 
 impl UiColumnType {
     /// Returns the default width for this column type (in characters).
-    /// The Command column returns 0 as it expands to fill remaining space.
     #[must_use]
     pub fn default_width(&self) -> u16 {
         match self {
@@ -834,7 +833,7 @@ impl UiColumnType {
                     3 // Usually a byte on Unix
                 }
             }
-            Self::Command => 0, // Expands to fill
+            Self::Command => 20,
         }
     }
 }
@@ -943,7 +942,7 @@ impl<'de> serde::Deserialize<'de> for UiColumn {
 pub struct Ui {
     /// Columns to display in interactive search, from left to right.
     /// The indicator column (" > ") is always shown first implicitly.
-    /// The "command" column should be last as it expands to fill remaining space.
+    /// The "command" column expands to fill remaining space by default.
     /// Can be simple strings or objects with type and width.
     #[serde(default = "Ui::default_columns")]
     pub columns: Vec<UiColumn>,
@@ -1939,7 +1938,7 @@ mod tests {
 
     /// Forces both `LazyLock`s, so a typo in either constant fails here rather
     /// than panicking at runtime.
-    #[test]
+    #[rstest]
     fn default_addresses_parse() {
         assert_eq!(super::DEFAULT_SYNC_URL.host_str(), Some("api.atuin.sh"));
         assert_eq!(super::DEFAULT_HUB_URL.host_str(), Some("hub.atuin.sh"));
@@ -1967,7 +1966,7 @@ mod tests {
         assert_eq!(settings.default_filter_mode(git_root), expected);
     }
 
-    #[test]
+    #[rstest]
     fn builder_with_data_dir_uses_custom_paths() -> Result<()> {
         use std::path::PathBuf;
 
@@ -2026,7 +2025,7 @@ mod tests {
         assert!(err.contains(expected_err), "error should mention `{expected_err}`, got: {err}");
     }
 
-    #[test]
+    #[rstest]
     fn effective_data_dir_returns_default_when_not_set() {
         let effective = super::Settings::effective_data_dir();
         let default = atuin_common::utils::data_dir();
@@ -2035,7 +2034,7 @@ mod tests {
         assert!(effective.ends_with("atuin") || effective == default);
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_deserializes_simple_binding() {
         let json = r#"{"emacs": {"ctrl-c": "exit"}}"#;
         let config: super::KeymapConfig = serde_json::from_str(json).unwrap();
@@ -2045,7 +2044,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_deserializes_conditional_binding() {
         let json = r#"{
             "emacs": {
@@ -2067,7 +2066,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_deserializes_vim_normal() {
         let json = r#"{"vim-normal": {"j": "select-next", "k": "select-previous"}}"#;
         let config: super::KeymapConfig = serde_json::from_str(json).unwrap();
@@ -2075,13 +2074,13 @@ mod tests {
         assert!(config.emacs.is_empty());
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_is_empty_when_default() {
         let config = super::KeymapConfig::default();
         assert!(config.is_empty());
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_mixed_modes() {
         let json = r#"{
             "emacs": {"ctrl-c": "exit"},
@@ -2108,7 +2107,20 @@ mod tests {
             .expect("could not deserialize config")
     }
 
-    #[test]
+    #[rstest]
+    fn fixed_command_column_uses_default_width() {
+        let settings = parse_settings(
+            "[ui]\ncolumns = [{ type = \"command\", expand = false }, { type = \"directory\", \
+             expand = true }]\n",
+        );
+
+        assert_eq!(settings.ui.columns[0].column_type, super::UiColumnType::Command);
+        assert_eq!(settings.ui.columns[0].width, 20);
+        assert!(!settings.ui.columns[0].expand);
+        assert!(settings.ui.columns[1].expand);
+    }
+
+    #[rstest]
     fn skim_is_requested_but_resolves_to_fuzzy() {
         let settings = parse_settings("search_mode = \"skim\"\n");
 
@@ -2116,7 +2128,7 @@ mod tests {
         assert_eq!(settings.search_mode(), SearchMode::Fuzzy);
     }
 
-    #[test]
+    #[rstest]
     fn skim_shell_up_key_binding_resolves_to_fuzzy() {
         let settings = parse_settings("search_mode_shell_up_key_binding = \"skim\"\n");
 
