@@ -45,6 +45,7 @@ pub enum Action {
     ReturnSelectionNth(u8),
     // Commands — other
     Copy,
+    CopyDirectory,
     Delete,
     DeleteAll,
     ReturnOriginal,
@@ -125,6 +126,7 @@ impl Action {
             "accept" => Ok(Action::Accept),
             "return-selection" => Ok(Action::ReturnSelection),
             "copy" => Ok(Action::Copy),
+            "copy-directory" => Ok(Action::CopyDirectory),
             "delete" => Ok(Action::Delete),
             "delete-all" => Ok(Action::DeleteAll),
             "return-original" => Ok(Action::ReturnOriginal),
@@ -192,6 +194,7 @@ impl Action {
             Action::ReturnSelection => "return-selection".to_string(),
             Action::ReturnSelectionNth(n) => format!("return-selection-{n}"),
             Action::Copy => "copy".to_string(),
+            Action::CopyDirectory => "copy-directory".to_string(),
             Action::Delete => "delete".to_string(),
             Action::DeleteAll => "delete-all".to_string(),
             Action::ReturnOriginal => "return-original".to_string(),
