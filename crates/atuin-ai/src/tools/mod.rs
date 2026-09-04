@@ -1506,6 +1506,8 @@ mod tests {
             meta: Some(CommandCaptureMeta {
                 output_truncated: false,
                 output_observed_bytes: 0,
+                terminal_width: 80,
+                terminal_height: 24,
             }),
         };
         let chunked = GetCommandOutputResponse::build(capture, &[

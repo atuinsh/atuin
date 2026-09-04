@@ -136,6 +136,8 @@ mod tests {
             meta: Some(CommandCaptureMeta {
                 output_truncated: false,
                 output_observed_bytes: u64::conv(output.len()),
+                terminal_width: 80,
+                terminal_height: 24,
             }),
         }
     }

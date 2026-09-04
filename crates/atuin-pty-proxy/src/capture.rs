@@ -37,6 +37,8 @@ pub struct CommandCapture {
     pub session_id: Option<String>,
     pub output_observed_bytes: u64,
     pub output_truncated: bool,
+    pub terminal_width: u16,
+    pub terminal_height: u16,
 }
 
 /// The state of an in-progress command capture.
@@ -250,6 +252,7 @@ impl TrackerCore {
         };
 
         let state = std::mem::take(&mut self.capture);
+        let (rows, cols) = self.emulator.screen().size();
         (self.sink)(CommandCapture {
             output: state.output,
             exit_code: state.exit_code,
@@ -257,6 +260,8 @@ impl TrackerCore {
             session_id: state.session_id,
             output_observed_bytes: state.output_observed_bytes,
             output_truncated: state.output_truncated,
+            terminal_width: cols.get(),
+            terminal_height: rows.get(),
         });
     }
 
@@ -425,6 +430,8 @@ mod tests {
             session_id: Some("sess".to_string()),
             output_observed_bytes: u64::conv(b"hi\r\n".len()),
             output_truncated: false,
+            terminal_width: COLS,
+            terminal_height: ROWS,
         },
     )]
     // Only the execute and finish markers: no prompt or command line in the stream at all.
@@ -437,6 +444,8 @@ mod tests {
             session_id: Some("abcd".to_string()),
             output_observed_bytes: u64::conv(b"line one\r\n".len()),
             output_truncated: false,
+            terminal_width: COLS,
+            terminal_height: ROWS,
         },
     )]
     fn captures_a_full_command_cycle(
@@ -736,6 +745,8 @@ mod tests {
             // after it, in the unknown zone, so it was never counted to begin with.
             output_observed_bytes: u64::conv(b"line one\r\n".len()),
             output_truncated: false,
+            terminal_width: COLS,
+            terminal_height: ROWS,
         });
     }
 
