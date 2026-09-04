@@ -306,6 +306,26 @@ enter_accept = true
 ## starts once.
 # enabled = false
 
+# [output_capture]
+## Capture the output of each command and keep it alongside your history.
+## Requires the pty proxy (see [pty_proxy] above).
+# enabled = false
+
+## The maximum command output length to store.
+## Longer output is middle-truncated, meaning that 'a super very long output'
+## gets truncated to 'a super...long output'.
+## Takes a size with a unit (B, KB, MB, GB, TB; 1MB is 1024KB) or a number of bytes.
+# max_output_size = "1MB"
+
+## Whether to sync captured output.
+## Please note that sync is currently not supported and is coming in the next release.
+# sync = false
+
+## The maximum local disk space Atuin uses for storing command output.
+## Either a size ("10GB"), a percentage of the disk holding your data directory ("10%"),
+## or "unlimited". Once the limit is reached, Atuin forgets the oldest command output.
+# max_disk_usage = "10%"
+
 # [theme]
 ## Color theme to use for rendering in the terminal.
 ## There are some built-in themes, including the base theme ("default"),
