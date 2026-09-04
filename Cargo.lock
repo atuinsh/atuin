@@ -507,7 +507,6 @@ dependencies = [
  "prost",
  "prost-types",
  "protox",
- "rand 0.8.7",
  "reqwest",
  "rstest",
  "tempfile",
