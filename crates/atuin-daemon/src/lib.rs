@@ -76,13 +76,6 @@ pub async fn boot(
     // Start all components first (so gRPC services can work)
     daemon.start_components().await?;
 
-    // Periodically fsync captured command output so it survives power loss, not
-    // just a daemon restart. Idle ticks issue no syscall.
-    tokio::spawn(output_capture::run_periodic_sync(
-        output_sync.clone(),
-        OutputCapture::SYNC_INTERVAL,
-    ));
-
     // Spawn config file watcher to reload settings on changes
     if let Ok(watcher) = global_settings_watcher() {
         let mut settings_rx = watcher.subscribe();
