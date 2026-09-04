@@ -186,11 +186,18 @@ impl OutputSyncHandle {
     ///
     /// Used on graceful shutdown to guarantee everything captured is durable.
     pub async fn sync_now(&self) -> Result<(), SyncError> {
+        // Claim any pending writes; a capture racing in after this re-sets the
+        // flag and is caught by the next periodic tick.
         self.dirty.store(false, Ordering::SeqCst);
         let db = self.db.clone();
-        tokio::task::spawn_blocking(move || db.persist(PersistMode::SyncAll))
+        let result = tokio::task::spawn_blocking(move || db.persist(PersistMode::SyncAll))
             .await
-            .expect("output-capture sync task panicked")?;
+            .expect("output-capture sync task panicked");
+        if let Err(e) = result {
+            // Flush failed: those writes are still unsynced, so re-arm for retry.
+            self.dirty.store(true, Ordering::SeqCst);
+            return Err(SyncError::from(e));
+        }
         Ok(())
     }
 }
