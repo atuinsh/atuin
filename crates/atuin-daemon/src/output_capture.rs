@@ -52,7 +52,7 @@ impl Flusher {
     /// How often to try to flush.
     ///
     /// We'd expect flush itself to take anywhere between 1-10ms, so this is plenty of overhead.
-    const SYNC_INTERVAL: Duration = Duration::from_secs(1);
+    const SYNC_INTERVAL: Duration = Duration::from_secs(5);
 
     pub fn spawn(db: OptimisticTxDatabase) -> Self {
         let dirty_outer = Arc::new(AtomicBool::new(false));
