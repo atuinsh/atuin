@@ -26,24 +26,14 @@ use std::sync::LazyLock;
 
 use regex::{Regex, RegexSet};
 
+#[cfg(test)]
+use self::tests::Test;
+
 /// The string every credential [`redact`] locates is replaced with.
 pub const REDACTED: &str = "****";
 
 /// The capture group each pattern uses to name the span [`redact`] should replace.
 const SECRET_GROUP: &str = "secret";
-
-/// A test case for a [`Pattern`]: `input` must be recognised by [`contains_secret`], and must come
-/// back from [`redact`] as `redacted`. The two are equal when the pattern matches but captures
-/// nothing.
-///
-/// These live beside the pattern they exercise, so that adding a pattern without saying what it
-/// should do to a string is visibly incomplete. They are compiled out of non-test builds: they are
-/// credential-shaped strings, and there is no reason to ship them.
-#[cfg(test)]
-struct Test {
-    input: &'static str,
-    redacted: &'static str,
-}
 
 struct Pattern {
     name: &'static str,
@@ -60,23 +50,35 @@ static SECRET_PATTERNS: &[Pattern] = &[
         name: "AWS Access Key ID",
         regex: "(?<secret>A[KS]IA[0-9A-Z]{16})",
         #[cfg(test)]
-        tests: &[Test { input: "AKIAIOSFODNN7EXAMPLE", redacted: REDACTED }],
+        tests: &[Test {
+            input: "AKIAIOSFODNN7EXAMPLE",
+            redacted: REDACTED,
+        }],
     },
     Pattern {
         name: "AWS Secret Access Key env var",
         regex: r"AWS_SECRET_ACCESS_KEY(?:\s*[=:]\s*(?<secret>\S+))?",
         #[cfg(test)]
         tests: &[
-            Test { input: "AWS_SECRET_ACCESS_KEY=KEYDATA", redacted: "AWS_SECRET_ACCESS_KEY=****" },
+            Test {
+                input: "AWS_SECRET_ACCESS_KEY=KEYDATA",
+                redacted: "AWS_SECRET_ACCESS_KEY=****",
+            },
             // Named but not assigned: recognised, but there is no value to take out.
-            Test { input: "echo $AWS_SECRET_ACCESS_KEY", redacted: "echo $AWS_SECRET_ACCESS_KEY" },
+            Test {
+                input: "echo $AWS_SECRET_ACCESS_KEY",
+                redacted: "echo $AWS_SECRET_ACCESS_KEY",
+            },
         ],
     },
     Pattern {
         name: "AWS Session Token env var",
         regex: r"AWS_SESSION_TOKEN(?:\s*[=:]\s*(?<secret>\S+))?",
         #[cfg(test)]
-        tests: &[Test { input: "AWS_SESSION_TOKEN=KEYDATA", redacted: "AWS_SESSION_TOKEN=****" }],
+        tests: &[Test {
+            input: "AWS_SESSION_TOKEN=KEYDATA",
+            redacted: "AWS_SESSION_TOKEN=****",
+        }],
     },
     Pattern {
         name: "Microsoft Azure secret access key env var",
@@ -110,7 +112,10 @@ static SECRET_PATTERNS: &[Pattern] = &[
                 redacted: "atuin login -u mycoolusername -p ****",
             },
             // Recognised, but nothing to take out.
-            Test { input: "atuin login", redacted: "atuin login" },
+            Test {
+                input: "atuin login",
+                redacted: "atuin login",
+            },
         ],
     },
     Pattern {
@@ -127,7 +132,10 @@ static SECRET_PATTERNS: &[Pattern] = &[
         regex: "(?<secret>ghp_[a-zA-Z0-9]{36})",
         // legit, I expired it
         #[cfg(test)]
-        tests: &[Test { input: "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", redacted: REDACTED }],
+        tests: &[Test {
+            input: "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",
+            redacted: REDACTED,
+        }],
     },
     Pattern {
         name: "GitHub PAT (new)",
@@ -151,14 +159,20 @@ static SECRET_PATTERNS: &[Pattern] = &[
         regex: "(?<secret>gho_[A-Za-z0-9]{36})",
         // not a real token
         #[cfg(test)]
-        tests: &[Test { input: "gho_1234567890abcdefghijklmnopqrstuvwx00", redacted: REDACTED }],
+        tests: &[Test {
+            input: "gho_1234567890abcdefghijklmnopqrstuvwx00",
+            redacted: REDACTED,
+        }],
     },
     Pattern {
         name: "GitHub OAuth Access Token (user)",
         regex: "(?<secret>ghu_[A-Za-z0-9]{36})",
         // not a real token
         #[cfg(test)]
-        tests: &[Test { input: "ghu_1234567890abcdefghijklmnopqrstuvwx00", redacted: REDACTED }],
+        tests: &[Test {
+            input: "ghu_1234567890abcdefghijklmnopqrstuvwx00",
+            redacted: REDACTED,
+        }],
     },
     Pattern {
         name: "GitHub App Installation Access Token",
@@ -166,9 +180,15 @@ static SECRET_PATTERNS: &[Pattern] = &[
         #[cfg(test)]
         tests: &[
             // not a real token
-            Test { input: "ghs_1234567890abcdefghijklmnopqrstuvwx000", redacted: REDACTED },
+            Test {
+                input: "ghs_1234567890abcdefghijklmnopqrstuvwx000",
+                redacted: REDACTED,
+            },
             // new token format, fake data
-            Test { input: "ghs_abc-def.ghi_jklMNOP0123456789qrstuv-wxyzABCD", redacted: REDACTED },
+            Test {
+                input: "ghs_abc-def.ghi_jklMNOP0123456789qrstuv-wxyzABCD",
+                redacted: REDACTED,
+            },
         ],
     },
     Pattern {
@@ -186,13 +206,19 @@ static SECRET_PATTERNS: &[Pattern] = &[
         regex: r"(?<secret>v1\.[0-9A-Fa-f]{40})",
         // not a real token
         #[cfg(test)]
-        tests: &[Test { input: "v1.1234567890abcdef1234567890abcdef12345678", redacted: REDACTED }],
+        tests: &[Test {
+            input: "v1.1234567890abcdef1234567890abcdef12345678",
+            redacted: REDACTED,
+        }],
     },
     Pattern {
         name: "GitLab PAT",
         regex: "(?<secret>glpat-[a-zA-Z0-9_]{20})",
         #[cfg(test)]
-        tests: &[Test { input: "glpat-RkE_BG5p_bbjML21WSfy", redacted: REDACTED }],
+        tests: &[Test {
+            input: "glpat-RkE_BG5p_bbjML21WSfy",
+            redacted: REDACTED,
+        }],
     },
     Pattern {
         name: "Slack OAuth v2 bot",
@@ -227,26 +253,38 @@ static SECRET_PATTERNS: &[Pattern] = &[
         // Split so the literal is not a contiguous `sk_test_...` token in this file: at the
         // correct length for the pattern, GitHub push protection rejects it as a real key.
         #[cfg(test)]
-        tests: &[Test { input: concat!("sk_", "test_1234567890abcdefghijklmn"), redacted: REDACTED }],
+        tests: &[Test {
+            input: concat!("sk_", "test_1234567890abcdefghijklmn"),
+            redacted: REDACTED,
+        }],
     },
     Pattern {
         name: "Stripe live key",
         regex: "(?<secret>sk_live_[0-9a-zA-Z]{24})",
         // See the note on the test key above.
         #[cfg(test)]
-        tests: &[Test { input: concat!("sk_", "live_1234567890abcdefghijklmn"), redacted: REDACTED }],
+        tests: &[Test {
+            input: concat!("sk_", "live_1234567890abcdefghijklmn"),
+            redacted: REDACTED,
+        }],
     },
     Pattern {
         name: "Netlify authentication token",
         regex: "(?<secret>nf[pcoub]_[0-9a-zA-Z]{36})",
         #[cfg(test)]
-        tests: &[Test { input: "nfp_nBh7BdJxUwyaBBwFzpyD29MMFT6pZ9wq5634", redacted: REDACTED }],
+        tests: &[Test {
+            input: "nfp_nBh7BdJxUwyaBBwFzpyD29MMFT6pZ9wq5634",
+            redacted: REDACTED,
+        }],
     },
     Pattern {
         name: "npm token",
         regex: "(?<secret>npm_[A-Za-z0-9]{36})",
         #[cfg(test)]
-        tests: &[Test { input: "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", redacted: REDACTED }],
+        tests: &[Test {
+            input: "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",
+            redacted: REDACTED,
+        }],
     },
     Pattern {
         name: "Pulumi personal access token",
@@ -275,8 +313,6 @@ static PATTERNS: LazyLock<Patterns> = LazyLock::new(|| {
         .collect();
 
     Patterns {
-        // Built from the compiled regexes, in their order, so an index from `set.matches` is
-        // always a valid index into `regexes` and always names the same pattern.
         set: RegexSet::new(regexes.iter().map(Regex::as_str))
             .expect("failed to build secrets regex set"),
         regexes,
@@ -284,10 +320,6 @@ static PATTERNS: LazyLock<Patterns> = LazyLock::new(|| {
 });
 
 /// Whether `s` contains anything that looks like it involves a credential.
-///
-/// True as soon as a pattern matches, even where there was no value to capture: text that merely
-/// *names* a credential, such as `echo $AWS_SECRET_ACCESS_KEY`, counts. Use it to decide whether to
-/// keep a string at all. To strip credentials from a string you are keeping, use [`redact`].
 #[must_use]
 pub fn contains_secret(s: &str) -> bool {
     PATTERNS.set.is_match(s)
@@ -303,9 +335,6 @@ pub fn contains_secret(s: &str) -> bool {
 /// Best-effort; in particular it cannot see through SGR escape sequences or terminal line wraps.
 #[must_use]
 pub fn redact(s: &str) -> Cow<'_, str> {
-    // `RegexSet` reports *that* a pattern matched but never *where*, so the spans have to come
-    // from the individual regexes. A pattern the set did not flag cannot match `s` anywhere, so
-    // only the flagged ones are worth that second pass.
     let mut spans: Vec<Range<usize>> = PATTERNS
         .set
         .matches(s)
@@ -345,6 +374,11 @@ mod tests {
     use rstest::rstest;
 
     use super::{PATTERNS, REDACTED, SECRET_GROUP, SECRET_PATTERNS, contains_secret, redact};
+
+    pub(super) struct Test {
+        pub(super) input: &'static str,
+        pub(super) redacted: &'static str,
+    }
 
     /// An alphabet dense in the characters the patterns care about, so that generated strings
     /// actually trip them instead of drifting past.
@@ -404,7 +438,12 @@ mod tests {
                 };
                 let (input, expected) = (wrap(test.input), wrap(test.redacted));
 
-                assert_eq!(&*redact(&input), expected.as_str(), "{} redacted wrongly", pattern.name);
+                assert_eq!(
+                    &*redact(&input),
+                    expected.as_str(),
+                    "{} redacted wrongly",
+                    pattern.name
+                );
             }
         }
     }
