@@ -8,6 +8,7 @@
 #![allow(dead_code, reason = "each integration test crate uses a different subset of the harness")]
 
 pub mod corpus;
+pub mod scale;
 pub mod strategies;
 
 use std::collections::HashSet;

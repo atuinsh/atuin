@@ -42,4 +42,4 @@ jobs:
           key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run nightly tests
-        run: cargo nextest run -p atuin-daemon --profile nightly --run-ignored ignored-only
+        run: cargo nextest run -p atuin-daemon --test nightly --run-ignored all
