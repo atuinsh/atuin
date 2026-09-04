@@ -1,10 +1,10 @@
 //! Durable storage for captured command output.
 //!
 //! Output is keyed by `history_id` (16 UUID bytes) in a fjall keyspace; the
-//! value is the encoded `history::CommandCapture`. Each write runs in an
-//! optimistic transaction so the check-then-insert is atomic against concurrent
-//! writers, and all blocking fjall I/O runs on tokio's blocking pool via
-//! `spawn_blocking`.
+//! value is the encoded `history::CommandCapture`. Inserts run in an optimistic
+//! transaction so the check-then-insert is atomic against concurrent writers;
+//! deletes are blind removes batched into one transaction. All blocking fjall
+//! I/O runs on tokio's blocking pool via `spawn_blocking`.
 //!
 //! TODO(retention): the store grows unbounded; no eviction yet. See the design doc.
 
@@ -35,6 +35,12 @@ pub enum CaptureError {
 
 #[derive(Debug, Error)]
 pub enum GetOutputError {
+    #[error("storage error: {0}")]
+    Storage(#[from] fjall::Error),
+}
+
+#[derive(Debug, Error)]
+pub enum DeleteOutputError {
     #[error("storage error: {0}")]
     Storage(#[from] fjall::Error),
 }
@@ -225,6 +231,41 @@ impl OutputCapture {
         .await
         .expect("output-capture read task panicked")
     }
+
+    /// Forget the captured output of every history id in `ids`.
+    ///
+    /// Ids with no stored output are skipped, so the call is idempotent and safe to retry. All
+    /// removals commit in a single transaction. Each removal is a blind write -- the transaction
+    /// performs no reads -- so it can never conflict with a concurrent [`Self::capture`]; whichever
+    /// of the two commits last wins the key.
+    pub async fn delete(
+        &self,
+        ids: impl IntoIterator<Item = HistoryId>,
+    ) -> Result<(), DeleteOutputError> {
+        let keys: Vec<[u8; 16]> = ids.into_iter().map(HistoryId::into_bytes).collect();
+        if keys.is_empty() {
+            return Ok(());
+        }
+
+        let db = self.db.clone();
+        let keyspace = self.keyspace.clone();
+        let flusher = self.flusher.clone();
+        tokio::task::spawn_blocking(move || {
+            {
+                let mut tx = db.write_tx()?;
+                for key in keys {
+                    tx.remove(&keyspace, key);
+                }
+                // fjall only reports conflicts for transactions that *read*; see
+                // `OptimisticTxKeyspace::remove` upstream, which makes the same assumption.
+                tx.commit()?.expect("a blind remove performs no reads, so it can never conflict");
+            }
+            flusher.kick();
+            Ok(())
+        })
+        .await
+        .expect("output-capture delete task panicked")
+    }
 }
 
 #[cfg(test)]
@@ -318,5 +359,62 @@ mod tests {
             }
         }
         assert_eq!(ok, 1, "exactly one writer wins, no TOCTOU double-store");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn delete_removes_stored_output(store: TempStore) {
+        store.capture(hid(1), cap("hello")).await.expect("capture");
+        store.delete([hid(1)]).await.expect("delete");
+        assert!(store.get(hid(1)).await.expect("get").is_none());
+    }
+
+    #[rstest]
+    #[case::no_ids(vec![])]
+    #[case::unknown_id(vec![hid(9)])]
+    #[tokio::test]
+    async fn delete_of_absent_ids_is_ok(store: TempStore, #[case] ids: Vec<HistoryId>) {
+        store.delete(ids).await.expect("delete is idempotent");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn delete_only_removes_requested_ids(store: TempStore) {
+        for n in 1..=3 {
+            store.capture(hid(n), cap(&format!("out{n}"))).await.expect("capture");
+        }
+        // Present and absent ids in the same batch: the absent one is simply skipped.
+        store.delete([hid(1), hid(3), hid(9)]).await.expect("delete");
+        assert!(store.get(hid(1)).await.expect("get").is_none());
+        assert_eq!(store.get(hid(2)).await.expect("get").expect("kept").output, "out2");
+        assert!(store.get(hid(3)).await.expect("get").is_none());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn deleted_id_can_be_captured_again(store: TempStore) {
+        store.capture(hid(1), cap("first")).await.expect("first");
+        store.delete([hid(1)]).await.expect("delete");
+        // The tombstone must free the id for the capture-once check, not merely hide the value.
+        store.capture(hid(1), cap("second")).await.expect("recapture after delete");
+        assert_eq!(store.get(hid(1)).await.expect("get").expect("present").output, "second");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn delete_marks_store_dirty_for_flush(store: TempStore) {
+        store.capture(hid(1), cap("hello")).await.expect("capture");
+        // Clear whatever the capture left behind so the flag below is attributable to `delete`.
+        // The background flusher's first (immediate) tick already ran while the capture's
+        // `.await` yielded; the next tick is `Flusher::SYNC_INTERVAL` (5s) away, far beyond this
+        // test's runtime, so nothing else touches the flag.
+        store.flusher.dirty.store(false, Ordering::SeqCst);
+
+        store.delete([hid(1)]).await.expect("delete");
+
+        assert!(
+            store.flusher.dirty.load(Ordering::SeqCst),
+            "delete must kick the flusher so the tombstone reaches disk"
+        );
     }
 }
