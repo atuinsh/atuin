@@ -301,7 +301,7 @@ impl GetCommandOutputRequest {
     }
 }
 
-impl GetChunkedOutputRequest {
+impl GetCommandChunkedOutputRequest {
     /// Fetch the history ID whose output is being requested.
     pub fn history_id(&self) -> Result<DomainHistoryId, GetOutputRequestParseError> {
         Ok(self.id.clone().ok_or(GetOutputRequestParseError::MissingHistory)?.try_into()?)

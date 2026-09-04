@@ -22,9 +22,10 @@ use crate::grpc::history::pb::history_client::HistoryClient as HistoryServiceCli
 use crate::grpc::history::pb::{
     AuthorKind, CancelHistoryReply, CancelHistoryRequest, ChunkedOutput, CommandCapture,
     CommandCaptureMeta, CommandOutput, DeleteHistoryReply, DeleteHistoryRequest, EndHistoryReply,
-    EndHistoryRequest, GetChunkedOutputRequest, GetCommandOutputRequest, RebuildHistoryReply,
-    RebuildHistoryRequest, RegisterCommandOutputRequest, ShutdownRequest, StartHistoryReply,
-    StartHistoryRequest, StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
+    EndHistoryRequest, GetCommandChunkedOutputRequest, GetCommandOutputRequest,
+    RebuildHistoryReply, RebuildHistoryRequest, RegisterCommandOutputRequest, ShutdownRequest,
+    StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryReply,
+    TailHistoryRequest,
 };
 use crate::search::search_client::SearchClient as SearchServiceClient;
 use crate::search::{
@@ -232,16 +233,16 @@ impl HistoryClient {
         }
     }
 
-    pub async fn get_chunked_output(
+    pub async fn get_command_chunked_output(
         &mut self,
         id: HistoryId,
         ranges: Vec<PyStyleIdxRange>,
     ) -> Result<Option<ChunkedOutput>> {
-        let request = GetChunkedOutputRequest {
+        let request = GetCommandChunkedOutputRequest {
             id: Some(id.into()),
             line_ranges: ranges,
         };
-        match self.client.get_chunked_output(request).await {
+        match self.client.get_command_chunked_output(request).await {
             Ok(response) => Ok(response.into_inner().chunked),
             Err(status) if status.code() == Code::NotFound => Ok(None),
             Err(status) => Err(status.into()),

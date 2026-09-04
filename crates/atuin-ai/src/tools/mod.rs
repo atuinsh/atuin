@@ -1323,13 +1323,14 @@ impl AtuinOutputToolCall {
                 response.meta.unwrap_or_default(),
             )
         } else {
-            let response = match client.get_chunked_output(history_id, self.ranges.clone()).await {
-                Ok(Some(response)) => response,
-                Ok(None) => return not_found(),
-                Err(e) => {
-                    return ToolOutcome::Error(format!("Failed to fetch command output: {e}"));
-                }
-            };
+            let response =
+                match client.get_command_chunked_output(history_id, self.ranges.clone()).await {
+                    Ok(Some(response)) => response,
+                    Ok(None) => return not_found(),
+                    Err(e) => {
+                        return ToolOutcome::Error(format!("Failed to fetch command output: {e}"));
+                    }
+                };
             let body = format_chunked_output_line_views_for_llm(response.lines());
             if body.is_empty() {
                 return ToolOutcome::Success(format!(

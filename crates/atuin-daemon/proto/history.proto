@@ -140,9 +140,6 @@ message TailHistoryReply {
 }
 
 // Some metadata associated with every command capture.
-//
-// proto3 has no `required`; every field below is logically required and the daemon's Rust
-// conversion layer rejects a message that omits one.
 message CommandCaptureMeta {
   // Whether the `output` field is considered truncated.
   //
@@ -202,7 +199,7 @@ message GetCommandOutputResponse {
 // You can request specific ranges, expressed within the `line_ranges` field. In effect, you can
 // say, I want ranges `[0, 3), [8, 10)`, and you will get the content of the lines `0, 1, 2, 8, 9`
 // of the output.
-message GetChunkedOutputRequest {
+message GetCommandChunkedOutputRequest {
   // The history ID you're searching for. Logically required.
   HistoryId id = 1;
   // An or-filter for requesting specific lines.
@@ -212,7 +209,7 @@ message GetChunkedOutputRequest {
   repeated common.PyStyleIdxRange line_ranges = 2;
 }
 
-message GetChunkedOutputResponse {
+message GetCommandChunkedOutputResponse {
   // The requested per-line chunks. Logically required.
   ChunkedOutput chunked = 1;
 }
@@ -226,7 +223,7 @@ message OutputChunk {
   string content = 2;
 }
 
-// When `GetChunkedOutput` replies with per-line chunks for the requested `line_ranges`, you get
+// When `GetCommandChunkedOutput` replies with per-line chunks for the requested `line_ranges`, you get
 // this output.
 message ChunkedOutput {
   repeated OutputChunk chunks = 1;
@@ -263,9 +260,9 @@ service History {
   rpc GetCommandOutput(GetCommandOutputRequest) returns (GetCommandOutputResponse);
   // Retrieve a command's captured output, sliced by line ranges.
   //
-  // See the docs for `GetChunkedOutputRequest` for the calling convention.
+  // See the docs for `GetCommandChunkedOutputRequest` for the calling convention.
   //
   // Returns:
   //  - `tonic::Status::not_found` if the given output is not found.
-  rpc GetChunkedOutput(GetChunkedOutputRequest) returns (GetChunkedOutputResponse);
+  rpc GetCommandChunkedOutput(GetCommandChunkedOutputRequest) returns (GetCommandChunkedOutputResponse);
 }
