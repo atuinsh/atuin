@@ -95,6 +95,13 @@ impl Flusher {
     }
 }
 
+impl Drop for Flusher {
+    fn drop(&mut self) {
+        // Stop the background loop once nothing is holding the flusher any more.
+        self.task.abort();
+    }
+}
+
 /// [`OutputCapture`] is the core engine responsible for collecting command output.
 ///
 /// It wraps an [`OptimisticTxKeyspace`], and stores data in said keyspace.
