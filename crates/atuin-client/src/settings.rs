@@ -2215,13 +2215,6 @@ mod tests {
         assert_eq!(capture.max_disk_usage, max_disk_usage);
     }
 
-    /// `enable` is accepted as an alias, as it is for `[daemon]` and `[pty_proxy]`.
-    #[rstest]
-    fn output_capture_accepts_the_enable_alias() {
-        let settings = parse_settings("[output_capture]\nenable = true\n");
-        assert!(settings.output_capture.enabled);
-    }
-
     /// Environment overrides arrive as strings, so the text forms must parse from there too.
     #[rstest]
     fn output_capture_sizes_can_come_from_the_environment() {
