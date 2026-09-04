@@ -17,8 +17,8 @@ use crate::DaemonHandle;
 use crate::grpc::history::pb::history_server::History as GrpcService;
 use crate::grpc::history::pb::{
     CancelHistoryReply, CancelHistoryRequest, ChunkedOutput, DeleteHistoryReply,
-    DeleteHistoryRequest, EndHistoryReply, EndHistoryRequest, GetCommandChunkedOutputRequest,
-    GetCommandChunkedOutputResponse, Lagged, RebuildHistoryReply, RebuildHistoryRequest,
+    DeleteHistoryRequest, EndHistoryReply, EndHistoryRequest, GetCommandOutputRequest,
+    GetCommandOutputResponse, Lagged, RebuildHistoryReply, RebuildHistoryRequest,
     RegisterCommandOutputRequest, RegisterCommandOutputResponse, ShutdownReply, ShutdownRequest,
     StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent,
     TailHistoryReply, TailHistoryRequest,
@@ -418,10 +418,10 @@ impl GrpcService for Service {
     }
 
     #[instrument(skip_all, level = Level::TRACE)]
-    async fn get_command_chunked_output(
+    async fn get_command_output(
         &self,
-        request: Request<GetCommandChunkedOutputRequest>,
-    ) -> Result<Response<GetCommandChunkedOutputResponse>, Status> {
+        request: Request<GetCommandOutputRequest>,
+    ) -> Result<Response<GetCommandOutputResponse>, Status> {
         let request = request.into_inner();
         let id = request.history_id()?;
 
@@ -430,7 +430,7 @@ impl GrpcService for Service {
                 Status::not_found(format!("no captured output for history id {id}"))
             })?;
 
-        Ok(Response::new(GetCommandChunkedOutputResponse {
+        Ok(Response::new(GetCommandOutputResponse {
             chunked: Some(ChunkedOutput::build(capture, request.output_ranges())),
         }))
     }

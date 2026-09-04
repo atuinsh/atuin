@@ -1306,7 +1306,7 @@ impl AtuinOutputToolCall {
             self.ranges.clone()
         };
 
-        let response = match client.get_command_chunked_output(history_id, ranges).await {
+        let response = match client.get_command_output(history_id, ranges).await {
             Ok(Some(response)) => response,
             Ok(None) => return not_found(),
             Err(e) => return ToolOutcome::Error(format!("Failed to fetch command output: {e}")),
@@ -1366,6 +1366,7 @@ impl PermissibleToolCall for LoadSkillToolCall {
 #[cfg(test)]
 mod tests {
     use atuin_common::filter;
+    use atuin_daemon::grpc::history::pb::{ChunkedOutput, CommandCapture, CommandCaptureMeta};
     use rstest::*;
 
     use super::*;
@@ -1486,6 +1487,30 @@ mod tests {
         assert_eq!(
             format_chunked_output_line_views_for_llm(lines.into_iter()),
             " 98\tnear end\n[...skipped 1 lines...]\n100\tend"
+        );
+    }
+
+    #[rstest]
+    fn atuin_output_renders_a_blank_line_instead_of_widening_the_gap() {
+        // Line 1 of the output is blank. Selecting it alongside the last two lines must render it
+        // as a blank numbered line and report exactly the two lines genuinely left out, "charlie"
+        // and "delta". Reconstructing chunk contents with `str::lines` used to swallow the blank
+        // line and inflate the marker to three.
+        let capture = CommandCapture {
+            output: "alpha\n\ncharlie\ndelta\necho\nfoxtrot".to_string(),
+            meta: Some(CommandCaptureMeta {
+                output_truncated: false,
+                output_observed_bytes: 0,
+            }),
+        };
+        let chunked = ChunkedOutput::build(capture, &[
+            PyStyleIdxRange::new(0, 1),
+            PyStyleIdxRange::new(4, 5),
+        ]);
+
+        assert_eq!(
+            format_chunked_output_line_views_for_llm(chunked.lines()),
+            "1\talpha\n2\t\n[...skipped 2 lines...]\n5\techo\n6\tfoxtrot"
         );
     }
 

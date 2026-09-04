@@ -148,9 +148,13 @@ message CommandCaptureMeta {
   // The total number of bytes that were pushed to the virtual terminal.
   //
   // Note that there's an easy misconception to make: `output_truncated := output.len() !=
-  // output_truncated`. Unfortunately, this is **NOT** true. `output_observed_bytes` counts the
-  // total number of bytes that were pushed to the virtual terminal, **BEFORE** any stripping that
-  // `output` and `output_truncated` imply.
+  // output_observed_bytes`. Unfortunately, this is **NOT** true.
+  //
+  // `output_observed_bytes` counts the total number of bytes that were pushed to the virtual
+  // terminal **BEFORE** rasterizing the terminal.
+  //
+  // Think about this example -- a command outputs "hello\rhello\rhello\rhello". What is rendered?
+  // "hello". `output_observed_bytes` will be 23 -- ie. how many bytes the terminal saw.
   uint64 output_observed_bytes = 2;
 }
 
@@ -175,13 +179,16 @@ message RegisterCommandOutputRequest  {
 
 message RegisterCommandOutputResponse {}
 
-// A command's full captured output.
 // Request to fetch specific line ranges of the command output for a given `id`.
 //
-// You can request specific ranges, expressed within the `line_ranges` field. In effect, you can
-// say, I want ranges `[0, 3), [8, 10)`, and you will get the content of the lines `0, 1, 2, 8, 9`
-// of the output.
-message GetCommandChunkedOutputRequest {
+// You can request specific ranges, expressed within the `line_ranges` field. Those ranges are
+// `PyStyleIdxRange`s, so **both ends are inclusive**: asking for `[0, 3]` and `[8, 10]` returns the
+// content of lines `0, 1, 2, 3` and `8, 9, 10`. Lines are 0-offset, and a trailing newline
+// terminates its line rather than starting an empty one, so `"a\nb\n"` is two lines, not three.
+//
+// Note the reply speaks a different dialect: each chunk reports the resolved span it covers as an
+// `UnsignedIdxRange`, which is half-open.
+message GetCommandOutputRequest {
   // The history ID you're searching for. Logically required.
   HistoryId id = 1;
   // An or-filter for requesting specific lines.
@@ -192,7 +199,7 @@ message GetCommandChunkedOutputRequest {
   repeated common.PyStyleIdxRange line_ranges = 2;
 }
 
-message GetCommandChunkedOutputResponse {
+message GetCommandOutputResponse {
   // The requested per-line chunks. Logically required.
   ChunkedOutput chunked = 1;
 }
@@ -206,7 +213,7 @@ message OutputChunk {
   string content = 2;
 }
 
-// When `GetCommandChunkedOutput` replies with per-line chunks for the requested `line_ranges`, you get
+// When `GetCommandOutput` replies with per-line chunks for the requested `line_ranges`, you get
 // this output.
 message ChunkedOutput {
   repeated OutputChunk chunks = 1;
@@ -238,9 +245,9 @@ service History {
   rpc RegisterCommandOutput(RegisterCommandOutputRequest) returns (RegisterCommandOutputResponse);
   // Retrieve a command's captured output, sliced by line ranges.
   //
-  // See the docs for `GetCommandChunkedOutputRequest` for the calling convention.
+  // See the docs for `GetCommandOutputRequest` for the calling convention.
   //
   // Returns:
   //  - `tonic::Status::not_found` if the given output is not found.
-  rpc GetCommandChunkedOutput(GetCommandChunkedOutputRequest) returns (GetCommandChunkedOutputResponse);
+  rpc GetCommandOutput(GetCommandOutputRequest) returns (GetCommandOutputResponse);
 }
