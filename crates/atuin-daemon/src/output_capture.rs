@@ -39,12 +39,6 @@ pub enum GetOutputError {
     Storage(#[from] fjall::Error),
 }
 
-#[derive(Debug, Error)]
-pub enum SyncError {
-    #[error("storage error: {0}")]
-    Storage(#[from] fjall::Error),
-}
-
 /// Task responsible for flushing fjall data buffered in memory onto the disk.
 struct Flusher {
     /// Whether new data was inserted since the last flush.
