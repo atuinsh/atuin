@@ -156,6 +156,22 @@ pub fn init_script(shell: Shell) -> String {
     render_init(shell)
 }
 
+#[cfg(target_os = "macos")]
+fn process_path(pid: libc::pid_t) -> Option<PathBuf> {
+    let mut buf = [0u8; 4096];
+    let buf_len = u32::try_from(buf.len()).ok()?;
+    // Safety: `buf` is writable for `buf_len` bytes, and `pid` identifies
+    // the process whose executable path is requested.
+    let res = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr().cast(), buf_len) };
+    if res <= 0 {
+        return None;
+    }
+    let len = usize::try_from(res).ok()?;
+    let bytes = &buf[..len];
+    let len = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    std::str::from_utf8(&bytes[..len]).ok().map(PathBuf::from)
+}
+
 fn get_parent_shell_path(target_shell: Shell) -> Option<String> {
     #[cfg(unix)]
     {
@@ -165,26 +181,7 @@ fn get_parent_shell_path(target_shell: Shell) -> Option<String> {
         let path = std::fs::read_link(format!("/proc/{ppid}/exe")).ok();
 
         #[cfg(target_os = "macos")]
-        let path = {
-            let ppid: libc::pid_t = ppid.try_into().ok()?;
-            let mut buf = [0u8; 4096];
-            // Safety: `buf` is writable for `buf.len()` bytes, and `ppid` identifies
-            // the direct parent process as returned by the standard library.
-            let res = unsafe {
-                libc::proc_pidpath(
-                    ppid,
-                    buf.as_mut_ptr() as *mut std::ffi::c_void,
-                    buf.len() as u32,
-                )
-            };
-            if res > 0 {
-                let bytes = &buf[..res as usize];
-                let len = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-                std::str::from_utf8(&bytes[..len]).ok().map(PathBuf::from)
-            } else {
-                None
-            }
-        };
+        let path = process_path(ppid.try_into().ok()?);
 
         #[cfg(any(target_os = "illumos", target_os = "solaris"))]
         let path = std::fs::read_link(format!("/proc/{ppid}/path/a.out")).ok();
@@ -286,7 +283,16 @@ end
 mod tests {
     use rstest::rstest;
 
-    use super::{PathBuf, Shell, render_init, shell_from_name};
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "illumos",
+        target_os = "solaris"
+    )))]
+    use super::PathBuf;
+    #[cfg(target_os = "macos")]
+    use super::process_path;
+    use super::{Shell, render_init, shell_from_name};
 
     #[rstest]
     #[case::zsh_abs_path("/bin/zsh", Shell::Zsh)]
@@ -356,26 +362,7 @@ mod tests {
         let resolved = std::fs::read_link(format!("/proc/{pid}/exe")).ok();
 
         #[cfg(target_os = "macos")]
-        let resolved = {
-            let pid: libc::pid_t = pid.try_into().unwrap();
-            let mut buf = [0u8; 4096];
-            // Safety: `buf` is writable for `buf.len()` bytes, and `pid` identifies
-            // this process.
-            let res = unsafe {
-                libc::proc_pidpath(
-                    pid,
-                    buf.as_mut_ptr() as *mut std::ffi::c_void,
-                    buf.len() as u32,
-                )
-            };
-            if res > 0 {
-                let bytes = &buf[..res as usize];
-                let len = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-                std::str::from_utf8(&bytes[..len]).ok().map(PathBuf::from)
-            } else {
-                None
-            }
-        };
+        let resolved = process_path(pid.try_into().unwrap());
 
         #[cfg(any(target_os = "illumos", target_os = "solaris"))]
         let resolved = std::fs::read_link(format!("/proc/{pid}/path/a.out")).ok();
