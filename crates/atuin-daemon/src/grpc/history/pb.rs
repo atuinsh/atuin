@@ -106,8 +106,6 @@ impl TryFrom<StartHistoryRequest> for History {
     fn try_from(req: StartHistoryRequest) -> Result<Self, Self::Error> {
         // `author_kind()` borrows `req`, so read it before moving fields out.
         let author_kind = req.author_kind();
-        // The wire carries a signed i64 nanosecond timestamp, matching the history db's column, so
-        // every value round-trips without a range check.
         Ok(Self::daemon()
             .timestamp(OffsetDateTime::from_unix_nanos_i64(req.timestamp))
             .command(req.command)
@@ -455,11 +453,10 @@ mod tests {
     #[test]
     fn command_output_ranges_are_inclusive_with_negative_offsets() {
         // [1, 2] inclusive -> "one", "two"; [-1, -1] -> the last line, "four" (no sentinel needed).
-        let chunked =
-            GetCommandOutputResponse::build(capture_of("zero\none\ntwo\nthree\nfour"), &[
-                py_range(1, 2),
-                py_range(-1, -1),
-            ]);
+        let chunked = GetCommandOutputResponse::build(
+            capture_of("zero\none\ntwo\nthree\nfour"),
+            &[py_range(1, 2), py_range(-1, -1)],
+        );
         assert!(chunked.meta.is_some());
         assert_eq!(chunked.total_lines, 5);
         let contents: Vec<&str> = chunked.chunks.iter().map(|c| c.content.as_str()).collect();
@@ -473,11 +470,10 @@ mod tests {
     fn command_output_returns_one_chunk_per_requested_range() {
         // Every requested range yields a chunk, in order: [2, 1] is backwards (empty), [10, 20] is
         // past the end (both empty content), [0, 0] selects "a". Nothing is dropped.
-        let chunked = GetCommandOutputResponse::build(capture_of("a\nb\nc"), &[
-            py_range(2, 1),
-            py_range(10, 20),
-            py_range(0, 0),
-        ]);
+        let chunked = GetCommandOutputResponse::build(
+            capture_of("a\nb\nc"),
+            &[py_range(2, 1), py_range(10, 20), py_range(0, 0)],
+        );
         let contents: Vec<&str> = chunked.chunks.iter().map(|c| c.content.as_str()).collect();
         assert_eq!(contents, vec!["", "", "a"]);
     }
