@@ -115,6 +115,7 @@ pub trait Dialect {
     const DELETE_STORE_BY_USER: &'static str;
     const DELETE_USER_BY_ID: &'static str;
     const ADD_RECORDS: &'static str;
+    const REPAIR_RECORDS: &'static str;
     const NEXT_RECORDS: &'static str;
     const STATUS: &'static str;
 }
@@ -143,6 +144,8 @@ impl Dialect for OrdinalBindingDialect {
     const ADD_RECORDS: &'static str = "INSERT INTO store (id, client_id, host, idx, timestamp, \
                                        version, tag, data, cek, user_id)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT DO NOTHING";
+    const REPAIR_RECORDS: &'static str =
+        "UPDATE store SET data = $1, cek = $2 WHERE client_id = $3 AND user_id = $4";
     const NEXT_RECORDS: &'static str = "SELECT client_id, host, idx, timestamp, version, tag, \
                                         data, cek FROM store
         WHERE user_id = $1 AND tag = $2 AND host = $3 AND idx >= $4 ORDER BY idx ASC LIMIT $5";
@@ -173,6 +176,8 @@ impl Dialect for PositionalBindingDialect {
     const ADD_RECORDS: &'static str = "INSERT INTO store (id, client_id, host, idx, timestamp, \
                                        version, tag, data, cek, user_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE id = id";
+    const REPAIR_RECORDS: &'static str =
+        "UPDATE store SET data = ?, cek = ? WHERE client_id = ? AND user_id = ?";
     const NEXT_RECORDS: &'static str = "SELECT client_id, host, idx, timestamp, version, tag, \
                                         data, cek FROM store
         WHERE user_id = ? AND tag = ? AND host = ? AND idx >= ? ORDER BY idx ASC LIMIT ?";
@@ -197,6 +202,18 @@ pub trait DynDatabase: Send + Sync + 'static {
     async fn delete_store(&self, user: &User) -> DbResult<()>;
 
     async fn add_records(&self, user: &User, record: &[Record<EncryptedData>]) -> DbResult<()>;
+
+    /// Replace the encrypted payload of existing records that the user owns.
+    ///
+    /// Only the `data` and `cek` columns are updated - all other fields (id, host, idx,
+    /// timestamp, version, tag) are preserved, because PASETO implicit assertions are
+    /// bound to those fields and any change would break decryption.
+    ///
+    /// Records that do not exist, or are owned by another user, must be silently skipped.
+    /// This is the single code path that mutates existing rows in the record store -
+    /// callers should be aware it breaks append-only semantics by design.
+    async fn repair_records(&self, user: &User, records: &[Record<EncryptedData>]) -> DbResult<()>;
+
     async fn next_records(
         &self,
         user: &User,
@@ -350,6 +367,28 @@ where
         Ok(())
     }
 
+    /// Replace the encrypted payload of records the user owns, leaving every
+    /// other column untouched. The (user_id, client_id) predicate is the
+    /// security boundary: a user can only mutate rows they own.
+    #[instrument(skip_all)]
+    async fn repair_records(&self, user: &User, records: &[Record<EncryptedData>]) -> DbResult<()> {
+        let mut tx = self.pool().begin().await?;
+
+        for r in records {
+            db::query(Self::Dialect::REPAIR_RECORDS)
+                .bind(r.data.raw.as_str())
+                .bind(r.data.cek.as_str())
+                .bind(r.id)
+                .bind(user.id)
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        tx.commit().await?;
+
+        Ok(())
+    }
+
     #[instrument(skip_all)]
     async fn next_records(
         &self,
@@ -437,6 +476,10 @@ where
 
     async fn add_records(&self, user: &User, records: &[Record<EncryptedData>]) -> DbResult<()> {
         Database::add_records(self, user, records).await
+    }
+
+    async fn repair_records(&self, user: &User, records: &[Record<EncryptedData>]) -> DbResult<()> {
+        Database::repair_records(self, user, records).await
     }
 
     async fn next_records(
