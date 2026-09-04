@@ -1366,7 +1366,9 @@ impl PermissibleToolCall for LoadSkillToolCall {
 #[cfg(test)]
 mod tests {
     use atuin_common::filter;
-    use atuin_daemon::grpc::history::pb::{ChunkedOutput, CommandCapture, CommandCaptureMeta};
+    use atuin_daemon::grpc::history::pb::{
+        CommandCapture, CommandCaptureMeta, GetCommandOutputResponse,
+    };
     use rstest::*;
 
     use super::*;
@@ -1503,7 +1505,7 @@ mod tests {
                 output_observed_bytes: 0,
             }),
         };
-        let chunked = ChunkedOutput::build(capture, &[
+        let chunked = GetCommandOutputResponse::build(capture, &[
             PyStyleIdxRange::new(0, 1),
             PyStyleIdxRange::new(4, 5),
         ]);

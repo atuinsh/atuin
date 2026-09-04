@@ -199,23 +199,8 @@ message GetCommandOutputRequest {
   repeated common.PyStyleIdxRange line_ranges = 2;
 }
 
+// The per-line chunks for the requested `line_ranges`.
 message GetCommandOutputResponse {
-  // The requested per-line chunks. Logically required.
-  ChunkedOutput chunked = 1;
-}
-
-// Encodes one single chunk of an output.
-message OutputChunk {
-  // The already-resolved, non-negative range of lines that this content encapsulates.
-  // Logically required.
-  common.UnsignedIdxRange line_range = 1;
-  // The content of the chunk itself.
-  string content = 2;
-}
-
-// When `GetCommandOutput` replies with per-line chunks for the requested `line_ranges`, you get
-// this output.
-message ChunkedOutput {
   repeated OutputChunk chunks = 1;
   // The total number of bytes in the stored output.
   //
@@ -228,6 +213,15 @@ message ChunkedOutput {
   // `sum(chunk.line_range.len() for chunk in chunks) <= total_lines`.
   uint64 total_lines = 3;
   CommandCaptureMeta meta = 4;
+}
+
+// Encodes one single chunk of an output.
+message OutputChunk {
+  // The already-resolved, non-negative range of lines that this content encapsulates.
+  // Logically required.
+  common.UnsignedIdxRange line_range = 1;
+  // The content of the chunk itself.
+  string content = 2;
 }
 
 service History {

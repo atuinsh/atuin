@@ -20,9 +20,9 @@ use tracing::{Level, instrument, span};
 
 use crate::grpc::history::pb::history_client::HistoryClient as HistoryServiceClient;
 use crate::grpc::history::pb::{
-    AuthorKind, CancelHistoryReply, CancelHistoryRequest, ChunkedOutput, CommandCapture,
-    CommandCaptureMeta, DeleteHistoryReply, DeleteHistoryRequest, EndHistoryReply,
-    EndHistoryRequest, GetCommandOutputRequest, RebuildHistoryReply, RebuildHistoryRequest,
+    AuthorKind, CancelHistoryReply, CancelHistoryRequest, CommandCapture, CommandCaptureMeta,
+    DeleteHistoryReply, DeleteHistoryRequest, EndHistoryReply, EndHistoryRequest,
+    GetCommandOutputRequest, GetCommandOutputResponse, RebuildHistoryReply, RebuildHistoryRequest,
     RegisterCommandOutputRequest, ShutdownRequest, StartHistoryReply, StartHistoryRequest,
     StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
 };
@@ -225,13 +225,13 @@ impl HistoryClient {
         &mut self,
         id: HistoryId,
         ranges: Vec<PyStyleIdxRange>,
-    ) -> Result<Option<ChunkedOutput>> {
+    ) -> Result<Option<GetCommandOutputResponse>> {
         let request = GetCommandOutputRequest {
             id: Some(id.into()),
             line_ranges: ranges,
         };
         match self.client.get_command_output(request).await {
-            Ok(response) => Ok(response.into_inner().chunked),
+            Ok(response) => Ok(Some(response.into_inner())),
             Err(status) if status.code() == Code::NotFound => Ok(None),
             Err(status) => Err(status.into()),
         }

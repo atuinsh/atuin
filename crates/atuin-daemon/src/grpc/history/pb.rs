@@ -314,7 +314,7 @@ pub struct ChunkedOutputLineView<'a> {
     pub content: &'a str,
 }
 
-impl ChunkedOutput {
+impl GetCommandOutputResponse {
     /// Build a chunked output from an output and a set of signed line ranges.
     #[must_use]
     pub fn build(capture: CommandCapture, ranges: &[PyStyleIdxRange]) -> Self {
@@ -442,7 +442,7 @@ mod tests {
 
     #[test]
     fn command_output_whole_output_via_full_range() {
-        let chunked = ChunkedOutput::build(capture_of("a\nb\nc"), &[py_range(0, -1)]);
+        let chunked = GetCommandOutputResponse::build(capture_of("a\nb\nc"), &[py_range(0, -1)]);
         assert!(chunked.meta.is_some());
         assert_eq!(chunked.total_lines, 3);
         assert_eq!(chunked.chunks.len(), 1);
@@ -453,10 +453,11 @@ mod tests {
     #[test]
     fn command_output_ranges_are_inclusive_with_negative_offsets() {
         // [1, 2] inclusive -> "one", "two"; [-1, -1] -> the last line, "four" (no sentinel needed).
-        let chunked = ChunkedOutput::build(
-            capture_of("zero\none\ntwo\nthree\nfour"),
-            &[py_range(1, 2), py_range(-1, -1)],
-        );
+        let chunked =
+            GetCommandOutputResponse::build(capture_of("zero\none\ntwo\nthree\nfour"), &[
+                py_range(1, 2),
+                py_range(-1, -1),
+            ]);
         assert!(chunked.meta.is_some());
         assert_eq!(chunked.total_lines, 5);
         let contents: Vec<&str> = chunked.chunks.iter().map(|c| c.content.as_str()).collect();
@@ -470,16 +471,17 @@ mod tests {
     fn command_output_returns_one_chunk_per_requested_range() {
         // Every requested range yields a chunk, in order: [2, 1] is backwards (empty), [10, 20] is
         // past the end (both empty content), [0, 0] selects "a". Nothing is dropped.
-        let chunked = ChunkedOutput::build(
-            capture_of("a\nb\nc"),
-            &[py_range(2, 1), py_range(10, 20), py_range(0, 0)],
-        );
+        let chunked = GetCommandOutputResponse::build(capture_of("a\nb\nc"), &[
+            py_range(2, 1),
+            py_range(10, 20),
+            py_range(0, 0),
+        ]);
         let contents: Vec<&str> = chunked.chunks.iter().map(|c| c.content.as_str()).collect();
         assert_eq!(contents, vec!["", "", "a"]);
     }
 
     /// The lines a chunked output actually hands back, as `(line number, content)` pairs.
-    fn views_of(chunked: &ChunkedOutput) -> Vec<(usize, &str)> {
+    fn views_of(chunked: &GetCommandOutputResponse) -> Vec<(usize, &str)> {
         chunked.lines().map(|view| (view.line, view.content)).collect()
     }
 
@@ -498,49 +500,61 @@ mod tests {
         #[case] output: &str,
         #[case] expected: u64,
     ) {
-        let chunked = ChunkedOutput::build(capture_of(output), &[py_range(0, -1)]);
+        let chunked = GetCommandOutputResponse::build(capture_of(output), &[py_range(0, -1)]);
         assert_eq!(chunked.total_lines, expected);
         // Whatever `total_lines` claims, asking for everything hands back exactly that many lines.
         assert_eq!(chunked.lines().count(), usize::try_from(expected).unwrap());
     }
 
-    #[test]
-    fn command_output_keeps_a_blank_line_at_the_end_of_a_chunk() {
-        // Line 1 is blank, so [0, 1] must come back as two lines, the second empty. Joining
-        // ["a", ""] gives "a\n", which `str::lines` reads back as just ["a"].
-        let chunked = ChunkedOutput::build(capture_of("a\n\nb"), &[py_range(0, 1)]);
-        assert_eq!(chunked.chunks[0].line_range, Some(range(0, 2)));
-        assert_eq!(views_of(&chunked), vec![(0, "a"), (1, "")]);
-    }
+    #[rstest]
+    // A chunk is stored as its lines joined by "\n", and that join is not reversible on its own:
+    // `str::lines` reads both "a" and "a\n" as a single line. So a blank line at the end of a
+    // chunk is exactly where a line goes missing and every later line number looks like a gap.
+    #[case::blank_line_ends_a_chunk("a\n\nb", vec![py_range(0, 1)], vec![(0, "a"), (1, "")])]
+    // A lone blank line joins to "", which must still read back as one selected line rather than
+    // vanishing and leaving the caller believing nothing matched.
+    #[case::chunk_is_only_a_blank_line("a\n\nb", vec![py_range(1, 1)], vec![(1, "")])]
+    // Blank lines away from a chunk boundary were never at risk, but pin them so a future fix
+    // cannot trade one failure for the other.
+    #[case::interior_blank_lines_survive(
+        "a\n\n\nb",
+        vec![py_range(0, -1)],
+        vec![(0, "a"), (1, ""), (2, ""), (3, "b")]
+    )]
+    // Two chunks, the first ending on blank line 1. Readers infer skipped lines from jumps in
+    // these numbers, so losing line 1 would report a three-line gap where only lines 2 and 3 are
+    // genuinely missing.
+    #[case::gap_is_not_widened_by_a_blank_line(
+        "alpha\n\ncharlie\ndelta\necho\nfoxtrot",
+        vec![py_range(0, 1), py_range(4, 5)],
+        vec![(0, "alpha"), (1, ""), (4, "echo"), (5, "foxtrot")]
+    )]
+    // Backwards and past-the-end ranges resolve to an empty span, which must contribute nothing
+    // at all rather than one phantom blank line.
+    #[case::empty_ranges_contribute_nothing(
+        "a\nb\nc",
+        vec![py_range(2, 1), py_range(10, 20)],
+        vec![]
+    )]
+    fn command_output_lines_survive_the_chunk_round_trip(
+        #[case] output: &str,
+        #[case] ranges: Vec<PyStyleIdxRange>,
+        #[case] expected: Vec<(usize, &str)>,
+    ) {
+        let chunked = GetCommandOutputResponse::build(capture_of(output), &ranges);
+        assert_eq!(views_of(&chunked), expected);
 
-    #[test]
-    fn command_output_keeps_a_chunk_that_is_only_a_blank_line() {
-        // A lone blank line joins to "", which must still read back as one selected line rather
-        // than vanishing and leaving the caller believing nothing matched.
-        let chunked = ChunkedOutput::build(capture_of("a\n\nb"), &[py_range(1, 1)]);
-        assert_eq!(chunked.chunks[0].line_range, Some(range(1, 2)));
-        assert_eq!(views_of(&chunked), vec![(1, "")]);
-    }
-
-    #[test]
-    fn command_output_does_not_invent_a_gap_after_a_blank_line() {
-        // Two chunks, the first ending on blank line 1. Readers infer skipped lines from jumps in
-        // these numbers, so losing line 1 would report a three-line gap where only lines 2 and 3
-        // are genuinely missing.
-        let chunked = ChunkedOutput::build(
-            capture_of("alpha\n\ncharlie\ndelta\necho\nfoxtrot"),
-            &[py_range(0, 1), py_range(4, 5)],
-        );
-        assert_eq!(views_of(&chunked), vec![(0, "alpha"), (1, ""), (4, "echo"), (5, "foxtrot"),]);
-    }
-
-    #[test]
-    fn command_output_empty_chunks_contribute_no_lines() {
-        // Backwards and past-the-end ranges resolve to an empty span, which must contribute
-        // nothing at all rather than one phantom blank line.
-        let chunked =
-            ChunkedOutput::build(capture_of("a\nb\nc"), &[py_range(2, 1), py_range(10, 20)]);
-        assert!(chunked.lines().next().is_none());
+        // Content and line numbers stay in step: every chunk hands back exactly as many lines as
+        // the range it reports covers.
+        let declared: usize = chunked
+            .chunks
+            .iter()
+            .map(|chunk| {
+                let resolved = chunk.line_range.expect("build always sets the resolved range");
+                usize::try_from(resolved.end - resolved.start).unwrap()
+            })
+            .sum();
+        assert_eq!(declared, expected.len());
     }
 
     proptest! {
@@ -554,7 +568,7 @@ mod tests {
         ) {
             let ranges: Vec<PyStyleIdxRange> =
                 ranges.into_iter().map(|(start, end)| PyStyleIdxRange::new(start, end)).collect();
-            let chunked = ChunkedOutput::build(capture_of(&output), &ranges);
+            let chunked = GetCommandOutputResponse::build(capture_of(&output), &ranges);
 
             let mut expected: Vec<usize> = Vec::new();
             for chunk in &chunked.chunks {

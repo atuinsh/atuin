@@ -16,12 +16,12 @@ use tracing::{Level, instrument};
 use crate::DaemonHandle;
 use crate::grpc::history::pb::history_server::History as GrpcService;
 use crate::grpc::history::pb::{
-    CancelHistoryReply, CancelHistoryRequest, ChunkedOutput, DeleteHistoryReply,
-    DeleteHistoryRequest, EndHistoryReply, EndHistoryRequest, GetCommandOutputRequest,
-    GetCommandOutputResponse, Lagged, RebuildHistoryReply, RebuildHistoryRequest,
-    RegisterCommandOutputRequest, RegisterCommandOutputResponse, ShutdownReply, ShutdownRequest,
-    StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent,
-    TailHistoryReply, TailHistoryRequest,
+    CancelHistoryReply, CancelHistoryRequest, DeleteHistoryReply, DeleteHistoryRequest,
+    EndHistoryReply, EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse, Lagged,
+    RebuildHistoryReply, RebuildHistoryRequest, RegisterCommandOutputRequest,
+    RegisterCommandOutputResponse, ShutdownReply, ShutdownRequest, StartHistoryReply,
+    StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent, TailHistoryReply,
+    TailHistoryRequest,
 };
 use crate::history_journal::HistoryJournal;
 
@@ -430,8 +430,6 @@ impl GrpcService for Service {
                 Status::not_found(format!("no captured output for history id {id}"))
             })?;
 
-        Ok(Response::new(GetCommandOutputResponse {
-            chunked: Some(ChunkedOutput::build(capture, request.output_ranges())),
-        }))
+        Ok(Response::new(GetCommandOutputResponse::build(capture, request.output_ranges())))
     }
 }
