@@ -2,8 +2,6 @@ name: Nightly
 
 on:
   schedule:
-    # 02:00 PST (UTC-8) => 10:00 UTC. GitHub cron is always UTC and does not observe DST, so this
-    # fires at 03:00 Pacific during PDT (Mar-Nov). Scheduled runs only ever fire from main.
     - cron: "0 10 * * *"
   workflow_dispatch: {}
 
@@ -12,10 +10,6 @@ env:
 
 jobs:
   nightly-tests:
-    # The long daemon scale tiers (1M rows / 100k record writes) are `#[ignore]`d and too slow for
-    # per-push CI. Run them here via the `nightly` nextest profile (allowlist in
-    # .config/nextest.toml). Tiers that document unfixed defects (H2 bulk-delete, the M2
-    # index-reload lost-update) stay ignored and out of the profile, so this job is green.
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 60
 
