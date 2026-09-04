@@ -619,9 +619,10 @@ pub(super) async fn end_history_entry(
 
 /// Delete history entries, routing through the daemon when it owns the store.
 ///
-/// When `daemon.enabled`, the daemon performs the deletion and updates its in-memory search index;
-/// otherwise (or if the daemon is unreachable) we delete directly via the record store and rebuild
-/// the affected rows locally.
+/// When `daemon.enabled`, the daemon performs the deletion and updates its in-memory search index,
+/// and its errors propagate: we deliberately do not delete locally instead, since that would leave a
+/// running daemon serving a stale index. Otherwise we delete directly via the record store and
+/// rebuild the affected rows locally.
 #[cfg_attr(not(feature = "daemon"), allow(unused_variables))]
 pub(super) async fn delete_history_entries(
     settings: &Settings,

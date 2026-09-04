@@ -69,8 +69,8 @@ pub struct DaemonState {
 /// # Example
 ///
 /// ```ignore
-/// // Emit an event
-/// handle.emit(DaemonEvent::HistoryRebuilt);
+/// // Request a graceful shutdown
+/// handle.shutdown();
 ///
 /// // Access settings
 /// let settings = handle.settings().await;
@@ -122,20 +122,10 @@ impl DaemonHandle {
         self.state.settings.read().await
     }
 
-    /// Reload settings from disk and emit a SettingsReloaded event.
-    ///
-    /// Components listening for `SettingsReloaded` can then re-read settings
-    /// via `handle.settings()` to pick up the changes.
-    pub async fn reload_settings(&self) -> Result<()> {
-        let new_settings = Settings::new()?;
-        self.apply_settings(new_settings).await;
-        Ok(())
-    }
-
     /// Apply already-loaded settings and emit a SettingsReloaded event.
     ///
-    /// Use this when settings have already been loaded (e.g., from a file watcher)
-    /// to avoid parsing the config file twice.
+    /// Components listening for `SettingsReloaded` can then re-read settings via
+    /// `handle.settings()` to pick up the changes.
     pub async fn apply_settings(&self, settings: Settings) {
         *self.state.settings.write().await = settings;
         self.emit(DaemonEvent::SettingsReloaded);

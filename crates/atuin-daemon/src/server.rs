@@ -3,8 +3,6 @@ use eyre::{Context, Result};
 
 use crate::components::search::SearchGrpcService;
 use crate::components::semantic::SemanticGrpcService;
-use crate::control::ControlService;
-use crate::control::control_server::ControlServer;
 use crate::daemon::DaemonHandle;
 use crate::grpc;
 use crate::grpc::history::pb::history_server::HistoryServer;
@@ -27,7 +25,6 @@ pub async fn run_grpc_server(
     history_service: HistoryServer<grpc::HistoryService>,
     search_service: SearchServer<SearchGrpcService>,
     semantic_service: SemanticServer<SemanticGrpcService>,
-    control_service: ControlServer<ControlService>,
     handle: DaemonHandle,
 ) -> Result<()> {
     use tokio::net::UnixListener;
@@ -141,7 +138,6 @@ pub async fn run_grpc_server(
             .add_service(history_service)
             .add_service(search_service)
             .add_service(semantic_service)
-            .add_service(control_service)
             .serve_with_incoming_shutdown(uds_stream, shutdown_signal)
             .await
         {
@@ -159,7 +155,6 @@ pub async fn run_grpc_server(
     history_service: HistoryServer<grpc::HistoryService>,
     search_service: SearchServer<SearchGrpcService>,
     semantic_service: SemanticServer<SemanticGrpcService>,
-    control_service: ControlServer<ControlService>,
     handle: DaemonHandle,
 ) -> Result<()> {
     use tokio::net::TcpListener;
@@ -194,7 +189,6 @@ pub async fn run_grpc_server(
             .add_service(history_service)
             .add_service(search_service)
             .add_service(semantic_service)
-            .add_service(control_service)
             .serve_with_incoming_shutdown(tcp_stream, shutdown_signal)
             .await
         {

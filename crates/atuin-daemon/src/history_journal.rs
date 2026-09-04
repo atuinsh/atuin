@@ -128,6 +128,13 @@ pub enum CmdDeleteError {
     HistoryDbFailed(eyre::Report),
 }
 
+/// Errors returned by [`HistoryJournal::rebuild`].
+#[derive(Debug, thiserror::Error)]
+pub enum CmdRebuildError {
+    #[error("rebuilding history db from store failed: {0}")]
+    HistoryStoreFailed(eyre::Report),
+}
+
 /// Errors returned by [`HistoryJournal::cancel`].
 #[derive(Debug, thiserror::Error)]
 pub enum CmdCancelError {
@@ -397,6 +404,25 @@ impl HistoryJournal {
             .await
             .map_err(CmdDeleteError::HistoryDbFailed)?;
 
+        self.reload_search_index(search_settings).await;
+
+        Ok(deleted)
+    }
+
+    /// Rebuild the history db from the record store, then reload the search index from it.
+    pub async fn rebuild(&self, search_settings: &Search) -> Result<(), CmdRebuildError> {
+        self.history_store
+            .build(&self.history_db)
+            .await
+            .map_err(CmdRebuildError::HistoryStoreFailed)?;
+
+        self.reload_search_index(search_settings).await;
+
+        Ok(())
+    }
+
+    /// Reload the search index from the history database.
+    async fn reload_search_index(&self, search_settings: &Search) {
         // Clone the shell filter and drop the read guard before the (full) reload, so the scan
         // doesn't hold the search-index lock across the database load.
         let shells = self.search_index.read().await.shells.clone();
@@ -417,8 +443,6 @@ impl HistoryJournal {
                 tracing::error!("failed to reload search index; keeping previous index: {e}");
             }
         }
-
-        Ok(deleted)
     }
 
     /// Create a new stream of [`CmdEvent`] objects.

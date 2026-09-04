@@ -11,7 +11,6 @@ use crate::grpc::history::pb::history_server::HistoryServer;
 
 pub mod client;
 pub mod components;
-pub mod control;
 pub mod daemon;
 pub mod events;
 pub mod grpc;
@@ -22,14 +21,14 @@ pub mod server;
 
 // Re-export core daemon types for convenience
 // Re-export client helpers
-pub use client::{ControlClient, SemanticClient, emit_event, emit_event_with_settings};
+pub use client::SemanticClient;
 // Re-export components
 pub use components::{SearchComponent, SemanticComponent, SyncComponent};
 pub use daemon::{AnyComponent, Daemon, DaemonBuilder, DaemonHandle};
 pub use events::DaemonEvent;
 pub use history_journal::{
-    CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, FinishedCmd, GetCmdInFlightError,
-    HistoryJournal,
+    CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, CmdRebuildError, FinishedCmd,
+    GetCmdInFlightError, HistoryJournal,
 };
 
 /// Boot the daemon using the new component-based architecture.
@@ -76,9 +75,6 @@ pub async fn boot(
     ));
     let history_service = HistoryServer::new(grpc::HistoryService::new(journal, handle.clone()));
 
-    // Create the control service
-    let control_service = control::ControlService::new(handle.clone());
-
     // Start all components first (so gRPC services can work)
     daemon.start_components().await?;
 
@@ -116,7 +112,6 @@ pub async fn boot(
         history_service,
         search_service.build(handle.clone()),
         semantic_service,
-        control_service.into_server(),
         handle,
     )
     .await?;

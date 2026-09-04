@@ -17,9 +17,9 @@ use crate::DaemonHandle;
 use crate::grpc::history::pb::history_server::History as GrpcService;
 use crate::grpc::history::pb::{
     CancelHistoryReply, CancelHistoryRequest, DeleteHistoryReply, DeleteHistoryRequest,
-    EndHistoryReply, EndHistoryRequest, Lagged, ShutdownReply, ShutdownRequest, StartHistoryReply,
-    StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent, TailHistoryReply,
-    TailHistoryRequest,
+    EndHistoryReply, EndHistoryRequest, Lagged, RebuildHistoryReply, RebuildHistoryRequest,
+    ShutdownReply, ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply,
+    StatusRequest, TailHistoryEvent, TailHistoryReply, TailHistoryRequest,
 };
 use crate::history_journal::HistoryJournal;
 
@@ -237,10 +237,8 @@ const DAEMON_PROTOCOL_VERSION: u32 = 2;
 #[derive(Clone)]
 pub struct Service {
     journal: Arc<HistoryJournal>,
-    /// TODO(markovejnovic): Revisit whether we need to hold this handle. At the moment, the only
-    /// reason why this exists is to be able to service the [`GrpcService::shutdown`] request, but
-    /// perhaps that function does not belong in the history service -- perhaps we should have a
-    /// Control service.
+    /// TODO(markovejnovic): Revisit whether we need to hold this handle. It exists only to service
+    /// the [`GrpcService::shutdown`] request.
     daemon_handle: DaemonHandle,
 }
 
@@ -334,6 +332,20 @@ impl GrpcService for Service {
 
         Ok(Response::new(DeleteHistoryReply {
             deleted: deleted.cast(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            protocol: DAEMON_PROTOCOL_VERSION,
+        }))
+    }
+
+    #[instrument(skip_all, level = Level::TRACE)]
+    async fn rebuild_history(
+        &self,
+        _request: Request<RebuildHistoryRequest>,
+    ) -> Result<Response<RebuildHistoryReply>, Status> {
+        let search_settings = self.daemon_handle.settings().await.search.clone();
+        self.journal.rebuild(&search_settings).await?;
+
+        Ok(Response::new(RebuildHistoryReply {
             version: env!("CARGO_PKG_VERSION").to_string(),
             protocol: DAEMON_PROTOCOL_VERSION,
         }))

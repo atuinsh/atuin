@@ -12,8 +12,7 @@ use atuin_client::history::{History, HistoryId};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::futures::Backoff;
-use atuin_daemon::DaemonEvent;
-use atuin_daemon::client::{ControlClient, DaemonClientErrorKind, HistoryClient, classify_error};
+use atuin_daemon::client::{DaemonClientErrorKind, HistoryClient, classify_error};
 use clap::Subcommand;
 #[cfg(unix)]
 use daemonize::Daemonize;
@@ -500,43 +499,9 @@ pub async fn delete_history(settings: &Settings, ids: Vec<HistoryId>) -> Result<
     Ok(reply.deleted)
 }
 
-/// Emit a daemon event, auto-starting the daemon if it is not running.
-///
-/// If the daemon is not reachable and `daemon.autostart` is enabled, this
-/// will start the daemon and retry the event. If the daemon cannot be
-/// started or the retry fails, a warning is printed to stderr.
-pub async fn emit_event(settings: &Settings, event: DaemonEvent) {
-    // Try to connect and send
-    match ControlClient::from_settings(settings).await {
-        Ok(mut client) => {
-            if let Err(e) = client.send_event(event).await {
-                tracing::debug!(?e, "failed to send event to daemon");
-            }
-            return;
-        }
-        Err(e) if !settings.daemon.autostart || !should_retry_after_error(&e) => {
-            tracing::debug!(?e, "daemon not available, skipping event emission");
-            return;
-        }
-        Err(_) => {}
-    }
-
-    // Auto-start the daemon and retry
-    if let Err(e) = ensure_daemon_running(settings).await {
-        eprintln!("Could not start daemon: {e}");
-        return;
-    }
-
-    match ControlClient::from_settings(settings).await {
-        Ok(mut client) => {
-            if let Err(e) = client.send_event(event).await {
-                eprintln!("Daemon started but failed to send event: {e}");
-            }
-        }
-        Err(e) => {
-            eprintln!("Daemon started but failed to connect: {e}");
-        }
-    }
+pub async fn rebuild_history(settings: &Settings) -> Result<()> {
+    try_with_restart(settings, async |client, ()| client.rebuild_history().await, ()).await?;
+    Ok(())
 }
 
 async fn status_cmd(settings: &Settings) -> Result<()> {
