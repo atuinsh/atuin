@@ -1,4 +1,4 @@
-FROM lukemathwalker/cargo-chef:latest-rust-slim-bookworm@sha256:e406ad0baa7266cee09ca9f62f30d7ed330bdb25be9f337ff8090e7ae215f7fd AS chef
+FROM lukemathwalker/cargo-chef:latest-rust-slim-bookworm@sha256:114101b5c218940bc2381db703dd3529473db554992bf10fc94a7ba2ac35baf8 AS chef
 WORKDIR app
 
 # Build with the toolchain pinned in rust-toolchain.toml, not the image's.
