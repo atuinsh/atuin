@@ -252,7 +252,7 @@ impl TrackerCore {
         let state = std::mem::take(&mut self.capture);
         (self.sink)(CommandCapture {
             output: state.output,
-            exit_code,
+            exit_code: state.exit_code,
             history_id,
             session_id: state.session_id,
             output_observed_bytes: state.output_observed_bytes,
