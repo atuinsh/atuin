@@ -21,20 +21,6 @@ pub enum DaemonEvent {
     /// - These messages get sent across a spmc queue, so we avoid unnecessary clones.
     HistorySynced(Arc<[HistoryId]>),
 
-    /// Sync completed successfully.
-    SyncCompleted {
-        /// Number of records uploaded.
-        uploaded: usize,
-        /// Number of records downloaded.
-        downloaded: usize,
-    },
-
-    /// Sync failed.
-    SyncFailed {
-        /// Error message describing what went wrong.
-        error: String,
-    },
-
     // ---- Settings ----
     /// Settings have changed, components should reload if needed.
     SettingsReloaded,

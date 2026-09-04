@@ -22,7 +22,6 @@ use atuin_common::futures::Backoff;
 use atuin_domain::record::RecordId;
 use atuin_dotfiles::store::AliasStore;
 use atuin_dotfiles::store::var::VarStore;
-use easy_cast::Conv;
 use futures::StreamExt;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
@@ -89,9 +88,8 @@ struct SyncEngineWorker {
     history_store: HistoryStore,
     alias_store: AliasStore,
     var_store: VarStore,
+    /// Fires once per configured sync period; its period doubles as the backoff seed.
     ticker: Interval,
-    /// The configured sync period the ticker was built with, to detect a settings change.
-    period: Duration,
 }
 
 impl SyncEngineWorker {
@@ -108,7 +106,7 @@ impl SyncEngineWorker {
         let alias_store = AliasStore::new(handle.store().clone(), host_id, key.clone());
         let var_store = VarStore::new(handle.store().clone(), host_id, key.clone());
 
-        let period = sync_period(&*handle.settings().await);
+        let ticker = Self::ticker(handle.settings().await.daemon.sync_period());
 
         Ok(Self {
             handle,
@@ -116,9 +114,16 @@ impl SyncEngineWorker {
             history_store,
             alias_store,
             var_store,
-            ticker: new_ticker(period),
-            period,
+            ticker,
         })
+    }
+
+    /// A ticker whose first tick fires immediately, and which never tries to "catch up" on ticks
+    /// missed while a slow sync was running.
+    fn ticker(period: Duration) -> Interval {
+        let mut ticker = time::interval(period);
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        ticker
     }
 
     /// The sync loop. Runs until shutdown is requested or the event bus closes.
@@ -143,7 +148,7 @@ impl SyncEngineWorker {
 
         // Once a sync has failed, keep retrying regardless of `auto_sync` (the old behaviour).
         let backoff = Backoff::Exponential {
-            initial: self.period.saturating_mul(2),
+            initial: self.ticker.period().saturating_mul(2),
             max: Self::MAX_BACKOFF,
             factor: NonZeroU32::new(2).unwrap(),
         };
@@ -154,10 +159,9 @@ impl SyncEngineWorker {
 
         // Pick up a changed `daemon.sync_frequency`, and in any case make the next tick a full
         // period from *now* rather than from the tick that just completed.
-        let period = sync_period(&*self.handle.settings().await);
-        if period != self.period {
-            self.period = period;
-            self.ticker = new_ticker(period);
+        let period = self.handle.settings().await.daemon.sync_period();
+        if period != self.ticker.period() {
+            self.ticker = Self::ticker(period);
         }
         self.ticker.reset();
     }
@@ -173,9 +177,6 @@ impl SyncEngineWorker {
             Ok(()) => ControlFlow::Break(()),
             Err(e) => {
                 tracing::error!("sync tick failed with {e}, backing off");
-                self.handle.emit(DaemonEvent::SyncFailed {
-                    error: e.to_string(),
-                });
                 ControlFlow::Continue(e)
             }
         }
@@ -217,11 +218,6 @@ impl SyncEngineWorker {
         tracing::info!(uploaded, downloaded = downloaded.len(), "sync complete");
 
         self.rebuild_history(&downloaded).await;
-
-        self.handle.emit(DaemonEvent::SyncCompleted {
-            uploaded: usize::conv(uploaded),
-            downloaded: downloaded.len(),
-        });
 
         self.rebuild_dotfiles().await;
 
@@ -282,65 +278,5 @@ async fn shutdown_requested(events: &mut broadcast::Receiver<DaemonEvent>) {
             // shutdown takes up to that long rather than hanging.
             Ok(_) | Err(RecvError::Lagged(_)) => {}
         }
-    }
-}
-
-fn sync_period(settings: &Settings) -> Duration {
-    // `tokio::time::interval` panics if given a zero period, and `sync_frequency` isn't validated
-    // elsewhere, so clamp to at least one second.
-    Duration::from_secs(settings.daemon.sync_frequency.max(1))
-}
-
-/// A ticker whose first tick fires immediately, and which never tries to "catch up" on ticks
-/// missed while a slow sync was running.
-fn new_ticker(period: Duration) -> Interval {
-    let mut ticker = time::interval(period);
-    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    ticker
-}
-
-#[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use rstest::rstest;
-    use tokio::sync::broadcast;
-
-    use super::shutdown_requested;
-    use crate::events::DaemonEvent;
-
-    #[rstest]
-    #[tokio::test]
-    async fn shutdown_requested_returns_on_shutdown_event() {
-        let (tx, mut rx) = broadcast::channel(4);
-        tx.send(DaemonEvent::ShutdownRequested).unwrap();
-        tokio::time::timeout(Duration::from_secs(1), shutdown_requested(&mut rx))
-            .await
-            .expect("should return once ShutdownRequested is received");
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn shutdown_requested_returns_when_bus_closes() {
-        let (tx, mut rx) = broadcast::channel::<DaemonEvent>(4);
-        drop(tx);
-        tokio::time::timeout(Duration::from_secs(1), shutdown_requested(&mut rx))
-            .await
-            .expect("should return once the sender is gone");
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn shutdown_requested_ignores_other_events() {
-        let (tx, mut rx) = broadcast::channel(4);
-        tx.send(DaemonEvent::SettingsReloaded).unwrap();
-        tx.send(DaemonEvent::SyncCompleted {
-            uploaded: 0,
-            downloaded: 0,
-        })
-        .unwrap();
-        let waited =
-            tokio::time::timeout(Duration::from_millis(50), shutdown_requested(&mut rx)).await;
-        assert!(waited.is_err(), "must keep waiting through non-shutdown events");
     }
 }

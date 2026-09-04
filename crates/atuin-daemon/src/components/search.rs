@@ -175,9 +175,7 @@ impl Component for SearchComponent {
                 }
             }
             // Events we don't care about
-            DaemonEvent::SyncCompleted { .. }
-            | DaemonEvent::SyncFailed { .. }
-            | DaemonEvent::ShutdownRequested => {}
+            DaemonEvent::ShutdownRequested => {}
         }
         Ok(())
     }

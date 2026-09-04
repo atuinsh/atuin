@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Duration;
 #[cfg(unix)]
 use std::{borrow::Cow, path::Path};
 
@@ -49,6 +50,17 @@ impl Default for Daemon {
             systemd_socket: false,
             tcp_port: 8889,
         }
+    }
+}
+
+impl Daemon {
+    /// [`Self::sync_frequency`] as a [`Duration`].
+    ///
+    /// Clamped to at least one second: `sync_frequency` isn't validated on load, and a zero period
+    /// is meaningless for a periodic sync (and panics `tokio::time::interval`).
+    #[must_use]
+    pub fn sync_period(&self) -> Duration {
+        Duration::from_secs(self.sync_frequency.max(1))
     }
 }
 
