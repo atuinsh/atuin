@@ -552,16 +552,21 @@ pub struct Search {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Tmux {
-    /// Enable using atuin with tmux popup (tmux >= 3.2)
+#[serde(default)]
+pub struct Popup {
+    /// Enable using Atuin in a multiplexer popup.
     pub enabled: bool,
 
-    /// Width of the tmux popup (percentage)
+    /// Width of the popup.
     pub width: String,
 
-    /// Height of the tmux popup (percentage)
+    /// Height of the popup.
     pub height: String,
 }
+
+/// Deprecated name for [`Popup`].
+#[deprecated(note = "use `Popup` instead")]
+pub type Tmux = Popup;
 
 /// Configuration for a specific log type (search or daemon).
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -767,7 +772,7 @@ impl Default for Search {
     }
 }
 
-impl Default for Tmux {
+impl Default for Popup {
     fn default() -> Self {
         Self {
             enabled: false,
@@ -1110,7 +1115,7 @@ pub struct Settings {
     pub kv: kv::Settings,
 
     #[serde(default)]
-    pub tmux: Tmux,
+    pub popup: Popup,
 
     #[serde(default)]
     pub logs: Logs,
@@ -1557,9 +1562,6 @@ impl Settings {
             ])?
             .set_default("theme.name", "default")?
             .set_default("theme.debug", None::<bool>)?
-            .set_default("tmux.enabled", false)?
-            .set_default("tmux.width", "80%")?
-            .set_default("tmux.height", "60%")?
             .set_default(
                 "prefers_reduced_motion",
                 std::env::var("NO_MOTION")
@@ -1569,6 +1571,30 @@ impl Settings {
             )?
             .set_default("no_mouse", false)?
             .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__")))
+    }
+
+    /// Resolve the canonical popup settings, falling back to the legacy `[tmux]` section.
+    ///
+    /// This runs before deserializing [`Settings`] in the normal loading and validation paths.
+    /// If both sections are present, `[popup]` wins without field-by-field merging.
+    fn normalize_popup_config(
+        builder: ConfigBuilder<DefaultState>,
+    ) -> Result<ConfigBuilder<DefaultState>, config::ConfigError> {
+        let config = builder.build_cloned()?;
+        let popup = match config.get::<Popup>("popup") {
+            Ok(popup) => popup,
+            Err(config::ConfigError::NotFound(_)) => match config.get::<Popup>("tmux") {
+                Ok(tmux) => tmux,
+                Err(config::ConfigError::NotFound(_)) => Popup::default(),
+                Err(error) => return Err(error),
+            },
+            Err(error) => return Err(error),
+        };
+
+        builder
+            .set_override("popup.enabled", popup.enabled)?
+            .set_override("popup.width", popup.width)?
+            .set_override("popup.height", popup.height)
     }
 
     pub fn get_config_path() -> Result<PathBuf> {
@@ -1680,7 +1706,7 @@ impl Settings {
                 .unwrap_or_else(|_| panic!("failed to set absolute path override for {key}"))
         });
 
-        config_builder.build().map_err(Into::into)
+        Self::normalize_popup_config(config_builder)?.build().map_err(Into::into)
     }
 
     /// Look up a single config value by dotted key (e.g. `"daemon.sync_frequency"`).
@@ -1805,9 +1831,9 @@ impl Settings {
 
     /// Check that a TOML string can be successfully deserialized into a [`Settings`] object.
     pub fn validate_str(toml: &str) -> Result<(), ValidationError> {
-        let config = Self::builder_with_data_dir(&atuin_common::utils::data_dir())?
-            .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
-            .build()?;
+        let builder = Self::builder_with_data_dir(&atuin_common::utils::data_dir())?
+            .add_source(ConfigFile::from_str(toml, FileFormat::Toml));
+        let config = Self::normalize_popup_config(builder)?.build()?;
 
         let settings: Self = config.try_deserialize()?;
         if let Some(dir) = &settings.data_dir {
@@ -2099,13 +2125,55 @@ mod tests {
 
     /// Deserialize a TOML string into a [`Settings`] object.
     fn parse_settings(toml: &str) -> Settings {
-        Settings::builder_with_data_dir(&atuin_common::utils::data_dir())
+        let builder = Settings::builder_with_data_dir(&atuin_common::utils::data_dir())
             .expect("could not build settings builder")
-            .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
+            .add_source(ConfigFile::from_str(toml, FileFormat::Toml));
+        Settings::normalize_popup_config(builder)
+            .expect("could not normalize popup settings")
             .build()
             .expect("could not build config")
             .try_deserialize()
             .expect("could not deserialize config")
+    }
+
+    #[rstest]
+    #[case::defaults("", false, "80%", "60%")]
+    #[case::custom_size(
+        "[popup]\nenabled = true\nwidth = \"70%\"\nheight = \"50%\"\n",
+        true,
+        "70%",
+        "50%"
+    )]
+    #[case::legacy_tmux(
+        "[tmux]\nenabled = true\nwidth = \"75%\"\nheight = \"55%\"\n",
+        true,
+        "75%",
+        "55%"
+    )]
+    #[case::popup_wins_without_merging_legacy_fields(
+        "[popup]\nenabled = false\n\n[tmux]\nenabled = true\nwidth = \"90%\"\nheight = \"70%\"\n",
+        false,
+        "80%",
+        "60%"
+    )]
+    fn popup_config(
+        #[case] toml: &str,
+        #[case] enabled: bool,
+        #[case] width: &str,
+        #[case] height: &str,
+    ) {
+        let settings = parse_settings(toml);
+
+        assert_eq!(settings.popup.enabled, enabled);
+        assert_eq!(settings.popup.width, width);
+        assert_eq!(settings.popup.height, height);
+    }
+
+    #[rstest]
+    fn invalid_popup_does_not_fall_back_to_legacy_tmux() {
+        let toml = "[popup]\nenabled = [true]\n\n[tmux]\nenabled = true\n";
+
+        assert!(Settings::validate_str(toml).is_err());
     }
 
     #[test]

@@ -13,11 +13,11 @@ The search TUI exposes a tradeoff: the UI is either in fullscreen alt-screen mod
 
 With pty-proxy, the Atuin popup renders over the top of your previous output, but when it's closed, pty-proxy restores the output successfully.
 
-!!! tip "Already using tmux?"
+!!! tip "Already using a multiplexer?"
 
-    tmux can solve the same problem without pty-proxy: set
-    [`[tmux] enabled = true`](../configuration/config.md#tmux) and the search UI
-    opens in a popup above your pane, leaving the pane untouched.
+    tmux or Zellij can solve the same problem without pty-proxy: set
+    [`[popup] enabled = true`](../configuration/config.md#popup) and the search
+    UI opens in a popup above your pane, leaving the pane untouched.
 
 ## Capturing command output
 

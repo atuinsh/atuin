@@ -339,19 +339,19 @@ enter_accept = true
 ##   commands that have no recorded shell
 # shells = "auto"
 
-[tmux]
-## Enable using atuin with tmux popup (requires tmux >= 3.2)
-## When enabled and running inside tmux, Atuin will use a popup window for interactive search.
+[popup]
+## Enable using atuin with a multiplexer popup.
+## Atuin supports tmux >= 3.2 and Zellij >= 0.44.1, preferring tmux when both are detected.
 ## Set to false to disable the popup.
-## This can also be controlled with the ATUIN_TMUX_POPUP environment variable.
-## Note: The tmux popup is currently supported in zsh, bash, and fish shells. This currently doesn't work with iTerm native tmux integration.
+## This can also be controlled at runtime with the ATUIN_POPUP_ENABLED environment variable.
+## Note: Multiplexer popups are currently supported in zsh, bash, and fish shells.
 # enabled = false
 
-## Width of the tmux popup window
+## Width of the popup
 ## Can be a percentage, or integer (e.g. "100" means 100 characters wide)
 # width = "80%"
 
-## Height of the tmux popup window
+## Height of the popup
 ## Can be a percentage, or integer (e.g. "100" means 100 lines tall)
 # height = "60%"
 

@@ -877,46 +877,52 @@ By using `auto` a preview is shown, if the command is longer than the width of t
 strategy = "auto"
 ```
 
-## tmux
+## Popup
 
-When you're inside tmux, open the search UI in a
-[popup](https://github.com/tmux/tmux/wiki/Getting-Started#popups) floating above
-your current pane, instead of drawing over the pane itself. The popup opens in
-your current working directory, and closes when you accept a command or exit.
+When running inside tmux or Zellij, Atuin can open the search UI in a
+[tmux popup](https://github.com/tmux/tmux/wiki/Getting-Started#popups) or
+[Zellij floating pane](https://zellij.dev/documentation/cli-actions.html#new-pane)
+above the current pane. The popup opens in the current working directory and
+closes when you accept a command or exit.
 
 ```toml
-[tmux]
+[popup]
 enabled = true
 width = "80%"
 height = "60%"
 ```
 
-Atuin falls back to its normal rendering, with no error, whenever the popup
-can't be used — outside tmux, on tmux older than 3.2, or in a shell that doesn't
-support it.
+Atuin uses tmux when both tmux and Zellij are detected. This fixed priority also
+applies to nested multiplexers: tmux inside Zellij uses the inner tmux, while
+Zellij inside tmux uses the outer tmux. If tmux is unavailable or too old,
+Atuin tries Zellij.
+
+Atuin renders inline when no supported multiplexer is detected. If starting a
+selected popup fails, Atuin returns the failure and leaves the current command
+unchanged; it does not open a second inline search.
 
 !!! note "Requirements"
 
-    - tmux >= 3.2, which is where `display-popup` gained the behavior Atuin needs
-    - zsh, bash, or fish — nushell, xonsh, and PowerShell don't support the popup yet
+    - tmux >= 3.2 or Zellij >= 0.44.1
+    - zsh, bash, or fish — nushell, xonsh, and PowerShell don't support popups yet
 
 !!! warning "iTerm2's native tmux integration"
 
     iTerm2's native tmux integration (control mode, `tmux -CC`) can't display
-    `tmux display-popup` popups, and Atuin can't detect this to fall back
-    automatically. If you rely on it, keep `[tmux] enabled = false` (the
-    default) so the search UI renders inline.
+    `tmux display-popup` popups. Atuin can't detect control mode before
+    choosing tmux, so the failed launch won't fall back to Zellij or inline
+    rendering.
 
 These settings are read by `atuin init` and passed to the shell plugin through
 environment variables, so **restart your shell after changing them**. To disable
 the popup for a single session without touching your config, set
-`ATUIN_TMUX_POPUP=false` before Atuin's key bindings run.
+`ATUIN_POPUP_ENABLED=false` after running `atuin init`.
 
 ### `enabled`
 
 Default: `false`
 
-Whether to show the search UI in a tmux popup.
+Whether to show the search UI in a supported multiplexer popup.
 
 ```toml
 enabled = true
@@ -926,8 +932,8 @@ enabled = true
 
 Default: `"80%"`
 
-Width of the popup, passed to `tmux display-popup -w`. Accepts a percentage of
-the terminal width, or an absolute number of columns.
+Width passed to the selected multiplexer. Accepts a percentage of the terminal
+width or an absolute number of columns.
 
 ```toml
 width = "80%"
@@ -937,8 +943,8 @@ width = "80%"
 
 Default: `"60%"`
 
-Height of the popup, passed to `tmux display-popup -h`. Accepts a percentage of
-the terminal height, or an absolute number of rows.
+Height passed to the selected multiplexer. Accepts a percentage of the terminal
+height or an absolute number of rows.
 
 ```toml
 height = "60%"

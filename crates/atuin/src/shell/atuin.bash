@@ -308,65 +308,132 @@ __atuin_accept_line() {
 
 #------------------------------------------------------------------------------
 
-# Check if tmux popup is available (tmux >= 3.2)
+# Popup detection intentionally uses only environment markers and version checks.
+# It does not inspect process ancestry; tmux wins whenever both backends qualify.
+# Check whether a version meets the requested minimum.
+__atuin_version_ge() {
+    local version=$1 required_major=$2 required_minor=$3 required_patch=${4:-0}
+    local major minor patch remainder
+    major=${version%%.*}
+    remainder=${version#*.}
+    [[ "$remainder" != "$version" ]] || return 1
+    minor=${remainder%%.*}
+    patch=0
+    if [[ "$remainder" == *.* ]]; then
+        patch=${remainder#*.}
+        patch=${patch%%.*}
+    fi
+    [[ "$major" =~ ^[0-9]+$ ]] || return 1
+    [[ "$minor" =~ ^[0-9]+$ ]] || return 1
+    [[ "$patch" =~ ^[0-9]+$ ]] || return 1
+    (( major > required_major
+        || (major == required_major && minor > required_minor)
+        || (major == required_major && minor == required_minor && patch >= required_patch) ))
+}
+
+# Check if tmux popup is available (tmux >= 3.2).
 __atuin_tmux_popup_check() {
     [[ -n "${TMUX-}" ]] || return 1
-    [[ "${ATUIN_TMUX_POPUP:-true}" != "false" ]] || return 1
 
     # https://github.com/tmux/tmux/wiki/FAQ#how-often-is-tmux-released-what-is-the-version-number-scheme
     local tmux_version
     tmux_version=$(tmux -V 2>/dev/null | sed -n 's/^[^0-9]*\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p') # Could have used grep...
-    [[ -z "$tmux_version" ]] && return 1
+    __atuin_version_ge "$tmux_version" 3 2
+}
 
-    local m1 m2
-    m1=${tmux_version%%.*}
-    m2=${tmux_version#*.}
-    m2=${m2%%.*}
-    [[ "$m1" =~ ^[0-9]+$ ]] || return 1
-    [[ "$m2" =~ ^[0-9]+$ ]] || m2=0
-    (( m1 > 3 || (m1 == 3 && m2 >= 2) ))
+# Check if a Zellij popup is available (Zellij >= 0.44.1).
+__atuin_zellij_popup_check() {
+    [[ -n "${ZELLIJ-}" ]] || return 1
+
+    local zellij_version
+    zellij_version=$(zellij --version 2>/dev/null | sed -n 's/^[^0-9]*\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')
+    __atuin_version_ge "$zellij_version" 0 44 1
+}
+
+# tmux has priority when both mux environments are detected.
+__atuin_popup_backend() {
+    [[ "${ATUIN_POPUP_ENABLED:-false}" == "true" ]] || return 1
+
+    if __atuin_tmux_popup_check; then
+        printf '%s\n' tmux
+    elif __atuin_zellij_popup_check; then
+        printf '%s\n' zellij
+    else
+        return 1
+    fi
 }
 
 # Use global variable to fix scope issues with traps
 __atuin_popup_tmpdir=""
-__atuin_tmux_popup_cleanup() {
+__atuin_popup_cleanup() {
     [[ -n "$__atuin_popup_tmpdir" && -d "$__atuin_popup_tmpdir" ]] && command rm -rf "$__atuin_popup_tmpdir"
     __atuin_popup_tmpdir=""
 }
 
 __atuin_search_cmd() {
     local -a search_args=("$@")
+    local popup_backend
+    popup_backend=$(__atuin_popup_backend) || popup_backend=""
 
-    if __atuin_tmux_popup_check; then
-        __atuin_popup_tmpdir=$(mktemp -d) || return 1
-        local result_file="$__atuin_popup_tmpdir/result"
-
-        trap '__atuin_tmux_popup_cleanup' EXIT HUP INT TERM
-
-        local escaped_query escaped_args
-        escaped_query=$(printf '%s' "$READLINE_LINE" | sed "s/'/'\\\\''/g")
-        escaped_args=""
-        for arg in "${search_args[@]}"; do
-            escaped_args+=" '$(printf '%s' "$arg" | sed "s/'/'\\\\''/g")'"
-        done
-
-        # In the popup, atuin goes to terminal, stderr goes to file
-        local cdir popup_width popup_height
-        cdir=$(pwd)
-        popup_width="${ATUIN_TMUX_POPUP_WIDTH:-80%}" # Keep default value anyways
-        popup_height="${ATUIN_TMUX_POPUP_HEIGHT:-60%}"
-        tmux display-popup -d "$cdir" -w "$popup_width" -h "$popup_height" -E -E -- \
-            sh -c "PATH='$PATH' ATUIN_SESSION='$ATUIN_SESSION' ATUIN_SHELL=bash ATUIN_QUERY='$escaped_query' atuin search $escaped_args -i 2>'$result_file'"
-
-        if [[ -f "$result_file" ]]; then
-            cat "$result_file"
-        fi
-
-        __atuin_tmux_popup_cleanup
-        trap - EXIT HUP INT TERM
-    else
+    # No backend, or failure to prepare one, is a preflight condition. Rendering
+    # inline here cannot open a second search after a popup has already run.
+    if [[ -z "$popup_backend" ]]; then
         ATUIN_SHELL=bash ATUIN_QUERY=$READLINE_LINE atuin search "${search_args[@]}" -i 3>&1 1>&2 2>&3 3>&-
+        return
     fi
+
+    __atuin_popup_tmpdir=$(mktemp -d) || {
+        ATUIN_SHELL=bash ATUIN_QUERY=$READLINE_LINE atuin search "${search_args[@]}" -i 3>&1 1>&2 2>&3 3>&-
+        return
+    }
+    local result_file="$__atuin_popup_tmpdir/result"
+
+    trap '__atuin_popup_cleanup' EXIT HUP INT TERM
+
+    local escaped_query escaped_args escaped_result_file
+    escaped_query=$(printf '%s' "$READLINE_LINE" | sed "s/'/'\\\\''/g")
+    escaped_result_file=$(printf '%s' "$result_file" | sed "s/'/'\\\\''/g")
+    escaped_args=""
+    for arg in "${search_args[@]}"; do
+        escaped_args+=" '$(printf '%s' "$arg" | sed "s/'/'\\\\''/g")'"
+    done
+
+    # --result-file carries only the selected command; diagnostics stay in the popup terminal.
+    local cdir popup_width popup_height popup_command popup_status
+    cdir=$(pwd)
+    popup_width="${ATUIN_POPUP_WIDTH:-80%}"
+    popup_height="${ATUIN_POPUP_HEIGHT:-60%}"
+    popup_command="PATH='$PATH' ATUIN_SESSION='$ATUIN_SESSION' ATUIN_SHELL=bash ATUIN_QUERY='$escaped_query' atuin search $escaped_args -i --result-file '$escaped_result_file'"
+
+    # From this point, propagate launch/result failures instead of retrying inline.
+    case "$popup_backend" in
+        tmux)
+            tmux display-popup -d "$cdir" -w "$popup_width" -h "$popup_height" -E -E -- \
+                sh -c "$popup_command"
+            popup_status=$?
+            ;;
+        zellij)
+            # Blocking makes the result available before return; an empty name keeps the
+            # launch command and query out of the pane title.
+            zellij action new-pane --floating --name= --cwd "$cdir" --width "$popup_width" \
+                --height "$popup_height" --close-on-exit --block-until-exit -- \
+                sh -c "$popup_command" >/dev/null
+            popup_status=$?
+            ;;
+    esac
+
+    if ((popup_status == 0)); then
+        if [[ -f "$result_file" ]]; then
+            command cat "$result_file"
+            popup_status=$?
+        else
+            popup_status=1
+        fi
+    fi
+
+    __atuin_popup_cleanup
+    trap - EXIT HUP INT TERM
+    return "$popup_status"
 }
 
 __atuin_history() {

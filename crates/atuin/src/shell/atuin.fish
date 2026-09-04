@@ -37,46 +37,66 @@ function _atuin_postexec --on-event fish_postexec
     set --erase ATUIN_HISTORY_ID
 end
 
-# Check if tmux popup is available (tmux >= 3.2)
-function _atuin_tmux_popup_check
-    if not test -n "$TMUX"
-        echo 0
-        return
+# Popup detection intentionally uses only environment markers and version checks.
+# It does not inspect process ancestry; tmux wins whenever both backends qualify.
+# Check whether a version meets the requested minimum.
+function _atuin_version_ge
+    set -l candidate_version $argv[1]
+    set -l required_major $argv[2]
+    set -l required_minor $argv[3]
+    set -l required_patch 0
+    if test (count $argv) -ge 4
+        set required_patch $argv[4]
     end
 
-    if test "$ATUIN_TMUX_POPUP" = false
-        echo 0
-        return
+    set -l parts (string split '.' -- $candidate_version)
+    set -l major $parts[1]
+    set -l minor 0
+    set -l patch 0
+    if test (count $parts) -ge 2
+        set minor $parts[2]
     end
+    if test (count $parts) -ge 3
+        set patch $parts[3]
+    end
+
+    string match -rq '^[0-9]+$' -- "$major"; or return 1
+    string match -rq '^[0-9]+$' -- "$minor"; or return 1
+    string match -rq '^[0-9]+$' -- "$patch"; or return 1
+
+    test "$major" -gt "$required_major"; and return 0
+    test "$major" -lt "$required_major"; and return 1
+    test "$minor" -gt "$required_minor"; and return 0
+    test "$minor" -lt "$required_minor"; and return 1
+    test "$patch" -ge "$required_patch"
+end
+
+# Check if tmux popup is available (tmux >= 3.2).
+function _atuin_tmux_popup_check
+    test -n "$TMUX"; or return 1
 
     set -l tmux_version (tmux -V 2>/dev/null | string match -r '\d+\.\d+')
-    if not test -n "$tmux_version"
-        echo 0
-        return
-    end
+    _atuin_version_ge "$tmux_version" 3 2
+end
 
-    set -l parts (string split '.' $tmux_version)
-    set -l m1 $parts[1]
-    set -l m2 0
-    if test (count $parts) -ge 2
-        set m2 $parts[2]
-    end
+# Check if a Zellij popup is available (Zellij >= 0.44.1).
+function _atuin_zellij_popup_check
+    test -n "$ZELLIJ"; or return 1
 
-    if not string match -rq '^[0-9]+$' -- "$m1"
-        echo 0
-        return
-    end
+    set -l zellij_version (zellij --version 2>/dev/null | string match -r '\d+\.\d+\.\d+')
+    _atuin_version_ge "$zellij_version" 0 44 1
+end
 
-    if not string match -rq '^[0-9]+$' -- "$m2"
-        set m2 0
-    end
+# tmux has priority when both mux environments are detected.
+function _atuin_popup_backend
+    test "$ATUIN_POPUP_ENABLED" = true; or return 1
 
-    if test "$m1" -gt 3 2>/dev/null; or begin
-            test "$m1" -eq 3 2>/dev/null; and test "$m2" -ge 2 2>/dev/null
-        end
-        echo 1
+    if _atuin_tmux_popup_check
+        echo tmux
+    else if _atuin_zellij_popup_check
+        echo zellij
     else
-        echo 0
+        return 1
     end
 end
 
@@ -94,11 +114,13 @@ function _atuin_search
             set keymap_mode emacs
     end
 
-    set -l use_tmux_popup (_atuin_tmux_popup_check)
+    set -l popup_backend (_atuin_popup_backend)
 
     set -l ATUIN_H
     set -l ATUIN_STATUS 0
-    if test "$use_tmux_popup" -eq 1
+    # No backend, or failure to prepare one, is a preflight condition. Rendering
+    # inline here cannot open a second search after a popup has already run.
+    if test -n "$popup_backend"
         set -l tmpdir (mktemp -d)
         if not test -d "$tmpdir"
             # if mktemp got errors
@@ -108,22 +130,42 @@ function _atuin_search
             set -l result_file "$tmpdir/result"
 
             set -l query (commandline -b | string replace -a "'" "'\\''")
+            set -l escaped_result_file (string replace -a "'" "'\\''" -- "$result_file")
             set -l escaped_args ""
             for arg in $argv
                 set escaped_args "$escaped_args '"(string replace -a "'" "'\\''" -- $arg)"'"
             end
 
-            # In the popup, atuin goes to terminal, stderr goes to file
+            # --result-file carries only the selected command; diagnostics stay in the
+            # popup terminal.
             set -l cdir (pwd)
-            # Keep default value anyways
-            set -l popup_width (test -n "$ATUIN_TMUX_POPUP_WIDTH" && echo "$ATUIN_TMUX_POPUP_WIDTH" || echo "80%")
-            set -l popup_height (test -n "$ATUIN_TMUX_POPUP_HEIGHT" && echo "$ATUIN_TMUX_POPUP_HEIGHT" || echo "60%")
-            tmux display-popup -d "$cdir" -w "$popup_width" -h "$popup_height" -E -E -- \
-                sh -c "PATH='$PATH' ATUIN_SESSION='$ATUIN_SESSION' ATUIN_SHELL=fish ATUIN_QUERY='$query' atuin search --keymap-mode=$keymap_mode$escaped_args -i 2>'$result_file'"
-            set ATUIN_STATUS $status
+            # Build the search command once; only the mux launcher differs.
+            set -l popup_command "PATH='$PATH' ATUIN_SESSION='$ATUIN_SESSION' ATUIN_SHELL=fish ATUIN_QUERY='$query' atuin search --keymap-mode=$keymap_mode$escaped_args -i --result-file '$escaped_result_file'"
+            set -l popup_width (test -n "$ATUIN_POPUP_WIDTH" && echo "$ATUIN_POPUP_WIDTH" || echo "80%")
+            set -l popup_height (test -n "$ATUIN_POPUP_HEIGHT" && echo "$ATUIN_POPUP_HEIGHT" || echo "60%")
 
-            if test -f "$result_file"
-                set ATUIN_H (cat "$result_file" | string collect)
+            # From this point, propagate launch/result failures instead of retrying inline.
+            switch "$popup_backend"
+                case tmux
+                    tmux display-popup -d "$cdir" -w "$popup_width" -h "$popup_height" -E -E -- \
+                        sh -c "$popup_command"
+                    set ATUIN_STATUS $status
+                case zellij
+                    # Blocking makes the result available before return; an empty name keeps the
+                    # launch command and query out of the pane title.
+                    zellij action new-pane --floating --name= --cwd "$cdir" --width "$popup_width" \
+                        --height "$popup_height" --close-on-exit --block-until-exit -- \
+                        sh -c "$popup_command" >/dev/null
+                    set ATUIN_STATUS $status
+            end
+
+            if test "$ATUIN_STATUS" -eq 0
+                if test -f "$result_file"
+                    set ATUIN_H (command cat "$result_file" | string collect)
+                    set ATUIN_STATUS $pipestatus[1]
+                else
+                    set ATUIN_STATUS 1
+                end
             end
 
             command rm -rf "$tmpdir"

@@ -1,6 +1,5 @@
 use std::io::{self, Write};
 
-use atuin_client::settings::Tmux;
 use atuin_dotfiles::store::AliasStore;
 use atuin_dotfiles::store::var::VarStore;
 use eyre::Result;
@@ -8,13 +7,16 @@ use eyre::Result;
 use super::StaticInitOptions;
 use crate::shell::BASH;
 
-fn write_tmux_config<W: Write>(writer: &mut W, tmux: &Tmux) -> io::Result<()> {
-    if tmux.enabled {
-        writeln!(writer, "export ATUIN_TMUX_POPUP_WIDTH='{}'", tmux.width)?;
-        writeln!(writer, "export ATUIN_TMUX_POPUP_HEIGHT='{}'", tmux.height)
-    } else {
-        writeln!(writer, "export ATUIN_TMUX_POPUP=false")
-    }
+fn write_popup_config<W: Write>(
+    writer: &mut W,
+    enabled: bool,
+    width: &str,
+    height: &str,
+) -> io::Result<()> {
+    // Keep the configured size available when popup mode is toggled on at runtime.
+    writeln!(writer, "export ATUIN_POPUP_ENABLED={enabled}")?;
+    writeln!(writer, "export ATUIN_POPUP_WIDTH='{width}'")?;
+    writeln!(writer, "export ATUIN_POPUP_HEIGHT='{height}'")
 }
 
 fn write_static_init<W: Write>(writer: &mut W, options: &StaticInitOptions<'_>) -> io::Result<()> {
@@ -35,7 +37,7 @@ fn write_static_init<W: Write>(writer: &mut W, options: &StaticInitOptions<'_>) 
         writeln!(writer, "}}")?;
     }
 
-    write_tmux_config(writer, options.tmux)?;
+    write_popup_config(writer, options.popup.enabled, &options.popup.width, &options.popup.height)?;
     writeln!(writer, "__atuin_bind_ctrl_r={bind_ctrl_r}")?;
     writeln!(writer, "__atuin_bind_up_arrow={bind_up_arrow}")?;
     writeln!(writer, "{}", BASH.main)?;
@@ -71,4 +73,45 @@ pub async fn init(
     println!("{vars}");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::write_popup_config;
+
+    #[rstest]
+    #[case::enabled(
+        true,
+        "70%",
+        "50%",
+        concat!(
+            "export ATUIN_POPUP_ENABLED=true\n",
+            "export ATUIN_POPUP_WIDTH='70%'\n",
+            "export ATUIN_POPUP_HEIGHT='50%'\n",
+        )
+    )]
+    #[case::disabled(
+        false,
+        "80%",
+        "60%",
+        concat!(
+            "export ATUIN_POPUP_ENABLED=false\n",
+            "export ATUIN_POPUP_WIDTH='80%'\n",
+            "export ATUIN_POPUP_HEIGHT='60%'\n",
+        )
+    )]
+    fn popup_config_exports_all_values(
+        #[case] enabled: bool,
+        #[case] width: &str,
+        #[case] height: &str,
+        #[case] expected: &str,
+    ) {
+        let mut output = Vec::new();
+
+        write_popup_config(&mut output, enabled, width, height).unwrap();
+
+        assert_eq!(String::from_utf8(output).unwrap(), expected);
+    }
 }
