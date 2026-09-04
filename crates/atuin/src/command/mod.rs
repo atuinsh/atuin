@@ -119,12 +119,9 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
             };
 
             while let Ok(capture) = rx.recv() {
-                let Some(id) = capture.history_id else {
-                    continue;
-                };
                 let _ = client
                     .register_command_output(
-                        id,
+                        capture.history_id,
                         capture.output,
                         capture.output_truncated,
                         capture.output_observed_bytes,
