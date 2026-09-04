@@ -46,6 +46,7 @@ struct CaptureState {
     output_truncated: bool,
     output_observed_bytes: u64,
     session_id: Option<String>,
+    exit_code: Option<i32>,
 }
 
 impl CaptureState {
@@ -58,6 +59,7 @@ impl CaptureState {
         self.output_truncated = false;
         self.output_observed_bytes = 0;
         self.session_id = None;
+        self.exit_code = None;
     }
 }
 
@@ -232,6 +234,9 @@ impl TrackerCore {
             }
         }
 
+        if let Some(code) = exit_code {
+            self.capture.exit_code = Some(code);
+        }
         if let Some(id) = session_id {
             self.capture.session_id = Some(String::from_utf8_lossy(id).into_owned());
         }
