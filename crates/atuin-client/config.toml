@@ -309,6 +309,7 @@ enter_accept = true
 # [output_capture]
 ## Capture the output of each command and keep it alongside your history.
 ## Requires the pty proxy (see [pty_proxy] above).
+## When false, the other keys in this section are ignored.
 # enabled = false
 
 ## The maximum command output length to store.

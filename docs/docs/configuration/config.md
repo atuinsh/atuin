@@ -1056,7 +1056,8 @@ Every key can also be set from the environment, for example
 
 Default: `false`
 
-Whether to capture command output at all.
+Whether to capture command output at all. When `false`, the other keys in this section
+are ignored.
 
 ### `max_output_size`
 

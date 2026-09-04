@@ -39,7 +39,8 @@ pub mod shells;
 pub mod watcher;
 
 pub use daemon::Daemon;
-pub use output_capture::OutputCapture;
+use output_capture::OutputCaptureConfig;
+pub use output_capture::{CaptureLimits, OutputCapture};
 pub use shells::Shells;
 
 /// Default sync address for Atuin's hosted service, parsed once.
@@ -1481,9 +1482,7 @@ impl Settings {
         let key_path = data_dir.join("key");
         let meta_path = data_dir.join("meta.db");
 
-        // The struct's `Default` is the single source of truth; the builder needs the same values
-        // so that `atuin config get --resolved output_capture` can show them.
-        let output_capture = OutputCapture::default();
+        let output_capture = OutputCaptureConfig::default();
 
         Ok(Config::builder()
             .set_default("history_format", "{time}\t{command}\t{duration}")?
@@ -1913,8 +1912,8 @@ mod tests {
     use url::Url;
 
     use super::{
-        AiEndpointProtocol, ConfigFile, Environment, FileFormat, FilterMode, RequestedSearchMode,
-        SearchMode, Settings, UtcOffsetSpec,
+        AiEndpointProtocol, CaptureLimits, ConfigFile, Environment, FileFormat, FilterMode,
+        OutputCapture, RequestedSearchMode, SearchMode, Settings, UtcOffsetSpec,
     };
 
     #[rstest]
@@ -2161,22 +2160,31 @@ mod tests {
             .expect("could not deserialize config")
     }
 
-    /// Output capture is opt-in, bounded per command, unsynced, and bounded on disk by default.
+    /// Output capture is off by default. Switched on with nothing else set, it is bounded per
+    /// command, unsynced, and bounded on disk.
     #[rstest]
     fn output_capture_defaults() {
-        let settings = parse_settings("");
-        let capture = &settings.output_capture;
+        assert_eq!(parse_settings("").output_capture, OutputCapture::Disabled);
 
-        assert!(!capture.enabled);
-        assert_eq!(capture.max_output_size, ByteSize::MIB);
-        assert!(!capture.sync);
-        assert_eq!(capture.max_disk_usage, DiskUsageLimit::Percent(Percent::new(10).unwrap()));
-        // The struct's own `Default` must agree with the builder's defaults.
-        let default = super::OutputCapture::default();
-        assert_eq!(default.enabled, capture.enabled);
-        assert_eq!(default.max_output_size, capture.max_output_size);
-        assert_eq!(default.sync, capture.sync);
-        assert_eq!(default.max_disk_usage, capture.max_disk_usage);
+        // The builder's defaults must agree with `CaptureLimits::default()`.
+        let enabled = parse_settings("[output_capture]\nenabled = true\n").output_capture;
+        assert_eq!(enabled, OutputCapture::Enabled(CaptureLimits::default()));
+
+        let limits = CaptureLimits::default();
+        assert_eq!(limits.max_output_size, ByteSize::MIB);
+        assert!(!limits.sync);
+        assert_eq!(limits.max_disk_usage, DiskUsageLimit::Percent(Percent::new(10).unwrap()));
+    }
+
+    /// With capture off, the limits are not reachable, however they are configured.
+    #[rstest]
+    fn output_capture_limits_are_unreachable_when_disabled() {
+        let settings = parse_settings(
+            "[output_capture]\nenabled = false\nmax_output_size = \"512KB\"\nsync = true\n",
+        );
+
+        assert_eq!(settings.output_capture, OutputCapture::Disabled);
+        assert_eq!(settings.output_capture.limits(), None);
     }
 
     #[rstest]
@@ -2207,12 +2215,13 @@ mod tests {
     ) {
         let settings =
             parse_settings(&format!("[output_capture]\nenabled = true\nsync = true\n{body}\n"));
-        let capture = &settings.output_capture;
 
-        assert!(capture.enabled);
-        assert!(capture.sync);
-        assert_eq!(capture.max_output_size, max_output_size);
-        assert_eq!(capture.max_disk_usage, max_disk_usage);
+        let expected = CaptureLimits {
+            max_output_size,
+            sync: true,
+            max_disk_usage,
+        };
+        assert_eq!(settings.output_capture, OutputCapture::Enabled(expected));
     }
 
     /// Environment overrides arrive as strings, so the text forms must parse from there too.
@@ -2220,6 +2229,7 @@ mod tests {
     fn output_capture_sizes_can_come_from_the_environment() {
         let env = Environment::with_prefix("atuin").prefix_separator("_").separator("__").source(
             Some(HashMap::from([
+                ("ATUIN_OUTPUT_CAPTURE__ENABLED".to_owned(), "true".to_owned()),
                 ("ATUIN_OUTPUT_CAPTURE__MAX_OUTPUT_SIZE".to_owned(), "512KB".to_owned()),
                 ("ATUIN_OUTPUT_CAPTURE__MAX_DISK_USAGE".to_owned(), "unlimited".to_owned()),
             ])),
@@ -2232,8 +2242,12 @@ mod tests {
             .try_deserialize()
             .expect("could not deserialize config");
 
-        assert_eq!(settings.output_capture.max_output_size, ByteSize::from_bytes(512 << 10));
-        assert_eq!(settings.output_capture.max_disk_usage, DiskUsageLimit::Unlimited);
+        let expected = CaptureLimits {
+            max_output_size: ByteSize::from_bytes(512 << 10),
+            sync: false,
+            max_disk_usage: DiskUsageLimit::Unlimited,
+        };
+        assert_eq!(settings.output_capture, OutputCapture::Enabled(expected));
     }
 
     #[test]
