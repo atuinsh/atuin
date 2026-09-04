@@ -158,16 +158,6 @@ impl Component for SearchComponent {
 
     async fn handle_event(&mut self, event: &DaemonEvent) -> Result<()> {
         match event {
-            DaemonEvent::HistorySynced(ids) => {
-                debug!(count = ids.len(), "Indexing synced history entries");
-
-                let Some(handle) = self.handle.as_ref() else {
-                    return Ok(());
-                };
-
-                let histories = handle.history_db().load_active(ids.iter().copied()).await?;
-                self.index.read().await.add_histories(&histories);
-            }
             DaemonEvent::SettingsReloaded => {
                 if let Some(handle) = self.handle.as_ref() {
                     info!("Rebuilding frecency map after settings update");

@@ -2,7 +2,7 @@
 //!
 //! [`SyncEngine`] owns a single background task that periodically syncs the record store with the
 //! configured server, rebuilds the local history / alias / var stores from whatever it downloaded,
-//! and announces the result on the daemon event bus. Failed syncs are retried with exponential
+//! and feeds the new history into the search index. Failed syncs are retried with exponential
 //! backoff. The work itself is done by [`SyncEngineWorker`], which lives inside that task.
 //!
 //! It is deliberately *not* a [`crate::daemon::Component`]: it reacts to no bus event other than
@@ -14,7 +14,6 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::Duration;
 
-use atuin_client::history::HistoryId;
 use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sync::{ClientSource, SyncEngine as ClientSyncEngine, SyncError};
 use atuin_client::settings::Settings;
@@ -23,13 +22,14 @@ use atuin_domain::record::RecordId;
 use atuin_dotfiles::store::AliasStore;
 use atuin_dotfiles::store::var::VarStore;
 use futures::StreamExt;
-use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::{RwLock, broadcast};
 use tokio::task::JoinHandle;
 use tokio::time::{self, Interval, MissedTickBehavior};
 
 use crate::daemon::DaemonHandle;
 use crate::events::DaemonEvent;
+use crate::search::SearchIndex;
 
 /// A running sync engine.
 ///
@@ -48,11 +48,11 @@ impl SyncEngine {
     ///
     /// The bus subscription is taken *before* the task is spawned so a
     /// [`DaemonEvent::ShutdownRequested`] emitted immediately after this returns is never missed.
-    pub fn spawn(handle: DaemonHandle) -> Self {
+    pub fn spawn(handle: DaemonHandle, search_index: Arc<RwLock<SearchIndex>>) -> Self {
         let events = handle.subscribe();
         let task = tokio::spawn(async move {
             tracing::info!("sync engine starting");
-            match SyncEngineWorker::new(handle, events).await {
+            match SyncEngineWorker::new(handle, events, search_index).await {
                 Ok(worker) => worker.run().await,
                 Err(e) => {
                     tracing::error!("sync engine disabled for this daemon run: {e}");
@@ -81,6 +81,15 @@ impl Drop for SyncEngine {
     }
 }
 
+/// Why a [`SyncEngineWorker`] could not be started.
+#[derive(Debug, thiserror::Error)]
+enum SyncEngineError {
+    /// [`Settings::host_id`] reports through `eyre`, which has no `std::error::Error` impl, so
+    /// the report is boxed to keep its chain as the source.
+    #[error("failed to get host id")]
+    HostId(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
 /// The state behind a [`SyncEngine`]: everything one sync tick needs, owned by the background task.
 struct SyncEngineWorker {
     handle: DaemonHandle,
@@ -88,19 +97,23 @@ struct SyncEngineWorker {
     history_store: HistoryStore,
     alias_store: AliasStore,
     var_store: VarStore,
+    /// The live search index, shared with the search component and the history journal; synced
+    /// history is added to it directly.
+    search_index: Arc<RwLock<SearchIndex>>,
     /// Fires once per configured sync period; its period doubles as the backoff seed.
     ticker: Interval,
 }
 
 impl SyncEngineWorker {
     /// Never wait longer than this between retries of a failed sync.
-    const MAX_BACKOFF: Duration = Duration::from_secs(30 * 60);
+    const MAX_BACKOFF: Duration = Duration::from_mins(30);
 
     async fn new(
         handle: DaemonHandle,
         events: broadcast::Receiver<DaemonEvent>,
-    ) -> eyre::Result<Self> {
-        let host_id = Settings::host_id().await?;
+        search_index: Arc<RwLock<SearchIndex>>,
+    ) -> Result<Self, SyncEngineError> {
+        let host_id = Settings::host_id().await.map_err(|e| SyncEngineError::HostId(e.into()))?;
         let key = handle.encryption_key();
         let history_store = HistoryStore::new(handle.store().clone(), host_id, key.clone());
         let alias_store = AliasStore::new(handle.store().clone(), host_id, key.clone());
@@ -114,6 +127,7 @@ impl SyncEngineWorker {
             history_store,
             alias_store,
             var_store,
+            search_index,
             ticker,
         })
     }
@@ -228,7 +242,7 @@ impl SyncEngineWorker {
         Ok(())
     }
 
-    /// Fold freshly downloaded records into the history database, announcing new history on the bus.
+    /// Fold freshly downloaded records into the history database and the search index.
     async fn rebuild_history(&self, downloaded: &[RecordId]) {
         // `incremental_build` already yields in bounded batches - an initial sync (on backfill,
         // eg.) risks being dozens of GB of RAM otherwise.
@@ -237,12 +251,13 @@ impl SyncEngineWorker {
         );
         while let Some(batch) = batches.next().await {
             match batch {
-                Ok(histories) if !histories.is_empty() => {
-                    // Only the IDs go on the bus; the rows themselves are already in sqlite.
-                    let ids: Arc<[HistoryId]> = histories.iter().map(|h| h.id).collect();
-                    self.handle.emit(DaemonEvent::HistorySynced(ids));
+                Ok(histories) => {
+                    tracing::debug!(count = histories.len(), "indexing synced history entries");
+                    // TODO(#4052): This is inherently racy -- any add_history operations added
+                    //              between a concurrent index rebuild's .read() and its .write()
+                    //              are discarded from the new index.
+                    self.search_index.read().await.add_histories(&histories);
                 }
-                Ok(_) => {}
                 // Legacy behavior was to abort on the first error.
                 Err(e) => {
                     tracing::error!("failed to build history from downloaded records: {e}");
@@ -272,10 +287,9 @@ async fn shutdown_requested(events: &mut broadcast::Receiver<DaemonEvent>) {
             Ok(DaemonEvent::ShutdownRequested) | Err(RecvError::Closed) => return,
             // This is only polled between ticks (raced in `select!` against `ticker.tick()`), so
             // if more than the bus capacity worth of events arrive during one long-running sync, a
-            // `ShutdownRequested` can be dropped along with the rest of the lagged batch. The only
-            // event this engine emits at any real rate is its own `HistorySynced`, and
-            // `SyncEngine::shutdown` bounds the wait on the task, so a lost event here just means
-            // shutdown takes up to that long rather than hanging.
+            // `ShutdownRequested` can be dropped along with the rest of the lagged batch. Nothing
+            // emits at that rate today, and `SyncEngine::shutdown` bounds the wait on the task, so
+            // a lost event here just means shutdown takes up to that long rather than hanging.
             Ok(_) | Err(RecvError::Lagged(_)) => {}
         }
     }

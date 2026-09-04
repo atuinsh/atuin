@@ -71,15 +71,16 @@ pub async fn boot(
         history_store,
         handle.history_db().clone(),
         semantic_handle,
-        search_index,
+        search_index.clone(),
     ));
     let history_service = HistoryServer::new(grpc::HistoryService::new(journal, handle.clone()));
 
     // Start all components first (so gRPC services can work)
     daemon.start_components().await?;
 
-    // Background cloud sync. Not a component: it only needs the handle and the shutdown event.
-    let sync_engine = SyncEngine::spawn(handle.clone());
+    // Background cloud sync. Not a component: it feeds the search index directly and only needs
+    // the shutdown event from the bus.
+    let sync_engine = SyncEngine::spawn(handle.clone(), search_index);
 
     // Spawn config file watcher to reload settings on changes
     if let Ok(watcher) = global_settings_watcher() {
