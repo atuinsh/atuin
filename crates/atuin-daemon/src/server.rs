@@ -2,12 +2,10 @@ use atuin_client::settings::Settings;
 use eyre::{Context, Result};
 
 use crate::components::search::SearchGrpcService;
-use crate::components::semantic::SemanticGrpcService;
 use crate::daemon::DaemonHandle;
 use crate::grpc;
 use crate::grpc::history::pb::history_server::HistoryServer;
 use crate::search::search_server::SearchServer;
-use crate::semantic::semantic_server::SemanticServer;
 
 /// How often to update the socket's modification time so it doesn't get automatically deleted by
 /// temporary file cleaners.
@@ -24,7 +22,6 @@ pub async fn run_grpc_server(
     settings: Settings,
     history_service: HistoryServer<grpc::HistoryService>,
     search_service: SearchServer<SearchGrpcService>,
-    semantic_service: SemanticServer<SemanticGrpcService>,
     handle: DaemonHandle,
 ) -> Result<()> {
     use tokio::net::UnixListener;
@@ -137,7 +134,6 @@ pub async fn run_grpc_server(
         if let Err(e) = Server::builder()
             .add_service(history_service)
             .add_service(search_service)
-            .add_service(semantic_service)
             .serve_with_incoming_shutdown(uds_stream, shutdown_signal)
             .await
         {
@@ -154,7 +150,6 @@ pub async fn run_grpc_server(
     settings: Settings,
     history_service: HistoryServer<grpc::HistoryService>,
     search_service: SearchServer<SearchGrpcService>,
-    semantic_service: SemanticServer<SemanticGrpcService>,
     handle: DaemonHandle,
 ) -> Result<()> {
     use tokio::net::TcpListener;
@@ -188,7 +183,6 @@ pub async fn run_grpc_server(
         if let Err(e) = Server::builder()
             .add_service(history_service)
             .add_service(search_service)
-            .add_service(semantic_service)
             .serve_with_incoming_shutdown(tcp_stream, shutdown_signal)
             .await
         {

@@ -3,8 +3,10 @@
 use std::ops::Range;
 
 mod chunks;
+mod py_style;
 
 pub use chunks::{ChunkInt, Chunks};
+pub use py_style::PyStyleIdxRange;
 
 /// Chunk a [`Range`] into fixed-size sub-ranges. See [`Chunks`].
 pub trait RangeExt<T: ChunkInt> {

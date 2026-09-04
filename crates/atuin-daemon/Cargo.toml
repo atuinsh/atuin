@@ -22,6 +22,7 @@ derive_more = { workspace = true }
 easy-cast = { workspace = true }
 enum_dispatch = { workspace = true }
 eyre = { workspace = true }
+fjall = { workspace = true }
 frizbee = { workspace = true }
 futures = { workspace = true }
 hyper-util = { workspace = true }

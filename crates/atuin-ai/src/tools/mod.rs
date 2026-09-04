@@ -8,7 +8,9 @@ use atuin_client::history::{AuthorPattern, HistoryId};
 use atuin_client::settings::FilterMode;
 use atuin_common::ansi;
 use atuin_common::filter::OrFilter;
+use atuin_common::range::PyStyleIdxRange;
 use atuin_common::time::UtcOffsetExt;
+use atuin_daemon::grpc::history::pb::ChunkedOutputLineView;
 use easy_cast::Conv;
 use enum_dispatch::enum_dispatch;
 use eyre::Result;
@@ -1184,7 +1186,10 @@ impl AtuinHistoryToolCall {
 #[derive(Debug, Clone)]
 pub struct AtuinOutputToolCall {
     pub history_id: HistoryId,
-    pub ranges: Vec<(i64, i64)>,
+    /// The MCP protocol specifies that ranges should be Python-style, ie. array indices can be
+    /// expressed as `[0, -1]` -- where `-1` refers to the element with cursor offset 1 from the end
+    /// of the slice.
+    pub ranges: Vec<PyStyleIdxRange>,
     /// The command the history entry ran, resolved from the local history
     /// db after parsing (`Effect::ResolveOutputCommand`). Display-only:
     /// `None` until the lookup lands, or when the id isn't known locally.
@@ -1218,9 +1223,9 @@ impl TryFrom<&serde_json::Value> for AtuinOutputToolCall {
                 let end =
                     range[1].as_i64().ok_or_else(|| eyre::eyre!("Range end must be an integer"))?;
 
-                Ok((start, end))
+                Ok(PyStyleIdxRange::new(start, end))
             })
-            .collect::<Result<Vec<(i64, i64)>, eyre::Error>>()?;
+            .collect::<Result<Vec<PyStyleIdxRange>, eyre::Error>>()?;
 
         Ok(Self {
             history_id,
@@ -1240,25 +1245,31 @@ impl PermissibleToolCall for AtuinOutputToolCall {
     }
 }
 
-fn format_output_lines_for_llm(lines: &[atuin_daemon::semantic::OutputLine]) -> String {
-    let width =
-        usize::conv(lines.iter().map(|line| line.line_number).max().unwrap_or(1).max(1).ilog10())
-            + 1;
-    let mut formatted = Vec::with_capacity(lines.len());
-    let mut previous_line_number = None;
+use atuin_daemon::grpc::history::pb::get_command_output_reply::Data as OutputData;
 
+/// Render `ChunkedOutputLineView`s as `read_file`-style numbered output for the LLM, inserting
+/// `[...skipped N lines...]` markers wherever the line numbers jump.
+fn format_chunked_output_line_views_for_llm<'a>(
+    lines: impl Iterator<Item = ChunkedOutputLineView<'a>> + Clone,
+) -> String {
+    let Some(max_line_no) = lines.clone().map(|line| line.line + 1).max() else {
+        return String::new();
+    };
+
+    let width = usize::conv(max_line_no.max(1).ilog10()) + 1;
+
+    let mut formatted = Vec::new();
+    let mut previous_idx = None;
     for line in lines {
-        if let Some(previous) = previous_line_number {
-            let skipped = line.line_number.saturating_sub(previous + 1);
+        if let Some(previous) = previous_idx {
+            let skipped = line.line.saturating_sub(previous + 1);
             if skipped > 0 {
                 formatted.push(format!("[...skipped {skipped} lines...]"));
             }
         }
-
-        formatted.push(format!("{:>width$}\t{}", line.line_number, line.content));
-        previous_line_number = Some(line.line_number);
+        formatted.push(format!("{:>width$}\t{}", line.line + 1, line.content));
+        previous_idx = Some(line.line);
     }
-
     formatted.join("\n")
 }
 
@@ -1269,7 +1280,7 @@ impl AtuinOutputToolCall {
             Err(e) => return ToolOutcome::Error(format!("Failed to load Atuin settings: {e}")),
         };
 
-        let mut client = match atuin_daemon::SemanticClient::from_settings(&settings).await {
+        let mut client = match atuin_daemon::HistoryClient::from_settings(&settings).await {
             Ok(client) => client,
             Err(e) => {
                 return ToolOutcome::Error(format!(
@@ -1280,43 +1291,60 @@ impl AtuinOutputToolCall {
         };
 
         let history_id = self.history_id;
-        let response = match client.command_output(history_id, self.ranges.clone()).await {
-            Ok(response) => response,
+        let response = match client.get_command_output(history_id, self.ranges.clone()).await {
+            Ok(Some(response)) => response,
+            Ok(None) => {
+                return ToolOutcome::Success(format!(
+                    "No captured output found for history ID {history_id}. Output is only \
+                     captured for commands run in an Atuin-enabled terminal while the daemon was \
+                     running; older output may also have been dropped. {NO_OUTPUT_ADVICE}"
+                ));
+            }
             Err(e) => return ToolOutcome::Error(format!("Failed to fetch command output: {e}")),
         };
 
-        if !response.found {
-            return ToolOutcome::Success(format!(
-                "No captured output found for history ID {history_id}. Output is only captured \
-                 for commands run in an Atuin-enabled terminal while the daemon was running; \
-                 older output may also have been dropped. {NO_OUTPUT_ADVICE}"
-            ));
-        }
+        let meta = response.meta.unwrap_or_default();
 
-        if response.total_lines == 0 {
-            return ToolOutcome::Success(format!(
-                "Captured output for history ID {history_id} is empty."
-            ));
-        }
+        let (body, totals) = match response.data {
+            Some(OutputData::Full(output)) => {
+                if output.is_empty() {
+                    return ToolOutcome::Success(format!(
+                        "Captured output for history ID {history_id} is empty."
+                    ));
+                }
+                let numbered = output
+                    .lines()
+                    .enumerate()
+                    .map(|(line, content)| ChunkedOutputLineView { line, content });
+                let totals = format!("{} bytes, {} lines", output.len(), output.lines().count());
+                (format_chunked_output_line_views_for_llm(numbered), totals)
+            }
+            Some(OutputData::Chunked(chunked)) => {
+                let body = format_chunked_output_line_views_for_llm(chunked.lines());
+                if body.is_empty() {
+                    return ToolOutcome::Success(format!(
+                        "No lines selected from captured output for history ID {history_id}."
+                    ));
+                }
+                let totals =
+                    format!("{} bytes, {} lines", chunked.total_bytes, chunked.total_lines);
+                (body, totals)
+            }
+            None => {
+                return ToolOutcome::Error(format!(
+                    "Daemon returned no output payload for history ID {history_id}."
+                ));
+            }
+        };
 
-        let output = format_output_lines_for_llm(&response.lines);
-        if output.is_empty() {
-            return ToolOutcome::Success(format!(
-                "No lines selected from captured output for history ID {history_id}."
-            ));
-        }
-
-        let total_output = if response.output_truncated {
-            format!(
-                "{} bytes captured, {} bytes observed before truncation, {} lines",
-                response.total_bytes, response.output_observed_bytes, response.total_lines
-            )
+        let total_output = if meta.output_truncated {
+            format!("{totals} ({} bytes observed before truncation)", meta.output_observed_bytes)
         } else {
-            format!("{} bytes, {} lines", response.total_bytes, response.total_lines)
+            totals
         };
 
         ToolOutcome::Success(format!(
-            "History ID: {history_id}\nTotal output: {total_output}\nSelected output:\n{output}"
+            "History ID: {history_id}\nTotal output: {total_output}\nSelected output:\n{body}"
         ))
     }
 }
@@ -1451,25 +1479,26 @@ mod tests {
 
         let call = AtuinOutputToolCall::try_from(&input)?;
 
-        assert_eq!(call.ranges, vec![(0, 30), (-100, -1)]);
+        assert_eq!(call.ranges, vec![PyStyleIdxRange::new(0, 30), PyStyleIdxRange::new(-100, -1),]);
         Ok(())
     }
 
     #[rstest]
     fn atuin_output_formats_lines_like_read_file() {
-        let lines = vec![
-            atuin_daemon::semantic::OutputLine {
-                line_number: 98,
-                content: "near end".to_string(),
+        // 0-based line indices 97 and 99 render as line numbers 98 and 100, with a gap marker.
+        let lines = [
+            ChunkedOutputLineView {
+                line: 97,
+                content: "near end",
             },
-            atuin_daemon::semantic::OutputLine {
-                line_number: 100,
-                content: "end".to_string(),
+            ChunkedOutputLineView {
+                line: 99,
+                content: "end",
             },
         ];
 
         assert_eq!(
-            format_output_lines_for_llm(&lines),
+            format_chunked_output_line_views_for_llm(lines.into_iter()),
             " 98\tnear end\n[...skipped 1 lines...]\n100\tend"
         );
     }

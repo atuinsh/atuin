@@ -45,7 +45,8 @@ use tokio_stream::wrappers::BroadcastStream;
 use tracing::field::Empty;
 use tracing::{Instrument, Span};
 
-use crate::SemanticComponent;
+use crate::grpc::history::pb::CommandCapture;
+use crate::output_capture::{CaptureError, GetOutputError, OutputCapture};
 use crate::search::SearchIndex;
 
 /// An event describing a change in the lifecycle of a command.
@@ -100,12 +101,12 @@ pub struct HistoryJournal {
     /// We hold a reference to the search index which allows us to add a new history record into it.
     search_index: Arc<tokio::sync::RwLock<SearchIndex>>,
 
-    /// Just like the search_index, we need to notify the SemanticComponent of added history.
-    semantic_component: SemanticComponent,
-
     /// Channel used to broadcast command events to other threads. See [`CmdEvent`] and
     /// [`Self::subscribe`].
     broadcast: broadcast::Sender<CmdEvent>,
+
+    /// Durable store for captured command output.
+    output_capture: OutputCapture,
 }
 
 /// Errors returned by [`HistoryJournal::finish`].
@@ -210,8 +211,8 @@ impl HistoryJournal {
         caps: Arc<CapClient>,
         history_store: HistoryStore,
         history_db: HistoryDatabase,
-        semantic_component: SemanticComponent,
         search_index: Arc<tokio::sync::RwLock<SearchIndex>>,
+        output_capture: OutputCapture,
     ) -> Self {
         let (broadcast, _) = broadcast::channel(128);
         Self {
@@ -219,9 +220,9 @@ impl HistoryJournal {
             history_store,
             history_db,
             active_cmds: DashMap::new(),
-            semantic_component,
             search_index,
             broadcast,
+            output_capture,
         }
     }
 
@@ -313,7 +314,7 @@ impl HistoryJournal {
             &RecordSeriesKey::new(self.history_store.host_id, RecordTag::History),
             self.caps.get_server::<PackfileCap>().await.ok().flatten(),
         )
-        .instrument(span.clone())
+        .instrument(span)
         .await
         {
             tracing::warn!("packing failed: {e}");
@@ -325,10 +326,8 @@ impl HistoryJournal {
         self.search_index.read().await.add_history(&history);
 
         if self.broadcast.receiver_count() > 0 {
-            let _ = self.broadcast.send(CmdEvent::Finished(history.clone()));
+            let _ = self.broadcast.send(CmdEvent::Finished(history));
         }
-
-        self.semantic_component.record_history(history).instrument(span).await;
 
         Ok(FinishedCmd {
             history_record_id,
@@ -443,6 +442,23 @@ impl HistoryJournal {
                 tracing::error!("failed to reload search index; keeping previous index: {e}");
             }
         }
+    }
+
+    /// Store a command's captured output. Errors if an output already exists for this id.
+    pub async fn register_command_output(
+        &self,
+        id: HistoryId,
+        capture: CommandCapture,
+    ) -> Result<(), CaptureError> {
+        self.output_capture.capture(id, capture).await
+    }
+
+    /// Retrieve a command's captured output, if any.
+    pub async fn get_command_output(
+        &self,
+        id: HistoryId,
+    ) -> Result<Option<CommandCapture>, GetOutputError> {
+        self.output_capture.get(id).await
     }
 
     /// Create a new stream of [`CmdEvent`] objects.

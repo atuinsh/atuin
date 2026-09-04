@@ -208,7 +208,7 @@ fn tool_definitions() -> Vec<Tool> {
                     (0-based, end-inclusive). Negative indices count from the end \
                     of the output, e.g. [[-80, -1]] is the last 80 lines — fetch \
                     that first when investigating a failure, since errors usually \
-                    print at the end. Defaults to the first 1000 lines.",
+                    print at the end. Defaults to the full output.",
             },
         },
         "required": ["history_id"],

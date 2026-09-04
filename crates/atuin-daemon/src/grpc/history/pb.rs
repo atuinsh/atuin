@@ -8,6 +8,7 @@ mod codegen {
 use std::time::Duration;
 
 use atuin_client::history::{History, HistoryId as DomainHistoryId};
+use atuin_common::range::PyStyleIdxRange;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::record::{CmdOrigin, CmdOriginParseError};
 pub use codegen::*;
@@ -17,11 +18,11 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use tonic::Status;
 
-use crate::grpc::common::pb as common;
-use crate::grpc::common::pb::Uuid;
+use crate::grpc::common::pb::{self as common, UnsignedIdxRange, Uuid};
 use crate::history_journal::{
     CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, CmdRebuildError, GetCmdInFlightError,
 };
+use crate::output_capture::{CaptureError, GetOutputError};
 
 impl From<DomainHistoryId> for HistoryId {
     fn from(value: DomainHistoryId) -> Self {
@@ -238,11 +239,129 @@ impl From<GetCmdInFlightError> for Status {
     }
 }
 
+impl From<CaptureError> for Status {
+    fn from(value: CaptureError) -> Self {
+        match value {
+            CaptureError::AlreadyExists => Self::already_exists(value.to_string()),
+            CaptureError::Storage(_) => Self::internal(value.to_string()),
+        }
+    }
+}
+
+/// Errors thrown parsing the [`RegisterCommandOutputRequest`].
+#[derive(Debug, Error)]
+pub enum RegisterCommandOutputRequestParseError {
+    #[error("missing capture")]
+    MissingCapture,
+    #[error("missing history id")]
+    MissingHistory,
+    #[error("invalid id field: {0}")]
+    InvalidId(#[from] IdParseError),
+}
+
+impl RegisterCommandOutputRequest {
+    pub fn history_id(&self) -> Result<DomainHistoryId, RegisterCommandOutputRequestParseError> {
+        Ok(self
+            .history_id
+            .clone()
+            .ok_or(RegisterCommandOutputRequestParseError::MissingHistory)?
+            .try_into()?)
+    }
+
+    pub fn capture(&self) -> Result<CommandCapture, RegisterCommandOutputRequestParseError> {
+        self.capture.clone().ok_or(RegisterCommandOutputRequestParseError::MissingCapture)
+    }
+}
+
+/// Errors thrown parsing the [`GetCommandOutputRequest`].
+#[derive(Debug, Error)]
+pub enum GetCommandOutputRequestParseError {
+    #[error("missing history id")]
+    MissingHistory,
+    #[error("invalid id field: {0}")]
+    InvalidId(#[from] IdParseError),
+}
+
+impl GetCommandOutputRequest {
+    /// Fetch the history ID to associate the output with.
+    pub fn history_id(&self) -> Result<DomainHistoryId, GetCommandOutputRequestParseError> {
+        Ok(self.id.clone().ok_or(GetCommandOutputRequestParseError::MissingHistory)?.try_into()?)
+    }
+
+    pub fn output_ranges(&self) -> impl Iterator<Item = PyStyleIdxRange> + '_ {
+        self.line_ranges.iter().copied().map(PyStyleIdxRange::from)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct ChunkedOutputLineView<'a> {
+    /// 0-offset line number.
+    pub line: usize,
+    pub content: &'a str,
+}
+
+impl ChunkedOutput {
+    /// Build a chunked output from an output and a set of signed line ranges.
+    #[must_use]
+    pub fn build(output: &str, ranges: &[PyStyleIdxRange]) -> Self {
+        let lines: Vec<&str> = output.lines().collect();
+
+        let chunks = ranges
+            .iter()
+            .map(|range| range.resolve_for(&lines))
+            .map(|range| OutputChunk {
+                line_range: Some(UnsignedIdxRange {
+                    start: u64::conv(range.start),
+                    end: u64::conv(range.end),
+                }),
+                content: lines[range].join("\n"),
+            })
+            .collect();
+
+        Self {
+            chunks,
+            total_bytes: u64::conv(output.len()),
+            total_lines: u64::conv(lines.len()),
+        }
+    }
+
+    pub fn lines(&self) -> impl Iterator<Item = ChunkedOutputLineView<'_>> + Clone {
+        self.chunks.iter().flat_map(|chunk| {
+            let start =
+                usize::try_from(chunk.line_range.map_or(0, |range| range.start)).unwrap_or(0);
+
+            chunk.content.lines().enumerate().map(move |(offset, line)| ChunkedOutputLineView {
+                line: start + offset,
+                content: line,
+            })
+        })
+    }
+}
+
+impl GetCommandOutputReply {
+    #[must_use]
+    pub fn build(capture: CommandCapture, ranges: &[PyStyleIdxRange]) -> Self {
+        let meta = capture.meta;
+        let data = if ranges.is_empty() {
+            get_command_output_reply::Data::Full(capture.output)
+        } else {
+            get_command_output_reply::Data::Chunked(ChunkedOutput::build(&capture.output, ranges))
+        };
+
+        Self {
+            data: Some(data),
+            meta,
+        }
+    }
+}
+
 invalid_argument_errors!(
     IdParseError,
     StartHistoryRequestParseError,
     EndHistoryRequestParseError,
     CancelHistoryRequestParseError,
+    RegisterCommandOutputRequestParseError,
+    GetCommandOutputRequestParseError,
 );
 
 versioned_messages!(
@@ -252,6 +371,8 @@ versioned_messages!(
     DeleteHistoryReply,
     RebuildHistoryReply,
 );
+
+internal_errors!(GetOutputError);
 
 #[cfg(test)]
 mod tests {
@@ -265,6 +386,72 @@ mod tests {
 
     fn good_id_proto() -> HistoryId {
         HistoryId::from(DomainHistoryId::from_bytes([1u8; 16]))
+    }
+
+    fn capture_of(output: &str) -> CommandCapture {
+        CommandCapture {
+            output: output.to_string(),
+            meta: Some(CommandCaptureMeta {
+                output_truncated: false,
+                output_observed_bytes: u64::conv(output.len()),
+            }),
+        }
+    }
+
+    /// A resolved, concrete half-open span, as reported back on a chunk's `line_range`.
+    fn range(start: u64, end: u64) -> UnsignedIdxRange {
+        UnsignedIdxRange { start, end }
+    }
+
+    /// A requested range, Python-slice style (inclusive ends, negatives from the end).
+    fn py_range(start: i64, end: i64) -> PyStyleIdxRange {
+        PyStyleIdxRange::new(start, end)
+    }
+
+    #[test]
+    fn command_output_empty_ranges_return_the_full_output() {
+        let reply = GetCommandOutputReply::build(capture_of("a\nb\nc"), &[]);
+        assert!(reply.meta.is_some());
+        match reply.data.unwrap() {
+            get_command_output_reply::Data::Full(output) => assert_eq!(output, "a\nb\nc"),
+            get_command_output_reply::Data::Chunked(_) => panic!("expected the full output"),
+        }
+    }
+
+    #[test]
+    fn command_output_ranges_are_inclusive_with_negative_offsets() {
+        // [1, 2] inclusive -> "one", "two"; [-1, -1] -> the last line, "four" (no sentinel needed).
+        let reply = GetCommandOutputReply::build(capture_of("zero\none\ntwo\nthree\nfour"), &[
+            py_range(1, 2),
+            py_range(-1, -1),
+        ]);
+        let chunked = match reply.data.unwrap() {
+            get_command_output_reply::Data::Chunked(chunked) => chunked,
+            get_command_output_reply::Data::Full(_) => panic!("expected chunks"),
+        };
+        assert_eq!(chunked.total_lines, 5);
+        let contents: Vec<&str> = chunked.chunks.iter().map(|c| c.content.as_str()).collect();
+        assert_eq!(contents, vec!["one\ntwo", "four"]);
+        // The reported `line_range` is the resolved, concrete half-open span.
+        assert_eq!(chunked.chunks[0].line_range, Some(range(1, 3)));
+        assert_eq!(chunked.chunks[1].line_range, Some(range(4, 5)));
+    }
+
+    #[test]
+    fn command_output_returns_one_chunk_per_requested_range() {
+        // Every requested range yields a chunk, in order: [2, 1] is backwards (empty), [10, 20] is
+        // past the end (both empty content), [0, 0] selects "a". Nothing is dropped.
+        let reply = GetCommandOutputReply::build(capture_of("a\nb\nc"), &[
+            py_range(2, 1),
+            py_range(10, 20),
+            py_range(0, 0),
+        ]);
+        let chunked = match reply.data.unwrap() {
+            get_command_output_reply::Data::Chunked(chunked) => chunked,
+            get_command_output_reply::Data::Full(_) => panic!("expected chunks"),
+        };
+        let contents: Vec<&str> = chunked.chunks.iter().map(|c| c.content.as_str()).collect();
+        assert_eq!(contents, vec!["", "", "a"]);
     }
 
     fn end_req(
@@ -443,42 +630,5 @@ mod tests {
     #[case::get(Status::from(GetCmdInFlightError::NotFound(DomainHistoryId::from_bytes([0u8; 16]))))]
     fn journal_not_found_maps_to_not_found(#[case] status: Status) {
         assert_eq!(status.code(), Code::NotFound);
-    }
-
-    fn history_fixture() -> History {
-        History::from_db()
-            .id(DomainHistoryId::from_bytes([1u8; 16]))
-            .timestamp(OffsetDateTime::UNIX_EPOCH)
-            .command("c".into())
-            .cwd("/".into())
-            .exit(0)
-            .duration(0)
-            .session("s".into())
-            .hostname("h:u".into())
-            .author("a".into())
-            .intent(None)
-            .deleted_at(None)
-            .shell(None)
-            .author_kind(None)
-            .build()
-            .into()
-    }
-
-    #[rstest]
-    fn tail_started_maps_to_started() {
-        let event = TailHistoryEvent::from(CmdEvent::Started(history_fixture()));
-        assert!(matches!(event, TailHistoryEvent::Started(_)));
-    }
-
-    #[rstest]
-    fn tail_finished_maps_to_ended() {
-        let event = TailHistoryEvent::from(CmdEvent::Finished(history_fixture()));
-        assert!(matches!(event, TailHistoryEvent::Ended(_)));
-    }
-
-    #[rstest]
-    fn tail_cancelled_maps_to_cancelled() {
-        let event = TailHistoryEvent::from(CmdEvent::Cancelled(history_fixture()));
-        assert!(matches!(event, TailHistoryEvent::Cancelled(_)));
     }
 }

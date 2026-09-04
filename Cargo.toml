@@ -56,6 +56,7 @@ eventsource-stream = "0.2"
 eye_declare = "0.6.4"
 eye_declare_engine = { version = "0.6.4", features = ["test-util"] }
 eyre = "0.6"
+fjall = { version = "3.1" }
 frizbee = "0.12.0"
 fs-err = "3.1"
 futures = "0.3"
