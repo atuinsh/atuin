@@ -40,6 +40,7 @@ pub enum GetOutputError {
 }
 
 /// Task responsible for flushing fjall data buffered in memory onto the disk.
+#[derive(Debug)]
 struct Flusher {
     /// Whether new data was inserted since the last flush.
     dirty: Arc<AtomicBool>,
@@ -57,7 +58,7 @@ impl Flusher {
         let dirty_outer = Arc::new(AtomicBool::new(false));
 
         let dirty = dirty_outer.clone();
-        let task = tokio::task::spawn(async move || {
+        let task = tokio::task::spawn(async move {
             let mut interval = tokio::time::interval(Self::SYNC_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
@@ -67,15 +68,14 @@ impl Flusher {
                     continue;
                 }
 
-                match tokio::task::spawn_blocking(move || db.persist(PersistMode::SyncAll))
-                    .await
-                    .expect("persistence task shouldn't panic")
+                let db = db.clone();
+                if let Err(err) =
+                    tokio::task::spawn_blocking(move || db.persist(PersistMode::SyncAll))
+                        .await
+                        .expect("persistence task shouldn't panic")
                 {
-                    Ok() => {}
-                    Err(err) => {
-                        error!(?err, "failed to persist data on disk");
-                        dirty.store(true, Ordering::Relaxed);
-                    }
+                    error!(?err, "failed to persist data on disk. will try again...");
+                    dirty.store(true, Ordering::Relaxed);
                 }
             }
         });
@@ -129,7 +129,7 @@ impl OutputCapture {
         })?;
 
         Ok(Self {
-            db,
+            db: db.clone(),
             keyspace,
             flusher: Arc::new(Flusher::spawn(db)),
         })
