@@ -1298,48 +1298,30 @@ impl AtuinOutputToolCall {
             ))
         };
 
-        let (body, totals, meta) = if self.ranges.is_empty() {
-            let response = match client.get_command_output(history_id).await {
-                Ok(Some(response)) => response,
-                Ok(None) => return not_found(),
-                Err(e) => {
-                    return ToolOutcome::Error(format!("Failed to fetch command output: {e}"));
-                }
-            };
-            let output = response.output;
-            if output.is_empty() {
-                return ToolOutcome::Success(format!(
-                    "Captured output for history ID {history_id} is empty."
-                ));
-            }
-            let numbered = output
-                .lines()
-                .enumerate()
-                .map(|(line, content)| ChunkedOutputLineView { line, content });
-            let totals = format!("{} bytes, {} lines", output.len(), output.lines().count());
-            (
-                format_chunked_output_line_views_for_llm(numbered),
-                totals,
-                response.meta.unwrap_or_default(),
-            )
+        // An empty request means "give me everything": a single `[0, -1]` range spans the whole
+        // output.
+        let ranges = if self.ranges.is_empty() {
+            vec![PyStyleIdxRange::new(0, -1)]
         } else {
-            let response =
-                match client.get_command_chunked_output(history_id, self.ranges.clone()).await {
-                    Ok(Some(response)) => response,
-                    Ok(None) => return not_found(),
-                    Err(e) => {
-                        return ToolOutcome::Error(format!("Failed to fetch command output: {e}"));
-                    }
-                };
-            let body = format_chunked_output_line_views_for_llm(response.lines());
-            if body.is_empty() {
-                return ToolOutcome::Success(format!(
-                    "No lines selected from captured output for history ID {history_id}."
-                ));
-            }
-            let totals = format!("{} bytes, {} lines", response.total_bytes, response.total_lines);
-            (body, totals, response.meta.unwrap_or_default())
+            self.ranges.clone()
         };
+
+        let response = match client.get_command_chunked_output(history_id, ranges).await {
+            Ok(Some(response)) => response,
+            Ok(None) => return not_found(),
+            Err(e) => return ToolOutcome::Error(format!("Failed to fetch command output: {e}")),
+        };
+
+        let body = format_chunked_output_line_views_for_llm(response.lines());
+        if body.is_empty() {
+            return ToolOutcome::Success(if self.ranges.is_empty() {
+                format!("Captured output for history ID {history_id} is empty.")
+            } else {
+                format!("No lines selected from captured output for history ID {history_id}.")
+            });
+        }
+        let totals = format!("{} bytes, {} lines", response.total_bytes, response.total_lines);
+        let meta = response.meta.unwrap_or_default();
 
         let total_output = if meta.output_truncated {
             format!("{totals} ({} bytes observed before truncation)", meta.output_observed_bytes)

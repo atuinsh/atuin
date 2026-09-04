@@ -21,11 +21,10 @@ use tracing::{Level, instrument, span};
 use crate::grpc::history::pb::history_client::HistoryClient as HistoryServiceClient;
 use crate::grpc::history::pb::{
     AuthorKind, CancelHistoryReply, CancelHistoryRequest, ChunkedOutput, CommandCapture,
-    CommandCaptureMeta, CommandOutput, DeleteHistoryReply, DeleteHistoryRequest, EndHistoryReply,
-    EndHistoryRequest, GetCommandChunkedOutputRequest, GetCommandOutputRequest,
-    RebuildHistoryReply, RebuildHistoryRequest, RegisterCommandOutputRequest, ShutdownRequest,
-    StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryReply,
-    TailHistoryRequest,
+    CommandCaptureMeta, DeleteHistoryReply, DeleteHistoryRequest, EndHistoryReply,
+    EndHistoryRequest, GetCommandChunkedOutputRequest, RebuildHistoryReply, RebuildHistoryRequest,
+    RegisterCommandOutputRequest, ShutdownRequest, StartHistoryReply, StartHistoryRequest,
+    StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
 };
 use crate::search::search_client::SearchClient as SearchServiceClient;
 use crate::search::{
@@ -220,19 +219,8 @@ impl HistoryClient {
         Ok(())
     }
 
-    /// Fetch a command's captured output. Returns [`None`] when the daemon has no output stored for
-    /// `id` (the daemon signals this with a `NOT_FOUND` status).
-    pub async fn get_command_output(&mut self, id: HistoryId) -> Result<Option<CommandOutput>> {
-        let request = GetCommandOutputRequest {
-            id: Some(id.into()),
-        };
-        match self.client.get_command_output(request).await {
-            Ok(response) => Ok(response.into_inner().output),
-            Err(status) if status.code() == Code::NotFound => Ok(None),
-            Err(status) => Err(status.into()),
-        }
-    }
-
+    /// Fetch a command's captured output for the requested line ranges. Returns [`None`] when the
+    /// daemon has no output stored for `id` (the daemon signals this with a `NOT_FOUND` status).
     pub async fn get_command_chunked_output(
         &mut self,
         id: HistoryId,

@@ -294,13 +294,6 @@ pub enum GetOutputRequestParseError {
     InvalidId(#[from] IdParseError),
 }
 
-impl GetCommandOutputRequest {
-    /// Fetch the history ID whose output is being requested.
-    pub fn history_id(&self) -> Result<DomainHistoryId, GetOutputRequestParseError> {
-        Ok(self.id.clone().ok_or(GetOutputRequestParseError::MissingHistory)?.try_into()?)
-    }
-}
-
 impl GetCommandChunkedOutputRequest {
     /// Fetch the history ID whose output is being requested.
     pub fn history_id(&self) -> Result<DomainHistoryId, GetOutputRequestParseError> {
@@ -325,7 +318,7 @@ impl ChunkedOutput {
     /// Build a chunked output from an output and a set of signed line ranges.
     #[must_use]
     pub fn build(capture: CommandCapture, ranges: &[PyStyleIdxRange]) -> Self {
-        let output = &capture.output;
+        let CommandCapture { output, meta } = capture;
         let lines: Vec<&str> = output.lines().collect();
 
         let chunks = ranges
@@ -344,7 +337,7 @@ impl ChunkedOutput {
             chunks,
             total_bytes: u64::conv(output.len()),
             total_lines: u64::conv(lines.len()),
-            meta: capture.meta,
+            meta,
         }
     }
 
@@ -358,15 +351,6 @@ impl ChunkedOutput {
                 content: line,
             })
         })
-    }
-}
-
-impl From<CommandCapture> for CommandOutput {
-    fn from(capture: CommandCapture) -> Self {
-        Self {
-            output: capture.output,
-            meta: capture.meta,
-        }
     }
 }
 
@@ -450,10 +434,13 @@ mod tests {
     }
 
     #[test]
-    fn command_output_carries_the_full_output_and_meta() {
-        let output = CommandOutput::from(capture_of("a\nb\nc"));
-        assert_eq!(output.output, "a\nb\nc");
-        assert!(output.meta.is_some());
+    fn command_output_whole_output_via_full_range() {
+        let chunked = ChunkedOutput::build(capture_of("a\nb\nc"), &[py_range(0, -1)]);
+        assert!(chunked.meta.is_some());
+        assert_eq!(chunked.total_lines, 3);
+        assert_eq!(chunked.chunks.len(), 1);
+        assert_eq!(chunked.chunks[0].content, "a\nb\nc");
+        assert_eq!(chunked.chunks[0].line_range, Some(range(0, 3)));
     }
 
     #[test]

@@ -176,24 +176,6 @@ message RegisterCommandOutputRequest  {
 message RegisterCommandOutputResponse {}
 
 // A command's full captured output.
-message CommandOutput {
-  // The full output.
-  string output = 1;
-  // The original metadata of the captured output. Logically required.
-  CommandCaptureMeta meta = 2;
-}
-
-// Request to fetch the full command output for a given `id`.
-message GetCommandOutputRequest {
-  // The history ID you're searching for. Logically required.
-  HistoryId id = 1;
-}
-
-message GetCommandOutputResponse {
-  // The captured output. Logically required.
-  CommandOutput output = 1;
-}
-
 // Request to fetch specific line ranges of the command output for a given `id`.
 //
 // You can request specific ranges, expressed within the `line_ranges` field. In effect, you can
@@ -206,6 +188,7 @@ message GetCommandChunkedOutputRequest {
   //
   // Passing one value returns that range explicitly.
   // Passing multiple values returns the multiple values.
+  // Request the whole output with a single `[0, -1]` range.
   repeated common.PyStyleIdxRange line_ranges = 2;
 }
 
@@ -253,11 +236,6 @@ service History {
   rpc Shutdown(ShutdownRequest) returns (ShutdownReply);
   // Store a completed command's captured output. Errors if output already exists for this id.
   rpc RegisterCommandOutput(RegisterCommandOutputRequest) returns (RegisterCommandOutputResponse);
-  // Retrieve a command's full captured output.
-  //
-  // Returns:
-  //  - `tonic::Status::not_found` if the given output is not found.
-  rpc GetCommandOutput(GetCommandOutputRequest) returns (GetCommandOutputResponse);
   // Retrieve a command's captured output, sliced by line ranges.
   //
   // See the docs for `GetCommandChunkedOutputRequest` for the calling convention.
