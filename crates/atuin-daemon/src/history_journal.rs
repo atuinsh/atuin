@@ -107,6 +107,17 @@ pub struct HistoryJournal {
 
     /// Durable store for captured command output.
     output_capture: OutputCapture,
+    /// Serializes the terminal transition + record-store write of [`Self::finish`] against
+    /// [`Self::delete`] (and against concurrent finishes).
+    ///
+    /// [`Self::finish`] checks a command *out* of [`Self::active_cmds`] before it persists, so
+    /// without this lock a `delete` landing in that window sees the id as already-gone-from-flight,
+    /// writes a `Delete` tombstone, and then the still-running `finish` appends its `Create` *after*
+    /// that tombstone -- leaving the row live locally and resurrecting it on replay. Holding the
+    /// lock from checkout through the record-store push makes the two mutually exclusive per id.
+    /// It also serializes the record store's read-modify-write on the append index (`last().idx`),
+    /// which is otherwise racy across concurrent writers.
+    record_write: tokio::sync::Mutex<()>,
 }
 
 /// Errors returned by [`HistoryJournal::finish`].
@@ -223,6 +234,7 @@ impl HistoryJournal {
             search_index,
             broadcast,
             output_capture,
+            record_write: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -280,32 +292,42 @@ impl HistoryJournal {
         exit_code: i64,
         duration: Duration,
     ) -> Result<FinishedCmd, CmdFinishError> {
-        let mut session = self.checkout(history_id).ok_or(CmdFinishError::NotFound(history_id))?;
+        // Hold `record_write` from checkout through the record-store push, so a concurrent `delete`
+        // of this id either cancels it before we check out or tombstones it after we commit -- never
+        // in between. See the field's docs. Released before the best-effort bookkeeping below, none
+        // of which touches the record store.
+        let (history, history_record_id, history_record_idx, span) = {
+            let _guard = self.record_write.lock().await;
 
-        session.exit = exit_code;
-        session.duration = i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX);
+            let mut session =
+                self.checkout(history_id).ok_or(CmdFinishError::NotFound(history_id))?;
 
-        let span = session.span().clone();
-        span.record("exit_code", exit_code);
-        span.record("duration", session.duration);
+            session.exit = exit_code;
+            session.duration = i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX);
 
-        // Each `?` below drops `session`, which restores it to the in-flight map, so a failed (or
-        // cancelled) persistence leaves the command in flight instead of dropping it.
-        self.history_db
-            .save(&session)
-            .instrument(span.clone())
-            .await
-            .map_err(|e| CmdFinishError::HistoryDbFailed(e.into()))?;
+            let span = session.span().clone();
+            span.record("exit_code", exit_code);
+            span.record("duration", session.duration);
 
-        let (history_record_id, history_record_idx) = self
-            .history_store
-            .push(session.clone())
-            .instrument(span.clone())
-            .await
-            .map_err(CmdFinishError::HistoryStoreFailed)?;
+            // Each `?` below drops `session`, which restores it to the in-flight map, so a failed (or
+            // cancelled) persistence leaves the command in flight instead of dropping it.
+            self.history_db
+                .save(&session)
+                .instrument(span.clone())
+                .await
+                .map_err(|e| CmdFinishError::HistoryDbFailed(e.into()))?;
 
-        // Persistence succeeded; take ownership and stop treating the command as in flight.
-        let history = session.commit().history;
+            let (history_record_id, history_record_idx) = self
+                .history_store
+                .push(session.clone())
+                .instrument(span.clone())
+                .await
+                .map_err(CmdFinishError::HistoryStoreFailed)?;
+
+            // Persistence succeeded; take ownership and stop treating the command as in flight.
+            let history = session.commit().history;
+            (history, history_record_id, history_record_idx, span)
+        };
 
         // TODO(markovejnovic): This is a little bit hacked-together. I'm thinking it would be good
         // to have a Packer type for this kind of logic. It can wraps the Caps.
@@ -369,7 +391,13 @@ impl HistoryJournal {
         //
         // This happens as a result of the fact that [`HistoryJournal`] might be tracking started,
         // but not finished commands. These get cancelled via [`HistoryJournal::cancel`].
+        // Hold `record_write` across the whole cancel-or-tombstone loop, so each id is terminated
+        // atomically with respect to a racing `finish`: an in-flight id is cancelled out of
+        // `active_cmds` here (and `finish` then sees it gone), or it is already fully persisted and
+        // we tombstone it -- never caught mid-persist. See the field's docs.
         let delete_records = async || {
+            let _guard = self.record_write.lock().await;
+
             let mut deleted: usize = 0;
             let mut record_ids = Vec::new();
             for id in ids {
