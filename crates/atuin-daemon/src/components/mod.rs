@@ -11,8 +11,6 @@
 //!
 //! - [`search::SearchComponent`]: Fuzzy search over history
 //! - [`semantic::SemanticComponent`]: In-memory semantic command captures
-//!
-//! Cloud sync is intentionally not a component; see the `sync_engine` module.
 
 pub mod search;
 pub mod semantic;

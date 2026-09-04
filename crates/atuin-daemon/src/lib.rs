@@ -31,6 +31,7 @@ pub use history_journal::{
     CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, CmdRebuildError, FinishedCmd,
     GetCmdInFlightError, HistoryJournal,
 };
+use sync_engine::SyncEngine;
 
 /// Boot the daemon.
 ///
@@ -78,7 +79,7 @@ pub async fn boot(
     daemon.start_components().await?;
 
     // Background cloud sync. Not a component: it only needs the handle and the shutdown event.
-    let sync_task = sync_engine::spawn(handle.clone());
+    let sync_engine = SyncEngine::spawn(handle.clone());
 
     // Spawn config file watcher to reload settings on changes
     if let Ok(watcher) = global_settings_watcher() {
@@ -125,9 +126,7 @@ pub async fn boot(
     daemon.stop_components().await;
 
     // The sync engine saw ShutdownRequested itself; give an in-flight tick a moment to finish.
-    if tokio::time::timeout(sync_engine::SHUTDOWN_GRACE, sync_task).await.is_err() {
-        tracing::warn!("sync engine did not stop within {:?}", sync_engine::SHUTDOWN_GRACE);
-    }
+    sync_engine.shutdown().await;
 
     tracing::info!("daemon shut down complete");
     Ok(())

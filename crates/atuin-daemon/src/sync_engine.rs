@@ -1,28 +1,29 @@
 //! Background cloud sync.
 //!
-//! The sync engine is a single spawned task that periodically syncs the record store with the
+//! [`SyncEngine`] owns a single background task that periodically syncs the record store with the
 //! configured server, rebuilds the local history / alias / var stores from whatever it downloaded,
 //! and announces the result on the daemon event bus. Failed syncs are retried with exponential
-//! backoff.
+//! backoff. The work itself is done by [`SyncEngineWorker`], which lives inside that task.
 //!
 //! It is deliberately *not* a [`crate::daemon::Component`]: it reacts to no bus event other than
 //! [`DaemonEvent::ShutdownRequested`] and exposes no gRPC service, so the component lifecycle only
 //! added boilerplate (a command channel whose sole command was "stop").
 
-use std::ops::Range;
+use std::num::NonZeroU32;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::Duration;
 
 use atuin_client::history::HistoryId;
 use atuin_client::history::store::HistoryStore;
-use atuin_client::record::sync::{ClientSource, SyncEngine, SyncError};
+use atuin_client::record::sync::{ClientSource, SyncEngine as ClientSyncEngine, SyncError};
 use atuin_client::settings::Settings;
-use atuin_domain::record::{HostId, RecordId};
+use atuin_common::futures::Backoff;
+use atuin_domain::record::RecordId;
 use atuin_dotfiles::store::AliasStore;
 use atuin_dotfiles::store::var::VarStore;
 use easy_cast::Conv;
 use futures::StreamExt;
-use rand::Rng;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
@@ -31,80 +32,239 @@ use tokio::time::{self, Interval, MissedTickBehavior};
 use crate::daemon::DaemonHandle;
 use crate::events::DaemonEvent;
 
-/// How long [`spawn`]'s caller should be willing to wait for an in-flight tick on shutdown.
-pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
-
-/// Spawn the sync engine.
+/// A running sync engine.
 ///
-/// The bus subscription is taken *before* the task is spawned so a
-/// [`DaemonEvent::ShutdownRequested`] emitted immediately after this returns is never missed.
-/// The returned handle resolves once the engine has observed shutdown and finished any in-flight
-/// tick; callers should bound their wait with [`SHUTDOWN_GRACE`].
-pub fn spawn(handle: DaemonHandle) -> JoinHandle<()> {
-    let events = handle.subscribe();
-    tokio::spawn(run(handle, events))
+/// This is a handle to the background task; the actual work happens in a [`SyncEngineWorker`]
+/// inside it. Dropping the engine aborts the task, so hold onto it for as long as sync should run.
+#[must_use = "dropping the engine aborts the sync task"]
+pub struct SyncEngine {
+    task: JoinHandle<()>,
 }
 
-/// The sync loop. Runs until shutdown is requested or the event bus closes.
-async fn run(handle: DaemonHandle, mut events: broadcast::Receiver<DaemonEvent>) {
-    tracing::info!("sync engine starting");
+impl SyncEngine {
+    /// How long [`Self::shutdown`] waits for an in-flight tick before giving up on it.
+    const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
-    let host_id = match Settings::host_id().await {
-        Ok(id) => id,
-        Err(e) => {
-            tracing::error!("failed to get host id, sync engine disabled for this daemon run: {e}");
-            return;
+    /// Spawn the sync engine.
+    ///
+    /// The bus subscription is taken *before* the task is spawned so a
+    /// [`DaemonEvent::ShutdownRequested`] emitted immediately after this returns is never missed.
+    pub fn spawn(handle: DaemonHandle) -> Self {
+        let events = handle.subscribe();
+        let task = tokio::spawn(async move {
+            tracing::info!("sync engine starting");
+            match SyncEngineWorker::new(handle, events).await {
+                Ok(worker) => worker.run().await,
+                Err(e) => {
+                    tracing::error!("sync engine disabled for this daemon run: {e}");
+                }
+            }
+            tracing::info!("sync engine stopped");
+        });
+        Self { task }
+    }
+
+    /// Wait for the worker to finish after a [`DaemonEvent::ShutdownRequested`] was emitted.
+    ///
+    /// The worker stops on its own once it sees that event; this gives an in-flight tick up to
+    /// [`Self::SHUTDOWN_GRACE`] to complete. Whatever is still running afterwards (a sync, or a
+    /// backoff sleep between retries) is aborted when `self` drops.
+    pub async fn shutdown(mut self) {
+        if time::timeout(Self::SHUTDOWN_GRACE, &mut self.task).await.is_err() {
+            tracing::warn!("sync engine did not stop within {:?}", Self::SHUTDOWN_GRACE);
         }
-    };
-    let stores = Stores::new(&handle, host_id);
+    }
+}
 
-    let mut period = sync_period(&*handle.settings().await);
-    let mut ticker = new_ticker(period);
-    let mut backoff = Backoff::new(period);
+impl Drop for SyncEngine {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
 
-    loop {
-        tokio::select! {
-            _ = ticker.tick() => {}
-            () = shutdown_requested(&mut events) => break,
+/// The state behind a [`SyncEngine`]: everything one sync tick needs, owned by the background task.
+struct SyncEngineWorker {
+    handle: DaemonHandle,
+    events: broadcast::Receiver<DaemonEvent>,
+    history_store: HistoryStore,
+    alias_store: AliasStore,
+    var_store: VarStore,
+    ticker: Interval,
+    /// The configured sync period the ticker was built with, to detect a settings change.
+    period: Duration,
+}
+
+impl SyncEngineWorker {
+    /// Never wait longer than this between retries of a failed sync.
+    const MAX_BACKOFF: Duration = Duration::from_secs(30 * 60);
+
+    async fn new(
+        handle: DaemonHandle,
+        events: broadcast::Receiver<DaemonEvent>,
+    ) -> eyre::Result<Self> {
+        let host_id = Settings::host_id().await?;
+        let key = handle.encryption_key();
+        let history_store = HistoryStore::new(handle.store().clone(), host_id, key.clone());
+        let alias_store = AliasStore::new(handle.store().clone(), host_id, key.clone());
+        let var_store = VarStore::new(handle.store().clone(), host_id, key.clone());
+
+        let period = sync_period(&*handle.settings().await);
+
+        Ok(Self {
+            handle,
+            events,
+            history_store,
+            alias_store,
+            var_store,
+            ticker: new_ticker(period),
+            period,
+        })
+    }
+
+    /// The sync loop. Runs until shutdown is requested or the event bus closes.
+    async fn run(mut self) {
+        loop {
+            tokio::select! {
+                _ = self.ticker.tick() => {}
+                () = shutdown_requested(&mut self.events) => break,
+            }
+            self.tick().await;
         }
+    }
 
-        // Clone rather than hold the read guard across the network round-trip, so settings reloads
-        // aren't blocked for the duration of a sync.
-        let settings = handle.settings().await.clone();
-
-        // Skip periodic ticks if auto_sync is disabled AND we're not retrying a previous failure.
-        // Retries must continue regardless of auto_sync.
-        if !settings.auto_sync && !backoff.is_retrying() {
+    /// One tick of the loop: sync, retrying with backoff until it succeeds, then re-arm the ticker.
+    async fn tick(&mut self) {
+        if !self.handle.settings().await.auto_sync {
             tracing::debug!("auto_sync disabled, skipping periodic sync tick");
-            continue;
+            return;
         }
 
         tracing::info!("sync tick");
-        match sync_once(&handle, &stores, &settings).await {
-            Ok(()) => {
-                backoff.reset();
-                // Pick up a changed `daemon.sync_frequency`.
-                let new_period = sync_period(&settings);
-                if new_period != period {
-                    period = new_period;
-                    ticker = new_ticker(period);
-                    ticker.reset_after(period);
-                    backoff.set_base(new_period);
-                }
-            }
+
+        // Once a sync has failed, keep retrying regardless of `auto_sync` (the old behaviour).
+        let backoff = Backoff::Exponential {
+            initial: self.period.saturating_mul(2),
+            max: Self::MAX_BACKOFF,
+            factor: NonZeroU32::new(2).unwrap(),
+        };
+        // `Duration::MAX` never elapses; a sync that can't reach the server retries until shutdown.
+        if let Err(e) = backoff.retry(|| self.attempt(), Duration::MAX).await {
+            tracing::error!("gave up retrying sync: {e}");
+        }
+
+        // Pick up a changed `daemon.sync_frequency`, and in any case make the next tick a full
+        // period from *now* rather than from the tick that just completed.
+        let period = sync_period(&*self.handle.settings().await);
+        if period != self.period {
+            self.period = period;
+            self.ticker = new_ticker(period);
+        }
+        self.ticker.reset();
+    }
+
+    /// One sync attempt, in [`Backoff::retry`]'s terms: `Break` when there is nothing left to
+    /// retry, `Continue` when the sync failed.
+    async fn attempt(&self) -> ControlFlow<(), SyncError> {
+        // Clone rather than hold the read guard across the network round-trip, so settings reloads
+        // aren't blocked for the duration of a sync. Re-read per attempt so a retry sequence picks
+        // up a changed server address or token.
+        let settings = self.handle.settings().await.clone();
+        match self.sync_once(&settings).await {
+            Ok(()) => ControlFlow::Break(()),
             Err(e) => {
-                tracing::error!("sync tick failed with {e}");
-                handle.emit(DaemonEvent::SyncFailed {
+                tracing::error!("sync tick failed with {e}, backing off");
+                self.handle.emit(DaemonEvent::SyncFailed {
                     error: e.to_string(),
                 });
-                let delay = backoff.next_delay();
-                tracing::error!("backing off, next sync tick in {delay:?}");
-                ticker.reset_after(delay);
+                ControlFlow::Continue(e)
             }
         }
     }
 
-    tracing::info!("sync engine stopped");
+    /// One sync.
+    ///
+    /// `Ok(())` means either the sync succeeded or there was nothing to do (not logged in, or the
+    /// login check itself failed). `Err` means the sync itself failed and should be retried.
+    async fn sync_once(&self, settings: &Settings) -> Result<(), SyncError> {
+        let logged_in = match settings.logged_in().await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("failed to check login status, skipping sync tick: {e}");
+                return Ok(());
+            }
+        };
+
+        if let Err(e) = self.handle.caps().refresh().await {
+            tracing::debug!("capability refresh failed, keeping cached document: {e}");
+        }
+
+        if !logged_in {
+            tracing::debug!("not logged in, skipping sync tick");
+            return Ok(());
+        }
+
+        let engine = ClientSyncEngine::builder()
+            .store(self.handle.store().clone())
+            .client_source(ClientSource::FromSettings {
+                settings,
+                caps: Some(self.handle.caps().clone()),
+            })
+            .build()
+            .connect()
+            .await?;
+        let (uploaded, downloaded) = engine.keyed(self.handle.encryption_key()).sync().await?;
+
+        tracing::info!(uploaded, downloaded = downloaded.len(), "sync complete");
+
+        self.rebuild_history(&downloaded).await;
+
+        self.handle.emit(DaemonEvent::SyncCompleted {
+            uploaded: usize::conv(uploaded),
+            downloaded: downloaded.len(),
+        });
+
+        self.rebuild_dotfiles().await;
+
+        if let Err(e) = Settings::save_sync_time().await {
+            tracing::error!("failed to save sync time: {e}");
+        }
+
+        Ok(())
+    }
+
+    /// Fold freshly downloaded records into the history database, announcing new history on the bus.
+    async fn rebuild_history(&self, downloaded: &[RecordId]) {
+        // `incremental_build` already yields in bounded batches - an initial sync (on backfill,
+        // eg.) risks being dozens of GB of RAM otherwise.
+        let mut batches = std::pin::pin!(
+            self.history_store.incremental_build(self.handle.history_db(), downloaded)
+        );
+        while let Some(batch) = batches.next().await {
+            match batch {
+                Ok(histories) if !histories.is_empty() => {
+                    // Only the IDs go on the bus; the rows themselves are already in sqlite.
+                    let ids: Arc<[HistoryId]> = histories.iter().map(|h| h.id).collect();
+                    self.handle.emit(DaemonEvent::HistorySynced(ids));
+                }
+                Ok(_) => {}
+                // Legacy behavior was to abort on the first error.
+                Err(e) => {
+                    tracing::error!("failed to build history from downloaded records: {e}");
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Rebuild the alias and var stores from the record store.
+    async fn rebuild_dotfiles(&self) {
+        if let Err(e) = self.alias_store.build().await {
+            tracing::error!("failed to rebuild alias store: {e}");
+        }
+        if let Err(e) = self.var_store.build().await {
+            tracing::error!("failed to rebuild var store: {e}");
+        }
+    }
 }
 
 /// Resolve once the daemon asks for shutdown (or the bus is gone). Every other event is ignored.
@@ -117,9 +277,9 @@ async fn shutdown_requested(events: &mut broadcast::Receiver<DaemonEvent>) {
             // This is only polled between ticks (raced in `select!` against `ticker.tick()`), so
             // if more than the bus capacity worth of events arrive during one long-running sync, a
             // `ShutdownRequested` can be dropped along with the rest of the lagged batch. The only
-            // event this engine emits at any real rate is its own `HistorySynced`, and `boot()`
-            // bounds the wait on this task with `SHUTDOWN_GRACE` as the backstop, so a lost event
-            // here just means shutdown takes up to that long rather than hanging.
+            // event this engine emits at any real rate is its own `HistorySynced`, and
+            // `SyncEngine::shutdown` bounds the wait on the task, so a lost event here just means
+            // shutdown takes up to that long rather than hanging.
             Ok(_) | Err(RecvError::Lagged(_)) => {}
         }
     }
@@ -139,240 +299,15 @@ fn new_ticker(period: Duration) -> Interval {
     ticker
 }
 
-/// The local stores rebuilt from downloaded records after each successful sync.
-struct Stores {
-    history: HistoryStore,
-    alias: AliasStore,
-    var: VarStore,
-}
-
-impl Stores {
-    fn new(handle: &DaemonHandle, host_id: HostId) -> Self {
-        let key = handle.encryption_key();
-        Self {
-            history: HistoryStore::new(handle.store().clone(), host_id, key.clone()),
-            alias: AliasStore::new(handle.store().clone(), host_id, key.clone()),
-            var: VarStore::new(handle.store().clone(), host_id, key.clone()),
-        }
-    }
-
-    /// Fold freshly downloaded records into the history database, announcing new history on the bus.
-    async fn rebuild_history(&self, handle: &DaemonHandle, downloaded: &[RecordId]) {
-        // `incremental_build` already yields in bounded batches - an initial sync (on backfill,
-        // eg.) risks being dozens of GB of RAM otherwise.
-        let mut batches =
-            std::pin::pin!(self.history.incremental_build(handle.history_db(), downloaded));
-        while let Some(batch) = batches.next().await {
-            match batch {
-                Ok(histories) if !histories.is_empty() => {
-                    // Only the IDs go on the bus; the rows themselves are already in sqlite.
-                    let ids: Arc<[HistoryId]> = histories.iter().map(|h| h.id).collect();
-                    handle.emit(DaemonEvent::HistorySynced(ids));
-                }
-                Ok(_) => {}
-                // Legacy behavior was to abort on the first error.
-                Err(e) => {
-                    tracing::error!("failed to build history from downloaded records: {e}");
-                    break;
-                }
-            }
-        }
-    }
-
-    /// Rebuild the alias and var stores from the record store.
-    async fn rebuild_dotfiles(&self) {
-        if let Err(e) = self.alias.build().await {
-            tracing::error!("failed to rebuild alias store: {e}");
-        }
-        if let Err(e) = self.var.build().await {
-            tracing::error!("failed to rebuild var store: {e}");
-        }
-    }
-}
-
-/// One sync attempt.
-///
-/// `Ok(())` means either the sync succeeded or there was nothing to do (not logged in, or the login
-/// check itself failed); both clear any backoff. `Err` means the sync itself failed and should be
-/// retried.
-async fn sync_once(
-    handle: &DaemonHandle,
-    stores: &Stores,
-    settings: &Settings,
-) -> Result<(), SyncError> {
-    let logged_in = match settings.logged_in().await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!("failed to check login status, skipping sync tick: {e}");
-            return Ok(());
-        }
-    };
-
-    if let Err(e) = handle.caps().refresh().await {
-        tracing::debug!("capability refresh failed, keeping cached document: {e}");
-    }
-
-    if !logged_in {
-        tracing::debug!("not logged in, skipping sync tick");
-        return Ok(());
-    }
-
-    let engine = SyncEngine::builder()
-        .store(handle.store().clone())
-        .client_source(ClientSource::FromSettings {
-            settings,
-            caps: Some(handle.caps().clone()),
-        })
-        .build()
-        .connect()
-        .await?;
-    let (uploaded, downloaded) = engine.keyed(handle.encryption_key()).sync().await?;
-
-    tracing::info!(uploaded, downloaded = downloaded.len(), "sync complete");
-
-    stores.rebuild_history(handle, &downloaded).await;
-
-    handle.emit(DaemonEvent::SyncCompleted {
-        uploaded: usize::conv(uploaded),
-        downloaded: downloaded.len(),
-    });
-
-    stores.rebuild_dotfiles().await;
-
-    if let Err(e) = Settings::save_sync_time().await {
-        tracing::error!("failed to save sync time: {e}");
-    }
-
-    Ok(())
-}
-
-/// Exponential backoff between failed sync attempts.
-///
-/// Replaces the old `SyncState { Idle, Retrying }` enum: we are "retrying" exactly when a delay
-/// has been handed out and not yet reset.
-struct Backoff {
-    /// The delay the first retry grows from — the configured sync period.
-    base: Duration,
-    /// Hard ceiling on any delay: [`Self::MAX_BASE`] plus a per-engine jitter.
-    max: Duration,
-    /// The delay used for the most recent retry; `None` while sync is healthy.
-    current: Option<Duration>,
-}
-
-impl Backoff {
-    /// Each retry waits this much longer than the previous one.
-    const GROWTH: Range<f64> = 2.0..2.2;
-    /// Never back off by more than this (plus [`Self::MAX_JITTER`]).
-    const MAX_BASE: Duration = Duration::from_secs(30 * 60);
-    /// Random jitter added to [`Self::MAX_BASE`] once per engine, so fleets don't sync in lockstep.
-    const MAX_JITTER: Duration = Duration::from_secs(60);
-
-    fn new(base: Duration) -> Self {
-        let jitter = rand::thread_rng().gen_range(Duration::ZERO..Self::MAX_JITTER);
-        Self {
-            base,
-            max: Self::MAX_BASE + jitter,
-            current: None,
-        }
-    }
-
-    /// Whether the last sync failed and we're waiting to retry it.
-    fn is_retrying(&self) -> bool {
-        self.current.is_some()
-    }
-
-    /// The sync succeeded (or there was nothing to sync): go back to the regular cadence.
-    fn reset(&mut self) {
-        self.current = None;
-    }
-
-    /// The configured sync period changed; later retries grow from the new value.
-    ///
-    /// Deliberately does not touch `max`, so the per-engine jitter is drawn only once.
-    fn set_base(&mut self, base: Duration) {
-        self.base = base;
-    }
-
-    /// The sync failed: compute and record how long to wait before the next attempt.
-    fn next_delay(&mut self) -> Duration {
-        let prev = self.current.unwrap_or(self.base);
-        // `base` (and thus `prev`) is derived from an unvalidated `u64` config value, so clamp to
-        // `max` before multiplying to keep the multiply itself from overflowing `Duration`.
-        let delay =
-            prev.min(self.max).mul_f64(rand::thread_rng().gen_range(Self::GROWTH)).min(self.max);
-        self.current = Some(delay);
-        delay
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
-    use rstest::{fixture, rstest};
+    use rstest::rstest;
     use tokio::sync::broadcast;
 
-    use super::{Backoff, shutdown_requested};
+    use super::shutdown_requested;
     use crate::events::DaemonEvent;
-
-    const BASE: Duration = Duration::from_secs(300);
-
-    #[fixture]
-    fn backoff() -> Backoff {
-        Backoff::new(BASE)
-    }
-
-    /// `delay` is within `[lo, hi]` — the growth factor is random in `2.0..2.2`.
-    fn assert_within(delay: Duration, prev: Duration) {
-        assert!(delay >= prev.mul_f64(2.0), "{delay:?} < 2 * {prev:?}");
-        assert!(delay <= prev.mul_f64(2.2), "{delay:?} > 2.2 * {prev:?}");
-    }
-
-    #[rstest]
-    fn starts_idle(backoff: Backoff) {
-        assert!(!backoff.is_retrying());
-    }
-
-    #[rstest]
-    fn first_delay_grows_from_base(mut backoff: Backoff) {
-        let delay = backoff.next_delay();
-        assert_within(delay, BASE);
-        assert!(backoff.is_retrying());
-    }
-
-    #[rstest]
-    fn delays_grow_geometrically(mut backoff: Backoff) {
-        let first = backoff.next_delay();
-        let second = backoff.next_delay();
-        assert_within(second, first);
-    }
-
-    #[rstest]
-    fn delay_is_capped_at_max_with_jitter() {
-        let mut backoff = Backoff::new(Duration::from_secs(20 * 60));
-        // 20 min * 2.0 already exceeds the 30-31 min cap, so every delay is the cap.
-        for _ in 0..4 {
-            assert_eq!(backoff.next_delay(), backoff.max);
-        }
-        assert!(backoff.max >= Backoff::MAX_BASE);
-        assert!(backoff.max < Backoff::MAX_BASE + Backoff::MAX_JITTER);
-    }
-
-    #[rstest]
-    fn reset_returns_to_idle_and_restarts_from_base(mut backoff: Backoff) {
-        backoff.next_delay();
-        backoff.next_delay();
-        backoff.reset();
-        assert!(!backoff.is_retrying());
-        assert_within(backoff.next_delay(), BASE);
-    }
-
-    #[rstest]
-    fn set_base_changes_where_retries_grow_from(mut backoff: Backoff) {
-        let new_base = Duration::from_secs(60);
-        backoff.set_base(new_base);
-        assert_within(backoff.next_delay(), new_base);
-    }
 
     #[rstest]
     #[tokio::test]
