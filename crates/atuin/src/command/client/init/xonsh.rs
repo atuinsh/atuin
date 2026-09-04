@@ -11,7 +11,7 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
         (options.enable_ctrl_r, options.enable_up_arrow)
     };
 
-    // TODO: tmux popup for xonsh
+    // TODO: multiplexer popup for xonsh
     println!(
         "_ATUIN_BIND_CTRL_R={}",
         if bind_ctrl_r {

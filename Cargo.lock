@@ -426,6 +426,7 @@ dependencies = [
  "tiny-bip39",
  "tokio",
  "toml",
+ "toml_edit",
  "tracing",
  "tracing-futures",
  "typed-builder",

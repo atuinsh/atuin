@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::settings::{Settings, Tmux};
+use atuin_client::settings::{Popup, Settings};
 use atuin_common::encryption::paseto_v4;
 use atuin_dotfiles::store::AliasStore;
 use atuin_dotfiles::store::var::VarStore;
@@ -56,7 +56,7 @@ struct StaticInitOptions<'a> {
     pub enable_ctrl_r: bool,
     #[cfg_attr(not(feature = "ai"), allow(dead_code))]
     pub enable_ai: bool,
-    pub tmux: &'a Tmux,
+    pub popup: &'a Popup,
 }
 
 impl Cmd {
@@ -129,7 +129,7 @@ impl Cmd {
             enable_up_arrow: !self.disable_up_arrow,
             enable_ctrl_r: !self.disable_ctrl_r,
             enable_ai: !self.disable_ai && settings.ai.enabled.unwrap_or(true),
-            tmux: &settings.tmux,
+            popup: &settings.popup,
         }
     }
 

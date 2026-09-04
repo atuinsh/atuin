@@ -55,9 +55,11 @@ serde_with = { workspace = true }
 shellexpand = { workspace = true }
 sql-builder = { workspace = true }
 sqlx = { workspace = true, features = ["sqlite", "regexp"] }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true, features = ["macros", "formatting", "parsing"] }
 tokio = { workspace = true }
+toml_edit = { workspace = true }
 tracing = { workspace = true }
 tracing-futures = { workspace = true }
 typed-builder = { workspace = true }
