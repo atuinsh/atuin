@@ -4,6 +4,7 @@ use std::sync::LazyLock;
 use atuin_common::filter::OrFilter;
 use atuin_common::rmp::decode::{self, Bytes, DecodeError};
 use atuin_common::rmp::encode::{self, ByteBuf, EncodeError};
+use atuin_common::secrets::contains_secret;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils::{normalize_optional_string, uuid_v7};
 use atuin_domain::record::{CmdOrigin, DecryptedData, UNKNOWN_USER};
@@ -13,7 +14,6 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::secrets::SECRET_PATTERNS_RE;
 use crate::settings::Settings;
 
 pub(crate) mod builder;
@@ -697,12 +697,13 @@ impl History {
         self.exit == 0 || self.duration == -1
     }
 
+    #[must_use]
     pub fn should_save(&self, settings: &Settings) -> bool {
         !(self.command.starts_with(' ')
             || self.command.is_empty()
             || settings.history_filter.is_match(&self.command)
             || settings.cwd_filter.is_match(&self.cwd)
-            || (settings.secrets_filter && SECRET_PATTERNS_RE.is_match(&self.command)))
+            || (settings.secrets_filter && contains_secret(&self.command)))
     }
 }
 
