@@ -8,11 +8,17 @@
 //!
 //! TODO(retention): the store grows unbounded; no eviction yet. See the design doc.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
 use atuin_client::history::HistoryId;
 use fjall::config::CompressionPolicy;
-use fjall::{OptimisticTxDatabase, OptimisticTxKeyspace, Readable};
+use fjall::{OptimisticTxDatabase, OptimisticTxKeyspace, PersistMode, Readable};
 use prost::Message;
 use thiserror::Error;
+use tokio::task::JoinHandle;
+use tracing::error;
 
 use crate::grpc::history::pb::CommandCapture;
 
@@ -33,6 +39,105 @@ pub enum GetOutputError {
     Storage(#[from] fjall::Error),
 }
 
+/// Task responsible for flushing fjall data buffered in memory onto the disk.
+#[derive(Debug)]
+struct Flusher {
+    /// Whether new data was inserted since the last flush.
+    dirty: Arc<AtomicBool>,
+    /// Handle to the background task.
+    task: JoinHandle<()>,
+}
+
+impl Flusher {
+    /// How often to try to flush.
+    ///
+    /// We'd expect flush itself to take anywhere between 1-10ms, so this is plenty of overhead.
+    const SYNC_INTERVAL: Duration = Duration::from_secs(5);
+
+    pub fn spawn(db: OptimisticTxDatabase) -> Self {
+        let dirty_outer = Arc::new(AtomicBool::new(false));
+
+        let dirty = dirty_outer.clone();
+        let task = tokio::task::spawn(async move {
+            let mut interval = tokio::time::interval(Self::SYNC_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                interval.tick().await;
+
+                // TODO(markovejnovic): @taylordotfish and I were wondering whether it is possible
+                // to use relaxed here. @taylordotfish claims that's not possible and I am more and
+                // more convinced by her argument.
+                //
+                // The concern is that one thread may perform some writes
+                //
+                // db-write
+                // db-write
+                // dirty-set
+                //
+                // while another thread does
+                //
+                // dirty-load
+                // persist
+                //
+                // In the pathological case, the db writes can be re-ordered after the dirty-set
+                // (under relaxed semantics):
+                //
+                // dirty-set
+                // db-write
+                // db-write
+                //
+                // while the other thread does
+                //
+                // dirty-load
+                // persist
+                //
+                // Well the persist won't observe those db-writes.
+                //
+                // The counter-argument is that both db-write and persist acquire the same mutex,
+                // so must be seq-cst-ordered?
+                //
+                // Unsure but would be curious to learn more.
+                //
+                // @taylordotfish mentioned we shouldn't rely on the internal implementation
+                // details.
+                if !dirty.swap(false, Ordering::Acquire) {
+                    continue;
+                }
+
+                let db = db.clone();
+                if let Err(err) =
+                    tokio::task::spawn_blocking(move || db.persist(PersistMode::SyncAll))
+                        .await
+                        .expect("persistence task shouldn't panic")
+                {
+                    error!(?err, "failed to persist data on disk. will try again...");
+                    dirty.store(true, Ordering::Relaxed);
+                }
+            }
+        });
+
+        Self {
+            dirty: dirty_outer,
+            task,
+        }
+    }
+
+    /// Mark the flusher as necessary.
+    ///
+    /// Generally, this should be called on every mutation.
+    fn kick(&self) {
+        // Relaxed _should_ be OK here since fjall is handling actual memory ordering and concurrency.
+        self.dirty.store(true, Ordering::Release);
+    }
+}
+
+impl Drop for Flusher {
+    fn drop(&mut self) {
+        // Stop the background loop once nothing is holding the flusher any more.
+        self.task.abort();
+    }
+}
+
 /// [`OutputCapture`] is the core engine responsible for collecting command output.
 ///
 /// It wraps an [`OptimisticTxKeyspace`], and stores data in said keyspace.
@@ -42,6 +147,7 @@ pub struct OutputCapture {
     db: OptimisticTxDatabase,
     #[debug(skip)]
     keyspace: OptimisticTxKeyspace,
+    flusher: Arc<Flusher>,
 }
 
 impl OutputCapture {
@@ -64,7 +170,12 @@ impl OutputCapture {
                 .data_block_compression_policy(CompressionPolicy::all(fjall::CompressionType::Lz4))
                 .with_kv_separation(Some(fjall::KvSeparationOptions::default()))
         })?;
-        Ok(Self { db, keyspace })
+
+        Ok(Self {
+            db: db.clone(),
+            keyspace,
+            flusher: Arc::new(Flusher::spawn(db)),
+        })
     }
 
     /// Capture a command and associate it with the given history id.
@@ -78,6 +189,7 @@ impl OutputCapture {
         let key = id.into_bytes();
         let value = capture.encode_to_vec();
 
+        let flusher = self.flusher.clone();
         tokio::task::spawn_blocking(move || {
             let mut tx = db.write_tx()?;
             if tx.contains_key(&keyspace, key)? {
@@ -86,7 +198,10 @@ impl OutputCapture {
 
             tx.insert(&keyspace, key, value);
             match tx.commit()? {
-                Ok(()) => Ok(()),
+                Ok(()) => {
+                    flusher.kick();
+                    Ok(())
+                }
                 // Another writer committed this key first, so it's already captured.
                 Err(fjall::Conflict) => Err(CaptureError::AlreadyExists),
             }
