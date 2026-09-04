@@ -470,3 +470,93 @@ impl HistoryJournal {
         BroadcastStream::new(self.broadcast.subscribe())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use atuin_client::history::History;
+    use atuin_domain::record::CmdOrigin;
+    use rstest::{fixture, rstest};
+
+    use super::*;
+
+    fn in_flight(cmd: &str) -> InFlightCmd {
+        let history: History = History::daemon()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command(cmd)
+            .cwd("/tmp")
+            .session("018f9db6-2222-7000-8000-000000000001")
+            .cmd_origin(CmdOrigin::try_from("host:user").unwrap())
+            .build()
+            .into();
+        InFlightCmd {
+            span: tracing::trace_span!("test", history_id = %history.id),
+            history,
+        }
+    }
+
+    #[fixture]
+    fn map() -> (DashMap<HistoryId, InFlightCmd>, HistoryId) {
+        let map = DashMap::new();
+        let cmd = in_flight("echo lease");
+        let id = cmd.history.id;
+        map.insert(id, cmd);
+        (map, id)
+    }
+
+    /// Dropping the lease without committing puts the command back, unchanged.
+    #[rstest]
+    fn dropped_lease_rolls_back(map: (DashMap<HistoryId, InFlightCmd>, HistoryId)) {
+        let (map, id) = map;
+        {
+            let mut lease = ActiveCmdLease::take(&map, id).expect("in flight");
+            assert!(map.get(&id).is_none(), "checked-out command must leave the map");
+            lease.exit = 42;
+        }
+        let restored = map.get(&id).expect("rolled back");
+        assert_eq!(restored.history.exit, 42, "mutations made through the lease are kept");
+    }
+
+    /// Committing consumes the lease and the command stays out of the map.
+    #[rstest]
+    fn committed_lease_stays_out(map: (DashMap<HistoryId, InFlightCmd>, HistoryId)) {
+        let (map, id) = map;
+        let lease = ActiveCmdLease::take(&map, id).expect("in flight");
+        let cmd = lease.commit();
+        assert_eq!(cmd.history.id, id);
+        assert!(map.get(&id).is_none());
+        assert!(map.is_empty());
+    }
+
+    /// Only one lease can hold a command at a time; a second `take` sees nothing in flight.
+    #[rstest]
+    fn second_take_while_leased_is_none(map: (DashMap<HistoryId, InFlightCmd>, HistoryId)) {
+        let (map, id) = map;
+        let first = ActiveCmdLease::take(&map, id).expect("in flight");
+        assert!(ActiveCmdLease::take(&map, id).is_none());
+        drop(first);
+        assert!(ActiveCmdLease::take(&map, id).is_some(), "rolled back, so takeable again");
+    }
+
+    #[rstest]
+    fn take_of_unknown_id_is_none(map: (DashMap<HistoryId, InFlightCmd>, HistoryId)) {
+        let (map, _) = map;
+        assert!(ActiveCmdLease::take(&map, HistoryId::from_bytes([9u8; 16])).is_none());
+        assert_eq!(map.len(), 1, "an unknown id must not disturb the map");
+    }
+
+    /// The lease's span is the command's own span, so finish() traces under it.
+    #[rstest]
+    fn lease_exposes_the_command_span(map: (DashMap<HistoryId, InFlightCmd>, HistoryId)) {
+        let (map, id) = map;
+        let lease = ActiveCmdLease::take(&map, id).unwrap();
+        // `Span::metadata()` returns the span's static descriptor regardless of whether a
+        // subscriber is recording it (`is_disabled()` is what depends on that), so this holds
+        // whether or not the test binary has installed a tracing subscriber.
+        assert_eq!(
+            lease.span().metadata().map(|m| m.name()),
+            Some("test"),
+            "the lease's span must be the fixture's `trace_span!(\"test\", ..)`"
+        );
+        assert_eq!(lease.id, id, "Deref reaches the History");
+    }
+}

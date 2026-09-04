@@ -26,3 +26,7 @@ test-behavior.sh
 # vocabulary under .vale/styles/config/ is source.
 /.vale/styles/*
 !/.vale/styles/config/
+
+# proptest regenerates this on every failing run; the intentionally red timestamp proptest in the
+# daemon adversarial suite writes one on every run.
+crates/atuin-daemon/tests/*.proptest-regressions
