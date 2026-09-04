@@ -173,8 +173,10 @@ impl OutputSyncHandle {
             .expect("output-capture sync task panicked");
 
         if let Err(e) = result {
-            // The flush failed, so those writes are still unsynced: re-arm the
-            // flag so the next tick retries them.
+            // A persist failure is fatal: fjall poisons the database, so every
+            // subsequent persist (and write) short-circuits to `Err`. There is
+            // no recoverable retry here; re-arm only so `dirty` keeps telling
+            // the truth that these writes are still unsynced.
             self.dirty.store(true, Ordering::SeqCst);
             return Err(SyncError::from(e));
         }
@@ -194,7 +196,10 @@ impl OutputSyncHandle {
             .await
             .expect("output-capture sync task panicked");
         if let Err(e) = result {
-            // Flush failed: those writes are still unsynced, so re-arm for retry.
+            // A persist failure is fatal: fjall poisons the database, so every
+            // subsequent persist (and write) short-circuits to `Err`. There is
+            // no recoverable retry here; re-arm only so `dirty` keeps telling
+            // the truth that these writes are still unsynced.
             self.dirty.store(true, Ordering::SeqCst);
             return Err(SyncError::from(e));
         }
@@ -216,7 +221,14 @@ pub async fn run_periodic_sync(handle: OutputSyncHandle, period: Duration) {
     loop {
         ticker.tick().await;
         if let Err(e) = handle.sync_if_dirty().await {
-            tracing::warn!("periodic output-capture flush failed: {e}");
+            // A persist failure poisons the fjall database: every subsequent
+            // persist (and write) will also fail, so retrying on the next
+            // tick is futile. Log once and stop the loop instead of spamming
+            // a warning every tick forever.
+            tracing::error!(
+                "output-capture flush failed, database is now unrecoverable, stopping periodic flush: {e}"
+            );
+            return;
         }
     }
 }

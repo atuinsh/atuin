@@ -129,7 +129,10 @@ pub async fn boot(
     // Stop all components on shutdown
     daemon.stop_components().await;
 
-    // Final durable flush: guarantee everything captured this session is on disk.
+    // Final flush: best-effort attempt to get everything captured so far onto
+    // disk. A capture still in flight when this runs may land after this
+    // fsync; it would still survive a daemon restart (page cache) but not a
+    // power loss in that sub-second window.
     if let Err(e) = output_sync.sync_now().await {
         tracing::warn!("final output-capture flush failed: {e}");
     }
