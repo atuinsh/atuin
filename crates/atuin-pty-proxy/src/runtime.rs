@@ -43,24 +43,21 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
         }
     };
 
-    let shell_path = if let Some(ref path) = options.shell {
+    let shell_path = options.shell.as_ref().map(|path| {
         if path.is_absolute() {
-            Some(path.clone())
+            path.clone()
         } else if let Ok(paths) = std::env::var("PATH") {
             // Resolve via $PATH
             std::env::split_paths(&paths)
-                .map(|p| p.join(path))
-                .find(|p| p.is_file())
+                .map(|directory| directory.join(path))
+                .find(|candidate| candidate.is_file())
                 // Fallback if not found in $PATH
-                .or_else(|| Some(path.clone()))
+                .unwrap_or_else(|| path.clone())
         } else {
             // No $PATH variable
-            Some(path.clone())
+            path.clone()
         }
-    } else {
-        // No shell specified
-        None
-    };
+    });
 
     let mut cmd = match shell_path {
         Some(ref path) => CommandBuilder::new(path),

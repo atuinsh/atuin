@@ -349,7 +349,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn test_proc_path_resolution() {
-        let pid = std::process::id() as libc::pid_t;
+        let pid = std::process::id();
         let expected = std::env::current_exe().unwrap().canonicalize().unwrap();
 
         #[cfg(target_os = "linux")]
@@ -357,7 +357,10 @@ mod tests {
 
         #[cfg(target_os = "macos")]
         let resolved = {
+            let pid: libc::pid_t = pid.try_into().unwrap();
             let mut buf = [0u8; 4096];
+            // Safety: `buf` is writable for `buf.len()` bytes, and `pid` identifies
+            // this process.
             let res = unsafe {
                 libc::proc_pidpath(
                     pid,
