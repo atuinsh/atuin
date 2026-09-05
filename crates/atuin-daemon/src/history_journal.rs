@@ -213,11 +213,14 @@ impl HistoryJournal {
             duration = Empty,
         );
 
-        self.active_cmds.insert(id, InFlightCmd {
-            history: history.clone(),
-            span,
-            finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
-        });
+        self.active_cmds.insert(
+            id,
+            InFlightCmd {
+                history: history.clone(),
+                span,
+                finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
+            },
+        );
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
     }
@@ -245,6 +248,8 @@ impl HistoryJournal {
     ) -> Result<FinishedCmd, CmdFinishError> {
         // Careful! We need to ensure that the finalization_mutex gets guarded _while_ under the
         // dashmap lock.
+        //
+        // Make sure you read the docs of [`ActveCmd::finalization_mutex`].
         let mutex = self
             .active_cmds
             .get(&history_id)
@@ -263,31 +268,21 @@ impl HistoryJournal {
         span.record("exit_code", exit_code);
         span.record("duration", history.duration);
 
-        let (history_record_id, history_record_idx) = {
-            // Persist while the entry is *still in the map*. A concurrent `delete` is blocked on
-            // the per-id lock, so once it proceeds it sees the id either still in flight (and
-            // cancels it) or fully persisted (and tombstones the durable `Create`) -- never in a
-            // window where the `Create` has not yet landed. A `?` here returns before the
-            // `remove` below, leaving the command in flight so a retry can finish it.
-            self.history_db
-                .save(&history)
-                .instrument(span.clone())
-                .await
-                .map_err(|e| CmdFinishError::HistoryDbFailed(e.into()))?;
+        self.history_db
+            .save(&history)
+            .instrument(span.clone())
+            .await
+            .map_err(|e| CmdFinishError::HistoryDbFailed(e.into()))?;
 
-            let ids = self
-                .history_store
-                .push(history.clone())
-                .instrument(span.clone())
-                .await
-                .map_err(CmdFinishError::HistoryStoreFailed)?;
+        let (history_record_id, history_record_idx) = self
+            .history_store
+            .push(history.clone())
+            .instrument(span.clone())
+            .await
+            .map_err(CmdFinishError::HistoryStoreFailed)?;
 
-            // Persistence succeeded; stop treating the command as in flight.
-            self.active_cmds.remove(&history_id);
-            ids
-        };
+        self.active_cmds.remove(&history_id);
 
-        // The command is persisted and out of the map; the per-id lock has nothing left to guard.
         drop(lock);
 
         // TODO(markovejnovic): This is a little bit hacked-together. I'm thinking it would be good
