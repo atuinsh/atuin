@@ -14,12 +14,11 @@ use tonic::{Request, Response, Status};
 use tracing::{Level, instrument};
 
 use crate::DaemonHandle;
-use crate::grpc::common::pb::TryCollectResultsCapped;
 use crate::grpc::history::pb::history_server::History as GrpcService;
 use crate::grpc::history::pb::{
     CancelHistoryReply, CancelHistoryRequest, DeleteHistoryReply, DeleteHistoryRequest,
-    EndHistoryReply, EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse, Lagged,
-    MAX_DELETE_HISTORY_IDS, RebuildHistoryReply, RebuildHistoryRequest,
+    DeleteHistoryStreamExt, EndHistoryReply, EndHistoryRequest, GetCommandOutputRequest,
+    GetCommandOutputResponse, Lagged, RebuildHistoryReply, RebuildHistoryRequest,
     RegisterCommandOutputRequest, RegisterCommandOutputResponse, ShutdownReply, ShutdownRequest,
     StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent,
     TailHistoryReply, TailHistoryRequest,
@@ -323,7 +322,7 @@ impl GrpcService for Service {
         &self,
         request: Request<tonic::Streaming<DeleteHistoryRequest>>,
     ) -> Result<Response<DeleteHistoryReply>, Status> {
-        let ids = request.into_inner().try_collect_capped(MAX_DELETE_HISTORY_IDS).await?;
+        let ids = request.into_inner().collect_history_ids().await?;
 
         let search_settings = self.daemon_handle.settings().await.search.clone();
         let deleted = self.journal.delete(ids, &search_settings).await?;

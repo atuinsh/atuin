@@ -27,7 +27,7 @@ impl From<DomainRecordId> for RecordId {
 #[error("too many items in one request stream: the limit is {0}")]
 pub struct TooManyItemsError(pub usize);
 
-/// Why draining a client-streamed, chunked request with [`TryCollectResultsCapped`] failed.
+/// Why draining a client-streamed, chunked request with [`TryCollectResultsCappedExt`] failed.
 #[derive(Debug, Error)]
 pub enum CollectCappedError<E: std::error::Error> {
     /// The stream carried more than the caller's `max` items.
@@ -57,7 +57,7 @@ where
 }
 
 /// Collect a client-streamed, chunked request into one validated, capped `Vec`.
-pub trait TryCollectResultsCapped<C, T, E>: Stream<Item = Result<C, Status>> + Sized
+pub trait TryCollectResultsCappedExt<C, T, E>: Stream<Item = Result<C, Status>> + Sized
 where
     C: IntoIterator<Item = Result<T, E>>,
     E: std::error::Error,
@@ -90,7 +90,7 @@ where
     }
 }
 
-impl<S, C, T, E> TryCollectResultsCapped<C, T, E> for S
+impl<S, C, T, E> TryCollectResultsCappedExt<C, T, E> for S
 where
     S: Stream<Item = Result<C, Status>>,
     C: IntoIterator<Item = Result<T, E>>,

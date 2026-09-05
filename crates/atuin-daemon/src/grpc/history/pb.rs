@@ -5,6 +5,7 @@ mod codegen {
     tonic::include_proto!("history");
 }
 
+use std::future::Future;
 use std::time::Duration;
 
 use atuin_client::history::{History, HistoryId as DomainHistoryId};
@@ -18,7 +19,9 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use tonic::Status;
 
-use crate::grpc::common::pb::{self as common, UnsignedIdxRange, Uuid};
+use crate::grpc::common::pb::{
+    self as common, CollectCappedError, TryCollectResultsCappedExt, UnsignedIdxRange, Uuid,
+};
 use crate::history_journal::{
     CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, CmdRebuildError, GetCmdInFlightError,
 };
@@ -178,9 +181,6 @@ impl TryFrom<CancelHistoryRequest> for DomainHistoryId {
     }
 }
 
-/// A `DeleteHistoryRequest` chunk iterates its ids, each parsed from the wire. This is what lets a
-/// stream of these be drained with
-/// [`TryCollectResultsCapped`](crate::grpc::common::pb::TryCollectResultsCapped).
 impl IntoIterator for DeleteHistoryRequest {
     type Item = Result<DomainHistoryId, IdParseError>;
     type IntoIter = std::iter::Map<std::vec::IntoIter<HistoryId>, fn(HistoryId) -> Self::Item>;
@@ -190,17 +190,21 @@ impl IntoIterator for DeleteHistoryRequest {
     }
 }
 
-impl DeleteHistoryRequest {
-    pub fn into_history_ids(self) -> impl Iterator<Item = Result<DomainHistoryId, IdParseError>> {
-        self.into_iter()
-    }
+pub trait DeleteHistoryStreamExt {
+    fn collect_history_ids(
+        self,
+    ) -> impl Future<Output = Result<Vec<DomainHistoryId>, CollectCappedError<IdParseError>>> + Send;
 }
 
-/// The most ids one client-streamed `DeleteHistory` may carry, passed as the cap to
-/// [`TryCollectResultsCapped::try_collect_capped`](crate::grpc::common::pb::TryCollectResultsCapped). 10M
-/// `HistoryId`s is ~160 MiB -- well above any real history, but bounded so a runaway or hostile
-/// client cannot make the daemon accumulate without limit before it deletes anything.
-pub const MAX_DELETE_HISTORY_IDS: usize = 10_000_000;
+impl DeleteHistoryStreamExt for tonic::Streaming<DeleteHistoryRequest> {
+    fn collect_history_ids(
+        self,
+    ) -> impl Future<Output = Result<Vec<DomainHistoryId>, CollectCappedError<IdParseError>>> + Send
+    {
+        const MAX_IDS: usize = 10_000_000;
+        self.try_collect_capped(MAX_IDS)
+    }
+}
 
 /// Map a single journal event to its tail-stream reply.
 impl From<CmdEvent> for TailHistoryEvent {
@@ -407,7 +411,9 @@ mod tests {
     use tonic::Code;
 
     use super::*;
-    use crate::grpc::common::pb::{CollectCappedError, TooManyItemsError, TryCollectResultsCapped};
+    use crate::grpc::common::pb::{
+        CollectCappedError, TooManyItemsError, TryCollectResultsCappedExt,
+    };
 
     fn good_id_proto() -> HistoryId {
         HistoryId::from(DomainHistoryId::from_bytes([1u8; 16]))
@@ -436,7 +442,7 @@ mod tests {
             Ok(delete_req(&[id_proto(1), id_proto(2)])),
             Ok(delete_req(&[id_proto(3)])),
         ]);
-        let ids = stream.try_collect_capped(MAX_DELETE_HISTORY_IDS).await.unwrap();
+        let ids = stream.try_collect_capped(100).await.unwrap();
         assert_eq!(ids, vec![
             DomainHistoryId::from_bytes([1; 16]),
             DomainHistoryId::from_bytes([2; 16]),
@@ -448,7 +454,7 @@ mod tests {
     async fn delete_stream_maps_a_malformed_id_to_invalid_argument() {
         let stream =
             futures::stream::iter(vec![Ok(delete_req(&[good_id_proto(), bad_id_proto()]))]);
-        let err = stream.try_collect_capped(MAX_DELETE_HISTORY_IDS).await.unwrap_err();
+        let err = stream.try_collect_capped(100).await.unwrap_err();
         assert!(matches!(err, CollectCappedError::Item(IdParseError::MissingUuid)));
         assert_eq!(Status::from(err).code(), Code::InvalidArgument);
     }
