@@ -72,6 +72,15 @@ macro_rules! assigned {
     };
 }
 
+/// `atuin login`, followed optionally by one of `$flags` and its value somewhere later on the same
+/// line. The search window is bounded so that a line mentioning `atuin login` many times costs
+/// linear rather than quadratic time; no real login line has 512 characters before its password.
+macro_rules! login_flag {
+    ($flags:literal) => {
+        concat!(r"atuin\s+login(?:[^\n]{0,512}?\s-(?:", $flags, r")[= \t]*", secret_value!(), ")?")
+    };
+}
+
 /// Every credential shape Atuin recognises.
 static SECRET_PATTERNS: &[Pattern] = &[
     Pattern {
@@ -132,7 +141,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     // and `atuin login` takes both at once.
     Pattern {
         name: "Atuin login password",
-        regex: r#"atuin\s+login(?:[^\n]*?\s-(?:p|-password)[=\s]+(?<secret>"[^"]*"|'[^']*'|\S+))?"#,
+        regex: login_flag!("p|-password"),
         #[cfg(test)]
         tests: &[
             Test {
@@ -148,7 +157,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     },
     Pattern {
         name: "Atuin login key",
-        regex: r#"atuin\s+login(?:[^\n]*?\s-(?:k|-key)[=\s]+(?<secret>"[^"]*"|'[^']*'|\S+))?"#,
+        regex: login_flag!("k|-key"),
         #[cfg(test)]
         tests: &[Test {
             input: "atuin login -k \"lots of random words\"",
@@ -806,6 +815,72 @@ mod tests {
             matches!(redact(&input), Cow::Borrowed(_)),
             input == expected,
             "Borrowed must mean unchanged for {input:?}"
+        );
+    }
+
+    /// Every flag spelling against every shape; the password and key patterns share one builder so
+    /// that coverage is symmetric between them, which it was not before.
+    #[rstest]
+    fn every_login_flag_spelling_is_redacted(
+        #[values("-p", "--password", "-k", "--key")] flag: &str,
+        #[values(
+            ("atuin login FLAG hunter2", "atuin login FLAG ****"),
+            ("atuin login FLAG=hunter2", "atuin login FLAG=****"),
+            ("atuin login FLAG 'hunter two'", "atuin login FLAG ****"),
+            ("atuin login FLAG \"hunter two\"", "atuin login FLAG ****"),
+            ("atuin login -u me FLAG hunter2 --other x", "atuin login -u me FLAG **** --other x"),
+            ("atuin login FLAG \"it's \\\"quoted\\\" here\"", "atuin login FLAG ****"),
+            ("atuin login FLAG 'it'\"'\"'s'", "atuin login FLAG ****"),
+            ("atuin login FLAG \"hun\"ter2", "atuin login FLAG ****"),
+            ("atuin login FLAG \"oops\nls -la\ncat f", "atuin login FLAG ****\nls -la\ncat f"),
+            ("atuin login FLAG", "atuin login FLAG"),
+            ("atuin login FLAG ****", "atuin login FLAG ****"),
+        )]
+        shape: (&str, &str),
+    ) {
+        let (input, expected) = (shape.0.replace("FLAG", flag), shape.1.replace("FLAG", flag));
+
+        assert_eq!(&*redact(&input), expected, "input {input:?}");
+        assert!(contains_secret(&input), "{input:?} must still be recognised");
+        assert_eq!(
+            matches!(redact(&input), Cow::Borrowed(_)),
+            input == expected,
+            "Borrowed must mean unchanged for {input:?}"
+        );
+    }
+
+    /// clap accepts a short flag's value attached: `-phunter2`.
+    #[rstest]
+    #[case::attached_password("atuin login -u me -phunter2", "atuin login -u me -p****")]
+    #[case::attached_key("atuin login -kabc", "atuin login -k****")]
+    #[case::both_attached(
+        "atuin login --password=hunter2 -kabc",
+        "atuin login --password=**** -k****"
+    )]
+    // A following flag is taken as the value. This was already so and is not worth a lookahead
+    // the regex crate does not have; the leak direction is safe (over-redaction).
+    #[case::flag_as_value_is_over_redacted("atuin login -p -k y", "atuin login -p **** ****")]
+    fn login_attached_and_adjacent_flags(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(&*redact(input), expected);
+    }
+
+    /// The login patterns' search window is bounded, so a line mentioning `atuin login` many times
+    /// costs linear time. Unbounded, this input took 35 s in a debug build (23.6 s release) and
+    /// stalled the capture sink long enough to drop later commands' output; bounded it is under
+    /// 2 s debug. The budget leaves room for a slow CI box while still catching a return to
+    /// quadratic.
+    #[test]
+    fn many_login_mentions_on_one_line_stay_linear() {
+        use std::time::{Duration, Instant};
+
+        let line = "atuin login ".repeat(87_381);
+        let started = Instant::now();
+        assert!(matches!(redact(&line), Cow::Borrowed(_)));
+        let took = started.elapsed();
+
+        assert!(
+            took < Duration::from_secs(10),
+            "took {took:?}; the login patterns have gone quadratic again"
         );
     }
 }
