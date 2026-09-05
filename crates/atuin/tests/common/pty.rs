@@ -183,7 +183,8 @@ impl PtyShell {
                 let state = self.state.0.lock();
                 let screen = state.parser.screen();
                 let cursor = screen.cursor_position();
-                let snapshot = (cursor, screen.rows(0, screen.size().1).nth(usize::from(cursor.0)));
+                let snapshot =
+                    (cursor, screen.rows(0, screen.size().1.get()).nth(usize::from(cursor.0)));
                 drop(state);
                 snapshot
             };
@@ -191,7 +192,7 @@ impl PtyShell {
             self.wait_for_terminal("typed character", |state| {
                 let screen = state.parser.screen();
                 screen.cursor_position() != cursor
-                    || screen.rows(0, screen.size().1).nth(usize::from(cursor.0)) != line
+                    || screen.rows(0, screen.size().1.get()).nth(usize::from(cursor.0)) != line
             });
         }
     }
@@ -206,7 +207,7 @@ impl PtyShell {
         self.wait_for_terminal("empty shell prompt", |state| {
             let screen = state.parser.screen();
             screen
-                .rows(0, screen.size().1)
+                .rows(0, screen.size().1.get())
                 .nth(usize::from(screen.cursor_position().0))
                 .is_some_and(|line| line.trim() == PROMPT)
         });

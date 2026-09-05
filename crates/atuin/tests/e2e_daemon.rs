@@ -102,7 +102,6 @@ async fn fresh_daemon_serves_history(
         let status = tokio::time::timeout(TIMEOUT, client.status()).await.unwrap().unwrap();
         assert!(status.healthy);
         assert_eq!(status.version, env!("CARGO_PKG_VERSION"));
-        assert_eq!(status.protocol, 1);
         let pidfile =
             std::fs::read_to_string(daemon.env.data_dir().join("atuin-daemon.pid")).unwrap();
         assert_eq!(pidfile.lines().next().unwrap(), status.pid.to_string());

@@ -67,6 +67,8 @@ impl Shell {
         if let Some(settings) = settings {
             env.write_config(settings);
         }
+        // Finish migrations before background shell hooks can open the databases.
+        env.run(&["store", "status"]);
         let rc = env.home().join(&config.rc);
         fs::create_dir_all(rc.parent().unwrap()).unwrap();
         fs::write(rc, &config.script).unwrap();

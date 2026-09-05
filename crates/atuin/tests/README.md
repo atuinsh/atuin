@@ -38,11 +38,12 @@ PROMPT="E2E_PROMPT> "
   override the paths; `$HOME` in a default path means the caller's home. The
   resolved values are passed to the shell. See `shells/bash-blesh.toml`.
 
-Each case gets its own home, databases, and daemon socket. PTY input waits for
-rendered characters; command completion waits for an empty prompt and terminal
-input mode. Polling
-for history persistence and daemon health has deadlines; there are no test
-retries or fixed startup sleeps.
+Each case gets its own home, databases, and daemon socket. PTY cases initialize
+empty databases before launching the shell, so background hooks cannot race
+with first-use migrations. Smoke and daemon cases keep their fresh-install setup.
+PTY input waits for rendered characters; command completion waits for an empty
+prompt and terminal input mode. Polling for history persistence and daemon health
+has deadlines; there are no test retries or fixed startup sleeps.
 
 `e2e_smoke` covers CLI startup and keys. `e2e_pty` covers recording, search,
 selection, cancellation, quoting, resize, and filter switching. `e2e_daemon`
