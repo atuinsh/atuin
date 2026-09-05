@@ -16,18 +16,18 @@ impl KeyspaceTrait for Keyspace {
     const NAME: &'static str = "output_capture_v1";
 
     type Key = HistoryId;
-    type Value = CommandCapture;
-
-    // Keys are the 16 raw UUID bytes; values are hand-encoded MessagePack.
     type KeySerialized = [u8; 16];
-    type ValueSerialized = Vec<u8>;
-
     type KeySerializationError = Infallible;
+
+    type Value = CommandCapture;
+    type ValueSerialized = Vec<u8>;
+    type ValueSerializationError = EncodeError;
+    type ValueDeserializationError = DecodeError<'static>;
+
     fn serialize_key(key: Self::Key) -> Result<Self::KeySerialized, Self::KeySerializationError> {
         Ok(key.into_bytes())
     }
 
-    type ValueSerializationError = EncodeError;
     fn serialize_value(
         value: Self::Value,
     ) -> Result<Self::ValueSerialized, Self::ValueSerializationError> {
@@ -41,7 +41,6 @@ impl KeyspaceTrait for Keyspace {
         Ok(out.into_vec())
     }
 
-    type ValueDeserializationError = DecodeError<'static>;
     fn deserialize_value(
         serialized: Self::ValueSerialized,
     ) -> Result<Self::Value, Self::ValueDeserializationError> {
@@ -73,5 +72,13 @@ impl KeyspaceTrait for Keyspace {
             })
         })()
         .map_err(DecodeError::into_static)
+    }
+
+    fn create_options() -> fjall::KeyspaceCreateOptions {
+        fjall::KeyspaceCreateOptions::default()
+            .data_block_compression_policy(fjall::config::CompressionPolicy::all(
+                fjall::CompressionType::Lz4,
+            ))
+            .with_kv_separation(Some(fjall::KvSeparationOptions::default()))
     }
 }

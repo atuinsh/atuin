@@ -14,7 +14,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use atuin_client::history::{CommandCapture, HistoryId};
-use fjall::config::CompressionPolicy;
 use fjall::{OptimisticTxDatabase, OptimisticTxKeyspace, PersistMode, Readable};
 use keyspace::{Keyspace as _, KeyspaceV1};
 use thiserror::Error;
@@ -166,15 +165,10 @@ impl OutputCapture {
 
     /// Create a new [`OutputCapture`] system.
     pub fn new(db: OptimisticTxDatabase) -> fjall::Result<Self> {
-        let keyspace = db.keyspace(ActiveKeyspaceSchema::NAME, || {
-            fjall::KeyspaceCreateOptions::default()
-                .data_block_compression_policy(CompressionPolicy::all(fjall::CompressionType::Lz4))
-                .with_kv_separation(Some(fjall::KvSeparationOptions::default()))
-        })?;
-
         Ok(Self {
             db: db.clone(),
-            keyspace,
+            keyspace: db
+                .keyspace(ActiveKeyspaceSchema::NAME, ActiveKeyspaceSchema::create_options)?,
             flusher: Arc::new(Flusher::spawn(db)),
         })
     }

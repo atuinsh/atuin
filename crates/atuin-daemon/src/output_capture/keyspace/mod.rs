@@ -18,31 +18,45 @@ pub use v1::Keyspace as KeyspaceV1;
 
 /// See the moduledoc.
 pub trait Keyspace {
+    /// The type of the key in the output capture.
+    type Key;
+
     /// The serialized representation of the key.
     type KeySerialized: Into<UserKey>;
 
+    /// Error thrown when trying to serialize keys.
+    type KeySerializationError;
+
+    /// The type of the value in the output capture.
+    type Value;
+
     /// The serialized representation of the value.
     type ValueSerialized: Into<UserValue>;
+
+    /// Errors thrown when trying to serialize values.
+    type ValueSerializationError;
+
+    /// Erors thrown when trying to deserialize values.
+    type ValueDeserializationError;
 
     /// The name of the keyspace. Ensure no other keyspaces share this name as bad things can
     /// happen.
     const NAME: &'static str;
 
-    type Key;
-    type Value;
-
-    type KeySerializationError;
-
     /// Try to serialize the key into a serialized form.
     fn serialize_key(key: Self::Key) -> Result<Self::KeySerialized, Self::KeySerializationError>;
 
-    type ValueSerializationError;
+    /// Try to serialize the value.
     fn serialize_value(
         value: Self::Value,
     ) -> Result<Self::ValueSerialized, Self::ValueSerializationError>;
 
-    type ValueDeserializationError;
+    /// Try to deserialize the value.
     fn deserialize_value(
         serialized: Self::ValueSerialized,
     ) -> Result<Self::Value, Self::ValueDeserializationError>;
+
+    /// Create a [`fjall::KeyspaceCreateOptions`] which defines the compation/compression/etc fjall
+    /// options.
+    fn create_options() -> fjall::KeyspaceCreateOptions;
 }
