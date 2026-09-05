@@ -19,9 +19,8 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use tonic::Status;
 
-use crate::grpc::common::pb::{
-    self as common, CollectCappedError, TryCollectResultsCappedExt, UnsignedIdxRange, Uuid,
-};
+use crate::grpc::common::pb::{self as common, UnsignedIdxRange, Uuid};
+use crate::grpc::common::{CollectCappedError, TryCollectResultsCappedExt};
 use crate::history_journal::{
     CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, CmdRebuildError, GetCmdInFlightError,
 };
@@ -411,9 +410,6 @@ mod tests {
     use tonic::Code;
 
     use super::*;
-    use crate::grpc::common::pb::{
-        CollectCappedError, TooManyItemsError, TryCollectResultsCappedExt,
-    };
 
     fn good_id_proto() -> HistoryId {
         HistoryId::from(DomainHistoryId::from_bytes([1u8; 16]))
