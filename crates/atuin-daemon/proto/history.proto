@@ -20,8 +20,13 @@ enum AuthorKind {
 }
 
 message StartHistoryRequest {
-  // If people are still using my software in ~530 years, they can figure out a u128 migration
-  uint64 timestamp = 1; // nanosecond unix epoch
+  // Nanosecond UNIX epoch
+  //
+  // Please note this **must** be an i64.
+  // The database timestamp is also an i64, so it is better for this to be an i64 too.
+  //
+  // TODO(markovejnovic): Use google.Duration.
+  int64 timestamp = 1;
   string command = 2;
   string cwd = 3;
   string session = 4;
@@ -105,7 +110,13 @@ message ShutdownReply {
 message TailHistoryRequest {}
 
 message HistoryEntry {
-  uint64 timestamp = 1; // nanosecond unix epoch
+  // Nanosecond UNIX epoch
+  //
+  // Please note this **must** be an i64.
+  // The database timestamp is also an i64, so it is better for this to be an i64 too.
+  //
+  // TODO(markovejnovic): Use google.Duration.
+  int64 timestamp = 1;
   HistoryId id = 2;
   string command = 3;
   string cwd = 4;

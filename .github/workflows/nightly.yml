@@ -1,0 +1,45 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: "0 10 * * *"
+  workflow_dispatch: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  nightly-tests:
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install OpenSSL dev libraries (Linux)
+        if: runner.os == 'Linux'
+        uses: awalsh128/cache-apt-pkgs-action@v1.6.3
+        with:
+          packages: libssl-dev pkg-config
+          version: 1.0
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.0
+
+      - uses: taiki-e/install-action@v2
+        name: Install nextest
+        with:
+          tool: cargo-nextest
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+             ~/.cargo/git
+             target
+          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run nightly tests
+        run: cargo nextest run -p atuin-daemon --test nightly --run-ignored all

@@ -703,7 +703,7 @@ impl TailEvent {
             }
             None => bail!("daemon sent an unspecified history tail event"),
         };
-        let timestamp = OffsetDateTime::from_unix_nanos_u64(history.timestamp);
+        let timestamp = OffsetDateTime::from_unix_nanos_i64(history.timestamp);
         let author_kind = history.author_kind();
 
         Ok(Self {
@@ -1374,5 +1374,57 @@ mod tests {
         assert!(plain.contains("pending"));
         assert!(plain.contains("duration:"));
         assert!(plain.contains("running"));
+    }
+
+    /// With the daemon enabled, a delete is the daemon's job: if it cannot be reached the command
+    /// fails loudly and nothing is deleted behind its back (a running daemon would otherwise serve
+    /// a stale index). With the daemon disabled, the CLI deletes locally.
+    #[cfg(feature = "daemon")]
+    #[rstest]
+    #[case::daemon_enabled_but_unreachable(true, true, 2)]
+    #[case::daemon_disabled(false, false, 0)]
+    #[tokio::test]
+    async fn delete_routes_through_the_daemon_only_when_enabled(
+        #[future] db: Sqlite,
+        #[case] daemon_enabled: bool,
+        #[case] expect_error: bool,
+        #[case] rows_left: i64,
+    ) {
+        use atuin_client::record::sqlite_store::SqliteStore;
+        use atuin_common::utils::uuid_v7;
+        use atuin_domain::record::HostId;
+
+        let db = db.await;
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SqliteStore::in_memory(Duration::from_secs(2)).await.unwrap();
+        let history_store = HistoryStore::new(store, HostId(uuid_v7()), paseto_v4::Key::generate());
+        let settings = Settings {
+            daemon: atuin_client::settings::Daemon {
+                enabled: daemon_enabled,
+                autostart: false,
+                socket_path: Some(tmp.path().join("no-daemon-here.sock")),
+                ..Default::default()
+            },
+            ..Settings::utc()
+        };
+        let entries: Vec<History> = ["echo one", "echo two"]
+            .into_iter()
+            .map(|cmd| {
+                History::capture()
+                    .timestamp(time::OffsetDateTime::now_utc())
+                    .command(cmd)
+                    .cwd("/")
+                    .build()
+                    .into()
+            })
+            .collect();
+        for entry in &entries {
+            db.save(entry).await.unwrap();
+        }
+
+        let result = delete_history_entries(&settings, &history_store, &db, entries).await;
+
+        assert_eq!(result.is_err(), expect_error, "{result:?}");
+        assert_eq!(db.history_count(false).await.unwrap(), rows_left);
     }
 }

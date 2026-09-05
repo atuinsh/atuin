@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc deeebd103a0eaae0ed030195aa5b2ea2007cb44fe573b84a4bde62cbd04d3ab7 # shrinks to req = StartHistoryRequest { timestamp: 9223372036854775808, command: "A", cwd: "", session: "00000000000000000000000000000000", hostname: "a:a", author: "", intent: "", shell: "", author_kind: Unspecified }, exit = 0, duration = None
