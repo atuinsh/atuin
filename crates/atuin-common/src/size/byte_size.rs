@@ -1,7 +1,7 @@
 //! A count of bytes with a human-friendly text form.
 
 use std::fmt;
-use std::num::IntErrorKind;
+use std::num::{IntErrorKind, ParseIntError};
 use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer};
@@ -12,10 +12,8 @@ use super::text_or_bytes;
 /// A number of bytes.
 ///
 /// The text form is `<number><unit>`: `1MB`, `512 KB`, `1.5GB`, or a bare `4096` for bytes.
-/// Units are powers of 1024 -- `1MB` is 1,048,576 bytes, as with `du`, `dd`, Docker and
-/// journald, which is what people at a shell expect -- and are case-insensitive. The IEC
-/// spellings (`MiB`) and single letters (`M`) are accepted as synonyms. Fractions of a unit are
-/// floored to whole bytes; fractions of a *byte* are rejected.
+/// Units are powers of 1024 -- `1MB` is 1,048,576 bytes. Fractions of a unit are floored to whole
+/// bytes; fractions of a *byte* are rejected.
 ///
 /// Serializes as its text form. Deserializes from either the text form or a bare integer, so
 /// `max_output_size = "1MB"` and `max_output_size = 1048576` are both accepted in `config.toml`.
@@ -130,14 +128,6 @@ pub enum ByteSizeParseError {
     Overflow,
 }
 
-/// Parse a run of ASCII digits. `number` is the whole numeric part of the input, for the error.
-fn parse_digits(digits: &str, number: &str) -> Result<u128, ByteSizeParseError> {
-    digits.parse().map_err(|e: std::num::ParseIntError| match e.kind() {
-        IntErrorKind::PosOverflow => ByteSizeParseError::Overflow,
-        _ => ByteSizeParseError::InvalidNumber(number.to_owned()),
-    })
-}
-
 impl FromStr for ByteSize {
     type Err = ByteSizeParseError;
 
@@ -164,16 +154,18 @@ impl FromStr for ByteSize {
             return Err(ByteSizeParseError::FractionalBytes);
         }
 
-        let whole = if whole.is_empty() {
-            0
-        } else {
-            parse_digits(whole, number)?
+        // Each half is a run of ASCII digits; an absent half (`1.`, `.5`) is zero.
+        let parse_digits = |digits: &str| -> Result<u128, ByteSizeParseError> {
+            if digits.is_empty() {
+                return Ok(0);
+            }
+            digits.parse().map_err(|e: ParseIntError| match e.kind() {
+                IntErrorKind::PosOverflow => ByteSizeParseError::Overflow,
+                _ => ByteSizeParseError::InvalidNumber(number.to_owned()),
+            })
         };
-        let fraction_value = if fraction.is_empty() {
-            0
-        } else {
-            parse_digits(fraction, number)?
-        };
+        let whole = parse_digits(whole)?;
+        let fraction_value = parse_digits(fraction)?;
         let scale =
             10u128.pow(u32::try_from(fraction.len()).expect("bounded by MAX_FRACTION_DIGITS"));
         let multiplier = u128::from(unit.multiplier());
