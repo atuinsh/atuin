@@ -21,6 +21,7 @@ use tonic::Status;
 use crate::grpc::common::pb::{self as common, UnsignedIdxRange, Uuid};
 use crate::history_journal::{
     CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, CmdRebuildError, GetCmdInFlightError,
+    RegisterOutputError,
 };
 use crate::output_capture::{CaptureError, GetOutputError};
 
@@ -209,6 +210,7 @@ impl From<CmdCancelError> for Status {
     fn from(value: CmdCancelError) -> Self {
         match value {
             CmdCancelError::NotFound(_) => Self::not_found(value.to_string()),
+            CmdCancelError::OutputCaptureFailed(_) => Self::internal(value.to_string()),
         }
     }
 }
@@ -244,6 +246,16 @@ impl From<CaptureError> for Status {
         match value {
             CaptureError::AlreadyExists => Self::already_exists(value.to_string()),
             CaptureError::Storage(_) => Self::internal(value.to_string()),
+        }
+    }
+}
+
+impl From<RegisterOutputError> for Status {
+    fn from(value: RegisterOutputError) -> Self {
+        match value {
+            RegisterOutputError::NotLive(_) => Self::not_found(value.to_string()),
+            RegisterOutputError::HistoryDbFailed(_) => Self::internal(value.to_string()),
+            RegisterOutputError::Capture(err) => Self::from(err),
         }
     }
 }
@@ -748,6 +760,14 @@ mod tests {
     #[case(CmdFinishError::HistoryStoreFailed(eyre::eyre!("x")), Code::Internal)]
     #[case(CmdFinishError::HistoryDbFailed(eyre::eyre!("x")), Code::Internal)]
     fn finish_error_status_codes(#[case] err: CmdFinishError, #[case] code: Code) {
+        assert_eq!(Status::from(err).code(), code);
+    }
+
+    #[rstest]
+    #[case(RegisterOutputError::NotLive(DomainHistoryId::from_bytes([0u8; 16])), Code::NotFound)]
+    #[case(RegisterOutputError::HistoryDbFailed(eyre::eyre!("x")), Code::Internal)]
+    #[case(RegisterOutputError::Capture(CaptureError::AlreadyExists), Code::AlreadyExists)]
+    fn register_output_error_status_codes(#[case] err: RegisterOutputError, #[case] code: Code) {
         assert_eq!(Status::from(err).code(), code);
     }
 

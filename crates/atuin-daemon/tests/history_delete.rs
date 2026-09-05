@@ -1,6 +1,7 @@
 //! What a user gets from `atuin history prune/dedup`, `atuin search --delete` and the TUI delete
 //! key now that the daemon owns deletion: exact row removal, a search index that forgets
-//! immediately, tombstones that reach other machines, and rows that survive a failed attempt.
+//! immediately, tombstones that reach other machines, rows that survive a failed attempt, and
+//! captured output that goes with its entry and is never accepted for an entry that is gone.
 #![cfg(unix)]
 
 mod common;
@@ -11,13 +12,14 @@ use std::time::Duration;
 use atuin_client::history::HistoryId;
 use atuin_client::history::store::HistoryRecord;
 use atuin_client::settings::Search;
+use atuin_daemon::grpc::history::pb::RegisterCommandOutputRequest;
 use atuin_daemon::grpc::history::pb::tail_history_reply::Event;
-use atuin_daemon::grpc::history::pb::{CommandCapture, CommandCaptureMeta};
 use atuin_daemon::search::SearchIndex;
-use atuin_daemon::{CmdDeleteError, CmdFinishError};
-use common::{TestEnv, history};
+use atuin_daemon::{CmdDeleteError, CmdFinishError, RegisterOutputError};
+use common::{TestEnv, capture, history};
 use easy_cast::Conv;
 use rstest::*;
+use tonic::Code;
 
 #[fixture]
 async fn env() -> TestEnv {
@@ -301,19 +303,6 @@ async fn failed_finish_keeps_the_command_in_flight(#[case] lock_history_db: bool
     assert_eq!(env.index_count().await, 1);
 }
 
-/// A complete capture (with its required meta) holding `output`.
-fn capture(output: &str) -> CommandCapture {
-    CommandCapture {
-        output: output.to_string(),
-        meta: Some(CommandCaptureMeta {
-            output_truncated: false,
-            output_observed_bytes: u64::conv(output.len()),
-            terminal_width: 80,
-            terminal_height: 24,
-        }),
-    }
-}
-
 /// Deleting an entry also forgets its captured output, whether the command had finished or was
 /// still in flight when the output was registered.
 #[rstest]
@@ -357,4 +346,83 @@ async fn delete_history_rpc_forgets_captured_output(#[future(awt)] env: TestEnv)
         client.get_command_output(id, vec![]).await.unwrap().is_none(),
         "deleting the entry must also delete its captured output"
     );
+}
+
+/// Output may only be registered for a command the daemon knows about. A deleted id -- persisted
+/// or still in flight when it was deleted -- and an id that never existed are refused, and nothing
+/// is stored for them.
+#[rstest]
+#[tokio::test]
+async fn output_for_a_deleted_or_unknown_id_is_refused(
+    #[future(awt)] env: TestEnv,
+    #[values(true, false)] finished: bool,
+) {
+    let deleted = env.journal.start_cmd(history("echo secret"));
+    if finished {
+        env.journal.finish(deleted, 0, Duration::from_millis(1)).await.unwrap();
+    }
+    assert_eq!(env.journal.delete([deleted], &Search::default()).await.unwrap(), 1);
+    let unknown = HistoryId::from_bytes([0xCD; 16]);
+
+    for id in [deleted, unknown] {
+        let err = env.journal.register_command_output(id, capture("late")).await.unwrap_err();
+        assert!(matches!(err, RegisterOutputError::NotLive(_)), "{id}: {err}");
+        assert!(env.journal.get_command_output(id).await.unwrap().is_none(), "{id}");
+    }
+}
+
+/// The refusal reaches the wire as `NOT_FOUND`.
+#[rstest]
+#[tokio::test]
+async fn refused_output_is_not_found_over_the_wire(#[future(awt)] env: TestEnv) {
+    let mut raw = env.raw_history_client().await;
+    let status = raw
+        .register_command_output(RegisterCommandOutputRequest {
+            history_id: Some(HistoryId::from_bytes([0xCD; 16]).into()),
+            capture: Some(capture("late")),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), Code::NotFound, "{status}");
+}
+
+/// Cancelling a command discards the output already captured for it, and output arriving after
+/// the cancel is refused.
+#[rstest]
+#[tokio::test]
+async fn cancel_discards_captured_output(#[future(awt)] env: TestEnv) {
+    let id = env.journal.start_cmd(history("echo failed"));
+    env.journal.register_command_output(id, capture("boom")).await.unwrap();
+    assert!(env.journal.get_command_output(id).await.unwrap().is_some());
+
+    env.journal.cancel(id).await.unwrap();
+
+    assert!(env.journal.get_command_output(id).await.unwrap().is_none());
+    let err = env.journal.register_command_output(id, capture("late")).await.unwrap_err();
+    assert!(matches!(err, RegisterOutputError::NotLive(_)), "{err}");
+}
+
+/// Output that arrives while a delete is part-way through -- after the delete removed the stored
+/// output but before it removed the history record -- is refused rather than stored, so it cannot
+/// outlive the entry. Locking the record store holds the delete at exactly that point.
+#[rstest]
+#[tokio::test]
+async fn output_arriving_mid_delete_is_refused(#[future(awt)] env: TestEnv) {
+    let mut client = env.history_client().await;
+    let id = env.record(&mut client, "echo secret").await;
+
+    let lock = env.lock_record_store().await;
+    let journal = env.journal.clone();
+    let delete = tokio::spawn(async move { journal.delete([id], &Search::default()).await });
+    // Let the delete claim the id, remove its (absent) output, and block on the locked record
+    // store. The harness's default db timeout is 5s, far beyond this wait.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let err = env.journal.register_command_output(id, capture("late")).await.unwrap_err();
+    assert!(matches!(err, RegisterOutputError::NotLive(_)), "{err}");
+
+    lock.release().await;
+    assert_eq!(delete.await.unwrap().unwrap(), 1);
+    assert!(env.journal.get_command_output(id).await.unwrap().is_none());
+    assert!(env.history_db.load(id).await.unwrap().is_none());
 }

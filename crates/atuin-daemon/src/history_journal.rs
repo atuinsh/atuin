@@ -102,6 +102,60 @@ struct InFlightCmd {
     finalization_mutex: Arc<tokio::sync::Mutex<()>>,
 }
 
+/// A fixed set of striped async mutexes indexed by history id.
+///
+/// The gate makes "check that an id is live, then store its output" atomic against "mark the id as
+/// being deleted" (see [`HistoryJournal::register_command_output`] and
+/// [`HistoryJournal::delete`]). Striping keeps it allocation-free: two ids may share a stripe,
+/// which only costs a little unnecessary waiting, never correctness.
+///
+/// Lock order: a stripe is always taken *before* an [`InFlightCmd::finalization_mutex`], and a
+/// task never holds two stripes at once (`delete` marks ids one at a time).
+#[derive(Debug)]
+struct IdGate {
+    stripes: Box<[tokio::sync::Mutex<()>]>,
+}
+
+impl IdGate {
+    const STRIPES: u64 = 64;
+
+    fn new() -> Self {
+        Self {
+            stripes: (0..Self::STRIPES).map(|_| tokio::sync::Mutex::new(())).collect(),
+        }
+    }
+
+    async fn lock(&self, id: HistoryId) -> tokio::sync::MutexGuard<'_, ()> {
+        // UUIDv7 keeps its random bits at the tail, so the tail spreads ids across stripes.
+        let bytes = id.into_bytes();
+        let tail = u64::from_le_bytes(bytes[8..].try_into().expect("a UUID has 16 bytes"));
+        let idx = usize::try_from(tail % Self::STRIPES).expect("a stripe index is below 64");
+        self.stripes[idx].lock().await
+    }
+}
+
+/// The ids a running [`HistoryJournal::delete`] has claimed, released on drop.
+///
+/// Reference-counted in [`HistoryJournal::deleting`] so that two concurrent deletes of the same id
+/// keep it claimed until *both* are done: a delete that fails part-way must not unmark an id
+/// another delete is still tearing down.
+struct DeletingMarks<'a> {
+    deleting: &'a DashMap<HistoryId, usize>,
+    ids: Vec<HistoryId>,
+}
+
+impl Drop for DeletingMarks<'_> {
+    fn drop(&mut self) {
+        for id in &self.ids {
+            // Drop the entry once this was the last delete holding the id.
+            self.deleting.remove_if_mut(id, |_, count| {
+                *count -= 1;
+                *count == 0
+            });
+        }
+    }
+}
+
 /// Registry of in-flight commands which performs output capture, management, storage and
 /// retrieval.
 #[derive(Debug)]
@@ -135,6 +189,15 @@ pub struct HistoryJournal {
 
     /// Durable store for captured command output.
     output_capture: OutputCapture,
+
+    /// Ids a [`Self::delete`] is currently tearing down, reference-counted across concurrent
+    /// deletes. [`Self::register_command_output`] refuses these, so no capture can land between a
+    /// delete's output removal and its record removal.
+    deleting: DashMap<HistoryId, usize>,
+
+    /// Serialises the liveness check + write in [`Self::register_command_output`] against the
+    /// marking in [`Self::delete`] and the teardown in [`Self::cancel`].
+    id_gate: IdGate,
 }
 
 /// Errors returned by [`HistoryJournal::finish`].
@@ -171,6 +234,19 @@ pub enum CmdRebuildError {
 pub enum CmdCancelError {
     #[error("command {0} is not in flight")]
     NotFound(HistoryId),
+    #[error("discarding captured output failed: {0}")]
+    OutputCaptureFailed(#[from] DeleteOutputError),
+}
+
+/// Errors returned by [`HistoryJournal::register_command_output`].
+#[derive(Debug, thiserror::Error)]
+pub enum RegisterOutputError {
+    #[error("command {0} is neither in flight nor persisted; refusing its output")]
+    NotLive(HistoryId),
+    #[error("checking the history db failed: {0}")]
+    HistoryDbFailed(eyre::Report),
+    #[error(transparent)]
+    Capture(#[from] CaptureError),
 }
 
 /// Errors returned by [`HistoryJournal::get`].
@@ -198,6 +274,8 @@ impl HistoryJournal {
             search_index,
             broadcast,
             output_capture,
+            deleting: DashMap::new(),
+            id_gate: IdGate::new(),
         }
     }
 
@@ -314,14 +392,30 @@ impl HistoryJournal {
         })
     }
 
-    /// Cancel a command, discarding its in-memory state without persisting a history entry.
+    /// Cancel a command, discarding its in-memory state -- and any output captured for it --
+    /// without persisting a history entry.
     pub async fn cancel(&self, history_id: HistoryId) -> Result<(), CmdCancelError> {
+        // Taken before the finalization mutex (see `IdGate`). Holding it across the teardown means
+        // a capture for this id either landed before we got here, and is discarded below, or finds
+        // the command gone and is refused.
+        let _gate = self.id_gate.lock(history_id).await;
+
         let lock = self
             .active_cmds
             .get(&history_id)
             .map(|cmd| cmd.finalization_mutex.clone())
             .ok_or(CmdCancelError::NotFound(history_id))?;
         let _guard = lock.lock().await;
+
+        // A concurrent finish or delete may have taken the command while we waited for its mutex;
+        // in that case its output is no longer ours to discard.
+        if !self.active_cmds.contains_key(&history_id) {
+            return Err(CmdCancelError::NotFound(history_id));
+        }
+
+        // Fallible work first: if this fails the command stays in flight and the caller can retry.
+        // Nothing durable refers to a cancelled command, so a buffered removal is enough.
+        self.output_capture.discard([history_id]).await?;
 
         let Some((_id, cmd)) = self.active_cmds.remove(&history_id) else {
             return Err(CmdCancelError::NotFound(history_id));
@@ -333,7 +427,7 @@ impl HistoryJournal {
     }
 
     /// Delete the given history entries from Atuin's memory completely, including any captured
-    /// output they have.
+    /// output they have, and refuse output for them from then on.
     ///
     /// `search_settings` is needed to rebuild the search index's frecency map after the deletion,
     /// so the swapped-in index has correct rankings immediately rather than after the next refresh.
@@ -345,6 +439,14 @@ impl HistoryJournal {
         search_settings: &Search,
     ) -> Result<usize, CmdDeleteError> {
         let ids: Vec<HistoryId> = ids.into_iter().collect();
+
+        // Claim every id before touching anything: from here on `register_command_output` refuses
+        // them, so no capture can land between the output removal below and the record removal
+        // after it. Marking takes the same per-id gate the register path holds across its
+        // check-and-write, so a capture that passed its check is stored by the time its id is
+        // marked, and the removal below sees it. The marks are released when `_marks` drops, on
+        // success or on any early return.
+        let _marks = self.mark_deleting(&ids).await;
 
         // Forget captured output before the history records. This order means a failed call can
         // leave an entry without its output but never output without its entry.
@@ -454,13 +556,53 @@ impl HistoryJournal {
         }
     }
 
-    /// Store a command's captured output. Errors if an output already exists for this id.
+    /// Claim `ids` for a running delete. See [`DeletingMarks`].
+    async fn mark_deleting(&self, ids: &[HistoryId]) -> DeletingMarks<'_> {
+        for id in ids {
+            let _gate = self.id_gate.lock(*id).await;
+            *self.deleting.entry(*id).or_insert(0) += 1;
+        }
+        DeletingMarks {
+            deleting: &self.deleting,
+            ids: ids.to_vec(),
+        }
+    }
+
+    /// Store a command's captured output.
+    ///
+    /// Only commands the daemon knows about -- in flight, or persisted in the history db -- may
+    /// have output. Anything else (deleted, cancelled, or never started) is refused with
+    /// [`RegisterOutputError::NotLive`], so captured output can never outlive its entry.
+    ///
+    /// The liveness check and the write happen under the id's `IdGate` stripe, the same stripe
+    /// [`Self::delete`] takes to mark the id and [`Self::cancel`] holds across its teardown. So a
+    /// capture that passed the check is stored before a delete can mark its id (and the delete's
+    /// output removal sees it), and a capture arriving after the mark is refused. `finish` needs no
+    /// gate: it saves the db row before it drops the in-flight entry, so a finishing command is
+    /// live throughout.
     pub async fn register_command_output(
         &self,
         id: HistoryId,
         capture: CommandCapture,
-    ) -> Result<(), CaptureError> {
-        self.output_capture.capture(id, capture).await
+    ) -> Result<(), RegisterOutputError> {
+        let _gate = self.id_gate.lock(id).await;
+
+        if self.deleting.contains_key(&id) {
+            return Err(RegisterOutputError::NotLive(id));
+        }
+        let live = self.active_cmds.contains_key(&id)
+            || self
+                .history_db
+                .load(id)
+                .await
+                .map_err(|e| RegisterOutputError::HistoryDbFailed(e.into()))?
+                .is_some();
+        if !live {
+            return Err(RegisterOutputError::NotLive(id));
+        }
+
+        self.output_capture.capture(id, capture).await?;
+        Ok(())
     }
 
     /// Retrieve a command's captured output, if any.

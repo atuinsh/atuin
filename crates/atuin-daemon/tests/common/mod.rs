@@ -28,12 +28,14 @@ use atuin_daemon::client::{HistoryClient, SearchClient, SearchParams};
 use atuin_daemon::grpc::HistoryService;
 use atuin_daemon::grpc::history::pb;
 use atuin_daemon::grpc::history::pb::history_server::HistoryServer;
+use atuin_daemon::grpc::history::pb::{CommandCapture, CommandCaptureMeta};
 use atuin_daemon::search::{IndexFilterMode, SearchIndex};
 use atuin_daemon::{
     Daemon, DaemonEvent, DaemonHandle, HistoryJournal, OutputCapture, SearchComponent,
 };
 use atuin_domain::record::{CmdOrigin, HostId, RecordTag};
 use corpus::{HistoryGen, Seeded};
+use easy_cast::Conv;
 use hyper_util::rt::TokioIo;
 use tempfile::TempDir;
 use tokio::net::{UnixListener, UnixStream};
@@ -64,6 +66,19 @@ pub fn history_at(cmd: &str, timestamp: time::OffsetDateTime) -> History {
         .author("test-user")
         .build()
         .into()
+}
+
+/// A complete capture (with its required meta) holding `output`.
+pub fn capture(output: &str) -> CommandCapture {
+    CommandCapture {
+        output: output.to_string(),
+        meta: Some(CommandCaptureMeta {
+            output_truncated: false,
+            output_observed_bytes: u64::conv(output.len()),
+            terminal_width: 80,
+            terminal_height: 24,
+        }),
+    }
 }
 
 pub struct TestEnvBuilder {
