@@ -245,7 +245,9 @@ impl From<CaptureError> for Status {
     fn from(value: CaptureError) -> Self {
         match value {
             CaptureError::AlreadyExists => Self::already_exists(value.to_string()),
-            CaptureError::Storage(_) => Self::internal(value.to_string()),
+            CaptureError::Storage(_) | CaptureError::Serialize(_) => {
+                Self::internal(value.to_string())
+            }
         }
     }
 }

@@ -30,6 +30,8 @@ pub enum CaptureError {
     AlreadyExists,
     #[error("storage error: {0}")]
     Storage(#[from] fjall::Error),
+    #[error("failed to serialize the capture: {0}")]
+    Serialize(#[from] rmp_serde::encode::Error),
 }
 
 #[derive(Debug, Error)]
@@ -186,8 +188,7 @@ impl OutputCapture {
         let db = self.db.clone();
         let keyspace = self.keyspace.clone();
         let key = KeyspaceV1::serialize_key(id).expect("history id serialization is infallible");
-        let value =
-            KeyspaceV1::serialize_value(capture).expect("a CommandCapture serializes to JSON");
+        let value = KeyspaceV1::serialize_value(capture)?;
 
         let flusher = self.flusher.clone();
         tokio::task::spawn_blocking(move || {

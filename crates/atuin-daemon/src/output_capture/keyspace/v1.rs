@@ -12,7 +12,7 @@ impl KeyspaceTrait for Keyspace {
     type Key = HistoryId;
     type Value = CommandCapture;
 
-    // Keys are the 16 raw UUID bytes; values are serde_json-encoded.
+    // Keys are the 16 raw UUID bytes; values are MessagePack-encoded.
     type KeySerialized = [u8; 16];
     type ValueSerialized = Vec<u8>;
 
@@ -29,17 +29,17 @@ impl KeyspaceTrait for Keyspace {
         Ok(HistoryId::from_bytes(serialized))
     }
 
-    type ValueSerializationError = serde_json::Error;
+    type ValueSerializationError = rmp_serde::encode::Error;
     fn serialize_value(
         value: Self::Value,
     ) -> Result<Self::ValueSerialized, Self::ValueSerializationError> {
-        serde_json::to_vec(&value)
+        rmp_serde::to_vec(&value)
     }
 
-    type ValueDeserializationError = serde_json::Error;
+    type ValueDeserializationError = rmp_serde::decode::Error;
     fn deserialize_value(
         serialized: Self::ValueSerialized,
     ) -> Result<Self::Value, Self::ValueDeserializationError> {
-        serde_json::from_slice(&serialized)
+        rmp_serde::from_slice(&serialized)
     }
 }
