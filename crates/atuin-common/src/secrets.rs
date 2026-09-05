@@ -62,20 +62,26 @@ macro_rules! secret_value {
 /// `os.environ[..]`). The separator is `=`, `:`, `:=`, `=>`, `==`, a type annotation ending in `=`,
 /// a table column gap (a tab or two-plus spaces) or a `|`/`│` cell border. Nothing here crosses a
 /// newline, so an empty assignment cannot reach into the next line.
+///
+/// A type annotation needs a blank before its `=`, so that a base64 value's `==` padding reads as
+/// part of the value rather than as `type =`. The table-gap and `|` separators deliberately take the
+/// next word even in prose or a pipeline (`NAME  is required`, `"$NAME" | pbcopy`): over-redaction
+/// there is the price of catching `vault`/`doppler`-style tables.
 macro_rules! assigned {
     ($name:literal) => {
         concat!(
             $name,
-            r#"(?:["']?\]?[ \t]*(?::[ \t]*[\w&<>\[\]]+[ \t]*=|[=:][=>]?|[ \t]*[|│][ \t]*|[ \t]{2,}|\t)[ \t]*"#,
+            r#"(?:["']?\]?[ \t]*(?::[ \t]*[\w&<>\[\]]+[ \t]+=|[=:][=>]?|[ \t]*[|│][ \t]*|[ \t]{2,}|\t)[ \t]*"#,
             secret_value!(),
             ")?"
         )
     };
 }
 
-/// `atuin login`, followed optionally by one of `$flags` and its value somewhere later on the same
-/// line. The search window is bounded so that a line mentioning `atuin login` many times costs
-/// linear rather than quadratic time; no real login line has 512 characters before its password.
+/// `atuin login`, followed optionally by one of `$flags` and its value later on the line (a flag
+/// that opens the very next line still counts — capturing it is the safe direction). The search
+/// window is bounded so that a line mentioning `atuin login` many times costs linear rather than
+/// quadratic time; no real login line has 512 characters before its password.
 macro_rules! login_flag {
     ($flags:literal) => {
         concat!(r"atuin\s+login(?:[^\n]{0,512}?\s-(?:", $flags, r")[= \t]*", secret_value!(), ")?")
@@ -417,7 +423,8 @@ pub fn redact(s: &str) -> Cow<'_, str> {
     // Two patterns can carve one stretch into spans whose leftovers a second pass captures
     // differently (see `redaction_reaches_a_fixed_point_in_one_call`), so iterate until a pass
     // changes nothing. Each pass replaces at least one span that is not already the marker, so
-    // this converges in a couple of iterations; the bound is a backstop, not a budget.
+    // this converges in a couple of iterations; the bound is a backstop, not a budget — a test
+    // panics on it, a running sink only warns.
     for _ in 0..8 {
         let next = match redact_once(&out) {
             Cow::Borrowed(_) => None,
@@ -428,7 +435,11 @@ pub fn redact(s: &str) -> Cow<'_, str> {
         };
         out = next;
     }
-    debug_assert!(false, "redact did not reach a fixed point in 8 passes on {s:?}");
+    #[allow(clippy::manual_assert)]
+    if cfg!(test) {
+        panic!("redact did not reach a fixed point in 8 passes on {s:?}");
+    }
+    tracing::warn!("redact did not reach a fixed point in 8 passes; storing the last pass");
     Cow::Owned(out)
 }
 
@@ -827,6 +838,9 @@ mod tests {
             ("NAME=wJalrXUtnFEMI", "NAME=****"),
             ("NAME = wJalrXUtnFEMI", "NAME = ****"),
             ("NAME: wJalrXUtnFEMI", "NAME: ****"),
+            ("NAME: AQoDYXdzEJr==", "NAME: ****"),
+            ("NAME: abc=def", "NAME: ****"),
+            ("NAME:abc==", "NAME:****"),
             ("NAME := wJalrXUtnFEMI", "NAME := ****"),
             ("NAME => wJalrXUtnFEMI", "NAME => ****"),
             ("NAME == wJalrXUtnFEMI", "NAME == ****"),
@@ -914,7 +928,7 @@ mod tests {
     }
 
     /// The login patterns' search window is bounded, so a line mentioning `atuin login` many times
-    /// costs linear time. Unbounded, this input took 35 s in a debug build (23.6 s release) and
+    /// costs linear time. Unbounded, this input took about 17 minutes in a debug build (23.6 s release) and
     /// stalled the capture sink long enough to drop later commands' output; bounded it is under
     /// 2 s debug. The budget leaves room for a slow CI box while still catching a return to
     /// quadratic.
@@ -936,8 +950,8 @@ mod tests {
     /// Modern Stripe secret keys are `sk_live_` plus 99 characters; the pattern's floor of 24 is
     /// the old format. A fixed width would redact 24 and leave 75 beside the marker.
     #[rstest]
-    #[case::modern_live(&format!("sk_live_{}", "a1".repeat(50)), "****")]
-    #[case::modern_test(&format!("sk_test_{}", "b2".repeat(50)), "****")]
+    #[case::modern_live(&format!("sk_live_{}", "a".repeat(99)), "****")]
+    #[case::modern_test(&format!("sk_test_{}", "b".repeat(99)), "****")]
     #[case::old_format_still_exact(concat!("sk_", "live_1234567890abcdefghijklmn"), "****")]
     #[case::followed_by_punctuation(&format!("key={}.", concat!("sk_", "live_1234567890abcdefghijklmn")), "key=****.")]
     fn stripe_keys_of_any_modern_length_are_fully_redacted(
