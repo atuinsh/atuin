@@ -145,7 +145,7 @@ A single bar character term acts as an OR operator. For example, the following
 query matches entries that start with `core` and end with either `go`, `rb`,
 or `py`.
 
-```
+```text
 ^core go$ | rb$ | py$
 ```
 
@@ -662,7 +662,7 @@ To filter by author on the command line, use `atuin search --author`. See
 [Filtering by Author](../guide/agent-hooks.md#filtering-by-author) for the
 available values.
 
-#### `shells`
+### `shells`
 
 Atuin version: >= 18.18
 
@@ -990,7 +990,7 @@ Default if [`systemd_socket`] is true: `$XDG_RUNTIME_DIR/atuin.sock` if
 `$XDG_RUNTIME_DIR` is set, otherwise `$TMPDIR/atuin-$UID/atuin.sock`.
 
 [user ID]: https://en.wikipedia.org/wiki/User_identifier
-[`systemd_socket`](#systemd_socket)
+[`systemd_socket`]: #systemd_socket
 
 Where to bind a Unix socket for client -> daemon communication.
 
@@ -1033,6 +1033,67 @@ The port to use for client -> daemon communication. Only used on non-Unix system
 ```toml
 tcp_port = 8889
 ```
+
+## Output capture
+
+Capture the output of each command and keep it alongside your history. This needs the
+[pty proxy](../reference/pty-proxy.md) to see your terminal, so enable `[pty_proxy]` as well.
+
+Add the section to your config file:
+
+```toml
+[output_capture]
+enabled = true
+max_output_size = "1MB"
+sync = false
+max_disk_usage = "10%"
+```
+
+Every key can also be set from the environment, for example
+`ATUIN_OUTPUT_CAPTURE__MAX_OUTPUT_SIZE=512KB`.
+
+### `enabled`
+
+Default: `false`
+
+Whether to capture command output at all. When `false`, the other keys in this section
+are ignored.
+
+### `max_output_size`
+
+Default: `"1MB"`
+
+The most output kept for a single command. Longer output is middle-truncated: the start and
+the end are kept and the middle is replaced with `...`, so `a super very long output` is stored
+as `a super...long output`.
+
+Sizes take a unit: `B`, `KB`, `MB`, `GB` or `TB` (case-insensitive; `1MB` is 1024 KB). A bare
+number is a count of bytes.
+
+```toml
+max_output_size = "512KB"
+```
+
+### `sync`
+
+Default: `false`
+
+Whether captured output is synced to the server. Sync of command output is not supported yet
+and is coming in the next release; the setting has no effect until then.
+
+### `max_disk_usage`
+
+Default: `"10%"`
+
+The most disk space Atuin will use to store command output. One of:
+
+| Value | Meaning |
+|-------|---------|
+| `"10GB"` | An absolute size, in the same format as `max_output_size`. |
+| `"10%"` | A share of the disk that holds your Atuin data directory. |
+| `"unlimited"` | Never delete captured output because of its size. |
+
+Once the limit is reached, Atuin forgets the oldest command output first.
 
 ## logs
 

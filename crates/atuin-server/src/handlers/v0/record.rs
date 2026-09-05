@@ -26,9 +26,10 @@ pub async fn post(
 
     counter!("atuin_record_uploaded").increment(u64::conv(records.len()));
 
+    let max_record_size = settings.max_record_size.bytes();
     let keep = records
         .iter()
-        .all(|r| r.data.raw.len() <= settings.max_record_size || settings.max_record_size == 0);
+        .all(|r| u64::conv(r.data.raw.len()) <= max_record_size || max_record_size == 0);
 
     if !keep {
         counter!("atuin_record_too_large").increment(1);

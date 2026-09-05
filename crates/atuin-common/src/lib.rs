@@ -21,5 +21,6 @@ pub mod sync;
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
 pub mod time;
+pub mod units;
 pub mod url;
 pub mod utils;

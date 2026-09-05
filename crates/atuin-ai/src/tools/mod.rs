@@ -10,6 +10,7 @@ use atuin_common::ansi;
 use atuin_common::filter::OrFilter;
 use atuin_common::range::PyStyleIdxRange;
 use atuin_common::time::UtcOffsetExt;
+use atuin_common::units::ByteSize;
 use atuin_daemon::grpc::history::pb::ChunkedOutputLineView;
 use easy_cast::Conv;
 use enum_dispatch::enum_dispatch;
@@ -1323,14 +1324,13 @@ impl AtuinOutputToolCall {
                 format!("No lines selected from captured output for history ID {history_id}.")
             });
         }
-        let totals = format!("{} bytes, {} lines", response.total_bytes, response.total_lines);
         let meta = response.meta.unwrap_or_default();
-
-        let total_output = if meta.output_truncated {
-            format!("{totals} ({} bytes observed before truncation)", meta.output_observed_bytes)
-        } else {
-            totals
-        };
+        let total_output = format_output_totals(
+            response.total_bytes,
+            response.total_lines,
+            meta.output_truncated,
+            meta.output_observed_bytes,
+        );
 
         ToolOutcome::Success(format!(
             "History ID: {history_id}\nTotal output: {total_output}\nSelected output:\n{body}"
@@ -1366,6 +1366,25 @@ impl PermissibleToolCall for LoadSkillToolCall {
     }
 }
 
+/// A human-readable `"<size>, <n> lines"` summary of a captured command's output, noting how much
+/// was seen before truncation when the capture was cut short.
+fn format_output_totals(
+    total_bytes: u64,
+    total_lines: u64,
+    output_truncated: bool,
+    output_observed_bytes: u64,
+) -> String {
+    let totals = format!("{}, {total_lines} lines", ByteSize::from_bytes(total_bytes).human());
+    if output_truncated {
+        format!(
+            "{totals} ({} observed before truncation)",
+            ByteSize::from_bytes(output_observed_bytes).human()
+        )
+    } else {
+        totals
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use atuin_common::filter;
@@ -1375,6 +1394,28 @@ mod tests {
     use rstest::*;
 
     use super::*;
+
+    #[rstest]
+    #[case::not_truncated(1_500_000, 42, false, 0, "1.5MB, 42 lines")]
+    #[case::truncated(
+        65_536,
+        10,
+        true,
+        200_000,
+        "64KB, 10 lines (196KB observed before truncation)"
+    )]
+    fn format_output_totals_is_human_readable(
+        #[case] total_bytes: u64,
+        #[case] total_lines: u64,
+        #[case] output_truncated: bool,
+        #[case] output_observed_bytes: u64,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(
+            format_output_totals(total_bytes, total_lines, output_truncated, output_observed_bytes),
+            expected
+        );
+    }
 
     fn read_rule(scope: Option<&str>) -> Rule {
         Rule {
