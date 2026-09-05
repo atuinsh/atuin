@@ -372,8 +372,10 @@ pub fn redact(s: &str) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
+    use std::sync::LazyLock;
 
     use proptest::prelude::*;
+    use regex::RegexSet;
     use rstest::rstest;
 
     use super::{PATTERNS, REDACTED, SECRET_GROUP, SECRET_PATTERNS, contains_secret, redact};
@@ -448,6 +450,56 @@ mod tests {
             2 => "[a-z0-9]{1,8}",
         ];
         prop::collection::vec(token, 0..12).prop_map(|parts| parts.concat())
+    }
+
+    /// The expressions `should_save` matched before this module existed, verbatim from
+    /// `atuin-client/src/secrets.rs` at 7baae5c23. FROZEN. A pattern edit that makes
+    /// `contains_secret` disagree with this set changes which commands atuin drops from history,
+    /// and needs its own review — it is not a redaction tweak.
+    const OLD_PATTERNS: &[&str] = &[
+        "A[KS]IA[0-9A-Z]{16}",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AZURE_.*_KEY",
+        "GOOGLE_SERVICE_ACCOUNT_KEY",
+        r"atuin\s+login",
+        "ghp_[a-zA-Z0-9]{36}",
+        "gh1_[A-Za-z0-9]{21}_[A-Za-z0-9]{59}|github_pat_[0-9][A-Za-z0-9]{21}_[A-Za-z0-9]{59}",
+        "gho_[A-Za-z0-9]{36}",
+        "ghu_[A-Za-z0-9]{36}",
+        "ghs_[A-Za-z0-9._-]{36,}",
+        "ghr_[A-Za-z0-9]{76}",
+        r"v1\.[0-9A-Fa-f]{40}",
+        "glpat-[a-zA-Z0-9_]{20}",
+        "xoxb-[0-9]{11}-[0-9]{11}-[0-9a-zA-Z]{24}",
+        "xoxp-[0-9]{11}-[0-9]{11}-[0-9a-zA-Z]{24}",
+        "T[a-zA-Z0-9_]{8}/B[a-zA-Z0-9_]{8}/[a-zA-Z0-9_]{24}",
+        "sk_test_[0-9a-zA-Z]{24}",
+        "sk_live_[0-9a-zA-Z]{24}",
+        "nf[pcoub]_[0-9a-zA-Z]{36}",
+        "npm_[A-Za-z0-9]{36}",
+        "pul-[0-9a-f]{40}",
+    ];
+    static OLD: LazyLock<RegexSet> =
+        LazyLock::new(|| RegexSet::new(OLD_PATTERNS).expect("frozen old patterns compile"));
+
+    /// Boundary strings where a rewrite is most likely to drift from the old set: bare mentions,
+    /// odd whitespace inside the Azure wildcard, newlines inside `atuin\s+login`, near-misses.
+    #[rstest]
+    #[case::bare_name("AWS_SECRET_ACCESS_KEY")]
+    #[case::mention("echo $AWS_SESSION_TOKEN")]
+    #[case::azure_with_space("AZURE_ X_KEY")]
+    #[case::azure_with_tab("AZURE_\tX_KEY")]
+    #[case::azure_tokens_apart("AZURE_TENANT_ID=abc AZURE_CLIENT_SECRET=s OTHER_KEY=v")]
+    #[case::azure_no_key("AZURE_TENANT_ID=abc")]
+    #[case::login_newline("atuin\nlogin")]
+    #[case::login_no_space("atuinlogin")]
+    #[case::login_bare("atuin login")]
+    #[case::lowercase_aws("aws_secret_access_key = x")]
+    #[case::marker("****")]
+    #[case::empty("")]
+    fn contains_secret_agrees_with_the_old_set_on_boundary_strings(#[case] s: &str) {
+        assert_eq!(contains_secret(s), OLD.is_match(s), "{s:?}");
     }
 
     /// The contract `redact` relies on: without this group it would not know which part of a match
@@ -662,6 +714,14 @@ mod tests {
             let redacted = redact(&format!("{prefix} {credential} {suffix}")).into_owned();
             prop_assert!(redacted.contains(REDACTED));
             prop_assert!(!redacted.contains(credential));
+        }
+
+        /// `contains_secret` must recognise exactly what the old set did. A string that stops
+        /// matching would start being stored, and its output captured; one that starts matching
+        /// would silently vanish from history.
+        #[test]
+        fn contains_secret_matches_the_old_pattern_set_exactly(s in credential_dense()) {
+            prop_assert_eq!(contains_secret(&s), OLD.is_match(&s), "{:?}", s);
         }
     }
 }
