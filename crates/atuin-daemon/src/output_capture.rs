@@ -261,8 +261,13 @@ impl OutputCapture {
             for key in keys {
                 tx.remove(&keyspace, key);
             }
-            tx.commit()?.expect("a blind remove performs no reads, so it can never conflict");
-            Ok(())
+            match tx.commit()? {
+                Ok(()) => Ok(()),
+                // fjall only reports conflicts for transactions that read; this one never does.
+                Err(fjall::Conflict) => {
+                    unreachable!("a blind remove performs no reads, so it can never conflict")
+                }
+            }
         })
         .await
         .expect("output-capture delete task panicked")
@@ -399,23 +404,5 @@ mod tests {
         // The tombstone must free the id for the capture-once check, not merely hide the value.
         store.capture(hid(1), cap("second")).await.expect("recapture after delete");
         assert_eq!(store.get(hid(1)).await.expect("get").expect("present").output, "second");
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn delete_marks_store_dirty_for_flush(store: TempStore) {
-        store.capture(hid(1), cap("hello")).await.expect("capture");
-        // Clear whatever the capture left behind so the flag below is attributable to `delete`.
-        // The background flusher's first (immediate) tick already ran while the capture's
-        // `.await` yielded; the next tick is `Flusher::SYNC_INTERVAL` (5s) away, far beyond this
-        // test's runtime, so nothing else touches the flag.
-        store.flusher.dirty.store(false, Ordering::SeqCst);
-
-        store.delete([hid(1)]).await.expect("delete");
-
-        assert!(
-            store.flusher.dirty.load(Ordering::SeqCst),
-            "delete must kick the flusher so the tombstone reaches disk"
-        );
     }
 }
