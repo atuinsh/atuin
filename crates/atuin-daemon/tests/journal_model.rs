@@ -112,7 +112,7 @@ async fn apply(env: &TestEnv, model: &mut Model, op: &Op) {
         }
         Op::Cancel(slot) => {
             let id = model.id(*slot);
-            let result = env.journal.cancel(id);
+            let result = env.journal.cancel(id).await;
             let (_, state) = &mut model.slots[usize::from(*slot)];
             if *state == State::InFlight {
                 result.expect("cancelling an in-flight command");

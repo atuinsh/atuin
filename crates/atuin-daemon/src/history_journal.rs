@@ -28,7 +28,6 @@
 //! It is possible to stream events out of [`HistoryJournal`] via [`HistoryJournal::subscribe`]
 //! which returns a new [`futures::Stream`] of [`CmdEvent`] events.
 
-use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -72,6 +71,14 @@ pub struct FinishedCmd {
 struct InFlightCmd {
     history: History,
     span: Span,
+    /// Per-id lock serializing this command's [`HistoryJournal::finish`] against a concurrent
+    /// [`HistoryJournal::delete`] (and a duplicate finish). Held across the terminal
+    /// transition -- persist-then-remove for `finish`, check-then-cancel for `delete` -- so the
+    /// two are mutually exclusive *for this id* while unrelated commands proceed in parallel.
+    ///
+    /// The lock lives inside the entry, so it exists exactly while the command is in flight and
+    /// is dropped with the entry -- no separate lock map to garbage-collect.
+    lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// Registry of in-flight commands which performs output capture, management, storage and
@@ -107,17 +114,6 @@ pub struct HistoryJournal {
 
     /// Durable store for captured command output.
     output_capture: OutputCapture,
-    /// Serializes the terminal transition + record-store write of [`Self::finish`] against
-    /// [`Self::delete`] (and against concurrent finishes).
-    ///
-    /// [`Self::finish`] checks a command *out* of [`Self::active_cmds`] before it persists, so
-    /// without this lock a `delete` landing in that window sees the id as already-gone-from-flight,
-    /// writes a `Delete` tombstone, and then the still-running `finish` appends its `Create` *after*
-    /// that tombstone -- leaving the row live locally and resurrecting it on replay. Holding the
-    /// lock from checkout through the record-store push makes the two mutually exclusive per id.
-    /// It also serializes the record store's read-modify-write on the append index (`last().idx`),
-    /// which is otherwise racy across concurrent writers.
-    record_write: tokio::sync::Mutex<()>,
 }
 
 /// Errors returned by [`HistoryJournal::finish`].
@@ -161,61 +157,6 @@ pub enum GetCmdInFlightError {
     NotFound(HistoryId),
 }
 
-/// RAII lease of a temporarily checked-out [`HistoryJournal`]'s in-flight map entry.
-///
-/// While the lease is alive the command has been removed from the map. If it is dropped without
-/// [`ActiveCmdLease::commit`], the command is returned to the map (rolled back).
-struct ActiveCmdLease<'a> {
-    map: &'a DashMap<HistoryId, InFlightCmd>,
-    cmd: Option<InFlightCmd>,
-}
-
-impl<'a> ActiveCmdLease<'a> {
-    /// Remove the command identified by `id` from `map`, returning a lease that restores it on drop
-    /// unless [`Self::commit`] is called. Returns [`None`] when no such command is in flight.
-    fn take(map: &'a DashMap<HistoryId, InFlightCmd>, id: HistoryId) -> Option<Self> {
-        map.remove(&id).map(|(_id, cmd)| Self {
-            map,
-            cmd: Some(cmd),
-        })
-    }
-
-    /// The command's tracing span, which traces its lifetime.
-    fn span(&self) -> &Span {
-        &self.cmd.as_ref().expect("command is present until commit or drop").span
-    }
-
-    /// Consume the lease, keeping the command out of the map and returning ownership of it.
-    ///
-    /// Call this once all fallible work has succeeded and the command should no longer be considered
-    /// in flight.
-    fn commit(mut self) -> InFlightCmd {
-        self.cmd.take().expect("command is present until commit or drop")
-    }
-}
-
-impl Deref for ActiveCmdLease<'_> {
-    type Target = History;
-
-    fn deref(&self) -> &Self::Target {
-        &self.cmd.as_ref().expect("command is present until commit or drop").history
-    }
-}
-
-impl DerefMut for ActiveCmdLease<'_> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.cmd.as_mut().expect("command is present until commit or drop").history
-    }
-}
-
-impl Drop for ActiveCmdLease<'_> {
-    fn drop(&mut self) {
-        if let Some(cmd) = self.cmd.take() {
-            self.map.insert(cmd.history.id, cmd);
-        }
-    }
-}
-
 impl HistoryJournal {
     /// Create a new command registry.
     pub fn new(
@@ -234,7 +175,6 @@ impl HistoryJournal {
             search_index,
             broadcast,
             output_capture,
-            record_write: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -257,18 +197,10 @@ impl HistoryJournal {
         self.active_cmds.insert(id, InFlightCmd {
             history: history.clone(),
             span,
+            lock: Arc::new(tokio::sync::Mutex::new(())),
         });
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
-    }
-
-    /// Borrows an in-flight command from [`Self::active_cmds`] with an [`ActiveCmdLease`]
-    /// guard, which achieves two things:
-    ///
-    ///   - [`ActiveCmdLease::commit`] removes it from [`Self::active_cmds`].
-    ///   - [`Drop`] "rolls the command back", placing it back into [`Self::active_cmds`].
-    fn checkout(&self, history_id: HistoryId) -> Option<ActiveCmdLease<'_>> {
-        ActiveCmdLease::take(&self.active_cmds, history_id)
     }
 
     /// The in-flight command recorded under `history_id`.
@@ -292,42 +224,56 @@ impl HistoryJournal {
         exit_code: i64,
         duration: Duration,
     ) -> Result<FinishedCmd, CmdFinishError> {
-        // Hold `record_write` from checkout through the record-store push, so a concurrent `delete`
-        // of this id either cancels it before we check out or tombstones it after we commit -- never
-        // in between. See the field's docs. Released before the best-effort bookkeeping below, none
-        // of which touches the record store.
-        let (history, history_record_id, history_record_idx, span) = {
-            let _guard = self.record_write.lock().await;
+        // Take this id's per-id lock (cloning the `Arc` and releasing the map's shard guard at
+        // once -- a `DashMap` guard must never be held across an `.await`). A concurrent `delete`
+        // of this id takes the same lock, so the two serialize. Unrelated commands touch different
+        // entries and different locks, and proceed fully in parallel.
+        let lock = self
+            .active_cmds
+            .get(&history_id)
+            .map(|cmd| cmd.lock.clone())
+            .ok_or(CmdFinishError::NotFound(history_id))?;
+        let guard = lock.lock().await;
 
-            let mut session =
-                self.checkout(history_id).ok_or(CmdFinishError::NotFound(history_id))?;
+        // Under the lock, read the in-flight command. A `delete` that won the lock first may have
+        // cancelled it out of the map while we waited -- then it is genuinely gone.
+        let (mut history, span) = {
+            let cmd =
+                self.active_cmds.get(&history_id).ok_or(CmdFinishError::NotFound(history_id))?;
+            (cmd.history.clone(), cmd.span.clone())
+        };
 
-            session.exit = exit_code;
-            session.duration = i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX);
+        history.exit = exit_code;
+        history.duration = i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX);
+        span.record("exit_code", exit_code);
+        span.record("duration", history.duration);
 
-            let span = session.span().clone();
-            span.record("exit_code", exit_code);
-            span.record("duration", session.duration);
-
-            // Each `?` below drops `session`, which restores it to the in-flight map, so a failed (or
-            // cancelled) persistence leaves the command in flight instead of dropping it.
+        let (history_record_id, history_record_idx) = {
+            // Persist while the entry is *still in the map*. A concurrent `delete` is blocked on
+            // the per-id lock, so once it proceeds it sees the id either still in flight (and
+            // cancels it) or fully persisted (and tombstones the durable `Create`) -- never in a
+            // window where the `Create` has not yet landed. A `?` here returns before the
+            // `remove` below, leaving the command in flight so a retry can finish it.
             self.history_db
-                .save(&session)
+                .save(&history)
                 .instrument(span.clone())
                 .await
                 .map_err(|e| CmdFinishError::HistoryDbFailed(e.into()))?;
 
-            let (history_record_id, history_record_idx) = self
+            let ids = self
                 .history_store
-                .push(session.clone())
+                .push(history.clone())
                 .instrument(span.clone())
                 .await
                 .map_err(CmdFinishError::HistoryStoreFailed)?;
 
-            // Persistence succeeded; take ownership and stop treating the command as in flight.
-            let history = session.commit().history;
-            (history, history_record_id, history_record_idx, span)
+            // Persistence succeeded; stop treating the command as in flight.
+            self.active_cmds.remove(&history_id);
+            ids
         };
+
+        // The command is persisted and out of the map; the per-id lock has nothing left to guard.
+        drop(guard);
 
         // TODO(markovejnovic): This is a little bit hacked-together. I'm thinking it would be good
         // to have a Packer type for this kind of logic. It can wraps the Caps.
@@ -358,7 +304,20 @@ impl HistoryJournal {
     }
 
     /// Cancel a command, discarding its in-memory state without persisting a history entry.
-    pub fn cancel(&self, history_id: HistoryId) -> Result<(), CmdCancelError> {
+    pub async fn cancel(&self, history_id: HistoryId) -> Result<(), CmdCancelError> {
+        // Take the id's per-id lock before removing it, so a concurrent `finish` of the same id
+        // can't be mid-persist (holding the entry and the lock) when we pull it out. Without this
+        // a cancel could remove an entry whose `finish` then goes on to durably append its
+        // `Create`, and both would report success. See [`InFlightCmd::lock`].
+        let lock = self
+            .active_cmds
+            .get(&history_id)
+            .map(|cmd| cmd.lock.clone())
+            .ok_or(CmdCancelError::NotFound(history_id))?;
+        let _guard = lock.lock().await;
+
+        // Under the lock, re-check: a `finish` that won the lock first has already removed the
+        // entry and persisted the command, so there is nothing left to cancel.
         let Some((_id, cmd)) = self.active_cmds.remove(&history_id) else {
             return Err(CmdCancelError::NotFound(history_id));
         };
@@ -391,18 +350,34 @@ impl HistoryJournal {
         //
         // This happens as a result of the fact that [`HistoryJournal`] might be tracking started,
         // but not finished commands. These get cancelled via [`HistoryJournal::cancel`].
-        // Hold `record_write` across the whole cancel-or-tombstone loop, so each id is terminated
-        // atomically with respect to a racing `finish`: an in-flight id is cancelled out of
-        // `active_cmds` here (and `finish` then sees it gone), or it is already fully persisted and
-        // we tombstone it -- never caught mid-persist. See the field's docs.
+        // Terminate each id atomically with respect to a racing `finish` of the *same* id, by
+        // taking that id's per-id lock (see [`InFlightCmd::lock`]) before deciding its fate. An
+        // in-flight id is cancelled out of `active_cmds` (and `finish`, once it gets the lock, then
+        // sees it gone and returns `NotFound`); an already-persisted id is tombstoned. The window
+        // where `finish` had checked the id out but not yet appended its `Create` -- which used to
+        // resurrect the row -- no longer exists: `finish` holds the entry (and the lock) until the
+        // `Create` is durable. Ids in different batches / different finishes never contend.
         let delete_records = async || {
-            let _guard = self.record_write.lock().await;
-
             let mut deleted: usize = 0;
             let mut record_ids = Vec::new();
             for id in ids {
-                if let Some((_id, cmd)) = self.active_cmds.remove(&id) {
-                    let _ = self.broadcast.send(CmdEvent::Cancelled(cmd.history));
+                let lock = self.active_cmds.get(&id).map(|cmd| cmd.lock.clone());
+                let cancelled = if let Some(lock) = lock {
+                    let _guard = lock.lock().await;
+                    // Re-check under the lock: a `finish` that won the lock first has removed the
+                    // entry and durably appended its `Create`, so we fall through and tombstone it.
+                    match self.active_cmds.remove(&id) {
+                        Some((_id, cmd)) => {
+                            let _ = self.broadcast.send(CmdEvent::Cancelled(cmd.history));
+                            true
+                        }
+                        None => false,
+                    }
+                } else {
+                    false
+                };
+
+                if cancelled {
                     deleted += 1;
                     continue;
                 }
@@ -496,95 +471,5 @@ impl HistoryJournal {
     #[must_use]
     pub fn subscribe(&self) -> BroadcastStream<CmdEvent> {
         BroadcastStream::new(self.broadcast.subscribe())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use atuin_client::history::History;
-    use atuin_domain::record::CmdOrigin;
-    use rstest::{fixture, rstest};
-
-    use super::*;
-
-    fn in_flight(cmd: &str) -> InFlightCmd {
-        let history: History = History::daemon()
-            .timestamp(time::OffsetDateTime::now_utc())
-            .command(cmd)
-            .cwd("/tmp")
-            .session("018f9db6-2222-7000-8000-000000000001")
-            .cmd_origin(CmdOrigin::try_from("host:user").unwrap())
-            .build()
-            .into();
-        InFlightCmd {
-            span: tracing::trace_span!("test", history_id = %history.id),
-            history,
-        }
-    }
-
-    #[fixture]
-    fn map() -> (DashMap<HistoryId, InFlightCmd>, HistoryId) {
-        let map = DashMap::new();
-        let cmd = in_flight("echo lease");
-        let id = cmd.history.id;
-        map.insert(id, cmd);
-        (map, id)
-    }
-
-    /// Dropping the lease without committing puts the command back, unchanged.
-    #[rstest]
-    fn dropped_lease_rolls_back(map: (DashMap<HistoryId, InFlightCmd>, HistoryId)) {
-        let (map, id) = map;
-        {
-            let mut lease = ActiveCmdLease::take(&map, id).expect("in flight");
-            assert!(map.get(&id).is_none(), "checked-out command must leave the map");
-            lease.exit = 42;
-        }
-        let restored = map.get(&id).expect("rolled back");
-        assert_eq!(restored.history.exit, 42, "mutations made through the lease are kept");
-    }
-
-    /// Committing consumes the lease and the command stays out of the map.
-    #[rstest]
-    fn committed_lease_stays_out(map: (DashMap<HistoryId, InFlightCmd>, HistoryId)) {
-        let (map, id) = map;
-        let lease = ActiveCmdLease::take(&map, id).expect("in flight");
-        let cmd = lease.commit();
-        assert_eq!(cmd.history.id, id);
-        assert!(map.get(&id).is_none());
-        assert!(map.is_empty());
-    }
-
-    /// Only one lease can hold a command at a time; a second `take` sees nothing in flight.
-    #[rstest]
-    fn second_take_while_leased_is_none(map: (DashMap<HistoryId, InFlightCmd>, HistoryId)) {
-        let (map, id) = map;
-        let first = ActiveCmdLease::take(&map, id).expect("in flight");
-        assert!(ActiveCmdLease::take(&map, id).is_none());
-        drop(first);
-        assert!(ActiveCmdLease::take(&map, id).is_some(), "rolled back, so takeable again");
-    }
-
-    #[rstest]
-    fn take_of_unknown_id_is_none(map: (DashMap<HistoryId, InFlightCmd>, HistoryId)) {
-        let (map, _) = map;
-        assert!(ActiveCmdLease::take(&map, HistoryId::from_bytes([9u8; 16])).is_none());
-        assert_eq!(map.len(), 1, "an unknown id must not disturb the map");
-    }
-
-    /// The lease's span is the command's own span, so finish() traces under it.
-    #[rstest]
-    fn lease_exposes_the_command_span(map: (DashMap<HistoryId, InFlightCmd>, HistoryId)) {
-        let (map, id) = map;
-        let lease = ActiveCmdLease::take(&map, id).unwrap();
-        // `Span::metadata()` returns the span's static descriptor regardless of whether a
-        // subscriber is recording it (`is_disabled()` is what depends on that), so this holds
-        // whether or not the test binary has installed a tracing subscriber.
-        assert_eq!(
-            lease.span().metadata().map(|m| m.name()),
-            Some("test"),
-            "the lease's span must be the fixture's `trace_span!(\"test\", ..)`"
-        );
-        assert_eq!(lease.id, id, "Deref reaches the History");
     }
 }

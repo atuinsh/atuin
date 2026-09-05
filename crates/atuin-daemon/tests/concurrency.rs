@@ -97,7 +97,7 @@ async fn duplicate_lifecycle_calls_resolve_to_exactly_one_winner(#[case] second:
         let other = tokio::spawn(async move {
             match second {
                 Second::End => j2.finish(id, 0, Duration::from_millis(1)).await.is_ok(),
-                Second::Cancel => j2.cancel(id).is_ok(),
+                Second::Cancel => j2.cancel(id).await.is_ok(),
             }
         });
         let (a, b) = (first.await.unwrap(), other.await.unwrap());
