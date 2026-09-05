@@ -64,6 +64,11 @@ pub fn classify_error(error: &eyre::Report) -> DaemonClientErrorKind {
     DaemonClientErrorKind::NonGrpc
 }
 
+/// Ids per chunk when client-streaming a `DeleteHistory`. A proto `HistoryId` is ~22 wire bytes,
+/// so a chunk of this many is ~1.1 MiB -- comfortably under tonic's 4 MiB default decode limit,
+/// with margin for framing overhead.
+const DELETE_CHUNK_SIZE: usize = 50_000;
+
 // Wrap the grpc client
 impl HistoryClient {
     #[cfg(unix)]
@@ -170,13 +175,20 @@ impl HistoryClient {
     }
 
     pub async fn delete_history(&mut self, ids: Vec<HistoryId>) -> Result<DeleteHistoryReply> {
-        Ok(self
-            .client
-            .delete_history(DeleteHistoryRequest {
-                ids: ids.into_iter().map(Into::into).collect(),
+        // `DeleteHistory` is client-streamed: we split the ids into chunks and send one
+        // `DeleteHistoryRequest` per chunk, so no single message can exceed the server's decode
+        // limit (tonic's default 4 MiB) no matter how many ids are deleted. The server deletes the
+        // union of every chunk once the stream ends. An empty `ids` sends an empty stream, which
+        // deletes nothing. `DELETE_CHUNK_SIZE` ids weigh well under the limit (a proto HistoryId is
+        // ~22 wire bytes, so a chunk is ~1.1 MiB).
+        let chunks: Vec<DeleteHistoryRequest> = ids
+            .chunks(DELETE_CHUNK_SIZE)
+            .map(|chunk| DeleteHistoryRequest {
+                ids: chunk.iter().copied().map(Into::into).collect(),
             })
-            .await?
-            .into_inner())
+            .collect();
+
+        Ok(self.client.delete_history(futures::stream::iter(chunks)).await?.into_inner())
     }
 
     pub async fn rebuild_history(&mut self) -> Result<RebuildHistoryReply> {

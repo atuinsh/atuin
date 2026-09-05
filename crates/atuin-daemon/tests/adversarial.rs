@@ -143,7 +143,9 @@ proptest! {
                 }
             }
 
-            let result = raw.delete_history(DeleteHistoryRequest { ids: ids.clone() }).await;
+            let result = raw
+                .delete_history(futures::stream::iter(vec![DeleteHistoryRequest { ids: ids.clone() }]))
+                .await;
             let all_well_formed = ids.iter().all(strategies::is_well_formed);
             match result {
                 Err(status) => {

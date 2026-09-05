@@ -231,7 +231,8 @@ use crate::history_journal::HistoryJournal;
 /// **Note that you should never change the `Shutdown` and `Status` RPCs as they do not have the
 /// protocol version guards.** They are **assumed** to be stable and if you want to modify them, you
 /// **must** use the `reserved` keyword.
-const DAEMON_PROTOCOL_VERSION: u32 = 2;
+// v3: `DeleteHistory` became a client-streaming RPC (was unary). Wire-incompatible with v2.
+const DAEMON_PROTOCOL_VERSION: u32 = 3;
 
 /// The History gRPC service.
 ///
@@ -320,14 +321,20 @@ impl GrpcService for Service {
     #[instrument(skip_all, level = Level::TRACE)]
     async fn delete_history(
         &self,
-        request: Request<DeleteHistoryRequest>,
+        request: Request<tonic::Streaming<DeleteHistoryRequest>>,
     ) -> Result<Response<DeleteHistoryReply>, Status> {
-        // We collect here to validate every id up front: `into_history_ids` yields an iterator of
-        // `Result`s, and [`HistoryJournal::delete`] needs validated, correct HistoryIds. Consuming
-        // the request (rather than borrowing + cloning each proto id) keeps this to a single
-        // allocation, and a malformed request deletes nothing.
-        let ids: Vec<HistoryId> =
-            request.into_inner().into_history_ids().collect::<Result<Vec<_>, _>>()?;
+        // The request is client-streamed so a delete of millions of ids never exceeds tonic's
+        // per-message decode limit: the client chunks the ids across messages and we gather their
+        // union here. We validate every id up front -- `into_history_ids` yields an iterator of
+        // `Result`s and [`HistoryJournal::delete`] needs validated HistoryIds -- so a single
+        // malformed id in any chunk rejects the whole delete and nothing is deleted.
+        let mut stream = request.into_inner();
+        let mut ids: Vec<HistoryId> = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            for id in chunk?.into_history_ids() {
+                ids.push(id?);
+            }
+        }
 
         let search_settings = self.daemon_handle.settings().await.search.clone();
         let deleted = self.journal.delete(ids, &search_settings).await?;

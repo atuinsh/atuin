@@ -88,7 +88,7 @@ async fn delete_reports_every_id_it_processed(
     let reply = client.delete_history(ids.clone()).await.unwrap();
 
     assert_eq!(reply.deleted, expected_deleted);
-    assert_eq!(reply.protocol, 2);
+    assert_eq!(reply.protocol, 3);
     assert_eq!(env.active_rows().await, 0, "no named row may survive");
     for id in &persisted {
         assert!(env.history_db.load(*id).await.unwrap().is_none());

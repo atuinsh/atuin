@@ -94,13 +94,13 @@ pub async fn deleting_a_sample_leaves_everything_else_body(rows: usize) {
 }
 
 /// `atuin search --delete-it-all --include-duplicates` (or a big `history prune`) on a large
-/// history: every row goes in one request, and the daemon is still healthy afterwards.
+/// history: every row goes in one logical delete, and the daemon is still healthy afterwards.
 ///
-/// EXPECTED TO FAIL for 200k and 1M: the client sends every id in one `DeleteHistoryRequest`
-/// (22 bytes each) and the server keeps tonic's 4 MiB decode limit, so anything above ~190k ids is
-/// rejected with `OutOfRange` before a single row is deleted. Both failing tiers are `#[ignore]`d
-/// in `tests/scale.rs` (defect H2) so CI stays green while the assertion stands; once chunking
-/// lands, 200k moves back into the default run and 1M joins `tests/nightly.rs`.
+/// This once failed above ~190k ids: the client sent every id in a single `DeleteHistoryRequest`
+/// (~22 wire bytes each) and the server's tonic decode limit (4 MiB) rejected it with `OutOfRange`
+/// before a single row was deleted (defect H2). `DeleteHistory` is now client-streamed -- the
+/// client chunks the ids across messages -- so this passes at every tier. 200k runs on every push
+/// (`tests/scale.rs`); 1M runs nightly (`tests/nightly.rs`).
 pub async fn deleting_everything_in_one_request_body(rows: usize) {
     let env = TestEnv::builder().seed_rows(rows).build().await;
     let mut client = env.history_client().await;

@@ -100,7 +100,8 @@ impl Cmd {
 }
 
 const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
-const DAEMON_PROTOCOL_VERSION: u32 = 2;
+// v3: `DeleteHistory` became a client-streaming RPC (was unary). Wire-incompatible with v2.
+const DAEMON_PROTOCOL_VERSION: u32 = 3;
 const STARTUP_POLL: Duration = Duration::from_millis(40);
 const LOCK_POLL: Duration = Duration::from_millis(20);
 const LEGACY_DAEMON_RESTART_MESSAGE: &str = "legacy daemon detected; restart daemon manually";
