@@ -232,7 +232,7 @@ use crate::history_journal::HistoryJournal;
 /// protocol version guards.** They are **assumed** to be stable and if you want to modify them, you
 /// **must** use the `reserved` keyword.
 // v3: `DeleteHistory` became a client-streaming RPC (was unary). Wire-incompatible with v2.
-const DAEMON_PROTOCOL_VERSION: u32 = 3;
+const DAEMON_PROTOCOL_VERSION: u32 = 2;
 
 /// The History gRPC service.
 ///
@@ -323,11 +323,6 @@ impl GrpcService for Service {
         &self,
         request: Request<tonic::Streaming<DeleteHistoryRequest>>,
     ) -> Result<Response<DeleteHistoryReply>, Status> {
-        // The request is client-streamed so a delete of millions of ids never exceeds tonic's
-        // per-message decode limit: the client chunks the ids across messages and we gather their
-        // union here. We validate every id up front -- `into_history_ids` yields an iterator of
-        // `Result`s and [`HistoryJournal::delete`] needs validated HistoryIds -- so a single
-        // malformed id in any chunk rejects the whole delete and nothing is deleted.
         let mut stream = request.into_inner();
         let mut ids: Vec<HistoryId> = Vec::new();
         while let Some(chunk) = stream.next().await {

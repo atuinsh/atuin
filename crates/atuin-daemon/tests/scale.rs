@@ -33,10 +33,8 @@ async fn deleting_a_sample_leaves_everything_else(#[case] rows: usize) {
 #[rstest]
 #[case::one_k(1_000)]
 #[case::ten_k(10_000)]
-// 200k: the tier that used to overflow tonic's 4 MiB decode limit in one `DeleteHistoryRequest`.
-// Now that the RPC is client-streamed it deletes cleanly, so it runs on every push (the 1M tier
-// lives in `tests/nightly.rs`).
 #[case::two_hundred_k(200_000)]
+#[case::one_million(1_000_000)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn deleting_everything_in_one_request(#[case] rows: usize) {
     deleting_everything_in_one_request_body(rows).await;
