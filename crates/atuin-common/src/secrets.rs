@@ -44,6 +44,34 @@ struct Pattern {
     tests: &'static [Test],
 }
 
+/// The value side of an assignment or flag: balanced quoted segments, unquoted runs and lone
+/// quotes, repeated, so a shell concatenation like `'it'"'"'s'` or an unterminated `"oops` is one
+/// value, while an unquoted run stops at structural punctuation so a compact JSON line is not
+/// swallowed past the value. Balanced quotes are tried first, which is what makes `"v",` stop.
+macro_rules! secret_value {
+    () => {
+        r#"(?<secret>(?:"[^"\n]*"|'[^'\n]*'|[^\s"',;)\]}]+|["'])+)"#
+    };
+}
+
+/// A variable name followed, *optionally*, by a separator and its value. Optional so that a bare
+/// mention still matches — and so still drops the command — while capturing nothing.
+///
+/// Between the name and the separator a closing quote or `]` may sit (JSON, TOML, Python
+/// `os.environ[..]`). The separator is `=`, `:`, `:=`, `=>`, `==`, a type annotation ending in `=`,
+/// a table column gap (a tab or two-plus spaces) or a `|`/`│` cell border. Nothing here crosses a
+/// newline, so an empty assignment cannot reach into the next line.
+macro_rules! assigned {
+    ($name:literal) => {
+        concat!(
+            $name,
+            r#"(?:["']?\]?[ \t]*(?::[ \t]*[\w&<>\[\]]+[ \t]*=|[=:][=>]?|[ \t]*[|│][ \t]*|[ \t]{2,}|\t)[ \t]*"#,
+            secret_value!(),
+            ")?"
+        )
+    };
+}
+
 /// Every credential shape Atuin recognises.
 static SECRET_PATTERNS: &[Pattern] = &[
     Pattern {
@@ -57,7 +85,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     },
     Pattern {
         name: "AWS Secret Access Key env var",
-        regex: r"AWS_SECRET_ACCESS_KEY(?:\s*[=:]\s*(?<secret>\S+))?",
+        regex: assigned!("AWS_SECRET_ACCESS_KEY"),
         #[cfg(test)]
         tests: &[
             Test {
@@ -73,7 +101,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     },
     Pattern {
         name: "AWS Session Token env var",
-        regex: r"AWS_SESSION_TOKEN(?:\s*[=:]\s*(?<secret>\S+))?",
+        regex: assigned!("AWS_SESSION_TOKEN"),
         #[cfg(test)]
         tests: &[Test {
             input: "AWS_SESSION_TOKEN=KEYDATA",
@@ -84,7 +112,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
         name: "Microsoft Azure secret access key env var",
         // Lazy, so that two assignments on one line stay two matches rather than one match
         // spanning both -- which would leave the first value exposed.
-        regex: r"AZURE_.*?_KEY(?:\s*[=:]\s*(?<secret>\S+))?",
+        regex: assigned!(r"AZURE_.*?_KEY"),
         #[cfg(test)]
         tests: &[Test {
             input: "export AZURE_STORAGE_ACCOUNT_KEY=KEYDATA",
@@ -93,7 +121,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     },
     Pattern {
         name: "Google cloud platform key env var",
-        regex: r"GOOGLE_SERVICE_ACCOUNT_KEY(?:\s*[=:]\s*(?<secret>\S+))?",
+        regex: assigned!("GOOGLE_SERVICE_ACCOUNT_KEY"),
         #[cfg(test)]
         tests: &[Test {
             input: "export GOOGLE_SERVICE_ACCOUNT_KEY=KEYDATA",
@@ -723,5 +751,61 @@ mod tests {
         fn contains_secret_matches_the_old_pattern_set_exactly(s in credential_dense()) {
             prop_assert_eq!(contains_secret(&s), OLD.is_match(&s), "{:?}", s);
         }
+    }
+
+    /// Every assignment shape, against every env-var pattern. The four patterns share one suffix
+    /// builder precisely so this cannot drift per pattern again; the `contains_secret` assertion
+    /// on every shape — including the bare mention — is the should_save guard for all four.
+    #[rstest]
+    fn every_env_var_pattern_redacts_each_assignment_shape(
+        #[values(
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+            "AZURE_STORAGE_ACCOUNT_KEY",
+            "GOOGLE_SERVICE_ACCOUNT_KEY"
+        )]
+        name: &str,
+        #[values(
+            ("NAME=wJalrXUtnFEMI", "NAME=****"),
+            ("NAME = wJalrXUtnFEMI", "NAME = ****"),
+            ("NAME: wJalrXUtnFEMI", "NAME: ****"),
+            ("NAME := wJalrXUtnFEMI", "NAME := ****"),
+            ("NAME => wJalrXUtnFEMI", "NAME => ****"),
+            ("NAME == wJalrXUtnFEMI", "NAME == ****"),
+            ("export NAME=\"a b c\"", "export NAME=****"),
+            ("NAME='{\"type\": \"service_account\", \"k\": \"v\"}'", "NAME=****"),
+            ("{\"NAME\": \"wJalr\", \"X\": 1}", "{\"NAME\": ****, \"X\": 1}"),
+            ("{\"NAME\":\"wJalr\",\"X\":1}", "{\"NAME\":****,\"X\":1}"),
+            ("'NAME': 'wJalr', 'X': '1'", "'NAME': ****, 'X': '1'"),
+            ("os.environ[\"NAME\"] = \"wJalr\"", "os.environ[\"NAME\"] = ****"),
+            ("+ \"NAME\" = \"wJalr\"", "+ \"NAME\" = ****"),
+            ("NAME    wJalrXUtnFEMI", "NAME    ****"),
+            ("NAME\twJalrXUtnFEMI", "NAME\t****"),
+            ("│ NAME │ wJalr │", "│ NAME │ **** │"),
+            ("NAME: str = \"wJalr\"", "NAME: str = ****"),
+            ("const NAME: &str = \"wJalr\";", "const NAME: &str = ****;"),
+            ("NAME: Optional[str] = \"wJalr\"", "NAME: Optional[str] = ****"),
+            ("NAME=wJalr/K7+MD=", "NAME=****"),
+            ("NAME=abc;", "NAME=****;"),
+            ("(NAME=abc)", "(NAME=****)"),
+            ("NAME=", "NAME="),
+            ("NAME= ", "NAME= "),
+            ("NAME=\nOTHER=value", "NAME=\nOTHER=value"),
+            ("NAME:\n  password: hunter2", "NAME:\n  password: hunter2"),
+            ("echo $NAME", "echo $NAME"),
+            ("NAME is required", "NAME is required"),
+            ("set NAME, and OTHER", "set NAME, and OTHER"),
+        )]
+        shape: (&str, &str),
+    ) {
+        let (input, expected) = (shape.0.replace("NAME", name), shape.1.replace("NAME", name));
+
+        assert_eq!(&*redact(&input), expected, "input {input:?}");
+        assert!(contains_secret(&input), "{input:?} must still be recognised");
+        assert_eq!(
+            matches!(redact(&input), Cow::Borrowed(_)),
+            input == expected,
+            "Borrowed must mean unchanged for {input:?}"
+        );
     }
 }
