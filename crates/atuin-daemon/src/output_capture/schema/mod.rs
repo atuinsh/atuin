@@ -36,7 +36,7 @@ pub trait Schema {
     /// Errors thrown when trying to serialize values.
     type ValueSerializationError;
 
-    /// Erors thrown when trying to deserialize values.
+    /// Errors thrown when trying to deserialize values.
     type ValueDeserializationError;
 
     /// The name of the keyspace. Ensure no other keyspaces share this name as bad things can
@@ -56,7 +56,7 @@ pub trait Schema {
         serialized: Self::ValueSerialized,
     ) -> Result<Self::Value, Self::ValueDeserializationError>;
 
-    /// Create a [`fjall::KeyspaceCreateOptions`] which defines the compation/compression/etc fjall
+    /// Create a [`fjall::KeyspaceCreateOptions`] which defines the compaction/compression/etc fjall
     /// options.
     fn create_options() -> fjall::KeyspaceCreateOptions;
 }
