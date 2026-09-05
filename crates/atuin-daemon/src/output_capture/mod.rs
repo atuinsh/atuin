@@ -7,23 +7,21 @@
 //! `spawn_blocking`.
 //!
 //! TODO(retention): the store grows unbounded; no eviction yet. See the design doc.
+mod schema;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use atuin_client::history::HistoryId;
-use fjall::config::CompressionPolicy;
+use atuin_client::history::{CommandCapture, HistoryId};
 use fjall::{OptimisticTxDatabase, OptimisticTxKeyspace, PersistMode, Readable};
-use prost::Message;
+use schema::{Schema as _, SchemaV1};
 use thiserror::Error;
 use tokio::task::JoinHandle;
 use tracing::error;
 
-use crate::grpc::history::pb::CommandCapture;
-
-/// fjall keyspace name for stored output.
-const KEYSPACE_NAME: &str = "command_output";
+/// The schema currently in use for stored output.
+type ActiveSchema = SchemaV1;
 
 #[derive(Debug, Error)]
 pub enum CaptureError {
@@ -31,6 +29,8 @@ pub enum CaptureError {
     AlreadyExists,
     #[error("storage error: {0}")]
     Storage(#[from] fjall::Error),
+    #[error("failed to serialize the capture: {0}")]
+    Serialize(#[from] atuin_common::rmp::encode::EncodeError),
 }
 
 #[derive(Debug, Error)]
@@ -165,15 +165,9 @@ impl OutputCapture {
 
     /// Create a new [`OutputCapture`] system.
     pub fn new(db: OptimisticTxDatabase) -> fjall::Result<Self> {
-        let keyspace = db.keyspace(KEYSPACE_NAME, || {
-            fjall::KeyspaceCreateOptions::default()
-                .data_block_compression_policy(CompressionPolicy::all(fjall::CompressionType::Lz4))
-                .with_kv_separation(Some(fjall::KvSeparationOptions::default()))
-        })?;
-
         Ok(Self {
             db: db.clone(),
-            keyspace,
+            keyspace: db.keyspace(ActiveSchema::NAME, ActiveSchema::create_options)?,
             flusher: Arc::new(Flusher::spawn(db)),
         })
     }
@@ -186,8 +180,8 @@ impl OutputCapture {
     ) -> Result<(), CaptureError> {
         let db = self.db.clone();
         let keyspace = self.keyspace.clone();
-        let key = id.into_bytes();
-        let value = capture.encode_to_vec();
+        let key = ActiveSchema::serialize_key(id).expect("history id serialization is infallible");
+        let value = ActiveSchema::serialize_value(capture)?;
 
         let flusher = self.flusher.clone();
         tokio::task::spawn_blocking(move || {
@@ -212,11 +206,11 @@ impl OutputCapture {
 
     pub async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError> {
         let keyspace = self.keyspace.clone();
-        let key = id.into_bytes();
+        let key = ActiveSchema::serialize_key(id).expect("history id serialization is infallible");
 
         tokio::task::spawn_blocking(move || match keyspace.get(key)? {
             Some(slice) => {
-                let capture = CommandCapture::decode(&*slice)
+                let capture = ActiveSchema::deserialize_value(slice.to_vec())
                     .expect("stored value is a valid CommandCapture");
                 Ok(Some(capture))
             }
@@ -233,7 +227,6 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::grpc::history::pb::CommandCaptureMeta;
 
     fn temp_capture() -> (OutputCapture, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -248,12 +241,10 @@ mod tests {
     fn cap(output: &str) -> CommandCapture {
         CommandCapture {
             output: output.to_string(),
-            meta: Some(CommandCaptureMeta {
-                output_truncated: false,
-                output_observed_bytes: u64::conv(output.len()),
-                terminal_width: 80,
-                terminal_height: 24,
-            }),
+            output_observed_bytes: u64::conv(output.len()),
+            output_truncated: false,
+            terminal_width: 80,
+            terminal_height: 24,
         }
     }
 
@@ -263,7 +254,7 @@ mod tests {
         store.capture(hid(1), cap("hello")).await.expect("capture");
         let got = store.get(hid(1)).await.expect("get").expect("present");
         assert_eq!(got.output, "hello");
-        assert_eq!(got.meta.expect("meta").output_observed_bytes, 5);
+        assert_eq!(got.output_observed_bytes, 5);
     }
 
     #[tokio::test]

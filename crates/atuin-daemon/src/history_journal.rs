@@ -33,7 +33,7 @@ use std::time::Duration;
 
 use atuin_client::database::Sqlite as HistoryDatabase;
 use atuin_client::history::store::HistoryStore;
-use atuin_client::history::{History, HistoryId};
+use atuin_client::history::{CommandCapture, History, HistoryId};
 use atuin_client::packfile;
 use atuin_client::settings::Search;
 use atuin_domain::caps::{CapClient, PackfileCap};
@@ -44,7 +44,6 @@ use tokio_stream::wrappers::BroadcastStream;
 use tracing::field::Empty;
 use tracing::{Instrument, Span};
 
-use crate::grpc::history::pb::CommandCapture;
 use crate::output_capture::{CaptureError, GetOutputError, OutputCapture};
 use crate::search::SearchIndex;
 
