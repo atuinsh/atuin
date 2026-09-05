@@ -68,12 +68,11 @@ message CancelHistoryReply {
   uint32 protocol = 2;
 }
 
-// One chunk of a client-streamed delete. The client splits the ids to delete across as many of
-// these as it takes to keep every message under the server's decode limit (tonic's default 4 MiB),
-// so a delete of millions of ids is no longer capped by a single request's size. The delete is
-// applied once, over the union of every chunk's ids, when the stream ends.
+// One chunk of a client-streamed delete.
+//
+// Clients may want to delete millions of rows and tonic will limit a request
+// at 4MB, so this stream serves to circumvent this limitation.
 message DeleteHistoryRequest {
-  // History entries to delete, by id. A chunk of the whole delete, not necessarily all of it.
   repeated HistoryId ids = 1;
 }
 
@@ -245,21 +244,29 @@ message OutputChunk {
 
 service History {
   rpc StartHistory(StartHistoryRequest) returns (StartHistoryReply);
+
   rpc EndHistory(EndHistoryRequest) returns (EndHistoryReply);
+
   rpc CancelHistory(CancelHistoryRequest) returns (CancelHistoryReply);
+
   // Delete history entries by id. The request is client-streamed: the caller sends the ids in one
   // or more chunks (see DeleteHistoryRequest) and the daemon deletes their union in a single pass
-  // once the stream closes, returning one reply. Streaming keeps each message under the decode
-  // limit so arbitrarily large deletes no longer overflow a single request.
+  // once the stream closes, returning one reply.
   rpc DeleteHistory(stream DeleteHistoryRequest) returns (DeleteHistoryReply);
+
   rpc RebuildHistory(RebuildHistoryRequest) returns (RebuildHistoryReply);
+
   rpc TailHistory(TailHistoryRequest) returns (stream TailHistoryReply);
+
   // Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
   rpc Status(StatusRequest) returns (StatusReply);
+
   // Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
   rpc Shutdown(ShutdownRequest) returns (ShutdownReply);
+
   // Store a completed command's captured output. Errors if output already exists for this id.
   rpc RegisterCommandOutput(RegisterCommandOutputRequest) returns (RegisterCommandOutputResponse);
+
   // Retrieve a command's captured output, sliced by line ranges.
   //
   // See the docs for `GetCommandOutputRequest` for the calling convention.
