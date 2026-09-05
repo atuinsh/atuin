@@ -115,7 +115,7 @@ mod tests {
 
     fn custom_limits() -> CaptureLimits {
         CaptureLimits {
-            max_output_size: ByteSize::from_bytes(512 << 10),
+            max_output_size: ByteSize::kib(512),
             sync: true,
             max_disk_usage: DiskUsageLimit::Unlimited,
         }

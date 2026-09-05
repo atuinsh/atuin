@@ -145,7 +145,7 @@ A single bar character term acts as an OR operator. For example, the following
 query matches entries that start with `core` and end with either `go`, `rb`,
 or `py`.
 
-```
+```text
 ^core go$ | rb$ | py$
 ```
 
@@ -662,7 +662,7 @@ To filter by author on the command line, use `atuin search --author`. See
 [Filtering by Author](../guide/agent-hooks.md#filtering-by-author) for the
 available values.
 
-#### `shells`
+### `shells`
 
 Atuin version: >= 18.18
 
@@ -990,7 +990,7 @@ Default if [`systemd_socket`] is true: `$XDG_RUNTIME_DIR/atuin.sock` if
 `$XDG_RUNTIME_DIR` is set, otherwise `$TMPDIR/atuin-$UID/atuin.sock`.
 
 [user ID]: https://en.wikipedia.org/wiki/User_identifier
-[`systemd_socket`](#systemd_socket)
+[`systemd_socket`]: #systemd_socket
 
 Where to bind a Unix socket for client -> daemon communication.
 

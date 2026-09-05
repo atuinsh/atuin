@@ -2190,8 +2190,8 @@ mod tests {
     #[rstest]
     #[case::sizes_as_text(
         "max_output_size = \"512KB\"\nmax_disk_usage = \"10GB\"",
-        ByteSize::from_bytes(512 << 10),
-        DiskUsageLimit::Bytes(ByteSize::from_bytes(10 << 30))
+        ByteSize::kib(512),
+        DiskUsageLimit::Bytes(ByteSize::gib(10))
     )]
     #[case::sizes_as_bytes(
         "max_output_size = 4096\nmax_disk_usage = 1048576",
@@ -2205,7 +2205,7 @@ mod tests {
     )]
     #[case::percent_disk_usage(
         "max_output_size = \"2MB\"\nmax_disk_usage = \"25%\"",
-        ByteSize::from_bytes(2 << 20),
+        ByteSize::mib(2),
         DiskUsageLimit::Percent(Percent::new(25).unwrap())
     )]
     fn output_capture_parses_sizes(
@@ -2243,7 +2243,7 @@ mod tests {
             .expect("could not deserialize config");
 
         let expected = CaptureLimits {
-            max_output_size: ByteSize::from_bytes(512 << 10),
+            max_output_size: ByteSize::kib(512),
             sync: false,
             max_disk_usage: DiskUsageLimit::Unlimited,
         };

@@ -45,9 +45,43 @@ impl ByteSize {
         Self(bytes)
     }
 
+    /// `n` kibibytes: `n * 1024` bytes.
+    #[must_use]
+    pub const fn kib(n: u64) -> Self {
+        Self(n << 10)
+    }
+
+    /// `n` mebibytes: `n * 1024^2` bytes.
+    #[must_use]
+    pub const fn mib(n: u64) -> Self {
+        Self(n << 20)
+    }
+
+    /// `n` gibibytes: `n * 1024^3` bytes.
+    #[must_use]
+    pub const fn gib(n: u64) -> Self {
+        Self(n << 30)
+    }
+
+    /// `n` tebibytes: `n * 1024^4` bytes.
+    #[must_use]
+    pub const fn tib(n: u64) -> Self {
+        Self(n << 40)
+    }
+
     #[must_use]
     pub const fn bytes(self) -> u64 {
         self.0
+    }
+
+    /// A `du -h`-style rendering for showing sizes to people: `512B`, `1.5MB`, `16GB`.
+    ///
+    /// Unlike [`Display`](fmt::Display), this is lossy -- it keeps at most three significant
+    /// digits and rounds *up* so a size never reads smaller than it is -- so it is unsuitable for
+    /// the serialized form.
+    #[must_use]
+    pub fn human(self) -> HumanByteSize {
+        HumanByteSize(self)
     }
 }
 
@@ -111,6 +145,36 @@ impl fmt::Display for ByteSize {
             .find(|unit| self.0.is_multiple_of(unit.multiplier()))
             .expect("every value is divisible by one byte");
         write!(f, "{}{}", self.0 / unit.multiplier(), unit.label())
+    }
+}
+
+/// The [`Display`](fmt::Display) rendering returned by [`ByteSize::human`].
+#[derive(Clone, Copy, Debug)]
+pub struct HumanByteSize(ByteSize);
+
+impl fmt::Display for HumanByteSize {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let bytes = self.0.bytes();
+        // Anything below a kilobyte (zero included) has no fraction to show: print the raw count.
+        let Some(unit) = Unit::DESCENDING
+            .into_iter()
+            .find(|unit| *unit != Unit::B && bytes >= unit.multiplier())
+        else {
+            return write!(f, "{bytes}B");
+        };
+        let multiplier = unit.multiplier();
+        // At ten units and above, `du -h` drops the decimal; below it, it shows exactly one.
+        // Either way it rounds up, so a size never reads smaller than it is.
+        if bytes / multiplier >= 10 {
+            return write!(f, "{}{}", bytes.div_ceil(multiplier), unit.label());
+        }
+        // `bytes < 10 * multiplier` here, so `bytes * 10` stays well inside a `u64`.
+        let tenths = (bytes * 10).div_ceil(multiplier);
+        if tenths >= 100 {
+            write!(f, "{}{}", bytes.div_ceil(multiplier), unit.label())
+        } else {
+            write!(f, "{}.{}{}", tenths / 10, tenths % 10, unit.label())
+        }
     }
 }
 
@@ -260,6 +324,30 @@ mod tests {
     }
 
     #[rstest]
+    #[case::zero(0, "0B")]
+    #[case::bytes(512, "512B")]
+    #[case::just_under_a_kilobyte(1023, "1023B")]
+    // du -h prints exact multiples with one decimal, e.g. "1.0K".
+    #[case::exact_kilobyte(1 << 10, "1.0KB")]
+    #[case::half_a_kilobyte_more(3 << 9, "1.5KB")]
+    // Rounds up: 1025 / 1024 = 1.0009..., ceiled to one decimal.
+    #[case::rounds_up_to_one_decimal(1025, "1.1KB")]
+    // 4095 and 4096 both land on 4.0KB once ceiled to one decimal.
+    #[case::ceiling_collapses_neighbours_low(4095, "4.0KB")]
+    #[case::ceiling_collapses_neighbours_high(4096, "4.0KB")]
+    #[case::one_byte_over_four_kib(4097, "4.1KB")]
+    #[case::megabytes(1_500_000, "1.5MB")]
+    // At ten units and above, du -h drops the decimal.
+    #[case::ten_gibibytes(10 << 30, "10GB")]
+    #[case::rounds_up_to_a_whole_unit(16_642_998_272, "16GB")]
+    #[case::exact_terabyte(1 << 40, "1.0TB")]
+    // The largest defined unit is TB, so huge values stay in terabytes.
+    #[case::max(u64::MAX, "16777216TB")]
+    fn displays_human_readable_sizes(#[case] bytes: u64, #[case] expected: &str) {
+        assert_eq!(ByteSize::from_bytes(bytes).human().to_string(), expected);
+    }
+
+    #[rstest]
     #[case::text(r#""1MB""#, 1 << 20)]
     #[case::integer("1048576", 1 << 20)]
     #[case::zero("0", 0)]
@@ -290,6 +378,17 @@ mod tests {
         assert_eq!(ByteSize::GIB.bytes(), 1 << 30);
         assert_eq!(ByteSize::TIB.bytes(), 1 << 40);
         assert_eq!(ByteSize::default(), ByteSize::ZERO);
+    }
+
+    #[rstest]
+    fn unit_constructors_scale_by_1024() {
+        assert_eq!(ByteSize::kib(1), ByteSize::KIB);
+        assert_eq!(ByteSize::mib(1), ByteSize::MIB);
+        assert_eq!(ByteSize::gib(1), ByteSize::GIB);
+        assert_eq!(ByteSize::tib(1), ByteSize::TIB);
+        assert_eq!(ByteSize::kib(512).bytes(), 512 << 10);
+        assert_eq!(ByteSize::mib(2).bytes(), 2 << 20);
+        assert_eq!(ByteSize::gib(10).bytes(), 10 << 30);
     }
 
     proptest! {
