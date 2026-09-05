@@ -236,10 +236,34 @@ impl OutputCapture {
         .expect("output-capture read task panicked")
     }
 
-    /// Forget the captured output of every history id in `ids`.
+    /// Forget the captured output of every history id in `ids`, durably: the removal is fsynced
+    /// before this returns.
+    ///
+    /// For entries whose deletion is (or is about to be) durable on the history side, so that a
+    /// crash can never leave output behind for an entry that no longer exists.
     pub async fn delete(
         &self,
         ids: impl IntoIterator<Item = HistoryId>,
+    ) -> Result<(), DeleteOutputError> {
+        self.remove(ids, Some(PersistMode::SyncAll)).await
+    }
+
+    /// Forget the captured output of every history id in `ids`, letting the periodic flusher carry
+    /// the removal to disk.
+    ///
+    /// For commands nothing durable refers to (a cancelled in-flight command). After a daemon
+    /// restart no in-flight command survives anyway, so an fsync here would buy nothing.
+    pub async fn discard(
+        &self,
+        ids: impl IntoIterator<Item = HistoryId>,
+    ) -> Result<(), DeleteOutputError> {
+        self.remove(ids, None).await
+    }
+
+    async fn remove(
+        &self,
+        ids: impl IntoIterator<Item = HistoryId>,
+        durability: Option<PersistMode>,
     ) -> Result<(), DeleteOutputError> {
         let keys: Vec<[u8; 16]> = ids.into_iter().map(HistoryId::into_bytes).collect();
         if keys.is_empty() {
@@ -248,21 +272,27 @@ impl OutputCapture {
 
         let db = self.db.clone();
         let keyspace = self.keyspace.clone();
+        let flusher = self.flusher.clone();
         tokio::task::spawn_blocking(move || {
             // Fjall deletes by leaving tombstones.
             //
             // If a crash were to happen between this transaction finishing and the flusher fsyncing
             // it, the tombstone would never commit, which means that a subsequent reboot would
-            // resurrect the entry.
-            //
-            // If the user wants to delete something, chances are they want to delete it **NOW**.
-            // They don't delete super often anyways, so let's just fsync immediately.
-            let mut tx = db.write_tx()?.durability(Some(PersistMode::SyncAll));
+            // resurrect the entry. `delete` therefore fsyncs at commit: if the user wants something
+            // gone, they want it gone **now**, and deletes are rare. `discard` leaves it to the
+            // flusher.
+            let mut tx = db.write_tx()?.durability(durability);
             for key in keys {
                 tx.remove(&keyspace, key);
             }
             match tx.commit()? {
-                Ok(()) => Ok(()),
+                Ok(()) => {
+                    // A buffered removal reaches disk on the flusher's next tick.
+                    if durability.is_none() {
+                        flusher.kick();
+                    }
+                    Ok(())
+                }
                 // fjall only reports conflicts for transactions that read; this one never does.
                 Err(fjall::Conflict) => {
                     unreachable!("a blind remove performs no reads, so it can never conflict")
@@ -404,5 +434,15 @@ mod tests {
         // The tombstone must free the id for the capture-once check, not merely hide the value.
         store.capture(hid(1), cap("second")).await.expect("recapture after delete");
         assert_eq!(store.get(hid(1)).await.expect("get").expect("present").output, "second");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn discard_removes_stored_output(store: TempStore) {
+        store.capture(hid(1), cap("hello")).await.expect("capture");
+        store.discard([hid(1)]).await.expect("discard");
+        assert!(store.get(hid(1)).await.expect("get").is_none());
+        // Idempotent, like `delete`.
+        store.discard([hid(1), hid(9)]).await.expect("discard again");
     }
 }
