@@ -1,12 +1,4 @@
 //! Durable storage for captured command output.
-//!
-//! Output is keyed by `history_id` (16 UUID bytes) in a fjall keyspace; the
-//! value is the encoded `history::CommandCapture`. Each write runs in an
-//! optimistic transaction so the check-then-insert is atomic against concurrent
-//! writers, and all blocking fjall I/O runs on tokio's blocking pool via
-//! `spawn_blocking`.
-//!
-//! TODO(retention): the store grows unbounded; no eviction yet. See the design doc.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,14 +21,32 @@ const KEYSPACE_NAME: &str = "command_output";
 pub enum CaptureError {
     #[error("history id already has an associated capture")]
     AlreadyExists,
-    #[error("storage error: {0}")]
-    Storage(#[from] fjall::Error),
+    #[error("storage error")]
+    Storage(
+        #[source]
+        #[from]
+        fjall::Error,
+    ),
 }
 
 #[derive(Debug, Error)]
 pub enum GetOutputError {
-    #[error("storage error: {0}")]
-    Storage(#[from] fjall::Error),
+    #[error("storage error")]
+    Storage(
+        #[source]
+        #[from]
+        fjall::Error,
+    ),
+}
+
+#[derive(Debug, Error)]
+pub enum DeleteOutputError {
+    #[error("storage error")]
+    Storage(
+        #[source]
+        #[from]
+        fjall::Error,
+    ),
 }
 
 /// Task responsible for flushing fjall data buffered in memory onto the disk.
@@ -225,20 +235,75 @@ impl OutputCapture {
         .await
         .expect("output-capture read task panicked")
     }
+
+    /// Forget the captured output of every history id in `ids`.
+    pub async fn delete(
+        &self,
+        ids: impl IntoIterator<Item = HistoryId>,
+    ) -> Result<(), DeleteOutputError> {
+        let keys: Vec<[u8; 16]> = ids.into_iter().map(HistoryId::into_bytes).collect();
+        if keys.is_empty() {
+            return Ok(());
+        }
+
+        let db = self.db.clone();
+        let keyspace = self.keyspace.clone();
+        tokio::task::spawn_blocking(move || {
+            // Fjall deletes by leaving tombstones.
+            //
+            // If a crash were to happen between this transaction finishing and the flusher fsyncing
+            // it, the tombstone would never commit, which means that a subsequent reboot would
+            // resurrect the entry.
+            //
+            // If the user wants to delete something, chances are they want to delete it **NOW**.
+            // They don't delete super often anyways, so let's just fsync immediately.
+            let mut tx = db.write_tx()?.durability(Some(PersistMode::SyncAll));
+            for key in keys {
+                tx.remove(&keyspace, key);
+            }
+            match tx.commit()? {
+                Ok(()) => Ok(()),
+                // fjall only reports conflicts for transactions that read; this one never does.
+                Err(fjall::Conflict) => {
+                    unreachable!("a blind remove performs no reads, so it can never conflict")
+                }
+            }
+        })
+        .await
+        .expect("output-capture delete task panicked")
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Deref;
+
     use easy_cast::Conv;
+    use rstest::{fixture, rstest};
     use uuid::Uuid;
 
     use super::*;
     use crate::grpc::history::pb::CommandCaptureMeta;
 
-    fn temp_capture() -> (OutputCapture, tempfile::TempDir) {
+    /// An [`OutputCapture`] over a fresh temp dir. Dropping the guard removes the dir.
+    struct TempStore {
+        store: OutputCapture,
+        _dir: tempfile::TempDir,
+    }
+
+    impl Deref for TempStore {
+        type Target = OutputCapture;
+
+        fn deref(&self) -> &Self::Target {
+            &self.store
+        }
+    }
+
+    #[fixture]
+    fn store() -> TempStore {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = OutputCapture::open(dir.path()).expect("open");
-        (store, dir)
+        TempStore { store, _dir: dir }
     }
 
     fn hid(n: u128) -> HistoryId {
@@ -257,24 +322,24 @@ mod tests {
         }
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn round_trips_output_by_history_id() {
-        let (store, _dir) = temp_capture();
+    async fn round_trips_output_by_history_id(store: TempStore) {
         store.capture(hid(1), cap("hello")).await.expect("capture");
         let got = store.get(hid(1)).await.expect("get").expect("present");
         assert_eq!(got.output, "hello");
         assert_eq!(got.meta.expect("meta").output_observed_bytes, 5);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn missing_id_returns_none() {
-        let (store, _dir) = temp_capture();
+    async fn missing_id_returns_none(store: TempStore) {
         assert!(store.get(hid(9)).await.expect("get").is_none());
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn second_capture_for_same_id_is_rejected() {
-        let (store, _dir) = temp_capture();
+    async fn second_capture_for_same_id_is_rejected(store: TempStore) {
         store.capture(hid(1), cap("first")).await.expect("first");
         let err = store.capture(hid(1), cap("second")).await.unwrap_err();
         assert!(matches!(err, CaptureError::AlreadyExists));
@@ -282,9 +347,9 @@ mod tests {
         assert_eq!(store.get(hid(1)).await.expect("get").expect("present").output, "first");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn concurrent_writers_store_exactly_one() {
-        let (store, _dir) = temp_capture();
+    async fn concurrent_writers_store_exactly_one(store: TempStore) {
         let store = std::sync::Arc::new(store);
         let mut handles = Vec::new();
         for n in 0..16u8 {
@@ -300,5 +365,44 @@ mod tests {
             }
         }
         assert_eq!(ok, 1, "exactly one writer wins, no TOCTOU double-store");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn delete_removes_stored_output(store: TempStore) {
+        store.capture(hid(1), cap("hello")).await.expect("capture");
+        store.delete([hid(1)]).await.expect("delete");
+        assert!(store.get(hid(1)).await.expect("get").is_none());
+    }
+
+    #[rstest]
+    #[case::no_ids(vec![])]
+    #[case::unknown_id(vec![hid(9)])]
+    #[tokio::test]
+    async fn delete_of_absent_ids_is_ok(store: TempStore, #[case] ids: Vec<HistoryId>) {
+        store.delete(ids).await.expect("delete is idempotent");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn delete_only_removes_requested_ids(store: TempStore) {
+        for n in 1..=3 {
+            store.capture(hid(n), cap(&format!("out{n}"))).await.expect("capture");
+        }
+        // Present and absent ids in the same batch: the absent one is simply skipped.
+        store.delete([hid(1), hid(3), hid(9)]).await.expect("delete");
+        assert!(store.get(hid(1)).await.expect("get").is_none());
+        assert_eq!(store.get(hid(2)).await.expect("get").expect("kept").output, "out2");
+        assert!(store.get(hid(3)).await.expect("get").is_none());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn deleted_id_can_be_captured_again(store: TempStore) {
+        store.capture(hid(1), cap("first")).await.expect("first");
+        store.delete([hid(1)]).await.expect("delete");
+        // The tombstone must free the id for the capture-once check, not merely hide the value.
+        store.capture(hid(1), cap("second")).await.expect("recapture after delete");
+        assert_eq!(store.get(hid(1)).await.expect("get").expect("present").output, "second");
     }
 }

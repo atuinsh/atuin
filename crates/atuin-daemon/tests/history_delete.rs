@@ -12,9 +12,11 @@ use atuin_client::history::HistoryId;
 use atuin_client::history::store::HistoryRecord;
 use atuin_client::settings::Search;
 use atuin_daemon::grpc::history::pb::tail_history_reply::Event;
+use atuin_daemon::grpc::history::pb::{CommandCapture, CommandCaptureMeta};
 use atuin_daemon::search::SearchIndex;
 use atuin_daemon::{CmdDeleteError, CmdFinishError};
 use common::{TestEnv, history};
+use easy_cast::Conv;
 use rstest::*;
 
 #[fixture]
@@ -297,4 +299,62 @@ async fn failed_finish_keeps_the_command_in_flight(#[case] lock_history_db: bool
         .count();
     assert_eq!(creates, 1, "exactly one create record after the retry");
     assert_eq!(env.index_count().await, 1);
+}
+
+/// A complete capture (with its required meta) holding `output`.
+fn capture(output: &str) -> CommandCapture {
+    CommandCapture {
+        output: output.to_string(),
+        meta: Some(CommandCaptureMeta {
+            output_truncated: false,
+            output_observed_bytes: u64::conv(output.len()),
+            terminal_width: 80,
+            terminal_height: 24,
+        }),
+    }
+}
+
+/// Deleting an entry also forgets its captured output, whether the command had finished or was
+/// still in flight when the output was registered.
+#[rstest]
+#[tokio::test]
+async fn delete_forgets_captured_output(
+    #[future(awt)] env: TestEnv,
+    #[values(true, false)] finished: bool,
+) {
+    let id = env.journal.start_cmd(history("echo secret"));
+    if finished {
+        env.journal.finish(id, 0, Duration::from_millis(1)).await.unwrap();
+    }
+    env.journal.register_command_output(id, capture("secret output")).await.unwrap();
+    assert!(env.journal.get_command_output(id).await.unwrap().is_some());
+
+    assert_eq!(env.journal.delete([id], &Search::default()).await.unwrap(), 1);
+
+    assert!(
+        env.journal.get_command_output(id).await.unwrap().is_none(),
+        "captured output must be forgotten with the entry (finished = {finished})"
+    );
+}
+
+/// The same guarantee through the RPCs a shell and the AI tools use: after `delete_history`,
+/// `get_command_output` reports the output as not found.
+#[rstest]
+#[tokio::test]
+async fn delete_history_rpc_forgets_captured_output(#[future(awt)] env: TestEnv) {
+    let mut client = env.history_client().await;
+    let id = env.record(&mut client, "echo secret").await;
+    let output = "secret output";
+    client
+        .register_command_output(id, output.to_string(), false, u64::conv(output.len()), 80, 24)
+        .await
+        .unwrap();
+    assert!(client.get_command_output(id, vec![]).await.unwrap().is_some());
+
+    assert_eq!(client.delete_history(vec![id]).await.unwrap().deleted, 1);
+
+    assert!(
+        client.get_command_output(id, vec![]).await.unwrap().is_none(),
+        "deleting the entry must also delete its captured output"
+    );
 }
