@@ -315,10 +315,6 @@ impl HistoryJournal {
 
     /// Cancel a command, discarding its in-memory state without persisting a history entry.
     pub async fn cancel(&self, history_id: HistoryId) -> Result<(), CmdCancelError> {
-        // Take the id's per-id lock before removing it, so a concurrent `finish` of the same id
-        // can't be mid-persist (holding the entry and the lock) when we pull it out. Without this
-        // a cancel could remove an entry whose `finish` then goes on to durably append its
-        // `Create`, and both would report success. See [`InFlightCmd::lock`].
         let lock = self
             .active_cmds
             .get(&history_id)
@@ -326,8 +322,6 @@ impl HistoryJournal {
             .ok_or(CmdCancelError::NotFound(history_id))?;
         let _guard = lock.lock().await;
 
-        // Under the lock, re-check: a `finish` that won the lock first has already removed the
-        // entry and persisted the command, so there is nothing left to cancel.
         let Some((_id, cmd)) = self.active_cmds.remove(&history_id) else {
             return Err(CmdCancelError::NotFound(history_id));
         };
@@ -360,13 +354,6 @@ impl HistoryJournal {
         //
         // This happens as a result of the fact that [`HistoryJournal`] might be tracking started,
         // but not finished commands. These get cancelled via [`HistoryJournal::cancel`].
-        // Terminate each id atomically with respect to a racing `finish` of the *same* id, by
-        // taking that id's per-id lock (see [`InFlightCmd::lock`]) before deciding its fate. An
-        // in-flight id is cancelled out of `active_cmds` (and `finish`, once it gets the lock, then
-        // sees it gone and returns `NotFound`); an already-persisted id is tombstoned. The window
-        // where `finish` had checked the id out but not yet appended its `Create` -- which used to
-        // resurrect the row -- no longer exists: `finish` holds the entry (and the lock) until the
-        // `Create` is durable. Ids in different batches / different finishes never contend.
         let delete_records = async || {
             let mut deleted: usize = 0;
             let mut record_ids = Vec::new();
