@@ -383,10 +383,6 @@ mod tests {
         pub(super) redacted: &'static str,
     }
 
-    /// An alphabet dense in the characters the patterns care about, so that generated strings
-    /// actually trip them instead of drifting past.
-    const FUZZY: &str = r#"[A-Za-z0-9_=:$"' .\-]{0,120}"#;
-
     /// The table cases whose *whole* input is the credential, so planting one inside a larger
     /// string must yield exactly one [`REDACTED`]. Derived from the table rather than repeated, so
     /// a new pattern joins the property tests for free.
@@ -397,6 +393,61 @@ mod tests {
             .filter(|test| test.redacted == REDACTED)
             .map(|test| test.input)
             .collect()
+    }
+
+    /// A generator that never produces a credential makes every property test vacuous: each one
+    /// collapses to "clean input comes back Borrowed". This pins that the generator below does
+    /// reach the Owned path, so the properties driven by it mean what they say.
+    #[test]
+    fn the_credential_dense_generator_reaches_the_owned_path() {
+        use proptest::strategy::ValueTree;
+        use proptest::test_runner::TestRunner;
+
+        let mut runner = TestRunner::deterministic();
+        let strategy = credential_dense();
+        let owned = (0..500)
+            .filter(|_| {
+                let sample = strategy.new_tree(&mut runner).expect("strategy").current();
+                matches!(redact(&sample), Cow::Owned(_))
+            })
+            .count();
+
+        assert!(
+            owned >= 100,
+            "only {owned}/500 generated strings changed under redact; the generator is not \
+             exercising the Owned path"
+        );
+    }
+
+    /// Names, flags and separator glue the patterns care about, so that generated text actually
+    /// forms assignments and login lines rather than drifting past every pattern.
+    const NAMES_AND_FLAGS: &[&str] = &[
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AZURE_STORAGE_ACCOUNT_KEY",
+        "GOOGLE_SERVICE_ACCOUNT_KEY",
+        "atuin login",
+        "-p",
+        "-k",
+        "--password=",
+        "--key",
+    ];
+    const GLUE: &[&str] = &[
+        "=", ": ", " := ", " => ", " == ", "\"", "'", "]", "[", " ", "  ", "\t", "\n", "****", "*",
+        ",", "}", "{", "|",
+    ];
+
+    /// Text in which credentials, assignment shapes, quotes, the marker and whitespace occur
+    /// often, so property tests reach the Owned path. Credentials come from the pattern table's
+    /// own plantable fixtures, so a new pattern is generated automatically.
+    fn credential_dense() -> impl Strategy<Value = String> {
+        let token = prop_oneof![
+            4 => prop::sample::select(plantable()).prop_map(str::to_owned),
+            3 => prop::sample::select(NAMES_AND_FLAGS.to_vec()).prop_map(str::to_owned),
+            3 => prop::sample::select(GLUE.to_vec()).prop_map(str::to_owned),
+            2 => "[a-z0-9]{1,8}",
+        ];
+        prop::collection::vec(token, 0..12).prop_map(|parts| parts.concat())
     }
 
     /// The contract `redact` relies on: without this group it would not know which part of a match
@@ -575,7 +626,7 @@ mod tests {
 
         /// The contract callers rely on to avoid copying clean output.
         #[test]
-        fn borrowed_exactly_when_nothing_changed(s in FUZZY) {
+        fn borrowed_exactly_when_nothing_changed(s in credential_dense()) {
             match redact(&s) {
                 Cow::Borrowed(out) => prop_assert_eq!(out, s.as_str()),
                 Cow::Owned(out) => prop_assert_ne!(out.as_str(), s.as_str()),
@@ -584,14 +635,19 @@ mod tests {
 
         /// Redacting again must be a no-op, or the marker itself would be feeding the patterns.
         #[test]
-        fn redaction_is_idempotent(s in FUZZY) {
+        fn redaction_is_idempotent(s in credential_dense()) {
             let once = redact(&s).into_owned();
             prop_assert_eq!(&*redact(&once), once.as_str());
         }
 
+        // A filter on the strategy, not `prop_assume!`: with credential-dense input most samples
+        // are rejected, and proptest's global-reject cap (1024) does not scale with the case
+        // count, so `prop_assume!` would fail the test under PROPTEST_CASES=2000. Local rejects
+        // from a filter are capped far higher.
         #[test]
-        fn text_with_nothing_recognisable_is_returned_as_is(s in FUZZY) {
-            prop_assume!(!contains_secret(&s));
+        fn text_with_nothing_recognisable_is_returned_as_is(
+            s in credential_dense().prop_filter("contains a secret", |s| !contains_secret(s)),
+        ) {
             prop_assert!(matches!(redact(&s), Cow::Borrowed(_)));
         }
 
