@@ -1,7 +1,8 @@
 //! Model-based check of the journal: any interleaving of start / finish / cancel / delete /
-//! rebuild over a fixed set of commands must keep four views in agreement -- the in-flight map,
-//! the history db, the search index, and what another machine would rebuild from the record
-//! store -- and must emit exactly the events a shell watching `atuin history tail` expects.
+//! rebuild / register-output over a fixed set of commands must keep five views in agreement -- the
+//! in-flight map, the history db, the search index, what another machine would rebuild from the
+//! record store, and which commands have captured output -- and must emit exactly the events a
+//! shell watching `atuin history tail` expects.
 #![cfg(unix)]
 
 mod common;
@@ -11,8 +12,8 @@ use std::time::Duration;
 
 use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::Search;
-use atuin_daemon::CmdEvent;
-use common::{TestEnv, history};
+use atuin_daemon::{CaptureError, CmdEvent, RegisterOutputError};
+use common::{TestEnv, capture, history};
 use futures::{FutureExt, StreamExt};
 use proptest::prelude::*;
 
@@ -25,6 +26,7 @@ enum Op {
     Cancel(u8),
     Delete(Vec<u8>),
     Rebuild,
+    Register(u8),
 }
 
 fn op() -> impl Strategy<Value = Op> {
@@ -34,6 +36,7 @@ fn op() -> impl Strategy<Value = Op> {
         1 => (0..SLOTS).prop_map(Op::Cancel),
         2 => proptest::collection::vec(0..SLOTS, 0..4).prop_map(Op::Delete),
         1 => Just(Op::Rebuild),
+        3 => (0..SLOTS).prop_map(Op::Register),
     ]
 }
 
@@ -62,6 +65,8 @@ fn kind_of(event: &CmdEvent) -> (Kind, HistoryId) {
 
 struct Model {
     slots: Vec<(History, State)>,
+    /// Whether the journal holds captured output for the slot's command.
+    has_output: Vec<bool>,
     expected_events: Vec<(Kind, HistoryId)>,
 }
 
@@ -71,6 +76,7 @@ impl Model {
             slots: (0..SLOTS)
                 .map(|i| (history(&format!("model cmd {i:02}")), State::Fresh))
                 .collect(),
+            has_output: vec![false; usize::from(SLOTS)],
             expected_events: Vec::new(),
         }
     }
@@ -117,6 +123,7 @@ async fn apply(env: &TestEnv, model: &mut Model, op: &Op) {
             if *state == State::InFlight {
                 result.expect("cancelling an in-flight command");
                 *state = State::Gone;
+                model.has_output[usize::from(*slot)] = false;
                 model.expected_events.push((Kind::Cancelled, id));
             } else {
                 assert!(result.is_err(), "cancel of a {state:?} command must fail");
@@ -132,6 +139,7 @@ async fn apply(env: &TestEnv, model: &mut Model, op: &Op) {
             assert_eq!(deleted, slots.len());
             for slot in slots {
                 let id = model.id(*slot);
+                model.has_output[usize::from(*slot)] = false;
                 let (_, state) = &mut model.slots[usize::from(*slot)];
                 match *state {
                     State::InFlight => {
@@ -143,6 +151,29 @@ async fn apply(env: &TestEnv, model: &mut Model, op: &Op) {
                     State::Persisted | State::Fresh => *state = State::Gone,
                     State::Gone => {}
                 }
+            }
+        }
+        Op::Register(slot) => {
+            let id = model.id(*slot);
+            let result = env.journal.register_command_output(id, capture("out")).await;
+            let state = model.slots[usize::from(*slot)].1;
+            let has_output = &mut model.has_output[usize::from(*slot)];
+            match (state, *has_output) {
+                (State::InFlight | State::Persisted, false) => {
+                    result.expect("registering output for a live command");
+                    *has_output = true;
+                }
+                (State::InFlight | State::Persisted, true) => assert!(
+                    matches!(
+                        result,
+                        Err(RegisterOutputError::Capture(CaptureError::AlreadyExists))
+                    ),
+                    "a second capture for a live command must be refused: {result:?}"
+                ),
+                (State::Fresh | State::Gone, _) => assert!(
+                    matches!(result, Err(RegisterOutputError::NotLive(_))),
+                    "output for a {state:?} command must be refused: {result:?}"
+                ),
             }
         }
         Op::Rebuild => env
@@ -172,6 +203,15 @@ async fn check_invariants(env: &TestEnv, model: &Model, step: usize, op: &Op) {
             hits.contains(&h.id),
             *state == State::Persisted,
             "{ctx}: index view of {}",
+            h.command
+        );
+    }
+    for (slot, (h, state)) in model.slots.iter().enumerate() {
+        let stored = env.journal.get_command_output(h.id).await.unwrap().is_some();
+        assert_eq!(stored, model.has_output[slot], "{ctx}: captured output of {}", h.command);
+        assert!(
+            !stored || matches!(state, State::InFlight | State::Persisted),
+            "{ctx}: {} has output but is {state:?}",
             h.command
         );
     }
