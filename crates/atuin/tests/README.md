@@ -27,7 +27,8 @@ PROMPT="E2E_PROMPT> "
 
 - `shell`: executable to find on PATH. `ATUIN_E2E_<SHELL>` overrides it, e.g.
   `ATUIN_E2E_BASH=/bin/bash`.
-- `args`: optional shell arguments, such as `["-i"]`.
+- `args`: optional shell arguments, such as `["-i"]`. The zsh setups use
+  `["-d"]` to skip global startup files while still loading the test `.zshrc`.
 - `rc`: path relative to the temporary home.
 - `script`: the complete rc file. Set the prompt to `E2E_PROMPT> `, without a
   right prompt. The tests use the common command syntax supported by bash, zsh,
