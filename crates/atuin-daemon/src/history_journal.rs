@@ -74,6 +74,7 @@ struct InFlightCmd {
     /// Suppose that a command is in flight -- `active_cmds` holds an entry for it.
     /// Suppose two requests come concurrently -- finish the command and delete the command.
     ///
+    /// ```text
     /// finish is supposed to:
     ///   1. x := read(active_cmds, cmd)
     ///      ^--- BORROW (not pop) the command from the shared active_cmds map into the stack.
@@ -90,6 +91,7 @@ struct InFlightCmd {
     ///       -> Some(x) means that the command was in-flight, in which case we're good to go
     ///       -> None means that the command was already persisted by finish:4
     ///          which means we need to do history_store.push(delete(x))
+    /// ```
     ///
     /// BUT! What might happen is that _while_ we're finishing a command (ie. between finish:1 and
     /// finish:4), we get a delete. The delete sees that pop(active_cmds, cmd) is Some, and it pops

@@ -182,7 +182,6 @@ impl SqliteStore {
     /// shared lock: the DB's unique index is the arbiter, and a loser simply recomputes its idx and
     /// tries again.
     #[instrument(level = "trace", skip_all, fields(id = ?record.id, idx = record.idx, host = ?record.host.id, tag = ?record.tag), err)]
-    #[must_use]
     pub async fn push_unique(&self, record: &Record<paseto_v4::EncryptedData>) -> Result<bool> {
         let res = db::query(
             "insert or ignore into store(id, idx, host, tag, timestamp, version, data, cek)
