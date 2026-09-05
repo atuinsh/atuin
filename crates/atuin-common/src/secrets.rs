@@ -286,7 +286,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     },
     Pattern {
         name: "Stripe test key",
-        regex: "(?<secret>sk_test_[0-9a-zA-Z]{24})",
+        regex: "(?<secret>sk_test_[0-9a-zA-Z]{24,})",
         // Split so the literal is not a contiguous `sk_test_...` token in this file: at the
         // correct length for the pattern, GitHub push protection rejects it as a real key.
         #[cfg(test)]
@@ -297,7 +297,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     },
     Pattern {
         name: "Stripe live key",
-        regex: "(?<secret>sk_live_[0-9a-zA-Z]{24})",
+        regex: "(?<secret>sk_live_[0-9a-zA-Z]{24,})",
         // See the note on the test key above.
         #[cfg(test)]
         tests: &[Test {
@@ -927,5 +927,19 @@ mod tests {
             took < Duration::from_secs(10),
             "took {took:?}; the login patterns have gone quadratic again"
         );
+    }
+
+    /// Modern Stripe secret keys are `sk_live_` plus 99 characters; the pattern's floor of 24 is
+    /// the old format. A fixed width would redact 24 and leave 75 beside the marker.
+    #[rstest]
+    #[case::modern_live(&format!("sk_live_{}", "a1".repeat(50)), "****")]
+    #[case::modern_test(&format!("sk_test_{}", "b2".repeat(50)), "****")]
+    #[case::old_format_still_exact(concat!("sk_", "live_1234567890abcdefghijklmn"), "****")]
+    #[case::followed_by_punctuation(&format!("key={}.", concat!("sk_", "live_1234567890abcdefghijklmn")), "key=****.")]
+    fn stripe_keys_of_any_modern_length_are_fully_redacted(
+        #[case] input: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(&*redact(input), expected);
     }
 }
