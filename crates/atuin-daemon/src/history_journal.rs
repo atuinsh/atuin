@@ -71,8 +71,6 @@ pub struct FinishedCmd {
 struct InFlightCmd {
     history: History,
     span: Span,
-    ///
-    ///
     /// Suppose that a command is in flight -- `active_cmds` holds an entry for it.
     /// Suppose two requests come concurrently -- finish the command and delete the command.
     ///
@@ -97,7 +95,9 @@ struct InFlightCmd {
     /// finish:4), we get a delete. The delete sees that pop(active_cmds, cmd) is Some, and it pops
     /// it and then exits, thinking that there is nothing else to handle there. But guess what --
     /// the data is just about to be inserted.
-    finalization_lock: Arc<tokio::sync::Mutex<()>>,
+    ///
+    /// Really, we need a critical section between finish:1-4 and delete:1.
+    finalization_mutex: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// Registry of in-flight commands which performs output capture, management, storage and
@@ -213,14 +213,11 @@ impl HistoryJournal {
             duration = Empty,
         );
 
-        self.active_cmds.insert(
-            id,
-            InFlightCmd {
-                history: history.clone(),
-                span,
-                finalization_lock: Arc::new(tokio::sync::Mutex::new(())),
-            },
-        );
+        self.active_cmds.insert(id, InFlightCmd {
+            history: history.clone(),
+            span,
+            finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
+        });
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
     }
@@ -246,19 +243,15 @@ impl HistoryJournal {
         exit_code: i64,
         duration: Duration,
     ) -> Result<FinishedCmd, CmdFinishError> {
-        // Take this id's per-id lock (cloning the `Arc` and releasing the map's shard guard at
-        // once -- a `DashMap` guard must never be held across an `.await`). A concurrent `delete`
-        // of this id takes the same lock, so the two serialize. Unrelated commands touch different
-        // entries and different locks, and proceed fully in parallel.
-        let lock = self
+        // Careful! We need to ensure that the finalization_mutex gets guarded _while_ under the
+        // dashmap lock.
+        let mutex = self
             .active_cmds
             .get(&history_id)
-            .map(|cmd| cmd.finalization_lock.clone())
+            .map(|cmd| cmd.finalization_mutex.clone())
             .ok_or(CmdFinishError::NotFound(history_id))?;
-        let guard = lock.lock().await;
+        let lock = mutex.lock().await;
 
-        // Under the lock, read the in-flight command. A `delete` that won the lock first may have
-        // cancelled it out of the map while we waited -- then it is genuinely gone.
         let (mut history, span) = {
             let cmd =
                 self.active_cmds.get(&history_id).ok_or(CmdFinishError::NotFound(history_id))?;
@@ -295,7 +288,7 @@ impl HistoryJournal {
         };
 
         // The command is persisted and out of the map; the per-id lock has nothing left to guard.
-        drop(guard);
+        drop(lock);
 
         // TODO(markovejnovic): This is a little bit hacked-together. I'm thinking it would be good
         // to have a Packer type for this kind of logic. It can wraps the Caps.
@@ -334,7 +327,7 @@ impl HistoryJournal {
         let lock = self
             .active_cmds
             .get(&history_id)
-            .map(|cmd| cmd.finalization_lock.clone())
+            .map(|cmd| cmd.finalization_mutex.clone())
             .ok_or(CmdCancelError::NotFound(history_id))?;
         let _guard = lock.lock().await;
 
@@ -383,11 +376,9 @@ impl HistoryJournal {
             let mut deleted: usize = 0;
             let mut record_ids = Vec::new();
             for id in ids {
-                let lock = self.active_cmds.get(&id).map(|cmd| cmd.finalization_lock.clone());
-                let cancelled = if let Some(lock) = lock {
-                    let _guard = lock.lock().await;
-                    // Re-check under the lock: a `finish` that won the lock first has removed the
-                    // entry and durably appended its `Create`, so we fall through and tombstone it.
+                let mutex = self.active_cmds.get(&id).map(|cmd| cmd.finalization_mutex.clone());
+                let cancelled = if let Some(mutex) = mutex {
+                    let _lock = mutex.lock().await;
                     match self.active_cmds.remove(&id) {
                         Some((_id, cmd)) => {
                             let _ = self.broadcast.send(CmdEvent::Cancelled(cmd.history));
