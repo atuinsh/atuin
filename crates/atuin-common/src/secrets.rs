@@ -362,16 +362,8 @@ pub fn contains_secret(s: &str) -> bool {
     PATTERNS.set.is_match(s)
 }
 
-/// Replace every credential [`redact`] can locate in `s` with [`REDACTED`].
-///
-/// Returns [`Cow::Borrowed`] if and only if nothing was replaced, so
-/// `matches!(redact(s), Cow::Owned(_))` is an exact test for "something was taken out". Note that
-/// this is a weaker condition than [`contains_secret`]: a pattern can match text that holds no
-/// value to remove.
-///
-/// Best-effort; in particular it cannot see through SGR escape sequences or terminal line wraps.
-#[must_use]
-pub fn redact(s: &str) -> Cow<'_, str> {
+/// A single pass over `s`, replacing every credential the patterns can locate with [`REDACTED`].
+fn redact_once(s: &str) -> Cow<'_, str> {
     let mut spans: Vec<Range<usize>> = PATTERNS
         .set
         .matches(s)
@@ -403,6 +395,39 @@ pub fn redact(s: &str) -> Cow<'_, str> {
     }
     out.push_str(&s[cursor..]);
 
+    Cow::Owned(out)
+}
+
+/// Replace every credential [`redact`] can locate in `s` with [`REDACTED`].
+///
+/// Returns [`Cow::Borrowed`] if and only if nothing was replaced, so
+/// `matches!(redact(s), Cow::Owned(_))` is an exact test for "something was taken out". Note that
+/// this is a weaker condition than [`contains_secret`]: a pattern can match text that holds no
+/// value to remove.
+///
+/// Best-effort; in particular it cannot see through SGR escape sequences or terminal line wraps.
+#[must_use]
+pub fn redact(s: &str) -> Cow<'_, str> {
+    let mut out = match redact_once(s) {
+        Cow::Borrowed(_) => return Cow::Borrowed(s),
+        Cow::Owned(out) => out,
+    };
+
+    // Two patterns can carve one stretch into spans whose leftovers a second pass captures
+    // differently (see `redaction_reaches_a_fixed_point_in_one_call`), so iterate until a pass
+    // changes nothing. Each pass replaces at least one span that is not already the marker, so
+    // this converges in a couple of iterations; the bound is a backstop, not a budget.
+    for _ in 0..8 {
+        let next = match redact_once(&out) {
+            Cow::Borrowed(_) => None,
+            Cow::Owned(next) => Some(next),
+        };
+        let Some(next) = next else {
+            return Cow::Owned(out);
+        };
+        out = next;
+    }
+    debug_assert!(false, "redact did not reach a fixed point in 8 passes on {s:?}");
     Cow::Owned(out)
 }
 
@@ -677,6 +702,26 @@ mod tests {
     #[case::touching(&format!("ghp_{}npm_{}", "a".repeat(36), "b".repeat(36)), "********")]
     fn merges_spans(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(&*redact(input), expected);
+    }
+
+    /// Two patterns can carve one stretch of text into spans whose leftovers a second pass would
+    /// capture differently: here the type-annotation branch of `assigned!` takes `aAKIA…` for a
+    /// type name, the AWS key pattern redacts the key inside it, and the leftover `a****` reads as
+    /// a plain value next time round. `redact` runs to a fixed point so that stored output never
+    /// changes on re-processing.
+    #[rstest]
+    #[case::credential_in_a_type_position(
+        "AWS_SECRET_ACCESS_KEY: aAKIAIOSFODNN7EXAMPLE => ",
+        "AWS_SECRET_ACCESS_KEY: **** =**** "
+    )]
+    #[case::credential_in_a_type_position_with_a_value(
+        "AWS_SECRET_ACCESS_KEY: xAKIAIOSFODNN7EXAMPLE = y",
+        "AWS_SECRET_ACCESS_KEY: **** = ****"
+    )]
+    fn redaction_reaches_a_fixed_point_in_one_call(#[case] input: &str, #[case] expected: &str) {
+        let once = redact(input);
+        assert_eq!(&*once, expected);
+        assert!(matches!(redact(&once), Cow::Borrowed(_)), "a second pass changed {once:?}");
     }
 
     proptest! {
