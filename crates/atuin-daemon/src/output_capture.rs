@@ -234,10 +234,12 @@ impl OutputCapture {
 
     /// Forget the captured output of every history id in `ids`.
     ///
-    /// Ids with no stored output are skipped, so the call is idempotent and safe to retry. All
-    /// removals commit in a single transaction. Each removal is a blind write -- the transaction
-    /// performs no reads -- so it can never conflict with a concurrent [`Self::capture`]; whichever
-    /// of the two commits last wins the key.
+    /// Ids with no stored output are a no-op (a tombstone is written regardless), so the call is
+    /// idempotent and safe to retry. All removals commit in a single transaction. Each removal is
+    /// a blind write -- the transaction performs no reads -- so it can never conflict with a
+    /// concurrent [`Self::capture`]. A concurrent `capture` of the same id that started before
+    /// this delete committed observes a conflict and fails with `AlreadyExists`; one that starts
+    /// afterwards succeeds. The removal is fsynced to disk before this call returns.
     pub async fn delete(
         &self,
         ids: impl IntoIterator<Item = HistoryId>,
@@ -251,8 +253,18 @@ impl OutputCapture {
         let keyspace = self.keyspace.clone();
         let flusher = self.flusher.clone();
         tokio::task::spawn_blocking(move || {
+            // Scoped so clippy's `significant_drop_tightening` sees the transaction end here;
+            // `commit(self)` already consumes it, but the lint cannot tell.
             {
-                let mut tx = db.write_tx()?;
+                // The history-db side of a delete (`HistoryJournal::delete`) is durable as soon
+                // as it commits. Without an explicit sync here, this tombstone would sit in
+                // fjall's journal buffer until the periodic `Flusher` runs (up to
+                // `Flusher::SYNC_INTERVAL`, 5s); a crash in that window would resurrect the
+                // captured output for a history entry that no longer exists, with nothing left to
+                // delete it. Deletes are rare and user-initiated, so pay the fsync at commit
+                // instead. (This can't be covered by a unit test -- there's no in-process way to
+                // observe whether a commit reached disk -- so it's documented here instead.)
+                let mut tx = db.write_tx()?.durability(Some(PersistMode::SyncAll));
                 for key in keys {
                     tx.remove(&keyspace, key);
                 }
