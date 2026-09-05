@@ -1,0 +1,5 @@
+[[profile.default.overrides]]
+filter = 'binary(/^e2e_/)'
+retries = 0
+# Bound the complete test, including cleanup.
+slow-timeout = { period = "60s", terminate-after = 2 }
