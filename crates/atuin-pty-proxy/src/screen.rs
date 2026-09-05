@@ -279,7 +279,7 @@ mod tests {
 
         let captures: Vec<_> = captures.try_iter().collect();
         assert_eq!(captures.len(), 1);
-        assert_eq!(captures[0].output, "abcdklmno");
+        assert_eq!(captures[0].1.output, "abcdklmno");
     }
 
     #[rstest]
@@ -306,8 +306,8 @@ mod tests {
 
         let captures: Vec<_> = captures.try_iter().collect();
         assert_eq!(captures.len(), 1);
-        assert_eq!(captures[0].output, "hi");
-        assert_eq!(captures[0].history_id, hid(HID));
+        assert_eq!(captures[0].1.output, "hi");
+        assert_eq!(captures[0].0, hid(HID));
     }
 
     #[rstest]
@@ -333,8 +333,8 @@ mod tests {
 
         let captures: Vec<_> = captures.try_iter().collect();
         assert_eq!(captures.len(), 1);
-        assert_eq!(captures[0].output, "hi");
-        assert_eq!(captures[0].output_observed_bytes, u64::conv(b"hi\r\n".len()));
+        assert_eq!(captures[0].1.output, "hi");
+        assert_eq!(captures[0].1.output_observed_bytes, u64::conv(b"hi\r\n".len()));
 
         // The screen snapshot, on the other hand, is where the labels belong.
         let rows = rows_of(&encode_screen(&parser.emulator)).join("\n");
@@ -367,11 +367,11 @@ mod tests {
         }
     }
 
-    /// A capture sink that funnels every capture into the returned receiver.
-    fn capture_sink() -> (CommandCaptureSink, Receiver<CommandCapture>) {
+    /// A capture sink that funnels every `(history id, capture)` into the returned receiver.
+    fn capture_sink() -> (CommandCaptureSink, Receiver<(HistoryId, CommandCapture)>) {
         let (sender, received) = mpsc::channel();
-        let sink = Box::new(move |capture| {
-            sender.send(capture).expect("test receiver is still alive");
+        let sink = Box::new(move |history_id, capture| {
+            sender.send((history_id, capture)).expect("test receiver is still alive");
         });
         (sink, received)
     }

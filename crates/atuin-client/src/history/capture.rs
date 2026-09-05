@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-use super::HistoryId;
-
 /// A completed command's captured output.
 ///
 /// This is the domain representation of a captured command, independent of any wire (gRPC) or
@@ -16,8 +14,6 @@ pub struct CommandCapture {
     pub output: String,
     /// The command's exit code, if one was observed.
     pub exit_code: Option<i32>,
-    /// The history id this capture is associated with.
-    pub history_id: HistoryId,
     /// The total number of bytes that were pushed to the virtual terminal.
     ///
     /// This counts bytes observed *before* rasterizing the terminal, so it is not the same as

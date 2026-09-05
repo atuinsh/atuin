@@ -106,7 +106,10 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
     }
 
     let settings = atuin_client::settings::Settings::new().ok()?;
-    let (tx, rx) = mpsc::sync_channel::<atuin_pty_proxy::CommandCapture>(128);
+    let (tx, rx) = mpsc::sync_channel::<(
+        atuin_client::history::HistoryId,
+        atuin_pty_proxy::CommandCapture,
+    )>(128);
 
     std::thread::spawn(move || {
         let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
@@ -118,10 +121,10 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
                 return;
             };
 
-            while let Ok(capture) = rx.recv() {
+            while let Ok((history_id, capture)) = rx.recv() {
                 let _ = client
                     .register_command_output(
-                        capture.history_id,
+                        history_id,
                         capture.output,
                         capture.output_truncated,
                         capture.output_observed_bytes,
@@ -133,8 +136,8 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
         });
     });
 
-    Some(Box::new(move |capture| {
-        let _ = tx.try_send(capture);
+    Some(Box::new(move |history_id, capture| {
+        let _ = tx.try_send((history_id, capture));
     }))
 }
 

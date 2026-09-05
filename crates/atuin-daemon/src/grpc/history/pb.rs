@@ -301,18 +301,14 @@ impl From<DomainCommandCapture> for CommandCapture {
     }
 }
 
-impl CommandCapture {
-    /// Convert a wire capture into its domain representation, associating it with `history_id`.
-    ///
-    /// The wire type carries neither the history id nor the exit code: the id travels separately in
-    /// the request envelope (and is supplied here by the caller), and the exit code is left unset.
-    #[must_use]
-    pub fn into_domain(self, history_id: DomainHistoryId) -> DomainCommandCapture {
-        let meta = self.meta.unwrap_or_default();
-        DomainCommandCapture {
-            output: self.output,
+impl From<CommandCapture> for DomainCommandCapture {
+    fn from(capture: CommandCapture) -> Self {
+        // The wire type carries no exit code, so it is left unset; the history id travels
+        // separately in the request envelope and is applied by the caller as the storage key.
+        let meta = capture.meta.unwrap_or_default();
+        Self {
+            output: capture.output,
             exit_code: None,
-            history_id,
             output_observed_bytes: meta.output_observed_bytes,
             output_truncated: meta.output_truncated,
             terminal_width: u16::try_from(meta.terminal_width).unwrap_or(u16::MAX),

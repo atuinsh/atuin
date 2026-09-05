@@ -443,12 +443,13 @@ impl HistoryJournal {
         }
     }
 
-    /// Store a command's captured output. Errors if an output already exists for its history id.
+    /// Store a command's captured output. Errors if an output already exists for this id.
     pub async fn register_command_output(
         &self,
+        id: HistoryId,
         capture: CommandCapture,
     ) -> Result<(), CaptureError> {
-        self.output_capture.capture(capture).await
+        self.output_capture.capture(id, capture).await
     }
 
     /// Retrieve a command's captured output, if any.
