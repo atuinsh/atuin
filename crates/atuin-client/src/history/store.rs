@@ -302,6 +302,13 @@ impl HistoryStore {
             }
         }
 
+        // Never write a row for an id the store also deletes, not even transiently: the daemon
+        // reads "row present" as "this command is live" and would accept captured output for it
+        // in the window before the delete below removed it again. The deletes are still applied,
+        // for rows the old sync left behind.
+        let deleted: HashSet<HistoryId> = deletes.iter().copied().collect();
+        creates.retain(|h| !deleted.contains(&h.id));
+
         database.save_bulk(&creates).await?;
         database.delete_rows(deletes).await?;
 
@@ -779,5 +786,31 @@ mod tests {
         db.close().await;
 
         assert!(history_store.build_all(&db, &[record_id]).await.is_err());
+    }
+
+    /// A full rebuild never writes a row for an id the store also deletes. The end state (deleted
+    /// absent, kept present) is what this pins; that no row is written even transiently is by
+    /// construction of `build`, which filters the creates before touching the database.
+    #[rstest]
+    #[tokio::test]
+    async fn build_skips_rows_the_store_deletes(
+        #[future(awt)]
+        #[from(stores)]
+        parts: (SqliteStore, HostId, HistoryStore),
+        #[from(sample_history)] history: History,
+    ) {
+        let (_store, _host_id, history_store) = parts;
+        let deleted_id = history.id;
+        let mut kept = history.clone();
+        kept.id = "018cd4fe81757cd2aee65cd7861f9c82".parse().unwrap();
+        history_store.push(history).await.unwrap();
+        history_store.delete(deleted_id).await.unwrap();
+        history_store.push(kept.clone()).await.unwrap();
+
+        let db = memory_db().await;
+        history_store.build(&db).await.unwrap();
+
+        assert!(db.load(deleted_id).await.unwrap().is_none());
+        assert!(db.load(kept.id).await.unwrap().is_some());
     }
 }
