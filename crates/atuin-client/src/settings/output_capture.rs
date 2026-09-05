@@ -1,5 +1,7 @@
-use atuin_common::size::{ByteSize, DiskUsageLimit, Percent};
+use atuin_common::units::{ByteSize, Percent};
 use serde::{Deserialize, Serialize};
+
+use super::DiskUsageLimit;
 
 /// The `[output_capture]` section of `config.toml`: capturing and storing command output.
 ///
@@ -52,9 +54,7 @@ impl Default for CaptureLimits {
         Self {
             max_output_size: ByteSize::MIB,
             sync: false,
-            max_disk_usage: DiskUsageLimit::Percent(
-                Percent::new(10).expect("10 is a valid percentage"),
-            ),
+            max_disk_usage: DiskUsageLimit::Percent(Percent::new(10)),
         }
     }
 }

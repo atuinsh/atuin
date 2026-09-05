@@ -1,13 +1,15 @@
 //! A count of bytes with a human-friendly text form.
 
 use std::fmt;
+use std::iter::Sum;
 use std::num::{IntErrorKind, ParseIntError};
+use std::ops::{Add, AddAssign, Div, Mul, Sub, SubAssign};
 use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer};
 use serde_with::SerializeDisplay;
 
-use super::text_or_bytes;
+use super::{Percent, text_or_bytes};
 
 /// A number of bytes.
 ///
@@ -17,6 +19,10 @@ use super::text_or_bytes;
 ///
 /// Serializes as its text form. Deserializes from either the text form or a bare integer, so
 /// `max_output_size = "1MB"` and `max_output_size = 1048576` are both accepted in `config.toml`.
+///
+/// Sizes add, subtract, sum, and scale by a plain count or by a [`Percent`]
+/// (`ByteSize::gib(10) * Percent::new(10)` is `1GB`). Integer arithmetic saturates; see the
+/// [module docs](super).
 #[derive(
     Clone,
     Copy,
@@ -82,6 +88,89 @@ impl ByteSize {
     #[must_use]
     pub fn human(self) -> HumanByteSize {
         HumanByteSize(self)
+    }
+}
+
+impl Add for ByteSize {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self {
+        Self(self.0.saturating_add(rhs.0))
+    }
+}
+
+impl Sub for ByteSize {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self {
+        Self(self.0.saturating_sub(rhs.0))
+    }
+}
+
+impl AddAssign for ByteSize {
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
+    }
+}
+
+impl SubAssign for ByteSize {
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = *self - rhs;
+    }
+}
+
+/// `n` times a size.
+impl Mul<u64> for ByteSize {
+    type Output = Self;
+
+    fn mul(self, rhs: u64) -> Self {
+        Self(self.0.saturating_mul(rhs))
+    }
+}
+
+impl Mul<ByteSize> for u64 {
+    type Output = ByteSize;
+
+    fn mul(self, rhs: ByteSize) -> ByteSize {
+        rhs * self
+    }
+}
+
+/// A size split `n` ways, rounded down. Panics on zero, as integer division does.
+impl Div<u64> for ByteSize {
+    type Output = Self;
+
+    fn div(self, rhs: u64) -> Self {
+        Self(self.0 / rhs)
+    }
+}
+
+/// A share of a size: `ByteSize::gib(10) * Percent::new(10)` is `1GB`.
+impl Mul<Percent> for ByteSize {
+    type Output = Self;
+
+    fn mul(self, rhs: Percent) -> Self {
+        Self(self.0 * rhs)
+    }
+}
+
+impl Mul<ByteSize> for Percent {
+    type Output = ByteSize;
+
+    fn mul(self, rhs: ByteSize) -> ByteSize {
+        rhs * self
+    }
+}
+
+impl Sum for ByteSize {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(Self::ZERO, Add::add)
+    }
+}
+
+impl<'a> Sum<&'a Self> for ByteSize {
+    fn sum<I: Iterator<Item = &'a Self>>(iter: I) -> Self {
+        iter.copied().sum()
     }
 }
 
@@ -411,5 +500,52 @@ mod tests {
             prop_assert_eq!(u64::from(size), bytes);
             prop_assert_eq!(size.bytes(), bytes);
         }
+    }
+
+    #[rstest]
+    fn sizes_add_subtract_and_sum() {
+        assert_eq!(ByteSize::KIB + ByteSize::KIB, ByteSize::kib(2));
+        assert_eq!(ByteSize::MIB - ByteSize::KIB, ByteSize::kib(1023));
+        // saturating, like every other operation here
+        assert_eq!(ByteSize::KIB - ByteSize::MIB, ByteSize::ZERO);
+        assert_eq!(ByteSize::from_bytes(u64::MAX) + ByteSize::KIB, ByteSize::from_bytes(u64::MAX));
+
+        let mut size = ByteSize::MIB;
+        size += ByteSize::KIB;
+        size -= ByteSize::kib(2);
+        assert_eq!(size, ByteSize::kib(1023));
+
+        let sizes = [ByteSize::KIB, ByteSize::MIB, ByteSize::GIB];
+        assert_eq!(
+            sizes.iter().sum::<ByteSize>(),
+            ByteSize::from_bytes((1 << 10) + (1 << 20) + (1 << 30))
+        );
+        assert_eq!(sizes.into_iter().sum::<ByteSize>(), sizes.iter().sum());
+        assert_eq!(std::iter::empty::<ByteSize>().sum::<ByteSize>(), ByteSize::ZERO);
+    }
+
+    #[rstest]
+    fn sizes_scale_by_a_count() {
+        assert_eq!(ByteSize::KIB * 4, ByteSize::kib(4));
+        assert_eq!(4 * ByteSize::KIB, ByteSize::kib(4));
+        assert_eq!(ByteSize::GIB * u64::MAX, ByteSize::from_bytes(u64::MAX));
+        assert_eq!(ByteSize::kib(4) / 4, ByteSize::KIB);
+        assert_eq!(ByteSize::from_bytes(7) / 2, ByteSize::from_bytes(3));
+    }
+
+    #[rstest]
+    #[case::a_tenth(10, 10 << 30, 1 << 30)]
+    #[case::the_whole(100, 1 << 20, 1 << 20)]
+    #[case::more_than_the_whole(150, 1 << 20, 3 << 19)]
+    #[case::rounds_down(1, 150, 1)]
+    #[case::saturates(200, u64::MAX, u64::MAX)]
+    fn sizes_scale_by_a_percent_in_either_order(
+        #[case] pct: u64,
+        #[case] bytes: u64,
+        #[case] expected: u64,
+    ) {
+        let size = ByteSize::from_bytes(bytes);
+        assert_eq!(size * Percent::new(pct), ByteSize::from_bytes(expected));
+        assert_eq!(Percent::new(pct) * size, ByteSize::from_bytes(expected));
     }
 }

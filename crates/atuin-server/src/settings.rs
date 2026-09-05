@@ -1,6 +1,7 @@
 use std::io::prelude::*;
 use std::path::PathBuf;
 
+use atuin_common::units::ByteSize;
 use config::{Config, Environment, File as ConfigFile, FileFormat};
 use eyre::{Result, eyre};
 use fs_err::{File, create_dir_all};
@@ -34,7 +35,7 @@ pub struct Settings {
     pub port: u16,
     pub path: String,
     pub open_registration: bool,
-    pub max_record_size: usize,
+    pub max_record_size: ByteSize,
     pub register_webhook_url: Option<url::Url>,
     pub register_webhook_username: String,
     pub metrics: Metrics,
@@ -68,7 +69,7 @@ impl Settings {
             .set_default("host", "127.0.0.1")?
             .set_default("port", 8888)?
             .set_default("open_registration", false)?
-            .set_default("max_record_size", 1024 * 1024 * 1024)? // pretty chonky
+            .set_default("max_record_size", "1GB")?
             .set_default("path", "")?
             .set_default("register_webhook_username", "")?
             .set_default("metrics.enable", false)?
@@ -96,4 +97,39 @@ impl Settings {
 #[must_use]
 pub fn example_config() -> &'static str {
     EXAMPLE_CONFIG
+}
+
+#[cfg(test)]
+mod tests {
+    use atuin_common::units::ByteSize;
+    use config::{Config, File as ConfigFile, FileFormat};
+
+    use super::Settings;
+
+    fn settings_with_max_record_size(value: &str) -> Settings {
+        let toml = format!(
+            "host = \"\"\nport = 8888\npath = \"\"\nopen_registration = \
+             false\nregister_webhook_username = \"\"\ndb_uri = \
+             \"sqlite::memory:\"\nmax_record_size = {value}\n[metrics]\nenable = false\nhost = \
+             \"127.0.0.1\"\nport = 9001\n"
+        );
+        Config::builder()
+            .add_source(ConfigFile::from_str(&toml, FileFormat::Toml))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap()
+    }
+
+    #[test]
+    fn max_record_size_accepts_a_human_string() {
+        let settings = settings_with_max_record_size("\"500MB\"");
+        assert_eq!(settings.max_record_size, ByteSize::from_bytes(500 << 20));
+    }
+
+    #[test]
+    fn max_record_size_accepts_a_bare_integer() {
+        let settings = settings_with_max_record_size("1048576");
+        assert_eq!(settings.max_record_size, ByteSize::MIB);
+    }
 }

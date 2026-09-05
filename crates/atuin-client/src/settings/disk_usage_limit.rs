@@ -2,10 +2,11 @@
 
 use std::str::FromStr;
 
+use atuin_common::units::{
+    ByteSize, ByteSizeParseError, Percent, PercentParseError, text_or_bytes,
+};
 use serde::{Deserialize, Deserializer};
 use serde_with::SerializeDisplay;
-
-use super::{ByteSize, ByteSizeParseError, Percent, PercentParseError, text_or_bytes};
 
 /// The most disk space something may use.
 ///
@@ -52,7 +53,7 @@ impl DiskUsageLimit {
         match self {
             Self::Unlimited => None,
             Self::Bytes(bytes) => Some(bytes),
-            Self::Percent(percent) => Some(percent.of(disk_size)),
+            Self::Percent(percent) => Some(disk_size * percent),
         }
     }
 }
@@ -93,8 +94,8 @@ mod tests {
 
     use super::*;
 
-    fn percent(value: u8) -> Percent {
-        Percent::new(value).expect("test percentages are within range")
+    fn percent(value: u64) -> Percent {
+        Percent::new(value)
     }
 
     fn bytes(value: u64) -> DiskUsageLimit {
@@ -105,7 +106,7 @@ mod tests {
         prop_oneof![
             Just(DiskUsageLimit::Unlimited),
             any::<u64>().prop_map(bytes),
-            (0..=100u8).prop_map(|value| DiskUsageLimit::Percent(percent(value))),
+            any::<u64>().prop_map(|value| DiskUsageLimit::Percent(percent(value))),
         ]
     }
 
@@ -115,6 +116,7 @@ mod tests {
     #[case::unlimited_with_whitespace(" unlimited\n", DiskUsageLimit::Unlimited)]
     #[case::percent("10%", DiskUsageLimit::Percent(percent(10)))]
     #[case::percent_with_whitespace(" 10 % ", DiskUsageLimit::Percent(percent(10)))]
+    #[case::percent_above_the_disk("150%", DiskUsageLimit::Percent(percent(150)))]
     #[case::size("10GB", bytes(10 << 30))]
     #[case::size_with_fraction("1.5GB", bytes(3 << 29))]
     #[case::bare_bytes("4096", bytes(4096))]
@@ -124,10 +126,6 @@ mod tests {
 
     #[rstest]
     #[case::empty("", DiskUsageLimitParseError::Bytes(ByteSizeParseError::Empty))]
-    #[case::over_100_percent(
-        "150%",
-        DiskUsageLimitParseError::Percent(PercentParseError::OutOfRange(150))
-    )]
     #[case::fractional_percent(
         "2.5%",
         DiskUsageLimitParseError::Percent(PercentParseError::InvalidNumber("2.5".into()))
@@ -182,7 +180,6 @@ mod tests {
     #[case::negative("-1")]
     #[case::bool("false")]
     #[case::bad_text(r#""some""#)]
-    #[case::over_100_percent(r#""101%""#)]
     fn rejects_other_json_values(#[case] json: &str) {
         assert!(serde_json::from_str::<DiskUsageLimit>(json).is_err());
     }

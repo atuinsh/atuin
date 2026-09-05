@@ -19,6 +19,8 @@
 use std::ops::Range;
 use std::time::Duration;
 
+use atuin_common::units::ByteSize;
+use easy_cast::Conv;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 
 /// A command to execute, with its byte range in the source for replacement.
@@ -145,9 +147,9 @@ async fn run_command(shell: &str, body: &str) -> String {
                 if output.stdout.len() > MAX_OUTPUT_BYTES {
                     let truncated = String::from_utf8_lossy(&output.stdout[..MAX_OUTPUT_BYTES]);
                     format!(
-                        "{}\n[output truncated at {}KB]",
+                        "{}\n[output truncated at {}]",
                         truncated.trim(),
-                        MAX_OUTPUT_BYTES / 1024
+                        ByteSize::from_bytes(u64::conv(MAX_OUTPUT_BYTES)).human()
                     )
                 } else {
                     String::from_utf8_lossy(&output.stdout).trim().to_string()

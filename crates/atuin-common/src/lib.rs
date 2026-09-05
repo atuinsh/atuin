@@ -15,12 +15,12 @@ pub mod path;
 pub mod range;
 pub mod rmp;
 pub mod shell;
-pub mod size;
 pub mod slice;
 pub mod string;
 pub mod sync;
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
 pub mod time;
+pub mod units;
 pub mod url;
 pub mod utils;

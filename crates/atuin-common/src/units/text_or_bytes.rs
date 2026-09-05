@@ -11,7 +11,7 @@ use super::ByteSize;
 
 /// Deserialize `T` from a string via [`FromStr`], or from a non-negative integer via
 /// `From<ByteSize>`.
-pub(super) fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+pub fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: Deserializer<'de>,
     T: FromStr + From<ByteSize>,

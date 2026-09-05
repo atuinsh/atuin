@@ -30,6 +30,7 @@ static META_CONFIG: OnceLock<(String, f64)> = OnceLock::new();
 static META_STORE: OnceCell<crate::meta::MetaStore> = OnceCell::const_new();
 
 pub mod daemon;
+pub mod disk_usage_limit;
 mod dotfiles;
 mod kv;
 pub(crate) mod meta;
@@ -39,6 +40,7 @@ pub mod shells;
 pub mod watcher;
 
 pub use daemon::Daemon;
+pub use disk_usage_limit::{DiskUsageLimit, DiskUsageLimitParseError};
 use output_capture::OutputCaptureConfig;
 pub use output_capture::{CaptureLimits, OutputCapture};
 pub use shells::Shells;
@@ -1906,14 +1908,14 @@ mod tests {
     use std::collections::HashMap;
     use std::str::FromStr;
 
-    use atuin_common::size::{ByteSize, DiskUsageLimit, Percent};
+    use atuin_common::units::{ByteSize, Percent};
     use eyre::Result;
     use rstest::rstest;
     use url::Url;
 
     use super::{
-        AiEndpointProtocol, CaptureLimits, ConfigFile, Environment, FileFormat, FilterMode,
-        OutputCapture, RequestedSearchMode, SearchMode, Settings, UtcOffsetSpec,
+        AiEndpointProtocol, CaptureLimits, ConfigFile, DiskUsageLimit, Environment, FileFormat,
+        FilterMode, OutputCapture, RequestedSearchMode, SearchMode, Settings, UtcOffsetSpec,
     };
 
     #[rstest]
@@ -2064,8 +2066,8 @@ mod tests {
         "[output_capture]\nmax_output_size = \"1 parsec\"\n",
         "output_capture.max_output_size"
     )]
-    #[case::disk_usage_over_100_percent(
-        "[output_capture]\nmax_disk_usage = \"150%\"\n",
+    #[case::fractional_disk_usage_percent(
+        "[output_capture]\nmax_disk_usage = \"2.5%\"\n",
         "output_capture.max_disk_usage"
     )]
     #[case::negative_output_size(
@@ -2173,7 +2175,7 @@ mod tests {
         let limits = CaptureLimits::default();
         assert_eq!(limits.max_output_size, ByteSize::MIB);
         assert!(!limits.sync);
-        assert_eq!(limits.max_disk_usage, DiskUsageLimit::Percent(Percent::new(10).unwrap()));
+        assert_eq!(limits.max_disk_usage, DiskUsageLimit::Percent(Percent::new(10)));
     }
 
     /// With capture off, the limits are not reachable, however they are configured.
@@ -2206,7 +2208,7 @@ mod tests {
     #[case::percent_disk_usage(
         "max_output_size = \"2MB\"\nmax_disk_usage = \"25%\"",
         ByteSize::mib(2),
-        DiskUsageLimit::Percent(Percent::new(25).unwrap())
+        DiskUsageLimit::Percent(Percent::new(25))
     )]
     fn output_capture_parses_sizes(
         #[case] body: &str,
