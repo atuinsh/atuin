@@ -1,6 +1,7 @@
 use atuin_client::database::{Context, DbSearchMode, OptFilters, Sqlite};
-use atuin_client::history::{History, HistoryId, all_user_author_filter};
+use atuin_client::history::{AuthorPattern, History, HistoryId};
 use atuin_client::settings::{FilterMode, SearchMode, Settings, Shells};
+use atuin_common::filter::OrFilter;
 use enum_dispatch::enum_dispatch;
 use eyre::Result;
 
@@ -31,6 +32,7 @@ pub struct SearchState {
     pub filter_mode: FilterMode,
     pub context: Context,
     pub custom_context: Option<HistoryId>,
+    pub authors: OrFilter<Vec<AuthorPattern>>,
     pub shells: Shells,
 }
 
@@ -67,7 +69,7 @@ pub trait SearchEngine: Send + Sync + 'static {
             Ok(db
                 .search(DbSearchMode::FullText, state.filter_mode, &state.context, "", OptFilters {
                     limit: Some(200),
-                    authors: all_user_author_filter(),
+                    authors: state.authors.as_slice_filter(),
                     shells: shells.as_filter(),
                     ..Default::default()
                 })
