@@ -77,6 +77,7 @@ Captured output is stored in memory, on your machine:
 
 - The daemon keeps up to 1MB of output per command, and the most recent 128 commands (up to 32MB of output) per shell session.
 - Output is lost when the daemon stops. Only commands captured while the daemon was running are available.
+- When you delete a history entry, Atuin also deletes its captured output.
 
 Atuin sends nothing to the LLM until the LLM requests the output of a specific command, and by default Atuin AI asks your permission first.
 
