@@ -9,6 +9,7 @@ use atuin_common::range::PyStyleIdxRange;
 use easy_cast::Conv;
 use eyre::{Context as EyreContext, Result};
 use hyper_util::rt::TokioIo;
+use itertools::Itertools;
 #[cfg(windows)]
 use tokio::net::TcpStream;
 #[cfg(unix)]
@@ -63,11 +64,6 @@ pub fn classify_error(error: &eyre::Report) -> DaemonClientErrorKind {
 
     DaemonClientErrorKind::NonGrpc
 }
-
-/// Ids per chunk when client-streaming a `DeleteHistory`. A proto `HistoryId` is ~22 wire bytes,
-/// so a chunk of this many is ~1.1 MiB -- comfortably under tonic's 4 MiB default decode limit,
-/// with margin for framing overhead.
-const DELETE_CHUNK_SIZE: usize = 50_000;
 
 // Wrap the grpc client
 impl HistoryClient {
@@ -174,17 +170,23 @@ impl HistoryClient {
             .into_inner())
     }
 
-    pub async fn delete_history(&mut self, ids: Vec<HistoryId>) -> Result<DeleteHistoryReply> {
-        // `DeleteHistory` is client-streamed: we split the ids into chunks and send one
-        // `DeleteHistoryRequest` per chunk, so no single message can exceed the server's decode
-        // limit (tonic's default 4 MiB) no matter how many ids are deleted. The server deletes the
-        // union of every chunk once the stream ends. An empty `ids` sends an empty stream, which
-        // deletes nothing. `DELETE_CHUNK_SIZE` ids weigh well under the limit (a proto HistoryId is
-        // ~22 wire bytes, so a chunk is ~1.1 MiB).
+    pub async fn delete_history(
+        &mut self,
+        ids: impl IntoIterator<Item = HistoryId>,
+    ) -> Result<DeleteHistoryReply> {
+        // TODO(markovejnovic): A more flexible implementation would be to iterate into chunks that
+        //                      are as large as possible. If we know the size of a struct (which we
+        //                      can, in theory), then we can simply chunk by that.
+        //                      If we _don't_ know the size of the struct, then we can create a
+        //                      struct, measure its size, repeat until we reach our threshold.
+        const DELETE_CHUNK_SIZE: usize = 50_000;
+
         let chunks: Vec<DeleteHistoryRequest> = ids
+            .into_iter()
             .chunks(DELETE_CHUNK_SIZE)
+            .into_iter()
             .map(|chunk| DeleteHistoryRequest {
-                ids: chunk.iter().copied().map(Into::into).collect(),
+                ids: chunk.map(Into::into).collect(),
             })
             .collect();
 
