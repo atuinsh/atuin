@@ -12,14 +12,16 @@ use std::time::Duration;
 use atuin_client::history::HistoryId;
 use atuin_client::history::store::HistoryRecord;
 use atuin_client::settings::Search;
-use atuin_daemon::grpc::history::pb::RegisterCommandOutputRequest;
+use atuin_daemon::grpc::HistoryService;
+use atuin_daemon::grpc::history::pb::history_server::History;
 use atuin_daemon::grpc::history::pb::tail_history_reply::Event;
+use atuin_daemon::grpc::history::pb::{DeleteHistoryRequest, RegisterCommandOutputRequest};
 use atuin_daemon::search::SearchIndex;
 use atuin_daemon::{CmdDeleteError, CmdFinishError, RegisterOutputError};
 use common::{TestEnv, capture, history};
 use easy_cast::Conv;
 use rstest::*;
-use tonic::Code;
+use tonic::{Code, Request};
 
 #[fixture]
 async fn env() -> TestEnv {
@@ -425,4 +427,40 @@ async fn output_arriving_mid_delete_is_refused(#[future(awt)] env: TestEnv) {
     assert_eq!(delete.await.unwrap().unwrap(), 1);
     assert!(env.journal.get_command_output(id).await.unwrap().is_none());
     assert!(env.history_db.load(id).await.unwrap().is_none());
+}
+
+/// A delete the client abandons mid-call (its RPC future dropped, as tonic does when the client
+/// disconnects) still runs to completion: the row, the stored output, and the claim on the id are
+/// released together, never left half-done.
+#[rstest]
+#[tokio::test]
+async fn abandoned_delete_still_completes(#[future(awt)] env: TestEnv) {
+    let mut client = env.history_client().await;
+    let id = env.record(&mut client, "echo secret").await;
+    let output = "secret";
+    client
+        .register_command_output(id, output.to_string(), false, u64::conv(output.len()), 80, 24)
+        .await
+        .unwrap();
+    let service = HistoryService::new(env.journal.clone(), env.handle.clone());
+
+    let lock = env.lock_record_store().await;
+    let request = Request::new(DeleteHistoryRequest {
+        ids: vec![id.into()],
+    });
+    // Drive the handler until it blocks on the locked record store, then drop it.
+    let abandoned =
+        tokio::time::timeout(Duration::from_millis(200), service.delete_history(request)).await;
+    assert!(abandoned.is_err(), "the delete must still be waiting on the record store");
+    lock.release().await;
+
+    // The detached delete finishes on its own.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while env.history_db.load(id).await.unwrap().is_some() {
+        assert!(tokio::time::Instant::now() < deadline, "abandoned delete never completed");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(env.journal.get_command_output(id).await.unwrap().is_none());
+    let err = env.journal.register_command_output(id, capture("late")).await.unwrap_err();
+    assert!(matches!(err, RegisterOutputError::NotLive(_)), "{err}");
 }

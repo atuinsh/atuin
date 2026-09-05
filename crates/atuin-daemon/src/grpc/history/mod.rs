@@ -1,5 +1,6 @@
 pub mod pb;
 
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -254,6 +255,24 @@ impl Service {
     }
 }
 
+/// Run `fut` to completion on its own task and hand back its output.
+///
+/// tonic drops a handler's future as soon as its client disconnects. For the calls that decide
+/// what output the daemon keeps, stopping half-way is worse than finishing: a dropped
+/// [`HistoryJournal::register_command_output`] releases the id's gate while its store write is
+/// still in flight, and a dropped [`HistoryJournal::delete`] releases its claim on the ids with the
+/// records only half removed. Detaching the call makes it run to completion regardless of the
+/// client; the client merely stops hearing about it.
+async fn detached<F>(fut: F) -> Result<F::Output, Status>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    tokio::spawn(fut)
+        .await
+        .map_err(|e| Status::internal(format!("journal task did not complete: {e}")))
+}
+
 #[tonic::async_trait]
 impl GrpcService for Service {
     type TailHistoryStream = Pin<Box<dyn Stream<Item = Result<TailHistoryReply, Status>> + Send>>;
@@ -308,7 +327,8 @@ impl GrpcService for Service {
     ) -> Result<Response<CancelHistoryReply>, Status> {
         let id: HistoryId = request.into_inner().try_into()?;
 
-        self.journal.cancel(id).await?;
+        let journal = self.journal.clone();
+        detached(async move { journal.cancel(id).await }).await??;
 
         Ok(Response::new(CancelHistoryReply {
             // TODO(markovejnovic): Pull this from one constant, well-defined spot.
@@ -330,7 +350,9 @@ impl GrpcService for Service {
             request.into_inner().into_history_ids().collect::<Result<Vec<_>, _>>()?;
 
         let search_settings = self.daemon_handle.settings().await.search.clone();
-        let deleted = self.journal.delete(ids, &search_settings).await?;
+        let journal = self.journal.clone();
+        let deleted =
+            detached(async move { journal.delete(ids, &search_settings).await }).await??;
 
         Ok(Response::new(DeleteHistoryReply {
             deleted: deleted.cast(),
@@ -413,7 +435,10 @@ impl GrpcService for Service {
         request: Request<RegisterCommandOutputRequest>,
     ) -> Result<Response<RegisterCommandOutputResponse>, Status> {
         let request = request.into_inner();
-        self.journal.register_command_output(request.history_id()?, request.capture()?).await?;
+        let id = request.history_id()?;
+        let capture = request.capture()?;
+        let journal = self.journal.clone();
+        detached(async move { journal.register_command_output(id, capture).await }).await??;
         Ok(Response::new(RegisterCommandOutputResponse {}))
     }
 
