@@ -1,11 +1,9 @@
-use serde::{Deserialize, Serialize};
-
 /// A completed command's captured output.
 ///
 /// This is the domain representation of a captured command, independent of any wire (gRPC) or
 /// storage format. The daemon persists this type directly; the gRPC layer converts to and from its
 /// own protobuf types at the edges.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandCapture {
     /// The rendered output of the command.
     ///

@@ -21,8 +21,8 @@ use thiserror::Error;
 use tokio::task::JoinHandle;
 use tracing::error;
 
-/// fjall keyspace name for stored output.
-const KEYSPACE_NAME: &str = "command_output";
+/// The keyspace schema currently in use for stored output.
+type ActiveKeyspaceSchema = KeyspaceV1;
 
 #[derive(Debug, Error)]
 pub enum CaptureError {
@@ -31,7 +31,7 @@ pub enum CaptureError {
     #[error("storage error: {0}")]
     Storage(#[from] fjall::Error),
     #[error("failed to serialize the capture: {0}")]
-    Serialize(#[from] rmp_serde::encode::Error),
+    Serialize(#[from] atuin_common::rmp::encode::EncodeError),
 }
 
 #[derive(Debug, Error)]
@@ -166,7 +166,7 @@ impl OutputCapture {
 
     /// Create a new [`OutputCapture`] system.
     pub fn new(db: OptimisticTxDatabase) -> fjall::Result<Self> {
-        let keyspace = db.keyspace(KEYSPACE_NAME, || {
+        let keyspace = db.keyspace(ActiveKeyspaceSchema::NAME, || {
             fjall::KeyspaceCreateOptions::default()
                 .data_block_compression_policy(CompressionPolicy::all(fjall::CompressionType::Lz4))
                 .with_kv_separation(Some(fjall::KvSeparationOptions::default()))
@@ -187,8 +187,9 @@ impl OutputCapture {
     ) -> Result<(), CaptureError> {
         let db = self.db.clone();
         let keyspace = self.keyspace.clone();
-        let key = KeyspaceV1::serialize_key(id).expect("history id serialization is infallible");
-        let value = KeyspaceV1::serialize_value(capture)?;
+        let key = ActiveKeyspaceSchema::serialize_key(id)
+            .expect("history id serialization is infallible");
+        let value = ActiveKeyspaceSchema::serialize_value(capture)?;
 
         let flusher = self.flusher.clone();
         tokio::task::spawn_blocking(move || {
@@ -213,11 +214,12 @@ impl OutputCapture {
 
     pub async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError> {
         let keyspace = self.keyspace.clone();
-        let key = KeyspaceV1::serialize_key(id).expect("history id serialization is infallible");
+        let key = ActiveKeyspaceSchema::serialize_key(id)
+            .expect("history id serialization is infallible");
 
         tokio::task::spawn_blocking(move || match keyspace.get(key)? {
             Some(slice) => {
-                let capture = KeyspaceV1::deserialize_value(slice.to_vec())
+                let capture = ActiveKeyspaceSchema::deserialize_value(slice.to_vec())
                     .expect("stored value is a valid CommandCapture");
                 Ok(Some(capture))
             }

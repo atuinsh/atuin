@@ -295,7 +295,7 @@ mod tests {
             .send(Msg::Data(
                 format!(
                     "\x1b]133;A\x07$ \x1b]133;B\x07echo \
-                     hi\r\n\x1b]133;C\x07hi\r\n\x1b]133;D;0;history_id={HID};session_id=sess\x07"
+                     hi\r\n\x1b]133;C\x07hi\r\n\x1b]133;D;0;history_id={HID}\x07"
                 )
                 .into_bytes(),
             ))
@@ -325,8 +325,7 @@ mod tests {
         parser.handle_msg(Msg::Data(
             [
                 b"\x1b]133;A\x07$ \x1b]133;B\x07echo hi\r\n".as_slice(),
-                format!("\x1b]133;C\x07hi\r\n\x1b]133;D;0;history_id={HID};session_id=sess\x07")
-                    .as_bytes(),
+                format!("\x1b]133;C\x07hi\r\n\x1b]133;D;0;history_id={HID}\x07").as_bytes(),
             ]
             .concat(),
         ));

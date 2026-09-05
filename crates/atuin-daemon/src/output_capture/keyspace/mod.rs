@@ -36,11 +36,6 @@ pub trait Keyspace {
     /// Try to serialize the key into a serialized form.
     fn serialize_key(key: Self::Key) -> Result<Self::KeySerialized, Self::KeySerializationError>;
 
-    type KeyDeserializationError;
-    fn deserialize_key(
-        serialized: Self::KeySerialized,
-    ) -> Result<Self::Key, Self::KeyDeserializationError>;
-
     type ValueSerializationError;
     fn serialize_value(
         value: Self::Value,

@@ -353,9 +353,8 @@ mod tests {
     ///
     /// Its own bytes are discounted from `output_observed_bytes`, so the totals asserted
     /// below are the raw command output alone.
-    fn finished(exit_code: i32, history_id: &str, session_id: &str) -> Vec<u8> {
-        format!("\x1b]133;D;{exit_code};history_id={history_id};session_id={session_id}\x07")
-            .into_bytes()
+    fn finished(exit_code: i32, history_id: &str) -> Vec<u8> {
+        format!("\x1b]133;D;{exit_code};history_id={history_id}\x07").into_bytes()
     }
 
     /// A whole shell interaction, laid out the way a real shell emits it: the prompt, the
@@ -370,7 +369,7 @@ mod tests {
             b"\r\n",
             COMMAND_EXECUTED,
             output.as_bytes(),
-            &finished(0, HID, "sess"),
+            &finished(0, HID),
         ]
         .concat()
     }
@@ -395,7 +394,7 @@ mod tests {
     )]
     // Only the execute and finish markers: no prompt or command line in the stream at all.
     #[case::bare_execute_and_finish_markers(
-        [COMMAND_EXECUTED, b"line one\r\n", &finished(0, HID, "abcd")].concat(),
+        [COMMAND_EXECUTED, b"line one\r\n", &finished(0, HID)].concat(),
         CommandCapture {
             output: "line one".to_string(),
             output_observed_bytes: u64::conv(b"line one\r\n".len()),
@@ -457,7 +456,7 @@ mod tests {
         #[case] output: &[u8],
         #[case] expected: &str,
     ) {
-        tracker.push(&[COMMAND_EXECUTED, output, &finished(0, HID, "sess")].concat());
+        tracker.push(&[COMMAND_EXECUTED, output, &finished(0, HID)].concat());
         assert_eq!(tracker.only_capture().1.output, expected);
     }
 
@@ -467,7 +466,7 @@ mod tests {
         for i in 0..10 {
             data.extend_from_slice(format!("line {i}\r\n").as_bytes());
         }
-        data.extend_from_slice(&finished(0, HID, "sess"));
+        data.extend_from_slice(&finished(0, HID));
         tracker.push(&data);
 
         let expected: Vec<String> = (0..10).map(|i| format!("line {i}")).collect();
@@ -489,7 +488,7 @@ mod tests {
         // command that leaves a background colour set would otherwise turn the whole screen
         // into non-default cells, and every one of them into a space in the next capture.
         tracker
-            .push(&[COMMAND_EXECUTED, b"out\r\n\x1b[41m", &finished(0, HID, "sess")].concat())
+            .push(&[COMMAND_EXECUTED, b"out\r\n\x1b[41m", &finished(0, HID)].concat())
             .push(&interaction("$ ", "id", "\x1b[0mok\r\n"));
 
         let captures = tracker.captures();
@@ -508,7 +507,7 @@ mod tests {
                 b"vim f\r\n",
                 COMMAND_EXECUTED,
                 b"\x1b[?1049hEDITOR\r\nSCREEN\x1b[?1049l",
-                &finished(0, HID, "sess"),
+                &finished(0, HID),
             ]
             .concat(),
         );
@@ -533,7 +532,7 @@ mod tests {
                 b"vim f\r\n",
                 COMMAND_EXECUTED,
                 b"\x1b[?1049hEDITOR\r\nSCREEN",
-                &finished(0, HID, "sess"),
+                &finished(0, HID),
             ]
             .concat(),
         );
@@ -570,10 +569,10 @@ mod tests {
             &[
                 COMMAND_EXECUTED,
                 b"first\r\n",
-                &finished(0, HID_ONE, "sess"),
+                &finished(0, HID_ONE),
                 COMMAND_EXECUTED,
                 b"second\r\n",
-                &finished(1, HID_TWO, "sess"),
+                &finished(1, HID_TWO),
             ]
             .concat(),
         );
@@ -600,7 +599,7 @@ mod tests {
                 b"echo hi\r\n",
                 COMMAND_EXECUTED,
                 b"hi\r\n",
-                &finished(0, HID, "sess"),
+                &finished(0, HID),
             ]
             .concat(),
         );
@@ -623,7 +622,7 @@ mod tests {
                 b"echo hi\r\n",
                 COMMAND_EXECUTED,
                 b"hi\r\n",
-                &finished(0, HID, "sess"),
+                &finished(0, HID),
             ]
             .concat(),
         );
@@ -668,7 +667,7 @@ mod tests {
                 b"stale\r\n\x1b]133;D;0\x07",
                 COMMAND_EXECUTED,
                 b"fresh\r\n",
-                &finished(0, HID, "sess"),
+                &finished(0, HID),
             ]
             .concat(),
         );
@@ -681,9 +680,7 @@ mod tests {
     #[rstest]
     fn metadata_from_a_later_finish_marker_is_used(mut tracker: Tracker) {
         const BARE_FINISH: &[u8] = b"\x1b]133;D;1\x07";
-        tracker.push(
-            &[COMMAND_EXECUTED, b"line one\r\n", BARE_FINISH, &finished(0, HID, "abcd")].concat(),
-        );
+        tracker.push(&[COMMAND_EXECUTED, b"line one\r\n", BARE_FINISH, &finished(0, HID)].concat());
 
         let (history_id, capture) = tracker.only_capture();
         assert_eq!(history_id, hid(HID));
@@ -700,13 +697,15 @@ mod tests {
 
     #[rstest]
     fn a_marker_split_across_pushes_is_still_recognised(mut tracker: Tracker) {
+        // Split the marker partway through the history ID, so neither push holds a whole one.
+        let (head, tail) = HID.split_at(20);
         tracker.push(
-            &[COMMAND_EXECUTED, format!("line one\r\n\x1b]133;D;0;history_id={HID}").as_bytes()]
+            &[COMMAND_EXECUTED, format!("line one\r\n\x1b]133;D;0;history_id={head}").as_bytes()]
                 .concat(),
         );
         assert_eq!(tracker.captures(), vec![]);
 
-        tracker.push(b";session_id=abcd\x07");
+        tracker.push(format!("{tail}\x07").as_bytes());
 
         let (history_id, capture) = tracker.only_capture();
         assert_eq!(capture.output, "line one");
@@ -733,15 +732,16 @@ mod tests {
 
     #[rstest]
     fn splitting_a_marker_across_pushes_does_not_change_the_byte_count(mut tracker: Tracker) {
+        let (head, tail) = HID.split_at(20);
         tracker
             .push(
                 &[
                     COMMAND_EXECUTED,
-                    format!("line one\r\n\x1b]133;D;0;history_id={HID}").as_bytes(),
+                    format!("line one\r\n\x1b]133;D;0;history_id={head}").as_bytes(),
                 ]
                 .concat(),
             )
-            .push(b";session_id=abcd\x07");
+            .push(format!("{tail}\x07").as_bytes());
 
         // The same total as if the whole marker had arrived in one push: the marker is
         // discounted in full, however it was split up.
@@ -770,7 +770,7 @@ mod tests {
         const LINE_LEN: usize = 70;
         const LINES: usize = 40_000;
 
-        let finish = finished(0, HID, "session-1");
+        let finish = finished(0, HID);
         let mut input = COMMAND_EXECUTED.to_vec();
         for i in 0..LINES {
             input.extend_from_slice(format!("{i:0LINE_LEN$}\r\n").as_bytes());
@@ -790,7 +790,7 @@ mod tests {
     fn resizing_reflows_the_capture(#[with(6, 20)] mut tracker: Tracker) {
         tracker.push(&[COMMAND_EXECUTED, b"abcdefghij"].concat());
         tracker.resize(6, 5);
-        tracker.push(&[b"klmno\r\n".as_slice(), &finished(0, HID, "sess")].concat());
+        tracker.push(&[b"klmno\r\n".as_slice(), &finished(0, HID)].concat());
 
         // The first ten columns were rendered on a twenty-column screen; narrowing it drops
         // what no longer fits, and the rest is appended at the new width.
