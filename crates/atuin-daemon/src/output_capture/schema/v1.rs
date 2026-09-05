@@ -34,8 +34,8 @@ impl super::Schema for Schema {
         encode::write_str(&mut out, &value.output)?;
         encode::write_uint(&mut out, value.output_observed_bytes)?;
         encode::write_bool(&mut out, value.output_truncated);
-        encode::write_uint(&mut out, value.terminal_width)?;
-        encode::write_uint(&mut out, value.terminal_height)?;
+        encode::write_uint(&mut out, value.terminal_width.into())?;
+        encode::write_uint(&mut out, value.terminal_height.into())?;
         Ok(out.into_vec())
     }
 
