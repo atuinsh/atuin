@@ -419,8 +419,8 @@ For the exact expressions, see
 The same patterns are applied to captured command output. A command whose
 own text is clean can still print a credential — `cat .env`, `gh auth token`
 — so recognised values in the captured output are replaced with `****`
-before it is stored. Only the value is replaced; the variable name or flag
-beside it is kept.
+before storage. Only the value is replaced; the variable name or flag
+beside it stays.
 
 !!! note
 
