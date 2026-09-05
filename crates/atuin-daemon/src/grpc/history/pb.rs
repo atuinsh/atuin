@@ -409,6 +409,8 @@ mod tests {
     use time::OffsetDateTime;
     use tonic::Code;
 
+    use crate::grpc::common::TooManyItemsError;
+
     use super::*;
 
     fn good_id_proto() -> HistoryId {
@@ -439,11 +441,14 @@ mod tests {
             Ok(delete_req(&[id_proto(3)])),
         ]);
         let ids = stream.try_collect_capped(100).await.unwrap();
-        assert_eq!(ids, vec![
-            DomainHistoryId::from_bytes([1; 16]),
-            DomainHistoryId::from_bytes([2; 16]),
-            DomainHistoryId::from_bytes([3; 16]),
-        ]);
+        assert_eq!(
+            ids,
+            vec![
+                DomainHistoryId::from_bytes([1; 16]),
+                DomainHistoryId::from_bytes([2; 16]),
+                DomainHistoryId::from_bytes([3; 16]),
+            ]
+        );
     }
 
     #[tokio::test]
@@ -525,11 +530,10 @@ mod tests {
     #[test]
     fn command_output_ranges_are_inclusive_with_negative_offsets() {
         // [1, 2] inclusive -> "one", "two"; [-1, -1] -> the last line, "four" (no sentinel needed).
-        let chunked =
-            GetCommandOutputResponse::build(capture_of("zero\none\ntwo\nthree\nfour"), &[
-                py_range(1, 2),
-                py_range(-1, -1),
-            ]);
+        let chunked = GetCommandOutputResponse::build(
+            capture_of("zero\none\ntwo\nthree\nfour"),
+            &[py_range(1, 2), py_range(-1, -1)],
+        );
         assert!(chunked.meta.is_some());
         assert_eq!(chunked.total_lines, 5);
         let contents: Vec<&str> = chunked.chunks.iter().map(|c| c.content.as_str()).collect();
@@ -543,11 +547,10 @@ mod tests {
     fn command_output_returns_one_chunk_per_requested_range() {
         // Every requested range yields a chunk, in order: [2, 1] is backwards (empty), [10, 20] is
         // past the end (both empty content), [0, 0] selects "a". Nothing is dropped.
-        let chunked = GetCommandOutputResponse::build(capture_of("a\nb\nc"), &[
-            py_range(2, 1),
-            py_range(10, 20),
-            py_range(0, 0),
-        ]);
+        let chunked = GetCommandOutputResponse::build(
+            capture_of("a\nb\nc"),
+            &[py_range(2, 1), py_range(10, 20), py_range(0, 0)],
+        );
         let contents: Vec<&str> = chunked.chunks.iter().map(|c| c.content.as_str()).collect();
         assert_eq!(contents, vec!["", "", "a"]);
     }
