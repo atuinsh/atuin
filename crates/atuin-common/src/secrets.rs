@@ -17,8 +17,9 @@
 //!   is nothing in it to take out.
 //!
 //! Both are best-effort. [`redact`] in particular is applied to rendered terminal output, where a
-//! credential can be broken up by SGR escape sequences or by a line wrap at the right margin.
-//! Neither will match.
+//! credential can be broken up by SGR escape sequences, which will not match. (A soft wrap at the
+//! right margin is re-joined by the terminal emulator before capture, so a wrap alone does not
+//! defeat matching.)
 
 use std::borrow::Cow;
 use std::ops::Range;
@@ -402,10 +403,10 @@ fn redact_once(s: &str) -> Cow<'_, str> {
 ///
 /// Returns [`Cow::Borrowed`] if and only if nothing was replaced, so
 /// `matches!(redact(s), Cow::Owned(_))` is an exact test for "something was taken out". Note that
-/// this is a weaker condition than [`contains_secret`]: a pattern can match text that holds no
-/// value to remove.
+/// this is a stronger condition than [`contains_secret`]: everything replaced was recognised, but
+/// a pattern can also match text that holds no value to remove.
 ///
-/// Best-effort; in particular it cannot see through SGR escape sequences or terminal line wraps.
+/// Best-effort; in particular it cannot see through SGR escape sequences.
 #[must_use]
 pub fn redact(s: &str) -> Cow<'_, str> {
     let mut out = match redact_once(s) {
@@ -733,7 +734,7 @@ mod tests {
         /// the splicing, the sort, and the span boundaries all at once.
         ///
         /// Lowercase filler cannot form a credential of its own (every pattern needs an uppercase
-        /// letter, a digit or punctuation), and the spaces around each planted value stop a
+        /// letter, a digit, punctuation or whitespace), and the spaces around each planted value stop a
         /// greedy class from reaching into its neighbours.
         #[test]
         fn planted_credentials_go_and_their_surroundings_stay(
