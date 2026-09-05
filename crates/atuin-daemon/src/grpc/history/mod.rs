@@ -6,7 +6,7 @@ use std::sync::Arc;
 use atuin_client::history::{History, HistoryId};
 use atuin_common::time::OffsetDateTimeExt;
 use easy_cast::Cast;
-use futures::{StreamExt, TryStreamExt};
+use futures::StreamExt;
 use time::OffsetDateTime;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
@@ -14,14 +14,15 @@ use tonic::{Request, Response, Status};
 use tracing::{Level, instrument};
 
 use crate::DaemonHandle;
+use crate::grpc::common::pb::TryCollectResultsCapped;
 use crate::grpc::history::pb::history_server::History as GrpcService;
 use crate::grpc::history::pb::{
     CancelHistoryReply, CancelHistoryRequest, DeleteHistoryReply, DeleteHistoryRequest,
     EndHistoryReply, EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse, Lagged,
-    RebuildHistoryReply, RebuildHistoryRequest, RegisterCommandOutputRequest,
-    RegisterCommandOutputResponse, ShutdownReply, ShutdownRequest, StartHistoryReply,
-    StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent, TailHistoryReply,
-    TailHistoryRequest,
+    MAX_DELETE_HISTORY_IDS, RebuildHistoryReply, RebuildHistoryRequest,
+    RegisterCommandOutputRequest, RegisterCommandOutputResponse, ShutdownReply, ShutdownRequest,
+    StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent,
+    TailHistoryReply, TailHistoryRequest,
 };
 use crate::history_journal::HistoryJournal;
 
@@ -322,15 +323,11 @@ impl GrpcService for Service {
         &self,
         request: Request<tonic::Streaming<DeleteHistoryRequest>>,
     ) -> Result<Response<DeleteHistoryReply>, Status> {
-        let ids: Vec<HistoryId> = request
-            .into_inner()
-            .try_fold(Vec::new(), |mut acc, chunk| async move {
-                for id in chunk.into_history_ids() {
-                    acc.push(id?);
-                }
-                Ok(acc)
-            })
-            .await?;
+        // Drain the whole client stream into one validated, capped batch. All-or-nothing: a
+        // malformed id, a stream error, or overflowing the cap aborts before anything is deleted
+        // (`journal.delete` deletes as it iterates and cannot roll back). The cap also guards the
+        // daemon against a runaway client. `CollectCappedError` maps to the right `Status` via `?`.
+        let ids = request.into_inner().try_collect_capped(MAX_DELETE_HISTORY_IDS).await?;
 
         let search_settings = self.daemon_handle.settings().await.search.clone();
         let deleted = self.journal.delete(ids, &search_settings).await?;

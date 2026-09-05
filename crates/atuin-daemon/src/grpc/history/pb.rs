@@ -178,11 +178,29 @@ impl TryFrom<CancelHistoryRequest> for DomainHistoryId {
     }
 }
 
-impl DeleteHistoryRequest {
-    pub fn into_history_ids(self) -> impl Iterator<Item = Result<DomainHistoryId, IdParseError>> {
-        self.ids.into_iter().map(DomainHistoryId::try_from)
+/// A `DeleteHistoryRequest` chunk iterates its ids, each parsed from the wire. This is what lets a
+/// stream of these be drained with
+/// [`TryCollectResultsCapped`](crate::grpc::common::pb::TryCollectResultsCapped).
+impl IntoIterator for DeleteHistoryRequest {
+    type Item = Result<DomainHistoryId, IdParseError>;
+    type IntoIter = std::iter::Map<std::vec::IntoIter<HistoryId>, fn(HistoryId) -> Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.ids.into_iter().map(DomainHistoryId::try_from as fn(HistoryId) -> Self::Item)
     }
 }
+
+impl DeleteHistoryRequest {
+    pub fn into_history_ids(self) -> impl Iterator<Item = Result<DomainHistoryId, IdParseError>> {
+        self.into_iter()
+    }
+}
+
+/// The most ids one client-streamed `DeleteHistory` may carry, passed as the cap to
+/// [`TryCollectResultsCapped::try_collect_capped`](crate::grpc::common::pb::TryCollectResultsCapped). 10M
+/// `HistoryId`s is ~160 MiB -- well above any real history, but bounded so a runaway or hostile
+/// client cannot make the daemon accumulate without limit before it deletes anything.
+pub const MAX_DELETE_HISTORY_IDS: usize = 10_000_000;
 
 /// Map a single journal event to its tail-stream reply.
 impl From<CmdEvent> for TailHistoryEvent {
@@ -389,9 +407,59 @@ mod tests {
     use tonic::Code;
 
     use super::*;
+    use crate::grpc::common::pb::{CollectCappedError, TooManyItemsError, TryCollectResultsCapped};
 
     fn good_id_proto() -> HistoryId {
         HistoryId::from(DomainHistoryId::from_bytes([1u8; 16]))
+    }
+
+    fn id_proto(byte: u8) -> HistoryId {
+        HistoryId::from(DomainHistoryId::from_bytes([byte; 16]))
+    }
+
+    /// A proto id that fails to parse: no uuid at all.
+    fn bad_id_proto() -> HistoryId {
+        HistoryId { uuid: None }
+    }
+
+    fn delete_req(ids: &[HistoryId]) -> DeleteHistoryRequest {
+        DeleteHistoryRequest { ids: ids.to_vec() }
+    }
+
+    // These exercise the `DeleteHistoryRequest` wiring -- its `IntoIterator` glue and the
+    // `IdParseError -> Status` mapping -- through the generic collector. The collector's own
+    // behavior (cap, item/stream errors) is covered in `grpc::common::pb`.
+
+    #[tokio::test]
+    async fn delete_stream_collects_ids_across_chunks_in_order() {
+        let stream = futures::stream::iter(vec![
+            Ok(delete_req(&[id_proto(1), id_proto(2)])),
+            Ok(delete_req(&[id_proto(3)])),
+        ]);
+        let ids = stream.try_collect_capped(MAX_DELETE_HISTORY_IDS).await.unwrap();
+        assert_eq!(ids, vec![
+            DomainHistoryId::from_bytes([1; 16]),
+            DomainHistoryId::from_bytes([2; 16]),
+            DomainHistoryId::from_bytes([3; 16]),
+        ]);
+    }
+
+    #[tokio::test]
+    async fn delete_stream_maps_a_malformed_id_to_invalid_argument() {
+        let stream =
+            futures::stream::iter(vec![Ok(delete_req(&[good_id_proto(), bad_id_proto()]))]);
+        let err = stream.try_collect_capped(MAX_DELETE_HISTORY_IDS).await.unwrap_err();
+        assert!(matches!(err, CollectCappedError::Item(IdParseError::MissingUuid)));
+        assert_eq!(Status::from(err).code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn delete_stream_maps_over_cap_to_invalid_argument() {
+        let stream =
+            futures::stream::iter(vec![Ok(delete_req(&[id_proto(1), id_proto(2), id_proto(3)]))]);
+        let err = stream.try_collect_capped(2).await.unwrap_err();
+        assert!(matches!(err, CollectCappedError::TooMany(TooManyItemsError(2))));
+        assert_eq!(Status::from(err).code(), Code::InvalidArgument);
     }
 
     fn capture_of(output: &str) -> CommandCapture {
