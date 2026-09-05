@@ -248,7 +248,6 @@ mod tests {
     fn cap(output: &str) -> CommandCapture {
         CommandCapture {
             output: output.to_string(),
-            exit_code: None,
             output_observed_bytes: u64::conv(output.len()),
             output_truncated: false,
             terminal_width: 80,

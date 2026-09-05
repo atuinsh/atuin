@@ -31,7 +31,6 @@ struct CaptureState {
     output: String,
     output_truncated: bool,
     output_observed_bytes: u64,
-    exit_code: Option<i32>,
 }
 
 impl CaptureState {
@@ -43,7 +42,6 @@ impl CaptureState {
         self.output.clear();
         self.output_truncated = false;
         self.output_observed_bytes = 0;
-        self.exit_code = None;
     }
 }
 
@@ -185,7 +183,7 @@ impl TrackerCore {
         let prev_zone = self.zone();
         self.enter_zone(chunk.event.zone());
 
-        let Event::CommandFinished { exit_code } = chunk.event else {
+        let Event::CommandFinished { .. } = chunk.event else {
             return;
         };
 
@@ -209,9 +207,6 @@ impl TrackerCore {
             }
         }
 
-        if let Some(code) = exit_code {
-            self.capture.exit_code = Some(code);
-        }
         let Some(history_id) = history_id
             .and_then(|bytes| std::str::from_utf8(bytes).ok())
             .and_then(|s| s.parse::<HistoryId>().ok())
@@ -225,7 +220,6 @@ impl TrackerCore {
         let (rows, cols) = self.emulator.screen().size();
         (self.sink)(history_id, CommandCapture {
             output: state.output,
-            exit_code: state.exit_code,
             output_observed_bytes: state.output_observed_bytes,
             output_truncated: state.output_truncated,
             terminal_width: cols.get(),
@@ -393,7 +387,6 @@ mod tests {
         interaction("$ ", "echo hi", "hi\r\n"),
         CommandCapture {
             output: "hi".to_string(),
-            exit_code: Some(0),
             output_observed_bytes: u64::conv(b"hi\r\n".len()),
             output_truncated: false,
             terminal_width: COLS,
@@ -405,7 +398,6 @@ mod tests {
         [COMMAND_EXECUTED, b"line one\r\n", &finished(0, HID, "abcd")].concat(),
         CommandCapture {
             output: "line one".to_string(),
-            exit_code: Some(0),
             output_observed_bytes: u64::conv(b"line one\r\n".len()),
             output_truncated: false,
             terminal_width: COLS,
@@ -436,13 +428,6 @@ mod tests {
         assert_eq!(history_id, hid(HID));
         // The command produced nothing, and its `D` marker doesn't count as output.
         assert_eq!(capture.output_observed_bytes, 0);
-    }
-
-    #[rstest]
-    fn reports_the_exit_code(mut tracker: Tracker) {
-        tracker.push(&[COMMAND_EXECUTED, b"nope\r\n", &finished(127, HID, "sess")].concat());
-
-        assert_eq!(tracker.only_capture().1.exit_code, Some(127));
     }
 
     #[rstest]
@@ -596,10 +581,8 @@ mod tests {
         let captures = tracker.captures();
         assert_eq!(captures.len(), 2);
         assert_eq!(captures[0].1.output, "first");
-        assert_eq!(captures[0].1.exit_code, Some(0));
         assert_eq!(captures[0].0, hid(HID_ONE));
         assert_eq!(captures[1].1.output, "second");
-        assert_eq!(captures[1].1.exit_code, Some(1));
         assert_eq!(captures[1].0, hid(HID_TWO));
     }
 
@@ -706,7 +689,6 @@ mod tests {
         assert_eq!(history_id, hid(HID));
         assert_eq!(capture, CommandCapture {
             output: "line one".to_string(),
-            exit_code: Some(0),
             // The first `D` ends the output zone and is discounted; the second arrives
             // after it, in the unknown zone, so it was never counted to begin with.
             output_observed_bytes: u64::conv(b"line one\r\n".len()),

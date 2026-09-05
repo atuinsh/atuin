@@ -12,8 +12,6 @@ pub struct CommandCapture {
     /// Contains SGR escape sequences. Contains no other escape sequences, and no control characters
     /// except `'\n'`.
     pub output: String,
-    /// The command's exit code, if one was observed.
-    pub exit_code: Option<i32>,
     /// The total number of bytes that were pushed to the virtual terminal.
     ///
     /// This counts bytes observed *before* rasterizing the terminal, so it is not the same as

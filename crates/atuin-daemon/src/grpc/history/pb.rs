@@ -305,12 +305,11 @@ impl From<DomainCommandCapture> for CommandCapture {
 
 impl From<CommandCapture> for DomainCommandCapture {
     fn from(capture: CommandCapture) -> Self {
-        // The wire type carries no exit code, so it is left unset; the history id travels
-        // separately in the request envelope and is applied by the caller as the storage key.
+        // The history id travels separately in the request envelope and is applied by the caller
+        // as the storage key.
         let meta = capture.meta.unwrap_or_default();
         Self {
             output: capture.output,
-            exit_code: None,
             output_observed_bytes: meta.output_observed_bytes,
             output_truncated: meta.output_truncated,
             terminal_width: u16::try_from(meta.terminal_width).unwrap_or(u16::MAX),
