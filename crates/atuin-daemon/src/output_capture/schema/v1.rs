@@ -32,10 +32,10 @@ impl super::Schema for Schema {
         let mut out = ByteBuf::new();
         encode::write_array_len(&mut out, VALUE_FIELDS)?;
         encode::write_str(&mut out, &value.output)?;
-        encode::write_u64(&mut out, value.output_observed_bytes)?;
+        encode::write_uint(&mut out, value.output_observed_bytes)?;
         encode::write_bool(&mut out, value.output_truncated);
-        encode::write_u16(&mut out, value.terminal_width)?;
-        encode::write_u16(&mut out, value.terminal_height)?;
+        encode::write_uint(&mut out, value.terminal_width)?;
+        encode::write_uint(&mut out, value.terminal_height)?;
         Ok(out.into_vec())
     }
 
@@ -56,10 +56,11 @@ impl super::Schema for Schema {
             }
 
             let output = decode::read_string(&mut bytes)?;
-            let output_observed_bytes = decode::read_u64(&mut bytes).map_err(DecodeError::from)?;
+            let output_observed_bytes: u64 =
+                decode::read_int(&mut bytes).map_err(DecodeError::from)?;
             let output_truncated = decode::read_bool(&mut bytes).map_err(DecodeError::from)?;
-            let terminal_width = decode::read_u16(&mut bytes).map_err(DecodeError::from)?;
-            let terminal_height = decode::read_u16(&mut bytes).map_err(DecodeError::from)?;
+            let terminal_width: u16 = decode::read_int(&mut bytes).map_err(DecodeError::from)?;
+            let terminal_height: u16 = decode::read_int(&mut bytes).map_err(DecodeError::from)?;
 
             Ok(CommandCapture {
                 output,
