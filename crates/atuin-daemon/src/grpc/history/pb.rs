@@ -433,6 +433,7 @@ mod tests {
     // `IdParseError -> Status` mapping -- through the generic collector. The collector's own
     // behavior (cap, item/stream errors) is covered in `grpc::common::pb`.
 
+    #[rstest]
     #[tokio::test]
     async fn delete_stream_collects_ids_across_chunks_in_order() {
         let stream = futures::stream::iter(vec![
@@ -447,6 +448,7 @@ mod tests {
         ]);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn delete_stream_maps_a_malformed_id_to_invalid_argument() {
         let stream =
@@ -456,6 +458,7 @@ mod tests {
         assert_eq!(Status::from(err).code(), Code::InvalidArgument);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn delete_stream_maps_over_cap_to_invalid_argument() {
         let stream =
@@ -494,7 +497,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn register_command_output_accepts_a_capture_carrying_its_meta() {
         let capture = register_req(Some(capture_of("hello"))).capture().expect("capture");
         assert_eq!(capture.output, "hello");
@@ -513,7 +516,7 @@ mod tests {
         assert_eq!(Status::from(err).code(), Code::InvalidArgument);
     }
 
-    #[test]
+    #[rstest]
     fn command_output_whole_output_via_full_range() {
         let chunked = GetCommandOutputResponse::build(capture_of("a\nb\nc"), &[py_range(0, -1)]);
         assert!(chunked.meta.is_some());
@@ -523,7 +526,7 @@ mod tests {
         assert_eq!(chunked.chunks[0].line_range, Some(range(0, 3)));
     }
 
-    #[test]
+    #[rstest]
     fn command_output_ranges_are_inclusive_with_negative_offsets() {
         // [1, 2] inclusive -> "one", "two"; [-1, -1] -> the last line, "four" (no sentinel needed).
         let chunked =
@@ -540,7 +543,7 @@ mod tests {
         assert_eq!(chunked.chunks[1].line_range, Some(range(4, 5)));
     }
 
-    #[test]
+    #[rstest]
     fn command_output_returns_one_chunk_per_requested_range() {
         // Every requested range yields a chunk, in order: [2, 1] is backwards (empty), [10, 20] is
         // past the end (both empty content), [0, 0] selects "a". Nothing is dropped.

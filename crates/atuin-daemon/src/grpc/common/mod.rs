@@ -86,6 +86,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use tonic::Code;
 
     use super::*;
@@ -99,6 +100,7 @@ mod tests {
         items
     }
 
+    #[rstest]
     #[tokio::test]
     async fn collects_every_chunk_in_stream_order() {
         let stream =
@@ -107,6 +109,7 @@ mod tests {
         assert_eq!(got, vec![1, 2, 3]);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn rejects_more_than_max() {
         // Two chunks of two; the fourth item trips the cap of 3.
@@ -118,6 +121,7 @@ mod tests {
         assert!(matches!(err, CollectCappedError::TooMany(TooManyItemsError(3))));
     }
 
+    #[rstest]
     #[tokio::test]
     async fn propagates_an_item_error() {
         let stream = futures::stream::iter(vec![Ok(chunk(vec![Ok(1), Err(BadItem(2)), Ok(3)]))]);
@@ -125,6 +129,7 @@ mod tests {
         assert!(matches!(err, CollectCappedError::Item(BadItem(2))));
     }
 
+    #[rstest]
     #[tokio::test]
     async fn propagates_a_stream_error_verbatim() {
         let stream =
