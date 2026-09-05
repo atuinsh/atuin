@@ -6,7 +6,7 @@ use std::sync::Arc;
 use atuin_client::history::{History, HistoryId};
 use atuin_common::time::OffsetDateTimeExt;
 use easy_cast::Cast;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use time::OffsetDateTime;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
@@ -323,13 +323,15 @@ impl GrpcService for Service {
         &self,
         request: Request<tonic::Streaming<DeleteHistoryRequest>>,
     ) -> Result<Response<DeleteHistoryReply>, Status> {
-        let mut stream = request.into_inner();
-        let mut ids: Vec<HistoryId> = Vec::new();
-        while let Some(chunk) = stream.next().await {
-            for id in chunk?.into_history_ids() {
-                ids.push(id?);
-            }
-        }
+        let ids: Vec<HistoryId> = request
+            .into_inner()
+            .try_fold(Vec::new(), |mut acc, chunk| async move {
+                for id in chunk.into_history_ids() {
+                    acc.push(id?);
+                }
+                Ok(acc)
+            })
+            .await?;
 
         let search_settings = self.daemon_handle.settings().await.search.clone();
         let deleted = self.journal.delete(ids, &search_settings).await?;
