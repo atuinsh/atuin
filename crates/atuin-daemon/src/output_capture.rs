@@ -1,12 +1,4 @@
 //! Durable storage for captured command output.
-//!
-//! Output is keyed by `history_id` (16 UUID bytes) in a fjall keyspace; the
-//! value is the encoded `history::CommandCapture`. Inserts run in an optimistic
-//! transaction so the check-then-insert is atomic against concurrent writers;
-//! deletes are blind removes batched into one transaction. All blocking fjall
-//! I/O runs on tokio's blocking pool via `spawn_blocking`.
-//!
-//! TODO(retention): the store grows unbounded; no eviction yet. See the design doc.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,20 +21,32 @@ const KEYSPACE_NAME: &str = "command_output";
 pub enum CaptureError {
     #[error("history id already has an associated capture")]
     AlreadyExists,
-    #[error("storage error: {0}")]
-    Storage(#[from] fjall::Error),
+    #[error("storage error")]
+    Storage(
+        #[source]
+        #[from]
+        fjall::Error,
+    ),
 }
 
 #[derive(Debug, Error)]
 pub enum GetOutputError {
-    #[error("storage error: {0}")]
-    Storage(#[from] fjall::Error),
+    #[error("storage error")]
+    Storage(
+        #[source]
+        #[from]
+        fjall::Error,
+    ),
 }
 
 #[derive(Debug, Error)]
 pub enum DeleteOutputError {
-    #[error("storage error: {0}")]
-    Storage(#[from] fjall::Error),
+    #[error("storage error")]
+    Storage(
+        #[source]
+        #[from]
+        fjall::Error,
+    ),
 }
 
 /// Task responsible for flushing fjall data buffered in memory onto the disk.
@@ -233,13 +237,6 @@ impl OutputCapture {
     }
 
     /// Forget the captured output of every history id in `ids`.
-    ///
-    /// Ids with no stored output are a no-op (a tombstone is written regardless), so the call is
-    /// idempotent and safe to retry. All removals commit in a single transaction. Each removal is
-    /// a blind write -- the transaction performs no reads -- so it can never conflict with a
-    /// concurrent [`Self::capture`]. A concurrent `capture` of the same id that started before
-    /// this delete committed observes a conflict and fails with `AlreadyExists`; one that starts
-    /// afterwards succeeds. The removal is fsynced to disk before this call returns.
     pub async fn delete(
         &self,
         ids: impl IntoIterator<Item = HistoryId>,
@@ -251,28 +248,20 @@ impl OutputCapture {
 
         let db = self.db.clone();
         let keyspace = self.keyspace.clone();
-        let flusher = self.flusher.clone();
         tokio::task::spawn_blocking(move || {
-            // Scoped so clippy's `significant_drop_tightening` sees the transaction end here;
-            // `commit(self)` already consumes it, but the lint cannot tell.
-            {
-                // The history-db side of a delete (`HistoryJournal::delete`) is durable as soon
-                // as it commits. Without an explicit sync here, this tombstone would sit in
-                // fjall's journal buffer until the periodic `Flusher` runs (up to
-                // `Flusher::SYNC_INTERVAL`, 5s); a crash in that window would resurrect the
-                // captured output for a history entry that no longer exists, with nothing left to
-                // delete it. Deletes are rare and user-initiated, so pay the fsync at commit
-                // instead. (This can't be covered by a unit test -- there's no in-process way to
-                // observe whether a commit reached disk -- so it's documented here instead.)
-                let mut tx = db.write_tx()?.durability(Some(PersistMode::SyncAll));
-                for key in keys {
-                    tx.remove(&keyspace, key);
-                }
-                // fjall only reports conflicts for transactions that *read*; see
-                // `OptimisticTxKeyspace::remove` upstream, which makes the same assumption.
-                tx.commit()?.expect("a blind remove performs no reads, so it can never conflict");
+            // Fjall deletes by leaving tombstones.
+            //
+            // If a crash were to happen between this transaction finishing and the flusher fsyncing
+            // it, the tombstone would never commit, which means that a subsequent reboot would
+            // resurrect the entry.
+            //
+            // If the user wants to delete something, chances are they want to delete it **NOW**.
+            // They don't delete super often anyways, so let's just fsync immediately.
+            let mut tx = db.write_tx()?.durability(Some(PersistMode::SyncAll));
+            for key in keys {
+                tx.remove(&keyspace, key);
             }
-            flusher.kick();
+            tx.commit()?.expect("a blind remove performs no reads, so it can never conflict");
             Ok(())
         })
         .await

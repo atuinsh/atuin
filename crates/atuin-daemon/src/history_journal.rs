@@ -346,11 +346,12 @@ impl HistoryJournal {
     ) -> Result<usize, CmdDeleteError> {
         let ids: Vec<HistoryId> = ids.into_iter().collect();
 
-        // Forget captured output before the history records. Both halves are idempotent, so a
-        // failure part-way through is fixed by retrying. This order means a failed call can leave
-        // an entry without its output but never output without its entry: an orphaned capture
-        // would silently keep (possibly sensitive) output around with nothing left to delete it
-        // through, and nothing reclaims it yet (see `TODO(retention)` in `output_capture`).
+        // Forget captured output before the history records. This order means a failed call can
+        // leave an entry without its output but never output without its entry.
+        //
+        // Eh, it's not great, but without some sort of STM, we can't do better.
+        //
+        // TODO(markovejnovic): Implement STM
         self.output_capture.delete(ids.iter().copied()).await?;
 
         // Remove records from the record store.
