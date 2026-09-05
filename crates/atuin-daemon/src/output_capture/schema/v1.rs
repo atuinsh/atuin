@@ -4,15 +4,15 @@ use atuin_client::history::{CommandCapture, HistoryId};
 use atuin_common::rmp::decode::{self, Bytes, DecodeError};
 use atuin_common::rmp::encode::{self, ByteBuf, EncodeError};
 
-use super::Keyspace as KeyspaceTrait;
+use super::Schema as SchemaTrait;
 
-pub struct Keyspace;
+pub struct Schema;
 
 /// The number of MessagePack fields in a serialized value: `output`, `output_observed_bytes`,
 /// `output_truncated`, `terminal_width`, `terminal_height`.
 const VALUE_FIELDS: u32 = 5;
 
-impl KeyspaceTrait for Keyspace {
+impl SchemaTrait for Schema {
     const NAME: &'static str = "output_capture_v1";
 
     type Key = HistoryId;

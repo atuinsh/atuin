@@ -1,23 +1,23 @@
 //! This module exposes fjall keyspaces to the user.
 //!
-//! The way you're intended to use this is through the [`Keyspace`] trait. This trait explicitly
+//! The way you're intended to use this is through the [`Schema`] trait. This trait explicitly
 //! defines the types that are used to store data into command and is responsible for:
 //!
 //!  - Versioning the [`fjall::Keyspace`], which includes the keyspace creation options, which
 //!    **must** remain stable for the lifetime of the keyspace.
-//!  - Versioning the [`Keyspace::Key`] and [`Keyspace::Value`] types, which are the types that are
+//!  - Versioning the [`Schema::Key`] and [`Schema::Value`] types, which are the types that are
 //!    directly inserted into [`fjall`].
 //!
-//! There is currently only one implementation of this keyspace -- [`KeyspaceV1`]. This trait is,
-//! however, quite useful as it enables us to upgrade between keyspaces. Please be very careful
+//! There is currently only one implementation of this schema -- [`SchemaV1`]. This trait is,
+//! however, quite useful as it enables us to upgrade between schemas. Please be very careful
 //! deleting it, even though there is only one implementation.
 
 mod v1;
 use fjall::{UserKey, UserValue};
-pub use v1::Keyspace as KeyspaceV1;
+pub use v1::Schema as SchemaV1;
 
 /// See the moduledoc.
-pub trait Keyspace {
+pub trait Schema {
     /// The type of the key in the output capture.
     type Key;
 
