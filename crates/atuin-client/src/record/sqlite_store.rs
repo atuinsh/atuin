@@ -171,6 +171,49 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// Insert a single record, reporting whether its `(host, tag, idx)` slot is now held by
+    /// *this* record.
+    ///
+    /// Returns `Ok(true)` when the record is stored -- a fresh insert, or an idempotent re-push
+    /// of a record already present under its own id. Returns `Ok(false)` when the `record_uniq`
+    /// index rejected the insert), so the caller should retry with a fresh `idx`.
+    ///
+    /// This is how concurrent writers to the same series settle on distinct indices without a
+    /// shared lock: the DB's unique index is the arbiter, and a loser simply recomputes its idx and
+    /// tries again.
+    #[instrument(level = "trace", skip_all, fields(id = ?record.id, idx = record.idx, host = ?record.host.id, tag = ?record.tag), err)]
+    pub async fn push_unique(&self, record: &Record<paseto_v4::EncryptedData>) -> Result<bool> {
+        let res = db::query(
+            "insert or ignore into store(id, idx, host, tag, timestamp, version, data, cek)
+                values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )
+        .bind(record.id.0.as_hyphenated().to_string())
+        .bind(i64::conv(record.idx))
+        .bind(record.host.id.0.as_hyphenated().to_string())
+        .bind(record.tag.as_str())
+        .bind(i64::conv(record.timestamp))
+        .bind(record.version.as_str())
+        .bind(record.data.raw.as_str())
+        .bind(record.data.cek.as_str())
+        .execute(self.sqlite.pool())
+        .await?;
+
+        if res.rows_affected() == 1 {
+            return Ok(true);
+        }
+
+        // Zero rows inserted: `insert or ignore` swallowed a unique-index conflict. Either our
+        // own id is already stored (an idempotent re-push -> success) or the `(host, tag, idx)`
+        // slot belongs to a different record (a racing writer took this idx -> retry).
+        let ours_present = db::query("select 1 from store where id = ?1 limit 1")
+            .bind(record.id.0.as_hyphenated().to_string())
+            .fetch_optional(self.sqlite.pool())
+            .await?
+            .is_some();
+
+        Ok(ours_present)
+    }
+
     #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
     pub async fn get(&self, id: RecordId) -> Result<Record<paseto_v4::EncryptedData>> {
         let res = db::query_as::<_, DbRecord>(sqlx::AssertSqlSafe(format!(

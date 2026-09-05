@@ -308,7 +308,7 @@ impl GrpcService for Service {
     ) -> Result<Response<CancelHistoryReply>, Status> {
         let id: HistoryId = request.into_inner().try_into()?;
 
-        self.journal.cancel(id)?;
+        self.journal.cancel(id).await?;
 
         Ok(Response::new(CancelHistoryReply {
             // TODO(markovejnovic): Pull this from one constant, well-defined spot.

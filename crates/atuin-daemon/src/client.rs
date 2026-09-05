@@ -131,7 +131,7 @@ impl HistoryClient {
             cwd: h.cwd,
             hostname: h.cmd_origin.into_string(),
             session: h.session,
-            timestamp: u64::conv(h.timestamp.unix_timestamp_nanos()),
+            timestamp: i64::conv(h.timestamp.unix_timestamp_nanos()),
             author: h.author,
             intent: h.intent.unwrap_or_default(),
             shell: h.shell.unwrap_or_default(),

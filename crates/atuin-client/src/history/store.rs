@@ -145,25 +145,28 @@ impl HistoryStore {
     #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     async fn push_record(&self, record: HistoryRecord) -> Result<(RecordId, RecordIdx)> {
         let bytes = record.serialize()?;
-        let idx = self
-            .store
-            .last(&RecordSeriesKey::new(self.host_id, RecordTag::History))
-            .await?
-            .map_or(0, |p| p.idx + 1);
+        let series = RecordSeriesKey::new(self.host_id, RecordTag::History);
 
-        let record = Record::builder()
-            .host(Host::new(self.host_id))
-            .version(RecordVersion::from(Version::LATEST.name()))
-            .tag(RecordTag::History)
-            .idx(idx)
-            .data(bytes)
-            .build();
+        // Allocate the append index optimistically: read `last().idx + 1`, then try to claim it.
+        // Concurrent writers may read the same tail and compute the same idx. `push_unique` reports
+        // `false` when a racer already took the slot, and we recompute and retry.
+        loop {
+            let idx = self.store.last(&series).await?.map_or(0, |p| p.idx + 1);
 
-        let id = record.id;
+            let record = Record::builder()
+                .host(Host::new(self.host_id))
+                .version(RecordVersion::from(Version::LATEST.name()))
+                .tag(RecordTag::History)
+                .idx(idx)
+                .data(bytes.clone())
+                .build();
 
-        self.store.push(&record.encrypt(&self.encryption_key)).await?;
+            let id = record.id;
 
-        Ok((id, idx))
+            if self.store.push_unique(&record.encrypt(&self.encryption_key)).await? {
+                return Ok((id, idx));
+            }
+        }
     }
 
     #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]

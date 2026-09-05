@@ -48,9 +48,10 @@ uuid = { workspace = true }
 listenfd = { workspace = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }
-rstest = { workspace = true }
+atuin-common = { workspace = true, features = ["os", "sqlite"] }
 proptest = { workspace = true }
+rstest = { workspace = true }
+tempfile = { workspace = true }
 
 [build-dependencies]
 protox = { workspace = true }

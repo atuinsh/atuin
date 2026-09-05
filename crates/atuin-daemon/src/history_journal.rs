@@ -28,7 +28,6 @@
 //! It is possible to stream events out of [`HistoryJournal`] via [`HistoryJournal::subscribe`]
 //! which returns a new [`futures::Stream`] of [`CmdEvent`] events.
 
-use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -71,6 +70,35 @@ pub struct FinishedCmd {
 struct InFlightCmd {
     history: History,
     span: Span,
+    /// Suppose that a command is in flight -- `active_cmds` holds an entry for it.
+    /// Suppose two requests come concurrently -- finish the command and delete the command.
+    ///
+    /// ```text
+    /// finish is supposed to:
+    ///   1. x := read(active_cmds, cmd)
+    ///      ^--- BORROW (not pop) the command from the shared active_cmds map into the stack.
+    ///   2. history_db.save(x).await
+    ///      ^--- store the command into the history database (new row)
+    ///   3. history_store.push(create(X)).await
+    ///      ^--- append a creation event to the history store.
+    ///   4. pop(active_cmds, cmd)
+    ///      ^--- remove the entry from the active_cmds
+    ///
+    /// delete is supposed to:
+    ///   1. x := pop(active_cmds, cmd)
+    ///      ^--- remove the command from the active cmds
+    ///       -> Some(x) means that the command was in-flight, in which case we're good to go
+    ///       -> None means that the command was already persisted by finish:4
+    ///          which means we need to do history_store.push(delete(x))
+    /// ```
+    ///
+    /// BUT! What might happen is that _while_ we're finishing a command (ie. between finish:1 and
+    /// finish:4), we get a delete. The delete sees that pop(active_cmds, cmd) is Some, and it pops
+    /// it and then exits, thinking that there is nothing else to handle there. But guess what --
+    /// the data is just about to be inserted.
+    ///
+    /// Really, we need a critical section between finish:1-4 and delete:1.
+    finalization_mutex: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// Registry of in-flight commands which performs output capture, management, storage and
@@ -149,61 +177,6 @@ pub enum GetCmdInFlightError {
     NotFound(HistoryId),
 }
 
-/// RAII lease of a temporarily checked-out [`HistoryJournal`]'s in-flight map entry.
-///
-/// While the lease is alive the command has been removed from the map. If it is dropped without
-/// [`ActiveCmdLease::commit`], the command is returned to the map (rolled back).
-struct ActiveCmdLease<'a> {
-    map: &'a DashMap<HistoryId, InFlightCmd>,
-    cmd: Option<InFlightCmd>,
-}
-
-impl<'a> ActiveCmdLease<'a> {
-    /// Remove the command identified by `id` from `map`, returning a lease that restores it on drop
-    /// unless [`Self::commit`] is called. Returns [`None`] when no such command is in flight.
-    fn take(map: &'a DashMap<HistoryId, InFlightCmd>, id: HistoryId) -> Option<Self> {
-        map.remove(&id).map(|(_id, cmd)| Self {
-            map,
-            cmd: Some(cmd),
-        })
-    }
-
-    /// The command's tracing span, which traces its lifetime.
-    fn span(&self) -> &Span {
-        &self.cmd.as_ref().expect("command is present until commit or drop").span
-    }
-
-    /// Consume the lease, keeping the command out of the map and returning ownership of it.
-    ///
-    /// Call this once all fallible work has succeeded and the command should no longer be considered
-    /// in flight.
-    fn commit(mut self) -> InFlightCmd {
-        self.cmd.take().expect("command is present until commit or drop")
-    }
-}
-
-impl Deref for ActiveCmdLease<'_> {
-    type Target = History;
-
-    fn deref(&self) -> &Self::Target {
-        &self.cmd.as_ref().expect("command is present until commit or drop").history
-    }
-}
-
-impl DerefMut for ActiveCmdLease<'_> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.cmd.as_mut().expect("command is present until commit or drop").history
-    }
-}
-
-impl Drop for ActiveCmdLease<'_> {
-    fn drop(&mut self) {
-        if let Some(cmd) = self.cmd.take() {
-            self.map.insert(cmd.history.id, cmd);
-        }
-    }
-}
-
 impl HistoryJournal {
     /// Create a new command registry.
     pub fn new(
@@ -244,18 +217,10 @@ impl HistoryJournal {
         self.active_cmds.insert(id, InFlightCmd {
             history: history.clone(),
             span,
+            finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
         });
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
-    }
-
-    /// Borrows an in-flight command from [`Self::active_cmds`] with an [`ActiveCmdLease`]
-    /// guard, which achieves two things:
-    ///
-    ///   - [`ActiveCmdLease::commit`] removes it from [`Self::active_cmds`].
-    ///   - [`Drop`] "rolls the command back", placing it back into [`Self::active_cmds`].
-    fn checkout(&self, history_id: HistoryId) -> Option<ActiveCmdLease<'_>> {
-        ActiveCmdLease::take(&self.active_cmds, history_id)
     }
 
     /// The in-flight command recorded under `history_id`.
@@ -279,32 +244,44 @@ impl HistoryJournal {
         exit_code: i64,
         duration: Duration,
     ) -> Result<FinishedCmd, CmdFinishError> {
-        let mut session = self.checkout(history_id).ok_or(CmdFinishError::NotFound(history_id))?;
+        // Careful! We need to ensure that the finalization_mutex gets guarded _while_ under the
+        // dashmap lock.
+        //
+        // Make sure you read the docs of [`ActveCmd::finalization_mutex`].
+        let mutex = self
+            .active_cmds
+            .get(&history_id)
+            .map(|cmd| cmd.finalization_mutex.clone())
+            .ok_or(CmdFinishError::NotFound(history_id))?;
+        let lock = mutex.lock().await;
 
-        session.exit = exit_code;
-        session.duration = i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX);
+        let (mut history, span) = {
+            let cmd =
+                self.active_cmds.get(&history_id).ok_or(CmdFinishError::NotFound(history_id))?;
+            (cmd.history.clone(), cmd.span.clone())
+        };
 
-        let span = session.span().clone();
+        history.exit = exit_code;
+        history.duration = i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX);
         span.record("exit_code", exit_code);
-        span.record("duration", session.duration);
+        span.record("duration", history.duration);
 
-        // Each `?` below drops `session`, which restores it to the in-flight map, so a failed (or
-        // cancelled) persistence leaves the command in flight instead of dropping it.
         self.history_db
-            .save(&session)
+            .save(&history)
             .instrument(span.clone())
             .await
             .map_err(|e| CmdFinishError::HistoryDbFailed(e.into()))?;
 
         let (history_record_id, history_record_idx) = self
             .history_store
-            .push(session.clone())
+            .push(history.clone())
             .instrument(span.clone())
             .await
             .map_err(CmdFinishError::HistoryStoreFailed)?;
 
-        // Persistence succeeded; take ownership and stop treating the command as in flight.
-        let history = session.commit().history;
+        self.active_cmds.remove(&history_id);
+
+        drop(lock);
 
         // TODO(markovejnovic): This is a little bit hacked-together. I'm thinking it would be good
         // to have a Packer type for this kind of logic. It can wraps the Caps.
@@ -335,7 +312,14 @@ impl HistoryJournal {
     }
 
     /// Cancel a command, discarding its in-memory state without persisting a history entry.
-    pub fn cancel(&self, history_id: HistoryId) -> Result<(), CmdCancelError> {
+    pub async fn cancel(&self, history_id: HistoryId) -> Result<(), CmdCancelError> {
+        let lock = self
+            .active_cmds
+            .get(&history_id)
+            .map(|cmd| cmd.finalization_mutex.clone())
+            .ok_or(CmdCancelError::NotFound(history_id))?;
+        let _guard = lock.lock().await;
+
         let Some((_id, cmd)) = self.active_cmds.remove(&history_id) else {
             return Err(CmdCancelError::NotFound(history_id));
         };
@@ -372,8 +356,21 @@ impl HistoryJournal {
             let mut deleted: usize = 0;
             let mut record_ids = Vec::new();
             for id in ids {
-                if let Some((_id, cmd)) = self.active_cmds.remove(&id) {
-                    let _ = self.broadcast.send(CmdEvent::Cancelled(cmd.history));
+                let mutex = self.active_cmds.get(&id).map(|cmd| cmd.finalization_mutex.clone());
+                let cancelled = if let Some(mutex) = mutex {
+                    let _lock = mutex.lock().await;
+                    match self.active_cmds.remove(&id) {
+                        Some((_id, cmd)) => {
+                            let _ = self.broadcast.send(CmdEvent::Cancelled(cmd.history));
+                            true
+                        }
+                        None => false,
+                    }
+                } else {
+                    false
+                };
+
+                if cancelled {
                     deleted += 1;
                     continue;
                 }
