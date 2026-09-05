@@ -323,10 +323,6 @@ impl GrpcService for Service {
         &self,
         request: Request<tonic::Streaming<DeleteHistoryRequest>>,
     ) -> Result<Response<DeleteHistoryReply>, Status> {
-        // Drain the whole client stream into one validated, capped batch. All-or-nothing: a
-        // malformed id, a stream error, or overflowing the cap aborts before anything is deleted
-        // (`journal.delete` deletes as it iterates and cannot roll back). The cap also guards the
-        // daemon against a runaway client. `CollectCappedError` maps to the right `Status` via `?`.
         let ids = request.into_inner().try_collect_capped(MAX_DELETE_HISTORY_IDS).await?;
 
         let search_settings = self.daemon_handle.settings().await.search.clone();
