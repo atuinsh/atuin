@@ -1,0 +1,7 @@
+shell = "zsh"
+rc = ".zshrc"
+script = '''
+bindkey -v
+eval "$(atuin init zsh)"
+PROMPT="E2E_PROMPT> "
+'''

@@ -1,0 +1,12 @@
+shell = "bash"
+rc = ".bashrc"
+script = '''
+source "$ATUIN_E2E_BLESH" --noattach
+eval "$(atuin init bash)"
+PS1="E2E_PROMPT> "
+ble-attach
+'''
+multiline_accept = "\n"
+
+[required_files]
+ATUIN_E2E_BLESH = "$HOME/.local/share/blesh/ble.sh"

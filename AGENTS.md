@@ -65,7 +65,14 @@ atuin-server-sqlite    SQLite implementation (sqlx)
   independent parameters) instead of near-duplicate tests.
 - Reach for `proptest` when a property holds across many inputs — round-trips (encode/decode, serde,
   parse/display), invariants, idempotence; keep targeted `#[case]`s for known edge cases and regressions.
-- Integration tests in `crates/atuin/tests/` need Postgres (`ATUIN_DB_URI` env var).
+- Server integration tests in `crates/atuin-server/tests/` need Postgres (`ATUIN_DB_URI` env var).
+- Fresh-install and PTY e2e tests in `crates/atuin/tests/` (`e2e_*`) run the built binary in a
+  pristine `$HOME`; the PTY ones drive interactive bash/zsh/fish and skip shells that aren't
+  installed unless `ATUIN_E2E_REQUIRE_SHELLS=1` (set in the CI `e2e` job).
+  `ATUIN_E2E_BASH` selects a specific Bash binary; macOS CI tests both `/bin/bash` and Homebrew Bash.
+  Add shell setups as `crates/atuin/tests/shells/*.toml`; rstest discovers every file for every
+  PTY test. See `crates/atuin/tests/README.md`. Daemon tests use a private socket and check RPC
+  health and persisted history rather than socket existence alone.
 - Use `rstest` for tests, especially when they can be made simpler using `case`s and `fixture`s.
 - Use `":memory:"` SQLite for unit tests needing a database.
 - Runner: `cargo nextest`.
