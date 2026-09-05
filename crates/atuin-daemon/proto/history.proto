@@ -68,8 +68,8 @@ message CancelHistoryReply {
   uint32 protocol = 2;
 }
 
+// One chunk of a client-streamed delete.
 message DeleteHistoryRequest {
-  // History entries to delete, by id.
   repeated HistoryId ids = 1;
 }
 
@@ -241,17 +241,35 @@ message OutputChunk {
 
 service History {
   rpc StartHistory(StartHistoryRequest) returns (StartHistoryReply);
+
   rpc EndHistory(EndHistoryRequest) returns (EndHistoryReply);
+
   rpc CancelHistory(CancelHistoryRequest) returns (CancelHistoryReply);
-  rpc DeleteHistory(DeleteHistoryRequest) returns (DeleteHistoryReply);
+
+  // Delete history entries by id.
+  //
+  // Clients may want to delete millions of rows and tonic will limit a request at 4MB, so this
+  // stream serves to circumvent this limitation.
+  //
+  // The server will accumulate up to 10M history entries and then delete them all in one go.
+  //
+  // TODO(markovejnovic): It would be really good if we could stream the reply back so that the
+  //                      user can see a progress bar.
+  rpc DeleteHistory(stream DeleteHistoryRequest) returns (DeleteHistoryReply);
+
   rpc RebuildHistory(RebuildHistoryRequest) returns (RebuildHistoryReply);
+
   rpc TailHistory(TailHistoryRequest) returns (stream TailHistoryReply);
+
   // Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
   rpc Status(StatusRequest) returns (StatusReply);
+
   // Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
   rpc Shutdown(ShutdownRequest) returns (ShutdownReply);
+
   // Store a completed command's captured output. Errors if output already exists for this id.
   rpc RegisterCommandOutput(RegisterCommandOutputRequest) returns (RegisterCommandOutputResponse);
+
   // Retrieve a command's captured output, sliced by line ranges.
   //
   // See the docs for `GetCommandOutputRequest` for the calling convention.

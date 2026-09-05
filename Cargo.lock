@@ -502,6 +502,7 @@ dependencies = [
  "frizbee",
  "futures",
  "hyper-util",
+ "itertools 0.15.0",
  "lasso",
  "listenfd",
  "parking_lot",

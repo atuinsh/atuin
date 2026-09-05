@@ -17,11 +17,11 @@ use crate::DaemonHandle;
 use crate::grpc::history::pb::history_server::History as GrpcService;
 use crate::grpc::history::pb::{
     CancelHistoryReply, CancelHistoryRequest, DeleteHistoryReply, DeleteHistoryRequest,
-    EndHistoryReply, EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse, Lagged,
-    RebuildHistoryReply, RebuildHistoryRequest, RegisterCommandOutputRequest,
-    RegisterCommandOutputResponse, ShutdownReply, ShutdownRequest, StartHistoryReply,
-    StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent, TailHistoryReply,
-    TailHistoryRequest,
+    DeleteHistoryStreamExt, EndHistoryReply, EndHistoryRequest, GetCommandOutputRequest,
+    GetCommandOutputResponse, Lagged, RebuildHistoryReply, RebuildHistoryRequest,
+    RegisterCommandOutputRequest, RegisterCommandOutputResponse, ShutdownReply, ShutdownRequest,
+    StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent,
+    TailHistoryReply, TailHistoryRequest,
 };
 use crate::history_journal::HistoryJournal;
 
@@ -320,14 +320,9 @@ impl GrpcService for Service {
     #[instrument(skip_all, level = Level::TRACE)]
     async fn delete_history(
         &self,
-        request: Request<DeleteHistoryRequest>,
+        request: Request<tonic::Streaming<DeleteHistoryRequest>>,
     ) -> Result<Response<DeleteHistoryReply>, Status> {
-        // We collect here to validate every id up front: `into_history_ids` yields an iterator of
-        // `Result`s, and [`HistoryJournal::delete`] needs validated, correct HistoryIds. Consuming
-        // the request (rather than borrowing + cloning each proto id) keeps this to a single
-        // allocation, and a malformed request deletes nothing.
-        let ids: Vec<HistoryId> =
-            request.into_inner().into_history_ids().collect::<Result<Vec<_>, _>>()?;
+        let ids = request.into_inner().collect_history_ids().await?;
 
         let search_settings = self.daemon_handle.settings().await.search.clone();
         let deleted = self.journal.delete(ids, &search_settings).await?;

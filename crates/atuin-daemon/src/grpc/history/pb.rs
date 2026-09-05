@@ -5,6 +5,7 @@ mod codegen {
     tonic::include_proto!("history");
 }
 
+use std::future::Future;
 use std::time::Duration;
 
 use atuin_client::history::{
@@ -21,6 +22,7 @@ use time::OffsetDateTime;
 use tonic::Status;
 
 use crate::grpc::common::pb::{self as common, UnsignedIdxRange, Uuid};
+use crate::grpc::common::{CollectCappedError, TryCollectResultsCappedExt};
 use crate::history_journal::{
     CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, CmdRebuildError, GetCmdInFlightError,
 };
@@ -180,9 +182,28 @@ impl TryFrom<CancelHistoryRequest> for DomainHistoryId {
     }
 }
 
-impl DeleteHistoryRequest {
-    pub fn into_history_ids(self) -> impl Iterator<Item = Result<DomainHistoryId, IdParseError>> {
-        self.ids.into_iter().map(DomainHistoryId::try_from)
+impl IntoIterator for DeleteHistoryRequest {
+    type Item = Result<DomainHistoryId, IdParseError>;
+    type IntoIter = std::iter::Map<std::vec::IntoIter<HistoryId>, fn(HistoryId) -> Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.ids.into_iter().map(DomainHistoryId::try_from as fn(HistoryId) -> Self::Item)
+    }
+}
+
+pub trait DeleteHistoryStreamExt {
+    fn collect_history_ids(
+        self,
+    ) -> impl Future<Output = Result<Vec<DomainHistoryId>, CollectCappedError<IdParseError>>> + Send;
+}
+
+impl DeleteHistoryStreamExt for tonic::Streaming<DeleteHistoryRequest> {
+    fn collect_history_ids(
+        self,
+    ) -> impl Future<Output = Result<Vec<DomainHistoryId>, CollectCappedError<IdParseError>>> + Send
+    {
+        const MAX_IDS: usize = 10_000_000;
+        self.try_collect_capped(MAX_IDS)
     }
 }
 
@@ -422,9 +443,62 @@ mod tests {
     use tonic::Code;
 
     use super::*;
+    use crate::grpc::common::TooManyItemsError;
 
     fn good_id_proto() -> HistoryId {
         HistoryId::from(DomainHistoryId::from_bytes([1u8; 16]))
+    }
+
+    fn id_proto(byte: u8) -> HistoryId {
+        HistoryId::from(DomainHistoryId::from_bytes([byte; 16]))
+    }
+
+    /// A proto id that fails to parse: no uuid at all.
+    fn bad_id_proto() -> HistoryId {
+        HistoryId { uuid: None }
+    }
+
+    fn delete_req(ids: &[HistoryId]) -> DeleteHistoryRequest {
+        DeleteHistoryRequest { ids: ids.to_vec() }
+    }
+
+    // These exercise the `DeleteHistoryRequest` wiring -- its `IntoIterator` glue and the
+    // `IdParseError -> Status` mapping -- through the generic collector. The collector's own
+    // behavior (cap, item/stream errors) is covered in `grpc::common::pb`.
+
+    #[rstest]
+    #[tokio::test]
+    async fn delete_stream_collects_ids_across_chunks_in_order() {
+        let stream = futures::stream::iter(vec![
+            Ok(delete_req(&[id_proto(1), id_proto(2)])),
+            Ok(delete_req(&[id_proto(3)])),
+        ]);
+        let ids = stream.try_collect_capped(100).await.unwrap();
+        assert_eq!(ids, vec![
+            DomainHistoryId::from_bytes([1; 16]),
+            DomainHistoryId::from_bytes([2; 16]),
+            DomainHistoryId::from_bytes([3; 16]),
+        ]);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn delete_stream_maps_a_malformed_id_to_invalid_argument() {
+        let stream =
+            futures::stream::iter(vec![Ok(delete_req(&[good_id_proto(), bad_id_proto()]))]);
+        let err = stream.try_collect_capped(100).await.unwrap_err();
+        assert!(matches!(err, CollectCappedError::Item(IdParseError::MissingUuid)));
+        assert_eq!(Status::from(err).code(), Code::InvalidArgument);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn delete_stream_maps_over_cap_to_invalid_argument() {
+        let stream =
+            futures::stream::iter(vec![Ok(delete_req(&[id_proto(1), id_proto(2), id_proto(3)]))]);
+        let err = stream.try_collect_capped(2).await.unwrap_err();
+        assert!(matches!(err, CollectCappedError::TooMany(TooManyItemsError(2))));
+        assert_eq!(Status::from(err).code(), Code::InvalidArgument);
     }
 
     fn capture_of(output: &str) -> CommandCapture {
@@ -456,7 +530,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn register_command_output_accepts_a_capture_carrying_its_meta() {
         let capture = register_req(Some(capture_of("hello"))).capture().expect("capture");
         assert_eq!(capture.output, "hello");
@@ -475,7 +549,7 @@ mod tests {
         assert_eq!(Status::from(err).code(), Code::InvalidArgument);
     }
 
-    #[test]
+    #[rstest]
     fn command_output_whole_output_via_full_range() {
         let chunked = GetCommandOutputResponse::build(capture_of("a\nb\nc"), &[py_range(0, -1)]);
         assert!(chunked.meta.is_some());
@@ -485,7 +559,7 @@ mod tests {
         assert_eq!(chunked.chunks[0].line_range, Some(range(0, 3)));
     }
 
-    #[test]
+    #[rstest]
     fn command_output_ranges_are_inclusive_with_negative_offsets() {
         // [1, 2] inclusive -> "one", "two"; [-1, -1] -> the last line, "four" (no sentinel needed).
         let chunked =
@@ -502,7 +576,7 @@ mod tests {
         assert_eq!(chunked.chunks[1].line_range, Some(range(4, 5)));
     }
 
-    #[test]
+    #[rstest]
     fn command_output_returns_one_chunk_per_requested_range() {
         // Every requested range yields a chunk, in order: [2, 1] is backwards (empty), [10, 20] is
         // past the end (both empty content), [0, 0] selects "a". Nothing is dropped.

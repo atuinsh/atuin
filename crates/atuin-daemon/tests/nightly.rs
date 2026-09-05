@@ -36,6 +36,12 @@ async fn deleting_everything_in_one_request_hundred_k() {
 
 #[ignore = "nightly tier; see the module docs for how to run it"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deleting_everything_in_one_request_one_m() {
+    deleting_everything_in_one_request_body(1_000_000).await;
+}
+
+#[ignore = "nightly tier; see the module docs for how to run it"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn rebuild_from_a_large_store_hundred_k() {
     rebuild_from_a_large_store_body(100_000).await;
 }
