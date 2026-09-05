@@ -71,14 +71,33 @@ pub struct FinishedCmd {
 struct InFlightCmd {
     history: History,
     span: Span,
-    /// Per-id lock serializing this command's [`HistoryJournal::finish`] against a concurrent
-    /// [`HistoryJournal::delete`] (and a duplicate finish). Held across the terminal
-    /// transition -- persist-then-remove for `finish`, check-then-cancel for `delete` -- so the
-    /// two are mutually exclusive *for this id* while unrelated commands proceed in parallel.
     ///
-    /// The lock lives inside the entry, so it exists exactly while the command is in flight and
-    /// is dropped with the entry -- no separate lock map to garbage-collect.
-    lock: Arc<tokio::sync::Mutex<()>>,
+    ///
+    /// Suppose that a command is in flight -- `active_cmds` holds an entry for it.
+    /// Suppose two requests come concurrently -- finish the command and delete the command.
+    ///
+    /// finish is supposed to:
+    ///   1. x := read(active_cmds, cmd)
+    ///      ^--- BORROW (not pop) the command from the shared active_cmds map into the stack.
+    ///   2. history_db.save(x).await
+    ///      ^--- store the command into the history database (new row)
+    ///   3. history_store.push(create(X)).await
+    ///      ^--- append a creation event to the history store.
+    ///   4. pop(active_cmds, cmd)
+    ///      ^--- remove the entry from the active_cmds
+    ///
+    /// delete is supposed to:
+    ///   1. x := pop(active_cmds, cmd)
+    ///      ^--- remove the command from the active cmds
+    ///       -> Some(x) means that the command was in-flight, in which case we're good to go
+    ///       -> None means that the command was already persisted by finish:4
+    ///          which means we need to do history_store.push(delete(x))
+    ///
+    /// BUT! What might happen is that _while_ we're finishing a command (ie. between finish:1 and
+    /// finish:4), we get a delete. The delete sees that pop(active_cmds, cmd) is Some, and it pops
+    /// it and then exits, thinking that there is nothing else to handle there. But guess what --
+    /// the data is just about to be inserted.
+    finalization_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// Registry of in-flight commands which performs output capture, management, storage and
@@ -194,11 +213,14 @@ impl HistoryJournal {
             duration = Empty,
         );
 
-        self.active_cmds.insert(id, InFlightCmd {
-            history: history.clone(),
-            span,
-            lock: Arc::new(tokio::sync::Mutex::new(())),
-        });
+        self.active_cmds.insert(
+            id,
+            InFlightCmd {
+                history: history.clone(),
+                span,
+                finalization_lock: Arc::new(tokio::sync::Mutex::new(())),
+            },
+        );
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
     }
@@ -231,7 +253,7 @@ impl HistoryJournal {
         let lock = self
             .active_cmds
             .get(&history_id)
-            .map(|cmd| cmd.lock.clone())
+            .map(|cmd| cmd.finalization_lock.clone())
             .ok_or(CmdFinishError::NotFound(history_id))?;
         let guard = lock.lock().await;
 
@@ -312,7 +334,7 @@ impl HistoryJournal {
         let lock = self
             .active_cmds
             .get(&history_id)
-            .map(|cmd| cmd.lock.clone())
+            .map(|cmd| cmd.finalization_lock.clone())
             .ok_or(CmdCancelError::NotFound(history_id))?;
         let _guard = lock.lock().await;
 
@@ -361,7 +383,7 @@ impl HistoryJournal {
             let mut deleted: usize = 0;
             let mut record_ids = Vec::new();
             for id in ids {
-                let lock = self.active_cmds.get(&id).map(|cmd| cmd.lock.clone());
+                let lock = self.active_cmds.get(&id).map(|cmd| cmd.finalization_lock.clone());
                 let cancelled = if let Some(lock) = lock {
                     let _guard = lock.lock().await;
                     // Re-check under the lock: a `finish` that won the lock first has removed the

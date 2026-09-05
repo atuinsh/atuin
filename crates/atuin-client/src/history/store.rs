@@ -148,10 +148,8 @@ impl HistoryStore {
         let series = RecordSeriesKey::new(self.host_id, RecordTag::History);
 
         // Allocate the append index optimistically: read `last().idx + 1`, then try to claim it.
-        // Concurrent writers may read the same tail and compute the same idx, so the store's
-        // unique `(host, tag, idx)` index is the real arbiter -- `push_unique` reports `false`
-        // when a racer already took the slot, and we recompute and retry. This replaces the old
-        // daemon-wide `record_write` lock: writers race and the DB serializes only the insert.
+        // Concurrent writers may read the same tail and compute the same idx. `push_unique` reports
+        // `false` when a racer already took the slot, and we recompute and retry.
         loop {
             let idx = self.store.last(&series).await?.map_or(0, |p| p.idx + 1);
 

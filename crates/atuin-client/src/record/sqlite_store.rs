@@ -175,14 +175,14 @@ impl SqliteStore {
     /// *this* record.
     ///
     /// Returns `Ok(true)` when the record is stored -- a fresh insert, or an idempotent re-push
-    /// of a record already present under its own id. Returns `Ok(false)` when that
-    /// `(host, tag, idx)` is already occupied by a *different* record (the `record_uniq` index
-    /// rejected the insert), so the caller should retry with a fresh `idx`.
+    /// of a record already present under its own id. Returns `Ok(false)` when the `record_uniq`
+    /// index rejected the insert), so the caller should retry with a fresh `idx`.
     ///
     /// This is how concurrent writers to the same series settle on distinct indices without a
-    /// shared lock: the DB's unique index is the arbiter, and a loser simply recomputes its idx
-    /// and tries again.
+    /// shared lock: the DB's unique index is the arbiter, and a loser simply recomputes its idx and
+    /// tries again.
     #[instrument(level = "trace", skip_all, fields(id = ?record.id, idx = record.idx, host = ?record.host.id, tag = ?record.tag), err)]
+    #[must_use]
     pub async fn push_unique(&self, record: &Record<paseto_v4::EncryptedData>) -> Result<bool> {
         let res = db::query(
             "insert or ignore into store(id, idx, host, tag, timestamp, version, data, cek)
