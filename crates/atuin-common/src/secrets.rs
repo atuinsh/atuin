@@ -700,6 +700,9 @@ mod tests {
     // Distinct credentials with nothing between them are adjacent, not overlapping: two
     // credentials were found, so two markers is the honest result.
     #[case::touching(&format!("ghp_{}npm_{}", "a".repeat(36), "b".repeat(36)), "********")]
+    // Starts inside the previous span and runs past it. This is the branch of the splice loop
+    // that advances the cursor without writing a second marker; nothing else reaches it.
+    #[case::runs_past(&format!("ghp_{}ghs_{}", "a".repeat(33), "b".repeat(36)), "****")]
     fn merges_spans(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(&*redact(input), expected);
     }
@@ -941,5 +944,42 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(&*redact(input), expected);
+    }
+
+    /// One character short, one character wrong, one case wrong. Without these every *broadening*
+    /// of a pattern passes the suite, and broadening contains_secret silently drops more commands
+    /// from history. The lowercase AWS case also pins that case-sensitivity is deliberate.
+    #[rstest]
+    #[case::ghp_one_short(&format!("ghp_{}", "a".repeat(35)))]
+    #[case::ghs_one_short(&format!("ghs_{}", "a".repeat(35)))]
+    #[case::akia_one_short(&format!("AKIA{}", "B".repeat(15)))]
+    #[case::lowercase_aws_name("aws_secret_access_key = wJalrXUtnFEMI")]
+    #[case::pulumi_uppercase_hex(&format!("pul-{}", "ABCDEF0123".repeat(4)))]
+    #[case::v1_unescaped_dot(&format!("v1x{}", "0".repeat(40)))]
+    #[case::github_pat_no_leading_digit(&format!("github_pat_A{}_{}", "a".repeat(21), "b".repeat(59)))]
+    #[case::login_without_whitespace("atuinlogin -p x")]
+    #[case::stripe_one_short(&format!("sk_live_{}", "a".repeat(23)))]
+    #[case::slack_webhook_short_team(&format!("T1234567/B12345678/{}", "x".repeat(24)))]
+    #[case::slack_bot_short_first_group(&format!("xoxb-1234567890-12345678901-{}", "x".repeat(24)))]
+    #[case::npm_one_short(&format!("npm_{}", "a".repeat(35)))]
+    #[case::netlify_unknown_kind(&format!("nfx_{}", "a".repeat(36)))]
+    fn near_misses_are_not_credentials(#[case] input: &str) {
+        assert!(!contains_secret(input), "{input:?} should not be recognised");
+        assert!(matches!(redact(input), Cow::Borrowed(_)), "{input:?} should be left alone");
+    }
+
+    /// The table-driven tests and the planted-credential properties only cover a pattern if it
+    /// brings its own cases. Without this floor, `tests: &[]` silently removes a pattern from all
+    /// of them and the suite stays green.
+    #[test]
+    fn every_pattern_has_a_case_that_actually_redacts() {
+        for pattern in SECRET_PATTERNS {
+            assert!(!pattern.tests.is_empty(), "{} has no test cases", pattern.name);
+            assert!(
+                pattern.tests.iter().any(|test| test.input != test.redacted),
+                "{} has no case in which anything is redacted",
+                pattern.name
+            );
+        }
     }
 }
