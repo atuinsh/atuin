@@ -341,6 +341,9 @@ pub fn redact(s: &str) -> Cow<'_, str> {
         .iter()
         .flat_map(|i| PATTERNS.regexes[i].captures_iter(s))
         .filter_map(|caps| Some(caps.name(SECRET_GROUP)?.range()))
+        // Text that is already the marker is not a change. This is what makes `redact`
+        // idempotent and keeps "Borrowed iff nothing changed" exact.
+        .filter(|span| &s[span.clone()] != REDACTED)
         .collect();
 
     if spans.is_empty() {
@@ -502,6 +505,8 @@ mod tests {
         "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\nglpat-RkE_BG5p_bbjML21WSfy",
         "****\n****"
     )]
+    // Five stars is not the marker; it is a value, and comes out as the marker.
+    #[case::five_stars_are_a_value("AWS_SECRET_ACCESS_KEY=*****", "AWS_SECRET_ACCESS_KEY=****")]
     fn redacts(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(&*redact(input), expected);
     }
@@ -515,6 +520,9 @@ mod tests {
     #[case::named_but_never_assigned("echo $AWS_SECRET_ACCESS_KEY")]
     #[case::login_without_arguments("atuin login")]
     #[case::almost_a_token("ghp_tooshort")]
+    #[case::already_redacted_assignment("AWS_SECRET_ACCESS_KEY=****")]
+    #[case::already_redacted_login("atuin login -p ****")]
+    #[case::two_markers_as_value("AWS_SESSION_TOKEN=**** ****")]
     fn passes_text_through_borrowed(#[case] input: &str) {
         assert!(matches!(redact(input), Cow::Borrowed(_)), "{input:?} should not be copied");
     }
