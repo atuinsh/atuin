@@ -8,6 +8,12 @@
  *   atuin hook install opencode
  *
  * Then restart opencode.
+ *
+ * Dual V1 + V2 form:
+ * - V1 (opencode 1.x) calls `server()` and uses the returned hooks.
+ * - V2 (opencode2 beta) reads the default export's `id` and `setup()`.
+ * The named `AtuinPlugin` export is kept for pre-1.18.29 V1 releases that
+ * expect bare function exports.
  */
 
 import type { Plugin } from "@opencode-ai/plugin";
@@ -40,6 +46,10 @@ interface Proposal {
 interface Entry {
 	historyId: string;
 	cwd: string;
+	// V2 only: proposal id that claimed this entry. Lets `finish` close only
+	// its own entry, so a denied or concurrent duplicate command can never
+	// steal another call's history entry or exit code.
+	owner?: string;
 }
 
 interface AtuinResult {
@@ -133,8 +143,8 @@ async function swallowFailures(work: () => void | Promise<void>): Promise<void> 
 	}
 }
 
-// opencode treats every export of a plugin file as a plugin function and fails
-// to load the file if one is not, so keep this the only export.
+// V1 factory. Kept as a named export for pre-1.18.29 releases that expect
+// bare function exports; 1.18.29+ uses it via the default export's `server`.
 export const AtuinPlugin: Plugin = async ({ directory }) => {
 	// Commands opencode has proposed but is not yet cleared to run, keyed by
 	// tool call ID.
@@ -219,4 +229,188 @@ export const AtuinPlugin: Plugin = async ({ directory }) => {
 				return finish(input.callID, output);
 			}),
 	};
+};
+
+// V2 `tool.execute.after` reports `{ status: "completed", result }` or
+// `{ status: "error", error }` instead of V1's `{ output, metadata }`.
+// Shapes differ between beta builds, so read defensively and never throw.
+function v2ExitCodeFrom(event: unknown): number {
+	const e = (event ?? {}) as {
+		status?: unknown;
+		result?: unknown;
+		error?: unknown;
+	};
+	const payload = e.status === "error" ? e.error : e.result;
+	const metadata = (payload as { metadata?: unknown } | undefined)?.metadata;
+	const exit = (metadata as { exit?: unknown } | undefined)?.exit;
+	if (typeof exit === "number") return exit;
+
+	let text = "";
+	try {
+		const p = payload as { message?: unknown; output?: unknown } | undefined;
+		if (typeof p?.message === "string") text = p.message;
+		else if (typeof p?.output === "string") text = p.output;
+		else text = JSON.stringify(payload ?? "");
+	} catch {
+		text = "";
+	}
+	if (text.includes("User aborted the command")) return EXIT_ABORTED;
+	if (/exceeding timeout \d+ ms/.test(text)) return EXIT_TIMED_OUT;
+	return e.status === "completed" ? 0 : 1;
+}
+
+function splitProposal(args: unknown): Proposal | undefined {
+	const { command, description } = (args ?? {}) as {
+		command?: unknown;
+		description?: unknown;
+	};
+	if (typeof command !== "string" || command.length === 0) return undefined;
+	return {
+		command,
+		intent:
+			typeof description === "string" && description.length > 0
+				? description
+				: undefined,
+	};
+}
+
+// V2 setup (opencode2 beta). Same lifecycle as V1, adapted to the V2 API:
+// - `tool.execute.before` remembers the proposal (no Atuin call yet, so
+//   denied commands stay unrecorded).
+// - `shell.create.before` is the first post-permission hook carrying the
+//   resolved cwd, so it opens the history entry. It carries no call ID, so
+//   the pending proposal is claimed by matching `command`.
+// - `tool.execute.after` closes the entry; it also drops unclaimed
+//   proposals, so denied commands never reach Atuin.
+// `ctx` is typed loosely on purpose: the file must also load under V1
+// runtimes whose `@opencode-ai/plugin` package predates the V2 `tool`/`shell`
+// domains. Missing domains disable the V2 path quietly instead of crashing.
+async function atuinSetup(
+	ctx: any,
+): Promise<(() => void | Promise<void>) | void> {
+	const tool = ctx?.tool;
+	const shell = ctx?.shell;
+	if (typeof tool?.hook !== "function" || typeof shell?.hook !== "function") {
+		return;
+	}
+	const baseDir =
+		typeof ctx?.location?.directory === "string"
+			? (ctx.location.directory as string)
+			: undefined;
+
+	// Proposals keyed by V2 tool call id.
+	const proposed = new Map<string, Proposal>();
+	// Open history entries keyed by command (the only key the shell hook and
+	// the tool hook share), each tagged with the claiming proposal id.
+	// `finish` closes only the entry owned by its own call id: a denied or
+	// concurrent duplicate can neither steal another call's entry nor
+	// misattribute an exit code. At most an entry goes unclosed, matching
+	// the V1 eviction policy for commands that never report back.
+	const running = new Map<string, Entry[]>();
+
+	function rememberV2(callID: string, args: unknown) {
+		const proposal = splitProposal(args);
+		if (!proposal) return;
+
+		if (proposed.size >= MAX_PROPOSED) {
+			const oldest = proposed.keys().next().value;
+			if (oldest !== undefined) proposed.delete(oldest);
+		}
+
+		proposed.set(callID, proposal);
+	}
+
+	async function claim(command: string, cwd: string | undefined) {
+		for (const [id, proposal] of proposed) {
+			if (proposal.command !== command) continue;
+			proposed.delete(id);
+			const historyId = await startHistory(cwd || baseDir || "", proposal);
+			if (!historyId) return;
+			const list = running.get(command) ?? [];
+			list.push({ historyId, cwd: cwd || "", owner: id });
+			running.set(command, list);
+			return;
+		}
+	}
+
+	async function finishV2(id: string, input: unknown, event: unknown) {
+		const byId = proposed.get(id);
+		proposed.delete(id);
+		const command =
+			byId?.command ?? (input as { command?: unknown } | undefined)?.command;
+		if (typeof command !== "string" || command.length === 0) return;
+
+		// Close only the entry this call claimed. Anything else (a denied
+		// duplicate, an evicted proposal) leaves other calls' entries alone.
+		const list = running.get(command);
+		const index = list?.findIndex((entry) => entry.owner === id) ?? -1;
+		if (!list || index < 0) return;
+		const [entry] = list.splice(index, 1);
+		if (list.length === 0) running.delete(command);
+		if (!entry) return;
+
+		await atuin(
+			[
+				"history",
+				"end",
+				entry.historyId,
+				"--exit",
+				String(v2ExitCodeFrom(event)),
+			],
+			entry.cwd,
+		);
+	}
+
+	const registrations: unknown[] = [];
+	try {
+		registrations.push(
+			await tool.hook("execute.before", (event: any) =>
+				swallowFailures(() => {
+					if (event?.tool !== BASH_TOOL) return;
+					if (typeof event?.id !== "string") return;
+					rememberV2(event.id, event.input);
+				}),
+			),
+		);
+		registrations.push(
+			await shell.hook("create.before", (event: any) =>
+				swallowFailures(() => {
+					if (typeof event?.command !== "string" || event.command.length === 0) {
+						return;
+					}
+					return claim(event.command, event.cwd);
+				}),
+			),
+		);
+		registrations.push(
+			await tool.hook("execute.after", (event: any) =>
+				swallowFailures(() => {
+					if (event?.tool !== BASH_TOOL) return;
+					if (typeof event?.id !== "string") return;
+					return finishV2(event.id, event?.input, event);
+				}),
+			),
+		);
+	} catch {
+		// Hook registration failed: stay unloaded instead of failing plugin
+		// load. A missing history entry is always the better failure.
+		return;
+	}
+
+	return async () => {
+		for (const r of registrations) {
+			try {
+				await (r as { dispose?: () => unknown } | undefined)?.dispose?.();
+			} catch {
+				// Deliberately ignored.
+			}
+		}
+	};
+}
+
+// Dual V1 + V2 entrypoint: V1 calls `server()`, V2 reads `id` + `setup()`.
+export default {
+	id: "atuin",
+	setup: atuinSetup,
+	server: AtuinPlugin,
 };
