@@ -36,7 +36,6 @@ fn fresh_history_list_is_empty_and_bootstraps_data_dir(env: FreshEnv) {
     assert!(env.data_dir().join("history.db").is_file());
 }
 
-/// `atuin key` must read an existing key without creating or replacing one.
 #[rstest]
 fn key_loads_but_never_generates(env: FreshEnv) {
     let out = Process::spawn(env.atuin(&["key"])).wait();

@@ -40,8 +40,6 @@ impl FreshEnv {
         format!("{}:{inherited}", self.home.path().join("bin").display())
     }
 
-    /// The environment a fresh interactive session would see. Update checks are
-    /// disabled so tests never touch the network.
     pub fn env_vars(&self) -> Vec<(String, String)> {
         let home = self.home.path();
         let mut vars = vec![
@@ -67,7 +65,6 @@ impl FreshEnv {
         vars
     }
 
-    /// A `Command` for the atuin binary itself, run inside this environment.
     pub fn atuin(&self, args: &[&str]) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_atuin"));
         cmd.args(args);
@@ -96,7 +93,6 @@ impl FreshEnv {
         self.home.path().join(".local/share/atuin")
     }
 
-    /// Write the client config before starting the shell.
     pub fn write_config(&self, contents: &str) {
         let dir = self.home.path().join(".config/atuin");
         fs::create_dir_all(&dir).unwrap();
@@ -104,7 +100,7 @@ impl FreshEnv {
     }
 }
 
-/// Captures output without risking a full pipe, and reaps children even on failure.
+/// File-backed output avoids pipe deadlocks. Drop kills and reaps the child.
 pub struct Process {
     pub child: Child,
     stdout: File,

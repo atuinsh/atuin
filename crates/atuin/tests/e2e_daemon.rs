@@ -1,4 +1,4 @@
-//! Boot the installed binary without pre-existing databases or keys.
+//! Daemon startup, persistence, and restart tests.
 
 #![cfg(all(unix, feature = "daemon"))]
 
@@ -25,7 +25,6 @@ fn daemon() -> Daemon {
 
 impl Drop for Daemon {
     fn drop(&mut self) {
-        // The private socket prevents cleanup from reaching another daemon.
         let _ = Process::spawn(self.env.atuin(&["daemon", "stop"])).try_wait();
     }
 }
@@ -46,7 +45,7 @@ async fn fresh_daemon_serves_history(
     assert!(!daemon.env.data_dir().join("history.db").exists());
     assert!(!daemon.env.socket().exists());
 
-    // Repeat after shutdown to check that the socket and startup lock can be reused.
+    // Check socket and startup-lock reuse after shutdown.
     for _ in 0..2 {
         if !autostart {
             daemon.foreground =
@@ -72,7 +71,7 @@ async fn fresh_daemon_serves_history(
             .expect("daemon never became healthy");
         }
 
-        // Start all writers before waiting, so autostart must coordinate concurrent hooks.
+        // Spawn all writers first to exercise concurrent autostart.
         let commands: Vec<_> = (0..writers).map(|_| format!("echo {}", marker())).collect();
         let processes: Vec<_> = commands
             .iter()

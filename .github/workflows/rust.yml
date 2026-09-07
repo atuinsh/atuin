@@ -214,7 +214,7 @@ jobs:
           key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run cargo test
-        # the fresh-install e2e tests run in the e2e job, where shells are installed
+        # E2e tests have a separate job with shell dependencies.
         run: cargo nextest run --test '*' -E 'not binary(/e2e_.*/)'
         env:
           ATUIN_DB_URI: postgres://atuin:pass@localhost:5432/atuin

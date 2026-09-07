@@ -21,7 +21,7 @@ struct PtyState {
 pub struct PtyShell {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
-    // Keeps the master side (and thus the PTY) alive for the session.
+    // Keep the PTY alive until the shell is dropped.
     master: Box<dyn portable_pty::MasterPty + Send>,
     state: Arc<(Mutex<PtyState>, Condvar)>,
 }
@@ -53,7 +53,7 @@ fn answer_queries(state: &mut PtyState) -> Vec<u8> {
                 i += query.len();
                 continue 'scan;
             }
-            // A query split across reads: stop here and wait for the rest.
+            // Keep partial queries for the next read.
             if tail.len() < query.len() && query.starts_with(tail) {
                 break 'scan;
             }
@@ -72,8 +72,7 @@ impl PtyShell {
         env: &FreshEnv,
         vars: &BTreeMap<String, String>,
     ) -> Self {
-        // Taller than the default inline_height (40) so the search UI never
-        // has to scroll the prompt out of view.
+        // Leave room for the prompt above inline_height (40).
         let (rows, cols) = (50, 120);
         let pty = portable_pty::native_pty_system();
         let pair = pty
@@ -127,9 +126,7 @@ impl PtyShell {
                 let mut state = thread_state.0.lock();
                 state.pending.extend_from_slice(&buf[..n]);
                 let replies = answer_queries(&mut state);
-                // Send terminal replies before publishing the rendered screen.
-                // Otherwise a waiter can send a key that changes the foreground
-                // application before it receives the reply to its own query.
+                // Reply before waking tests: their next key may switch applications.
                 if !replies.is_empty() {
                     let mut writer = thread_writer.lock();
                     if writer.write_all(&replies).and_then(|()| writer.flush()).is_err() {
@@ -168,7 +165,6 @@ impl PtyShell {
         drop(state);
     }
 
-    /// The current rendered screen contents.
     pub fn screen(&self) -> String {
         self.state.0.lock().parser.screen().contents()
     }
@@ -253,13 +249,11 @@ impl PtyShell {
         self.wait_for_terminal(what, |state| pred(&state.parser.screen().contents()))
     }
 
-    /// Wait until `needle` appears anywhere on the screen.
     pub fn wait_for(&self, needle: &str) -> String {
         self.wait_for_screen(&format!("{needle:?} on screen"), |s| s.contains(needle))
     }
 
-    /// Wait until some screen line, trimmed, is exactly `line` — e.g. command
-    /// output as opposed to the echoed command line itself.
+    /// Match a whole trimmed line to distinguish output from echoed input.
     pub fn wait_for_line(&self, line: &str) -> String {
         self.wait_for_screen(&format!("line {line:?} on screen"), |s| {
             s.lines().any(|l| l.trim() == line)

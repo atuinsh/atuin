@@ -1,5 +1,4 @@
 //! Interactive shell tests against a rendered PTY screen.
-//! Set `ATUIN_E2E_REQUIRE_SHELLS=1` to fail on missing shells or ble.sh.
 
 #![cfg(unix)]
 
@@ -17,19 +16,16 @@ use pty::PtyShell;
 use rstest::rstest;
 use shell::{PROMPT, Shell};
 
-/// Run a command in the shell and wait for its output line to render.
 fn run_echo_marker(pty: &PtyShell, marker: &str) {
     pty.send_line(&format!("echo {marker}"));
-    // Match output, not the echoed command line.
     pty.wait_for_line(marker);
 }
 
-/// Search for a unique command on a cleared screen.
 fn search_for_marker(pty: &PtyShell, marker: &str, open_key: &[u8]) {
     pty.send_line("clear");
     pty.send(open_key);
     pty.wait_for(": exit");
-    // The full command must appear as a result, not just in the query.
+    // Search a suffix so the full command can only match a result.
     pty.send_str(&marker[marker.len() - 12..]);
     pty.wait_for(&format!("echo {marker}"));
 }
@@ -52,7 +48,7 @@ fn shell_hooks_record_history(#[files("tests/shells/*.toml")] setup: PathBuf) {
     pty.send_line(&command);
     let cwd = env.home().canonicalize().unwrap();
     let expected = format!("7\t{}\t{command}", cwd.display());
-    // Fish and zsh finish history entries in the background; read afresh on each poll.
+    // Fish and zsh finish history entries asynchronously.
     wait_until("completed history entry with exit status and cwd", || {
         let mut command =
             env.atuin(&["history", "list", "--format", "{exit}\t{directory}\t{command}"]);
@@ -84,7 +80,6 @@ fn selection_returns_for_editing(
             && s.lines().any(|l| l.contains(PROMPT) && l.contains(&format!("echo {marker}")))
     });
 
-    // Appending text and executing proves the selection was left editable.
     pty.send_str("-edited");
     pty.wait_for(&format!("echo {marker}-edited"));
     pty.send_enter();
