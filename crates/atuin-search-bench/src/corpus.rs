@@ -9,6 +9,8 @@
 //! comparisons). Same seed → same corpus, so results are comparable across
 //! runs and machines.
 
+use easy_cast::Conv;
+
 #[must_use]
 pub fn generate(n: usize, seed: u64) -> Vec<String> {
     let mut rng = Rng::new(seed);
@@ -33,7 +35,7 @@ impl Rng {
     }
 
     fn below(&mut self, n: usize) -> usize {
-        (self.next() % n as u64) as usize
+        usize::conv(self.next() % u64::conv(n))
     }
 
     fn pick(&mut self, xs: &[&'static str]) -> &'static str {

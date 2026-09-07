@@ -1158,8 +1158,21 @@ impl Settings {
             .unwrap_or_else(|| self.search_mode())
     }
 
-    pub(crate) fn effective_data_dir() -> PathBuf {
+    /// The resolved data directory: a custom `data_dir` / `ATUIN_DATA_DIR` if one was configured
+    /// when settings were last built this process, otherwise [`atuin_common::utils::data_dir`].
+    #[must_use]
+    pub fn effective_data_dir() -> PathBuf {
         DATA_DIR.get().cloned().unwrap_or_else(atuin_common::utils::data_dir)
+    }
+
+    /// Directory of the durable command-output capture store, under the [effective data
+    /// dir](Self::effective_data_dir). Unlike the sqlite stores this is a fjall database
+    /// directory, not a single file.
+    ///
+    /// The user should not mess with this directory. Bad things can happen.
+    #[must_use]
+    pub fn command_capture_dir() -> PathBuf {
+        Self::effective_data_dir().join("output-capture")
     }
 
     // -- Meta store: lazily initialized on first access --

@@ -1,6 +1,7 @@
 use atuin_domain::record::{
     EncryptedData, Host, HostId, Record, RecordIdx, RecordSeriesKey, RecordTag, RecordVersion,
 };
+use easy_cast::Conv;
 use sqlx::Row;
 
 #[derive(sqlx::FromRow)]
@@ -30,7 +31,7 @@ pub struct NewSession {
 }
 
 #[derive(derive_more::Into)]
-pub(super) struct DbRecord(pub Record<EncryptedData>);
+pub(crate) struct DbRecord(pub Record<EncryptedData>);
 
 macro_rules! impl_db_record_from_row {
     ($row:ty) => {
@@ -47,8 +48,8 @@ macro_rules! impl_db_record_from_row {
                 Ok(Self(Record {
                     id: row.try_get("client_id")?,
                     host: Host::new(row.try_get("host")?),
-                    idx: idx as u64,
-                    timestamp: timestamp as u64,
+                    idx: u64::conv(idx),
+                    timestamp: u64::conv(timestamp),
                     version: RecordVersion::from(row.try_get::<String, _>("version")?),
                     tag: RecordTag::from(row.try_get::<String, _>("tag")?),
                     data,
@@ -63,7 +64,7 @@ impl_db_record_from_row!(sqlx::sqlite::SqliteRow);
 impl_db_record_from_row!(sqlx::mysql::MySqlRow);
 
 #[derive(derive_more::Into)]
-pub(super) struct RecordSeriesPoint {
+pub(crate) struct RecordSeriesPoint {
     pub(super) series: RecordSeriesKey,
     pub(super) idx: RecordIdx,
 }
@@ -78,7 +79,7 @@ macro_rules! impl_record_series_point_from_row {
 
                 Ok(Self {
                     series: RecordSeriesKey::new(host, RecordTag::from(tag)),
-                    idx: idx as u64,
+                    idx: u64::conv(idx),
                 })
             }
         }

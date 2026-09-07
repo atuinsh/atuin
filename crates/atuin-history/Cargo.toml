@@ -2,27 +2,26 @@
 name = "atuin-history"
 description = "The history crate for Atuin"
 edition = "2024"
-version = { workspace = true }
 
 authors.workspace = true
-rust-version.workspace = true
-license.workspace = true
 homepage.workspace = true
-repository.workspace = true
+license.workspace = true
 readme.workspace = true
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [dependencies]
-atuin-client = { path = "../atuin-client", version = "18.20.1" }
+atuin-client = { workspace = true }
 
-time = { workspace = true }
-serde = { workspace = true }
 crossterm = { workspace = true, features = ["use-dev-tty"] }
-unicode-segmentation = "1.11.0"
+easy-cast = { workspace = true }
+serde = { workspace = true }
+time = { workspace = true }
+unicode-segmentation = { workspace = true }
 
 [dev-dependencies]
-divan = { version = "5.0.1", package = "codspeed-divan-compat" }
+divan = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }
 

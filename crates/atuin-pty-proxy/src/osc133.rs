@@ -11,17 +11,17 @@
 //!
 //! The wire format is `ESC ] 133 ; <cmd> [; <params>] ST` where `ST` is `BEL`
 //! (0x07), `ESC \` (0x1B 0x5C), or `C1 ST` (0x9C).
-//!
-//! # Design goals
-//!
-//! * **Transparent** — the parser observes the byte stream without modifying it;
-//!   the caller remains responsible for forwarding bytes to their destination.
-//! * **Bounded** — OSC parameter buffering is capped so malformed output cannot
-//!   grow memory without limit.
-//! * **Non-blocking** — [`Parser::push_located`] processes whatever bytes are
-//!   available and returns immediately.
-//! * **Extensible** — marker parameters are preserved so Atuin-specific metadata
-//!   can ride alongside standard OSC 133 markers.
+
+const ESC: u8 = 0x1B;
+const BEL: u8 = 0x07;
+const C1_ST: u8 = 0x9C;
+const BACKSLASH: u8 = b'\\';
+const RIGHT_BRACKET: u8 = b']';
+
+/// Maximum bytes we'll buffer for the OSC parameter string. This is large enough
+/// for Atuin metadata such as history/session IDs while still bounding malformed
+/// OSC sequences.
+const MAX_PARAMS_SIZE: usize = 512;
 
 /// Events emitted when an OSC 133 marker is detected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,69 +39,8 @@ pub enum Event {
     },
 }
 
-/// Parameters attached to an OSC 133 marker.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct Params {
-    items: Vec<Param>,
-}
-
-impl Params {
-    /// Iterate over all marker parameters in order.
-    #[cfg(test)]
-    #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = &Param> {
-        self.items.iter()
-    }
-
-    /// Return the value for the first `key=value` parameter with this key.
-    #[inline]
-    pub fn get(&self, key: &str) -> Option<&str> {
-        self.items.iter().find_map(|item| match item {
-            Param::KeyValue {
-                key: item_key,
-                value,
-            } if item_key == key => Some(value.as_str()),
-            Param::Value(_) | Param::KeyValue { .. } => None,
-        })
-    }
-}
-
-/// A single OSC 133 marker parameter.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Param {
-    /// A positional parameter without an equals sign.
-    Value(String),
-    /// A `key=value` parameter.
-    KeyValue {
-        key: String,
-        value: String,
-    },
-}
-
-/// An OSC 133 event with its position in the most recent input chunk.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocatedEvent {
-    /// The OSC 133 event that was parsed.
-    pub event: Event,
-    /// Offset where this marker starts in the current chunk.
-    ///
-    /// If a marker started in an earlier [`Parser::push_located`] call, this is
-    /// `0` in the chunk that completed the marker.
-    pub start_offset: usize,
-    /// Offset immediately after this marker's terminator in the current chunk.
-    ///
-    /// If a marker spans multiple [`Parser::push_located`] calls, this is still
-    /// the offset in the chunk that completed the marker.
-    pub offset: usize,
-    /// The semantic zone after applying this event.
-    pub zone: Zone,
-    /// Metadata parameters attached to this marker.
-    pub params: Params,
-}
-
 /// The current semantic zone as determined by the most recent OSC 133 marker.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum Zone {
     /// No marker seen yet, or after a `D` marker (between commands).
     #[default]
@@ -114,26 +53,210 @@ pub enum Zone {
     Output,
 }
 
-// ---------------------------------------------------------------------------
-// Internal constants
-// ---------------------------------------------------------------------------
+impl Event {
+    /// Get the zone corresponding to the data that comes after this event.
+    pub fn zone(self) -> Zone {
+        match self {
+            Self::PromptStart => Zone::Prompt,
+            Self::CommandStart => Zone::Input,
+            Self::CommandExecuted => Zone::Output,
+            Self::CommandFinished { .. } => Zone::Unknown,
+        }
+    }
+}
 
-const ESC: u8 = 0x1B;
-const BEL: u8 = 0x07;
-const C1_ST: u8 = 0x9C;
-const BACKSLASH: u8 = b'\\';
-const RIGHT_BRACKET: u8 = b']';
+/// An OSC 133 event with the slice of data up to the end of the OSC sequence.
+///
+/// Concatenating [`Self::data`] for every chunk, followed by [`EventChunks::trailing_data`],
+/// exactly reproduces the bytes passed to [`Parser::push`].
+#[derive(Debug, Clone, Copy)]
+pub struct EventChunk<'a> {
+    /// The OSC 133 event.
+    pub event: Event,
 
-/// Maximum bytes we'll buffer for the OSC parameter string. This is large enough
-/// for Atuin metadata such as history/session IDs while still bounding malformed
-/// OSC sequences.
-const PARAM_BUF_CAP: usize = 512;
+    /// All the data between the last event and the end of this event's OSC 133 sequence.
+    ///
+    /// This includes the entire OSC 133 sequence itself.
+    pub data: &'a [u8],
 
-// ---------------------------------------------------------------------------
-// State machine
-// ---------------------------------------------------------------------------
+    /// The total length of the OSC 133 sequence corresponding to this event.
+    pub osc_len: usize,
+}
 
+/// A single OSC 133 marker parameter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Param<'a> {
+    Value(&'a [u8]),
+    KeyValue {
+        key: &'a [u8],
+        value: &'a [u8],
+    },
+}
+
+/// An iterator of OSC 133 events, created by [`Parser::push`].
+///
+/// After exhausting the iterator, you will likely want to call [`Self::trailing_data`] to get the
+/// last chunk of data that was not yielded by the iterator. You may need to use
+/// [`Iterator::by_ref`] when iterating to ensure you still have access to the iterator afterward.
+pub struct EventChunks<'parser, 'data> {
+    parser: &'parser mut Parser,
+    data: &'data [u8],
+    /// Index within `parser.param_buf` where unhandled parameters start.
+    params_start: usize,
+    exhausted: bool,
+}
+
+impl<'data> Iterator for EventChunks<'_, 'data> {
+    type Item = EventChunk<'data>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.exhausted {
+            return None;
+        }
+        for (i, b) in self.data.iter().copied().enumerate() {
+            if let Some(item) = self.handle_byte(b, i) {
+                return Some(item);
+            }
+        }
+        self.exhausted = true;
+        None
+    }
+}
+
+impl std::iter::FusedIterator for EventChunks<'_, '_> {}
+
+impl<'data> EventChunks<'_, 'data> {
+    /// Get the OSC 133 params for the most recently yielded event.
+    pub fn params(&self) -> impl Iterator<Item = Param<'_>> {
+        let bytes = if self.exhausted {
+            b""
+        } else {
+            &self.parser.param_bytes()[self.params_start..]
+        };
+        // Make the split iterator conditional on `bytes` being non-empty; otherwise it will yield
+        // an empty param when `bytes` is empty.
+        let split = (!bytes.is_empty()).then(|| bytes.split(|b| *b == b';'));
+        split.into_iter().flatten().map(|bytes| {
+            let Some(sep) = bytes.iter().position(|b| *b == b'=') else {
+                return Param::Value(bytes);
+            };
+            Param::KeyValue {
+                key: &bytes[..sep],
+                value: &bytes[sep + 1..],
+            }
+        })
+    }
+
+    /// Get the last bit of data not yielded by this iterator.
+    ///
+    /// This method is intended to be called once the iterator has been exhausted.
+    pub fn trailing_data(&self) -> &'data [u8] {
+        self.data
+    }
+
+    fn handle_byte(&mut self, byte: u8, offset: usize) -> Option<EventChunk<'data>> {
+        match self.parser.state {
+            State::Ground => {
+                if byte == ESC {
+                    self.parser.state = State::Esc;
+                }
+            }
+            State::Esc => {
+                self.handle_esc(byte);
+            }
+            State::OscParam => {
+                if byte == BEL || byte == C1_ST {
+                    let terminator_len = 1;
+                    return self.end_osc(offset, terminator_len);
+                } else if byte == ESC {
+                    self.parser.state = State::OscEsc;
+                } else if self.parser.append_param_byte(byte).is_err() {
+                    self.parser.state = State::Ground;
+                }
+            }
+            State::OscEsc => {
+                if byte == BACKSLASH {
+                    let terminator_len = 2; // ESC + BACKSLASH
+                    return self.end_osc(offset, terminator_len);
+                }
+                // Fall back to handling this byte as if we had been in the regular `Esc` state.
+                // If something spits out a malformed unterminated OSC sequence, we want the next
+                // legitimate OSC sequence to reset us into the proper state. This accomplishes
+                // that.
+                self.handle_esc(byte);
+            }
+        }
+        None
+    }
+
+    fn handle_esc(&mut self, byte: u8) {
+        match byte {
+            RIGHT_BRACKET => {
+                self.parser.state = State::OscParam;
+                self.parser.clear_param_bytes();
+                self.params_start = 0;
+            }
+            ESC => {
+                // Restart the escape sequence if we get another ESC.
+                self.parser.state = State::Esc;
+            }
+            _ => {
+                self.parser.state = State::Ground;
+            }
+        }
+    }
+
+    /// Finish the OSC sequence whose terminator ends at `offset`.
+    ///
+    /// Returns an [`EventChunk`] if this was an OSC 133 sequence; otherwise, returns [`None`],
+    /// and the bytes will get included as normal data in the next [`EventChunk`] (or in
+    /// [`EventChunks::trailing_data`]).
+    fn end_osc(&mut self, offset: usize, terminator_len: usize) -> Option<EventChunk<'data>> {
+        self.parser.state = State::Ground;
+
+        let param_bytes = self.parser.param_bytes();
+        let mut payload = param_bytes.strip_prefix(b"133")?;
+        if *payload.split_off_first()? != b';' {
+            return None;
+        }
+
+        let cmd = *payload.split_off_first()?;
+        if payload.split_off_first().is_some_and(|b| *b != b';') {
+            return None;
+        }
+
+        let event = match cmd {
+            b'A' => Event::PromptStart,
+            b'B' => Event::CommandStart,
+            b'C' => Event::CommandExecuted,
+            b'D' => {
+                let mut exit_code = None;
+                if let Some(bytes) = payload.split(|b| *b == b';').next()
+                    && let Some(code) = parse_bytes(bytes)
+                {
+                    exit_code = Some(code);
+                    payload = payload.get(bytes.len() + 1..).unwrap_or_default();
+                }
+                Event::CommandFinished { exit_code }
+            }
+            _ => return None,
+        };
+
+        self.params_start = param_bytes.len() - payload.len();
+        let (data, rest) = self.data.split_at(offset + 1);
+        self.data = rest;
+
+        let non_params_len = 2 + terminator_len; // ESC + RIGHT_BRACKET + terminator_len
+        let osc_len = non_params_len + self.parser.param_buf_len;
+        Some(EventChunk {
+            event,
+            data,
+            osc_len,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 enum State {
     /// Normal pass-through.
     Ground,
@@ -148,16 +271,13 @@ enum State {
 
 /// A streaming, zero-allocation parser for OSC 133 escape sequences.
 ///
-/// Feed arbitrary byte slices into [`Parser::push_located`].  The parser detects
-/// OSC 133 markers and reports [`Event`]s through a caller-supplied callback
-/// without modifying the data.  It can sit transparently between a PTY reader
-/// and stdout.
+/// Feed arbitrary byte slices into [`Parser::push`]. The parser detects
+/// OSC 133 markers and returns an iterator of [`EventChunk`]s, each containing
+/// an [`Event`] and the data up to that point.
 pub struct Parser {
     state: State,
-    zone: Zone,
-    sequence_start: Option<usize>,
-    param_buf: [u8; PARAM_BUF_CAP],
-    param_len: usize,
+    param_buf: [u8; MAX_PARAMS_SIZE],
+    param_buf_len: usize,
 }
 
 impl Default for Parser {
@@ -168,199 +288,52 @@ impl Default for Parser {
 
 impl Parser {
     /// Create a new parser in the initial (ground / unknown-zone) state.
-    #[inline]
     pub fn new() -> Self {
         Self {
             state: State::Ground,
-            zone: Zone::Unknown,
-            sequence_start: None,
-            param_buf: [0u8; PARAM_BUF_CAP],
-            param_len: 0,
+            param_buf: [0; MAX_PARAMS_SIZE],
+            param_buf_len: 0,
         }
     }
 
-    /// The current semantic zone based on markers seen so far.
-    #[inline]
-    #[allow(dead_code)]
-    pub fn zone(&self) -> Zone {
-        self.zone
-    }
-
-    /// Start offset of an incomplete OSC sequence in the most recent chunk.
-    #[inline]
-    pub(crate) fn incomplete_osc_sequence_start(&self) -> Option<usize> {
-        matches!(self.state, State::OscParam | State::OscEsc)
-            .then(|| self.sequence_start.unwrap_or(0))
-    }
-
-    /// Process a chunk of bytes, calling `on_event` for every OSC 133 marker
-    /// found.
-    ///
-    /// All bytes in `data` should still be forwarded to the terminal by the
-    /// caller — this method only *observes* the stream.
-    #[cfg(test)]
-    #[inline]
-    pub fn push(&mut self, data: &[u8], mut on_event: impl FnMut(Event)) {
-        self.push_located(data, |located| on_event(located.event));
-    }
-
-    /// Process a chunk of bytes, calling `on_event` for every OSC 133 marker
-    /// found with its byte offset in this chunk.
-    ///
-    /// The offset points to the first byte after the marker terminator, making
-    /// it suitable for callers that need to split the original chunk at marker
-    /// boundaries.
-    #[inline]
-    pub fn push_located(&mut self, data: &[u8], mut on_event: impl FnMut(LocatedEvent)) {
-        self.sequence_start = (self.state != State::Ground).then_some(0);
-
-        for (offset, &byte) in data.iter().enumerate() {
-            match self.state {
-                State::Ground => {
-                    if byte == ESC {
-                        self.state = State::Esc;
-                        self.sequence_start = Some(offset);
-                    }
-                }
-                State::Esc => {
-                    if byte == RIGHT_BRACKET {
-                        self.state = State::OscParam;
-                        self.param_len = 0;
-                    } else {
-                        self.state = State::Ground;
-                        self.sequence_start = None;
-                    }
-                }
-                State::OscParam => {
-                    if byte == BEL || byte == C1_ST {
-                        self.dispatch(offset + 1, &mut on_event);
-                        self.state = State::Ground;
-                        self.sequence_start = None;
-                    } else if byte == ESC {
-                        self.state = State::OscEsc;
-                    } else if self.param_len < PARAM_BUF_CAP {
-                        self.param_buf[self.param_len] = byte;
-                        self.param_len += 1;
-                    }
-                    // If param_len == PARAM_BUF_CAP we silently stop
-                    // accumulating — dispatch will ignore non-133 sequences.
-                }
-                State::OscEsc => {
-                    if byte == BACKSLASH {
-                        self.dispatch(offset + 1, &mut on_event);
-                    }
-                    // Whether we got a valid ST or not, return to ground.
-                    // (A new ESC ] would restart accumulation via the Ground
-                    // -> Esc -> OscParam path on the *next* byte.)
-                    self.state = State::Ground;
-                    self.sequence_start = None;
-                }
-            }
+    /// Process a chunk of bytes, yielding an [`EventChunk`] for every OSC 133 marker
+    /// found, containing the event type and all the data up to that point.
+    pub fn push<'data>(&mut self, data: &'data [u8]) -> EventChunks<'_, 'data> {
+        EventChunks {
+            parser: self,
+            data,
+            params_start: 0,
+            exhausted: false,
         }
     }
 
-    /// Inspect the accumulated parameter buffer.  If it holds an OSC 133
-    /// payload, emit the corresponding [`Event`] and update the zone.
-    #[inline]
-    fn dispatch(&mut self, offset: usize, on_event: &mut impl FnMut(LocatedEvent)) {
-        let payload = &self.param_buf[..self.param_len];
+    fn param_bytes(&self) -> &[u8] {
+        &self.param_buf[..self.param_buf_len]
+    }
 
-        if payload.len() < 5 || &payload[..4] != b"133;" {
-            return;
+    fn append_param_byte(&mut self, byte: u8) -> Result<(), ()> {
+        if self.param_buf_len >= self.param_buf.len() {
+            return Err(());
         }
+        self.param_buf[self.param_buf_len] = byte;
+        self.param_buf_len += 1;
+        Ok(())
+    }
 
-        if payload.len() > 5 && payload[5] != b';' {
-            return;
-        }
-
-        let metadata = payload.get(6..).unwrap_or_default();
-        let cmd = payload[4];
-        let (event, params) = match cmd {
-            b'A' => {
-                self.zone = Zone::Prompt;
-                (Event::PromptStart, parse_params(metadata))
-            }
-            b'B' => {
-                self.zone = Zone::Input;
-                (Event::CommandStart, parse_params(metadata))
-            }
-            b'C' => {
-                self.zone = Zone::Output;
-                (Event::CommandExecuted, parse_params(metadata))
-            }
-            b'D' => {
-                let (exit_code, params) = parse_command_finished_params(metadata);
-                self.zone = Zone::Unknown;
-                (Event::CommandFinished { exit_code }, params)
-            }
-            _ => return,
-        };
-
-        on_event(LocatedEvent {
-            event,
-            start_offset: self.sequence_start.unwrap_or(0),
-            offset,
-            zone: self.zone,
-            params,
-        });
+    fn clear_param_bytes(&mut self) {
+        self.param_buf_len = 0;
     }
 }
 
-fn parse_command_finished_params(metadata: &[u8]) -> (Option<i32>, Params) {
-    if metadata.is_empty() {
-        return (None, Params::default());
-    }
-
-    let Some(separator) = metadata.iter().position(|byte| *byte == b';') else {
-        return parse_exit_code(metadata).map_or_else(
-            || (None, parse_params(metadata)),
-            |exit_code| (Some(exit_code), Params::default()),
-        );
-    };
-
-    let (first, rest) = metadata.split_at(separator);
-    let rest = &rest[1..];
-
-    parse_exit_code(first).map_or_else(
-        || (None, parse_params(metadata)),
-        |exit_code| (Some(exit_code), parse_params(rest)),
-    )
-}
-
-fn parse_exit_code(code: &[u8]) -> Option<i32> {
-    if code.is_empty() {
+fn parse_bytes<T>(bytes: &[u8]) -> Option<T>
+where
+    T: std::str::FromStr,
+{
+    if bytes.is_empty() {
         return None;
     }
-
-    std::str::from_utf8(code).ok().and_then(|code| code.parse::<i32>().ok())
+    std::str::from_utf8(bytes).ok().and_then(|s| s.parse().ok())
 }
-
-fn parse_params(metadata: &[u8]) -> Params {
-    let items = metadata
-        .split(|byte| *byte == b';')
-        .filter(|part| !part.is_empty())
-        .map(parse_param)
-        .collect();
-
-    Params { items }
-}
-
-fn parse_param(param: &[u8]) -> Param {
-    let param = String::from_utf8_lossy(param);
-
-    if let Some((key, value)) = param.split_once('=') {
-        return Param::KeyValue {
-            key: key.to_string(),
-            value: value.to_string(),
-        };
-    }
-
-    Param::Value(param.into_owned())
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -368,12 +341,87 @@ mod tests {
 
     use super::*;
 
+    /// An owned copy of [`Param`], so tests can hold onto parameters after the
+    /// borrow of the parser ends.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum OwnedParam {
+        Value(Vec<u8>),
+        KeyValue {
+            key: Vec<u8>,
+            value: Vec<u8>,
+        },
+    }
+
+    impl From<Param<'_>> for OwnedParam {
+        fn from(param: Param<'_>) -> Self {
+            match param {
+                Param::Value(value) => Self::Value(value.to_vec()),
+                Param::KeyValue { key, value } => Self::KeyValue {
+                    key: key.to_vec(),
+                    value: value.to_vec(),
+                },
+            }
+        }
+    }
+
+    impl OwnedParam {
+        fn value(value: &str) -> Self {
+            Self::Value(value.as_bytes().to_vec())
+        }
+
+        fn key_value(key: &str, value: &str) -> Self {
+            Self::KeyValue {
+                key: key.as_bytes().to_vec(),
+                value: value.as_bytes().to_vec(),
+            }
+        }
+    }
+
+    /// An owned copy of [`EventChunk`] plus the parameters that went with it.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct OwnedChunk {
+        event: Event,
+        data: Vec<u8>,
+        params: Vec<OwnedParam>,
+    }
+
+    /// The full result of one [`Parser::push`] call.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct Push {
+        chunks: Vec<OwnedChunk>,
+        trailing_data: Vec<u8>,
+    }
+
+    impl Push {
+        fn events(&self) -> Vec<Event> {
+            self.chunks.iter().map(|chunk| chunk.event).collect()
+        }
+    }
+
+    fn push(parser: &mut Parser, data: &[u8]) -> Push {
+        let mut chunks = Vec::new();
+        let mut iter = parser.push(data);
+        while let Some(chunk) = iter.next() {
+            chunks.push(OwnedChunk {
+                event: chunk.event,
+                data: chunk.data.to_vec(),
+                params: iter.params().map(OwnedParam::from).collect(),
+            });
+        }
+        Push {
+            chunks,
+            trailing_data: iter.trailing_data().to_vec(),
+        }
+    }
+
+    /// Push `data` through a fresh parser in a single call.
+    fn parse(data: &[u8]) -> Push {
+        push(&mut Parser::new(), data)
+    }
+
     /// Collect all events from a single `push` call.
     fn parse_events(data: &[u8]) -> Vec<Event> {
-        let mut parser = Parser::new();
-        let mut events = Vec::new();
-        parser.push(data, |e| events.push(e));
-        events
+        parse(data).events()
     }
 
     // -- Basic event detection ------------------------------------------------
@@ -398,37 +446,38 @@ mod tests {
         assert_eq!(parse_events(data), vec![expected]);
     }
 
-    // -- Zone tracking --------------------------------------------------------
+    // -- Zone mapping ---------------------------------------------------------
 
-    #[test]
-    fn zone_starts_unknown() {
-        let parser = Parser::new();
-        assert_eq!(parser.zone(), Zone::Unknown);
+    #[rstest]
+    #[case(Event::PromptStart, Zone::Prompt)]
+    #[case(Event::CommandStart, Zone::Input)]
+    #[case(Event::CommandExecuted, Zone::Output)]
+    #[case(Event::CommandFinished { exit_code: Some(0) }, Zone::Unknown)]
+    #[case(Event::CommandFinished { exit_code: None }, Zone::Unknown)]
+    fn event_maps_to_zone(#[case] event: Event, #[case] expected: Zone) {
+        assert_eq!(event.zone(), expected);
     }
 
-    #[test]
+    #[rstest]
+    fn zone_default_is_unknown() {
+        assert_eq!(Zone::default(), Zone::Unknown);
+    }
+
+    #[rstest]
     fn full_zone_cycle() {
         let mut parser = Parser::new();
-        let mut events = Vec::new();
+        let mut zones = Vec::new();
 
-        parser.push(b"\x1b]133;A\x07", |e| events.push(e));
-        assert_eq!(parser.zone(), Zone::Prompt);
+        for data in [
+            b"\x1b]133;A\x07".as_slice(),
+            b"\x1b]133;B\x07",
+            b"\x1b]133;C\x07",
+            b"\x1b]133;D;0\x07",
+        ] {
+            zones.extend(push(&mut parser, data).events().into_iter().map(Event::zone));
+        }
 
-        parser.push(b"\x1b]133;B\x07", |e| events.push(e));
-        assert_eq!(parser.zone(), Zone::Input);
-
-        parser.push(b"\x1b]133;C\x07", |e| events.push(e));
-        assert_eq!(parser.zone(), Zone::Output);
-
-        parser.push(b"\x1b]133;D;0\x07", |e| events.push(e));
-        assert_eq!(parser.zone(), Zone::Unknown);
-
-        assert_eq!(events, vec![
-            Event::PromptStart,
-            Event::CommandStart,
-            Event::CommandExecuted,
-            Event::CommandFinished { exit_code: Some(0) },
-        ]);
+        assert_eq!(zones, vec![Zone::Prompt, Zone::Input, Zone::Output, Zone::Unknown]);
     }
 
     // -- Multiple events / interleaved text in one push -----------------------
@@ -442,8 +491,203 @@ mod tests {
     #[case::detects_c1_st_terminator(b"\x1b]133;A\x9c", vec![Event::PromptStart])]
     #[case::back_to_back_osc_no_gap(b"\x1b]133;A\x07\x1b]133;B\x07", vec![Event::PromptStart, Event::CommandStart])]
     #[case::csi_sequences_ignored(b"\x1b[32m\x1b]133;A\x07\x1b[0m$ \x1b]133;B\x07", vec![Event::PromptStart, Event::CommandStart])]
+    #[case::unterminated_osc_then_marker(b"\x1b]0;title\x1b]133;A\x07", vec![Event::PromptStart])]
+    // Enter pressed on an empty prompt, twice.
+    #[case::repeated_prompt_cycle(b"\x1b]133;A\x07$ \x1b]133;B\x07\x1b]133;D\x07\x1b]133;A\x07$ \x1b]133;B\x07", vec![Event::PromptStart, Event::CommandStart, Event::CommandFinished { exit_code: None }, Event::PromptStart, Event::CommandStart])]
     fn emits_events(#[case] data: &[u8], #[case] expected: Vec<Event>) {
         assert_eq!(parse_events(data), expected);
+    }
+
+    // -- Chunk data -----------------------------------------------------------
+
+    #[rstest]
+    #[case::marker_at_the_end(
+        b"before\x1b]133;A\x07",
+        vec![(Event::PromptStart, b"before\x1b]133;A\x07".as_slice())],
+        b"",
+    )]
+    #[case::two_markers(
+        b"before\x1b]133;A\x07between\x1b]133;B\x07after",
+        vec![
+            (Event::PromptStart, b"before\x1b]133;A\x07".as_slice()),
+            (Event::CommandStart, b"between\x1b]133;B\x07".as_slice()),
+        ],
+        b"after",
+    )]
+    // A non-OSC-133 sequence is still terminal output, so it stays in the data we hand back.
+    #[case::non_133_osc_stays_in_the_data(
+        b"\x1b]0;title\x07x\x1b]133;A\x07",
+        vec![(Event::PromptStart, b"\x1b]0;title\x07x\x1b]133;A\x07".as_slice())],
+        b"",
+    )]
+    #[case::partial_marker_is_left_trailing(
+        b"out\x1b]133;C\x07more\x1b]133;D;0",
+        vec![(Event::CommandExecuted, b"out\x1b]133;C\x07".as_slice())],
+        b"more\x1b]133;D;0",
+    )]
+    // The parser has to return to the ground state once a sequence is terminated. Otherwise
+    // plain output keeps accumulating in the parameter buffer, and a bare BEL in that output
+    // fabricates an event out of it.
+    #[case::output_after_a_marker_is_not_parsed_as_parameters(
+        b"\x1b]133;A\x07133;D;99\x07",
+        vec![(Event::PromptStart, b"\x1b]133;A\x07".as_slice())],
+        b"133;D;99\x07",
+    )]
+    // The same, but with output that would graft cleanly onto the parameters of the marker
+    // before it: `133;A` + `;fake` parses as a prompt-start marker carrying a `fake` param.
+    #[case::a_bel_in_output_cannot_extend_the_previous_marker(
+        b"\x1b]133;A\x07;fake\x07more",
+        vec![(Event::PromptStart, b"\x1b]133;A\x07".as_slice())],
+        b";fake\x07more",
+    )]
+    // `ESC ] 133 ; A ESC` is a malformed, unterminated OSC. The second ESC starts a new
+    // sequence rather than aborting into the ground state.
+    #[case::unterminated_sequence_does_not_swallow_the_next_esc(
+        b"\x1b]133;A\x1b\x1b]133;B\x07",
+        vec![(Event::CommandStart, b"\x1b]133;A\x1b\x1b]133;B\x07".as_slice())],
+        b"",
+    )]
+    fn splits_data_at_the_markers(
+        #[case] data: &[u8],
+        #[case] expected_chunks: Vec<(Event, &[u8])>,
+        #[case] expected_trailing: &[u8],
+    ) {
+        let result = parse(data);
+        let chunks: Vec<_> =
+            result.chunks.iter().map(|chunk| (chunk.event, chunk.data.as_slice())).collect();
+
+        assert_eq!(chunks, expected_chunks);
+        assert_eq!(result.trailing_data, expected_trailing);
+    }
+
+    #[rstest]
+    #[case::bel(b"\x1b]133;D;0\x07")]
+    #[case::st(b"\x1b]133;D;0\x1b\\")]
+    #[case::c1_st(b"\x1b]133;D;0\x9c")]
+    fn chunk_data_includes_the_terminator(#[case] marker: &[u8]) {
+        // A chunk that stopped one byte short would leave the marker looking unterminated
+        // to whoever replays the data, and drop its final byte into the next chunk.
+        let data = [b"out".as_slice(), marker, b"rest"].concat();
+
+        let result = parse(&data);
+        assert_eq!(result.chunks.len(), 1);
+        assert_eq!(result.chunks[0].data, [b"out".as_slice(), marker].concat());
+        assert_eq!(result.trailing_data, b"rest");
+    }
+
+    #[rstest]
+    #[case::empty(b"")]
+    #[case::no_markers(b"just some regular terminal output\r\n")]
+    #[case::every_terminator_and_a_partial_marker(
+        b"a\x1b]133;A\x07b\x1b]133;B\x1b\\c\x1b]0;title\x07d\x1b]133;D;0\x9ce\x1b]133;"
+    )]
+    #[case::back_to_back_markers(b"\x1b]133;A\x07\x1b]133;B\x07\x1b]133;C\x07\x1b]133;D;0\x07")]
+    #[case::trailing_lone_esc(b"out\x1b")]
+    #[case::overlong_osc(b"\x1b]133;A\x07\x1b]0;\x07\x1b\x1b]133;B\x07tail")]
+    fn chunks_and_trailing_data_reconstruct_the_input(#[case] data: &[u8]) {
+        // Whatever the parser makes of the stream, every byte handed to it has to come back
+        // out: the caller passes this data straight on to a terminal.
+        let result = parse(data);
+
+        let mut rebuilt = Vec::new();
+        for chunk in &result.chunks {
+            rebuilt.extend_from_slice(&chunk.data);
+        }
+        rebuilt.extend_from_slice(&result.trailing_data);
+
+        assert_eq!(rebuilt, data);
+    }
+
+    #[rstest]
+    fn a_marker_split_across_pushes_is_reported_by_the_completing_push() {
+        let mut parser = Parser::new();
+
+        let first = push(&mut parser, b"out\x1b]133;D");
+        assert!(first.chunks.is_empty());
+        assert_eq!(first.trailing_data, b"out\x1b]133;D");
+
+        let second = push(&mut parser, b";0;history_id=x\x07rest");
+        assert_eq!(second.chunks.len(), 1);
+        assert_eq!(second.chunks[0].data, b";0;history_id=x\x07");
+        assert_eq!(second.trailing_data, b"rest");
+    }
+
+    // -- Params ---------------------------------------------------------------
+
+    #[rstest]
+    #[case::key_values_and_a_bare_value(
+        b"\x1b]133;D;127;history_id=018f;session_id=abcd;flag\x07",
+        Event::CommandFinished { exit_code: Some(127) },
+        vec![
+            OwnedParam::key_value("history_id", "018f"),
+            OwnedParam::key_value("session_id", "abcd"),
+            OwnedParam::value("flag"),
+        ],
+    )]
+    #[case::params_survive_a_missing_exit_code(
+        b"\x1b]133;D;history_id=018f;session_id=abcd\x07",
+        Event::CommandFinished { exit_code: None },
+        vec![
+            OwnedParam::key_value("history_id", "018f"),
+            OwnedParam::key_value("session_id", "abcd"),
+        ],
+    )]
+    #[case::unparsable_exit_code_is_kept_as_a_param(
+        b"\x1b]133;D;abc;history_id=018f\x07",
+        Event::CommandFinished { exit_code: None },
+        vec![OwnedParam::value("abc"), OwnedParam::key_value("history_id", "018f")],
+    )]
+    // This is what `atuin init bash` emits.
+    #[case::prompt_start_params(
+        b"\x1b]133;A;cl=line\x07",
+        Event::PromptStart,
+        vec![OwnedParam::key_value("cl", "line")],
+    )]
+    #[case::no_params_prompt_start(b"\x1b]133;A\x07", Event::PromptStart, vec![])]
+    #[case::no_params_command_start(b"\x1b]133;B\x07", Event::CommandStart, vec![])]
+    #[case::no_params_command_executed(b"\x1b]133;C\x07", Event::CommandExecuted, vec![])]
+    #[case::no_params_finished_bare(
+        b"\x1b]133;D\x07",
+        Event::CommandFinished { exit_code: None },
+        vec![],
+    )]
+    #[case::no_params_finished_exit_code_only(
+        b"\x1b]133;D;0\x07",
+        Event::CommandFinished { exit_code: Some(0) },
+        vec![],
+    )]
+    #[case::no_params_finished_trailing_semicolon(
+        b"\x1b]133;D;\x07",
+        Event::CommandFinished { exit_code: None },
+        vec![],
+    )]
+    fn parses_params(
+        #[case] data: &[u8],
+        #[case] expected_event: Event,
+        #[case] expected_params: Vec<OwnedParam>,
+    ) {
+        let result = parse(data);
+
+        assert_eq!(result.chunks.len(), 1);
+        assert_eq!(result.chunks[0].event, expected_event);
+        assert_eq!(result.chunks[0].params, expected_params);
+    }
+
+    #[rstest]
+    fn params_belong_to_the_most_recent_event() {
+        let mut parser = Parser::new();
+        let mut iter =
+            parser.push(b"\x1b]133;D;0;history_id=one\x07\x1b]133;D;1;history_id=two\x07");
+
+        assert!(iter.next().is_some());
+        assert_eq!(iter.params().map(OwnedParam::from).collect::<Vec<_>>(), vec![
+            OwnedParam::key_value("history_id", "one")
+        ]);
+
+        assert!(iter.next().is_some());
+        assert_eq!(iter.params().map(OwnedParam::from).collect::<Vec<_>>(), vec![
+            OwnedParam::key_value("history_id", "two")
+        ]);
     }
 
     // -- Split across push boundaries -----------------------------------------
@@ -460,14 +704,47 @@ mod tests {
         #[case] expected: Vec<Event>,
     ) {
         let mut parser = Parser::new();
-        let mut events = Vec::new();
-        parser.push(first, |e| events.push(e));
-        assert!(events.is_empty());
-        parser.push(second, |e| events.push(e));
-        assert_eq!(events, expected);
+        assert_eq!(push(&mut parser, first).events(), vec![]);
+        assert_eq!(push(&mut parser, second).events(), expected);
     }
 
-    // -- Unknown command letter -----------------------------------------------
+    #[rstest]
+    fn params_split_across_push_boundary() {
+        let mut parser = Parser::new();
+        assert_eq!(push(&mut parser, b"\x1b]133;D;0;history_id=018f").events(), vec![]);
+
+        let result = push(&mut parser, b";session_id=abcd\x07rest");
+        assert_eq!(result.chunks.len(), 1);
+        assert_eq!(result.chunks[0].params, vec![
+            OwnedParam::key_value("history_id", "018f"),
+            OwnedParam::key_value("session_id", "abcd"),
+        ]);
+        assert_eq!(result.trailing_data, b"rest");
+    }
+
+    #[rstest]
+    fn events_do_not_depend_on_how_the_stream_is_chunked(
+        #[values(1, 2, 3, 7, usize::MAX)] chunk_size: usize,
+    ) {
+        let data = b"\x1b]133;A\x07$ \x1b]133;B\x07ls\r\n\x1b]133;C\x07f\r\n\x1b]133;D;99\x07";
+        let mut parser = Parser::new();
+        let mut events = Vec::new();
+
+        for chunk in data.chunks(chunk_size.min(data.len())) {
+            events.extend(push(&mut parser, chunk).events());
+        }
+
+        assert_eq!(events, vec![
+            Event::PromptStart,
+            Event::CommandStart,
+            Event::CommandExecuted,
+            Event::CommandFinished {
+                exit_code: Some(99)
+            },
+        ]);
+    }
+
+    // -- Input that must not produce events -----------------------------------
 
     #[rstest]
     #[case::osc_7(b"\x1b]7;file:///home/user\x07")]
@@ -475,146 +752,71 @@ mod tests {
     #[case::marker_with_unexpected_trailing_bytes(b"\x1b]133;ABC\x07")]
     // "13" followed by terminator — not "133;" so no event.
     #[case::truncated_133_prefix(b"\x1b]13\x07")]
+    #[case::wrong_osc_number(b"\x1b]1330;A\x07")]
     #[case::empty_osc(b"\x1b]\x07")]
     #[case::empty_input(b"")]
     #[case::only_normal_text(b"just some regular terminal output\r\n")]
+    #[case::csi_only(b"\x1b[2J\x1b[H")]
     fn ignores_input(#[case] data: &[u8]) {
         assert!(parse_events(data).is_empty());
     }
 
     // -- Buffer overflow (very long non-133 OSC) ------------------------------
 
-    #[test]
-    fn very_long_osc_does_not_panic() {
-        let mut data = Vec::new();
-        data.extend_from_slice(b"\x1b]");
-        data.extend(std::iter::repeat_n(b'x', 1000));
+    #[rstest]
+    // An OSC whose parameters overflow the buffer is dropped, without panicking...
+    #[case::overlong_osc_is_dropped(b"\x1b]", b"", vec![])]
+    #[case::overlong_133_osc_is_dropped(b"\x1b]133;D;0;", b"", vec![])]
+    // ...and the parser is back in a state where it recognises the next marker.
+    #[case::parser_recovers(b"\x1b]133;D;0;", b"\x1b]133;A\x07", vec![Event::PromptStart])]
+    fn an_overlong_osc_does_not_panic(
+        #[case] prefix: &[u8],
+        #[case] suffix: &[u8],
+        #[case] expected: Vec<Event>,
+    ) {
+        let mut data = prefix.to_vec();
+        data.extend(std::iter::repeat_n(b'x', MAX_PARAMS_SIZE * 2));
         data.push(BEL);
-        // Should not panic and should produce no event.
-        assert!(parse_events(&data).is_empty());
+        data.extend_from_slice(suffix);
+
+        assert_eq!(parse_events(&data), expected);
     }
 
     // -- Repeated prompts (empty command) ------------------------------------
 
-    #[test]
-    fn repeated_prompt_cycle() {
+    // -- Fused ----------------------------------------------------------------
+
+    #[rstest]
+    fn params_are_empty_once_the_iterator_is_exhausted() {
+        // Exhausting the iterator scans the trailing data, which can start a fresh OSC and
+        // leave stale bytes in the parameter buffer. They belong to no yielded event.
         let mut parser = Parser::new();
-        let mut events = Vec::new();
+        let mut iter = parser.push(b"\x1b]133;D;0;history_id=x\x07tail\x1b]0;title");
 
-        // User hits enter on an empty prompt twice.
-        let data = b"\x1b]133;A\x07$ \x1b]133;B\x07\x1b]133;D\x07\x1b]133;A\x07$ \x1b]133;B\x07";
-        parser.push(data, |e| events.push(e));
+        assert!(iter.next().is_some());
+        assert_eq!(iter.params().count(), 1, "the yielded event still has its params");
 
-        assert_eq!(events, vec![
-            Event::PromptStart,
-            Event::CommandStart,
-            Event::CommandFinished { exit_code: None },
-            Event::PromptStart,
-            Event::CommandStart,
-        ]);
-        assert_eq!(parser.zone(), Zone::Input);
+        assert!(iter.next().is_none());
+        assert_eq!(iter.params().count(), 0);
     }
 
-    // -- Byte-at-a-time feeding -----------------------------------------------
-
-    #[test]
-    fn byte_at_a_time() {
-        let data = b"\x1b]133;D;99\x07";
+    #[rstest]
+    fn iterator_is_fused() {
         let mut parser = Parser::new();
-        let mut events = Vec::new();
+        let mut iter = parser.push(b"\x1b]133;A\x07tail");
 
-        for &byte in data {
-            parser.push(&[byte], |e| events.push(e));
-        }
-
-        assert_eq!(events, vec![Event::CommandFinished {
-            exit_code: Some(99)
-        }]);
-    }
-
-    // -- Located event offsets ------------------------------------------------
-
-    #[test]
-    fn located_event_reports_offset_after_marker() {
-        let data = b"before\x1b]133;A\x07prompt";
-        let mut parser = Parser::new();
-        let mut events = Vec::new();
-
-        parser.push_located(data, |e| events.push(e));
-
-        assert_eq!(events, vec![LocatedEvent {
-            event: Event::PromptStart,
-            start_offset: b"before".len(),
-            offset: b"before\x1b]133;A\x07".len(),
-            zone: Zone::Prompt,
-            params: Params::default(),
-        }]);
-    }
-
-    #[test]
-    fn located_event_offset_is_relative_to_completing_chunk() {
-        let mut parser = Parser::new();
-        let mut events = Vec::new();
-
-        parser.push_located(b"\x1b]133;", |e| events.push(e));
-        parser.push_located(b"D;42\x07after", |e| events.push(e));
-
-        assert_eq!(events, vec![LocatedEvent {
-            event: Event::CommandFinished {
-                exit_code: Some(42)
-            },
-            start_offset: 0,
-            offset: b"D;42\x07".len(),
-            zone: Zone::Unknown,
-            params: Params::default(),
-        }]);
-    }
-
-    #[test]
-    fn located_event_preserves_metadata_params() {
-        let mut parser = Parser::new();
-        let mut events = Vec::new();
-
-        parser.push_located(b"\x1b]133;D;127;history_id=018f;session_id=abcd;flag\x07", |event| {
-            events.push(event);
-        });
-
-        assert_eq!(events.len(), 1);
-        let event = &events[0];
-        assert_eq!(event.event, Event::CommandFinished {
-            exit_code: Some(127)
-        });
-        assert_eq!(event.params.get("history_id"), Some("018f"));
-        assert_eq!(event.params.get("session_id"), Some("abcd"));
-        assert!(event.params.iter().any(|param| param == &Param::Value("flag".to_string())));
-    }
-
-    #[test]
-    fn command_finished_metadata_without_exit_code_is_preserved() {
-        let mut parser = Parser::new();
-        let mut events = Vec::new();
-
-        parser.push_located(b"\x1b]133;D;history_id=018f;session_id=abcd\x07", |event| {
-            events.push(event);
-        });
-
-        assert_eq!(events.len(), 1);
-        let event = &events[0];
-        assert_eq!(event.event, Event::CommandFinished { exit_code: None });
-        assert_eq!(event.params.get("history_id"), Some("018f"));
-        assert_eq!(event.params.get("session_id"), Some("abcd"));
+        assert!(iter.next().is_some());
+        assert!(iter.next().is_none());
+        assert!(iter.next().is_none());
+        assert_eq!(iter.trailing_data(), b"tail");
     }
 
     // -- Default trait --------------------------------------------------------
 
-    #[test]
-    fn parser_default() {
-        let parser = Parser::default();
-        assert_eq!(parser.zone(), Zone::Unknown);
-    }
-
-    #[test]
-    fn zone_default() {
-        assert_eq!(Zone::default(), Zone::Unknown);
+    #[rstest]
+    fn parser_default_matches_new() {
+        assert_eq!(push(&mut Parser::default(), b"\x1b]133;A\x07").events(), vec![
+            Event::PromptStart
+        ]);
     }
 }

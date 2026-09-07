@@ -3,6 +3,8 @@
 use std::borrow::Borrow;
 use std::num::NonZeroU16;
 
+use easy_cast::Cast;
+
 /// Arbitrary upper bound on the emulated screen height, in rows. Mitigates OOMs with long output.
 const MAX_ROWS: usize = 16_384;
 
@@ -34,10 +36,11 @@ pub fn to_plain_text(input: impl AsRef<[u8]>, cols: NonZeroU16) -> String {
     // Note this overshoots, but that's OK, we'll clean up later.
     let newline_rows = newlines + 1;
     let wrapped_rows = normalized.len() / usize::from(cols.get());
-    let rows = newline_rows
+    let rows: u16 = newline_rows
         .saturating_add(wrapped_rows)
         .saturating_add(1)
-        .clamp(1, MAX_ROWS.min(usize::from(u16::MAX))) as u16;
+        .clamp(1, MAX_ROWS.min(usize::from(u16::MAX)))
+        .cast();
     let rows = NonZeroU16::new(rows).expect("`rows` is always at least 1 due to `clamp`");
 
     let mut parser = vt100::Parser::new(rows, cols, 0);

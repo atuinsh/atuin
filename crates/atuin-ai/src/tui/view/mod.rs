@@ -6,6 +6,7 @@
 //! app's keymap, not here — elements are display-only.
 
 use atuin_common::path::DisplayRichExt;
+use easy_cast::{Cast, CastTo, Conv, Nearest};
 use eye_declare::{
     AnyElement, Element, ElementExt, Fluent, Markdown, MarkdownStyles, Spinner, col, empty,
     markdown, row, spinner, text, viewport,
@@ -160,7 +161,7 @@ fn format_elapsed(elapsed: std::time::Duration) -> String {
     if secs < 10.0 {
         format!("{secs:.1} seconds")
     } else if secs < 60.0 {
-        format!("{} seconds", secs.round() as u64)
+        format!("{secs:.0} seconds")
     } else {
         let total = elapsed.as_secs();
         format!("{}m {:02}s", total / 60, total % 60)
@@ -268,7 +269,7 @@ fn shell_tool_view(command: &str, preview: Option<&ToolPreview>) -> AnyElement<'
             .child(
                 row().fixed(2, text("└ ").style(Style::default().fg(Color::DarkGray))).fill(
                     viewport(preview.lines.iter().cloned())
-                        .height((preview.lines.len() as u16).clamp(1, MAX_SHELL_PREVIEW_LINES))
+                        .height(preview.lines.len().clamp(1, MAX_SHELL_PREVIEW_LINES.into()).cast())
                         .style(Style::default().fg(Color::Gray))
                         .wrap(false),
                 ),
@@ -323,7 +324,7 @@ fn file_edit_tool_view(
         return status_line;
     }
 
-    let gutter_w = gutter_width(preview.max_line_number() as usize);
+    let gutter_w = gutter_width(usize::conv(preview.max_line_number()));
 
     col()
         .child(status_line)
@@ -340,7 +341,7 @@ fn hunk_view(hunk: &crate::diff::DiffHunk, gutter_w: u16) -> impl Element + use<
 
     let mut before_pos = hunk.before_start;
     let mut after_pos = hunk.after_start;
-    let num_w = (gutter_w - 1) as usize;
+    let num_w = usize::conv(gutter_w - 1);
 
     col().children(hunk.lines.iter().map(move |line| {
         let (prefix, content, style, gutter) = match line {
@@ -390,7 +391,7 @@ fn file_write_tool_view(
     }
 
     let gutter_w = gutter_width(preview.total_lines);
-    let num_w = (gutter_w - 1) as usize;
+    let num_w = usize::conv(gutter_w - 1);
     let remaining = preview.remaining_lines();
     let dim = Style::default().fg(Color::DarkGray);
 
@@ -413,7 +414,7 @@ fn file_write_tool_view(
 
 /// Line-number gutter width for the highest displayed number, plus spacing.
 fn gutter_width(max_line_num: usize) -> u16 {
-    max_line_num.to_string().len().max(2) as u16 + 1
+    u16::conv(max_line_num.to_string().len().max(2)) + 1
 }
 
 /// Shared pending/success/error status line for edit and write.
@@ -558,23 +559,14 @@ fn history_search_row(is_first: bool, details: &ToolCallDetails) -> AnyElement<'
     group_row_view(is_first, &details.status, content)
 }
 
-fn filter_mode_label(mode: &HistorySearchFilterMode) -> &'static str {
-    match mode {
-        HistorySearchFilterMode::Global => "global",
-        HistorySearchFilterMode::Host => "host",
-        HistorySearchFilterMode::Session => "session",
-        HistorySearchFilterMode::Directory => "directory",
-        HistorySearchFilterMode::Workspace => "workspace",
-    }
-}
-
 /// Format a list of filter modes as `"(global, workspace)"`, or an empty
 /// string if the list is empty.
 fn format_filter_modes(modes: &[HistorySearchFilterMode]) -> String {
     if modes.is_empty() {
         return String::new();
     }
-    let parts: Vec<&'static str> = modes.iter().map(filter_mode_label).collect();
+    let parts: Vec<&'static str> =
+        modes.iter().copied().map(HistorySearchFilterMode::as_str).collect();
     format!("({})", parts.join(", "))
 }
 
@@ -798,10 +790,11 @@ pub fn status_bar_view(
         return left.any();
     };
 
-    let filled = ((pct / 100.0).clamp(0.0, 1.0) * USAGE_BAR_WIDTH as f64).round() as usize;
+    let filled: usize =
+        ((pct / 100.0).clamp(0.0, 1.0) * f64::conv(USAGE_BAR_WIDTH)).cast_to(Nearest);
     let bar_filled = "█".repeat(filled);
     let bar_empty = "░".repeat(USAGE_BAR_WIDTH - filled);
-    let pct_text = format!(" {}%", pct.round() as i64);
+    let pct_text = format!(" {pct:.0}%");
     let resets_text = resets_in
         .map(|d| format!(" · resets in {} ", crate::usage::format_reset_delta(d)))
         .unwrap_or_default();
@@ -814,7 +807,7 @@ pub fn status_bar_view(
         Color::Green
     };
 
-    let width = (USAGE_BAR_WIDTH + pct_text.chars().count() + resets_text.chars().count()) as u16;
+    let width = u16::conv(USAGE_BAR_WIDTH + pct_text.chars().count() + resets_text.chars().count());
 
     row()
         .fill(left)

@@ -6,6 +6,7 @@ use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::RecordTag;
 use clap::Subcommand;
+use easy_cast::Conv;
 use eyre::{Result, WrapErr};
 use tracing::instrument;
 
@@ -101,8 +102,7 @@ async fn run(settings: &Settings, force: bool, db: &Sqlite, store: SqliteStore) 
     let history_length = db.history_count(true).await?;
     let store_history_length = store.len_tag(&RecordTag::History).await?;
 
-    #[allow(clippy::cast_sign_loss)]
-    if history_length as u64 > store_history_length {
+    if u64::conv(history_length) > store_history_length {
         println!("{history_length} in history index, but {store_history_length} in history store");
         println!("Running automatic history store init...");
 

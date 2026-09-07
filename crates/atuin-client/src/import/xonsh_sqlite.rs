@@ -6,6 +6,7 @@ use atuin_common::db;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::record::CmdOrigin;
 use directories::BaseDirs;
+use easy_cast::{CastTo, Conv, Trunc};
 use eyre::{Result, eyre};
 use futures::TryStreamExt;
 use sqlx::sqlite::SqlitePool;
@@ -31,20 +32,31 @@ struct HistDbEntry {
 
 impl HistDbEntry {
     fn into_hist_with_cmd_origin(self, cmd_origin: CmdOrigin) -> History {
-        let ts_nanos = (self.tsb * 1_000_000_000_f64) as i128;
-        let timestamp =
-            OffsetDateTime::from_unix_nanos(ts_nanos).unwrap_or(OffsetDateTime::UNIX_EPOCH);
+        let timestamp = (self.tsb * 1_000_000_000_f64)
+            .try_cast_to(Trunc)
+            .ok()
+            .and_then(|nanos: i128| OffsetDateTime::from_unix_nanos(nanos).ok())
+            .unwrap_or(OffsetDateTime::UNIX_EPOCH);
 
-        let session_ts_seconds = self.session_start.trunc() as u64;
-        let session_ts_nanos = (self.session_start.fract() * 1_000_000_000_f64) as u32;
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "only used for creating a UUID -- saturating is ok"
+        )]
+        let (session_ts_seconds, session_ts_nanos) = (
+            self.session_start.trunc() as u64,
+            (self.session_start.fract() * 1_000_000_000_f64) as u32,
+        );
         let session_ts = Timestamp::from_unix(NoContext, session_ts_seconds, session_ts_nanos);
         let session_id = Uuid::new_v7(session_ts).to_string();
-        let duration = (self.tse - self.tsb) * 1_000_000_000_f64;
+        let duration = ((self.tse - self.tsb) * 1_000_000_000_f64)
+            .try_cast_to(Trunc)
+            .unwrap_or(HistoryImported::DEFAULT_DURATION);
 
         History::import()
             .shell("xonsh")
             .timestamp(timestamp)
-            .duration(duration.trunc() as i64)
+            .duration(duration)
             .exit(self.rtn.unwrap_or(HistoryImported::DEFAULT_EXIT))
             .command(self.inp)
             .cwd(self.cwd)
@@ -101,7 +113,7 @@ impl Importer for XonshSqlite {
         let query = "SELECT COUNT(*) FROM xonsh_history";
         let row = db::query(query).fetch_one(&self.pool).await?;
         let count: u32 = row.get(0);
-        Ok(count as usize)
+        Ok(usize::conv(count))
     }
 
     async fn load(self, loader: &mut impl Loader) -> Result<()> {

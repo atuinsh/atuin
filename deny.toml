@@ -39,6 +39,9 @@ confidence-threshold = 0.8
 exceptions = [
     # CC0-1.0 waives copyright but not patents; allow it only for notify.
     { crate = "notify", allow = ["CC0-1.0"] },
+    # 0BSD is a permissive, public-domain-equivalent license; it reaches us only
+    # through varint-rs (a transitive dependency of fjall's lsm-tree).
+    { crate = "varint-rs", allow = ["0BSD"] },
 ]
 
 [bans]

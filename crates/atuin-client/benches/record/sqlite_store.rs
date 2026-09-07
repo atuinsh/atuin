@@ -3,6 +3,7 @@ use std::time::Duration;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordTag, RecordVersion};
+use easy_cast::Conv;
 use rand::Rng;
 use rand::distributions::Alphanumeric;
 use tempfile::TempDir;
@@ -40,7 +41,7 @@ impl BenchRecord {
         let key: String =
             ctx.rng().sample_iter(&Alphanumeric).take(Self::KEY_SIZE).map(char::from).collect();
 
-        (0..n as u64)
+        (0..u64::conv(n))
             .map(|idx| {
                 Record::builder()
                     .host(host.clone())

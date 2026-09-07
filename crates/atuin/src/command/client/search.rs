@@ -294,8 +294,8 @@ impl Cmd {
                         eprintln!("deleting {}", entry.id);
                     }
 
-                    let ids = history_store.delete_entries(entries).await?;
-                    history_store.build_all(&db, &ids).await?;
+                    super::history::delete_history_entries(settings, &history_store, &db, entries)
+                        .await?;
 
                     entries = run_non_interactive(settings, opt_filter, &query, &db).await?;
                 }

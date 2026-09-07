@@ -11,6 +11,7 @@ use atuin_client::record::sync::{ClientSource, SyncEngine};
 use atuin_client::settings::Settings;
 use atuin_dotfiles::store::AliasStore;
 use atuin_dotfiles::store::var::VarStore;
+use easy_cast::Conv;
 use eyre::Result;
 use futures::StreamExt;
 use rand::Rng;
@@ -22,8 +23,6 @@ use crate::events::DaemonEvent;
 
 /// Commands that can be sent to the sync task.
 enum SyncCommand {
-    /// Trigger an immediate sync.
-    ForceSync,
     /// Stop the sync loop.
     Stop,
 }
@@ -43,7 +42,6 @@ enum SyncState {
 /// This component:
 /// - Runs a background sync loop on a configurable interval
 /// - Implements exponential backoff on sync failures
-/// - Responds to ForceSync events for immediate sync
 /// - Emits SyncCompleted/SyncFailed events
 pub struct SyncComponent {
     task_handle: Option<tokio::task::JoinHandle<()>>,
@@ -83,13 +81,7 @@ impl Component for SyncComponent {
         Ok(())
     }
 
-    async fn handle_event(&mut self, event: &DaemonEvent) -> Result<()> {
-        if let DaemonEvent::ForceSync = event {
-            tracing::info!("force sync requested");
-            if let Some(tx) = &self.command_tx {
-                let _ = tx.send(SyncCommand::ForceSync).await;
-            }
-        }
+    async fn handle_event(&mut self, _event: &DaemonEvent) -> Result<()> {
         Ok(())
     }
 
@@ -108,8 +100,7 @@ impl Component for SyncComponent {
 
 /// The main sync loop.
 ///
-/// This runs in a spawned task and handles periodic sync as well as
-/// force sync requests.
+/// This runs in a spawned task and handles periodic sync.
 async fn sync_loop(handle: DaemonHandle, mut cmd_rx: mpsc::Receiver<SyncCommand>) {
     tracing::info!("sync loop starting");
 
@@ -165,19 +156,6 @@ async fn sync_loop(handle: DaemonHandle, mut cmd_rx: mpsc::Receiver<SyncCommand>
             }
             cmd = cmd_rx.recv() => {
                 match cmd {
-                    Some(SyncCommand::ForceSync) => {
-                        tracing::info!("executing force sync");
-                        let settings = handle.settings().await;
-                        sync_state = do_sync_tick(
-                            &handle,
-                            &history_store,
-                            &alias_store,
-                            &var_store,
-                            &mut ticker,
-                            max_interval,
-                            &settings,
-                        ).await;
-                    }
                     Some(SyncCommand::Stop) | None => {
                         tracing::info!("sync loop stopping");
                         break;
@@ -252,11 +230,10 @@ async fn do_sync_tick(
                 new_interval = max_interval;
             }
 
-            *ticker = time::interval_at(
-                tokio::time::Instant::now() + Duration::from_secs(new_interval as u64),
-                time::Duration::from_secs(new_interval as u64),
-            );
-            ticker.reset_after(time::Duration::from_secs(new_interval as u64));
+            let backoff =
+                Duration::try_from_secs_f64(new_interval).unwrap_or_else(|_| ticker.period());
+            *ticker = time::interval_at(tokio::time::Instant::now() + backoff, backoff);
+            ticker.reset_after(backoff);
             ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
             tracing::error!("backing off, next sync tick in {new_interval}");
@@ -279,8 +256,7 @@ async fn do_sync_tick(
                 match batch {
                     Ok(histories) if !histories.is_empty() => {
                         // Only the IDs go on the bus; the rows themselves are already in sqlite.
-                        let ids: Arc<[HistoryId]> =
-                            histories.iter().map(|h| h.id.clone()).collect();
+                        let ids: Arc<[HistoryId]> = histories.iter().map(|h| h.id).collect();
                         handle.emit(DaemonEvent::HistorySynced(ids));
                     }
                     Ok(_) => {}
@@ -294,7 +270,7 @@ async fn do_sync_tick(
 
             // Emit sync completed event
             handle.emit(DaemonEvent::SyncCompleted {
-                uploaded: uploaded_count as usize,
+                uploaded: usize::conv(uploaded_count),
                 downloaded: downloaded_records.len(),
             });
 

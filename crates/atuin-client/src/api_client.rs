@@ -16,6 +16,7 @@ use atuin_domain::caps::{AuthHeaderProvider, CapClient, CapMismatch, Capabilitie
 use atuin_domain::record::{
     EncryptedData, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus,
 };
+use easy_cast::Conv;
 use eyre::{Result, bail};
 use futures::{Stream, StreamExt, TryStreamExt, stream};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AGENT};
@@ -350,7 +351,7 @@ impl RecordsRequest {
                     return;
                 }
 
-                let len = page.len() as u64;
+                let len = u64::conv(page.len());
                 progress += len;
                 yield page;
 
@@ -379,7 +380,7 @@ impl RecordsRequest {
                         match this.page(cursor..stop).await {
                             Ok(page) if page.is_empty() => None,
                             Ok(page) => {
-                                let next = cursor + page.len() as u64;
+                                let next = cursor + u64::conv(page.len());
                                 Some((Ok(page), (next, this)))
                             }
                             Err(e) => Some((Err(e), (chunks.end(), this))),

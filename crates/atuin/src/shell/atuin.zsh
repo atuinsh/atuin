@@ -44,7 +44,7 @@ __atuin_osc133_command_finished() {
     [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || return
     [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return
 
-    printf '\033]133;D;%s;history_id=%s;session_id=%s\a' "$1" "$ATUIN_HISTORY_ID" "${ATUIN_SESSION:-}"
+    printf '\033]133;D;%s;history_id=%s\a' "$1" "$ATUIN_HISTORY_ID"
 }
 
 __atuin_osc133_prompt_start=$'%{\033]133;A;cl=line\a%}'
@@ -93,6 +93,7 @@ _atuin_precmd() {
     local duration=""
     if [[ -n $__atuin_preexec_time && -n $__atuin_precmd_time ]]; then
         printf -v duration %.0f $(((__atuin_precmd_time - __atuin_preexec_time) * 1000000000))
+        ((duration < 0)) && duration=0
     fi
 
     __atuin_osc133_command_finished "$EXIT"

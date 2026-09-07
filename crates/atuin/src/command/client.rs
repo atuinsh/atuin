@@ -311,7 +311,7 @@ impl Cmd {
             }),
 
             #[cfg(feature = "ai")]
-            Self::Ai(cmd) => Some(cmd.log_config(settings)),
+            Self::Ai(cmd) => cmd.log_config(settings),
 
             Self::Internal(cmd) => cmd.log_config(),
 

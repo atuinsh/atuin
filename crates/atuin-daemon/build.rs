@@ -4,12 +4,7 @@ use std::{env, fs};
 use protox::prost::Message;
 
 fn main() -> std::io::Result<()> {
-    let proto_paths = [
-        "proto/history.proto",
-        "proto/search.proto",
-        "proto/control.proto",
-        "proto/semantic.proto",
-    ];
+    let proto_paths = ["proto/common.proto", "proto/history.proto", "proto/search.proto"];
     let proto_include_dirs = ["proto"];
 
     let file_descriptors = protox::compile(proto_paths, proto_include_dirs).unwrap();
@@ -21,6 +16,7 @@ fn main() -> std::io::Result<()> {
     tonic_prost_build::configure()
         .build_server(true)
         .file_descriptor_set_path(&file_descriptor_path)
+        .extern_path(".common.PyStyleIdxRange", "::atuin_common::range::PyStyleIdxRange")
         .skip_protoc_run()
         .compile_protos(&proto_paths, &proto_include_dirs)
 }

@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::record::CmdOrigin;
 use directories::BaseDirs;
+use easy_cast::{CastTo, Trunc};
 use eyre::{Result, eyre};
 use serde::Deserialize;
 use time::OffsetDateTime;
@@ -91,8 +92,13 @@ fn load_session(path: &Path) -> Result<Option<HistoryData>> {
     // if there are commands in this session, replace the existing UUIDv4
     // with a UUIDv7 generated from the timestamp of the first command
     if let Some(cmd) = hist_file.data.cmds.first() {
-        let seconds = cmd.ts.0.trunc() as u64;
-        let nanos = (cmd.ts.0.fract() * 1_000_000_000_f64) as u32;
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "only used for creating a UUID -- saturating is ok"
+        )]
+        let (seconds, nanos) =
+            (cmd.ts.0.trunc() as u64, (cmd.ts.0.fract() * 1_000_000_000_f64) as u32);
         let ts = Timestamp::from_unix(NoContext, seconds, nanos);
         hist_file.data.sessionid = Uuid::new_v7(ts).to_string();
     }
@@ -124,16 +130,20 @@ impl Importer for Xonsh {
         for session in self.sessions {
             for cmd in session.cmds {
                 let (start, end) = cmd.ts;
-                let ts_nanos = (start * 1_000_000_000_f64) as i128;
-                let timestamp =
-                    OffsetDateTime::from_unix_nanos(ts_nanos).unwrap_or(OffsetDateTime::UNIX_EPOCH);
+                let timestamp = (start * 1_000_000_000_f64)
+                    .try_cast_to(Trunc)
+                    .ok()
+                    .and_then(|nanos: i128| OffsetDateTime::from_unix_nanos(nanos).ok())
+                    .unwrap_or(OffsetDateTime::UNIX_EPOCH);
 
-                let duration = (end - start) * 1_000_000_000_f64;
+                let duration = ((end - start) * 1_000_000_000_f64)
+                    .try_cast_to(Trunc)
+                    .unwrap_or(HistoryImported::DEFAULT_DURATION);
 
                 let entry = History::import()
                     .shell("xonsh")
                     .timestamp(timestamp)
-                    .duration(duration.trunc() as i64)
+                    .duration(duration)
                     .exit(cmd.rtn.unwrap_or(HistoryImported::DEFAULT_EXIT))
                     .command(cmd.inp.trim())
                     .cwd(cmd.cwd)

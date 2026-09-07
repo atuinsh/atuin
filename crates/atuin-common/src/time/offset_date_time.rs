@@ -125,6 +125,8 @@ impl fmt::Display for OffsetDateTimeDisplay {
 }
 
 const _: () = assert!(
+    // Using plain `as` casts here because trait methods like `try_from` aren't available in const
+    // contexts.
     (i64::MIN as i128) >= MIN_UNIX_NANOS
         && (i64::MAX as i128) <= MAX_UNIX_NANOS
         && (u64::MAX as i128) <= MAX_UNIX_NANOS,

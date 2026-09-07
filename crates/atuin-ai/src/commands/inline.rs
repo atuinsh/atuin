@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use atuin_client::database::Sqlite;
+use easy_cast::Conv;
 use eyre::{Context as _, Result, bail};
 use tracing::{debug, info};
 
@@ -182,7 +183,7 @@ async fn run_inline_tui(
             Ok(Some(cached_snapshot)) => {
                 let age =
                     time::OffsetDateTime::now_utc().unix_timestamp() - cached_snapshot.written_at;
-                let fresh = age < crate::usage::REFRESH_AFTER.as_secs() as i64;
+                let fresh = age < i64::conv(crate::usage::REFRESH_AFTER.as_secs());
                 (Some(cached_snapshot.snapshot), fresh)
             }
             Ok(None) => (None, false),
@@ -383,7 +384,7 @@ fn prompt_ai_setup() -> Result<SetupChoice> {
 
         let ev = event::read().context("failed to read key event")?;
 
-        crossterm::execute!(stdout, cursor::MoveUp(options.len() as u16))?;
+        crossterm::execute!(stdout, cursor::MoveUp(u16::conv(options.len())))?;
 
         if let Event::Key(key) = ev {
             if key.kind != KeyEventKind::Press {
