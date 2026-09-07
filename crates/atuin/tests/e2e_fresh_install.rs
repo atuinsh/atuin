@@ -1,4 +1,4 @@
-//! CLI smoke tests with an empty home and data directory.
+//! CLI fresh-install tests with an empty home and data directory.
 
 #![cfg(unix)]
 
