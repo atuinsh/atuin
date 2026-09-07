@@ -69,7 +69,7 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 - Fresh-install and PTY e2e tests in `crates/atuin/tests/` (`e2e_*`) run the built binary in a
   pristine `$HOME`; the PTY ones drive interactive bash/zsh/fish and skip shells that aren't
   installed unless `ATUIN_E2E_REQUIRE_SHELLS=1` (set in the CI `e2e` job).
-  `ATUIN_E2E_BASH` selects a specific Bash binary; macOS CI tests both `/bin/bash` and Homebrew Bash.
+  `ATUIN_E2E_BASH` selects a specific Bash binary; macOS CI uses Homebrew Bash.
   Add shell setups as `crates/atuin/tests/shells/*.toml`; rstest discovers every file for every
   PTY test. See `crates/atuin/tests/README.md`. Daemon tests use a private socket and check RPC
   health and persisted history rather than socket existence alone.

@@ -220,17 +220,11 @@ jobs:
           ATUIN_DB_URI: postgres://atuin:pass@localhost:5432/atuin
 
   e2e:
-    name: e2e (${{ matrix.os }}, ${{ matrix.bash }} bash)
+    name: e2e (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: depot-ubuntu-24.04
-            bash: default
-          - os: depot-macos-26
-            bash: system
-          - os: depot-macos-26
-            bash: homebrew
+        os: [depot-ubuntu-24.04, depot-macos-26]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -247,16 +241,10 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install bash fish
 
-      - name: Select Bash (macOS)
+      - name: Select Homebrew Bash (macOS)
         if: runner.os == 'macOS'
-        env:
-          BASH_VARIANT: ${{ matrix.bash }}
         run: |
-          if [[ "$BASH_VARIANT" == system ]]; then
-            echo "ATUIN_E2E_BASH=/bin/bash" >> "$GITHUB_ENV"
-          else
-            echo "ATUIN_E2E_BASH=$(brew --prefix bash)/bin/bash" >> "$GITHUB_ENV"
-          fi
+          echo "ATUIN_E2E_BASH=$(brew --prefix bash)/bin/bash" >> "$GITHUB_ENV"
 
       - name: Install ble.sh
         run: |

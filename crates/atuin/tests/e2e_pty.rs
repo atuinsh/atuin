@@ -154,7 +154,7 @@ fn selection_preserves_multiline_and_shell_quoting(
         assert!(!env.home().join("result.txt").exists());
         pty.send(shell.config.multiline_accept.as_bytes());
     }
-    pty.wait_for_screen("selected command's exact output", |_| {
+    wait_until("selected command's exact output", || {
         std::fs::read_to_string(env.home().join("result.txt")).is_ok_and(|s| s == expected)
     });
 }

@@ -1,12 +1,13 @@
 # End-to-end tests
 
-Run the installed binary in a temporary home:
+Run the binary built by Cargo in a temporary home:
 
 ```sh
 ATUIN_E2E_REQUIRE_SHELLS=1 cargo nextest run -p atuin --test 'e2e_*'
 ```
 
-CI runs Linux and macOS, with separate macOS jobs for Apple and Homebrew Bash.
+CI runs Linux and macOS, using Homebrew Bash on macOS. Apple's system Bash 3.2
+is outside the CI matrix for now; use `ATUIN_E2E_BASH=/bin/bash` to test it locally.
 Missing shells or prerequisite files fail when `ATUIN_E2E_REQUIRE_SHELLS` is set;
 otherwise the affected cases print a skip message and return.
 

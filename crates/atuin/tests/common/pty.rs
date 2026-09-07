@@ -127,14 +127,17 @@ impl PtyShell {
                 let mut state = thread_state.0.lock();
                 state.pending.extend_from_slice(&buf[..n]);
                 let replies = answer_queries(&mut state);
-                thread_state.1.notify_all();
-                drop(state);
+                // Send terminal replies before publishing the rendered screen.
+                // Otherwise a waiter can send a key that changes the foreground
+                // application before it receives the reply to its own query.
                 if !replies.is_empty() {
                     let mut writer = thread_writer.lock();
                     if writer.write_all(&replies).and_then(|()| writer.flush()).is_err() {
                         break;
                     }
                 }
+                thread_state.1.notify_all();
+                drop(state);
             }
             thread_state.0.lock().closed = true;
             thread_state.1.notify_all();
