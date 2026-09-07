@@ -126,7 +126,8 @@ impl Agent {
         AGENTS.iter().copied().find(|spec| spec.aliases.contains(&name)).map(Self).ok_or_else(
             || {
                 eyre::eyre!(
-                    "unknown agent: {name}. Supported agents: claude-code, codex, opencode, opencode-v2, pi"
+                    "unknown agent: {name}. Supported agents: claude-code, codex, opencode, \
+                     opencode-v2, pi"
                 )
             },
         )
@@ -431,7 +432,12 @@ mod tests {
         #[case] expected_source: &str,
     ) {
         let agent = Agent::from_name(name).unwrap();
-        let InstallKind::Extension { extension_path, source, .. } = agent.install_kind() else {
+        let InstallKind::Extension {
+            extension_path,
+            source,
+            ..
+        } = agent.install_kind()
+        else {
             panic!("opencode does not install an extension");
         };
 
