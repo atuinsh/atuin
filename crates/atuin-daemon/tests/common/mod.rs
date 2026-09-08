@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use atuin_client::database::{Context, Sqlite};
 use atuin_client::history::store::{HistoryRecord, HistoryStore};
-use atuin_client::history::{History, HistoryId};
+use atuin_client::history::{CommandCapture, History, HistoryId};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::{FilterMode, Settings};
 use atuin_common::db::sqlite::Sqlite as CommonSqlite;
@@ -28,7 +28,6 @@ use atuin_daemon::client::{HistoryClient, SearchClient, SearchParams};
 use atuin_daemon::grpc::HistoryService;
 use atuin_daemon::grpc::history::pb;
 use atuin_daemon::grpc::history::pb::history_server::HistoryServer;
-use atuin_daemon::grpc::history::pb::{CommandCapture, CommandCaptureMeta};
 use atuin_daemon::search::{IndexFilterMode, SearchIndex};
 use atuin_daemon::{
     Daemon, DaemonEvent, DaemonHandle, HistoryJournal, OutputCapture, SearchComponent,
@@ -68,16 +67,14 @@ pub fn history_at(cmd: &str, timestamp: time::OffsetDateTime) -> History {
         .into()
 }
 
-/// A complete capture (with its required meta) holding `output`.
+/// A complete capture holding `output`, in the daemon's domain representation.
 pub fn capture(output: &str) -> CommandCapture {
     CommandCapture {
         output: output.to_string(),
-        meta: Some(CommandCaptureMeta {
-            output_truncated: false,
-            output_observed_bytes: u64::conv(output.len()),
-            terminal_width: 80,
-            terminal_height: 24,
-        }),
+        output_observed_bytes: u64::conv(output.len()),
+        output_truncated: false,
+        terminal_width: 80,
+        terminal_height: 24,
     }
 }
 

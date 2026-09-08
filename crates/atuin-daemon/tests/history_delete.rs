@@ -12,16 +12,14 @@ use std::time::Duration;
 use atuin_client::history::HistoryId;
 use atuin_client::history::store::HistoryRecord;
 use atuin_client::settings::Search;
-use atuin_daemon::grpc::HistoryService;
-use atuin_daemon::grpc::history::pb::history_server::History;
+use atuin_daemon::grpc::history::pb::RegisterCommandOutputRequest;
 use atuin_daemon::grpc::history::pb::tail_history_reply::Event;
-use atuin_daemon::grpc::history::pb::{DeleteHistoryRequest, RegisterCommandOutputRequest};
 use atuin_daemon::search::SearchIndex;
 use atuin_daemon::{CmdDeleteError, CmdFinishError, RegisterOutputError};
 use common::{TestEnv, capture, history};
 use easy_cast::Conv;
 use rstest::*;
-use tonic::{Code, Request};
+use tonic::Code;
 
 #[fixture]
 async fn env() -> TestEnv {
@@ -381,7 +379,7 @@ async fn refused_output_is_not_found_over_the_wire(#[future(awt)] env: TestEnv) 
     let status = raw
         .register_command_output(RegisterCommandOutputRequest {
             history_id: Some(HistoryId::from_bytes([0xCD; 16]).into()),
-            capture: Some(capture("late")),
+            capture: Some(capture("late").into()),
         })
         .await
         .unwrap_err();
@@ -442,15 +440,13 @@ async fn abandoned_delete_still_completes(#[future(awt)] env: TestEnv) {
         .register_command_output(id, output.to_string(), false, u64::conv(output.len()), 80, 24)
         .await
         .unwrap();
-    let service = HistoryService::new(env.journal.clone(), env.handle.clone());
 
     let lock = env.lock_record_store().await;
-    let request = Request::new(DeleteHistoryRequest {
-        ids: vec![id.into()],
-    });
-    // Drive the handler until it blocks on the locked record store, then drop it.
+    // Let the RPC reach the daemon and block on the locked record store, then drop the client
+    // call. Dropping it resets the stream, which is how tonic learns a client went away and drops
+    // the handler future.
     let abandoned =
-        tokio::time::timeout(Duration::from_millis(200), service.delete_history(request)).await;
+        tokio::time::timeout(Duration::from_millis(200), client.delete_history(vec![id])).await;
     assert!(abandoned.is_err(), "the delete must still be waiting on the record store");
     lock.release().await;
 
