@@ -234,8 +234,7 @@ impl OutputCapture {
         .expect("output-capture read task panicked")
     }
 
-    /// Forget the captured output of every history id in `ids`, letting the periodic flusher carry
-    /// the removal to disk.
+    /// Forget the captured output of every history id in `ids`.
     pub async fn remove(
         &self,
         ids: impl IntoIterator<Item = HistoryId>,
