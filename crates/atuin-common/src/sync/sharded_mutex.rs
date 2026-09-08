@@ -6,47 +6,47 @@ use tokio::sync::{Mutex, MutexGuard};
 
 /// A fixed number of async mutexes, each guarding a `V`, selected by hashing a `K`.
 ///
-/// Locking a key locks the stripe its hash lands in. Two keys may share a stripe, which costs a
-/// little unnecessary waiting, never correctness -- as long as a task never holds two stripes at
-/// once, since two keys in the same stripe would deadlock it against itself.
+/// Locking a key locks the shard its hash lands in. Two keys may share a shard, which costs a
+/// little unnecessary waiting, never correctness -- as long as a task never holds two shards at
+/// once, since two keys in the same shard would deadlock it against itself.
 ///
-/// The `V` belongs to the stripe, not the key: keys that share a stripe see the same value. Use
+/// The `V` belongs to the shard, not the key: keys that share a shard see the same value. Use
 /// `()` for pure mutual exclusion, which is what makes a per-key "check, then act" atomic without
 /// allocating a mutex per key.
 #[derive(Debug)]
-pub struct StripedMutex<K, V> {
-    stripes: Box<[Mutex<V>]>,
+pub struct ShardedMutex<K, V> {
+    shards: Box<[Mutex<V>]>,
     key: PhantomData<fn(&K)>,
 }
 
-impl<K: Hash, V: Default> StripedMutex<K, V> {
-    /// `stripes` mutexes, each starting at `V::default()`.
+impl<K: Hash, V: Default> ShardedMutex<K, V> {
+    /// `shards` mutexes, each starting at `V::default()`.
     #[must_use]
-    pub fn new(stripes: NonZeroUsize) -> Self {
+    pub fn new(shards: NonZeroUsize) -> Self {
         Self {
-            stripes: (0..stripes.get()).map(|_| Mutex::new(V::default())).collect(),
+            shards: (0..shards.get()).map(|_| Mutex::new(V::default())).collect(),
             key: PhantomData,
         }
     }
 }
 
-impl<K: Hash, V> StripedMutex<K, V> {
-    /// Lock the stripe `key` hashes to, waiting while another task holds it.
+impl<K: Hash, V> ShardedMutex<K, V> {
+    /// Lock the shard `key` hashes to, waiting while another task holds it.
     pub async fn lock(&self, key: &K) -> MutexGuard<'_, V> {
-        self.stripes[self.stripe_of(key)].lock().await
+        self.shards[self.shard_of(key)].lock().await
     }
 
-    /// How many stripes there are.
+    /// How many shards there are.
     #[must_use]
-    pub fn stripes(&self) -> usize {
-        self.stripes.len()
+    pub fn shards(&self) -> usize {
+        self.shards.len()
     }
 
-    fn stripe_of(&self, key: &K) -> usize {
+    fn shard_of(&self, key: &K) -> usize {
         let mut hasher = DefaultHasher::new();
         key.hash(&mut hasher);
-        let count = u64::try_from(self.stripes.len()).expect("a stripe count fits in u64");
-        usize::try_from(hasher.finish() % count).expect("a stripe index is below the count")
+        let count = u64::try_from(self.shards.len()).expect("a shard count fits in u64");
+        usize::try_from(hasher.finish() % count).expect("a shard index is below the count")
     }
 }
 
@@ -58,16 +58,16 @@ mod tests {
 
     use rstest::rstest;
 
-    use super::StripedMutex;
+    use super::ShardedMutex;
 
-    fn stripes(n: usize) -> NonZeroUsize {
-        NonZeroUsize::new(n).expect("test stripe counts are non-zero")
+    fn shards(n: usize) -> NonZeroUsize {
+        NonZeroUsize::new(n).expect("test shard counts are non-zero")
     }
 
     #[rstest]
     #[tokio::test]
     async fn the_same_key_waits_for_its_holder() {
-        let mutex: Arc<StripedMutex<&str, ()>> = Arc::new(StripedMutex::new(stripes(16)));
+        let mutex: Arc<ShardedMutex<&str, ()>> = Arc::new(ShardedMutex::new(shards(16)));
         let held = mutex.lock(&"key").await;
 
         let contender = Arc::clone(&mutex);
@@ -80,7 +80,7 @@ mod tests {
         );
 
         drop(held);
-        waiter.await.expect("the waiter acquires the stripe once it is released");
+        waiter.await.expect("the waiter acquires the shard once it is released");
     }
 
     /// Resolves once `handle`'s task has finished; used to observe "still blocked".
@@ -92,9 +92,9 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn the_value_belongs_to_the_stripe() {
-        // One stripe: every key shares it, and therefore shares its value.
-        let mutex: StripedMutex<u32, u32> = StripedMutex::new(stripes(1));
+    async fn the_value_belongs_to_the_shard() {
+        // One shard: every key shares it, and therefore shares its value.
+        let mutex: ShardedMutex<u32, u32> = ShardedMutex::new(shards(1));
         *mutex.lock(&1).await += 1;
         *mutex.lock(&2).await += 1;
         assert_eq!(*mutex.lock(&3).await, 2);
@@ -103,20 +103,20 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn the_guard_hands_out_the_stored_value() {
-        let mutex: StripedMutex<String, Vec<u8>> = StripedMutex::new(stripes(8));
+        let mutex: ShardedMutex<String, Vec<u8>> = ShardedMutex::new(shards(8));
         mutex.lock(&"a".to_string()).await.push(7);
         assert_eq!(*mutex.lock(&"a".to_string()).await, vec![7]);
     }
 
     #[rstest]
-    fn keys_spread_across_stripes() {
-        let mutex: StripedMutex<u64, ()> = StripedMutex::new(stripes(64));
+    fn keys_spread_across_shards() {
+        let mutex: ShardedMutex<u64, ()> = ShardedMutex::new(shards(64));
         let used: std::collections::HashSet<usize> =
-            (0..256u64).map(|k| mutex.stripe_of(&k)).collect();
-        assert_eq!(mutex.stripes(), 64);
+            (0..256u64).map(|k| mutex.shard_of(&k)).collect();
+        assert_eq!(mutex.shards(), 64);
         assert!(
             used.len() >= 32,
-            "256 keys should land in at least half of 64 stripes, got {}",
+            "256 keys should land in at least half of 64 shards, got {}",
             used.len()
         );
     }
@@ -124,8 +124,8 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn colliding_keys_serialise() {
-        // One stripe: two different keys collide, so the second waits for the first.
-        let mutex: Arc<StripedMutex<u32, ()>> = Arc::new(StripedMutex::new(stripes(1)));
+        // One shard: two different keys collide, so the second waits for the first.
+        let mutex: Arc<ShardedMutex<u32, ()>> = Arc::new(ShardedMutex::new(shards(1)));
         let held = mutex.lock(&1).await;
 
         let contender = Arc::clone(&mutex);
@@ -137,20 +137,20 @@ mod tests {
         );
 
         drop(held);
-        waiter.await.expect("the waiter acquires the stripe once it is released");
+        waiter.await.expect("the waiter acquires the shard once it is released");
     }
 
     #[rstest]
     #[tokio::test]
-    async fn keys_on_different_stripes_lock_independently() {
-        let mutex: StripedMutex<u64, ()> = StripedMutex::new(stripes(64));
+    async fn keys_on_different_shards_lock_independently() {
+        let mutex: ShardedMutex<u64, ()> = ShardedMutex::new(shards(64));
         let first = 0u64;
         let other = (1..=1024u64)
-            .find(|k| mutex.stripe_of(k) != mutex.stripe_of(&first))
-            .expect("one of 1024 keys lands on another of 64 stripes");
+            .find(|k| mutex.shard_of(k) != mutex.shard_of(&first))
+            .expect("one of 1024 keys lands on another of 64 shards");
         let _held = mutex.lock(&first).await;
 
-        // Not one big lock: a key on another stripe is acquired immediately.
+        // Not one big lock: a key on another shard is acquired immediately.
         assert!(tokio::time::timeout(Duration::from_millis(50), mutex.lock(&other)).await.is_ok());
     }
 
@@ -158,6 +158,6 @@ mod tests {
     fn is_send_and_sync_regardless_of_the_key() {
         fn assert_send_sync<T: Send + Sync>() {}
         // `Rc` is neither; the key marker must not drag the key's auto traits into the mutex.
-        assert_send_sync::<StripedMutex<std::rc::Rc<u8>, ()>>();
+        assert_send_sync::<ShardedMutex<std::rc::Rc<u8>, ()>>();
     }
 }

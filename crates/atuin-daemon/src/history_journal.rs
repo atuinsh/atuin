@@ -37,7 +37,7 @@ use atuin_client::history::store::HistoryStore;
 use atuin_client::history::{CommandCapture, History, HistoryId};
 use atuin_client::packfile;
 use atuin_client::settings::Search;
-use atuin_common::sync::StripedMutex;
+use atuin_common::sync::ShardedMutex;
 use atuin_domain::caps::{CapClient, PackfileCap};
 use atuin_domain::record::{RecordId, RecordIdx, RecordSeriesKey, RecordTag};
 use dashmap::DashMap;
@@ -125,9 +125,9 @@ impl Drop for DeletingMarks<'_> {
     }
 }
 
-/// How many stripes back [`HistoryJournal::liveness_mutex`]. History ids hash evenly under the
+/// How many shards back [`HistoryJournal::liveness_mutex`]. History ids hash evenly under the
 /// default hasher, so collisions only cost a little waiting.
-const LIVENESS_STRIPES: NonZeroUsize = NonZeroUsize::new(64).unwrap();
+const LIVENESS_SHARDS: NonZeroUsize = NonZeroUsize::new(64).unwrap();
 
 /// Registry of in-flight commands which performs output capture, management, storage and
 /// retrieval.
@@ -169,12 +169,12 @@ pub struct HistoryJournal {
     deleting: DashMap<HistoryId, usize>,
 
     /// Serialises the liveness check + write in [`Self::register_command_output`] against the
-    /// marking in [`Self::delete`] and the teardown in [`Self::cancel`], one stripe per history id.
+    /// marking in [`Self::delete`] and the teardown in [`Self::cancel`], one shard per history id.
     ///
-    /// Lock order: a liveness stripe is always taken *before* an
-    /// [`InFlightCmd::finalization_mutex`], and a task never holds two stripes at once
+    /// Lock order: a liveness shard is always taken *before* an
+    /// [`InFlightCmd::finalization_mutex`], and a task never holds two shards at once
     /// (`delete` marks ids one at a time).
-    liveness_mutex: StripedMutex<HistoryId, ()>,
+    liveness_mutex: ShardedMutex<HistoryId, ()>,
 }
 
 /// Errors returned by [`HistoryJournal::finish`].
@@ -250,7 +250,7 @@ impl HistoryJournal {
             broadcast,
             output_capture,
             deleting: DashMap::new(),
-            liveness_mutex: StripedMutex::new(LIVENESS_STRIPES),
+            liveness_mutex: ShardedMutex::new(LIVENESS_SHARDS),
         }
     }
 
@@ -427,7 +427,7 @@ impl HistoryJournal {
 
         // Claim every id before touching anything: from here on `register_command_output` refuses
         // them, so no capture can land between the output removal below and the record removal
-        // after it. Marking takes the same liveness stripe the register path holds across its
+        // after it. Marking takes the same liveness shard the register path holds across its
         // check-and-write, so a capture that passed its check is stored by the time its id is
         // marked, and the removal below sees it. The marks are released when `_marks` drops, on
         // success or on any early return.
