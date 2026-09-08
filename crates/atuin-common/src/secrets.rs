@@ -93,7 +93,7 @@ macro_rules! assigned {
 /// quadratic time; no real login line has 512 characters before its password.
 macro_rules! login_flag {
     ($flags:literal) => {
-        concat!(r"atuin\s+login(?:[^\n]{0,512}?\s-(?:", $flags, r")[= \t]*", secret_value!(), ")?")
+        concat!(r"atuin\s+login(?:[^\n]{0,512}?\s+-(?:", $flags, r")[= \t]*", secret_value!(), ")?")
     };
 }
 
@@ -978,6 +978,9 @@ mod tests {
             ("atuin login FLAG ****", "atuin login FLAG ****"),
             ("atuin login FLAG \x1b[31;1mhunter2\x1b[m", "atuin login FLAG ****"),
             ("atuin login FLAG=", "atuin login FLAG="),
+            ("atuin login -u me \\\n  FLAG hunter2\n", "atuin login -u me \\\n  FLAG ****\n"),
+            ("atuin login \\\n\tFLAG hunter2", "atuin login \\\n\tFLAG ****"),
+            ("atuin login\nFLAG hunter2", "atuin login\nFLAG ****"),
         )]
         shape: (&str, &str),
     ) {
@@ -1004,6 +1007,28 @@ mod tests {
     // the regex crate does not have; the leak direction is safe (over-redaction).
     #[case::flag_as_value_is_over_redacted("atuin login -p -k y", "atuin login -p **** ****")]
     fn login_attached_and_adjacent_flags(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(&*redact(input), expected);
+    }
+
+    #[rstest]
+    #[case::long_username_inside_the_window(
+        &format!("atuin login --username {} -p hunter2", "a".repeat(400)),
+        &format!("atuin login --username {} -p ****", "a".repeat(400))
+    )]
+    #[case::beyond_the_window_is_left_alone(
+        &format!("atuin login {} -p secret", "x".repeat(520)),
+        &format!("atuin login {} -p secret", "x".repeat(520))
+    )]
+    #[case::two_space_table_gap("AWS_SECRET_ACCESS_KEY  wJalr", "AWS_SECRET_ACCESS_KEY  ****")]
+    #[case::double_quote_stops_at_the_line_end(
+        "AWS_SECRET_ACCESS_KEY=\"abc\nexport OTHER=\"y\"\nls",
+        "AWS_SECRET_ACCESS_KEY=****\nexport OTHER=\"y\"\nls"
+    )]
+    #[case::single_quote_stops_at_the_line_end(
+        "AWS_SECRET_ACCESS_KEY='abc\nexport OTHER='y'\nls",
+        "AWS_SECRET_ACCESS_KEY=****\nexport OTHER='y'\nls"
+    )]
+    fn window_gap_and_quote_bounds(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(&*redact(input), expected);
     }
 
