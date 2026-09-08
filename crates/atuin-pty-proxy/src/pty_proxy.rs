@@ -171,8 +171,7 @@ then
   __atuin_pty_proxy_owns_tty=0
 
   # Check whether this terminal is already running in an Atuin PTY proxy.
-  __atuin_pty_proxy_answer=$(atuin __internal pty-proxy-active 2>/dev/null)
-  if [[ $? -ne 0 ]]; then
+  if ! __atuin_pty_proxy_answer=$(atuin __internal pty-proxy-active 2>/dev/null); then
     :
   elif [[ $__atuin_pty_proxy_answer = 1 ]]; then
     __atuin_pty_proxy_owns_tty=1
