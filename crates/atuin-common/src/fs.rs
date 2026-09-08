@@ -1,16 +1,22 @@
 use std::path::{Path, PathBuf};
 
 /// A path that is removed when this type is dropped.
-#[derive(derive_more::AsRef)]
 pub struct RemoveOnDropPath<P: AsRef<Path> = PathBuf>(
     /// The path to the file.
-    #[as_ref(Path)]
     pub P,
 );
 
 impl<P: AsRef<Path>> Drop for RemoveOnDropPath<P> {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+// Not using `derive_more` as it causes Clippy to emit an incorrect "this trait bound is already
+// specified in the where clause" warning.
+impl<P: AsRef<Path>> AsRef<Path> for RemoveOnDropPath<P> {
+    fn as_ref(&self) -> &Path {
+        self
     }
 }
 
