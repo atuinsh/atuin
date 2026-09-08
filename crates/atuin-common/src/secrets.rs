@@ -80,7 +80,7 @@ macro_rules! assigned {
     ($name:literal) => {
         concat!(
             $name,
-            r#"(?:["']?\]?[ \t]*(?::[ \t]*[\w&<>\[\]]+[ \t]+=|[=:][=>]?|[ \t]*[|│][ \t]*|[ \t]{2,}|\t)[ \t]*"#,
+            r#"(?:\w*["']?(?:\[\d+\])?\]?[ \t]*(?::[ \t]*[\w&<>\[\]'".:|, ]+?[ \t]+=|[?+]=|[=:][=>]?|[ \t]*[|│][ \t]*|[ \t]{2,}|\t)[ \t]*"#,
             secret_value!(),
             ")?"
         )
@@ -934,6 +934,17 @@ mod tests {
             ("NAME: |wJalr/K7|", "NAME: ****"),
             ("NAME   = ", "NAME   = "),
             ("NAME  =\nOTHER=x", "NAME  =\nOTHER=x"),
+            ("pub const NAME: &'static str = \"wJalr\";", "pub const NAME: &'static str = ****;"),
+            ("NAME: str | None = \"wJalr\"", "NAME: str | None = ****"),
+            ("NAME: dict[str, str] = {\"k\": \"wJalr\"}", "NAME: dict[str, str] = ****"),
+            ("NAME: typing.Optional[str] = \"wJalr\"", "NAME: typing.Optional[str] = ****"),
+            ("const NAME: string | undefined = 'wJalr';", "const NAME: string | undefined = ****;"),
+            ("const NAME: Cow<'static, str> = \"wJalr\";", "const NAME: Cow<'static, str> = ****;"),
+            ("NAME ?= wJalr", "NAME ?= ****"),
+            ("NAME += wJalr", "NAME += ****"),
+            ("$NAME[1]: |wJalr/K7|", "$NAME[1]: ****"),
+            ("NAME_JSON={\"type\": \"service_account\"}", "NAME_JSON=****"),
+            ("NAME_OLD=wJalr", "NAME_OLD=****"),
         )]
         shape: (&str, &str),
     ) {
