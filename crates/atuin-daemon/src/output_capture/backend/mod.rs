@@ -45,7 +45,7 @@ pub enum BackendKind {
     Nop,
 }
 
-#[derive(derive_more::Debug)]
+#[derive(Debug)]
 pub enum AnyBackend {
     Fjall(FjallBackend),
     Nop(NopBackend),

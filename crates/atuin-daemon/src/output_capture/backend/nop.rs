@@ -2,7 +2,7 @@ use atuin_client::history::{CommandCapture, HistoryId};
 
 use super::{Backend, CaptureError, GetOutputError};
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct NopBackend;
 
 impl Backend for NopBackend {

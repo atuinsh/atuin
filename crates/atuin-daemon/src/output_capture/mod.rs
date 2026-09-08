@@ -4,7 +4,7 @@ mod schema;
 use atuin_client::history::{CommandCapture, HistoryId};
 use backend::{AnyBackend, Backend as _, FjallBackend, NopBackend};
 pub use backend::{BackendKind, CaptureError, GetOutputError};
-use tracing::warn;
+use tracing::error;
 
 /// [`OutputCapture`] is the core engine responsible for collecting command output.
 #[derive(derive_more::Debug)]
@@ -13,7 +13,7 @@ pub struct OutputCapture {
 }
 
 impl OutputCapture {
-    /// Open (or create) the store at `path`.
+    #[must_use]
     pub fn open(path: impl AsRef<std::path::Path>) -> Self {
         let path = path.as_ref();
         match FjallBackend::open(path) {
@@ -21,7 +21,7 @@ impl OutputCapture {
                 backend: AnyBackend::Fjall(backend),
             },
             Err(err) => {
-                warn!(
+                error!(
                     ?err,
                     ?path,
                     "failed to open the output capture store; output capture is disabled"
