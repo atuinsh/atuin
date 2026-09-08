@@ -40,6 +40,7 @@ struct Pattern {
     name: &'static str,
     /// Must name a [`SECRET_GROUP`] capture group; see the module docs.
     regex: &'static str,
+    prefilter: Option<&'static str>,
     /// See [`Test`].
     #[cfg(test)]
     tests: &'static [Test],
@@ -93,6 +94,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "AWS Access Key ID",
         regex: "(?<secret>A[KS]IA[0-9A-Z]{16})",
+        prefilter: None,
         #[cfg(test)]
         tests: &[Test {
             input: "AKIAIOSFODNN7EXAMPLE",
@@ -102,6 +104,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "AWS Secret Access Key env var",
         regex: assigned!("AWS_SECRET_ACCESS_KEY"),
+        prefilter: Some("AWS_SECRET_ACCESS_KEY"),
         #[cfg(test)]
         tests: &[
             Test {
@@ -118,6 +121,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "AWS Session Token env var",
         regex: assigned!("AWS_SESSION_TOKEN"),
+        prefilter: Some("AWS_SESSION_TOKEN"),
         #[cfg(test)]
         tests: &[Test {
             input: "AWS_SESSION_TOKEN=KEYDATA",
@@ -129,6 +133,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
         // Lazy, so that two assignments on one line stay two matches rather than one match
         // spanning both -- which would leave the first value exposed.
         regex: assigned!(r"AZURE_.*?_KEY"),
+        prefilter: Some(r"AZURE_.*?_KEY"),
         #[cfg(test)]
         tests: &[Test {
             input: "export AZURE_STORAGE_ACCOUNT_KEY=KEYDATA",
@@ -138,6 +143,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "Google cloud platform key env var",
         regex: assigned!("GOOGLE_SERVICE_ACCOUNT_KEY"),
+        prefilter: Some("GOOGLE_SERVICE_ACCOUNT_KEY"),
         #[cfg(test)]
         tests: &[Test {
             input: "export GOOGLE_SERVICE_ACCOUNT_KEY=KEYDATA",
@@ -149,6 +155,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "Atuin login password",
         regex: login_flag!("p|-password"),
+        prefilter: Some(r"atuin\s+login"),
         #[cfg(test)]
         tests: &[
             Test {
@@ -165,6 +172,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "Atuin login key",
         regex: login_flag!("k|-key"),
+        prefilter: Some(r"atuin\s+login"),
         #[cfg(test)]
         tests: &[Test {
             input: "atuin login -k \"lots of random words\"",
@@ -174,6 +182,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "GitHub PAT (old)",
         regex: "(?<secret>ghp_[a-zA-Z0-9]{36})",
+        prefilter: None,
         // legit, I expired it
         #[cfg(test)]
         tests: &[Test {
@@ -185,6 +194,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
         name: "GitHub PAT (new)",
         regex: "(?<secret>gh1_[A-Za-z0-9]{21}_[A-Za-z0-9]{59}\
                 |github_pat_[0-9][A-Za-z0-9]{21}_[A-Za-z0-9]{59})",
+        prefilter: None,
         #[cfg(test)]
         tests: &[
             Test {
@@ -201,6 +211,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "GitHub OAuth Access Token",
         regex: "(?<secret>gho_[A-Za-z0-9]{36})",
+        prefilter: None,
         // not a real token
         #[cfg(test)]
         tests: &[Test {
@@ -211,6 +222,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "GitHub OAuth Access Token (user)",
         regex: "(?<secret>ghu_[A-Za-z0-9]{36})",
+        prefilter: None,
         // not a real token
         #[cfg(test)]
         tests: &[Test {
@@ -221,6 +233,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "GitHub App Installation Access Token",
         regex: "(?<secret>ghs_[A-Za-z0-9._-]{36,})",
+        prefilter: None,
         #[cfg(test)]
         tests: &[
             // not a real token
@@ -238,6 +251,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "GitHub Refresh Token",
         regex: "(?<secret>ghr_[A-Za-z0-9]{76})",
+        prefilter: None,
         // not a real token
         #[cfg(test)]
         tests: &[Test {
@@ -248,6 +262,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "GitHub App Installation Access Token v1",
         regex: r"(?<secret>v1\.[0-9A-Fa-f]{40})",
+        prefilter: None,
         // not a real token
         #[cfg(test)]
         tests: &[Test {
@@ -258,6 +273,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "GitLab PAT",
         regex: "(?<secret>glpat-[a-zA-Z0-9_]{20})",
+        prefilter: None,
         #[cfg(test)]
         tests: &[Test {
             input: "glpat-RkE_BG5p_bbjML21WSfy",
@@ -267,6 +283,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "Slack OAuth v2 bot",
         regex: "(?<secret>xoxb-[0-9]{11}-[0-9]{11}-[0-9a-zA-Z]{24})",
+        prefilter: None,
         #[cfg(test)]
         tests: &[Test {
             input: "xoxb-17653672481-19874698323-pdFZKVeTuE8sk7oOcBrzbqgy",
@@ -276,6 +293,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "Slack OAuth v2 user token",
         regex: "(?<secret>xoxp-[0-9]{11}-[0-9]{11}-[0-9a-zA-Z]{24})",
+        prefilter: None,
         #[cfg(test)]
         tests: &[Test {
             input: "xoxp-17653672481-19874698323-pdFZKVeTuE8sk7oOcBrzbqgy",
@@ -285,6 +303,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "Slack webhook",
         regex: "(?<secret>T[a-zA-Z0-9_]{8}/B[a-zA-Z0-9_]{8}/[a-zA-Z0-9_]{24})",
+        prefilter: None,
         #[cfg(test)]
         tests: &[Test {
             input: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX",
@@ -294,6 +313,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "Stripe test key",
         regex: "(?<secret>sk_test_[0-9a-zA-Z]{24,})",
+        prefilter: None,
         // Split so the literal is not a contiguous `sk_test_...` token in this file: at the
         // correct length for the pattern, GitHub push protection rejects it as a real key.
         #[cfg(test)]
@@ -305,6 +325,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "Stripe live key",
         regex: "(?<secret>sk_live_[0-9a-zA-Z]{24,})",
+        prefilter: None,
         // See the note on the test key above.
         #[cfg(test)]
         tests: &[Test {
@@ -315,6 +336,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "Netlify authentication token",
         regex: "(?<secret>nf[pcoub]_[0-9a-zA-Z]{36})",
+        prefilter: None,
         #[cfg(test)]
         tests: &[Test {
             input: "nfp_nBh7BdJxUwyaBBwFzpyD29MMFT6pZ9wq5634",
@@ -324,6 +346,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "npm token",
         regex: "(?<secret>npm_[A-Za-z0-9]{36})",
+        prefilter: None,
         #[cfg(test)]
         tests: &[Test {
             input: "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",
@@ -333,6 +356,7 @@ static SECRET_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "Pulumi personal access token",
         regex: "(?<secret>pul-[0-9a-f]{40})",
+        prefilter: None,
         #[cfg(test)]
         tests: &[Test {
             input: "pul-683c2770662c51d960d72ec27613be7653c5cb26",
@@ -341,41 +365,33 @@ static SECRET_PATTERNS: &[Pattern] = &[
     },
 ];
 
-struct Patterns {
-    /// A prefilter over every pattern at once: one pass says which, if any, are worth running.
-    set: RegexSet,
-    regexes: Vec<Regex>,
-}
+static PREFILTER: LazyLock<RegexSet> = LazyLock::new(|| {
+    RegexSet::new(SECRET_PATTERNS.iter().map(|pattern| pattern.prefilter.unwrap_or(pattern.regex)))
+        .expect("failed to build secrets regex set")
+});
 
-static PATTERNS: LazyLock<Patterns> = LazyLock::new(|| {
-    let regexes: Vec<Regex> = SECRET_PATTERNS
+static REGEXES: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    SECRET_PATTERNS
         .iter()
         .map(|pattern| {
             Regex::new(pattern.regex)
                 .unwrap_or_else(|e| panic!("failed to compile regex for {}: {e}", pattern.name))
         })
-        .collect();
-
-    Patterns {
-        set: RegexSet::new(regexes.iter().map(Regex::as_str))
-            .expect("failed to build secrets regex set"),
-        regexes,
-    }
+        .collect()
 });
 
 /// Whether `s` contains anything that looks like it involves a credential.
 #[must_use]
 pub fn contains_secret(s: &str) -> bool {
-    PATTERNS.set.is_match(s)
+    PREFILTER.is_match(s)
 }
 
 /// A single pass over `s`, replacing every credential the patterns can locate with [`REDACTED`].
 fn redact_once(s: &str) -> Cow<'_, str> {
-    let mut spans: Vec<Range<usize>> = PATTERNS
-        .set
+    let mut spans: Vec<Range<usize>> = PREFILTER
         .matches(s)
         .iter()
-        .flat_map(|i| PATTERNS.regexes[i].captures_iter(s))
+        .flat_map(|i| REGEXES[i].captures_iter(s))
         .filter_map(|caps| Some(caps.name(SECRET_GROUP)?.range()))
         // Text that is already the marker is not a change. This is what makes `redact`
         // idempotent and keeps "Borrowed iff nothing changed" exact.
@@ -452,7 +468,7 @@ mod tests {
     use regex::RegexSet;
     use rstest::rstest;
 
-    use super::{PATTERNS, REDACTED, SECRET_GROUP, SECRET_PATTERNS, contains_secret, redact};
+    use super::{REDACTED, REGEXES, SECRET_GROUP, SECRET_PATTERNS, contains_secret, redact};
 
     pub(super) struct Test {
         pub(super) input: &'static str,
@@ -580,7 +596,7 @@ mod tests {
     /// is the credential and which is the variable name holding it.
     #[test]
     fn every_pattern_names_its_secret_group() {
-        for (pattern, regex) in SECRET_PATTERNS.iter().zip(&PATTERNS.regexes) {
+        for (pattern, regex) in SECRET_PATTERNS.iter().zip(REGEXES.iter()) {
             assert!(
                 regex.capture_names().any(|name| name == Some(SECRET_GROUP)),
                 "{} does not name a `{SECRET_GROUP}` capture group",
@@ -820,6 +836,18 @@ mod tests {
         fn contains_secret_matches_the_old_pattern_set_exactly(s in credential_dense()) {
             prop_assert_eq!(contains_secret(&s), OLD.is_match(&s), "{:?}", s);
         }
+
+        #[test]
+        fn each_prefilter_matches_exactly_where_its_pattern_does(s in credential_dense()) {
+            for pattern in SECRET_PATTERNS {
+                let Some(prefilter) = pattern.prefilter else { continue };
+                prop_assert_eq!(
+                    regex::Regex::new(prefilter).unwrap().is_match(&s),
+                    regex::Regex::new(pattern.regex).unwrap().is_match(&s),
+                    "{}: {:?}", pattern.name, s
+                );
+            }
+        }
     }
 
     /// Every assignment shape, against every env-var pattern. The four patterns share one suffix
@@ -944,6 +972,54 @@ mod tests {
         assert!(
             took < Duration::from_secs(10),
             "took {took:?}; the login patterns have gone quadratic again"
+        );
+    }
+
+    fn irregular_login_mentions() -> String {
+        let mut line = String::new();
+        let mut n = 7u32;
+        while line.len() < 1 << 20 {
+            line.push_str("atuin login");
+            line.push_str(if n % 3 == 0 {
+                "  "
+            } else {
+                " "
+            });
+            n = n.wrapping_mul(1_103_515_245).wrapping_add(12_345) >> 3;
+        }
+        line
+    }
+
+    #[test]
+    fn irregularly_spaced_login_mentions_stay_fast() {
+        use std::time::{Duration, Instant};
+
+        let line = irregular_login_mentions();
+        let started = Instant::now();
+        assert!(matches!(redact(&line), Cow::Borrowed(_)));
+        let took = started.elapsed();
+
+        assert!(took < Duration::from_secs(10), "took {took:?}");
+    }
+
+    #[test]
+    fn a_hostile_capture_does_not_slow_later_scans_on_the_same_thread() {
+        use std::time::{Duration, Instant};
+
+        let quiet = "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\n".repeat(25_000);
+        let time = |s: &str| {
+            let started = Instant::now();
+            let _ = redact(s);
+            started.elapsed()
+        };
+
+        let before = time(&quiet);
+        let _ = redact(&irregular_login_mentions());
+        let after = time(&quiet);
+
+        assert!(
+            after < before * 5 + Duration::from_millis(50),
+            "before {before:?}, after {after:?}"
         );
     }
 
