@@ -420,6 +420,10 @@ impl HistoryJournal {
     async fn reload_search_index(&self, search_settings: &Search) {
         // Clone the shell filter and drop the read guard before the (full) reload, so the scan
         // doesn't hold the search-index lock across the database load.
+        //
+        // TODO(#4052): This is inherently racy -- any add_history operations added between this
+        //              .read() and the subsequent .write() are completely discarded from the new
+        //              index.
         let shells = self.search_index.read().await.shells.clone();
         let rebuilt = SearchIndex::from_db(shells, &self.history_db, search_settings).await;
         match rebuilt {

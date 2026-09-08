@@ -131,6 +131,7 @@ enum Second {
 /// appended its `Create` -- leaving the row live locally and resurrecting it on replay
 /// (Delete-then-Create). `finish` and `delete` now hold `record_write` across that transition, so
 /// the delete either cancels the still-in-flight id or tombstones the fully-persisted row.
+#[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn delete_racing_finish_leaves_no_row_anywhere() {
     let env = TestEnv::builder().build().await;
@@ -225,6 +226,7 @@ enum Reload {
 ///
 /// EXPECTED TO FAIL: each delete rebuilds the index from its own db snapshot; whichever swap lands
 /// last may predate the other delete's `delete_rows`, resurrecting that command in search.
+#[rstest]
 #[ignore = "documents an unfixed defect (concurrent deletes resurrect rows; see report M2); run \
             with --run-ignored. See module docs."]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -260,14 +262,10 @@ async fn concurrent_deletes_both_leave_the_index() {
     );
 }
 
-/// Several processes deleting disjoint sets at once: every row goes, every tombstone lands, and a
-/// replay of the store agrees.
-///
-/// This is the same record-store `idx` collision as `concurrent_shells_never_lose_records`, now on
-/// tombstones -- a dropped tombstone resurrects its row on replay. Serializing the record-store
-/// writes under `record_write` keeps every tombstone's `idx` distinct, so none is dropped.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn disjoint_concurrent_deletes_all_reach_the_store() {
+/// Several processes each deleting a disjoint set of commands, all at once. Shared setup for the
+/// durable-layer test below and its index-layer sibling; returns the settled env and the number of
+/// commands that were recorded (and therefore deleted).
+async fn env_after_disjoint_concurrent_deletes() -> (TestEnv, usize) {
     let env = TestEnv::builder().build().await;
     let mut client = env.history_client().await;
     let mut groups: Vec<Vec<HistoryId>> = Vec::new();
@@ -287,10 +285,23 @@ async fn disjoint_concurrent_deletes_all_reach_the_store() {
     let counts: Vec<usize> = join_all(tasks).await.into_iter().map(Result::unwrap).collect();
     assert_eq!(counts.iter().sum::<usize>(), total);
 
+    (env, total)
+}
+
+/// Several processes deleting disjoint sets at once: every row goes, every tombstone lands, and a
+/// replay of the store agrees.
+///
+/// This is the same record-store `idx` collision as `concurrent_shells_never_lose_records`, now on
+/// tombstones -- a dropped tombstone resurrects its row on replay. Serializing the record-store
+/// writes under `record_write` keeps every tombstone's `idx` distinct, so none is dropped.
+#[rstest]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn disjoint_concurrent_deletes_all_reach_the_store() {
+    let (env, total) = env_after_disjoint_concurrent_deletes().await;
+
     // Compute every layer before asserting on any of them, so a violation in one layer never
     // hides the state of the others.
     let survivors: Vec<HistoryId> = env.active_ids().await.into_iter().collect();
-    let index_count = env.index_count().await;
     let tombstones = env
         .history_records()
         .await
@@ -300,12 +311,24 @@ async fn disjoint_concurrent_deletes_all_reach_the_store() {
     let replay_count = env.fresh_db_from_store().await.history_count(false).await.unwrap();
 
     assert!(survivors.is_empty(), "rows survived concurrent deletes in the live db: {survivors:?}");
-    assert_eq!(index_count, 0, "index still holds {index_count} commands after concurrent deletes");
     assert_eq!(
         tombstones, total,
         "tombstones in the record store: got {tombstones}, wanted {total}"
     );
     assert_eq!(replay_count, 0, "replay on another machine left {replay_count} rows instead of 0");
+}
+
+/// Nothing the concurrent deletes removed is still searchable once they have all settled.
+///
+/// **Expected to fail intermittently due to issue #4052.** `.config/nextest.toml` will retry this
+/// test several times.
+#[rstest]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn disjoint_concurrent_deletes_leave_the_index_empty() {
+    let (env, _total) = env_after_disjoint_concurrent_deletes().await;
+
+    let index_count = env.index_count().await;
+    assert_eq!(index_count, 0, "index still holds {index_count} commands after concurrent deletes");
 }
 
 /// A shell hook must not stall behind an index reload: `EndHistory` stays fast even when a writer
@@ -317,6 +340,7 @@ async fn disjoint_concurrent_deletes_all_reach_the_store() {
 /// `finish`'s `add_history` -- blocked until the scan ended. The reload now clones the shell filter
 /// and drops the guard before scanning, so the writer below acquires immediately and the hook's
 /// latency stays within a small multiple of an uncontended finish.
+#[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn end_history_is_not_starved_by_an_index_reload() {
     let env = seeded_env().await;
@@ -392,6 +416,7 @@ async fn end_history_is_not_starved_by_an_index_reload() {
 ///
 /// EXPECTED TO FAIL: the `HistorySynced` handler adds to whichever index is live under a read
 /// guard, which the reload then discards.
+#[rstest]
 #[ignore = "documents an unfixed defect (synced history dropped by a racing reload; see report \
             M2); run with --run-ignored. See module docs."]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -434,6 +459,7 @@ async fn synced_history_during_a_reload_is_searchable() {
 
 /// `atuin history tail` is told when it fell behind, and loses nothing silently: dropped + received
 /// equals what happened.
+#[rstest]
 #[tokio::test]
 async fn tail_reports_lag_instead_of_dropping_silently() {
     let env = TestEnv::builder().build().await;
@@ -463,6 +489,7 @@ async fn tail_reports_lag_instead_of_dropping_silently() {
 
 /// With many shells running at once, `atuin history tail` sees every command start exactly once
 /// before it ends exactly once.
+#[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tail_orders_events_per_command_under_concurrency() {
     let env = TestEnv::builder().build().await;
