@@ -21,9 +21,11 @@
 //!   - [`HistoryJournal::finish`] marks the command as finished, which will create and store a new
 //!     history entry.
 //!   - [`HistoryJournal::cancel`] cancels the command, disposing of any in-memory resources, but
-//!     without the logic of persisting the history entry.
+//!     without the logic of persisting the history entry. This will discard any captured output
+//!     too.
 //!   - [`HistoryJournal::delete`] deletes a history entry which will dispose of a command, if it is
-//!     in flight, announcing the command as "cancelled".
+//!     in flight, announcing the command as "cancelled". This will discard any captured output
+//!     too.
 //!
 //! ## Streaming
 //!
@@ -44,8 +46,9 @@
 //!   3. A command is deleted, ie. it has been added at some point, and has been subsequently
 //!      deleted through [`HistoryJournal::delete`].
 //!
-//! In all of these states, the command can have associated output capture enter out-of-band, via
-//! [`HistoryJournal::register_command_output`].
+//! In all of these states, the note that a caller can request a command can have associated output
+//! capture enter out-of-band, via [`HistoryJournal::register_command_output`]. This **must** be
+//! rejected if the command is deleted.
 //!
 //! ## Deletion
 //!
@@ -313,11 +316,14 @@ impl HistoryJournal {
             duration = Empty,
         );
 
-        self.active_cmds.insert(id, InFlightCmd {
-            history: history.clone(),
-            span,
-            finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
-        });
+        self.active_cmds.insert(
+            id,
+            InFlightCmd {
+                history: history.clone(),
+                span,
+                finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
+            },
+        );
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
     }
