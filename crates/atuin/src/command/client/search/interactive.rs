@@ -1490,9 +1490,10 @@ struct SavedScreen {
     rows_data: Vec<Vec<u8>>,
 }
 
-/// Connect to atuin pty-proxy's Unix socket and fetch the current screen state.
+/// Fetch the current screen state from the given PTY proxy socket.
 ///
 /// The wire format is:
+///
 /// ```text
 /// [rows: u16 BE][cols: u16 BE][cursor_row: u16 BE][cursor_col: u16 BE]
 /// [row_0_len: u32 BE][row_0_bytes...]
@@ -1500,7 +1501,7 @@ struct SavedScreen {
 /// ...
 /// ```
 #[cfg(unix)]
-fn fetch_screen_state(socket_path: &str) -> Option<SavedScreen> {
+fn fetch_screen_state(socket_path: &std::path::Path) -> Option<SavedScreen> {
     use std::os::unix::net::UnixStream;
 
     let mut stream = UnixStream::connect(socket_path).ok()?;
@@ -1736,9 +1737,11 @@ pub async fn history(
     // fetch the screen state and render as a centered overlay.
     #[cfg(unix)]
     let (saved_screen, popup_rect, popup_scroll_offset) = {
-        let socket_path = std::env::var("ATUIN_PTY_PROXY_SOCKET")
-            .or_else(|_| std::env::var("ATUIN_HEX_SOCKET"))
-            .ok();
+        #[cfg(feature = "pty-proxy")]
+        let socket_path = atuin_pty_proxy::parent_socket_path();
+        #[cfg(not(feature = "pty-proxy"))]
+        let socket_path = None::<std::path::PathBuf>;
+
         if let Some(ref path) = socket_path
             && inline_height > 0
         {

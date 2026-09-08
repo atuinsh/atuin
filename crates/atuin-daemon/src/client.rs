@@ -213,14 +213,14 @@ impl HistoryClient {
     pub async fn register_command_output(
         &mut self,
         id: HistoryId,
-        output: String,
+        output: impl Into<String>,
         output_truncated: bool,
         output_observed_bytes: u64,
         terminal_width: u16,
         terminal_height: u16,
     ) -> Result<()> {
         let capture = CommandCapture {
-            output,
+            output: output.into(),
             meta: Some(CommandCaptureMeta {
                 output_truncated,
                 output_observed_bytes,

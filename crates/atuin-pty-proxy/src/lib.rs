@@ -15,6 +15,8 @@ mod screen;
 pub use capture::{CommandCapture, CommandCaptureSink};
 #[cfg(unix)]
 pub use pty_proxy::{PtyProxy, Shell, init_script};
+#[cfg(unix)]
+pub use screen::{is_pty_proxy_child, parent_socket_path};
 
 #[cfg(not(unix))]
 #[allow(dead_code)]

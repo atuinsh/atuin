@@ -242,7 +242,7 @@ async fn deletion_survives_restart_and_rebuild(#[future(awt)] env: TestEnv) {
 #[rstest]
 #[tokio::test]
 async fn delete_failure_keeps_rows_until_retry() {
-    let env = TestEnv::builder().db_timeout(Duration::from_millis(200)).build().await;
+    let env = TestEnv::builder().build().await;
     let mut client = env.history_client().await;
     let a = env.record(&mut client, "echo a").await;
     let b = env.record(&mut client, "echo b").await;
@@ -266,7 +266,7 @@ async fn delete_failure_keeps_rows_until_retry() {
 #[case::record_store_down(false)]
 #[tokio::test]
 async fn failed_finish_keeps_the_command_in_flight(#[case] lock_history_db: bool) {
-    let env = TestEnv::builder().db_timeout(Duration::from_millis(200)).build().await;
+    let env = TestEnv::builder().build().await;
     let id = env.journal.start_cmd(history("echo flaky"));
 
     let lock = if lock_history_db {
