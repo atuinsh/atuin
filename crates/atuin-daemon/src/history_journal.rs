@@ -155,18 +155,44 @@ struct InFlightCmd {
     finalization_mutex: Arc<tokio::sync::Mutex<()>>,
 }
 
-/// The ids a running [`HistoryJournal::delete`] has claimed, released on drop.
+/// Increments each id's entry in [`HistoryJournal::deleting`] on creation and decrements it on
+/// drop, so `deleting[id] > 0` for exactly as long as some [`HistoryJournal::delete`] is running
+/// against `id`.
 ///
-/// Reference-counted in [`HistoryJournal::deleting`] so that two concurrent deletes of the same id
-/// keep it claimed until *both* are done: a delete that fails part-way must not unmark an id
-/// another delete is still tearing down.
-struct DeletingMarks<'s, 'i> {
+/// Pathological case if `deleting` were a `HashSet` (insert on creation, remove on drop). Delete A
+/// runs `delete([1, 2])`, delete B runs `delete([2, 3])`:
+///
+/// ```text
+///   A                                      B
+///   HistoryJournal::delete([1, 2])
+///                                          HistoryJournal::delete([2, 3])
+///
+///   HistoryJournal::guard_deleting
+///     deleting.insert(2)
+///                                          HistoryJournal::guard_deleting
+///                                            deleting.insert(2)              => Nop
+///
+///   HistoryJournal::delete() (finish)
+///     DeletingGuard::Drop()                                                  => deleting={1, 3}
+///
+///   ------ All is well so far.
+///
+///                                          output_capture.remove(2)
+///
+///   register_command_output(2)
+///     -> self.deleting.contains_key(2) == false
+///       -> so we insert the new register_command_output(2)
+///
+///                                          history_store.delete(2)
+///                                            -> the NEW register_command_output(2) is orphaned
+/// ```
+struct DeletingGuard<'s, 'i> {
     deleting: &'s DashMap<HistoryId, usize>,
     ids: &'i [HistoryId],
     marked: usize,
 }
 
-impl Drop for DeletingMarks<'_, '_> {
+impl Drop for DeletingGuard<'_, '_> {
     fn drop(&mut self) {
         for id in &self.ids[..self.marked] {
             self.deleting.remove_if_mut(id, |_, count| {
@@ -575,9 +601,9 @@ impl HistoryJournal {
         }
     }
 
-    /// Claim `ids` for a running delete. See [`DeletingMarks`].
-    async fn guard_deleting<'i>(&self, ids: &'i [HistoryId]) -> DeletingMarks<'_, 'i> {
-        let mut marks = DeletingMarks {
+    /// Claim `ids` for a running delete. See [`DeletingGuard`].
+    async fn guard_deleting<'i>(&self, ids: &'i [HistoryId]) -> DeletingGuard<'_, 'i> {
+        let mut marks = DeletingGuard {
             deleting: &self.deleting,
             ids,
             marked: 0,

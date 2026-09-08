@@ -239,7 +239,12 @@ impl OutputCapture {
         &self,
         ids: impl IntoIterator<Item = HistoryId>,
     ) -> Result<(), DeleteOutputError> {
-        let keys: Vec<[u8; 16]> = ids.into_iter().map(HistoryId::into_bytes).collect();
+        let keys: Vec<_> = ids
+            .into_iter()
+            .map(|id| {
+                ActiveSchema::serialize_key(id).expect("history id serialization is infallible")
+            })
+            .collect();
         if keys.is_empty() {
             return Ok(());
         }
