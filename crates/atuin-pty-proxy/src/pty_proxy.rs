@@ -152,33 +152,80 @@ fn env_flag(name: &str) -> bool {
 /// without conflicting with an existing standalone `atuin pty-proxy init`
 /// line in shell config.
 #[must_use]
-pub fn init_script(shell: Shell) -> &'static str {
+pub fn init_script(shell: Shell) -> String {
     render_init(shell)
 }
 
-fn render_init(shell: Shell) -> &'static str {
+#[cfg(target_os = "macos")]
+fn process_path(pid: libc::pid_t) -> Option<PathBuf> {
+    let mut buf = [0u8; 4096];
+    let buf_len = u32::try_from(buf.len()).ok()?;
+    // Safety: `buf` is writable for `buf_len` bytes, and `pid` identifies
+    // the process whose executable path is requested.
+    let res = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr().cast(), buf_len) };
+    if res <= 0 {
+        return None;
+    }
+    let len = usize::try_from(res).ok()?;
+    let bytes = &buf[..len];
+    let len = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    std::str::from_utf8(&bytes[..len]).ok().map(PathBuf::from)
+}
+
+fn get_parent_shell_path(target_shell: Shell) -> Option<String> {
+    #[cfg(unix)]
+    {
+        let ppid = std::os::unix::process::parent_id();
+
+        #[cfg(target_os = "linux")]
+        let path = std::fs::read_link(format!("/proc/{ppid}/exe")).ok();
+
+        #[cfg(target_os = "macos")]
+        let path = process_path(ppid.try_into().ok()?);
+
+        #[cfg(any(target_os = "illumos", target_os = "solaris"))]
+        let path = std::fs::read_link(format!("/proc/{ppid}/path/a.out")).ok();
+
+        #[cfg(not(any(
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "illumos",
+            target_os = "solaris"
+        )))]
+        let path: Option<PathBuf> = None;
+
+        if let Some(path) = path
+            && let path = path.to_string_lossy()
+            && let Some(detected_shell) = shell_from_name(&path)
+            && detected_shell == target_shell
+        {
+            return Some(path.into_owned());
+        }
+    }
+    None
+}
+
+fn render_init(shell: Shell) -> String {
     // Each shell embeds its own interpreter path in the `--shell` argument so
     // `atuin pty-proxy` spawns the same binary that sourced the init, rather
     // than resolving via $PATH (which can pick the wrong installation when the
     // user has, for instance, both /usr/bin/bash and /opt/homebrew/bin/bash).
     match shell {
         Shell::Bash | Shell::Zsh => {
-            r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
-  _atuin_pty_proxy_tmux_current="${TMUX:-}"
-  _atuin_pty_proxy_tmux_previous="${ATUIN_PTY_PROXY_TMUX:-}"
+            let zsh_shell = get_parent_shell_path(Shell::Zsh)
+                .unwrap_or_else(|| "$(command -v zsh)".to_string());
+            format!(
+                r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
+  _atuin_pty_proxy_tmux_current="${{TMUX:-}}"
+  _atuin_pty_proxy_tmux_previous="${{ATUIN_PTY_PROXY_TMUX:-}}"
 
-  if [[ -z "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || [[ "$_atuin_pty_proxy_tmux_current" != "$_atuin_pty_proxy_tmux_previous" ]]; then
+  if [[ -z "${{ATUIN_PTY_PROXY_ACTIVE:-}}" ]] || [[ "$_atuin_pty_proxy_tmux_current" != "$_atuin_pty_proxy_tmux_previous" ]]; then
     export ATUIN_PTY_PROXY_ACTIVE=1
     export ATUIN_PTY_PROXY_TMUX="$_atuin_pty_proxy_tmux_current"
-    if [[ -n "${BASH_VERSION:-}" ]]; then
+    if [[ -n "${{BASH_VERSION:-}}" ]]; then
       exec atuin pty-proxy --shell "$BASH"
-    elif [[ -n "${ZSH_VERSION:-}" ]]; then
-      # Prefer ZSH_ARGZERO (zsh 5.3+) — it preserves the path zsh was
-      # invoked with — and fall back to PATH lookup otherwise. Login shells
-      # set argv[0] to "-zsh", and ZSH_ARGZERO keeps that leading dash, so
-      # strip it (${var#-}) before passing the path along.
-      _atuin_pty_proxy_zsh="${ZSH_ARGZERO:-$(command -v zsh)}"
-      exec atuin pty-proxy --shell "${_atuin_pty_proxy_zsh#-}"
+    elif [[ -n "${{ZSH_VERSION:-}}" ]]; then
+      exec atuin pty-proxy --shell "{zsh_shell}"
     else
       exec atuin pty-proxy
     fi
@@ -187,6 +234,7 @@ fn render_init(shell: Shell) -> &'static str {
   unset _atuin_pty_proxy_tmux_current _atuin_pty_proxy_tmux_previous
 fi
 "#
+            )
         }
         Shell::Fish => {
             r#"if status is-interactive; and test -t 0; and test -t 1
@@ -210,7 +258,7 @@ fi
         exec atuin pty-proxy --shell (status fish-path)
     end
 end
-"#
+"#.to_string()
         }
         // Nushell cannot dynamically source the output of `atuin init nu`,
         // so we only output the pty-proxy preamble here. Users must also set up
@@ -226,7 +274,7 @@ end
         exec atuin pty-proxy --shell $nu.current-exe
     }
 }
-"#
+"#.to_string()
         }
     }
 }
@@ -235,6 +283,15 @@ end
 mod tests {
     use rstest::rstest;
 
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "illumos",
+        target_os = "solaris"
+    )))]
+    use super::PathBuf;
+    #[cfg(target_os = "macos")]
+    use super::process_path;
     use super::{Shell, render_init, shell_from_name};
 
     #[rstest]
@@ -270,10 +327,8 @@ mod tests {
     fn init_scripts_forward_shell_path() {
         let posix = render_init(Shell::Bash);
         assert!(posix.contains(r#"exec atuin pty-proxy --shell "$BASH""#));
-        // zsh: capture ZSH_ARGZERO (with PATH fallback), then strip the
-        // leading dash present on login shells before forwarding the path.
-        assert!(posix.contains(r#"_atuin_pty_proxy_zsh="${ZSH_ARGZERO:-$(command -v zsh)}""#));
-        assert!(posix.contains(r#"exec atuin pty-proxy --shell "${_atuin_pty_proxy_zsh#-}""#));
+        // zsh: resolves to parent path dynamically or falls back to command -v
+        assert!(posix.contains(r#"exec atuin pty-proxy --shell "$(command -v zsh)""#));
 
         let fish = render_init(Shell::Fish);
         assert!(fish.contains("exec atuin pty-proxy --shell (status fish-path)"));
@@ -295,5 +350,33 @@ mod tests {
         assert!(script.contains("is-terminal --stdin"));
         assert!(script.contains("is-terminal --stdout"));
         assert!(script.contains("ATUIN_PTY_PROXY_ACTIVE"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_proc_path_resolution() {
+        let pid = std::process::id();
+        let expected = std::env::current_exe().unwrap().canonicalize().unwrap();
+
+        #[cfg(target_os = "linux")]
+        let resolved = std::fs::read_link(format!("/proc/{pid}/exe")).ok();
+
+        #[cfg(target_os = "macos")]
+        let resolved = process_path(pid.try_into().unwrap());
+
+        #[cfg(any(target_os = "illumos", target_os = "solaris"))]
+        let resolved = std::fs::read_link(format!("/proc/{pid}/path/a.out")).ok();
+
+        #[cfg(not(any(
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "illumos",
+            target_os = "solaris"
+        )))]
+        let resolved: Option<PathBuf> = None;
+
+        if let Some(resolved) = resolved {
+            assert_eq!(resolved.canonicalize().unwrap(), expected);
+        }
     }
 }

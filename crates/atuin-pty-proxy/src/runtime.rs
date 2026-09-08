@@ -43,7 +43,23 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
         }
     };
 
-    let mut cmd = match options.shell {
+    let shell_path = options.shell.as_ref().map(|path| {
+        if path.is_absolute() {
+            path.clone()
+        } else if let Ok(paths) = std::env::var("PATH") {
+            // Resolve via $PATH
+            std::env::split_paths(&paths)
+                .map(|directory| directory.join(path))
+                .find(|candidate| candidate.is_file())
+                // Fallback if not found in $PATH
+                .unwrap_or_else(|| path.clone())
+        } else {
+            // No $PATH variable
+            path.clone()
+        }
+    });
+
+    let mut cmd = match shell_path {
         Some(ref path) => CommandBuilder::new(path),
         None => CommandBuilder::new_default_prog(),
     };
@@ -52,7 +68,7 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     // anything it execs via `$SHELL -c` (e.g. fzf's `become`) — sees the
     // shell the user asked for instead of a stale value inherited from the
     // parent environment.
-    if let Some(ref path) = options.shell {
+    if let Some(ref path) = shell_path {
         cmd.env("SHELL", path);
     }
     if let Some(path) = &sock_path {
