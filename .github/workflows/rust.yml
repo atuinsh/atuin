@@ -128,6 +128,28 @@ jobs:
       - name: Run cargo test
         run: cargo nextest run --lib --bins
 
+      - name: Show new proptest regressions
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          echo "::group::proptest regression files changed by this run"
+          echo "A proptest failure appends a 'cc <seed>' line to a regression file."
+          echo "New/changed regression files (download the artifact below to reproduce):"
+          git status --porcelain
+          git --no-pager diff
+          echo "::endgroup::"
+
+      - name: Upload proptest regressions
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: proptest-regressions-unit-${{ matrix.os }}
+          path: |
+            **/proptest-regressions/**
+            **/*.proptest-regressions
+          if-no-files-found: ignore
+          retention-days: 14
+
   check:
     strategy:
       matrix:
