@@ -235,7 +235,10 @@ jobs:
         uses: awalsh128/cache-apt-pkgs-action@v1.6.3
         with:
           packages: libssl-dev pkg-config zsh fish
-          version: 1.0
+          # Bump to invalidate a poisoned cache: a hit under the old key restored
+          # an incomplete fileset that reported success but left zsh off PATH,
+          # failing the PTY e2e tests. A fresh key forces a real apt install.
+          version: 1.1
 
       - name: Install shells (macOS)
         if: runner.os == 'macOS'
