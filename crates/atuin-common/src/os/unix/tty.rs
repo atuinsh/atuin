@@ -86,10 +86,10 @@ mod tests {
 
         // `Dev` is already u64 on Linux but is narrower on macOS, so the conversion is not
         // redundant everywhere it compiles.
-        #[allow(clippy::useless_conversion, reason = "Dev is not u64 on every platform")]
+        #[allow(clippy::unnecessary_cast, reason = "Dev is not u64 on every platform")]
         {
-            assert_eq!(u64::try_from(id.dev).unwrap(), meta.dev());
-            assert_eq!(u64::try_from(id.rdev).unwrap(), meta.rdev());
+            assert_eq!(id.dev as u64, meta.dev());
+            assert_eq!(id.rdev as u64, meta.rdev());
         }
     }
 
