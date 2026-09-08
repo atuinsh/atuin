@@ -1740,7 +1740,7 @@ pub async fn history(
         #[cfg(feature = "pty-proxy")]
         let socket_path = atuin_pty_proxy::parent_socket_path();
         #[cfg(not(feature = "pty-proxy"))]
-        let socket_path = None;
+        let socket_path = None::<std::path::PathBuf>;
 
         if let Some(ref path) = socket_path
             && inline_height > 0
