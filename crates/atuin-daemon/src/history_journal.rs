@@ -446,6 +446,14 @@ impl HistoryJournal {
         id: HistoryId,
         capture: CommandCapture,
     ) -> Result<(), CaptureError> {
+        let in_flight = self.active_cmds.get(&id).map(|cmd| cmd.history.command.clone());
+        let command = match in_flight {
+            Some(command) => Some(command),
+            None => self.history_db.load(id).await.ok().flatten().map(|history| history.command),
+        };
+        if command.is_some_and(|command| atuin_common::secrets::output_unsafe(&command)) {
+            return Ok(());
+        }
         self.output_capture.capture(id, capture).await
     }
 

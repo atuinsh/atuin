@@ -54,6 +54,43 @@ async fn test_start_end_history(#[future(awt)] env: TestEnv) {
 }
 
 #[rstest]
+#[case::key("atuin key", false)]
+#[case::account_login("atuin account login -u me", false)]
+#[case::ordinary("echo hello", true)]
+#[tokio::test]
+async fn output_is_stored_only_for_commands_that_cannot_print_the_key(
+    #[future(awt)] env: TestEnv,
+    #[case] command: &str,
+    #[case] stored: bool,
+    #[values(false, true)] ended_before_capture: bool,
+) {
+    let mut client = env.history_client().await;
+    let history: History = History::daemon()
+        .timestamp(time::OffsetDateTime::now_utc())
+        .command(command.to_string())
+        .cwd("/tmp".to_string())
+        .session("test-session".to_string())
+        .cmd_origin(
+            #[allow(deprecated)]
+            atuin_domain::record::CmdOrigin::parse_lenient("test-host"),
+        )
+        .build()
+        .into();
+    let id: HistoryId =
+        client.start_history(history).await.unwrap().id.unwrap().try_into().unwrap();
+    if ended_before_capture {
+        client.end_history(id, Some(Duration::from_nanos(1_000_000)), 0).await.unwrap();
+    }
+
+    client
+        .register_command_output(id, "adapt amused able anxiety mother", false, 32, 80, 24)
+        .await
+        .unwrap();
+
+    assert_eq!(client.get_command_output(id, vec![]).await.unwrap().is_some(), stored);
+}
+
+#[rstest]
 #[tokio::test]
 async fn end_history_without_duration_derives_from_start(#[future(awt)] env: TestEnv) {
     let mut client = env.history_client().await;

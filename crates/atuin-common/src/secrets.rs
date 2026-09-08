@@ -388,6 +388,23 @@ static REGEXES: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         .collect()
 });
 
+static SGR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\x1b\[[0-9;]*m").expect("sgr regex"));
+
+static OUTPUT_UNSAFE: LazyLock<RegexSet> = LazyLock::new(|| {
+    RegexSet::new([
+        r"atuin\s+key\b",
+        r"atuin\s+(?:account\s+)?login\b",
+        r"atuin\s+(?:account\s+)?register\b",
+        r"atuin\s+account\s+change-password\b",
+    ])
+    .expect("failed to build output-unsafe set")
+});
+
+#[must_use]
+pub fn output_unsafe(command: &str) -> bool {
+    OUTPUT_UNSAFE.is_match(&SGR.replace_all(command, ""))
+}
+
 /// Whether `s` contains anything that looks like it involves a credential.
 #[must_use]
 pub fn contains_secret(s: &str) -> bool {
@@ -486,7 +503,9 @@ mod tests {
     use regex::RegexSet;
     use rstest::rstest;
 
-    use super::{REDACTED, REGEXES, SECRET_GROUP, SECRET_PATTERNS, contains_secret, redact};
+    use super::{
+        REDACTED, REGEXES, SECRET_GROUP, SECRET_PATTERNS, contains_secret, output_unsafe, redact,
+    };
 
     pub(super) struct Test {
         pub(super) input: &'static str,
@@ -1149,5 +1168,24 @@ mod tests {
                 pattern.name
             );
         }
+    }
+
+    #[rstest]
+    #[case::key("atuin key", true)]
+    #[case::key_base64("atuin key --base64", true)]
+    #[case::highlighted_account_login("\x1b[32matuin\x1b[0m account login -u me", true)]
+    #[case::account_register("atuin account register", true)]
+    #[case::register("atuin register -u x", true)]
+    #[case::change_password("atuin account change-password", true)]
+    #[case::login("atuin login -u me", true)]
+    #[case::keys_subcommand("atuin keys list", false)]
+    #[case::history("atuin history list", false)]
+    #[case::unrelated_key_word("cat keyfile", false)]
+    #[case::plain("ls", false)]
+    fn commands_whose_output_holds_the_encryption_key(
+        #[case] command: &str,
+        #[case] unsafe_: bool,
+    ) {
+        assert_eq!(output_unsafe(command), unsafe_);
     }
 }
