@@ -7,6 +7,7 @@
 //! `spawn_blocking`.
 //!
 //! TODO(retention): the store grows unbounded; no eviction yet. See the design doc.
+mod schema;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,11 +15,11 @@ use std::time::Duration;
 
 use atuin_client::history::{CommandCapture, HistoryId};
 use fjall::{OptimisticTxDatabase, OptimisticTxKeyspace, PersistMode, Readable};
+use schema::{Schema as _, SchemaV1};
 use tokio::task::JoinHandle;
 use tracing::error;
 
 use super::{Backend, CaptureError, GetOutputError};
-use crate::output_capture::schema::{Schema as _, SchemaV1};
 
 /// The schema currently in use for stored output.
 type ActiveSchema = SchemaV1;

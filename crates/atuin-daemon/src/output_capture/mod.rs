@@ -1,5 +1,4 @@
 mod backend;
-mod schema;
 
 use atuin_client::history::{CommandCapture, HistoryId};
 use backend::{AnyBackend, Backend as _, FjallBackend, NopBackend};
