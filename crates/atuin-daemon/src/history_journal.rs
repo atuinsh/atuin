@@ -595,9 +595,9 @@ impl HistoryJournal {
     /// What this guarantees: no capture can land between a delete's output removal and its record
     /// removal, or after a cancel, and none is accepted once the row is gone. What it does not
     /// cover: a row removed behind the daemon's back -- by sync applying another machine's delete,
-    /// or by a delete that failed part-way and was never retried, whose row a later rebuild drops.
-    /// Output left behind that way is the retention sweep's to reclaim (`TODO(retention)` in
-    /// `output_capture`).
+    /// or by a delete that failed part-way and was never retried, whose row a later rebuild drops
+    /// -- and a cancel whose output discard failed (see [`Self::cancel`]). Output left behind that
+    /// way is for a retention sweep to reclaim; none exists yet.
     pub async fn register_command_output(
         &self,
         id: HistoryId,

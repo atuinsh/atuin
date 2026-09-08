@@ -541,14 +541,24 @@ async fn captures_never_outlive_their_entries_under_contention() {
         }
         join_all(tasks).await;
 
-        for id in ids {
-            if env.journal.get_command_output(id).await.unwrap().is_some() {
+        for (i, id) in ids.into_iter().enumerate() {
+            let stored = env.journal.get_command_output(id).await.unwrap().is_some();
+            if stored {
                 let live =
                     env.journal.get(id).is_ok() || env.history_db.load(id).await.unwrap().is_some();
                 assert!(
                     live,
                     "round {round}: output stored for {id}, which is neither in flight nor \
                      persisted"
+                );
+            }
+            // A register racing a finish always wins -- the command is live throughout -- so its
+            // output must be there. Without this the test would pass vacuously if registers started
+            // failing across the board.
+            if i % 3 == 2 {
+                assert!(
+                    stored,
+                    "round {round}: output for the finished command {id} must be stored"
                 );
             }
         }
