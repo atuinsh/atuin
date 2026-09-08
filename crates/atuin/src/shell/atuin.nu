@@ -19,7 +19,7 @@ if '__atuin_pty_proxy' not-in $env {
     # so a manually started proxy still functions when `pty_proxy.enabled` is false.
     # We are using a record rather than a plain string so it doesn't get exported
     # to child processes -- we want each child shell to perform its own detection.
-    $env.__atuin_pty_proxy = { owns_tty: (if 'ATUIN_PTY_PROXY_SOCKET' in $env {
+    $env.__atuin_pty_proxy = { owns_tty: (if 'ATUIN_PTY_PROXY_ACTIVE' in $env {
         do {
             let atuin_pty_proxy_check = (do -i { atuin __internal pty-proxy-active } | complete)
             $atuin_pty_proxy_check.exit_code == 0 and ($atuin_pty_proxy_check.stdout | str trim) == "1"

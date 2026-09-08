@@ -38,6 +38,8 @@ enum InitError {
 /// the server failed to initialize), this sets `ATUIN_PTY_PROXY_FAILED` to stop the child shell
 /// from endlessly trying to spawn additional PTY proxies.
 fn set_child_env(cmd: &mut CommandBuilder, socket_path: Option<&std::path::Path>) {
+    cmd.env("ATUIN_PTY_PROXY_ACTIVE", "1");
+
     if let Some(path) = socket_path {
         cmd.env("ATUIN_PTY_PROXY_SOCKET", path);
         cmd.env_remove("ATUIN_PTY_PROXY_FAILED");

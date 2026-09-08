@@ -33,11 +33,11 @@ if [[ -z "${ATUIN_SESSION:-}" || "${ATUIN_SHLVL:-}" != "$SHLVL" ]]; then
 fi
 ATUIN_HISTORY_ID=""
 
-if [[ -z "${__atuin_pty_proxy_owns_tty:-}" ]]; then
+if [[ -z ${__atuin_pty_proxy_owns_tty-} ]]; then
     # The pty-proxy preamble also sets this variable, but make sure it's set here,
     # so a manually started proxy still functions when `pty_proxy.enabled` is false.
     __atuin_pty_proxy_owns_tty=0
-    if [[ -n "${ATUIN_PTY_PROXY_SOCKET:-}" ]]; then
+    if [[ -n ${ATUIN_PTY_PROXY_ACTIVE-} ]]; then
         __atuin_pty_proxy_answer=$(atuin __internal pty-proxy-active 2>/dev/null)
         if [[ $? -eq 0 ]] && [[ $__atuin_pty_proxy_answer = 1 ]]; then
             __atuin_pty_proxy_owns_tty=1

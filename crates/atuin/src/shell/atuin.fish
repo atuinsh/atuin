@@ -8,7 +8,7 @@ if not set -q __atuin_pty_proxy_owns_tty
     # The pty-proxy preamble also sets this variable, but make sure it's set here,
     # so a manually started proxy still functions when `pty_proxy.enabled` is false.
     set -g __atuin_pty_proxy_owns_tty 0
-    if set -q ATUIN_PTY_PROXY_SOCKET
+    if set -q ATUIN_PTY_PROXY_ACTIVE
         set -l __atuin_pty_proxy_answer (atuin __internal pty-proxy-active 2>/dev/null)
         set -l __atuin_pty_proxy_status $status
         if test $__atuin_pty_proxy_status -eq 0; and test "$__atuin_pty_proxy_answer" = 1
