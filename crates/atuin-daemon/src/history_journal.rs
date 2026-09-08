@@ -37,7 +37,7 @@ use atuin_client::history::store::HistoryStore;
 use atuin_client::history::{CommandCapture, History, HistoryId};
 use atuin_client::packfile;
 use atuin_client::settings::Search;
-use atuin_common::sync::ShardedMutex;
+use atuin_common::sync::AsyncShardedMutex;
 use atuin_domain::caps::{CapClient, PackfileCap};
 use atuin_domain::record::{RecordId, RecordIdx, RecordSeriesKey, RecordTag};
 use dashmap::DashMap;
@@ -174,7 +174,7 @@ pub struct HistoryJournal {
     /// Lock order: a liveness shard is always taken *before* an
     /// [`InFlightCmd::finalization_mutex`], and a task never holds two shards at once
     /// (`delete` marks ids one at a time).
-    liveness_mutex: ShardedMutex<HistoryId, ()>,
+    liveness_mutex: AsyncShardedMutex<HistoryId, ()>,
 }
 
 /// Errors returned by [`HistoryJournal::finish`].
@@ -250,7 +250,7 @@ impl HistoryJournal {
             broadcast,
             output_capture,
             deleting: DashMap::new(),
-            liveness_mutex: ShardedMutex::new(LIVENESS_SHARDS),
+            liveness_mutex: AsyncShardedMutex::new(LIVENESS_SHARDS),
         }
     }
 
