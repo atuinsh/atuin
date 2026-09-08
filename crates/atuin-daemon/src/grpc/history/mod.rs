@@ -332,7 +332,7 @@ impl GrpcService for Service {
         let journal = self.journal.clone();
         // Spawned so a client disconnect cannot drop the call half-way.
         let deleted = tokio::spawn(
-            async move { journal.delete(ids, &search_settings).await }
+            async move { journal.delete(&ids, &search_settings).await }
                 .instrument(tracing::Span::current()),
         )
         .await

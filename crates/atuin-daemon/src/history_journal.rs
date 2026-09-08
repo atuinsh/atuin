@@ -27,6 +27,42 @@
 //!
 //! It is possible to stream events out of [`HistoryJournal`] via [`HistoryJournal::subscribe`]
 //! which returns a new [`futures::Stream`] of [`CmdEvent`] events.
+//!
+//! ## Output Capture
+//!
+//! When deleting entries from the history journal, we have to be careful to gracefully handle
+//! output command capture.
+//!
+//! A command can be in one of many states:
+//!
+//!   1. The command is considered "in flight", ie. it has been started but not stopped. In this
+//!      case, it will be a member of the `active_cmds` hashmap.
+//!   2. The command is considered "settled", ie. it has been stopped and committed into the
+//!      database.
+//!   3. A command is deleted, ie. it has been added at some point, and has been subsequently
+//!      deleted through [`HistoryJournal::delete`].
+//!
+//! In both of these states, the command can have associated output capture enter out-of-band, via
+//! [`HistoryJournal::register_command_output`].
+//!
+//! ## Deletion
+//!
+//! Deletion is handled through [`HistoryJournal::delete`]. This is a potentially long process and
+//! requires the following invariants be upheld:
+//!
+//!   - During deletion, [`HistoryJournal::register_command_output`] requests going in parallel must
+//!     be rejected.
+//!
+//!
+//!
+//
+// There is a really nasty concurrency issue we have to handle...
+//
+// Firstly, note that it is possible for **multiple** cancels/finishes to through at the
+// same time. Additionally, while we're cancelling, we might receive a call to
+// `register_command_output`.
+//
+// This puts us in a nasty position -- the `register_command_output` can regiser
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -108,15 +144,14 @@ struct InFlightCmd {
 /// Reference-counted in [`HistoryJournal::deleting`] so that two concurrent deletes of the same id
 /// keep it claimed until *both* are done: a delete that fails part-way must not unmark an id
 /// another delete is still tearing down.
-struct DeletingMarks<'a> {
-    deleting: &'a DashMap<HistoryId, usize>,
-    ids: Vec<HistoryId>,
+struct DeletingMarks<'s, 'a> {
+    deleting: &'s DashMap<HistoryId, usize>,
+    ids: &'a [HistoryId],
 }
 
-impl Drop for DeletingMarks<'_> {
+impl<'s, 'a> Drop for DeletingMarks<'s, 'a> {
     fn drop(&mut self) {
-        for id in &self.ids {
-            // Drop the entry once this was the last delete holding the id.
+        for id in self.ids {
             self.deleting.remove_if_mut(id, |_, count| {
                 *count -= 1;
                 *count == 0
@@ -270,14 +305,11 @@ impl HistoryJournal {
             duration = Empty,
         );
 
-        self.active_cmds.insert(
-            id,
-            InFlightCmd {
-                history: history.clone(),
-                span,
-                finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
-            },
-        );
+        self.active_cmds.insert(id, InFlightCmd {
+            history: history.clone(),
+            span,
+            finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
+        });
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
     }
@@ -421,27 +453,25 @@ impl HistoryJournal {
     /// so the swapped-in index has correct rankings immediately rather than after the next refresh.
     ///
     /// Returns how many history entries Atuin forgot.
+    ///
+    /// This function is serialized on the **bundle** of the `ids` you're passing in, eg. if you
+    /// pass `ids = [1, 2]` and then in parallel another delete call with `ids = [2, 3]`, the latter
+    /// will wait for the former request to completely go through.
     pub async fn delete(
         &self,
-        ids: impl IntoIterator<Item = HistoryId>,
+        ids: &[HistoryId],
         search_settings: &Search,
     ) -> Result<usize, CmdDeleteError> {
-        let ids: Vec<HistoryId> = ids.into_iter().collect();
-
-        // Claim every id before touching anything: from here on `register_command_output` refuses
-        // them, so no capture can land between the output removal below and the record removal
-        // after it. Marking takes the same liveness shard the register path holds across its
-        // check-and-write, so a capture that passed its check is stored by the time its id is
-        // marked, and the removal below sees it. The marks are released when `_marks` drops, on
-        // success or on any early return.
-        let _marks = self.mark_deleting(&ids).await;
+        // This delete guard is important since it serializes, per HistoryId, the deletion of
+        // history IDs.
+        //
+        // In effect, if concurrent `delete`s come through here, they'll have to wait on ids.
+        let _delete_guard = self.guard_deleting(&ids).await;
 
         // Forget captured output before the history records. This order means a failed call can
         // leave an entry without its output but never output without its entry.
         //
         // Eh, it's not great, but without some sort of STM, we can't do better.
-        //
-        // TODO(markovejnovic): Implement STM
         self.output_capture.remove(ids.iter().copied()).await?;
 
         // Remove records from the record store.
@@ -479,7 +509,7 @@ impl HistoryJournal {
                     continue;
                 }
 
-                match self.history_store.delete(id).await {
+                match self.history_store.delete(*id).await {
                     Ok((record_id, _)) => {
                         record_ids.push(record_id);
                         deleted += 1;
@@ -548,16 +578,17 @@ impl HistoryJournal {
     ///
     /// The guard exists before the first id is marked, so a future dropped part-way through still
     /// releases every mark it took.
-    async fn mark_deleting(&self, ids: &[HistoryId]) -> DeletingMarks<'_> {
-        let mut marks = DeletingMarks {
+    async fn guard_deleting<'a>(&self, ids: &'a [HistoryId]) -> DeletingMarks<'_, 'a> {
+        let marks = DeletingMarks {
             deleting: &self.deleting,
-            ids: Vec::with_capacity(ids.len()),
+            ids,
         };
+
         for id in ids {
             let _liveness = self.liveness_mutex.lock(id).await;
             *self.deleting.entry(*id).or_insert(0) += 1;
-            marks.ids.push(*id);
         }
+
         marks
     }
 
