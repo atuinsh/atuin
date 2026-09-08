@@ -1581,6 +1581,7 @@ impl Settings {
                     .unwrap_or_else(|| config::Value::new(None, config::ValueKind::Boolean(false))),
             )?
             .set_default("no_mouse", false)?
+            .set_default("pty_proxy.enabled", false)?
             .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__")))
     }
 

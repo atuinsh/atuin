@@ -98,7 +98,7 @@ impl PtyProxy {
 impl Init {
     fn run(self) -> Result<(), String> {
         let shell = detect_shell(self.shell)?;
-        let script = render_init(shell);
+        let script = init_script(shell);
         print!("{script}");
         Ok(())
     }
@@ -146,96 +146,98 @@ fn env_flag(name: &str) -> bool {
 
 /// Shell code that re-execs the current shell inside `atuin pty-proxy`.
 ///
-/// Guarded by `ATUIN_PTY_PROXY_ACTIVE`, so it is safe to emit more than once
-/// per shell startup: whichever copy runs first wins and the rest no-op. This
-/// lets `atuin init` embed the preamble (via the `pty_proxy.enabled` setting)
-/// without conflicting with an existing standalone `atuin pty-proxy init`
-/// line in shell config.
+/// Safe to emit more than once: the script checks whether a PTY proxy has already been spawned and
+/// won't spawn another. This lets `atuin init` embed the preamble (via the `pty_proxy.enabled`
+/// setting) without conflicting with an existing standalone `atuin pty-proxy init` line in shell
+/// config.
 #[must_use]
 pub fn init_script(shell: Shell) -> &'static str {
-    render_init(shell)
+    match shell {
+        Shell::Bash | Shell::Zsh => BASH_ZSH_INIT,
+        Shell::Fish => FISH_INIT,
+        Shell::Nu => NU_INIT,
+    }
 }
 
-fn render_init(shell: Shell) -> &'static str {
-    // Each shell embeds its own interpreter path in the `--shell` argument so
-    // `atuin pty-proxy` spawns the same binary that sourced the init, rather
-    // than resolving via $PATH (which can pick the wrong installation when the
-    // user has, for instance, both /usr/bin/bash and /opt/homebrew/bin/bash).
-    match shell {
-        Shell::Bash | Shell::Zsh => {
-            r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
-  _atuin_pty_proxy_tmux_current="${TMUX:-}"
-  _atuin_pty_proxy_tmux_previous="${ATUIN_PTY_PROXY_TMUX:-}"
+/// Preamble for Bash and Zsh.
+///
+/// Each shell embeds its own interpreter path in the `--shell` argument so `atuin pty-proxy`
+/// spawns the same binary that sourced the init, rather than resolving via `$PATH` (which can
+/// pick the wrong installation when the user has, for instance, both `/usr/bin/bash` and
+/// `/opt/homebrew/bin/bash`).
+const BASH_ZSH_INIT: &str = r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]] &&
+  [[ -z ${__atuin_pty_proxy_owns_tty-} ]]
+then
+  __atuin_pty_proxy_owns_tty=0
 
-  if [[ -z "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || [[ "$_atuin_pty_proxy_tmux_current" != "$_atuin_pty_proxy_tmux_previous" ]]; then
-    export ATUIN_PTY_PROXY_ACTIVE=1
-    export ATUIN_PTY_PROXY_TMUX="$_atuin_pty_proxy_tmux_current"
-    if [[ -n "${BASH_VERSION:-}" ]]; then
-      exec atuin pty-proxy --shell "$BASH"
-    elif [[ -n "${ZSH_VERSION:-}" ]]; then
-      # Prefer ZSH_ARGZERO (zsh 5.3+) — it preserves the path zsh was
-      # invoked with — and fall back to PATH lookup otherwise. Login shells
-      # set argv[0] to "-zsh", and ZSH_ARGZERO keeps that leading dash, so
-      # strip it (${var#-}) before passing the path along.
-      _atuin_pty_proxy_zsh="${ZSH_ARGZERO:-$(command -v zsh)}"
-      exec atuin pty-proxy --shell "${_atuin_pty_proxy_zsh#-}"
-    else
-      exec atuin pty-proxy
-    fi
+  # Check whether this terminal is already running in an Atuin PTY proxy.
+  __atuin_pty_proxy_answer=$(atuin __internal pty-proxy-active 2>/dev/null)
+  if [[ $? -ne 0 ]]; then
+    :
+  elif [[ $__atuin_pty_proxy_answer = 1 ]]; then
+    __atuin_pty_proxy_owns_tty=1
+  elif [[ -n ${ATUIN_PTY_PROXY_FAILED-} ]]; then
+    # If the PTY proxy failed to spawn its server, stop here instead of endlessly
+    # trying to spawn more proxies.
+    :
+  elif [[ -n "${BASH_VERSION:-}" ]]; then
+    exec atuin pty-proxy --shell "$BASH"
+  elif [[ -n "${ZSH_VERSION:-}" ]]; then
+    # Prefer ZSH_ARGZERO (zsh 5.3+) -- it preserves the path zsh was
+    # invoked with -- and fall back to PATH lookup otherwise. Login shells
+    # set argv[0] to "-zsh", and ZSH_ARGZERO keeps that leading dash, so
+    # strip it (${var#-}) before passing it along.
+    _atuin_pty_proxy_zsh="${ZSH_ARGZERO:-$(command -v zsh)}"
+    exec atuin pty-proxy --shell "${_atuin_pty_proxy_zsh#-}"
+  else
+    exec atuin pty-proxy
   fi
-
-  unset _atuin_pty_proxy_tmux_current _atuin_pty_proxy_tmux_previous
+  unset __atuin_pty_proxy_answer
 fi
-"#
-        }
-        Shell::Fish => {
-            r#"if status is-interactive; and test -t 0; and test -t 1
-    set -l _atuin_pty_proxy_tmux_current ""
-    if set -q TMUX
-        set _atuin_pty_proxy_tmux_current "$TMUX"
-    end
+"#;
 
-    set -l _atuin_pty_proxy_tmux_previous ""
-    if set -q ATUIN_PTY_PROXY_TMUX
-        set _atuin_pty_proxy_tmux_previous "$ATUIN_PTY_PROXY_TMUX"
-    end
+/// Preamble for fish.
+const FISH_INIT: &str = r#"if status is-interactive; and test -t 0; and test -t 1
+    and not set -q __atuin_pty_proxy_owns_tty
 
-    if not set -q ATUIN_PTY_PROXY_ACTIVE
-        set -gx ATUIN_PTY_PROXY_ACTIVE 1
-        set -gx ATUIN_PTY_PROXY_TMUX "$_atuin_pty_proxy_tmux_current"
-        exec atuin pty-proxy --shell (status fish-path)
-    else if test "$_atuin_pty_proxy_tmux_current" != "$_atuin_pty_proxy_tmux_previous"
-        set -gx ATUIN_PTY_PROXY_ACTIVE 1
-        set -gx ATUIN_PTY_PROXY_TMUX "$_atuin_pty_proxy_tmux_current"
+    set -g __atuin_pty_proxy_owns_tty 0
+    set -l __atuin_pty_proxy_answer (atuin __internal pty-proxy-active 2>/dev/null)
+    set -l __atuin_pty_proxy_status $status
+
+    if test $__atuin_pty_proxy_status -ne 0
+    else if test "$__atuin_pty_proxy_answer" = 1
+        set -g __atuin_pty_proxy_owns_tty 1
+    else if not set -q ATUIN_PTY_PROXY_FAILED
         exec atuin pty-proxy --shell (status fish-path)
     end
 end
-"#
-        }
-        // Nushell cannot dynamically source the output of `atuin init nu`,
-        // so we only output the pty-proxy preamble here. Users must also set up
-        // `atuin init nu` separately.
-        Shell::Nu => {
-            r#"if (is-terminal --stdin) and (is-terminal --stdout) {
-    let tmux_current = ($env.TMUX? | default "")
-    let tmux_previous = ($env.ATUIN_PTY_PROXY_TMUX? | default "")
+"#;
 
-    if (($env.ATUIN_PTY_PROXY_ACTIVE? | default "") | is-empty) or ($tmux_current != $tmux_previous) {
-        $env.ATUIN_PTY_PROXY_ACTIVE = "1"
-        $env.ATUIN_PTY_PROXY_TMUX = $tmux_current
+/// Preamble for Nushell.
+///
+/// Nushell cannot dynamically source the output of `atuin init nu`, so only the pty-proxy
+/// preamble is emitted here; users must also set up `atuin init nu` separately.
+const NU_INIT: &str = r#"if (is-terminal --stdin) and (is-terminal --stdout) and ('__atuin_pty_proxy' not-in $env) {
+    # Use a record rather than a plain string so the variable doesn't get exported
+    # to child processes -- we want each child shell to perform its own detection.
+    $env.__atuin_pty_proxy = { owns_tty: false }
+
+    let atuin_proxy_check = (do -i { atuin __internal pty-proxy-active } | complete)
+
+    if $atuin_proxy_check.exit_code != 0 {
+    } else if ($atuin_proxy_check.stdout | str trim) == "1" {
+        $env.__atuin_pty_proxy = { owns_tty: true }
+    } else if ('ATUIN_PTY_PROXY_FAILED' not-in $env) {
         exec atuin pty-proxy --shell $nu.current-exe
     }
 }
-"#
-        }
-    }
-}
+"#;
 
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
 
-    use super::{Shell, render_init, shell_from_name};
+    use super::{Shell, init_script, shell_from_name};
 
     #[rstest]
     #[case::zsh_abs_path("/bin/zsh", Shell::Zsh)]
@@ -250,50 +252,54 @@ mod tests {
     fn every_init_execs_pty_proxy(
         #[values(Shell::Zsh, Shell::Bash, Shell::Fish, Shell::Nu)] shell: Shell,
     ) {
-        assert!(render_init(shell).contains("exec atuin pty-proxy"));
+        assert!(init_script(shell).contains("exec atuin pty-proxy"));
     }
 
     #[rstest]
-    fn posix_init_uses_exec_and_tmux_guard() {
-        let script = render_init(Shell::Bash);
-        assert!(script.contains("ATUIN_PTY_PROXY_TMUX"));
-        assert!(!script.contains("eval \"$(atuin init bash)\""));
+    fn every_init_asks_atuin_whether_this_terminal_has_a_proxy(
+        #[values(Shell::Zsh, Shell::Bash, Shell::Fish, Shell::Nu)] shell: Shell,
+    ) {
+        assert!(init_script(shell).contains("__internal pty-proxy-active"));
+    }
+
+    #[rstest]
+    fn every_init_stops_when_the_proxy_says_it_failed(
+        #[values(Shell::Zsh, Shell::Bash, Shell::Fish, Shell::Nu)] shell: Shell,
+    ) {
+        let script = init_script(shell);
+        assert!(script.contains("ATUIN_PTY_PROXY_FAILED"));
+    }
+
+    #[rstest]
+    #[case(Shell::Bash, r#"[[ -z "${__atuin_pty_proxy_owns_tty:-}" ]]"#)]
+    #[case(Shell::Fish, "not set -q __atuin_pty_proxy_owns_tty")]
+    #[case(Shell::Nu, "'__atuin_pty_proxy' not-in $env")]
+    fn init_no_ops_when_emitted_twice(#[case] shell: Shell, #[case] guard: &str) {
+        // `atuin init` embeds the preamble, and users may also still have a standalone
+        // `atuin pty-proxy init` line. Whichever copy runs first decides; the second must not
+        // repeat the check.
+        assert!(init_script(shell).contains(guard), "{shell:?} repeats the check");
     }
 
     #[rstest]
     fn posix_init_has_no_double_braces() {
-        let script = render_init(Shell::Bash);
+        let script = init_script(Shell::Bash);
         assert!(!script.contains("${{"), "double braces in bash init script");
     }
 
     #[rstest]
     fn init_scripts_forward_shell_path() {
-        let posix = render_init(Shell::Bash);
+        let posix = init_script(Shell::Bash);
         assert!(posix.contains(r#"exec atuin pty-proxy --shell "$BASH""#));
         // zsh: capture ZSH_ARGZERO (with PATH fallback), then strip the
         // leading dash present on login shells before forwarding the path.
         assert!(posix.contains(r#"_atuin_pty_proxy_zsh="${ZSH_ARGZERO:-$(command -v zsh)}""#));
         assert!(posix.contains(r#"exec atuin pty-proxy --shell "${_atuin_pty_proxy_zsh#-}""#));
 
-        let fish = render_init(Shell::Fish);
+        let fish = init_script(Shell::Fish);
         assert!(fish.contains("exec atuin pty-proxy --shell (status fish-path)"));
 
-        let nu = render_init(Shell::Nu);
+        let nu = init_script(Shell::Nu);
         assert!(nu.contains("exec atuin pty-proxy --shell $nu.current-exe"));
-    }
-
-    #[rstest]
-    fn fish_init_uses_source() {
-        let script = render_init(Shell::Fish);
-        assert!(!script.contains("atuin init fish | source"));
-    }
-
-    #[rstest]
-    fn nu_init_uses_exec_and_tty_guard() {
-        let script = render_init(Shell::Nu);
-        assert!(script.contains("ATUIN_PTY_PROXY_TMUX"));
-        assert!(script.contains("is-terminal --stdin"));
-        assert!(script.contains("is-terminal --stdout"));
-        assert!(script.contains("ATUIN_PTY_PROXY_ACTIVE"));
     }
 }
