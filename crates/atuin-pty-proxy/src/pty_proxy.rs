@@ -273,7 +273,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case(Shell::Bash, r#"[[ -z "${__atuin_pty_proxy_owns_tty:-}" ]]"#)]
+    #[case(Shell::Bash, r#"[[ -z ${__atuin_pty_proxy_owns_tty-} ]]"#)]
     #[case(Shell::Fish, "not set -q __atuin_pty_proxy_owns_tty")]
     #[case(Shell::Nu, "'__atuin_pty_proxy' not-in $env")]
     fn init_no_ops_when_emitted_twice(#[case] shell: Shell, #[case] guard: &str) {
