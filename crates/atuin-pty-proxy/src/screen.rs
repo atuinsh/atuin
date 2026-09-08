@@ -58,6 +58,8 @@ pub fn is_pty_proxy_child() -> bool {
 }
 
 /// Check whether `socket_dir` contains a live socket corresponding to `tty_id`.
+///
+/// If so, returns the path to the socket.
 fn live_socket(mut socket_dir: PathBuf, tty: TtyId) -> Option<PathBuf> {
     socket_dir.push(socket_name(tty));
     std::os::unix::net::UnixStream::connect(&socket_dir).ok()?;
