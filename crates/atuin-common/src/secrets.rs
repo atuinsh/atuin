@@ -52,7 +52,15 @@ struct Pattern {
 /// swallowed past the value. Balanced quotes are tried first, which is what makes `"v",` stop.
 macro_rules! secret_value {
     () => {
-        r#"(?<secret>(?:"[^"\n]*"|'[^'\n]*'|[^\s"',;)\]}]+|["'])+)"#
+        concat!(
+            r#"(?<secret>(?:\x1b\[[0-9;]*m)*(?:"#,
+            r#"\{(?:[^{}\n]|\{(?:[^{}\n]|\{[^{}\n]*\})*\})*\}"#,
+            r#"|\[(?:[^\[\]\n]|\[(?:[^\[\]\n]|\[[^\[\]\n]*\])*\])*\]"#,
+            r#"|\|[^|\n]+\|"#,
+            r#"|(?:"(?:[^"\\\n]|\\.)*"|'[^'\n]*'|["'])(?:"(?:[^"\\\n]|\\.)*"|'[^'\n]*'|["']|[^\s"',;)\]}]+)*"#,
+            r#"|[^\s"',;)\]}=:][^\s"',;)\]}]*"#,
+            "))"
+        )
     };
 }
 
@@ -895,6 +903,20 @@ mod tests {
             ("echo $NAME", "echo $NAME"),
             ("NAME is required", "NAME is required"),
             ("set NAME, and OTHER", "set NAME, and OTHER"),
+            ("NAME={\"type\":\"service_account\",\"private_key\":\"-----BEGIN\"}", "NAME=****"),
+            ("NAME={\"type\": \"service_account\", \"private_key\": \"-----BEGIN\"}", "NAME=****"),
+            ("NAME={\"a\": {\"b\": {\"c\": 1}}} tail", "NAME=**** tail"),
+            ("{\"NAME\": {\"a\":1}, \"X\": 1}", "{\"NAME\": ****, \"X\": 1}"),
+            ("NAME=[\"a\", \"b\"] rest", "NAME=**** rest"),
+            ("│ NAME │ {\"type\": \"service_account\"} │", "│ NAME │ **** │"),
+            ("NAME=\x1b[31;1mwJalr\x1b[m", "NAME=****"),
+            ("NAME=\x1b[38;2;166;226;46m\"wJalr\"\x1b[m", "NAME=****"),
+            ("[\"NAME=V\",\"PATH=/usr/bin\",\"HOME=/root\"]", "[\"NAME=****\",\"PATH=/usr/bin\",\"HOME=/root\"]"),
+            ("Environment=\"NAME=V\" \"FOO=bar\"", "Environment=\"NAME=****\" \"FOO=bar\""),
+            ("{\"NAME\": \"ab\\\"cd\", \"Expiration\": \"2026\"}", "{\"NAME\": ****, \"Expiration\": \"2026\"}"),
+            ("NAME: |wJalr/K7|", "NAME: ****"),
+            ("NAME   = ", "NAME   = "),
+            ("NAME  =\nOTHER=x", "NAME  =\nOTHER=x"),
         )]
         shape: (&str, &str),
     ) {
@@ -926,6 +948,8 @@ mod tests {
             ("atuin login FLAG \"oops\nls -la\ncat f", "atuin login FLAG ****\nls -la\ncat f"),
             ("atuin login FLAG", "atuin login FLAG"),
             ("atuin login FLAG ****", "atuin login FLAG ****"),
+            ("atuin login FLAG \x1b[31;1mhunter2\x1b[m", "atuin login FLAG ****"),
+            ("atuin login FLAG=", "atuin login FLAG="),
         )]
         shape: (&str, &str),
     ) {
