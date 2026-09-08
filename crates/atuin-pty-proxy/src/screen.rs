@@ -159,7 +159,7 @@ pub struct SocketServer {
 impl SocketServer {
     /// Create a new socket server.
     ///
-    /// The server will start running once [`spawn`] is called.
+    /// The server will start running once [`Self::spawn`] is called.
     pub fn new(path: &std::path::Path) -> std::io::Result<Self> {
         Ok(Self {
             listener: UnixListener::bind(path)?,
