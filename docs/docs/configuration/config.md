@@ -899,7 +899,7 @@ Atuin tries Zellij.
 
 Atuin renders inline when no supported multiplexer is detected. If starting a
 selected popup fails, Atuin returns the failure and leaves the current command
-unchanged; it does not open a second inline search.
+unchanged; it doesn't open a second inline search.
 
 !!! note "Requirements"
 
@@ -919,7 +919,7 @@ the popup for a single session without touching your config, set
 `ATUIN_POPUP_ENABLED=false` after running `atuin init`.
 
 After successfully loading a config that contains `[tmux]` but not `[popup]`,
-Atuin automatically renames the old section to `[popup]`. If the config cannot
+Atuin automatically renames the old section to `[popup]`. If the config can't
 be updated, the old section remains supported in memory. If both sections are
 present, the file is left unchanged and `[popup]` takes precedence without
 merging individual settings.
