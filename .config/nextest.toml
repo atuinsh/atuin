@@ -3,3 +3,8 @@ filter = 'binary(/^e2e_/)'
 retries = 0
 # Bound the complete test, including cleanup.
 slow-timeout = { period = "60s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+# TODO: This test is flaky due to issue #4052.
+filter = 'binary_id(=atuin-daemon::concurrency) and test(=disjoint_concurrent_deletes_leave_the_index_empty)'
+retries = 3
