@@ -1,5 +1,6 @@
 #![allow(dead_code, unused_imports)]
 
+mod fjall;
 mod nop;
 
 use std::future::Future;
@@ -7,6 +8,7 @@ use std::future::Future;
 use atuin_client::history::{CommandCapture, HistoryId};
 use thiserror::Error;
 
+pub use fjall::FjallBackend;
 pub use nop::NopBackend;
 
 pub type BackendError = Box<dyn std::error::Error + Send + Sync + 'static>;
