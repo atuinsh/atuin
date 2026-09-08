@@ -632,9 +632,13 @@ dependencies = [
  "crossterm",
  "easy-cast",
  "eyre",
+ "parking_lot",
  "portable-pty",
  "rstest",
+ "rustix",
  "signal-hook",
+ "tempfile",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

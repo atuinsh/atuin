@@ -7,6 +7,7 @@ pub mod db;
 pub mod docs;
 pub mod encryption;
 pub mod filter;
+pub mod fs;
 pub mod futures;
 pub mod logs;
 #[cfg(feature = "os")]
