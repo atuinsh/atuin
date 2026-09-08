@@ -125,8 +125,8 @@ impl Drop for DeletingMarks<'_> {
     }
 }
 
-/// How many stripes back [`HistoryJournal::liveness_mutex`]. History ids are UUIDv7 and hash
-/// evenly, so collisions only cost a little waiting.
+/// How many stripes back [`HistoryJournal::liveness_mutex`]. History ids hash evenly under the
+/// default hasher, so collisions only cost a little waiting.
 const LIVENESS_STRIPES: NonZeroUsize = NonZeroUsize::new(64).unwrap();
 
 /// Registry of in-flight commands which performs output capture, management, storage and
@@ -169,7 +169,11 @@ pub struct HistoryJournal {
     deleting: DashMap<HistoryId, usize>,
 
     /// Serialises the liveness check + write in [`Self::register_command_output`] against the
-    /// marking in [`Self::delete`] and the teardown in [`Self::cancel`].
+    /// marking in [`Self::delete`] and the teardown in [`Self::cancel`], one stripe per history id.
+    ///
+    /// Lock order: a liveness stripe is always taken *before* an
+    /// [`InFlightCmd::finalization_mutex`], and a task never holds two stripes at once
+    /// (`delete` marks ids one at a time).
     liveness_mutex: StripedMutex<HistoryId, ()>,
 }
 
@@ -423,7 +427,7 @@ impl HistoryJournal {
 
         // Claim every id before touching anything: from here on `register_command_output` refuses
         // them, so no capture can land between the output removal below and the record removal
-        // after it. Marking takes the same per-id gate the register path holds across its
+        // after it. Marking takes the same liveness stripe the register path holds across its
         // check-and-write, so a capture that passed its check is stored by the time its id is
         // marked, and the removal below sees it. The marks are released when `_marks` drops, on
         // success or on any early return.

@@ -76,9 +76,7 @@ mod tests {
         });
         // While the guard is held, the second lock of the same key cannot complete.
         assert!(
-            tokio::time::timeout(Duration::from_millis(50), &mut Box::pin(waiter_ready(&waiter)))
-                .await
-                .is_err()
+            tokio::time::timeout(Duration::from_millis(50), waiter_ready(&waiter)).await.is_err()
         );
 
         drop(held);
@@ -121,5 +119,45 @@ mod tests {
             "256 keys should land in at least half of 64 stripes, got {}",
             used.len()
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn colliding_keys_serialise() {
+        // One stripe: two different keys collide, so the second waits for the first.
+        let mutex: Arc<StripedMutex<u32, ()>> = Arc::new(StripedMutex::new(stripes(1)));
+        let held = mutex.lock(&1).await;
+
+        let contender = Arc::clone(&mutex);
+        let waiter = tokio::spawn(async move {
+            let _ = contender.lock(&2).await;
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), waiter_ready(&waiter)).await.is_err()
+        );
+
+        drop(held);
+        waiter.await.expect("the waiter acquires the stripe once it is released");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn keys_on_different_stripes_lock_independently() {
+        let mutex: StripedMutex<u64, ()> = StripedMutex::new(stripes(64));
+        let first = 0u64;
+        let other = (1..=1024u64)
+            .find(|k| mutex.stripe_of(k) != mutex.stripe_of(&first))
+            .expect("one of 1024 keys lands on another of 64 stripes");
+        let _held = mutex.lock(&first).await;
+
+        // Not one big lock: a key on another stripe is acquired immediately.
+        assert!(tokio::time::timeout(Duration::from_millis(50), mutex.lock(&other)).await.is_ok());
+    }
+
+    #[rstest]
+    fn is_send_and_sync_regardless_of_the_key() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        // `Rc` is neither; the key marker must not drag the key's auto traits into the mutex.
+        assert_send_sync::<StripedMutex<std::rc::Rc<u8>, ()>>();
     }
 }
