@@ -68,15 +68,16 @@
 //!   - [`HistoryJournal::lifecycle_mutex`] is a [sharded
 //!     mutex](http://quinnftw.com/sharding-to-reduce-mutex-contention/) which guards [`HistoryId`]s
 //!     as they transition between states. _**Note to maintainers**: This sharded mutex **can
-//!     deadlock** if you are awaiting a [`HistoryId`], while holding another [`HistoryId`].
-//!     **Always** avoid nesting [`HistoryJournal::lifecycle_mutex`] accesses._
+//!     deadlock** if you are awaiting a [`HistoryId`], while holding the same or another
+//!     [`HistoryId`]. **Always** avoid nesting [`HistoryJournal::lifecycle_mutex`] accesses._
 //!
 //!     This utility is critical as it prevents parallel [`HistoryJournal::cancel`],
 //!     [`HistoryJournal::delete`], [`HistoryJournal::register_command_output`], etc. requests from
 //!     stomping over each other and putting us in an inconsistent state.
 //!   - [`InFlightCmd::finalization_mutex`] is used to prevent the cancellation of a command as it
 //!     is being finalized. It is acquired at the start of [`HistoryJournal::finish`],
-//!     [`HistoryJournal::cancel`] and for each entry deleted during [`HistoryJournal::delete`].
+//!     [`HistoryJournal::cancel`] and for each in-flight entry deleted during
+//!     [`HistoryJournal::delete`].
 //!
 
 use std::num::NonZeroUsize;
@@ -316,14 +317,11 @@ impl HistoryJournal {
             duration = Empty,
         );
 
-        self.active_cmds.insert(
-            id,
-            InFlightCmd {
-                history: history.clone(),
-                span,
-                finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
-            },
-        );
+        self.active_cmds.insert(id, InFlightCmd {
+            history: history.clone(),
+            span,
+            finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
+        });
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
     }
