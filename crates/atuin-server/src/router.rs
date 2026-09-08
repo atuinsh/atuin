@@ -128,6 +128,7 @@ pub fn router(database: Arc<dyn DynDatabase>, settings: Settings) -> Router {
         .route("/api/v0/record", post(handlers::v0::record::post))
         .route("/api/v0/record", get(handlers::v0::record::index))
         .route("/api/v0/record/next", get(handlers::v0::record::next))
+        .route("/api/v0/record/repair", post(handlers::v0::record::repair))
         .route("/api/v0/store", delete(handlers::v0::store::delete))
         .negotiate_capabilities(caps.clone());
 

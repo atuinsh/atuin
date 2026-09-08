@@ -47,6 +47,46 @@ pub async fn post(
     Ok(())
 }
 
+/// Replace the encrypted payload of existing records this user owns.
+///
+/// Used by `atuin store repair` to surgically fix records whose payload cannot be
+/// decrypted with the current key (e.g. left over from a botched key rotation).
+/// Only `data` and `cek` are updated - every other column is preserved so that
+/// PASETO implicit assertions still verify. Records the user does not own are
+/// silently skipped by the database layer.
+#[instrument(skip_all, err(level = "warn"), fields(user.id = user.id))]
+pub async fn repair(
+    UserAuth(user): UserAuth,
+    state: State<AppState>,
+    Json(records): Json<Vec<Record<EncryptedData>>>,
+) -> Result<(), ErrorResponseStatus<'static>> {
+    let State(AppState { database, settings }) = state;
+
+    tracing::debug!(count = records.len(), user = user.username, "request to repair records");
+
+    counter!("atuin_record_repair_requested").increment(records.len() as u64);
+
+    let keep = records
+        .iter()
+        .all(|r| r.data.raw.len() <= settings.max_record_size || settings.max_record_size == 0);
+
+    if !keep {
+        counter!("atuin_record_too_large").increment(1);
+
+        return Err(ErrorResponse::reply("could not repair records; record too large")
+            .with_status(StatusCode::BAD_REQUEST));
+    }
+
+    if let Err(e) = database.repair_records(&user, &records).await {
+        error!("failed to repair records: {}", e);
+
+        return Err(ErrorResponse::reply("failed to repair records")
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR));
+    };
+
+    Ok(())
+}
+
 #[instrument(skip_all, err(level = "warn"), fields(user.id = user.id))]
 pub async fn index(
     UserAuth(user): UserAuth,
