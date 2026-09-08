@@ -92,6 +92,41 @@ async fn output_is_stored_only_for_commands_that_cannot_print_the_key(
 
 #[rstest]
 #[tokio::test]
+async fn output_for_a_cancelled_command_is_not_stored(#[future(awt)] env: TestEnv) {
+    let mut client = env.history_client().await;
+    let history: History = History::daemon()
+        .timestamp(time::OffsetDateTime::now_utc())
+        .command("echo hello".to_string())
+        .cwd("/tmp".to_string())
+        .session("test-session".to_string())
+        .cmd_origin(
+            #[allow(deprecated)]
+            atuin_domain::record::CmdOrigin::parse_lenient("test-host"),
+        )
+        .build()
+        .into();
+    let id: HistoryId =
+        client.start_history(history).await.unwrap().id.unwrap().try_into().unwrap();
+    client.cancel_history(id).await.unwrap();
+
+    client.register_command_output(id, "hello", false, 5, 80, 24).await.unwrap();
+
+    assert!(client.get_command_output(id, vec![]).await.unwrap().is_none());
+}
+
+#[rstest]
+#[tokio::test]
+async fn output_for_an_unknown_command_is_not_stored(#[future(awt)] env: TestEnv) {
+    let mut client = env.history_client().await;
+    let id = HistoryId::from_bytes(*uuid::Uuid::from_u128(7).as_bytes());
+
+    client.register_command_output(id, "hello", false, 5, 80, 24).await.unwrap();
+
+    assert!(client.get_command_output(id, vec![]).await.unwrap().is_none());
+}
+
+#[rstest]
+#[tokio::test]
 async fn end_history_without_duration_derives_from_start(#[future(awt)] env: TestEnv) {
     let mut client = env.history_client().await;
     let history: History = History::daemon()

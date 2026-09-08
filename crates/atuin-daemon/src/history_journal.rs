@@ -451,7 +451,7 @@ impl HistoryJournal {
             Some(command) => Some(command),
             None => self.history_db.load(id).await.ok().flatten().map(|history| history.command),
         };
-        if command.is_some_and(|command| atuin_common::secrets::output_unsafe(&command)) {
+        if command.is_none_or(|command| atuin_common::secrets::output_unsafe(&command)) {
             return Ok(());
         }
         self.output_capture.capture(id, capture).await
