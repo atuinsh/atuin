@@ -28,6 +28,7 @@
 //! It is possible to stream events out of [`HistoryJournal`] via [`HistoryJournal::subscribe`]
 //! which returns a new [`futures::Stream`] of [`CmdEvent`] events.
 
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -36,6 +37,7 @@ use atuin_client::history::store::HistoryStore;
 use atuin_client::history::{CommandCapture, History, HistoryId};
 use atuin_client::packfile;
 use atuin_client::settings::Search;
+use atuin_common::sync::StripedMutex;
 use atuin_domain::caps::{CapClient, PackfileCap};
 use atuin_domain::record::{RecordId, RecordIdx, RecordSeriesKey, RecordTag};
 use dashmap::DashMap;
@@ -101,38 +103,6 @@ struct InFlightCmd {
     finalization_mutex: Arc<tokio::sync::Mutex<()>>,
 }
 
-/// A fixed set of striped async mutexes indexed by history id.
-///
-/// The gate makes "check that an id is live, then store its output" atomic against "mark the id as
-/// being deleted" (see [`HistoryJournal::register_command_output`] and
-/// [`HistoryJournal::delete`]). Striping keeps it allocation-free: two ids may share a stripe,
-/// which only costs a little unnecessary waiting, never correctness.
-///
-/// Lock order: a stripe is always taken *before* an [`InFlightCmd::finalization_mutex`], and a
-/// task never holds two stripes at once (`delete` marks ids one at a time).
-#[derive(Debug)]
-struct IdGate {
-    stripes: Box<[tokio::sync::Mutex<()>]>,
-}
-
-impl IdGate {
-    const STRIPES: u64 = 64;
-
-    fn new() -> Self {
-        Self {
-            stripes: (0..Self::STRIPES).map(|_| tokio::sync::Mutex::new(())).collect(),
-        }
-    }
-
-    async fn lock(&self, id: HistoryId) -> tokio::sync::MutexGuard<'_, ()> {
-        // UUIDv7 keeps its random bits at the tail, so the tail spreads ids across stripes.
-        let bytes = id.into_bytes();
-        let tail = u64::from_le_bytes(bytes[8..].try_into().expect("a UUID has 16 bytes"));
-        let idx = usize::try_from(tail % Self::STRIPES).expect("a stripe index is below 64");
-        self.stripes[idx].lock().await
-    }
-}
-
 /// The ids a running [`HistoryJournal::delete`] has claimed, released on drop.
 ///
 /// Reference-counted in [`HistoryJournal::deleting`] so that two concurrent deletes of the same id
@@ -154,6 +124,10 @@ impl Drop for DeletingMarks<'_> {
         }
     }
 }
+
+/// How many stripes back [`HistoryJournal::liveness_mutex`]. History ids are UUIDv7 and hash
+/// evenly, so collisions only cost a little waiting.
+const LIVENESS_STRIPES: NonZeroUsize = NonZeroUsize::new(64).unwrap();
 
 /// Registry of in-flight commands which performs output capture, management, storage and
 /// retrieval.
@@ -196,7 +170,7 @@ pub struct HistoryJournal {
 
     /// Serialises the liveness check + write in [`Self::register_command_output`] against the
     /// marking in [`Self::delete`] and the teardown in [`Self::cancel`].
-    id_gate: IdGate,
+    liveness_mutex: StripedMutex<HistoryId, ()>,
 }
 
 /// Errors returned by [`HistoryJournal::finish`].
@@ -272,7 +246,7 @@ impl HistoryJournal {
             broadcast,
             output_capture,
             deleting: DashMap::new(),
-            id_gate: IdGate::new(),
+            liveness_mutex: StripedMutex::new(LIVENESS_STRIPES),
         }
     }
 
@@ -292,14 +266,11 @@ impl HistoryJournal {
             duration = Empty,
         );
 
-        self.active_cmds.insert(
-            id,
-            InFlightCmd {
-                history: history.clone(),
-                span,
-                finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
-            },
-        );
+        self.active_cmds.insert(id, InFlightCmd {
+            history: history.clone(),
+            span,
+            finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
+        });
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
     }
@@ -401,7 +372,7 @@ impl HistoryJournal {
         // `register_command_output`.
         //
         // This puts us in a nasty position -- the `register_command_output` can regiser
-        let _gate = self.id_gate.lock(history_id).await;
+        let _liveness = self.liveness_mutex.lock(&history_id).await;
 
         let lock = self
             .active_cmds
@@ -576,7 +547,7 @@ impl HistoryJournal {
             ids: Vec::with_capacity(ids.len()),
         };
         for id in ids {
-            let _gate = self.id_gate.lock(*id).await;
+            let _liveness = self.liveness_mutex.lock(id).await;
             *self.deleting.entry(*id).or_insert(0) += 1;
             marks.ids.push(*id);
         }
@@ -592,7 +563,7 @@ impl HistoryJournal {
         id: HistoryId,
         capture: CommandCapture,
     ) -> Result<(), RegisterOutputError> {
-        let _gate = self.id_gate.lock(id).await;
+        let _liveness = self.liveness_mutex.lock(&id).await;
 
         if self.deleting.contains_key(&id) {
             return Err(RegisterOutputError::NotLive(id));
