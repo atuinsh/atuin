@@ -1057,7 +1057,7 @@ mod tests {
         let mut n = 7u32;
         while line.len() < 1 << 20 {
             line.push_str("atuin login");
-            line.push_str(if n % 3 == 0 {
+            line.push_str(if n.is_multiple_of(3) {
                 "  "
             } else {
                 " "
