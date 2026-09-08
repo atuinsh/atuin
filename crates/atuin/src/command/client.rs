@@ -169,44 +169,66 @@ impl Cmd {
         }
 
         #[cfg(feature = "ai")]
-        let mut runtime = if matches!(&self, Self::Ai(_)) {
+        let use_multi_thread_runtime = matches!(&self, Self::Ai(_));
+        #[cfg(not(feature = "ai"))]
+        let use_multi_thread_runtime = false;
+
+        let Some(future) = self.run_inner()? else {
+            // The command was handled synchronously; return.
+            return Ok(());
+        };
+
+        let runtime = if use_multi_thread_runtime {
             tokio::runtime::Builder::new_multi_thread()
         } else {
             tokio::runtime::Builder::new_current_thread()
+        }
+        .enable_all()
+        .build()
+        .unwrap();
+
+        let res = runtime.block_on(future);
+        runtime.shutdown_timeout(std::time::Duration::from_millis(50));
+        res
+    }
+
+    /// Run the command, returning a future for commands that require async.
+    ///
+    /// If the command was able to be handled synchronously, returns `Ok(None)`. Otherwise, returns
+    /// `Ok(Some(future))` where `future` will run the command when awaited. Returns `Err` on error.
+    fn run_inner(self) -> Result<Option<impl Future<Output = Result<()>>>> {
+        let run_internal = if let Self::Internal(cmd) = &self {
+            match cmd.run() {
+                Some(func) => Some(func),
+                None => return Ok(None),
+            }
+        } else {
+            None
         };
 
-        #[cfg(not(feature = "ai"))]
-        let mut runtime = tokio::runtime::Builder::new_current_thread();
-
-        let runtime = runtime.enable_all().build().unwrap();
-
-        // For non-history commands, we want to initialize logging and the theme manager before
-        // doing anything else. History commands are performance-sensitive and run before and after
-        // every shell command, so we want to skip any unnecessary initialization for them.
         let settings = Settings::new().wrap_err("could not load client settings")?;
         let _logging = self
             .log_config(&settings)
             .map(|c| LogCtx::try_enable("atuin", &c))
             .transpose()
             .wrap_err("failed to enable logging")?;
-        let theme_manager = theme::ThemeManager::new(settings.theme.debug, None);
-        let res = runtime.block_on(self.run_inner(settings, theme_manager));
 
-        runtime.shutdown_timeout(std::time::Duration::from_millis(50));
-
-        res
+        Ok(Some(async {
+            if let Some(func) = run_internal {
+                func(settings).await
+            } else {
+                self.run_async(settings).await
+            }
+        }))
     }
 
     #[allow(clippy::too_many_lines)]
     // `atuin_ai::commands::run` is not `Send` because `eye_declare` holds a `StdoutLock` across
     // await points.
     #[allow(clippy::future_not_send)]
-    async fn run_inner(
-        self,
-        mut settings: Settings,
-        mut theme_manager: theme::ThemeManager,
-    ) -> Result<()> {
+    async fn run_async(self, mut settings: Settings) -> Result<()> {
         tracing::trace!(command = ?self, "client command");
+        let mut theme_manager = theme::ThemeManager::new(settings.theme.debug, None);
 
         // Skip initializing any databases for history
         // This is a pretty hot path, as it runs before and after every single command the user
@@ -219,7 +241,6 @@ impl Cmd {
             #[cfg(feature = "self-update")]
             Self::Update(update) => return update.run(&settings).await,
             Self::Config(config) => return config.run(&settings).await,
-            Self::Internal(cmd) => return cmd.run(&settings).await,
             Self::InternalDecoy => {
                 eprintln!("error: this command is not meant to be accessed directly");
                 std::process::exit(1);

@@ -633,16 +633,26 @@ impl HistoryJournal {
             return Err(RegisterOutputError::NotLive(id));
         }
 
-        let live = self.active_cmds.contains_key(&id)
-            || self
-                .history_db
+        // Resolve the command backing this id: an in-flight entry wins, otherwise the
+        // (non-deleted) history row. `None` means the command is gone or already deleted.
+        let command = if let Some(cmd) = self.active_cmds.get(&id) {
+            Some(cmd.history.command.clone())
+        } else {
+            self.history_db
                 .load(id)
                 .await
                 .map_err(|e| RegisterOutputError::HistoryDbFailed(e.into()))?
-                .is_some_and(|h| h.deleted_at.is_none());
+                .filter(|h| h.deleted_at.is_none())
+                .map(|h| h.command)
+        };
 
-        if !live {
+        let Some(command) = command else {
             return Err(RegisterOutputError::NotLive(id));
+        };
+
+        // Never persist output for commands that may carry secrets.
+        if atuin_common::secrets::output_unsafe(&command) {
+            return Ok(());
         }
 
         self.output_capture.capture(id, capture).await?;
