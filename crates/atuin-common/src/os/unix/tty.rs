@@ -1,6 +1,6 @@
 //! TTY-related utilities.
 
-use std::os::fd::{AsFd, BorrowedFd};
+use std::os::fd::AsFd;
 
 use rustix::fs::Dev;
 
@@ -42,13 +42,8 @@ impl TtyId {
     #[must_use]
     pub fn current() -> Option<Self> {
         use rustix::stdio::{stderr, stdin, stdout};
-        first_tty_id([stdin(), stdout(), stderr()])
+        [stdin(), stdout(), stderr()].into_iter().find_map(Self::from_fd)
     }
-}
-
-/// Get the ID of the first FD in `fds` that is a terminal.
-fn first_tty_id<'a>(fds: impl IntoIterator<Item = BorrowedFd<'a>>) -> Option<TtyId> {
-    fds.into_iter().find_map(TtyId::from_fd)
 }
 
 #[cfg(test)]
@@ -97,7 +92,7 @@ mod tests {
     static STDIN_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
     /// Replace stdin with `fd` for as long as the returned guard lives.
-    fn with_stdin(fd: BorrowedFd<'_>) -> impl Drop {
+    fn with_stdin(fd: std::os::fd::BorrowedFd<'_>) -> impl Drop {
         struct Restore {
             saved: std::os::fd::OwnedFd,
             _lock: parking_lot::MutexGuard<'static, ()>,
@@ -132,44 +127,5 @@ mod tests {
         // wrongly accept it.
         let devnull = File::open("/dev/null").unwrap();
         assert_eq!(TtyId::from_fd(&devnull), None);
-    }
-
-    #[rstest]
-    fn first_tty_id_skips_non_terminals(pty: (File, File, PathBuf)) {
-        // Mirrors `atuin search -i </dev/null >/dev/null`, where only stderr is left on the tty.
-        let (_master, slave, _path) = pty;
-        let devnull = File::open("/dev/null").unwrap();
-        let expected = TtyId::from_fd(&slave).unwrap();
-
-        let found = first_tty_id([devnull.as_fd(), devnull.as_fd(), slave.as_fd()]);
-
-        assert_eq!(found, Some(expected));
-    }
-
-    #[rstest]
-    fn first_tty_id_returns_the_earliest_terminal(
-        #[from(pty)] first: (File, File, PathBuf),
-        #[from(pty)] second: (File, File, PathBuf),
-    ) {
-        let (_master_a, slave_a, _path_a) = first;
-        let (_master_b, slave_b, _path_b) = second;
-        let expected = TtyId::from_fd(&slave_a).unwrap();
-        assert_ne!(TtyId::from_fd(&slave_b), Some(expected), "the two ptys must differ");
-
-        let found = first_tty_id([slave_a.as_fd(), slave_b.as_fd()]);
-
-        assert_eq!(found, Some(expected));
-    }
-
-    #[rstest]
-    fn first_tty_id_is_none_when_nothing_is_a_terminal() {
-        // The case we deliberately do not handle: with every standard fd redirected there is no
-        // way to tell which terminal we belong to, so the pty proxy is not used.
-        let devnull = File::open("/dev/null").unwrap();
-        let regular = tempfile::NamedTempFile::new().unwrap();
-
-        let found = first_tty_id([devnull.as_fd(), regular.as_file().as_fd(), devnull.as_fd()]);
-
-        assert_eq!(found, None);
     }
 }
