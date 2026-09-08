@@ -13,8 +13,9 @@ if [[ -z ${__atuin_pty_proxy_owns_tty-} ]]; then
     # so a manually started proxy still functions when `pty_proxy.enabled` is false.
     __atuin_pty_proxy_owns_tty=0
     if [[ -n ${ATUIN_PTY_PROXY_ACTIVE-} ]]; then
-        __atuin_pty_proxy_answer=$(atuin __internal pty-proxy-active 2>/dev/null)
-        if [[ $? -eq 0 ]] && [[ $__atuin_pty_proxy_answer = 1 ]]; then
+        if __atuin_pty_proxy_answer=$(atuin __internal pty-proxy-active 2>/dev/null) &&
+            [[ $__atuin_pty_proxy_answer = 1 ]]
+        then
             __atuin_pty_proxy_owns_tty=1
         fi
         unset __atuin_pty_proxy_answer
