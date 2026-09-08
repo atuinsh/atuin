@@ -56,6 +56,7 @@ macro_rules! secret_value {
             r#"(?<secret>(?:\x1b\[[0-9;]*m)*(?:"#,
             r#"\{(?:[^{}\n]|\{(?:[^{}\n]|\{[^{}\n]*\})*\})*\}"#,
             r#"|\[(?:[^\[\]\n]|\[(?:[^\[\]\n]|\[[^\[\]\n]*\])*\])*\]"#,
+            r#"|[{\[][^\n]*"#,
             r#"|\|[^|\n]+\|"#,
             r#"|(?:"(?:[^"\\\n]|\\.)*"|'[^'\n]*'|["'])(?:"(?:[^"\\\n]|\\.)*"|'[^'\n]*'|["']|[^\s"',;)\]}]+)*"#,
             r#"|[^\s"',;)\]}=:][^\s"',;)\]}]*"#,
@@ -76,11 +77,25 @@ macro_rules! secret_value {
 /// part of the value rather than as `type =`. The table-gap and `|` separators deliberately take the
 /// next word even in prose or a pipeline (`NAME  is required`, `"$NAME" | pbcopy`): over-redaction
 /// there is the price of catching `vault`/`doppler`-style tables.
+macro_rules! type_token {
+    () => {
+        r#"&?(?:'\w+[ \t]+)?[\w.:]+(?:[<\[](?:[^<>\[\]\n=]|[<\[][^<>\[\]\n=]*[>\]])*[>\]])?"#
+    };
+}
+
+macro_rules! type_annotation {
+    () => {
+        concat!(type_token!(), r"(?:[ \t]*\|[ \t]*", type_token!(), ")*")
+    };
+}
+
 macro_rules! assigned {
     ($name:literal) => {
         concat!(
             $name,
-            r#"(?:\w*["']?(?:\[\d+\])?\]?[ \t]*(?::[ \t]*[\w&<>\[\]'".:|, ]+?[ \t]+=|[?+]=|[=:][=>]?|[ \t]*[|│][ \t]*|[ \t]{2,}|\t)[ \t]*"#,
+            r#"(?:\w*["']?(?:\[\d+\])?\]?[ \t]*(?::[ \t]*"#,
+            type_annotation!(),
+            r#"[ \t]+=|[?+]=|[=:][=>]?|[ \t]*[|│][ \t]*|[ \t]{2,}|\t)[ \t]*"#,
             secret_value!(),
             ")?"
         )
@@ -978,6 +993,16 @@ mod tests {
             ("$NAME[1]: |wJalr/K7|", "$NAME[1]: ****"),
             ("NAME_JSON={\"type\": \"service_account\"}", "NAME_JSON=****"),
             ("NAME_OLD=wJalr", "NAME_OLD=****"),
+            ("{'NAME': 'wJalr', 'X': 'y = z'}", "{'NAME': ****, 'X': 'y = z'}"),
+            ("NAME: abc123 AWS_REGION = us-east-1", "NAME: **** AWS_REGION = us-east-1"),
+            ("NAME: wJalr, OTHER_TOKEN = tok", "NAME: ****, OTHER_TOKEN = tok"),
+            ("NAME: \"wJalr\", \"Expiration\": \"2026 = x\"", "NAME: ****, \"Expiration\": \"2026 = x\""),
+            ("NAME: Dict[str, Dict[str, str]] = {\"a\": {\"b\": \"c\"}}", "NAME: Dict[str, Dict[str, str]] = ****"),
+            ("NAME={\"abc", "NAME=****"),
+            ("NAME=[\"abc", "NAME=****"),
+            ("NAME={\"a\":{\"b\":{\"c\":{\"d\":1}}}}", "NAME=****"),
+            ("NAME=abc\"def\"", "NAME=****\"def\""),
+            ("NAME_FILE=/run/secrets/aws", "NAME_FILE=****"),
         )]
         shape: (&str, &str),
     ) {
@@ -1123,7 +1148,7 @@ mod tests {
             started.elapsed()
         };
 
-        let before = time(&quiet);
+        let before = (0..3).map(|_| time(&quiet)).min().unwrap();
         let _ = redact(&irregular_login_mentions());
         let after = time(&quiet);
 

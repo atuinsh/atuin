@@ -449,7 +449,13 @@ impl HistoryJournal {
         let in_flight = self.active_cmds.get(&id).map(|cmd| cmd.history.command.clone());
         let command = match in_flight {
             Some(command) => Some(command),
-            None => self.history_db.load(id).await.ok().flatten().map(|history| history.command),
+            None => match self.history_db.load(id).await {
+                Ok(history) => history.map(|history| history.command),
+                Err(e) => {
+                    tracing::warn!("could not look up the command for history {id}: {e}");
+                    None
+                }
+            },
         };
         if command.is_none_or(|command| atuin_common::secrets::output_unsafe(&command)) {
             return Ok(());
