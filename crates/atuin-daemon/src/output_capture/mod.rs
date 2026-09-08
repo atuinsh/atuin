@@ -360,9 +360,9 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn delete_removes_stored_output(store: TempStore) {
+    async fn remove_removes_stored_output(store: TempStore) {
         store.capture(hid(1), cap("hello")).await.expect("capture");
-        store.delete([hid(1)]).await.expect("delete");
+        store.remove([hid(1)]).await.expect("remove");
         assert!(store.get(hid(1)).await.expect("get").is_none());
     }
 
@@ -370,18 +370,18 @@ mod tests {
     #[case::no_ids(vec![])]
     #[case::unknown_id(vec![hid(9)])]
     #[tokio::test]
-    async fn delete_of_absent_ids_is_ok(store: TempStore, #[case] ids: Vec<HistoryId>) {
-        store.delete(ids).await.expect("delete is idempotent");
+    async fn remove_of_absent_ids_is_ok(store: TempStore, #[case] ids: Vec<HistoryId>) {
+        store.remove(ids).await.expect("remove is idempotent");
     }
 
     #[rstest]
     #[tokio::test]
-    async fn delete_only_removes_requested_ids(store: TempStore) {
+    async fn remove_only_removes_requested_ids(store: TempStore) {
         for n in 1..=3 {
             store.capture(hid(n), cap(&format!("out{n}"))).await.expect("capture");
         }
         // Present and absent ids in the same batch: the absent one is simply skipped.
-        store.delete([hid(1), hid(3), hid(9)]).await.expect("delete");
+        store.remove([hid(1), hid(3), hid(9)]).await.expect("remove");
         assert!(store.get(hid(1)).await.expect("get").is_none());
         assert_eq!(store.get(hid(2)).await.expect("get").expect("kept").output, "out2");
         assert!(store.get(hid(3)).await.expect("get").is_none());
@@ -389,21 +389,21 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn deleted_id_can_be_captured_again(store: TempStore) {
+    async fn removed_id_can_be_captured_again(store: TempStore) {
         store.capture(hid(1), cap("first")).await.expect("first");
-        store.delete([hid(1)]).await.expect("delete");
+        store.remove([hid(1)]).await.expect("remove");
         // The tombstone must free the id for the capture-once check, not merely hide the value.
-        store.capture(hid(1), cap("second")).await.expect("recapture after delete");
+        store.capture(hid(1), cap("second")).await.expect("recapture after remove");
         assert_eq!(store.get(hid(1)).await.expect("get").expect("present").output, "second");
     }
 
     #[rstest]
     #[tokio::test]
-    async fn discard_removes_stored_output(store: TempStore) {
+    async fn remove_after_removal_is_idempotent(store: TempStore) {
         store.capture(hid(1), cap("hello")).await.expect("capture");
-        store.discard([hid(1)]).await.expect("discard");
+        store.remove([hid(1)]).await.expect("remove");
         assert!(store.get(hid(1)).await.expect("get").is_none());
-        // Idempotent, like `delete`.
-        store.discard([hid(1), hid(9)]).await.expect("discard again");
+        // Re-removing an already-removed id alongside an absent one is still Ok.
+        store.remove([hid(1), hid(9)]).await.expect("remove again");
     }
 }
