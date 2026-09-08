@@ -408,12 +408,21 @@ static REGEXES: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 
 static SGR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\x1b\[[0-9;]*m").expect("sgr regex"));
 
+macro_rules! executed {
+    ($subcommand:literal) => {
+        concat!(
+            r"(?:^|[;&|(`\n])[ \t]*(?:(?:sudo|command|exec|time|env|nohup)\s+|\w+=\S*\s+)*(?:\S*/)?atuin\s+",
+            $subcommand
+        )
+    };
+}
+
 static OUTPUT_UNSAFE: LazyLock<RegexSet> = LazyLock::new(|| {
     RegexSet::new([
-        r"atuin\s+key\b",
-        r"atuin\s+(?:account\s+)?login\b",
-        r"atuin\s+(?:account\s+)?register\b",
-        r"atuin\s+account\s+change-password\b",
+        executed!(r"key\b"),
+        executed!(r"(?:account\s+)?login\b"),
+        executed!(r"(?:account\s+)?register\b"),
+        executed!(r"account\s+change-password\b"),
     ])
     .expect("failed to build output-unsafe set")
 });
@@ -1223,6 +1232,24 @@ mod tests {
     #[case::history("atuin history list", false)]
     #[case::unrelated_key_word("cat keyfile", false)]
     #[case::plain("ls", false)]
+    #[case::echoed_mention("echo atuin key", false)]
+    #[case::printed_mention("printf 'atuin login'", false)]
+    #[case::grepped_mention("grep \"atuin register\" notes.txt", false)]
+    #[case::commit_message("git commit -m \"atuin login fix\"", false)]
+    #[case::help_lookup("man atuin key", false)]
+    #[case::after_and("atuin sync && atuin key", true)]
+    #[case::after_semicolon("clear; atuin key", true)]
+    #[case::after_pipe("echo | atuin login -u me", true)]
+    #[case::piped_out("atuin key | pbcopy", true)]
+    #[case::command_substitution("echo $(atuin key)", true)]
+    #[case::backticks("echo `atuin key`", true)]
+    #[case::subshell("(atuin key)", true)]
+    #[case::next_line("ls\natuin key", true)]
+    #[case::sudo("sudo atuin key", true)]
+    #[case::timed("time atuin account register", true)]
+    #[case::env_prefix("ATUIN_CONFIG_DIR=/tmp/x atuin login -u me", true)]
+    #[case::by_path("./target/debug/atuin key", true)]
+    #[case::absolute_path("/usr/local/bin/atuin key --base64", true)]
     fn commands_whose_output_holds_the_encryption_key(
         #[case] command: &str,
         #[case] unsafe_: bool,
