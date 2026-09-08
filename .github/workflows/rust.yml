@@ -241,6 +241,28 @@ jobs:
         env:
           ATUIN_DB_URI: postgres://atuin:pass@localhost:5432/atuin
 
+      - name: Show new proptest regressions
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          echo "::group::proptest regression files changed by this run"
+          echo "A proptest failure appends a 'cc <seed>' line to a regression file."
+          echo "New/changed regression files (download the artifact below to reproduce):"
+          git status --porcelain
+          git --no-pager diff
+          echo "::endgroup::"
+
+      - name: Upload proptest regressions
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: proptest-regressions-integration
+          path: |
+            **/proptest-regressions/**
+            **/*.proptest-regressions
+          if-no-files-found: ignore
+          retention-days: 14
+
   e2e:
     name: e2e (${{ matrix.os }})
     strategy:
