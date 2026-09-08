@@ -82,6 +82,36 @@ While iterating on the server, I find it helpful to run a new user on my system,
 
 Our test coverage is currently not the best, but we are working on it! Generally tests live in the file next to the functionality they are testing, and are executed just with `cargo test`.
 
+### Reproducing a proptest failure from CI
+
+Some tests use [`proptest`](https://proptest-rs.github.io/proptest/) to check a
+property across many generated inputs. When one fails, proptest shrinks to a
+minimal counterexample and records its seed as a `cc <seed>` line in a
+regression file, so re-running the test replays that exact case first. These
+files are committed to the repo:
+
+- source-tree tests: `crates/<crate>/proptest-regressions/<path>.txt`
+- integration tests: `crates/<crate>/tests/<name>.proptest-regressions`
+
+On a CI runner that file is written and then thrown away with the runner, so a
+failure found on a brand-new input would otherwise be lost. To prevent that,
+the `unit-test` and `integration-test` jobs upload every regression file as a
+build artifact whenever they fail.
+
+To reproduce a CI failure:
+
+1. Open the failed run on GitHub and download the artifact — `proptest-regressions-integration`, or `proptest-regressions-unit-<os>` for the matrix job.
+2. It preserves the repo layout. Copy each file over the matching file in your checkout (or read the new `cc <seed>` line straight out of the failed job's "Show new proptest regressions" step, which prints the diff).
+3. Re-run the test; proptest replays the saved seed and reproduces the failure:
+
+   ```shell
+   cargo nextest run -p <crate> <test-name>
+   ```
+
+The seeds are generated inputs, not real secrets, so the artifacts are safe to
+share. Once you have fixed the bug, keep the new `cc <seed>` line committed —
+it becomes a permanent regression case.
+
 ## Documentation
 
 Docs live in `docs/docs/` and are built with mkdocs. To preview them:
