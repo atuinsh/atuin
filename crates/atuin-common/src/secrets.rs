@@ -1161,6 +1161,7 @@ mod tests {
     #[case::login_without_whitespace("atuinlogin -p x")]
     #[case::stripe_one_short(&format!("sk_live_{}", "a".repeat(23)))]
     #[case::slack_webhook_short_team(&format!("T1234567/B12345678/{}", "x".repeat(24)))]
+    #[case::slack_webhook_wrong_team_prefix(&format!("U00000000/B00000000/{}", "x".repeat(24)))]
     #[case::slack_bot_short_first_group(&format!("xoxb-1234567890-12345678901-{}", "x".repeat(24)))]
     #[case::npm_one_short(&format!("npm_{}", "a".repeat(35)))]
     #[case::netlify_unknown_kind(&format!("nfx_{}", "a".repeat(36)))]
