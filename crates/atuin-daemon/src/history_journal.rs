@@ -160,10 +160,6 @@ impl<'s, 'a> Drop for DeletingMarks<'s, 'a> {
     }
 }
 
-/// How many shards back [`HistoryJournal::liveness_mutex`]. History ids hash evenly under the
-/// default hasher, so collisions only cost a little waiting.
-const LIVENESS_SHARDS: NonZeroUsize = NonZeroUsize::new(64).unwrap();
-
 /// Registry of in-flight commands which performs output capture, management, storage and
 /// retrieval.
 #[derive(Debug)]
@@ -206,9 +202,7 @@ pub struct HistoryJournal {
     /// Serialises the liveness check + write in [`Self::register_command_output`] against the
     /// marking in [`Self::delete`] and the teardown in [`Self::cancel`], one shard per history id.
     ///
-    /// Lock order: a liveness shard is always taken *before* an
-    /// [`InFlightCmd::finalization_mutex`], and a task never holds two shards at once
-    /// (`delete` marks ids one at a time).
+    /// Please see the [moduledoc](super) for a great explanation.
     liveness_mutex: AsyncShardedMutex<HistoryId, ()>,
 }
 
@@ -275,6 +269,8 @@ impl HistoryJournal {
         search_index: Arc<tokio::sync::RwLock<SearchIndex>>,
         output_capture: OutputCapture,
     ) -> Self {
+        const DEFAULT_LIVENESS_SHARDS: NonZeroUsize = NonZeroUsize::new(64).unwrap();
+
         let (broadcast, _) = broadcast::channel(128);
         Self {
             caps,
@@ -285,7 +281,7 @@ impl HistoryJournal {
             broadcast,
             output_capture,
             deleting: DashMap::new(),
-            liveness_mutex: AsyncShardedMutex::new(LIVENESS_SHARDS),
+            liveness_mutex: AsyncShardedMutex::new(DEFAULT_LIVENESS_SHARDS),
         }
     }
 
@@ -305,11 +301,14 @@ impl HistoryJournal {
             duration = Empty,
         );
 
-        self.active_cmds.insert(id, InFlightCmd {
-            history: history.clone(),
-            span,
-            finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
-        });
+        self.active_cmds.insert(
+            id,
+            InFlightCmd {
+                history: history.clone(),
+                span,
+                finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
+            },
+        );
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
     }
@@ -564,9 +563,6 @@ impl HistoryJournal {
     }
 
     /// Claim `ids` for a running delete. See [`DeletingMarks`].
-    ///
-    /// The guard exists before the first id is marked, so a future dropped part-way through still
-    /// releases every mark it took.
     async fn guard_deleting<'a>(&self, ids: &'a [HistoryId]) -> DeletingMarks<'_, 'a> {
         let marks = DeletingMarks {
             deleting: &self.deleting,
