@@ -270,11 +270,14 @@ impl HistoryJournal {
             duration = Empty,
         );
 
-        self.active_cmds.insert(id, InFlightCmd {
-            history: history.clone(),
-            span,
-            finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
-        });
+        self.active_cmds.insert(
+            id,
+            InFlightCmd {
+                history: history.clone(),
+                span,
+                finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
+            },
+        );
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
     }
@@ -393,7 +396,7 @@ impl HistoryJournal {
         // shell fires cancels and forgets them, so a storage failure here is retried by nobody:
         // log it and cancel anyway rather than leave the command in flight forever. Any output
         // that stays behind is the retention sweep's to reclaim.
-        if let Err(err) = self.output_capture.discard([history_id]).await {
+        if let Err(err) = self.output_capture.remove([history_id]).await {
             tracing::warn!(
                 %history_id,
                 ?err,
@@ -439,7 +442,7 @@ impl HistoryJournal {
         // Eh, it's not great, but without some sort of STM, we can't do better.
         //
         // TODO(markovejnovic): Implement STM
-        self.output_capture.delete(ids.iter().copied()).await?;
+        self.output_capture.remove(ids.iter().copied()).await?;
 
         // Remove records from the record store.
         //

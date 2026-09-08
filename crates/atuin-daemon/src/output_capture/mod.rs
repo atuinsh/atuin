@@ -234,18 +234,6 @@ impl OutputCapture {
         .expect("output-capture read task panicked")
     }
 
-    /// Forget the captured output of every history id in `ids`, durably: the removal is fsynced
-    /// before this returns.
-    ///
-    /// For entries whose deletion is (or is about to be) durable on the history side, so that a
-    /// crash can never leave output behind for an entry that no longer exists.
-    pub async fn delete(
-        &self,
-        ids: impl IntoIterator<Item = HistoryId>,
-    ) -> Result<(), DeleteOutputError> {
-        self.remove(ids, Some(PersistMode::SyncAll)).await
-    }
-
     /// Forget the captured output of every history id in `ids`, letting the periodic flusher carry
     /// the removal to disk.
     ///
@@ -254,17 +242,9 @@ impl OutputCapture {
     /// loses it, and a capture written moments earlier is buffered the same way, so it usually goes
     /// with it. After a daemon restart no in-flight command survives anyway, so anything left is
     /// the retention sweep's to reclaim.
-    pub async fn discard(
+    pub async fn remove(
         &self,
         ids: impl IntoIterator<Item = HistoryId>,
-    ) -> Result<(), DeleteOutputError> {
-        self.remove(ids, None).await
-    }
-
-    async fn remove(
-        &self,
-        ids: impl IntoIterator<Item = HistoryId>,
-        durability: Option<PersistMode>,
     ) -> Result<(), DeleteOutputError> {
         let keys: Vec<[u8; 16]> = ids.into_iter().map(HistoryId::into_bytes).collect();
         if keys.is_empty() {
@@ -275,23 +255,13 @@ impl OutputCapture {
         let keyspace = self.keyspace.clone();
         let flusher = self.flusher.clone();
         tokio::task::spawn_blocking(move || {
-            // Fjall deletes by leaving tombstones.
-            //
-            // If a crash were to happen between this transaction finishing and the flusher fsyncing
-            // it, the tombstone would never commit, which means that a subsequent reboot would
-            // resurrect the entry. `delete` therefore fsyncs at commit: if the user wants something
-            // gone, they want it gone **now**, and deletes are rare. `discard` leaves it to the
-            // flusher.
-            let mut tx = db.write_tx()?.durability(durability);
+            let mut tx = db.write_tx()?;
             for key in keys {
                 tx.remove(&keyspace, key);
             }
             match tx.commit()? {
                 Ok(()) => {
-                    // A buffered removal reaches disk on the flusher's next tick.
-                    if durability.is_none() {
-                        flusher.kick();
-                    }
+                    flusher.kick();
                     Ok(())
                 }
                 // fjall only reports conflicts for transactions that read; this one never does.
