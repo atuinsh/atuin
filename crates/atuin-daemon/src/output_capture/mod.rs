@@ -7,6 +7,7 @@
 //! `spawn_blocking`.
 //!
 //! TODO(retention): the store grows unbounded; no eviction yet. See the design doc.
+mod backend;
 mod schema;
 
 use std::sync::Arc;
@@ -16,28 +17,13 @@ use std::time::Duration;
 use atuin_client::history::{CommandCapture, HistoryId};
 use fjall::{OptimisticTxDatabase, OptimisticTxKeyspace, PersistMode, Readable};
 use schema::{Schema as _, SchemaV1};
-use thiserror::Error;
 use tokio::task::JoinHandle;
 use tracing::error;
 
+pub use backend::{CaptureError, GetOutputError};
+
 /// The schema currently in use for stored output.
 type ActiveSchema = SchemaV1;
-
-#[derive(Debug, Error)]
-pub enum CaptureError {
-    #[error("history id already has an associated capture")]
-    AlreadyExists,
-    #[error("storage error: {0}")]
-    Storage(#[from] fjall::Error),
-    #[error("failed to serialize the capture: {0}")]
-    Serialize(#[from] atuin_common::rmp::encode::EncodeError),
-}
-
-#[derive(Debug, Error)]
-pub enum GetOutputError {
-    #[error("storage error: {0}")]
-    Storage(#[from] fjall::Error),
-}
 
 /// Task responsible for flushing fjall data buffered in memory onto the disk.
 #[derive(Debug)]
@@ -181,17 +167,21 @@ impl OutputCapture {
         let db = self.db.clone();
         let keyspace = self.keyspace.clone();
         let key = ActiveSchema::serialize_key(id).expect("history id serialization is infallible");
-        let value = ActiveSchema::serialize_value(capture)?;
+        let value = ActiveSchema::serialize_value(capture)
+            .map_err(|err| CaptureError::Serialize(Box::new(err)))?;
 
         let flusher = self.flusher.clone();
         tokio::task::spawn_blocking(move || {
-            let mut tx = db.write_tx()?;
-            if tx.contains_key(&keyspace, key)? {
+            let mut tx = db.write_tx().map_err(|err| CaptureError::Storage(Box::new(err)))?;
+            if tx
+                .contains_key(&keyspace, key)
+                .map_err(|err| CaptureError::Storage(Box::new(err)))?
+            {
                 return Err(CaptureError::AlreadyExists);
             }
 
             tx.insert(&keyspace, key, value);
-            match tx.commit()? {
+            match tx.commit().map_err(|err| CaptureError::Storage(Box::new(err)))? {
                 Ok(()) => {
                     flusher.kick();
                     Ok(())
@@ -208,13 +198,15 @@ impl OutputCapture {
         let keyspace = self.keyspace.clone();
         let key = ActiveSchema::serialize_key(id).expect("history id serialization is infallible");
 
-        tokio::task::spawn_blocking(move || match keyspace.get(key)? {
-            Some(slice) => {
-                let capture = ActiveSchema::deserialize_value(slice.to_vec())
-                    .expect("stored value is a valid CommandCapture");
-                Ok(Some(capture))
+        tokio::task::spawn_blocking(move || {
+            match keyspace.get(key).map_err(|err| GetOutputError::Storage(Box::new(err)))? {
+                Some(slice) => {
+                    let capture = ActiveSchema::deserialize_value(slice.to_vec())
+                        .expect("stored value is a valid CommandCapture");
+                    Ok(Some(capture))
+                }
+                None => Ok(None),
             }
-            None => Ok(None),
         })
         .await
         .expect("output-capture read task panicked")
