@@ -1,9 +1,8 @@
 mod fjall;
 mod nop;
 
-use std::future::Future;
-
 use atuin_client::history::{CommandCapture, HistoryId};
+use enum_dispatch::enum_dispatch;
 pub use fjall::FjallBackend;
 pub use nop::NopBackend;
 use thiserror::Error;
@@ -26,38 +25,18 @@ pub enum GetOutputError {
     Storage(#[source] BackendError),
 }
 
+#[enum_dispatch]
+#[allow(async_fn_in_trait, reason = "only used within our code and we don't need it to be Send")]
 pub trait Backend {
-    fn capture(
-        &self,
-        id: HistoryId,
-        capture: CommandCapture,
-    ) -> impl Future<Output = Result<(), CaptureError>> + Send;
+    async fn capture(&self, id: HistoryId, capture: CommandCapture) -> Result<(), CaptureError>;
 
-    fn get(
-        &self,
-        id: HistoryId,
-    ) -> impl Future<Output = Result<Option<CommandCapture>, GetOutputError>> + Send;
+    async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError>;
 }
 
+#[enum_dispatch(Backend)]
 #[derive(Debug, strum_macros::EnumDiscriminants)]
 #[strum_discriminants(name(BackendKind))]
 pub enum AnyBackend {
     Fjall(FjallBackend),
     Nop(NopBackend),
-}
-
-impl Backend for AnyBackend {
-    async fn capture(&self, id: HistoryId, capture: CommandCapture) -> Result<(), CaptureError> {
-        match self {
-            Self::Fjall(backend) => backend.capture(id, capture).await,
-            Self::Nop(backend) => backend.capture(id, capture).await,
-        }
-    }
-
-    async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError> {
-        match self {
-            Self::Fjall(backend) => backend.get(id).await,
-            Self::Nop(backend) => backend.get(id).await,
-        }
-    }
 }
