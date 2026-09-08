@@ -313,10 +313,13 @@ static SECRET_PATTERNS: &[Pattern] = &[
         regex: "(?<secret>T[a-zA-Z0-9_]{8}/B[a-zA-Z0-9_]{8}/[a-zA-Z0-9_]{24})",
         prefilter: None,
         #[cfg(test)]
-        tests: &[Test {
-            input: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX",
-            redacted: "https://hooks.slack.com/services/****",
-        }],
+        tests: &[
+            Test {
+                input: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX",
+                redacted: "https://hooks.slack.com/services/****",
+            },
+            Test { input: "T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX", redacted: REDACTED },
+        ],
     },
     Pattern {
         name: "Stripe test key",
@@ -625,6 +628,10 @@ mod tests {
     #[case::lowercase_aws("aws_secret_access_key = x")]
     #[case::marker("****")]
     #[case::empty("")]
+    #[case::azure_across_lines("AZURE_X\nY_KEY")]
+    #[case::login_crlf("atuin\r\nlogin -p hunter2")]
+    #[case::login_nbsp("atuin\u{a0}login -p hunter2")]
+    #[case::stripe_test_one_short(&format!("sk_test_{}", "a".repeat(23)))]
     fn contains_secret_agrees_with_the_old_set_on_boundary_strings(#[case] s: &str) {
         assert_eq!(contains_secret(s), OLD.is_match(s), "{s:?}");
     }
@@ -849,17 +856,6 @@ mod tests {
             prop_assert_eq!(&*redact(&once), once.as_str());
         }
 
-        // A filter on the strategy, not `prop_assume!`: with credential-dense input most samples
-        // are rejected, and proptest's global-reject cap (1024) does not scale with the case
-        // count, so `prop_assume!` would fail the test under PROPTEST_CASES=2000. Local rejects
-        // from a filter are capped far higher.
-        #[test]
-        fn text_with_nothing_recognisable_is_returned_as_is(
-            s in credential_dense().prop_filter("contains a secret", |s| !contains_secret(s)),
-        ) {
-            prop_assert!(matches!(redact(&s), Cow::Borrowed(_)));
-        }
-
         /// Arbitrary unicode either side of a planted credential: the credential still goes, and
         /// the byte-offset splicing must not land mid-character.
         #[test]
@@ -891,6 +887,24 @@ mod tests {
                     "{}: {:?}", pattern.name, s
                 );
             }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            max_local_rejects: 1_000_000,
+            ..ProptestConfig::default()
+        })]
+
+        // A filter on the strategy, not `prop_assume!`: with credential-dense input most samples
+        // are rejected, and proptest's global-reject cap (1024) does not scale with the case
+        // count, so `prop_assume!` would fail the test under PROPTEST_CASES=2000. Local rejects
+        // from a filter are capped far higher.
+        #[test]
+        fn text_with_nothing_recognisable_is_returned_as_is(
+            s in credential_dense().prop_filter("contains a secret", |s| !contains_secret(s)),
+        ) {
+            prop_assert!(matches!(redact(&s), Cow::Borrowed(_)));
         }
     }
 
@@ -1150,6 +1164,7 @@ mod tests {
     #[case::slack_bot_short_first_group(&format!("xoxb-1234567890-12345678901-{}", "x".repeat(24)))]
     #[case::npm_one_short(&format!("npm_{}", "a".repeat(35)))]
     #[case::netlify_unknown_kind(&format!("nfx_{}", "a".repeat(36)))]
+    #[case::stripe_test_one_short(&format!("sk_test_{}", "a".repeat(23)))]
     fn near_misses_are_not_credentials(#[case] input: &str) {
         assert!(!contains_secret(input), "{input:?} should not be recognised");
         assert!(matches!(redact(input), Cow::Borrowed(_)), "{input:?} should be left alone");
