@@ -21,6 +21,8 @@ dashmap = { workspace = true }
 derive_more = { workspace = true }
 easy-cast = { workspace = true }
 enum_dispatch = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
 eyre = { workspace = true }
 fjall = { workspace = true }
 frizbee = { workspace = true }

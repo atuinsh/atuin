@@ -30,7 +30,7 @@ pub use history_journal::{
     CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, CmdRebuildError, FinishedCmd,
     GetCmdInFlightError, HistoryJournal,
 };
-pub use output_capture::OutputCapture;
+pub use output_capture::{BackendKind, OutputCapture};
 
 /// Boot the daemon using the new component-based architecture.
 ///
@@ -63,7 +63,7 @@ pub async fn boot(
     let host_id = Settings::host_id().await?;
     let history_store =
         HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
-    let output_capture = OutputCapture::open(Settings::command_capture_dir())?;
+    let output_capture = OutputCapture::open(Settings::command_capture_dir());
     let journal = Arc::new(HistoryJournal::new(
         handle.caps().clone(),
         history_store,
