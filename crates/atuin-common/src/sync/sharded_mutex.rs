@@ -8,7 +8,7 @@ use std::num::NonZeroUsize;
 #[derive(Debug)]
 pub struct Sharded<K, M> {
     shards: Box<[M]>,
-    key: PhantomData<fn(&K)>,
+    key: PhantomData<fn() -> K>,
 }
 
 impl<K: Hash, M: Default> Sharded<K, M> {

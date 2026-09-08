@@ -158,34 +158,6 @@ struct InFlightCmd {
 /// Increments each id's entry in [`HistoryJournal::deleting`] on creation and decrements it on
 /// drop, so `deleting[id] > 0` for exactly as long as some [`HistoryJournal::delete`] is running
 /// against `id`.
-///
-/// Pathological case if `deleting` were a `HashSet` (insert on creation, remove on drop). Delete A
-/// runs `delete([1, 2])`, delete B runs `delete([2, 3])`:
-///
-/// ```text
-///   A                                      B
-///   HistoryJournal::delete([1, 2])
-///                                          HistoryJournal::delete([2, 3])
-///
-///   HistoryJournal::guard_deleting
-///     deleting.insert(2)
-///                                          HistoryJournal::guard_deleting
-///                                            deleting.insert(2)              => Nop
-///
-///   HistoryJournal::delete() (finish)
-///     DeletingGuard::Drop()                                                  => deleting={1, 3}
-///
-///   ------ All is well so far.
-///
-///                                          output_capture.remove(2)
-///
-///   register_command_output(2)
-///     -> self.deleting.contains_key(2) == false
-///       -> so we insert the new register_command_output(2)
-///
-///                                          history_store.delete(2)
-///                                            -> the NEW register_command_output(2) is orphaned
-/// ```
 struct DeletingGuard<'s, 'i> {
     deleting: &'s DashMap<HistoryId, usize>,
     ids: &'i [HistoryId],
