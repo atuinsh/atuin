@@ -233,7 +233,6 @@ impl From<CmdCancelError> for Status {
     fn from(value: CmdCancelError) -> Self {
         match value {
             CmdCancelError::NotFound(_) => Self::not_found(value.to_string()),
-            CmdCancelError::OutputCaptureFailed(_) => Self::internal(value.to_string()),
         }
     }
 }

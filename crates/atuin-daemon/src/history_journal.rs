@@ -233,8 +233,6 @@ pub enum CmdRebuildError {
 pub enum CmdCancelError {
     #[error("command {0} is not in flight")]
     NotFound(HistoryId),
-    #[error("discarding captured output failed: {0}")]
-    OutputCaptureFailed(#[from] DeleteOutputError),
 }
 
 /// Errors returned by [`HistoryJournal::register_command_output`].
@@ -412,13 +410,22 @@ impl HistoryJournal {
             return Err(CmdCancelError::NotFound(history_id));
         }
 
-        // Fallible work first: if this fails the command stays in flight and the caller can retry.
-        // Nothing durable refers to a cancelled command, so a buffered removal is enough.
-        self.output_capture.discard([history_id]).await?;
+        // Nothing durable refers to a cancelled command, so a buffered removal is enough. The
+        // shell fires cancels and forgets them, so a storage failure here is retried by nobody:
+        // log it and cancel anyway rather than leave the command in flight forever. Any output
+        // that stays behind is the retention sweep's to reclaim.
+        if let Err(err) = self.output_capture.discard([history_id]).await {
+            tracing::warn!(
+                %history_id,
+                ?err,
+                "failed to discard the captured output of a cancelled command"
+            );
+        }
 
-        let Some((_id, cmd)) = self.active_cmds.remove(&history_id) else {
-            return Err(CmdCancelError::NotFound(history_id));
-        };
+        let (_id, cmd) = self
+            .active_cmds
+            .remove(&history_id)
+            .expect("still present: re-checked under the finalization mutex every remover holds");
 
         let _ = self.broadcast.send(CmdEvent::Cancelled(cmd.history));
 
@@ -556,22 +563,27 @@ impl HistoryJournal {
     }
 
     /// Claim `ids` for a running delete. See [`DeletingMarks`].
+    ///
+    /// The guard exists before the first id is marked, so a future dropped part-way through still
+    /// releases every mark it took.
     async fn mark_deleting(&self, ids: &[HistoryId]) -> DeletingMarks<'_> {
+        let mut marks = DeletingMarks {
+            deleting: &self.deleting,
+            ids: Vec::with_capacity(ids.len()),
+        };
         for id in ids {
             let _gate = self.id_gate.lock(*id).await;
             *self.deleting.entry(*id).or_insert(0) += 1;
+            marks.ids.push(*id);
         }
-        DeletingMarks {
-            deleting: &self.deleting,
-            ids: ids.to_vec(),
-        }
+        marks
     }
 
     /// Store a command's captured output.
     ///
     /// Only commands the daemon knows about -- in flight, or persisted in the history db -- may
     /// have output. Anything else (deleted, cancelled, or never started) is refused with
-    /// [`RegisterOutputError::NotLive`], so captured output can never outlive its entry.
+    /// [`RegisterOutputError::NotLive`].
     ///
     /// The liveness check and the write happen under the id's `IdGate` stripe, the same stripe
     /// [`Self::delete`] takes to mark the id and [`Self::cancel`] holds across its teardown. So a
@@ -579,6 +591,13 @@ impl HistoryJournal {
     /// output removal sees it), and a capture arriving after the mark is refused. `finish` needs no
     /// gate: it saves the db row before it drops the in-flight entry, so a finishing command is
     /// live throughout.
+    ///
+    /// What this guarantees: no capture can land between a delete's output removal and its record
+    /// removal, or after a cancel, and none is accepted once the row is gone. What it does not
+    /// cover: a row removed behind the daemon's back -- by sync applying another machine's delete,
+    /// or by a delete that failed part-way and was never retried, whose row a later rebuild drops.
+    /// Output left behind that way is the retention sweep's to reclaim (`TODO(retention)` in
+    /// `output_capture`).
     pub async fn register_command_output(
         &self,
         id: HistoryId,
@@ -595,7 +614,8 @@ impl HistoryJournal {
                 .load(id)
                 .await
                 .map_err(|e| RegisterOutputError::HistoryDbFailed(e.into()))?
-                .is_some();
+                // A row the legacy sync soft-deleted is hidden from every read path; treat it as gone.
+                .is_some_and(|h| h.deleted_at.is_none());
         if !live {
             return Err(RegisterOutputError::NotLive(id));
         }

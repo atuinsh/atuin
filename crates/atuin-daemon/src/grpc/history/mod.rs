@@ -12,7 +12,7 @@ use time::OffsetDateTime;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};
-use tracing::{Level, instrument};
+use tracing::{Instrument, Level, instrument};
 
 use crate::DaemonHandle;
 use crate::grpc::history::pb::history_server::History as GrpcService;
@@ -263,12 +263,15 @@ impl Service {
 /// still in flight, and a dropped [`HistoryJournal::delete`] releases its claim on the ids with the
 /// records only half removed. Detaching the call makes it run to completion regardless of the
 /// client; the client merely stops hearing about it.
+///
+/// Callers write `detached(..).await??`: the outer `?` is the join result (the task panicked), the
+/// inner `?` is the journal's own error, converted through its `From<_> for Status`.
 async fn detached<F>(fut: F) -> Result<F::Output, Status>
 where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    tokio::spawn(fut)
+    tokio::spawn(fut.instrument(tracing::Span::current()))
         .await
         .map_err(|e| Status::internal(format!("journal task did not complete: {e}")))
 }
