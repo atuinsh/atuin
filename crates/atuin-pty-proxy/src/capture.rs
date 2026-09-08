@@ -1,5 +1,6 @@
 use std::num::NonZeroU16;
 
+pub use atuin_client::history::CommandCapture;
 use atuin_client::history::HistoryId;
 use atuin_common::string::{BoundedBuffer, TrimExt as _};
 
@@ -15,7 +16,6 @@ const CLEAR_SCREEN_CONTENTS: &[u8] = b"\x1b7\x1b[m\x1b[2J\x1b8";
 const DISABLE_ALTERNATE_SCREEN: &[u8] = b"\x1b[?1049l";
 
 const HISTORY_ID_PARAM: &[u8] = b"history_id";
-const SESSION_ID_PARAM: &[u8] = b"session_id";
 
 /// The maximum number of bytes captured per zone.
 ///
@@ -23,23 +23,7 @@ const SESSION_ID_PARAM: &[u8] = b"session_id";
 /// one screenful, which is almost certainly only a small fraction of this limit.
 const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
 
-pub type CommandCaptureSink = Box<dyn Fn(CommandCapture) + Send + 'static>;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CommandCapture {
-    /// The rendered output of the command.
-    ///
-    /// Contains SGR escape sequences. Contains no other escape sequences, and no control characters
-    /// except `'\n'`.
-    pub output: String,
-    pub exit_code: Option<i32>,
-    pub history_id: HistoryId,
-    pub session_id: Option<String>,
-    pub output_observed_bytes: u64,
-    pub output_truncated: bool,
-    pub terminal_width: u16,
-    pub terminal_height: u16,
-}
+pub type CommandCaptureSink = Box<dyn Fn(HistoryId, CommandCapture) + Send + 'static>;
 
 /// The state of an in-progress command capture.
 #[derive(Default)]
@@ -47,8 +31,6 @@ struct CaptureState {
     output: String,
     output_truncated: bool,
     output_observed_bytes: u64,
-    session_id: Option<String>,
-    exit_code: Option<i32>,
 }
 
 impl CaptureState {
@@ -60,8 +42,6 @@ impl CaptureState {
         self.output.clear();
         self.output_truncated = false;
         self.output_observed_bytes = 0;
-        self.session_id = None;
-        self.exit_code = None;
     }
 }
 
@@ -203,7 +183,7 @@ impl TrackerCore {
         let prev_zone = self.zone();
         self.enter_zone(chunk.event.zone());
 
-        let Event::CommandFinished { exit_code } = chunk.event else {
+        let Event::CommandFinished { .. } = chunk.event else {
             return;
         };
 
@@ -217,31 +197,16 @@ impl TrackerCore {
         }
 
         let mut history_id = None;
-        let mut session_id = None;
         for param in params {
-            match param {
-                Param::KeyValue {
-                    key: HISTORY_ID_PARAM,
-                    value,
-                } => {
-                    history_id = Some(value);
-                }
-                Param::KeyValue {
-                    key: SESSION_ID_PARAM,
-                    value,
-                } => {
-                    session_id = Some(value);
-                }
-                _ => {}
+            if let Param::KeyValue {
+                key: HISTORY_ID_PARAM,
+                value,
+            } = param
+            {
+                history_id = Some(value);
             }
         }
 
-        if let Some(code) = exit_code {
-            self.capture.exit_code = Some(code);
-        }
-        if let Some(id) = session_id {
-            self.capture.session_id = Some(String::from_utf8_lossy(id).into_owned());
-        }
         let Some(history_id) = history_id
             .and_then(|bytes| std::str::from_utf8(bytes).ok())
             .and_then(|s| s.parse::<HistoryId>().ok())
@@ -253,11 +218,8 @@ impl TrackerCore {
 
         let state = std::mem::take(&mut self.capture);
         let (rows, cols) = self.emulator.screen().size();
-        (self.sink)(CommandCapture {
+        (self.sink)(history_id, CommandCapture {
             output: state.output,
-            exit_code: state.exit_code,
-            history_id,
-            session_id: state.session_id,
             output_observed_bytes: state.output_observed_bytes,
             output_truncated: state.output_truncated,
             terminal_width: cols.get(),
@@ -339,8 +301,8 @@ mod tests {
     /// A [`CommandCaptureTracker`] together with the captures its sink has been handed.
     struct Tracker {
         inner: CommandCaptureTracker,
-        received: Receiver<CommandCapture>,
-        collected: Vec<CommandCapture>,
+        received: Receiver<(HistoryId, CommandCapture)>,
+        collected: Vec<(HistoryId, CommandCapture)>,
     }
 
     impl Tracker {
@@ -350,8 +312,8 @@ mod tests {
                 inner: CommandCaptureTracker::new(
                     nonzero(rows),
                     nonzero(cols),
-                    Box::new(move |capture| {
-                        sender.send(capture).expect("test receiver is still alive");
+                    Box::new(move |history_id, capture| {
+                        sender.send((history_id, capture)).expect("test receiver is still alive");
                     }),
                 ),
                 received,
@@ -369,14 +331,14 @@ mod tests {
             self
         }
 
-        /// Every capture reported so far.
-        fn captures(&mut self) -> Vec<CommandCapture> {
+        /// Every `(history id, capture)` reported so far.
+        fn captures(&mut self) -> Vec<(HistoryId, CommandCapture)> {
             self.collected.extend(self.received.try_iter());
             self.collected.clone()
         }
 
-        /// Assert that exactly one capture was reported, and return it.
-        fn only_capture(&mut self) -> CommandCapture {
+        /// Assert that exactly one capture was reported, and return it with its history id.
+        fn only_capture(&mut self) -> (HistoryId, CommandCapture) {
             let mut captures = self.captures();
             assert_eq!(captures.len(), 1, "expected exactly one capture, got {captures:#?}");
             captures.pop().expect("length checked above")
@@ -391,9 +353,8 @@ mod tests {
     ///
     /// Its own bytes are discounted from `output_observed_bytes`, so the totals asserted
     /// below are the raw command output alone.
-    fn finished(exit_code: i32, history_id: &str, session_id: &str) -> Vec<u8> {
-        format!("\x1b]133;D;{exit_code};history_id={history_id};session_id={session_id}\x07")
-            .into_bytes()
+    fn finished(exit_code: i32, history_id: &str) -> Vec<u8> {
+        format!("\x1b]133;D;{exit_code};history_id={history_id}\x07").into_bytes()
     }
 
     /// A whole shell interaction, laid out the way a real shell emits it: the prompt, the
@@ -408,7 +369,7 @@ mod tests {
             b"\r\n",
             COMMAND_EXECUTED,
             output.as_bytes(),
-            &finished(0, HID, "sess"),
+            &finished(0, HID),
         ]
         .concat()
     }
@@ -425,9 +386,6 @@ mod tests {
         interaction("$ ", "echo hi", "hi\r\n"),
         CommandCapture {
             output: "hi".to_string(),
-            exit_code: Some(0),
-            history_id: hid(HID),
-            session_id: Some("sess".to_string()),
             output_observed_bytes: u64::conv(b"hi\r\n".len()),
             output_truncated: false,
             terminal_width: COLS,
@@ -436,12 +394,9 @@ mod tests {
     )]
     // Only the execute and finish markers: no prompt or command line in the stream at all.
     #[case::bare_execute_and_finish_markers(
-        [COMMAND_EXECUTED, b"line one\r\n", &finished(0, HID, "abcd")].concat(),
+        [COMMAND_EXECUTED, b"line one\r\n", &finished(0, HID)].concat(),
         CommandCapture {
             output: "line one".to_string(),
-            exit_code: Some(0),
-            history_id: hid(HID),
-            session_id: Some("abcd".to_string()),
             output_observed_bytes: u64::conv(b"line one\r\n".len()),
             output_truncated: false,
             terminal_width: COLS,
@@ -454,7 +409,9 @@ mod tests {
         #[case] expected: CommandCapture,
     ) {
         tracker.push(&input);
-        assert_eq!(tracker.only_capture(), expected);
+        let (history_id, capture) = tracker.only_capture();
+        assert_eq!(history_id, hid(HID));
+        assert_eq!(capture, expected);
     }
 
     #[rstest]
@@ -465,18 +422,11 @@ mod tests {
     fn a_command_with_no_output_is_still_captured(mut tracker: Tracker, #[case] input: Vec<u8>) {
         tracker.push(&input);
 
-        let capture = tracker.only_capture();
+        let (history_id, capture) = tracker.only_capture();
         assert_eq!(capture.output, "");
-        assert_eq!(capture.history_id, hid(HID));
+        assert_eq!(history_id, hid(HID));
         // The command produced nothing, and its `D` marker doesn't count as output.
         assert_eq!(capture.output_observed_bytes, 0);
-    }
-
-    #[rstest]
-    fn reports_the_exit_code(mut tracker: Tracker) {
-        tracker.push(&[COMMAND_EXECUTED, b"nope\r\n", &finished(127, HID, "sess")].concat());
-
-        assert_eq!(tracker.only_capture().exit_code, Some(127));
     }
 
     #[rstest]
@@ -506,8 +456,8 @@ mod tests {
         #[case] output: &[u8],
         #[case] expected: &str,
     ) {
-        tracker.push(&[COMMAND_EXECUTED, output, &finished(0, HID, "sess")].concat());
-        assert_eq!(tracker.only_capture().output, expected);
+        tracker.push(&[COMMAND_EXECUTED, output, &finished(0, HID)].concat());
+        assert_eq!(tracker.only_capture().1.output, expected);
     }
 
     #[rstest]
@@ -516,18 +466,18 @@ mod tests {
         for i in 0..10 {
             data.extend_from_slice(format!("line {i}\r\n").as_bytes());
         }
-        data.extend_from_slice(&finished(0, HID, "sess"));
+        data.extend_from_slice(&finished(0, HID));
         tracker.push(&data);
 
         let expected: Vec<String> = (0..10).map(|i| format!("line {i}")).collect();
-        assert_eq!(tracker.only_capture().output, expected.join("\n"));
+        assert_eq!(tracker.only_capture().1.output, expected.join("\n"));
     }
 
     #[rstest]
     fn keeps_basic_formatting(mut tracker: Tracker) {
         tracker.push(&interaction("\x1b[32m%\x1b[0m ", "ls", "\x1b[31mfile\x1b[0m\r\n"));
 
-        assert_eq!(tracker.only_capture().output, "\x1b[31mfile");
+        assert_eq!(tracker.only_capture().1.output, "\x1b[31mfile");
     }
 
     #[rstest]
@@ -538,13 +488,13 @@ mod tests {
         // command that leaves a background colour set would otherwise turn the whole screen
         // into non-default cells, and every one of them into a space in the next capture.
         tracker
-            .push(&[COMMAND_EXECUTED, b"out\r\n\x1b[41m", &finished(0, HID, "sess")].concat())
+            .push(&[COMMAND_EXECUTED, b"out\r\n\x1b[41m", &finished(0, HID)].concat())
             .push(&interaction("$ ", "id", "\x1b[0mok\r\n"));
 
         let captures = tracker.captures();
         assert_eq!(captures.len(), 2);
-        assert_eq!(captures[0].output, "out");
-        assert_eq!(captures[1].output, "ok");
+        assert_eq!(captures[0].1.output, "out");
+        assert_eq!(captures[1].1.output, "ok");
     }
 
     #[rstest]
@@ -557,12 +507,12 @@ mod tests {
                 b"vim f\r\n",
                 COMMAND_EXECUTED,
                 b"\x1b[?1049hEDITOR\r\nSCREEN\x1b[?1049l",
-                &finished(0, HID, "sess"),
+                &finished(0, HID),
             ]
             .concat(),
         );
 
-        let capture = tracker.only_capture();
+        let capture = tracker.only_capture().1;
         assert_eq!(capture.output, "");
         // The bytes were still observed, even though none of them were captured.
         let drawn = b"\x1b[?1049hEDITOR\r\nSCREEN\x1b[?1049l".len();
@@ -582,12 +532,12 @@ mod tests {
                 b"vim f\r\n",
                 COMMAND_EXECUTED,
                 b"\x1b[?1049hEDITOR\r\nSCREEN",
-                &finished(0, HID, "sess"),
+                &finished(0, HID),
             ]
             .concat(),
         );
 
-        assert_eq!(tracker.only_capture().output, "");
+        assert_eq!(tracker.only_capture().1.output, "");
     }
 
     #[rstest]
@@ -598,8 +548,8 @@ mod tests {
 
         let captures = tracker.captures();
         assert_eq!(captures.len(), 2);
-        assert_eq!(captures[0].output, "aaa");
-        assert_eq!(captures[1].output, "bbb");
+        assert_eq!(captures[0].1.output, "aaa");
+        assert_eq!(captures[1].1.output, "bbb");
     }
 
     #[rstest]
@@ -610,7 +560,7 @@ mod tests {
         let long = "p".repeat(4 * 20);
         tracker.push(&interaction(&long, &long, "hi\r\n"));
 
-        assert_eq!(tracker.only_capture().output, "hi");
+        assert_eq!(tracker.only_capture().1.output, "hi");
     }
 
     #[rstest]
@@ -619,22 +569,20 @@ mod tests {
             &[
                 COMMAND_EXECUTED,
                 b"first\r\n",
-                &finished(0, HID_ONE, "sess"),
+                &finished(0, HID_ONE),
                 COMMAND_EXECUTED,
                 b"second\r\n",
-                &finished(1, HID_TWO, "sess"),
+                &finished(1, HID_TWO),
             ]
             .concat(),
         );
 
         let captures = tracker.captures();
         assert_eq!(captures.len(), 2);
-        assert_eq!(captures[0].output, "first");
-        assert_eq!(captures[0].exit_code, Some(0));
-        assert_eq!(captures[0].history_id, hid(HID_ONE));
-        assert_eq!(captures[1].output, "second");
-        assert_eq!(captures[1].exit_code, Some(1));
-        assert_eq!(captures[1].history_id, hid(HID_TWO));
+        assert_eq!(captures[0].1.output, "first");
+        assert_eq!(captures[0].0, hid(HID_ONE));
+        assert_eq!(captures[1].1.output, "second");
+        assert_eq!(captures[1].0, hid(HID_TWO));
     }
 
     // -- Marker handling ------------------------------------------------------
@@ -651,12 +599,12 @@ mod tests {
                 b"echo hi\r\n",
                 COMMAND_EXECUTED,
                 b"hi\r\n",
-                &finished(0, HID, "sess"),
+                &finished(0, HID),
             ]
             .concat(),
         );
 
-        assert_eq!(tracker.only_capture().output, "hi");
+        assert_eq!(tracker.only_capture().1.output, "hi");
     }
 
     #[rstest]
@@ -674,12 +622,12 @@ mod tests {
                 b"echo hi\r\n",
                 COMMAND_EXECUTED,
                 b"hi\r\n",
-                &finished(0, HID, "sess"),
+                &finished(0, HID),
             ]
             .concat(),
         );
 
-        assert_eq!(tracker.only_capture().output, "hi");
+        assert_eq!(tracker.only_capture().1.output, "hi");
     }
 
     #[rstest]
@@ -690,7 +638,7 @@ mod tests {
             .push(&[COMMAND_EXECUTED, b"stale\r\n\x1b]133;D;0\x07"].concat())
             .push(&interaction("$ ", "echo hi", "hi\r\n"));
 
-        let capture = tracker.only_capture();
+        let capture = tracker.only_capture().1;
         assert_eq!(capture.output, "hi");
         assert_eq!(capture.output_observed_bytes, u64::conv(b"hi\r\n".len()));
     }
@@ -706,7 +654,7 @@ mod tests {
         }
         tracker.push(&abandoned).push(&interaction("$ ", "echo hi", "hi\r\n"));
 
-        assert_eq!(tracker.only_capture().output, "hi");
+        assert_eq!(tracker.only_capture().1.output, "hi");
     }
 
     #[rstest]
@@ -719,12 +667,12 @@ mod tests {
                 b"stale\r\n\x1b]133;D;0\x07",
                 COMMAND_EXECUTED,
                 b"fresh\r\n",
-                &finished(0, HID, "sess"),
+                &finished(0, HID),
             ]
             .concat(),
         );
 
-        let capture = tracker.only_capture();
+        let capture = tracker.only_capture().1;
         assert_eq!(capture.output, "fresh");
         assert_eq!(capture.output_observed_bytes, u64::conv(b"fresh\r\n".len()));
     }
@@ -732,15 +680,12 @@ mod tests {
     #[rstest]
     fn metadata_from_a_later_finish_marker_is_used(mut tracker: Tracker) {
         const BARE_FINISH: &[u8] = b"\x1b]133;D;1\x07";
-        tracker.push(
-            &[COMMAND_EXECUTED, b"line one\r\n", BARE_FINISH, &finished(0, HID, "abcd")].concat(),
-        );
+        tracker.push(&[COMMAND_EXECUTED, b"line one\r\n", BARE_FINISH, &finished(0, HID)].concat());
 
-        assert_eq!(tracker.only_capture(), CommandCapture {
+        let (history_id, capture) = tracker.only_capture();
+        assert_eq!(history_id, hid(HID));
+        assert_eq!(capture, CommandCapture {
             output: "line one".to_string(),
-            exit_code: Some(0),
-            history_id: hid(HID),
-            session_id: Some("abcd".to_string()),
             // The first `D` ends the output zone and is discounted; the second arrives
             // after it, in the unknown zone, so it was never counted to begin with.
             output_observed_bytes: u64::conv(b"line one\r\n".len()),
@@ -752,18 +697,19 @@ mod tests {
 
     #[rstest]
     fn a_marker_split_across_pushes_is_still_recognised(mut tracker: Tracker) {
+        // Split the marker partway through the history ID, so neither push holds a whole one.
+        let (head, tail) = HID.split_at(20);
         tracker.push(
-            &[COMMAND_EXECUTED, format!("line one\r\n\x1b]133;D;0;history_id={HID}").as_bytes()]
+            &[COMMAND_EXECUTED, format!("line one\r\n\x1b]133;D;0;history_id={head}").as_bytes()]
                 .concat(),
         );
         assert_eq!(tracker.captures(), vec![]);
 
-        tracker.push(b";session_id=abcd\x07");
+        tracker.push(format!("{tail}\x07").as_bytes());
 
-        let capture = tracker.only_capture();
+        let (history_id, capture) = tracker.only_capture();
         assert_eq!(capture.output, "line one");
-        assert_eq!(capture.history_id, hid(HID));
-        assert_eq!(capture.session_id.as_deref(), Some("abcd"));
+        assert_eq!(history_id, hid(HID));
     }
 
     #[rstest]
@@ -779,26 +725,30 @@ mod tests {
             .as_bytes(),
         );
 
-        let capture = tracker.only_capture();
+        let capture = tracker.only_capture().1;
         assert_eq!(capture.output, "hi");
         assert_eq!(capture.output_observed_bytes, u64::conv(b"hi\r\n".len()));
     }
 
     #[rstest]
     fn splitting_a_marker_across_pushes_does_not_change_the_byte_count(mut tracker: Tracker) {
+        let (head, tail) = HID.split_at(20);
         tracker
             .push(
                 &[
                     COMMAND_EXECUTED,
-                    format!("line one\r\n\x1b]133;D;0;history_id={HID}").as_bytes(),
+                    format!("line one\r\n\x1b]133;D;0;history_id={head}").as_bytes(),
                 ]
                 .concat(),
             )
-            .push(b";session_id=abcd\x07");
+            .push(format!("{tail}\x07").as_bytes());
 
         // The same total as if the whole marker had arrived in one push: the marker is
         // discounted in full, however it was split up.
-        assert_eq!(tracker.only_capture().output_observed_bytes, u64::conv(b"line one\r\n".len()));
+        assert_eq!(
+            tracker.only_capture().1.output_observed_bytes,
+            u64::conv(b"line one\r\n".len())
+        );
     }
 
     #[rstest]
@@ -808,7 +758,7 @@ mod tests {
             tracker.push(std::slice::from_ref(byte));
         }
 
-        let capture = tracker.only_capture();
+        let capture = tracker.only_capture().1;
         assert_eq!(capture.output, "hi");
         assert_eq!(capture.output_observed_bytes, u64::conv(b"hi\r\n".len()));
     }
@@ -820,7 +770,7 @@ mod tests {
         const LINE_LEN: usize = 70;
         const LINES: usize = 40_000;
 
-        let finish = finished(0, HID, "session-1");
+        let finish = finished(0, HID);
         let mut input = COMMAND_EXECUTED.to_vec();
         for i in 0..LINES {
             input.extend_from_slice(format!("{i:0LINE_LEN$}\r\n").as_bytes());
@@ -828,7 +778,7 @@ mod tests {
         input.extend_from_slice(&finish);
         tracker.push(&input);
 
-        let capture = tracker.only_capture();
+        let capture = tracker.only_capture().1;
         assert!(capture.output_truncated);
         assert_eq!(capture.output.len(), MAX_CAPTURE_BYTES);
         assert_eq!(capture.output_observed_bytes, u64::conv((LINE_LEN + 2) * LINES));
@@ -840,11 +790,11 @@ mod tests {
     fn resizing_reflows_the_capture(#[with(6, 20)] mut tracker: Tracker) {
         tracker.push(&[COMMAND_EXECUTED, b"abcdefghij"].concat());
         tracker.resize(6, 5);
-        tracker.push(&[b"klmno\r\n".as_slice(), &finished(0, HID, "sess")].concat());
+        tracker.push(&[b"klmno\r\n".as_slice(), &finished(0, HID)].concat());
 
         // The first ten columns were rendered on a twenty-column screen; narrowing it drops
         // what no longer fits, and the rest is appended at the new width.
-        assert_eq!(tracker.only_capture().output, "abcdklmno");
+        assert_eq!(tracker.only_capture().1.output, "abcdklmno");
     }
 
     #[rstest]

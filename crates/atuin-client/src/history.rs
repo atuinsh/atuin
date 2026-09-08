@@ -17,7 +17,10 @@ use crate::secrets::SECRET_PATTERNS_RE;
 use crate::settings::Settings;
 
 pub(crate) mod builder;
+pub mod capture;
 pub mod store;
+
+pub use capture::CommandCapture;
 
 /// Known AI agent author values. Used by [`History::is_agent`] to guess who ran a command when the
 /// entry does not state it, and so when matching against [`AuthorPattern::AllAgent`] and

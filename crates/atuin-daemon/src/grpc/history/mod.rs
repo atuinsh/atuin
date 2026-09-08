@@ -18,11 +18,11 @@ use crate::DaemonHandle;
 use crate::grpc::history::pb::history_server::History as GrpcService;
 use crate::grpc::history::pb::{
     CancelHistoryReply, CancelHistoryRequest, DeleteHistoryReply, DeleteHistoryRequest,
-    EndHistoryReply, EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse, Lagged,
-    RebuildHistoryReply, RebuildHistoryRequest, RegisterCommandOutputRequest,
-    RegisterCommandOutputResponse, ShutdownReply, ShutdownRequest, StartHistoryReply,
-    StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent, TailHistoryReply,
-    TailHistoryRequest,
+    DeleteHistoryStreamExt, EndHistoryReply, EndHistoryRequest, GetCommandOutputRequest,
+    GetCommandOutputResponse, Lagged, RebuildHistoryReply, RebuildHistoryRequest,
+    RegisterCommandOutputRequest, RegisterCommandOutputResponse, ShutdownReply, ShutdownRequest,
+    StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent,
+    TailHistoryReply, TailHistoryRequest,
 };
 use crate::history_journal::HistoryJournal;
 
@@ -340,14 +340,9 @@ impl GrpcService for Service {
     #[instrument(skip_all, level = Level::TRACE)]
     async fn delete_history(
         &self,
-        request: Request<DeleteHistoryRequest>,
+        request: Request<tonic::Streaming<DeleteHistoryRequest>>,
     ) -> Result<Response<DeleteHistoryReply>, Status> {
-        // We collect here to validate every id up front: `into_history_ids` yields an iterator of
-        // `Result`s, and [`HistoryJournal::delete`] needs validated, correct HistoryIds. Consuming
-        // the request (rather than borrowing + cloning each proto id) keeps this to a single
-        // allocation, and a malformed request deletes nothing.
-        let ids: Vec<HistoryId> =
-            request.into_inner().into_history_ids().collect::<Result<Vec<_>, _>>()?;
+        let ids = request.into_inner().collect_history_ids().await?;
 
         let search_settings = self.daemon_handle.settings().await.search.clone();
         let journal = self.journal.clone();
@@ -436,7 +431,7 @@ impl GrpcService for Service {
     ) -> Result<Response<RegisterCommandOutputResponse>, Status> {
         let request = request.into_inner();
         let id = request.history_id()?;
-        let capture = request.capture()?;
+        let capture = request.capture()?.into();
         let journal = self.journal.clone();
         detached(async move { journal.register_command_output(id, capture).await }).await??;
         Ok(Response::new(RegisterCommandOutputResponse {}))
@@ -455,6 +450,6 @@ impl GrpcService for Service {
                 Status::not_found(format!("no captured output for history id {id}"))
             })?;
 
-        Ok(Response::new(GetCommandOutputResponse::build(capture, request.output_ranges())))
+        Ok(Response::new(GetCommandOutputResponse::build(capture.into(), request.output_ranges())))
     }
 }

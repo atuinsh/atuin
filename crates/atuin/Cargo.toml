@@ -158,8 +158,17 @@ tree-sitter-powershell = { workspace = true }
 windows-sys = { workspace = true }
 
 [dev-dependencies]
+parking_lot = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
+tempfile = { workspace = true }
+toml_edit = { workspace = true, features = ["serde"] }
+
+# for the PTY e2e tests (tests/e2e_pty.rs)
+[target.'cfg(unix)'.dev-dependencies]
+atuin-vt100 = { workspace = true }
+nix-pty = { package = "nix", version = "0.28", features = ["term"] }
+portable-pty = "0.9"
 
 [lints]
 workspace = true

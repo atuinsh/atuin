@@ -26,6 +26,7 @@ fjall = { workspace = true }
 frizbee = { workspace = true }
 futures = { workspace = true }
 hyper-util = { workspace = true }
+itertools = { workspace = true }
 lasso = { workspace = true }
 parking_lot = { workspace = true }
 prost = { workspace = true }

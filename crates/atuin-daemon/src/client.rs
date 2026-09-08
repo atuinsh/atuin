@@ -9,6 +9,7 @@ use atuin_common::range::PyStyleIdxRange;
 use easy_cast::Conv;
 use eyre::{Context as EyreContext, Result};
 use hyper_util::rt::TokioIo;
+use itertools::Itertools;
 #[cfg(windows)]
 use tokio::net::TcpStream;
 #[cfg(unix)]
@@ -169,14 +170,27 @@ impl HistoryClient {
             .into_inner())
     }
 
-    pub async fn delete_history(&mut self, ids: Vec<HistoryId>) -> Result<DeleteHistoryReply> {
-        Ok(self
-            .client
-            .delete_history(DeleteHistoryRequest {
-                ids: ids.into_iter().map(Into::into).collect(),
+    pub async fn delete_history(
+        &mut self,
+        ids: impl IntoIterator<Item = HistoryId>,
+    ) -> Result<DeleteHistoryReply> {
+        // TODO(markovejnovic): A more flexible implementation would be to iterate into chunks that
+        //                      are as large as possible. If we know the size of a struct (which we
+        //                      can, in theory), then we can simply chunk by that.
+        //                      If we _don't_ know the size of the struct, then we can create a
+        //                      struct, measure its size, repeat until we reach our threshold.
+        const DELETE_CHUNK_SIZE: usize = 50_000;
+
+        let chunks: Vec<DeleteHistoryRequest> = ids
+            .into_iter()
+            .chunks(DELETE_CHUNK_SIZE)
+            .into_iter()
+            .map(|chunk| DeleteHistoryRequest {
+                ids: chunk.map(Into::into).collect(),
             })
-            .await?
-            .into_inner())
+            .collect();
+
+        Ok(self.client.delete_history(futures::stream::iter(chunks)).await?.into_inner())
     }
 
     pub async fn rebuild_history(&mut self) -> Result<RebuildHistoryReply> {

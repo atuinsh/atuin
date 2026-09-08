@@ -13,12 +13,6 @@ use common::scale::{
 };
 use rstest::*;
 
-// rstest 0.26.1 does not honour a case-level `#[ignore]` placed between `#[case]` attributes: it
-// either applies the last `#[ignore]` seen to every case in the function, or ignores none of them
-// (observed: every case took on the last case's ignore reason, which would have hidden
-// `two_hundred_k`, the one case that must run and fail). So a tier that needs `#[ignore]` lives
-// in its own wrapper function around the shared `common::scale::<name>_body`.
-
 #[rstest]
 #[case::one_k(1_000)]
 #[case::ten_k(10_000)]
@@ -39,23 +33,10 @@ async fn deleting_a_sample_leaves_everything_else(#[case] rows: usize) {
 #[rstest]
 #[case::one_k(1_000)]
 #[case::ten_k(10_000)]
+#[case::two_hundred_k(200_000)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn deleting_everything_in_one_request(#[case] rows: usize) {
     deleting_everything_in_one_request_body(rows).await;
-}
-
-#[ignore = "documents an unfixed defect (H2): a 200k-id delete exceeds tonic's 4 MiB decode limit \
-            and is rejected before any row is deleted. Run with --run-ignored all."]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn deleting_everything_in_one_request_two_hundred_k() {
-    deleting_everything_in_one_request_body(200_000).await;
-}
-
-#[ignore = "documents an unfixed defect (H2): a 1M-id delete exceeds tonic's 4 MiB decode limit \
-            and is rejected before any row is deleted. Run with --run-ignored all."]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn deleting_everything_in_one_request_one_m() {
-    deleting_everything_in_one_request_body(1_000_000).await;
 }
 
 #[rstest]
