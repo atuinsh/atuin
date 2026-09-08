@@ -394,6 +394,15 @@ pub fn contains_secret(s: &str) -> bool {
     PREFILTER.is_match(s)
 }
 
+fn is_multiline_opener(value: &str) -> bool {
+    matches!(value, "|" | "|-" | "|+" | ">" | ">-" | ">+" | "\\" | "{" | "[")
+        || value.starts_with("<<")
+        || value.starts_with("!!")
+        || (value.len() > 1
+            && value.starts_with('&')
+            && value[1..].chars().all(|c| c.is_alphanumeric() || c == '_'))
+}
+
 /// A single pass over `s`, replacing every credential the patterns can locate with [`REDACTED`].
 fn redact_once(s: &str) -> Cow<'_, str> {
     let mut spans: Vec<Range<usize>> = PREFILTER
@@ -404,6 +413,7 @@ fn redact_once(s: &str) -> Cow<'_, str> {
         // Text that is already the marker is not a change. This is what makes `redact`
         // idempotent and keeps "Borrowed iff nothing changed" exact.
         .filter(|span| &s[span.clone()] != REDACTED)
+        .filter(|span| !is_multiline_opener(&s[span.clone()]))
         .collect();
 
     if spans.is_empty() {
@@ -724,6 +734,13 @@ mod tests {
     #[case::already_redacted_assignment("AWS_SECRET_ACCESS_KEY=****")]
     #[case::already_redacted_login("atuin login -p ****")]
     #[case::two_markers_as_value("AWS_SESSION_TOKEN=**** ****")]
+    #[case::yaml_literal_block("stringData:\n  AWS_SECRET_ACCESS_KEY: |-\n    wJalr\n")]
+    #[case::yaml_folded_block("AWS_SECRET_ACCESS_KEY: >-\n  v")]
+    #[case::heredoc("AWS_SESSION_TOKEN = <<EOT\nVALUE\nEOT")]
+    #[case::shell_continuation("export AWS_SECRET_ACCESS_KEY=\\\nVALUE")]
+    #[case::yaml_tag("AWS_SECRET_ACCESS_KEY: !!binary |\n  d0phbHI=")]
+    #[case::yaml_anchor("AWS_SECRET_ACCESS_KEY: &key\n  v")]
+    #[case::multiline_json_opener("GOOGLE_SERVICE_ACCOUNT_KEY={\n  \"type\": \"x\"\n}")]
     fn passes_text_through_borrowed(#[case] input: &str) {
         assert!(matches!(redact(input), Cow::Borrowed(_)), "{input:?} should not be copied");
     }
@@ -751,7 +768,7 @@ mod tests {
     #[rstest]
     #[case::credential_in_a_type_position(
         "AWS_SECRET_ACCESS_KEY: aAKIAIOSFODNN7EXAMPLE => ",
-        "AWS_SECRET_ACCESS_KEY: **** =**** "
+        "AWS_SECRET_ACCESS_KEY: **** => "
     )]
     #[case::credential_in_a_type_position_with_a_value(
         "AWS_SECRET_ACCESS_KEY: xAKIAIOSFODNN7EXAMPLE = y",
