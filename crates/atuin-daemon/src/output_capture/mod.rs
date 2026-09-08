@@ -236,12 +236,6 @@ impl OutputCapture {
 
     /// Forget the captured output of every history id in `ids`, letting the periodic flusher carry
     /// the removal to disk.
-    ///
-    /// For commands nothing durable refers to (a cancelled in-flight command). The removal reaches
-    /// disk on the flusher's next tick or when the store closes; only a crash inside that window
-    /// loses it, and a capture written moments earlier is buffered the same way, so it usually goes
-    /// with it. After a daemon restart no in-flight command survives anyway, so anything left is
-    /// the retention sweep's to reclaim.
     pub async fn remove(
         &self,
         ids: impl IntoIterator<Item = HistoryId>,
