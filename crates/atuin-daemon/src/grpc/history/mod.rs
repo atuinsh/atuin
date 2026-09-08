@@ -1,6 +1,5 @@
 pub mod pb;
 
-use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -255,27 +254,6 @@ impl Service {
     }
 }
 
-/// Run `fut` to completion on its own task and hand back its output.
-///
-/// tonic drops a handler's future as soon as its client disconnects. For the calls that decide
-/// what output the daemon keeps, stopping half-way is worse than finishing: a dropped
-/// [`HistoryJournal::register_command_output`] releases the id's gate while its store write is
-/// still in flight, and a dropped [`HistoryJournal::delete`] releases its claim on the ids with the
-/// records only half removed. Detaching the call makes it run to completion regardless of the
-/// client; the client merely stops hearing about it.
-///
-/// Callers write `detached(..).await??`: the outer `?` is the join result (the task panicked), the
-/// inner `?` is the journal's own error, converted through its `From<_> for Status`.
-async fn detached<F>(fut: F) -> Result<F::Output, Status>
-where
-    F: Future + Send + 'static,
-    F::Output: Send + 'static,
-{
-    tokio::spawn(fut.instrument(tracing::Span::current()))
-        .await
-        .map_err(|e| Status::internal(format!("journal task did not complete: {e}")))
-}
-
 #[tonic::async_trait]
 impl GrpcService for Service {
     type TailHistoryStream = Pin<Box<dyn Stream<Item = Result<TailHistoryReply, Status>> + Send>>;
@@ -331,7 +309,10 @@ impl GrpcService for Service {
         let id: HistoryId = request.into_inner().try_into()?;
 
         let journal = self.journal.clone();
-        detached(async move { journal.cancel(id).await }).await??;
+        // Spawned so a client disconnect cannot drop the call half-way.
+        tokio::spawn(async move { journal.cancel(id).await }.instrument(tracing::Span::current()))
+            .await
+            .map_err(|e| Status::internal(format!("cancel did not complete: {e}")))??;
 
         Ok(Response::new(CancelHistoryReply {
             // TODO(markovejnovic): Pull this from one constant, well-defined spot.
@@ -349,8 +330,13 @@ impl GrpcService for Service {
 
         let search_settings = self.daemon_handle.settings().await.search.clone();
         let journal = self.journal.clone();
-        let deleted =
-            detached(async move { journal.delete(ids, &search_settings).await }).await??;
+        // Spawned so a client disconnect cannot drop the call half-way.
+        let deleted = tokio::spawn(
+            async move { journal.delete(ids, &search_settings).await }
+                .instrument(tracing::Span::current()),
+        )
+        .await
+        .map_err(|e| Status::internal(format!("delete did not complete: {e}")))??;
 
         Ok(Response::new(DeleteHistoryReply {
             deleted: deleted.cast(),
@@ -436,7 +422,13 @@ impl GrpcService for Service {
         let id = request.history_id()?;
         let capture = request.capture()?.into();
         let journal = self.journal.clone();
-        detached(async move { journal.register_command_output(id, capture).await }).await??;
+        // Spawned so a client disconnect cannot drop the call half-way.
+        tokio::spawn(
+            async move { journal.register_command_output(id, capture).await }
+                .instrument(tracing::Span::current()),
+        )
+        .await
+        .map_err(|e| Status::internal(format!("output registration did not complete: {e}")))??;
         Ok(Response::new(RegisterCommandOutputResponse {}))
     }
 
