@@ -197,7 +197,10 @@ fi
 "#;
 
 /// Preamble for fish.
-const FISH_INIT: &str = r#"if status is-interactive; and test -t 0; and test -t 1
+// Unlike other shells, we only test whether stdout is a tty rather than also checking stdin,
+// because we instruct users to pipe `atuin init fish` to `source`, which puts the script itself
+// on stdin, making it necessarily not a tty.
+const FISH_INIT: &str = r#"if status is-interactive; and test -t 1
     and not set -q __atuin_pty_proxy_owns_tty
 
     set -g __atuin_pty_proxy_owns_tty 0
