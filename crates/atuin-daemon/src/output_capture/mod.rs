@@ -39,7 +39,7 @@ impl OutputCapture {
 
     #[must_use]
     pub fn kind(&self) -> BackendKind {
-        self.backend.kind()
+        BackendKind::from(&self.backend)
     }
 
     /// Capture a command and associate it with the given history id.

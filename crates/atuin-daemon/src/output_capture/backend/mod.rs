@@ -39,25 +39,11 @@ pub trait Backend {
     ) -> impl Future<Output = Result<Option<CommandCapture>, GetOutputError>> + Send;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BackendKind {
-    Fjall,
-    Nop,
-}
-
-#[derive(Debug)]
+#[derive(Debug, strum_macros::EnumDiscriminants)]
+#[strum_discriminants(name(BackendKind))]
 pub enum AnyBackend {
     Fjall(FjallBackend),
     Nop(NopBackend),
-}
-
-impl AnyBackend {
-    pub fn kind(&self) -> BackendKind {
-        match self {
-            Self::Fjall(_) => BackendKind::Fjall,
-            Self::Nop(_) => BackendKind::Nop,
-        }
-    }
 }
 
 impl Backend for AnyBackend {
