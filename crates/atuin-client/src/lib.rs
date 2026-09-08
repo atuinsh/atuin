@@ -25,6 +25,5 @@ pub mod ordering;
 pub mod packfile;
 pub mod plugin;
 pub mod record;
-pub mod secrets;
 pub mod settings;
 pub mod theme;

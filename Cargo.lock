@@ -461,6 +461,7 @@ dependencies = [
  "pretty_assertions",
  "proptest",
  "prost",
+ "regex",
  "rmp",
  "rstest",
  "rustix",
