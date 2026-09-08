@@ -392,7 +392,9 @@ Matches each command against a set of built-in regular expressions, and refuses 
 | Pulumi       | Personal access tokens                                                                                                |
 | Atuin        | `atuin login`, which takes your password and encryption key as arguments                                              |
 
-For the exact expressions, see [`secrets.rs`](https://github.com/atuinsh/atuin/blob/main/crates/atuin-client/src/secrets.rs).
+For the exact expressions, see [`secrets.rs`](https://github.com/atuinsh/atuin/blob/main/crates/atuin-common/src/secrets.rs).
+
+The same patterns are applied to captured command output. A command whose own text is clean can still print a credential — `cat .env`, `gh auth token` — so recognised values in the captured output are replaced with `****` before storage. Only the value is replaced; the variable name or flag beside it stays.
 
 Note
 
