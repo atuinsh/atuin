@@ -404,13 +404,6 @@ impl HistoryJournal {
 
     /// Cancel a command, discarding its in-memory state -- and any output captured for it.
     pub async fn cancel(&self, history_id: HistoryId) -> Result<(), CmdCancelError> {
-        // There is a really nasty concurrency issue we have to handle...
-        //
-        // Firstly, note that it is possible for **multiple** cancels/finishes to through at the
-        // same time. Additionally, while we're cancelling, we might receive a call to
-        // `register_command_output`.
-        //
-        // This puts us in a nasty position -- the `register_command_output` can regiser
         let _liveness = self.liveness_mutex.lock(&history_id).await;
 
         let lock = self
@@ -424,10 +417,6 @@ impl HistoryJournal {
             return Err(CmdCancelError::NotFound(history_id));
         }
 
-        // Nothing durable refers to a cancelled command, so a buffered removal is enough. The
-        // shell fires cancels and forgets them, so a storage failure here is retried by nobody:
-        // log it and cancel anyway rather than leave the command in flight forever. Any output
-        // that stays behind is the retention sweep's to reclaim.
         if let Err(err) = self.output_capture.remove([history_id]).await {
             tracing::warn!(
                 %history_id,
