@@ -185,7 +185,7 @@ async fn journal_delete_removes_entry_and_rebuilds_index(#[future(awt)] env: Tes
     journal.finish(id_b, 0, Duration::from_millis(1)).await.unwrap();
     assert_eq!(env.index_count().await, 2);
 
-    assert_eq!(journal.delete([id_a], &Search::default()).await.unwrap(), 1);
+    assert_eq!(journal.delete(&[id_a], &Search::default()).await.unwrap(), 1);
 
     let index = env.index.read().await;
     assert_eq!(index.command_count(), 1, "index should be rebuilt without the deleted command");

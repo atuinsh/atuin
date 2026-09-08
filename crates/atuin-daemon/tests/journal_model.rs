@@ -133,7 +133,7 @@ async fn apply(env: &TestEnv, model: &mut Model, op: &Op) {
             let ids: Vec<HistoryId> = slots.iter().map(|s| model.id(*s)).collect();
             let deleted = env
                 .journal
-                .delete(ids, &Search::default())
+                .delete(&ids, &Search::default())
                 .await
                 .expect("delete never fails on healthy stores");
             assert_eq!(deleted, slots.len());

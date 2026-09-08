@@ -142,7 +142,7 @@ async fn delete_racing_finish_leaves_no_row_anywhere() {
         let j2 = env.journal.clone();
         let finish = tokio::spawn(async move { j1.finish(id, 0, Duration::from_millis(1)).await });
         let delete =
-            tokio::spawn(async move { j2.delete([id], &Search::default()).await.unwrap() });
+            tokio::spawn(async move { j2.delete(&[id], &Search::default()).await.unwrap() });
         let (finished, deleted) = (finish.await.unwrap(), delete.await.unwrap());
         assert_eq!(deleted, 1);
         if env.history_db.load(id).await.unwrap().is_some() {
@@ -180,7 +180,7 @@ async fn commands_finished_during_an_index_reload_are_searchable(#[case] reload:
     let reload_task = tokio::spawn(async move {
         match reload {
             Reload::Delete => {
-                journal.delete([victim], &Search::default()).await.unwrap();
+                journal.delete(&[victim], &Search::default()).await.unwrap();
             }
             Reload::Rebuild => journal.rebuild(&Search::default()).await.unwrap(),
         }
@@ -237,8 +237,8 @@ async fn concurrent_deletes_both_leave_the_index() {
         let ja = env.journal.clone();
         let jb = env.journal.clone();
         let (ra, rb) = tokio::join!(
-            tokio::spawn(async move { ja.delete([a.id], &Search::default()).await.unwrap() }),
-            tokio::spawn(async move { jb.delete([b.id], &Search::default()).await.unwrap() }),
+            tokio::spawn(async move { ja.delete(&[a.id], &Search::default()).await.unwrap() }),
+            tokio::spawn(async move { jb.delete(&[b.id], &Search::default()).await.unwrap() }),
         );
         assert_eq!((ra.unwrap(), rb.unwrap()), (1, 1));
         for h in [&a, &b] {
@@ -282,7 +282,7 @@ async fn disjoint_concurrent_deletes_all_reach_the_store() {
 
     let tasks = groups.iter().cloned().map(|ids| {
         let journal = env.journal.clone();
-        tokio::spawn(async move { journal.delete(ids, &Search::default()).await.unwrap() })
+        tokio::spawn(async move { journal.delete(&ids, &Search::default()).await.unwrap() })
     });
     let counts: Vec<usize> = join_all(tasks).await.into_iter().map(Result::unwrap).collect();
     assert_eq!(counts.iter().sum::<usize>(), total);
@@ -400,7 +400,7 @@ async fn synced_history_during_a_reload_is_searchable() {
     let victim = env.seeded.ids[0];
     let journal = env.journal.clone();
     let reload =
-        tokio::spawn(async move { journal.delete([victim], &Search::default()).await.unwrap() });
+        tokio::spawn(async move { journal.delete(&[victim], &Search::default()).await.unwrap() });
     tokio::time::sleep(Duration::from_millis(30)).await;
 
     let mut history_gen = HistoryGen::new(0xABCD);
@@ -528,7 +528,7 @@ async fn captures_never_outlive_their_entries_under_contention() {
             tasks.push(tokio::spawn(async move {
                 match i % 3 {
                     0 => {
-                        let _ = journal.delete([id], &Search::default()).await;
+                        let _ = journal.delete(&[id], &Search::default()).await;
                     }
                     1 => {
                         let _ = journal.cancel(id).await;

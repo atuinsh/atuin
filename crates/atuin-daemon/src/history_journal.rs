@@ -13,20 +13,22 @@
 //!
 //! ## Commands in flight
 //!
-//! Commands-in-flight are commands which have been started but have just started running. These
-//! commands are uniquely identified by their [`HistoryId`].
+//! Commands-in-flight are commands which have been started but are already running. These commands
+//! are uniquely identified by their [`HistoryId`].
 //!
-//! Commands in flight can be terminated in one of two ways:
+//! Commands in flight can be terminated in one of three ways:
 //!
 //!   - [`HistoryJournal::finish`] marks the command as finished, which will create and store a new
 //!     history entry.
 //!   - [`HistoryJournal::cancel`] cancels the command, disposing of any in-memory resources, but
 //!     without the logic of persisting the history entry.
+//!   - [`HistoryJournal::delete`] deletes a history entry which will dispose of a command, if it is
+//!     in flight, announcing the command as "cancelled".
 //!
 //! ## Streaming
 //!
 //! It is possible to stream events out of [`HistoryJournal`] via [`HistoryJournal::subscribe`]
-//! which returns a new [`futures::Stream`] of [`CmdEvent`] events.
+//! which returns a new [`futures::Stream`] of [`Result<CmdEvent, _>`] events.
 //!
 //! ## Output Capture
 //!
@@ -42,7 +44,7 @@
 //!   3. A command is deleted, ie. it has been added at some point, and has been subsequently
 //!      deleted through [`HistoryJournal::delete`].
 //!
-//! In both of these states, the command can have associated output capture enter out-of-band, via
+//! In all of these states, the command can have associated output capture enter out-of-band, via
 //! [`HistoryJournal::register_command_output`].
 //!
 //! ## Deletion
@@ -53,16 +55,26 @@
 //!   - During deletion, [`HistoryJournal::register_command_output`] requests going in parallel must
 //!     be rejected.
 //!
+//! ## Concurrency
 //!
+//! Concurrency in this module is quite difficult. Here are the important things to know about:
 //!
-//
-// There is a really nasty concurrency issue we have to handle...
-//
-// Firstly, note that it is possible for **multiple** cancels/finishes to through at the
-// same time. Additionally, while we're cancelling, we might receive a call to
-// `register_command_output`.
-//
-// This puts us in a nasty position -- the `register_command_output` can regiser
+//!   - [`HistoryJournal::deleting`] is a hashmap which refcounts each history ID which is currently
+//!     under the process of deletion. This enables us to reject any command output capture requests
+//!     which run in parallel to a deletion.
+//!   - [`HistoryJournal::lifecycle_mutex`] is a [sharded
+//!     mutex](http://quinnftw.com/sharding-to-reduce-mutex-contention/) which guards [`HistoryId`]s
+//!     as they transition between states. _**Note to maintainers**: This sharded mutex **can
+//!     deadlock** if you are awaiting a [`HistoryId`], while holding another [`HistoryId`].
+//!     **Always** avoid nesting [`HistoryJournal::lifecycle_mutex`] accesses._
+//!
+//!     This utility is critical as it prevents parallel [`HistoryJournal::cancel`],
+//!     [`HistoryJournal::delete`], [`HistoryJournal::register_command_output`], etc. requests from
+//!     stomping over each other and putting us in an inconsistent state.
+//!   - [`InFlightCmd::finalization_mutex`] is used to prevent the cancellation of a command as it
+//!     is being finalized. It is acquired at the start of [`HistoryJournal::finish`],
+//!     [`HistoryJournal::cancel`] and for each entry deleted during [`HistoryJournal::delete`].
+//!
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -144,14 +156,15 @@ struct InFlightCmd {
 /// Reference-counted in [`HistoryJournal::deleting`] so that two concurrent deletes of the same id
 /// keep it claimed until *both* are done: a delete that fails part-way must not unmark an id
 /// another delete is still tearing down.
-struct DeletingMarks<'s, 'a> {
+struct DeletingMarks<'s, 'i> {
     deleting: &'s DashMap<HistoryId, usize>,
-    ids: &'a [HistoryId],
+    ids: &'i [HistoryId],
+    marked: usize,
 }
 
-impl<'s, 'a> Drop for DeletingMarks<'s, 'a> {
+impl Drop for DeletingMarks<'_, '_> {
     fn drop(&mut self) {
-        for id in self.ids {
+        for id in &self.ids[..self.marked] {
             self.deleting.remove_if_mut(id, |_, count| {
                 *count -= 1;
                 *count == 0
@@ -160,8 +173,7 @@ impl<'s, 'a> Drop for DeletingMarks<'s, 'a> {
     }
 }
 
-/// Registry of in-flight commands which performs output capture, management, storage and
-/// retrieval.
+/// Registry of in-flight commands which performs output capture, management, storage and retrieval.
 #[derive(Debug)]
 pub struct HistoryJournal {
     /// Capabilities client used for packing.
@@ -199,11 +211,11 @@ pub struct HistoryJournal {
     /// delete's output removal and its record removal.
     deleting: DashMap<HistoryId, usize>,
 
-    /// Serialises the liveness check + write in [`Self::register_command_output`] against the
+    /// Serialises the lifecycle check + write in [`Self::register_command_output`] against the
     /// marking in [`Self::delete`] and the teardown in [`Self::cancel`], one shard per history id.
     ///
-    /// Please see the [moduledoc](super) for a great explanation.
-    liveness_mutex: AsyncShardedMutex<HistoryId, ()>,
+    /// Please see the [moduledoc](self) for a (hopefully better) explanation.
+    lifecycle_mutex: AsyncShardedMutex<HistoryId, ()>,
 }
 
 /// Errors returned by [`HistoryJournal::finish`].
@@ -269,7 +281,7 @@ impl HistoryJournal {
         search_index: Arc<tokio::sync::RwLock<SearchIndex>>,
         output_capture: OutputCapture,
     ) -> Self {
-        const DEFAULT_LIVENESS_SHARDS: NonZeroUsize = NonZeroUsize::new(64).unwrap();
+        const DEFAULT_LIFECYCLE_SHARDS: NonZeroUsize = NonZeroUsize::new(64).unwrap();
 
         let (broadcast, _) = broadcast::channel(128);
         Self {
@@ -281,7 +293,7 @@ impl HistoryJournal {
             broadcast,
             output_capture,
             deleting: DashMap::new(),
-            liveness_mutex: AsyncShardedMutex::new(DEFAULT_LIVENESS_SHARDS),
+            lifecycle_mutex: AsyncShardedMutex::new(DEFAULT_LIFECYCLE_SHARDS),
         }
     }
 
@@ -301,14 +313,11 @@ impl HistoryJournal {
             duration = Empty,
         );
 
-        self.active_cmds.insert(
-            id,
-            InFlightCmd {
-                history: history.clone(),
-                span,
-                finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
-            },
-        );
+        self.active_cmds.insert(id, InFlightCmd {
+            history: history.clone(),
+            span,
+            finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
+        });
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
     }
@@ -403,7 +412,7 @@ impl HistoryJournal {
 
     /// Cancel a command, discarding its in-memory state -- and any output captured for it.
     pub async fn cancel(&self, history_id: HistoryId) -> Result<(), CmdCancelError> {
-        let _liveness = self.liveness_mutex.lock(&history_id).await;
+        let _lifecycle = self.lifecycle_mutex.lock(&history_id).await;
 
         let lock = self
             .active_cmds
@@ -454,7 +463,7 @@ impl HistoryJournal {
         // history IDs.
         //
         // In effect, if concurrent `delete`s come through here, they'll have to wait on ids.
-        let _delete_guard = self.guard_deleting(&ids).await;
+        let _delete_guard = self.guard_deleting(ids).await;
 
         // Forget captured output before the history records. This order means a failed call can
         // leave an entry without its output but never output without its entry.
@@ -477,7 +486,7 @@ impl HistoryJournal {
         let delete_records = async || {
             let mut deleted: usize = 0;
             let mut record_ids = Vec::new();
-            for id in ids {
+            for &id in ids {
                 let mutex = self.active_cmds.get(&id).map(|cmd| cmd.finalization_mutex.clone());
                 let cancelled = if let Some(mutex) = mutex {
                     let _lock = mutex.lock().await;
@@ -497,7 +506,7 @@ impl HistoryJournal {
                     continue;
                 }
 
-                match self.history_store.delete(*id).await {
+                match self.history_store.delete(id).await {
                     Ok((record_id, _)) => {
                         record_ids.push(record_id);
                         deleted += 1;
@@ -563,15 +572,17 @@ impl HistoryJournal {
     }
 
     /// Claim `ids` for a running delete. See [`DeletingMarks`].
-    async fn guard_deleting<'a>(&self, ids: &'a [HistoryId]) -> DeletingMarks<'_, 'a> {
-        let marks = DeletingMarks {
+    async fn guard_deleting<'i>(&self, ids: &'i [HistoryId]) -> DeletingMarks<'_, 'i> {
+        let mut marks = DeletingMarks {
             deleting: &self.deleting,
             ids,
+            marked: 0,
         };
 
-        for id in ids {
-            let _liveness = self.liveness_mutex.lock(id).await;
-            *self.deleting.entry(*id).or_insert(0) += 1;
+        for &id in ids {
+            let _lifecycle = self.lifecycle_mutex.lock(&id).await;
+            *self.deleting.entry(id).or_insert(0) += 1;
+            marks.marked += 1;
         }
 
         marks
@@ -586,7 +597,7 @@ impl HistoryJournal {
         id: HistoryId,
         capture: CommandCapture,
     ) -> Result<(), RegisterOutputError> {
-        let _liveness = self.liveness_mutex.lock(&id).await;
+        let _lifecycle = self.lifecycle_mutex.lock(&id).await;
 
         if self.deleting.contains_key(&id) {
             return Err(RegisterOutputError::NotLive(id));

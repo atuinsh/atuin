@@ -252,13 +252,13 @@ async fn delete_failure_keeps_rows_until_retry() {
     let b = env.record(&mut client, "echo b").await;
 
     let lock = env.lock_record_store().await;
-    let err = env.journal.delete([a, b], &Search::default()).await.unwrap_err();
+    let err = env.journal.delete(&[a, b], &Search::default()).await.unwrap_err();
     assert!(matches!(err, CmdDeleteError::HistoryStoreFailed(_)), "{err}");
     assert_eq!(env.active_ids().await, HashSet::from([a, b]));
     assert_eq!(env.index_count().await, 2);
     lock.release().await;
 
-    assert_eq!(env.journal.delete([a, b], &Search::default()).await.unwrap(), 2);
+    assert_eq!(env.journal.delete(&[a, b], &Search::default()).await.unwrap(), 2);
     assert!(env.active_ids().await.is_empty());
     assert_eq!(env.index_count().await, 0);
 }
@@ -318,7 +318,7 @@ async fn delete_forgets_captured_output(
     env.journal.register_command_output(id, capture("secret output")).await.unwrap();
     assert!(env.journal.get_command_output(id).await.unwrap().is_some());
 
-    assert_eq!(env.journal.delete([id], &Search::default()).await.unwrap(), 1);
+    assert_eq!(env.journal.delete(&[id], &Search::default()).await.unwrap(), 1);
 
     assert!(
         env.journal.get_command_output(id).await.unwrap().is_none(),
@@ -361,7 +361,7 @@ async fn output_for_a_deleted_or_unknown_id_is_refused(
     if finished {
         env.journal.finish(deleted, 0, Duration::from_millis(1)).await.unwrap();
     }
-    assert_eq!(env.journal.delete([deleted], &Search::default()).await.unwrap(), 1);
+    assert_eq!(env.journal.delete(&[deleted], &Search::default()).await.unwrap(), 1);
     let unknown = HistoryId::from_bytes([0xCD; 16]);
 
     for id in [deleted, unknown] {
@@ -413,7 +413,7 @@ async fn output_arriving_mid_delete_is_refused(#[future(awt)] env: TestEnv) {
 
     let lock = env.lock_record_store().await;
     let journal = env.journal.clone();
-    let delete = tokio::spawn(async move { journal.delete([id], &Search::default()).await });
+    let delete = tokio::spawn(async move { journal.delete(&[id], &Search::default()).await });
     // Let the delete claim the id, remove its (absent) output, and block on the locked record
     // store. The harness's default db timeout is 5s, far beyond this wait.
     tokio::time::sleep(Duration::from_millis(200)).await;
