@@ -275,6 +275,12 @@ impl HistoryStore {
         Ok(ret)
     }
 
+    /// This function builds the history database from the current history record state.
+    ///
+    /// Invariants:
+    ///   - I1: Records which have been created and then subsequently deleted via a delete record
+    ///         will *not* be committed to the history store, at any point during the operation of
+    ///         this function.
     #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     pub async fn build(&self, database: &Sqlite) -> Result<()> {
         // I'd like to change how we rebuild and not couple this with the database, but need to
@@ -302,10 +308,9 @@ impl HistoryStore {
             }
         }
 
-        // Never write a row for an id the store also deletes, not even transiently: the daemon
-        // reads "row present" as "this command is live" and would accept captured output for it
-        // in the window before the delete below removed it again. The deletes are still applied,
-        // for rows the old sync left behind.
+        // Upholds I1.
+        //
+        // TODO(markovejnovic): Make this an iterator. The extra allocation is not useful.
         let deleted: HashSet<HistoryId> = deletes.iter().copied().collect();
         creates.retain(|h| !deleted.contains(&h.id));
 
@@ -710,9 +715,10 @@ mod tests {
 
         // Had the delete been applied before the create, `first` would still be present.
         let stored = db.list([], &context(), None, false, true, None).await.unwrap();
-        assert_eq!(stored.iter().map(|h| h.command.as_str()).collect::<Vec<_>>(), vec![
-            "command 2"
-        ]);
+        assert_eq!(
+            stored.iter().map(|h| h.command.as_str()).collect::<Vec<_>>(),
+            vec!["command 2"]
+        );
     }
 
     #[rstest]

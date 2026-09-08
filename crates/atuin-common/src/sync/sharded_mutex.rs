@@ -5,14 +5,6 @@ use std::num::NonZeroUsize;
 use tokio::sync::{Mutex, MutexGuard};
 
 /// A fixed number of async mutexes, each guarding a `V`, selected by hashing a `K`.
-///
-/// Locking a key locks the shard its hash lands in. Two keys may share a shard, which costs a
-/// little unnecessary waiting, never correctness -- as long as a task never holds two shards at
-/// once, since two keys in the same shard would deadlock it against itself.
-///
-/// The `V` belongs to the shard, not the key: keys that share a shard see the same value. Use
-/// `()` for pure mutual exclusion, which is what makes a per-key "check, then act" atomic without
-/// allocating a mutex per key.
 #[derive(Debug)]
 pub struct ShardedMutex<K, V> {
     shards: Box<[Mutex<V>]>,
