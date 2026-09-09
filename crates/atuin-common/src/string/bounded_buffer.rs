@@ -365,7 +365,7 @@ mod tests {
         for write in ["abcdefghij", "more", "and more"] {
             assert!(buffer.write_str(write).is_ok(), "{write:?} was refused");
         }
-        assert_eq!(parts(&buffer.take()), ("abcde", Some("ore")));
+        assert_eq!(parts(&buffer.take()), ("abcde", Some("ore"))); // codespell:ignore ore
     }
 
     // -- Properties -----------------------------------------------------------
