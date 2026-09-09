@@ -313,11 +313,14 @@ impl HistoryJournal {
             duration = Empty,
         );
 
-        self.active_cmds.insert(id, InFlightCmd {
-            history: history.clone(),
-            span,
-            finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
-        });
+        self.active_cmds.insert(
+            id,
+            InFlightCmd {
+                history: history.clone(),
+                span,
+                finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
+            },
+        );
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
     }
@@ -465,10 +468,6 @@ impl HistoryJournal {
         // In effect, if concurrent `delete`s come through here, they'll have to wait on ids.
         let _delete_guard = self.guard_deleting(ids).await;
 
-        // Output capture is secondary, so a failure to forget it must never sink the deletion the
-        // user actually asked for. We still remove output before the history records so a clean run
-        // never strands output without its entry; if removal fails we log it and delete the entry
-        // anyway, leaving orphaned output the store's garbage collector will reclaim.
         if let Err(err) = self.output_capture.remove(ids.iter().copied()).await {
             tracing::error!(
                 ?ids,
