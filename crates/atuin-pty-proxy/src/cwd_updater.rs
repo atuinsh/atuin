@@ -45,6 +45,9 @@ fn pty_cwd(parent: Option<BorrowedFd<'_>>, child: Option<Pid>) -> Option<PathBuf
 /// causes undefined behavior on macOS. The underlying `tcgetpgrp` libc call returns 0 when called
 /// on a PTY that no session has claimed, but on macOS, this gets passed directly to
 /// `NonZero::new_unchecked`, which is UB.
+///
+/// TODO(taylordotfish): Remove this once <https://github.com/bytecodealliance/rustix/issues/1678>
+/// is fixed.
 fn tcgetpgrp(terminal: BorrowedFd<'_>) -> Option<Pid> {
     // SAFETY: The FD we pass is guaranteed to be valid because it came from a `BorrowedFd` that
     // exists at least for the life of the call.
