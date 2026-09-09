@@ -133,9 +133,6 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
                     output = redacted;
                 }
 
-                // Recording output is best-effort: the history entry is stored over a separate
-                // call, so if the daemon can't take the output we drop it quietly (debug, not
-                // warn/error) rather than let a secondary feature turn into noise.
                 if let Err(err) = client
                     .register_command_output(
                         history_id,
