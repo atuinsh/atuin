@@ -131,7 +131,6 @@ mod tests {
     ///
     ///     cargo test -p atuin-common --features os -- --ignored --nocapture cwd_layers
     #[test]
-    #[ignore = "diagnostic, run explicitly"]
     fn cwd_layers() {
         use sysinfo::{ProcessRefreshKind, System, UpdateKind};
 
