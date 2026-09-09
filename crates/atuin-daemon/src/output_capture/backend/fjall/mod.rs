@@ -28,11 +28,154 @@ use super::{Backend, CaptureError, DeleteOutputError, GetOutputError};
 /// The schema currently in use for stored output.
 type ActiveSchema = SchemaV1;
 
+/// The store and every operation on it.
+///
+/// This is the state the background tasks (the flusher and the gc) drive. It deliberately holds no
+/// task handles, so a task can own a clone of it without a reference cycle back to the
+/// `FjallBackend` that owns those tasks.
+struct FjallBackendInner {
+    db: OptimisticTxDatabase,
+    keyspace: OptimisticTxKeyspace,
+    /// Set on every mutation; the flusher clears it and persists. See `Flusher` for the
+    /// memory-ordering rationale.
+    dirty: Arc<AtomicBool>,
+}
+
+impl FjallBackendInner {
+    /// On-disk bytes used by the store's segments and blob files.
+    ///
+    /// Might over/under-report by a couple dozen MB.
+    fn estimated_disk_space(&self) -> u64 {
+        self.keyspace.inner().disk_space()
+    }
+
+    async fn capture(&self, id: HistoryId, capture: CommandCapture) -> Result<(), CaptureError> {
+        let db = self.db.clone();
+        let keyspace = self.keyspace.clone();
+        let dirty = self.dirty.clone();
+        let key = ActiveSchema::serialize_key(id).expect("history id serialization is infallible");
+        let value = ActiveSchema::serialize_value(capture)
+            .map_err(|err| CaptureError::Serialize(Box::new(err)))?;
+
+        tokio::task::spawn_blocking(move || {
+            let mut tx = db.write_tx().map_err(|err| CaptureError::Storage(Box::new(err)))?;
+            if tx
+                .contains_key(&keyspace, key)
+                .map_err(|err| CaptureError::Storage(Box::new(err)))?
+            {
+                return Err(CaptureError::AlreadyExists);
+            }
+
+            tx.insert(&keyspace, key, value);
+            match tx.commit().map_err(|err| CaptureError::Storage(Box::new(err)))? {
+                Ok(()) => {
+                    dirty.store(true, Ordering::Release);
+                    Ok(())
+                }
+                // Another writer committed this key first, so it's already captured.
+                Err(fjall::Conflict) => Err(CaptureError::AlreadyExists),
+            }
+        })
+        .await
+        .expect("output-capture write task panicked")
+    }
+
+    async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError> {
+        let keyspace = self.keyspace.clone();
+        let key = ActiveSchema::serialize_key(id).expect("history id serialization is infallible");
+
+        tokio::task::spawn_blocking(move || {
+            match keyspace.get(key).map_err(|err| GetOutputError::Storage(Box::new(err)))? {
+                Some(slice) => {
+                    let capture = ActiveSchema::deserialize_value(slice.to_vec())
+                        .expect("stored value is a valid CommandCapture");
+                    Ok(Some(capture))
+                }
+                None => Ok(None),
+            }
+        })
+        .await
+        .expect("output-capture read task panicked")
+    }
+
+    async fn remove(&self, ids: Vec<HistoryId>) -> Result<(), DeleteOutputError> {
+        let keys: Vec<_> = ids
+            .into_iter()
+            .map(|id| {
+                ActiveSchema::serialize_key(id).expect("history id serialization is infallible")
+            })
+            .collect();
+        if keys.is_empty() {
+            return Ok(());
+        }
+
+        let db = self.db.clone();
+        let keyspace = self.keyspace.clone();
+        let dirty = self.dirty.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut tx = db.write_tx().map_err(|err| DeleteOutputError::Storage(Box::new(err)))?;
+            for key in keys {
+                tx.remove(&keyspace, key);
+            }
+            match tx.commit().map_err(|err| DeleteOutputError::Storage(Box::new(err)))? {
+                Ok(()) => {
+                    dirty.store(true, Ordering::Release);
+                    Ok(())
+                }
+                // fjall only reports conflicts for transactions that read; this one never does.
+                Err(fjall::Conflict) => {
+                    unreachable!("a blind remove performs no reads, so it can never conflict")
+                }
+            }
+        })
+        .await
+        .expect("output-capture delete task panicked")
+    }
+
+    /// Deletes the oldest stored entries until their values total at least `reclaim_bytes`,
+    /// returning the number of bytes actually freed.
+    async fn reclaim(&self, reclaim_bytes: u64) -> Result<u64, DeleteOutputError> {
+        if reclaim_bytes == 0 {
+            return Ok(0);
+        }
+
+        let db = self.db.clone();
+        let keyspace = self.keyspace.clone();
+        let dirty = self.dirty.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut tx = db.write_tx().map_err(|err| DeleteOutputError::Storage(Box::new(err)))?;
+            let mut freed: u64 = 0;
+
+            for guard in keyspace.inner().iter() {
+                let (key, value) =
+                    guard.into_inner().map_err(|err| DeleteOutputError::Storage(Box::new(err)))?;
+
+                tx.remove(&keyspace, key);
+
+                freed = freed.saturating_add(u64::try_from(value.len()).unwrap_or(u64::MAX));
+                if freed >= reclaim_bytes {
+                    break;
+                }
+            }
+
+            match tx.commit().map_err(|err| DeleteOutputError::Storage(Box::new(err)))? {
+                Ok(()) => {
+                    dirty.store(true, Ordering::Release);
+                    Ok(freed)
+                }
+                Err(fjall::Conflict) => {
+                    unreachable!("reclaim performs no tracked reads, so it can never conflict")
+                }
+            }
+        })
+        .await
+        .expect("output-capture reclaim task panicked")
+    }
+}
+
 /// Task responsible for flushing fjall data buffered in memory onto the disk.
 #[derive(Debug)]
 struct Flusher {
-    /// Whether new data was inserted since the last flush.
-    dirty: Arc<AtomicBool>,
     /// Handle to the background task.
     task: JoinHandle<()>,
 }
@@ -43,10 +186,7 @@ impl Flusher {
     /// We'd expect flush itself to take anywhere between 1-10ms, so this is plenty of overhead.
     const SYNC_INTERVAL: Duration = Duration::from_secs(5);
 
-    pub fn spawn(db: OptimisticTxDatabase) -> Self {
-        let dirty_outer = Arc::new(AtomicBool::new(false));
-
-        let dirty = dirty_outer.clone();
+    pub fn spawn(inner: Arc<FjallBackendInner>) -> Self {
         let task = tokio::task::spawn(async move {
             let mut interval = tokio::time::interval(Self::SYNC_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -89,34 +229,23 @@ impl Flusher {
                 //
                 // @taylordotfish mentioned we shouldn't rely on the internal implementation
                 // details.
-                if !dirty.swap(false, Ordering::Acquire) {
+                if !inner.dirty.swap(false, Ordering::Acquire) {
                     continue;
                 }
 
-                let db = db.clone();
+                let db = inner.db.clone();
                 if let Err(err) =
                     tokio::task::spawn_blocking(move || db.persist(PersistMode::SyncAll))
                         .await
                         .expect("persistence task shouldn't panic")
                 {
                     error!(?err, "failed to persist data on disk. will try again...");
-                    dirty.store(true, Ordering::Relaxed);
+                    inner.dirty.store(true, Ordering::Relaxed);
                 }
             }
         });
 
-        Self {
-            dirty: dirty_outer,
-            task,
-        }
-    }
-
-    /// Mark the flusher as necessary.
-    ///
-    /// Generally, this should be called on every mutation.
-    fn kick(&self) {
-        // Relaxed _should_ be OK here since fjall is handling actual memory ordering and concurrency.
-        self.dirty.store(true, Ordering::Release);
+        Self { task }
     }
 }
 
@@ -130,11 +259,12 @@ impl Drop for Flusher {
 #[derive(Clone, derive_more::Debug)]
 pub struct FjallBackend {
     #[debug(skip)]
-    db: OptimisticTxDatabase,
+    inner: Arc<FjallBackendInner>,
+    // Held only to abort their background tasks on drop; never read.
     #[debug(skip)]
-    keyspace: OptimisticTxKeyspace,
-    flusher: Arc<Flusher>,
-    gc: Option<Arc<Gc>>,
+    _flusher: Arc<Flusher>,
+    #[debug(skip)]
+    _gc: Option<Arc<Gc>>,
 }
 
 impl FjallBackend {
@@ -148,65 +278,23 @@ impl FjallBackend {
     }
 
     pub fn new(db: OptimisticTxDatabase, budget: Option<ByteSize>) -> fjall::Result<Self> {
-        let mut backend = Self {
-            db: db.clone(),
-            keyspace: db.keyspace(ActiveSchema::NAME, ActiveSchema::create_options)?,
-            flusher: Arc::new(Flusher::spawn(db)),
-            gc: None,
-        };
+        let keyspace = db.keyspace(ActiveSchema::NAME, ActiveSchema::create_options)?;
+        let inner = Arc::new(FjallBackendInner {
+            db,
+            keyspace,
+            dirty: Arc::new(AtomicBool::new(false)),
+        });
 
-        if let Some(budget) = budget {
-            backend.gc = Some(Arc::new(Gc::spawn(backend.clone(), budget)));
-        }
-        Ok(backend)
-    }
+        // The flusher and gc each drive `inner` from a background task, holding only a clone of it.
+        // `inner` points at no task, so those clones form no cycle that would keep the tasks alive.
+        let flusher = Arc::new(Flusher::spawn(inner.clone()));
+        let gc = budget.map(|budget| Arc::new(Gc::spawn(inner.clone(), budget)));
 
-    /// On-disk bytes used by the store's segments and blob files.
-    ///
-    /// Might over/under-report by a couple dozen MB.
-    fn estimated_disk_space(&self) -> u64 {
-        self.keyspace.inner().disk_space()
-    }
-
-    /// Deletes the oldest stored entries until their values total at least `reclaim_bytes`,
-    /// returning the number of bytes actually freed.
-    async fn reclaim(&self, reclaim_bytes: u64) -> Result<u64, DeleteOutputError> {
-        if reclaim_bytes == 0 {
-            return Ok(0);
-        }
-
-        let db = self.db.clone();
-
-        let keyspace = self.keyspace.clone();
-        let flusher = self.flusher.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut tx = db.write_tx().map_err(|err| DeleteOutputError::Storage(Box::new(err)))?;
-            let mut freed: u64 = 0;
-
-            for guard in keyspace.inner().iter() {
-                let (key, value) =
-                    guard.into_inner().map_err(|err| DeleteOutputError::Storage(Box::new(err)))?;
-
-                tx.remove(&keyspace, key);
-
-                freed = freed.saturating_add(u64::try_from(value.len()).unwrap_or(u64::MAX));
-                if freed >= reclaim_bytes {
-                    break;
-                }
-            }
-
-            match tx.commit().map_err(|err| DeleteOutputError::Storage(Box::new(err)))? {
-                Ok(()) => {
-                    flusher.kick();
-                    Ok(freed)
-                }
-                Err(fjall::Conflict) => {
-                    unreachable!("reclaim performs no tracked reads, so it can never conflict")
-                }
-            }
+        Ok(Self {
+            inner,
+            _flusher: flusher,
+            _gc: gc,
         })
-        .await
-        .expect("output-capture reclaim task panicked")
     }
 }
 
@@ -231,86 +319,15 @@ fn resolve_budget(path: &Path, limit: DiskUsageLimit) -> Option<ByteSize> {
 
 impl Backend for FjallBackend {
     async fn capture(&self, id: HistoryId, capture: CommandCapture) -> Result<(), CaptureError> {
-        let db = self.db.clone();
-        let keyspace = self.keyspace.clone();
-        let key = ActiveSchema::serialize_key(id).expect("history id serialization is infallible");
-        let value = ActiveSchema::serialize_value(capture)
-            .map_err(|err| CaptureError::Serialize(Box::new(err)))?;
-
-        let flusher = self.flusher.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut tx = db.write_tx().map_err(|err| CaptureError::Storage(Box::new(err)))?;
-            if tx
-                .contains_key(&keyspace, key)
-                .map_err(|err| CaptureError::Storage(Box::new(err)))?
-            {
-                return Err(CaptureError::AlreadyExists);
-            }
-
-            tx.insert(&keyspace, key, value);
-            match tx.commit().map_err(|err| CaptureError::Storage(Box::new(err)))? {
-                Ok(()) => {
-                    flusher.kick();
-                    Ok(())
-                }
-                // Another writer committed this key first, so it's already captured.
-                Err(fjall::Conflict) => Err(CaptureError::AlreadyExists),
-            }
-        })
-        .await
-        .expect("output-capture write task panicked")
+        self.inner.capture(id, capture).await
     }
 
     async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError> {
-        let keyspace = self.keyspace.clone();
-        let key = ActiveSchema::serialize_key(id).expect("history id serialization is infallible");
-
-        tokio::task::spawn_blocking(move || {
-            match keyspace.get(key).map_err(|err| GetOutputError::Storage(Box::new(err)))? {
-                Some(slice) => {
-                    let capture = ActiveSchema::deserialize_value(slice.to_vec())
-                        .expect("stored value is a valid CommandCapture");
-                    Ok(Some(capture))
-                }
-                None => Ok(None),
-            }
-        })
-        .await
-        .expect("output-capture read task panicked")
+        self.inner.get(id).await
     }
 
     async fn remove(&self, ids: Vec<HistoryId>) -> Result<(), DeleteOutputError> {
-        let keys: Vec<_> = ids
-            .into_iter()
-            .map(|id| {
-                ActiveSchema::serialize_key(id).expect("history id serialization is infallible")
-            })
-            .collect();
-        if keys.is_empty() {
-            return Ok(());
-        }
-
-        let db = self.db.clone();
-        let keyspace = self.keyspace.clone();
-        let flusher = self.flusher.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut tx = db.write_tx().map_err(|err| DeleteOutputError::Storage(Box::new(err)))?;
-            for key in keys {
-                tx.remove(&keyspace, key);
-            }
-            match tx.commit().map_err(|err| DeleteOutputError::Storage(Box::new(err)))? {
-                Ok(()) => {
-                    flusher.kick();
-                    Ok(())
-                }
-                // fjall only reports conflicts for transactions that read; this one never does.
-                Err(fjall::Conflict) => {
-                    unreachable!("a blind remove performs no reads, so it can never conflict")
-                }
-            }
-        })
-        .await
-        .expect("output-capture delete task panicked")
+        self.inner.remove(ids).await
     }
 }
 
@@ -441,14 +458,14 @@ mod tests {
         }
 
         // One byte of budget evicts exactly the oldest entry (keys sort by id).
-        let freed = store.reclaim(1).await.expect("reclaim");
+        let freed = store.inner.reclaim(1).await.expect("reclaim");
         assert!(freed > 0, "freeing an entry reports its size");
         assert!(store.get(hid(1)).await.expect("get").is_none(), "oldest evicted");
         assert!(store.get(hid(2)).await.expect("get").is_some(), "newer kept");
         assert!(store.get(hid(3)).await.expect("get").is_some(), "newer kept");
 
         // A budget past everything drains the rest.
-        store.reclaim(u64::MAX).await.expect("reclaim");
+        store.inner.reclaim(u64::MAX).await.expect("reclaim");
         assert!(store.get(hid(2)).await.expect("get").is_none());
         assert!(store.get(hid(3)).await.expect("get").is_none());
     }
@@ -457,7 +474,7 @@ mod tests {
     async fn reclaim_zero_bytes_evicts_nothing() {
         let (store, _dir) = temp_backend();
         store.capture(hid(1), cap("keep")).await.expect("capture");
-        assert_eq!(store.reclaim(0).await.expect("reclaim"), 0);
+        assert_eq!(store.inner.reclaim(0).await.expect("reclaim"), 0);
         assert!(store.get(hid(1)).await.expect("get").is_some());
     }
 }
