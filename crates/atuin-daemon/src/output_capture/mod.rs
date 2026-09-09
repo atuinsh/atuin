@@ -1,6 +1,7 @@
 mod backend;
 
 use atuin_client::history::{CommandCapture, HistoryId};
+use atuin_client::settings::DiskUsageLimit;
 use backend::{AnyBackend, Backend as _, FjallBackend, NopBackend};
 pub use backend::{BackendKind, CaptureError, DeleteOutputError, GetOutputError};
 use tracing::error;
@@ -13,9 +14,9 @@ pub struct OutputCapture {
 
 impl OutputCapture {
     #[must_use]
-    pub fn open(path: impl AsRef<std::path::Path>) -> Self {
+    pub fn open(path: impl AsRef<std::path::Path>, max_disk_usage: DiskUsageLimit) -> Self {
         let path = path.as_ref();
-        match FjallBackend::open(path) {
+        match FjallBackend::open(path, max_disk_usage) {
             Ok(backend) => Self {
                 backend: AnyBackend::Fjall(backend),
             },
@@ -103,7 +104,7 @@ mod tests {
     #[tokio::test]
     async fn open_uses_the_fjall_backend_when_the_path_is_usable() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = OutputCapture::open(dir.path().join("capture"));
+        let store = OutputCapture::open(dir.path().join("capture"), DiskUsageLimit::Unlimited);
         assert_eq!(store.kind(), BackendKind::Fjall);
         store.capture(hid(1), cap("hello")).await.expect("capture");
         assert_eq!(store.get(hid(1)).await.expect("get").expect("present").output_start, "hello");
@@ -115,7 +116,7 @@ mod tests {
         let path = dir.path().join("occupied");
         std::fs::write(&path, b"not a database").expect("write file");
 
-        let store = OutputCapture::open(&path);
+        let store = OutputCapture::open(&path, DiskUsageLimit::Unlimited);
         assert_eq!(store.kind(), BackendKind::Nop);
         store.capture(hid(1), cap("hello")).await.expect("capture is discarded, not failed");
         assert!(store.get(hid(1)).await.expect("get").is_none());
@@ -133,7 +134,7 @@ mod tests {
     #[tokio::test]
     async fn remove_forgets_captured_output() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = OutputCapture::open(dir.path().join("capture"));
+        let store = OutputCapture::open(dir.path().join("capture"), DiskUsageLimit::Unlimited);
         store.capture(hid(1), cap("hello")).await.expect("capture");
         store.remove([hid(1)]).await.expect("remove");
         assert!(store.get(hid(1)).await.expect("get").is_none());

@@ -80,7 +80,9 @@ async fn filtered_commands_leave_no_captured_output() {
 
     let env = FreshEnv::new();
     env.write_config(
-        "history_filter = [\"^echo filtered-\"]\n[daemon]\nenabled = true\nautostart = false\n",
+        "history_filter = [\"^echo filtered-\"]\n[output]\nenabled = true\nmax_output_size = \
+         \"1MB\"\nsync = false\nmax_disk_usage = \"unlimited\"\n[daemon]\nenabled = \
+         true\nautostart = false\n",
     );
     // Finish migrations before the daemon and the shell hooks race for the databases.
     env.run(&["store", "status"]);

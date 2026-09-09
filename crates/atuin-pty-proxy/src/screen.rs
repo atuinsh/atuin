@@ -9,7 +9,7 @@ use atuin_common::os::unix::tty::TtyId;
 use atuin_common::os::unix::{SecureTempDirError, create_secure_temp_dir};
 use easy_cast::Conv;
 
-use crate::capture::{self, CommandCaptureSink, CommandCaptureTracker};
+use crate::capture::{CaptureConfig, CommandCaptureTracker};
 use crate::debug::Osc133DebugHighlighter;
 
 pub enum Msg {
@@ -67,7 +67,7 @@ fn live_socket(mut socket_dir: PathBuf, tty: TtyId) -> Option<PathBuf> {
 }
 
 pub struct ParserOptions {
-    pub sink: Option<CommandCaptureSink>,
+    pub command_capture: Option<CaptureConfig>,
     pub debug_osc133: bool,
 }
 
@@ -93,20 +93,10 @@ impl Parser {
     /// in the terminal -- otherwise our emulator would badly drift from the parent terminal.
     const SCROLLBACK_CAPACITY: usize = 50;
 
-    /// The maximum size of a command capture.
-    ///
-    /// 1 MiB total, split across the start and end.
-    const CAPTURE_LIMIT: capture::CaptureLimit = capture::CaptureLimit {
-        start_bytes: 512 * 1024, // 512 KiB
-        end_bytes: 512 * 1024,   // 512 KiB
-    };
-
     fn new(rows: NonZeroU16, cols: NonZeroU16, options: ParserOptions) -> Self {
         Self {
             emulator: vt100::Parser::new(rows, cols, Self::SCROLLBACK_CAPACITY),
-            tracker: options
-                .sink
-                .map(|f| CommandCaptureTracker::new(rows, cols, f, Self::CAPTURE_LIMIT)),
+            tracker: options.command_capture.map(|c| CommandCaptureTracker::new(rows, cols, c)),
             highlighter: options.debug_osc133.then(Osc133DebugHighlighter::new),
         }
     }
@@ -246,7 +236,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::capture::CommandCapture;
+    use crate::capture::{CommandCapture, CommandCaptureSink};
 
     const TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -480,7 +470,10 @@ mod tests {
     fn a_resize_is_forwarded_to_the_capture_tracker() {
         let (sink, captures) = capture_sink();
         let mut parser = Parser::new(nonzero(6), nonzero(20), ParserOptions {
-            sink: Some(sink),
+            command_capture: Some(CaptureConfig {
+                sink,
+                max_output_bytes: 1024 * 1024,
+            }),
             debug_osc133: false,
         });
 
@@ -507,7 +500,10 @@ mod tests {
         let (sink, captures) = capture_sink();
         let (msg_tx, msg_rx) = mpsc::sync_channel(8);
         spawn_parser_thread(24, 80, msg_rx, ParserOptions {
-            sink: Some(sink),
+            command_capture: Some(CaptureConfig {
+                sink,
+                max_output_bytes: 1024 * 1024,
+            }),
             debug_osc133: false,
         });
 
@@ -538,7 +534,10 @@ mod tests {
         // label and `output_observed_bytes` counts them.
         let (sink, captures) = capture_sink();
         let mut parser = Parser::new(nonzero(6), nonzero(40), ParserOptions {
-            sink: Some(sink),
+            command_capture: Some(CaptureConfig {
+                sink,
+                max_output_bytes: 1024 * 1024,
+            }),
             debug_osc133: true,
         });
 
@@ -581,7 +580,7 @@ mod tests {
     /// Parser options with nothing enabled.
     fn plain() -> ParserOptions {
         ParserOptions {
-            sink: None,
+            command_capture: None,
             debug_osc133: false,
         }
     }

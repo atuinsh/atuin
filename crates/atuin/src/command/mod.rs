@@ -91,14 +91,14 @@ fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy, prev_umask: Mode) {
     let child_umask = Some(u32::from(prev_umask.bits()));
 
     #[cfg(feature = "daemon")]
-    proxy.run(semantic_command_capture_sink(), child_umask);
+    proxy.run(semantic_command_capture_config(), child_umask);
 
     #[cfg(not(feature = "daemon"))]
     proxy.run(None, child_umask);
 }
 
 #[cfg(all(feature = "daemon", feature = "pty-proxy", unix))]
-fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink> {
+fn semantic_command_capture_config() -> Option<atuin_pty_proxy::CaptureConfig> {
     use std::borrow::Cow;
     use std::sync::mpsc;
 
@@ -107,6 +107,8 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
     }
 
     let settings = atuin_client::settings::Settings::new().ok()?;
+    let max_output_bytes =
+        usize::try_from(settings.output.limits()?.max_output_size.as_u64()).unwrap_or(usize::MAX);
     let (tx, rx) = mpsc::sync_channel::<(
         atuin_client::history::HistoryId,
         atuin_pty_proxy::CommandCapture,
@@ -158,9 +160,14 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
         });
     });
 
-    Some(Box::new(move |history_id, capture| {
+    let sink: atuin_pty_proxy::CommandCaptureSink = Box::new(move |history_id, capture| {
         let _ = tx.try_send((history_id, capture));
-    }))
+    });
+
+    Some(atuin_pty_proxy::CaptureConfig {
+        sink,
+        max_output_bytes,
+    })
 }
 
 #[cfg(all(feature = "daemon", feature = "pty-proxy", unix))]

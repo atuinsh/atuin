@@ -34,6 +34,7 @@ async-trait = "0.1.58"
 axoupdater = "0.10"
 axum = "0.8"
 base64 = "0.22"
+bytesize = { version = "2.7", features = ["serde"] }
 chrono = "0.4"
 chrono-humanize = "0.2"
 clap = { version = "4.5.7", features = ["derive"] }
@@ -47,7 +48,17 @@ daemonize = "0.5.0"
 dashmap = "6.1.0"
 derive_more = {
     version = "2",
-    features = ["as_ref", "deref", "display", "error", "from", "into", "debug"],
+    features = [
+        "add",
+        "add_assign",
+        "as_ref",
+        "deref",
+        "display",
+        "error",
+        "from",
+        "into",
+        "debug",
+    ],
 }
 directories = "6.0.0"
 divan = { version = "5.0.1", package = "codspeed-divan-compat" }

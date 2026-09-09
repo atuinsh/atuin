@@ -217,7 +217,7 @@ impl Cmd {
             if let Some(func) = run_internal {
                 func(settings).await
             } else {
-                self.run_async(settings).await
+                Box::pin(self.run_async(settings)).await
             }
         }))
     }

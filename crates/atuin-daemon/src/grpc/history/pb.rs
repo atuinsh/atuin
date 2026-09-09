@@ -307,10 +307,6 @@ impl RegisterCommandOutputRequest {
     }
 
     /// The capture to store, rejected unless it carries its [`CommandCaptureMeta`].
-    ///
-    /// `meta` is logically required, and nothing downstream can tell an omitted one from an
-    /// all-defaults one: a capture stored without it reads back as `output_truncated = false`, so
-    /// truncated output would be presented as complete. Reject it at the edge instead.
     pub fn capture(&self) -> Result<CommandCapture, RegisterCommandOutputRequestParseError> {
         let capture =
             self.capture.clone().ok_or(RegisterCommandOutputRequestParseError::MissingCapture)?;

@@ -20,13 +20,13 @@ const HISTORY_ID_PARAM: &[u8] = b"history_id";
 
 pub type CommandCaptureSink = Box<dyn Fn(HistoryId, CommandCapture) + Send + 'static>;
 
-/// The maximum size of a command capture.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub struct CaptureLimit {
-    /// The maximum number of bytes to store from the start of a command's output.
-    pub start_bytes: usize,
-    /// The maximum number of bytes to store from the end of a command's output.
-    pub end_bytes: usize,
+/// Configuration for a `CommandCaptureTracker`: where captures go, and how large a single
+/// command's captured output may grow before its middle is dropped.
+pub struct CaptureConfig {
+    pub sink: CommandCaptureSink,
+    /// The total number of bytes kept for a single command, split evenly across the start and
+    /// end of its output once the middle has to be dropped.
+    pub max_output_bytes: usize,
 }
 
 /// The state of an in-progress command capture.
@@ -45,12 +45,9 @@ struct Scrollback {
 }
 
 impl Scrollback {
-    pub fn new(limit: CaptureLimit) -> Self {
+    pub fn new(limit: bounded_buffer::Limit) -> Self {
         Self {
-            buffer: BoundedBuffer::new(bounded_buffer::Limit {
-                start: limit.start_bytes,
-                end: limit.end_bytes,
-            }),
+            buffer: BoundedBuffer::new(limit),
             state: Default::default(),
             zone: Zone::Unknown,
         }
@@ -263,17 +260,21 @@ pub struct CommandCaptureTracker {
 }
 
 impl CommandCaptureTracker {
-    pub fn new(
-        rows: NonZeroU16,
-        cols: NonZeroU16,
-        sink: CommandCaptureSink,
-        limit: CaptureLimit,
-    ) -> Self {
+    pub fn new(rows: NonZeroU16, cols: NonZeroU16, config: CaptureConfig) -> Self {
+        let CaptureConfig {
+            sink,
+            max_output_bytes,
+        } = config;
         Self {
             osc_parser: osc133::Parser::new(),
             core: TrackerCore {
                 capture: CaptureState::default(),
-                emulator: vt100::Parser::new_with_callbacks(rows, cols, 0, Scrollback::new(limit)),
+                emulator: vt100::Parser::new_with_callbacks(
+                    rows,
+                    cols,
+                    0,
+                    Scrollback::new(bounded_buffer::Limit::split_evenly(max_output_bytes)),
+                ),
                 sink,
             },
         }
@@ -301,10 +302,7 @@ mod tests {
     const COLS: u16 = 80;
 
     /// Roomy enough that nothing below is truncated unless the case asks for it.
-    const LIMIT: CaptureLimit = CaptureLimit {
-        start_bytes: 64 * 1024,
-        end_bytes: 64 * 1024,
-    };
+    const LIMIT: usize = 128 * 1024;
 
     const PROMPT_START: &[u8] = b"\x1b]133;A\x07";
     const COMMAND_START: &[u8] = b"\x1b]133;B\x07";
@@ -328,17 +326,15 @@ mod tests {
     }
 
     impl Tracker {
-        fn new(rows: u16, cols: u16, limit: CaptureLimit) -> Self {
+        fn new(rows: u16, cols: u16, max_output_bytes: usize) -> Self {
             let (sender, received) = mpsc::channel();
             Self {
-                inner: CommandCaptureTracker::new(
-                    nonzero(rows),
-                    nonzero(cols),
-                    Box::new(move |history_id, capture| {
+                inner: CommandCaptureTracker::new(nonzero(rows), nonzero(cols), CaptureConfig {
+                    sink: Box::new(move |history_id, capture| {
                         sender.send((history_id, capture)).expect("test receiver is still alive");
                     }),
-                    limit,
-                ),
+                    max_output_bytes,
+                }),
                 received,
                 collected: Vec::new(),
             }
@@ -410,9 +406,9 @@ mod tests {
     fn tracker(
         #[default(ROWS)] rows: u16,
         #[default(COLS)] cols: u16,
-        #[default(LIMIT)] limit: CaptureLimit,
+        #[default(LIMIT)] max_output_bytes: usize,
     ) -> Tracker {
-        Tracker::new(rows, cols, limit)
+        Tracker::new(rows, cols, max_output_bytes)
     }
 
     // -- The happy path -------------------------------------------------------
@@ -803,10 +799,7 @@ mod tests {
 
     /// A limit small enough to overflow within a test, but wider than the terminal so that whole
     /// lines land either side of the cut.
-    const SMALL_LIMIT: CaptureLimit = CaptureLimit {
-        start_bytes: 300,
-        end_bytes: 300,
-    };
+    const SMALL_LIMIT: usize = 600;
 
     /// Numbered lines, one per row, so any kept fragment says where in the output it came from.
     fn numbered_lines(count: usize) -> Vec<u8> {
@@ -828,13 +821,9 @@ mod tests {
         let capture = tracker.only_capture().1;
         let end = capture.output_end.expect("output this long has to lose its middle");
 
-        // Neither half outgrows its budget...
-        assert!(
-            capture.output_start.len() <= SMALL_LIMIT.start_bytes,
-            "{:?}",
-            capture.output_start
-        );
-        assert!(end.len() <= SMALL_LIMIT.end_bytes, "{end:?}");
+        // Neither half outgrows its budget -- half the total, split evenly...
+        assert!(capture.output_start.len() <= SMALL_LIMIT / 2, "{:?}", capture.output_start);
+        assert!(end.len() <= SMALL_LIMIT / 2, "{end:?}");
         // ...the start really is the beginning of the output...
         assert!(capture.output_start.starts_with("line 0000\n"), "{:?}", capture.output_start);
         // ...and the end really is the end of it. Keeping only the first bytes, as the capture
@@ -861,7 +850,7 @@ mod tests {
 
     #[rstest]
     fn a_capture_that_lost_its_middle_still_reports_every_byte_observed(
-        #[with(ROWS, COLS, CaptureLimit { start_bytes: 0, end_bytes: 0 })] mut tracker: Tracker,
+        #[with(ROWS, COLS, 0)] mut tracker: Tracker,
     ) {
         // Nothing can be kept at all, but the observed-byte count is independent of the limit --
         // it is what the terminal saw, before rendering and before any truncation.
@@ -894,11 +883,8 @@ mod tests {
     }
 
     fn split_capture(bytes: usize) -> (String, String) {
-        let limit = CaptureLimit {
-            start_bytes: bytes,
-            end_bytes: bytes,
-        };
-        let mut tracker = Tracker::new(SHORT_ROWS, COLS, limit);
+        // `bytes` is the budget for each side, which `split_evenly` gives it back from an even total.
+        let mut tracker = Tracker::new(SHORT_ROWS, COLS, 2 * bytes);
         tracker.push(&secret_lines(60));
 
         let capture = tracker.only_capture().1;

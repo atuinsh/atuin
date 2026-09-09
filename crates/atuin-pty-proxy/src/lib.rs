@@ -14,7 +14,7 @@ mod runtime;
 mod screen;
 
 #[cfg(unix)]
-pub use capture::{CommandCapture, CommandCaptureSink};
+pub use capture::{CaptureConfig, CommandCapture, CommandCaptureSink};
 #[cfg(unix)]
 pub use pty_proxy::{PtyProxy, Shell, init_script};
 #[cfg(unix)]
