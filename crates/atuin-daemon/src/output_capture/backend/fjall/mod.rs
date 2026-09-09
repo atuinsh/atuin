@@ -147,47 +147,52 @@ impl FjallBackend {
         })
     }
 
-    pub(super) async fn logical_size(&self) -> Result<u64, GetOutputError> {
-        let keyspace = self.keyspace.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut total: u64 = 0;
-            for guard in keyspace.inner().iter() {
-                let (_key, value) =
-                    guard.into_inner().map_err(|err| GetOutputError::Storage(Box::new(err)))?;
-                total = total.saturating_add(u64::try_from(value.len()).unwrap_or(u64::MAX));
-            }
-            Ok(total)
-        })
-        .await
-        .expect("output-capture size task panicked")
+    /// On-disk bytes used by the store's segments and blob files.
+    ///
+    /// Might over/under-report by a couple dozen MB.
+    pub(super) fn estimated_disk_space(&self) -> u64 {
+        self.keyspace.inner().disk_space()
     }
 
-    pub(super) async fn oldest_ids_totaling(
-        &self,
-        reclaim_bytes: u64,
-    ) -> Result<Vec<HistoryId>, GetOutputError> {
+    /// Deletes the oldest stored entries until their values total at least `reclaim_bytes`,
+    /// returning the number of bytes actually freed.
+    pub(super) async fn reclaim(&self, reclaim_bytes: u64) -> Result<u64, DeleteOutputError> {
         if reclaim_bytes == 0 {
-            return Ok(Vec::new());
+            return Ok(0);
         }
+
+        let db = self.db.clone();
+
         let keyspace = self.keyspace.clone();
+        let flusher = self.flusher.clone();
         tokio::task::spawn_blocking(move || {
-            let mut ids = Vec::new();
+            let mut tx = db.write_tx().map_err(|err| DeleteOutputError::Storage(Box::new(err)))?;
             let mut freed: u64 = 0;
+
             for guard in keyspace.inner().iter() {
                 let (key, value) =
-                    guard.into_inner().map_err(|err| GetOutputError::Storage(Box::new(err)))?;
-                let bytes: [u8; 16] =
-                    key.as_ref().try_into().expect("output capture keys are 16-byte history ids");
-                ids.push(HistoryId::from_bytes(bytes));
+                    guard.into_inner().map_err(|err| DeleteOutputError::Storage(Box::new(err)))?;
+
+                tx.remove(&keyspace, key);
+
                 freed = freed.saturating_add(u64::try_from(value.len()).unwrap_or(u64::MAX));
                 if freed >= reclaim_bytes {
                     break;
                 }
             }
-            Ok(ids)
+
+            match tx.commit().map_err(|err| DeleteOutputError::Storage(Box::new(err)))? {
+                Ok(()) => {
+                    flusher.kick();
+                    Ok(freed)
+                }
+                Err(fjall::Conflict) => {
+                    unreachable!("reclaim performs no tracked reads, so it can never conflict")
+                }
+            }
         })
         .await
-        .expect("output-capture select task panicked")
+        .expect("output-capture reclaim task panicked")
     }
 }
 
@@ -393,5 +398,33 @@ mod tests {
         assert!(store.get(hid(1)).await.expect("get").is_none());
         // Re-removing an already-removed id alongside an absent one is still Ok.
         store.remove(vec![hid(1), hid(9)]).await.expect("remove again");
+    }
+
+    #[tokio::test]
+    async fn reclaim_evicts_oldest_until_budget_met() {
+        let (store, _dir) = temp_backend();
+        for n in 1..=3u128 {
+            store.capture(hid(n), cap(&format!("out{n}"))).await.expect("capture");
+        }
+
+        // One byte of budget evicts exactly the oldest entry (keys sort by id).
+        let freed = store.reclaim(1).await.expect("reclaim");
+        assert!(freed > 0, "freeing an entry reports its size");
+        assert!(store.get(hid(1)).await.expect("get").is_none(), "oldest evicted");
+        assert!(store.get(hid(2)).await.expect("get").is_some(), "newer kept");
+        assert!(store.get(hid(3)).await.expect("get").is_some(), "newer kept");
+
+        // A budget past everything drains the rest.
+        store.reclaim(u64::MAX).await.expect("reclaim");
+        assert!(store.get(hid(2)).await.expect("get").is_none());
+        assert!(store.get(hid(3)).await.expect("get").is_none());
+    }
+
+    #[tokio::test]
+    async fn reclaim_zero_bytes_evicts_nothing() {
+        let (store, _dir) = temp_backend();
+        store.capture(hid(1), cap("keep")).await.expect("capture");
+        assert_eq!(store.reclaim(0).await.expect("reclaim"), 0);
+        assert!(store.get(hid(1)).await.expect("get").is_some());
     }
 }

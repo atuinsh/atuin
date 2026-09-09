@@ -6,6 +6,7 @@ use std::num::{IntErrorKind, ParseIntError};
 use std::ops::{Add, AddAssign, Div, Mul, Sub, SubAssign};
 use std::str::FromStr;
 
+use easy_cast::{ConvTo, Trunc};
 use serde::de::{Deserialize, Deserializer, Error, Visitor};
 use serde_with::SerializeDisplay;
 
@@ -182,6 +183,45 @@ impl Mul<Percent> for ByteSize {
 }
 
 impl Mul<ByteSize> for Percent {
+    type Output = ByteSize;
+
+    fn mul(self, rhs: ByteSize) -> ByteSize {
+        rhs * self
+    }
+}
+
+/// A size scaled by a factor, truncated to whole bytes and saturating at the bounds. A negative
+/// or NaN factor gives zero.
+impl Mul<f64> for ByteSize {
+    type Output = Self;
+
+    fn mul(self, rhs: f64) -> Self {
+        let scaled = self.0 as f64 * rhs;
+        Self(u64::try_conv_to(Trunc, scaled).unwrap_or(if scaled > 0.0 {
+            u64::MAX
+        } else {
+            0
+        }))
+    }
+}
+
+impl Mul<ByteSize> for f64 {
+    type Output = ByteSize;
+
+    fn mul(self, rhs: ByteSize) -> ByteSize {
+        rhs * self
+    }
+}
+
+impl Mul<f32> for ByteSize {
+    type Output = Self;
+
+    fn mul(self, rhs: f32) -> Self {
+        self * f64::from(rhs)
+    }
+}
+
+impl Mul<ByteSize> for f32 {
     type Output = ByteSize;
 
     fn mul(self, rhs: ByteSize) -> ByteSize {
@@ -655,5 +695,25 @@ mod tests {
         let size = ByteSize::from_bytes(bytes);
         assert_eq!(size * Percent::new(pct), ByteSize::from_bytes(expected));
         assert_eq!(Percent::new(pct) * size, ByteSize::from_bytes(expected));
+    }
+
+    #[rstest]
+    #[case::doubles(2.0, 1 << 20, 1 << 21)]
+    #[case::halves(0.5, 1 << 20, 1 << 19)]
+    #[case::rounds_down(0.1, 15, 1)]
+    #[case::saturates(1e30, u64::MAX, u64::MAX)]
+    #[case::negative_is_zero(-1.0, 1 << 20, 0)]
+    #[case::nan_is_zero(f64::NAN, 1 << 20, 0)]
+    fn sizes_scale_by_a_factor_in_either_order(
+        #[case] factor: f64,
+        #[case] bytes: u64,
+        #[case] expected: u64,
+    ) {
+        let size = ByteSize::from_bytes(bytes);
+        assert_eq!(size * factor, ByteSize::from_bytes(expected));
+        assert_eq!(factor * size, ByteSize::from_bytes(expected));
+        #[allow(clippy::cast_possible_truncation)]
+        let factor = factor as f32;
+        assert_eq!(size * factor, factor * size);
     }
 }

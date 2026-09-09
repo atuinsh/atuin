@@ -1,34 +1,34 @@
 use std::time::Duration;
 
-use atuin_common::units::{ByteSize, Percent};
+use atuin_common::units::ByteSize;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
-use super::{Backend, FjallBackend};
+use super::FjallBackend;
 
 pub struct Gc {
     task: JoinHandle<()>,
 }
 
 impl Gc {
-    const INTERVAL: Duration = Duration::from_secs(60);
-    const TRIGGER_FRACTION: Percent = Percent::new(90.0);
-    const TARGET_FRACTION: Percent = Percent::new(80.0);
+    /// The period at which the garbage collector ticks, roughly.
+    const INTERVAL: Duration = Duration::from_mins(1);
+
+    /// The minimum fraction of the budget before we try to perform old-entry cleanup.
+    const TRIGGER_FRACTION: f64 = 0.95;
+
+    /// The target fraction of the budget. We'll trim any elements to fit this fraction.
+    const TARGET_FRACTION: f64 = 0.9;
 
     pub fn spawn(backend: FjallBackend, budget: ByteSize) -> Self {
         let task = tokio::task::spawn(async move {
             let mut interval = tokio::time::interval(Self::INTERVAL);
             interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
             loop {
                 interval.tick().await;
 
-                let size = match backend.logical_size().await {
-                    Ok(size) => size,
-                    Err(err) => {
-                        tracing::warn!(?err, "output capture gc failed to measure size");
-                        continue;
-                    }
-                };
+                let size = backend.estimated_disk_space();
 
                 let trigger = (Self::TRIGGER_FRACTION * budget).bytes();
                 if size < trigger {
@@ -38,19 +38,8 @@ impl Gc {
                 let target = (Self::TARGET_FRACTION * budget).bytes();
                 let reclaim = size.saturating_sub(target);
 
-                let ids = match backend.oldest_ids_totaling(reclaim).await {
-                    Ok(ids) => ids,
-                    Err(err) => {
-                        tracing::warn!(?err, "output capture gc failed to select entries");
-                        continue;
-                    }
-                };
-                if ids.is_empty() {
-                    continue;
-                }
-
-                if let Err(err) = backend.remove(ids).await {
-                    tracing::warn!(?err, "output capture gc failed to remove entries");
+                if let Err(err) = backend.reclaim(reclaim).await {
+                    tracing::warn!(?err, "output capture gc failed to reclaim entries");
                 }
             }
         });
