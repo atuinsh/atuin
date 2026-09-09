@@ -10,6 +10,20 @@ pub struct Limit {
     pub end: usize,
 }
 
+impl Limit {
+    /// Split a total byte budget evenly across the start and end of the buffer.
+    ///
+    /// An odd byte goes to the end, so a budget of 1 keeps a single trailing byte.
+    #[must_use]
+    pub const fn split_evenly(total_bytes: usize) -> Self {
+        let start = total_bytes / 2;
+        Self {
+            start,
+            end: total_bytes - start,
+        }
+    }
+}
+
 /// A string buffer limited to a certain length.
 #[derive(Clone)]
 pub struct BoundedBuffer {

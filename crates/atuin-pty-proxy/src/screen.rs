@@ -9,7 +9,7 @@ use atuin_common::os::unix::tty::TtyId;
 use atuin_common::os::unix::{SecureTempDirError, create_secure_temp_dir};
 use easy_cast::Conv;
 
-use crate::capture::{CaptureConfig, CaptureLimit, CommandCaptureTracker};
+use crate::capture::{CaptureConfig, CommandCaptureTracker};
 use crate::debug::Osc133DebugHighlighter;
 
 pub enum Msg {
@@ -96,14 +96,7 @@ impl Parser {
     fn new(rows: NonZeroU16, cols: NonZeroU16, options: ParserOptions) -> Self {
         Self {
             emulator: vt100::Parser::new(rows, cols, Self::SCROLLBACK_CAPACITY),
-            tracker: options.command_capture.map(|c| {
-                CommandCaptureTracker::new(
-                    rows,
-                    cols,
-                    c.sink,
-                    CaptureLimit::split_evenly(c.max_output_bytes),
-                )
-            }),
+            tracker: options.command_capture.map(|c| CommandCaptureTracker::new(rows, cols, c)),
             highlighter: options.debug_osc133.then(Osc133DebugHighlighter::new),
         }
     }
