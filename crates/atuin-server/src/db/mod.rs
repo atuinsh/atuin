@@ -190,6 +190,7 @@ pub trait DynDatabase: Send + Sync + 'static {
     async fn get_user(&self, username: &str) -> DbResult<User>;
     async fn get_user_session(&self, u: &User) -> DbResult<Session>;
     async fn add_user(&self, user: &NewUser) -> DbResult<i64>;
+    async fn add_user_with_session(&self, user: &NewUser, token: &str) -> DbResult<i64>;
 
     async fn update_user_password(&self, u: &User) -> DbResult<()>;
 
@@ -297,6 +298,32 @@ where
         Ok(res.0)
     }
 
+    /// Atomically create a user and their initial session in a single transaction, so a
+    /// registration can never leave a user without a session (or a session without a user).
+    ///
+    /// Returns the new user's id. MySQL overrides this because it lacks `RETURNING`.
+    #[instrument(skip_all)]
+    async fn add_user_with_session(&self, user: &NewUser, token: &str) -> DbResult<i64> {
+        let mut tx = self.pool().begin().await?;
+
+        let (user_id,): (i64,) = db::query_as(Self::Dialect::ADD_USER)
+            .bind(user.username.as_str())
+            .bind(user.email.as_str())
+            .bind(user.password.as_str())
+            .fetch_one(&mut *tx)
+            .await?;
+
+        db::query(Self::Dialect::ADD_SESSION)
+            .bind(user_id)
+            .bind(token)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+
+        Ok(user_id)
+    }
+
     #[instrument(skip_all)]
     async fn update_user_password(&self, user: &User) -> DbResult<()> {
         db::query(Self::Dialect::UPDATE_USER_PASSWORD)
@@ -309,10 +336,15 @@ where
 
     #[instrument(skip_all)]
     async fn delete_user(&self, u: &User) -> DbResult<()> {
-        db::query(Self::Dialect::DELETE_SESSIONS_BY_USER).bind(u.id).execute(self.pool()).await?;
-        db::query(Self::Dialect::DELETE_HISTORY_BY_USER).bind(u.id).execute(self.pool()).await?;
-        db::query(Self::Dialect::DELETE_STORE_BY_USER).bind(u.id).execute(self.pool()).await?;
-        db::query(Self::Dialect::DELETE_USER_BY_ID).bind(u.id).execute(self.pool()).await?;
+        // Wrap all four deletes in a single transaction so a failure part-way through can't
+        // leave the account half-deleted (e.g. the user row gone but its store rows orphaned).
+        // Dropping `tx` without committing rolls back implicitly.
+        let mut tx = self.pool().begin().await?;
+        db::query(Self::Dialect::DELETE_SESSIONS_BY_USER).bind(u.id).execute(&mut *tx).await?;
+        db::query(Self::Dialect::DELETE_HISTORY_BY_USER).bind(u.id).execute(&mut *tx).await?;
+        db::query(Self::Dialect::DELETE_STORE_BY_USER).bind(u.id).execute(&mut *tx).await?;
+        db::query(Self::Dialect::DELETE_USER_BY_ID).bind(u.id).execute(&mut *tx).await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -421,6 +453,10 @@ where
 
     async fn add_user(&self, user: &NewUser) -> DbResult<i64> {
         Database::add_user(self, user).await
+    }
+
+    async fn add_user_with_session(&self, user: &NewUser, token: &str) -> DbResult<i64> {
+        Database::add_user_with_session(self, user, token).await
     }
 
     async fn update_user_password(&self, u: &User) -> DbResult<()> {

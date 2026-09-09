@@ -46,4 +46,30 @@ impl Database for MySql {
 
         Ok(i64::conv(res.last_insert_id()))
     }
+
+    // MySQL has no `RETURNING`, so unlike the default it reads the new id from
+    // `last_insert_id()` off the insert result, all within one transaction.
+    #[instrument(skip_all)]
+    async fn add_user_with_session(&self, user: &NewUser, token: &str) -> DbResult<i64> {
+        let mut tx = self.pool().begin().await?;
+
+        let res = db::query(<Self::Dialect as Dialect>::ADD_USER)
+            .bind(user.username.as_str())
+            .bind(user.email.as_str())
+            .bind(user.password.as_str())
+            .execute(&mut *tx)
+            .await?;
+
+        let user_id = i64::conv(res.last_insert_id());
+
+        db::query(<Self::Dialect as Dialect>::ADD_SESSION)
+            .bind(user_id)
+            .bind(token)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+
+        Ok(user_id)
+    }
 }
