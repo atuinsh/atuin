@@ -12,8 +12,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
 use eyre::Result;
 use tower::ServiceBuilder;
-use tower_http::trace::{DefaultOnResponse, TraceLayer};
-use tracing::Level;
+use tower_http::trace::TraceLayer;
 
 use super::handlers;
 use crate::db::models::User;
@@ -138,7 +137,7 @@ pub fn router(database: Arc<dyn DynDatabase>, settings: Settings) -> Router {
     let traced = unnegotiated.merge(negotiated).layer(
         TraceLayer::new_for_http()
             .make_span_with(crate::trace::make_request_span)
-            .on_response(DefaultOnResponse::new().level(Level::INFO)),
+            .on_response(crate::trace::on_response),
     );
 
     let routes = Router::new().route("/healthz", get(handlers::health::health_check)).merge(traced);

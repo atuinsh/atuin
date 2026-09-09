@@ -63,7 +63,6 @@ atuin-client = {
     default-features = false,
     features = ["sync"],
 }
-atuin-common = { workspace = true, features = ["test-utils"] }
 futures-util = { workspace = true }
 regex = { workspace = true }
 rstest = { workspace = true }

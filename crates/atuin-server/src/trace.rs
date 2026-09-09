@@ -1,6 +1,8 @@
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use axum::extract::{ConnectInfo, MatchedPath, Request};
+use axum::response::Response;
 use tracing::{Span, field};
 
 /// Build the root tracing span for an incoming HTTP request.
@@ -29,4 +31,14 @@ pub fn make_request_span(request: &Request) -> Span {
     }
 
     span
+}
+
+/// Emit the access-log line for a completed request, under the `atuin_server`
+/// target so it shows with the default `atuin_server=info` filter.
+pub fn on_response(response: &Response, latency: Duration, _span: &Span) {
+    tracing::info!(
+        http.status_code = response.status().as_u16(),
+        latency_ms = latency.as_millis(),
+        "request completed",
+    );
 }

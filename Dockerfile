@@ -37,9 +37,7 @@ WORKDIR app
 USER atuin
 
 ENV TZ=Etc/UTC
-# tower_http emits the per-request access log; include it so HTTP requests show
-# up by default. Raise to `=debug` on either target for more detail.
-ENV RUST_LOG=atuin_server=info,tower_http=info
+ENV RUST_LOG=atuin_server=info
 ENV ATUIN_CONFIG_DIR=/config
 
 COPY --from=builder /app/target/release/atuin-server /usr/local/bin
