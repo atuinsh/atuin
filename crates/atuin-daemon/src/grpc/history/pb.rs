@@ -27,7 +27,7 @@ use crate::history_journal::{
     CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, CmdRebuildError, GetCmdInFlightError,
     RegisterOutputError,
 };
-use crate::output_capture::{CaptureError, GetOutputError};
+use crate::output_capture::{CaptureError, GetOutputError, OutputCaptureStats};
 
 impl From<DomainHistoryId> for HistoryId {
     fn from(value: DomainHistoryId) -> Self {
@@ -475,6 +475,19 @@ impl GetCommandOutputResponse {
     }
 }
 
+impl From<OutputCaptureStats> for OutputCaptureStore {
+    fn from(stats: OutputCaptureStats) -> Self {
+        Self {
+            stored_captures: stats.stored_captures,
+            disk_bytes: stats.disk_bytes,
+            oldest_capture_unix_ms: stats.oldest_capture_unix_ms,
+            newest_capture_unix_ms: stats.newest_capture_unix_ms,
+            store_path: stats.store_path.to_string_lossy().into_owned(),
+            schema: stats.schema.to_string(),
+        }
+    }
+}
+
 invalid_argument_errors!(
     IdParseError,
     StartHistoryRequestParseError,
@@ -490,6 +503,7 @@ versioned_messages!(
     CancelHistoryReply,
     DeleteHistoryReply,
     RebuildHistoryReply,
+    GetOutputCaptureStatsReply,
 );
 
 internal_errors!(GetOutputError);

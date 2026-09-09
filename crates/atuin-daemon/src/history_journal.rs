@@ -98,7 +98,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tracing::field::Empty;
 use tracing::{Instrument, Span};
 
-use crate::output_capture::{CaptureError, GetOutputError, OutputCapture};
+use crate::output_capture::{CaptureError, GetOutputError, OutputCapture, OutputCaptureStats};
 use crate::search::SearchIndex;
 
 /// An event describing a change in the lifecycle of a command.
@@ -642,6 +642,11 @@ impl HistoryJournal {
         id: HistoryId,
     ) -> Result<Option<CommandCapture>, GetOutputError> {
         self.output_capture.get(id).await
+    }
+
+    /// Statistics about the durable output-capture store, or `None` when capture is disabled.
+    pub async fn output_capture_stats(&self) -> Result<Option<OutputCaptureStats>, GetOutputError> {
+        self.output_capture.stats().await
     }
 
     /// Create a new stream of [`CmdEvent`] objects.

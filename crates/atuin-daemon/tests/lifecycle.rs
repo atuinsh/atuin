@@ -26,7 +26,7 @@ async fn test_status(#[future(awt)] env: TestEnv) {
     let status = client.status().await.unwrap();
     assert!(status.healthy);
     assert_eq!(status.version, env!("CARGO_PKG_VERSION"));
-    assert_eq!(status.protocol, 2);
+    assert_eq!(status.protocol, 3);
     assert!(status.pid > 0);
 }
 
@@ -288,7 +288,7 @@ async fn test_delete_history_removes_entry(#[future(awt)] env: TestEnv) {
 
     let reply = client.delete_history(vec![id]).await.unwrap();
     assert_eq!(reply.deleted, 1);
-    assert_eq!(reply.protocol, 2);
+    assert_eq!(reply.protocol, 3);
     assert_eq!(env.active_rows().await, 0);
 
     // Deleting an already-deleted id still succeeds (idempotent), counting the record write.
@@ -303,11 +303,37 @@ async fn test_rebuild_history(#[future(awt)] env: TestEnv) {
     env.record(&mut client, "echo before-rebuild").await;
 
     let reply = client.rebuild_history().await.unwrap();
-    assert_eq!(reply.protocol, 2);
+    assert_eq!(reply.protocol, 3);
 
     // The journal keeps working after a rebuild.
     let id = env.record(&mut client, "echo after-rebuild").await;
     assert_eq!(client.delete_history(vec![id]).await.unwrap().deleted, 1);
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_output_capture_stats(#[future(awt)] env: TestEnv) {
+    let mut client = env.history_client().await;
+
+    // Empty store: reachable, active (fjall), nothing stored.
+    let empty = client.output_capture_stats().await.unwrap();
+    assert_eq!(empty.protocol, 3);
+    let store = empty.store.expect("fjall store is active");
+    assert_eq!(store.stored_captures, 0);
+    assert!(store.oldest_capture_unix_ms.is_none());
+    assert_eq!(store.schema, "output_capture_v2");
+
+    // Record a command (real UUIDv7 id) and register its output.
+    let id = env.record(&mut client, "echo hello").await;
+    client.register_command_output(id, "hello", None, 5, 80, 24).await.unwrap();
+
+    let after = client.output_capture_stats().await.unwrap().store.expect("active");
+    assert_eq!(after.stored_captures, 1);
+    // `disk_bytes` counts only flushed on-disk segments; fjall only rotates its memtable to disk
+    // at a 64 MiB threshold, so one small capture legitimately still reports 0 here.
+    // The single capture is both oldest and newest, and its time comes from the v7 id.
+    let oldest = after.oldest_capture_unix_ms.expect("v7 id yields a timestamp");
+    assert_eq!(Some(oldest), after.newest_capture_unix_ms);
 }
 
 #[rstest]

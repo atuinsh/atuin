@@ -237,6 +237,37 @@ message OutputChunk {
   string content = 2;
 }
 
+// Request for a snapshot of the command-output capture store's state. Takes no arguments.
+message GetOutputCaptureStatsRequest {}
+
+// A snapshot of the capture store's state.
+message GetOutputCaptureStatsReply {
+  string version = 1;
+  uint32 protocol = 2;
+  // Present when a persistent store is active; absent when capture is disabled (the store
+  // could not be opened and the daemon fell back to a no-op backend).
+  optional OutputCaptureStore store = 3;
+}
+
+// Size and contents of the durable capture store.
+message OutputCaptureStore {
+  // Exact number of captures currently stored.
+  uint64 stored_captures = 1;
+  // On-disk size, in bytes, of the store's FLUSHED segments (post-compression). Recent captures
+  // may still be sitting in the daemon's in-memory memtable, which is not counted here and is
+  // only rotated to disk at a 64 MiB threshold -- so a small, active store can legitimately
+  // report 0 even though captures have been written.
+  uint64 disk_bytes = 2;
+  // Creation time (unix ms) of the oldest / newest stored capture, from the UUIDv7 ids. Absent
+  // when the store is empty.
+  optional uint64 oldest_capture_unix_ms = 3;
+  optional uint64 newest_capture_unix_ms = 4;
+  // Absolute path of the store directory on the daemon host.
+  string store_path = 5;
+  // Keyspace/schema name, e.g. "output_capture_v2".
+  string schema = 6;
+}
+
 service History {
   rpc StartHistory(StartHistoryRequest) returns (StartHistoryReply);
 
@@ -275,4 +306,7 @@ service History {
   // Returns:
   //  - `tonic::Status::not_found` if the given output is not found.
   rpc GetCommandOutput(GetCommandOutputRequest) returns (GetCommandOutputResponse);
+
+  // Report a snapshot of the command-output capture store's state (size, count, time span).
+  rpc GetOutputCaptureStats(GetOutputCaptureStatsRequest) returns (GetOutputCaptureStatsReply);
 }

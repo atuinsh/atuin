@@ -23,7 +23,8 @@ use crate::grpc::history::pb::history_client::HistoryClient as HistoryServiceCli
 use crate::grpc::history::pb::{
     AuthorKind, CancelHistoryReply, CancelHistoryRequest, CommandCapture, CommandCaptureMeta,
     DeleteHistoryReply, DeleteHistoryRequest, EndHistoryReply, EndHistoryRequest,
-    GetCommandOutputRequest, GetCommandOutputResponse, RebuildHistoryReply, RebuildHistoryRequest,
+    GetCommandOutputRequest, GetCommandOutputResponse, GetOutputCaptureStatsReply,
+    GetOutputCaptureStatsRequest, RebuildHistoryReply, RebuildHistoryRequest,
     RegisterCommandOutputRequest, ShutdownRequest, StartHistoryReply, StartHistoryRequest,
     StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
 };
@@ -253,6 +254,15 @@ impl HistoryClient {
             Err(status) if status.code() == Code::NotFound => Ok(None),
             Err(status) => Err(status.into()),
         }
+    }
+
+    /// Fetch a snapshot of the daemon's output-capture store state.
+    pub async fn output_capture_stats(&mut self) -> Result<GetOutputCaptureStatsReply> {
+        Ok(self
+            .client
+            .get_output_capture_stats(GetOutputCaptureStatsRequest {})
+            .await?
+            .into_inner())
     }
 }
 

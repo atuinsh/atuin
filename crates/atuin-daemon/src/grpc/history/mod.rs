@@ -18,10 +18,11 @@ use crate::grpc::history::pb::history_server::History as GrpcService;
 use crate::grpc::history::pb::{
     CancelHistoryReply, CancelHistoryRequest, DeleteHistoryReply, DeleteHistoryRequest,
     DeleteHistoryStreamExt, EndHistoryReply, EndHistoryRequest, GetCommandOutputRequest,
-    GetCommandOutputResponse, Lagged, RebuildHistoryReply, RebuildHistoryRequest,
-    RegisterCommandOutputRequest, RegisterCommandOutputResponse, ShutdownReply, ShutdownRequest,
-    StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent,
-    TailHistoryReply, TailHistoryRequest,
+    GetCommandOutputResponse, GetOutputCaptureStatsReply, GetOutputCaptureStatsRequest, Lagged,
+    RebuildHistoryReply, RebuildHistoryRequest, RegisterCommandOutputRequest,
+    RegisterCommandOutputResponse, ShutdownReply, ShutdownRequest, StartHistoryReply,
+    StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent, TailHistoryReply,
+    TailHistoryRequest,
 };
 use crate::history_journal::HistoryJournal;
 
@@ -231,7 +232,7 @@ use crate::history_journal::HistoryJournal;
 /// **Note that you should never change the `Shutdown` and `Status` RPCs as they do not have the
 /// protocol version guards.** They are **assumed** to be stable and if you want to modify them, you
 /// **must** use the `reserved` keyword.
-const DAEMON_PROTOCOL_VERSION: u32 = 2;
+const DAEMON_PROTOCOL_VERSION: u32 = 3;
 
 /// The History gRPC service.
 ///
@@ -446,5 +447,18 @@ impl GrpcService for Service {
             })?;
 
         Ok(Response::new(GetCommandOutputResponse::build(&capture.into(), request.output_ranges())))
+    }
+
+    #[instrument(skip_all, level = Level::TRACE)]
+    async fn get_output_capture_stats(
+        &self,
+        _request: Request<GetOutputCaptureStatsRequest>,
+    ) -> Result<Response<GetOutputCaptureStatsReply>, Status> {
+        let store = self.journal.output_capture_stats().await?;
+        Ok(Response::new(GetOutputCaptureStatsReply {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            protocol: DAEMON_PROTOCOL_VERSION,
+            store: store.map(Into::into),
+        }))
     }
 }
