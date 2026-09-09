@@ -1,6 +1,6 @@
 use atuin_client::history::{CommandCapture, HistoryId};
 
-use super::{Backend, CaptureError, GetOutputError};
+use super::{Backend, CaptureError, DeleteOutputError, GetOutputError};
 
 /// [`Backend`] implementation which does nothing. All output capture is discarded.
 #[derive(Debug, Clone, Copy)]
@@ -13,5 +13,9 @@ impl Backend for NopBackend {
 
     async fn get(&self, _id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError> {
         Ok(None)
+    }
+
+    async fn remove(&self, _ids: Vec<HistoryId>) -> Result<(), DeleteOutputError> {
+        Ok(())
     }
 }

@@ -109,7 +109,8 @@ async fn output_for_a_cancelled_command_is_not_stored(#[future(awt)] env: TestEn
         client.start_history(history).await.unwrap().id.unwrap().try_into().unwrap();
     client.cancel_history(id).await.unwrap();
 
-    client.register_command_output(id, "hello", false, 5, 80, 24).await.unwrap();
+    // The command was cancelled, so it is gone: its output is refused, not silently stored.
+    assert!(client.register_command_output(id, "hello", false, 5, 80, 24).await.is_err());
 
     assert!(client.get_command_output(id, vec![]).await.unwrap().is_none());
 }
@@ -120,7 +121,8 @@ async fn output_for_an_unknown_command_is_not_stored(#[future(awt)] env: TestEnv
     let mut client = env.history_client().await;
     let id = HistoryId::from_bytes(*uuid::Uuid::from_u128(7).as_bytes());
 
-    client.register_command_output(id, "hello", false, 5, 80, 24).await.unwrap();
+    // The id was never started, so it is unknown: its output is refused, not silently stored.
+    assert!(client.register_command_output(id, "hello", false, 5, 80, 24).await.is_err());
 
     assert!(client.get_command_output(id, vec![]).await.unwrap().is_none());
 }
@@ -257,7 +259,7 @@ async fn journal_delete_removes_entry_and_rebuilds_index(#[future(awt)] env: Tes
     journal.finish(id_b, 0, Duration::from_millis(1)).await.unwrap();
     assert_eq!(env.index_count().await, 2);
 
-    assert_eq!(journal.delete([id_a], &Search::default()).await.unwrap(), 1);
+    assert_eq!(journal.delete(&[id_a], &Search::default()).await.unwrap(), 1);
 
     let index = env.index.read().await;
     assert_eq!(index.command_count(), 1, "index should be rebuilt without the deleted command");

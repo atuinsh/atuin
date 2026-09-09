@@ -19,7 +19,7 @@ use schema::{Schema as _, SchemaV1};
 use tokio::task::JoinHandle;
 use tracing::error;
 
-use super::{Backend, CaptureError, GetOutputError};
+use super::{Backend, CaptureError, DeleteOutputError, GetOutputError};
 
 /// The schema currently in use for stored output.
 type ActiveSchema = SchemaV1;
@@ -196,6 +196,40 @@ impl Backend for FjallBackend {
         .await
         .expect("output-capture read task panicked")
     }
+
+    async fn remove(&self, ids: Vec<HistoryId>) -> Result<(), DeleteOutputError> {
+        let keys: Vec<_> = ids
+            .into_iter()
+            .map(|id| {
+                ActiveSchema::serialize_key(id).expect("history id serialization is infallible")
+            })
+            .collect();
+        if keys.is_empty() {
+            return Ok(());
+        }
+
+        let db = self.db.clone();
+        let keyspace = self.keyspace.clone();
+        let flusher = self.flusher.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut tx = db.write_tx().map_err(|err| DeleteOutputError::Storage(Box::new(err)))?;
+            for key in keys {
+                tx.remove(&keyspace, key);
+            }
+            match tx.commit().map_err(|err| DeleteOutputError::Storage(Box::new(err)))? {
+                Ok(()) => {
+                    flusher.kick();
+                    Ok(())
+                }
+                // fjall only reports conflicts for transactions that read; this one never does.
+                Err(fjall::Conflict) => {
+                    unreachable!("a blind remove performs no reads, so it can never conflict")
+                }
+            }
+        })
+        .await
+        .expect("output-capture delete task panicked")
+    }
 }
 
 #[cfg(test)]
@@ -268,5 +302,52 @@ mod tests {
             }
         }
         assert_eq!(ok, 1, "exactly one writer wins, no TOCTOU double-store");
+    }
+
+    #[tokio::test]
+    async fn remove_removes_stored_output() {
+        let (store, _dir) = temp_backend();
+        store.capture(hid(1), cap("hello")).await.expect("capture");
+        store.remove(vec![hid(1)]).await.expect("remove");
+        assert!(store.get(hid(1)).await.expect("get").is_none());
+    }
+
+    #[tokio::test]
+    async fn remove_of_absent_ids_is_ok() {
+        let (store, _dir) = temp_backend();
+        store.remove(vec![]).await.expect("remove of nothing is idempotent");
+        store.remove(vec![hid(9)]).await.expect("remove of an absent id is idempotent");
+    }
+
+    #[tokio::test]
+    async fn remove_only_removes_requested_ids() {
+        let (store, _dir) = temp_backend();
+        for n in 1..=3u128 {
+            store.capture(hid(n), cap(&format!("out{n}"))).await.expect("capture");
+        }
+        store.remove(vec![hid(1), hid(3), hid(9)]).await.expect("remove");
+        assert!(store.get(hid(1)).await.expect("get").is_none());
+        assert_eq!(store.get(hid(2)).await.expect("get").expect("kept").output, "out2");
+        assert!(store.get(hid(3)).await.expect("get").is_none());
+    }
+
+    #[tokio::test]
+    async fn removed_id_can_be_captured_again() {
+        let (store, _dir) = temp_backend();
+        store.capture(hid(1), cap("first")).await.expect("first");
+        store.remove(vec![hid(1)]).await.expect("remove");
+        // The tombstone must free the id for the capture-once check, not merely hide the value.
+        store.capture(hid(1), cap("second")).await.expect("recapture after remove");
+        assert_eq!(store.get(hid(1)).await.expect("get").expect("present").output, "second");
+    }
+
+    #[tokio::test]
+    async fn remove_after_removal_is_idempotent() {
+        let (store, _dir) = temp_backend();
+        store.capture(hid(1), cap("hello")).await.expect("capture");
+        store.remove(vec![hid(1)]).await.expect("remove");
+        assert!(store.get(hid(1)).await.expect("get").is_none());
+        // Re-removing an already-removed id alongside an absent one is still Ok.
+        store.remove(vec![hid(1), hid(9)]).await.expect("remove again");
     }
 }

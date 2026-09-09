@@ -28,9 +28,11 @@ pub use daemon::{AnyComponent, Daemon, DaemonBuilder, DaemonHandle};
 pub use events::DaemonEvent;
 pub use history_journal::{
     CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, CmdRebuildError, FinishedCmd,
-    GetCmdInFlightError, HistoryJournal,
+    GetCmdInFlightError, HistoryJournal, RegisterOutputError,
 };
-pub use output_capture::{BackendKind, OutputCapture};
+pub use output_capture::{
+    BackendKind, CaptureError, DeleteOutputError, GetOutputError, OutputCapture,
+};
 
 /// Boot the daemon using the new component-based architecture.
 ///

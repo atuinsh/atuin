@@ -25,12 +25,21 @@ pub enum GetOutputError {
     Storage(#[source] BackendError),
 }
 
+#[derive(Debug, Error)]
+pub enum DeleteOutputError {
+    #[error("storage error: {0}")]
+    Storage(#[source] BackendError),
+}
+
 #[enum_dispatch]
 #[allow(async_fn_in_trait, reason = "only used within our code and we don't need it to be Send")]
 pub trait Backend {
     async fn capture(&self, id: HistoryId, capture: CommandCapture) -> Result<(), CaptureError>;
 
     async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError>;
+
+    /// Forget the captured output of every history id in `ids`. Absent ids are ignored.
+    async fn remove(&self, ids: Vec<HistoryId>) -> Result<(), DeleteOutputError>;
 }
 
 #[enum_dispatch(Backend)]

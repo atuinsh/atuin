@@ -2,7 +2,7 @@ mod backend;
 
 use atuin_client::history::{CommandCapture, HistoryId};
 use backend::{AnyBackend, Backend as _, FjallBackend, NopBackend};
-pub use backend::{BackendKind, CaptureError, GetOutputError};
+pub use backend::{BackendKind, CaptureError, DeleteOutputError, GetOutputError};
 use tracing::error;
 
 /// [`OutputCapture`] is the core engine responsible for collecting command output.
@@ -53,6 +53,17 @@ impl OutputCapture {
 
     pub async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError> {
         self.backend.get(id).await
+    }
+
+    /// Forget the captured output of every history id in `ids`.
+    ///
+    /// Removing an absent id is a no-op, so this is safe to call for a batch that mixes
+    /// captured and never-captured ids.
+    pub async fn remove(
+        &self,
+        ids: impl IntoIterator<Item = HistoryId>,
+    ) -> Result<(), DeleteOutputError> {
+        self.backend.remove(ids.into_iter().collect()).await
     }
 }
 
@@ -105,5 +116,20 @@ mod tests {
         store.capture(hid(1), cap("first")).await.expect("first");
         store.capture(hid(1), cap("second")).await.expect("second");
         assert!(store.get(hid(1)).await.expect("get").is_none());
+    }
+
+    #[tokio::test]
+    async fn remove_forgets_captured_output() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = OutputCapture::open(dir.path().join("capture"));
+        store.capture(hid(1), cap("hello")).await.expect("capture");
+        store.remove([hid(1)]).await.expect("remove");
+        assert!(store.get(hid(1)).await.expect("get").is_none());
+    }
+
+    #[tokio::test]
+    async fn remove_on_the_nop_backend_is_ok() {
+        let store = OutputCapture::nop();
+        store.remove([hid(1), hid(2)]).await.expect("remove is discarded, not failed");
     }
 }

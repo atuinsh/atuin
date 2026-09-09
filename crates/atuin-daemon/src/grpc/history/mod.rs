@@ -11,7 +11,7 @@ use time::OffsetDateTime;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};
-use tracing::{Level, instrument};
+use tracing::{Instrument, Level, instrument};
 
 use crate::DaemonHandle;
 use crate::grpc::history::pb::history_server::History as GrpcService;
@@ -308,7 +308,11 @@ impl GrpcService for Service {
     ) -> Result<Response<CancelHistoryReply>, Status> {
         let id: HistoryId = request.into_inner().try_into()?;
 
-        self.journal.cancel(id).await?;
+        let journal = self.journal.clone();
+        // Spawned so a client disconnect cannot drop the call half-way.
+        tokio::spawn(async move { journal.cancel(id).await }.instrument(tracing::Span::current()))
+            .await
+            .map_err(|e| Status::internal(format!("cancel did not complete: {e}")))??;
 
         Ok(Response::new(CancelHistoryReply {
             // TODO(markovejnovic): Pull this from one constant, well-defined spot.
@@ -325,7 +329,14 @@ impl GrpcService for Service {
         let ids = request.into_inner().collect_history_ids().await?;
 
         let search_settings = self.daemon_handle.settings().await.search.clone();
-        let deleted = self.journal.delete(ids, &search_settings).await?;
+        let journal = self.journal.clone();
+        // Spawned so a client disconnect cannot drop the call half-way.
+        let deleted = tokio::spawn(
+            async move { journal.delete(&ids, &search_settings).await }
+                .instrument(tracing::Span::current()),
+        )
+        .await
+        .map_err(|e| Status::internal(format!("delete did not complete: {e}")))??;
 
         Ok(Response::new(DeleteHistoryReply {
             deleted: deleted.cast(),
@@ -408,9 +419,16 @@ impl GrpcService for Service {
         request: Request<RegisterCommandOutputRequest>,
     ) -> Result<Response<RegisterCommandOutputResponse>, Status> {
         let request = request.into_inner();
-        self.journal
-            .register_command_output(request.history_id()?, request.capture()?.into())
-            .await?;
+        let id = request.history_id()?;
+        let capture = request.capture()?.into();
+        let journal = self.journal.clone();
+        // Spawned so a client disconnect cannot drop the call half-way.
+        tokio::spawn(
+            async move { journal.register_command_output(id, capture).await }
+                .instrument(tracing::Span::current()),
+        )
+        .await
+        .map_err(|e| Status::internal(format!("output registration did not complete: {e}")))??;
         Ok(Response::new(RegisterCommandOutputResponse {}))
     }
 
