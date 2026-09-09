@@ -200,6 +200,7 @@ Note: `select-next` and `select-previous` respect the `invert` setting. When `in
 | `return-original` | Close the TUI and return the original command line text |
 | `return-query` | Close the TUI and return the current search query |
 | `copy` | Copy the selected entry to the clipboard |
+| `copy-directory` | Copy the selected entry's working directory to the clipboard |
 | `delete` | Delete the selected entry from history |
 | `delete-all` | Delete **all** history entries matching the selected command text |
 | `exit` | Exit the TUI (behavior depends on the `exit_mode` setting) |
