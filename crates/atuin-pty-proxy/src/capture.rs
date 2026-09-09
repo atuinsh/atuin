@@ -26,7 +26,7 @@ const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
 
 pub type CommandCaptureSink = Box<dyn Fn(HistoryId, CommandCapture) + Send + 'static>;
 
-/// Configuration for a [`CommandCaptureTracker`]: where captures go, and how large a single
+/// Configuration for a `CommandCaptureTracker`: where captures go, and how large a single
 /// command's captured output may grow before it is truncated.
 pub struct CaptureConfig {
     pub sink: CommandCaptureSink,
