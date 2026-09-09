@@ -69,9 +69,7 @@ impl FromStr for DiskUsageLimit {
         if s.ends_with('%') {
             return Ok(Self::Percent(s.parse()?));
         }
-        s.parse::<ByteSize>()
-            .map(Self::Bytes)
-            .map_err(|e| DiskUsageLimitParseError::Bytes(e.to_string()))
+        s.parse::<ByteSize>().map(Self::Bytes).map_err(DiskUsageLimitParseError::Bytes)
     }
 }
 

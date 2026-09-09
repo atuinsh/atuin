@@ -2,7 +2,7 @@
 //!
 //! This utility supports math operations, deserializing from strings and into strings.
 
-use std::ops::{Add, AddAssign, Mul, Sub, SubAssign};
+use std::ops::Mul;
 use std::str::FromStr;
 
 use easy_cast::{ConvApprox, ConvTo, Trunc};
@@ -18,9 +18,13 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
     PartialOrd,
     DeserializeFromStr,
     SerializeDisplay,
+    derive_more::Add,
+    derive_more::AddAssign,
     derive_more::Display,
     derive_more::From,
     derive_more::Into,
+    derive_more::Sub,
+    derive_more::SubAssign,
 )]
 #[display("{_0}%")]
 pub struct Percent(f64);
@@ -37,34 +41,6 @@ impl Percent {
     #[must_use]
     pub const fn value(self) -> f64 {
         self.0
-    }
-}
-
-impl Add for Percent {
-    type Output = Self;
-
-    fn add(self, rhs: Self) -> Self {
-        Self(self.0 + rhs.0)
-    }
-}
-
-impl Sub for Percent {
-    type Output = Self;
-
-    fn sub(self, rhs: Self) -> Self {
-        Self(self.0 - rhs.0)
-    }
-}
-
-impl AddAssign for Percent {
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
-impl SubAssign for Percent {
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
     }
 }
 
