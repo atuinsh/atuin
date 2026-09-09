@@ -143,6 +143,7 @@ fn draw_charts(f: &mut Frame<'_>, area: Rect, stats: &HistoryStats, styles: Styl
     let areas = Layout::vertical([Constraint::Fill(1), Constraint::Fill(1), Constraint::Length(1)])
         .split(area);
     let top = Layout::horizontal([Constraint::Fill(1); 2]).split(areas[0]);
+
     let mut exits = stats.exits.clone();
     exits.sort_by_key(|(exit, _)| *exit);
     let exit_width = if exits.iter().any(|(exit, _)| *exit < 0) {
@@ -170,6 +171,7 @@ fn draw_charts(f: &mut Frame<'_>, area: Rect, stats: &HistoryStats, styles: Styl
         " Exit codes ".into()
     };
     chart(f, top[0], title, &exit_bars, exit_width, styles);
+
     // Single-character weekday labels let all seven days fit in a narrow terminal.
     let day_width = if top[1].width >= 30 {
         3
@@ -194,6 +196,7 @@ fn draw_charts(f: &mut Frame<'_>, area: Rect, stats: &HistoryStats, styles: Styl
         })
         .collect();
     chart(f, top[1], " Runs by weekday (UTC) ".into(), &day_bars, day_width, styles);
+
     let months = monthly_durations(&stats.duration_over_time);
     let capacity = usize::from(areas[1].width.saturating_sub(2) / 8);
     let bars: Vec<_> = months
@@ -226,6 +229,7 @@ fn draw_charts(f: &mut Frame<'_>, area: Rect, stats: &HistoryStats, styles: Styl
     } else {
         chart(f, areas[1], title, &bars, 7, styles);
     }
+
     f.render_widget(Paragraph::new("¹ Known exits only").style(styles.muted), areas[2]);
 }
 

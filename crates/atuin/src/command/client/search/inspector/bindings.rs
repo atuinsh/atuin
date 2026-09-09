@@ -20,6 +20,7 @@ impl Bindings {
                 })
             })
             .collect();
+
         bindings.sort_by(|(_, a), (_, b)| (a.len(), a).cmp(&(b.len(), b)));
         Self(bindings)
     }
@@ -43,6 +44,7 @@ impl Bindings {
             Action::ScrollToBottom => "end",
             _ => "",
         };
+
         self.0
             .iter()
             .find(|(a, key)| a == action && key == preferred)

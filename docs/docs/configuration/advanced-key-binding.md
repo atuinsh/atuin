@@ -229,15 +229,15 @@ The difference between `accept` and `return-selection`: `accept` runs the comman
 
 | Action | Description |
 |--------|-------------|
-| `inspect-previous` | Inspect the previous entry in the current view, or scroll output up |
-| `inspect-next` | Inspect the next entry in the current view, or scroll output down |
-| `inspect-runs` | View individual executions of the selected command |
-| `inspect-session` | View commands in the selected run's session |
-| `inspect-stats` | View command statistics and charts |
-| `inspect-output` | View captured output with colours and text formatting for the selected run |
+| `inspect-previous` | Select the row above, or scroll output up |
+| `inspect-next` | Select the row below, or scroll output down |
+| `inspect-runs` | Open Runs |
+| `inspect-session` | Open Session |
+| `inspect-stats` | Open Stats |
+| `inspect-output` | Open captured output |
 
-In the inspector, list conditions refer to Runs/Session rather than the search results.
-In Output, `list-at-start` and `list-at-end` refer to the reader's scroll boundaries.
+List conditions apply to the current inspector view, not the search results.
+In Output, start/end conditions describe scroll boundaries.
 
 ### Special
 

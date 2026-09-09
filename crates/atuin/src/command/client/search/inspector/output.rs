@@ -28,15 +28,18 @@ impl Capture {
             if let Some(task) = self.task.take() {
                 task.abort();
             }
+
             self.id = Some(id);
             self.ready = None;
             let settings = settings.clone();
             self.task = Some(tokio::spawn(async move { load_output(id, &settings).await }));
         }
+
         // Never await a pending request in the input loop: Esc must remain responsive.
         if self.task.as_ref().is_some_and(JoinHandle::is_finished) {
             self.ready = Some(self.task.take().unwrap().await.unwrap_or(Err(UNAVAILABLE)));
         }
+
         changed
     }
 
@@ -80,6 +83,7 @@ async fn load_output(id: HistoryId, settings: &Settings) -> LoadedCapture {
         client.get_command_output(id, vec![atuin_common::range::PyStyleIdxRange::new(0, -1)]).await
     })
     .await;
+
     match result {
         Ok(Ok(Some(output))) => {
             let text = Output::parse(
@@ -90,6 +94,7 @@ async fn load_output(id: HistoryId, settings: &Settings) -> LoadedCapture {
                     .collect::<Vec<_>>()
                     .join("\n"),
             );
+
             let status = if output.meta.as_ref().is_some_and(|meta| meta.output_truncated) {
                 "Output · capture truncated"
             } else if text.is_empty() {
@@ -97,6 +102,7 @@ async fn load_output(id: HistoryId, settings: &Settings) -> LoadedCapture {
             } else {
                 "Output"
             };
+
             Ok((text, status.into()))
         }
         Ok(Ok(None)) => Err("No output captured for this run"),
@@ -133,6 +139,7 @@ impl Output {
             }
             Err(_) => Text::raw(plain_output(capture)),
         };
+
         // Captures should contain only SGR and newlines. Defensively remove any other
         // controls left by the converter, and don't allow output to blink or conceal text.
         for span in text.lines.iter_mut().flat_map(|line| &mut line.spans) {
@@ -141,9 +148,11 @@ impl Output {
                 .style
                 .remove_modifier(Modifier::SLOW_BLINK | Modifier::RAPID_BLINK | Modifier::HIDDEN);
         }
+
         if text.lines.len() == 1 && text.lines[0].spans.iter().all(|s| s.content.is_empty()) {
             text.lines.clear();
         }
+
         Self {
             text,
             ..Self::default()
@@ -169,9 +178,11 @@ impl Output {
                     .filter(|s| !s.content.is_empty())
                     .map(|s| (s.content.as_ref(), s.style));
                 let mut span = spans.next();
+
                 for row in vt100::capture::basic_formatted_rows(&plain, width) {
                     let mut remaining = row.len();
                     let mut wrapped = Line::default();
+
                     while let Some((content, style)) = span
                         && remaining > 0
                     {
@@ -184,11 +195,13 @@ impl Output {
                             Some((&content[end..], style))
                         };
                     }
+
                     self.rows.push(wrapped);
                 }
             }
             self.width = width;
         }
+
         &self.rows
     }
 }

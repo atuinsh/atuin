@@ -39,6 +39,7 @@ pub struct Browser {
     scope: Option<(View, String)>,
     window_for: Option<HistoryId>,
     table: TableState,
+
     output: Capture,
     output_scroll: usize,
     output_max_scroll: usize,
@@ -78,6 +79,7 @@ impl Browser {
             self.output_page_size.saturating_sub(1)
         }
         .max(1);
+
         self.output_scroll = if next {
             self.output_scroll.saturating_add(amount).min(self.output_max_scroll)
         } else {
@@ -112,6 +114,7 @@ impl Browser {
                 self.output_scroll = 0;
                 self.output_max_scroll = 0;
             }
+
             return Ok((None, None));
         }
 
@@ -122,6 +125,7 @@ impl Browser {
         };
         let position = self.entries.iter().position(|entry| entry.id == selected.id);
         let at_edge = position.is_none_or(|i| i == 0 || i + 1 == self.entries.len());
+
         if self.scope.as_ref() != Some(&(self.view, scope.clone()))
             || (at_edge && self.window_for != Some(selected.id))
         {
@@ -131,6 +135,7 @@ impl Browser {
             self.window_for = Some(selected.id);
             self.table = TableState::default();
         }
+
         let position = self.entries.iter().position(|entry| entry.id == selected.id);
         self.table.select(position);
         Ok(position.map_or((None, None), |i| {
@@ -155,6 +160,7 @@ impl Browser {
             self.draw_output(f, chunk, selected, settings, theme, bindings);
             return;
         }
+
         let areas = Layout::vertical([
             Constraint::Min(3),
             Constraint::Length(if chunk.height >= 10 {
@@ -172,6 +178,7 @@ impl Browser {
         let session = self.view == View::Session;
         let narrow = area.width < 90;
         let tiny = area.width < 65;
+
         let rows = self.entries.iter().map(|entry| {
             let mut cells = vec![
                 Cell::from(if tiny {
@@ -203,6 +210,7 @@ impl Browser {
             }));
             Row::new(cells)
         });
+
         let mut widths = vec![
             Constraint::Length(if tiny {
                 8
@@ -223,6 +231,7 @@ impl Browser {
         } else {
             "Directory"
         });
+
         let title = if session {
             " Session "
         } else {
@@ -237,6 +246,7 @@ impl Browser {
             .style(styles.base)
             .row_highlight_style(styles.command.add_modifier(Modifier::REVERSED))
             .highlight_symbol("› ");
+
         f.render_stateful_widget(table, area, &mut self.table);
     }
 
@@ -261,6 +271,7 @@ impl Browser {
             Constraint::Length(1),
         ])
         .split(area);
+
         let mut command = command_text(selected, settings.ui.syntax_highlight, theme)
             .lines
             .into_iter()
@@ -280,18 +291,22 @@ impl Browser {
             ),
         ];
         f.render_widget(Paragraph::new(heading), areas[0]);
+
         let status = self.output.status().to_owned();
         let block = panel(format!(" {status} "), styles);
+
         // At very small heights, spend the remaining space on output instead of borders.
         let inner = if spacious {
             block.inner(areas[1])
         } else {
             areas[1]
         };
+
         let rows = self.output.rows(inner.width);
         self.output_page_size = usize::from(inner.height);
         self.output_max_scroll = rows.len().saturating_sub(self.output_page_size);
         self.output_scroll = self.output_scroll.min(self.output_max_scroll);
+
         if spacious {
             let progress = format!(
                 " {}–{} / {} rows ",
@@ -301,12 +316,14 @@ impl Browser {
             );
             f.render_widget(block.title_bottom(Line::from(progress).right_aligned()), areas[1]);
         }
+
         let text = if rows.is_empty() {
             vec![Line::styled(status, styles.muted)]
         } else {
             rows.iter().skip(self.output_scroll).take(self.output_page_size).cloned().collect()
         };
         f.render_widget(Paragraph::new(text).style(Style::reset()), inner);
+
         f.render_widget(
             Paragraph::new(guide(View::Output, areas[2].width, styles, bindings)),
             areas[2],
@@ -389,6 +406,7 @@ fn draw_details(
     if area.height == 0 {
         return;
     }
+
     let lines = vec![
         Line::from(vec![
             Span::styled("When  ", styles.label),
@@ -416,6 +434,7 @@ fn draw_details(
             Span::raw(selected.cwd.escape_non_printable()),
         ]),
     ];
+
     f.render_widget(
         Paragraph::new(lines)
             .style(styles.base)
@@ -443,6 +462,7 @@ pub fn draw_command(
     };
     let areas = Layout::vertical([Constraint::Length(height), Constraint::Min(0)]).split(area);
     let columns = Layout::horizontal([Constraint::Length(5), Constraint::Min(0)]).split(areas[0]);
+
     f.render_widget(Paragraph::new("cmd: ").style(Styles::new(theme).muted), columns[0]);
     f.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), columns[1]);
     areas[1]
@@ -462,6 +482,7 @@ fn command_text(history: &History, highlight: bool, theme: &Theme) -> Text<'stat
     } else {
         Vec::new()
     };
+
     let fallback = Styles::new(theme).command;
     let mut lines = vec![Line::default()];
     for (index, ch) in text.char_indices() {
@@ -469,6 +490,7 @@ fn command_text(history: &History, highlight: bool, theme: &Theme) -> Text<'stat
             lines.push(Line::default());
             continue;
         }
+
         let style = meanings
             .get(index)
             .map_or(fallback, |meaning| Style::from_crossterm(theme.as_style(*meaning)));
@@ -481,6 +503,7 @@ fn command_text(history: &History, highlight: bool, theme: &Theme) -> Text<'stat
             line.spans.push(Span::styled(ch.to_string(), style));
         }
     }
+
     Text::from(lines)
 }
 
@@ -493,6 +516,7 @@ fn guide(view: View, width: u16, styles: Styles, bindings: &Bindings) -> Line<'s
         Delete, Exit, InspectNext, InspectOutput, InspectPrevious, InspectRuns, InspectSession,
         InspectStats, ReturnSelection, ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop,
     };
+
     let actions: &[(&[Action], &str)] = match view {
         View::Runs | View::Session => &[
             (&[InspectOutput], "output"),
@@ -513,6 +537,7 @@ fn guide(view: View, width: u16, styles: Styles, bindings: &Bindings) -> Line<'s
             &[(&[InspectRuns], "runs"), (&[InspectSession], "session"), (&[Exit], "search")]
         }
     };
+
     let mut spans = Vec::new();
     let mut used = 0;
     for (actions, action) in actions {
@@ -528,15 +553,18 @@ fn guide(view: View, width: u16, styles: Styles, bindings: &Bindings) -> Line<'s
             ", "
         };
         let needed = key.width() + label.width() + separator.len();
+
         // Avoid cutting a key or its action in half on narrow terminals.
         if used + needed > usize::from(width) {
             break;
         }
+
         spans.push(Span::styled(separator, styles.muted));
         spans.push(Span::styled(key, styles.key));
         spans.push(Span::styled(label, styles.muted));
         used += needed;
     }
+
     Line::from(spans)
 }
 
