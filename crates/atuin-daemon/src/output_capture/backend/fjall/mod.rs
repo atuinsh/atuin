@@ -154,9 +154,7 @@ impl FjallBackend {
             flusher: Arc::new(Flusher::spawn(db)),
             gc: None,
         };
-        // The collector holds its own clone of the backend to drive it. Clone it while `gc` is
-        // still `None` so that clone carries no handle back to the `Gc`, which would be a
-        // reference cycle keeping the task alive forever.
+
         if let Some(budget) = budget {
             backend.gc = Some(Arc::new(Gc::spawn(backend.clone(), budget)));
         }

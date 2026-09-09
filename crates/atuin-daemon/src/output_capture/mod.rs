@@ -13,8 +13,6 @@ pub struct OutputCapture {
 }
 
 impl OutputCapture {
-    /// Open the store at `path`, keeping its disk use under `max_disk_usage`; see
-    /// `FjallBackend::open`. Falls back to a no-op store if the store cannot be opened.
     #[must_use]
     pub fn open(path: impl AsRef<std::path::Path>, max_disk_usage: DiskUsageLimit) -> Self {
         let path = path.as_ref();
