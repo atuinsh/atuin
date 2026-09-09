@@ -298,10 +298,7 @@ where
         Ok(res.0)
     }
 
-    /// Atomically create a user and their initial session in a single transaction, so a
-    /// registration can never leave a user without a session (or a session without a user).
-    ///
-    /// Returns the new user's id. MySQL overrides this because it lacks `RETURNING`.
+    /// Atomically create a user and their initial session in a single transaction.
     #[instrument(skip_all)]
     async fn add_user_with_session(&self, user: &NewUser, token: &str) -> DbResult<i64> {
         let mut tx = self.pool().begin().await?;
@@ -313,11 +310,7 @@ where
             .fetch_one(&mut *tx)
             .await?;
 
-        db::query(Self::Dialect::ADD_SESSION)
-            .bind(user_id)
-            .bind(token)
-            .execute(&mut *tx)
-            .await?;
+        db::query(Self::Dialect::ADD_SESSION).bind(user_id).bind(token).execute(&mut *tx).await?;
 
         tx.commit().await?;
 
@@ -336,9 +329,6 @@ where
 
     #[instrument(skip_all)]
     async fn delete_user(&self, u: &User) -> DbResult<()> {
-        // Wrap all four deletes in a single transaction so a failure part-way through can't
-        // leave the account half-deleted (e.g. the user row gone but its store rows orphaned).
-        // Dropping `tx` without committing rolls back implicitly.
         let mut tx = self.pool().begin().await?;
         db::query(Self::Dialect::DELETE_SESSIONS_BY_USER).bind(u.id).execute(&mut *tx).await?;
         db::query(Self::Dialect::DELETE_HISTORY_BY_USER).bind(u.id).execute(&mut *tx).await?;

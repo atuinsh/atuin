@@ -33,8 +33,8 @@ impl Database for MySql {
         Ok(Self { pool })
     }
 
-    // MySQL has no `RETURNING`, so unlike the default it reads the new id from
-    // `last_insert_id()` off the query result.
+    // MySQL has no `RETURNING`, so unlike the default it reads the new id from `last_insert_id()`
+    // off the query result.
     #[instrument(skip_all)]
     async fn add_user(&self, user: &NewUser) -> DbResult<i64> {
         let res = db::query(<Self::Dialect as Dialect>::ADD_USER)
@@ -47,8 +47,8 @@ impl Database for MySql {
         Ok(i64::conv(res.last_insert_id()))
     }
 
-    // MySQL has no `RETURNING`, so unlike the default it reads the new id from
-    // `last_insert_id()` off the insert result, all within one transaction.
+    // MySQL has no `RETURNING`, so unlike the default it reads the new id from `last_insert_id()`
+    // off the insert result, all within one transaction.
     #[instrument(skip_all)]
     async fn add_user_with_session(&self, user: &NewUser, token: &str) -> DbResult<i64> {
         let mut tx = self.pool().begin().await?;
