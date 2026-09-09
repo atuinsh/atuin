@@ -5,7 +5,7 @@ mod codegen {
     tonic::include_proto!("history");
 }
 
-use std::future::Future;
+use std::ops::Range;
 use std::time::Duration;
 
 use atuin_client::history::{
@@ -21,7 +21,7 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use tonic::Status;
 
-use crate::grpc::common::pb::{self as common, UnsignedIdxRange, Uuid};
+use crate::grpc::common::pb::{self as common, Uuid};
 use crate::grpc::common::{CollectCappedError, TryCollectResultsCappedExt};
 use crate::history_journal::{
     CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, CmdRebuildError, GetCmdInFlightError,
@@ -309,8 +309,8 @@ impl RegisterCommandOutputRequest {
     /// The capture to store, rejected unless it carries its [`CommandCaptureMeta`].
     ///
     /// `meta` is logically required, and nothing downstream can tell an omitted one from an
-    /// all-defaults one: a capture stored without it reads back as `output_truncated = false`, so
-    /// truncated output would be presented as complete. Reject it at the edge instead.
+    /// all-defaults one: a capture stored without it reads back as `output_observed_bytes = 0` on a
+    /// 0x0 terminal, misrepresenting what was captured. Reject it at the edge instead.
     pub fn capture(&self) -> Result<CommandCapture, RegisterCommandOutputRequestParseError> {
         let capture =
             self.capture.clone().ok_or(RegisterCommandOutputRequestParseError::MissingCapture)?;
@@ -324,9 +324,9 @@ impl RegisterCommandOutputRequest {
 impl From<DomainCommandCapture> for CommandCapture {
     fn from(capture: DomainCommandCapture) -> Self {
         Self {
-            output: capture.output,
+            output_start: capture.output_start,
+            output_end: capture.output_end,
             meta: Some(CommandCaptureMeta {
-                output_truncated: capture.output_truncated,
                 output_observed_bytes: capture.output_observed_bytes,
                 terminal_width: u32::from(capture.terminal_width),
                 terminal_height: u32::from(capture.terminal_height),
@@ -341,9 +341,9 @@ impl From<CommandCapture> for DomainCommandCapture {
         // as the storage key.
         let meta = capture.meta.unwrap_or_default();
         Self {
-            output: capture.output,
+            output_start: capture.output_start,
+            output_end: capture.output_end,
             output_observed_bytes: meta.output_observed_bytes,
-            output_truncated: meta.output_truncated,
             terminal_width: u16::try_from(meta.terminal_width).unwrap_or(u16::MAX),
             terminal_height: u16::try_from(meta.terminal_height).unwrap_or(u16::MAX),
         }
@@ -374,51 +374,100 @@ impl GetCommandOutputRequest {
 
 #[derive(Clone, Copy)]
 pub struct ChunkedOutputLineView<'a> {
-    /// 0-offset line number.
-    pub line: usize,
+    /// The line's position in the output.
+    ///
+    /// Non-negative numbers are 0-based offsets from the start of the output. Negative numbers
+    /// count backward from the end (`-1` is the last line); these indicate lines taken from the end
+    /// chunk of an output whose middle was discarded.
+    pub line: i64,
     pub content: &'a str,
 }
 
 impl GetCommandOutputResponse {
     /// Build a chunked output from an output and a set of signed line ranges.
     #[must_use]
-    pub fn build(capture: CommandCapture, ranges: &[PyStyleIdxRange]) -> Self {
-        let CommandCapture { output, meta } = capture;
-        let lines: Vec<&str> = output.lines().collect();
+    pub fn build(capture: &CommandCapture, ranges: &[PyStyleIdxRange]) -> Self {
+        let lines_start: Vec<&str> = capture.output_start.lines().collect();
+        let lines_end: Option<Vec<&str>> =
+            capture.output_end.as_ref().map(|end| end.lines().collect());
 
-        let chunks = ranges
-            .iter()
-            .map(|range| range.resolve_for(&lines))
-            .map(|range| OutputChunk {
-                line_range: Some(UnsignedIdxRange {
-                    start: u64::conv(range.start),
-                    end: u64::conv(range.end),
-                }),
+        /// How to represent a line number.
+        enum Anchor {
+            /// Use a positive number, indicating an offset from the start.
+            Start,
+            /// Use a negative number, indicating an offset from the end.
+            End,
+        }
+
+        let to_output_chunk = |range: Range<usize>, lines: &[&str], anchor| {
+            if range.is_empty() {
+                return None;
+            }
+            let offset = match anchor {
+                Anchor::Start => 0,
+                Anchor::End => i64::conv(lines.len()),
+            };
+            Some(OutputChunk {
+                line_range: Some(PyStyleIdxRange::new(
+                    i64::conv(range.start) - offset,
+                    i64::conv(range.end) - 1 - offset,
+                )),
                 content: lines[range].join("\n"),
             })
-            .collect();
+        };
+
+        let mut truncated = false;
+        let chunks = if let Some(lines_end) = &lines_end {
+            ranges
+                .iter()
+                .flat_map(|range| {
+                    let ranges = range.resolve_for_split(&lines_start, lines_end);
+                    truncated |= ranges.truncated;
+                    [
+                        to_output_chunk(ranges.start, &lines_start, Anchor::Start),
+                        to_output_chunk(ranges.end, lines_end, Anchor::End),
+                    ]
+                })
+                .flatten()
+                .collect()
+        } else {
+            ranges
+                .iter()
+                .map(|range| range.resolve_for(&lines_start))
+                .filter_map(|range| to_output_chunk(range, &lines_start, Anchor::Start))
+                .collect()
+        };
 
         Self {
             chunks,
-            total_bytes: u64::conv(output.len()),
-            total_lines: u64::conv(lines.len()),
-            meta,
+            total_bytes: u64::try_from(
+                capture
+                    .output_start
+                    .len()
+                    .saturating_add(capture.output_end.as_ref().map_or_default(|end| end.len())),
+            )
+            .unwrap_or(u64::MAX),
+            total_lines: u64::try_from(
+                lines_start.len().saturating_add(lines_end.map_or_default(|lines| lines.len())),
+            )
+            .unwrap_or(u64::MAX),
+            truncated,
+            meta: capture.meta,
         }
     }
 
-    /// Every chunk's lines, each tagged with its absolute 0-offset line number.
+    /// Every chunk's lines, each tagged with its position in the output.
     pub fn lines(&self) -> impl Iterator<Item = ChunkedOutputLineView<'_>> + Clone {
         self.chunks.iter().flat_map(|chunk| {
             let (start, count) = chunk.line_range.map_or((0, 0), |range| {
-                (
-                    usize::try_from(range.start).unwrap_or(0),
-                    usize::try_from(range.end.saturating_sub(range.start)).unwrap_or(0),
-                )
+                // Both ends are inclusive, so a one-line chunk has `start == end`.
+                let count = range.end.saturating_sub(range.start).saturating_add(1);
+                (range.start, usize::try_from(count).unwrap_or(0))
             });
 
             chunk.content.split('\n').take(count).enumerate().map(move |(offset, line)| {
                 ChunkedOutputLineView {
-                    line: start + offset,
+                    line: start.saturating_add(i64::try_from(offset).unwrap_or(i64::MAX)),
                     content: line,
                 }
             })
@@ -514,9 +563,9 @@ mod tests {
 
     fn capture_of(output: &str) -> CommandCapture {
         CommandCapture {
-            output: output.to_string(),
+            output_start: output.to_string(),
+            output_end: None,
             meta: Some(CommandCaptureMeta {
-                output_truncated: false,
                 output_observed_bytes: u64::conv(output.len()),
                 terminal_width: 80,
                 terminal_height: 24,
@@ -524,9 +573,18 @@ mod tests {
         }
     }
 
-    /// A resolved, concrete half-open span, as reported back on a chunk's `line_range`.
-    fn range(start: u64, end: u64) -> UnsignedIdxRange {
-        UnsignedIdxRange { start, end }
+    /// A capture that lost its middle: `start` and `end` were kept, everything between them was
+    /// discarded, and `observed` bytes went past the terminal in total.
+    fn split_capture_of(start: &str, end: &str, observed: u64) -> CommandCapture {
+        CommandCapture {
+            output_start: start.to_string(),
+            output_end: Some(end.to_string()),
+            meta: Some(CommandCaptureMeta {
+                output_observed_bytes: observed,
+                terminal_width: 80,
+                terminal_height: 24,
+            }),
+        }
     }
 
     /// A requested range, Python-slice style (inclusive ends, negatives from the end).
@@ -544,14 +602,18 @@ mod tests {
     #[rstest]
     fn register_command_output_accepts_a_capture_carrying_its_meta() {
         let capture = register_req(Some(capture_of("hello"))).capture().expect("capture");
-        assert_eq!(capture.output, "hello");
+        assert_eq!(capture.output_start, "hello");
         assert!(capture.meta.is_some());
     }
 
     #[rstest]
-    // A capture with no `meta` would read back as `output_truncated = false`, so truncated output
-    // would be presented as complete. Both omissions are rejected as invalid arguments instead.
-    #[case::no_meta(Some(CommandCapture { output: "hi".to_string(), meta: None }))]
+    // A capture with no `meta` would read back with a zeroed `output_observed_bytes`, so output
+    // that overflowed the limit would look complete. Both omissions are rejected instead.
+    #[case::no_meta(Some(CommandCapture {
+        output_start: "hi".to_string(),
+        output_end: None,
+        meta: None,
+    }))]
     #[case::no_capture(None)]
     fn register_command_output_rejects_an_incomplete_capture(
         #[case] capture: Option<CommandCapture>,
@@ -562,19 +624,19 @@ mod tests {
 
     #[rstest]
     fn command_output_whole_output_via_full_range() {
-        let chunked = GetCommandOutputResponse::build(capture_of("a\nb\nc"), &[py_range(0, -1)]);
+        let chunked = GetCommandOutputResponse::build(&capture_of("a\nb\nc"), &[py_range(0, -1)]);
         assert!(chunked.meta.is_some());
         assert_eq!(chunked.total_lines, 3);
         assert_eq!(chunked.chunks.len(), 1);
         assert_eq!(chunked.chunks[0].content, "a\nb\nc");
-        assert_eq!(chunked.chunks[0].line_range, Some(range(0, 3)));
+        assert_eq!(chunked.chunks[0].line_range, Some(py_range(0, 2)));
     }
 
     #[rstest]
     fn command_output_ranges_are_inclusive_with_negative_offsets() {
         // [1, 2] inclusive -> "one", "two"; [-1, -1] -> the last line, "four" (no sentinel needed).
         let chunked =
-            GetCommandOutputResponse::build(capture_of("zero\none\ntwo\nthree\nfour"), &[
+            GetCommandOutputResponse::build(&capture_of("zero\none\ntwo\nthree\nfour"), &[
                 py_range(1, 2),
                 py_range(-1, -1),
             ]);
@@ -583,25 +645,122 @@ mod tests {
         let contents: Vec<&str> = chunked.chunks.iter().map(|c| c.content.as_str()).collect();
         assert_eq!(contents, vec!["one\ntwo", "four"]);
         // The reported `line_range` is the resolved, concrete half-open span.
-        assert_eq!(chunked.chunks[0].line_range, Some(range(1, 3)));
-        assert_eq!(chunked.chunks[1].line_range, Some(range(4, 5)));
+        assert_eq!(chunked.chunks[0].line_range, Some(py_range(1, 2)));
+        assert_eq!(chunked.chunks[1].line_range, Some(py_range(4, 4)));
     }
 
     #[rstest]
-    fn command_output_returns_one_chunk_per_requested_range() {
-        // Every requested range yields a chunk, in order: [2, 1] is backwards (empty), [10, 20] is
-        // past the end (both empty content), [0, 0] selects "a". Nothing is dropped.
-        let chunked = GetCommandOutputResponse::build(capture_of("a\nb\nc"), &[
+    fn command_output_drops_ranges_that_select_nothing() {
+        // A range that selects nothing yields no chunk at all: [2, 1] is backwards and [10, 20] is
+        // past the end, so only [0, 0] survives, selecting "a".
+        //
+        // A chunk's `line_range` is inclusive at both ends, which cannot encode an empty span --
+        // the natural candidate, [0, -1], already means "the whole output". So an empty range has
+        // to be dropped rather than reported as a zero-length chunk. Callers already had to treat
+        // empty chunks as contributing nothing, so no line is lost by leaving them out.
+        let chunked = GetCommandOutputResponse::build(&capture_of("a\nb\nc"), &[
             py_range(2, 1),
             py_range(10, 20),
             py_range(0, 0),
         ]);
         let contents: Vec<&str> = chunked.chunks.iter().map(|c| c.content.as_str()).collect();
-        assert_eq!(contents, vec!["", "", "a"]);
+        assert_eq!(contents, vec!["a"]);
+        assert_eq!(chunked.chunks[0].line_range, Some(py_range(0, 0)));
+    }
+
+    // -- Captures that lost their middle --------------------------------------
+
+    /// Six lines of output whose middle was discarded: `a b c` were kept from the front and
+    /// `x y z` from the back, with an unknown number of lines gone between them.
+    fn split_abc_xyz() -> CommandCapture {
+        split_capture_of("a\nb\nc", "x\ny\nz", 1_000_000)
+    }
+
+    #[rstest]
+    fn split_capture_reports_both_halves_for_a_full_range() {
+        let chunked = GetCommandOutputResponse::build(&split_abc_xyz(), &[py_range(0, -1)]);
+
+        // One chunk per half, in order, each carrying only the lines it really holds.
+        let contents: Vec<&str> = chunked.chunks.iter().map(|c| c.content.as_str()).collect();
+        assert_eq!(contents, vec!["a\nb\nc", "x\ny\nz"]);
+        // The kept start is numbered from the front and the kept tail from the back, so the two
+        // halves can never be mistaken for one contiguous run.
+        assert_eq!(chunked.chunks[0].line_range, Some(py_range(0, 2)));
+        assert_eq!(chunked.chunks[1].line_range, Some(py_range(-3, -1)));
+        // The request spanned the gap, so the caller is told the output is incomplete.
+        assert!(chunked.truncated);
+    }
+
+    #[rstest]
+    fn split_capture_totals_count_only_what_was_kept() {
+        let chunked = GetCommandOutputResponse::build(&split_abc_xyz(), &[py_range(0, -1)]);
+        assert_eq!(chunked.total_lines, 6, "three lines either side of the gap");
+        assert_eq!(chunked.total_bytes, u64::conv("a\nb\nc".len() + "x\ny\nz".len()));
+        // The bytes the terminal actually saw are reported separately, and are far larger.
+        assert_eq!(chunked.meta.expect("meta").output_observed_bytes, 1_000_000);
+    }
+
+    #[rstest]
+    // Wholly inside the kept start: answered in full, nothing missing.
+    #[case::within_the_start(py_range(0, 1), vec![(0, "a"), (1, "b")], false)]
+    #[case::exactly_the_start(py_range(0, 2), vec![(0, "a"), (1, "b"), (2, "c")], false)]
+    // Wholly inside the kept tail: likewise, and numbered from the end.
+    #[case::within_the_tail(py_range(-2, -1), vec![(-2, "y"), (-1, "z")], false)]
+    #[case::exactly_the_tail(py_range(-3, -1), vec![(-3, "x"), (-2, "y"), (-1, "z")], false)]
+    // Reaching past either kept half runs into the gap, which must be reported.
+    #[case::past_the_start(py_range(0, 5), vec![(0, "a"), (1, "b"), (2, "c")], true)]
+    #[case::past_the_tail(py_range(-9, -1), vec![(-3, "x"), (-2, "y"), (-1, "z")], true)]
+    // Entirely inside the gap: nothing to hand back, but the caller must not read that as an
+    // empty output.
+    #[case::inside_the_gap_from_the_front(py_range(8, 9), vec![], true)]
+    #[case::inside_the_gap_from_the_back(py_range(-99, -90), vec![], true)]
+    // Spanning it: both halves, and the gap between them.
+    #[case::spanning(py_range(1, -2), vec![(1, "b"), (2, "c"), (-3, "x"), (-2, "y")], true)]
+    fn split_capture_answers_a_range_from_the_half_that_holds_it(
+        #[case] range: PyStyleIdxRange,
+        #[case] expected: Vec<(i64, &str)>,
+        #[case] truncated: bool,
+    ) {
+        let chunked = GetCommandOutputResponse::build(&split_abc_xyz(), &[range]);
+        assert_eq!(views_of(&chunked), expected);
+        assert_eq!(chunked.truncated, truncated);
+    }
+
+    #[rstest]
+    fn split_capture_truncation_is_sticky_across_ranges() {
+        // One range inside the kept start, one spanning the gap. The response carries a single
+        // flag, so it has to report the incompleteness of the request as a whole.
+        let chunked =
+            GetCommandOutputResponse::build(&split_abc_xyz(), &[py_range(0, 0), py_range(0, -1)]);
+        assert!(chunked.truncated);
+    }
+
+    #[rstest]
+    fn a_whole_capture_never_reports_truncation() {
+        // Nothing was discarded, so no request can reach a gap -- not even one running well past
+        // both ends of the output.
+        let chunked = GetCommandOutputResponse::build(&capture_of("a\nb\nc"), &[
+            py_range(0, -1),
+            py_range(0, 99),
+            py_range(-99, -1),
+        ]);
+        assert!(!chunked.truncated);
+    }
+
+    #[rstest]
+    fn an_empty_tail_still_marks_the_capture_as_split() {
+        // The limit left no room for a tail. There is nothing to hand back from it, but the
+        // output is still incomplete and a full-range request has to say so.
+        let capture = split_capture_of("a\nb\nc", "", 1_000_000);
+        let chunked = GetCommandOutputResponse::build(&capture, &[py_range(0, -1)]);
+
+        assert!(chunked.truncated);
+        assert_eq!(views_of(&chunked), vec![(0, "a"), (1, "b"), (2, "c")]);
+        assert_eq!(chunked.total_lines, 3);
     }
 
     /// The lines a chunked output actually hands back, as `(line number, content)` pairs.
-    fn views_of(chunked: &GetCommandOutputResponse) -> Vec<(usize, &str)> {
+    fn views_of(chunked: &GetCommandOutputResponse) -> Vec<(i64, &str)> {
         chunked.lines().map(|view| (view.line, view.content)).collect()
     }
 
@@ -620,7 +779,7 @@ mod tests {
         #[case] output: &str,
         #[case] expected: u64,
     ) {
-        let chunked = GetCommandOutputResponse::build(capture_of(output), &[py_range(0, -1)]);
+        let chunked = GetCommandOutputResponse::build(&capture_of(output), &[py_range(0, -1)]);
         assert_eq!(chunked.total_lines, expected);
         // Whatever `total_lines` claims, asking for everything hands back exactly that many lines.
         assert_eq!(chunked.lines().count(), usize::try_from(expected).unwrap());
@@ -659,9 +818,9 @@ mod tests {
     fn command_output_lines_survive_the_chunk_round_trip(
         #[case] output: &str,
         #[case] ranges: Vec<PyStyleIdxRange>,
-        #[case] expected: Vec<(usize, &str)>,
+        #[case] expected: Vec<(i64, &str)>,
     ) {
-        let chunked = GetCommandOutputResponse::build(capture_of(output), &ranges);
+        let chunked = GetCommandOutputResponse::build(&capture_of(output), &ranges);
         assert_eq!(views_of(&chunked), expected);
 
         // Content and line numbers stay in step: every chunk hands back exactly as many lines as
@@ -671,7 +830,7 @@ mod tests {
             .iter()
             .map(|chunk| {
                 let resolved = chunk.line_range.expect("build always sets the resolved range");
-                usize::try_from(resolved.end - resolved.start).unwrap()
+                usize::try_from(resolved.end - resolved.start + 1).unwrap()
             })
             .sum();
         assert_eq!(declared, expected.len());
@@ -688,17 +847,15 @@ mod tests {
         ) {
             let ranges: Vec<PyStyleIdxRange> =
                 ranges.into_iter().map(|(start, end)| PyStyleIdxRange::new(start, end)).collect();
-            let chunked = GetCommandOutputResponse::build(capture_of(&output), &ranges);
+            let chunked = GetCommandOutputResponse::build(&capture_of(&output), &ranges);
 
-            let mut expected: Vec<usize> = Vec::new();
+            let mut expected: Vec<i64> = Vec::new();
             for chunk in &chunked.chunks {
                 let resolved = chunk.line_range.expect("build always sets the resolved range");
-                expected.extend(
-                    usize::try_from(resolved.start).unwrap()..usize::try_from(resolved.end).unwrap(),
-                );
+                expected.extend(resolved.start..=resolved.end);
             }
 
-            let actual: Vec<usize> = chunked.lines().map(|view| view.line).collect();
+            let actual: Vec<i64> = chunked.lines().map(|view| view.line).collect();
             prop_assert_eq!(actual, expected);
         }
     }

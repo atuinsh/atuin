@@ -636,6 +636,7 @@ dependencies = [
  "crossterm",
  "easy-cast",
  "eyre",
+ "libc",
  "parking_lot",
  "portable-pty",
  "rstest",

@@ -445,6 +445,6 @@ impl GrpcService for Service {
                 Status::not_found(format!("no captured output for history id {id}"))
             })?;
 
-        Ok(Response::new(GetCommandOutputResponse::build(capture.into(), request.output_ranges())))
+        Ok(Response::new(GetCommandOutputResponse::build(&capture.into(), request.output_ranges())))
     }
 }

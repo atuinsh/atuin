@@ -5,20 +5,30 @@
 /// own protobuf types at the edges.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandCapture {
-    /// The rendered output of the command.
+    /// The starting portion of the rendered output of the command.
     ///
     /// Contains SGR escape sequences. Contains no other escape sequences, and no control characters
     /// except `'\n'`.
-    pub output: String,
+    ///
+    /// If `output_end` is [`None`], the output didn't need to be truncated, so `output_start`
+    /// contains the full output.
+    pub output_start: String,
+
+    /// The ending portion of the rendered output of the command.
+    ///
+    /// If this is [`Some`], the middle portion of the output had to be discarded because the output
+    /// exceeded the size limit.
+    pub output_end: Option<String>,
+
     /// The total number of bytes that were pushed to the virtual terminal.
     ///
     /// This counts bytes observed *before* rasterizing the terminal, so it is not the same as
     /// `output.len()`.
     pub output_observed_bytes: u64,
-    /// Whether [`Self::output`] was truncated because it would have exceeded a maximal limit.
-    pub output_truncated: bool,
+
     /// The width of the terminal when the command finished.
     pub terminal_width: u16,
+
     /// The height of the terminal when the command finished.
     pub terminal_height: u16,
 }

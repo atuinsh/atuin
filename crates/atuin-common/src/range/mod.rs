@@ -3,7 +3,7 @@
 use std::ops::Range;
 
 mod chunks;
-mod py_style;
+pub mod py_style;
 
 pub use chunks::{ChunkInt, Chunks};
 pub use py_style::PyStyleIdxRange;

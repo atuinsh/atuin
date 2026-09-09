@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::Search;
+use atuin_common::range::PyStyleIdxRange;
 use atuin_daemon::grpc::history::pb::tail_history_reply::Event;
 use atuin_daemon::search::IndexFilterMode;
 use common::{TestEnv, history};
@@ -83,11 +84,71 @@ async fn output_is_stored_only_for_commands_that_cannot_print_the_key(
     }
 
     client
-        .register_command_output(id, "adapt amused able anxiety mother", false, 32, 80, 24)
+        .register_command_output(id, "adapt amused able anxiety mother", None, 32, 80, 24)
         .await
         .unwrap();
 
     assert_eq!(client.get_command_output(id, vec![]).await.unwrap().is_some(), stored);
+}
+
+/// A capture whose middle was discarded has to survive the whole round trip -- proto, storage
+/// schema, and chunking -- with its two halves still distinguishable. Storing only the first
+/// bytes, as the capture used to, threw away the end of every long-running command's output.
+#[rstest]
+#[tokio::test]
+async fn a_capture_that_lost_its_middle_round_trips(#[future(awt)] env: TestEnv) {
+    let mut client = env.history_client().await;
+    let history: History = History::daemon()
+        .timestamp(time::OffsetDateTime::now_utc())
+        .command("seq 1 10000000".to_string())
+        .cwd("/tmp".to_string())
+        .session("test-session".to_string())
+        .cmd_origin(
+            #[allow(deprecated)]
+            atuin_domain::record::CmdOrigin::parse_lenient("test-host"),
+        )
+        .build()
+        .into();
+    let id: HistoryId =
+        client.start_history(history).await.unwrap().id.unwrap().try_into().unwrap();
+
+    client
+        .register_command_output(
+            id,
+            "first\nsecond",
+            Some("penultimate\nlast".to_string()),
+            9_000_000,
+            80,
+            24,
+        )
+        .await
+        .unwrap();
+
+    // Ask for the whole thing: both kept halves come back, and the caller is told the middle is
+    // missing rather than being handed four lines as if they were the entire output.
+    let whole = vec![PyStyleIdxRange::new(0, -1)];
+    let response = client.get_command_output(id, whole).await.unwrap().expect("stored");
+    assert!(response.truncated);
+    assert_eq!(response.total_lines, 4);
+
+    let lines: Vec<(i64, &str)> = response.lines().map(|view| (view.line, view.content)).collect();
+    assert_eq!(lines, vec![
+        (0, "first"),
+        (1, "second"),
+        // Numbered from the end: how many lines the discarded middle held is not knowable.
+        (-2, "penultimate"),
+        (-1, "last"),
+    ]);
+
+    // The observed byte count is of everything the terminal saw, not of what survived.
+    assert_eq!(response.meta.expect("meta").output_observed_bytes, 9_000_000);
+
+    // Asking only for the tail is answered from the tail alone, with nothing reported missing.
+    let tail = vec![PyStyleIdxRange::new(-1, -1)];
+    let response = client.get_command_output(id, tail).await.unwrap().expect("stored");
+    assert!(!response.truncated);
+    let lines: Vec<(i64, &str)> = response.lines().map(|view| (view.line, view.content)).collect();
+    assert_eq!(lines, vec![(-1, "last")]);
 }
 
 #[rstest]
@@ -110,7 +171,7 @@ async fn output_for_a_cancelled_command_is_not_stored(#[future(awt)] env: TestEn
     client.cancel_history(id).await.unwrap();
 
     // The command was cancelled, so it is gone: its output is refused, not silently stored.
-    assert!(client.register_command_output(id, "hello", false, 5, 80, 24).await.is_err());
+    assert!(client.register_command_output(id, "hello", None, 5, 80, 24).await.is_err());
 
     assert!(client.get_command_output(id, vec![]).await.unwrap().is_none());
 }
@@ -122,7 +183,7 @@ async fn output_for_an_unknown_command_is_not_stored(#[future(awt)] env: TestEnv
     let id = HistoryId::from_bytes(*uuid::Uuid::from_u128(7).as_bytes());
 
     // The id was never started, so it is unknown: its output is refused, not silently stored.
-    assert!(client.register_command_output(id, "hello", false, 5, 80, 24).await.is_err());
+    assert!(client.register_command_output(id, "hello", None, 5, 80, 24).await.is_err());
 
     assert!(client.get_command_output(id, vec![]).await.unwrap().is_none());
 }

@@ -81,9 +81,9 @@ mod tests {
 
     fn cap(output: &str) -> CommandCapture {
         CommandCapture {
-            output: output.to_string(),
+            output_start: output.to_string(),
+            output_end: None,
             output_observed_bytes: u64::conv(output.len()),
-            output_truncated: false,
             terminal_width: 80,
             terminal_height: 24,
         }
@@ -95,7 +95,7 @@ mod tests {
         let store = OutputCapture::open(dir.path().join("capture"), DiskUsageLimit::Unlimited);
         assert_eq!(store.kind(), BackendKind::Fjall);
         store.capture(hid(1), cap("hello")).await.expect("capture");
-        assert_eq!(store.get(hid(1)).await.expect("get").expect("present").output, "hello");
+        assert_eq!(store.get(hid(1)).await.expect("get").expect("present").output_start, "hello");
     }
 
     #[tokio::test]

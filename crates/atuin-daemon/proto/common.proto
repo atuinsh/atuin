@@ -19,6 +19,8 @@ message RecordId {
 // Rust codegen maps this message onto `atuin_common::range::PyStyleIdxRange` (see the daemon's
 // `build.rs`), so the resolution rules live in one place. Keep the field numbers in step with the
 // `prost` attributes on that struct.
+//
+// NOTE: Unlike Python, this is an **inclusive** range!
 message PyStyleIdxRange { int64 start = 1; int64 end = 2; }
 
 // A pair of unsigned indices delimiting an already-resolved, concrete `[start, end)` half-open

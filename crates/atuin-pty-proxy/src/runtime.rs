@@ -5,6 +5,7 @@ use atuin_common::os::unix::tty::TtyId;
 use crossterm::terminal;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
+use crate::cwd_updater::CwdUpdater;
 use crate::debug::{Osc133DebugHighlighter, RESET};
 use crate::pty_proxy::RuntimeOptions;
 use crate::screen::{self, Msg, SocketServer};
@@ -132,6 +133,11 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     let mut pty_reader = pair.master.try_clone_reader().map_err(|e| eyre::eyre!("{e:#}"))?;
     let mut pty_writer = pair.master.take_writer().map_err(|e| eyre::eyre!("{e:#}"))?;
 
+    let child_pid =
+        child.process_id().and_then(|pid| rustix::process::Pid::from_raw(pid.cast_signed()));
+    // Update this process's CWD to match the child's CWD. This is necessary to enable programs like
+    // tmux to track the child's CWD.
+    let cwd_updater = CwdUpdater::new(pair.master.as_ref(), child_pid);
     spawn_resize_handler(pair.master, msg_tx.clone())?;
     terminal::enable_raw_mode()?;
 
@@ -146,6 +152,7 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
                 Ok(n) => {
                     let raw_data = &buf[..n];
                     let _ = msg_tx.send(Msg::Data(raw_data.to_vec()));
+                    cwd_updater.update();
 
                     let highlighted;
                     let data: &[u8] = if let Some(highlighter) = &mut highlighter {
