@@ -1,7 +1,7 @@
 mod backend;
 
 use atuin_client::history::{CommandCapture, HistoryId};
-use backend::{AnyBackend, Backend as _, FailingBackend, FjallBackend, NopBackend};
+use backend::{AnyBackend, Backend as _, FjallBackend, NopBackend};
 pub use backend::{BackendKind, CaptureError, DeleteOutputError, GetOutputError};
 use tracing::error;
 
@@ -39,14 +39,13 @@ impl OutputCapture {
 
     /// A capture store whose every operation fails, standing in for a broken backend.
     ///
-    /// Test-only hook: it lets tests prove that a broken output store never sinks a primary
-    /// operation (for example, that deleting history still succeeds when its captured output
-    /// cannot be removed). Never used in production.
-    #[doc(hidden)]
+    /// Lets a test prove that a broken output store never sinks a primary operation (for example,
+    /// that deleting history still succeeds when its captured output cannot be removed).
+    #[cfg(test)]
     #[must_use]
     pub fn failing() -> Self {
         Self {
-            backend: AnyBackend::Failing(FailingBackend),
+            backend: AnyBackend::Failing(backend::FailingBackend),
         }
     }
 

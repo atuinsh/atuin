@@ -326,23 +326,6 @@ async fn delete_forgets_captured_output(
     );
 }
 
-#[tokio::test]
-async fn delete_survives_a_broken_output_store() {
-    let env = TestEnv::builder().broken_output_store().build().await;
-
-    let id = env.journal.start_cmd(history("echo goodbye"));
-    env.journal.finish(id, 0, Duration::from_millis(1)).await.unwrap();
-
-    let deleted = env
-        .journal
-        .delete(&[id], &Search::default())
-        .await
-        .expect("a failed output removal must not fail the whole delete");
-    assert_eq!(deleted, 1, "the delete still reports the entry it processed");
-
-    assert!(!env.active_ids().await.contains(&id), "the history entry must still be deleted");
-}
-
 /// The same guarantee through the RPCs a shell and the AI tools use: after `delete_history`,
 /// `get_command_output` reports the output as not found.
 #[rstest]

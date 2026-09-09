@@ -313,14 +313,11 @@ impl HistoryJournal {
             duration = Empty,
         );
 
-        self.active_cmds.insert(
-            id,
-            InFlightCmd {
-                history: history.clone(),
-                span,
-                finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
-            },
-        );
+        self.active_cmds.insert(id, InFlightCmd {
+            history: history.clone(),
+            span,
+            finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
+        });
         let _ = self.broadcast.send(CmdEvent::Started(history));
         id
     }
@@ -654,5 +651,62 @@ impl HistoryJournal {
     #[must_use]
     pub fn subscribe(&self) -> BroadcastStream<CmdEvent> {
         BroadcastStream::new(self.broadcast.subscribe())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use atuin_client::record::sqlite_store::SqliteStore;
+    use atuin_common::encryption::paseto_v4;
+    use atuin_common::filter::OrFilter;
+    use atuin_common::utils::uuid_v7;
+    use atuin_domain::record::{CmdOrigin, HostId};
+    use tokio::sync::RwLock;
+
+    use super::*;
+
+    /// A journal wired to real temp stores, so `finish`/`delete` run for real against a
+    /// caller-chosen output-capture backend. The returned `TempDir` must outlive the journal.
+    async fn journal(output_capture: OutputCapture) -> (HistoryJournal, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let timeout = Duration::from_secs(5);
+        let history_db =
+            HistoryDatabase::new(tmp.path().join("history.db"), timeout).await.unwrap();
+        let store = SqliteStore::new(tmp.path().join("records.db"), timeout).await.unwrap();
+        let history_store = HistoryStore::new(store, HostId(uuid_v7()), paseto_v4::Key::generate());
+        let search_index = Arc::new(RwLock::new(SearchIndex::new(OrFilter::all())));
+        let caps = CapClient::new("http://127.0.0.1:1".parse().unwrap(), reqwest::Client::new());
+        let journal =
+            HistoryJournal::new(caps, history_store, history_db, search_index, output_capture);
+        (journal, tmp)
+    }
+
+    fn entry(cmd: &str) -> History {
+        History::daemon()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command(cmd)
+            .cwd("/tmp")
+            .session(uuid_v7().as_simple().to_string())
+            .cmd_origin(CmdOrigin::try_from("test-host:test-user").unwrap())
+            .shell("bash")
+            .author("test-user")
+            .build()
+            .into()
+    }
+
+    /// A broken output store must not sink a deletion: the entry the user asked to forget is still
+    /// removed rather than the whole delete being refused.
+    #[tokio::test]
+    async fn delete_survives_a_broken_output_store() {
+        let (journal, _tmp) = journal(OutputCapture::failing()).await;
+        let id = journal.start_cmd(entry("echo goodbye"));
+        journal.finish(id, 0, Duration::from_millis(1)).await.unwrap();
+
+        let deleted = journal
+            .delete(&[id], &Search::default())
+            .await
+            .expect("a failed output removal must not fail the whole delete");
+        assert_eq!(deleted, 1);
+        assert!(journal.history_db.load(id).await.unwrap().is_none());
     }
 }

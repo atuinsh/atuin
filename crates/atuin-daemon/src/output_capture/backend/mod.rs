@@ -1,9 +1,11 @@
+#[cfg(test)]
 mod failing;
 mod fjall;
 mod nop;
 
 use atuin_client::history::{CommandCapture, HistoryId};
 use enum_dispatch::enum_dispatch;
+#[cfg(test)]
 pub use failing::FailingBackend;
 pub use fjall::FjallBackend;
 pub use nop::NopBackend;
@@ -52,5 +54,6 @@ pub enum AnyBackend {
     Nop(NopBackend),
     /// A broken store, built only by the [`OutputCapture::failing`](crate::OutputCapture::failing)
     /// test hook. Never selected in production.
+    #[cfg(test)]
     Failing(FailingBackend),
 }
