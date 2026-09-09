@@ -36,9 +36,9 @@ pub struct Context {
 pub struct OptFilters<'a> {
     pub exit: Option<i64>,
     pub exclude_exit: Option<i64>,
-    /// Only commands that recorded a non-zero exit. Unlike `exclude_exit: 0`,
-    /// this also skips the `exit = -1` sentinel rows for commands still
-    /// running (or whose end hook never fired).
+    /// Only commands that recorded a non-zero exit. Like `exclude_exit: 0`,
+    /// this skips the `exit = -1` sentinel rows for commands still running
+    /// (or whose end hook never fired).
     pub only_failed: bool,
     pub cwd: Option<&'a str>,
     pub exclude_cwd: Option<&'a str>,
@@ -766,7 +766,15 @@ impl Sqlite {
 
         filter_options.exit.map(|exit| sql.and_where_eq("exit", exit));
 
-        filter_options.exclude_exit.map(|exclude_exit| sql.and_where_ne("exit", exclude_exit));
+        if let Some(exclude_exit) = filter_options.exclude_exit {
+            sql.and_where_ne("exit", exclude_exit);
+            // A command that is still running (or whose end hook never fired) is
+            // stored with exit -1. Excluding successes asks for failures, and an
+            // unfinished command is not one of those, see `History::success`.
+            if exclude_exit == 0 {
+                sql.and_where_ne("exit", -1);
+            }
+        }
 
         if filter_options.only_failed {
             sql.and_where("exit != 0 AND exit != -1");
@@ -1586,6 +1594,38 @@ mod test {
             .unwrap();
 
         assert_eq!(hits.len(), expected);
+    }
+
+    // `--exclude-exit 0` is how people ask for their failed commands. A command that
+    // is still running sits in the table with exit -1 until its end hook fires, and
+    // it must not be reported as a failure (the `atuin search` invocation itself
+    // always showed up, #3193).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_exclude_exit_zero_skips_running_commands() {
+        let db = db_with(&["true"]).await;
+        for (command, exit, duration) in [("false", 1, 1), ("sleep 10", -1, -1)] {
+            let mut item: History = History::capture()
+                .timestamp(OffsetDateTime::now_utc())
+                .command(command)
+                .cwd("/home/ellie")
+                .build()
+                .into();
+            item.exit = exit;
+            item.duration = duration;
+            item.session = "beep boop".to_string();
+            db.save(&item).await.unwrap();
+        }
+
+        let hits = db
+            .search(DbSearchMode::FullText, FilterMode::Global, &new_context(), "", OptFilters {
+                exclude_exit: Some(0),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let commands: Vec<&str> = hits.iter().map(|h| h.command.as_str()).collect();
+        assert_eq!(commands, ["false"]);
     }
 
     #[rstest]
