@@ -1,6 +1,8 @@
 #[cfg(unix)]
 mod capture;
 #[cfg(unix)]
+mod cwd_updater;
+#[cfg(unix)]
 mod debug;
 #[cfg(unix)]
 mod osc133;

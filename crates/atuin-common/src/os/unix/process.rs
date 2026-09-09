@@ -1,6 +1,7 @@
 //! Utilities for operating on processes.
 
 use std::ops::ControlFlow;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use rustix::io::Errno;
@@ -67,5 +68,72 @@ pub fn process_start_time(pid: Pid) -> Option<u64> {
         system.process(pid).map(sysinfo::Process::start_time)
     } else {
         None
+    }
+}
+
+/// Get a process's current working directory.
+#[must_use]
+pub fn cwd(pid: Pid) -> Option<PathBuf> {
+    let pid = u32::try_from(pid.as_raw_pid()).ok()?;
+
+    if cfg!(target_os = "linux") {
+        std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+    } else {
+        let pid = sysinfo::Pid::from_u32(pid);
+        let mut system = sysinfo::System::new();
+        if !system.refresh_process_specifics(
+            pid,
+            sysinfo::ProcessRefreshKind::new().with_cmd(sysinfo::UpdateKind::Always),
+        ) {
+            return None;
+        }
+        system.process(pid)?.cwd().map(Into::into)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::process::{Child, Command};
+    use std::time::{Duration, Instant};
+
+    use rstest::rstest;
+
+    use super::*;
+
+    /// Spawn a process that sits still in `dir`.
+    fn sleeper(dir: &std::path::Path) -> (Child, Pid) {
+        let child = Command::new("sleep").arg("30").current_dir(dir).spawn().unwrap();
+        let pid = Pid::from_raw(child.id().cast_signed()).unwrap();
+        (child, pid)
+    }
+
+    #[rstest]
+    fn reads_the_working_directory_of_another_process() {
+        let dir = tempfile::tempdir().unwrap();
+        // The temporary directory may sit behind a symlink (/tmp on macOS), and a working
+        // directory never does.
+        let expected = dir.path().canonicalize().unwrap();
+        let (mut child, pid) = sleeper(dir.path());
+
+        // The child chdirs somewhere between fork and exec, so it may not be there yet.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while cwd(pid).as_deref() != Some(expected.as_path()) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let found = cwd(pid);
+
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(found.as_deref(), Some(expected.as_path()));
+    }
+
+    #[rstest]
+    fn a_process_that_has_gone_has_no_working_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut child, pid) = sleeper(dir.path());
+        child.kill().unwrap();
+        child.wait().unwrap();
+
+        assert_eq!(cwd(pid), None);
     }
 }

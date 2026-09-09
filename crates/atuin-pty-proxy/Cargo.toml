@@ -22,13 +22,13 @@ atuin-vt100 = { workspace = true }
 crossterm = { workspace = true }
 eyre = { workspace = true }
 portable-pty = { workspace = true }
+rustix = { workspace = true }
 signal-hook = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
 parking_lot = { workspace = true }
 rstest = { workspace = true }
-rustix = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]
