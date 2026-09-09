@@ -6,12 +6,12 @@ use atuin_common::rmp::encode::{self, ByteBuf, EncodeError};
 
 pub struct Schema;
 
-/// The number of MessagePack fields in a serialized value: `output`, `output_observed_bytes`,
-/// `output_truncated`, `terminal_width`, `terminal_height`.
+/// The number of MessagePack fields in a serialized value: `output_start`, `output_end`,
+/// `output_observed_bytes`, `terminal_width`, `terminal_height`.
 const VALUE_FIELDS: u32 = 5;
 
 impl super::Schema for Schema {
-    const NAME: &'static str = "output_capture_v1";
+    const NAME: &'static str = "output_capture_v2";
 
     type Key = HistoryId;
     type KeySerialized = [u8; 16];
@@ -31,9 +31,9 @@ impl super::Schema for Schema {
     ) -> Result<Self::ValueSerialized, Self::ValueSerializationError> {
         let mut out = ByteBuf::new();
         encode::write_array_len(&mut out, VALUE_FIELDS)?;
-        encode::write_str(&mut out, &value.output)?;
+        encode::write_str(&mut out, &value.output_start)?;
+        encode::write_optional(&mut out, value.output_end.as_deref(), encode::write_str)?;
         encode::write_uint(&mut out, value.output_observed_bytes)?;
-        encode::write_bool(&mut out, value.output_truncated);
         encode::write_uint(&mut out, value.terminal_width.into())?;
         encode::write_uint(&mut out, value.terminal_height.into())?;
         Ok(out.into_vec())
@@ -55,17 +55,17 @@ impl super::Schema for Schema {
                 });
             }
 
-            let output = decode::read_string(&mut bytes)?;
+            let output_start = decode::read_string(&mut bytes)?;
+            let output_end = decode::read_optional(&mut bytes, decode::read_string)?;
             let output_observed_bytes: u64 =
                 decode::read_int(&mut bytes).map_err(DecodeError::from)?;
-            let output_truncated = decode::read_bool(&mut bytes).map_err(DecodeError::from)?;
             let terminal_width: u16 = decode::read_int(&mut bytes).map_err(DecodeError::from)?;
             let terminal_height: u16 = decode::read_int(&mut bytes).map_err(DecodeError::from)?;
 
             Ok(CommandCapture {
-                output,
+                output_start,
+                output_end,
                 output_observed_bytes,
-                output_truncated,
                 terminal_width,
                 terminal_height,
             })

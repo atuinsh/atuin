@@ -335,7 +335,7 @@ async fn delete_history_rpc_forgets_captured_output(#[future(awt)] env: TestEnv)
     let id = env.record(&mut client, "echo secret").await;
     let output = "secret output";
     client
-        .register_command_output(id, output.to_string(), false, u64::conv(output.len()), 80, 24)
+        .register_command_output(id, output, None, u64::conv(output.len()), 80, 24)
         .await
         .unwrap();
     assert!(client.get_command_output(id, vec![]).await.unwrap().is_some());
@@ -437,7 +437,7 @@ async fn abandoned_delete_still_completes(#[future(awt)] env: TestEnv) {
     let id = env.record(&mut client, "echo secret").await;
     let output = "secret";
     client
-        .register_command_output(id, output.to_string(), false, u64::conv(output.len()), 80, 24)
+        .register_command_output(id, output, None, u64::conv(output.len()), 80, 24)
         .await
         .unwrap();
 

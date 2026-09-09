@@ -2,7 +2,8 @@ use std::num::NonZeroU16;
 
 pub use atuin_client::history::CommandCapture;
 use atuin_client::history::HistoryId;
-use atuin_common::string::{BoundedBuffer, TrimExt as _};
+use atuin_common::string::TrimExt as _;
+use atuin_common::string::bounded_buffer::{self, BoundedBuffer, BufferContents};
 
 use crate::osc133::{self, Event, EventChunk, EventChunks, Param, Zone};
 
@@ -17,32 +18,23 @@ const DISABLE_ALTERNATE_SCREEN: &[u8] = b"\x1b[?1049l";
 
 const HISTORY_ID_PARAM: &[u8] = b"history_id";
 
-/// The maximum number of bytes captured per zone.
-///
-/// During the process of capturing, the buffer might grow past this point, but never by more than
-/// one screenful, which is almost certainly only a small fraction of this limit.
-const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
-
 pub type CommandCaptureSink = Box<dyn Fn(HistoryId, CommandCapture) + Send + 'static>;
+
+/// The maximum size of a command capture.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct CaptureLimit {
+    /// The maximum number of bytes to store from the start of a command's output.
+    pub start_bytes: usize,
+    /// The maximum number of bytes to store from the end of a command's output.
+    pub end_bytes: usize,
+}
 
 /// The state of an in-progress command capture.
 #[derive(Default)]
 struct CaptureState {
-    output: String,
-    output_truncated: bool,
+    output_start: String,
+    output_end: Option<String>,
     output_observed_bytes: u64,
-}
-
-impl CaptureState {
-    /// Clear the [`CaptureState`], resetting it to the default state.
-    ///
-    /// This may be more efficient than creating a new [`CaptureState`], because it preserves
-    /// the capacity of [`Self::output`].
-    fn clear(&mut self) {
-        self.output.clear();
-        self.output_truncated = false;
-        self.output_observed_bytes = 0;
-    }
 }
 
 /// Type implementing [`vt100::Callbacks`], used for capturing terminal scrollback.
@@ -53,9 +45,12 @@ struct Scrollback {
 }
 
 impl Scrollback {
-    pub fn new() -> Self {
+    pub fn new(limit: CaptureLimit) -> Self {
         Self {
-            buffer: BoundedBuffer::new(MAX_CAPTURE_BYTES),
+            buffer: BoundedBuffer::new(bounded_buffer::Limit {
+                start: limit.start_bytes,
+                end: limit.end_bytes,
+            }),
             state: Default::default(),
             zone: Zone::Unknown,
         }
@@ -68,14 +63,6 @@ impl vt100::Callbacks for Scrollback {
             let _ = contents.write_formatted_basic(&mut self.buffer, &mut self.state);
         }
     }
-}
-
-/// Represents rendered terminal output.
-struct RenderedOutput {
-    /// The terminal data. This may contain SGR escape sequences.
-    pub data: String,
-    /// Whether the data has been truncated (exceeded the maximum buffer size).
-    pub truncated: bool,
 }
 
 /// The "core" of a [`CommandCaptureTracker`].
@@ -103,24 +90,20 @@ impl TrackerCore {
     /// This also includes rows that have scrolled off the screen. This method resets the scrollback
     /// buffers but not the screen. Most likely, you will not want to call this method again until
     /// you clear the screen.
-    fn take_rendered(&mut self) -> RenderedOutput {
+    fn take_rendered(&mut self) -> BufferContents {
         let (screen, scrollback) = self.emulator.screen_and_callbacks_mut();
         let _ = screen.write_contents_formatted_basic(
             &mut scrollback.buffer,
             vt100::capture::BasicFormattedCaptureRange::Full(&mut scrollback.state),
         );
 
-        let buffer = scrollback.buffer.take();
         scrollback.state = Default::default();
-        RenderedOutput {
-            truncated: buffer.is_truncated(),
-            data: buffer.into_data(),
-        }
+        scrollback.buffer.take()
     }
 
     /// Clear an in-progress capture and the scrollback buffer.
     fn clear_capture(&mut self) {
-        self.capture.clear();
+        self.capture = CaptureState::default();
         let scrollback = self.emulator.callbacks_mut();
         scrollback.buffer.clear();
         scrollback.state = Default::default();
@@ -158,16 +141,34 @@ impl TrackerCore {
             // history ID, we can't do anything with it.
             self.clear_capture();
         } else if current_zone == Zone::Output {
-            let mut rendered = self.take_rendered();
+            let mut contents = self.take_rendered();
             // Trim leading and trailing newlines; these correspond to blank lines in the terminal.
             // Don't trim spaces since indentation is meaningful.
             //
             // Note that we will end up trimming leading/trailing space that is technically part of
             // the output itself too, as it cannot be easily distinguished from empty parts of the
             // terminal (in some cases it is effectively impossible).
-            rendered.data.trim_matches_in_place('\n');
-            self.capture.output = rendered.data;
-            self.capture.output_truncated |= rendered.truncated;
+            if let Some(end) = &mut contents.end {
+                // Technically we could fail to trim all the relevant blank lines here if the
+                // terminal height is greater than the start limit and end limit combined --
+                // trailing blank lines, for example, would get split across the start and end
+                // chunks, but we wouldn't trim the trailing newlines from the start chunk. This is
+                // because we wouldn't know whether the missing middle chunk consisted entirely of
+                // blank lines or had other data (which would make the trailing newlines in the
+                // start chunk actually part of the command output and thus something we *shouldn't*
+                // trim).
+                //
+                // This case is very unlikely in practice, as we expect the output capture limits to
+                // significantly exceed the terminal height -- otherwise not much useful information
+                // could actually be captured. In any case, we err on the side of keeping "too much"
+                // data rather than discarding it.
+                end.trim_end_matches_in_place('\n');
+                contents.start.trim_start_matches_in_place('\n');
+            } else {
+                contents.start.trim_matches_in_place('\n');
+            }
+            self.capture.output_start = contents.start;
+            self.capture.output_end = contents.end;
         }
 
         if zone == Zone::Output {
@@ -219,9 +220,9 @@ impl TrackerCore {
         let state = std::mem::take(&mut self.capture);
         let (rows, cols) = self.emulator.screen().size();
         (self.sink)(history_id, CommandCapture {
-            output: state.output,
+            output_start: state.output_start,
+            output_end: state.output_end,
             output_observed_bytes: state.output_observed_bytes,
-            output_truncated: state.output_truncated,
             terminal_width: cols.get(),
             terminal_height: rows.get(),
         });
@@ -252,12 +253,17 @@ pub struct CommandCaptureTracker {
 }
 
 impl CommandCaptureTracker {
-    pub fn new(rows: NonZeroU16, cols: NonZeroU16, sink: CommandCaptureSink) -> Self {
+    pub fn new(
+        rows: NonZeroU16,
+        cols: NonZeroU16,
+        sink: CommandCaptureSink,
+        limit: CaptureLimit,
+    ) -> Self {
         Self {
             osc_parser: osc133::Parser::new(),
             core: TrackerCore {
                 capture: CaptureState::default(),
-                emulator: vt100::Parser::new_with_callbacks(rows, cols, 0, Scrollback::new()),
+                emulator: vt100::Parser::new_with_callbacks(rows, cols, 0, Scrollback::new(limit)),
                 sink,
             },
         }
@@ -284,6 +290,12 @@ mod tests {
     const ROWS: u16 = 24;
     const COLS: u16 = 80;
 
+    /// Roomy enough that nothing below is truncated unless the case asks for it.
+    const LIMIT: CaptureLimit = CaptureLimit {
+        start_bytes: 64 * 1024,
+        end_bytes: 64 * 1024,
+    };
+
     const PROMPT_START: &[u8] = b"\x1b]133;A\x07";
     const COMMAND_START: &[u8] = b"\x1b]133;B\x07";
     const COMMAND_EXECUTED: &[u8] = b"\x1b]133;C\x07";
@@ -306,7 +318,7 @@ mod tests {
     }
 
     impl Tracker {
-        fn new(rows: u16, cols: u16) -> Self {
+        fn new(rows: u16, cols: u16, limit: CaptureLimit) -> Self {
             let (sender, received) = mpsc::channel();
             Self {
                 inner: CommandCaptureTracker::new(
@@ -315,6 +327,7 @@ mod tests {
                     Box::new(move |history_id, capture| {
                         sender.send((history_id, capture)).expect("test receiver is still alive");
                     }),
+                    limit,
                 ),
                 received,
                 collected: Vec::new(),
@@ -349,6 +362,15 @@ mod tests {
         NonZeroU16::new(value).expect("test dimensions are non-zero")
     }
 
+    /// The rendered output of a capture that kept all of it.
+    ///
+    /// Most cases below are far too short to be truncated, and an `output_end` appearing where
+    /// one is not expected is itself a failure -- so assert that here rather than in every case.
+    fn whole_output(capture: &CommandCapture) -> &str {
+        assert_eq!(capture.output_end, None, "expected an untruncated capture");
+        &capture.output_start
+    }
+
     /// A `D` marker carrying the metadata Atuin's shell integration sends.
     ///
     /// Its own bytes are discounted from `output_observed_bytes`, so the totals asserted
@@ -375,8 +397,12 @@ mod tests {
     }
 
     #[fixture]
-    fn tracker(#[default(ROWS)] rows: u16, #[default(COLS)] cols: u16) -> Tracker {
-        Tracker::new(rows, cols)
+    fn tracker(
+        #[default(ROWS)] rows: u16,
+        #[default(COLS)] cols: u16,
+        #[default(LIMIT)] limit: CaptureLimit,
+    ) -> Tracker {
+        Tracker::new(rows, cols, limit)
     }
 
     // -- The happy path -------------------------------------------------------
@@ -385,9 +411,9 @@ mod tests {
     #[case::full_interaction(
         interaction("$ ", "echo hi", "hi\r\n"),
         CommandCapture {
-            output: "hi".to_string(),
+            output_start: "hi".to_string(),
+            output_end: None,
             output_observed_bytes: u64::conv(b"hi\r\n".len()),
-            output_truncated: false,
             terminal_width: COLS,
             terminal_height: ROWS,
         },
@@ -396,9 +422,9 @@ mod tests {
     #[case::bare_execute_and_finish_markers(
         [COMMAND_EXECUTED, b"line one\r\n", &finished(0, HID)].concat(),
         CommandCapture {
-            output: "line one".to_string(),
+            output_start: "line one".to_string(),
+            output_end: None,
             output_observed_bytes: u64::conv(b"line one\r\n".len()),
-            output_truncated: false,
             terminal_width: COLS,
             terminal_height: ROWS,
         },
@@ -423,7 +449,7 @@ mod tests {
         tracker.push(&input);
 
         let (history_id, capture) = tracker.only_capture();
-        assert_eq!(capture.output, "");
+        assert_eq!(whole_output(&capture), "");
         assert_eq!(history_id, hid(HID));
         // The command produced nothing, and its `D` marker doesn't count as output.
         assert_eq!(capture.output_observed_bytes, 0);
@@ -457,7 +483,7 @@ mod tests {
         #[case] expected: &str,
     ) {
         tracker.push(&[COMMAND_EXECUTED, output, &finished(0, HID)].concat());
-        assert_eq!(tracker.only_capture().1.output, expected);
+        assert_eq!(whole_output(&tracker.only_capture().1), expected);
     }
 
     #[rstest]
@@ -470,14 +496,14 @@ mod tests {
         tracker.push(&data);
 
         let expected: Vec<String> = (0..10).map(|i| format!("line {i}")).collect();
-        assert_eq!(tracker.only_capture().1.output, expected.join("\n"));
+        assert_eq!(whole_output(&tracker.only_capture().1), expected.join("\n"));
     }
 
     #[rstest]
     fn keeps_basic_formatting(mut tracker: Tracker) {
         tracker.push(&interaction("\x1b[32m%\x1b[0m ", "ls", "\x1b[31mfile\x1b[0m\r\n"));
 
-        assert_eq!(tracker.only_capture().1.output, "\x1b[31mfile");
+        assert_eq!(whole_output(&tracker.only_capture().1), "\x1b[31mfile");
     }
 
     #[rstest]
@@ -493,8 +519,8 @@ mod tests {
 
         let captures = tracker.captures();
         assert_eq!(captures.len(), 2);
-        assert_eq!(captures[0].1.output, "out");
-        assert_eq!(captures[1].1.output, "ok");
+        assert_eq!(whole_output(&captures[0].1), "out");
+        assert_eq!(whole_output(&captures[1].1), "ok");
     }
 
     #[rstest]
@@ -513,7 +539,7 @@ mod tests {
         );
 
         let capture = tracker.only_capture().1;
-        assert_eq!(capture.output, "");
+        assert_eq!(whole_output(&capture), "");
         // The bytes were still observed, even though none of them were captured.
         let drawn = b"\x1b[?1049hEDITOR\r\nSCREEN\x1b[?1049l".len();
         assert_eq!(capture.output_observed_bytes, u64::conv(drawn));
@@ -537,7 +563,7 @@ mod tests {
             .concat(),
         );
 
-        assert_eq!(tracker.only_capture().1.output, "");
+        assert_eq!(whole_output(&tracker.only_capture().1), "");
     }
 
     #[rstest]
@@ -548,8 +574,8 @@ mod tests {
 
         let captures = tracker.captures();
         assert_eq!(captures.len(), 2);
-        assert_eq!(captures[0].1.output, "aaa");
-        assert_eq!(captures[1].1.output, "bbb");
+        assert_eq!(whole_output(&captures[0].1), "aaa");
+        assert_eq!(whole_output(&captures[1].1), "bbb");
     }
 
     #[rstest]
@@ -560,7 +586,7 @@ mod tests {
         let long = "p".repeat(4 * 20);
         tracker.push(&interaction(&long, &long, "hi\r\n"));
 
-        assert_eq!(tracker.only_capture().1.output, "hi");
+        assert_eq!(whole_output(&tracker.only_capture().1), "hi");
     }
 
     #[rstest]
@@ -579,9 +605,9 @@ mod tests {
 
         let captures = tracker.captures();
         assert_eq!(captures.len(), 2);
-        assert_eq!(captures[0].1.output, "first");
+        assert_eq!(whole_output(&captures[0].1), "first");
         assert_eq!(captures[0].0, hid(HID_ONE));
-        assert_eq!(captures[1].1.output, "second");
+        assert_eq!(whole_output(&captures[1].1), "second");
         assert_eq!(captures[1].0, hid(HID_TWO));
     }
 
@@ -604,7 +630,7 @@ mod tests {
             .concat(),
         );
 
-        assert_eq!(tracker.only_capture().1.output, "hi");
+        assert_eq!(whole_output(&tracker.only_capture().1), "hi");
     }
 
     #[rstest]
@@ -627,7 +653,7 @@ mod tests {
             .concat(),
         );
 
-        assert_eq!(tracker.only_capture().1.output, "hi");
+        assert_eq!(whole_output(&tracker.only_capture().1), "hi");
     }
 
     #[rstest]
@@ -639,7 +665,7 @@ mod tests {
             .push(&interaction("$ ", "echo hi", "hi\r\n"));
 
         let capture = tracker.only_capture().1;
-        assert_eq!(capture.output, "hi");
+        assert_eq!(whole_output(&capture), "hi");
         assert_eq!(capture.output_observed_bytes, u64::conv(b"hi\r\n".len()));
     }
 
@@ -654,7 +680,7 @@ mod tests {
         }
         tracker.push(&abandoned).push(&interaction("$ ", "echo hi", "hi\r\n"));
 
-        assert_eq!(tracker.only_capture().1.output, "hi");
+        assert_eq!(whole_output(&tracker.only_capture().1), "hi");
     }
 
     #[rstest]
@@ -673,7 +699,7 @@ mod tests {
         );
 
         let capture = tracker.only_capture().1;
-        assert_eq!(capture.output, "fresh");
+        assert_eq!(whole_output(&capture), "fresh");
         assert_eq!(capture.output_observed_bytes, u64::conv(b"fresh\r\n".len()));
     }
 
@@ -685,11 +711,11 @@ mod tests {
         let (history_id, capture) = tracker.only_capture();
         assert_eq!(history_id, hid(HID));
         assert_eq!(capture, CommandCapture {
-            output: "line one".to_string(),
+            output_start: "line one".to_string(),
+            output_end: None,
             // The first `D` ends the output zone and is discounted; the second arrives
             // after it, in the unknown zone, so it was never counted to begin with.
             output_observed_bytes: u64::conv(b"line one\r\n".len()),
-            output_truncated: false,
             terminal_width: COLS,
             terminal_height: ROWS,
         });
@@ -708,7 +734,7 @@ mod tests {
         tracker.push(format!("{tail}\x07").as_bytes());
 
         let (history_id, capture) = tracker.only_capture();
-        assert_eq!(capture.output, "line one");
+        assert_eq!(whole_output(&capture), "line one");
         assert_eq!(history_id, hid(HID));
     }
 
@@ -726,7 +752,7 @@ mod tests {
         );
 
         let capture = tracker.only_capture().1;
-        assert_eq!(capture.output, "hi");
+        assert_eq!(whole_output(&capture), "hi");
         assert_eq!(capture.output_observed_bytes, u64::conv(b"hi\r\n".len()));
     }
 
@@ -759,29 +785,83 @@ mod tests {
         }
 
         let capture = tracker.only_capture().1;
-        assert_eq!(capture.output, "hi");
+        assert_eq!(whole_output(&capture), "hi");
         assert_eq!(capture.output_observed_bytes, u64::conv(b"hi\r\n".len()));
     }
 
     // -- Limits ---------------------------------------------------------------
 
-    #[rstest]
-    fn output_capture_is_capped_and_reports_observed_bytes(mut tracker: Tracker) {
-        const LINE_LEN: usize = 70;
-        const LINES: usize = 40_000;
+    /// A limit small enough to overflow within a test, but wider than the terminal so that whole
+    /// lines land either side of the cut.
+    const SMALL_LIMIT: CaptureLimit = CaptureLimit {
+        start_bytes: 300,
+        end_bytes: 300,
+    };
 
-        let finish = finished(0, HID);
+    /// Numbered lines, one per row, so any kept fragment says where in the output it came from.
+    fn numbered_lines(count: usize) -> Vec<u8> {
         let mut input = COMMAND_EXECUTED.to_vec();
-        for i in 0..LINES {
-            input.extend_from_slice(format!("{i:0LINE_LEN$}\r\n").as_bytes());
+        for i in 0..count {
+            input.extend_from_slice(format!("line {i:04}\r\n").as_bytes());
         }
-        input.extend_from_slice(&finish);
-        tracker.push(&input);
+        input.extend_from_slice(&finished(0, HID));
+        input
+    }
+
+    #[rstest]
+    fn oversized_output_keeps_its_start_and_its_end(
+        #[with(ROWS, COLS, SMALL_LIMIT)] mut tracker: Tracker,
+    ) {
+        const LINES: usize = 500;
+        tracker.push(&numbered_lines(LINES));
 
         let capture = tracker.only_capture().1;
-        assert!(capture.output_truncated);
-        assert_eq!(capture.output.len(), MAX_CAPTURE_BYTES);
-        assert_eq!(capture.output_observed_bytes, u64::conv((LINE_LEN + 2) * LINES));
+        let end = capture.output_end.expect("output this long has to lose its middle");
+
+        // Neither half outgrows its budget...
+        assert!(
+            capture.output_start.len() <= SMALL_LIMIT.start_bytes,
+            "{:?}",
+            capture.output_start
+        );
+        assert!(end.len() <= SMALL_LIMIT.end_bytes, "{end:?}");
+        // ...the start really is the beginning of the output...
+        assert!(capture.output_start.starts_with("line 0000\n"), "{:?}", capture.output_start);
+        // ...and the end really is the end of it. Keeping only the first bytes, as the capture
+        // used to, threw away exactly the part a user is most likely to want.
+        assert!(end.ends_with(&format!("line {:04}", LINES - 1)), "{end:?}");
+        // The middle is what went, so the two halves cannot account for every line.
+        assert!(capture.output_start.lines().count() + end.lines().count() < LINES);
+        // The byte count is of everything the terminal saw, not of what was kept.
+        assert_eq!(capture.output_observed_bytes, u64::conv(LINES * b"line 0000\r\n".len()));
+    }
+
+    #[rstest]
+    fn output_that_fits_the_limit_is_not_split(
+        #[with(ROWS, COLS, SMALL_LIMIT)] mut tracker: Tracker,
+    ) {
+        // Ten numbered lines are 100 rendered bytes, well inside the 600 the limit allows.
+        const LINES: usize = 10;
+        tracker.push(&numbered_lines(LINES));
+
+        let capture = tracker.only_capture().1;
+        let expected: Vec<String> = (0..LINES).map(|i| format!("line {i:04}")).collect();
+        assert_eq!(whole_output(&capture), expected.join("\n"));
+    }
+
+    #[rstest]
+    fn a_capture_that_lost_its_middle_still_reports_every_byte_observed(
+        #[with(ROWS, COLS, CaptureLimit { start_bytes: 0, end_bytes: 0 })] mut tracker: Tracker,
+    ) {
+        // Nothing can be kept at all, but the observed-byte count is independent of the limit --
+        // it is what the terminal saw, before rendering and before any truncation.
+        const LINES: usize = 50;
+        tracker.push(&numbered_lines(LINES));
+
+        let capture = tracker.only_capture().1;
+        assert_eq!(capture.output_start, "");
+        assert_eq!(capture.output_end.as_deref(), Some(""));
+        assert_eq!(capture.output_observed_bytes, u64::conv(LINES * b"line 0000\r\n".len()));
     }
 
     // -- Terminal size --------------------------------------------------------
@@ -794,12 +874,12 @@ mod tests {
 
         // The first ten columns were rendered on a twenty-column screen; narrowing it drops
         // what no longer fits, and the rest is appended at the new width.
-        assert_eq!(tracker.only_capture().1.output, "abcdklmno");
+        assert_eq!(whole_output(&tracker.only_capture().1), "abcdklmno");
     }
 
     #[rstest]
     fn tiny_terminals_do_not_panic(#[values(1, 2, 3)] rows: u16, #[values(1, 2, 3)] cols: u16) {
-        let mut tracker = Tracker::new(rows, cols);
+        let mut tracker = Tracker::new(rows, cols, LIMIT);
         tracker.push(&interaction("$ ", "echo hi", "hello world\r\nsecond line\r\n"));
 
         // Whatever survives on a terminal this small, we must have reported something.

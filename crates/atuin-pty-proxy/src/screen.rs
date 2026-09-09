@@ -9,7 +9,7 @@ use atuin_common::os::unix::tty::TtyId;
 use atuin_common::os::unix::{SecureTempDirError, create_secure_temp_dir};
 use easy_cast::Conv;
 
-use crate::capture::{CommandCaptureSink, CommandCaptureTracker};
+use crate::capture::{self, CommandCaptureSink, CommandCaptureTracker};
 use crate::debug::Osc133DebugHighlighter;
 
 pub enum Msg {
@@ -93,10 +93,20 @@ impl Parser {
     /// in the terminal -- otherwise our emulator would badly drift from the parent terminal.
     const SCROLLBACK_CAPACITY: usize = 50;
 
+    /// The maximum size of a command capture.
+    ///
+    /// 1 MiB total, split across the start and end.
+    const CAPTURE_LIMIT: capture::CaptureLimit = capture::CaptureLimit {
+        start_bytes: 512 * 1024, // 512 KiB
+        end_bytes: 512 * 1024,   // 512 KiB
+    };
+
     fn new(rows: NonZeroU16, cols: NonZeroU16, options: ParserOptions) -> Self {
         Self {
             emulator: vt100::Parser::new(rows, cols, Self::SCROLLBACK_CAPACITY),
-            tracker: options.sink.map(|f| CommandCaptureTracker::new(rows, cols, f)),
+            tracker: options
+                .sink
+                .map(|f| CommandCaptureTracker::new(rows, cols, f, Self::CAPTURE_LIMIT)),
             highlighter: options.debug_osc133.then(Osc133DebugHighlighter::new),
         }
     }
@@ -482,7 +492,14 @@ mod tests {
 
         let captures: Vec<_> = captures.try_iter().collect();
         assert_eq!(captures.len(), 1);
-        assert_eq!(captures[0].1.output, "abcdklmno");
+        assert_eq!(untruncated(&captures[0].1), "abcdklmno");
+    }
+
+    /// The rendered output of a capture. Everything here is far inside the 1 MiB limit, so a
+    /// split capture would itself be the bug.
+    fn untruncated(capture: &CommandCapture) -> &str {
+        assert_eq!(capture.output_end, None, "expected an untruncated capture");
+        &capture.output_start
     }
 
     #[rstest]
@@ -509,7 +526,7 @@ mod tests {
 
         let captures: Vec<_> = captures.try_iter().collect();
         assert_eq!(captures.len(), 1);
-        assert_eq!(captures[0].1.output, "hi");
+        assert_eq!(untruncated(&captures[0].1), "hi");
         assert_eq!(captures[0].0, hid(HID));
     }
 
@@ -535,7 +552,7 @@ mod tests {
 
         let captures: Vec<_> = captures.try_iter().collect();
         assert_eq!(captures.len(), 1);
-        assert_eq!(captures[0].1.output, "hi");
+        assert_eq!(untruncated(&captures[0].1), "hi");
         assert_eq!(captures[0].1.output_observed_bytes, u64::conv(b"hi\r\n".len()));
 
         // The screen snapshot, on the other hand, is where the labels belong.

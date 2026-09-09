@@ -43,19 +43,52 @@ pub trait TrimExt {
     /// substring.
     fn trim_matches_in_place<P: PatternRef>(&mut self, pattern: P);
 
+    /// Like [`str::trim_start_matches`], but modifies the [`String`] in-place instead of returning
+    /// a substring.
+    fn trim_start_matches_in_place<P: PatternRef>(&mut self, pattern: P);
+
+    /// Like [`str::trim_end_matches`], but modifies the [`String`] in-place instead of returning a
+    /// substring.
+    fn trim_end_matches_in_place<P: PatternRef>(&mut self, pattern: P);
+
     /// Like [`str::trim`], but modifies the [`String`] in-place instead of returning a substring.
     fn trim_in_place(&mut self) {
         self.trim_matches_in_place(char::is_whitespace);
     }
+
+    /// Like [`str::trim_start`], but modifies the [`String`] in-place instead of returning a
+    /// substring.
+    fn trim_start_in_place(&mut self) {
+        self.trim_start_matches_in_place(char::is_whitespace);
+    }
+
+    /// Like [`str::trim_end`], but modifies the [`String`] in-place instead of returning a
+    /// substring.
+    fn trim_end_in_place(&mut self) {
+        self.trim_end_matches_in_place(char::is_whitespace);
+    }
+}
+
+fn trim_start_matches_in_place<P: PatternRef>(s: &mut String, pattern: &mut P) {
+    s.drain(..s.len() - pattern.trim_start_matches(s).len());
+}
+
+fn trim_end_matches_in_place<P: PatternRef>(s: &mut String, pattern: &mut P) {
+    s.truncate(pattern.trim_end_matches(s).len());
 }
 
 impl TrimExt for String {
-    fn trim_matches_in_place<P>(&mut self, mut pattern: P)
-    where
-        P: PatternRef,
-    {
-        self.truncate(pattern.trim_end_matches(self).len());
-        self.drain(..self.len() - pattern.trim_start_matches(self).len());
+    fn trim_start_matches_in_place<P: PatternRef>(&mut self, mut pattern: P) {
+        trim_start_matches_in_place(self, &mut pattern);
+    }
+
+    fn trim_end_matches_in_place<P: PatternRef>(&mut self, mut pattern: P) {
+        trim_end_matches_in_place(self, &mut pattern);
+    }
+
+    fn trim_matches_in_place<P: PatternRef>(&mut self, mut pattern: P) {
+        trim_start_matches_in_place(self, &mut pattern);
+        trim_end_matches_in_place(self, &mut pattern);
     }
 }
 
@@ -139,6 +172,75 @@ mod tests {
         assert_eq!(string, input.trim());
     }
 
+    // -- One end at a time ----------------------------------------------------
+    //
+    // A split capture trims its two halves differently: leading blank lines come off the start
+    // chunk and trailing ones off the end chunk, but neither may lose the newlines facing the
+    // discarded middle, since those are real output.
+
+    /// Run each one-sided trim over an owned copy of `input`.
+    fn trimmed_start(input: &str, pattern: impl super::PatternRef) -> String {
+        let mut string = input.to_string();
+        string.trim_start_matches_in_place(pattern);
+        string
+    }
+
+    fn trimmed_end(input: &str, pattern: impl super::PatternRef) -> String {
+        let mut string = input.to_string();
+        string.trim_end_matches_in_place(pattern);
+        string
+    }
+
+    #[rstest]
+    #[case::both_ends("\n\nhi\n\n", "hi\n\n", "\n\nhi")]
+    #[case::leading_only("\n\nhi", "hi", "\n\nhi")]
+    #[case::trailing_only("hi\n\n", "hi\n\n", "hi")]
+    #[case::interior_kept("\none\ntwo\n", "one\ntwo\n", "\none\ntwo")]
+    #[case::all_pattern("\n\n", "", "")]
+    #[case::empty("", "", "")]
+    #[case::nothing_to_trim("hi", "hi", "hi")]
+    fn trims_only_the_requested_end(
+        #[case] input: &str,
+        #[case] start_trimmed: &str,
+        #[case] end_trimmed: &str,
+    ) {
+        assert_eq!(trimmed_start(input, '\n'), start_trimmed);
+        assert_eq!(trimmed_end(input, '\n'), end_trimmed);
+    }
+
+    #[rstest]
+    #[case::multibyte_pattern("——hi——", '—', "hi——", "——hi")]
+    #[case::multibyte_content_preserved("xx🦀 世界xx", 'x', "🦀 世界xx", "xx🦀 世界")]
+    fn one_sided_trims_handle_multibyte_characters(
+        #[case] input: &str,
+        #[case] pattern: char,
+        #[case] start_trimmed: &str,
+        #[case] end_trimmed: &str,
+    ) {
+        assert_eq!(trimmed_start(input, pattern), start_trimmed);
+        assert_eq!(trimmed_end(input, pattern), end_trimmed);
+    }
+
+    #[rstest]
+    #[case::ascii_whitespace(" \t\r\nhi \t\r\n", "hi \t\r\n", " \t\r\nhi")]
+    #[case::unicode_whitespace("\u{3000}hi\u{3000}", "hi\u{3000}", "\u{3000}hi")]
+    #[case::nothing_to_trim("hi", "hi", "hi")]
+    fn one_sided_whitespace_trims_match_str(
+        #[case] input: &str,
+        #[case] start_trimmed: &str,
+        #[case] end_trimmed: &str,
+    ) {
+        let mut start = input.to_string();
+        start.trim_start_in_place();
+        assert_eq!(start, start_trimmed);
+        assert_eq!(start, input.trim_start());
+
+        let mut end = input.to_string();
+        end.trim_end_in_place();
+        assert_eq!(end, end_trimmed);
+        assert_eq!(end, input.trim_end());
+    }
+
     #[rstest]
     fn a_stateful_pattern_is_reused_rather_than_consumed() {
         // The point of `PatternRef`: a single `FnMut` drives both ends.
@@ -167,6 +269,61 @@ mod tests {
             let mut string = input.clone();
             string.trim_in_place();
             prop_assert_eq!(string, input.trim());
+        }
+
+        #[test]
+        fn agrees_with_str_trim_start_matches(
+            input in ".{0,64}",
+            pattern in prop::char::range('a', 'e'),
+        ) {
+            let mut string = input.clone();
+            string.trim_start_matches_in_place(pattern);
+            prop_assert_eq!(string, input.trim_start_matches(pattern));
+        }
+
+        #[test]
+        fn agrees_with_str_trim_end_matches(
+            input in ".{0,64}",
+            pattern in prop::char::range('a', 'e'),
+        ) {
+            let mut string = input.clone();
+            string.trim_end_matches_in_place(pattern);
+            prop_assert_eq!(string, input.trim_end_matches(pattern));
+        }
+
+        #[test]
+        fn agrees_with_str_trim_start(input in ".{0,64}") {
+            let mut string = input.clone();
+            string.trim_start_in_place();
+            prop_assert_eq!(string, input.trim_start());
+        }
+
+        #[test]
+        fn agrees_with_str_trim_end(input in ".{0,64}") {
+            let mut string = input.clone();
+            string.trim_end_in_place();
+            prop_assert_eq!(string, input.trim_end());
+        }
+
+        /// Trimming both ends is exactly trimming each end in turn, however they are ordered.
+        #[test]
+        fn both_ends_is_the_two_one_sided_trims(
+            input in ".{0,64}",
+            pattern in prop::char::range('a', 'e'),
+        ) {
+            let mut both = input.clone();
+            both.trim_matches_in_place(pattern);
+
+            let mut start_then_end = input.clone();
+            start_then_end.trim_start_matches_in_place(pattern);
+            start_then_end.trim_end_matches_in_place(pattern);
+
+            let mut end_then_start = input;
+            end_then_start.trim_end_matches_in_place(pattern);
+            end_then_start.trim_start_matches_in_place(pattern);
+
+            prop_assert_eq!(&both, &start_then_end);
+            prop_assert_eq!(&both, &end_then_start);
         }
     }
 }
