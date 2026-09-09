@@ -130,6 +130,6 @@ mod tests {
     #[test]
     fn max_record_size_accepts_a_bare_integer() {
         let settings = settings_with_max_record_size("1048576");
-        assert_eq!(settings.max_record_size, ByteSize::MIB);
+        assert_eq!(settings.max_record_size, ByteSize::mib(1));
     }
 }

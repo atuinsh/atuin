@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use atuin_common::units::ByteSize;
+use atuin_common::units::{ByteSize, Percent};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
@@ -16,13 +16,14 @@ impl Gc {
     /// The period at which the garbage collector ticks, roughly.
     const INTERVAL: Duration = Duration::from_mins(1);
 
-    /// The minimum fraction of the budget before we try to perform old-entry cleanup.
-    const TRIGGER_FRACTION: f64 = 0.95;
+    /// The minimum share of the budget before we try to perform old-entry cleanup.
+    const TRIGGER_SHARE: Percent = Percent::new(95.0);
 
-    /// The target fraction of the budget. We'll trim any elements to fit this fraction.
-    const TARGET_FRACTION: f64 = 0.9;
+    /// The share of the budget we trim down to once cleanup runs.
+    const TARGET_SHARE: Percent = Percent::new(90.0);
 
     pub fn spawn(inner: Arc<FjallBackendInner>, budget: ByteSize) -> Self {
+        let budget = budget.as_u64();
         let task = tokio::task::spawn(async move {
             let mut interval = tokio::time::interval(Self::INTERVAL);
             interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -32,12 +33,12 @@ impl Gc {
 
                 let size = inner.estimated_disk_space();
 
-                let trigger = (Self::TRIGGER_FRACTION * budget).bytes();
+                let trigger = budget * Self::TRIGGER_SHARE;
                 if size < trigger {
                     continue;
                 }
 
-                let target = (Self::TARGET_FRACTION * budget).bytes();
+                let target = budget * Self::TARGET_SHARE;
                 let reclaim = size.saturating_sub(target);
 
                 if let Err(err) = inner.reclaim(reclaim).await {

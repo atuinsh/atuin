@@ -312,7 +312,7 @@ fn resolve_budget(path: &Path, limit: DiskUsageLimit) -> Option<ByteSize> {
                 .filter(|disk| path.starts_with(disk.mount_point()))
                 .max_by_key(|disk| disk.mount_point().as_os_str().len())
                 .map(|disk| disk.total_space())?;
-            limit.resolve(ByteSize::from_bytes(total))
+            limit.resolve(ByteSize::b(total))
         }
     }
 }

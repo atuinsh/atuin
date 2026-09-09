@@ -54,7 +54,7 @@ pub struct CaptureLimits {
 impl Default for CaptureLimits {
     fn default() -> Self {
         Self {
-            max_output_size: ByteSize::MB,
+            max_output_size: ByteSize::mb(1),
             sync: false,
             max_disk_usage: DiskUsageLimit::Percent(Percent::new(10.0)),
         }
@@ -124,7 +124,7 @@ mod tests {
     #[test]
     fn effective_limits_returns_the_configured_limits_when_enabled() {
         let limits = CaptureLimits {
-            max_output_size: ByteSize::from_bytes(42),
+            max_output_size: ByteSize::b(42),
             ..CaptureLimits::default()
         };
         assert_eq!(OutputCapture::Enabled(limits.clone()).effective_limits(), limits);

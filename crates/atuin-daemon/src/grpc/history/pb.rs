@@ -530,14 +530,11 @@ mod tests {
             Ok(delete_req(&[id_proto(3)])),
         ]);
         let ids = stream.try_collect_capped(100).await.unwrap();
-        assert_eq!(
-            ids,
-            vec![
-                DomainHistoryId::from_bytes([1; 16]),
-                DomainHistoryId::from_bytes([2; 16]),
-                DomainHistoryId::from_bytes([3; 16]),
-            ]
-        );
+        assert_eq!(ids, vec![
+            DomainHistoryId::from_bytes([1; 16]),
+            DomainHistoryId::from_bytes([2; 16]),
+            DomainHistoryId::from_bytes([3; 16]),
+        ]);
     }
 
     #[rstest]
@@ -634,10 +631,11 @@ mod tests {
     #[rstest]
     fn command_output_ranges_are_inclusive_with_negative_offsets() {
         // [1, 2] inclusive -> "one", "two"; [-1, -1] -> the last line, "four" (no sentinel needed).
-        let chunked = GetCommandOutputResponse::build(
-            &capture_of("zero\none\ntwo\nthree\nfour"),
-            &[py_range(1, 2), py_range(-1, -1)],
-        );
+        let chunked =
+            GetCommandOutputResponse::build(&capture_of("zero\none\ntwo\nthree\nfour"), &[
+                py_range(1, 2),
+                py_range(-1, -1),
+            ]);
         assert!(chunked.meta.is_some());
         assert_eq!(chunked.total_lines, 5);
         let contents: Vec<&str> = chunked.chunks.iter().map(|c| c.content.as_str()).collect();
@@ -656,10 +654,11 @@ mod tests {
         // the natural candidate, [0, -1], already means "the whole output". So an empty range has
         // to be dropped rather than reported as a zero-length chunk. Callers already had to treat
         // empty chunks as contributing nothing, so no line is lost by leaving them out.
-        let chunked = GetCommandOutputResponse::build(
-            &capture_of("a\nb\nc"),
-            &[py_range(2, 1), py_range(10, 20), py_range(0, 0)],
-        );
+        let chunked = GetCommandOutputResponse::build(&capture_of("a\nb\nc"), &[
+            py_range(2, 1),
+            py_range(10, 20),
+            py_range(0, 0),
+        ]);
         let contents: Vec<&str> = chunked.chunks.iter().map(|c| c.content.as_str()).collect();
         assert_eq!(contents, vec!["a"]);
         assert_eq!(chunked.chunks[0].line_range, Some(py_range(0, 0)));
@@ -736,10 +735,11 @@ mod tests {
     fn a_whole_capture_never_reports_truncation() {
         // Nothing was discarded, so no request can reach a gap -- not even one running well past
         // both ends of the output.
-        let chunked = GetCommandOutputResponse::build(
-            &capture_of("a\nb\nc"),
-            &[py_range(0, -1), py_range(0, 99), py_range(-99, -1)],
-        );
+        let chunked = GetCommandOutputResponse::build(&capture_of("a\nb\nc"), &[
+            py_range(0, -1),
+            py_range(0, 99),
+            py_range(-99, -1),
+        ]);
         assert!(!chunked.truncated);
     }
 
