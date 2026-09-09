@@ -133,7 +133,10 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
                     output = redacted;
                 }
 
-                let _ = client
+                // Recording output is best-effort: the history entry is stored over a separate
+                // call, so if the daemon can't take the output we drop it quietly (debug, not
+                // warn/error) rather than let a secondary feature turn into noise.
+                if let Err(err) = client
                     .register_command_output(
                         history_id,
                         output,
@@ -142,7 +145,10 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
                         capture.terminal_width,
                         capture.terminal_height,
                     )
-                    .await;
+                    .await
+                {
+                    tracing::debug!(%history_id, ?err, "could not record command output; dropping it");
+                }
             }
         });
     });

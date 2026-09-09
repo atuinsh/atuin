@@ -83,6 +83,7 @@ pub struct TestEnvBuilder {
     with_search_component: bool,
     seed_rows: usize,
     seed: u64,
+    broken_output_store: bool,
 }
 
 impl TestEnvBuilder {
@@ -117,6 +118,14 @@ impl TestEnvBuilder {
         self
     }
 
+    /// Back the journal with an output-capture store whose every operation fails, to exercise the
+    /// best-effort handling around a broken store (e.g. a delete that survives a failed removal).
+    #[must_use]
+    pub fn broken_output_store(mut self) -> Self {
+        self.broken_output_store = true;
+        self
+    }
+
     pub async fn build(self) -> TestEnv {
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("history.db");
@@ -145,7 +154,11 @@ impl TestEnvBuilder {
         let history_db = Sqlite::new(&db_path, self.db_timeout).await.unwrap();
         let store = SqliteStore::new(&record_path, self.db_timeout).await.unwrap();
 
-        let output_capture = OutputCapture::open(tmp.path().join("capture"));
+        let output_capture = if self.broken_output_store {
+            OutputCapture::failing()
+        } else {
+            OutputCapture::open(tmp.path().join("capture"))
+        };
         let search_component = SearchComponent::new();
         let index = search_component.index();
         let search_service = search_component.grpc_service();
@@ -256,6 +269,7 @@ impl TestEnv {
             with_search_component: false,
             seed_rows: 0,
             seed: 0x5EED,
+            broken_output_store: false,
         }
     }
 

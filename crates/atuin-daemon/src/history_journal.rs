@@ -98,7 +98,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tracing::field::Empty;
 use tracing::{Instrument, Span};
 
-use crate::output_capture::{CaptureError, DeleteOutputError, GetOutputError, OutputCapture};
+use crate::output_capture::{CaptureError, GetOutputError, OutputCapture};
 use crate::search::SearchIndex;
 
 /// An event describing a change in the lifecycle of a command.
@@ -234,8 +234,6 @@ pub enum CmdFinishError {
 /// Errors returned by [`HistoryJournal::delete`].
 #[derive(Debug, thiserror::Error)]
 pub enum CmdDeleteError {
-    #[error("deleting captured output failed: {0}")]
-    OutputCaptureFailed(#[from] DeleteOutputError),
     #[error("deleting from history store failed: {0}")]
     HistoryStoreFailed(eyre::Report),
     #[error("applying deletion to history db failed: {0}")]
@@ -428,7 +426,7 @@ impl HistoryJournal {
         }
 
         if let Err(err) = self.output_capture.remove([history_id]).await {
-            tracing::warn!(
+            tracing::error!(
                 %history_id,
                 ?err,
                 "failed to discard the captured output of a cancelled command"
@@ -467,11 +465,18 @@ impl HistoryJournal {
         // In effect, if concurrent `delete`s come through here, they'll have to wait on ids.
         let _delete_guard = self.guard_deleting(ids).await;
 
-        // Forget captured output before the history records. This order means a failed call can
-        // leave an entry without its output but never output without its entry.
-        //
-        // Eh, it's not great, but without some sort of STM, we can't do better.
-        self.output_capture.remove(ids.iter().copied()).await?;
+        // Output capture is secondary, so a failure to forget it must never sink the deletion the
+        // user actually asked for. We still remove output before the history records so a clean run
+        // never strands output without its entry; if removal fails we log it and delete the entry
+        // anyway, leaving orphaned output the store's garbage collector will reclaim.
+        if let Err(err) = self.output_capture.remove(ids.iter().copied()).await {
+            tracing::error!(
+                ?ids,
+                ?err,
+                "failed to remove captured output while deleting history; deleting the entry \
+                 anyway. the orphaned output will be reclaimed by the store's garbage collector",
+            );
+        }
 
         // Remove records from the record store.
         //
