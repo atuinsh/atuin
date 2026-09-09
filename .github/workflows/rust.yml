@@ -135,6 +135,7 @@ jobs:
           echo "::group::proptest regression files changed by this run"
           echo "A proptest failure appends a 'cc <seed>' line to a regression file."
           echo "New/changed regression files (download the artifact below to reproduce):"
+          git add -N -- '*proptest-regressions*' || true
           git status --porcelain
           git --no-pager diff
           echo "::endgroup::"
@@ -248,6 +249,7 @@ jobs:
           echo "::group::proptest regression files changed by this run"
           echo "A proptest failure appends a 'cc <seed>' line to a regression file."
           echo "New/changed regression files (download the artifact below to reproduce):"
+          git add -N -- '*proptest-regressions*' || true
           git status --porcelain
           git --no-pager diff
           echo "::endgroup::"

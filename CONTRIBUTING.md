@@ -100,7 +100,7 @@ build artifact whenever they fail.
 
 To reproduce a CI failure:
 
-1. Open the failed run on GitHub and download the artifact — `proptest-regressions-integration`, or `proptest-regressions-unit-<os>` for the matrix job.
+1. Open the failed run on GitHub and download the artifact — `proptest-regressions-integration`, or `proptest-regressions-unit-<runner>` for the matrix job, where `<runner>` is the failing leg's full runner label (for example `proptest-regressions-unit-depot-ubuntu-24.04`).
 2. It preserves the repo layout. Copy each file over the matching file in your checkout (or read the new `cc <seed>` line straight out of the failed job's "Show new proptest regressions" step, which prints the diff).
 3. Re-run the test; proptest replays the saved seed and reproduces the failure:
 
