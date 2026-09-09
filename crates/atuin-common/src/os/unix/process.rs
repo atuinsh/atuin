@@ -79,16 +79,23 @@ pub fn cwd(pid: Pid) -> Option<PathBuf> {
     if cfg!(target_os = "linux") {
         std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
     } else {
-        let pid = sysinfo::Pid::from_u32(pid);
-        let mut system = sysinfo::System::new();
-        if !system.refresh_process_specifics(
-            pid,
-            sysinfo::ProcessRefreshKind::new().with_cmd(sysinfo::UpdateKind::Always),
-        ) {
-            return None;
-        }
-        system.process(pid)?.cwd().map(Into::into)
+        cwd_generic(pid)
     }
+}
+
+/// Implementation of [`cwd`] that works on all Unix-like systems.
+///
+/// Linux has a specific, more efficient implementation.
+fn cwd_generic(pid: u32) -> Option<PathBuf> {
+    let pid = sysinfo::Pid::from_u32(pid);
+    let mut system = sysinfo::System::new();
+    if !system.refresh_process_specifics(
+        pid,
+        sysinfo::ProcessRefreshKind::new().with_cwd(sysinfo::UpdateKind::Always),
+    ) {
+        return None;
+    }
+    system.process(pid)?.cwd().map(Into::into)
 }
 
 #[cfg(test)]
@@ -107,8 +114,24 @@ mod tests {
         (child, pid)
     }
 
+    /// Wait for `read` to return `expected`, then report what it last returned.
+    ///
+    /// A child chdirs somewhere between fork and exec, so it may not have arrived yet.
+    fn settles_on(
+        expected: &std::path::Path,
+        mut read: impl FnMut() -> Option<PathBuf>,
+    ) -> Option<PathBuf> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let found = read();
+            if found.as_deref() == Some(expected) || Instant::now() >= deadline {
+                return found;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     #[rstest]
-    #[cfg_attr(target_os = "macos", ignore)] // TODO
     fn reads_the_working_directory_of_another_process() {
         let dir = tempfile::tempdir().unwrap();
         // The temporary directory may sit behind a symlink (/tmp on macOS), and a working
@@ -116,74 +139,30 @@ mod tests {
         let expected = dir.path().canonicalize().unwrap();
         let (mut child, pid) = sleeper(dir.path());
 
-        // The child chdirs somewhere between fork and exec, so it may not be there yet.
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while cwd(pid).as_deref() != Some(expected.as_path()) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let found = cwd(pid);
+        let found = settles_on(&expected, || cwd(pid));
 
         child.kill().unwrap();
         child.wait().unwrap();
         assert_eq!(found.as_deref(), Some(expected.as_path()));
     }
 
-    /// TODO: TEMPORARY diagnostic for the macOS failure, to be deleted once it is fixed.
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn cwd_layers() {
-        use sysinfo::{ProcessRefreshKind, System, UpdateKind};
-
+    #[rstest]
+    fn the_generic_lookup_reads_the_working_directory_too() {
+        // Linux takes the /proc route, so without this the portable route would go untested
+        // until it reached a platform that has no choice but to use it.
         let dir = tempfile::tempdir().unwrap();
         let expected = dir.path().canonicalize().unwrap();
-        let (mut child, pid) = sleeper(dir.path());
-        std::thread::sleep(Duration::from_millis(500));
-        let sysinfo_pid = sysinfo::Pid::from_u32(child.id());
-        let me = Pid::from_raw(std::process::id().cast_signed()).unwrap();
+        let (mut child, _) = sleeper(dir.path());
+        let pid = child.id();
 
-        println!("expected                  {}", expected.display());
-        println!("cwd(child)                {:?}", cwd(pid));
-        println!("cwd(self)                 {:?}", cwd(me));
-
-        let mut narrow = System::new();
-        let refreshed = narrow.refresh_process_specifics(
-            sysinfo_pid,
-            ProcessRefreshKind::new().with_cwd(UpdateKind::Always),
-        );
-        println!("cwd-only refresh          {refreshed}");
-        println!("cwd-only found            {}", narrow.process(sysinfo_pid).is_some());
-        println!(
-            "cwd-only name             {:?}",
-            narrow.process(sysinfo_pid).map(sysinfo::Process::name)
-        );
-        println!(
-            "cwd-only exe              {:?}",
-            narrow.process(sysinfo_pid).and_then(sysinfo::Process::exe)
-        );
-        println!(
-            "cwd-only cwd              {:?}",
-            narrow.process(sysinfo_pid).and_then(sysinfo::Process::cwd)
-        );
-
-        let mut wide = System::new();
-        let refreshed = wide.refresh_process_specifics(
-            sysinfo_pid,
-            ProcessRefreshKind::everything().with_cwd(UpdateKind::Always),
-        );
-        println!("wide refresh              {refreshed}");
-        println!("wide found                {}", wide.process(sysinfo_pid).is_some());
-        println!(
-            "wide cwd                  {:?}",
-            wide.process(sysinfo_pid).and_then(sysinfo::Process::cwd)
-        );
+        let found = settles_on(&expected, || cwd_generic(pid));
 
         child.kill().unwrap();
         child.wait().unwrap();
-        panic!();
+        assert_eq!(found.as_deref(), Some(expected.as_path()));
     }
 
     #[rstest]
-    #[cfg_attr(target_os = "macos", ignore)] // TODO
     fn a_process_that_has_gone_has_no_working_directory() {
         let dir = tempfile::tempdir().unwrap();
         let (mut child, pid) = sleeper(dir.path());
