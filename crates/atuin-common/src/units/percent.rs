@@ -232,7 +232,8 @@ mod tests {
         assert_eq!(Percent::new(10.0) * -1000_isize, -100);
         assert_eq!(Percent::new(200.0) * u128::MAX, u128::MAX);
         assert_eq!(Percent::new(200.0) * i128::MIN, i128::MIN);
-        assert_eq!(Percent::new(f64::NAN) * 10_u8, u8::MAX);
+        // A NaN percentage has no integer share; the saturating cast maps it to 0.
+        assert_eq!(Percent::new(f64::NAN) * 10_u8, 0);
     }
 
     #[rstest]
