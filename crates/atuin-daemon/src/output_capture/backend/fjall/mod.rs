@@ -7,18 +7,21 @@
 //! `spawn_blocking`.
 mod schema;
 
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use atuin_client::history::{CommandCapture, HistoryId};
+use atuin_client::settings::DiskUsageLimit;
+use atuin_common::units::ByteSize;
 use fjall::{OptimisticTxDatabase, OptimisticTxKeyspace, PersistMode, Readable};
 use schema::{Schema as _, SchemaV1};
 use tokio::task::JoinHandle;
 use tracing::error;
 
 mod gc;
-pub use gc::Gc;
+use gc::Gc;
 
 use super::{Backend, CaptureError, DeleteOutputError, GetOutputError};
 
@@ -131,32 +134,45 @@ pub struct FjallBackend {
     #[debug(skip)]
     keyspace: OptimisticTxKeyspace,
     flusher: Arc<Flusher>,
+    gc: Option<Arc<Gc>>,
 }
 
 impl FjallBackend {
-    pub fn open(path: impl AsRef<std::path::Path>) -> fjall::Result<Self> {
-        let db = OptimisticTxDatabase::builder(path.as_ref()).open()?;
-        Self::new(db)
+    /// Open the store at `path`, keeping its disk use under `max_disk_usage`. A percentage limit
+    /// is taken against the disk `path` lives on; an absolute size is used verbatim; `unlimited`
+    /// runs no garbage collector.
+    pub fn open(path: impl AsRef<Path>, max_disk_usage: DiskUsageLimit) -> fjall::Result<Self> {
+        let path = path.as_ref();
+        let db = OptimisticTxDatabase::builder(path).open()?;
+        Self::new(db, resolve_budget(path, max_disk_usage))
     }
 
-    pub fn new(db: OptimisticTxDatabase) -> fjall::Result<Self> {
-        Ok(Self {
+    pub fn new(db: OptimisticTxDatabase, budget: Option<ByteSize>) -> fjall::Result<Self> {
+        let mut backend = Self {
             db: db.clone(),
             keyspace: db.keyspace(ActiveSchema::NAME, ActiveSchema::create_options)?,
             flusher: Arc::new(Flusher::spawn(db)),
-        })
+            gc: None,
+        };
+        // The collector holds its own clone of the backend to drive it. Clone it while `gc` is
+        // still `None` so that clone carries no handle back to the `Gc`, which would be a
+        // reference cycle keeping the task alive forever.
+        if let Some(budget) = budget {
+            backend.gc = Some(Arc::new(Gc::spawn(backend.clone(), budget)));
+        }
+        Ok(backend)
     }
 
     /// On-disk bytes used by the store's segments and blob files.
     ///
     /// Might over/under-report by a couple dozen MB.
-    pub(super) fn estimated_disk_space(&self) -> u64 {
+    fn estimated_disk_space(&self) -> u64 {
         self.keyspace.inner().disk_space()
     }
 
     /// Deletes the oldest stored entries until their values total at least `reclaim_bytes`,
     /// returning the number of bytes actually freed.
-    pub(super) async fn reclaim(&self, reclaim_bytes: u64) -> Result<u64, DeleteOutputError> {
+    async fn reclaim(&self, reclaim_bytes: u64) -> Result<u64, DeleteOutputError> {
         if reclaim_bytes == 0 {
             return Ok(0);
         }
@@ -193,6 +209,25 @@ impl FjallBackend {
         })
         .await
         .expect("output-capture reclaim task panicked")
+    }
+}
+
+/// The disk budget for a store living at `path`, or `None` when usage is unlimited. Only a
+/// percentage has to look at the disk; an absolute size is taken as-is, so an absolute limit
+/// never touches the filesystem.
+fn resolve_budget(path: &Path, limit: DiskUsageLimit) -> Option<ByteSize> {
+    match limit {
+        DiskUsageLimit::Unlimited => None,
+        DiskUsageLimit::Bytes(bytes) => Some(bytes),
+        DiskUsageLimit::Percent(_) => {
+            let disks = sysinfo::Disks::new_with_refreshed_list();
+            let total = disks
+                .iter()
+                .filter(|disk| path.starts_with(disk.mount_point()))
+                .max_by_key(|disk| disk.mount_point().as_os_str().len())
+                .map(|disk| disk.total_space())?;
+            limit.resolve(ByteSize::from_bytes(total))
+        }
     }
 }
 
@@ -290,7 +325,7 @@ mod tests {
 
     fn temp_backend() -> (FjallBackend, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let backend = FjallBackend::open(dir.path()).expect("open");
+        let backend = FjallBackend::open(dir.path(), DiskUsageLimit::Unlimited).expect("open");
         (backend, dir)
     }
 

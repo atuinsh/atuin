@@ -6,6 +6,7 @@ use tokio::time::MissedTickBehavior;
 
 use super::FjallBackend;
 
+#[derive(Debug)]
 pub struct Gc {
     task: JoinHandle<()>,
 }

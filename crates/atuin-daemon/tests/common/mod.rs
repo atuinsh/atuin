@@ -20,7 +20,7 @@ use atuin_client::database::{Context, Sqlite};
 use atuin_client::history::store::{HistoryRecord, HistoryStore};
 use atuin_client::history::{CommandCapture, History, HistoryId};
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::settings::{FilterMode, Settings};
+use atuin_client::settings::{DiskUsageLimit, FilterMode, Settings};
 use atuin_common::db::sqlite::Sqlite as CommonSqlite;
 use atuin_common::filter::OrFilter;
 use atuin_common::utils::uuid_v7;
@@ -145,7 +145,8 @@ impl TestEnvBuilder {
         let history_db = Sqlite::new(&db_path, self.db_timeout).await.unwrap();
         let store = SqliteStore::new(&record_path, self.db_timeout).await.unwrap();
 
-        let output_capture = OutputCapture::open(tmp.path().join("capture"));
+        let output_capture =
+            OutputCapture::open(tmp.path().join("capture"), DiskUsageLimit::Unlimited);
         let search_component = SearchComponent::new();
         let index = search_component.index();
         let search_service = search_component.grpc_service();
