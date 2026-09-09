@@ -71,6 +71,7 @@ indicatif = "0.18.0"
 interim = { version = "0.2.0", features = ["time_0_3"] }
 itertools = "0.15.0"
 lasso = { version = "0.7", features = ["multi-threaded"] }
+libc = "0.2"
 # Version range mirrors sqlx-sqlite's so cargo unifies both to a single
 # `links = "sqlite3"` package (one bundled SQLite).
 libsqlite3-sys = ">=0.30.1, <0.38.0"
