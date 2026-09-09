@@ -333,12 +333,6 @@ pub struct History {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryStats {
-    /// The command that was ran after this one in the session
-    pub next: Option<History>,
-    ///
-    /// The command that was ran before this one in the session
-    pub previous: Option<History>,
-
     /// How many times has this command been ran?
     pub total: u64,
 
@@ -779,7 +773,7 @@ mod tests {
     /// The SQL author filter derives its recognised-kind list from [`AuthorKind::VARIANTS`] while
     /// Rust decoding goes through [`AuthorKind::from_repr`]; a value present in one but not the
     /// other would split the two classifiers, so pin them to agree over the whole u8 range.
-    #[test]
+    #[rstest]
     fn author_kind_variants_and_from_repr_agree() {
         for value in 0..=u8::MAX {
             assert_eq!(
@@ -836,14 +830,14 @@ mod tests {
         assert!(author_matches_filters(&ellie, users.as_slice_filter()));
     }
 
-    #[test]
+    #[rstest]
     fn an_all_author_filter_matches_everyone() {
         let all = OrFilter::all();
         assert!(author_matches_filters(&entry("pi", "raspberry:ellie", None), all));
         assert!(author_matches_filters(&entry("ellie", "raspberry:ellie", None), all));
     }
 
-    #[test]
+    #[rstest]
     fn the_all_user_filter_excludes_agents() {
         let filter = all_user_author_filter();
         assert!(!author_matches_filters(&entry("pi", "raspberry:ellie", None), filter));
@@ -1011,7 +1005,7 @@ mod tests {
     /// A V2 record from before `author_kind` was appended: same version, one field short. New
     /// fields are only read when the encoded array is long enough to hold them, so this must still
     /// decode rather than error or misread the missing field.
-    #[test]
+    #[rstest]
     fn deserialize_v2_written_without_author_kind() {
         let history = History {
             author_kind: Some(AuthorKind::Agent),

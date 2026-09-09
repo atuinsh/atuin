@@ -290,17 +290,42 @@ If vim is enabled in the config (see [`keymap_mode`](config.md#keymap_mode)), th
 
 
 ### Inspector
-Open the inspector with Ctrl + o
+Open the inspector with Ctrl + o. It starts in **Runs**, showing individual executions
+of the exact command (not deduplicated), **newest first**. **Session** shows commands
+in the selected run's session, also newest first. Switching views keeps that run
+selected. **Stats** is aggregate-only: total runs, success rate (known exit codes),
+average runtime, exit-code distribution, weekday activity, and monthly mean runtime.
+It covers live occurrences of the exact command across hosts and sessions, without
+repeating the per-run details. Select an occurrence in Runs or Session to browse its output.
+
+The footer's **`<enter>: output`** hint opens a focused **Output** reader for the
+selected run; **Esc** returns
+to the same list and selection. Enter does **not** execute a command in the inspector,
+regardless of `enter_accept`; use **Tab** to put the command into the shell for editing.
+
+Output preserves captured colours and text formatting without replaying terminal control
+sequences. Blinking and hidden text are disabled. Long lines wrap, and the reader
+shows scroll position and missing, empty, unavailable, or truncated capture states.
+Output is fetched from the local daemon in the background when opened. The current
+successful capture is cached; reopening retries missing or unavailable captures. The mouse wheel navigates the current list or scrolls the output reader.
+
+The selector and footer reflect your configured inspector keybindings. The shortcuts
+below are the defaults.
 
 | Shortcut  | Action                                        |
 | --------- | --------------------------------------------- |
-| Esc       | Close the inspector, returning to the shell   |
+| Esc       | Back from output to the previous inspector view; otherwise back to search |
 | Ctrl + o  | Close the inspector, returning to search view |
 | Ctrl + d  | Delete the inspected item from the history    |
-| ↑         | Inspect the previous item in the history      |
-| ↓         | Inspect the next item in the history          |
-| Page Up   | Inspect the previous item in the history      |
-| Page Down | Inspect the next item in the history          |
+| r         | View runs of the selected command            |
+| s         | View the selected run's session               |
+| t         | View statistics and charts                    |
+| o         | View the selected run's captured output       |
+| ↑         | Select the row above, or scroll output up     |
+| ↓         | Select the row below, or scroll output down   |
 | j / k     | Navigate items (when vim mode is enabled)     |
-| Enter     | Execute selected item (respects `enter_accept`) |
+| Enter     | Open captured output for the selected run     |
+| Page Up / Page Down | Scroll output a page at a time (one item in lists) |
+| Home / End | Jump to the start / end of output            |
+| Ctrl + c  | Close Atuin and return to the shell           |
 | Tab       | Select current item and edit                  |

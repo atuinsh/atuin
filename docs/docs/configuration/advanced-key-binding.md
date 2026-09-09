@@ -183,9 +183,9 @@ Actions are specified as kebab-case strings.
 | `scroll-page-down` | Scroll a full page down |
 | `scroll-to-top` | Jump to the top of the list |
 | `scroll-to-bottom` | Jump to the bottom of the list |
-| `scroll-to-screen-top` | Jump to the top of the visible screen |
-| `scroll-to-screen-middle` | Jump to the middle of the visible screen |
-| `scroll-to-screen-bottom` | Jump to the bottom of the visible screen |
+| `scroll-to-screen-top` | Jump to the top of the visible search results |
+| `scroll-to-screen-middle` | Jump to the middle of the visible search results |
+| `scroll-to-screen-bottom` | Jump to the bottom of the visible search results |
 
 Note: `select-next` and `select-previous` respect the `invert` setting. When `invert` is true, the visual direction is flipped.
 
@@ -229,8 +229,15 @@ The difference between `accept` and `return-selection`: `accept` runs the comman
 
 | Action | Description |
 |--------|-------------|
-| `inspect-previous` | Inspect the previous entry (in the inspector tab) |
-| `inspect-next` | Inspect the next entry (in the inspector tab) |
+| `inspect-previous` | Inspect the previous entry in the current view, or scroll output up |
+| `inspect-next` | Inspect the next entry in the current view, or scroll output down |
+| `inspect-runs` | View individual executions of the selected command |
+| `inspect-session` | View commands in the selected run's session |
+| `inspect-stats` | View command statistics and charts |
+| `inspect-output` | View captured output with colours and text formatting for the selected run |
+
+In the inspector, list conditions refer to Runs/Session rather than the search results.
+In Output, `list-at-start` and `list-at-end` refer to the reader's scroll boundaries.
 
 ### Special
 

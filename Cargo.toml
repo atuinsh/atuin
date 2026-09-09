@@ -26,6 +26,7 @@ atuin-scripts = { path = "crates/atuin-scripts", version = "18.21.0" }
 atuin-server = { path = "crates/atuin-server", version = "18.21.0" }
 atuin-vt100 = "0.19"
 
+ansi-to-tui = { version = "8.0.1", default-features = false }
 arboard = { version = "3.4", default-features = false }
 argon2 = "0.5"
 async-stream = "0.3"
