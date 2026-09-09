@@ -133,11 +133,7 @@ tempfile = { version = "3.19" }
 thiserror = "2"
 time = { version = "0.3.47", features = ["serde-human-readable", "macros", "local-offset"] }
 tiny-bip39 = "2"
-# `release_max_level_info` compiles out trace/debug events in any build with
-# debug assertions off (release, dist, profiling). Builds that want the
-# `#[instrument(level = "trace")]` spans back must turn debug assertions on --
-# see the `profiling-traced` profile below.
-tracing = { version = "0.1", features = ["release_max_level_info"] }
+tracing = { version = "0.1", features = ["release_max_level_debug"] }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1.14", features = ["net"] }
 tokio-util = { version = "0.7", features = ["rt"] }
