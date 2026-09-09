@@ -12,7 +12,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
 use eyre::Result;
 use tower::ServiceBuilder;
-use tower_http::trace::TraceLayer;
+use tower_http::trace::{DefaultOnResponse, TraceLayer};
+use tracing::Level;
 
 use super::handlers;
 use crate::db::models::User;
@@ -133,10 +134,20 @@ pub fn router(database: Arc<dyn DynDatabase>, settings: Settings) -> Router {
 
     let unnegotiated = Router::new()
         .route("/api/v0/capabilities", get(capabilities_endpoint))
-        .route("/healthz", get(handlers::health::health_check))
         .with_state(caps);
 
-    let routes = unnegotiated.merge(negotiated);
+    // Access-log every route at INFO via tower_http, so self-hosters see HTTP
+    // requests under the default `atuin_server=info` filter (see issue #4063).
+    // `/healthz` is deliberately left out of this layer below: the container
+    // healthcheck polls it every 30s and would otherwise swamp the logs.
+    let traced = unnegotiated.merge(negotiated).layer(
+        TraceLayer::new_for_http()
+            .make_span_with(crate::trace::make_request_span)
+            .on_response(DefaultOnResponse::new().level(Level::INFO)),
+    );
+
+    let routes =
+        Router::new().route("/healthz", get(handlers::health::health_check)).merge(traced);
 
     let path = settings.path.as_str();
     let routes = if path.is_empty() {
@@ -148,8 +159,87 @@ pub fn router(database: Arc<dyn DynDatabase>, settings: Settings) -> Router {
     routes.fallback(teapot).with_state(AppState { database, settings }).layer(
         ServiceBuilder::new()
             .layer(axum::middleware::from_fn(clacks_overhead))
-            .layer(TraceLayer::new_for_http().make_span_with(crate::trace::make_request_span))
             .layer(axum::middleware::from_fn(metrics::track_metrics))
             .layer(axum::middleware::from_fn(semver)),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use atuin_common::test_utils::capture_logs;
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+    use tracing::Level;
+
+    use super::{Router, router};
+    use crate::db::DbSettings;
+    use crate::settings::{Metrics, Settings};
+
+    async fn test_router() -> Router {
+        let database = crate::connect("sqlite://:memory:".parse().unwrap())
+            .await
+            .expect("in-memory sqlite should connect");
+        let settings = Settings {
+            host: "127.0.0.1".to_owned(),
+            port: 0,
+            path: String::new(),
+            open_registration: true,
+            max_record_size: 1024 * 1024,
+            register_webhook_url: None,
+            register_webhook_username: String::new(),
+            metrics: Metrics::default(),
+            fake_version: None,
+            db_settings: DbSettings {
+                db_uri: "sqlite://:memory:".parse().unwrap(),
+            },
+        };
+        router(database, settings)
+    }
+
+    /// tower_http emits one completion event per request; we pin it to INFO so
+    /// self-hosters see access logs under the default `atuin_server=info`
+    /// filter without opting in to debug.
+    #[tokio::test]
+    async fn requests_are_access_logged_at_info() {
+        let app = test_router().await;
+        let logs = capture_logs();
+
+        // `/` (index) only reads settings, so it exercises the trace layer
+        // without touching the database.
+        let _response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        let access_log_levels: Vec<Level> = logs
+            .get()
+            .iter()
+            .filter(|log| log.message.contains("finished processing request"))
+            .map(|log| log.level)
+            .collect();
+
+        assert_eq!(
+            access_log_levels,
+            vec![Level::INFO],
+            "expected exactly one INFO access-log line per request"
+        );
+    }
+
+    /// The Docker healthcheck polls `/healthz` every 30s, so it is excluded from
+    /// the trace layer entirely -- it must never appear in the access log.
+    #[tokio::test]
+    async fn healthz_is_not_access_logged() {
+        let app = test_router().await;
+        let logs = capture_logs();
+
+        app.oneshot(Request::builder().uri("/healthz").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert!(
+            logs.get().iter().all(|log| !log.message.contains("processing request")),
+            "/healthz must not be access-logged"
+        );
+    }
 }
