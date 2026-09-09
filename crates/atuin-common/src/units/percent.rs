@@ -74,11 +74,11 @@ impl Mul<f32> for Percent {
 
     fn mul(self, rhs: f32) -> f32 {
         let share = self * f64::from(rhs);
-        f32::try_conv_approx(share).unwrap_or(if share < 0.0 {
-            f32::NEG_INFINITY
-        } else {
-            f32::INFINITY
-        })
+
+        #[expect(clippy::cast_possible_truncation, reason = "saturation is intended")]
+        let result = share as f32;
+
+        result
     }
 }
 
