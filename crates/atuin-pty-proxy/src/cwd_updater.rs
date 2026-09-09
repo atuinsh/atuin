@@ -2,7 +2,7 @@
 //!
 //! This is necessary to enable programs like tmux to detect the CWD of the child.
 
-use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
 use std::time::Duration;
@@ -35,8 +35,20 @@ fn pty_parent_fd(parent: &dyn MasterPty) -> Option<OwnedFd> {
 /// This tries to obtain the CWD of the terminal's foreground process group, which is what programs
 /// like tmux do. If that fails, we fall back to querying the CWD of the top-level PTY proxy child.
 fn pty_cwd(parent: Option<BorrowedFd<'_>>, child: Option<Pid>) -> Option<PathBuf> {
-    let parent = parent.and_then(|parent| rustix::termios::tcgetpgrp(parent).ok());
+    let parent = parent.and_then(tcgetpgrp);
     [parent, child].into_iter().flatten().find_map(process::cwd)
+}
+
+/// Get the foreground process group of a terminal.
+///
+/// We avoid using [`rustix::termios::tcgetpgrp`] because rustix has an upstream soundness bug that
+/// causes undefined behavior on macOS. The underlying `tcgetpgrp` libc call returns 0 when called
+/// on a PTY that no session has claimed, but on macOS, this gets passed directly to
+/// `NonZero::new_unchecked`, which is UB.
+fn tcgetpgrp(terminal: BorrowedFd<'_>) -> Option<Pid> {
+    // SAFETY: The FD we pass is guaranteed to be valid because it came from a `BorrowedFd` that
+    // exists at least for the life of the call.
+    Pid::from_raw(unsafe { libc::tcgetpgrp(terminal.as_raw_fd()) })
 }
 
 /// Updates this process's CWD to match the PTY proxy child's CWD.
