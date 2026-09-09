@@ -91,7 +91,7 @@ impl Mul<Percent> for f32 {
 }
 
 /// A share of an integer, truncated toward zero and saturating at the type's bounds.
-macro_rules! share_of_int {
+macro_rules! impl_int_mul {
     ($($t:ty => $to_f64:expr),* $(,)?) => {$(
         impl Mul<$t> for Percent {
             type Output = $t;
@@ -113,7 +113,7 @@ macro_rules! share_of_int {
     )*};
 }
 
-share_of_int!(
+impl_int_mul!(
     u8 => f64::from,
     u16 => f64::from,
     u32 => f64::from,
