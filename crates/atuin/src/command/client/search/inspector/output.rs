@@ -95,7 +95,7 @@ async fn load_output(id: HistoryId, settings: &Settings) -> LoadedCapture {
                     .join("\n"),
             );
 
-            let status = if output.meta.as_ref().is_some_and(|meta| meta.output_truncated) {
+            let status = if output.truncated {
                 "Output · capture truncated"
             } else if text.is_empty() {
                 "Captured output is empty"
