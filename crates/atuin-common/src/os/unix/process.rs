@@ -179,6 +179,7 @@ mod tests {
 
         child.kill().unwrap();
         child.wait().unwrap();
+        panic!();
     }
 
     #[rstest]
