@@ -32,9 +32,8 @@ fn pty_parent_fd(parent: &dyn MasterPty) -> Option<OwnedFd> {
 
 /// Get the CWD of the PTY proxy child.
 ///
-/// This tries to obtain the CWD of the foreground process in the process group, which is what
-/// programs like tmux do. If that fails, we fall back to querying the CWD of the top-level PTY
-/// proxy child.
+/// This tries to obtain the CWD of the terminal's foreground process group, which is what programs
+/// like tmux do. If that fails, we fall back to querying the CWD of the top-level PTY proxy child.
 fn pty_cwd(parent: Option<BorrowedFd<'_>>, child: Option<Pid>) -> Option<PathBuf> {
     let parent = parent.and_then(|parent| rustix::termios::tcgetpgrp(parent).ok());
     [parent, child].into_iter().flatten().find_map(process::cwd)
