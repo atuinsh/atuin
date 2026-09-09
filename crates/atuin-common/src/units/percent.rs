@@ -5,7 +5,6 @@
 use std::ops::Mul;
 use std::str::FromStr;
 
-use easy_cast::{ConvTo, Trunc};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 /// A percentage.
@@ -90,7 +89,7 @@ impl Mul<Percent> for f32 {
     }
 }
 
-/// A share of an integer, truncated toward zero and saturating at the type's bounds.
+/// Impl [`Mul`] between [`Percent`] and an integer.
 macro_rules! impl_int_mul {
     ($($t:ty => $to_f64:expr),* $(,)?) => {$(
         impl Mul<$t> for Percent {
@@ -98,8 +97,13 @@ macro_rules! impl_int_mul {
 
             fn mul(self, rhs: $t) -> $t {
                 let share = self * $to_f64(rhs);
-                <$t>::try_conv_to(Trunc, share)
-                    .unwrap_or(if share < 0.0 { <$t>::MIN } else { <$t>::MAX })
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "saturation is intended"
+                )]
+                let result = share as $t;
+                result
             }
         }
 
