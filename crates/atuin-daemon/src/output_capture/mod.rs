@@ -37,6 +37,18 @@ impl OutputCapture {
         }
     }
 
+    /// A capture store whose every operation fails, standing in for a broken backend.
+    ///
+    /// Lets a test prove that a broken output store never sinks a primary operation (for example,
+    /// that deleting history still succeeds when its captured output cannot be removed).
+    #[cfg(test)]
+    #[must_use]
+    pub fn failing() -> Self {
+        Self {
+            backend: AnyBackend::Failing(backend::FailingBackend),
+        }
+    }
+
     #[must_use]
     pub fn kind(&self) -> BackendKind {
         BackendKind::from(&self.backend)

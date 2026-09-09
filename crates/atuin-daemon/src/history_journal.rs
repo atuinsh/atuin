@@ -98,7 +98,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tracing::field::Empty;
 use tracing::{Instrument, Span};
 
-use crate::output_capture::{CaptureError, DeleteOutputError, GetOutputError, OutputCapture};
+use crate::output_capture::{CaptureError, GetOutputError, OutputCapture};
 use crate::search::SearchIndex;
 
 /// An event describing a change in the lifecycle of a command.
@@ -234,8 +234,6 @@ pub enum CmdFinishError {
 /// Errors returned by [`HistoryJournal::delete`].
 #[derive(Debug, thiserror::Error)]
 pub enum CmdDeleteError {
-    #[error("deleting captured output failed: {0}")]
-    OutputCaptureFailed(#[from] DeleteOutputError),
     #[error("deleting from history store failed: {0}")]
     HistoryStoreFailed(eyre::Report),
     #[error("applying deletion to history db failed: {0}")]
@@ -428,7 +426,7 @@ impl HistoryJournal {
         }
 
         if let Err(err) = self.output_capture.remove([history_id]).await {
-            tracing::warn!(
+            tracing::error!(
                 %history_id,
                 ?err,
                 "failed to discard the captured output of a cancelled command"
@@ -467,11 +465,14 @@ impl HistoryJournal {
         // In effect, if concurrent `delete`s come through here, they'll have to wait on ids.
         let _delete_guard = self.guard_deleting(ids).await;
 
-        // Forget captured output before the history records. This order means a failed call can
-        // leave an entry without its output but never output without its entry.
-        //
-        // Eh, it's not great, but without some sort of STM, we can't do better.
-        self.output_capture.remove(ids.iter().copied()).await?;
+        if let Err(err) = self.output_capture.remove(ids.iter().copied()).await {
+            tracing::error!(
+                ?ids,
+                ?err,
+                "failed to remove captured output while deleting history; deleting the entry \
+                 anyway. the orphaned output will be reclaimed by the store's garbage collector",
+            );
+        }
 
         // Remove records from the record store.
         //
@@ -650,5 +651,62 @@ impl HistoryJournal {
     #[must_use]
     pub fn subscribe(&self) -> BroadcastStream<CmdEvent> {
         BroadcastStream::new(self.broadcast.subscribe())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use atuin_client::record::sqlite_store::SqliteStore;
+    use atuin_common::encryption::paseto_v4;
+    use atuin_common::filter::OrFilter;
+    use atuin_common::utils::uuid_v7;
+    use atuin_domain::record::{CmdOrigin, HostId};
+    use tokio::sync::RwLock;
+
+    use super::*;
+
+    /// A journal wired to real temp stores, so `finish`/`delete` run for real against a
+    /// caller-chosen output-capture backend. The returned `TempDir` must outlive the journal.
+    async fn journal(output_capture: OutputCapture) -> (HistoryJournal, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let timeout = Duration::from_secs(5);
+        let history_db =
+            HistoryDatabase::new(tmp.path().join("history.db"), timeout).await.unwrap();
+        let store = SqliteStore::new(tmp.path().join("records.db"), timeout).await.unwrap();
+        let history_store = HistoryStore::new(store, HostId(uuid_v7()), paseto_v4::Key::generate());
+        let search_index = Arc::new(RwLock::new(SearchIndex::new(OrFilter::all())));
+        let caps = CapClient::new("http://127.0.0.1:1".parse().unwrap(), reqwest::Client::new());
+        let journal =
+            HistoryJournal::new(caps, history_store, history_db, search_index, output_capture);
+        (journal, tmp)
+    }
+
+    fn entry(cmd: &str) -> History {
+        History::daemon()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command(cmd)
+            .cwd("/tmp")
+            .session(uuid_v7().as_simple().to_string())
+            .cmd_origin(CmdOrigin::try_from("test-host:test-user").unwrap())
+            .shell("bash")
+            .author("test-user")
+            .build()
+            .into()
+    }
+
+    /// A broken output store must not sink a deletion: the entry the user asked to forget is still
+    /// removed rather than the whole delete being refused.
+    #[tokio::test]
+    async fn delete_survives_a_broken_output_store() {
+        let (journal, _tmp) = journal(OutputCapture::failing()).await;
+        let id = journal.start_cmd(entry("echo goodbye"));
+        journal.finish(id, 0, Duration::from_millis(1)).await.unwrap();
+
+        let deleted = journal
+            .delete(&[id], &Search::default())
+            .await
+            .expect("a failed output removal must not fail the whole delete");
+        assert_eq!(deleted, 1);
+        assert!(journal.history_db.load(id).await.unwrap().is_none());
     }
 }

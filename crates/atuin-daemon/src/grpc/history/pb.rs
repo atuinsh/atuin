@@ -240,9 +240,9 @@ impl From<CmdCancelError> for Status {
 impl From<CmdDeleteError> for Status {
     fn from(value: CmdDeleteError) -> Self {
         match value {
-            CmdDeleteError::OutputCaptureFailed(_)
-            | CmdDeleteError::HistoryStoreFailed(_)
-            | CmdDeleteError::HistoryDbFailed(_) => Self::internal(value.to_string()),
+            CmdDeleteError::HistoryStoreFailed(_) | CmdDeleteError::HistoryDbFailed(_) => {
+                Self::internal(value.to_string())
+            }
         }
     }
 }

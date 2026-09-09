@@ -141,7 +141,7 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
                     redact(output_end);
                 }
 
-                let _ = client
+                if let Err(err) = client
                     .register_command_output(
                         history_id,
                         output_start,
@@ -150,7 +150,10 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
                         capture.terminal_width,
                         capture.terminal_height,
                     )
-                    .await;
+                    .await
+                {
+                    tracing::debug!(%history_id, ?err, "could not record command output; dropping it");
+                }
             }
         });
     });
