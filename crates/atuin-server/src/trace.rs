@@ -23,7 +23,6 @@ pub fn make_request_span(request: &Request) -> Span {
         "http.request",
         http.method = %method,
         http.route = route,
-        // recorded by `on_response` once the response is ready
         http.status_code = field::Empty,
         client.ip = field::Empty,
     );
@@ -35,9 +34,6 @@ pub fn make_request_span(request: &Request) -> Span {
     span
 }
 
-/// Record the response status on the request span and emit the access-log line,
-/// under the `atuin_server` target so it shows with the default
-/// `atuin_server=info` filter.
 pub fn on_response(response: &Response, latency: Duration, span: &Span) {
     span.record("http.status_code", response.status().as_u16());
     tracing::info!(latency_ms = latency.as_millis(), "request completed");
