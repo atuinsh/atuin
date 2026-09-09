@@ -127,6 +127,61 @@ mod tests {
         assert_eq!(found.as_deref(), Some(expected.as_path()));
     }
 
+    /// TEMPORARY diagnostic for the macOS failure, to be deleted once it is fixed.
+    ///
+    ///     cargo test -p atuin-common --features os -- --ignored --nocapture cwd_layers
+    #[test]
+    #[ignore = "diagnostic, run explicitly"]
+    fn cwd_layers() {
+        use sysinfo::{ProcessRefreshKind, System, UpdateKind};
+
+        let dir = tempfile::tempdir().unwrap();
+        let expected = dir.path().canonicalize().unwrap();
+        let (mut child, pid) = sleeper(dir.path());
+        std::thread::sleep(Duration::from_millis(500));
+        let sysinfo_pid = sysinfo::Pid::from_u32(child.id());
+        let me = Pid::from_raw(std::process::id().cast_signed()).unwrap();
+
+        println!("expected                  {}", expected.display());
+        println!("cwd(child)                {:?}", cwd(pid));
+        println!("cwd(self)                 {:?}", cwd(me));
+
+        let mut narrow = System::new();
+        let refreshed = narrow.refresh_process_specifics(
+            sysinfo_pid,
+            ProcessRefreshKind::new().with_cwd(UpdateKind::Always),
+        );
+        println!("cwd-only refresh          {refreshed}");
+        println!("cwd-only found            {}", narrow.process(sysinfo_pid).is_some());
+        println!(
+            "cwd-only name             {:?}",
+            narrow.process(sysinfo_pid).map(sysinfo::Process::name)
+        );
+        println!(
+            "cwd-only exe              {:?}",
+            narrow.process(sysinfo_pid).and_then(sysinfo::Process::exe)
+        );
+        println!(
+            "cwd-only cwd              {:?}",
+            narrow.process(sysinfo_pid).and_then(sysinfo::Process::cwd)
+        );
+
+        let mut wide = System::new();
+        let refreshed = wide.refresh_process_specifics(
+            sysinfo_pid,
+            ProcessRefreshKind::everything().with_cwd(UpdateKind::Always),
+        );
+        println!("wide refresh              {refreshed}");
+        println!("wide found                {}", wide.process(sysinfo_pid).is_some());
+        println!(
+            "wide cwd                  {:?}",
+            wide.process(sysinfo_pid).and_then(sysinfo::Process::cwd)
+        );
+
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
+
     #[rstest]
     fn a_process_that_has_gone_has_no_working_directory() {
         let dir = tempfile::tempdir().unwrap();
