@@ -1,7 +1,8 @@
 mod backend;
 
 use atuin_client::history::{CommandCapture, HistoryId};
-use backend::{AnyBackend, Backend as _, FjallBackend, NopBackend};
+use atuin_common::units::ByteSize;
+use backend::{AnyBackend, Backend as _, FjallBackend, Gc, NopBackend};
 pub use backend::{BackendKind, CaptureError, DeleteOutputError, GetOutputError};
 use tracing::error;
 
@@ -9,6 +10,8 @@ use tracing::error;
 #[derive(derive_more::Debug)]
 pub struct OutputCapture {
     backend: AnyBackend,
+    #[debug(skip)]
+    gc: Option<Gc>,
 }
 
 impl OutputCapture {
@@ -18,6 +21,7 @@ impl OutputCapture {
         match FjallBackend::open(path) {
             Ok(backend) => Self {
                 backend: AnyBackend::Fjall(backend),
+                gc: None,
             },
             Err(err) => {
                 error!(
@@ -34,7 +38,16 @@ impl OutputCapture {
     pub fn nop() -> Self {
         Self {
             backend: AnyBackend::Nop(NopBackend),
+            gc: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_gc(mut self, budget: Option<ByteSize>) -> Self {
+        if let (AnyBackend::Fjall(backend), Some(budget)) = (&self.backend, budget) {
+            self.gc = Some(Gc::spawn(backend.clone(), budget));
+        }
+        self
     }
 
     #[must_use]

@@ -3,8 +3,9 @@ use std::sync::Arc;
 use atuin_client::database::Sqlite as HistoryDatabase;
 use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::settings::Settings;
 use atuin_client::settings::watcher::global_settings_watcher;
+use atuin_client::settings::{DiskUsageLimit, Settings};
+use atuin_common::units::ByteSize;
 use eyre::Result;
 
 use crate::grpc::history::pb::history_server::HistoryServer;
@@ -65,7 +66,13 @@ pub async fn boot(
     let host_id = Settings::host_id().await?;
     let history_store =
         HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
-    let output_capture = OutputCapture::open(Settings::command_capture_dir());
+    let output_capture = match settings.output_capture.limits() {
+        Some(limits) => {
+            let budget = resolve_budget(limits.max_disk_usage);
+            OutputCapture::open(Settings::command_capture_dir()).with_gc(budget)
+        }
+        None => OutputCapture::nop(),
+    };
     let journal = Arc::new(HistoryJournal::new(
         handle.caps().clone(),
         history_store,
@@ -123,6 +130,23 @@ pub async fn boot(
 
     tracing::info!("daemon shut down complete");
     Ok(())
+}
+
+fn resolve_budget(limit: DiskUsageLimit) -> Option<ByteSize> {
+    match limit {
+        DiskUsageLimit::Unlimited => None,
+        DiskUsageLimit::Bytes(bytes) => Some(bytes),
+        DiskUsageLimit::Percent(_) => {
+            let capture_dir = Settings::command_capture_dir();
+            let disks = sysinfo::Disks::new_with_refreshed_list();
+            let total = disks
+                .iter()
+                .filter(|disk| capture_dir.starts_with(disk.mount_point()))
+                .max_by_key(|disk| disk.mount_point().as_os_str().len())
+                .map(|disk| disk.total_space())?;
+            limit.resolve(ByteSize::from_bytes(total))
+        }
+    }
 }
 
 /// Wait for a shutdown signal (Ctrl+C or SIGTERM).

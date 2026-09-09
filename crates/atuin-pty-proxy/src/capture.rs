@@ -17,13 +17,21 @@ const DISABLE_ALTERNATE_SCREEN: &[u8] = b"\x1b[?1049l";
 
 const HISTORY_ID_PARAM: &[u8] = b"history_id";
 
-/// The maximum number of bytes captured per zone.
+/// The maximum number of bytes captured per zone, used as the fallback default in tests.
 ///
 /// During the process of capturing, the buffer might grow past this point, but never by more than
 /// one screenful, which is almost certainly only a small fraction of this limit.
+#[cfg(test)]
 const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
 
 pub type CommandCaptureSink = Box<dyn Fn(HistoryId, CommandCapture) + Send + 'static>;
+
+/// Configuration for a [`CommandCaptureTracker`]: where captures go, and how large a single
+/// command's captured output may grow before it is truncated.
+pub struct CaptureConfig {
+    pub sink: CommandCaptureSink,
+    pub max_output_bytes: usize,
+}
 
 /// The state of an in-progress command capture.
 #[derive(Default)]
@@ -53,9 +61,9 @@ struct Scrollback {
 }
 
 impl Scrollback {
-    pub fn new() -> Self {
+    pub fn new(max_output_bytes: usize) -> Self {
         Self {
-            buffer: BoundedBuffer::new(MAX_CAPTURE_BYTES),
+            buffer: BoundedBuffer::new(max_output_bytes),
             state: Default::default(),
             zone: Zone::Unknown,
         }
@@ -252,12 +260,22 @@ pub struct CommandCaptureTracker {
 }
 
 impl CommandCaptureTracker {
-    pub fn new(rows: NonZeroU16, cols: NonZeroU16, sink: CommandCaptureSink) -> Self {
+    pub fn new(
+        rows: NonZeroU16,
+        cols: NonZeroU16,
+        sink: CommandCaptureSink,
+        max_output_bytes: usize,
+    ) -> Self {
         Self {
             osc_parser: osc133::Parser::new(),
             core: TrackerCore {
                 capture: CaptureState::default(),
-                emulator: vt100::Parser::new_with_callbacks(rows, cols, 0, Scrollback::new()),
+                emulator: vt100::Parser::new_with_callbacks(
+                    rows,
+                    cols,
+                    0,
+                    Scrollback::new(max_output_bytes),
+                ),
                 sink,
             },
         }
@@ -307,6 +325,10 @@ mod tests {
 
     impl Tracker {
         fn new(rows: u16, cols: u16) -> Self {
+            Self::with_bound(rows, cols, MAX_CAPTURE_BYTES)
+        }
+
+        fn with_bound(rows: u16, cols: u16, max_output_bytes: usize) -> Self {
             let (sender, received) = mpsc::channel();
             Self {
                 inner: CommandCaptureTracker::new(
@@ -315,6 +337,7 @@ mod tests {
                     Box::new(move |history_id, capture| {
                         sender.send((history_id, capture)).expect("test receiver is still alive");
                     }),
+                    max_output_bytes,
                 ),
                 received,
                 collected: Vec::new(),
@@ -782,6 +805,15 @@ mod tests {
         assert!(capture.output_truncated);
         assert_eq!(capture.output.len(), MAX_CAPTURE_BYTES);
         assert_eq!(capture.output_observed_bytes, u64::conv((LINE_LEN + 2) * LINES));
+    }
+
+    #[rstest]
+    fn output_beyond_the_bound_is_truncated() {
+        let mut tracker = Tracker::with_bound(ROWS, COLS, 8);
+
+        tracker.push(&interaction("$ ", "echo hi", "a much longer line of output\r\n"));
+
+        assert!(tracker.only_capture().1.output_truncated);
     }
 
     // -- Terminal size --------------------------------------------------------

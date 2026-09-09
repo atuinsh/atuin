@@ -30,14 +30,19 @@ static META_CONFIG: OnceLock<(String, f64)> = OnceLock::new();
 static META_STORE: OnceCell<crate::meta::MetaStore> = OnceCell::const_new();
 
 pub mod daemon;
+pub mod disk_usage_limit;
 mod dotfiles;
 mod kv;
 pub(crate) mod meta;
+pub mod output_capture;
 mod scripts;
 pub mod shells;
 pub mod watcher;
 
 pub use daemon::Daemon;
+pub use disk_usage_limit::{DiskUsageLimit, DiskUsageLimitParseError};
+use output_capture::OutputCaptureConfig;
+pub use output_capture::{CaptureLimits, OutputCapture};
 pub use shells::Shells;
 
 /// Default sync address for Atuin's hosted service, parsed once.
@@ -1095,6 +1100,9 @@ pub struct Settings {
     pub pty_proxy: PtyProxy,
 
     #[serde(default)]
+    pub output_capture: OutputCapture,
+
+    #[serde(default)]
     pub search: Search,
 
     #[serde(default)]
@@ -1476,6 +1484,8 @@ impl Settings {
         let key_path = data_dir.join("key");
         let meta_path = data_dir.join("meta.db");
 
+        let output_capture = OutputCaptureConfig::default();
+
         Ok(Config::builder()
             .set_default("history_format", "{time}\t{command}\t{duration}")?
             .set_default("db_path", db_path.to_str())?
@@ -1541,6 +1551,16 @@ impl Settings {
             .set_default("daemon.pidfile_path", pidfile_path.to_str())?
             .set_default("daemon.systemd_socket", false)?
             .set_default("daemon.tcp_port", 8889)?
+            .set_default("output_capture.enabled", output_capture.enabled)?
+            .set_default(
+                "output_capture.max_output_size",
+                output_capture.max_output_size.to_string(),
+            )?
+            .set_default("output_capture.sync", output_capture.sync)?
+            .set_default(
+                "output_capture.max_disk_usage",
+                output_capture.max_disk_usage.to_string(),
+            )?
             .set_default("logs.enabled", true)?
             .set_default("logs.dir", logs_dir.to_str())?
             .set_default("logs.level", "info")?

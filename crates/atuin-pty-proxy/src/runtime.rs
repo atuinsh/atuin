@@ -90,7 +90,7 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
 
     let (msg_tx, msg_rx) = mpsc::sync_channel::<Msg>(64);
     let _parser_handle = screen::spawn_parser_thread(rows, cols, msg_rx, screen::ParserOptions {
-        sink: options.command_capture_sink,
+        command_capture: options.command_capture,
         debug_osc133: options.debug_osc133,
     });
 

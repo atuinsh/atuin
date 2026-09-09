@@ -5,8 +5,6 @@
 //! optimistic transaction so the check-then-insert is atomic against concurrent
 //! writers, and all blocking fjall I/O runs on tokio's blocking pool via
 //! `spawn_blocking`.
-//!
-//! TODO(retention): the store grows unbounded; no eviction yet. See the design doc.
 mod schema;
 
 use std::sync::Arc;
@@ -18,6 +16,9 @@ use fjall::{OptimisticTxDatabase, OptimisticTxKeyspace, PersistMode, Readable};
 use schema::{Schema as _, SchemaV1};
 use tokio::task::JoinHandle;
 use tracing::error;
+
+mod gc;
+pub use gc::Gc;
 
 use super::{Backend, CaptureError, DeleteOutputError, GetOutputError};
 
@@ -123,7 +124,7 @@ impl Drop for Flusher {
     }
 }
 
-#[derive(derive_more::Debug)]
+#[derive(Clone, derive_more::Debug)]
 pub struct FjallBackend {
     #[debug(skip)]
     db: OptimisticTxDatabase,
@@ -144,6 +145,49 @@ impl FjallBackend {
             keyspace: db.keyspace(ActiveSchema::NAME, ActiveSchema::create_options)?,
             flusher: Arc::new(Flusher::spawn(db)),
         })
+    }
+
+    pub(super) async fn logical_size(&self) -> Result<u64, GetOutputError> {
+        let keyspace = self.keyspace.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut total: u64 = 0;
+            for guard in keyspace.inner().iter() {
+                let (_key, value) =
+                    guard.into_inner().map_err(|err| GetOutputError::Storage(Box::new(err)))?;
+                total = total.saturating_add(u64::try_from(value.len()).unwrap_or(u64::MAX));
+            }
+            Ok(total)
+        })
+        .await
+        .expect("output-capture size task panicked")
+    }
+
+    pub(super) async fn oldest_ids_totaling(
+        &self,
+        reclaim_bytes: u64,
+    ) -> Result<Vec<HistoryId>, GetOutputError> {
+        if reclaim_bytes == 0 {
+            return Ok(Vec::new());
+        }
+        let keyspace = self.keyspace.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut ids = Vec::new();
+            let mut freed: u64 = 0;
+            for guard in keyspace.inner().iter() {
+                let (key, value) =
+                    guard.into_inner().map_err(|err| GetOutputError::Storage(Box::new(err)))?;
+                let bytes: [u8; 16] =
+                    key.as_ref().try_into().expect("output capture keys are 16-byte history ids");
+                ids.push(HistoryId::from_bytes(bytes));
+                freed = freed.saturating_add(u64::try_from(value.len()).unwrap_or(u64::MAX));
+                if freed >= reclaim_bytes {
+                    break;
+                }
+            }
+            Ok(ids)
+        })
+        .await
+        .expect("output-capture select task panicked")
     }
 }
 

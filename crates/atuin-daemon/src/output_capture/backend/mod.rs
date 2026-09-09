@@ -3,7 +3,7 @@ mod nop;
 
 use atuin_client::history::{CommandCapture, HistoryId};
 use enum_dispatch::enum_dispatch;
-pub use fjall::FjallBackend;
+pub use fjall::{FjallBackend, Gc};
 pub use nop::NopBackend;
 use thiserror::Error;
 
