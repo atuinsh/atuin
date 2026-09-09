@@ -326,9 +326,6 @@ async fn delete_forgets_captured_output(
     );
 }
 
-/// Output capture is secondary: a broken output store must not sink a deletion. The entry the
-/// user asked to forget is still removed, and Atuin cleans up what it can rather than refusing the
-/// whole delete.
 #[tokio::test]
 async fn delete_survives_a_broken_output_store() {
     let env = TestEnv::builder().broken_output_store().build().await;
