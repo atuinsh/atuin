@@ -2,6 +2,66 @@
 
 All notable changes to this project will be documented in this file.
 
+## 18.22.0
+
+### Bug Fixes
+
+- *(daemon)* Periodically flush captured command output to disk ([#4070](https://github.com/atuinsh/atuin/issues/4070))
+- *(daemon)* Stream large DeleteHistory requests ([#4076](https://github.com/atuinsh/atuin/issues/4076))
+- *(daemon)* Delete captured output when history entries are deleted ([#4074](https://github.com/atuinsh/atuin/issues/4074))
+- *(nix)* Export OpenSSL lib for LD_LIBRARY_PATH in nix devshell ([#4018](https://github.com/atuinsh/atuin/issues/4018))
+- *(pty-proxy)* Make PTY proxy aware of other PTYs ([#4079](https://github.com/atuinsh/atuin/issues/4079))
+- *(server)* Wrap multi-write DB operations in transactions ([#4088](https://github.com/atuinsh/atuin/issues/4088))
+- *(server)* Emit HTTP access logs at INFO and compile in debug tracing ([#4087](https://github.com/atuinsh/atuin/issues/4087))
+- *(sync)* Expand a packfile whose range is a hole below the store head ([#4085](https://github.com/atuinsh/atuin/issues/4085))
+- Normalize output of `atuin --version` ([#4038](https://github.com/atuinsh/atuin/issues/4038))
+- Make `atuin ai init` a no-op instead of erroring ([#4040](https://github.com/atuinsh/atuin/issues/4040))
+- Do not try to decrypt plaintext records ([#4057](https://github.com/atuinsh/atuin/issues/4057))
+- Behavior of PTY proxy on terminal resizes ([#4061](https://github.com/atuinsh/atuin/issues/4061))
+- Build error ([#4094](https://github.com/atuinsh/atuin/issues/4094))
+
+### Features
+
+- *(daemon)* Daemon owns History Deletion ([#4045](https://github.com/atuinsh/atuin/issues/4045))
+- *(mcp)* Make agents actually use the atuin MCP server ([#4050](https://github.com/atuinsh/atuin/issues/4050))
+- *(pty-proxy)* Keep the start and end of command captures that exceed the max size ([#4092](https://github.com/atuinsh/atuin/issues/4092))
+- *(pty-proxy)* Mirror the CWD of the PTY proxy child ([#4091](https://github.com/atuinsh/atuin/issues/4091))
+- Implement command capture and remove semantic.rs ([#4048](https://github.com/atuinsh/atuin/issues/4048))
+- Simplify semantic captures ([#4065](https://github.com/atuinsh/atuin/issues/4065))
+- Store terminal size in command captures ([#4072](https://github.com/atuinsh/atuin/issues/4072))
+- Version Stored Output Capture and Avoid PB on disk ([#4068](https://github.com/atuinsh/atuin/issues/4068))
+- Redact secrets from captured command output ([#4071](https://github.com/atuinsh/atuin/issues/4071))
+- Rework inspector and add output view ([#4090](https://github.com/atuinsh/atuin/issues/4090))
+- Add [output_capture] settings ([#4069](https://github.com/atuinsh/atuin/issues/4069))
+
+### Miscellaneous Tasks
+
+- *(ci)* Limit concurrency of workflows on same branch ([#4073](https://github.com/atuinsh/atuin/issues/4073))
+- Lift dependencies into top-level Cargo.toml ([#4042](https://github.com/atuinsh/atuin/issues/4042))
+- Sort dependencies in `Cargo.toml`s ([#4046](https://github.com/atuinsh/atuin/issues/4046))
+- Enable Clippy cast warnings ([#4049](https://github.com/atuinsh/atuin/issues/4049))
+- Temporary workaround for flaky test ([#4083](https://github.com/atuinsh/atuin/issues/4083))
+- Emit proptest regression artifacts so CI failures are reproducible ([#4084](https://github.com/atuinsh/atuin/issues/4084))
+- Lockfile bumps ([#4089](https://github.com/atuinsh/atuin/issues/4089))
+- Don't fail if we can't capture output ([#4086](https://github.com/atuinsh/atuin/issues/4086))
+- Link to upstream rustix issue in atuin-pty-proxy ([#4093](https://github.com/atuinsh/atuin/issues/4093))
+
+### Refactor
+
+- *(daemon)* Manage sync inside of the daemon ([#4055](https://github.com/atuinsh/atuin/issues/4055))
+- *(daemon)* Split output capture into fjall and nop backends ([#4082](https://github.com/atuinsh/atuin/issues/4082))
+- *(deps)* Bump mkdocs-material from 9.7.0 to 9.7.7 in /docs in the uv group across 1 directory ([#4059](https://github.com/atuinsh/atuin/issues/4059))
+- *(deps)* Bump vale-cli/vale-action from 2.1.2 to 3.0.0 ([#3887](https://github.com/atuinsh/atuin/issues/3887))
+- *(deps)* Bump rpassword from 7.4.0 to 7.5.0 in the cargo group across 1 directory ([#3877](https://github.com/atuinsh/atuin/issues/3877))
+- *(history)* Make HistoryId a Copy Uuid ([#4013](https://github.com/atuinsh/atuin/issues/4013))
+- Clean up the history service and fix minor bugs
+
+### Testing
+
+- *(daemon)* Adversarial test suites with new daemon ([#4058](https://github.com/atuinsh/atuin/issues/4058))
+- E2e pty test harness ([#4075](https://github.com/atuinsh/atuin/issues/4075))
+- Filtered commands leave no captured output ([#4081](https://github.com/atuinsh/atuin/issues/4081))
+
 ## 18.21.0
 
 ### Bug Fixes

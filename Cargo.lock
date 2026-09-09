@@ -254,7 +254,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "atuin"
-version = "18.21.0"
+version = "18.22.0"
 dependencies = [
  "ansi-to-tui",
  "arboard",
@@ -327,7 +327,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-ai"
-version = "18.21.0"
+version = "18.22.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -390,7 +390,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-client"
-version = "18.21.0"
+version = "18.22.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -456,7 +456,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-common"
-version = "18.21.0"
+version = "18.22.0"
 dependencies = [
  "atuin-vt100",
  "base64",
@@ -505,7 +505,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-daemon"
-version = "18.21.0"
+version = "18.22.0"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -553,7 +553,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-domain"
-version = "18.21.0"
+version = "18.22.0"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -588,7 +588,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-dotfiles"
-version = "18.21.0"
+version = "18.22.0"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -606,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-history"
-version = "18.21.0"
+version = "18.22.0"
 dependencies = [
  "atuin-client",
  "codspeed-divan-compat",
@@ -621,7 +621,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-kv"
-version = "18.21.0"
+version = "18.22.0"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -641,7 +641,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-pty-proxy"
-version = "18.21.0"
+version = "18.22.0"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -662,7 +662,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-scripts"
-version = "18.21.0"
+version = "18.22.0"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -703,7 +703,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server"
-version = "18.21.0"
+version = "18.22.0"
 dependencies = [
  "argon2",
  "async-trait",
