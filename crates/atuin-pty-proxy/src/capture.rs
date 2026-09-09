@@ -164,6 +164,16 @@ impl TrackerCore {
                 // data rather than discarding it.
                 end.trim_end_matches_in_place('\n');
                 contents.start.trim_start_matches_in_place('\n');
+
+                // Ensure the start chunk doesn't end in the middle of a line, and the end chunk
+                // doesn't start in the middle of a line. This is not just to make the output nicer
+                // but is also important for secret redaction -- if a secret got split across the
+                // start and end chunks, we would fail to redact it later. For example, if the
+                // output of a command were one byte over the limit and we happened to truncate the
+                // `=` in `...AWS_SECRET_ACCESS_KEY=SOME_SECRET_VALUE...`, we would fail to redact
+                // the secret. Removing partial lines from the chunks avoids the issue.
+                contents.start.truncate(contents.start.rfind('\n').unwrap_or(0));
+                end.drain(..end.find('\n').map_or(end.len(), |n| n + 1));
             } else {
                 contents.start.trim_matches_in_place('\n');
             }
@@ -862,6 +872,114 @@ mod tests {
         assert_eq!(capture.output_start, "");
         assert_eq!(capture.output_end.as_deref(), Some(""));
         assert_eq!(capture.output_observed_bytes, u64::conv(LINES * b"line 0000\r\n".len()));
+    }
+
+    // -- Partial lines at the cut ---------------------------------------------
+
+    /// A short terminal, so the blank rows trailing the output do not eat the whole end budget
+    /// at the small limits these cases use.
+    const SHORT_ROWS: u16 = 4;
+
+    /// One numbered assignment per line, so a kept fragment says both where in the output it came
+    /// from and whether a credential survived the cut.
+    const SECRET_LINE_LEN: usize = "AWS_SECRET_ACCESS_KEY=hunter0000".len();
+
+    fn secret_lines(count: usize) -> Vec<u8> {
+        let mut input = COMMAND_EXECUTED.to_vec();
+        for i in 0..count {
+            input.extend_from_slice(format!("AWS_SECRET_ACCESS_KEY=hunter{i:04}\r\n").as_bytes());
+        }
+        input.extend_from_slice(&finished(0, HID));
+        input
+    }
+
+    fn split_capture(bytes: usize) -> (String, String) {
+        let limit = CaptureLimit {
+            start_bytes: bytes,
+            end_bytes: bytes,
+        };
+        let mut tracker = Tracker::new(SHORT_ROWS, COLS, limit);
+        tracker.push(&secret_lines(60));
+
+        let capture = tracker.only_capture().1;
+        let end = capture.output_end.expect("this output has to lose its middle");
+        (capture.output_start, end)
+    }
+
+    /// Sweep the limit across a line boundary and well past it, so the cut lands mid-line as
+    /// often as not. At the real 512 KiB limits a chunk spans many rows, but where the cut falls
+    /// *within* a row is arbitrary, and that is what these cover.
+    #[rstest]
+    fn neither_chunk_keeps_a_partial_line(
+        #[values(36, 40, 45, 50, 60, 65, 70, 80, 99)] bytes: usize,
+    ) {
+        let (start, end) = split_capture(bytes);
+        assert!(!start.is_empty() && !end.is_empty(), "nothing kept, so nothing is proven");
+
+        for line in start.lines().chain(end.lines()) {
+            assert_eq!(
+                line.len(),
+                SECRET_LINE_LEN,
+                "a line the cut broke was kept with limit {bytes}: {line:?}",
+            );
+            assert!(line.starts_with("AWS_SECRET_ACCESS_KEY=hunter"), "{line:?}");
+        }
+    }
+
+    /// The reason the partial lines go. Once the middle is discarded the two chunks are redacted
+    /// separately, so a credential split across the cut matches neither half -- an assignment
+    /// whose name ended one chunk leaves a bare value at the head of the next.
+    #[rstest]
+    fn a_credential_split_across_the_cut_does_not_survive(
+        #[values(36, 40, 45, 50, 60, 65, 70, 80, 99)] bytes: usize,
+    ) {
+        let (start, end) = split_capture(bytes);
+        assert!(!start.is_empty() && !end.is_empty(), "nothing kept, so nothing is proven");
+
+        for chunk in [&start, &end] {
+            let redacted = atuin_common::secrets::redact(chunk);
+            assert!(
+                !redacted.contains("hunter"),
+                "a credential survived redaction with limit {bytes}: {redacted:?}",
+            );
+            // And it was redaction that removed it, not the guard removing everything.
+            assert!(redacted.contains("AWS_SECRET_ACCESS_KEY=****"), "{redacted:?}");
+        }
+    }
+
+    #[rstest]
+    fn whole_lines_either_side_of_the_cut_are_kept() {
+        // A budget reaching just past a line's newline keeps that whole line: the guard only ever
+        // removes a line the cut had already broken.
+        let (start, end) = split_capture(SECRET_LINE_LEN + 4);
+        assert_eq!(start, "AWS_SECRET_ACCESS_KEY=hunter0000");
+        assert_eq!(end, "AWS_SECRET_ACCESS_KEY=hunter0059");
+    }
+
+    #[rstest]
+    fn a_chunk_with_no_newline_is_dropped_whole() {
+        // The budget ends on the last byte of a line, so the chunk holds what is really a whole
+        // line -- but its newline is on the far side of the cut, and a chunk with no newline in it
+        // cannot be told apart from one the cut broke. Dropping it is the safe reading: keeping it
+        // would leave a bare `hunter0059`, with the name that makes it recognisable on the other
+        // side of the gap. It costs nothing at the real limits, where a chunk spans many rows.
+        let (start, end) = split_capture(SECRET_LINE_LEN);
+        assert_eq!(start, "");
+        assert_eq!(end, "");
+    }
+
+    #[rstest]
+    fn an_untruncated_capture_keeps_its_first_and_last_lines() {
+        // The guard runs only where a middle was discarded. Nothing was, so no line is at risk
+        // and none may be dropped.
+        let mut tracker = Tracker::new(ROWS, COLS, LIMIT);
+        tracker.push(&secret_lines(3));
+
+        let capture = tracker.only_capture().1;
+        assert_eq!(capture.output_end, None);
+        assert_eq!(capture.output_start.lines().count(), 3);
+        assert!(capture.output_start.starts_with("AWS_SECRET_ACCESS_KEY=hunter0000"));
+        assert!(capture.output_start.ends_with("AWS_SECRET_ACCESS_KEY=hunter0002"));
     }
 
     // -- Terminal size --------------------------------------------------------
