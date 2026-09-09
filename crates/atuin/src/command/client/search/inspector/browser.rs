@@ -31,14 +31,54 @@ pub enum View {
     Output,
 }
 
+/// Display strings prepared when a database window is loaded, not on each frame.
+struct Run {
+    id: HistoryId,
+    timestamp: String,
+    exit: String,
+    duration: String,
+    origin: String,
+    context: String,
+    failed: bool,
+}
+
+impl Run {
+    fn new(entry: &History, session: bool, settings: &Settings) -> Self {
+        Self {
+            id: entry.id,
+            timestamp: timestamp(entry, settings),
+            exit: exit_label(entry.exit),
+            duration: Duration::saturating_from_nanos_i64(entry.duration)
+                .display()
+                .largest_unit()
+                .to_string(),
+            origin: origin(entry),
+            context: if session {
+                &entry.command
+            } else {
+                &entry.cwd
+            }
+            .escape_non_printable()
+            .into_owned(),
+            failed: entry.exit > 0,
+        }
+    }
+}
+
 /// Switching views pivots on the selected occurrence, not the original search result.
 #[derive(Default)]
 pub struct Browser {
     pub view: View,
-    entries: Vec<History>,
+    entries: Vec<Run>,
     scope: Option<(View, String)>,
     window_for: Option<HistoryId>,
     table: TableState,
+
+    selected_for: Option<HistoryId>,
+    command: Paragraph<'static>,
+    command_size: (usize, usize),
+    details: Paragraph<'static>,
+    output_heading: Paragraph<'static>,
 
     output: Capture,
     output_scroll: usize,
@@ -48,6 +88,54 @@ pub struct Browser {
 }
 
 impl Browser {
+    /// Settings and theme are fixed for a search session. Only a new occurrence
+    /// needs its command highlighted and its metadata formatted again.
+    pub fn prepare(&mut self, selected: &History, settings: &Settings, theme: &Theme) {
+        if self.selected_for == Some(selected.id) {
+            return;
+        }
+        let styles = Styles::new(theme);
+        let command = command_text(selected, settings.ui.syntax_highlight, theme);
+        self.command_size = (command.width(), command.lines.len());
+
+        let mut heading = command.lines.first().cloned().unwrap_or_default();
+        heading.spans.insert(0, Span::styled("cmd: ", styles.muted));
+        self.output_heading = Paragraph::new(vec![
+            heading,
+            Line::styled(
+                format!(
+                    " {}  ·  {}  ·  exit {}",
+                    timestamp(selected, settings),
+                    origin(selected),
+                    exit_label(selected.exit)
+                ),
+                styles.muted,
+            ),
+        ]);
+
+        self.command = Paragraph::new(command).wrap(Wrap { trim: false });
+        self.details = details(selected, settings, styles);
+        self.selected_for = Some(selected.id);
+    }
+
+    /// Keep command context visible without spending a panel's borders and padding on it.
+    pub fn draw_command(&self, f: &mut Frame<'_>, area: Rect, theme: &Theme) -> Rect {
+        let width = usize::from(area.width.saturating_sub(5).max(1));
+        let wraps = self.command_size.1 > 1 || self.command_size.0 > width;
+        let height = if area.height >= 12 && wraps {
+            2
+        } else {
+            1
+        };
+        let areas = Layout::vertical([Constraint::Length(height), Constraint::Min(0)]).split(area);
+        let columns =
+            Layout::horizontal([Constraint::Length(5), Constraint::Min(0)]).split(areas[0]);
+
+        f.render_widget(Paragraph::new("cmd: ").style(Styles::new(theme).muted), columns[0]);
+        f.render_widget(&self.command, columns[1]);
+        areas[1]
+    }
+
     pub fn select_view(&mut self, view: View) {
         if self.view != view {
             if view == View::Output {
@@ -129,8 +217,13 @@ impl Browser {
         if self.scope.as_ref() != Some(&(self.view, scope.clone()))
             || (at_edge && self.window_for != Some(selected.id))
         {
-            self.entries = db.inspector_history(selected, self.view == View::Session).await?;
-            self.entries.reverse();
+            self.entries = db
+                .inspector_history(selected, self.view == View::Session)
+                .await?
+                .into_iter()
+                .rev()
+                .map(|entry| Run::new(&entry, self.view == View::Session, settings))
+                .collect();
             self.scope = Some((self.view, scope));
             self.window_for = Some(selected.id);
             self.table = TableState::default();
@@ -146,18 +239,10 @@ impl Browser {
         }))
     }
 
-    pub fn draw(
-        &mut self,
-        f: &mut Frame<'_>,
-        chunk: Rect,
-        selected: &History,
-        settings: &Settings,
-        theme: &Theme,
-        bindings: &Bindings,
-    ) {
+    pub fn draw(&mut self, f: &mut Frame<'_>, chunk: Rect, theme: &Theme, bindings: &Bindings) {
         let styles = Styles::new(theme);
         if self.view == View::Output {
-            self.draw_output(f, chunk, selected, settings, theme, bindings);
+            self.draw_output(f, chunk, theme, bindings);
             return;
         }
 
@@ -170,11 +255,11 @@ impl Browser {
             }),
         ])
         .split(chunk);
-        self.draw_list(f, areas[0], settings, styles);
-        draw_details(f, areas[1], selected, settings, styles);
+        self.draw_list(f, areas[0], styles);
+        f.render_widget(&self.details, areas[1]);
     }
 
-    fn draw_list(&mut self, f: &mut Frame<'_>, area: Rect, settings: &Settings, styles: Styles) {
+    fn draw_list(&mut self, f: &mut Frame<'_>, area: Rect, styles: Styles) {
         let session = self.view == View::Session;
         let narrow = area.width < 90;
         let tiny = area.width < 65;
@@ -182,32 +267,22 @@ impl Browser {
         let rows = self.entries.iter().map(|entry| {
             let mut cells = vec![
                 Cell::from(if tiny {
-                    clock(entry, settings)
+                    entry.timestamp.rsplit(' ').next().unwrap_or_default()
                 } else {
-                    timestamp(entry, settings)
+                    entry.timestamp.as_str()
                 })
                 .style(styles.muted),
-                Cell::from(exit_label(entry.exit)).style(if entry.exit > 0 {
+                Cell::from(entry.exit.as_str()).style(if entry.failed {
                     styles.failure
                 } else {
                     styles.muted
                 }),
-                Cell::from(
-                    Duration::saturating_from_nanos_i64(entry.duration)
-                        .display()
-                        .largest_unit()
-                        .to_string(),
-                )
-                .style(styles.muted),
+                Cell::from(entry.duration.as_str()).style(styles.muted),
             ];
             if !narrow {
-                cells.push(Cell::from(origin(entry)).style(styles.muted));
+                cells.push(Cell::from(entry.origin.as_str()).style(styles.muted));
             }
-            cells.push(Cell::from(if session {
-                entry.command.escape_non_printable()
-            } else {
-                entry.cwd.escape_non_printable()
-            }));
+            cells.push(Cell::from(entry.context.as_str()));
             Row::new(cells)
         });
 
@@ -250,15 +325,7 @@ impl Browser {
         f.render_stateful_widget(table, area, &mut self.table);
     }
 
-    fn draw_output(
-        &mut self,
-        f: &mut Frame<'_>,
-        area: Rect,
-        selected: &History,
-        settings: &Settings,
-        theme: &Theme,
-        bindings: &Bindings,
-    ) {
+    fn draw_output(&mut self, f: &mut Frame<'_>, area: Rect, theme: &Theme, bindings: &Bindings) {
         let styles = Styles::new(theme);
         let spacious = area.height >= 10;
         let areas = Layout::vertical([
@@ -272,25 +339,7 @@ impl Browser {
         ])
         .split(area);
 
-        let mut command = command_text(selected, settings.ui.syntax_highlight, theme)
-            .lines
-            .into_iter()
-            .next()
-            .unwrap_or_default();
-        command.spans.insert(0, Span::styled("cmd: ", styles.muted));
-        let heading = vec![
-            command,
-            Line::styled(
-                format!(
-                    " {}  ·  {}  ·  exit {}",
-                    timestamp(selected, settings),
-                    origin(selected),
-                    exit_label(selected.exit)
-                ),
-                styles.muted,
-            ),
-        ];
-        f.render_widget(Paragraph::new(heading), areas[0]);
+        f.render_widget(&self.output_heading, areas[0]);
 
         let status = self.output.status().to_owned();
         let block = panel(format!(" {status} "), styles);
@@ -373,14 +422,6 @@ fn timestamp(entry: &History, settings: &Settings) -> String {
         .unwrap_or_default()
 }
 
-fn clock(entry: &History, settings: &Settings) -> String {
-    entry
-        .timestamp
-        .to_offset(settings.timezone.0)
-        .format(format_description!("[hour]:[minute]:[second]"))
-        .unwrap_or_default()
-}
-
 fn origin(entry: &History) -> String {
     format!(
         "{}@{}",
@@ -396,17 +437,7 @@ fn exit_label(exit: i64) -> String {
     }
 }
 
-fn draw_details(
-    f: &mut Frame<'_>,
-    area: Rect,
-    selected: &History,
-    settings: &Settings,
-    styles: Styles,
-) {
-    if area.height == 0 {
-        return;
-    }
-
+fn details(selected: &History, settings: &Settings, styles: Styles) -> Paragraph<'static> {
     let lines = vec![
         Line::from(vec![
             Span::styled("When  ", styles.label),
@@ -431,41 +462,14 @@ fn draw_details(
         ]),
         Line::from(vec![
             Span::styled("Cwd   ", styles.label),
-            Span::raw(selected.cwd.escape_non_printable()),
+            Span::raw(selected.cwd.escape_non_printable().into_owned()),
         ]),
     ];
 
-    f.render_widget(
-        Paragraph::new(lines)
-            .style(styles.base)
-            .wrap(Wrap { trim: false })
-            .block(panel(" Selected run ", styles)),
-        area,
-    );
-}
-
-/// Keep command context visible without spending a panel's borders and padding on it.
-pub fn draw_command(
-    f: &mut Frame<'_>,
-    area: Rect,
-    history: &History,
-    settings: &Settings,
-    theme: &Theme,
-) -> Rect {
-    let text = command_text(history, settings.ui.syntax_highlight, theme);
-    let width = usize::from(area.width.saturating_sub(5).max(1));
-    let rows = text.lines.iter().map(|line| line.width().max(1).div_ceil(width)).sum::<usize>();
-    let height = if area.height >= 12 && rows > 1 {
-        2
-    } else {
-        1
-    };
-    let areas = Layout::vertical([Constraint::Length(height), Constraint::Min(0)]).split(area);
-    let columns = Layout::horizontal([Constraint::Length(5), Constraint::Min(0)]).split(areas[0]);
-
-    f.render_widget(Paragraph::new("cmd: ").style(Styles::new(theme).muted), columns[0]);
-    f.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), columns[1]);
-    areas[1]
+    Paragraph::new(lines)
+        .style(styles.base)
+        .wrap(Wrap { trim: false })
+        .block(panel(" Selected run ", styles))
 }
 
 fn command_text(history: &History, highlight: bool, theme: &Theme) -> Text<'static> {
@@ -669,10 +673,12 @@ mod tests {
             (Some(neighbor.id), None)
         );
         assert_eq!(browser.entries[0].id, neighbor.id);
+        assert_eq!(browser.entries[0].context, neighbor.command);
         assert_eq!(browser.table.selected(), Some(1));
         browser.select_view(View::Runs);
         assert_eq!(browser.refresh(&db, &neighbor, &settings).await.unwrap(), (None, None));
         assert_eq!(browser.entries[0].id, neighbor.id);
+        assert_eq!(browser.entries[0].context, neighbor.cwd);
     }
 
     #[rstest]
@@ -688,16 +694,15 @@ mod tests {
         history.duration = 2_000_000_000;
         let mut browser = Browser {
             view,
-            entries: vec![history.clone()],
+            entries: vec![Run::new(&history, view == View::Session, &Settings::utc())],
             ..Browser::default()
         };
         browser.table.select(Some(0));
         let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
         let mut themes = ThemeManager::new(Some(true), Some(String::new()));
         let theme = themes.load_theme("(none)", None);
-        terminal
-            .draw(|f| browser.draw(f, f.area(), &history, &Settings::utc(), theme, &bindings()))
-            .unwrap();
+        browser.prepare(&history, &Settings::utc(), theme);
+        terminal.draw(|f| browser.draw(f, f.area(), theme, &bindings())).unwrap();
         let rendered: String = terminal
             .backend()
             .buffer()
@@ -715,7 +720,7 @@ mod tests {
     #[case("echo first\necho second", 80, 24, 2)]
     #[case("a long command that wraps across lines", 12, 24, 2)]
     #[case("echo first\necho second", 80, 5, 1)]
-    fn command_header_is_compact(
+    fn command_header_follows_selection_and_stays_compact(
         mut history: History,
         #[case] command: &str,
         #[case] width: u16,
@@ -725,11 +730,15 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let mut themes = ThemeManager::new(Some(true), Some(String::new()));
         let theme = themes.load_theme("(none)", None);
+        let mut browser = Browser::default();
+        browser.prepare(&history, &Settings::utc(), theme);
+        history.id = HistoryId::new(atuin_common::utils::uuid_v7());
+        history.command = command.into();
+        browser.prepare(&history, &Settings::utc(), theme);
         terminal
             .draw(|f| {
-                history.command = command.into();
                 let area = draw_views(f, f.area(), View::Runs, theme, &bindings());
-                let rest = draw_command(f, area, &history, &Settings::utc(), theme);
+                let rest = browser.draw_command(f, area, theme);
                 assert_eq!(rest.y, rows + 1);
                 assert_eq!(rest.height, height - rows - 1);
             })
@@ -779,7 +788,7 @@ mod tests {
     fn output_back_preserves_list_position(history: History) {
         let mut browser = Browser {
             view: View::Session,
-            entries: vec![history],
+            entries: vec![Run::new(&history, true, &Settings::utc())],
             ..Browser::default()
         };
         browser.table.select(Some(0));
@@ -836,10 +845,8 @@ mod tests {
             ),
             ..Browser::default()
         };
-        let settings = Settings::utc();
-        terminal
-            .draw(|f| browser.draw(f, f.area(), &history, &settings, theme, &bindings()))
-            .unwrap();
+        browser.prepare(&history, &Settings::utc(), theme);
+        terminal.draw(|f| browser.draw(f, f.area(), theme, &bindings())).unwrap();
         assert!(browser.output_max_scroll > 0);
         let first_output = if height >= 10 {
             (2, 3)
@@ -866,9 +873,7 @@ mod tests {
         for _ in 0..6000 {
             browser.scroll_output(true);
         }
-        terminal
-            .draw(|f| browser.draw(f, f.area(), &history, &settings, theme, &bindings()))
-            .unwrap();
+        terminal.draw(|f| browser.draw(f, f.area(), theme, &bindings())).unwrap();
         let rendered: String = terminal
             .backend()
             .buffer()
@@ -900,9 +905,7 @@ mod tests {
         }
         assert_eq!(browser.output_scroll, 0);
         browser.back_from_output();
-        terminal
-            .draw(|f| browser.draw(f, f.area(), &history, &Settings::utc(), theme, &bindings()))
-            .unwrap();
+        terminal.draw(|f| browser.draw(f, f.area(), theme, &bindings())).unwrap();
         assert!(terminal.backend().buffer().content().iter().all(|c| c.bg != Color::Blue));
     }
 }

@@ -1,8 +1,11 @@
 use super::super::keybindings::{Action, EvalContext, Keymap};
 
-/// Resolved bindings for this frame, shared by the view selector and footer.
+/// Resolved bindings shared by the view selector and footer.
 #[derive(Default)]
-pub struct Bindings(Vec<(Action, String)>);
+pub struct Bindings {
+    keys: Vec<(Action, String)>,
+    context: Option<EvalContext>,
+}
 
 impl Bindings {
     pub fn new(keymap: &Keymap, context: &EvalContext) -> Self {
@@ -22,7 +25,17 @@ impl Bindings {
             .collect();
 
         bindings.sort_by(|(_, a), (_, b)| (a.len(), a).cmp(&(b.len(), b)));
-        Self(bindings)
+        Self {
+            keys: bindings,
+            context: Some(*context),
+        }
+    }
+
+    /// The keymap is fixed for the search session; only conditions can change.
+    pub fn update(&mut self, keymap: &Keymap, context: &EvalContext) {
+        if self.context.as_ref() != Some(context) {
+            *self = Self::new(keymap, context);
+        }
     }
 
     pub fn key(&self, action: &Action) -> Option<&str> {
@@ -45,10 +58,10 @@ impl Bindings {
             _ => "",
         };
 
-        self.0
+        self.keys
             .iter()
             .find(|(a, key)| a == action && key == preferred)
-            .or_else(|| self.0.iter().find(|(a, _)| a == action))
+            .or_else(|| self.keys.iter().find(|(a, _)| a == action))
             .map(|(_, key)| key.as_str())
     }
 
@@ -81,7 +94,7 @@ mod tests {
 
     #[rstest]
     fn remapped_and_conditional_keys() {
-        let context = EvalContext {
+        let mut context = EvalContext {
             cursor_position: 0,
             input_width: 0,
             input_byte_len: 0,
@@ -98,10 +111,23 @@ mod tests {
             ConditionAtom::ListAtEnd,
             Action::SelectNext,
         )]);
-        let bindings = Bindings::new(&keymap, &context);
+        let mut bindings = Bindings::default();
+        bindings.update(&keymap, &context);
         assert_eq!(bindings.key(&Action::InspectOutput), Some("x"));
         assert_eq!(bindings.title("Session", &Action::InspectSession), "[S] Session");
         assert_eq!(bindings.title("Runs", &Action::InspectRuns), "Runs");
+        assert!(bindings.key(&Action::InspectNext).is_none());
+
+        let keys = bindings.keys.as_ptr();
+        bindings.update(&keymap, &context);
+        assert_eq!(bindings.keys.as_ptr(), keys);
+
+        context.selected_index = 1;
+        bindings.update(&keymap, &context);
+        assert_eq!(bindings.key(&Action::InspectNext), Some("down"));
+
+        context.selected_index = 0;
+        bindings.update(&keymap, &context);
         assert!(bindings.key(&Action::InspectNext).is_none());
     }
 }

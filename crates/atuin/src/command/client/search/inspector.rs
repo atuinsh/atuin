@@ -69,8 +69,89 @@ fn monthly_durations(durations: &[(String, i64)]) -> Vec<(time::Date, i64)> {
     durations
 }
 
+/// Formatted once when the database statistics change, independent of viewport size.
+pub struct Stats {
+    metrics: [(&'static str, String); 3],
+    exits: Vec<Bar<'static>>,
+    exit_width: u16,
+    weekdays: [Vec<Bar<'static>>; 2],
+    months: Vec<Bar<'static>>,
+}
+
+impl From<HistoryStats> for Stats {
+    fn from(mut stats: HistoryStats) -> Self {
+        let metrics = [
+            ("Total runs", stats.total.to_string()),
+            ("Success rate¹", success_rate(&stats)),
+            ("Avg runtime", Duration::from_nanos(stats.average_duration).display().to_string()),
+        ];
+
+        let exit_width = if stats.exits.iter().any(|(exit, _)| *exit < 0) {
+            7
+        } else {
+            4
+        };
+        stats.exits.sort_by_key(|(exit, _)| *exit);
+        let exits = stats
+            .exits
+            .iter()
+            .map(|(exit, count)| {
+                Bar::default()
+                    .label(if *exit < 0 {
+                        "Unknown".into()
+                    } else {
+                        exit.to_string()
+                    })
+                    .value(u64::try_from(*count).unwrap_or(0))
+            })
+            .collect();
+
+        let mut days = [0; 7];
+        for (day, count) in &stats.day_of_week {
+            if let Ok(index) = day.parse::<usize>()
+                && let Some(value) = days.get_mut(index)
+            {
+                *value = u64::try_from(*count).unwrap_or(0);
+            }
+        }
+        let weekdays = [["S", "M", "T", "W", "T", "F", "S"], [
+            "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat",
+        ]]
+        .map(|labels| {
+            labels
+                .into_iter()
+                .zip(days)
+                .map(|(label, count)| Bar::default().label(label).value(count))
+                .collect()
+        });
+
+        let months = monthly_durations(&stats.duration_over_time)
+            .into_iter()
+            .map(|(date, duration)| {
+                Bar::default()
+                    .label(date.format(format_description!("[month]/[year]")).unwrap_or_default())
+                    .value(u64::try_from(duration).unwrap_or(0))
+                    .text_value(
+                        Duration::saturating_from_nanos_i64(duration)
+                            .display()
+                            .largest_unit()
+                            .to_string(),
+                    )
+            })
+            .collect();
+
+        Self {
+            metrics,
+            exits,
+            exit_width,
+            weekdays,
+            months,
+        }
+    }
+}
+
 /// Aggregate-only: occurrence metadata and command context belong in Runs.
-pub fn draw(f: &mut Frame<'_>, area: Rect, stats: &HistoryStats, theme: &Theme) {
+pub fn draw(f: &mut Frame<'_>, area: Rect, stats: &Stats, theme: &Theme) {
     let styles = Styles {
         base: Style::from_crossterm(theme.as_style(Meaning::Base)),
         muted: Style::from_crossterm(theme.as_style(Meaning::Annotation)),
@@ -87,11 +168,7 @@ pub fn draw(f: &mut Frame<'_>, area: Rect, stats: &HistoryStats, theme: &Theme) 
         Constraint::Min(0),
     ])
     .split(area);
-    let metrics = [
-        ("Total runs", stats.total.to_string()),
-        ("Success rate¹", success_rate(stats)),
-        ("Avg runtime", Duration::from_nanos(stats.average_duration).display().to_string()),
-    ];
+    let metrics = &stats.metrics;
     if compact {
         let lines: Vec<_> = metrics
             .iter()
@@ -106,9 +183,9 @@ pub fn draw(f: &mut Frame<'_>, area: Rect, stats: &HistoryStats, theme: &Theme) 
         f.render_widget(Paragraph::new("¹ Known exits only").style(styles.muted), areas[1]);
     } else {
         let cards = Layout::horizontal([Constraint::Fill(1); 3]).split(areas[0]);
-        for ((label, value), card) in metrics.into_iter().zip(cards.iter()) {
+        for ((label, value), card) in metrics.iter().zip(cards.iter()) {
             f.render_widget(
-                Paragraph::new(value)
+                Paragraph::new(value.as_str())
                     .style(styles.important)
                     .block(panel(format!(" {label} "), styles).padding(Padding::horizontal(1))),
                 *card,
@@ -139,38 +216,21 @@ fn chart(
     );
 }
 
-fn draw_charts(f: &mut Frame<'_>, area: Rect, stats: &HistoryStats, styles: Styles) {
+fn draw_charts(f: &mut Frame<'_>, area: Rect, stats: &Stats, styles: Styles) {
     let areas = Layout::vertical([Constraint::Fill(1), Constraint::Fill(1), Constraint::Length(1)])
         .split(area);
     let top = Layout::horizontal([Constraint::Fill(1); 2]).split(areas[0]);
 
-    let mut exits = stats.exits.clone();
-    exits.sort_by_key(|(exit, _)| *exit);
-    let exit_width = if exits.iter().any(|(exit, _)| *exit < 0) {
-        7
-    } else {
-        4
-    };
+    let exits = &stats.exits;
+    let exit_width = stats.exit_width;
     let capacity = usize::from(top[0].width.saturating_sub(2) / (exit_width + 1));
-    let exit_bars: Vec<_> = exits
-        .iter()
-        .take(capacity)
-        .map(|(exit, count)| {
-            Bar::default()
-                .label(if *exit < 0 {
-                    "Unknown".into()
-                } else {
-                    exit.to_string()
-                })
-                .value(u64::try_from(*count).unwrap_or(0))
-        })
-        .collect();
+    let exit_bars = &exits[..capacity.min(exits.len())];
     let title = if exits.len() > capacity {
         format!(" Exit codes · {capacity}/{} shown ", exits.len())
     } else {
         " Exit codes ".into()
     };
-    chart(f, top[0], title, &exit_bars, exit_width, styles);
+    chart(f, top[0], title, exit_bars, exit_width, styles);
 
     // Single-character weekday labels let all seven days fit in a narrow terminal.
     let day_width = if top[1].width >= 30 {
@@ -178,42 +238,12 @@ fn draw_charts(f: &mut Frame<'_>, area: Rect, stats: &HistoryStats, styles: Styl
     } else {
         1
     };
-    let days = if day_width == 3 {
-        ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-    } else {
-        ["S", "M", "T", "W", "T", "F", "S"]
-    };
-    let day_bars: Vec<_> = days
-        .iter()
-        .enumerate()
-        .map(|(i, day)| {
-            let count = stats
-                .day_of_week
-                .iter()
-                .find(|(d, _)| d == &i.to_string())
-                .map_or(0, |(_, count)| *count);
-            Bar::default().label(*day).value(u64::try_from(count).unwrap_or(0))
-        })
-        .collect();
-    chart(f, top[1], " Runs by weekday (UTC) ".into(), &day_bars, day_width, styles);
+    let day_bars = &stats.weekdays[usize::from(day_width == 3)];
+    chart(f, top[1], " Runs by weekday (UTC) ".into(), day_bars, day_width, styles);
 
-    let months = monthly_durations(&stats.duration_over_time);
+    let months = &stats.months;
     let capacity = usize::from(areas[1].width.saturating_sub(2) / 8);
-    let bars: Vec<_> = months
-        .iter()
-        .skip(months.len().saturating_sub(capacity))
-        .map(|(date, duration)| {
-            Bar::default()
-                .label(date.format(format_description!("[month]/[year]")).unwrap_or_default())
-                .value(u64::try_from(*duration).unwrap_or(0))
-                .text_value(
-                    Duration::saturating_from_nanos_i64(*duration)
-                        .display()
-                        .largest_unit()
-                        .to_string(),
-                )
-        })
-        .collect();
+    let bars = &months[months.len().saturating_sub(capacity)..];
     let title = if months.len() > capacity {
         format!(" Mean runtime / month · latest {capacity} of {} ", months.len())
     } else {
@@ -227,7 +257,7 @@ fn draw_charts(f: &mut Frame<'_>, area: Rect, stats: &HistoryStats, styles: Styl
             areas[1],
         );
     } else {
-        chart(f, areas[1], title, &bars, 7, styles);
+        chart(f, areas[1], title, bars, 7, styles);
     }
 
     f.render_widget(Paragraph::new("¹ Known exits only").style(styles.muted), areas[2]);
@@ -286,6 +316,7 @@ mod tests {
         #[case] width: u16,
         #[case] height: u16,
     ) {
+        let stats = Stats::from(stats);
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let mut themes = ThemeManager::new(Some(true), Some(String::new()));
         let theme = themes.load_theme("(none)", None);
@@ -323,6 +354,7 @@ mod tests {
         stats.total = 0;
         stats.exits.clear();
         stats.duration_over_time.clear();
+        let stats = Stats::from(stats);
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let mut themes = ThemeManager::new(Some(true), Some(String::new()));
         let theme = themes.load_theme("(none)", None);

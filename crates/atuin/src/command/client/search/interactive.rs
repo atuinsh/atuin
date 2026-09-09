@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use atuin_client::database::{Context, Sqlite, current_context};
 use atuin_client::history::store::HistoryStore;
-use atuin_client::history::{History, HistoryId, HistoryStats};
+use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::{
     CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewStrategy, RequestedSearchMode,
     SearchMode, Settings, UiColumn,
@@ -38,6 +38,7 @@ use windows_sys::Win32::System::Console::{GetConsoleOutputCP, SetConsoleOutputCP
 use super::cursor::Cursor;
 use super::engines::{AnySearchEngine, SearchEngine, SearchState};
 use super::history_list::{HistoryList, ListState};
+use super::inspector::Stats as InspectorStats;
 use super::inspector::bindings::Bindings;
 use super::inspector::browser::{Browser, View as InspectorView};
 use crate::VERSION;
@@ -68,6 +69,7 @@ pub struct InspectingState {
     next: Option<HistoryId>,
     previous: Option<HistoryId>,
     browser: Browser,
+    bindings: Bindings,
 }
 
 impl InspectingState {
@@ -917,7 +919,7 @@ impl State {
         &mut self,
         f: &mut Frame,
         results: &[History],
-        stats: Option<&HistoryStats>,
+        stats: Option<&InspectorStats>,
         inspecting: Option<&History>,
         settings: &Settings,
         theme: &Theme,
@@ -938,23 +940,18 @@ impl State {
         f: &mut Frame,
         area: Rect,
         results: &[History],
-        stats: Option<&HistoryStats>,
+        stats: Option<&InspectorStats>,
         inspecting: Option<&History>,
         settings: &Settings,
         theme: &Theme,
     ) {
-        let bindings = if self.tab_index == 1 {
-            Bindings::new(&self.keymaps.inspector, &self.eval_context())
-        } else {
-            Bindings::default()
-        };
+        let bindings = &self.inspecting_state.bindings;
         // Output is a focused reader, not another panel beneath the search chrome.
         if self.tab_index == 1
             && self.inspecting_state.browser.view == InspectorView::Output
-            && let Some(selected) =
-                inspecting.or_else(|| results.get(self.results_state.selected()))
+            && inspecting.or_else(|| results.get(self.results_state.selected())).is_some()
         {
-            self.inspecting_state.browser.draw(f, area, selected, settings, theme, &bindings);
+            self.inspecting_state.browser.draw(f, area, theme, bindings);
             return;
         }
         let compactness = to_compactness(f, settings);
@@ -1160,27 +1157,21 @@ impl State {
                         .alignment(Alignment::Center);
                     f.render_widget(message, results_list_chunk);
                 } else {
-                    let inspecting = match inspecting {
-                        Some(inspecting) => inspecting,
-                        None => &results[self.results_state.selected()],
-                    };
                     let browser = &mut self.inspecting_state.browser;
                     let chunk = super::inspector::browser::draw_views(
                         f,
                         results_list_chunk,
                         browser.view,
                         theme,
-                        &bindings,
+                        bindings,
                     );
-                    let chunk = super::inspector::browser::draw_command(
-                        f, chunk, inspecting, settings, theme,
-                    );
+                    let chunk = browser.draw_command(f, chunk, theme);
                     if browser.view == InspectorView::Stats {
                         if let Some(stats) = stats {
                             super::inspector::draw(f, chunk, stats, theme);
                         }
                     } else {
-                        browser.draw(f, chunk, inspecting, settings, theme, &bindings);
+                        browser.draw(f, chunk, theme, bindings);
                     }
                 }
 
@@ -1188,7 +1179,7 @@ impl State {
                     self.inspecting_state.browser.view,
                     input_chunk.width,
                     theme,
-                    &bindings,
+                    bindings,
                 );
                 f.render_widget(Paragraph::new(guide), input_chunk);
 
@@ -1995,12 +1986,22 @@ pub async fn history(
 
     let mut results = app.query_results(&mut db, settings).await?;
 
-    let mut stats: Option<HistoryStats> = None;
+    let mut stats: Option<InspectorStats> = None;
     // Aggregates depend on the command, not the selected occurrence.
     let mut stats_for: Option<String> = None;
     let mut inspecting: Option<History> = None;
     let accept;
     let result = 'render: loop {
+        if app.tab_index == 1 {
+            let context = app.eval_context();
+            app.inspecting_state.bindings.update(&app.keymaps.inspector, &context);
+            if let Some(selected) =
+                inspecting.as_ref().or_else(|| results.get(app.results_state.selected()))
+            {
+                app.inspecting_state.browser.prepare(selected, settings, theme);
+            }
+        }
+
         terminal.draw(|f| {
             app.draw(f, &results, stats.as_ref(), inspecting.as_ref(), settings, theme, popup_mode);
         })?;
@@ -2185,7 +2186,7 @@ pub async fn history(
                     stats
                 } else {
                     stats_for = Some(selected.command.clone());
-                    Some(db.stats(selected).await?)
+                    Some(db.stats(selected).await?.into())
                 }
             } else {
                 (app.inspecting_state.previous, app.inspecting_state.next) =
