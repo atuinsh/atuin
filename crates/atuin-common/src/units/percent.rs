@@ -5,7 +5,7 @@
 use std::ops::Mul;
 use std::str::FromStr;
 
-use easy_cast::{ConvApprox, ConvTo, Trunc};
+use easy_cast::{ConvTo, Trunc};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 /// A percentage.
