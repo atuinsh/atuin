@@ -15,14 +15,14 @@ use std::time::Duration;
 
 use atuin_client::history::{CommandCapture, HistoryId};
 use fjall::{OptimisticTxDatabase, OptimisticTxKeyspace, PersistMode, Readable};
-use schema::{Schema as _, SchemaV1};
+use schema::{Schema as _, SchemaV2};
 use tokio::task::JoinHandle;
 use tracing::error;
 
 use super::{Backend, CaptureError, DeleteOutputError, GetOutputError};
 
 /// The schema currently in use for stored output.
-type ActiveSchema = SchemaV1;
+type ActiveSchema = SchemaV2;
 
 /// Task responsible for flushing fjall data buffered in memory onto the disk.
 #[derive(Debug)]
@@ -251,9 +251,9 @@ mod tests {
 
     fn cap(output: &str) -> CommandCapture {
         CommandCapture {
-            output: output.to_string(),
+            output_start: output.to_string(),
+            output_end: None,
             output_observed_bytes: u64::conv(output.len()),
-            output_truncated: false,
             terminal_width: 80,
             terminal_height: 24,
         }
@@ -264,8 +264,48 @@ mod tests {
         let (store, _dir) = temp_backend();
         store.capture(hid(1), cap("hello")).await.expect("capture");
         let got = store.get(hid(1)).await.expect("get").expect("present");
-        assert_eq!(got.output, "hello");
+        assert_eq!(got.output_start, "hello");
         assert_eq!(got.output_observed_bytes, 5);
+    }
+
+    /// A capture whose middle was discarded: the v2 schema stores the two halves separately, so
+    /// the optional tail has to survive a round trip as its own field.
+    fn split_cap(start: &str, end: &str, observed: u64) -> CommandCapture {
+        CommandCapture {
+            output_start: start.to_string(),
+            output_end: Some(end.to_string()),
+            output_observed_bytes: observed,
+            terminal_width: 80,
+            terminal_height: 24,
+        }
+    }
+
+    #[tokio::test]
+    async fn round_trips_a_capture_that_lost_its_middle() {
+        let (store, _dir) = temp_backend();
+        let capture = split_cap("first lines", "last lines", 10_000);
+        store.capture(hid(1), capture.clone()).await.expect("capture");
+
+        let got = store.get(hid(1)).await.expect("get").expect("present");
+        assert_eq!(got, capture);
+        // The tail is what distinguishes a split capture from a whole one, so it must come back
+        // as `Some` and not be folded into the start.
+        assert_eq!(got.output_end.as_deref(), Some("last lines"));
+        assert_eq!(got.output_observed_bytes, 10_000, "the observed count is not the kept count");
+    }
+
+    #[tokio::test]
+    async fn an_empty_tail_is_not_the_same_as_no_tail() {
+        // `Some("")` means "everything after the start was discarded"; `None` means "nothing was".
+        // Collapsing the two would lose the only signal that a capture is incomplete.
+        let (store, _dir) = temp_backend();
+        store.capture(hid(1), split_cap("kept", "", 500)).await.expect("capture");
+        store.capture(hid(2), cap("kept")).await.expect("capture");
+
+        let split = store.get(hid(1)).await.expect("get").expect("present");
+        let whole = store.get(hid(2)).await.expect("get").expect("present");
+        assert_eq!(split.output_end.as_deref(), Some(""));
+        assert_eq!(whole.output_end, None);
     }
 
     #[tokio::test]
@@ -281,7 +321,7 @@ mod tests {
         let err = store.capture(hid(1), cap("second")).await.unwrap_err();
         assert!(matches!(err, CaptureError::AlreadyExists));
         // The first write survives.
-        assert_eq!(store.get(hid(1)).await.expect("get").expect("present").output, "first");
+        assert_eq!(store.get(hid(1)).await.expect("get").expect("present").output_start, "first");
     }
 
     #[tokio::test]
@@ -327,7 +367,7 @@ mod tests {
         }
         store.remove(vec![hid(1), hid(3), hid(9)]).await.expect("remove");
         assert!(store.get(hid(1)).await.expect("get").is_none());
-        assert_eq!(store.get(hid(2)).await.expect("get").expect("kept").output, "out2");
+        assert_eq!(store.get(hid(2)).await.expect("get").expect("kept").output_start, "out2");
         assert!(store.get(hid(3)).await.expect("get").is_none());
     }
 
@@ -338,7 +378,7 @@ mod tests {
         store.remove(vec![hid(1)]).await.expect("remove");
         // The tombstone must free the id for the capture-once check, not merely hide the value.
         store.capture(hid(1), cap("second")).await.expect("recapture after remove");
-        assert_eq!(store.get(hid(1)).await.expect("get").expect("present").output, "second");
+        assert_eq!(store.get(hid(1)).await.expect("get").expect("present").output_start, "second");
     }
 
     #[tokio::test]

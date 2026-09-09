@@ -9,11 +9,11 @@ use url::{Position, Url};
 
 #[cfg(feature = "unicode")]
 pub mod align;
+pub mod bounded_buffer;
 #[cfg(feature = "unicode")]
 pub mod ellipsis;
 pub mod trim;
 
-mod buffer;
 mod escape_non_printable_posix_ext;
 mod non_nul_str;
 
@@ -22,7 +22,7 @@ mod normalize;
 
 #[cfg(feature = "unicode")]
 pub use align::{AlignExt, Alignment};
-pub use buffer::BoundedBuffer;
+pub use bounded_buffer::BoundedBuffer;
 #[cfg(feature = "unicode")]
 pub use ellipsis::EllipsizeExt;
 pub use escape_non_printable_posix_ext::EscapeNonPrintablePosixExt;

@@ -76,6 +76,7 @@ pty-proxy sits between your terminal and your shell, and uses your shell's promp
 Captured output is stored in memory, on your machine:
 
 - The daemon keeps up to 1MB of output per command, and the most recent 128 commands (up to 32MB of output) per shell session.
+- When a command's output exceeds 1MB, the first 512KB and last 512KB are kept — these are typically the most relevant portions.
 - Output is lost when the daemon stops. Only commands captured while the daemon was running are available.
 - When you delete a history entry, Atuin also deletes its captured output.
 - Atuin only keeps output for commands in your history. If Atuin doesn't record a command (for example a failing command when `store_failed = false`), it discards that command's output too.

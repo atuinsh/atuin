@@ -70,9 +70,9 @@ pub fn history_at(cmd: &str, timestamp: time::OffsetDateTime) -> History {
 /// A complete capture holding `output`, in the daemon's domain representation.
 pub fn capture(output: &str) -> CommandCapture {
     CommandCapture {
-        output: output.to_string(),
+        output_start: output.to_string(),
+        output_end: None,
         output_observed_bytes: u64::conv(output.len()),
-        output_truncated: false,
         terminal_width: 80,
         terminal_height: 24,
     }

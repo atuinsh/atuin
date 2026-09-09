@@ -126,18 +126,26 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
                 // Output can carry credentials the command line never showed, e.g. `cat .env`.
                 // Swap the string only when something was actually taken out, so that clean
                 // output -- nearly all of it -- reaches the daemon without being copied.
-                let mut output = capture.output;
-                if settings.secrets_filter
-                    && let Cow::Owned(redacted) = atuin_common::secrets::redact(&output)
-                {
-                    output = redacted;
+                let redact = |output: &mut String| {
+                    if settings.secrets_filter
+                        && let Cow::Owned(redacted) = atuin_common::secrets::redact(output)
+                    {
+                        *output = redacted;
+                    }
+                };
+
+                let mut output_start = capture.output_start;
+                redact(&mut output_start);
+                let mut output_end = capture.output_end;
+                if let Some(output_end) = output_end.as_mut() {
+                    redact(output_end);
                 }
 
                 let _ = client
                     .register_command_output(
                         history_id,
-                        output,
-                        capture.output_truncated,
+                        output_start,
+                        output_end,
                         capture.output_observed_bytes,
                         capture.terminal_width,
                         capture.terminal_height,

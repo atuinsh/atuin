@@ -1248,27 +1248,38 @@ impl PermissibleToolCall for AtuinOutputToolCall {
     }
 }
 
+fn format_line_no(line: i64) -> String {
+    if line < 0 {
+        line.to_string()
+    } else {
+        (line + 1).to_string()
+    }
+}
+
 /// Render `ChunkedOutputLineView`s as `read_file`-style numbered output for the LLM, inserting
 /// `[...skipped N lines...]` markers wherever the line numbers jump.
 fn format_chunked_output_line_views_for_llm<'a>(
     lines: impl Iterator<Item = ChunkedOutputLineView<'a>> + Clone,
 ) -> String {
-    let Some(max_line_no) = lines.clone().map(|line| line.line + 1).max() else {
+    let width = lines.clone().map(|line| format_line_no(line.line).len()).max();
+    let Some(width) = width else {
         return String::new();
     };
-
-    let width = usize::conv(max_line_no.max(1).ilog10()) + 1;
 
     let mut formatted = Vec::new();
     let mut previous_idx = None;
     for line in lines {
         if let Some(previous) = previous_idx {
-            let skipped = line.line.saturating_sub(previous + 1);
-            if skipped > 0 {
-                formatted.push(format!("[...skipped {skipped} lines...]"));
+            if previous >= 0 && line.line < 0 {
+                formatted.push("[...skipped an unknown number of lines...]".to_string());
+            } else {
+                let skipped = line.line.saturating_sub(previous).saturating_sub(1).max(0);
+                if skipped > 0 {
+                    formatted.push(format!("[...skipped {skipped} lines...]"));
+                }
             }
         }
-        formatted.push(format!("{:>width$}\t{}", line.line + 1, line.content));
+        formatted.push(format!("{:>width$}\t{}", format_line_no(line.line), line.content));
         previous_idx = Some(line.line);
     }
     formatted.join("\n")
@@ -1326,7 +1337,7 @@ impl AtuinOutputToolCall {
         let totals = format!("{} bytes, {} lines", response.total_bytes, response.total_lines);
         let meta = response.meta.unwrap_or_default();
 
-        let total_output = if meta.output_truncated {
+        let total_output = if response.truncated {
             format!("{totals} ({} bytes observed before truncation)", meta.output_observed_bytes)
         } else {
             totals
@@ -1502,15 +1513,15 @@ mod tests {
         // and "delta". Reconstructing chunk contents with `str::lines` used to swallow the blank
         // line and inflate the marker to three.
         let capture = CommandCapture {
-            output: "alpha\n\ncharlie\ndelta\necho\nfoxtrot".to_string(),
+            output_start: "alpha\n\ncharlie\ndelta\necho\nfoxtrot".to_string(),
+            output_end: None,
             meta: Some(CommandCaptureMeta {
-                output_truncated: false,
                 output_observed_bytes: 0,
                 terminal_width: 80,
                 terminal_height: 24,
             }),
         };
-        let chunked = GetCommandOutputResponse::build(capture, &[
+        let chunked = GetCommandOutputResponse::build(&capture, &[
             PyStyleIdxRange::new(0, 1),
             PyStyleIdxRange::new(4, 5),
         ]);
@@ -1518,6 +1529,52 @@ mod tests {
         assert_eq!(
             format_chunked_output_line_views_for_llm(chunked.lines()),
             "1\talpha\n2\t\n[...skipped 2 lines...]\n5\techo\n6\tfoxtrot"
+        );
+    }
+
+    #[rstest]
+    fn atuin_output_marks_the_gap_left_by_a_discarded_middle() {
+        // The command outran the capture limit, so its middle is gone. The kept tail is numbered
+        // from the end, because how many lines went missing -- and so where the tail really
+        // starts -- cannot be known. Numbering it from the front instead would repeat line
+        // numbers 1..3 and read as one contiguous six-line output.
+        let capture = CommandCapture {
+            output_start: "alpha\nbravo\ncharlie".to_string(),
+            output_end: Some("xray\nyankee\nzulu".to_string()),
+            meta: Some(CommandCaptureMeta {
+                output_observed_bytes: 1_000_000,
+                terminal_width: 80,
+                terminal_height: 24,
+            }),
+        };
+        let chunked = GetCommandOutputResponse::build(&capture, &[PyStyleIdxRange::new(0, -1)]);
+
+        assert!(chunked.truncated, "the request spanned the discarded middle");
+        assert_eq!(
+            format_chunked_output_line_views_for_llm(chunked.lines()),
+            " 1\talpha\n 2\tbravo\n 3\tcharlie\n[...skipped an unknown number of \
+             lines...]\n-3\txray\n-2\tyankee\n-1\tzulu"
+        );
+    }
+
+    #[rstest]
+    fn atuin_output_numbers_a_tail_only_request_from_the_end() {
+        let capture = CommandCapture {
+            output_start: "alpha\nbravo\ncharlie".to_string(),
+            output_end: Some("xray\nyankee\nzulu".to_string()),
+            meta: Some(CommandCaptureMeta {
+                output_observed_bytes: 1_000_000,
+                terminal_width: 80,
+                terminal_height: 24,
+            }),
+        };
+        let chunked = GetCommandOutputResponse::build(&capture, &[PyStyleIdxRange::new(-3, -2)]);
+
+        // Wholly inside the kept tail, so nothing was skipped and nothing is claimed to be.
+        assert!(!chunked.truncated);
+        assert_eq!(
+            format_chunked_output_line_views_for_llm(chunked.lines()),
+            "-3\txray\n-2\tyankee"
         );
     }
 
