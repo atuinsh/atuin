@@ -75,7 +75,7 @@ pub struct InspectingState {
 impl InspectingState {
     pub fn move_to_previous(&mut self) {
         if self.browser.view == InspectorView::Output {
-            self.browser.scroll_output(false);
+            self.browser.scroll_output(false, 1);
         } else if let Some(previous) = self.previous {
             self.current = Some(previous);
         }
@@ -83,7 +83,7 @@ impl InspectingState {
 
     pub fn move_to_next(&mut self) {
         if self.browser.view == InspectorView::Output {
-            self.browser.scroll_output(true);
+            self.browser.scroll_output(true, 1);
         } else if let Some(next) = self.next {
             self.current = Some(next);
         }

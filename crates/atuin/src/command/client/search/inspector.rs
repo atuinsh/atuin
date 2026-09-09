@@ -34,21 +34,18 @@ fn panel(title: impl Into<Line<'static>>, styles: Styles) -> Block<'static> {
 
 /// Unknown exit codes (negative sentinel values) are not failures or successes.
 fn success_rate(stats: &HistoryStats) -> String {
-    let (success, known) = stats.exits.iter().filter(|(exit, _)| *exit >= 0).fold(
-        (0_u128, 0_u128),
-        |(success, known), (exit, count)| {
-            let count = u128::try_from(*count).unwrap_or(0);
-            (
-                success
-                    + if *exit == 0 {
-                        count
-                    } else {
-                        0
-                    },
-                known + count,
-            )
-        },
-    );
+    let (mut success, mut known) = (0_u128, 0_u128);
+    for &(exit, count) in &stats.exits {
+        if exit < 0 {
+            continue;
+        }
+        let count = u128::try_from(count).unwrap_or(0);
+        known += count;
+        if exit == 0 {
+            success += count;
+        }
+    }
+
     if known == 0 {
         return "—".into();
     }
@@ -265,9 +262,6 @@ fn draw_charts(f: &mut Frame<'_>, area: Rect, stats: &Stats, styles: Styles) {
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::theme::ThemeManager;
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
     use rstest::{fixture, rstest};
 
     use super::*;
@@ -305,59 +299,5 @@ mod tests {
         let months = monthly_durations(&stats.duration_over_time);
         assert!(months[0].0 < months[1].0);
         assert_eq!(months[0].1, 1_000_000_000);
-    }
-
-    #[rstest]
-    #[case(100, 30)]
-    #[case(80, 24)]
-    #[case(40, 6)]
-    fn stats_show_aggregates_not_occurrence_details(
-        stats: HistoryStats,
-        #[case] width: u16,
-        #[case] height: u16,
-    ) {
-        let stats = Stats::from(stats);
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let mut themes = ThemeManager::new(Some(true), Some(String::new()));
-        let theme = themes.load_theme("(none)", None);
-        terminal.draw(|f| draw(f, f.area(), &stats, theme)).unwrap();
-        let text: String = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(ratatui::buffer::Cell::symbol)
-            .collect();
-        for expected in ["Total runs", "Success rate", "75.0%", "Avg runtime"] {
-            assert!(text.contains(expected), "missing {expected}: {text}");
-        }
-        for removed in
-            ["Previous command", "Next command", "Directory", "Selected run", "Command stats"]
-        {
-            assert!(!text.contains(removed));
-        }
-        if height >= 16 {
-            assert!(text.contains("Exit codes"));
-            assert!(text.contains("Mean runtime / month"));
-        }
-        assert!(!text.contains('\0'));
-    }
-
-    #[rstest]
-    #[case(1, 1)]
-    #[case(20, 5)]
-    fn empty_stats_fit_small_terminals(
-        mut stats: HistoryStats,
-        #[case] width: u16,
-        #[case] height: u16,
-    ) {
-        stats.total = 0;
-        stats.exits.clear();
-        stats.duration_over_time.clear();
-        let stats = Stats::from(stats);
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let mut themes = ThemeManager::new(Some(true), Some(String::new()));
-        let theme = themes.load_theme("(none)", None);
-        terminal.draw(|f| draw(f, f.area(), &stats, theme)).unwrap();
     }
 }

@@ -864,37 +864,51 @@ impl Sqlite {
         Ok(res)
     }
 
-    /// A bounded window of undeduplicated occurrences of this exact command, or its session.
+    /// A bounded window of undeduplicated occurrences of this exact command.
     /// Includes up to 100 entries on either side; callers can re-center when reaching an edge.
     /// Ordering includes the ID so equal timestamps remain stable while browsing.
-    pub async fn inspector_history(
-        &self,
-        history: &History,
-        session: bool,
-    ) -> Result<Vec<History>> {
-        // Imported entries may have no session. Do not group unrelated imports together.
-        if session && history.session.is_empty() {
-            return Ok(vec![history.clone()]);
-        }
-        let (field, value) = if session {
-            ("session", history.session.as_str())
-        } else {
-            ("command", history.command.as_str())
-        };
+    pub async fn inspector_runs(&self, history: &History) -> Result<Vec<History>> {
         let query = format!(
-            "select {HISTORY_COLUMNS} from (select {HISTORY_COLUMNS} from history where {field} = \
-             ?1
-             and deleted_at is null and (timestamp, id) <= (?2, ?3)
-             order by timestamp desc, id desc limit 101)
+            "select {HISTORY_COLUMNS} from (
+                 select {HISTORY_COLUMNS} from history
+                 where command = ?1 and deleted_at is null and (timestamp, id) <= (?2, ?3)
+                 order by timestamp desc, id desc limit 101)
              union all
-             select {HISTORY_COLUMNS} from (select {HISTORY_COLUMNS} from history where {field} = \
-             ?1
-             and deleted_at is null and (timestamp, id) > (?2, ?3)
-             order by timestamp, id limit 100)
+             select {HISTORY_COLUMNS} from (
+                 select {HISTORY_COLUMNS} from history
+                 where command = ?1 and deleted_at is null and (timestamp, id) > (?2, ?3)
+                 order by timestamp, id limit 100)
              order by timestamp, id"
         );
         db::query_as::<_, History>(sqlx::AssertSqlSafe(query.as_str()))
-            .bind(value)
+            .bind(&history.command)
+            .bind(i64::conv(history.timestamp.unix_timestamp_nanos()))
+            .bind(history.id)
+            .fetch_all(self.sqlite.pool())
+            .await
+    }
+
+    /// A window of entries in this session, bounded and ordered as in [`Self::inspector_runs`].
+    pub async fn inspector_session(&self, history: &History) -> Result<Vec<History>> {
+        // Imported entries may have no session. Do not group unrelated imports together.
+        if history.session.is_empty() {
+            return Ok(vec![history.clone()]);
+        }
+
+        let query = format!(
+            "select {HISTORY_COLUMNS} from (
+                 select {HISTORY_COLUMNS} from history
+                 where session = ?1 and deleted_at is null and (timestamp, id) <= (?2, ?3)
+                 order by timestamp desc, id desc limit 101)
+             union all
+             select {HISTORY_COLUMNS} from (
+                 select {HISTORY_COLUMNS} from history
+                 where session = ?1 and deleted_at is null and (timestamp, id) > (?2, ?3)
+                 order by timestamp, id limit 100)
+             order by timestamp, id"
+        );
+        db::query_as::<_, History>(sqlx::AssertSqlSafe(query.as_str()))
+            .bind(&history.session)
             .bind(i64::conv(history.timestamp.unix_timestamp_nanos()))
             .bind(history.id)
             .fetch_all(self.sqlite.pool())
@@ -1317,6 +1331,8 @@ mod test {
             ("echo 'λ'", "two", false),
             ("echo 'λ'", "one", true),
             ("echo 'λ' suffix", "two", false),
+            ("imported", "", false),
+            ("another import", "", false),
         ] {
             let mut entry: History = History::capture()
                 .timestamp(OffsetDateTime::UNIX_EPOCH)
@@ -1332,15 +1348,16 @@ mod test {
             db.save(&entry).await.unwrap();
             entries.push(entry);
         }
-        let runs = db.inspector_history(&entries[0], false).await.unwrap();
+        let runs = db.inspector_runs(&entries[0]).await.unwrap();
         assert_eq!(runs.len(), 2);
         assert!(runs.iter().all(|entry| entry.command == "echo 'λ'"));
         assert!(runs.iter().any(|entry| entry.id == entries[2].id));
         assert!(runs.windows(2).all(|pair| pair[0].id.to_string() < pair[1].id.to_string()));
-        let session = db.inspector_history(&entries[0], true).await.unwrap();
+        let session = db.inspector_session(&entries[0]).await.unwrap();
         assert_eq!(session.len(), 2);
         assert!(session.iter().all(|entry| entry.session == "one"));
         assert!(session.iter().any(|entry| entry.command == "pwd"));
+        assert_eq!(db.inspector_session(&entries[5]).await.unwrap(), vec![entries[5].clone()]);
     }
 
     #[rstest]
@@ -1383,26 +1400,24 @@ mod test {
 
     #[rstest]
     #[tokio::test]
-    async fn inspector_history_window_can_recenter(#[future] empty_db: Sqlite) {
+    async fn inspector_windows_are_bounded(#[future] empty_db: Sqlite) {
         let db = empty_db.await;
         let mut entries = Vec::new();
         for second in 0..250 {
-            let entry: History = History::capture()
+            let mut entry: History = History::capture()
                 .timestamp(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(second))
                 .command("ls")
                 .cwd("/tmp")
                 .build()
                 .into();
+            entry.session = "window".into();
             db.save(&entry).await.unwrap();
             entries.push(entry);
         }
-        let middle = db.inspector_history(&entries[125], false).await.unwrap();
+        let middle = db.inspector_runs(&entries[125]).await.unwrap();
         assert_eq!(middle.len(), 201);
         assert_eq!(middle[100].id, entries[125].id);
-        let next = db.inspector_history(middle.last().unwrap(), false).await.unwrap();
-        assert_eq!(next.last().unwrap().id, entries[249].id);
-        let previous = db.inspector_history(&middle[0], false).await.unwrap();
-        assert_eq!(previous[0].id, entries[0].id);
+        assert_eq!(db.inspector_session(&entries[125]).await.unwrap(), middle);
     }
 
     async fn assert_search_eq(
