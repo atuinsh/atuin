@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use atuin_client::history::{CommandCapture, HistoryId};
+use easy_cast::Conv;
 use fjall::{OptimisticTxDatabase, OptimisticTxKeyspace, PersistMode, Readable};
 use schema::{Schema as _, SchemaV2};
 use tokio::task::JoinHandle;
@@ -230,6 +231,57 @@ impl Backend for FjallBackend {
         .await
         .expect("output-capture delete task panicked")
     }
+
+    async fn stats(&self) -> Result<Option<super::OutputCaptureStats>, GetOutputError> {
+        let keyspace = self.keyspace.clone();
+        tokio::task::spawn_blocking(move || {
+            // Exact live-entry count. O(n) over the keyspace index — acceptable for a diagnostic,
+            // and honest: `approximate_len()` over-counts after deletes (tombstones).
+            let stored_captures = u64::conv(
+                keyspace.inner().len().map_err(|err| GetOutputError::Storage(Box::new(err)))?,
+            );
+
+            // On-disk footprint of this keyspace, post-LZ4 (differs from any uncompressed sum).
+            let disk_bytes = keyspace.inner().disk_space();
+
+            // History ids are UUIDv7; their bytes sort in creation order, so the first and last
+            // keys are the oldest and newest captures.
+            let oldest_capture_unix_ms = keyspace
+                .first_key_value()
+                .map(fjall::Guard::key)
+                .transpose()
+                .map_err(|err| GetOutputError::Storage(Box::new(err)))?
+                .and_then(|key| key_to_unix_ms(key.as_ref()));
+            let newest_capture_unix_ms = keyspace
+                .last_key_value()
+                .map(fjall::Guard::key)
+                .transpose()
+                .map_err(|err| GetOutputError::Storage(Box::new(err)))?
+                .and_then(|key| key_to_unix_ms(key.as_ref()));
+
+            Ok(Some(super::OutputCaptureStats {
+                stored_captures,
+                disk_bytes,
+                oldest_capture_unix_ms,
+                newest_capture_unix_ms,
+                store_path: keyspace.path(),
+                schema: ActiveSchema::NAME,
+            }))
+        })
+        .await
+        .expect("output-capture stats task panicked")
+    }
+}
+
+/// Decode the creation time (unix ms) embedded in a UUIDv7 history-id key.
+///
+/// Returns `None` for keys that are not a 16-byte UUIDv7 (e.g. a test id built from a plain
+/// `u128`), so a non-v7 id degrades to "unknown" rather than a bogus timestamp.
+fn key_to_unix_ms(key: &[u8]) -> Option<u64> {
+    let bytes: [u8; 16] = key.try_into().ok()?;
+    let ts = uuid::Uuid::from_bytes(bytes).get_timestamp()?;
+    let (secs, subsec_nanos) = ts.to_unix();
+    Some(secs.saturating_mul(1000).saturating_add(u64::from(subsec_nanos) / 1_000_000))
 }
 
 #[cfg(test)]
@@ -247,6 +299,12 @@ mod tests {
 
     fn hid(n: u128) -> HistoryId {
         HistoryId::from_bytes(*Uuid::from_u128(n).as_bytes())
+    }
+
+    /// A history id backed by a real UUIDv7, so its embedded creation time is decodable. The
+    /// module's `hid(n)` builds a plain `Uuid::from_u128`, which is not v7 and has no timestamp.
+    fn hid_v7() -> HistoryId {
+        HistoryId::from_bytes(*atuin_common::utils::uuid_v7().as_bytes())
     }
 
     fn cap(output: &str) -> CommandCapture {
@@ -389,5 +447,31 @@ mod tests {
         assert!(store.get(hid(1)).await.expect("get").is_none());
         // Re-removing an already-removed id alongside an absent one is still Ok.
         store.remove(vec![hid(1), hid(9)]).await.expect("remove again");
+    }
+
+    #[tokio::test]
+    async fn stats_counts_sizes_and_time_range() {
+        let (store, _dir) = temp_backend();
+
+        // An empty store reports itself as an active fjall store with nothing in it.
+        let stats = store.stats().await.expect("stats").expect("fjall backend reports stats");
+        assert_eq!(stats.stored_captures, 0);
+        assert_eq!(stats.oldest_capture_unix_ms, None);
+        assert_eq!(stats.newest_capture_unix_ms, None);
+        assert_eq!(stats.schema, "output_capture_v2");
+
+        store.capture(hid_v7(), cap("first")).await.expect("capture");
+        store.capture(hid_v7(), cap("second")).await.expect("capture");
+
+        // `disk_space()` only counts flushed segments, and two tiny captures never cross the
+        // (64 MiB default) memtable threshold on their own; force the flush fjall's own tests use.
+        store.keyspace.inner().rotate_memtable_and_wait().expect("flush memtable to disk");
+        let stats = store.stats().await.expect("stats").expect("present");
+        assert_eq!(stats.stored_captures, 2);
+        assert!(stats.disk_bytes > 0, "a non-empty keyspace occupies disk");
+        // Keys sort in creation order, so the first key's time is never after the last key's.
+        let oldest = stats.oldest_capture_unix_ms.expect("v7 ids decode to a time");
+        let newest = stats.newest_capture_unix_ms.expect("v7 ids decode to a time");
+        assert!(oldest <= newest);
     }
 }

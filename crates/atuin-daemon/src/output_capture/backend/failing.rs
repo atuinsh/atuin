@@ -1,6 +1,8 @@
 use atuin_client::history::{CommandCapture, HistoryId};
 
-use super::{Backend, BackendError, CaptureError, DeleteOutputError, GetOutputError};
+use super::{
+    Backend, BackendError, CaptureError, DeleteOutputError, GetOutputError, OutputCaptureStats,
+};
 
 /// A [`Backend`] whose every operation fails, standing in for a broken output store.
 ///
@@ -25,5 +27,9 @@ impl Backend for FailingBackend {
 
     async fn remove(&self, _ids: Vec<HistoryId>) -> Result<(), DeleteOutputError> {
         Err(DeleteOutputError::Storage(unavailable()))
+    }
+
+    async fn stats(&self) -> Result<Option<OutputCaptureStats>, GetOutputError> {
+        Err(GetOutputError::Storage("failing backend".into()))
     }
 }

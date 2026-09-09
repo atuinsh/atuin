@@ -2,7 +2,9 @@ mod backend;
 
 use atuin_client::history::{CommandCapture, HistoryId};
 use backend::{AnyBackend, Backend as _, FjallBackend, NopBackend};
-pub use backend::{BackendKind, CaptureError, DeleteOutputError, GetOutputError};
+pub use backend::{
+    BackendKind, CaptureError, DeleteOutputError, GetOutputError, OutputCaptureStats,
+};
 use tracing::error;
 
 /// [`OutputCapture`] is the core engine responsible for collecting command output.
@@ -65,6 +67,11 @@ impl OutputCapture {
 
     pub async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError> {
         self.backend.get(id).await
+    }
+
+    /// Store-wide statistics, or `None` when capture is disabled (the nop backend).
+    pub async fn stats(&self) -> Result<Option<OutputCaptureStats>, GetOutputError> {
+        self.backend.stats().await
     }
 
     /// Forget the captured output of every history id in `ids`.
@@ -143,5 +150,12 @@ mod tests {
     async fn remove_on_the_nop_backend_is_ok() {
         let store = OutputCapture::nop();
         store.remove([hid(1), hid(2)]).await.expect("remove is discarded, not failed");
+    }
+
+    #[tokio::test]
+    async fn nop_store_reports_no_stats() {
+        // A disabled store distinguishes itself by having no stats at all; the gRPC layer relies
+        // on that `None` to report the store as disabled rather than as an empty live store.
+        assert!(OutputCapture::nop().stats().await.expect("stats").is_none());
     }
 }

@@ -35,6 +35,23 @@ pub enum DeleteOutputError {
     Storage(#[source] BackendError),
 }
 
+/// A point-in-time snapshot of the durable capture store's size and contents.
+#[derive(Debug, Clone)]
+pub struct OutputCaptureStats {
+    /// Exact number of captures currently stored.
+    pub stored_captures: u64,
+    /// On-disk size of the store's keyspace, in bytes (post-compression).
+    pub disk_bytes: u64,
+    /// Creation time (unix ms) of the oldest / newest stored capture, decoded from the UUIDv7
+    /// history-id keys. `None` when the store is empty (or an id is not a UUIDv7).
+    pub oldest_capture_unix_ms: Option<u64>,
+    pub newest_capture_unix_ms: Option<u64>,
+    /// Absolute path of the store directory.
+    pub store_path: std::path::PathBuf,
+    /// Keyspace/schema name, e.g. `"output_capture_v2"`.
+    pub schema: &'static str,
+}
+
 #[enum_dispatch]
 #[allow(async_fn_in_trait, reason = "only used within our code and we don't need it to be Send")]
 pub trait Backend {
@@ -44,6 +61,9 @@ pub trait Backend {
 
     /// Forget the captured output of every history id in `ids`. Absent ids are ignored.
     async fn remove(&self, ids: Vec<HistoryId>) -> Result<(), DeleteOutputError>;
+
+    /// Store-wide statistics, or `None` for a backend that does not persist (the nop backend).
+    async fn stats(&self) -> Result<Option<OutputCaptureStats>, GetOutputError>;
 }
 
 #[enum_dispatch(Backend)]

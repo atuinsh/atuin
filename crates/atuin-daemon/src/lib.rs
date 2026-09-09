@@ -31,7 +31,7 @@ pub use history_journal::{
     GetCmdInFlightError, HistoryJournal, RegisterOutputError,
 };
 pub use output_capture::{
-    BackendKind, CaptureError, DeleteOutputError, GetOutputError, OutputCapture,
+    BackendKind, CaptureError, DeleteOutputError, GetOutputError, OutputCapture, OutputCaptureStats,
 };
 
 /// Boot the daemon using the new component-based architecture.
