@@ -48,7 +48,11 @@ fn pty_cwd(parent: Option<BorrowedFd<'_>>, child: Option<Pid>) -> Option<PathBuf
 fn tcgetpgrp(terminal: BorrowedFd<'_>) -> Option<Pid> {
     // SAFETY: The FD we pass is guaranteed to be valid because it came from a `BorrowedFd` that
     // exists at least for the life of the call.
-    Pid::from_raw(unsafe { libc::tcgetpgrp(terminal.as_raw_fd()) })
+    let pid = unsafe { libc::tcgetpgrp(terminal.as_raw_fd()) };
+    if pid <= 0 {
+        return None;
+    }
+    Pid::from_raw(pid)
 }
 
 /// Updates this process's CWD to match the PTY proxy child's CWD.
