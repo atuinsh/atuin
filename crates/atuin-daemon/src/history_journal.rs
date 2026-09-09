@@ -217,7 +217,7 @@ pub struct HistoryJournal {
     /// marking in [`Self::delete`] and the teardown in [`Self::cancel`], one shard per history id.
     ///
     /// Please see the [moduledoc](self) for a (hopefully better) explanation.
-    lifecycle_mutex: AsyncShardedMutex<HistoryId, ()>,
+    lifecycle_mutex: AsyncShardedMutex<HistoryId>,
 }
 
 /// Errors returned by [`HistoryJournal::finish`].
