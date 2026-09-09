@@ -307,16 +307,22 @@ impl Unit {
 
     /// `suffix` is whatever followed the number, already trimmed. An empty suffix is bytes.
     fn parse(suffix: &str) -> Option<Self> {
-        Some(match suffix.to_ascii_lowercase().as_str() {
-            "" | "b" => Self::B,
-            "kb" => Self::Kilo,
-            "mb" => Self::Mega,
-            "gb" => Self::Giga,
-            "tb" => Self::Tera,
-            "k" | "kib" => Self::Kibi,
-            "m" | "mib" => Self::Mebi,
-            "g" | "gib" => Self::Gibi,
-            "t" | "tib" => Self::Tebi,
+        // Every unit is at most three ASCII bytes, so lowercase into a stack buffer rather than
+        // allocating a String; the length guard also rejects any longer suffix as unknown.
+        let mut lower = [0u8; 3];
+        let lower = lower.get_mut(..suffix.len())?;
+        lower.copy_from_slice(suffix.as_bytes());
+        lower.make_ascii_lowercase();
+        Some(match &*lower {
+            b"" | b"b" => Self::B,
+            b"kb" => Self::Kilo,
+            b"mb" => Self::Mega,
+            b"gb" => Self::Giga,
+            b"tb" => Self::Tera,
+            b"k" | b"kib" => Self::Kibi,
+            b"m" | b"mib" => Self::Mebi,
+            b"g" | b"gib" => Self::Gibi,
+            b"t" | b"tib" => Self::Tebi,
             _ => return None,
         })
     }
