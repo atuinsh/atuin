@@ -25,7 +25,7 @@ pub type CommandCaptureSink = Box<dyn Fn(HistoryId, CommandCapture) + Send + 'st
 pub struct CaptureConfig {
     pub sink: CommandCaptureSink,
     /// The total number of bytes kept for a single command, split evenly across the start and
-    /// end of its output (see [`CaptureLimit::split_evenly`]).
+    /// end of its output once the middle has to be dropped.
     pub max_output_bytes: usize,
 }
 
@@ -45,7 +45,10 @@ impl CaptureLimit {
     #[must_use]
     pub const fn split_evenly(total_bytes: usize) -> Self {
         let start_bytes = total_bytes / 2;
-        Self { start_bytes, end_bytes: total_bytes - start_bytes }
+        Self {
+            start_bytes,
+            end_bytes: total_bytes - start_bytes,
+        }
     }
 }
 

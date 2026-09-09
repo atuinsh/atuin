@@ -65,7 +65,7 @@ pub async fn boot(
     let host_id = Settings::host_id().await?;
     let history_store =
         HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
-    let output_capture = match settings.output_capture.limits() {
+    let output_capture = match settings.output.limits() {
         Some(limits) => OutputCapture::open(Settings::command_capture_dir(), limits.max_disk_usage),
         None => OutputCapture::nop(),
     };

@@ -108,8 +108,7 @@ fn semantic_command_capture_config() -> Option<atuin_pty_proxy::CaptureConfig> {
 
     let settings = atuin_client::settings::Settings::new().ok()?;
     let max_output_bytes =
-        usize::try_from(settings.output_capture.limits()?.max_output_size.bytes())
-            .unwrap_or(usize::MAX);
+        usize::try_from(settings.output.limits()?.max_output_size.bytes()).unwrap_or(usize::MAX);
     let (tx, rx) = mpsc::sync_channel::<(
         atuin_client::history::HistoryId,
         atuin_pty_proxy::CommandCapture,

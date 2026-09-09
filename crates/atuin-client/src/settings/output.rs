@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use super::DiskUsageLimit;
 
-/// The `[output_capture]` section of `config.toml`: capturing and storing command output.
+/// The `[output]` section of `config.toml`: capturing and storing command output.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
 #[serde(from = "OutputCaptureConfig", into = "OutputCaptureConfig")]
 pub enum OutputCapture {
@@ -61,14 +61,14 @@ impl Default for CaptureLimits {
     }
 }
 
-/// The `[output_capture]` table as written in `config.toml`.
+/// The `[output]` table as written in `config.toml`.
 ///
 /// This is the serde representation of [`OutputCapture`]. [`OutputCapture`] is the predominant way
 /// you should interact with the configuration. This type represents the value in the `config.toml`.
 /// Unlike [`OutputCapture`], it is a flattened representation.
 ///
 /// The reason I went with a flattened representation is to enable the `atuin config set
-/// output_capture.enabled false` convention.
+/// output.enabled false` convention.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct OutputCaptureConfig {
     pub(crate) enabled: bool,
