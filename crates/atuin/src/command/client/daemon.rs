@@ -13,6 +13,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::futures::Backoff;
 use atuin_daemon::client::{DaemonClientErrorKind, HistoryClient, classify_error};
+use atuin_daemon::grpc::history::pb::OutputCaptureStore;
 use clap::Subcommand;
 #[cfg(unix)]
 use daemonize::Daemonize;
@@ -246,6 +247,38 @@ async fn probe(settings: &Settings) -> Probe {
             }
         }
         Err(err) => Probe::Unreachable(err),
+    }
+}
+
+/// The daemon's output-capture store state, as seen by a strictly read-only probe.
+pub(super) enum OutputCaptureReport {
+    /// The store is live; carries its statistics.
+    Active(OutputCaptureStore),
+    /// The daemon is reachable but its store failed to open (nop backend).
+    Disabled,
+    /// The daemon is reachable but its version/protocol does not match ours.
+    NeedsRestart(String),
+    /// The daemon could not be reached.
+    NotRunning,
+    /// The stats RPC returned an error.
+    Error(String),
+}
+
+/// Read the daemon's output-capture store state without ever restarting it.
+///
+/// `atuin doctor` must stay side-effect-free, so this reuses the read-only `probe` (which
+/// already version-gates via the wire-stable Status RPC) rather than `ready_client`, which would
+/// shut a stale daemon down.
+pub(super) async fn output_capture_report(settings: &Settings) -> OutputCaptureReport {
+    match probe(settings).await {
+        Probe::Ready(mut client) => match client.output_capture_stats().await {
+            Ok(reply) => {
+                reply.store.map_or(OutputCaptureReport::Disabled, OutputCaptureReport::Active)
+            }
+            Err(err) => OutputCaptureReport::Error(err.to_string()),
+        },
+        Probe::NeedsRestart(reason) => OutputCaptureReport::NeedsRestart(reason),
+        Probe::Unreachable(_) => OutputCaptureReport::NotRunning,
     }
 }
 

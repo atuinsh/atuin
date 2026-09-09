@@ -367,10 +367,91 @@ impl AtuinInfo {
 }
 
 #[derive(Debug, Serialize)]
+struct OutputCaptureInfo {
+    /// One of: active, disabled, daemon-disabled, daemon-not-running, daemon-outdated, error,
+    /// unsupported.
+    status: String,
+    detail: Option<String>,
+    store: Option<OutputCaptureStoreInfo>,
+}
+
+#[derive(Debug, Serialize)]
+struct OutputCaptureStoreInfo {
+    stored_captures: u64,
+    disk_bytes_flushed: u64,
+    oldest_capture: Option<String>,
+    newest_capture: Option<String>,
+    store_path: String,
+    schema: String,
+}
+
+/// Render a unix-millisecond timestamp as an RFC3339 UTC string, or `None` if it is out of range.
+fn format_capture_time(unix_ms: u64) -> Option<String> {
+    use atuin_common::time::OffsetDateTimeExt;
+    use time::OffsetDateTime;
+    use time::format_description::well_known::Rfc3339;
+    let nanos = i128::from(unix_ms).checked_mul(1_000_000)?;
+    OffsetDateTime::from_unix_nanos(nanos).ok()?.format(&Rfc3339).ok()
+}
+
+impl OutputCaptureInfo {
+    fn status(status: &str, detail: &str) -> Self {
+        Self { status: status.to_string(), detail: Some(detail.to_string()), store: None }
+    }
+
+    #[cfg(feature = "daemon")]
+    async fn new(settings: &Settings) -> Self {
+        use super::daemon::{OutputCaptureReport, output_capture_report};
+
+        if !settings.daemon.enabled {
+            return Self::status(
+                "daemon-disabled",
+                "the daemon is disabled in settings; enable it to capture command output",
+            );
+        }
+
+        match output_capture_report(settings).await {
+            OutputCaptureReport::Active(store) => Self {
+                status: "active".to_string(),
+                detail: None,
+                store: Some(OutputCaptureStoreInfo {
+                    stored_captures: store.stored_captures,
+                    disk_bytes_flushed: store.disk_bytes,
+                    oldest_capture: store.oldest_capture_unix_ms.and_then(format_capture_time),
+                    newest_capture: store.newest_capture_unix_ms.and_then(format_capture_time),
+                    store_path: store.store_path,
+                    schema: store.schema,
+                }),
+            },
+            OutputCaptureReport::Disabled => Self::status(
+                "disabled",
+                "the daemon could not open its capture store; command output is not being saved",
+            ),
+            OutputCaptureReport::NeedsRestart(reason) => {
+                Self { status: "daemon-outdated".to_string(), detail: Some(reason), store: None }
+            }
+            OutputCaptureReport::NotRunning => Self::status(
+                "daemon-not-running",
+                "the daemon is not running; start it with `atuin daemon start`",
+            ),
+            OutputCaptureReport::Error(msg) => {
+                Self { status: "error".to_string(), detail: Some(msg), store: None }
+            }
+        }
+    }
+
+    #[cfg(not(feature = "daemon"))]
+    async fn new(_settings: &Settings) -> Self {
+        Self::status("unsupported", "this atuin build was compiled without daemon support")
+    }
+}
+
+#[derive(Debug, Serialize)]
 struct DoctorDump {
     pub atuin: AtuinInfo,
     pub shell: ShellInfo,
     pub system: SystemInfo,
+    pub output_capture: OutputCaptureInfo,
 }
 
 impl DoctorDump {
@@ -379,6 +460,7 @@ impl DoctorDump {
             atuin: AtuinInfo::new(settings).await,
             shell: ShellInfo::new(),
             system: SystemInfo::new(),
+            output_capture: OutputCaptureInfo::new(settings).await,
         }
     }
 }
@@ -426,6 +508,17 @@ fn checks(info: &DoctorDump) {
             println!("{blesh_integration_error}");
         }
     }
+
+    if info.output_capture.status == "disabled" {
+        println!(
+            "{}",
+            "[Output capture] The daemon could not open its capture store, so command output is \
+             not being saved. Check the daemon logs and the permissions on the output-capture \
+             directory."
+                .bold()
+                .red()
+        );
+    }
 }
 
 #[instrument(level = "trace", skip_all, err)]
@@ -442,4 +535,18 @@ pub async fn run(settings: &Settings) -> Result<()> {
     println!("{dump}");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_capture_time_renders_rfc3339_utc() {
+        // 2021-01-01T00:00:00Z is 1_609_459_200_000 ms since the epoch.
+        assert_eq!(
+            format_capture_time(1_609_459_200_000).as_deref(),
+            Some("2021-01-01T00:00:00Z"),
+        );
+    }
 }
