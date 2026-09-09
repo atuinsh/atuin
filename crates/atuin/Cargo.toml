@@ -86,10 +86,12 @@ atuin-daemon = { workspace = true, optional = true }
 atuin-domain = { workspace = true }
 atuin-dotfiles = { workspace = true }
 atuin-history = { workspace = true }
+atuin-vt100 = { workspace = true }
 atuin-kv = { workspace = true }
 atuin-pty-proxy = { workspace = true, optional = true }
 atuin-scripts = { workspace = true }
 
+ansi-to-tui = { workspace = true }
 async-trait = { workspace = true }
 axoupdater = { workspace = true, optional = true }
 clap = { workspace = true }
@@ -166,7 +168,6 @@ toml_edit = { workspace = true, features = ["serde"] }
 
 # for the PTY e2e tests (tests/e2e_pty.rs)
 [target.'cfg(unix)'.dev-dependencies]
-atuin-vt100 = { workspace = true }
 nix-pty = { package = "nix", version = "0.28", features = ["term"] }
 portable-pty = "0.9"
 
