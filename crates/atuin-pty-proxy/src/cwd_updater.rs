@@ -117,7 +117,8 @@ impl CwdUpdater {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
+    use std::fs::File;
+    use std::io::{Read, Write};
     use std::path::Path;
     use std::process::Command;
     use std::time::{Duration, Instant};
@@ -164,14 +165,20 @@ mod tests {
     }
 
     /// A shell on a pty of its own, as the updater sees it.
+    ///
+    /// The descriptors kept here hold the pty open for as long as the fixture lives.
     struct Fixture {
         /// The pty the shell runs on, as the updater keeps it.
         parent: Option<OwnedFd>,
         /// The shell, as the updater knows it.
         child: Option<Pid>,
+        /// The terminal, for typing at the shell.
+        ///
+        /// This is a descriptor of our own rather than portable-pty's writer, whose `Drop`
+        /// writes a newline and an EOF into the terminal -- a blocking write that a test has
+        /// no reason to make, and that would tell the shell to exit.
+        input: File,
         shell: Box<dyn portable_pty::Child + Send + Sync>,
-        // Keep the pty open for as long as the shell runs on it.
-        master: Box<dyn MasterPty + Send>,
     }
 
     impl Fixture {
@@ -180,17 +187,39 @@ mod tests {
             let pair = open_pty();
             let shell = spawn_shell(&pair, cwd);
             drop(pair.slave);
+
+            // Nothing here reads the terminal, and a shell whose output has nowhere to go
+            // stalls once the pty fills -- which takes far less output on some platforms than
+            // on others. Throw it away as it arrives.
+            let mut output = pair.master.try_clone_reader().expect("clone pty reader");
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 1024];
+                while output.read(&mut buf).is_ok_and(|read| read > 0) {}
+            });
+
             Self {
                 parent: pty_parent_fd(pair.master.as_ref()),
                 child: pid_of(shell.process_id()),
+                input: File::from(pty_parent_fd(pair.master.as_ref()).expect("pty descriptor")),
                 shell,
-                master: pair.master,
             }
         }
 
         /// The directory the updater would move the proxy to.
         fn cwd(&self) -> Option<PathBuf> {
             pty_cwd(self.parent.as_ref().map(AsFd::as_fd), self.child)
+        }
+
+        /// Type a line at the shell.
+        fn send_line(&mut self, line: &str) {
+            writeln!(self.input, "{line}").expect("write to pty");
+            self.input.flush().expect("flush pty");
+        }
+
+        /// Send an interrupt, as pressing ctrl-c would.
+        fn interrupt(&mut self) {
+            self.input.write_all(&[0x03]).expect("write to pty");
+            self.input.flush().expect("flush pty");
         }
     }
 
@@ -218,11 +247,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let elsewhere = dir.path().canonicalize().unwrap().join("elsewhere");
         std::fs::create_dir(&elsewhere).unwrap();
-        let fixture = Fixture::new(dir.path());
-        let mut writer = fixture.master.take_writer().unwrap();
+        let mut fixture = Fixture::new(dir.path());
 
-        writeln!(writer, "cd '{}'", elsewhere.display()).unwrap();
-        writer.flush().unwrap();
+        fixture.send_line(&format!("cd '{}'", elsewhere.display()));
 
         let found = settles_on(&Some(elsewhere.clone()), || fixture.cwd());
 
@@ -237,17 +264,14 @@ mod tests {
         let home = dir.path().canonicalize().unwrap();
         let elsewhere = home.join("elsewhere");
         std::fs::create_dir(&elsewhere).unwrap();
-        let fixture = Fixture::new(&home);
-        let mut writer = fixture.master.take_writer().unwrap();
+        let mut fixture = Fixture::new(&home);
 
         // A foreground job of its own, in a directory the shell itself never enters.
-        writeln!(writer, "(cd '{}' && exec sleep 30)", elsewhere.display()).unwrap();
-        writer.flush().unwrap();
+        fixture.send_line(&format!("(cd '{}' && exec sleep 30)", elsewhere.display()));
         let found = settles_on(&Some(elsewhere.clone()), || fixture.cwd());
 
         // Interrupt the job rather than leave it running for half a minute.
-        writer.write_all(&[0x03]).unwrap();
-        writer.flush().unwrap();
+        fixture.interrupt();
         assert_eq!(
             fixture.child.and_then(process::cwd),
             Some(home),
@@ -277,6 +301,15 @@ mod tests {
         child.kill().unwrap();
         child.wait().unwrap();
         assert_eq!(found, Some(expected));
+    }
+
+    #[rstest]
+    fn a_descriptor_that_is_not_a_terminal_has_no_foreground_group() {
+        // `tcgetpgrp` answers -1 here. That is not a pid, and unlike the 0 a pty answers with,
+        // `Pid::from_raw` asserts on it rather than returning `None`.
+        let not_a_terminal = File::open("/dev/null").expect("open /dev/null");
+
+        assert_eq!(tcgetpgrp(not_a_terminal.as_fd()), None);
     }
 
     #[rstest]
