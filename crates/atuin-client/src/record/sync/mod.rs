@@ -510,16 +510,6 @@ impl Keyed<'_> {
         let store = &self.engine.store;
 
         // Skip only if this manifest's whole covered range is already present locally.
-        //
-        // Testing the store head (`last().idx >= end - 1`) is NOT safe here: `expand_manifests`
-        // expands a page's manifests concurrently, so a manifest covering a *higher* range can
-        // commit its history first, pushing the head past a *lower* manifest's range end while
-        // that lower range is still an unfilled hole. The lower manifest would then see a head
-        // beyond its end, wrongly conclude "already local", and return without downloading --
-        // silently dropping the history it covers.
-        //
-        // `first_gap` is the first missing idx, so `first_gap >= end` proves `[0, end)` -- and
-        // hence this manifest's range -- is contiguously present, with no hole to skip over.
         let first_gap = store
             .first_gap(&RecordSeriesKey::new(view.record.host.id, RecordTag::History))
             .await
@@ -1927,10 +1917,13 @@ mod packfile_capability_tests {
         build_engine(client, down.clone())
             .await
             .keyed(&key)
-            .sync_remote(vec![packfile_download_op(host, 3), Operation::Download {
-                remote: 3,
-                series: RecordSeriesKey::new(host, RecordTag::History),
-            }])
+            .sync_remote(vec![
+                packfile_download_op(host, 3),
+                Operation::Download {
+                    remote: 3,
+                    series: RecordSeriesKey::new(host, RecordTag::History),
+                },
+            ])
             .await
             .unwrap();
 
