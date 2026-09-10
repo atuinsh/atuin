@@ -67,17 +67,11 @@ rustix = { workspace = true, optional = true }
 windows-sys = { workspace = true, optional = true }
 
 [dev-dependencies]
-divan = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
-
-[[bench]]
-name = "ansi"
-harness = false
-required-features = ["ansi"]
 
 [lints]
 workspace = true
