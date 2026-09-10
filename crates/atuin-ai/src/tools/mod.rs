@@ -92,6 +92,17 @@ pub enum ToolOutcome {
 }
 
 impl ToolOutcome {
+    /// Maximum size of the `stdout` and `stderr` buffers (each) in [`Self::Structured`].
+    ///
+    /// [`ansi::to_plain_text`] used to be capped at 16384 rows to prevent OOM errors, which
+    /// provided an effective limit on the size of the stdout and stderr buffers we return. Now that
+    /// [`ansi::to_plain_text`] is more efficient, it imposes no limit of its own; to ensure we
+    /// don't return too much data, we apply the cap ourselves.
+    ///
+    /// 16384 times 120 (the width of the emulated terminal, from `PREVIEW_WIDTH`) is approximately
+    /// 2,000,000 (2MB), so we use that as our limit here.
+    const MAX_STRUCTURED_OUTPUT_SIZE: usize = 2_000_000;
+
     /// Format this outcome as a string for the tool result sent to the LLM.
     ///
     /// The optional `interrupt_reason` overrides the generic interrupted message
@@ -961,8 +972,11 @@ pub async fn execute_shell_command_streaming(
     // the raw bytes through a VT100 parser and extracting plain text.
     let rows = PREVIEW_HEIGHT;
     let cols = PREVIEW_WIDTH;
-    let stdout_text = ansi::to_plain_text(&full_stdout, rows, cols);
-    let stderr_text = ansi::to_plain_text(&full_stderr, rows, cols);
+    let mut stdout_text = ansi::to_plain_text(&full_stdout, rows, cols);
+    let mut stderr_text = ansi::to_plain_text(&full_stderr, rows, cols);
+
+    stdout_text.truncate(stdout_text.floor_char_boundary(ToolOutcome::MAX_STRUCTURED_OUTPUT_SIZE));
+    stderr_text.truncate(stderr_text.floor_char_boundary(ToolOutcome::MAX_STRUCTURED_OUTPUT_SIZE));
 
     ToolOutcome::Structured {
         stdout: stdout_text,
