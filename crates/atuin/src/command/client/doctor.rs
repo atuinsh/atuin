@@ -236,7 +236,7 @@ impl SystemInfo {
 
         Self {
             os: System::name().unwrap_or_else(|| "unknown".to_string()),
-            arch: System::cpu_arch().nonempty_or("unknown"),
+            arch: System::cpu_arch().nonempty_or_else(|| "unknown".into()),
             version: System::os_version().unwrap_or_else(|| "unknown".to_string()),
             disks,
         }
