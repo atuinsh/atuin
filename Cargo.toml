@@ -6,7 +6,7 @@ exclude = ["ui/backend"]
 [workspace.package]
 version = "18.22.0"
 authors = ["Ellie Huxtable <ellie@atuin.sh>"]
-rust-version = "1.98.0"
+rust-version = "1.95.0"
 license = "MIT"
 homepage = "https://atuin.sh"
 repository = "https://github.com/atuinsh/atuin"
@@ -62,7 +62,10 @@ derive_more = {
 }
 directories = "6.0.0"
 divan = { version = "5.0.1", package = "codspeed-divan-compat" }
-easy-cast = "0.7.1"
+# easy-cast 0.5.5+ raises its MSRV to 1.96 (for the CastTo/cast_to API, which we
+# don't use). The lockfile keeps us on 0.5.4 (MSRV 1.79); the `msrv` CI job runs
+# --locked, so an accidental bump would fail there.
+easy-cast = "0.5.4"
 enum_dispatch = "0.3"
 eventsource-stream = "0.2"
 eye_declare = "0.6.4"
