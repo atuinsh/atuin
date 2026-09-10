@@ -44,7 +44,7 @@ colored = "2.0.4"
 config = { version = "0.15.8", default-features = false, features = ["toml"] }
 crossterm = "0.29.0"
 crypto_secretbox = "0.1.1"
-daemonize = "0.5.0"
+daemonix = "0.1.0"
 dashmap = "6.1.0"
 derive_more = {
     version = "2",
