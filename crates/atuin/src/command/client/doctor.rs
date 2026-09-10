@@ -8,6 +8,7 @@ use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
 use atuin_common::path::PathExt;
 use atuin_common::shell::{Shell, shell_name};
+use atuin_common::string::NonEmptyOrExt as _;
 use colored::Colorize;
 use eyre::Result;
 use serde::Serialize;
@@ -235,7 +236,7 @@ impl SystemInfo {
 
         Self {
             os: System::name().unwrap_or_else(|| "unknown".to_string()),
-            arch: System::cpu_arch(),
+            arch: System::cpu_arch().nonempty_or("unknown"),
             version: System::os_version().unwrap_or_else(|| "unknown".to_string()),
             disks,
         }
