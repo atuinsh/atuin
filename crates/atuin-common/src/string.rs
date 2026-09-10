@@ -68,7 +68,11 @@ pub trait NonEmptyOrExt {
 
 impl NonEmptyOrExt for String {
     fn nonempty_or<S: Into<Self>>(self, value: S) -> Self {
-        if self.is_empty() { value.into() } else { self }
+        if self.is_empty() {
+            value.into()
+        } else {
+            self
+        }
     }
 }
 
