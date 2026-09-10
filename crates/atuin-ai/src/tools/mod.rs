@@ -907,8 +907,7 @@ pub async fn execute_shell_command_streaming(
                     Ok(0) => stdout_done = true,
                     Ok(n) => {
                         full_stdout.extend_from_slice(&stdout_buf[..n]);
-                        let normalized = ansi::onlcr(&stdout_buf[..n]).collect::<Vec<u8>>();
-                        parser.process(&normalized);
+                        ansi::onlcr(&stdout_buf[..n]).for_each(|chunk| parser.process(chunk));
                     }
                     Err(_) => stdout_done = true,
                 }
@@ -921,8 +920,7 @@ pub async fn execute_shell_command_streaming(
                     Ok(n) => {
                         full_stderr.extend_from_slice(&stderr_buf[..n]);
                         // Feed stderr to the preview parser too, so it shows in the VT100 screen
-                        let normalized = ansi::onlcr(&stderr_buf[..n]).collect::<Vec<u8>>();
-                        parser.process(&normalized);
+                        ansi::onlcr(&stderr_buf[..n]).for_each(|chunk| parser.process(chunk));
                     }
                     Err(_) => stderr_done = true,
                 }
@@ -961,9 +959,10 @@ pub async fn execute_shell_command_streaming(
 
     // Strip ANSI escape sequences for clean LLM output by running
     // the raw bytes through a VT100 parser and extracting plain text.
+    let rows = PREVIEW_HEIGHT;
     let cols = PREVIEW_WIDTH;
-    let stdout_text = ansi::to_plain_text(&full_stdout, cols);
-    let stderr_text = ansi::to_plain_text(&full_stderr, cols);
+    let stdout_text = ansi::to_plain_text(&full_stdout, rows, cols);
+    let stderr_text = ansi::to_plain_text(&full_stderr, rows, cols);
 
     ToolOutcome::Structured {
         stdout: stdout_text,
