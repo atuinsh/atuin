@@ -63,11 +63,13 @@ impl<T: AsRef<str> + ?Sized> NormalizeDiacriticsExt for T {}
 /// Extension trait for owned strings providing an empty-string fallback.
 pub trait NonEmptyOrExt: Sized {
     /// Return the string if it is non-empty, otherwise `value`.
+    #[must_use]
     fn nonempty_or(self, value: Self) -> Self {
         self.nonempty_or_else(|| value)
     }
 
     /// Same as [`Self::nonempty_or`] but takes a factory function.
+    #[must_use]
     fn nonempty_or_else(self, default: impl FnOnce() -> Self) -> Self;
 }
 
