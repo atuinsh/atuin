@@ -461,6 +461,7 @@ dependencies = [
  "atuin-vt100",
  "base64",
  "bytesize",
+ "codspeed-divan-compat",
  "crypto_secretbox",
  "derive_more",
  "directories",
