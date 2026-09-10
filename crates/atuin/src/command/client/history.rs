@@ -1217,7 +1217,7 @@ impl Cmd {
                         let before = i64::try_from(
                             interim::parse_date_string(
                                 before.as_str(),
-                                OffsetDateTime::now_utc(),
+                                OffsetDateTime::now_utc().to_offset(settings.timezone.0),
                                 interim::Dialect::Uk,
                             )?
                             .unix_timestamp_nanos(),
