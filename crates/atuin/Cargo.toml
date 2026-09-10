@@ -144,7 +144,7 @@ arboard = { workspace = true, optional = true }
 arboard = { workspace = true, optional = true, features = ["wayland-data-control"] }
 
 [target.'cfg(unix)'.dependencies]
-daemonize = { workspace = true }
+daemonix = { workspace = true }
 
 # Enable tree-sitter shell parsing on platforms where tree-sitter's bundled C
 # compiles cleanly. tree-sitter 0.26's portable/endian.h fails on illumos,
