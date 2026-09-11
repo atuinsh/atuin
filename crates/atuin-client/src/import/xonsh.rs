@@ -3,7 +3,6 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::record::CmdOrigin;
 use directories::BaseDirs;
 use easy_cast::CastFloat;
@@ -133,7 +132,7 @@ impl Importer for Xonsh {
                 let timestamp = (start * 1_000_000_000_f64)
                     .try_cast_trunc()
                     .ok()
-                    .and_then(|nanos: i128| OffsetDateTime::from_unix_nanos(nanos).ok())
+                    .and_then(|nanos: i128| OffsetDateTime::from_unix_timestamp_nanos(nanos).ok())
                     .unwrap_or(OffsetDateTime::UNIX_EPOCH);
 
                 let duration = ((end - start) * 1_000_000_000_f64)

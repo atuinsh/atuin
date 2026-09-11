@@ -42,7 +42,6 @@ tokio = { workspace = true }
 tokio-stream = { workspace = true, features = ["sync"] }
 tonic = { workspace = true }
 tonic-prost = { workspace = true }
-tonic-types = { workspace = true }
 tower = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -59,7 +58,6 @@ tempfile = { workspace = true }
 
 [build-dependencies]
 protox = { workspace = true }
-tonic-build = { workspace = true }
 tonic-prost-build = { workspace = true }
 
 [lints]

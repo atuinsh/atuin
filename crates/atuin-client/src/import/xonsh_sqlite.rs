@@ -3,7 +3,6 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use atuin_common::db;
-use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::record::CmdOrigin;
 use directories::BaseDirs;
 use easy_cast::{CastFloat, Conv};
@@ -35,7 +34,7 @@ impl HistDbEntry {
         let timestamp = (self.tsb * 1_000_000_000_f64)
             .try_cast_trunc()
             .ok()
-            .and_then(|nanos: i128| OffsetDateTime::from_unix_nanos(nanos).ok())
+            .and_then(|nanos: i128| OffsetDateTime::from_unix_timestamp_nanos(nanos).ok())
             .unwrap_or(OffsetDateTime::UNIX_EPOCH);
 
         #[expect(
