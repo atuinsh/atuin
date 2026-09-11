@@ -1,15 +1,13 @@
 //! Disk-budget garbage collection for the output capture backend.
 
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use atuin_client::settings::DiskUsageLimit;
 use atuin_common::units::{ByteSize, Percent};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
-use super::AnyBackend;
+use super::{AnyBackend, OutputBackend};
 
 #[derive(Debug)]
 pub struct Gc {
@@ -67,24 +65,5 @@ impl Gc {
 impl Drop for Gc {
     fn drop(&mut self) {
         self.task.abort();
-    }
-}
-
-/// The disk budget for a store living at `path`, or `None` when usage is unlimited. Only a
-/// percentage has to look at the disk; an absolute size is taken as-is, so an absolute limit never
-/// touches the filesystem.
-pub fn resolve_budget(path: &Path, limit: DiskUsageLimit) -> Option<ByteSize> {
-    match limit {
-        DiskUsageLimit::Unlimited => None,
-        DiskUsageLimit::Bytes(bytes) => Some(bytes),
-        DiskUsageLimit::Percent(_) => {
-            let disks = sysinfo::Disks::new_with_refreshed_list();
-            let total = disks
-                .iter()
-                .filter(|disk| path.starts_with(disk.mount_point()))
-                .max_by_key(|disk| disk.mount_point().as_os_str().len())
-                .map(|disk| disk.total_space())?;
-            limit.resolve(ByteSize::b(total))
-        }
     }
 }

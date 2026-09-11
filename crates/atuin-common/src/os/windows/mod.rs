@@ -6,6 +6,7 @@
 
 use windows_sys::Win32::Foundation::GetLastError;
 
+pub mod disk;
 pub mod process;
 
 /// Query the system for the last set error.

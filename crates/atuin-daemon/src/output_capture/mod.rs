@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use atuin_client::history::{CommandCapture, HistoryId};
 use atuin_client::settings::DiskUsageLimit;
-use backend::{AnyBackend, Backend, FjallStorage, Gc, NopIndex, SqliteIndex};
+use backend::{AnyBackend, Backend, FjallStorage, Gc, NopIndex, OutputBackend, SqliteIndex};
 pub use backend::{
     BackendKind, CaptureError, DeleteOutputError, GetOutputError, IndexError, OutputMatch,
 };
@@ -70,8 +70,13 @@ impl OutputCapture {
 
         // The gc drives the backend from a background task, holding only a clone of the `Arc`; the
         // backend points at no task, so that clone forms no cycle that would keep the task alive.
-        let gc = backend::resolve_budget(path, max_disk_usage)
-            .map(|budget| Gc::spawn(backend.clone(), budget));
+        let gc = match max_disk_usage.resolve_for_path(path) {
+            Ok(budget) => budget.map(|budget| Gc::spawn(backend.clone(), budget)),
+            Err(err) => {
+                warn!(?err, ?path, "failed to resolve the output capture disk budget; gc disabled");
+                None
+            }
+        };
 
         Self {
             backend,

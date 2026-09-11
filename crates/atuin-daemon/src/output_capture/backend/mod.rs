@@ -1,11 +1,5 @@
 //! The output capture backend: a [`Storage`] holding the captures, coupled with the [`Index`] that
 //! searches them.
-//!
-//! [`Backend`] pairs any storage with any index and keeps the two consistent by construction: every
-//! write and delete goes to both, and [`Backend::reconcile`] heals whatever slipped. [`AnyBackend`]
-//! names the pairings that actually exist, so an impossible one (a nop store with a live index,
-//! say) is unrepresentable. A storage that also indexes itself -- both halves in one durability
-//! domain, no reconcile needed -- would be its own [`AnyBackend`] variant with the same methods.
 
 mod gc;
 mod index;
@@ -14,7 +8,8 @@ mod storage;
 use std::collections::HashSet;
 
 use atuin_client::history::{CommandCapture, HistoryId};
-pub use gc::{Gc, resolve_budget};
+use enum_dispatch::enum_dispatch;
+pub use gc::Gc;
 pub use index::{Index, IndexError, NopIndex, OutputMatch, SqliteIndex};
 #[cfg(test)]
 pub use storage::FailingStorage;
@@ -32,7 +27,7 @@ pub enum ReconcileError {
     Index(#[from] IndexError),
 }
 
-/// A [`Storage`] and a derived [`Index`] over it, kept consistent by this type.
+/// A [`Storage`] and a derived [`Index`] over it.
 #[derive(Debug)]
 pub struct Backend<S, I> {
     /// The source of truth for captured output.
@@ -45,64 +40,72 @@ impl<S: Storage, I: Index> Backend<S, I> {
     pub fn new(storage: S, index: I) -> Self {
         Self { storage, index }
     }
+}
 
-    pub async fn capture(
+#[enum_dispatch]
+#[allow(async_fn_in_trait, reason = "only used within our code; no Send bound needed")]
+pub trait OutputBackend {
+    async fn capture(&self, id: HistoryId, capture: CommandCapture) -> Result<(), CaptureError>;
+
+    async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError>;
+
+    async fn remove(&self, ids: &[HistoryId]) -> Result<(), DeleteOutputError>;
+
+    async fn search(&self, query: &str, limit: usize) -> Result<Vec<OutputMatch>, IndexError>;
+
+    fn estimated_disk_space(&self) -> u64;
+
+    async fn eviction_candidates(
         &self,
-        id: HistoryId,
-        capture: CommandCapture,
-    ) -> Result<(), CaptureError> {
-        // The visible text is read before the value moves into the storage.
+        reclaim_bytes: u64,
+    ) -> Result<Vec<HistoryId>, DeleteOutputError>;
+
+    async fn reconcile(&self) -> Result<(), ReconcileError>;
+}
+
+impl<S: Storage, I: Index> OutputBackend for Backend<S, I> {
+    async fn capture(&self, id: HistoryId, capture: CommandCapture) -> Result<(), CaptureError> {
         let text = capture.plaintext();
         self.storage.capture(id, capture).await?;
 
-        // Indexing is best-effort: a failure here must never sink the capture. Boot reconcile heals
-        // any entry the index missed.
+        // Indexing here is best-effort. If we fail, we fail, it's sad but hopefully the next
+        // reconcile will pick it up.
         if let Err(err) = self.index.insert(id, &text).await {
             warn!(?err, %id, "failed to index captured output; search may miss it until reconcile");
         }
         Ok(())
     }
 
-    pub async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError> {
+    async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError> {
         self.storage.get(id).await
     }
 
-    /// Forget the captured output of every history id in `ids`, from the storage and the index.
-    /// Absent ids are ignored.
-    pub async fn remove(&self, ids: &[HistoryId]) -> Result<(), DeleteOutputError> {
+    async fn remove(&self, ids: &[HistoryId]) -> Result<(), DeleteOutputError> {
         let result = self.storage.remove(ids.iter().copied()).await;
 
-        // Best-effort, like `capture`: the storage is authoritative, so its result is what we
-        // return; a stale index entry left behind is dropped by the next reconcile.
         if let Err(err) = self.index.remove(ids.iter().copied()).await {
             warn!(?err, "failed to drop ids from the output search index");
         }
+
         result
     }
 
-    /// Relevance-ranked full-text matches over captured output, most relevant first.
-    pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<OutputMatch>, IndexError> {
+    async fn search(&self, query: &str, limit: usize) -> Result<Vec<OutputMatch>, IndexError> {
         self.index.search(query, limit).await
     }
 
-    /// On-disk bytes the storage occupies; what the [`Gc`] budgets against.
-    pub fn estimated_disk_space(&self) -> u64 {
+    fn estimated_disk_space(&self) -> u64 {
         self.storage.estimated_disk_space()
     }
 
-    /// The oldest ids whose eviction would free at least `reclaim_bytes`. Does not delete anything.
-    pub async fn eviction_candidates(
+    async fn eviction_candidates(
         &self,
         reclaim_bytes: u64,
     ) -> Result<Vec<HistoryId>, DeleteOutputError> {
         self.storage.eviction_candidates(reclaim_bytes).await
     }
 
-    /// Bring the search index back in line with the storage: drop index entries whose capture is
-    /// gone, and index captures the index is missing (a rebuild is just this against an empty index). The index ids are read *before* the storage ids so a
-    /// capture landing mid-reconcile is only ever seen as "missing" (and re-indexed), never mistaken
-    /// for a stale entry to delete.
-    pub async fn reconcile(&self) -> Result<(), ReconcileError> {
+    async fn reconcile(&self) -> Result<(), ReconcileError> {
         let index_set: HashSet<HistoryId> = self.index.indexed_ids().await?.into_iter().collect();
         let storage_ids = self.storage.all_ids().await?;
         let storage_set: HashSet<HistoryId> = storage_ids.iter().copied().collect();
@@ -138,6 +141,7 @@ pub type FailingBackend = Backend<FailingStorage, NopIndex>;
 /// Every pairing of storage and index the daemon can run on.
 #[derive(Debug, strum_macros::EnumDiscriminants)]
 #[strum_discriminants(name(BackendKind))]
+#[enum_dispatch(OutputBackend)]
 pub enum AnyBackend {
     Fjall(FjallBackend),
     FjallUnindexed(FjallUnindexedBackend),
@@ -146,56 +150,6 @@ pub enum AnyBackend {
     /// Never selected in production.
     #[cfg(test)]
     Failing(FailingBackend),
-}
-
-/// Run `$body` against whichever backend `$this` holds, bound to `$b`.
-macro_rules! dispatch {
-    ($this:expr, $b:ident => $body:expr) => {
-        match $this {
-            AnyBackend::Fjall($b) => $body,
-            AnyBackend::FjallUnindexed($b) => $body,
-            AnyBackend::Nop($b) => $body,
-            #[cfg(test)]
-            AnyBackend::Failing($b) => $body,
-        }
-    };
-}
-
-impl AnyBackend {
-    pub async fn capture(
-        &self,
-        id: HistoryId,
-        capture: CommandCapture,
-    ) -> Result<(), CaptureError> {
-        dispatch!(self, b => b.capture(id, capture).await)
-    }
-
-    pub async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError> {
-        dispatch!(self, b => b.get(id).await)
-    }
-
-    pub async fn remove(&self, ids: &[HistoryId]) -> Result<(), DeleteOutputError> {
-        dispatch!(self, b => b.remove(ids).await)
-    }
-
-    pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<OutputMatch>, IndexError> {
-        dispatch!(self, b => b.search(query, limit).await)
-    }
-
-    pub fn estimated_disk_space(&self) -> u64 {
-        dispatch!(self, b => b.estimated_disk_space())
-    }
-
-    pub async fn eviction_candidates(
-        &self,
-        reclaim_bytes: u64,
-    ) -> Result<Vec<HistoryId>, DeleteOutputError> {
-        dispatch!(self, b => b.eviction_candidates(reclaim_bytes).await)
-    }
-
-    pub async fn reconcile(&self) -> Result<(), ReconcileError> {
-        dispatch!(self, b => b.reconcile().await)
-    }
 }
 
 #[cfg(test)]
