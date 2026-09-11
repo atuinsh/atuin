@@ -268,7 +268,7 @@ mod test {
 
         /// Helper for [`selects_history_path`], which supplies
         /// [`EXPECTATION_VAR`] and a private `HOME`. Not a standalone test.
-        #[test]
+        #[rstest]
         #[ignore = "re-executed as a child process by selects_history_path"]
         fn history_path_child() {
             let expected = std::env::var(EXPECTATION_VAR).unwrap_or_else(|_| {
@@ -349,6 +349,7 @@ mod test {
         assert_eq!(parsed.duration, duration);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn test_parse_file() {
         let bytes = r": 1613322469:0;cargo install atuin
@@ -372,6 +373,7 @@ cargo update
         ]);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn timestamp_near_range_start_does_not_panic_on_backfill() {
         // first timestamp is near the minimum representable instant, preceded by an
@@ -390,6 +392,7 @@ cargo update
         ]);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn timestamp_near_range_end_does_not_panic_on_increment() {
         // first timestamp is the maximum representable instant (253402300799 is the
@@ -421,6 +424,7 @@ cargo update
         assert_eq!(loader.buf.last().unwrap().timestamp.unix_timestamp(), 253_402_300_799);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn test_parse_metafied() {
         let bytes =
