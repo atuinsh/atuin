@@ -192,21 +192,57 @@ impl Worker {
         Ok(())
     }
 
-    /// Build freshly-downloaded records into `history_db` and stream the resulting history rows
-    /// straight into the shared search index.
+    /// Build freshly-downloaded records into `history_db` and index the resulting rows.
     async fn index_downloaded_records(&self, ids: &[RecordId]) {
-        let batches = self.history_store.incremental_build(self.handle.history_db(), ids);
-        futures::pin_mut!(batches);
+        // This first accumulates all the IDs that were built, inserts them into history_db and then
+        // in a separate phase, walks through the history_db to populate the index.
+        //
+        // This is really not great, but unfortunately incremental_build has a bad misbehavior, it
+        // yields entries that were first created and then subsequently deleted, just by virtue of
+        // them being created.
+        //
+        // [`HistoryStore::build`] yields only the entries which were created, but
+        // [`HistoryStore::incremental_build`] yields both entries which were created and then
+        // subsequently deleted.
+        //
+        // There is a categorical problem with [`HistoryStore::incremental_build`]. Suppose you run
+        // incremental_build([add(1), add(2), delete(2), add(3)]), followed by an
+        // incremental_build([delete(3)]), the first iteration of `incremental_build` would tell you
+        // that it added 1 and 3, but a subsequent one would immediately delete it.
+        //
+        // In general, this anti-pattern and footgun with incremental_build exists in other places
+        // in the codebase.
+        //
+        // I would like to make incremental_build be a stream combinator, but it can't be -- it
+        // needs to compute all its inputs before it knows whether an operation created a history
+        // or not.
+        //
+        // Currently the logic is the exact same as it was before.
+        //
+        // TODO(markovejnovic): Figure out what's happening with [`HistoryStore::incremental_build`]
+        //                      and [`HistoryStore::build`], decide which one can be deleted and
+        //                      then improve this logic here.
+        const INDEX_CHUNK: usize = 1024;
 
-        while let Some(batch) = batches.next().await {
-            match batch {
-                // The rows are already in sqlite; push them straight into the live index.
-                Ok(histories) if !histories.is_empty() => {
-                    self.index.read().await.add_histories(&histories);
+        let mut built_ids = Vec::new();
+        {
+            let batches = self.history_store.incremental_build(self.handle.history_db(), ids);
+            futures::pin_mut!(batches);
+            while let Some(batch) = batches.next().await {
+                match batch {
+                    Ok(histories) => built_ids.extend(histories.iter().map(|h| h.id)),
+                    Err(e) => {
+                        tracing::error!("failed to build history from downloaded records: {e}");
+                    }
                 }
-                Ok(_) => {}
+            }
+        }
 
-                Err(e) => tracing::error!("failed to build history from downloaded records: {e}"),
+        for chunk in built_ids.chunks(INDEX_CHUNK) {
+            match self.handle.history_db().load_active(chunk.iter().copied()).await {
+                Ok(active) if !active.is_empty() => self.index.read().await.add_histories(&active),
+                Ok(_) => {}
+                Err(e) => tracing::error!("failed to load synced history for indexing: {e}"),
             }
         }
     }
