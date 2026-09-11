@@ -26,10 +26,9 @@ impl Zsh {
 }
 
 fn default_histpath() -> Result<PathBuf> {
-    // oh-my-zsh sets HISTFILE=~/.zhistory
-    // zsh has no default value for this var, but uses ~/.zhistory.
-    // zsh-newuser-install propose as default .histfile https://github.com/zsh-users/zsh/blob/master/Functions/Newuser/zsh-newuser-install#L794
-    // we could maybe be smarter about this in the future :)
+    // These are fallback filenames, not a default HISTFILE supplied by Zsh.
+    // get_histfile_path checks the process environment before calling this function.
+    // An unexported shell parameter is not visible to the importer.
     let user_dirs = UserDirs::new().ok_or_else(|| eyre!("could not find user directories"))?;
     let home_dir = user_dirs.home_dir();
 
@@ -185,6 +184,80 @@ mod test {
     use super::*;
     use crate::import::tests::TestLoader;
 
+    #[cfg(unix)]
+    mod path_selection {
+        use std::process::Command;
+
+        use rstest::fixture;
+        use tempfile::TempDir;
+
+        use super::*;
+
+        #[fixture]
+        fn home() -> TempDir {
+            tempfile::tempdir().unwrap()
+        }
+
+        #[rstest]
+        #[case::first_fallback(&[".zhistory", ".zsh_history", ".histfile"], None, Some(".zhistory"))]
+        #[case::second_fallback(&[".zsh_history", ".histfile"], None, Some(".zsh_history"))]
+        #[case::third_fallback(&[".histfile"], None, Some(".histfile"))]
+        #[case::exported_histfile(
+            &[".zhistory", ".zsh_history", "custom history"],
+            Some("custom history"),
+            Some("custom history")
+        )]
+        #[case::missing_exported_histfile(&[".zhistory"], Some("missing"), None)]
+        #[case::no_history(&[], None, None)]
+        fn selects_history_path(
+            home: TempDir,
+            #[case] files: &[&str],
+            #[case] histfile: Option<&str>,
+            #[case] expected: Option<&str>,
+        ) {
+            for file in files {
+                std::fs::write(home.path().join(file), "history\n").unwrap();
+            }
+
+            // Set environment variables only on a child process, never in the
+            // parallel test runner. Unix UserDirs resolves HOME from the environment.
+            let mut child = Command::new(std::env::current_exe().unwrap());
+            child
+                .args([
+                    "--exact",
+                    "import::zsh::test::path_selection::history_path_child",
+                    "--nocapture",
+                ])
+                .env("HOME", home.path())
+                .env_remove("HISTFILE")
+                .env("ATUIN_TEST_ZSH_HISTORY_PATH", expected.unwrap_or_default());
+            if let Some(histfile) = histfile {
+                child.env("HISTFILE", home.path().join(histfile));
+            }
+            let output = child.output().unwrap();
+            assert!(
+                output.status.success(),
+                "stdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+
+        #[rstest]
+        fn history_path_child() {
+            let Ok(expected) = std::env::var("ATUIN_TEST_ZSH_HISTORY_PATH") else {
+                return;
+            };
+            let result = get_histfile_path(default_histpath);
+            if expected.is_empty() {
+                assert!(result.is_err());
+            } else {
+                let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+                assert_eq!(result.unwrap(), home.join(expected));
+            }
+        }
+    }
+
     #[rstest]
     #[case::zero_duration(
         ": 1613322469:0;cargo install atuin",
@@ -249,6 +322,7 @@ mod test {
         assert_eq!(parsed.duration, duration);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn test_parse_file() {
         let bytes = r": 1613322469:0;cargo install atuin
@@ -272,6 +346,7 @@ cargo update
         ]);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn timestamp_near_range_start_does_not_panic_on_backfill() {
         // first timestamp is near the minimum representable instant, preceded by an
@@ -290,6 +365,7 @@ cargo update
         ]);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn timestamp_near_range_end_does_not_panic_on_increment() {
         // first timestamp is the maximum representable instant (253402300799 is the
@@ -321,6 +397,7 @@ cargo update
         assert_eq!(loader.buf.last().unwrap().timestamp.unix_timestamp(), 253_402_300_799);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn test_parse_metafied() {
         let bytes =
