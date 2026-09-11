@@ -1,3 +1,5 @@
+use vt100::capture::basic_formatted_to_plain;
+
 /// A completed command's captured output.
 ///
 /// This is the domain representation of a captured command, independent of any wire (gRPC) or
@@ -31,4 +33,20 @@ pub struct CommandCapture {
 
     /// The height of the terminal when the command finished.
     pub terminal_height: u16,
+}
+
+impl CommandCapture {
+    /// Write the command capture as a plaintext string, stripping away all escape codes.
+    pub fn plaintext(&self) -> String {
+        let mut out = String::with_capacity(
+            self.output_start.len() + self.output_end.as_ref().map_or(0, |end| end.len() + 1),
+        );
+        out.extend(basic_formatted_to_plain(&self.output_start));
+
+        if let Some(end) = &self.output_end {
+            out.push('\n');
+            out.extend(basic_formatted_to_plain(end));
+        }
+        out
+    }
 }

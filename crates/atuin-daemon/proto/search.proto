@@ -52,11 +52,7 @@ message SearchCommandOutputRequest {
 message OutputSearchMatch {
   // The history ID of the matching output.
   common.HistoryId history_id = 1;
-  // The full visible (escape-stripped) output that was searched, so a client can show any match
-  // in as much context as it likes without a second round trip.
-  string output = 2;
-  // Byte ranges into `output` covering each match. May be empty, or hold several.
-  repeated common.UnsignedIdxRange matches = 3;
+  common.HighlightedText output = 2;
   // Relevance -- higher means more relevant.
   //
   // Don't depend on this in any other form except for sorting.

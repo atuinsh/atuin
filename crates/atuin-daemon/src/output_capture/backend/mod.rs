@@ -10,7 +10,6 @@
 mod gc;
 mod index;
 mod storage;
-mod text;
 
 use std::collections::HashSet;
 
@@ -53,7 +52,7 @@ impl<S: Storage, I: Index> Backend<S, I> {
         capture: CommandCapture,
     ) -> Result<(), CaptureError> {
         // The visible text is read before the value moves into the storage.
-        let text = text::indexable_text(&capture);
+        let text = capture.plaintext();
         self.storage.capture(id, capture).await?;
 
         // Indexing is best-effort: a failure here must never sink the capture. Boot reconcile heals
@@ -119,7 +118,7 @@ impl<S: Storage, I: Index> Backend<S, I> {
             }
             // A concurrent delete may have removed it since we listed ids; only index what's there.
             if let Some(capture) = self.storage.get(id).await? {
-                self.index.insert(id, &text::indexable_text(&capture)).await?;
+                self.index.insert(id, &capture.plaintext()).await?;
             }
         }
         Ok(())

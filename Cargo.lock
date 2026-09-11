@@ -396,6 +396,7 @@ dependencies = [
  "async-trait",
  "atuin-common",
  "atuin-domain",
+ "atuin-vt100",
  "base64",
  "clap",
  "codspeed-divan-compat",
