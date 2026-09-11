@@ -30,6 +30,9 @@ fn default_histpath() -> Result<PathBuf> {
     // zsh has no default value for this var, but uses ~/.zhistory.
     // zsh-newuser-install propose as default .histfile https://github.com/zsh-users/zsh/blob/master/Functions/Newuser/zsh-newuser-install#L794
     // we could maybe be smarter about this in the future :)
+    //
+    // These are only reached when HISTFILE is absent from the process
+    // environment, so an unexported shell parameter silently lands here.
     let user_dirs = UserDirs::new().ok_or_else(|| eyre!("could not find user directories"))?;
     let home_dir = user_dirs.home_dir();
 
@@ -185,6 +188,103 @@ mod test {
     use super::*;
     use crate::import::tests::TestLoader;
 
+    #[cfg(unix)]
+    mod path_selection {
+        use std::process::Command;
+
+        use rstest::fixture;
+        use tempfile::TempDir;
+
+        use super::*;
+
+        /// Name of the helper test re-executed to assert path selection.
+        const CHILD_TEST: &str = "import::zsh::test::path_selection::history_path_child";
+
+        /// Env var carrying the child's expectation: a filename relative to
+        /// `HOME`, or [`EXPECT_ERROR`]. Its absence is a harness bug, not a
+        /// signal, so the child panics rather than passing vacuously.
+        const EXPECTATION_VAR: &str = "ATUIN_TEST_ZSH_HISTORY_PATH";
+
+        /// Distinct from any filename, so "expect failure" can't be confused
+        /// with "no expectation set".
+        const EXPECT_ERROR: &str = "!expect-error";
+
+        /// Printed by the child only after its assertions run. The parent
+        /// requires it, because an exit status of zero is also what libtest
+        /// reports when a filter matches no tests at all.
+        const CHILD_OK: &str = "history_path_child: assertions ran";
+
+        #[fixture]
+        fn home() -> TempDir {
+            tempfile::tempdir().unwrap()
+        }
+
+        #[rstest]
+        #[case::first_fallback(&[".zhistory", ".zsh_history", ".histfile"], None, Some(".zhistory"))]
+        #[case::second_fallback(&[".zsh_history", ".histfile"], None, Some(".zsh_history"))]
+        #[case::third_fallback(&[".histfile"], None, Some(".histfile"))]
+        #[case::exported_histfile(
+            &[".zhistory", ".zsh_history", "custom history"],
+            Some("custom history"),
+            Some("custom history")
+        )]
+        #[case::missing_exported_histfile(&[".zhistory"], Some("missing"), None)]
+        #[case::no_history(&[], None, None)]
+        fn selects_history_path(
+            home: TempDir,
+            #[case] files: &[&str],
+            #[case] histfile: Option<&str>,
+            #[case] expected: Option<&str>,
+        ) {
+            for file in files {
+                std::fs::write(home.path().join(file), "history\n").unwrap();
+            }
+
+            // Set environment variables only on a child process, never in the
+            // parallel test runner. Unix UserDirs resolves HOME from the environment.
+            //
+            // The child is `#[ignore]`d so normal runs skip it, which is why
+            // `--ignored` is passed here. This relies on libtest's CLI, which
+            // third-party runners such as nextest reproduce but don't guarantee.
+            let mut child = Command::new(std::env::current_exe().unwrap());
+            child
+                .args(["--exact", CHILD_TEST, "--ignored", "--nocapture"])
+                .env("HOME", home.path())
+                .env_remove("HISTFILE")
+                .env(EXPECTATION_VAR, expected.unwrap_or(EXPECT_ERROR));
+            if let Some(histfile) = histfile {
+                child.env("HISTFILE", home.path().join(histfile));
+            }
+            let output = child.output().unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "child failed\nstdout: {stdout}\nstderr: {stderr}");
+            assert!(
+                stdout.contains(CHILD_OK),
+                "child reported success without running its assertions; is {CHILD_TEST} still \
+                 present?\nstdout: {stdout}\nstderr: {stderr}",
+            );
+        }
+
+        /// Helper for [`selects_history_path`], which supplies
+        /// [`EXPECTATION_VAR`] and a private `HOME`. Not a standalone test.
+        #[rstest]
+        #[ignore = "re-executed as a child process by selects_history_path"]
+        fn history_path_child() {
+            let expected = std::env::var(EXPECTATION_VAR).unwrap_or_else(|_| {
+                panic!("{EXPECTATION_VAR} is unset; run selects_history_path instead")
+            });
+            let result = get_histfile_path(default_histpath);
+            if expected == EXPECT_ERROR {
+                assert!(result.is_err(), "expected an error, got {result:?}");
+            } else {
+                let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+                assert_eq!(result.unwrap(), home.join(expected));
+            }
+            println!("{CHILD_OK}");
+        }
+    }
+
     #[rstest]
     #[case::zero_duration(
         ": 1613322469:0;cargo install atuin",
@@ -249,6 +349,7 @@ mod test {
         assert_eq!(parsed.duration, duration);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn test_parse_file() {
         let bytes = r": 1613322469:0;cargo install atuin
@@ -272,6 +373,7 @@ cargo update
         ]);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn timestamp_near_range_start_does_not_panic_on_backfill() {
         // first timestamp is near the minimum representable instant, preceded by an
@@ -290,6 +392,7 @@ cargo update
         ]);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn timestamp_near_range_end_does_not_panic_on_increment() {
         // first timestamp is the maximum representable instant (253402300799 is the
@@ -321,6 +424,7 @@ cargo update
         assert_eq!(loader.buf.last().unwrap().timestamp.unix_timestamp(), 253_402_300_799);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn test_parse_metafied() {
         let bytes =

@@ -100,8 +100,23 @@ if present this data will be ignored by Atuin.
 
 ## zsh
 
-This will read the Zsh history from `$HISTFILE` or `$HOME/.zhistory`
-or `$HOME/.zsh_history` in either the basic or extended format.
+This reads Zsh history in either the basic or extended format. If `HISTFILE` is
+exported into the process environment, Atuin reads that file. Otherwise, it reads
+the first existing file in this order: `$HOME/.zhistory`, `$HOME/.zsh_history`,
+`$HOME/.histfile`. It doesn't combine these files.
+
+Setting `HISTFILE` in Zsh doesn't necessarily export it. Atuin can't read a
+shell parameter that hasn't been exported, so an old fallback file can be
+selected even when `echo "$HISTFILE"` shows a different path.
+
+To import the file named by your current Zsh parameter, pass it to the command:
+
+```shell
+HISTFILE="${HISTFILE:?Set HISTFILE to your Zsh history file}" atuin import zsh
+```
+
+This checks that `HISTFILE` isn't empty and exports it for this command only.
+Atuin reads the saved file, not entries that exist only in the shell's memory.
 
 ## zsh-hist-db
 
