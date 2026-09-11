@@ -4,9 +4,7 @@ use super::{CaptureError, DeleteOutputError, GetOutputError, Storage, StorageErr
 
 /// A [`Storage`] whose every operation fails, standing in for a broken output store.
 ///
-/// It exists only to exercise the best-effort handling around the store -- most importantly that a
-/// failed deletion never sinks the history delete itself. Production never selects it; only
-/// [`OutputCapture::failing`](crate::OutputCapture::failing), a test hook, builds one.
+/// This is for tests.
 #[derive(Debug, Clone, Copy)]
 pub struct FailingStorage;
 

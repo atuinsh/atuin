@@ -265,16 +265,12 @@ impl Drop for Flusher {
 pub struct FjallStorage {
     #[debug(skip)]
     inner: Arc<FjallStorageInner>,
-    // Held only to abort the flusher's background task on drop; never read.
     #[debug(skip)]
     _flusher: Arc<Flusher>,
 }
 
 impl FjallStorage {
     /// Open the store at `path`.
-    ///
-    /// Disk budgeting and eviction live one layer up, in the [`Backend`](super::super::Backend), so
-    /// a single eviction can drop an entry from the store and the search index together.
     pub fn open(path: impl AsRef<Path>) -> fjall::Result<Self> {
         let db = OptimisticTxDatabase::builder(path.as_ref()).open()?;
         Self::new(db)
@@ -288,8 +284,6 @@ impl FjallStorage {
             dirty: Arc::new(AtomicBool::new(false)),
         });
 
-        // The flusher drives `inner` from a background task, holding only a clone of it. `inner`
-        // points at no task, so that clone forms no cycle that would keep the task alive.
         let flusher = Arc::new(Flusher::spawn(inner.clone()));
 
         Ok(Self {
