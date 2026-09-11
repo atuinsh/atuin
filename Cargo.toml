@@ -141,7 +141,7 @@ sql-builder = "3"
 sqlx = { version = "0.9", features = ["runtime-tokio", "time", "uuid"] }
 strum = { version = "0.27", features = ["strum_macros"] }
 strum_macros = "0.28"
-sysinfo = "0.30.7"
+sysinfo = "0.39.6"
 tempfile = { version = "3.19" }
 thiserror = "2"
 time = { version = "0.3.47", features = ["serde-human-readable", "macros", "local-offset"] }

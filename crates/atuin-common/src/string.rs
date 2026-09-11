@@ -60,6 +60,59 @@ pub trait NormalizeDiacriticsExt: AsRef<str> {
 
 impl<T: AsRef<str> + ?Sized> NormalizeDiacriticsExt for T {}
 
+/// Extension trait for owned strings providing an empty-string fallback.
+pub trait NonEmptyOrExt: Sized {
+    /// Return the string if it is non-empty, otherwise `value`.
+    #[must_use]
+    fn nonempty_or(self, value: Self) -> Self {
+        self.nonempty_or_else(|| value)
+    }
+
+    /// Same as [`Self::nonempty_or`] but takes a factory function.
+    #[must_use]
+    fn nonempty_or_else(self, default: impl FnOnce() -> Self) -> Self;
+}
+
+impl NonEmptyOrExt for String {
+    fn nonempty_or_else(self, default: impl FnOnce() -> Self) -> Self {
+        if self.is_empty() {
+            default()
+        } else {
+            self
+        }
+    }
+}
+
+impl NonEmptyOrExt for &str {
+    fn nonempty_or_else(self, default: impl FnOnce() -> Self) -> Self {
+        if self.is_empty() {
+            default()
+        } else {
+            self
+        }
+    }
+}
+
+impl<T> NonEmptyOrExt for &[T] {
+    fn nonempty_or_else(self, default: impl FnOnce() -> Self) -> Self {
+        if self.is_empty() {
+            default()
+        } else {
+            self
+        }
+    }
+}
+
+impl<T> NonEmptyOrExt for Vec<T> {
+    fn nonempty_or_else(self, default: impl FnOnce() -> Self) -> Self {
+        if self.is_empty() {
+            default()
+        } else {
+            self
+        }
+    }
+}
+
 /// Extension trait for [`Url`] to render a `Debug` representation with any
 /// password redacted.
 pub trait FormatSafeUrlExt {
@@ -119,7 +172,7 @@ mod tests {
     use rstest::rstest;
     use url::Url;
 
-    use super::{FormatSafeUrlExt, NormalizeDiacriticsExt, TruncateCharsExt};
+    use super::{FormatSafeUrlExt, NonEmptyOrExt, NormalizeDiacriticsExt, TruncateCharsExt};
 
     #[rstest]
     #[case::empty("", "")]
@@ -151,6 +204,13 @@ mod tests {
         let out = input.truncate_chars(max);
         assert_eq!(out, expected);
         assert!(out.chars().count() <= max);
+    }
+
+    #[rstest]
+    #[case::empty("", "fallback")]
+    #[case::non_empty("value", "value")]
+    fn nonempty_or_falls_back_only_when_empty(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(input.to_string().nonempty_or_else(|| "fallback".into()), expected);
     }
 
     #[test]
