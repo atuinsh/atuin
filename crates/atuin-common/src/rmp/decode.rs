@@ -92,8 +92,10 @@ primitive_readers! {
 /// Read a MessagePack integer, decoding whatever integer marker is present into `T`.
 ///
 /// Unlike [`read_u64`] and friends, this accepts any integer encoding.
-pub fn read_int<'a, T: FromPrimitive>(bytes: &mut Bytes<'a>) -> Result<T, DecodeError<'a>> {
-    rmp::decode::read_int(bytes).map_err(DecodeError::from)
+pub fn read_int<'a, T: FromPrimitive, R: RmpRead>(
+    reader: &mut R,
+) -> Result<T, DecodeError<'a, R::Error>> {
+    rmp::decode::read_int(reader).map_err(DecodeError::from)
 }
 
 /// Read an owned string from a [`Bytes`] object.

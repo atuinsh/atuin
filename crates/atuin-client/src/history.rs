@@ -544,7 +544,7 @@ impl History {
         };
 
         let author_kind = if version >= Version::Two && nfields >= V2_AUTHOR_KIND_FIELD_NUMBER {
-            decode::read_optional(&mut bytes, decode::read_int::<u8>)?
+            decode::read_optional(&mut bytes, decode::read_int::<u8, _>)?
                 .and_then(AuthorKind::from_repr)
         } else {
             None
