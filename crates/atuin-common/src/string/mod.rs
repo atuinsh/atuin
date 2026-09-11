@@ -10,9 +10,9 @@ use url::{Position, Url};
 #[cfg(feature = "unicode")]
 pub mod align;
 pub mod bounded_buffer;
-pub mod highlighted;
 #[cfg(feature = "unicode")]
 pub mod ellipsis;
+pub mod highlighted;
 pub mod trim;
 
 mod escape_non_printable_posix_ext;

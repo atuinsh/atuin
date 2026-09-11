@@ -91,11 +91,10 @@ impl FjallStorageInner {
         .expect("output-capture read task panicked")
     }
 
-    async fn remove(&self, ids: &[HistoryId]) -> Result<(), DeleteOutputError> {
+    async fn remove(&self, ids: impl Iterator<Item = HistoryId>) -> Result<(), DeleteOutputError> {
         let keys: Vec<_> = ids
-            .iter()
             .map(|id| {
-                ActiveSchema::serialize_key(*id).expect("history id serialization is infallible")
+                ActiveSchema::serialize_key(id).expect("history id serialization is infallible")
             })
             .collect();
         if keys.is_empty() {
@@ -300,7 +299,7 @@ impl Storage for FjallStorage {
         self.inner.get(id).await
     }
 
-    async fn remove(&self, ids: &[HistoryId]) -> Result<(), DeleteOutputError> {
+    async fn remove(&self, ids: impl Iterator<Item = HistoryId>) -> Result<(), DeleteOutputError> {
         self.inner.remove(ids).await
     }
 
@@ -436,15 +435,15 @@ mod tests {
     async fn remove_removes_stored_output() {
         let (store, _dir) = temp_storage();
         store.capture(hid(1), cap("hello")).await.expect("capture");
-        store.remove(&[hid(1)]).await.expect("remove");
+        store.remove([hid(1)].into_iter()).await.expect("remove");
         assert!(store.get(hid(1)).await.expect("get").is_none());
     }
 
     #[tokio::test]
     async fn remove_of_absent_ids_is_ok() {
         let (store, _dir) = temp_storage();
-        store.remove(&[]).await.expect("remove of nothing is idempotent");
-        store.remove(&[hid(9)]).await.expect("remove of an absent id is idempotent");
+        store.remove(std::iter::empty()).await.expect("remove of nothing is idempotent");
+        store.remove([hid(9)].into_iter()).await.expect("remove of an absent id is idempotent");
     }
 
     #[tokio::test]
@@ -453,7 +452,7 @@ mod tests {
         for n in 1..=3u128 {
             store.capture(hid(n), cap(&format!("out{n}"))).await.expect("capture");
         }
-        store.remove(&[hid(1), hid(3), hid(9)]).await.expect("remove");
+        store.remove([hid(1), hid(3), hid(9)].into_iter()).await.expect("remove");
         assert!(store.get(hid(1)).await.expect("get").is_none());
         assert_eq!(store.get(hid(2)).await.expect("get").expect("kept").output_start, "out2");
         assert!(store.get(hid(3)).await.expect("get").is_none());
@@ -463,7 +462,7 @@ mod tests {
     async fn removed_id_can_be_captured_again() {
         let (store, _dir) = temp_storage();
         store.capture(hid(1), cap("first")).await.expect("first");
-        store.remove(&[hid(1)]).await.expect("remove");
+        store.remove([hid(1)].into_iter()).await.expect("remove");
         // The tombstone must free the id for the capture-once check, not merely hide the value.
         store.capture(hid(1), cap("second")).await.expect("recapture after remove");
         assert_eq!(store.get(hid(1)).await.expect("get").expect("present").output_start, "second");
@@ -473,10 +472,10 @@ mod tests {
     async fn remove_after_removal_is_idempotent() {
         let (store, _dir) = temp_storage();
         store.capture(hid(1), cap("hello")).await.expect("capture");
-        store.remove(&[hid(1)]).await.expect("remove");
+        store.remove([hid(1)].into_iter()).await.expect("remove");
         assert!(store.get(hid(1)).await.expect("get").is_none());
         // Re-removing an already-removed id alongside an absent one is still Ok.
-        store.remove(&[hid(1), hid(9)]).await.expect("remove again");
+        store.remove([hid(1), hid(9)].into_iter()).await.expect("remove again");
     }
 
     #[tokio::test]

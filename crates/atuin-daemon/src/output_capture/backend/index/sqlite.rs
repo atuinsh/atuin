@@ -2,8 +2,8 @@ use std::path::Path;
 
 use atuin_client::history::HistoryId;
 use atuin_common::db::sqlite::Sqlite;
-use atuin_common::db::sqlite::fts::TextHighlighter;
-use atuin_common::db::{self, sqlite::fts::TextHighlighterBindExt};
+use atuin_common::db::sqlite::fts::{TextHighlighter, TextHighlighterBindExt};
+use atuin_common::db::{self};
 use sqlx::Row;
 
 use super::{Index, IndexError, OutputMatch};

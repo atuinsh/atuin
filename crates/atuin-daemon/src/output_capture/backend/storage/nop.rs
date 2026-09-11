@@ -15,7 +15,7 @@ impl Storage for NopStorage {
         Ok(None)
     }
 
-    async fn remove(&self, _ids: &[HistoryId]) -> Result<(), DeleteOutputError> {
+    async fn remove(&self, _ids: impl Iterator<Item = HistoryId>) -> Result<(), DeleteOutputError> {
         Ok(())
     }
 

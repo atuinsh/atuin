@@ -70,7 +70,7 @@ impl<S: Storage, I: Index> Backend<S, I> {
     /// Forget the captured output of every history id in `ids`, from the storage and the index.
     /// Absent ids are ignored.
     pub async fn remove(&self, ids: &[HistoryId]) -> Result<(), DeleteOutputError> {
-        let result = self.storage.remove(ids).await;
+        let result = self.storage.remove(ids.iter().copied()).await;
 
         // Best-effort, like `capture`: the storage is authoritative, so its result is what we
         // return; a stale index entry left behind is dropped by the next reconcile.

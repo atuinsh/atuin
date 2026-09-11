@@ -21,7 +21,7 @@ impl Storage for FailingStorage {
         Err(GetOutputError::Storage(unavailable()))
     }
 
-    async fn remove(&self, _ids: &[HistoryId]) -> Result<(), DeleteOutputError> {
+    async fn remove(&self, _ids: impl Iterator<Item = HistoryId>) -> Result<(), DeleteOutputError> {
         Err(DeleteOutputError::Storage(unavailable()))
     }
 

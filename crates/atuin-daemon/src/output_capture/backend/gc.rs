@@ -1,9 +1,4 @@
 //! Disk-budget garbage collection for the output capture backend.
-//!
-//! Unlike the fjall flusher, this runs against the whole [`AnyBackend`], not its storage: it evicts
-//! through [`AnyBackend::remove`], so a single eviction drops an entry from the storage *and* the
-//! search index together. Against a nop backend it never fires -- reported disk usage is always
-//! zero -- so it is safe to run regardless.
 
 use std::path::Path;
 use std::sync::Arc;
