@@ -62,10 +62,12 @@ derive_more = {
 }
 directories = "6.0.0"
 divan = { version = "5.0.1", package = "codspeed-divan-compat" }
-# easy-cast 0.5.5+ raises its MSRV to 1.96 (for the CastTo/cast_to API, which we
-# don't use). The lockfile keeps us on 0.5.4 (MSRV 1.79); the `msrv` CI job runs
-# --locked, so an accidental bump would fail there.
-easy-cast = "0.5.4"
+# easy-cast 0.5.5+ raises its MSRV to 1.96.
+#
+# The assert_nonzero feature patches a bug fixed in:
+# https://github.com/kas-gui/easy-cast/pull/52
+# which was released in 0.6.0
+easy-cast = { version = "0.5.4", features = ["assert_nonzero"] }
 enum_dispatch = "0.3"
 eventsource-stream = "0.2"
 eye_declare = "0.6.4"
