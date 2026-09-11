@@ -1,15 +1,13 @@
 //! The full-text search index over captured output.
 //!
-//! This is a *derived* index: the [`Storage`](super::storage::Storage) is the source of truth, and
-//! every entry here can be rebuilt from it (see [`Backend::reconcile`](super::Backend::reconcile)).
-//! The index is **not** responsible for storing the captures themselves.
+//! Note this is intended to be a **shallow** index and should not actually store the data. See
+//! [`super::storage::Storage`] for the storage layer.
 
 mod nop;
 mod sqlite;
 
-use std::ops::Range;
-
 use atuin_client::history::HistoryId;
+use atuin_common::string::highlighted::HighlightedString;
 pub use nop::NopIndex;
 pub use sqlite::SqliteIndex;
 use thiserror::Error;
@@ -23,16 +21,10 @@ pub enum IndexError {
 }
 
 /// A single relevance-ranked full-text match over captured output.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub struct OutputMatch {
-    /// The command whose output matched.
     pub history_id: HistoryId,
-    /// The full escape-stripped output that was indexed, so the caller can show the match in
-    /// context without re-fetching it.
-    pub output: String,
-    /// Byte ranges within `output` covering each match; may be empty or hold several.
-    pub matches: Vec<Range<usize>>,
-    /// Relevance, higher is better (a normalized BM25 score).
+    pub output: HighlightedString,
     pub score: f64,
 }
 

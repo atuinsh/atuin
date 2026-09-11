@@ -1,4 +1,3 @@
-use std::ops::Range;
 use std::path::Path;
 
 use atuin_client::history::HistoryId;
@@ -140,11 +139,9 @@ impl Index for SqliteIndex {
             .map(|row| {
                 let raw: &[u8] = row.try_get("history_id").map_err(store)?;
                 let body: &str = row.try_get("body").map_err(store)?;
-                let (output, matches) = split_highlighted(self.highlighter, body);
                 Ok(OutputMatch {
                     history_id: id_from_bytes(raw)?,
-                    output,
-                    matches,
+                    output: self.highlighter.as_highlighted(body.to_owned()),
                     score: row.try_get("score").map_err(store)?,
                 })
             })
@@ -160,32 +157,6 @@ impl Index for SqliteIndex {
             .map(|row| id_from_bytes(row.try_get::<&[u8], _>("history_id").map_err(store)?))
             .collect()
     }
-}
-
-/// Split a `highlight()` result into the plain body and the byte range within it that each match
-/// covers.
-///
-/// The marker parsing lives in [`atuin_common::string::highlighted`]: `ranges()` locates each match
-/// in the still-marked body and `display_plain()` strips the markers. FTS5's output is balanced and
-/// non-nested, so shifting each raw range left by the marker bytes stripped before it lands it in
-/// plain-body coordinates.
-fn split_highlighted(highlighter: TextHighlighter, body: &str) -> (String, Vec<Range<usize>>) {
-    let highlighted = highlighter.as_highlighted(body);
-    let plain = highlighted.display_plain().to_string();
-
-    let [open, close] = highlighter.markers();
-    let (open_len, close_len) = (open.len_utf8(), close.len_utf8());
-    let matches = highlighted
-        .ranges()
-        .scan(0usize, |stripped, r| {
-            *stripped += open_len; // this match's leading open marker
-            let shifted = (r.start - *stripped)..(r.end - *stripped);
-            *stripped += close_len; // its trailing close marker, before the next match
-            Some(shifted)
-        })
-        .collect();
-
-    (plain, matches)
 }
 
 /// Turn free-form user input into a safe FTS5 `MATCH` expression: each whitespace-separated term
