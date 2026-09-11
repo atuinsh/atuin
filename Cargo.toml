@@ -149,8 +149,6 @@ strum_macros = "0.28"
 sysinfo = "0.39.6"
 tempfile = { version = "3.19" }
 thiserror = "2"
-# 0.3.55 fixes the from_unix_timestamp_nanos overflow (time-rs/time#802) that
-# OffsetDateTimeExt's helpers rely on upstream to reject.
 time = { version = "0.3.55", features = ["serde-human-readable", "macros", "local-offset"] }
 tiny-bip39 = "2"
 tracing = { version = "0.1", features = ["release_max_level_debug"] }
