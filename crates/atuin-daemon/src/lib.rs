@@ -47,9 +47,6 @@ pub async fn boot(
     let search_component = SearchComponent::new();
     let sync_component = SyncComponent::new();
 
-    // Open the output store up front, so the search service can hold a read-only searcher over it
-    // (the same "pull the shared handle out before moving the owner in" pattern used for the
-    // command search index below).
     let output_capture = match settings.output.limits() {
         Some(limits) => {
             OutputCapture::open(Settings::command_capture_dir(), limits.max_disk_usage).await

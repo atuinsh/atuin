@@ -90,6 +90,16 @@ impl TextHighlighter {
             Cow::Borrowed(text)
         }
     }
+
+    pub fn parse_highlighted<'s>(self, text: &'s str) -> impl Iterator<Item = Range<usize>> {
+        HighlightRanges {
+            text,
+            highlighter: self,
+            cursor: 0,
+            demarked_cursor: 0,
+            start: None,
+        }
+    }
 }
 
 /// Iterator behind [`TextHighlighter::parse_highlighted`].
@@ -122,7 +132,7 @@ impl<'s> Iterator for HighlightRanges<'s> {
 
             self.demarked_cursor += at;
             self.cursor += at + marker.len_utf8();
-            if marker == self.open {
+            if marker == self.highlighter.open {
                 self.start = Some(self.demarked_cursor);
             } else if let Some(start) = self.start.take() {
                 return Some(start..self.demarked_cursor);
