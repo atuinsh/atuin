@@ -43,26 +43,14 @@ mod wrapped;
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
-    /// Setup Atuin features
-    #[command()]
-    Setup,
-
-    /// Manipulate shell history
-    #[command(subcommand)]
-    History(history::Cmd),
-
-    /// Manage AI-agent shell hooks
-    Hook(hook::Cmd),
-
-    /// Import shell history from file
-    #[command(subcommand)]
-    Import(import::Cmd),
-
-    /// Calculate statistics for your history
-    Stats(stats::Cmd),
+    // Variant order sets the `--help` command list order, so keep the commands users reach for
+    // most (search, sync, stats) at the top and the plumbing/config commands lower down.
 
     /// Interactive history search
     Search(search::Cmd),
+
+    /// Calculate statistics for your history
+    Stats(stats::Cmd),
 
     #[cfg(feature = "sync")]
     #[command(flatten)]
@@ -71,6 +59,31 @@ pub enum Cmd {
     /// Manage your sync account
     #[cfg(feature = "sync")]
     Account(account::Cmd),
+
+    /// Manipulate shell history
+    #[command(subcommand)]
+    History(history::Cmd),
+
+    /// Setup Atuin features
+    #[command()]
+    Setup,
+
+    /// Print Atuin's shell init script
+    #[command()]
+    Init(init::Cmd),
+
+    /// Import shell history from file
+    #[command(subcommand)]
+    Import(import::Cmd),
+
+    /// Run the doctor to check for common issues
+    #[command()]
+    Doctor,
+
+    /// Update atuin to the latest version on your release channel
+    #[cfg(feature = "self-update")]
+    #[command()]
+    Update(update::Cmd),
 
     /// Get or set small key-value pairs
     #[command(subcommand)]
@@ -88,39 +101,8 @@ pub enum Cmd {
     #[command(subcommand)]
     Scripts(scripts::Cmd),
 
-    /// Print Atuin's shell init script
-    #[command()]
-    Init(init::Cmd),
-
-    /// Information about dotfiles locations and ENV vars
-    #[command()]
-    Info,
-
-    /// Run the doctor to check for common issues
-    #[command()]
-    Doctor,
-
-    /// Update atuin to the latest version on your release channel
-    #[cfg(feature = "self-update")]
-    #[command()]
-    Update(update::Cmd),
-
-    #[command()]
-    Wrapped {
-        year: Option<i32>,
-    },
-
-    /// *Experimental* Manage the background daemon
-    #[cfg(feature = "daemon")]
-    #[command()]
-    Daemon(daemon::Cmd),
-
-    /// Print the default atuin configuration (config.toml)
-    #[command()]
-    DefaultConfig,
-
-    #[command(subcommand)]
-    Config(config::Cmd),
+    /// Manage AI-agent shell hooks
+    Hook(hook::Cmd),
 
     /// Run the AI assistant
     #[cfg(feature = "ai")]
@@ -131,6 +113,27 @@ pub enum Cmd {
     #[cfg(feature = "ai")]
     #[command()]
     Mcp,
+
+    #[command()]
+    Wrapped {
+        year: Option<i32>,
+    },
+
+    /// Print the default atuin configuration (config.toml)
+    #[command()]
+    DefaultConfig,
+
+    #[command(subcommand)]
+    Config(config::Cmd),
+
+    /// Information about dotfiles locations and ENV vars
+    #[command()]
+    Info,
+
+    /// *Experimental* Manage the background daemon
+    #[cfg(feature = "daemon")]
+    #[command()]
+    Daemon(daemon::Cmd),
 
     /// Internal subcommands, not for direct use by users.
     #[command(

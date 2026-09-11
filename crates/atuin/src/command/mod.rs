@@ -23,10 +23,12 @@ pub enum AtuinCmd {
 
     /// PTY proxy for atuin
     #[cfg(feature = "pty-proxy")]
-    #[command(alias = "hex")]
+    #[command(alias = "hex", hide = true)]
     PtyProxy(atuin_pty_proxy::PtyProxy),
 
     /// Generate a UUID
+    // Plumbing: every shell init calls `atuin uuid` to seed ATUIN_SESSION; not for interactive use.
+    #[command(hide = true)]
     Uuid,
 
     Contributors,
