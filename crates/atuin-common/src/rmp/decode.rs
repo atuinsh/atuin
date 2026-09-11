@@ -1,9 +1,8 @@
+use num_traits::FromPrimitive;
 use rmp::Marker;
 pub use rmp::decode::bytes::{Bytes, BytesReadError};
 pub use rmp::decode::{
-    DecodeStringError, NumValueReadError, RmpRead, RmpReadErr, ValueReadError, read_array_len,
-    read_bin_len, read_bool, read_i8, read_i16, read_i32, read_i64, read_int, read_map_len,
-    read_str_from_slice, read_str_len, read_u8, read_u16, read_u32, read_u64,
+    DecodeStringError, NumValueReadError, RmpRead, RmpReadErr, ValueReadError, read_str_from_slice,
 };
 
 /// An error encountered while trying to decode a message with [`rmp`].
@@ -67,6 +66,56 @@ impl<E: RmpReadErr> DecodeError<'_, E> {
 }
 
 impl<E: RmpReadErr> std::error::Error for DecodeError<'_, E> {}
+
+/// Define wrappers over [`rmp`]'s primitive readers that return [`DecodeError`] instead of `rmp`'s
+/// raw error types. This keeps the whole decode surface behind a single error type, so callers
+/// only ever need `From<DecodeError>` rather than a conversion per `rmp` error type. The lifetime
+/// mirrors [`read_string`]; a primitive read never actually borrows from the buffer.
+macro_rules! primitive_readers {
+    ($($(#[$doc:meta])* $name:ident -> $ty:ty;)*) => {$(
+        $(#[$doc])*
+        pub fn $name<'a>(bytes: &mut Bytes<'a>) -> Result<$ty, DecodeError<'a>> {
+            rmp::decode::$name(bytes).map_err(DecodeError::from)
+        }
+    )*};
+}
+
+primitive_readers! {
+    /// Read a MessagePack `u8`.
+    read_u8 -> u8;
+    /// Read a MessagePack `u16`.
+    read_u16 -> u16;
+    /// Read a MessagePack `u32`.
+    read_u32 -> u32;
+    /// Read a MessagePack `u64`.
+    read_u64 -> u64;
+    /// Read a MessagePack `i8`.
+    read_i8 -> i8;
+    /// Read a MessagePack `i16`.
+    read_i16 -> i16;
+    /// Read a MessagePack `i32`.
+    read_i32 -> i32;
+    /// Read a MessagePack `i64`.
+    read_i64 -> i64;
+    /// Read a MessagePack boolean.
+    read_bool -> bool;
+    /// Read the length marker of a MessagePack array.
+    read_array_len -> u32;
+    /// Read the length marker of a MessagePack map.
+    read_map_len -> u32;
+    /// Read the length marker of a MessagePack binary blob.
+    read_bin_len -> u32;
+    /// Read the length marker of a MessagePack string.
+    read_str_len -> u32;
+}
+
+/// Read a MessagePack integer, decoding whatever integer marker is present into `T`.
+///
+/// Unlike [`read_u64`] and friends, this accepts any integer encoding (the writer may have chosen a
+/// narrower marker) and converts it to `T`.
+pub fn read_int<'a, T: FromPrimitive>(bytes: &mut Bytes<'a>) -> Result<T, DecodeError<'a>> {
+    rmp::decode::read_int(bytes).map_err(DecodeError::from)
+}
 
 /// Read an owned string from a [`Bytes`] object.
 ///
@@ -144,7 +193,7 @@ where
     F: FnMut(&mut R) -> Result<T, E>,
     E: Into<DecodeError<'a, R::Error>>,
 {
-    read_array_impl(reader, read_array_len, read)
+    read_array_impl(reader, rmp::decode::read_array_len, read)
 }
 
 /// Like [`read_array`], but reads into a fixed-size Rust array.
@@ -159,7 +208,7 @@ where
     F: FnMut(&mut R) -> Result<T, E>,
     E: Into<DecodeError<'a, R::Error>>,
 {
-    read_fixed_array_impl(reader, read_array_len, read)
+    read_fixed_array_impl(reader, rmp::decode::read_array_len, read)
 }
 
 /// Read a MessagePack binary array as an iterator of bytes.
@@ -169,7 +218,7 @@ pub fn read_binary_array<'a, R>(
 where
     R: RmpRead,
 {
-    read_array_impl(reader, read_bin_len, |reader| {
+    read_array_impl(reader, rmp::decode::read_bin_len, |reader| {
         reader.read_u8().map_err(ValueReadError::InvalidDataRead)
     })
 }
@@ -183,7 +232,7 @@ pub fn read_fixed_binary_array<'a, const N: usize, R>(
 where
     R: RmpRead,
 {
-    read_fixed_array_impl(reader, read_bin_len, |reader| {
+    read_fixed_array_impl(reader, rmp::decode::read_bin_len, |reader| {
         reader.read_u8().map_err(ValueReadError::InvalidDataRead)
     })
 }

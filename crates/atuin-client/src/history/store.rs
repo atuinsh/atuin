@@ -97,7 +97,8 @@ impl HistoryRecord {
                 // written by write_bin above
                 let _ = decode::read_bin_len(&mut bytes).map_err(error_report)?;
 
-                let record = History::deserialize(bytes.remaining_slice(), version)?;
+                let record =
+                    History::deserialize(bytes.remaining_slice(), version).map_err(error_report)?;
 
                 Ok(Self::Create(record))
             }

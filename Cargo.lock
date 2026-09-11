@@ -470,6 +470,7 @@ dependencies = [
  "getrandom 0.4.3",
  "itertools 0.15.0",
  "libsqlite3-sys",
+ "num-traits",
  "parking_lot",
  "pretty_assertions",
  "proptest",

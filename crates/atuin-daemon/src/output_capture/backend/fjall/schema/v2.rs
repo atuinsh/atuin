@@ -47,7 +47,7 @@ impl super::Schema for Schema {
         (|| {
             let mut bytes = Bytes::new(&serialized);
 
-            let nfields = decode::read_array_len(&mut bytes).map_err(DecodeError::from)?;
+            let nfields = decode::read_array_len(&mut bytes)?;
             if nfields != VALUE_FIELDS {
                 return Err(DecodeError::WrongArrayLength {
                     expected: VALUE_FIELDS as usize,
@@ -57,10 +57,9 @@ impl super::Schema for Schema {
 
             let output_start = decode::read_string(&mut bytes)?;
             let output_end = decode::read_optional(&mut bytes, decode::read_string)?;
-            let output_observed_bytes: u64 =
-                decode::read_int(&mut bytes).map_err(DecodeError::from)?;
-            let terminal_width: u16 = decode::read_int(&mut bytes).map_err(DecodeError::from)?;
-            let terminal_height: u16 = decode::read_int(&mut bytes).map_err(DecodeError::from)?;
+            let output_observed_bytes: u64 = decode::read_int(&mut bytes)?;
+            let terminal_width: u16 = decode::read_int(&mut bytes)?;
+            let terminal_height: u16 = decode::read_int(&mut bytes)?;
 
             Ok(CommandCapture {
                 output_start,

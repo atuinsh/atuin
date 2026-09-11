@@ -9,8 +9,9 @@ use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils::{normalize_optional_string, uuid_v7};
 use atuin_domain::record::{CmdOrigin, DecryptedData, UNKNOWN_USER};
 use easy_cast::Conv;
-use eyre::{Result, bail};
+use eyre::Result;
 use serde::{Deserialize, Serialize};
+use thiserror;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -126,7 +127,7 @@ pub fn probe_author() -> Option<String> {
     normalize_optional_string(env::var(HISTORY_AUTHOR_ENV).ok())
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, derive_more::Display)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, derive_more::Display)]
 #[display("{}", self.name())]
 #[repr(u16)]
 pub enum Version {
@@ -335,14 +336,38 @@ pub struct History {
 pub struct HistoryStats {
     /// How many times has this command been ran?
     pub total: u64,
-
     pub average_duration: u64,
-
     pub exits: Vec<(i64, i64)>,
-
     pub day_of_week: Vec<(String, i64)>,
-
     pub duration_over_time: Vec<(String, i64)>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum HistoryDeserializeError<'v, 'b> {
+    #[error("invalid version: {0}")]
+    InvalidVersion(&'v str),
+    #[error("failed to perform rmp decoding: {0}")]
+    DecodeError(DecodeError<'b>),
+    #[error("expected to decode {expected} record, found v{found}")]
+    VersionMismatch {
+        expected: Version,
+        found: u16,
+    },
+    #[error("unexpected number of fields ({fields}) for history version {version}")]
+    WrongFieldCount {
+        fields: u32,
+        version: Version,
+    },
+    #[error("trailing bytes found in encoded history.")]
+    TrailingBytes,
+    #[error("malformed history id")]
+    MalformedHistoryId(#[source] uuid::Error),
+}
+
+impl<'b> From<DecodeError<'b>> for HistoryDeserializeError<'_, 'b> {
+    fn from(e: DecodeError<'b>) -> Self {
+        Self::DecodeError(e)
+    }
 }
 
 impl History {
@@ -458,43 +483,46 @@ impl History {
         Ok(DecryptedData(output.into_vec()))
     }
 
-    pub fn deserialize(bytes: &[u8], version: &str) -> Result<Self> {
-        let Some(version) = Version::from_name(version) else {
-            bail!("unknown version {version:?}");
-        };
+    pub fn deserialize<'b, 'v>(
+        bytes: &'b [u8],
+        version: &'v str,
+    ) -> std::result::Result<Self, HistoryDeserializeError<'v, 'b>> {
+        let version =
+            Version::from_name(version).ok_or(HistoryDeserializeError::InvalidVersion(version))?;
 
         let mut bytes = Bytes::new(bytes);
 
-        fn to_static<'a>(e: impl Into<DecodeError<'a>>) -> DecodeError<'static> {
-            e.into().into_static()
-        }
-
-        let real_version = decode::read_u16(&mut bytes).map_err(to_static)?;
+        let real_version = decode::read_u16(&mut bytes)?;
         if real_version != version.as_int() {
-            bail!("expected to decode {version} record, found v{real_version}");
+            return Err(HistoryDeserializeError::VersionMismatch {
+                expected: version,
+                found: real_version,
+            });
         }
 
-        let nfields = decode::read_array_len(&mut bytes).map_err(to_static)?;
+        let nfields = decode::read_array_len(&mut bytes)?;
         let min_fields = version.min_fields();
         if nfields < min_fields || version.max_fields().is_some_and(|max| nfields > max) {
-            bail!("unexpected number of fields ({nfields}) for history version {version}");
+            return Err(HistoryDeserializeError::WrongFieldCount {
+                fields: nfields,
+                version,
+            });
         }
 
-        let id = decode::read_string(&mut bytes).map_err(to_static)?;
-        let timestamp = decode::read_u64(&mut bytes).map_err(to_static)?;
-        let duration = decode::read_int(&mut bytes).map_err(to_static)?;
-        let exit = decode::read_int(&mut bytes).map_err(to_static)?;
+        let id = decode::read_string(&mut bytes)?;
+        let timestamp = decode::read_u64(&mut bytes)?;
+        let duration = decode::read_int(&mut bytes)?;
+        let exit = decode::read_int(&mut bytes)?;
 
-        let command = decode::read_string(&mut bytes).map_err(to_static)?;
-        let cwd = decode::read_string(&mut bytes).map_err(to_static)?;
-        let session = decode::read_string(&mut bytes).map_err(to_static)?;
+        let command = decode::read_string(&mut bytes)?;
+        let cwd = decode::read_string(&mut bytes)?;
+        let session = decode::read_string(&mut bytes)?;
         #[allow(deprecated)]
-        let cmd_origin =
-            CmdOrigin::parse_lenient(decode::read_string(&mut bytes).map_err(to_static)?);
-        let deleted_at = decode::read_optional(&mut bytes, decode::read_u64).map_err(to_static)?;
+        let cmd_origin = CmdOrigin::parse_lenient(decode::read_string(&mut bytes)?);
+        let deleted_at = decode::read_optional(&mut bytes, decode::read_u64)?;
 
         let author = if version >= Version::One {
-            decode::read_optional(&mut bytes, decode::read_string).map_err(to_static)?
+            decode::read_optional(&mut bytes, decode::read_string)?
         } else {
             None
         };
@@ -504,31 +532,30 @@ impl History {
             Version::One => nfields > min_fields,
             Version::Two => true,
         } {
-            decode::read_optional(&mut bytes, decode::read_string).map_err(to_static)?
+            decode::read_optional(&mut bytes, decode::read_string)?
         } else {
             None
         };
 
         let shell = if version >= Version::Two {
-            decode::read_optional(&mut bytes, decode::read_string).map_err(to_static)?
+            decode::read_optional(&mut bytes, decode::read_string)?
         } else {
             None
         };
 
         let author_kind = if version >= Version::Two && nfields >= V2_AUTHOR_KIND_FIELD_NUMBER {
-            decode::read_optional(&mut bytes, decode::read_int::<u8, _>)
-                .map_err(to_static)?
+            decode::read_optional(&mut bytes, decode::read_int::<u8>)?
                 .and_then(AuthorKind::from_repr)
         } else {
             None
         };
 
         if version < Version::Two && !bytes.remaining_slice().is_empty() {
-            bail!("trailing bytes in encoded history. malformed");
+            return Err(HistoryDeserializeError::TrailingBytes);
         }
 
         Ok(Self {
-            id: id.parse()?,
+            id: id.parse().map_err(HistoryDeserializeError::MalformedHistoryId)?,
             timestamp: OffsetDateTime::from_unix_nanos_u64(timestamp),
             duration,
             exit,
