@@ -976,14 +976,14 @@ pub async fn execute_shell_command_streaming(
     // the raw bytes through a VT100 parser and extracting plain text.
     let rows = PREVIEW_HEIGHT;
     let cols = PREVIEW_WIDTH;
-    let mut stdout_text = ansi::to_plain_text(&full_stdout, rows, cols);
-    let mut stderr_text = ansi::to_plain_text(&full_stderr, rows, cols);
 
-    for output in [&mut stdout_text, &mut stderr_text] {
-        let start = output.len().saturating_sub(ToolOutcome::MAX_STRUCTURED_OUTPUT_SIZE);
-        let start = output.ceil_char_boundary(start);
-        output.drain(..start);
-    }
+    let [stdout_text, stderr_text] = [full_stdout, full_stderr].map(|output| {
+        let mut text = ansi::to_plain_text(&output, rows, cols);
+        let start = text.len().saturating_sub(ToolOutcome::MAX_STRUCTURED_OUTPUT_SIZE);
+        let start = text.ceil_char_boundary(start);
+        text.drain(..start);
+        text
+    });
 
     ToolOutcome::Structured {
         stdout: stdout_text,
