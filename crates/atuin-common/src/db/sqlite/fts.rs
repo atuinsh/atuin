@@ -176,6 +176,16 @@ mod tests {
         TextHighlighter::with_markers(['«', '»']).expect("distinct markers")
     }
 
+    /// Assert `parse_highlighted` yields `expected`, and that indexing the sanitized text with each
+    /// range recovers `hits`.
+    fn assert_parse(h: TextHighlighter, body: &str, expected: &[Range<usize>], hits: &[&str]) {
+        let clean = h.sanitize(body);
+        let ranges: Vec<Range<usize>> = h.parse_highlighted(body).collect();
+        assert_eq!(ranges.as_slice(), expected);
+        let got: Vec<&str> = ranges.iter().map(|r| &clean[r.clone()]).collect();
+        assert_eq!(got.as_slice(), hits);
+    }
+
     #[rstest]
     #[case::ascii(['x', 'x'], false)]
     #[case::emoji(['😀', '😀'], false)]
@@ -249,12 +259,7 @@ mod tests {
         #[case] expected: Vec<Range<usize>>,
         #[case] hits: Vec<&str>,
     ) {
-        let h = highlighter();
-        let clean = h.sanitize(body);
-        let ranges: Vec<_> = h.parse_highlighted(body).collect();
-        assert_eq!(ranges, expected);
-        let got: Vec<_> = ranges.iter().map(|r| &clean[r.clone()]).collect();
-        assert_eq!(got, hits);
+        assert_parse(highlighter(), body, &expected, &hits);
     }
 
     #[rstest]
@@ -267,12 +272,7 @@ mod tests {
         #[case] expected: Vec<Range<usize>>,
         #[case] hits: Vec<&str>,
     ) {
-        let h = TextHighlighter::default();
-        let clean = h.sanitize(body);
-        let ranges: Vec<_> = h.parse_highlighted(body).collect();
-        assert_eq!(ranges, expected);
-        let got: Vec<_> = ranges.iter().map(|r| &clean[r.clone()]).collect();
-        assert_eq!(got, hits);
+        assert_parse(TextHighlighter::default(), body, &expected, &hits);
     }
 
     #[test]
@@ -311,28 +311,41 @@ mod tests {
         [nasty_char(), nasty_char()].prop_filter("markers must differ", |m| m[0] != m[1])
     }
 
-    /// Marker-free text plus a set of ascending, non-overlapping char-index spans over it.
-    fn clean_and_spans() -> impl Strategy<Value = (Vec<char>, Vec<(usize, usize)>)> {
-        prop::collection::vec(
-            nasty_char().prop_filter("clean text holds no markers", |c| *c != '«' && *c != '»'),
-            0..12,
-        )
-        .prop_flat_map(|chars| {
-            let n = chars.len();
-            let spans = prop::collection::vec(0usize..=n, 0..8).prop_map(|mut v| {
-                v.sort_unstable();
-                if v.len() % 2 == 1 {
-                    v.pop();
-                }
-                v.as_chunks::<2>().0.iter().map(|c| (c[0], c[1])).collect::<Vec<_>>()
-            });
-            (Just(chars), spans)
+    /// Two distinct markers, text free of them, and ascending non-overlapping char-index spans over
+    /// that text. Drawing the markers from the same alphabet varies their byte width (1–4 bytes), so
+    /// the round-trip stresses the `marker.len_utf8()` cursor arithmetic against exact recovery.
+    fn markers_clean_and_spans() -> impl Strategy<Value = ([char; 2], Vec<char>, Vec<(usize, usize)>)>
+    {
+        distinct_markers().prop_flat_map(|markers| {
+            let [open, close] = markers;
+            prop::collection::vec(
+                nasty_char().prop_filter("clean text holds no marker", move |c| {
+                    *c != open && *c != close
+                }),
+                0..12,
+            )
+            .prop_flat_map(move |chars| {
+                let n = chars.len();
+                let spans = prop::collection::vec(0usize..=n, 0..8).prop_map(|mut v| {
+                    v.sort_unstable();
+                    if v.len() % 2 == 1 {
+                        v.pop();
+                    }
+                    v.as_chunks::<2>().0.iter().map(|c| (c[0], c[1])).collect::<Vec<_>>()
+                });
+                (Just(markers), Just(chars), spans)
+            })
         })
     }
 
-    /// Wrap each `(start_char, end_char)` span of `chars` in the visible markers, returning the
-    /// marked string and the byte ranges those spans occupy in the *unmarked* text.
-    fn wrap_spans(chars: &[char], spans: &[(usize, usize)]) -> (String, Vec<Range<usize>>) {
+    /// Wrap each `(start_char, end_char)` span of `chars` in `markers`, returning the marked string
+    /// and the byte ranges those spans occupy in the *unmarked* text.
+    fn wrap_spans(
+        markers: [char; 2],
+        chars: &[char],
+        spans: &[(usize, usize)],
+    ) -> (String, Vec<Range<usize>>) {
+        let [open, close] = markers;
         let byte: Vec<usize> = std::iter::once(0)
             .chain(chars.iter().scan(0, |acc, c| {
                 *acc += c.len_utf8();
@@ -345,9 +358,9 @@ mod tests {
         let mut cursor = 0;
         for &(s, e) in spans {
             marked.extend(chars[cursor..s].iter());
-            marked.push('«');
+            marked.push(open);
             marked.extend(chars[s..e].iter());
-            marked.push('»');
+            marked.push(close);
             ranges.push(byte[s]..byte[e]);
             cursor = e;
         }
@@ -369,7 +382,8 @@ mod tests {
 
         // (A) never panics, and (E) every yielded range is an in-bounds, char-boundary, ascending,
         // non-overlapping slice of `sanitize(text)` — the load-bearing "ranges index the sanitized
-        // text" contract.
+        // text" contract. `str::get(range)` returns Some only for an in-bounds, char-boundary,
+        // start <= end range, so it subsumes every bound except the non-overlap check.
         #[test]
         fn ranges_are_valid_ordered_slices_of_sanitized(
             markers in distinct_markers(),
@@ -379,10 +393,6 @@ mod tests {
             let clean = h.sanitize(&text);
             let mut prev_end = 0usize;
             for r in h.parse_highlighted(&text) {
-                prop_assert!(r.start <= r.end);
-                prop_assert!(r.end <= clean.len());
-                prop_assert!(clean.is_char_boundary(r.start));
-                prop_assert!(clean.is_char_boundary(r.end));
                 prop_assert!(r.start >= prev_end);
                 prop_assert!(clean.get(r.clone()).is_some());
                 prev_end = r.end;
@@ -412,10 +422,10 @@ mod tests {
         // indices exercise empty spans (s == e) and adjacent spans (e_i == s_{i+1}).
         #[test]
         fn wrapping_spans_round_trips_through_parse_and_sanitize(
-            (chars, spans) in clean_and_spans(),
+            (markers, chars, spans) in markers_clean_and_spans(),
         ) {
-            let h = highlighter();
-            let (marked, expected) = wrap_spans(&chars, &spans);
+            let h = TextHighlighter::with_markers(markers).unwrap();
+            let (marked, expected) = wrap_spans(markers, &chars, &spans);
             let clean: String = chars.iter().collect();
             let stripped = h.sanitize(&marked);
             prop_assert_eq!(stripped.as_ref(), clean.as_str());
