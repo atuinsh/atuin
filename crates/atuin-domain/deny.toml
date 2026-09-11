@@ -20,6 +20,7 @@ wildcards = "allow"
 
 [[bans.deny]]
 crate = "eyre"
+wrappers = ["atuin-common"]
 reason = "eyre and anyhow are considered anti-patterns for library crates. atuin-domain is a library crate."
 
 [[bans.deny]]
