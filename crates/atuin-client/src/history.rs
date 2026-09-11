@@ -343,11 +343,11 @@ pub struct HistoryStats {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum HistoryDeserializeError<'v, 'b> {
+pub enum HistoryDeserializeError<'a> {
     #[error("invalid version: {0}")]
-    InvalidVersion(&'v str),
+    InvalidVersion(&'a str),
     #[error("failed to perform rmp decoding: {0}")]
-    DecodeError(DecodeError<'b>),
+    DecodeError(DecodeError<'a>),
     #[error("expected to decode {expected} record, found v{found}")]
     VersionMismatch {
         expected: Version,
@@ -364,8 +364,8 @@ pub enum HistoryDeserializeError<'v, 'b> {
     MalformedHistoryId(#[source] uuid::Error),
 }
 
-impl<'b> From<DecodeError<'b>> for HistoryDeserializeError<'_, 'b> {
-    fn from(e: DecodeError<'b>) -> Self {
+impl<'a> From<DecodeError<'a>> for HistoryDeserializeError<'a> {
+    fn from(e: DecodeError<'a>) -> Self {
         Self::DecodeError(e)
     }
 }
@@ -483,10 +483,10 @@ impl History {
         Ok(DecryptedData(output.into_vec()))
     }
 
-    pub fn deserialize<'b, 'v>(
-        bytes: &'b [u8],
-        version: &'v str,
-    ) -> std::result::Result<Self, HistoryDeserializeError<'v, 'b>> {
+    pub fn deserialize<'a>(
+        bytes: &'a [u8],
+        version: &'a str,
+    ) -> std::result::Result<Self, HistoryDeserializeError<'a>> {
         let version =
             Version::from_name(version).ok_or(HistoryDeserializeError::InvalidVersion(version))?;
 
