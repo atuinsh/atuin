@@ -101,6 +101,7 @@ minspan = "0.1.5"
 nix = { version = "0.30.1", features = ["signal"] }
 norm = { version = "0.1.1", features = ["fzf-v2"] }
 notify = "8"
+num-traits = "0.2"
 opentelemetry = "0.32"
 opentelemetry-otlp = "0.32"
 opentelemetry_sdk = "0.32"

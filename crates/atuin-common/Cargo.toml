@@ -29,12 +29,12 @@ crypto_secretbox = { workspace = true }
 derive_more = { workspace = true }
 directories = { workspace = true }
 easy-cast = { workspace = true }
-eyre = { workspace = true }
 fs-err = { workspace = true }
 futures = { workspace = true }
 getrandom = { workspace = true }
 itertools = { workspace = true }
 libsqlite3-sys = { workspace = true, optional = true }
+num-traits = { workspace = true }
 parking_lot = { workspace = true }
 prost = { workspace = true, optional = true }
 regex = { workspace = true }
