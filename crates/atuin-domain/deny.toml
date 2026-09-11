@@ -1,0 +1,23 @@
+# cargo-deny config scoped to atuin-domain.
+#
+# atuin-domain is a library crate, so it must not depend on eyre or anyhow.
+# This is enforced in CI with a dedicated, crate-scoped invocation:
+#
+#   cargo deny --manifest-path crates/atuin-domain/Cargo.toml check bans
+#
+# (see the `deny` job in .github/workflows/rust.yml). The workspace-wide policy
+# lives in the repo-root deny.toml; this file only adds the eyre/anyhow ban for
+# atuin-domain's own dependency subgraph.
+
+[graph]
+all-features = true
+
+[bans]
+# This config exists solely to ban eyre/anyhow; leave the rest permissive so it
+# never fails for reasons unrelated to that ban.
+multiple-versions = "allow"
+wildcards = "allow"
+deny = [
+    { crate = "eyre", reason = "eyre and anyhow are considered anti-patterns for library crates. atuin-domain is a library crate." },
+    { crate = "anyhow", wrappers = ["prost-derive"], reason = "eyre and anyhow are considered anti-patterns for library crates. atuin-domain is a library crate." },
+]
