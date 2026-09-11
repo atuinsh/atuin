@@ -6,15 +6,12 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
+use worker::Worker;
 
 use crate::daemon::DaemonHandle;
 use crate::search::SearchIndex;
 
-/// Owns the background sync loop.
-///
-/// Dropping this aborts the loop. An in-flight sync is interrupted rather than
-/// drained; sync is incremental and idempotent, so it simply resumes on the next
-/// launch.
+/// Owns the background sync task.
 #[derive(Debug)]
 pub struct SyncEngine {
     task: JoinHandle<()>,
@@ -25,7 +22,12 @@ impl SyncEngine {
     #[must_use]
     pub fn spawn(handle: DaemonHandle, index: Arc<RwLock<SearchIndex>>) -> Self {
         Self {
-            task: tokio::spawn(worker::run(handle, index)),
+            task: tokio::spawn(async {
+                match Worker::new(handle, index).await {
+                    Ok(worker) => worker.run().await,
+                    Err(e) => tracing::error!("sync disabled: {e}"),
+                }
+            }),
         }
     }
 }

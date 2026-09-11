@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use atuin_client::history::store::HistoryStore;
-use atuin_client::record::sync::{ClientSource, SyncEngine, SyncError as ClientSyncError};
+use atuin_client::record::sync::{ClientSource, SyncError as ClientSyncError, SyncSession};
 use atuin_client::settings::Settings;
 use atuin_common::futures::Backoff;
 use atuin_dotfiles::store::AliasStore;
@@ -27,7 +27,7 @@ const MAX_BACKOFF: Duration = Duration::from_mins(30);
 const BACKOFF_FACTOR: NonZeroU32 = NonZeroU32::new(2).unwrap();
 
 /// Owns everything the sync loop needs across ticks.
-struct Worker {
+pub struct Worker {
     handle: DaemonHandle,
     index: Arc<RwLock<SearchIndex>>,
     /// TODO(markovejnovic): Would be good to have a StoreCtx which is a bundle of all these stores.
@@ -38,14 +38,14 @@ struct Worker {
 
 /// Errors that prevent the sync worker from starting.
 #[derive(Debug, thiserror::Error)]
-enum StartError {
+pub enum StartError {
     #[error("failed to get host id: {0}")]
     HostId(eyre::Report),
 }
 
 /// Why a single [`Worker::sync_once`] attempt did not complete a sync.
 #[derive(Debug, thiserror::Error)]
-enum SyncTickError {
+pub enum SyncTickError {
     #[error("failed to check login status: {0}")]
     LoginCheck(eyre::Report),
     #[error("not logged in")]
@@ -77,7 +77,7 @@ impl From<SyncTickError> for ControlFlow<()> {
 }
 
 impl Worker {
-    async fn new(
+    pub async fn new(
         handle: DaemonHandle,
         index: Arc<RwLock<SearchIndex>>,
     ) -> Result<Self, StartError> {
@@ -104,7 +104,7 @@ impl Worker {
     ///
     /// This blocks the active task forever.
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn run(self) {
+    pub async fn run(self) {
         loop {
             let settings = self.handle.settings().await.clone();
             let interval = Duration::from_secs(settings.daemon.sync_frequency);
@@ -145,7 +145,7 @@ impl Worker {
         }
 
         // Perform the sync
-        let engine = SyncEngine::builder()
+        let session = SyncSession::builder()
             .store(self.handle.store().clone())
             .client_source(ClientSource::FromSettings {
                 settings,
@@ -155,7 +155,7 @@ impl Worker {
             .connect()
             .await?;
         let (uploaded_count, downloaded_records) =
-            engine.keyed(self.handle.encryption_key()).sync().await?;
+            session.keyed(self.handle.encryption_key()).sync().await?;
 
         tracing::info!(
             uploaded = uploaded_count,
@@ -204,13 +204,5 @@ impl Worker {
         }
 
         Ok(())
-    }
-}
-
-/// Entry point for the spawned sync task.
-pub(super) async fn run(handle: DaemonHandle, index: Arc<RwLock<SearchIndex>>) {
-    match Worker::new(handle, index).await {
-        Ok(worker) => worker.run().await,
-        Err(e) => tracing::error!("sync disabled: {e}"),
     }
 }

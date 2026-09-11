@@ -2,7 +2,7 @@ use std::num::NonZeroU64;
 
 use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::record::sync::{ClientSource, Operation, SyncEngine};
+use atuin_client::record::sync::{ClientSource, Operation, SyncSession};
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::RecordTag;
@@ -45,7 +45,7 @@ impl Pull {
         //  b) are they for the host/tag we are pushing here?
         let key = paseto_v4::Key::try_load_from_path(&settings.key_path)
             .context("could not load encryption key")?;
-        let engine = SyncEngine::builder()
+        let session = SyncSession::builder()
             .store(store.clone())
             .client_source(ClientSource::FromSettings {
                 settings,
@@ -56,8 +56,8 @@ impl Pull {
             .await?
             .with_page_size(self.page);
 
-        let keyed = engine.keyed(&key);
-        let (diff, remote_index) = engine.diff().await?;
+        let keyed = session.keyed(&key);
+        let (diff, remote_index) = session.diff().await?;
 
         // Skip on --force: local was already wiped above, mismatch is the user's call.
         if !self.force
@@ -66,7 +66,7 @@ impl Pull {
             return Err(crate::print_error::format_sync_error(err));
         }
 
-        let operations = SyncEngine::operations(diff)?;
+        let operations = SyncSession::operations(diff)?;
 
         let operations = operations
             .into_iter()

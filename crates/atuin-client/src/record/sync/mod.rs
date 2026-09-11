@@ -37,7 +37,7 @@ use crate::packfile::PackedPackfile;
 use crate::packfile::record::{PackManifestRecordView, ParsingError, UnpackError};
 
 mod builder;
-pub use builder::{ClientSource, SyncEngineBuilder, SyncEngineInit};
+pub use builder::{ClientSource, SyncSessionBuilder, SyncSessionInit};
 
 /// How many packfile blobs to download concurrently within a single page. (Uploads are batched by
 /// [`Client::upload_packfiles`](crate::api_client::Client::upload_packfiles).)
@@ -46,7 +46,7 @@ const MAX_CONCURRENT_PACKFILE_TRANSFERS: usize = 16;
 /// How many packfile manifests to pack concurrently before handing a page's blobs to the client.
 const MAX_CONCURRENT_PACKS: usize = 16;
 
-/// Records requested per sync page unless overridden with [`SyncEngine::with_page_size`].
+/// Records requested per sync page unless overridden with [`SyncSession::with_page_size`].
 pub const DEFAULT_PAGE_SIZE: NonZeroU64 = NonZeroU64::new(100).unwrap();
 
 #[derive(Error, Debug, Clone)]
@@ -128,7 +128,7 @@ pub enum Operation {
 
 /// Drives atuin's sync.
 #[derive(Clone)]
-pub struct SyncEngine {
+pub struct SyncSession {
     client: Client,
     store: SqliteStore,
     /// An explicit page-size override set via [`Self::with_page_size`]. When `None`, the page size
@@ -136,16 +136,16 @@ pub struct SyncEngine {
     page_size_override: Option<NonZeroU64>,
 }
 
-/// A [`SyncEngine`] paired with an encryption key, for the operations that encrypt or decrypt.
-/// Obtained from [`SyncEngine::keyed`].
+/// A [`SyncSession`] paired with an encryption key, for the operations that encrypt or decrypt.
+/// Obtained from [`SyncSession::keyed`].
 pub struct Keyed<'k> {
-    engine: &'k SyncEngine,
+    engine: &'k SyncSession,
     key: &'k paseto_v4::Key,
     /// The result of verifying `key` against the remote.
     key_check: MutEagerFutureCell<Option<SyncError>>,
 }
 
-impl SyncEngine {
+impl SyncSession {
     /// Set how many records each sync page requests, overriding capability negotiation.
     #[must_use]
     pub fn with_page_size(mut self, page_size: NonZeroU64) -> Self {
@@ -686,7 +686,7 @@ impl Keyed<'_> {
             return Err(err);
         }
 
-        let operations = SyncEngine::operations(diff)?;
+        let operations = SyncSession::operations(diff)?;
         self.sync_remote(operations).await
     }
 }
@@ -701,7 +701,7 @@ mod tests {
     use rstest::rstest;
 
     use crate::record::sqlite_store::SqliteStore;
-    use crate::record::sync::{Operation, SyncEngine};
+    use crate::record::sync::{Operation, SyncSession};
     use crate::settings::test_local_timeout;
 
     enum Expect {
@@ -772,7 +772,7 @@ mod tests {
         #[case] expect: Expect,
     ) {
         let series = RecordSeriesKey::new(HostId(uuid_v7()), RecordTag::History);
-        let result = SyncEngine::operations(vec![Diff {
+        let result = SyncSession::operations(vec![Diff {
             series: series.clone(),
             local,
             remote,
@@ -870,7 +870,7 @@ mod tests {
         ]; // remote knows about the already-synced, and one new record in a new store
 
         let (_store, diff) = build_test_diff(local, remote).await;
-        let operations = SyncEngine::operations(diff).unwrap();
+        let operations = SyncSession::operations(diff).unwrap();
 
         assert_eq!(operations.len(), 7);
 
@@ -978,9 +978,9 @@ mod packfile_sync_tests {
         SqliteStore::in_memory(test_local_timeout()).await.unwrap()
     }
 
-    /// Wrap a prebuilt client in a [`SyncEngine`] for tests.
-    pub(super) async fn build_engine(client: Client, store: SqliteStore) -> SyncEngine {
-        SyncEngine::builder()
+    /// Wrap a prebuilt client in a [`SyncSession`] for tests.
+    pub(super) async fn build_engine(client: Client, store: SqliteStore) -> SyncSession {
+        SyncSession::builder()
             .store(store)
             .client_source(ClientSource::FromClient(client))
             .build()
