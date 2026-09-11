@@ -1,0 +1,26 @@
+# cargo-deny config scoped to atuin-common.
+#
+# atuin-common is a library crate, so it must not depend on eyre or anyhow.
+# This is enforced in CI with a dedicated, crate-scoped invocation:
+#
+#   cargo deny --manifest-path crates/atuin-common/Cargo.toml check bans
+#
+# (see the `deny` job in .github/workflows/rust.yml). The workspace-wide policy
+# lives in the repo-root deny.toml; this file only adds the eyre/anyhow ban for
+# atuin-common's own dependency subgraph.
+
+[graph]
+all-features = true
+
+[bans]
+# This config exists solely to ban eyre/anyhow; leave the rest permissive so it
+# never fails for reasons unrelated to that ban.
+multiple-versions = "allow"
+wildcards = "allow"
+deny = [
+    { crate = "eyre", reason = "eyre and anyhow are considered anti-patterns for library crates. atuin-common is a library crate." },
+    # anyhow is only ever pulled in transitively by the prost-derive proc-macro
+    # (via the `proto` feature); that edge is fine. The wrapper allowance lets it
+    # through there while still banning any direct use by atuin-common itself.
+    { crate = "anyhow", wrappers = ["prost-derive"], reason = "eyre and anyhow are considered anti-patterns for library crates. atuin-common is a library crate." },
+]
