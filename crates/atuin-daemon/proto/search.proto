@@ -1,6 +1,8 @@
 syntax = "proto3";
 package search;
 
+import "common.proto";
+
 enum FilterMode {
   GLOBAL = 0;
   HOST = 1;
@@ -46,18 +48,32 @@ message SearchCommandOutputRequest {
   uint32 limit = 2; // 0 means "use the server default".
 }
 
+// A single matching command output.
 message OutputSearchMatch {
-  bytes history_id = 1;
-  string snippet = 2; // A bounded excerpt of the output around the match.
-  double score = 3;   // Relevance, higher is better.
+  // The history ID of the matching output.
+  common.HistoryId history_id = 1;
+  // The full visible (escape-stripped) output that was searched, so a client can show any match
+  // in as much context as it likes without a second round trip.
+  string output = 2;
+  // Byte ranges into `output` covering each match. May be empty, or hold several.
+  repeated common.UnsignedIdxRange matches = 3;
+  // Relevance -- higher means more relevant.
+  //
+  // Don't depend on this in any other form except for sorting.
+  double score = 4;
 }
 
 message SearchCommandOutputResponse {
-  repeated OutputSearchMatch matches = 1; // Most relevant first.
+  // Relevancy-sorted result of search command output.
+  //
+  // Most-relevant is first.
+  repeated OutputSearchMatch matches = 1;
 }
 
 service Search {
   rpc Search(stream SearchRequest) returns (stream SearchResponse);
   rpc PrepareIndex(PrepareIndexRequest) returns (PrepareIndexResponse);
+
+  // Search the pool of output commands for a matching history request.
   rpc SearchCommandOutput(SearchCommandOutputRequest) returns (SearchCommandOutputResponse);
 }

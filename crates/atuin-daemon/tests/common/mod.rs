@@ -149,7 +149,7 @@ impl TestEnvBuilder {
             OutputCapture::open(tmp.path().join("capture"), DiskUsageLimit::Unlimited).await;
         let search_component = SearchComponent::new();
         let index = search_component.index();
-        let search_service = search_component.grpc_service(output_capture.reader());
+        let search_service = search_component.grpc_service(output_capture.searcher());
 
         // Seed before components start so a registered loader sees the rows.
         let mut history_gen = HistoryGen::new(self.seed);

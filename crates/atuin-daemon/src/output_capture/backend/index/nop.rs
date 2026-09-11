@@ -3,9 +3,6 @@ use atuin_client::history::HistoryId;
 use super::{Index, IndexError, OutputMatch};
 
 /// An [`Index`] that stores nothing and matches nothing.
-///
-/// Stands in when output capture is disabled or the sqlite index fails to open, so `search` simply
-/// comes back empty instead of erroring.
 #[derive(Debug, Clone, Copy)]
 pub struct NopIndex;
 

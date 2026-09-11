@@ -18,17 +18,17 @@ use schema::{Schema as _, SchemaV2};
 use tokio::task::JoinHandle;
 use tracing::error;
 
-use super::{Backend, CaptureError, DeleteOutputError, GetOutputError};
+use super::{CaptureError, DeleteOutputError, GetOutputError, Storage};
 
 /// The schema currently in use for stored output.
 type ActiveSchema = SchemaV2;
 
 /// The store and every operation on it.
 ///
-/// This is the state the background tasks (the flusher and the gc) drive. It deliberately holds no
-/// task handles, so a task can own a clone of it without a reference cycle back to the
-/// `FjallBackend` that owns those tasks.
-struct FjallBackendInner {
+/// This is the state the flusher drives from its background task. It deliberately holds no task
+/// handle, so the task can own a clone of it without a reference cycle back to the `FjallStorage`
+/// that owns the flusher.
+struct FjallStorageInner {
     db: OptimisticTxDatabase,
     keyspace: OptimisticTxKeyspace,
     /// Set on every mutation; the flusher clears it and persists. See `Flusher` for the
@@ -36,7 +36,7 @@ struct FjallBackendInner {
     dirty: Arc<AtomicBool>,
 }
 
-impl FjallBackendInner {
+impl FjallStorageInner {
     /// On-disk bytes used by the store's segments and blob files.
     ///
     /// Might over/under-report by a couple dozen MB.
@@ -147,7 +147,7 @@ impl FjallBackendInner {
 
     /// The oldest ids whose values total at least `reclaim_bytes` (or all of them, if the store
     /// holds less). Reads values to measure their size, oldest first, and stops early; it does not
-    /// delete -- eviction goes back through the facade's `remove` so the search index stays in sync.
+    /// delete -- eviction goes back through the backend's `remove` so the search index stays in sync.
     async fn eviction_candidates(
         &self,
         reclaim_bytes: u64,
@@ -191,7 +191,7 @@ impl Flusher {
     /// We'd expect flush itself to take anywhere between 1-10ms, so this is plenty of overhead.
     const SYNC_INTERVAL: Duration = Duration::from_secs(5);
 
-    pub fn spawn(inner: Arc<FjallBackendInner>) -> Self {
+    pub fn spawn(inner: Arc<FjallStorageInner>) -> Self {
         let task = tokio::task::spawn(async move {
             let mut interval = tokio::time::interval(Self::SYNC_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -262,21 +262,19 @@ impl Drop for Flusher {
 }
 
 #[derive(Clone, derive_more::Debug)]
-pub struct FjallBackend {
+pub struct FjallStorage {
     #[debug(skip)]
-    inner: Arc<FjallBackendInner>,
+    inner: Arc<FjallStorageInner>,
     // Held only to abort the flusher's background task on drop; never read.
     #[debug(skip)]
     _flusher: Arc<Flusher>,
 }
 
-impl FjallBackend {
+impl FjallStorage {
     /// Open the store at `path`.
     ///
-    /// Disk budgeting and eviction live one layer up, in the [`OutputCapture`] facade, so a single
-    /// eviction can drop an entry from the store and the search index together.
-    ///
-    /// [`OutputCapture`]: crate::output_capture::OutputCapture
+    /// Disk budgeting and eviction live one layer up, in the [`Backend`](super::super::Backend), so
+    /// a single eviction can drop an entry from the store and the search index together.
     pub fn open(path: impl AsRef<Path>) -> fjall::Result<Self> {
         let db = OptimisticTxDatabase::builder(path.as_ref()).open()?;
         Self::new(db)
@@ -284,7 +282,7 @@ impl FjallBackend {
 
     pub fn new(db: OptimisticTxDatabase) -> fjall::Result<Self> {
         let keyspace = db.keyspace(ActiveSchema::NAME, ActiveSchema::create_options)?;
-        let inner = Arc::new(FjallBackendInner {
+        let inner = Arc::new(FjallStorageInner {
             db,
             keyspace,
             dirty: Arc::new(AtomicBool::new(false)),
@@ -301,7 +299,7 @@ impl FjallBackend {
     }
 }
 
-impl Backend for FjallBackend {
+impl Storage for FjallStorage {
     async fn capture(&self, id: HistoryId, capture: CommandCapture) -> Result<(), CaptureError> {
         self.inner.capture(id, capture).await
     }
@@ -337,9 +335,9 @@ mod tests {
 
     use super::*;
 
-    fn temp_backend() -> (FjallBackend, tempfile::TempDir) {
+    fn temp_storage() -> (FjallStorage, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let backend = FjallBackend::open(dir.path()).expect("open");
+        let backend = FjallStorage::open(dir.path()).expect("open");
         (backend, dir)
     }
 
@@ -359,7 +357,7 @@ mod tests {
 
     #[tokio::test]
     async fn round_trips_output_by_history_id() {
-        let (store, _dir) = temp_backend();
+        let (store, _dir) = temp_storage();
         store.capture(hid(1), cap("hello")).await.expect("capture");
         let got = store.get(hid(1)).await.expect("get").expect("present");
         assert_eq!(got.output_start, "hello");
@@ -380,7 +378,7 @@ mod tests {
 
     #[tokio::test]
     async fn round_trips_a_capture_that_lost_its_middle() {
-        let (store, _dir) = temp_backend();
+        let (store, _dir) = temp_storage();
         let capture = split_cap("first lines", "last lines", 10_000);
         store.capture(hid(1), capture.clone()).await.expect("capture");
 
@@ -396,7 +394,7 @@ mod tests {
     async fn an_empty_tail_is_not_the_same_as_no_tail() {
         // `Some("")` means "everything after the start was discarded"; `None` means "nothing was".
         // Collapsing the two would lose the only signal that a capture is incomplete.
-        let (store, _dir) = temp_backend();
+        let (store, _dir) = temp_storage();
         store.capture(hid(1), split_cap("kept", "", 500)).await.expect("capture");
         store.capture(hid(2), cap("kept")).await.expect("capture");
 
@@ -408,13 +406,13 @@ mod tests {
 
     #[tokio::test]
     async fn missing_id_returns_none() {
-        let (store, _dir) = temp_backend();
+        let (store, _dir) = temp_storage();
         assert!(store.get(hid(9)).await.expect("get").is_none());
     }
 
     #[tokio::test]
     async fn second_capture_for_same_id_is_rejected() {
-        let (store, _dir) = temp_backend();
+        let (store, _dir) = temp_storage();
         store.capture(hid(1), cap("first")).await.expect("first");
         let err = store.capture(hid(1), cap("second")).await.unwrap_err();
         assert!(matches!(err, CaptureError::AlreadyExists));
@@ -424,7 +422,7 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_writers_store_exactly_one() {
-        let (store, _dir) = temp_backend();
+        let (store, _dir) = temp_storage();
         let store = std::sync::Arc::new(store);
         let mut handles = Vec::new();
         for n in 0..16u8 {
@@ -444,7 +442,7 @@ mod tests {
 
     #[tokio::test]
     async fn remove_removes_stored_output() {
-        let (store, _dir) = temp_backend();
+        let (store, _dir) = temp_storage();
         store.capture(hid(1), cap("hello")).await.expect("capture");
         store.remove(&[hid(1)]).await.expect("remove");
         assert!(store.get(hid(1)).await.expect("get").is_none());
@@ -452,14 +450,14 @@ mod tests {
 
     #[tokio::test]
     async fn remove_of_absent_ids_is_ok() {
-        let (store, _dir) = temp_backend();
+        let (store, _dir) = temp_storage();
         store.remove(&[]).await.expect("remove of nothing is idempotent");
         store.remove(&[hid(9)]).await.expect("remove of an absent id is idempotent");
     }
 
     #[tokio::test]
     async fn remove_only_removes_requested_ids() {
-        let (store, _dir) = temp_backend();
+        let (store, _dir) = temp_storage();
         for n in 1..=3u128 {
             store.capture(hid(n), cap(&format!("out{n}"))).await.expect("capture");
         }
@@ -471,7 +469,7 @@ mod tests {
 
     #[tokio::test]
     async fn removed_id_can_be_captured_again() {
-        let (store, _dir) = temp_backend();
+        let (store, _dir) = temp_storage();
         store.capture(hid(1), cap("first")).await.expect("first");
         store.remove(&[hid(1)]).await.expect("remove");
         // The tombstone must free the id for the capture-once check, not merely hide the value.
@@ -481,7 +479,7 @@ mod tests {
 
     #[tokio::test]
     async fn remove_after_removal_is_idempotent() {
-        let (store, _dir) = temp_backend();
+        let (store, _dir) = temp_storage();
         store.capture(hid(1), cap("hello")).await.expect("capture");
         store.remove(&[hid(1)]).await.expect("remove");
         assert!(store.get(hid(1)).await.expect("get").is_none());
@@ -491,13 +489,13 @@ mod tests {
 
     #[tokio::test]
     async fn eviction_candidates_names_oldest_until_budget_met() {
-        let (store, _dir) = temp_backend();
+        let (store, _dir) = temp_storage();
         for n in 1..=3u128 {
             store.capture(hid(n), cap(&format!("out{n}"))).await.expect("capture");
         }
 
         // One byte of budget names exactly the oldest entry (keys sort by id), and selecting a
-        // victim must not delete it -- the facade's `remove` does that, so both stores stay in sync.
+        // victim must not delete it -- the backend's `remove` does that, so both stores stay in sync.
         let victims = store.eviction_candidates(1).await.expect("candidates");
         assert_eq!(victims, vec![hid(1)]);
         assert!(store.get(hid(1)).await.expect("get").is_some(), "selection does not delete");
@@ -509,14 +507,14 @@ mod tests {
 
     #[tokio::test]
     async fn eviction_candidates_for_zero_bytes_is_empty() {
-        let (store, _dir) = temp_backend();
+        let (store, _dir) = temp_storage();
         store.capture(hid(1), cap("keep")).await.expect("capture");
         assert!(store.eviction_candidates(0).await.expect("candidates").is_empty());
     }
 
     #[tokio::test]
     async fn all_ids_lists_every_stored_id_oldest_first() {
-        let (store, _dir) = temp_backend();
+        let (store, _dir) = temp_storage();
         for n in 1..=3u128 {
             store.capture(hid(n), cap(&format!("out{n}"))).await.expect("capture");
         }

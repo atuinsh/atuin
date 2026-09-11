@@ -1,8 +1,9 @@
-//! Disk-budget garbage collection for the output capture store.
+//! Disk-budget garbage collection for the output capture backend.
 //!
-//! Unlike the fjall flusher, this lives at the facade layer: it evicts through [`Inner::remove`], so
-//! a single eviction drops an entry from the backend *and* the search index together. Against a nop
-//! backend it never fires -- reported disk usage is always zero -- so it is safe to run regardless.
+//! Unlike the fjall flusher, this runs against the whole [`AnyBackend`], not its storage: it evicts
+//! through [`AnyBackend::remove`], so a single eviction drops an entry from the storage *and* the
+//! search index together. Against a nop backend it never fires -- reported disk usage is always
+//! zero -- so it is safe to run regardless.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -13,10 +14,10 @@ use atuin_common::units::{ByteSize, Percent};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
-use super::Inner;
+use super::AnyBackend;
 
 #[derive(Debug)]
-pub(super) struct Gc {
+pub struct Gc {
     task: JoinHandle<()>,
 }
 
@@ -30,7 +31,7 @@ impl Gc {
     /// The share of the budget we trim down to once cleanup runs.
     const TARGET_SHARE: Percent = Percent::new(90.0);
 
-    pub(super) fn spawn(inner: Arc<Inner>, budget: ByteSize) -> Self {
+    pub fn spawn(backend: Arc<AnyBackend>, budget: ByteSize) -> Self {
         let budget = budget.as_u64();
         let task = tokio::task::spawn(async move {
             let mut interval = tokio::time::interval(Self::INTERVAL);
@@ -39,7 +40,7 @@ impl Gc {
             loop {
                 interval.tick().await;
 
-                let size = inner.estimated_disk_space();
+                let size = backend.estimated_disk_space();
 
                 let trigger = budget * Self::TRIGGER_SHARE;
                 if size < trigger {
@@ -49,7 +50,7 @@ impl Gc {
                 let target = budget * Self::TARGET_SHARE;
                 let reclaim = size.saturating_sub(target);
 
-                let victims = match inner.eviction_candidates(reclaim).await {
+                let victims = match backend.eviction_candidates(reclaim).await {
                     Ok(victims) => victims,
                     Err(err) => {
                         tracing::warn!(?err, "output capture gc failed to select entries to evict");
@@ -57,8 +58,8 @@ impl Gc {
                     }
                 };
 
-                // Evict through the facade so the derived search index drops these ids too.
-                if let Err(err) = inner.remove(victims).await {
+                // Evict through the backend so the derived search index drops these ids too.
+                if let Err(err) = backend.remove(&victims).await {
                     tracing::warn!(?err, "output capture gc failed to evict entries");
                 }
             }
@@ -77,7 +78,7 @@ impl Drop for Gc {
 /// The disk budget for a store living at `path`, or `None` when usage is unlimited. Only a
 /// percentage has to look at the disk; an absolute size is taken as-is, so an absolute limit never
 /// touches the filesystem.
-pub(super) fn resolve_budget(path: &Path, limit: DiskUsageLimit) -> Option<ByteSize> {
+pub fn resolve_budget(path: &Path, limit: DiskUsageLimit) -> Option<ByteSize> {
     match limit {
         DiskUsageLimit::Unlimited => None,
         DiskUsageLimit::Bytes(bytes) => Some(bytes),

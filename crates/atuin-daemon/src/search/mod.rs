@@ -4,6 +4,10 @@
 
 mod index;
 
+// The generated proto code references cross-package types as `super::common::*`; bringing the
+// common proto module into scope here (as `history::pb` does) lets those paths resolve.
+use crate::grpc::common::pb::{self as common};
+
 // Include the generated proto code
 mod proto {
     #![allow(clippy::must_use_candidate, reason = "prost-generated proto code")]

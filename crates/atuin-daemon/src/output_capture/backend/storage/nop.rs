@@ -1,12 +1,12 @@
 use atuin_client::history::{CommandCapture, HistoryId};
 
-use super::{Backend, CaptureError, DeleteOutputError, GetOutputError};
+use super::{CaptureError, DeleteOutputError, GetOutputError, Storage};
 
-/// [`Backend`] implementation which does nothing. All output capture is discarded.
+/// [`Storage`] implementation which does nothing. All output capture is discarded.
 #[derive(Debug, Clone, Copy)]
-pub struct NopBackend;
+pub struct NopStorage;
 
-impl Backend for NopBackend {
+impl Storage for NopStorage {
     async fn capture(&self, _id: HistoryId, _capture: CommandCapture) -> Result<(), CaptureError> {
         Ok(())
     }

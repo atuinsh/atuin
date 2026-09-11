@@ -31,7 +31,7 @@ pub use history_journal::{
     GetCmdInFlightError, HistoryJournal, RegisterOutputError,
 };
 pub use output_capture::{
-    BackendKind, CaptureError, DeleteOutputError, GetOutputError, OutputCapture,
+    BackendKind, CaptureError, DeleteOutputError, GetOutputError, OutputCapture, OutputSearcher,
 };
 
 /// Boot the daemon using the new component-based architecture.
@@ -47,9 +47,9 @@ pub async fn boot(
     let search_component = SearchComponent::new();
     let sync_component = SyncComponent::new();
 
-    // Open the output store and its search index up front, so the search service can hold a
-    // read-only handle to the index (the same "pull the shared handle out before moving the owner
-    // in" pattern used for the command search index below).
+    // Open the output store up front, so the search service can hold a read-only searcher over it
+    // (the same "pull the shared handle out before moving the owner in" pattern used for the
+    // command search index below).
     let output_capture = match settings.output.limits() {
         Some(limits) => {
             OutputCapture::open(Settings::command_capture_dir(), limits.max_disk_usage).await
@@ -59,7 +59,7 @@ pub async fn boot(
 
     // Get the gRPC services before moving components into the daemon
     // (The services share state with the components via Arc)
-    let search_service = search_component.grpc_service(output_capture.reader());
+    let search_service = search_component.grpc_service(output_capture.searcher());
     let search_index = search_component.index();
 
     // Build the daemon

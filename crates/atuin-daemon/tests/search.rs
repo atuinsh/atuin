@@ -85,9 +85,9 @@ mod unix {
         let store = SqliteStore::new(&record_path, Duration::from_secs(5)).await.unwrap();
 
         let search_component = SearchComponent::new();
-        // This test exercises command search only; there is no output store, so the output index is
-        // a nop.
-        let search_service = search_component.grpc_service(OutputCapture::nop().reader());
+        // This test exercises command search only; there is no output store, so the searcher is a
+        // nop.
+        let search_service = search_component.grpc_service(OutputCapture::nop().searcher());
 
         let mut daemon = Daemon::builder(settings)
             .store(store)

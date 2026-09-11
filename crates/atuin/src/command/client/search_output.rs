@@ -1,4 +1,5 @@
 use std::io::{self, IsTerminal, Write};
+use std::ops::Range;
 
 use atuin_client::database::Sqlite;
 use atuin_client::history::HistoryId;
@@ -12,7 +13,8 @@ use eyre::{Result, WrapErr, bail};
 ///
 /// Captured output lives only in the daemon (fjall + a sidecar sqlite FTS index), so this always
 /// goes through the daemon's `SearchCommandOutput` RPC. Each match is printed as
-/// `command<TAB>snippet`, most relevant first.
+/// `command<TAB>line`, most relevant first, where `line` is the line of output holding the first
+/// match (with every match on it bolded when stdout is a terminal).
 #[derive(Parser, Debug)]
 pub struct Cmd {
     #[arg(allow_hyphen_values = true)]
@@ -54,32 +56,36 @@ impl Cmd {
         // an await would make this future non-`Send`, which the dispatcher requires.
         let mut rows = Vec::with_capacity(matches.len());
         for m in matches {
-            let bytes: [u8; 16] = m
-                .history_id
-                .as_slice()
-                .try_into()
-                .wrap_err("daemon returned a malformed history id")?;
-            let id = HistoryId::from_bytes(bytes);
+            let Some(proto_id) = m.history_id else {
+                bail!("daemon returned a match with no history id");
+            };
+            let id: HistoryId =
+                proto_id.try_into().wrap_err("daemon returned a malformed history id")?;
             let Some(history) = db.load(id).await? else {
                 // The daemon may hold captured output for a history row that no longer exists
                 // locally; skip it rather than error.
                 continue;
             };
-            rows.push((history.command, m.snippet));
+            let matches = m
+                .matches
+                .into_iter()
+                .map(Range::try_from)
+                .collect::<Result<Vec<_>, _>>()
+                .wrap_err("daemon returned a match range that does not fit in memory")?;
+            rows.push((history.command, m.output, matches));
         }
 
         let mut w = io::stdout().lock();
-        let escape = w.is_terminal();
+        let tty = w.is_terminal();
 
-        for (command, snippet) in rows {
+        for (command, output, matches) in rows {
             let command = command.trim();
-            let snippet = snippet.replace(['\n', '\r'], " ");
-            let snippet = snippet.trim();
+            let context = context_line(&output, &matches, tty);
 
-            let line = if escape {
-                format!("{}\t{}", command.escape_non_printable(), snippet.escape_non_printable())
+            let line = if tty {
+                format!("{}\t{context}", command.escape_non_printable())
             } else {
-                format!("{command}\t{snippet}")
+                format!("{command}\t{context}")
             };
 
             if let Err(err) = writeln!(w, "{line}") {
@@ -91,5 +97,73 @@ impl Cmd {
         }
 
         Ok(())
+    }
+}
+
+/// The line of `output` holding the first match (or its first line, when there is none), trimmed.
+/// With `tty`, non-printables are escaped and every match on the line is bolded; without, the line
+/// is emitted verbatim so it stays greppable.
+fn context_line(output: &str, matches: &[Range<usize>], tty: bool) -> String {
+    let anchor = matches.first().map_or(0, |m| m.start.min(output.len()));
+    let line_start = output[..anchor].rfind('\n').map_or(0, |i| i + 1);
+    let line_end = output[anchor..].find('\n').map_or(output.len(), |i| anchor + i);
+    let line = &output[line_start..line_end];
+
+    if !tty {
+        return line.trim().to_string();
+    }
+
+    // Trim the line, then shift the ranges into the trimmed line's coordinates.
+    let trimmed = line.trim();
+    let offset = line_start + (line.len() - line.trim_start().len());
+    let end = offset + trimmed.len();
+
+    let mut out = String::with_capacity(trimmed.len());
+    let mut cursor = 0;
+    for m in matches {
+        // Clamp to the line and skip anything malformed (the ranges come from the daemon).
+        let (start, stop) = (m.start.max(offset), m.end.min(end));
+        if start >= stop || start < offset + cursor {
+            continue;
+        }
+        let (start, stop) = (start - offset, stop - offset);
+        let (Some(gap), Some(hit)) = (trimmed.get(cursor..start), trimmed.get(start..stop)) else {
+            continue;
+        };
+        out.push_str(&gap.escape_non_printable());
+        out.push_str("\x1b[1m");
+        out.push_str(&hit.escape_non_printable());
+        out.push_str("\x1b[0m");
+        cursor = stop;
+    }
+    let tail = &trimmed[cursor..];
+    out.push_str(&tail.escape_non_printable());
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn picks_the_line_of_the_first_match_and_bolds_every_match_on_it() {
+        let output = "first line\n  error: bad error\nlast line";
+        let matches = [13..18, 24..29];
+        assert_eq!(context_line(output, &matches, false), "error: bad error");
+        assert_eq!(
+            context_line(output, &matches, true),
+            "\x1b[1merror\x1b[0m: bad \x1b[1merror\x1b[0m"
+        );
+    }
+
+    #[test]
+    fn falls_back_to_the_first_line_without_matches() {
+        assert_eq!(context_line("only\nlines", &[], true), "only");
+    }
+
+    #[test]
+    fn malformed_ranges_are_ignored_rather_than_panicking() {
+        // Past the end, and splitting a multi-byte char.
+        assert_eq!(context_line("héllo", &[100..200, 1..2], true), "héllo");
     }
 }

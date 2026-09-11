@@ -1,8 +1,11 @@
+use std::borrow::Cow;
+use std::ops::Range;
 use std::path::Path;
 
 use atuin_client::history::HistoryId;
-use atuin_common::db;
 use atuin_common::db::sqlite::Sqlite;
+use atuin_common::db::sqlite::fts::TextHighlighter;
+use atuin_common::db::{self, sqlite::fts::TextHighlighterBindExt};
 use sqlx::Row;
 
 use super::{Index, IndexError, OutputMatch};
@@ -13,16 +16,12 @@ use super::{Index, IndexError, OutputMatch};
 /// v2: `history_id` stored as a 16-byte BLOB rather than a 32-char hex string.
 const SCHEMA_VERSION: i64 = 2;
 
-/// How many tokens of context a result snippet carries around its match.
-const SNIPPET_TOKENS: i64 = 32;
-
 /// A full-text search index backed by a sidecar sqlite FTS5 table.
-///
-/// Cloning shares the underlying connection pool, so a read-only clone can be handed to the search
-/// service while the facade keeps the writing handle.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SqliteIndex {
     db: Sqlite,
+    /// A type which allows type-safe operation on SQL `highlight` statements.
+    highlighter: TextHighlighter,
 }
 
 fn store(err: sqlx::Error) -> IndexError {
@@ -42,7 +41,12 @@ impl SqliteIndex {
             .open()
             .await
             .map_err(|err| IndexError::Storage(Box::new(err)))?;
-        let index = Self { db };
+
+        let index = Self {
+            db,
+            highlighter: TextHighlighter::default(),
+        };
+
         index.migrate().await?;
         Ok(index)
     }
@@ -87,7 +91,7 @@ impl Index for SqliteIndex {
             .map_err(store)?;
         db::query("INSERT INTO output_fts(history_id, body) VALUES (?, ?)")
             .bind(&key[..])
-            .bind(text)
+            .bind_highlightable(self.highlighter, text)
             .execute(&mut *tx)
             .await
             .map_err(store)?;
@@ -120,12 +124,13 @@ impl Index for SqliteIndex {
         }
 
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        // `highlight()` hands back the whole body with every match wrapped in the markers, which is
+        // the one pass that yields both the full output and where the matches sit in it.
         let rows = db::query(
-            "SELECT history_id, snippet(output_fts, 1, '', '', '…', ?) AS snippet, \
-             -bm25(output_fts) AS score FROM output_fts WHERE output_fts MATCH ? ORDER BY score \
-             DESC LIMIT ?",
+            "SELECT history_id, highlight(output_fts, 1, ?, ?) AS body, -bm25(output_fts) AS \
+             score FROM output_fts WHERE output_fts MATCH ? ORDER BY score DESC LIMIT ?",
         )
-        .bind(SNIPPET_TOKENS)
+        .bind_highlight(self.highlighter)
         .bind(&match_expr)
         .bind(limit)
         .fetch_all(self.db.pool())
@@ -135,9 +140,12 @@ impl Index for SqliteIndex {
         rows.into_iter()
             .map(|row| {
                 let raw: &[u8] = row.try_get("history_id").map_err(store)?;
+                let body: &str = row.try_get("body").map_err(store)?;
+                let (output, matches) = split_highlighted(body);
                 Ok(OutputMatch {
                     history_id: id_from_bytes(raw)?,
-                    snippet: row.try_get("snippet").map_err(store)?,
+                    output,
+                    matches,
                     score: row.try_get("score").map_err(store)?,
                 })
             })
@@ -153,6 +161,27 @@ impl Index for SqliteIndex {
             .map(|row| id_from_bytes(row.try_get::<&[u8], _>("history_id").map_err(store)?))
             .collect()
     }
+}
+
+/// Strip the [`MATCH_OPEN`]/[`MATCH_CLOSE`] markers out of a `highlight()` result, returning the
+/// plain body and the byte range within it that each marker pair enclosed.
+fn split_highlighted(body: &str) -> (String, Vec<Range<usize>>) {
+    let mut output = String::with_capacity(body.len());
+    let mut matches = Vec::new();
+    let mut open: Option<usize> = None;
+    let mut rest = body;
+    while let Some(at) = rest.find([MATCH_OPEN, MATCH_CLOSE]) {
+        output.push_str(&rest[..at]);
+        let marker = rest[at..].chars().next().expect("`find` landed on a char");
+        if marker == MATCH_OPEN {
+            open = Some(output.len());
+        } else if let Some(start) = open.take() {
+            matches.push(start..output.len());
+        }
+        rest = &rest[at + marker.len_utf8()..];
+    }
+    output.push_str(rest);
+    (output, matches)
 }
 
 /// Turn free-form user input into a safe FTS5 `MATCH` expression: each whitespace-separated term
@@ -198,7 +227,28 @@ mod tests {
         let hits = index.search("error", 10).await.expect("search");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].history_id, hid(1));
-        assert!(hits[0].snippet.contains("error"), "snippet shows the match: {:?}", hits[0]);
+        assert_eq!(hits[0].output, "the build failed with an error");
+        assert_eq!(hits[0].matches, vec![25..30]);
+    }
+
+    #[tokio::test]
+    async fn every_match_in_the_output_gets_a_range() {
+        let (index, _dir) = temp_index().await;
+        index.insert(hid(1), "error one\nfine\nerror two").await.expect("insert");
+
+        let hits = index.search("error", 10).await.expect("search");
+        assert_eq!(hits[0].matches, vec![0..5, 15..20]);
+    }
+
+    #[tokio::test]
+    async fn marker_codepoints_in_the_text_cannot_forge_a_match() {
+        let (index, _dir) = temp_index().await;
+        let text = format!("{MATCH_OPEN}fake{MATCH_CLOSE} real");
+        index.insert(hid(1), &text).await.expect("insert");
+
+        let hits = index.search("real", 10).await.expect("search");
+        assert_eq!(hits[0].output, "fake real");
+        assert_eq!(hits[0].matches, vec![5..9]);
     }
 
     #[tokio::test]

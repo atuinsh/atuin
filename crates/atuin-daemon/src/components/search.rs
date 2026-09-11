@@ -17,7 +17,7 @@ use tracing::{Level, debug, error, info, instrument, span, trace};
 
 use crate::daemon::{Component, DaemonHandle};
 use crate::events::DaemonEvent;
-use crate::output_capture::{AnyIndex, Index};
+use crate::output_capture::OutputSearcher;
 use crate::search::search_server::{Search as SearchSvc, SearchServer};
 use crate::search::{
     FilterMode, IndexFilterMode, OutputSearchMatch, PrepareIndexRequest, PrepareIndexResponse,
@@ -57,15 +57,15 @@ impl SearchComponent {
 
     /// Get the gRPC service for this component.
     ///
-    /// `output_index` is a read-only handle to the captured-output full-text index, owned by the
-    /// `OutputCapture` facade, used to serve [`SearchCommandOutput`] queries.
+    /// `output_searcher` is a read-only handle over captured output, owned by the `OutputCapture`
+    /// facade, used to serve [`SearchCommandOutput`] queries.
     ///
     /// [`SearchCommandOutput`]: SearchSvc::search_command_output
     #[must_use]
-    pub fn grpc_service(&self, output_index: AnyIndex) -> SearchGrpcServiceBuilder {
+    pub fn grpc_service(&self, output_searcher: OutputSearcher) -> SearchGrpcServiceBuilder {
         SearchGrpcServiceBuilder {
             index: self.index.clone(),
-            output_index,
+            output_searcher,
         }
     }
 
@@ -204,7 +204,7 @@ impl Component for SearchComponent {
 
 pub struct SearchGrpcServiceBuilder {
     index: Arc<RwLock<SearchIndex>>,
-    output_index: AnyIndex,
+    output_searcher: OutputSearcher,
 }
 
 impl SearchGrpcServiceBuilder {
@@ -212,7 +212,7 @@ impl SearchGrpcServiceBuilder {
     pub fn build(self, handle: DaemonHandle) -> SearchServer<SearchGrpcService> {
         SearchServer::new(SearchGrpcService {
             index: self.index,
-            output_index: self.output_index,
+            output_searcher: self.output_searcher,
             handle,
         })
     }
@@ -222,7 +222,7 @@ impl SearchGrpcServiceBuilder {
 #[derive(Clone)]
 pub struct SearchGrpcService {
     index: Arc<RwLock<SearchIndex>>,
-    output_index: AnyIndex,
+    output_searcher: OutputSearcher,
     handle: DaemonHandle,
 }
 
@@ -371,7 +371,7 @@ impl SearchSvc for SearchGrpcService {
         };
 
         let matches = self
-            .output_index
+            .output_searcher
             .search(&request.query, limit)
             .await
             .map_err(|err| {
@@ -380,8 +380,9 @@ impl SearchSvc for SearchGrpcService {
             })?
             .into_iter()
             .map(|m| OutputSearchMatch {
-                history_id: m.history_id.into_bytes().to_vec(),
-                snippet: m.snippet,
+                history_id: Some(m.history_id.into()),
+                output: m.output,
+                matches: m.matches.into_iter().map(Into::into).collect(),
                 score: m.score,
             })
             .collect();
