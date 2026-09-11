@@ -92,6 +92,21 @@ pub enum ToolOutcome {
 }
 
 impl ToolOutcome {
+    /// Maximum size of the `stdout` and `stderr` buffers (each) in [`Self::Structured`].
+    ///
+    /// [`ansi::to_plain_text`] used to be capped at 16384 rows to prevent OOM errors, which
+    /// provided an effective limit on the size of the stdout and stderr buffers we return. Now that
+    /// [`ansi::to_plain_text`] is more efficient, it imposes no limit of its own; to ensure we
+    /// don't return too much data, we apply the cap ourselves.
+    ///
+    /// 16384 times 120 (the width of the emulated terminal, from `PREVIEW_WIDTH`) is approximately
+    /// 2,000,000 (2MB), so we use that as our limit here.
+    ///
+    /// Note that we keep the *end* of output that exceeds the limit. This matches what
+    /// [`ansi::to_plain_text`] did previously -- it would process the full output but only keep the
+    /// last 16384 rendered lines.
+    const MAX_STRUCTURED_OUTPUT_SIZE: usize = 2_000_000;
+
     /// Format this outcome as a string for the tool result sent to the LLM.
     ///
     /// The optional `interrupt_reason` overrides the generic interrupted message
@@ -907,8 +922,7 @@ pub async fn execute_shell_command_streaming(
                     Ok(0) => stdout_done = true,
                     Ok(n) => {
                         full_stdout.extend_from_slice(&stdout_buf[..n]);
-                        let normalized = ansi::onlcr(&stdout_buf[..n]).collect::<Vec<u8>>();
-                        parser.process(&normalized);
+                        ansi::onlcr(&stdout_buf[..n]).for_each(|chunk| parser.process(chunk));
                     }
                     Err(_) => stdout_done = true,
                 }
@@ -921,8 +935,7 @@ pub async fn execute_shell_command_streaming(
                     Ok(n) => {
                         full_stderr.extend_from_slice(&stderr_buf[..n]);
                         // Feed stderr to the preview parser too, so it shows in the VT100 screen
-                        let normalized = ansi::onlcr(&stderr_buf[..n]).collect::<Vec<u8>>();
-                        parser.process(&normalized);
+                        ansi::onlcr(&stderr_buf[..n]).for_each(|chunk| parser.process(chunk));
                     }
                     Err(_) => stderr_done = true,
                 }
@@ -961,9 +974,16 @@ pub async fn execute_shell_command_streaming(
 
     // Strip ANSI escape sequences for clean LLM output by running
     // the raw bytes through a VT100 parser and extracting plain text.
+    let rows = PREVIEW_HEIGHT;
     let cols = PREVIEW_WIDTH;
-    let stdout_text = ansi::to_plain_text(&full_stdout, cols);
-    let stderr_text = ansi::to_plain_text(&full_stderr, cols);
+
+    let [stdout_text, stderr_text] = [full_stdout, full_stderr].map(|output| {
+        let mut text = ansi::to_plain_text(&output, rows, cols);
+        let start = text.len().saturating_sub(ToolOutcome::MAX_STRUCTURED_OUTPUT_SIZE);
+        let start = text.ceil_char_boundary(start);
+        text.drain(..start);
+        text
+    });
 
     ToolOutcome::Structured {
         stdout: stdout_text,

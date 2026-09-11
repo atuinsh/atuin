@@ -64,7 +64,7 @@ pub fn is_alive(pid: Pid) -> bool {
 pub fn process_start_time(pid: Pid) -> Option<u64> {
     let pid = sysinfo::Pid::from_u32(pid.as_raw_nonzero().get().unsigned_abs());
     let mut system = sysinfo::System::new();
-    if system.refresh_process(pid) {
+    if system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true) > 0 {
         system.process(pid).map(sysinfo::Process::start_time)
     } else {
         None
@@ -89,10 +89,12 @@ pub fn cwd(pid: Pid) -> Option<PathBuf> {
 fn cwd_generic(pid: u32) -> Option<PathBuf> {
     let pid = sysinfo::Pid::from_u32(pid);
     let mut system = sysinfo::System::new();
-    if !system.refresh_process_specifics(
-        pid,
-        sysinfo::ProcessRefreshKind::new().with_cwd(sysinfo::UpdateKind::Always),
-    ) {
+    if system.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::Some(&[pid]),
+        true,
+        sysinfo::ProcessRefreshKind::nothing().with_cwd(sysinfo::UpdateKind::Always),
+    ) == 0
+    {
         return None;
     }
     system.process(pid)?.cwd().map(Into::into)

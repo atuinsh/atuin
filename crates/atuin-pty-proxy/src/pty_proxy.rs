@@ -185,9 +185,12 @@ then
     # Prefer ZSH_ARGZERO (zsh 5.3+) -- it preserves the path zsh was
     # invoked with -- and fall back to PATH lookup otherwise. Login shells
     # set argv[0] to "-zsh", and ZSH_ARGZERO keeps that leading dash, so
-    # strip it (${var#-}) before passing it along.
+    # strip it (${var#-}) before passing it along. ZSH_ARGZERO may also be
+    # a bare command name ("zsh") rather than a path; the :c modifier
+    # resolves that to an absolute path via $PATH, leaves an absolute path
+    # unchanged, and leaves an unresolvable name as-is.
     _atuin_pty_proxy_zsh="${ZSH_ARGZERO:-$(command -v zsh)}"
-    exec atuin pty-proxy --shell "${_atuin_pty_proxy_zsh#-}"
+    exec atuin pty-proxy --shell "${${_atuin_pty_proxy_zsh#-}:c}"
   else
     exec atuin pty-proxy
   fi
@@ -293,10 +296,11 @@ mod tests {
     fn init_scripts_forward_shell_path() {
         let posix = init_script(Shell::Bash);
         assert!(posix.contains(r#"exec atuin pty-proxy --shell "$BASH""#));
-        // zsh: capture ZSH_ARGZERO (with PATH fallback), then strip the
-        // leading dash present on login shells before forwarding the path.
+        // zsh: capture ZSH_ARGZERO (with PATH fallback), strip the leading
+        // dash present on login shells, then resolve a bare command name to
+        // an absolute path with the :c modifier before forwarding it.
         assert!(posix.contains(r#"_atuin_pty_proxy_zsh="${ZSH_ARGZERO:-$(command -v zsh)}""#));
-        assert!(posix.contains(r#"exec atuin pty-proxy --shell "${_atuin_pty_proxy_zsh#-}""#));
+        assert!(posix.contains(r#"exec atuin pty-proxy --shell "${${_atuin_pty_proxy_zsh#-}:c}""#));
 
         let fish = init_script(Shell::Fish);
         assert!(fish.contains("exec atuin pty-proxy --shell (status fish-path)"));
