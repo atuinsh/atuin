@@ -465,8 +465,6 @@ impl History {
 
         let mut bytes = Bytes::new(bytes);
 
-        // rmp decode errors borrow from `bytes`; make them `'static` so they satisfy the
-        // `Error + Send + Sync + 'static` bound that conversion into `eyre::Report` requires.
         fn to_static<'a>(e: impl Into<DecodeError<'a>>) -> DecodeError<'static> {
             e.into().into_static()
         }

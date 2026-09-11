@@ -19,8 +19,5 @@ multiple-versions = "allow"
 wildcards = "allow"
 deny = [
     { crate = "eyre", reason = "eyre and anyhow are considered anti-patterns for library crates. atuin-common is a library crate." },
-    # anyhow is only ever pulled in transitively by the prost-derive proc-macro
-    # (via the `proto` feature); that edge is fine. The wrapper allowance lets it
-    # through there while still banning any direct use by atuin-common itself.
     { crate = "anyhow", wrappers = ["prost-derive"], reason = "eyre and anyhow are considered anti-patterns for library crates. atuin-common is a library crate." },
 ]
