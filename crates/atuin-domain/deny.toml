@@ -24,5 +24,5 @@ reason = "eyre and anyhow are considered anti-patterns for library crates. atuin
 
 [[bans.deny]]
 crate = "anyhow"
-wrappers = ["prost-derive", "reqwest-middleware"]
+wrappers = ["reqwest-middleware"]
 reason = "eyre and anyhow are considered anti-patterns for library crates. atuin-domain is a library crate."
