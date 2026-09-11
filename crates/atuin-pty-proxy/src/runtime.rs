@@ -144,7 +144,8 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
     let mut child = pair.slave.spawn_command(cmd).map_err(|e| Error::SpawnCommand(e.into()))?;
     drop(pair.slave);
 
-    let mut pty_reader = pair.master.try_clone_reader().map_err(|e| Error::CloneReader(e.into()))?;
+    let mut pty_reader =
+        pair.master.try_clone_reader().map_err(|e| Error::CloneReader(e.into()))?;
     let mut pty_writer = pair.master.take_writer().map_err(|e| Error::TakeWriter(e.into()))?;
 
     let child_pid =
