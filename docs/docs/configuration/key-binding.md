@@ -290,17 +290,25 @@ If vim is enabled in the config (see [`keymap_mode`](config.md#keymap_mode)), th
 
 
 ### Inspector
-Open the inspector with Ctrl + o
 
-| Shortcut  | Action                                        |
-| --------- | --------------------------------------------- |
-| Esc       | Close the inspector, returning to the shell   |
-| Ctrl + o  | Close the inspector, returning to search view |
-| Ctrl + d  | Delete the inspected item from the history    |
-| ↑         | Inspect the previous item in the history      |
-| ↓         | Inspect the next item in the history          |
-| Page Up   | Inspect the previous item in the history      |
-| Page Down | Inspect the next item in the history          |
-| j / k     | Navigate items (when vim mode is enabled)     |
-| Enter     | Execute selected item (respects `enter_accept`) |
-| Tab       | Select current item and edit                  |
+Open with **Ctrl + o**. **Runs** lists executions of the selected command;
+**Session** lists commands in that run's session. Both are newest first.
+**Stats** shows aggregate statistics.
+
+Captured output requires the local daemon and preserves colours and formatting.
+By default, **Enter** opens output instead of executing the command, regardless of
+`enter_accept`. **Esc** returns to the same selection.
+
+| Default shortcut | Action |
+| ---------------- | ------ |
+| r / s / t | Switch to Runs / Session / Stats |
+| Enter / o | Open captured output |
+| ↑ / ↓ or mouse wheel | Select a row or scroll output |
+| j / k | Navigate in vim mode |
+| Page Up / Page Down | Scroll output a page (one row in lists) |
+| Home / End | Jump to the start / end of output |
+| Esc | Back to the inspector or search |
+| Ctrl + o | Back to search |
+| Ctrl + d | Delete the selected run |
+| Tab | Edit the selected command in the shell, without executing it |
+| Ctrl + c | Close Atuin |

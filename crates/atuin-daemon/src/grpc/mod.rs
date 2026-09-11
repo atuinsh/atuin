@@ -44,6 +44,22 @@ macro_rules! invalid_argument_errors {
     };
 }
 
+/// Mark a [`thiserror::Error`] type as an internal error.
+///
+/// Invalid argument errors receive an [`Into`] implementation into [`tonic::Status`] which returns
+/// the error as [`tonic::Status::internal`].
+macro_rules! internal_errors {
+    ($($err:ty),* $(,)?) => {
+        $(
+            impl From<$err> for tonic::Status {
+                fn from(value: $err) -> Self {
+                    Self::internal(value.to_string())
+                }
+            }
+        )*
+    };
+}
+
 pub mod common;
 pub mod history;
 

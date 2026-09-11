@@ -131,12 +131,16 @@ pub fn router(database: Arc<dyn DynDatabase>, settings: Settings) -> Router {
         .route("/api/v0/store", delete(handlers::v0::store::delete))
         .negotiate_capabilities(caps.clone());
 
-    let unnegotiated = Router::new()
-        .route("/api/v0/capabilities", get(capabilities_endpoint))
-        .route("/healthz", get(handlers::health::health_check))
-        .with_state(caps);
+    let unnegotiated =
+        Router::new().route("/api/v0/capabilities", get(capabilities_endpoint)).with_state(caps);
 
-    let routes = unnegotiated.merge(negotiated);
+    let traced = unnegotiated.merge(negotiated).layer(
+        TraceLayer::new_for_http()
+            .make_span_with(crate::trace::make_request_span)
+            .on_response(crate::trace::on_response),
+    );
+
+    let routes = Router::new().route("/healthz", get(handlers::health::health_check)).merge(traced);
 
     let path = settings.path.as_str();
     let routes = if path.is_empty() {
@@ -148,7 +152,6 @@ pub fn router(database: Arc<dyn DynDatabase>, settings: Settings) -> Router {
     routes.fallback(teapot).with_state(AppState { database, settings }).layer(
         ServiceBuilder::new()
             .layer(axum::middleware::from_fn(clacks_overhead))
-            .layer(TraceLayer::new_for_http().make_span_with(crate::trace::make_request_span))
             .layer(axum::middleware::from_fn(metrics::track_metrics))
             .layer(axum::middleware::from_fn(semver)),
     )

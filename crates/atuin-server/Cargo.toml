@@ -59,7 +59,7 @@ uuid = { workspace = true }
 # TODO(taylordotfish): in Rust 1.99 we can change this to `workspace = true`
 atuin-client = {
     path = "../atuin-client",
-    version = "18.21.0",
+    version = "18.22.0",
     default-features = false,
     features = ["sync"],
 }

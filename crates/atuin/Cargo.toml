@@ -77,7 +77,7 @@ atuin-ai = { workspace = true, optional = true }
 # TODO(taylordotfish): in Rust 1.99 we can change this to `workspace = true`
 atuin-client = {
     path = "../atuin-client",
-    version = "18.21.0",
+    version = "18.22.0",
     optional = true,
     default-features = false,
 }
@@ -86,10 +86,12 @@ atuin-daemon = { workspace = true, optional = true }
 atuin-domain = { workspace = true }
 atuin-dotfiles = { workspace = true }
 atuin-history = { workspace = true }
+atuin-vt100 = { workspace = true }
 atuin-kv = { workspace = true }
 atuin-pty-proxy = { workspace = true, optional = true }
 atuin-scripts = { workspace = true }
 
+ansi-to-tui = { workspace = true }
 async-trait = { workspace = true }
 axoupdater = { workspace = true, optional = true }
 clap = { workspace = true }
@@ -142,7 +144,7 @@ arboard = { workspace = true, optional = true }
 arboard = { workspace = true, optional = true, features = ["wayland-data-control"] }
 
 [target.'cfg(unix)'.dependencies]
-daemonize = { workspace = true }
+daemonix = { workspace = true }
 
 # Enable tree-sitter shell parsing on platforms where tree-sitter's bundled C
 # compiles cleanly. tree-sitter 0.26's portable/endian.h fails on illumos,
@@ -158,8 +160,16 @@ tree-sitter-powershell = { workspace = true }
 windows-sys = { workspace = true }
 
 [dev-dependencies]
+parking_lot = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
+tempfile = { workspace = true }
+toml_edit = { workspace = true, features = ["serde"] }
+
+# for the PTY e2e tests (tests/e2e_pty.rs)
+[target.'cfg(unix)'.dev-dependencies]
+nix-pty = { package = "nix", version = "0.28", features = ["term"] }
+portable-pty = "0.9"
 
 [lints]
 workspace = true

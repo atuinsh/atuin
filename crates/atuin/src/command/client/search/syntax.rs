@@ -137,7 +137,7 @@ fn highlight_powershell(node: tree_sitter::Node, src: &[u8], meanings: &mut [Mea
     let mut captures = cursor.captures(&HIGHLIGHTS_QUERY, node, src);
 
     while let Some((m, capture_index)) = captures.next() {
-        let capture = m.captures[*capture_index];
+        let capture = m.captures()[*capture_index];
         let capture_name = HIGHLIGHTS_QUERY.capture_names()[usize::conv(capture.index)];
 
         let meaning = match capture_name {

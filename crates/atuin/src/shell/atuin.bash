@@ -8,18 +8,32 @@ fi
 ATUIN_STTY=$(stty -g)
 ATUIN_HISTORY_ID=""
 
+if [[ -z ${__atuin_pty_proxy_owns_tty-} ]]; then
+    # The pty-proxy preamble also sets this variable, but make sure it's set here,
+    # so a manually started proxy still functions when `pty_proxy.enabled` is false.
+    __atuin_pty_proxy_owns_tty=0
+    if [[ -n ${ATUIN_PTY_PROXY_ACTIVE-} ]]; then
+        if __atuin_pty_proxy_answer=$(atuin __internal pty-proxy-active 2>/dev/null) &&
+            [[ $__atuin_pty_proxy_answer = 1 ]]
+        then
+            __atuin_pty_proxy_owns_tty=1
+        fi
+        unset __atuin_pty_proxy_answer
+    fi
+fi
+
 __atuin_osc133_command_executed() {
-    [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || return
+    [[ "${__atuin_pty_proxy_owns_tty:-0}" = 1 ]] || return
     [[ -n "${ATUIN_HISTORY_ID:-}" && "$ATUIN_HISTORY_ID" != "__bash_preexec_failure__" ]] || return
 
     printf '\033]133;C\a'
 }
 
 __atuin_osc133_command_finished() {
-    [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || return
+    [[ "${__atuin_pty_proxy_owns_tty:-0}" = 1 ]] || return
     [[ -n "${ATUIN_HISTORY_ID:-}" && "$ATUIN_HISTORY_ID" != "__bash_preexec_failure__" ]] || return
 
-    printf '\033]133;D;%s;history_id=%s;session_id=%s\a' "$1" "$ATUIN_HISTORY_ID" "${ATUIN_SESSION:-}"
+    printf '\033]133;D;%s;history_id=%s\a' "$1" "$ATUIN_HISTORY_ID"
 }
 
 __atuin_osc133_prompt_start=$'\001\033]133;A;cl=line\a\002'
@@ -30,7 +44,7 @@ __atuin_osc133_wrap_prompt() {
     __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_start/}"
     __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_end/}"
 
-    if [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]]; then
+    if [[ "${__atuin_pty_proxy_owns_tty:-0}" = 1 ]]; then
         PS1="${__atuin_osc133_prompt_start}${__atuin_prompt}${__atuin_osc133_prompt_end}"
     else
         PS1="$__atuin_prompt"

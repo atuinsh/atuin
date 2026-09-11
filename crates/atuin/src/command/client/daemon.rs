@@ -15,7 +15,7 @@ use atuin_common::futures::Backoff;
 use atuin_daemon::client::{DaemonClientErrorKind, HistoryClient, classify_error};
 use clap::Subcommand;
 #[cfg(unix)]
-use daemonize::Daemonize;
+use daemonix::Daemonize;
 use eyre::{Result, WrapErr, bail, eyre};
 
 #[derive(clap::Args, Debug)]

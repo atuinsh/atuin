@@ -191,6 +191,37 @@ async fn run_the_test(db: &dyn DynDatabase) -> eyre::Result<()> {
     Ok(())
 }
 
+/// Registration must create the user and their session atomically: after one call, both the
+/// user row and a working session for the returned token must exist.
+#[rstest]
+#[tokio::test]
+async fn test_add_user_with_session_is_atomic() -> eyre::Result<()> {
+    let test_db = TestDb::new().await?;
+    let settings = &test_db.settings;
+
+    let db = atuin_server::connect(settings.db_uri.clone()).await?;
+
+    let new_user = NewUser {
+        username: "combined".to_owned(),
+        email: "combined@example.com".to_owned(),
+        password: "hunter2".to_owned(),
+    };
+    let token = crypto_random_string::<24>();
+
+    let user_id = db.add_user_with_session(&new_user, &token).await?;
+    assert_ne!(user_id, 0);
+
+    // The session created alongside the user must resolve back to that same user.
+    let user = db.get_session_user(&token).await?;
+    assert_eq!(user.username, "combined");
+    assert_eq!(user.id, user_id);
+
+    let session = db.get_session(&token).await?;
+    assert_eq!(session.user_id, user_id);
+
+    Ok(())
+}
+
 fn generate_record(host: &Host, idx: RecordIdx) -> Record<EncryptedData> {
     let data = EncryptedData {
         raw: "some data".into(),

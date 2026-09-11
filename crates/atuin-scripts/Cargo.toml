@@ -20,7 +20,6 @@ derive_more = { workspace = true }
 easy-cast = { workspace = true }
 eyre = { workspace = true }
 minijinja = { workspace = true }
-pretty_assertions = { workspace = true }
 rmp = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }

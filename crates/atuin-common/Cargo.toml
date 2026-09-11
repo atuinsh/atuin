@@ -16,6 +16,7 @@ test-utils = ["dep:tracing-subscriber"]
 unicode = ["dep:unicode-width", "dep:unicode-segmentation"]
 ansi = ["dep:atuin-vt100"]
 os = ["dep:rustix", "dep:windows-sys"]
+proto = ["dep:prost"]
 db = ["dep:sqlx"]
 sqlite = ["db", "sqlx/sqlite", "sqlx/regexp", "dep:libsqlite3-sys", "dep:tokio-util"]
 
@@ -23,17 +24,20 @@ sqlite = ["db", "sqlx/sqlite", "sqlx/regexp", "dep:libsqlite3-sys", "dep:tokio-u
 atuin-vt100 = { workspace = true, optional = true }
 
 base64 = { workspace = true }
+bytesize = { workspace = true }
 crypto_secretbox = { workspace = true }
 derive_more = { workspace = true }
 directories = { workspace = true }
 easy-cast = { workspace = true }
-eyre = { workspace = true }
 fs-err = { workspace = true }
 futures = { workspace = true }
 getrandom = { workspace = true }
 itertools = { workspace = true }
 libsqlite3-sys = { workspace = true, optional = true }
+num-traits = { workspace = true }
 parking_lot = { workspace = true }
+prost = { workspace = true, optional = true }
+regex = { workspace = true }
 rmp = { workspace = true }
 rusty_paserk = { workspace = true }
 rusty_paseto = { workspace = true }

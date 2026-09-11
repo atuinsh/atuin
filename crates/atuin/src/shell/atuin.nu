@@ -14,8 +14,21 @@ if 'ATUIN_SESSION' not-in $env or ('ATUIN_SHLVL' not-in $env) or ($env.ATUIN_SHL
 }
 hide-env -i ATUIN_HISTORY_ID
 
+if '__atuin_pty_proxy' not-in $env {
+    # The pty-proxy preamble also sets this variable, but make sure it's set here,
+    # so a manually started proxy still functions when `pty_proxy.enabled` is false.
+    # We are using a record rather than a plain string so it doesn't get exported
+    # to child processes -- we want each child shell to perform its own detection.
+    $env.__atuin_pty_proxy = { owns_tty: (if 'ATUIN_PTY_PROXY_ACTIVE' in $env {
+        do {
+            let atuin_pty_proxy_check = (do -i { atuin __internal pty-proxy-active } | complete)
+            $atuin_pty_proxy_check.exit_code == 0 and ($atuin_pty_proxy_check.stdout | str trim) == "1"
+        }
+    } else { false }) }
+}
+
 def _atuin_osc133_command_executed [] {
-    if 'ATUIN_PTY_PROXY_ACTIVE' not-in $env {
+    if not ($env.__atuin_pty_proxy?.owns_tty? | default false) {
         return
     }
     if 'ATUIN_HISTORY_ID' not-in $env or ($env.ATUIN_HISTORY_ID | is-empty) {
@@ -26,14 +39,14 @@ def _atuin_osc133_command_executed [] {
 }
 
 def _atuin_osc133_command_finished [exit_code: int] {
-    if 'ATUIN_PTY_PROXY_ACTIVE' not-in $env {
+    if not ($env.__atuin_pty_proxy?.owns_tty? | default false) {
         return
     }
     if 'ATUIN_HISTORY_ID' not-in $env or ($env.ATUIN_HISTORY_ID | is-empty) {
         return
     }
 
-    print -n $"(char -u '1b')]133;D;($exit_code);history_id=($env.ATUIN_HISTORY_ID);session_id=($env.ATUIN_SESSION)(char bel)"
+    print -n $"(char -u '1b')]133;D;($exit_code);history_id=($env.ATUIN_HISTORY_ID)(char bel)"
 }
 
 # Magic token to make sure we don't record commands run by keybindings

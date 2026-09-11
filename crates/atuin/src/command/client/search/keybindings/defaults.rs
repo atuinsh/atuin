@@ -351,22 +351,24 @@ pub fn default_inspector_keymap(settings: &Settings) -> Keymap {
     let prefix_char = settings.keys.prefix.chars().next().unwrap_or('a');
     km.bind(key(&format!("ctrl-{prefix_char}")), Action::EnterPrefixMode);
 
-    // Accept behavior respects enter_accept setting
-    let accept = if settings.enter_accept {
-        Action::Accept
-    } else {
-        Action::ReturnSelection
-    };
-    km.bind(key("enter"), accept);
+    // Inspection is non-executing: Enter opens output; Tab returns the command for editing.
+    km.bind(key("enter"), Action::InspectOutput);
 
     // Inspector-specific: delete history entry
     km.bind(key("ctrl-d"), Action::Delete);
 
-    // Inspector navigation
+    km.bind(key("r"), Action::InspectRuns);
+    km.bind(key("s"), Action::InspectSession);
+    km.bind(key("t"), Action::InspectStats);
+    km.bind(key("o"), Action::InspectOutput);
+
+    // Inspector navigation (scrolls text in the output view)
     km.bind(key("up"), Action::InspectPrevious);
     km.bind(key("down"), Action::InspectNext);
-    km.bind(key("pageup"), Action::InspectPrevious);
-    km.bind(key("pagedown"), Action::InspectNext);
+    km.bind(key("pageup"), Action::ScrollPageUp);
+    km.bind(key("pagedown"), Action::ScrollPageDown);
+    km.bind(key("home"), Action::ScrollToTop);
+    km.bind(key("end"), Action::ScrollToBottom);
 
     // For vim users, add j/k navigation
     if matches!(settings.keymap_mode, KeymapMode::VimNormal | KeymapMode::VimInsert) {
@@ -577,7 +579,7 @@ mod tests {
         assert_eq!(km.resolve(&key(k), &ctx), Some(expected));
     }
 
-    #[test]
+    #[rstest]
     fn emacs_enter_accept_true_uses_accept() {
         let mut settings = default_settings();
         settings.enter_accept = true;
@@ -619,7 +621,7 @@ mod tests {
         assert_eq!(km.resolve(&key(k), &ctx), Some(expected));
     }
 
-    #[test]
+    #[rstest]
     fn vim_normal_enter_accept_true_uses_accept() {
         let mut settings = default_settings();
         settings.enter_accept = true;
@@ -653,11 +655,17 @@ mod tests {
     // -- Inspector keymap tests --
 
     #[rstest]
+    #[case::runs("r", 0, 0, 0, 10, Action::InspectRuns)]
+    #[case::session("s", 0, 0, 0, 10, Action::InspectSession)]
+    #[case::stats("t", 0, 0, 0, 10, Action::InspectStats)]
+    #[case::output("o", 0, 0, 0, 10, Action::InspectOutput)]
     #[case::ctrl_d_deletes("ctrl-d", 0, 0, 0, 10, Action::Delete)]
     #[case::up_inspects_previous("up", 0, 0, 0, 10, Action::InspectPrevious)]
     #[case::down_inspects_next("down", 0, 0, 0, 10, Action::InspectNext)]
     #[case::esc_exits("esc", 0, 0, 0, 10, Action::Exit)]
-    // enter_accept=false → ReturnSelection
+    #[case::enter_opens_output("enter", 0, 0, 0, 10, Action::InspectOutput)]
+    #[case::pageup_scrolls("pageup", 0, 0, 0, 10, Action::ScrollPageUp)]
+    #[case::pagedown_scrolls("pagedown", 0, 0, 0, 10, Action::ScrollPageDown)]
     #[case::tab_returns_selection("tab", 0, 0, 0, 10, Action::ReturnSelection)]
     #[case::prefix_key_enters_prefix("ctrl-a", 0, 0, 0, 10, Action::EnterPrefixMode)]
     fn inspector_keymap_resolves(
@@ -694,7 +702,7 @@ mod tests {
 
     // -- KeymapSet tests --
 
-    #[test]
+    #[rstest]
     fn keymap_set_defaults_builds() {
         let settings = default_settings();
         let set = KeymapSet::defaults(&settings);
@@ -710,7 +718,7 @@ mod tests {
 
     // -- Settings-dependent behavior --
 
-    #[test]
+    #[rstest]
     fn custom_prefix_char() {
         let mut settings = default_settings();
         settings.keys.prefix = "x".to_string();
@@ -723,7 +731,7 @@ mod tests {
         assert_eq!(km.resolve(&key("ctrl-a"), &ctx), Some(Action::CursorStart));
     }
 
-    #[test]
+    #[rstest]
     fn ctrl_n_shortcuts_changes_numeric_modifier() {
         let mut settings = default_settings();
         settings.ctrl_n_shortcuts = true;
@@ -736,7 +744,7 @@ mod tests {
         assert_eq!(km.resolve(&key("alt-1"), &ctx), None);
     }
 
-    #[test]
+    #[rstest]
     fn default_alt_numeric_shortcuts() {
         let settings = default_settings();
         let km = default_emacs_keymap(&settings);
@@ -750,7 +758,7 @@ mod tests {
     // Config parsing and merging tests
     // -----------------------------------------------------------------------
 
-    #[test]
+    #[rstest]
     fn parse_simple_binding_config() {
         use atuin_client::settings::KeyBindingConfig;
         let cfg = KeyBindingConfig::Simple("accept".to_string());
@@ -760,7 +768,7 @@ mod tests {
         assert_eq!(binding.rules[0].action, Action::Accept);
     }
 
-    #[test]
+    #[rstest]
     fn parse_conditional_binding_config() {
         use atuin_client::settings::{KeyBindingConfig, KeyRuleConfig};
         let cfg = KeyBindingConfig::Rules(vec![
@@ -781,14 +789,14 @@ mod tests {
         assert_eq!(binding.rules[1].action, Action::CursorLeft);
     }
 
-    #[test]
+    #[rstest]
     fn parse_binding_config_invalid_action() {
         use atuin_client::settings::KeyBindingConfig;
         let cfg = KeyBindingConfig::Simple("not-a-real-action".to_string());
         assert!(super::parse_binding_config(&cfg).is_err());
     }
 
-    #[test]
+    #[rstest]
     fn parse_binding_config_invalid_condition() {
         use atuin_client::settings::{KeyBindingConfig, KeyRuleConfig};
         let cfg = KeyBindingConfig::Rules(vec![KeyRuleConfig {
@@ -798,7 +806,7 @@ mod tests {
         assert!(super::parse_binding_config(&cfg).is_err());
     }
 
-    #[test]
+    #[rstest]
     fn config_override_replaces_key() {
         use std::collections::HashMap;
 
@@ -819,7 +827,7 @@ mod tests {
         assert_eq!(set.emacs.resolve(&key("ctrl-c"), &ctx), Some(Action::Exit));
     }
 
-    #[test]
+    #[rstest]
     fn config_override_preserves_unoverridden_keys() {
         use std::collections::HashMap;
 
@@ -839,7 +847,7 @@ mod tests {
         assert_eq!(set.emacs.resolve(&key("enter"), &ctx), Some(Action::ReturnSelection));
     }
 
-    #[test]
+    #[rstest]
     fn config_conditional_override() {
         use std::collections::HashMap;
 
@@ -872,7 +880,7 @@ mod tests {
         assert_eq!(set.emacs.resolve(&key("up"), &ctx), Some(Action::SelectPrevious));
     }
 
-    #[test]
+    #[rstest]
     fn from_settings_with_empty_config_equals_defaults() {
         let settings = default_settings();
         let defaults = KeymapSet::defaults(&settings);
@@ -894,7 +902,7 @@ mod tests {
     // Phase 5: [keys] vs [keymap] backward compatibility
     // -----------------------------------------------------------------------
 
-    #[test]
+    #[rstest]
     fn keymap_overrides_ignore_keys_section() {
         use atuin_client::settings::KeyBindingConfig;
 
@@ -933,7 +941,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn keymap_present_resets_to_standard_keys_defaults() {
         use atuin_client::settings::KeyBindingConfig;
 
@@ -973,7 +981,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn keys_has_non_default_values_detection() {
         use atuin_client::settings::Keys;
 
@@ -989,7 +997,7 @@ mod tests {
         assert!(modified.has_non_default_values());
     }
 
-    #[test]
+    #[rstest]
     fn original_input_empty_condition_in_config() {
         use std::collections::HashMap;
 

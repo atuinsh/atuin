@@ -13,7 +13,7 @@ version.workspace = true
 
 [dependencies]
 atuin-client = { workspace = true }
-atuin-common = { workspace = true, features = ["os"] }
+atuin-common = { workspace = true, features = ["os", "proto"] }
 atuin-domain = { workspace = true }
 atuin-dotfiles = { workspace = true }
 atuin-history = { workspace = true }
@@ -21,10 +21,15 @@ dashmap = { workspace = true }
 derive_more = { workspace = true }
 easy-cast = { workspace = true }
 enum_dispatch = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
+sysinfo = { workspace = true }
 eyre = { workspace = true }
+fjall = { workspace = true }
 frizbee = { workspace = true }
 futures = { workspace = true }
 hyper-util = { workspace = true }
+itertools = { workspace = true }
 lasso = { workspace = true }
 parking_lot = { workspace = true }
 prost = { workspace = true }
@@ -37,7 +42,6 @@ tokio = { workspace = true }
 tokio-stream = { workspace = true, features = ["sync"] }
 tonic = { workspace = true }
 tonic-prost = { workspace = true }
-tonic-types = { workspace = true }
 tower = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -47,13 +51,13 @@ uuid = { workspace = true }
 listenfd = { workspace = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }
-rstest = { workspace = true }
+atuin-common = { workspace = true, features = ["os", "sqlite"] }
 proptest = { workspace = true }
+rstest = { workspace = true }
+tempfile = { workspace = true }
 
 [build-dependencies]
 protox = { workspace = true }
-tonic-build = { workspace = true }
 tonic-prost-build = { workspace = true }
 
 [lints]

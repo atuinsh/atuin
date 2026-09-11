@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use atuin_client::database::{Context, Sqlite, current_context};
 use atuin_client::history::store::HistoryStore;
-use atuin_client::history::{History, HistoryId, HistoryStats};
+use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::{
     CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewStrategy, RequestedSearchMode,
     SearchMode, Settings, UiColumn,
@@ -38,6 +38,9 @@ use windows_sys::Win32::System::Console::{GetConsoleOutputCP, SetConsoleOutputCP
 use super::cursor::Cursor;
 use super::engines::{AnySearchEngine, SearchEngine, SearchState};
 use super::history_list::{HistoryList, ListState};
+use super::inspector::Stats as InspectorStats;
+use super::inspector::bindings::Bindings;
+use super::inspector::browser::{Browser, View as InspectorView};
 use crate::VERSION;
 use crate::command::client::search::engines;
 use crate::command::client::search::history_list::HistoryHighlighter;
@@ -51,6 +54,7 @@ pub enum InputAction {
     AcceptInspecting,
     Copy(usize),
     Delete(usize),
+    DeleteInspecting,
     DeleteAllMatching(usize),
     ReturnOriginal,
     ReturnQuery,
@@ -59,30 +63,34 @@ pub enum InputAction {
     SwitchContext(Option<usize>),
 }
 
-#[derive(Clone)]
+#[derive(Default)]
 pub struct InspectingState {
     current: Option<HistoryId>,
     next: Option<HistoryId>,
     previous: Option<HistoryId>,
+    browser: Browser,
+    bindings: Bindings,
 }
 
 impl InspectingState {
     pub fn move_to_previous(&mut self) {
-        let previous = self.previous;
-        self.reset();
-        self.current = previous;
+        if self.browser.view == InspectorView::Output {
+            self.browser.scroll_output(false, 1);
+        } else if let Some(previous) = self.previous {
+            self.current = Some(previous);
+        }
     }
 
     pub fn move_to_next(&mut self) {
-        let next = self.next;
-        self.reset();
-        self.current = next;
+        if self.browser.view == InspectorView::Output {
+            self.browser.scroll_output(true, 1);
+        } else if let Some(next) = self.next {
+            self.current = Some(next);
+        }
     }
 
     pub fn reset(&mut self) {
-        self.current = None;
-        self.next = None;
-        self.previous = None;
+        *self = Self::default();
     }
 }
 
@@ -209,11 +217,11 @@ impl State {
             Err(error) => return Err(error),
         };
 
-        self.inspecting_state = InspectingState {
-            current: None,
-            next: None,
-            previous: None,
-        };
+        // Search results are deduplicated; the inspected occurrence need not be among them.
+        // Context/filter changes while inspecting must not discard that independent selection.
+        if self.tab_index == 0 {
+            self.inspecting_state.reset();
+        }
         self.results_state.select(0);
         self.results_len = results.len();
 
@@ -228,28 +236,26 @@ impl State {
     fn handle_input(&mut self, settings: &Settings, input: &Event) -> InputAction {
         match input {
             Event::Key(k) => self.handle_key_input(settings, k),
-            Event::Mouse(m) => self.handle_mouse_input(*m, settings.invert),
+            Event::Mouse(m) => self.handle_mouse_input(*m, settings),
             Event::Paste(d) => self.handle_paste_input(d),
             _ => InputAction::Continue,
         }
     }
 
-    fn handle_mouse_input(&mut self, input: MouseEvent, inverted: bool) -> InputAction {
-        match (input.kind, inverted) {
-            (event::MouseEventKind::ScrollDown, false)
-            | (event::MouseEventKind::ScrollUp, true) => {
-                self.scroll_down(1);
-            }
-            (event::MouseEventKind::ScrollDown, true)
-            | (event::MouseEventKind::ScrollUp, false) => {
-                self.scroll_up(1);
-            }
-            _ => {}
-        }
-        InputAction::Continue
+    fn handle_mouse_input(&mut self, input: MouseEvent, settings: &Settings) -> InputAction {
+        use super::keybindings::Action;
+        let action = match input.kind {
+            event::MouseEventKind::ScrollDown => Action::SelectNext,
+            event::MouseEventKind::ScrollUp => Action::SelectPrevious,
+            _ => return InputAction::Continue,
+        };
+        self.execute_action(&action, settings)
     }
 
     fn handle_paste_input(&mut self, input: &str) -> InputAction {
+        if self.tab_index == 1 {
+            return InputAction::Continue;
+        }
         for i in input.chars() {
             self.search.input.insert(i);
         }
@@ -333,10 +339,31 @@ impl State {
             )
     }
 
+    fn eval_context(&self) -> super::keybindings::EvalContext {
+        let (selected_index, results_len) = if self.tab_index == 1 {
+            if self.inspecting_state.current.is_some() {
+                self.inspecting_state.browser.list_position()
+            } else {
+                (0, 0)
+            }
+        } else {
+            (self.results_state.selected(), self.results_len)
+        };
+        super::keybindings::EvalContext {
+            cursor_position: self.search.input.position(),
+            input_width: UnicodeWidthStr::width(self.search.input.as_str()),
+            input_byte_len: self.search.input.as_str().len(),
+            selected_index,
+            results_len,
+            original_input_empty: self.original_input_empty,
+            has_context: self.search.custom_context.is_some(),
+        }
+    }
+
     #[must_use]
     fn handle_key_input(&mut self, settings: &Settings, input: &KeyEvent) -> InputAction {
+        use super::keybindings::Action;
         use super::keybindings::key::{KeyCodeValue, KeyInput, SingleKey};
-        use super::keybindings::{Action, EvalContext};
 
         // Skip release events
         if input.kind == event::KeyEventKind::Release {
@@ -346,16 +373,7 @@ impl State {
         // Reset switched_search_mode at start of each key event
         self.switched_search_mode = false;
 
-        // Build evaluation context from current state
-        let ctx = EvalContext {
-            cursor_position: self.search.input.position(),
-            input_width: UnicodeWidthStr::width(self.search.input.as_str()),
-            input_byte_len: self.search.input.as_str().len(),
-            selected_index: self.results_state.selected(),
-            results_len: self.results_len,
-            original_input_empty: self.original_input_empty,
-            has_context: self.search.custom_context.is_some(),
-        };
+        let ctx = self.eval_context();
 
         // Convert KeyEvent to SingleKey
         let Some(single) = SingleKey::from_event(input) else {
@@ -466,6 +484,59 @@ impl State {
         settings: &Settings,
     ) -> InputAction {
         use crate::command::client::search::keybindings::Action;
+
+        if self.tab_index == 1 {
+            match action {
+                Action::Exit => {
+                    if self.inspecting_state.browser.view == InspectorView::Output {
+                        self.inspecting_state.browser.back_from_output();
+                    } else {
+                        self.tab_index = 0;
+                    }
+                    return InputAction::Redraw;
+                }
+                Action::SelectPrevious | Action::SelectNext => {
+                    if *action == Action::SelectNext {
+                        self.inspecting_state.move_to_next();
+                    } else {
+                        self.inspecting_state.move_to_previous();
+                    }
+                    return InputAction::Redraw;
+                }
+                Action::ScrollPageUp
+                | Action::ScrollPageDown
+                | Action::ScrollHalfPageUp
+                | Action::ScrollHalfPageDown => {
+                    let next =
+                        matches!(action, Action::ScrollPageDown | Action::ScrollHalfPageDown);
+                    let half =
+                        matches!(action, Action::ScrollHalfPageUp | Action::ScrollHalfPageDown);
+                    if self.inspecting_state.browser.view == InspectorView::Output {
+                        self.inspecting_state.browser.scroll_output_page(next, half);
+                    } else if next {
+                        self.inspecting_state.move_to_next();
+                    } else {
+                        self.inspecting_state.move_to_previous();
+                    }
+                    return InputAction::Redraw;
+                }
+                Action::ScrollToScreenTop
+                | Action::ScrollToScreenMiddle
+                | Action::ScrollToScreenBottom => {
+                    // Screen-position jumps are search-only; don't move the hidden search list.
+                    return InputAction::Continue;
+                }
+                Action::ScrollToTop | Action::ScrollToBottom => {
+                    if self.inspecting_state.browser.view == InspectorView::Output {
+                        self.inspecting_state
+                            .browser
+                            .scroll_output_edge(matches!(action, Action::ScrollToBottom));
+                    }
+                    return InputAction::Redraw;
+                }
+                _ => {}
+            }
+        }
 
         match action {
             // -- Cursor movement --
@@ -652,10 +723,10 @@ impl State {
 
             // -- Commands --
             Action::Accept => {
+                self.accept = true;
                 if self.tab_index == 1 {
                     return InputAction::AcceptInspecting;
                 }
-                self.accept = true;
                 InputAction::Accept(self.results_state.selected())
             }
             Action::AcceptNth(n) => {
@@ -672,6 +743,7 @@ impl State {
                 InputAction::Accept(self.results_state.selected() + usize::conv(*n))
             }
             Action::Copy => InputAction::Copy(self.results_state.selected()),
+            Action::Delete if self.tab_index == 1 => InputAction::DeleteInspecting,
             Action::Delete => InputAction::Delete(self.results_state.selected()),
             Action::DeleteAll => InputAction::DeleteAllMatching(self.results_state.selected()),
             Action::ReturnOriginal => InputAction::ReturnOriginal,
@@ -694,7 +766,7 @@ impl State {
             Action::ClearContext => InputAction::SwitchContext(None),
             Action::ToggleTab => {
                 self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
-                InputAction::Continue
+                InputAction::Redraw
             }
 
             // -- Mode changes --
@@ -750,6 +822,19 @@ impl State {
             }
             Action::InspectNext => {
                 self.inspecting_state.move_to_next();
+                InputAction::Redraw
+            }
+            Action::InspectRuns
+            | Action::InspectSession
+            | Action::InspectStats
+            | Action::InspectOutput => {
+                let view = match action {
+                    Action::InspectSession => InspectorView::Session,
+                    Action::InspectStats => InspectorView::Stats,
+                    Action::InspectOutput => InspectorView::Output,
+                    _ => InspectorView::Runs,
+                };
+                self.inspecting_state.browser.select_view(view);
                 InputAction::Redraw
             }
 
@@ -834,7 +919,7 @@ impl State {
         &mut self,
         f: &mut Frame,
         results: &[History],
-        stats: Option<HistoryStats>,
+        stats: Option<&InspectorStats>,
         inspecting: Option<&History>,
         settings: &Settings,
         theme: &Theme,
@@ -855,11 +940,20 @@ impl State {
         f: &mut Frame,
         area: Rect,
         results: &[History],
-        stats: Option<HistoryStats>,
+        stats: Option<&InspectorStats>,
         inspecting: Option<&History>,
         settings: &Settings,
         theme: &Theme,
     ) {
+        let bindings = &self.inspecting_state.bindings;
+        // Output is a focused reader, not another panel beneath the search chrome.
+        if self.tab_index == 1
+            && self.inspecting_state.browser.view == InspectorView::Output
+            && inspecting.or_else(|| results.get(self.results_state.selected())).is_some()
+        {
+            self.inspecting_state.browser.draw(f, area, theme, bindings);
+            return;
+        }
         let compactness = to_compactness(f, settings);
         let invert = settings.invert;
         let border_size = match compactness {
@@ -1051,7 +1145,7 @@ impl State {
             }
 
             1 => {
-                if results.is_empty() {
+                if results.is_empty() && inspecting.is_none() {
                     let message = Paragraph::new("Nothing to inspect")
                         .block(
                             Block::new()
@@ -1063,27 +1157,31 @@ impl State {
                         .alignment(Alignment::Center);
                     f.render_widget(message, results_list_chunk);
                 } else {
-                    let inspecting = match inspecting {
-                        Some(inspecting) => inspecting,
-                        None => &results[self.results_state.selected()],
-                    };
-                    super::inspector::draw(
+                    let browser = &mut self.inspecting_state.browser;
+                    let chunk = super::inspector::browser::draw_views(
                         f,
                         results_list_chunk,
-                        inspecting,
-                        &stats.expect("Drawing inspector, but no stats"),
-                        settings,
+                        browser.view,
                         theme,
-                        settings.timezone,
+                        bindings,
                     );
+                    let chunk = browser.draw_command(f, chunk, theme);
+                    if browser.view == InspectorView::Stats {
+                        if let Some(stats) = stats {
+                            super::inspector::draw(f, chunk, stats, theme);
+                        }
+                    } else {
+                        browser.draw(f, chunk, theme, bindings);
+                    }
                 }
 
-                // HACK: I'm following up with abstracting this into the UI container, with a
-                // sub-widget for search + for inspector
-                let feedback = Paragraph::new(
-                    "The inspector is new - please give feedback (good, or bad) at https://forum.atuin.sh",
+                let guide = super::inspector::browser::input_guide(
+                    self.inspecting_state.browser.view,
+                    input_chunk.width,
+                    theme,
+                    bindings,
                 );
-                f.render_widget(feedback, input_chunk);
+                f.render_widget(Paragraph::new(guide), input_chunk);
 
                 return;
             }
@@ -1194,16 +1292,8 @@ impl State {
                 Span::raw(": inspect"),
             ]))),
 
-            1 => Paragraph::new(Text::from(Line::from(vec![
-                Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": exit"),
-                Span::raw(", "),
-                Span::styled("<ctrl-o>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": search"),
-                Span::raw(", "),
-                Span::styled("<ctrl-d>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": delete"),
-            ]))),
+            // The inspector has its own contextual guide at the bottom.
+            1 => Paragraph::default(),
 
             _ => unreachable!("invalid tab index"),
         }
@@ -1490,9 +1580,10 @@ struct SavedScreen {
     rows_data: Vec<Vec<u8>>,
 }
 
-/// Connect to atuin pty-proxy's Unix socket and fetch the current screen state.
+/// Fetch the current screen state from the given PTY proxy socket.
 ///
 /// The wire format is:
+///
 /// ```text
 /// [rows: u16 BE][cols: u16 BE][cursor_row: u16 BE][cursor_col: u16 BE]
 /// [row_0_len: u32 BE][row_0_bytes...]
@@ -1500,7 +1591,7 @@ struct SavedScreen {
 /// ...
 /// ```
 #[cfg(unix)]
-fn fetch_screen_state(socket_path: &str) -> Option<SavedScreen> {
+fn fetch_screen_state(socket_path: &std::path::Path) -> Option<SavedScreen> {
     use std::os::unix::net::UnixStream;
 
     let mut stream = UnixStream::connect(socket_path).ok()?;
@@ -1736,9 +1827,11 @@ pub async fn history(
     // fetch the screen state and render as a centered overlay.
     #[cfg(unix)]
     let (saved_screen, popup_rect, popup_scroll_offset) = {
-        let socket_path = std::env::var("ATUIN_PTY_PROXY_SOCKET")
-            .or_else(|_| std::env::var("ATUIN_HEX_SOCKET"))
-            .ok();
+        #[cfg(feature = "pty-proxy")]
+        let socket_path = atuin_pty_proxy::parent_socket_path();
+        #[cfg(not(feature = "pty-proxy"))]
+        let socket_path = None::<std::path::PathBuf>;
+
         if let Some(ref path) = socket_path
             && inline_height > 0
         {
@@ -1852,11 +1945,7 @@ pub async fn history(
         update_needed: None,
         switched_search_mode: false,
         tab_index: 0,
-        inspecting_state: InspectingState {
-            current: None,
-            next: None,
-            previous: None,
-        },
+        inspecting_state: InspectingState::default(),
         keymaps: KeymapSet::from_settings(settings),
         search: SearchState {
             input,
@@ -1900,15 +1989,24 @@ pub async fn history(
 
     let mut results = app.query_results(&mut db, settings).await?;
 
-    let mut stats: Option<HistoryStats> = None;
-    // The id of the history entry `stats` was computed for, so the render loop
-    // only hits the database when the inspected entry actually changes.
-    let mut stats_for: Option<HistoryId> = None;
+    let mut stats: Option<InspectorStats> = None;
+    // Aggregates depend on the command, not the selected occurrence.
+    let mut stats_for: Option<String> = None;
     let mut inspecting: Option<History> = None;
     let accept;
     let result = 'render: loop {
+        if app.tab_index == 1 {
+            let context = app.eval_context();
+            app.inspecting_state.bindings.update(&app.keymaps.inspector, &context);
+            if let Some(selected) =
+                inspecting.as_ref().or_else(|| results.get(app.results_state.selected()))
+            {
+                app.inspecting_state.browser.prepare(selected, settings, theme);
+            }
+        }
+
         terminal.draw(|f| {
-            app.draw(f, &results, stats.clone(), inspecting.as_ref(), settings, theme, popup_mode);
+            app.draw(f, &results, stats.as_ref(), inspecting.as_ref(), settings, theme, popup_mode);
         })?;
 
         let initial_input = app.search.input.as_str().to_owned();
@@ -1924,6 +2022,18 @@ pub async fn history(
                     loop {
                         match app.handle_input(settings, &event::read()?) {
                             InputAction::Continue => {},
+                            InputAction::DeleteInspecting => {
+                                if let Some(id) = app.inspecting_state.current {
+                                    if let Some(entry) = db.load(id).await? {
+                                        crate::command::client::history::delete_history_entries(
+                                            settings, history_store, &db, [entry],
+                                        ).await?;
+                                    }
+                                    app.tab_index = 0;
+                                    results = app.query_results(&mut db, settings).await?;
+                                    break;
+                                }
+                            },
                             InputAction::Delete(index) => {
                                 if results.is_empty() {
                                     break;
@@ -1952,7 +2062,12 @@ pub async fn history(
                                     break;
                                 }
 
-                                let command = results[index].command.clone();
+                                let command = if app.tab_index == 1 {
+                                    let Some(entry) = inspecting.as_ref() else { break; };
+                                    entry.command.clone()
+                                } else {
+                                    results[index].command.clone()
+                                };
 
                                 // Remove matching entries from the visible results
                                 results.retain(|e| e.command != command);
@@ -1980,7 +2095,10 @@ pub async fn history(
                                 app.tab_index = 0;
                             },
                             InputAction::SwitchContext(index) => {
-                                if let Some(index) = index && let Some(entry) = results.get(index) {
+                                let entry = index.and_then(|index| {
+                                    if app.tab_index == 1 { inspecting.as_ref() } else { results.get(index) }
+                                });
+                                if let Some(entry) = entry {
                                     app.search.custom_context = Some(entry.id);
                                     app.search.context = Context::from_history(entry);
                                     app.search.filter_mode = FilterMode::Session;
@@ -1991,14 +2109,16 @@ pub async fn history(
                                     app.search.context = initial_context.clone();
                                     app.search.filter_mode = default_filter_mode;
                                 }
+                                // Apply the context before consuming a queued accept/navigation key.
+                                break;
                             },
                             InputAction::Redraw => {
-                                if !popup_mode {
+                                // Inspector navigation uses ratatui's diff; clearing on every scroll flickers.
+                                if !popup_mode && app.tab_index != 1 {
                                     terminal.clear()?;
                                 }
-                                terminal.draw(|f| {
-                                    app.draw(f, &results, stats.clone(), inspecting.as_ref(), settings, theme, popup_mode);
-                                })?;
+                                // Refresh the selected occurrence before drawing or accepting another key.
+                                break;
                             },
                             r => {
                                 accept = app.accept;
@@ -2041,11 +2161,11 @@ pub async fn history(
             app.results_state.select(pos);
         }
 
-        let inspecting_id = app.inspecting_state.clone().current;
+        let inspecting_id = app.inspecting_state.current;
         // If inspecting ID is not the current inspecting History, update it.
         match inspecting_id {
             Some(inspecting_id) => {
-                if inspecting.is_none() || inspecting_id != inspecting.clone().unwrap().id {
+                if inspecting.as_ref().is_none_or(|entry| inspecting_id != entry.id) {
                     inspecting = db.load(inspecting_id).await?;
                 }
             }
@@ -2054,33 +2174,28 @@ pub async fn history(
             }
         }
 
+        if app.tab_index == 1 && inspecting.is_none() {
+            inspecting = results.get(app.results_state.selected()).cloned();
+        }
         stats = if app.tab_index == 0 {
             stats_for = None;
             None
-        } else if !results.is_empty() {
-            // If we have stats, then we can indicate next available IDs. This avoids passing
-            // around a database object, or a full stats object.
-            let selected = match inspecting.clone() {
-                Some(insp) => insp,
-                None => results[app.results_state.selected()].clone(),
-            };
-            if stats_for.as_ref() == Some(&selected.id) {
-                // Already computed for this entry - the render loop iterates on every
-                // input event and poll timeout, and stats() is several queries.
-                stats
+        } else if let Some(selected) = inspecting.as_ref() {
+            app.inspecting_state.current = Some(selected.id);
+            if app.inspecting_state.browser.view == InspectorView::Stats {
+                app.inspecting_state.previous = None;
+                app.inspecting_state.next = None;
+                if stats_for.as_deref() == Some(selected.command.as_str()) {
+                    stats
+                } else {
+                    stats_for = Some(selected.command.clone());
+                    Some(db.stats(selected).await?.into())
+                }
             } else {
-                let stats = db.stats(&selected).await?;
-                stats_for = Some(selected.id);
-                app.inspecting_state.current = Some(selected.id);
-                app.inspecting_state.previous = match stats.previous.clone() {
-                    Some(p) => Some(p.id),
-                    _ => None,
-                };
-                app.inspecting_state.next = match stats.next.clone() {
-                    Some(p) => Some(p.id),
-                    _ => None,
-                };
-                Some(stats)
+                (app.inspecting_state.previous, app.inspecting_state.next) =
+                    app.inspecting_state.browser.refresh(&db, selected, settings).await?;
+                stats_for = None;
+                None
             }
         } else {
             stats_for = None;
@@ -2143,7 +2258,11 @@ pub async fn history(
         }
         InputAction::ReturnOriginal => Ok(String::new()),
         InputAction::Copy(index) => {
-            let cmd = results.swap_remove(index).command;
+            let cmd = if app.tab_index == 1 {
+                inspecting.map(|entry| entry.command).unwrap_or_default()
+            } else {
+                results.swap_remove(index).command
+            };
             if let Err(e) = set_clipboard(cmd) {
                 tracing::warn!(?e, "failed to copy to clipboard");
             }
@@ -2158,6 +2277,7 @@ pub async fn history(
         InputAction::Continue
         | InputAction::Redraw
         | InputAction::Delete(_)
+        | InputAction::DeleteInspecting
         | InputAction::DeleteAllMatching(_)
         | InputAction::SwitchContext(_) => {
             unreachable!("should have been handled!")
@@ -2198,7 +2318,9 @@ mod tests {
     use rstest::{fixture, rstest};
     use time::OffsetDateTime;
 
-    use super::{Compactness, InputAction, InspectingState, KeymapSet, SearchModeState, State};
+    use super::{
+        Compactness, InputAction, InspectingState, InspectorView, KeymapSet, SearchModeState, State,
+    };
     use crate::command::client::search::engines::{self, SearchState};
     use crate::command::client::search::history_list::ListState;
     use crate::command::client::search::keybindings::Action;
@@ -2235,11 +2357,7 @@ mod tests {
             tab_index: 0,
             pending_vim_key: None,
             original_input_empty: false,
-            inspecting_state: InspectingState {
-                current: None,
-                next: None,
-                previous: None,
-            },
+            inspecting_state: InspectingState::default(),
             keymaps: KeymapSet::defaults(&Settings::utc()),
             search: SearchState {
                 input: input.to_string().into(),
@@ -2767,6 +2885,230 @@ mod tests {
         state.tab_index = 1;
         let result = state.execute_action(&Action::Accept, &settings);
         assert!(matches!(result, super::InputAction::AcceptInspecting));
+        assert!(state.accept);
+    }
+
+    #[rstest]
+    fn inspector_enter_opens_output_and_escape_goes_back(
+        #[with(KeymapMode::Emacs, 100, 5)] mut state: State,
+        mut settings: Settings,
+    ) {
+        use ratatui::crossterm::event;
+
+        use crate::command::client::search::keybindings::Action;
+        settings.enter_accept = true;
+        state.keymaps = KeymapSet::from_settings(&settings);
+        state.tab_index = 1;
+        state.inspecting_state.browser.select_view(super::InspectorView::Session);
+        let event = event::Event::Key(event::KeyEvent::new(
+            event::KeyCode::Enter,
+            event::KeyModifiers::NONE,
+        ));
+        assert!(matches!(state.handle_input(&settings, &event), InputAction::Redraw));
+        assert_eq!(state.inspecting_state.browser.view, super::InspectorView::Output);
+        assert!(!state.accept, "Enter in inspector must not execute the command");
+        let _ = state.execute_action(&Action::ScrollPageDown, &settings);
+        assert_eq!(state.results_state.selected(), 5);
+        let _ = state.execute_action(&Action::Exit, &settings);
+        assert_eq!(state.inspecting_state.browser.view, super::InspectorView::Session);
+        assert_eq!(state.tab_index, 1);
+        let _ = state.execute_action(&Action::Exit, &settings);
+        assert_eq!(state.tab_index, 0);
+    }
+
+    #[fixture]
+    async fn inspector_corpus(
+        #[default(3usize)] count: usize,
+        #[default(false)] tied: bool,
+    ) -> (atuin_client::database::Sqlite, Vec<History>) {
+        let db = atuin_client::database::Sqlite::in_memory(std::time::Duration::from_secs(2))
+            .await
+            .unwrap();
+        let mut entries = Vec::new();
+        for i in 0..count {
+            let mut entry: History = History::capture()
+                .timestamp(
+                    OffsetDateTime::UNIX_EPOCH
+                        + time::Duration::seconds(if tied {
+                            0
+                        } else {
+                            i64::try_from(i).unwrap()
+                        }),
+                )
+                .command("echo FIRST")
+                .cwd("/tmp")
+                .build()
+                .into();
+            entry.session = "inspector-test".into();
+            entry.cwd = format!("/tmp/{i}");
+            db.save(&entry).await.unwrap();
+            entries.push(entry);
+        }
+        entries.sort_by_key(|entry| (entry.timestamp, entry.id.to_string()));
+        (db, entries)
+    }
+
+    async fn refresh_inspector(
+        state: &mut State,
+        db: &atuin_client::database::Sqlite,
+        settings: &Settings,
+    ) {
+        if matches!(
+            state.inspecting_state.browser.view,
+            InspectorView::Output | InspectorView::Stats
+        ) {
+            state.inspecting_state.previous = None;
+            state.inspecting_state.next = None;
+            return;
+        }
+        let selected = db.load(state.inspecting_state.current.unwrap()).await.unwrap().unwrap();
+        (state.inspecting_state.previous, state.inspecting_state.next) =
+            state.inspecting_state.browser.refresh(db, &selected, settings).await.unwrap();
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn context_refresh_preserves_an_occurrence_missing_from_search(
+        mut state: State,
+        settings: Settings,
+        #[future] inspector_corpus: (atuin_client::database::Sqlite, Vec<History>),
+    ) {
+        let (mut db, entries) = inspector_corpus.await;
+        let mut third = entries[2].clone();
+        third.id = atuin_client::history::HistoryId::new(atuin_common::utils::uuid_v7());
+        third.command = "echo THIRD".into();
+        third.timestamp += time::Duration::seconds(1);
+        db.save(&third).await.unwrap();
+        state.tab_index = 1;
+        state.inspecting_state.current = Some(entries[0].id);
+        state.inspecting_state.browser.select_view(super::InspectorView::Session);
+        state.search.custom_context = Some(entries[0].id);
+        state.search.context = Context::from_history(&entries[0]);
+        state.search.filter_mode = FilterMode::Session;
+        let results = state.query_results(&mut db, &settings).await.unwrap();
+        assert!(
+            !results.iter().any(|entry| entry.id == entries[0].id),
+            "older occurrence should be deduplicated"
+        );
+        refresh_inspector(&mut state, &db, &settings).await;
+        assert_eq!(state.inspecting_state.current, Some(entries[0].id));
+        assert_eq!(state.inspecting_state.browser.view, super::InspectorView::Session);
+        assert!(matches!(
+            state.execute_action(&Action::ReturnSelection, &settings),
+            InputAction::AcceptInspecting
+        ));
+        // Even a filter with no search results must not replace the inspected occurrence.
+        state.search.input = "not in this history".to_owned().into();
+        assert!(state.query_results(&mut db, &settings).await.unwrap().is_empty());
+        assert_eq!(state.inspecting_state.current, Some(entries[0].id));
+        // Ordinary searches still reset the inspector.
+        state.tab_index = 0;
+        state.query_results(&mut db, &settings).await.unwrap();
+        assert!(state.inspecting_state.current.is_none());
+    }
+
+    #[rstest]
+    #[case(InspectorView::Runs)]
+    #[case(InspectorView::Session)]
+    #[tokio::test]
+    async fn conditional_navigation_crosses_windows_in_both_directions(
+        #[with(KeymapMode::Emacs, 1, 0)] mut state: State,
+        settings: Settings,
+        #[case] view: super::InspectorView,
+        #[with(250, true)]
+        #[future]
+        inspector_corpus: (atuin_client::database::Sqlite, Vec<History>),
+    ) {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        use crate::command::client::search::keybindings::{ConditionExpr, KeyInput, KeyRule};
+        let (db, entries) = inspector_corpus.await;
+        state.tab_index = 1;
+        state.inspecting_state.browser.select_view(view);
+        state.inspecting_state.current = Some(entries.last().unwrap().id);
+        for (key, condition, action) in [
+            ("down", "has-results && !list-at-end", Action::SelectNext),
+            ("up", "!list-at-start", Action::SelectPrevious),
+        ] {
+            state.keymaps.inspector.bind_conditional(KeyInput::parse(key).unwrap(), vec![
+                KeyRule::when(ConditionExpr::parse(condition).unwrap(), action),
+            ]);
+        }
+        refresh_inspector(&mut state, &db, &settings).await;
+        for (key, indices) in [
+            (KeyCode::Down, (0..entries.len()).rev().collect::<Vec<_>>()),
+            (KeyCode::Up, (0..entries.len()).collect()),
+        ] {
+            for index in indices {
+                assert_eq!(state.inspecting_state.current, Some(entries[index].id));
+                let _ = state.handle_key_input(&settings, &KeyEvent::new(key, KeyModifiers::NONE));
+                refresh_inspector(&mut state, &db, &settings).await;
+            }
+        }
+        assert_eq!(state.inspecting_state.current, Some(entries.last().unwrap().id));
+        assert_eq!(state.results_state.selected(), 0);
+        assert_eq!(state.inspecting_state.browser.view, view);
+    }
+
+    #[rstest]
+    #[case(InspectorView::Runs)]
+    #[case(InspectorView::Session)]
+    #[case(InspectorView::Output)]
+    #[case(InspectorView::Stats)]
+    #[tokio::test]
+    async fn mouse_navigation_stays_in_the_inspector(
+        #[with(KeymapMode::Emacs, 100, 5)] mut state: State,
+        mut settings: Settings,
+        #[case] view: super::InspectorView,
+        #[values(false, true)] invert: bool,
+        #[future] inspector_corpus: (atuin_client::database::Sqlite, Vec<History>),
+    ) {
+        use ratatui::crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
+        let (db, entries) = inspector_corpus.await;
+        settings.invert = invert;
+        state.tab_index = 1;
+        state.inspecting_state.current = Some(entries[1].id);
+        state.inspecting_state.browser.select_view(view);
+        refresh_inspector(&mut state, &db, &settings).await;
+        for (kind, expected) in
+            [(MouseEventKind::ScrollDown, entries[0].id), (MouseEventKind::ScrollUp, entries[1].id)]
+        {
+            let event = Event::Mouse(MouseEvent {
+                kind,
+                column: 5,
+                row: 10,
+                modifiers: KeyModifiers::NONE,
+            });
+            assert!(matches!(state.handle_input(&settings, &event), InputAction::Redraw));
+            refresh_inspector(&mut state, &db, &settings).await;
+            let expected = if matches!(view, InspectorView::Output | InspectorView::Stats) {
+                entries[1].id
+            } else {
+                expected
+            };
+            assert_eq!(state.inspecting_state.current, Some(expected));
+            assert_eq!(state.results_state.selected(), 5);
+            assert_eq!(state.inspecting_state.browser.view, view);
+        }
+        let _ = state.execute_action(&Action::ScrollToScreenTop, &settings);
+        assert_eq!(state.inspecting_state.current, Some(entries[1].id));
+        assert_eq!(state.results_state.selected(), 5);
+        let input = state.search.input.as_str().to_owned();
+        let _ = state.handle_input(&settings, &Event::Paste("unwanted query".into()));
+        assert_eq!(state.search.input.as_str(), input);
+    }
+
+    #[rstest]
+    fn inspector_delete_targets_the_inspected_occurrence(
+        #[with(KeymapMode::Emacs, 100, 5)] mut state: State,
+        settings: Settings,
+    ) {
+        use crate::command::client::search::keybindings::Action;
+        state.tab_index = 1;
+        assert!(matches!(
+            state.execute_action(&Action::Delete, &settings),
+            super::InputAction::DeleteInspecting
+        ));
     }
 
     #[rstest]
@@ -2784,6 +3126,7 @@ mod tests {
     }
 
     #[cfg(all(feature = "daemon", unix))]
+    #[rstest]
     #[tokio::test]
     async fn unavailable_daemon_fuzzy_retries_with_local_fuzzy() {
         use atuin_client::database::Sqlite;

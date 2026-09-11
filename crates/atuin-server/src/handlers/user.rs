@@ -20,7 +20,7 @@ use tracing::{debug, error, info, instrument, warn};
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::db::DbError;
-use crate::db::models::{NewSession, NewUser};
+use crate::db::models::NewUser;
 use crate::router::{AppState, UserAuth};
 
 pub fn verify_str(hash: &str, password: &str) -> bool {
@@ -109,26 +109,22 @@ pub async fn register(
         password: hashed,
     };
 
+    // 24 bytes encoded as base64
+    let token = crypto_random_string::<24>();
+
+    // Create the user and their initial session atomically, so a failure can't leave an
+    // account that exists but can never be logged into (or a dangling session).
     let db = &state.0.database;
-    let user_id = match db.add_user(&new_user).await {
+    let user_id = match db.add_user_with_session(&new_user, &token).await {
         Ok(id) => id,
         Err(e) => {
-            error!("failed to add user: {}", e);
-            return Err(
-                ErrorResponse::reply("failed to add user").with_status(StatusCode::BAD_REQUEST)
-            );
+            error!("failed to register user: {}", e);
+            return Err(ErrorResponse::reply("failed to register user")
+                .with_status(StatusCode::BAD_REQUEST));
         }
     };
 
     info!(user.id = user_id, "registered new user");
-
-    // 24 bytes encoded as base64
-    let token = crypto_random_string::<24>();
-
-    let new_session = NewSession {
-        user_id,
-        token: (&token).into(),
-    };
 
     if let Some(url) = &state.settings.register_webhook_url {
         // Could probs be run on another thread, but it's ok atm
@@ -142,17 +138,10 @@ pub async fn register(
 
     counter!("atuin_users_registered").increment(1);
 
-    match db.add_session(&new_session).await {
-        Ok(_) => Ok(Json(RegisterResponse {
-            session: token,
-            auth: Some("cli".into()),
-        })),
-        Err(e) => {
-            error!("failed to add session: {}", e);
-            Err(ErrorResponse::reply("failed to register user")
-                .with_status(StatusCode::BAD_REQUEST))
-        }
-    }
+    Ok(Json(RegisterResponse {
+        session: token,
+        auth: Some("cli".into()),
+    }))
 }
 
 #[instrument(skip_all, err(level = "warn"), fields(user.id = user.id, user.username = user.username.as_str()))]
