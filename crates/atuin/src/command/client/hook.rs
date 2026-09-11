@@ -21,6 +21,7 @@ use event::HookEvent;
 const HOOK_EVENT_TYPES: &[&str] = &["PreToolUse", "PostToolUse", "PostToolUseFailure"];
 const PI_EXTENSION_SOURCE: &str = include_str!("../../../contrib/pi/atuin.ts");
 const OPENCODE_PLUGIN_SOURCE: &str = include_str!("../../../contrib/opencode/atuin.ts");
+const OPENCODE_V2_PLUGIN_SOURCE: &str = include_str!("../../../contrib/opencode/atuin-v2.ts");
 
 enum InstallKind {
     JsonHooks {
@@ -103,7 +104,20 @@ const OPENCODE: AgentSpec = AgentSpec {
     },
 };
 
-const AGENTS: &[&AgentSpec] = &[&CLAUDE_CODE, &CODEX, &OPENCODE, &PI];
+// The loader contracts are incompatible. Keep V1 as the default and make V2
+// an explicit choice, replacing the same installed file rather than loading both.
+const OPENCODE_V2: AgentSpec = AgentSpec {
+    aliases: &["opencode-v2"],
+    actor_name: "opencode",
+    path_root: PathRoot::XdgConfig,
+    install_kind: InstallKind::Extension {
+        extension_path: &["opencode", "plugins", "atuin.ts"],
+        source: OPENCODE_V2_PLUGIN_SOURCE,
+        reload_hint: "Restart opencode to load the V2 plugin. This replaces the V1 plugin.",
+    },
+};
+
+const AGENTS: &[&AgentSpec] = &[&CLAUDE_CODE, &CODEX, &OPENCODE, &OPENCODE_V2, &PI];
 
 struct Agent(&'static AgentSpec);
 
@@ -112,7 +126,8 @@ impl Agent {
         AGENTS.iter().copied().find(|spec| spec.aliases.contains(&name)).map(Self).ok_or_else(
             || {
                 eyre::eyre!(
-                    "unknown agent: {name}. Supported agents: claude-code, codex, opencode, pi"
+                    "unknown agent: {name}. Supported agents: claude-code, codex, opencode, \
+                     opencode-v2, pi"
                 )
             },
         )
@@ -353,7 +368,7 @@ mod tests {
     use crate::Atuin;
     use crate::command::{AtuinCmd, client};
 
-    #[test]
+    #[rstest]
     fn parse_hook_agent_command() {
         let cmd = Cmd::try_parse_from(["hook", "codex"]).unwrap();
 
@@ -363,6 +378,7 @@ mod tests {
     #[rstest]
     #[case::codex("codex")]
     #[case::opencode("opencode")]
+    #[case::opencode_v2("opencode-v2")]
     #[case::pi("pi")]
     fn parse_hook_install_command(#[case] agent_name: &str) {
         let cmd = Cmd::try_parse_from(["hook", "install", agent_name]).unwrap();
@@ -374,17 +390,18 @@ mod tests {
     }
 
     #[rstest]
-    #[case::opencode("opencode")]
-    #[case::pi("pi")]
-    fn agent_from_name_supports_extension_agents(#[case] agent_name: &str) {
+    #[case::opencode("opencode", "opencode")]
+    #[case::opencode_v2("opencode-v2", "opencode")]
+    #[case::pi("pi", "pi")]
+    fn agent_from_name_supports_extension_agents(#[case] agent_name: &str, #[case] author: &str) {
         let agent = Agent::from_name(agent_name).unwrap();
-        assert_eq!(agent.actor_name(), agent_name);
+        assert_eq!(agent.actor_name(), author);
         assert!(matches!(agent.install_kind(), InstallKind::Extension { .. }));
     }
 
     /// An agent missing from `KNOWN_AGENTS` would be installable but invisible
     /// to `$all-agent`, and would pollute `$all-user` with its commands.
-    #[test]
+    #[rstest]
     fn every_agent_author_is_a_known_agent() {
         for spec in AGENTS {
             assert!(
@@ -407,10 +424,20 @@ mod tests {
     }
 
     /// opencode reads plugins from its XDG config directory, not from `$HOME`.
-    #[test]
-    fn opencode_plugin_is_rooted_in_the_xdg_config_dir() {
-        let agent = Agent::from_name("opencode").unwrap();
-        let InstallKind::Extension { extension_path, .. } = agent.install_kind() else {
+    #[rstest]
+    #[case::v1("opencode", OPENCODE_PLUGIN_SOURCE)]
+    #[case::v2("opencode-v2", OPENCODE_V2_PLUGIN_SOURCE)]
+    fn opencode_plugin_is_rooted_in_the_xdg_config_dir(
+        #[case] name: &str,
+        #[case] expected_source: &str,
+    ) {
+        let agent = Agent::from_name(name).unwrap();
+        let InstallKind::Extension {
+            extension_path,
+            source,
+            ..
+        } = agent.install_kind()
+        else {
             panic!("opencode does not install an extension");
         };
 
@@ -419,9 +446,10 @@ mod tests {
 
         assert!(installed.starts_with(&root), "{installed:?} is not under {root:?}");
         assert!(installed.ends_with("opencode/plugins/atuin.ts"));
+        assert_eq!(*source, expected_source);
     }
 
-    #[test]
+    #[rstest]
     fn parse_top_level_hook_command() {
         let cmd = Atuin::try_parse_from(["atuin", "hook", "codex"]).unwrap();
 
