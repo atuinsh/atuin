@@ -1,0 +1,29 @@
+# cargo-deny config scoped to atuin-pty-proxy.
+#
+# atuin-pty-proxy is a library crate, so it must not depend on eyre or anyhow.
+# This is enforced in CI with a dedicated, crate-scoped invocation:
+#
+#   cargo deny --manifest-path crates/atuin-pty-proxy/Cargo.toml check bans
+#
+# (see the `deny` job in .github/workflows/rust.yml). The workspace-wide policy
+# lives in the repo-root deny.toml; this file only adds the eyre/anyhow ban for
+# atuin-pty-proxy's own dependency subgraph.
+
+[graph]
+all-features = true
+
+[bans]
+# This config exists solely to ban eyre/anyhow; leave the rest permissive so it
+# never fails for reasons unrelated to that ban.
+multiple-versions = "allow"
+wildcards = "allow"
+
+[[bans.deny]]
+crate = "eyre"
+wrappers = ["atuin-client", "atuin-common"]
+reason = "eyre and anyhow are considered anti-patterns for library crates. atuin-pty-proxy is a library crate."
+
+[[bans.deny]]
+crate = "anyhow"
+wrappers = ["codspeed", "portable-pty", "reqwest-middleware", "sql-builder"]
+reason = "eyre and anyhow are considered anti-patterns for library crates. atuin-pty-proxy is a library crate."

@@ -20,7 +20,6 @@ atuin-client = { workspace = true }
 atuin-common = { workspace = true, features = ["ansi", "os"] }
 atuin-vt100 = { workspace = true }
 crossterm = { workspace = true }
-eyre = { workspace = true }
 libc = { workspace = true }
 portable-pty = { workspace = true }
 rustix = { workspace = true }

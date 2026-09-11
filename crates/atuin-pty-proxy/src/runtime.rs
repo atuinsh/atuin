@@ -50,7 +50,21 @@ fn set_child_env(cmd: &mut CommandBuilder, socket_path: Option<&std::path::Path>
     }
 }
 
-fn run(options: RuntimeOptions) -> eyre::Result<()> {
+#[derive(Debug, thiserror::Error)]
+enum Error {
+    #[error("failed to open pty: {0}")]
+    OpenPty(Box<dyn std::error::Error + Send + Sync + 'static>),
+    #[error("failed to spawn child process: {0}")]
+    SpawnCommand(Box<dyn std::error::Error + Send + Sync + 'static>),
+    #[error("failed to clone pty reader: {0}")]
+    CloneReader(Box<dyn std::error::Error + Send + Sync + 'static>),
+    #[error("failed to obtain pty writer: {0}")]
+    TakeWriter(Box<dyn std::error::Error + Send + Sync + 'static>),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+fn run(options: RuntimeOptions) -> Result<(), Error> {
     let (cols, rows) = terminal::size()?;
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -60,7 +74,7 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
             pixel_width: 0,
             pixel_height: 0,
         })
-        .map_err(|e| eyre::eyre!("{e:#}"))?;
+        .map_err(|e| Error::OpenPty(e.into()))?;
 
     // The PTY proxy server and the path of its socket.
     let server_and_path: Option<(SocketServer, atuin_common::fs::RemoveOnDropPath)> = pair
@@ -127,11 +141,11 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
         cmd.umask(Some(mask as _));
     }
 
-    let mut child = pair.slave.spawn_command(cmd).map_err(|e| eyre::eyre!("{e:#}"))?;
+    let mut child = pair.slave.spawn_command(cmd).map_err(|e| Error::SpawnCommand(e.into()))?;
     drop(pair.slave);
 
-    let mut pty_reader = pair.master.try_clone_reader().map_err(|e| eyre::eyre!("{e:#}"))?;
-    let mut pty_writer = pair.master.take_writer().map_err(|e| eyre::eyre!("{e:#}"))?;
+    let mut pty_reader = pair.master.try_clone_reader().map_err(|e| Error::CloneReader(e.into()))?;
+    let mut pty_writer = pair.master.take_writer().map_err(|e| Error::TakeWriter(e.into()))?;
 
     let child_pid =
         child.process_id().and_then(|pid| rustix::process::Pid::from_raw(pid.cast_signed()));
@@ -202,7 +216,7 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
 fn spawn_resize_handler(
     master: Box<dyn portable_pty::MasterPty + Send>,
     resize_tx: mpsc::SyncSender<Msg>,
-) -> eyre::Result<()> {
+) -> std::io::Result<()> {
     use signal_hook::consts::SIGWINCH;
     use signal_hook::iterator::Signals;
 
