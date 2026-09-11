@@ -23,7 +23,7 @@ impl Backend for FailingBackend {
         Err(GetOutputError::Storage(unavailable()))
     }
 
-    async fn remove(&self, _ids: Vec<HistoryId>) -> Result<(), DeleteOutputError> {
+    async fn remove(&self, _ids: &[HistoryId]) -> Result<(), DeleteOutputError> {
         Err(DeleteOutputError::Storage(unavailable()))
     }
 

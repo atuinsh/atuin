@@ -9,7 +9,9 @@ use super::{Index, IndexError, OutputMatch};
 
 /// Bump this whenever the on-disk index shape changes. On open a mismatch drops the table; the
 /// fjall store is the source of truth, so the next reconcile repopulates it.
-const SCHEMA_VERSION: i64 = 1;
+///
+/// v2: `history_id` stored as a 16-byte BLOB rather than a 32-char hex string.
+const SCHEMA_VERSION: i64 = 2;
 
 /// How many tokens of context a result snippet carries around its match.
 const SNIPPET_TOKENS: i64 = 32;
@@ -27,10 +29,9 @@ fn store(err: sqlx::Error) -> IndexError {
     IndexError::Storage(Box::new(err))
 }
 
-fn parse_id(raw: &str) -> Result<HistoryId, IndexError> {
-    uuid::Uuid::parse_str(raw)
-        .map(|uuid| HistoryId::from_bytes(uuid.into_bytes()))
-        .map_err(|err| IndexError::Storage(Box::new(err)))
+fn id_from_bytes(raw: &[u8]) -> Result<HistoryId, IndexError> {
+    let bytes: [u8; 16] = raw.try_into().map_err(|err| IndexError::Storage(Box::new(err)))?;
+    Ok(HistoryId::from_bytes(bytes))
 }
 
 impl SqliteIndex {
@@ -77,17 +78,17 @@ impl SqliteIndex {
 impl Index for SqliteIndex {
     async fn insert(&self, id: HistoryId, text: &str) -> Result<(), IndexError> {
         let pool = self.db.pool();
-        let id = id.to_string();
+        let key = id.into_bytes();
         // Capture is once-per-id, but reconcile/rebuild may re-run: replace any prior row so this
         // stays idempotent. FTS5 has no UNIQUE constraint to lean on, hence delete-then-insert.
         let mut tx = pool.begin().await.map_err(store)?;
         db::query("DELETE FROM output_fts WHERE history_id = ?")
-            .bind(&id)
+            .bind(&key[..])
             .execute(&mut *tx)
             .await
             .map_err(store)?;
         db::query("INSERT INTO output_fts(history_id, body) VALUES (?, ?)")
-            .bind(&id)
+            .bind(&key[..])
             .bind(text)
             .execute(&mut *tx)
             .await
@@ -103,8 +104,9 @@ impl Index for SqliteIndex {
         let pool = self.db.pool();
         let mut tx = pool.begin().await.map_err(store)?;
         for id in ids {
+            let key = id.into_bytes();
             db::query("DELETE FROM output_fts WHERE history_id = ?")
-                .bind(id.to_string())
+                .bind(&key[..])
                 .execute(&mut *tx)
                 .await
                 .map_err(store)?;
@@ -138,9 +140,9 @@ impl Index for SqliteIndex {
 
         rows.into_iter()
             .map(|row| {
-                let raw: String = row.try_get("history_id").map_err(store)?;
+                let raw: &[u8] = row.try_get("history_id").map_err(store)?;
                 Ok(OutputMatch {
-                    history_id: parse_id(&raw)?,
+                    history_id: id_from_bytes(raw)?,
                     snippet: row.try_get("snippet").map_err(store)?,
                     score: row.try_get("score").map_err(store)?,
                 })
@@ -154,7 +156,7 @@ impl Index for SqliteIndex {
             .await
             .map_err(store)?;
         rows.into_iter()
-            .map(|row| parse_id(&row.try_get::<String, _>("history_id").map_err(store)?))
+            .map(|row| id_from_bytes(row.try_get::<&[u8], _>("history_id").map_err(store)?))
             .collect()
     }
 }
@@ -163,11 +165,21 @@ impl Index for SqliteIndex {
 /// becomes a quoted string (doubling any embedded quote), ANDed together. Quoting sidesteps FTS5's
 /// query syntax so punctuation in the query can never raise a syntax error.
 fn sanitize_query(query: &str) -> String {
-    query
-        .split_whitespace()
-        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
-        .collect::<Vec<_>>()
-        .join(" ")
+    let mut out = String::with_capacity(query.len() + 2);
+    for term in query.split_whitespace() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push('"');
+        for ch in term.chars() {
+            if ch == '"' {
+                out.push('"'); // FTS5 escapes an embedded double-quote by doubling it.
+            }
+            out.push(ch);
+        }
+        out.push('"');
+    }
+    out
 }
 
 #[cfg(test)]

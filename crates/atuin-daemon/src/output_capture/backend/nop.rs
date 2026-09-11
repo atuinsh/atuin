@@ -15,7 +15,7 @@ impl Backend for NopBackend {
         Ok(None)
     }
 
-    async fn remove(&self, _ids: Vec<HistoryId>) -> Result<(), DeleteOutputError> {
+    async fn remove(&self, _ids: &[HistoryId]) -> Result<(), DeleteOutputError> {
         Ok(())
     }
 

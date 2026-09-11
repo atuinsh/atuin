@@ -10,7 +10,12 @@ use vt100::capture::basic_formatted_to_plain;
 /// visible words, so a search for `error` matches colourised output. The two halves of a truncated
 /// capture are joined with a newline.
 pub(super) fn indexable_text(capture: &CommandCapture) -> String {
-    let mut out: String = basic_formatted_to_plain(&capture.output_start).collect();
+    // Plain text is never longer than its formatted form, so this upper-bounds the capacity and
+    // the string never has to grow.
+    let mut out = String::with_capacity(
+        capture.output_start.len() + capture.output_end.as_ref().map_or(0, |end| end.len() + 1),
+    );
+    out.extend(basic_formatted_to_plain(&capture.output_start));
     if let Some(end) = &capture.output_end {
         out.push('\n');
         out.extend(basic_formatted_to_plain(end));

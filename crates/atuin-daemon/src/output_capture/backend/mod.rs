@@ -43,7 +43,7 @@ pub trait Backend {
     async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError>;
 
     /// Forget the captured output of every history id in `ids`. Absent ids are ignored.
-    async fn remove(&self, ids: Vec<HistoryId>) -> Result<(), DeleteOutputError>;
+    async fn remove(&self, ids: &[HistoryId]) -> Result<(), DeleteOutputError>;
 
     /// On-disk bytes the store occupies. A store that persists nothing reports 0.
     fn estimated_disk_space(&self) -> u64;

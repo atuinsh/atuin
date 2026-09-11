@@ -57,7 +57,7 @@ impl Inner {
     }
 
     async fn remove(&self, ids: Vec<HistoryId>) -> Result<(), DeleteOutputError> {
-        let result = self.backend.remove(ids.clone()).await;
+        let result = self.backend.remove(&ids).await;
 
         // Best-effort, like `capture`: the backend is authoritative, so its result is what we
         // return; a stale index entry left behind is dropped by the next reconcile.
