@@ -52,10 +52,12 @@ message SearchCommandOutputRequest {
 message OutputSearchMatch {
   // The history ID of the matching output.
   common.HistoryId history_id = 1;
+  // The text that matched within this output search.
+  //
+  // The text is a HighlightedText utility and carries markers for where the
+  // index thought the text got matched upon.
   common.HighlightedText output = 2;
   // Relevance -- higher means more relevant.
-  //
-  // Don't depend on this in any other form except for sorting.
   double score = 4;
 }
 
