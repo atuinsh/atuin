@@ -35,7 +35,8 @@ impl Cmd {
     pub async fn run(self, db: &Sqlite, settings: &Settings) -> Result<()> {
         if settings.output.limits().is_none() {
             bail!(
-                "output capture is disabled; enable [output] in your config to search command output"
+                "output capture is disabled; enable [output] in your config to search command \
+                 output"
             );
         }
 

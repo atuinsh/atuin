@@ -57,20 +57,18 @@ impl SqliteIndex {
 
         db::query("DROP TABLE IF EXISTS output_fts").execute(pool).await.map_err(store)?;
         db::query(
-            "CREATE VIRTUAL TABLE output_fts \
-             USING fts5(history_id UNINDEXED, body, tokenize = 'unicode61')",
+            "CREATE VIRTUAL TABLE output_fts USING fts5(history_id UNINDEXED, body, tokenize = \
+             'unicode61')",
         )
         .execute(pool)
         .await
         .map_err(store)?;
         // `PRAGMA user_version` cannot be bound; the value is our own integer constant, so building
         // the statement text is injection-free (hence the `AssertSqlSafe`).
-        db::query(sqlx::AssertSqlSafe(format!(
-            "PRAGMA user_version = {SCHEMA_VERSION}"
-        )))
-        .execute(pool)
-        .await
-        .map_err(store)?;
+        db::query(sqlx::AssertSqlSafe(format!("PRAGMA user_version = {SCHEMA_VERSION}")))
+            .execute(pool)
+            .await
+            .map_err(store)?;
         Ok(())
     }
 }
@@ -123,13 +121,9 @@ impl Index for SqliteIndex {
 
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let rows = db::query(
-            "SELECT history_id, \
-                    snippet(output_fts, 1, '', '', '…', ?) AS snippet, \
-                    -bm25(output_fts) AS score \
-             FROM output_fts \
-             WHERE output_fts MATCH ? \
-             ORDER BY score DESC \
-             LIMIT ?",
+            "SELECT history_id, snippet(output_fts, 1, '', '', '…', ?) AS snippet, \
+             -bm25(output_fts) AS score FROM output_fts WHERE output_fts MATCH ? ORDER BY score \
+             DESC LIMIT ?",
         )
         .bind(SNIPPET_TOKENS)
         .bind(&match_expr)

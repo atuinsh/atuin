@@ -13,8 +13,8 @@ use atuin_client::settings::DiskUsageLimit;
 use backend::{AnyBackend, Backend as _, FjallBackend, NopBackend};
 pub use backend::{BackendKind, CaptureError, DeleteOutputError, GetOutputError};
 use gc::Gc;
-use index::{NopIndex, SqliteIndex};
 pub use index::{AnyIndex, Index, IndexError, OutputMatch};
+use index::{NopIndex, SqliteIndex};
 use tokio::task::JoinHandle;
 use tracing::{error, warn};
 
@@ -147,7 +147,8 @@ impl OutputCapture {
                 error!(
                     ?err,
                     ?path,
-                    "failed to open the output search index; search over captured output is disabled"
+                    "failed to open the output search index; search over captured output is \
+                     disabled"
                 );
                 AnyIndex::Nop(NopIndex)
             }
@@ -167,7 +168,8 @@ impl OutputCapture {
 
         // The gc drives `inner` from a background task, holding only a clone of it; `inner` points
         // at no task, so that clone forms no cycle that would keep the task alive.
-        let gc = gc::resolve_budget(path, max_disk_usage).map(|budget| Gc::spawn(inner.clone(), budget));
+        let gc =
+            gc::resolve_budget(path, max_disk_usage).map(|budget| Gc::spawn(inner.clone(), budget));
 
         Self {
             inner,
@@ -236,11 +238,7 @@ impl OutputCapture {
     }
 
     /// Relevance-ranked full-text matches over captured output, most relevant first.
-    pub async fn search(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> Result<Vec<OutputMatch>, IndexError> {
+    pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<OutputMatch>, IndexError> {
         self.inner.search(query, limit).await
     }
 
@@ -262,9 +260,8 @@ impl Drop for OutputCapture {
 /// The sqlite index lives beside the fjall store directory as a sibling file, so it never lands
 /// among fjall's own files. `.../output-capture` becomes `.../output-capture-index.sqlite`.
 fn index_path(fjall_dir: &Path) -> PathBuf {
-    let mut name = fjall_dir
-        .file_name()
-        .map_or_else(|| OsString::from("output-capture"), OsString::from);
+    let mut name =
+        fjall_dir.file_name().map_or_else(|| OsString::from("output-capture"), OsString::from);
     name.push("-index.sqlite");
     fjall_dir.with_file_name(name)
 }
@@ -292,7 +289,8 @@ mod tests {
 
     async fn temp_store() -> (OutputCapture, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = OutputCapture::open(dir.path().join("capture"), DiskUsageLimit::Unlimited).await;
+        let store =
+            OutputCapture::open(dir.path().join("capture"), DiskUsageLimit::Unlimited).await;
         (store, dir)
     }
 
