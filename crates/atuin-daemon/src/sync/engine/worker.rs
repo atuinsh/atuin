@@ -9,6 +9,7 @@ use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sync::{ClientSource, SyncError as ClientSyncError, SyncSession};
 use atuin_client::settings::Settings;
 use atuin_common::futures::Backoff;
+use atuin_domain::record::RecordId;
 use atuin_dotfiles::store::AliasStore;
 use atuin_dotfiles::store::var::VarStore;
 use futures::StreamExt;
@@ -145,6 +146,10 @@ impl Worker {
         }
 
         // Perform the sync
+        //
+        // TODO(markovejnovic): The fact that we rebuild the SyncSession on every single iteration
+        //                      of the loop feels wrong to me, but the legacy behavior was this, and
+        //                      in favor of not breaking anything, I prefer to keep it this way.
         let session = SyncSession::builder()
             .store(self.handle.store().clone())
             .client_source(ClientSource::FromSettings {
@@ -163,26 +168,7 @@ impl Worker {
             "sync complete"
         );
 
-        let history_build = async {
-            let batches =
-                self.history_store.incremental_build(self.handle.history_db(), &downloaded_records);
-            futures::pin_mut!(batches);
-
-            while let Some(batch) = batches.next().await {
-                match batch {
-                    // The rows are already in sqlite; push them straight into the live index.
-                    Ok(histories) if !histories.is_empty() => {
-                        self.index.read().await.add_histories(&histories);
-                    }
-                    Ok(_) => {}
-                    // Legacy behavior was to abort on the first error.
-                    Err(e) => {
-                        tracing::error!("failed to build history from downloaded records: {e}");
-                        break;
-                    }
-                }
-            }
-        };
+        let history_build = self.index_downloaded_records(&downloaded_records);
 
         let alias_build = async {
             if let Err(e) = self.alias_store.build().await {
@@ -204,5 +190,24 @@ impl Worker {
         }
 
         Ok(())
+    }
+
+    /// Build freshly-downloaded records into `history_db` and stream the resulting history rows
+    /// straight into the shared search index.
+    async fn index_downloaded_records(&self, ids: &[RecordId]) {
+        let batches = self.history_store.incremental_build(self.handle.history_db(), ids);
+        futures::pin_mut!(batches);
+
+        while let Some(batch) = batches.next().await {
+            match batch {
+                // The rows are already in sqlite; push them straight into the live index.
+                Ok(histories) if !histories.is_empty() => {
+                    self.index.read().await.add_histories(&histories);
+                }
+                Ok(_) => {}
+
+                Err(e) => tracing::error!("failed to build history from downloaded records: {e}"),
+            }
+        }
     }
 }
