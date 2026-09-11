@@ -17,10 +17,12 @@ use tracing::{Level, debug, error, info, instrument, span, trace};
 
 use crate::daemon::{Component, DaemonHandle};
 use crate::events::DaemonEvent;
+use crate::output_capture::{AnyIndex, Index};
 use crate::search::search_server::{Search as SearchSvc, SearchServer};
 use crate::search::{
-    FilterMode, IndexFilterMode, PrepareIndexRequest, PrepareIndexResponse, SearchIndex,
-    SearchRequest, SearchResponse,
+    FilterMode, IndexFilterMode, OutputSearchMatch, PrepareIndexRequest, PrepareIndexResponse,
+    SearchCommandOutputRequest, SearchCommandOutputResponse, SearchIndex, SearchRequest,
+    SearchResponse,
 };
 
 const RESULTS_LIMIT: u32 = 200;
@@ -54,10 +56,16 @@ impl SearchComponent {
     }
 
     /// Get the gRPC service for this component.
+    ///
+    /// `output_index` is a read-only handle to the captured-output full-text index, owned by the
+    /// `OutputCapture` facade, used to serve [`SearchCommandOutput`] queries.
+    ///
+    /// [`SearchCommandOutput`]: SearchSvc::search_command_output
     #[must_use]
-    pub fn grpc_service(&self) -> SearchGrpcServiceBuilder {
+    pub fn grpc_service(&self, output_index: AnyIndex) -> SearchGrpcServiceBuilder {
         SearchGrpcServiceBuilder {
             index: self.index.clone(),
+            output_index,
         }
     }
 
@@ -196,6 +204,7 @@ impl Component for SearchComponent {
 
 pub struct SearchGrpcServiceBuilder {
     index: Arc<RwLock<SearchIndex>>,
+    output_index: AnyIndex,
 }
 
 impl SearchGrpcServiceBuilder {
@@ -203,6 +212,7 @@ impl SearchGrpcServiceBuilder {
     pub fn build(self, handle: DaemonHandle) -> SearchServer<SearchGrpcService> {
         SearchServer::new(SearchGrpcService {
             index: self.index,
+            output_index: self.output_index,
             handle,
         })
     }
@@ -212,6 +222,7 @@ impl SearchGrpcServiceBuilder {
 #[derive(Clone)]
 pub struct SearchGrpcService {
     index: Arc<RwLock<SearchIndex>>,
+    output_index: AnyIndex,
     handle: DaemonHandle,
 }
 
@@ -342,6 +353,40 @@ impl SearchSvc for SearchGrpcService {
             *self.index.write().await = index;
         }
         Ok(Response::new(PrepareIndexResponse {}))
+    }
+
+    #[instrument(skip_all, level = Level::TRACE, name = "search_command_output_rpc")]
+    async fn search_command_output(
+        &self,
+        request: Request<SearchCommandOutputRequest>,
+    ) -> Result<Response<SearchCommandOutputResponse>, Status> {
+        let request = request.into_inner();
+
+        // A client `limit` of 0 means "server default"; anything larger is capped at that default so
+        // one query can't ask the index for an unbounded result set.
+        let default_limit = usize::try_from(RESULTS_LIMIT).unwrap_or(usize::MAX);
+        let limit = match usize::try_from(request.limit).unwrap_or(default_limit) {
+            0 => default_limit,
+            n => n.min(default_limit),
+        };
+
+        let matches = self
+            .output_index
+            .search(&request.query, limit)
+            .await
+            .map_err(|err| {
+                error!(?err, "output full-text search failed");
+                Status::internal("output search failed")
+            })?
+            .into_iter()
+            .map(|m| OutputSearchMatch {
+                history_id: m.history_id.into_bytes().to_vec(),
+                snippet: m.snippet,
+                score: m.score,
+            })
+            .collect();
+
+        Ok(Response::new(SearchCommandOutputResponse { matches }))
     }
 }
 

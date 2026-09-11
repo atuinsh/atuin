@@ -40,7 +40,24 @@ message PrepareIndexRequest {
 
 message PrepareIndexResponse {}
 
+// Full-text search over captured command output.
+message SearchCommandOutputRequest {
+  string query = 1;
+  uint32 limit = 2; // 0 means "use the server default".
+}
+
+message OutputSearchMatch {
+  bytes history_id = 1;
+  string snippet = 2; // A bounded excerpt of the output around the match.
+  double score = 3;   // Relevance, higher is better.
+}
+
+message SearchCommandOutputResponse {
+  repeated OutputSearchMatch matches = 1; // Most relevant first.
+}
+
 service Search {
   rpc Search(stream SearchRequest) returns (stream SearchResponse);
   rpc PrepareIndex(PrepareIndexRequest) returns (PrepareIndexResponse);
+  rpc SearchCommandOutput(SearchCommandOutputRequest) returns (SearchCommandOutputResponse);
 }

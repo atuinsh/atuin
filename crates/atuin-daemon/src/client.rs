@@ -29,8 +29,8 @@ use crate::grpc::history::pb::{
 };
 use crate::search::search_client::SearchClient as SearchServiceClient;
 use crate::search::{
-    FilterMode as RpcFilterMode, PrepareIndexRequest, SearchContext as RpcSearchContext,
-    SearchRequest, SearchResponse,
+    FilterMode as RpcFilterMode, OutputSearchMatch, PrepareIndexRequest,
+    SearchCommandOutputRequest, SearchContext as RpcSearchContext, SearchRequest, SearchResponse,
 };
 
 pub struct HistoryClient {
@@ -350,6 +350,20 @@ impl SearchClient {
             .await?;
 
         Ok(response.into_inner())
+    }
+
+    /// Full-text search over captured command output. `limit` of 0 uses the server default.
+    pub async fn search_command_output(
+        &mut self,
+        query: impl Into<String>,
+        limit: u32,
+    ) -> Result<Vec<OutputSearchMatch>> {
+        let request = SearchCommandOutputRequest {
+            query: query.into(),
+            limit,
+        };
+        let response = self.client.search_command_output(request).await?;
+        Ok(response.into_inner().matches)
     }
 
     /// Tell the daemon to build the search index for the given list of shells.
