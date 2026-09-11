@@ -18,12 +18,13 @@ pub(crate) mod history_journal;
 mod output_capture;
 pub mod search;
 pub mod server;
+mod sync;
 
 // Re-export core daemon types for convenience
 // Re-export client helpers
 pub use client::HistoryClient;
 // Re-export components
-pub use components::{SearchComponent, SyncComponent};
+pub use components::SearchComponent;
 pub use daemon::{AnyComponent, Daemon, DaemonBuilder, DaemonHandle};
 pub use events::DaemonEvent;
 pub use history_journal::{
@@ -36,8 +37,8 @@ pub use output_capture::{
 
 /// Boot the daemon using the new component-based architecture.
 ///
-/// This creates a daemon with the standard components (history, search, sync),
-/// starts the gRPC server with their services, and runs the event loop.
+/// This creates a daemon with the search component, spawns the background sync
+/// engine, starts the gRPC server with their services, and runs the event loop.
 pub async fn boot(
     settings: Settings,
     store: SqliteStore,
@@ -45,7 +46,6 @@ pub async fn boot(
 ) -> Result<()> {
     // Create the components
     let search_component = SearchComponent::new();
-    let sync_component = SyncComponent::new();
 
     // Get the gRPC services before moving components into the daemon
     // (The services share state with the components via Arc)
@@ -57,10 +57,13 @@ pub async fn boot(
         .store(store)
         .history_db(history_db)
         .component(search_component)
-        .component(sync_component)
         .build()?;
 
     let handle = daemon.handle();
+
+    // Spawn the background sync engine. Held until `boot` returns, so it is aborted
+    // once the daemon shuts down. It feeds synced history straight into the index.
+    let _sync = sync::Sync::spawn(handle.clone(), search_index.clone());
 
     let host_id = Settings::host_id().await?;
     let history_store =

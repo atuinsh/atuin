@@ -8,13 +8,11 @@
 mod common;
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use atuin_client::history::HistoryId;
 use atuin_client::history::store::HistoryRecord;
 use atuin_client::settings::Search;
-use atuin_daemon::DaemonEvent;
 use atuin_daemon::grpc::history::pb::tail_history_reply::Event;
 use common::corpus::HistoryGen;
 use common::{TestEnv, capture, history};
@@ -414,8 +412,8 @@ async fn end_history_is_not_starved_by_an_index_reload() {
 
 /// History that arrives from sync while a delete is reloading the index is searchable afterwards.
 ///
-/// EXPECTED TO FAIL: the `HistorySynced` handler adds to whichever index is live under a read
-/// guard, which the reload then discards.
+/// EXPECTED TO FAIL: the sync engine adds to whichever index is live under a read guard, which the
+/// reload then discards.
 #[rstest]
 #[ignore = "documents an unfixed defect (synced history dropped by a racing reload; see report \
             M2); run with --run-ignored. See module docs."]
@@ -432,12 +430,10 @@ async fn synced_history_during_a_reload_is_searchable() {
     let synced: Vec<_> =
         (0..20).map(|_| history_gen.next()).filter(common::corpus::index_eligible).collect();
     env.history_db.save_bulk(&synced).await.unwrap();
-    env.handle.emit(DaemonEvent::HistorySynced(
-        synced.iter().map(|h| h.id).collect::<Arc<[HistoryId]>>(),
-    ));
+    // The sync engine adds freshly-downloaded rows straight to the live index.
+    env.index.read().await.add_histories(&synced);
 
     reload.await.unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await; // let the event loop drain
 
     // A synced row may share its command with older rows (the "common" part of the corpus), so
     // check the strong property on the count and the exact property on the unique commands.

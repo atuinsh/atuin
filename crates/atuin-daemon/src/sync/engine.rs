@@ -1,31 +1,23 @@
-//! Sync component.
+//! The background sync loop.
 //!
-//! Handles periodic synchronization with the Atuin cloud server.
+//! Runs in a spawned task, syncing with the Atuin cloud server on a configurable
+//! interval and feeding freshly-downloaded history into the search index.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use atuin_client::history::HistoryId;
 use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sync::{ClientSource, SyncEngine};
 use atuin_client::settings::Settings;
 use atuin_dotfiles::store::AliasStore;
 use atuin_dotfiles::store::var::VarStore;
-use easy_cast::Conv;
-use eyre::Result;
 use futures::StreamExt;
 use rand::Rng;
-use tokio::sync::mpsc;
+use tokio::sync::RwLock;
 use tokio::time::{self, MissedTickBehavior};
 
-use crate::daemon::{Component, DaemonHandle};
-use crate::events::DaemonEvent;
-
-/// Commands that can be sent to the sync task.
-enum SyncCommand {
-    /// Stop the sync loop.
-    Stop,
-}
+use crate::daemon::DaemonHandle;
+use crate::search::SearchIndex;
 
 /// Sync state - tracks whether we're in normal operation or retrying after failure.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -37,71 +29,11 @@ enum SyncState {
     Retrying,
 }
 
-/// Sync component - handles periodic cloud synchronization.
-///
-/// This component:
-/// - Runs a background sync loop on a configurable interval
-/// - Implements exponential backoff on sync failures
-/// - Emits SyncCompleted/SyncFailed events
-pub struct SyncComponent {
-    task_handle: Option<tokio::task::JoinHandle<()>>,
-    command_tx: Option<mpsc::Sender<SyncCommand>>,
-}
-
-impl SyncComponent {
-    /// Create a new sync component.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            task_handle: None,
-            command_tx: None,
-        }
-    }
-}
-
-impl Default for SyncComponent {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Component for SyncComponent {
-    fn name(&self) -> &'static str {
-        "sync"
-    }
-
-    async fn start(&mut self, handle: DaemonHandle) -> Result<()> {
-        let (cmd_tx, cmd_rx) = mpsc::channel(16);
-        self.command_tx = Some(cmd_tx);
-
-        // Spawn the sync loop with its own copy of the handle
-        self.task_handle = Some(tokio::spawn(sync_loop(handle, cmd_rx)));
-
-        tracing::info!("sync component started");
-        Ok(())
-    }
-
-    async fn handle_event(&mut self, _event: &DaemonEvent) -> Result<()> {
-        Ok(())
-    }
-
-    async fn stop(&mut self) -> Result<()> {
-        if let Some(tx) = &self.command_tx {
-            let _ = tx.send(SyncCommand::Stop).await;
-        }
-        if let Some(handle) = self.task_handle.take() {
-            // Give the task a moment to shut down gracefully
-            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
-        }
-        tracing::info!("sync component stopped");
-        Ok(())
-    }
-}
-
 /// The main sync loop.
 ///
-/// This runs in a spawned task and handles periodic sync.
-async fn sync_loop(handle: DaemonHandle, mut cmd_rx: mpsc::Receiver<SyncCommand>) {
+/// Runs until the task is aborted (on daemon shutdown). Implements periodic sync
+/// with exponential backoff on failure.
+pub(super) async fn run(handle: DaemonHandle, index: Arc<RwLock<SearchIndex>>) {
     tracing::info!("sync loop starting");
 
     // Clone settings since we need them across await points
@@ -132,48 +64,42 @@ async fn sync_loop(handle: DaemonHandle, mut cmd_rx: mpsc::Receiver<SyncCommand>
     let mut sync_state = SyncState::Idle;
 
     loop {
-        tokio::select! {
-            _ = ticker.tick() => {
-                let settings = handle.settings().await;
+        ticker.tick().await;
 
-                // Skip periodic ticks if auto_sync is disabled AND we're not retrying
-                // a previous failure. Retries must continue regardless of auto_sync.
-                if !settings.auto_sync && sync_state == SyncState::Idle {
-                    drop(settings);
-                    tracing::debug!("auto_sync disabled, skipping periodic sync tick");
-                    continue;
-                }
+        let settings = handle.settings().await;
 
-                sync_state = do_sync_tick(
-                    &handle,
-                    &history_store,
-                    &alias_store,
-                    &var_store,
-                    &mut ticker,
-                    max_interval,
-                    &settings,
-                ).await;
-            }
-            cmd = cmd_rx.recv() => {
-                match cmd {
-                    Some(SyncCommand::Stop) | None => {
-                        tracing::info!("sync loop stopping");
-                        break;
-                    }
-                }
-            }
+        // Skip periodic ticks if auto_sync is disabled AND we're not retrying a previous failure.
+        // Retries must continue regardless of auto_sync.
+        if !settings.auto_sync && sync_state == SyncState::Idle {
+            drop(settings);
+            tracing::debug!("auto_sync disabled, skipping periodic sync tick");
+            continue;
         }
+
+        sync_state = do_sync_tick(
+            &handle,
+            &history_store,
+            &alias_store,
+            &var_store,
+            &index,
+            &mut ticker,
+            max_interval,
+            &settings,
+        )
+        .await;
     }
 }
 
 /// Execute a single sync tick.
 ///
 /// Returns the new sync state: `Idle` on success, `Retrying` on failure.
+#[allow(clippy::too_many_arguments, reason = "a single call site, splitting it buys nothing")]
 async fn do_sync_tick(
     handle: &DaemonHandle,
     history_store: &HistoryStore,
     alias_store: &AliasStore,
     var_store: &VarStore,
+    index: &RwLock<SearchIndex>,
     ticker: &mut time::Interval,
     max_interval: f64,
     settings: &Settings,
@@ -217,11 +143,6 @@ async fn do_sync_tick(
         Err(e) => {
             tracing::error!("sync tick failed with {e}");
 
-            // Emit failure event
-            handle.emit(DaemonEvent::SyncFailed {
-                error: e.to_string(),
-            });
-
             // Exponential backoff
             let mut rng = rand::thread_rng();
             let mut new_interval = ticker.period().as_secs_f64() * rng.gen_range(2.0..2.2);
@@ -254,10 +175,9 @@ async fn do_sync_tick(
 
             while let Some(batch) = batches.next().await {
                 match batch {
+                    // The rows are already in sqlite; push them straight into the live index.
                     Ok(histories) if !histories.is_empty() => {
-                        // Only the IDs go on the bus; the rows themselves are already in sqlite.
-                        let ids: Arc<[HistoryId]> = histories.iter().map(|h| h.id).collect();
-                        handle.emit(DaemonEvent::HistorySynced(ids));
+                        index.read().await.add_histories(&histories);
                     }
                     Ok(_) => {}
                     // Legacy behavior was to abort on the first error.
@@ -267,12 +187,6 @@ async fn do_sync_tick(
                     }
                 }
             }
-
-            // Emit sync completed event
-            handle.emit(DaemonEvent::SyncCompleted {
-                uploaded: usize::conv(uploaded_count),
-                downloaded: downloaded_records.len(),
-            });
 
             // Rebuild alias and var stores
             if let Err(e) = alias_store.build().await {
