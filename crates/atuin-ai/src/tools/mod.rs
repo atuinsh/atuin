@@ -101,6 +101,10 @@ impl ToolOutcome {
     ///
     /// 16384 times 120 (the width of the emulated terminal, from `PREVIEW_WIDTH`) is approximately
     /// 2,000,000 (2MB), so we use that as our limit here.
+    ///
+    /// Note that we keep the *end* of output that exceeds the limit. This matches what
+    /// [`ansi::to_plain_text`] did previously -- it would process the full output but only keep the
+    /// last 16384 rendered lines.
     const MAX_STRUCTURED_OUTPUT_SIZE: usize = 2_000_000;
 
     /// Format this outcome as a string for the tool result sent to the LLM.
@@ -975,8 +979,11 @@ pub async fn execute_shell_command_streaming(
     let mut stdout_text = ansi::to_plain_text(&full_stdout, rows, cols);
     let mut stderr_text = ansi::to_plain_text(&full_stderr, rows, cols);
 
-    stdout_text.truncate(stdout_text.floor_char_boundary(ToolOutcome::MAX_STRUCTURED_OUTPUT_SIZE));
-    stderr_text.truncate(stderr_text.floor_char_boundary(ToolOutcome::MAX_STRUCTURED_OUTPUT_SIZE));
+    for output in [&mut stdout_text, &mut stderr_text] {
+        let start = output.len().saturating_sub(ToolOutcome::MAX_STRUCTURED_OUTPUT_SIZE);
+        let start = output.ceil_char_boundary(start);
+        output.drain(..start);
+    }
 
     ToolOutcome::Structured {
         stdout: stdout_text,
