@@ -560,7 +560,6 @@ dependencies = [
  "axum",
  "derive_more",
  "easy-cast",
- "eyre",
  "http",
  "parking_lot",
  "pretty_assertions",

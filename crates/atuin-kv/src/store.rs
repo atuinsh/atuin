@@ -122,7 +122,7 @@ impl KvStore {
             // Skip records we can't decrypt or decode, rather than failing the entire build.
             let kv = match record.version {
                 RecordVersion::V0 | RecordVersion::V1 => {
-                    record.decrypt(&self.encryption_key).and_then(|decrypted| {
+                    record.decrypt(&self.encryption_key).map_err(Into::into).and_then(|decrypted| {
                         KvRecord::deserialize(&decrypted.data, &decrypted.version)
                     })
                 }
