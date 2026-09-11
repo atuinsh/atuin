@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::ops::Range;
 use std::path::Path;
 
@@ -141,7 +140,7 @@ impl Index for SqliteIndex {
             .map(|row| {
                 let raw: &[u8] = row.try_get("history_id").map_err(store)?;
                 let body: &str = row.try_get("body").map_err(store)?;
-                let (output, matches) = split_highlighted(body);
+                let (output, matches) = split_highlighted(self.highlighter, body);
                 Ok(OutputMatch {
                     history_id: id_from_bytes(raw)?,
                     output,
@@ -163,25 +162,30 @@ impl Index for SqliteIndex {
     }
 }
 
-/// Strip the [`MATCH_OPEN`]/[`MATCH_CLOSE`] markers out of a `highlight()` result, returning the
-/// plain body and the byte range within it that each marker pair enclosed.
-fn split_highlighted(body: &str) -> (String, Vec<Range<usize>>) {
-    let mut output = String::with_capacity(body.len());
-    let mut matches = Vec::new();
-    let mut open: Option<usize> = None;
-    let mut rest = body;
-    while let Some(at) = rest.find([MATCH_OPEN, MATCH_CLOSE]) {
-        output.push_str(&rest[..at]);
-        let marker = rest[at..].chars().next().expect("`find` landed on a char");
-        if marker == MATCH_OPEN {
-            open = Some(output.len());
-        } else if let Some(start) = open.take() {
-            matches.push(start..output.len());
-        }
-        rest = &rest[at + marker.len_utf8()..];
-    }
-    output.push_str(rest);
-    (output, matches)
+/// Split a `highlight()` result into the plain body and the byte range within it that each match
+/// covers.
+///
+/// The marker parsing lives in [`atuin_common::string::highlighted`]: `ranges()` locates each match
+/// in the still-marked body and `display_plain()` strips the markers. FTS5's output is balanced and
+/// non-nested, so shifting each raw range left by the marker bytes stripped before it lands it in
+/// plain-body coordinates.
+fn split_highlighted(highlighter: TextHighlighter, body: &str) -> (String, Vec<Range<usize>>) {
+    let highlighted = highlighter.as_highlighted(body);
+    let plain = highlighted.display_plain().to_string();
+
+    let [open, close] = highlighter.markers();
+    let (open_len, close_len) = (open.len_utf8(), close.len_utf8());
+    let matches = highlighted
+        .ranges()
+        .scan(0usize, |stripped, r| {
+            *stripped += open_len; // this match's leading open marker
+            let shifted = (r.start - *stripped)..(r.end - *stripped);
+            *stripped += close_len; // its trailing close marker, before the next match
+            Some(shifted)
+        })
+        .collect();
+
+    (plain, matches)
 }
 
 /// Turn free-form user input into a safe FTS5 `MATCH` expression: each whitespace-separated term
@@ -243,7 +247,10 @@ mod tests {
     #[tokio::test]
     async fn marker_codepoints_in_the_text_cannot_forge_a_match() {
         let (index, _dir) = temp_index().await;
-        let text = format!("{MATCH_OPEN}fake{MATCH_CLOSE} real");
+        // Plant the highlighter's own markers in the source; `insert` sanitizes them away, so they
+        // cannot later be mistaken for a real highlight.
+        let [open, close] = TextHighlighter::default().markers();
+        let text = format!("{open}fake{close} real");
         index.insert(hid(1), &text).await.expect("insert");
 
         let hits = index.search("real", 10).await.expect("search");

@@ -31,3 +31,9 @@ message PyStyleIdxRange { int64 start = 1; int64 end = 2; }
 // A pair of unsigned indices delimiting an already-resolved, concrete `[start, end)` half-open
 // span.
 message UnsignedIdxRange { uint64 start = 1; uint64 end = 2; }
+
+message HighlightedText {
+  uint32 open = 1;
+  uint32 close = 2;
+  string raw = 3;
+}

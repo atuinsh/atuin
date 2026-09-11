@@ -239,6 +239,49 @@ pub type HighlightedString = HighlightedText<String>;
 pub type HighlightedStr<'a> = HighlightedText<&'a str>;
 pub type HighlightedCowStr<'a> = HighlightedText<Cow<'a, str>>;
 
+#[cfg_attr(feature = "proto", derive(prost::Message))]
+#[cfg_attr(not(feature = "proto"), derive(Debug, Default))]
+#[derive(Clone, PartialEq)]
+pub struct HighlightedTextProto {
+    #[cfg_attr(feature = "proto", prost(uint32, tag = "1"))]
+    pub open: u32,
+    #[cfg_attr(feature = "proto", prost(uint32, tag = "2"))]
+    pub close: u32,
+    #[cfg_attr(feature = "proto", prost(string, tag = "3"))]
+    pub raw: String,
+}
+
+#[derive(Debug, Error)]
+pub enum FromHighlightedTextProtoError {
+    #[error("marker code point {0:#x} is not a valid char")]
+    InvalidMarker(u32),
+    #[error(transparent)]
+    Markers(#[from] NewTextHighlighterError),
+}
+
+impl<S: AsRef<str>> From<&HighlightedText<S>> for HighlightedTextProto {
+    fn from(value: &HighlightedText<S>) -> Self {
+        let [open, close] = value.highlighter.markers();
+        Self {
+            open: u32::from(open),
+            close: u32::from(close),
+            raw: value.data.as_ref().to_owned(),
+        }
+    }
+}
+
+impl TryFrom<HighlightedTextProto> for HighlightedString {
+    type Error = FromHighlightedTextProtoError;
+
+    fn try_from(value: HighlightedTextProto) -> Result<Self, Self::Error> {
+        let open = char::from_u32(value.open)
+            .ok_or(FromHighlightedTextProtoError::InvalidMarker(value.open))?;
+        let close = char::from_u32(value.close)
+            .ok_or(FromHighlightedTextProtoError::InvalidMarker(value.close))?;
+        Ok(TextHighlighter::with_markers([open, close])?.as_highlighted(value.raw))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
