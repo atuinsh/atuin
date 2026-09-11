@@ -12,10 +12,6 @@ pub use rmp::decode::{
 /// indicates which variant the error is ([`rmp`]'s error types are enums; some unconditionally
 /// print a static string and others don't even implement [`Display`] for all `E`).
 ///
-/// This type implements [`std::error::Error`]. Note, however, that it is not, in general, `'static`
-/// (it can borrow from the decoded buffer). To use it where a `'static` error is required call
-/// [`into_static`](Self::into_static) first.
-///
 /// [`Display`]: std::fmt::Display
 #[derive(Debug, derive_more::Display, derive_more::From)]
 #[display("could not decode MessagePack value: {_0:?}")]
