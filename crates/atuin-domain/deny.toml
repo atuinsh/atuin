@@ -17,7 +17,12 @@ all-features = true
 # never fails for reasons unrelated to that ban.
 multiple-versions = "allow"
 wildcards = "allow"
-deny = [
-    { crate = "eyre", reason = "eyre and anyhow are considered anti-patterns for library crates. atuin-domain is a library crate." },
-    { crate = "anyhow", wrappers = ["prost-derive"], reason = "eyre and anyhow are considered anti-patterns for library crates. atuin-domain is a library crate." },
-]
+
+[[bans.deny]]
+crate = "eyre"
+reason = "eyre and anyhow are considered anti-patterns for library crates. atuin-domain is a library crate."
+
+[[bans.deny]]
+crate = "anyhow"
+wrappers = ["prost-derive", "reqwest-middleware"]
+reason = "eyre and anyhow are considered anti-patterns for library crates. atuin-domain is a library crate."
