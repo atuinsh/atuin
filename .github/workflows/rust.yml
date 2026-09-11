@@ -466,6 +466,13 @@ jobs:
           manifest-path: crates/atuin-domain/Cargo.toml
           command: check bans
 
+      # atuin-pty-proxy is a library crate; enforce (crate-scoped) that it
+      # never (re)adds eyre or anyhow. Config: crates/atuin-pty-proxy/deny.toml
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: crates/atuin-pty-proxy/Cargo.toml
+          command: check bans
+
   package:
     runs-on: depot-ubuntu-24.04
 
