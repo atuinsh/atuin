@@ -153,7 +153,7 @@ mod tests {
         assert!(out.chars().count() <= max);
     }
 
-    #[test]
+    #[rstest]
     fn truncate_chars_returns_the_original_slice_when_it_fits() {
         let s = "borrow me";
         assert!(std::ptr::eq(s.truncate_chars(100), s));
