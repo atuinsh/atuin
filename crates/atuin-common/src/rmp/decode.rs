@@ -63,10 +63,7 @@ impl<E: RmpReadErr> DecodeError<'_, E> {
 
 impl<E: RmpReadErr> std::error::Error for DecodeError<'_, E> {}
 
-/// Define wrappers over [`rmp`]'s primitive readers that return [`DecodeError`] instead of `rmp`'s
-/// raw error types. This keeps the whole decode surface behind a single error type, so callers
-/// only ever need `From<DecodeError>` rather than a conversion per `rmp` error type. The lifetime
-/// mirrors [`read_string`]; a primitive read never actually borrows from the buffer.
+/// Define wrappers over [`rmp`]'s primitive readers that return [`DecodeError`].
 macro_rules! primitive_readers {
     ($($(#[$doc:meta])* $name:ident -> $ty:ty;)*) => {$(
         $(#[$doc])*
@@ -77,31 +74,18 @@ macro_rules! primitive_readers {
 }
 
 primitive_readers! {
-    /// Read a MessagePack `u8`.
     read_u8 -> u8;
-    /// Read a MessagePack `u16`.
     read_u16 -> u16;
-    /// Read a MessagePack `u32`.
     read_u32 -> u32;
-    /// Read a MessagePack `u64`.
     read_u64 -> u64;
-    /// Read a MessagePack `i8`.
     read_i8 -> i8;
-    /// Read a MessagePack `i16`.
     read_i16 -> i16;
-    /// Read a MessagePack `i32`.
     read_i32 -> i32;
-    /// Read a MessagePack `i64`.
     read_i64 -> i64;
-    /// Read a MessagePack boolean.
     read_bool -> bool;
-    /// Read the length marker of a MessagePack array.
     read_array_len -> u32;
-    /// Read the length marker of a MessagePack map.
     read_map_len -> u32;
-    /// Read the length marker of a MessagePack binary blob.
     read_bin_len -> u32;
-    /// Read the length marker of a MessagePack string.
     read_str_len -> u32;
 }
 
