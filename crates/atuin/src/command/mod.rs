@@ -23,7 +23,7 @@ pub enum AtuinCmd {
 
     /// PTY proxy for atuin
     #[cfg(feature = "pty-proxy")]
-    #[command(alias = "hex", hide = true)]
+    #[command(alias = "hex")]
     PtyProxy(atuin_pty_proxy::PtyProxy),
 
     /// Generate a UUID

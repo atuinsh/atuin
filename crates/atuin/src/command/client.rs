@@ -45,7 +45,6 @@ mod wrapped;
 pub enum Cmd {
     // Variant order sets the `--help` command list order, so keep the commands users reach for
     // most (search, sync, stats) at the top and the plumbing/config commands lower down.
-
     /// Interactive history search
     Search(search::Cmd),
 
