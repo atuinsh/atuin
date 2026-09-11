@@ -47,9 +47,19 @@ pub async fn boot(
     let search_component = SearchComponent::new();
     let sync_component = SyncComponent::new();
 
+    // Open the output store and its search index up front, so the search service can hold a
+    // read-only handle to the index (the same "pull the shared handle out before moving the owner
+    // in" pattern used for the command search index below).
+    let output_capture = match settings.output.limits() {
+        Some(limits) => {
+            OutputCapture::open(Settings::command_capture_dir(), limits.max_disk_usage).await
+        }
+        None => OutputCapture::nop(),
+    };
+
     // Get the gRPC services before moving components into the daemon
     // (The services share state with the components via Arc)
-    let search_service = search_component.grpc_service();
+    let search_service = search_component.grpc_service(output_capture.reader());
     let search_index = search_component.index();
 
     // Build the daemon
@@ -65,10 +75,6 @@ pub async fn boot(
     let host_id = Settings::host_id().await?;
     let history_store =
         HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
-    let output_capture = match settings.output.limits() {
-        Some(limits) => OutputCapture::open(Settings::command_capture_dir(), limits.max_disk_usage),
-        None => OutputCapture::nop(),
-    };
     let journal = Arc::new(HistoryJournal::new(
         handle.caps().clone(),
         history_store,

@@ -44,6 +44,20 @@ pub trait Backend {
 
     /// Forget the captured output of every history id in `ids`. Absent ids are ignored.
     async fn remove(&self, ids: Vec<HistoryId>) -> Result<(), DeleteOutputError>;
+
+    /// On-disk bytes the store occupies. A store that persists nothing reports 0.
+    fn estimated_disk_space(&self) -> u64;
+
+    /// Every stored id, oldest first (by key order). Reads keys only; used to reconcile the derived
+    /// search index against the store.
+    async fn all_ids(&self) -> Result<Vec<HistoryId>, GetOutputError>;
+
+    /// The oldest stored ids whose values total at least `reclaim_bytes` (or all of them, if the
+    /// store holds less), for the garbage collector to evict. Does not delete anything.
+    async fn eviction_candidates(
+        &self,
+        reclaim_bytes: u64,
+    ) -> Result<Vec<HistoryId>, DeleteOutputError>;
 }
 
 #[enum_dispatch(Backend)]

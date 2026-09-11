@@ -16,7 +16,7 @@ mod unix {
     use atuin_common::filter::OrFilter;
     use atuin_daemon::client::{SearchClient, SearchParams};
     use atuin_daemon::components::SearchComponent;
-    use atuin_daemon::{Daemon, DaemonHandle};
+    use atuin_daemon::{Daemon, DaemonHandle, OutputCapture};
     use tempfile::TempDir;
     use tokio::net::UnixListener;
     use tokio_stream::wrappers::UnixListenerStream;
@@ -85,7 +85,9 @@ mod unix {
         let store = SqliteStore::new(&record_path, Duration::from_secs(5)).await.unwrap();
 
         let search_component = SearchComponent::new();
-        let search_service = search_component.grpc_service();
+        // This test exercises command search only; there is no output store, so the output index is
+        // a nop.
+        let search_service = search_component.grpc_service(OutputCapture::nop().reader());
 
         let mut daemon = Daemon::builder(settings)
             .store(store)

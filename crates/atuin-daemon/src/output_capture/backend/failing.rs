@@ -26,4 +26,19 @@ impl Backend for FailingBackend {
     async fn remove(&self, _ids: Vec<HistoryId>) -> Result<(), DeleteOutputError> {
         Err(DeleteOutputError::Storage(unavailable()))
     }
+
+    fn estimated_disk_space(&self) -> u64 {
+        0
+    }
+
+    async fn all_ids(&self) -> Result<Vec<HistoryId>, GetOutputError> {
+        Err(GetOutputError::Storage(unavailable()))
+    }
+
+    async fn eviction_candidates(
+        &self,
+        _reclaim_bytes: u64,
+    ) -> Result<Vec<HistoryId>, DeleteOutputError> {
+        Err(DeleteOutputError::Storage(unavailable()))
+    }
 }

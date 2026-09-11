@@ -18,4 +18,19 @@ impl Backend for NopBackend {
     async fn remove(&self, _ids: Vec<HistoryId>) -> Result<(), DeleteOutputError> {
         Ok(())
     }
+
+    fn estimated_disk_space(&self) -> u64 {
+        0
+    }
+
+    async fn all_ids(&self) -> Result<Vec<HistoryId>, GetOutputError> {
+        Ok(Vec::new())
+    }
+
+    async fn eviction_candidates(
+        &self,
+        _reclaim_bytes: u64,
+    ) -> Result<Vec<HistoryId>, DeleteOutputError> {
+        Ok(Vec::new())
+    }
 }

@@ -13,15 +13,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use atuin_client::history::{CommandCapture, HistoryId};
-use atuin_client::settings::DiskUsageLimit;
-use atuin_common::units::ByteSize;
 use fjall::{OptimisticTxDatabase, OptimisticTxKeyspace, PersistMode, Readable};
 use schema::{Schema as _, SchemaV2};
 use tokio::task::JoinHandle;
 use tracing::error;
-
-mod gc;
-use gc::Gc;
 
 use super::{Backend, CaptureError, DeleteOutputError, GetOutputError};
 
@@ -132,44 +127,54 @@ impl FjallBackendInner {
         .expect("output-capture delete task panicked")
     }
 
-    /// Deletes the oldest stored entries until their values total at least `reclaim_bytes`,
-    /// returning the number of bytes actually freed.
-    async fn reclaim(&self, reclaim_bytes: u64) -> Result<u64, DeleteOutputError> {
+    /// Every stored id, oldest first (fjall key order). Reads keys only.
+    async fn all_ids(&self) -> Result<Vec<HistoryId>, GetOutputError> {
+        let keyspace = self.keyspace.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut ids = Vec::new();
+            for guard in keyspace.inner().iter() {
+                // Read the key only; the value (a KV-separated blob) stays on disk.
+                let key = guard.key().map_err(|err| GetOutputError::Storage(Box::new(err)))?;
+                let id = ActiveSchema::deserialize_key(key.as_ref())
+                    .map_err(|err| GetOutputError::Storage(Box::new(err)))?;
+                ids.push(id);
+            }
+            Ok(ids)
+        })
+        .await
+        .expect("output-capture scan task panicked")
+    }
+
+    /// The oldest ids whose values total at least `reclaim_bytes` (or all of them, if the store
+    /// holds less). Reads values to measure their size, oldest first, and stops early; it does not
+    /// delete -- eviction goes back through the facade's `remove` so the search index stays in sync.
+    async fn eviction_candidates(
+        &self,
+        reclaim_bytes: u64,
+    ) -> Result<Vec<HistoryId>, DeleteOutputError> {
         if reclaim_bytes == 0 {
-            return Ok(0);
+            return Ok(Vec::new());
         }
 
-        let db = self.db.clone();
         let keyspace = self.keyspace.clone();
-        let dirty = self.dirty.clone();
         tokio::task::spawn_blocking(move || {
-            let mut tx = db.write_tx().map_err(|err| DeleteOutputError::Storage(Box::new(err)))?;
+            let mut ids = Vec::new();
             let mut freed: u64 = 0;
-
             for guard in keyspace.inner().iter() {
                 let (key, value) =
                     guard.into_inner().map_err(|err| DeleteOutputError::Storage(Box::new(err)))?;
-
-                tx.remove(&keyspace, key);
-
+                let id = ActiveSchema::deserialize_key(key.as_ref())
+                    .map_err(|err| DeleteOutputError::Storage(Box::new(err)))?;
+                ids.push(id);
                 freed = freed.saturating_add(u64::try_from(value.len()).unwrap_or(u64::MAX));
                 if freed >= reclaim_bytes {
                     break;
                 }
             }
-
-            match tx.commit().map_err(|err| DeleteOutputError::Storage(Box::new(err)))? {
-                Ok(()) => {
-                    dirty.store(true, Ordering::Release);
-                    Ok(freed)
-                }
-                Err(fjall::Conflict) => {
-                    unreachable!("reclaim performs no tracked reads, so it can never conflict")
-                }
-            }
+            Ok(ids)
         })
         .await
-        .expect("output-capture reclaim task panicked")
+        .expect("output-capture eviction-candidates task panicked")
     }
 }
 
@@ -260,24 +265,24 @@ impl Drop for Flusher {
 pub struct FjallBackend {
     #[debug(skip)]
     inner: Arc<FjallBackendInner>,
-    // Held only to abort their background tasks on drop; never read.
+    // Held only to abort the flusher's background task on drop; never read.
     #[debug(skip)]
     _flusher: Arc<Flusher>,
-    #[debug(skip)]
-    _gc: Option<Arc<Gc>>,
 }
 
 impl FjallBackend {
-    /// Open the store at `path`, keeping its disk use under `max_disk_usage`. A percentage limit
-    /// is taken against the disk `path` lives on; an absolute size is used verbatim; `unlimited`
-    /// runs no garbage collector.
-    pub fn open(path: impl AsRef<Path>, max_disk_usage: DiskUsageLimit) -> fjall::Result<Self> {
-        let path = path.as_ref();
-        let db = OptimisticTxDatabase::builder(path).open()?;
-        Self::new(db, resolve_budget(path, max_disk_usage))
+    /// Open the store at `path`.
+    ///
+    /// Disk budgeting and eviction live one layer up, in the [`OutputCapture`] facade, so a single
+    /// eviction can drop an entry from the store and the search index together.
+    ///
+    /// [`OutputCapture`]: crate::output_capture::OutputCapture
+    pub fn open(path: impl AsRef<Path>) -> fjall::Result<Self> {
+        let db = OptimisticTxDatabase::builder(path.as_ref()).open()?;
+        Self::new(db)
     }
 
-    pub fn new(db: OptimisticTxDatabase, budget: Option<ByteSize>) -> fjall::Result<Self> {
+    pub fn new(db: OptimisticTxDatabase) -> fjall::Result<Self> {
         let keyspace = db.keyspace(ActiveSchema::NAME, ActiveSchema::create_options)?;
         let inner = Arc::new(FjallBackendInner {
             db,
@@ -285,35 +290,14 @@ impl FjallBackend {
             dirty: Arc::new(AtomicBool::new(false)),
         });
 
-        // The flusher and gc each drive `inner` from a background task, holding only a clone of it.
-        // `inner` points at no task, so those clones form no cycle that would keep the tasks alive.
+        // The flusher drives `inner` from a background task, holding only a clone of it. `inner`
+        // points at no task, so that clone forms no cycle that would keep the task alive.
         let flusher = Arc::new(Flusher::spawn(inner.clone()));
-        let gc = budget.map(|budget| Arc::new(Gc::spawn(inner.clone(), budget)));
 
         Ok(Self {
             inner,
             _flusher: flusher,
-            _gc: gc,
         })
-    }
-}
-
-/// The disk budget for a store living at `path`, or `None` when usage is unlimited. Only a
-/// percentage has to look at the disk; an absolute size is taken as-is, so an absolute limit
-/// never touches the filesystem.
-fn resolve_budget(path: &Path, limit: DiskUsageLimit) -> Option<ByteSize> {
-    match limit {
-        DiskUsageLimit::Unlimited => None,
-        DiskUsageLimit::Bytes(bytes) => Some(bytes),
-        DiskUsageLimit::Percent(_) => {
-            let disks = sysinfo::Disks::new_with_refreshed_list();
-            let total = disks
-                .iter()
-                .filter(|disk| path.starts_with(disk.mount_point()))
-                .max_by_key(|disk| disk.mount_point().as_os_str().len())
-                .map(|disk| disk.total_space())?;
-            limit.resolve(ByteSize::b(total))
-        }
     }
 }
 
@@ -329,6 +313,21 @@ impl Backend for FjallBackend {
     async fn remove(&self, ids: Vec<HistoryId>) -> Result<(), DeleteOutputError> {
         self.inner.remove(ids).await
     }
+
+    fn estimated_disk_space(&self) -> u64 {
+        self.inner.estimated_disk_space()
+    }
+
+    async fn all_ids(&self) -> Result<Vec<HistoryId>, GetOutputError> {
+        self.inner.all_ids().await
+    }
+
+    async fn eviction_candidates(
+        &self,
+        reclaim_bytes: u64,
+    ) -> Result<Vec<HistoryId>, DeleteOutputError> {
+        self.inner.eviction_candidates(reclaim_bytes).await
+    }
 }
 
 #[cfg(test)]
@@ -340,7 +339,7 @@ mod tests {
 
     fn temp_backend() -> (FjallBackend, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let backend = FjallBackend::open(dir.path(), DiskUsageLimit::Unlimited).expect("open");
+        let backend = FjallBackend::open(dir.path()).expect("open");
         (backend, dir)
     }
 
@@ -491,30 +490,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reclaim_evicts_oldest_until_budget_met() {
+    async fn eviction_candidates_names_oldest_until_budget_met() {
         let (store, _dir) = temp_backend();
         for n in 1..=3u128 {
             store.capture(hid(n), cap(&format!("out{n}"))).await.expect("capture");
         }
 
-        // One byte of budget evicts exactly the oldest entry (keys sort by id).
-        let freed = store.inner.reclaim(1).await.expect("reclaim");
-        assert!(freed > 0, "freeing an entry reports its size");
-        assert!(store.get(hid(1)).await.expect("get").is_none(), "oldest evicted");
-        assert!(store.get(hid(2)).await.expect("get").is_some(), "newer kept");
-        assert!(store.get(hid(3)).await.expect("get").is_some(), "newer kept");
+        // One byte of budget names exactly the oldest entry (keys sort by id), and selecting a
+        // victim must not delete it -- the facade's `remove` does that, so both stores stay in sync.
+        let victims = store.eviction_candidates(1).await.expect("candidates");
+        assert_eq!(victims, vec![hid(1)]);
+        assert!(store.get(hid(1)).await.expect("get").is_some(), "selection does not delete");
 
-        // A budget past everything drains the rest.
-        store.inner.reclaim(u64::MAX).await.expect("reclaim");
-        assert!(store.get(hid(2)).await.expect("get").is_none());
-        assert!(store.get(hid(3)).await.expect("get").is_none());
+        // A budget past everything names all entries, oldest first.
+        let all = store.eviction_candidates(u64::MAX).await.expect("candidates");
+        assert_eq!(all, vec![hid(1), hid(2), hid(3)]);
     }
 
     #[tokio::test]
-    async fn reclaim_zero_bytes_evicts_nothing() {
+    async fn eviction_candidates_for_zero_bytes_is_empty() {
         let (store, _dir) = temp_backend();
         store.capture(hid(1), cap("keep")).await.expect("capture");
-        assert_eq!(store.inner.reclaim(0).await.expect("reclaim"), 0);
-        assert!(store.get(hid(1)).await.expect("get").is_some());
+        assert!(store.eviction_candidates(0).await.expect("candidates").is_empty());
+    }
+
+    #[tokio::test]
+    async fn all_ids_lists_every_stored_id_oldest_first() {
+        let (store, _dir) = temp_backend();
+        for n in 1..=3u128 {
+            store.capture(hid(n), cap(&format!("out{n}"))).await.expect("capture");
+        }
+        assert_eq!(store.all_ids().await.expect("all_ids"), vec![hid(1), hid(2), hid(3)]);
     }
 }
