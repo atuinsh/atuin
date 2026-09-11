@@ -61,7 +61,7 @@ pub async fn boot(
 
     let handle = daemon.handle();
 
-    let _sync = sync::Sync::spawn(handle.clone(), search_index.clone());
+    let _sync_engine = sync::SyncEngine::spawn(handle.clone(), search_index.clone());
 
     let host_id = Settings::host_id().await?;
     let history_store =
