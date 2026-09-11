@@ -459,6 +459,13 @@ jobs:
           manifest-path: crates/atuin-common/Cargo.toml
           command: check bans
 
+      # atuin-history is a library crate; enforce (crate-scoped) that it never
+      # (re)adds eyre or anyhow. Config: crates/atuin-history/deny.toml
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: crates/atuin-history/Cargo.toml
+          command: check bans
+
       # atuin-domain is a library crate; enforce (crate-scoped) that it never
       # (re)adds eyre or anyhow. Config: crates/atuin-domain/deny.toml
       - uses: EmbarkStudios/cargo-deny-action@v2
