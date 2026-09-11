@@ -72,6 +72,11 @@ impl TextHighlighter {
         })
     }
 
+    /// The `[open, close]` markers this highlighter wraps matches in.
+    pub fn markers(self) -> [char; 2] {
+        [self.open, self.close]
+    }
+
     /// Take a string which may or may not contain highlight markers and strip it of said highlight
     /// markers.
     ///
@@ -98,6 +103,9 @@ impl TextHighlighter {
 }
 
 /// Represents text which was highlighted by the `TextHighlighter`.
+///
+/// [`Display`] implementations come in the form of [`Self::display_plain`], [`Self::display_subs`]
+/// and [`Self::display_raw`].
 pub struct HighlightedText<S> {
     data: S,
     highlighter: TextHighlighter,
@@ -136,14 +144,17 @@ impl<S: AsRef<str>> HighlightedText<S> {
         }
     }
 
+    /// [`Display`] the highlighted text, stripping away the highlight markers.
     pub fn display_plain(&self) -> impl fmt::Display + '_ {
         DisplayPlain(self)
     }
 
+    /// [`Display`] the highlighted text, replacing highlighted markers with `subs`.
     pub fn display_subs(&self, subs: [char; 2]) -> impl fmt::Display + '_ {
         DisplaySubs { src: self, subs }
     }
 
+    /// [`Display`] the highlighted text as-is, including markers.
     pub fn display_raw(&self) -> impl fmt::Display + '_ {
         DisplayRaw(self)
     }
@@ -387,9 +398,8 @@ mod tests {
         distinct_markers().prop_flat_map(|markers| {
             let [open, close] = markers;
             prop::collection::vec(
-                nasty_char().prop_filter("clean text holds no marker", move |c| {
-                    *c != open && *c != close
-                }),
+                nasty_char()
+                    .prop_filter("clean text holds no marker", move |c| *c != open && *c != close),
                 0..12,
             )
             .prop_flat_map(move |chars| {
