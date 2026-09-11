@@ -61,8 +61,6 @@ pub async fn boot(
 
     let handle = daemon.handle();
 
-    // Spawn the background sync engine. Held until `boot` returns, so it is aborted
-    // once the daemon shuts down. It feeds synced history straight into the index.
     let _sync = sync::Sync::spawn(handle.clone(), search_index.clone());
 
     let host_id = Settings::host_id().await?;
