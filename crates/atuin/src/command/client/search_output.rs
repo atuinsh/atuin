@@ -5,6 +5,7 @@ use atuin_client::database::Sqlite;
 use atuin_client::history::HistoryId;
 use atuin_client::settings::Settings;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
+use atuin_common::string::highlighted::HighlightedString;
 use atuin_daemon::client::SearchClient;
 use clap::Parser;
 use eyre::{Result, WrapErr, bail};
@@ -66,13 +67,25 @@ impl Cmd {
                 // locally; skip it rather than error.
                 continue;
             };
-            let matches = m
-                .matches
-                .into_iter()
-                .map(Range::try_from)
-                .collect::<Result<Vec<_>, _>>()
-                .wrap_err("daemon returned a match range that does not fit in memory")?;
-            rows.push((history.command, m.output, matches));
+            let Some(output) = m.output else {
+                bail!("daemon returned a match with no output");
+            };
+            let (open, close) = (output.open, output.close);
+            let highlighted: HighlightedString =
+                output.try_into().wrap_err("daemon returned an invalid highlighted output")?;
+            let plain = highlighted.display_plain().to_string();
+            let open_len = char::from_u32(open).map_or(0, char::len_utf8);
+            let close_len = char::from_u32(close).map_or(0, char::len_utf8);
+            let matches: Vec<Range<usize>> = highlighted
+                .ranges()
+                .scan(0usize, |stripped, r| {
+                    *stripped += open_len;
+                    let shifted = (r.start - *stripped)..(r.end - *stripped);
+                    *stripped += close_len;
+                    Some(shifted)
+                })
+                .collect();
+            rows.push((history.command, plain, matches));
         }
 
         let mut w = io::stdout().lock();

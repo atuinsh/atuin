@@ -97,10 +97,13 @@ impl Index for SqliteIndex {
         Ok(())
     }
 
-    async fn remove(&self, ids: &[HistoryId]) -> Result<(), IndexError> {
-        if ids.is_empty() {
+    async fn remove(&self, ids: impl Iterator<Item = HistoryId>) -> Result<(), IndexError> {
+        let mut ids = ids.peekable();
+
+        if ids.peek().is_none() {
             return Ok(());
         }
+
         let pool = self.db.pool();
         let mut tx = pool.begin().await.map_err(store)?;
         for id in ids {
@@ -112,6 +115,7 @@ impl Index for SqliteIndex {
                 .map_err(store)?;
         }
         tx.commit().await.map_err(store)?;
+
         Ok(())
     }
 
@@ -202,8 +206,11 @@ mod tests {
         let hits = index.search("error", 10).await.expect("search");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].history_id, hid(1));
-        assert_eq!(hits[0].output, "the build failed with an error");
-        assert_eq!(hits[0].matches, vec![25..30]);
+        let output = &hits[0].output;
+        assert_eq!(output.display_plain().to_string(), "the build failed with an error");
+        let marked = output.as_ref();
+        let got: Vec<&str> = output.ranges().map(|r| &marked[r]).collect();
+        assert_eq!(got, vec!["error"]);
     }
 
     #[tokio::test]
@@ -212,7 +219,10 @@ mod tests {
         index.insert(hid(1), "error one\nfine\nerror two").await.expect("insert");
 
         let hits = index.search("error", 10).await.expect("search");
-        assert_eq!(hits[0].matches, vec![0..5, 15..20]);
+        let output = &hits[0].output;
+        let marked = output.as_ref();
+        let got: Vec<&str> = output.ranges().map(|r| &marked[r]).collect();
+        assert_eq!(got, vec!["error", "error"]);
     }
 
     #[tokio::test]
@@ -225,8 +235,11 @@ mod tests {
         index.insert(hid(1), &text).await.expect("insert");
 
         let hits = index.search("real", 10).await.expect("search");
-        assert_eq!(hits[0].output, "fake real");
-        assert_eq!(hits[0].matches, vec![5..9]);
+        let output = &hits[0].output;
+        assert_eq!(output.display_plain().to_string(), "fake real");
+        let marked = output.as_ref();
+        let got: Vec<&str> = output.ranges().map(|r| &marked[r]).collect();
+        assert_eq!(got, vec!["real"]);
     }
 
     #[tokio::test]
@@ -250,7 +263,7 @@ mod tests {
     async fn remove_drops_the_entry() {
         let (index, _dir) = temp_index().await;
         index.insert(hid(1), "removable content").await.expect("insert");
-        index.remove(&[hid(1)]).await.expect("remove");
+        index.remove([hid(1)].into_iter()).await.expect("remove");
         assert!(index.search("removable", 10).await.expect("search").is_empty());
     }
 

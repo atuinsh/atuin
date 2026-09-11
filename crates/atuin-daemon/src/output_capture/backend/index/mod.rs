@@ -12,12 +12,12 @@ pub use nop::NopIndex;
 pub use sqlite::SqliteIndex;
 use thiserror::Error;
 
-pub type IndexBackendError = Box<dyn std::error::Error + Send + Sync + 'static>;
+pub type IndexStorageError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 #[derive(Debug, Error)]
 pub enum IndexError {
     #[error("search index storage error: {0}")]
-    Storage(#[source] IndexBackendError),
+    Storage(#[source] IndexStorageError),
 }
 
 /// A single relevance-ranked full-text match over captured output.
@@ -34,7 +34,7 @@ pub trait Index {
     async fn insert(&self, id: HistoryId, text: &str) -> Result<(), IndexError>;
 
     /// Drop every id in `ids` from the index. Absent ids are ignored.
-    async fn remove(&self, ids: &[HistoryId]) -> Result<(), IndexError>;
+    async fn remove(&self, ids: impl Iterator<Item = HistoryId>) -> Result<(), IndexError>;
 
     /// Relevance-ranked matches, most relevant first: each carries the full output and the byte
     /// ranges of every match within it.

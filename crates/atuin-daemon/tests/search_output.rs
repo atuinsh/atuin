@@ -5,9 +5,8 @@
 
 mod common;
 
-use std::ops::Range;
-
 use atuin_client::history::HistoryId;
+use atuin_common::string::highlighted::HighlightedString;
 use common::TestEnv;
 use easy_cast::Conv;
 use rstest::*;
@@ -35,11 +34,11 @@ async fn search_returns_the_visible_output_and_where_it_matched(#[future(awt)] e
     assert_eq!(matches.len(), 1);
     let m = &matches[0];
     assert_eq!(HistoryId::try_from(m.history_id.clone().unwrap()).unwrap(), id);
-    assert_eq!(m.output, "error: disk full\nnext line");
-    let ranges: Vec<Range<usize>> =
-        m.matches.iter().map(|r| Range::try_from(*r).unwrap()).collect();
-    assert_eq!(ranges, vec![7..11]);
-    assert_eq!(&m.output[ranges[0].clone()], "disk");
+    let highlighted: HighlightedString = m.output.clone().unwrap().try_into().unwrap();
+    assert_eq!(highlighted.display_plain().to_string(), "error: disk full\nnext line");
+    let marked = highlighted.as_ref();
+    let got: Vec<&str> = highlighted.ranges().map(|r| &marked[r]).collect();
+    assert_eq!(got, vec!["disk"]);
 
     // Deleting the entry drops it from search along with its output.
     assert_eq!(history.delete_history(vec![id]).await.unwrap().deleted, 1);

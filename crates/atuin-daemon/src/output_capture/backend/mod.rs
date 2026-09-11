@@ -74,7 +74,7 @@ impl<S: Storage, I: Index> Backend<S, I> {
 
         // Best-effort, like `capture`: the storage is authoritative, so its result is what we
         // return; a stale index entry left behind is dropped by the next reconcile.
-        if let Err(err) = self.index.remove(ids).await {
+        if let Err(err) = self.index.remove(ids.iter().copied()).await {
             warn!(?err, "failed to drop ids from the output search index");
         }
         result
@@ -109,7 +109,7 @@ impl<S: Storage, I: Index> Backend<S, I> {
 
         let stale: Vec<HistoryId> = index_set.difference(&storage_set).copied().collect();
         if !stale.is_empty() {
-            self.index.remove(&stale).await?;
+            self.index.remove(stale.iter().copied()).await?;
         }
 
         for id in storage_ids {
@@ -250,8 +250,11 @@ mod tests {
 
         let hits = backend.search("fatal", 10).await.expect("search");
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].output, "fatal: disk full");
-        assert_eq!(hits[0].matches, vec![0..5]);
+        let output = &hits[0].output;
+        assert_eq!(output.display_plain().to_string(), "fatal: disk full");
+        let marked = output.as_ref();
+        let got: Vec<&str> = output.ranges().map(|r| &marked[r]).collect();
+        assert_eq!(got, vec!["fatal"]);
     }
 
     #[tokio::test]

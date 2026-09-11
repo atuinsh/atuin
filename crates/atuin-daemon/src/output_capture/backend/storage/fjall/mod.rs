@@ -25,9 +25,7 @@ type ActiveSchema = SchemaV2;
 
 /// The store and every operation on it.
 ///
-/// This is the state the flusher drives from its background task. It deliberately holds no task
-/// handle, so the task can own a clone of it without a reference cycle back to the `FjallStorage`
-/// that owns the flusher.
+/// This structure is shared between the [`FjallStorage`] and the task in [`Flusher`].
 struct FjallStorageInner {
     db: OptimisticTxDatabase,
     keyspace: OptimisticTxKeyspace,

@@ -362,8 +362,12 @@ impl SearchClient {
             query: query.into(),
             limit,
         };
-        let response = self.client.search_command_output(request).await?;
-        Ok(response.into_inner().matches)
+        let mut stream = self.client.search_command_output(request).await?.into_inner();
+        let mut matches = Vec::new();
+        while let Some(m) = stream.message().await? {
+            matches.push(m);
+        }
+        Ok(matches)
     }
 
     /// Tell the daemon to build the search index for the given list of shells.

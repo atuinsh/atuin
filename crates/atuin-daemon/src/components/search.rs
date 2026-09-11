@@ -21,8 +21,7 @@ use crate::output_capture::OutputSearcher;
 use crate::search::search_server::{Search as SearchSvc, SearchServer};
 use crate::search::{
     FilterMode, IndexFilterMode, OutputSearchMatch, PrepareIndexRequest, PrepareIndexResponse,
-    SearchCommandOutputRequest, SearchCommandOutputResponse, SearchIndex, SearchRequest,
-    SearchResponse,
+    SearchCommandOutputRequest, SearchIndex, SearchRequest, SearchResponse,
 };
 
 const RESULTS_LIMIT: u32 = 200;
@@ -250,6 +249,8 @@ impl SearchGrpcService {
 #[tonic::async_trait]
 impl SearchSvc for SearchGrpcService {
     type SearchStream = Pin<Box<dyn Stream<Item = Result<SearchResponse, Status>> + Send>>;
+    type SearchCommandOutputStream =
+        Pin<Box<dyn Stream<Item = Result<OutputSearchMatch, Status>> + Send>>;
 
     #[instrument(skip_all, level = Level::TRACE, name = "search_rpc")]
     async fn search(
@@ -359,7 +360,7 @@ impl SearchSvc for SearchGrpcService {
     async fn search_command_output(
         &self,
         request: Request<SearchCommandOutputRequest>,
-    ) -> Result<Response<SearchCommandOutputResponse>, Status> {
+    ) -> Result<Response<Self::SearchCommandOutputStream>, Status> {
         let request = request.into_inner();
 
         // A client `limit` of 0 means "server default"; anything larger is capped at that default so
@@ -370,7 +371,7 @@ impl SearchSvc for SearchGrpcService {
             n => n.min(default_limit),
         };
 
-        let matches = self
+        let matches: Vec<Result<OutputSearchMatch, Status>> = self
             .output_searcher
             .search(&request.query, limit)
             .await
@@ -379,15 +380,16 @@ impl SearchSvc for SearchGrpcService {
                 Status::internal("output search failed")
             })?
             .into_iter()
-            .map(|m| OutputSearchMatch {
-                history_id: Some(m.history_id.into()),
-                output: m.output,
-                matches: m.matches.into_iter().map(Into::into).collect(),
-                score: m.score,
+            .map(|m| {
+                Ok(OutputSearchMatch {
+                    history_id: Some(m.history_id.into()),
+                    output: Some((&m.output).into()),
+                    score: m.score,
+                })
             })
             .collect();
 
-        Ok(Response::new(SearchCommandOutputResponse { matches }))
+        Ok(Response::new(Box::pin(tokio_stream::iter(matches))))
     }
 }
 

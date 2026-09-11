@@ -11,7 +11,7 @@ impl Index for NopIndex {
         Ok(())
     }
 
-    async fn remove(&self, _ids: &[HistoryId]) -> Result<(), IndexError> {
+    async fn remove(&self, _ids: impl Iterator<Item = HistoryId>) -> Result<(), IndexError> {
         Ok(())
     }
 
