@@ -194,7 +194,7 @@ impl PackManifestDataV1 {
 #[derive(Debug, Error)]
 pub enum PackError {
     #[error("failed to decrypt a history record: {0}")]
-    Decrypt(eyre::Report),
+    Decrypt(#[from] paseto_v4::DecryptionError),
     #[error("failed to serialize the records: {0}")]
     Serialize(#[from] EncodeError),
     #[error("failed to compress the packfile: {0}")]

@@ -248,12 +248,13 @@ impl HistoryStore {
 
             // A record we can't decrypt or decode must not block the rest of the store -
             // skip it, and load everything else.
-            let hist = match Version::from_name(version.as_str()) {
-                Some(_) => record.decrypt(&self.encryption_key).and_then(|decrypted| {
-                    HistoryRecord::deserialize(&decrypted.data, version.as_str())
-                }),
-                None => Err(eyre!("unknown history version {version:?}")),
-            };
+            let hist =
+                match Version::from_name(version.as_str()) {
+                    Some(_) => record.decrypt(&self.encryption_key).map_err(Into::into).and_then(
+                        |decrypted| HistoryRecord::deserialize(&decrypted.data, version.as_str()),
+                    ),
+                    None => Err(eyre!("unknown history version {version:?}")),
+                };
 
             match hist {
                 Ok(hist) => ret.push(hist),
@@ -384,9 +385,11 @@ impl HistoryStore {
 
         // Skip records we can't decrypt or decode, rather than failing the entire build.
         let record = match Version::from_name(version.as_str()) {
-            Some(_) => record.decrypt(&self.encryption_key).and_then(|decrypted| {
-                HistoryRecord::deserialize(&decrypted.data, version.as_str())
-            }),
+            Some(_) => {
+                record.decrypt(&self.encryption_key).map_err(Into::into).and_then(|decrypted| {
+                    HistoryRecord::deserialize(&decrypted.data, version.as_str())
+                })
+            }
             None => Err(eyre!("unknown history version {version:?}")),
         };
 

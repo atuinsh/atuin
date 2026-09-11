@@ -6,7 +6,7 @@ exclude = ["ui/backend"]
 [workspace.package]
 version = "18.22.0"
 authors = ["Ellie Huxtable <ellie@atuin.sh>"]
-rust-version = "1.98.0"
+rust-version = "1.95.0"
 license = "MIT"
 homepage = "https://atuin.sh"
 repository = "https://github.com/atuinsh/atuin"
@@ -62,7 +62,12 @@ derive_more = {
 }
 directories = "6.0.0"
 divan = { version = "5.0.1", package = "codspeed-divan-compat" }
-easy-cast = "0.7.1"
+# easy-cast 0.5.5+ raises its MSRV to 1.96.
+#
+# The assert_nonzero feature patches a bug fixed in:
+# https://github.com/kas-gui/easy-cast/pull/52
+# which was released in 0.6.0
+easy-cast = { version = "0.5.4", features = ["assert_nonzero"] }
 enum_dispatch = "0.3"
 eventsource-stream = "0.2"
 eye_declare = "0.6.4"
@@ -142,7 +147,7 @@ sql-builder = "3"
 sqlx = { version = "0.9", features = ["runtime-tokio", "time", "uuid"] }
 strum = { version = "0.27", features = ["strum_macros"] }
 strum_macros = "0.28"
-sysinfo = "0.30.7"
+sysinfo = "0.39.6"
 tempfile = { version = "3.19" }
 thiserror = "2"
 time = { version = "0.3.47", features = ["serde-human-readable", "macros", "local-offset"] }

@@ -50,7 +50,7 @@ impl PyStyleIdxRange {
         };
 
         let start = norm(self.start).unwrap_or_default().clamp(0, len);
-        let end = norm(self.end).map_or_default(|n| n.saturating_add(1)).clamp(start, len);
+        let end = norm(self.end).map(|n| n.saturating_add(1)).unwrap_or_default().clamp(start, len);
         usize::conv(start)..usize::conv(end)
     }
 

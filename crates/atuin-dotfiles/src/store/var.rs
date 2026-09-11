@@ -338,9 +338,11 @@ impl VarStore {
 
             // Skip records we can't decrypt or decode, rather than failing the entire build.
             let ar = match version {
-                RecordVersion::V0 => record.decrypt(&self.encryption_key).and_then(|decrypted| {
-                    VarRecord::deserialize(&decrypted.data, &RecordVersion::V0)
-                }),
+                RecordVersion::V0 => {
+                    record.decrypt(&self.encryption_key).map_err(Into::into).and_then(|decrypted| {
+                        VarRecord::deserialize(&decrypted.data, &RecordVersion::V0)
+                    })
+                }
                 ref version => Err(eyre!("unknown version {version:?}")),
             };
 
