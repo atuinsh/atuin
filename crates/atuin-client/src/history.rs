@@ -465,31 +465,38 @@ impl History {
 
         let mut bytes = Bytes::new(bytes);
 
-        let real_version = decode::read_u16(&mut bytes).map_err(DecodeError::from)?;
+        // rmp decode errors borrow from `bytes`; make them `'static` so they satisfy the
+        // `Error + Send + Sync + 'static` bound that conversion into `eyre::Report` requires.
+        fn to_static<'a>(e: impl Into<DecodeError<'a>>) -> DecodeError<'static> {
+            e.into().into_static()
+        }
+
+        let real_version = decode::read_u16(&mut bytes).map_err(to_static)?;
         if real_version != version.as_int() {
             bail!("expected to decode {version} record, found v{real_version}");
         }
 
-        let nfields = decode::read_array_len(&mut bytes).map_err(DecodeError::from)?;
+        let nfields = decode::read_array_len(&mut bytes).map_err(to_static)?;
         let min_fields = version.min_fields();
         if nfields < min_fields || version.max_fields().is_some_and(|max| nfields > max) {
             bail!("unexpected number of fields ({nfields}) for history version {version}");
         }
 
-        let id = decode::read_string(&mut bytes)?;
-        let timestamp = decode::read_u64(&mut bytes).map_err(DecodeError::from)?;
-        let duration = decode::read_int(&mut bytes).map_err(DecodeError::from)?;
-        let exit = decode::read_int(&mut bytes).map_err(DecodeError::from)?;
+        let id = decode::read_string(&mut bytes).map_err(to_static)?;
+        let timestamp = decode::read_u64(&mut bytes).map_err(to_static)?;
+        let duration = decode::read_int(&mut bytes).map_err(to_static)?;
+        let exit = decode::read_int(&mut bytes).map_err(to_static)?;
 
-        let command = decode::read_string(&mut bytes)?;
-        let cwd = decode::read_string(&mut bytes)?;
-        let session = decode::read_string(&mut bytes)?;
+        let command = decode::read_string(&mut bytes).map_err(to_static)?;
+        let cwd = decode::read_string(&mut bytes).map_err(to_static)?;
+        let session = decode::read_string(&mut bytes).map_err(to_static)?;
         #[allow(deprecated)]
-        let cmd_origin = CmdOrigin::parse_lenient(decode::read_string(&mut bytes)?);
-        let deleted_at = decode::read_optional(&mut bytes, decode::read_u64)?;
+        let cmd_origin =
+            CmdOrigin::parse_lenient(decode::read_string(&mut bytes).map_err(to_static)?);
+        let deleted_at = decode::read_optional(&mut bytes, decode::read_u64).map_err(to_static)?;
 
         let author = if version >= Version::One {
-            decode::read_optional(&mut bytes, decode::read_string)?
+            decode::read_optional(&mut bytes, decode::read_string).map_err(to_static)?
         } else {
             None
         };
@@ -499,19 +506,20 @@ impl History {
             Version::One => nfields > min_fields,
             Version::Two => true,
         } {
-            decode::read_optional(&mut bytes, decode::read_string)?
+            decode::read_optional(&mut bytes, decode::read_string).map_err(to_static)?
         } else {
             None
         };
 
         let shell = if version >= Version::Two {
-            decode::read_optional(&mut bytes, decode::read_string)?
+            decode::read_optional(&mut bytes, decode::read_string).map_err(to_static)?
         } else {
             None
         };
 
         let author_kind = if version >= Version::Two && nfields >= V2_AUTHOR_KIND_FIELD_NUMBER {
-            decode::read_optional(&mut bytes, decode::read_int::<u8, _>)?
+            decode::read_optional(&mut bytes, decode::read_int::<u8, _>)
+                .map_err(to_static)?
                 .and_then(AuthorKind::from_repr)
         } else {
             None

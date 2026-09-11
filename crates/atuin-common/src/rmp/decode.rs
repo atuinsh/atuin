@@ -13,9 +13,10 @@ pub use rmp::decode::{
 /// indicates which variant the error is ([`rmp`]'s error types are enums; some unconditionally
 /// print a static string and others don't even implement [`Display`] for all `E`).
 ///
-/// Conversion to [`eyre::Report`] is supported. This cannot be done by implementing
-/// [`std::error::Error`] because this type is not, in general, `'static`, so a manual
-/// implementation is provided.
+/// This type implements [`std::error::Error`]. Note, however, that it is not, in general,
+/// `'static` (it can borrow from the decoded buffer). To use it where a `'static` error is
+/// required — for example converting into an `eyre::Report` or a
+/// `Box<dyn std::error::Error + 'static>` — call [`into_static`](Self::into_static) first.
 ///
 /// [`Display`]: std::fmt::Display
 #[derive(Debug, derive_more::Display, derive_more::From)]
@@ -66,11 +67,7 @@ impl<E: RmpReadErr> DecodeError<'_, E> {
     }
 }
 
-impl<E: RmpReadErr> From<DecodeError<'_, E>> for eyre::Report {
-    fn from(e: DecodeError<'_, E>) -> Self {
-        eyre::eyre!("{e}")
-    }
-}
+impl<E: RmpReadErr> std::error::Error for DecodeError<'_, E> {}
 
 /// Read an owned string from a [`Bytes`] object.
 ///

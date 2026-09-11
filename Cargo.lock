@@ -465,7 +465,6 @@ dependencies = [
  "derive_more",
  "directories",
  "easy-cast",
- "eyre",
  "fs-err",
  "futures",
  "getrandom 0.4.3",
