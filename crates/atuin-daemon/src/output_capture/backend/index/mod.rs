@@ -30,14 +30,13 @@ pub trait Index {
     /// Drop every id in `ids` from the index. Absent ids are ignored.
     async fn remove(&self, ids: impl Iterator<Item = HistoryId>) -> Result<(), IndexError>;
 
-    /// Relevance-ranked matches, most relevant first: each carries the full output and the byte
-    /// ranges of every match within it.
+    /// Relevance-ranked matches, most relevant first.
     async fn search(
         &self,
         query: &str,
         limit: usize,
     ) -> ChunkedStream<Result<OutputMatch, IndexError>>;
 
-    /// Every id currently held in the index, for reconciling against the storage.
+    /// Every id currently held in the index.
     async fn indexed_ids(&self) -> ChunkedStream<Result<HistoryId, IndexError>>;
 }
