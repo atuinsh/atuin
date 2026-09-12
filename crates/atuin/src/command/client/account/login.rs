@@ -2,7 +2,7 @@ use std::io::{self, IsTerminal};
 
 use atuin_client::auth::{self, AuthClient, AuthResponse};
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::record::sync::{ClientSource, SyncEngine, SyncError};
+use atuin_client::record::sync::{ClientSource, SyncError, SyncSession};
 use atuin_client::settings::{Settings, SyncAuth};
 use atuin_common::encryption::paseto_v4;
 use clap::Parser;
@@ -272,9 +272,9 @@ async fn verify_key_against_remote(
     let mut key = paseto_v4::Key::try_load_from_path(&settings.key_path)
         .context("could not load encryption key for verification")?;
 
-    // Build the engine once (this hits the network). The key can change between retries below, so
-    // each iteration re-keys the shared engine rather than reconnecting.
-    let engine = SyncEngine::builder()
+    // Build the session once (this hits the network). The key can change between retries below, so
+    // each iteration re-keys the shared session rather than reconnecting.
+    let session = SyncSession::builder()
         .store(store.clone())
         .client_source(ClientSource::FromSettings {
             settings,
@@ -284,7 +284,7 @@ async fn verify_key_against_remote(
         .connect()
         .await?;
     loop {
-        let check = engine.keyed(&key).key_valid().await;
+        let check = session.keyed(&key).key_valid().await;
         match check {
             // Only persist a key the server has confirmed can read the data, so
             // that cancelling out of a retry leaves the local store as it was.

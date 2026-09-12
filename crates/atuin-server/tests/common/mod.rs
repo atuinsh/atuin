@@ -85,8 +85,8 @@ pub async fn register_inner(
     api_client::Client::new(
         address.clone(),
         &api_client::AuthToken::Token(registration_response.session),
-        5,
-        30,
+        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(30),
         &Default::default(),
         caps,
     )
@@ -108,8 +108,8 @@ pub async fn login(address: &url::Url, username: String, password: String) -> ap
     api_client::Client::new(
         address.clone(),
         &api_client::AuthToken::Token(login_response.session),
-        5,
-        30,
+        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(30),
         &Default::default(),
         caps,
     )

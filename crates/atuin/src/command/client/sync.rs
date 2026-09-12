@@ -1,7 +1,7 @@
 use atuin_client::database::Sqlite;
 use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::record::sync::{ClientSource, SyncEngine};
+use atuin_client::record::sync::{ClientSource, SyncSession};
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::RecordTag;
@@ -76,9 +76,9 @@ async fn run(settings: &Settings, force: bool, db: &Sqlite, store: SqliteStore) 
     let host_id = Settings::host_id().await?;
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key.clone());
 
-    // Build the engine once and reuse it for both sync passes below. It owns a clone of the store
+    // Build the session once and reuse it for both sync passes below. It owns a clone of the store
     // (a shared pool), so the second pass sees whatever the store-init writes locally.
-    let engine = SyncEngine::builder()
+    let session = SyncSession::builder()
         .store(store.clone())
         .client_source(ClientSource::FromSettings {
             settings,
@@ -89,7 +89,7 @@ async fn run(settings: &Settings, force: bool, db: &Sqlite, store: SqliteStore) 
         .await
         .map_err(crate::print_error::format_sync_error)?;
 
-    let (uploaded, downloaded) = engine
+    let (uploaded, downloaded) = session
         .keyed(&encryption_key)
         .sync()
         .await
@@ -113,8 +113,8 @@ async fn run(settings: &Settings, force: bool, db: &Sqlite, store: SqliteStore) 
         println!("Re-running sync due to new records locally");
 
         // we'll want to run sync once more, as there will now be stuff to upload -- re-key the same
-        // engine rather than reconnecting.
-        let (uploaded, downloaded) = engine
+        // session rather than reconnecting.
+        let (uploaded, downloaded) = session
             .keyed(&encryption_key)
             .sync()
             .await

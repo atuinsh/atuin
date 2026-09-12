@@ -1,4 +1,4 @@
-//! The core sync engine that Atuin uses.
+//! The core sync session that Atuin uses.
 //!
 //! The role of sync is to sync records between a remote server and a local client. There are two
 //! core terms important to note:
@@ -37,7 +37,7 @@ use crate::packfile::PackedPackfile;
 use crate::packfile::record::{PackManifestRecordView, ParsingError, UnpackError};
 
 mod builder;
-pub use builder::{ClientSource, SyncEngineBuilder, SyncEngineInit};
+pub use builder::{ClientSource, SyncSessionBuilder, SyncSessionInit};
 
 /// How many packfile blobs to download concurrently within a single page. (Uploads are batched by
 /// [`Client::upload_packfiles`](crate::api_client::Client::upload_packfiles).)
@@ -46,7 +46,7 @@ const MAX_CONCURRENT_PACKFILE_TRANSFERS: usize = 16;
 /// How many packfile manifests to pack concurrently before handing a page's blobs to the client.
 const MAX_CONCURRENT_PACKS: usize = 16;
 
-/// Records requested per sync page unless overridden with [`SyncEngine::with_page_size`].
+/// Records requested per sync page unless overridden with [`SyncSession::with_page_size`].
 pub const DEFAULT_PAGE_SIZE: NonZeroU64 = NonZeroU64::new(100).unwrap();
 
 #[derive(Error, Debug, Clone)]
@@ -128,7 +128,7 @@ pub enum Operation {
 
 /// Drives atuin's sync.
 #[derive(Clone)]
-pub struct SyncEngine {
+pub struct SyncSession {
     client: Client,
     store: SqliteStore,
     /// An explicit page-size override set via [`Self::with_page_size`]. When `None`, the page size
@@ -136,16 +136,16 @@ pub struct SyncEngine {
     page_size_override: Option<NonZeroU64>,
 }
 
-/// A [`SyncEngine`] paired with an encryption key, for the operations that encrypt or decrypt.
-/// Obtained from [`SyncEngine::keyed`].
+/// A [`SyncSession`] paired with an encryption key, for the operations that encrypt or decrypt.
+/// Obtained from [`SyncSession::keyed`].
 pub struct Keyed<'k> {
-    engine: &'k SyncEngine,
+    session: &'k SyncSession,
     key: &'k paseto_v4::Key,
     /// The result of verifying `key` against the remote.
     key_check: MutEagerFutureCell<Option<SyncError>>,
 }
 
-impl SyncEngine {
+impl SyncSession {
     /// Set how many records each sync page requests, overriding capability negotiation.
     #[must_use]
     pub fn with_page_size(mut self, page_size: NonZeroU64) -> Self {
@@ -169,18 +169,18 @@ impl SyncEngine {
         }
     }
 
-    /// Pair this engine with an encryption `key` to run the crypto-touching sync operations.
+    /// Pair this session with an encryption `key` to run the crypto-touching sync operations.
     #[must_use]
     pub fn keyed<'k>(&'k self, key: &'k paseto_v4::Key) -> Keyed<'k> {
-        let engine = self.clone();
+        let session = self.clone();
         let key_for_check = key.clone();
         let key_check = MutEagerFutureCell::new(
-            async move { engine.check_encryption_key(&key_for_check).await },
+            async move { session.check_encryption_key(&key_for_check).await },
             &Handle::current(),
         );
 
         Keyed {
-            engine: self,
+            session: self,
             key,
             key_check,
         }
@@ -253,7 +253,7 @@ impl SyncEngine {
 
     // Take a diff and resolve it into a set of operations. In theory this could be done as a part of
     // the diffing stage, but it's easier to reason about and test this way. It needs none of the
-    // engine's state, so it's an associated function rather than a method.
+    // session's state, so it's an associated function rather than a method.
     #[instrument(level = "trace", skip_all, fields(n_diffs = diffs.len()), err)]
     pub fn operations(diffs: Vec<Diff>) -> Result<Vec<Operation>, SyncError> {
         let mut operations = diffs
@@ -334,9 +334,9 @@ impl Keyed<'_> {
         local: RecordIdx,
         remote: Option<RecordIdx>,
     ) -> Result<u64, SyncError> {
-        let page_size = self.engine.get_page_size().await.get();
-        let store = &self.engine.store;
-        let client = &self.engine.client;
+        let page_size = self.session.get_page_size().await.get();
+        let store = &self.session.store;
+        let client = &self.session.client;
         // The first record the remote *doesn't* have.
         let first_missing_remote = remote.map_or(0, |n| n + 1);
         let expected = local + 1 - first_missing_remote;
@@ -435,8 +435,8 @@ impl Keyed<'_> {
         series: &RecordSeriesKey,
         remote: RecordIdx,
     ) -> Result<Vec<RecordId>, SyncError> {
-        let page_size = self.engine.get_page_size().await.get();
-        let store = &self.engine.store;
+        let page_size = self.session.get_page_size().await.get();
+        let store = &self.session.store;
         // Scan the database to find the first missing local index, rather than assuming it's one
         // more than the highest local index. A prior packfile op for this host may have expanded a
         // pack whose history landed ABOVE a still-missing index; keying off the highest index would
@@ -507,7 +507,7 @@ impl Keyed<'_> {
         manifest: &Record<EncryptedData>,
     ) -> Result<Vec<RecordId>, PackfileDownloadError> {
         let view = PackManifestRecordView::new(manifest)?;
-        let store = &self.engine.store;
+        let store = &self.session.store;
 
         // Skip only if this manifest's whole covered range is already present locally.
         let first_gap = store
@@ -524,7 +524,7 @@ impl Keyed<'_> {
         }
 
         let blob = self
-            .engine
+            .session
             .client
             .download_packfile(view.record.id)
             .await
@@ -550,7 +550,7 @@ impl Keyed<'_> {
         let mut ret = Vec::new();
         let mut progress = 0u64;
 
-        let pages = self.engine.client.records(series).stream(chunks);
+        let pages = self.session.client.records(series).stream(chunks);
         futures::pin_mut!(pages);
         while let Some(page) = pages.next().await {
             let page = page.map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
@@ -561,7 +561,7 @@ impl Keyed<'_> {
                 ret.extend(self.expand_manifests(&page).await?);
             }
 
-            self.engine
+            self.session
                 .store
                 .push_batch(page.iter())
                 .await
@@ -618,7 +618,7 @@ impl Keyed<'_> {
         let mut downloaded = Vec::new();
 
         let packfiles_enabled = matches!(
-            self.engine.client.caps().get_server::<PackfileCap>().await,
+            self.session.client.caps().get_server::<PackfileCap>().await,
             Ok(Some(cap)) if cap.record_count > 0
         );
 
@@ -671,7 +671,7 @@ impl Keyed<'_> {
     /// Subsequent calls to [`Self::key_valid`] will return whether the key is valid against this
     /// new `remote_index`.
     pub async fn key_valid_against(&self, remote_index: &RecordStatus) -> Option<SyncError> {
-        let verdict = self.engine.check_key_against_index(self.key, remote_index).await;
+        let verdict = self.session.check_key_against_index(self.key, remote_index).await;
         self.key_check.overwrite(verdict.clone());
         verdict
     }
@@ -680,13 +680,13 @@ impl Keyed<'_> {
     /// diff into operations, then apply them.
     #[instrument(level = "trace", skip_all, err)]
     pub async fn sync(&self) -> Result<(u64, Vec<RecordId>), SyncError> {
-        let (diff, remote_index) = self.engine.diff().await?;
+        let (diff, remote_index) = self.session.diff().await?;
 
         if let Some(err) = self.key_valid_against(&remote_index).await {
             return Err(err);
         }
 
-        let operations = SyncEngine::operations(diff)?;
+        let operations = SyncSession::operations(diff)?;
         self.sync_remote(operations).await
     }
 }
@@ -701,7 +701,7 @@ mod tests {
     use rstest::rstest;
 
     use crate::record::sqlite_store::SqliteStore;
-    use crate::record::sync::{Operation, SyncEngine};
+    use crate::record::sync::{Operation, SyncSession};
     use crate::settings::test_local_timeout;
 
     enum Expect {
@@ -772,7 +772,7 @@ mod tests {
         #[case] expect: Expect,
     ) {
         let series = RecordSeriesKey::new(HostId(uuid_v7()), RecordTag::History);
-        let result = SyncEngine::operations(vec![Diff {
+        let result = SyncSession::operations(vec![Diff {
             series: series.clone(),
             local,
             remote,
@@ -870,7 +870,7 @@ mod tests {
         ]; // remote knows about the already-synced, and one new record in a new store
 
         let (_store, diff) = build_test_diff(local, remote).await;
-        let operations = SyncEngine::operations(diff).unwrap();
+        let operations = SyncSession::operations(diff).unwrap();
 
         assert_eq!(operations.len(), 7);
 
@@ -969,8 +969,15 @@ mod packfile_sync_tests {
     /// A [`Client`] pointed at a wiremock server, authenticated with a dummy token.
     pub(super) fn mock_client(addr: &url::Url) -> Client {
         let caps = caps_client_anonymous(addr, &HashMap::new()).unwrap();
-        Client::new(addr.clone(), &AuthToken::Token("t".into()), 30, 30, &HashMap::new(), caps)
-            .unwrap()
+        Client::new(
+            addr.clone(),
+            &AuthToken::Token("t".into()),
+            std::time::Duration::from_secs(30),
+            std::time::Duration::from_secs(30),
+            &HashMap::new(),
+            caps,
+        )
+        .unwrap()
     }
 
     /// A fresh in-memory record store.
@@ -978,9 +985,9 @@ mod packfile_sync_tests {
         SqliteStore::in_memory(test_local_timeout()).await.unwrap()
     }
 
-    /// Wrap a prebuilt client in a [`SyncEngine`] for tests.
-    pub(super) async fn build_engine(client: Client, store: SqliteStore) -> SyncEngine {
-        SyncEngine::builder()
+    /// Wrap a prebuilt client in a [`SyncSession`] for tests.
+    pub(super) async fn build_session(client: Client, store: SqliteStore) -> SyncSession {
+        SyncSession::builder()
             .store(store)
             .client_source(ClientSource::FromClient(client))
             .build()
@@ -1109,10 +1116,10 @@ mod packfile_sync_tests {
             .await;
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
-        let engine = build_engine(client, memory_store().await).await;
+        let session = build_session(client, memory_store().await).await;
 
         assert!(
-            engine.check_key_against_index(&key, &remote_index).await.is_none(),
+            session.check_key_against_index(&key, &remote_index).await.is_none(),
             "a plaintext packfile manifest must not be treated as a wrong key"
         );
     }
@@ -1147,9 +1154,9 @@ mod packfile_sync_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        let engine = build_engine(client, store).await;
+        let session = build_session(client, store).await;
         let wrong = paseto_v4::Key::from([9u8; 32]);
-        let err = engine.check_key_against_index(&wrong, &remote_index).await;
+        let err = session.check_key_against_index(&wrong, &remote_index).await;
         assert!(matches!(err, Some(SyncError::WrongKey)), "expected WrongKey, got {err:?}");
     }
 
@@ -1203,15 +1210,15 @@ mod packfile_sync_tests {
         let down = memory_store().await;
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
-        let engine = build_engine(client, down).await;
+        let session = build_session(client, down).await;
 
         // Packfile op first (populates history 0..=2), then the history op.
-        engine
+        session
             .keyed(&key)
             .sync_download(&RecordSeriesKey::new(host, RecordTag::Packfile), 1)
             .await
             .unwrap();
-        engine
+        session
             .keyed(&key)
             .sync_download(&RecordSeriesKey::new(host, RecordTag::History), 3)
             .await
@@ -1253,7 +1260,7 @@ mod packfile_sync_tests {
         let client = mock_client(&addr);
 
         // remote (2) is BEHIND the live local head (4) -- must not underflow/panic.
-        let got = build_engine(client, down)
+        let got = build_session(client, down)
             .await
             .keyed(&key)
             .sync_download(&RecordSeriesKey::new(host, RecordTag::History), 2)
@@ -1316,7 +1323,7 @@ mod packfile_sync_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        let returned = build_engine(client, down.clone())
+        let returned = build_session(client, down.clone())
             .await
             .with_page_size(NonZeroU64::new(page_size).unwrap())
             .keyed(&key)
@@ -1451,7 +1458,7 @@ mod packfile_sync_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        let returned = build_engine(client, down.clone())
+        let returned = build_session(client, down.clone())
             .await
             .keyed(&key)
             .sync_download(&RecordSeriesKey::new(host, RecordTag::Packfile), num_packs)
@@ -1488,7 +1495,15 @@ mod packfile_sync_tests {
     fn dead_client() -> Client {
         let addr: url::Url = "http://127.0.0.1:1/".parse().unwrap();
         let caps = caps_client_anonymous(&addr, &HashMap::new()).unwrap();
-        Client::new(addr, &AuthToken::Token("t".into()), 1, 1, &HashMap::new(), caps).unwrap()
+        Client::new(
+            addr,
+            &AuthToken::Token("t".into()),
+            std::time::Duration::from_secs(1),
+            std::time::Duration::from_secs(1),
+            &HashMap::new(),
+            caps,
+        )
+        .unwrap()
     }
 
     /// Building the view rejects an inverted plaintext range (`start_idx > end_idx`) -- the
@@ -1630,7 +1645,7 @@ mod packfile_sync_tests {
             .map(|record| record.id)
             .collect();
 
-        let ids = build_engine(dead_client(), down)
+        let ids = build_session(dead_client(), down)
             .await
             .keyed(&key)
             .download_packed(&manifest)
@@ -1675,7 +1690,7 @@ mod packfile_sync_tests {
         mount_packfile(&server, &manifest, blob).await;
         let addr: url::Url = server.uri().parse().unwrap();
 
-        let returned = build_engine(mock_client(&addr), down.clone())
+        let returned = build_session(mock_client(&addr), down.clone())
             .await
             .keyed(&key)
             .download_packed(&manifest)
@@ -1716,7 +1731,7 @@ mod packfile_sync_tests {
             .data(bad_data(host))
             .build();
 
-        let err = build_engine(dead_client(), memory_store().await)
+        let err = build_session(dead_client(), memory_store().await)
             .await
             .keyed(&key)
             .download_packed(&bad)
@@ -1753,7 +1768,7 @@ mod packfile_sync_tests {
             )
             .build();
 
-        let result = build_engine(dead_client(), memory_store().await)
+        let result = build_session(dead_client(), memory_store().await)
             .await
             .keyed(&key)
             .download_packed(&manifest)
@@ -1783,7 +1798,7 @@ mod packfile_capability_tests {
 
     use super::Operation;
     use super::packfile_sync_tests::{
-        build_engine, key, memory_store, mock_client, mount_packfile, packed_packfile,
+        build_session, key, memory_store, mock_client, mount_packfile, packed_packfile,
         seed_history, server,
     };
 
@@ -1840,7 +1855,7 @@ mod packfile_capability_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        build_engine(client, down.clone())
+        build_session(client, down.clone())
             .await
             .keyed(&key)
             .sync_remote(vec![packfile_download_op(host, 3)])
@@ -1914,7 +1929,7 @@ mod packfile_capability_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        build_engine(client, down.clone())
+        build_session(client, down.clone())
             .await
             .keyed(&key)
             .sync_remote(vec![packfile_download_op(host, 3), Operation::Download {
@@ -1969,7 +1984,7 @@ mod packfile_capability_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        build_engine(client, down.clone())
+        build_session(client, down.clone())
             .await
             .keyed(&key)
             .sync_remote(vec![packfile_download_op(host, 3)])
@@ -1997,7 +2012,7 @@ mod page_size_tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::DEFAULT_PAGE_SIZE;
-    use super::packfile_sync_tests::{build_engine, memory_store, mock_client, server};
+    use super::packfile_sync_tests::{build_session, memory_store, mock_client, server};
 
     async fn mount_caps(server: &MockServer, advertised: Option<u64>) {
         let mut caps = CapServer::new().add(CapabilitiesCap { version: 1 }).unwrap();
@@ -2030,9 +2045,9 @@ mod page_size_tests {
         mount_caps(&server, advertised).await;
 
         let addr: url::Url = server.uri().parse().unwrap();
-        let engine = build_engine(mock_client(&addr), memory_store().await).await;
+        let session = build_session(mock_client(&addr), memory_store().await).await;
 
-        assert_eq!(engine.get_page_size().await, expected);
+        assert_eq!(session.get_page_size().await, expected);
     }
 
     #[rstest]
@@ -2042,10 +2057,10 @@ mod page_size_tests {
         mount_caps(&server, Some(250)).await;
 
         let addr: url::Url = server.uri().parse().unwrap();
-        let engine = build_engine(mock_client(&addr), memory_store().await)
+        let session = build_session(mock_client(&addr), memory_store().await)
             .await
             .with_page_size(NonZeroU64::new(7).unwrap());
 
-        assert_eq!(engine.get_page_size().await, NonZeroU64::new(7).unwrap());
+        assert_eq!(session.get_page_size().await, NonZeroU64::new(7).unwrap());
     }
 }

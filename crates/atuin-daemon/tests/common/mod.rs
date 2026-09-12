@@ -94,9 +94,9 @@ impl TestEnvBuilder {
         self
     }
 
-    /// Register the real `SearchComponent` (background index loader + `HistorySynced` handling)
-    /// and run the daemon event loop, as production does. Without it the index is only touched by
-    /// the journal and by the harness itself, which keeps assertions deterministic.
+    /// Register the real `SearchComponent` (background index loader) and run the daemon event loop,
+    /// as production does. Without it the index is only touched by the journal and by the harness
+    /// itself, which keeps assertions deterministic.
     #[must_use]
     pub fn with_search_component(mut self) -> Self {
         self.with_search_component = true;
