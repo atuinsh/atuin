@@ -23,6 +23,7 @@ sqlite = ["db", "sqlx/sqlite", "sqlx/regexp", "dep:libsqlite3-sys", "dep:tokio-u
 [dependencies]
 atuin-vt100 = { workspace = true, optional = true }
 
+async-stream = { workspace = true }
 base64 = { workspace = true }
 bytesize = { workspace = true }
 crypto_secretbox = { workspace = true }
