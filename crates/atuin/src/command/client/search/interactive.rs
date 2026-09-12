@@ -5,11 +5,12 @@ use std::time::Duration;
 
 use atuin_client::database::{Context, Sqlite, current_context};
 use atuin_client::history::store::HistoryStore;
-use atuin_client::history::{History, HistoryId};
+use atuin_client::history::{AuthorPattern, History, HistoryId};
 use atuin_client::settings::{
     CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewStrategy, RequestedSearchMode,
-    SearchMode, Settings, UiColumn,
+    SearchMode, Settings, Shells, UiColumn,
 };
+use atuin_common::filter::OrFilter;
 use atuin_common::shell::Shell;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
 use easy_cast::Conv;
@@ -1800,6 +1801,8 @@ pub async fn history(
     mut db: Sqlite,
     history_store: &HistoryStore,
     theme: &Theme,
+    authors: OrFilter<Vec<AuthorPattern>>,
+    shells: Shells,
 ) -> Result<String> {
     let inline_height = if settings.shell_up_key_binding {
         settings.inline_height_shell_up_key_binding.unwrap_or(settings.inline_height)
@@ -1952,7 +1955,8 @@ pub async fn history(
             filter_mode: default_filter_mode,
             context: initial_context.clone(),
             custom_context: None,
-            shells: settings.search.shells.clone(),
+            authors,
+            shells,
         },
         engine: engines::engine(search_mode_state.mode(), settings),
         search_mode_state,
@@ -2310,7 +2314,7 @@ fn set_clipboard(_s: String) -> Result<(), std::convert::Infallible> {
 #[cfg(test)]
 mod tests {
     use atuin_client::database::Context;
-    use atuin_client::history::History;
+    use atuin_client::history::{History, all_user_author_filter};
     use atuin_client::settings::{
         FilterMode, KeymapMode, Preview, PreviewStrategy, RequestedSearchMode, SearchMode,
         Settings, Shells,
@@ -2370,6 +2374,7 @@ mod tests {
                     git_root: None,
                 },
                 custom_context: None,
+                authors: all_user_author_filter().to_vec_filter(),
                 shells: Shells::all(),
             },
             engine: engines::engine(SearchMode::Fuzzy, &Settings::utc()),
