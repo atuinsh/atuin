@@ -12,6 +12,7 @@ pub mod align;
 pub mod bounded_buffer;
 #[cfg(feature = "unicode")]
 pub mod ellipsis;
+pub mod highlighted;
 pub mod trim;
 
 mod escape_non_printable_posix_ext;
