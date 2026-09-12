@@ -18,14 +18,13 @@ use atuin_common::futures::stream::ChunkedStream;
 use fjall::{OptimisticTxDatabase, OptimisticTxKeyspace, PersistMode, Readable};
 use schema::{Schema as _, SchemaV2};
 use tokio::task::JoinHandle;
+use tokio_stream::wrappers::ReceiverStream;
 use tracing::error;
 
 use super::{CaptureError, DeleteOutputError, GetOutputError, Storage};
 
 /// The schema currently in use for stored output.
 type ActiveSchema = SchemaV2;
-
-const CHUNK: NonZeroUsize = NonZeroUsize::new(512).unwrap();
 
 /// The store and every operation on it.
 ///
@@ -128,28 +127,36 @@ impl FjallStorageInner {
         .expect("output-capture delete task panicked")
     }
 
-    /// Every stored id, oldest first (fjall key order). Reads keys only.
-    async fn all_ids(&self) -> ChunkedStream<Result<HistoryId, GetOutputError>> {
-        let keyspace = self.keyspace.clone();
-        let scanned: Result<Vec<HistoryId>, GetOutputError> =
-            tokio::task::spawn_blocking(move || {
-                let mut ids = Vec::new();
-                for guard in keyspace.inner().iter() {
-                    // Read the key only; the value (a KV-separated blob) stays on disk.
-                    let key = guard.key().map_err(|err| GetOutputError::Storage(Box::new(err)))?;
-                    let id = ActiveSchema::deserialize_key(key.as_ref())
-                        .map_err(|err| GetOutputError::Storage(Box::new(err)))?;
-                    ids.push(id);
-                }
-                Ok(ids)
-            })
-            .await
-            .expect("output-capture scan task panicked");
+    /// Every stored id, oldest first (fjall key order), streamed in chunks.
+    fn all_ids(&self) -> ChunkedStream<Result<HistoryId, GetOutputError>> {
+        const SCAN_CHUNKS_IN_FLIGHT: usize = 4;
+        const CHUNK: NonZeroUsize = NonZeroUsize::new(512).unwrap();
 
-        match scanned {
-            Ok(ids) => ChunkedStream::from_items(ids.into_iter().map(Ok), CHUNK),
-            Err(err) => ChunkedStream::from_chunks([vec![Err(err)]]),
-        }
+        let (tx, rx) = tokio::sync::mpsc::channel(SCAN_CHUNKS_IN_FLIGHT);
+
+        let keyspace = self.keyspace.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut ids = keyspace.inner().iter().map(|guard| {
+                // Read the key only; the value (a KV-separated blob) stays on disk.
+                guard.key().map_err(|err| GetOutputError::Storage(Box::new(err))).and_then(|key| {
+                    ActiveSchema::deserialize_key(key.as_ref())
+                        .map_err(|err| GetOutputError::Storage(Box::new(err)))
+                })
+            });
+
+            loop {
+                let batch: Vec<_> = ids.by_ref().take(CHUNK.get()).collect();
+                if batch.is_empty() {
+                    return;
+                }
+
+                if batch.iter().any(Result::is_err) || tx.blocking_send(batch).is_err() {
+                    return;
+                }
+            }
+        });
+
+        ChunkedStream::new(ReceiverStream::new(rx))
     }
 
     /// The oldest ids whose values total at least `reclaim_bytes` (or all of them, if the store
@@ -318,7 +325,7 @@ impl Storage for FjallStorage {
     }
 
     async fn all_ids(&self) -> ChunkedStream<Result<HistoryId, GetOutputError>> {
-        self.inner.all_ids().await
+        self.inner.all_ids()
     }
 
     async fn eviction_candidates(
@@ -523,5 +530,21 @@ mod tests {
         let ids: Vec<HistoryId> =
             store.all_ids().await.items().try_collect().await.expect("all_ids");
         assert_eq!(ids, vec![hid(1), hid(2), hid(3)]);
+    }
+
+    #[tokio::test]
+    async fn all_ids_streams_every_id_across_chunk_boundaries() {
+        let (store, _dir) = temp_storage();
+        // More ids than one internal scan chunk (512), so the walker must send a full chunk and
+        // keep walking -- the flush-and-continue path a single-chunk store never reaches.
+        let count = 600u128;
+        for n in 1..=count {
+            store.capture(hid(n), cap("x")).await.expect("capture");
+        }
+
+        let ids: Vec<HistoryId> =
+            store.all_ids().await.items().try_collect().await.expect("all_ids");
+        let expected: Vec<HistoryId> = (1..=count).map(hid).collect();
+        assert_eq!(ids, expected);
     }
 }

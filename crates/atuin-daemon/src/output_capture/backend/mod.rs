@@ -1,7 +1,5 @@
-//! The output capture backend: a [`Storage`] holding the captures, coupled with the [`Index`] that
-//! searches them.
+//! Output storage, generic on [`Storage`] and coupled with the [`Index`].
 
-mod gc;
 mod index;
 mod storage;
 
@@ -12,7 +10,6 @@ use atuin_client::history::{CommandCapture, HistoryId};
 use atuin_common::futures::stream::ChunkedStream;
 use enum_dispatch::enum_dispatch;
 use futures::TryStreamExt;
-pub use gc::Gc;
 pub use index::{Index, IndexError, NopIndex, SqliteIndex};
 #[cfg(test)]
 pub use storage::FailingStorage;
@@ -47,6 +44,7 @@ impl<S: Storage, I: Index> OutputStore<S, I> {
     }
 }
 
+/// The trait here is necessary for `enum_dispatch` to be able to do its magic.
 #[enum_dispatch]
 #[allow(async_fn_in_trait, reason = "only used within our code; no Send bound needed")]
 pub trait OutputStoreOps {
@@ -77,7 +75,7 @@ impl<S: Storage, I: Index> OutputStoreOps for OutputStore<S, I> {
         let text = capture.plaintext();
         self.storage.capture(id, capture).await?;
 
-        // Indexing here is best-effort. If we fail, we fail, it's sad but hopefully the next
+        // Indexing here is best-effort. If we fail -- we fail. It's sad but hopefully the next
         // reconcile will pick it up.
         if let Err(err) = self.index.insert(id, &text).await {
             warn!(?err, %id, "failed to index captured output; search may miss it until reconcile");

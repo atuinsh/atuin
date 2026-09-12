@@ -7,7 +7,7 @@ use atuin_common::units::{ByteSize, Percent};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
-use super::{AnyOutputStore, OutputStoreOps};
+use crate::output_capture::{AnyOutputStore, OutputStoreOps};
 
 #[derive(Debug)]
 pub struct Gc {
