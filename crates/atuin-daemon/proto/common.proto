@@ -8,6 +8,11 @@ message Uuid {
   bytes value = 1;
 }
 
+// Identifies a single history entry.
+message HistoryId {
+  Uuid uuid = 1;
+}
+
 // Identifies a single record in the record store.
 message RecordId {
   Uuid uuid = 1;

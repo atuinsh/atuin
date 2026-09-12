@@ -4,11 +4,6 @@ package history;
 import "common.proto";
 import "google/protobuf/duration.proto";
 
-// Identifies a single history entry.
-message HistoryId {
-  common.Uuid uuid = 1;
-}
-
 // Whether a human or an agent ran a command. Unspecified means the caller did
 // not say, and the author name is all the receiver has to go on. Unspecified is
 // also what keeps this backwards compatible: it is proto3's zero value, so a
@@ -38,7 +33,7 @@ message StartHistoryRequest {
 }
 
 message EndHistoryRequest {
-  HistoryId id = 1;
+  common.HistoryId id = 1;
   int64 exit = 2;
   // Measured command runtime. Absent means the client didn't measure it; the daemon then derives
   // it from the command's start timestamp.
@@ -47,11 +42,11 @@ message EndHistoryRequest {
 
 // Cancel an in-progress history entry without adding it to the database.
 message CancelHistoryRequest {
-  HistoryId id = 1;
+  common.HistoryId id = 1;
 }
 
 message StartHistoryReply {
-  HistoryId id = 1;
+  common.HistoryId id = 1;
   string version = 2;
   uint32 protocol = 3;
 }
@@ -70,7 +65,7 @@ message CancelHistoryReply {
 
 // One chunk of a client-streamed delete.
 message DeleteHistoryRequest {
-  repeated HistoryId ids = 1;
+  repeated common.HistoryId ids = 1;
 }
 
 message DeleteHistoryReply {
@@ -117,7 +112,7 @@ message HistoryEntry {
   //
   // TODO(markovejnovic): Use google.Duration.
   int64 timestamp = 1;
-  HistoryId id = 2;
+  common.HistoryId id = 2;
   string command = 3;
   string cwd = 4;
   string session = 5;
@@ -178,7 +173,7 @@ message CommandCapture {
 // Request which associates a command capture with a history ID.
 message RegisterCommandOutputRequest  {
   // The history id to associate with the command. Logically required.
-  HistoryId history_id = 1;
+  common.HistoryId history_id = 1;
   // The command capture itself. Logically required.
   CommandCapture capture = 2;
 }
@@ -196,7 +191,7 @@ message RegisterCommandOutputResponse {}
 // `UnsignedIdxRange`, which is half-open.
 message GetCommandOutputRequest {
   // The history ID you're searching for. Logically required.
-  HistoryId id = 1;
+  common.HistoryId id = 1;
   // An or-filter for requesting specific lines.
   //
   // Passing one value returns that range explicitly.
