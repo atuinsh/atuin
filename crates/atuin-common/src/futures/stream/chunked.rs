@@ -168,10 +168,12 @@ mod tests {
     fn from_fallible_items_folds_ok_and_err() {
         let two = NonZeroUsize::new(2).unwrap();
 
-        let ok: ChunkedStream<Result<i32, &str>> = ChunkedStream::from_fallible_items(Ok(1..=3), two);
+        let ok: ChunkedStream<Result<i32, &str>> =
+            ChunkedStream::from_fallible_items(Ok(1..=3), two);
         assert_eq!(block_on(ok.try_collect()), Ok(vec![1, 2, 3]));
 
-        let err = ChunkedStream::<Result<i32, &str>>::from_fallible_items::<Vec<i32>>(Err("boom"), two);
+        let err =
+            ChunkedStream::<Result<i32, &str>>::from_fallible_items::<Vec<i32>>(Err("boom"), two);
         assert_eq!(block_on(err.try_collect()), Err("boom"));
     }
 }

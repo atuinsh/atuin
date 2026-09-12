@@ -13,7 +13,8 @@ use tracing::{error, warn};
 
 use super::backend::{FjallStorage, NopIndex, NopStorage, OutputStore, SqliteIndex};
 use super::{
-    AnyOutputStore, CaptureError, DeleteOutputError, GetOutputError, OutputStoreKind, OutputStoreOps,
+    AnyOutputStore, CaptureError, DeleteOutputError, GetOutputError, OutputStoreKind,
+    OutputStoreOps,
 };
 
 #[derive(Debug)]

@@ -147,10 +147,18 @@ impl FjallStorageInner {
             loop {
                 let batch: Vec<_> = ids.by_ref().take(CHUNK.get()).collect();
                 if batch.is_empty() {
-                    return;
+                    return; // the walk is done
                 }
 
-                if batch.iter().any(Result::is_err) || tx.blocking_send(batch).is_err() {
+                let stop = {
+                    let err = batch.iter().find_map(|item| item.as_ref().err());
+                    if let Some(err) = err {
+                        error!(?err, "output-capture id scan hit an unreadable key");
+                    }
+                    err.is_some()
+                };
+
+                if tx.blocking_send(batch).is_err() || stop {
                     return;
                 }
             }
@@ -159,9 +167,10 @@ impl FjallStorageInner {
         ChunkedStream::new(ReceiverStream::new(rx))
     }
 
-    /// The oldest ids whose values total at least `reclaim_bytes` (or all of them, if the store
-    /// holds less). Reads values to measure their size, oldest first, and stops early; it does not
-    /// delete -- eviction goes back through the backend's `remove` so the search index stays in sync.
+    /// The oldest ids whose values total at least `reclaim_bytes`.
+    ///
+    /// TODO(markovejnovic): Consider making this return a ChunkedStream. It's probably fine as-is,
+    ///                      since the working set should be small.
     async fn eviction_candidates(
         &self,
         reclaim_bytes: u64,
