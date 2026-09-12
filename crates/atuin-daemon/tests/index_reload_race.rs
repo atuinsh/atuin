@@ -68,7 +68,8 @@ fn spawn_reload(env: &TestEnv, reload: Reload) -> tokio::task::JoinHandle<()> {
 #[case::delete(Reload::Delete)]
 #[case::rebuild(Reload::Rebuild)]
 #[ignore = "documents an unfixed defect (synced adds dropped by a racing reload; see report M2, \
-            #4052); run with --run-ignored. Continuous add_histories under a read guard is lost by \
+            #4052: https://github.com/atuinsh/atuin/issues/4052); run with --run-ignored. \
+            Continuous add_histories under a read guard is lost by \
             the index swap and the keyset scan. See module docs."]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn synced_batches_across_an_index_reload_stay_searchable(#[case] reload: Reload) {
@@ -124,7 +125,8 @@ async fn synced_batches_across_an_index_reload_stay_searchable(#[case] reload: R
 /// swap) and, saved after the scan's first page, sits past the keyset cursor forever.
 #[rstest]
 #[ignore = "documents an unfixed defect (synced row durable in the db but dropped from the index; \
-            see report M2, #4052); run with --run-ignored. See module docs."]
+            see report M2, #4052: https://github.com/atuinsh/atuin/issues/4052); run with \
+            --run-ignored. See module docs."]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_synced_row_survives_in_the_db_but_the_reload_drops_it_from_the_index() {
     let env = TestEnv::builder().seed_rows(RELOAD_ROWS).with_search_component().build().await;

@@ -169,7 +169,8 @@ async fn delete_racing_finish_leaves_no_row_anywhere() {
 #[rstest]
 #[case::delete(Reload::Delete)]
 #[case::rebuild(Reload::Rebuild)]
-#[ignore = "documents an unfixed defect (index reload is a lost-update; see report M2); run with \
+#[ignore = "documents an unfixed defect (index reload is a lost-update; see report M2, #4052: \
+            https://github.com/atuinsh/atuin/issues/4052); run with \
             --run-ignored. See module docs."]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn commands_finished_during_an_index_reload_are_searchable(#[case] reload: Reload) {
@@ -225,7 +226,8 @@ enum Reload {
 /// EXPECTED TO FAIL: each delete rebuilds the index from its own db snapshot; whichever swap lands
 /// last may predate the other delete's `delete_rows`, resurrecting that command in search.
 #[rstest]
-#[ignore = "documents an unfixed defect (concurrent deletes resurrect rows; see report M2); run \
+#[ignore = "documents an unfixed defect (concurrent deletes resurrect rows; see report M2, #4052: \
+            https://github.com/atuinsh/atuin/issues/4052); run \
             with --run-ignored. See module docs."]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_deletes_both_leave_the_index() {
@@ -416,7 +418,8 @@ async fn end_history_is_not_starved_by_an_index_reload() {
 /// reload then discards.
 #[rstest]
 #[ignore = "documents an unfixed defect (synced history dropped by a racing reload; see report \
-            M2); run with --run-ignored. See module docs."]
+            M2, #4052: https://github.com/atuinsh/atuin/issues/4052); run with --run-ignored. See \
+            module docs."]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn synced_history_during_a_reload_is_searchable() {
     let env = TestEnv::builder().seed_rows(RELOAD_ROWS).with_search_component().build().await;
