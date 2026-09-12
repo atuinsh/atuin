@@ -19,7 +19,7 @@ impl FromSettings for FileConfig {
         Some(Self {
             path: PathBuf::from_iter([&settings.dir, &child.file]),
             level: child.level.unwrap_or(settings.level),
-            retention_days: child.retention.unwrap_or(settings.retention),
+            retention: child.retention.unwrap_or(settings.retention).get(),
         })
     }
 }

@@ -33,7 +33,7 @@ impl LogLevel {
 pub struct FileConfig {
     pub path: PathBuf,
     pub level: LogLevel,
-    pub retention_days: u64,
+    pub retention: std::time::Duration,
 }
 
 impl FileConfig {

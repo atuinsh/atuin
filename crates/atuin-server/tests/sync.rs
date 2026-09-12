@@ -39,8 +39,8 @@ impl TestServer {
         api_client::Client::new(
             self.address.clone(),
             &api_client::AuthToken::Token(resp.session),
-            5,
-            30,
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(30),
             &Default::default(),
             api_client::caps_client_anonymous(&self.address, &Default::default()).unwrap(),
         )
