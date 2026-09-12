@@ -2,7 +2,7 @@
 //! [`SearchIndex::add_histories`], and records replayed out of the store via
 //! [`HistoryStore::incremental_build`] (what the sync worker does with freshly downloaded records).
 //! Both must survive degenerate and adversarial input -- agent entries, foreign shells,
-//! unparseable sessions, empty batches, endless duplicates -- and an environmental fault (a
+//! unparsable sessions, empty batches, endless duplicates -- and an environmental fault (a
 //! write-locked database) without panicking, corrupting the index, or letting a non-indexable
 //! command leak into interactive search. Every test states the user-facing invariant it defends;
 //! none reaches into the private sync worker, only the reachable feeding surface it is built on.
@@ -38,7 +38,7 @@ enum Poison {
     /// Its shell is not in the configured set.
     ForeignShell,
     /// Its session is not a valid UUID, so the index has no key to store it under.
-    UnparseableSession,
+    UnparsableSession,
 }
 
 fn poison(kind: Poison) -> History {
@@ -46,7 +46,7 @@ fn poison(kind: Poison) -> History {
     match kind {
         Poison::Agent => h.author_kind = Some(AuthorKind::Agent),
         Poison::ForeignShell => h.shell = Some("fish".to_owned()),
-        Poison::UnparseableSession => "not-a-uuid".clone_into(&mut h.session),
+        Poison::UnparsableSession => "not-a-uuid".clone_into(&mut h.session),
     }
     h
 }
@@ -57,7 +57,7 @@ fn poison(kind: Poison) -> History {
 #[rstest]
 #[case::agent(Poison::Agent)]
 #[case::foreign_shell(Poison::ForeignShell)]
-#[case::unparseable_session(Poison::UnparseableSession)]
+#[case::unparsable_session(Poison::UnparsableSession)]
 fn non_indexable_entries_are_skipped_while_a_valid_sibling_indexes(#[case] kind: Poison) {
     // Bash-only so the foreign-shell entry is filtered while the valid bash entry passes.
     let index = SearchIndex::new(OrFilter::from_list(vec!["bash".to_owned()]).unwrap());
