@@ -13,11 +13,7 @@ use super::{Index, IndexError, OutputMatch};
 
 const CHUNK: NonZeroUsize = NonZeroUsize::new(512).unwrap();
 
-/// Bump this whenever the on-disk index shape changes. On open a mismatch drops the table; the
-/// fjall store is the source of truth, so the next reconcile repopulates it.
-///
-/// v2: `history_id` stored as a 16-byte BLOB rather than a 32-char hex string.
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 /// A full-text search index backed by a sidecar sqlite FTS5 table.
 #[derive(Debug)]
@@ -63,6 +59,7 @@ impl SqliteIndex {
         }
 
         db::query("DROP TABLE IF EXISTS output_fts").execute(pool).await.map_err(store)?;
+        db::query("DROP TABLE IF EXISTS indexed").execute(pool).await.map_err(store)?;
         db::query(
             "CREATE VIRTUAL TABLE output_fts USING fts5(history_id UNINDEXED, body, tokenize = \
              'unicode61')",
@@ -70,8 +67,10 @@ impl SqliteIndex {
         .execute(pool)
         .await
         .map_err(store)?;
-        // `PRAGMA user_version` cannot be bound; the value is our own integer constant, so building
-        // the statement text is injection-free (hence the `AssertSqlSafe`).
+        db::query("CREATE TABLE indexed(history_id BLOB PRIMARY KEY) WITHOUT ROWID")
+            .execute(pool)
+            .await
+            .map_err(store)?;
         db::query(sqlx::AssertSqlSafe(format!("PRAGMA user_version = {SCHEMA_VERSION}")))
             .execute(pool)
             .await
@@ -84,8 +83,6 @@ impl Index for SqliteIndex {
     async fn insert(&self, id: HistoryId, text: &str) -> Result<(), IndexError> {
         let pool = self.db.pool();
         let key = id.into_bytes();
-        // Capture is once-per-id, but reconcile/rebuild may re-run: replace any prior row so this
-        // stays idempotent. FTS5 has no UNIQUE constraint to lean on, hence delete-then-insert.
         let mut tx = pool.begin().await.map_err(store)?;
         db::query("DELETE FROM output_fts WHERE history_id = ?")
             .bind(&key[..])
@@ -95,6 +92,11 @@ impl Index for SqliteIndex {
         db::query("INSERT INTO output_fts(history_id, body) VALUES (?, ?)")
             .bind(&key[..])
             .bind_highlightable(self.highlighter, text)
+            .execute(&mut *tx)
+            .await
+            .map_err(store)?;
+        db::query("INSERT OR IGNORE INTO indexed(history_id) VALUES (?)")
+            .bind(&key[..])
             .execute(&mut *tx)
             .await
             .map_err(store)?;
@@ -114,6 +116,11 @@ impl Index for SqliteIndex {
         for id in ids {
             let key = id.into_bytes();
             db::query("DELETE FROM output_fts WHERE history_id = ?")
+                .bind(&key[..])
+                .execute(&mut *tx)
+                .await
+                .map_err(store)?;
+            db::query("DELETE FROM indexed WHERE history_id = ?")
                 .bind(&key[..])
                 .execute(&mut *tx)
                 .await
@@ -173,13 +180,13 @@ impl Index for SqliteIndex {
         let pool = self.db.pool().clone();
         let page = i64::try_from(CHUNK.get()).unwrap_or(i64::MAX);
 
-        ChunkedStream::new(stream::unfold(Some(0_i64), move |after| {
+        ChunkedStream::new(stream::unfold(Some(Vec::new()), move |after| {
             let pool = pool.clone();
             async move {
-                let after = after?;
+                let after: Vec<u8> = after?;
 
                 let rows = match db::query(
-                    "SELECT rowid, history_id FROM output_fts WHERE rowid > ? ORDER BY rowid \
+                    "SELECT history_id FROM indexed WHERE history_id > ? ORDER BY history_id \
                      LIMIT ?",
                 )
                 .bind(after)
@@ -191,9 +198,9 @@ impl Index for SqliteIndex {
                     Err(err) => return Some((vec![Err(store(err))], None)),
                 };
 
-                let next = match rows.last().map(|row| row.try_get::<i64, _>("rowid")) {
+                let next = match rows.last().map(|row| row.try_get::<Vec<u8>, _>("history_id")) {
                     None => return None,
-                    Some(Ok(rowid)) => Some(rowid),
+                    Some(Ok(bytes)) => Some(bytes),
                     Some(Err(err)) => return Some((vec![Err(store(err))], None)),
                 };
 
@@ -233,8 +240,6 @@ fn sanitize_query(query: &str) -> String {
 mod tests {
     use std::collections::HashSet;
 
-    use futures::TryStreamExt;
-
     use super::*;
 
     fn hid(n: u128) -> HistoryId {
@@ -242,7 +247,7 @@ mod tests {
     }
 
     async fn search_hits(index: &SqliteIndex, query: &str, limit: usize) -> Vec<OutputMatch> {
-        index.search(query, limit).await.items().try_collect().await.expect("search")
+        index.search(query, limit).await.try_collect().await.expect("search")
     }
 
     async fn temp_index() -> (SqliteIndex, tempfile::TempDir) {
@@ -327,7 +332,7 @@ mod tests {
         index.insert(hid(2), "two").await.expect("insert");
 
         let mut ids: Vec<HistoryId> =
-            index.indexed_ids().await.items().try_collect().await.expect("indexed_ids");
+            index.indexed_ids().await.try_collect().await.expect("indexed_ids");
         ids.sort_by_key(|id| id.to_string());
         assert_eq!(ids, vec![hid(1), hid(2)]);
     }
@@ -341,7 +346,7 @@ mod tests {
         }
 
         let ids: HashSet<HistoryId> =
-            index.indexed_ids().await.items().try_collect().await.expect("indexed_ids");
+            index.indexed_ids().await.try_collect().await.expect("indexed_ids");
         let expected: HashSet<HistoryId> = (1..=count).map(hid).collect();
         assert_eq!(ids, expected);
     }
@@ -355,7 +360,6 @@ mod tests {
             index
                 .search(q, 10)
                 .await
-                .items()
                 .try_collect::<Vec<_>>()
                 .await
                 .unwrap_or_else(|e| panic!("query {q:?} errored: {e}"));

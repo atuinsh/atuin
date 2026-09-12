@@ -1,7 +1,7 @@
 //! The full-text search index over captured output.
 //!
 //! Note this is intended to be a **shallow** index and should not actually store the data. See
-//! [`super::storage::Storage`] for the storage layer.
+//! [`super::blob::BlobStore`] for the storage layer.
 
 mod nop;
 mod sqlite;

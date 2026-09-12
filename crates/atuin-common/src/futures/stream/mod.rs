@@ -4,8 +4,10 @@ use std::pin::Pin;
 use futures::{Stream, StreamExt, stream};
 
 mod chunked;
+mod merge;
 
 pub use chunked::ChunkedStream;
+pub use merge::{EitherOrBoth, try_merge_join, try_merge_join_by};
 
 /// Group adjacent stream items that share a key into chunks of at most `max` items.
 ///

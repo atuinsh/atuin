@@ -1,19 +1,19 @@
 use atuin_client::history::{CommandCapture, HistoryId};
 use atuin_common::futures::stream::ChunkedStream;
 
-use super::{CaptureError, DeleteOutputError, GetOutputError, Storage, StorageError};
+use super::{BlobStore, CaptureError, DeleteOutputError, GetOutputError, StorageError};
 
-/// A [`Storage`] whose every operation fails, standing in for a broken output store.
+/// A [`BlobStore`] whose every operation fails, standing in for a broken output store.
 ///
 /// This is for tests.
 #[derive(Debug, Clone, Copy)]
-pub struct FailingStorage;
+pub struct FailingBlobStore;
 
 fn unavailable() -> StorageError {
     "the output-capture store is unavailable".into()
 }
 
-impl Storage for FailingStorage {
+impl BlobStore for FailingBlobStore {
     async fn capture(&self, _id: HistoryId, _capture: CommandCapture) -> Result<(), CaptureError> {
         Err(CaptureError::Storage(unavailable()))
     }

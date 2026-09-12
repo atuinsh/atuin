@@ -459,6 +459,7 @@ dependencies = [
 name = "atuin-common"
 version = "18.22.0"
 dependencies = [
+ "async-stream",
  "atuin-vt100",
  "base64",
  "bytesize",

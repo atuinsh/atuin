@@ -21,14 +21,14 @@ use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::error;
 
-use super::{CaptureError, DeleteOutputError, GetOutputError, Storage};
+use super::{BlobStore, CaptureError, DeleteOutputError, GetOutputError};
 
 /// The schema currently in use for stored output.
 type ActiveSchema = SchemaV2;
 
 /// The store and every operation on it.
 ///
-/// This structure is shared between the [`FjallStorage`] and the task in [`Flusher`].
+/// This structure is shared between the [`FjallBlobStore`] and the task in [`Flusher`].
 struct FjallStorageInner {
     db: OptimisticTxDatabase,
     keyspace: OptimisticTxKeyspace,
@@ -285,14 +285,14 @@ impl Drop for Flusher {
 }
 
 #[derive(Clone, derive_more::Debug)]
-pub struct FjallStorage {
+pub struct FjallBlobStore {
     #[debug(skip)]
     inner: Arc<FjallStorageInner>,
     #[debug(skip)]
     _flusher: Arc<Flusher>,
 }
 
-impl FjallStorage {
+impl FjallBlobStore {
     /// Open the store at `path`.
     pub fn open(path: impl AsRef<Path>) -> fjall::Result<Self> {
         let db = OptimisticTxDatabase::builder(path.as_ref()).open()?;
@@ -316,7 +316,7 @@ impl FjallStorage {
     }
 }
 
-impl Storage for FjallStorage {
+impl BlobStore for FjallBlobStore {
     async fn capture(&self, id: HistoryId, capture: CommandCapture) -> Result<(), CaptureError> {
         self.inner.capture(id, capture).await
     }
@@ -348,14 +348,13 @@ impl Storage for FjallStorage {
 #[cfg(test)]
 mod tests {
     use easy_cast::Conv;
-    use futures::TryStreamExt;
     use uuid::Uuid;
 
     use super::*;
 
-    fn temp_storage() -> (FjallStorage, tempfile::TempDir) {
+    fn temp_storage() -> (FjallBlobStore, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let backend = FjallStorage::open(dir.path()).expect("open");
+        let backend = FjallBlobStore::open(dir.path()).expect("open");
         (backend, dir)
     }
 
@@ -536,8 +535,7 @@ mod tests {
         for n in 1..=3u128 {
             store.capture(hid(n), cap(&format!("out{n}"))).await.expect("capture");
         }
-        let ids: Vec<HistoryId> =
-            store.all_ids().await.items().try_collect().await.expect("all_ids");
+        let ids: Vec<HistoryId> = store.all_ids().await.try_collect().await.expect("all_ids");
         assert_eq!(ids, vec![hid(1), hid(2), hid(3)]);
     }
 
@@ -551,8 +549,7 @@ mod tests {
             store.capture(hid(n), cap("x")).await.expect("capture");
         }
 
-        let ids: Vec<HistoryId> =
-            store.all_ids().await.items().try_collect().await.expect("all_ids");
+        let ids: Vec<HistoryId> = store.all_ids().await.try_collect().await.expect("all_ids");
         let expected: Vec<HistoryId> = (1..=count).map(hid).collect();
         assert_eq!(ids, expected);
     }

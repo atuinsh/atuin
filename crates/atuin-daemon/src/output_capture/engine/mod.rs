@@ -11,8 +11,8 @@ use gc::Gc;
 use reconciler::Reconciler;
 use tracing::{error, warn};
 
-use super::backend::{
-    AnyIndex, AnyStorage, FjallStorage, NopIndex, NopStorage, OutputStore, SqliteIndex,
+use super::persistence::{
+    AnyBlobStore, AnyIndex, FjallBlobStore, NopBlobStore, NopIndex, OutputStore, SqliteIndex,
 };
 use super::{CaptureError, DeleteOutputError, GetOutputError};
 
@@ -28,7 +28,7 @@ impl OutputCaptureEngine {
     pub async fn open(path: impl AsRef<Path>, max_disk_usage: DiskUsageLimit) -> Self {
         let path = path.as_ref();
 
-        let storage = match FjallStorage::open(path) {
+        let storage = match FjallBlobStore::open(path) {
             Ok(storage) => storage,
             Err(err) => {
                 error!(
@@ -42,7 +42,7 @@ impl OutputCaptureEngine {
 
         // The index is derived, so a failure to open it leaves capture working; only search is lost.
         let store = match SqliteIndex::open(&index_path(path)).await {
-            Ok(index) => OutputStore::new(AnyStorage::Fjall(storage), AnyIndex::Sqlite(index)),
+            Ok(index) => OutputStore::new(AnyBlobStore::Fjall(storage), AnyIndex::Sqlite(index)),
             Err(err) => {
                 error!(
                     ?err,
@@ -50,15 +50,13 @@ impl OutputCaptureEngine {
                     "failed to open the output search index; search over captured output is \
                      disabled"
                 );
-                OutputStore::new(AnyStorage::Fjall(storage), AnyIndex::Nop(NopIndex))
+                OutputStore::new(AnyBlobStore::Fjall(storage), AnyIndex::Nop(NopIndex))
             }
         };
         let store = Arc::new(store);
 
         let reconciler = Reconciler::spawn(store.clone());
 
-        // The gc drives the store from a background task, holding only a clone of the `Arc`; the
-        // store points at no task, so that clone forms no cycle that would keep the task alive.
         let gc = match max_disk_usage.resolve_for_path(path) {
             Ok(budget) => budget.map(|budget| Gc::spawn(store.clone(), budget)),
             Err(err) => {
@@ -76,26 +74,25 @@ impl OutputCaptureEngine {
 
     #[must_use]
     pub fn nop() -> Self {
-        Self::without_tasks(OutputStore::new(AnyStorage::Nop(NopStorage), AnyIndex::Nop(NopIndex)))
+        Self {
+            store: Arc::new(OutputStore::new(
+                AnyBlobStore::Nop(NopBlobStore),
+                AnyIndex::Nop(NopIndex),
+            )),
+            _gc: None,
+            _reconciler: None,
+        }
     }
 
     /// A capture store whose every storage operation fails, standing in for a broken store.
-    ///
-    /// Lets a test prove that a broken output store never sinks a primary operation (for example,
-    /// that deleting history still succeeds when its captured output cannot be removed). Paired with
-    /// a nop index so the failure under test is the storage's.
     #[cfg(test)]
     #[must_use]
     pub fn failing() -> Self {
-        Self::without_tasks(OutputStore::new(
-            AnyStorage::Failing(super::backend::FailingStorage),
-            AnyIndex::Nop(NopIndex),
-        ))
-    }
-
-    fn without_tasks(store: OutputStore) -> Self {
         Self {
-            store: Arc::new(store),
+            store: Arc::new(OutputStore::new(
+                AnyBlobStore::Failing(super::persistence::FailingBlobStore),
+                AnyIndex::Nop(NopIndex),
+            )),
             _gc: None,
             _reconciler: None,
         }
@@ -144,7 +141,6 @@ fn index_path(fjall_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use easy_cast::Conv;
-    use futures::TryStreamExt;
     use uuid::Uuid;
 
     use super::*;
@@ -172,7 +168,7 @@ mod tests {
     }
 
     async fn search_hits(store: &OutputStore, query: &str, limit: usize) -> Vec<OutputMatch> {
-        store.search(query, limit).await.items().try_collect().await.expect("search")
+        store.search(query, limit).await.try_collect().await.expect("search")
     }
 
     #[tokio::test]

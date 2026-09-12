@@ -1,13 +1,13 @@
 use atuin_client::history::{CommandCapture, HistoryId};
 use atuin_common::futures::stream::ChunkedStream;
 
-use super::{CaptureError, DeleteOutputError, GetOutputError, Storage};
+use super::{BlobStore, CaptureError, DeleteOutputError, GetOutputError};
 
-/// [`Storage`] implementation which does nothing. All output capture is discarded.
+/// [`BlobStore`] implementation which does nothing. All output capture is discarded.
 #[derive(Debug, Clone, Copy)]
-pub struct NopStorage;
+pub struct NopBlobStore;
 
-impl Storage for NopStorage {
+impl BlobStore for NopBlobStore {
     async fn capture(&self, _id: HistoryId, _capture: CommandCapture) -> Result<(), CaptureError> {
         Ok(())
     }

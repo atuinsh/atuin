@@ -8,9 +8,9 @@ mod nop;
 use atuin_client::history::{CommandCapture, HistoryId};
 use atuin_common::futures::stream::ChunkedStream;
 #[cfg(test)]
-pub use failing::FailingStorage;
-pub use fjall::FjallStorage;
-pub use nop::NopStorage;
+pub use failing::FailingBlobStore;
+pub use fjall::FjallBlobStore;
+pub use nop::NopBlobStore;
 use thiserror::Error;
 
 pub type StorageError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -38,7 +38,7 @@ pub enum DeleteOutputError {
 }
 
 #[allow(async_fn_in_trait, reason = "only used within our code and we don't need it to be Send")]
-pub trait Storage {
+pub trait BlobStore {
     /// Try to store the [`CommandCapture`] associated with the given [`HistoryId`].
     async fn capture(&self, id: HistoryId, capture: CommandCapture) -> Result<(), CaptureError>;
 
@@ -73,14 +73,14 @@ pub trait Storage {
 }
 
 #[derive(Debug)]
-pub enum AnyStorage {
-    Fjall(FjallStorage),
-    Nop(NopStorage),
+pub enum AnyBlobStore {
+    Fjall(FjallBlobStore),
+    Nop(NopBlobStore),
     #[cfg(test)]
-    Failing(FailingStorage),
+    Failing(FailingBlobStore),
 }
 
-impl Storage for AnyStorage {
+impl BlobStore for AnyBlobStore {
     async fn capture(&self, id: HistoryId, capture: CommandCapture) -> Result<(), CaptureError> {
         match self {
             Self::Fjall(s) => s.capture(id, capture).await,

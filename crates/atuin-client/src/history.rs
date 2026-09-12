@@ -200,7 +200,18 @@ const V2_AUTHOR_KIND_FIELD_NUMBER: u32 = 13;
 // `Display` is the single source of that form — `.to_string()` derives from it.
 //
 // Be very, very careful changing this.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, derive_more::Display, derive_more::From)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    derive_more::Display,
+    derive_more::From,
+)]
 #[display("{}", _0.as_simple())]
 pub struct HistoryId(uuid::Uuid);
 

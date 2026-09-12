@@ -1,10 +1,10 @@
-mod backend;
 mod engine;
+mod persistence;
 
 use atuin_client::history::HistoryId;
 use atuin_common::string::highlighted::HighlightedString;
-pub use backend::{CaptureError, DeleteOutputError, GetOutputError, OutputStore};
 pub use engine::OutputCaptureEngine;
+pub use persistence::{CaptureError, DeleteOutputError, GetOutputError, OutputStore};
 
 #[derive(Debug)]
 pub struct OutputMatch {
