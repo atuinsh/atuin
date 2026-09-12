@@ -31,6 +31,7 @@ pub enum AtuinCmd {
     #[command(hide = true)]
     Uuid,
 
+    /// List the people who have contributed to Atuin
     Contributors,
 
     /// Generate shell completions
