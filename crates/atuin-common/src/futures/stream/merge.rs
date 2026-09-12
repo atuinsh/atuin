@@ -5,6 +5,32 @@ use async_stream::try_stream;
 use futures::{Stream, TryStreamExt};
 pub use itertools::EitherOrBoth;
 
+/// Merge two ascending-sorted fallible streams into their [`EitherOrBoth`] outer join.
+///
+/// The async streaming analog of `itertools::merge_join_by`.
+///
+/// # Examples
+///
+/// ```
+/// use atuin_common::futures::stream::{EitherOrBoth, try_merge_join_by};
+/// use futures::{StreamExt, TryStreamExt, executor::block_on, stream};
+///
+/// let left = stream::iter([1, 3, 4]).map(Ok::<_, ()>);
+/// let right = stream::iter([2, 3]).map(Ok::<_, ()>);
+///
+/// let merged: Vec<EitherOrBoth<i32, i32>> =
+///     block_on(try_merge_join_by(left, right, i32::cmp).try_collect()).unwrap();
+///
+/// assert_eq!(
+///     merged,
+///     vec![
+///         EitherOrBoth::Left(1),
+///         EitherOrBoth::Right(2),
+///         EitherOrBoth::Both(3, 3),
+///         EitherOrBoth::Left(4),
+///     ],
+/// );
+/// ```
 pub fn try_merge_join_by<A, B, L, R, E, F>(
     left: A,
     right: B,
@@ -51,6 +77,7 @@ where
     }
 }
 
+/// [`try_merge_join_by`] over a shared item type, using its natural [`Ord`] order.
 pub fn try_merge_join<A, B, T, E>(
     left: A,
     right: B,

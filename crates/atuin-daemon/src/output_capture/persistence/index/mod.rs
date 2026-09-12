@@ -8,6 +8,7 @@ mod sqlite;
 
 use atuin_client::history::HistoryId;
 use atuin_common::futures::stream::ChunkedStream;
+use enum_dispatch::enum_dispatch;
 pub use nop::NopIndex;
 pub use sqlite::SqliteIndex;
 use thiserror::Error;
@@ -22,6 +23,7 @@ pub enum IndexError {
     Storage(#[source] IndexStorageError),
 }
 
+#[enum_dispatch]
 #[allow(async_fn_in_trait, reason = "only used within our code; no Send bound needed")]
 pub trait Index {
     /// Index (replacing any prior entry for `id`) the visible text of one capture.
@@ -41,42 +43,9 @@ pub trait Index {
     async fn indexed_ids(&self) -> ChunkedStream<Result<HistoryId, IndexError>>;
 }
 
+#[enum_dispatch(Index)]
 #[derive(Debug)]
 pub enum AnyIndex {
     Sqlite(SqliteIndex),
     Nop(NopIndex),
-}
-
-impl Index for AnyIndex {
-    async fn insert(&self, id: HistoryId, text: &str) -> Result<(), IndexError> {
-        match self {
-            Self::Sqlite(i) => i.insert(id, text).await,
-            Self::Nop(i) => i.insert(id, text).await,
-        }
-    }
-
-    async fn remove(&self, ids: impl Iterator<Item = HistoryId>) -> Result<(), IndexError> {
-        match self {
-            Self::Sqlite(i) => i.remove(ids).await,
-            Self::Nop(i) => i.remove(ids).await,
-        }
-    }
-
-    async fn search(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
-        match self {
-            Self::Sqlite(i) => i.search(query, limit).await,
-            Self::Nop(i) => i.search(query, limit).await,
-        }
-    }
-
-    async fn indexed_ids(&self) -> ChunkedStream<Result<HistoryId, IndexError>> {
-        match self {
-            Self::Sqlite(i) => i.indexed_ids().await,
-            Self::Nop(i) => i.indexed_ids().await,
-        }
-    }
 }

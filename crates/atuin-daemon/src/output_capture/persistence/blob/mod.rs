@@ -7,6 +7,7 @@ mod nop;
 
 use atuin_client::history::{CommandCapture, HistoryId};
 use atuin_common::futures::stream::ChunkedStream;
+use enum_dispatch::enum_dispatch;
 #[cfg(test)]
 pub use failing::FailingBlobStore;
 pub use fjall::FjallBlobStore;
@@ -37,6 +38,7 @@ pub enum DeleteOutputError {
     Storage(#[source] StorageError),
 }
 
+#[enum_dispatch]
 #[allow(async_fn_in_trait, reason = "only used within our code and we don't need it to be Send")]
 pub trait BlobStore {
     /// Try to store the [`CommandCapture`] associated with the given [`HistoryId`].
@@ -72,69 +74,11 @@ pub trait BlobStore {
     ) -> Result<Vec<HistoryId>, DeleteOutputError>;
 }
 
+#[enum_dispatch(BlobStore)]
 #[derive(Debug)]
 pub enum AnyBlobStore {
     Fjall(FjallBlobStore),
     Nop(NopBlobStore),
     #[cfg(test)]
     Failing(FailingBlobStore),
-}
-
-impl BlobStore for AnyBlobStore {
-    async fn capture(&self, id: HistoryId, capture: CommandCapture) -> Result<(), CaptureError> {
-        match self {
-            Self::Fjall(s) => s.capture(id, capture).await,
-            Self::Nop(s) => s.capture(id, capture).await,
-            #[cfg(test)]
-            Self::Failing(s) => s.capture(id, capture).await,
-        }
-    }
-
-    async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError> {
-        match self {
-            Self::Fjall(s) => s.get(id).await,
-            Self::Nop(s) => s.get(id).await,
-            #[cfg(test)]
-            Self::Failing(s) => s.get(id).await,
-        }
-    }
-
-    async fn remove(&self, ids: impl Iterator<Item = HistoryId>) -> Result<(), DeleteOutputError> {
-        match self {
-            Self::Fjall(s) => s.remove(ids).await,
-            Self::Nop(s) => s.remove(ids).await,
-            #[cfg(test)]
-            Self::Failing(s) => s.remove(ids).await,
-        }
-    }
-
-    fn estimated_disk_space(&self) -> u64 {
-        match self {
-            Self::Fjall(s) => s.estimated_disk_space(),
-            Self::Nop(s) => s.estimated_disk_space(),
-            #[cfg(test)]
-            Self::Failing(s) => s.estimated_disk_space(),
-        }
-    }
-
-    async fn all_ids(&self) -> ChunkedStream<Result<HistoryId, GetOutputError>> {
-        match self {
-            Self::Fjall(s) => s.all_ids().await,
-            Self::Nop(s) => s.all_ids().await,
-            #[cfg(test)]
-            Self::Failing(s) => s.all_ids().await,
-        }
-    }
-
-    async fn eviction_candidates(
-        &self,
-        reclaim_bytes: u64,
-    ) -> Result<Vec<HistoryId>, DeleteOutputError> {
-        match self {
-            Self::Fjall(s) => s.eviction_candidates(reclaim_bytes).await,
-            Self::Nop(s) => s.eviction_candidates(reclaim_bytes).await,
-            #[cfg(test)]
-            Self::Failing(s) => s.eviction_candidates(reclaim_bytes).await,
-        }
-    }
 }
