@@ -27,6 +27,9 @@ const MAX_BACKOFF: Duration = Duration::from_mins(30);
 /// Factor by which the sync retry backoff grows after each failure.
 const BACKOFF_FACTOR: NonZeroU32 = NonZeroU32::new(2).unwrap();
 
+/// How often the loop re-checks settings while periodic sync is disabled (`sync_frequency = 0`).
+const DISABLED_SYNC_POLL: Duration = Duration::from_secs(300);
+
 /// Owns everything the sync loop needs across ticks.
 pub struct Worker {
     handle: DaemonHandle,
@@ -108,7 +111,13 @@ impl Worker {
     pub async fn run(self) {
         loop {
             let settings = self.handle.settings().await.clone();
-            let interval = Duration::from_secs(settings.daemon.sync_frequency);
+
+            let Some(interval) = settings.daemon.sync_frequency else {
+                tracing::debug!("periodic sync disabled (sync_frequency = 0)");
+                time::sleep(DISABLED_SYNC_POLL).await;
+                continue;
+            };
+            let interval = interval.get();
 
             if settings.auto_sync {
                 let backoff = Backoff::Exponential {
