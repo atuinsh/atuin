@@ -8,13 +8,11 @@
 mod common;
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use atuin_client::history::HistoryId;
 use atuin_client::history::store::HistoryRecord;
 use atuin_client::settings::Search;
-use atuin_daemon::DaemonEvent;
 use atuin_daemon::grpc::history::pb::tail_history_reply::Event;
 use common::corpus::HistoryGen;
 use common::{TestEnv, capture, history};
@@ -171,7 +169,8 @@ async fn delete_racing_finish_leaves_no_row_anywhere() {
 #[rstest]
 #[case::delete(Reload::Delete)]
 #[case::rebuild(Reload::Rebuild)]
-#[ignore = "documents an unfixed defect (index reload is a lost-update; see report M2); run with \
+#[ignore = "documents an unfixed defect (index reload is a lost-update; see report M2, #4052: \
+            https://github.com/atuinsh/atuin/issues/4052); run with \
             --run-ignored. See module docs."]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn commands_finished_during_an_index_reload_are_searchable(#[case] reload: Reload) {
@@ -227,7 +226,8 @@ enum Reload {
 /// EXPECTED TO FAIL: each delete rebuilds the index from its own db snapshot; whichever swap lands
 /// last may predate the other delete's `delete_rows`, resurrecting that command in search.
 #[rstest]
-#[ignore = "documents an unfixed defect (concurrent deletes resurrect rows; see report M2); run \
+#[ignore = "documents an unfixed defect (concurrent deletes resurrect rows; see report M2, #4052: \
+            https://github.com/atuinsh/atuin/issues/4052); run \
             with --run-ignored. See module docs."]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_deletes_both_leave_the_index() {
@@ -414,11 +414,12 @@ async fn end_history_is_not_starved_by_an_index_reload() {
 
 /// History that arrives from sync while a delete is reloading the index is searchable afterwards.
 ///
-/// EXPECTED TO FAIL: the `HistorySynced` handler adds to whichever index is live under a read
-/// guard, which the reload then discards.
+/// EXPECTED TO FAIL: the sync engine adds to whichever index is live under a read guard, which the
+/// reload then discards.
 #[rstest]
 #[ignore = "documents an unfixed defect (synced history dropped by a racing reload; see report \
-            M2); run with --run-ignored. See module docs."]
+            M2, #4052: https://github.com/atuinsh/atuin/issues/4052); run with --run-ignored. See \
+            module docs."]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn synced_history_during_a_reload_is_searchable() {
     let env = TestEnv::builder().seed_rows(RELOAD_ROWS).with_search_component().build().await;
@@ -432,12 +433,10 @@ async fn synced_history_during_a_reload_is_searchable() {
     let synced: Vec<_> =
         (0..20).map(|_| history_gen.next()).filter(common::corpus::index_eligible).collect();
     env.history_db.save_bulk(&synced).await.unwrap();
-    env.handle.emit(DaemonEvent::HistorySynced(
-        synced.iter().map(|h| h.id).collect::<Arc<[HistoryId]>>(),
-    ));
+    // The sync engine adds freshly-downloaded rows straight to the live index.
+    env.index.read().await.add_histories(&synced);
 
     reload.await.unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await; // let the event loop drain
 
     // A synced row may share its command with older rows (the "common" part of the corpus), so
     // check the strong property on the count and the exact property on the unique commands.
