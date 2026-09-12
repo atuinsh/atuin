@@ -62,3 +62,64 @@ pub struct WireToolResponse {
     #[serde(rename = "exitCode", default)]
     pub exit_code: Option<i64>,
 }
+
+/// A hook event as Antigravity (`agy`) serializes it on stdin.
+///
+/// Same lifecycle vocabulary as Claude Code (`PreToolUse`/`PostToolUse`) but a
+/// different shape: camelCase keys, the tool call nested under `toolCall`, the
+/// command under `toolCall.args.CommandLine`, and no tool-use id — a start is
+/// correlated with its end through `conversationId` plus `stepIdx`. Completion
+/// carries no numeric exit code, only an `error` string that is empty on
+/// success. See <https://antigravity.google/docs/hooks/>.
+#[derive(Debug, Deserialize)]
+pub struct AgyHookEvent {
+    /// The lifecycle stage. An unrecognized value decodes to [`AgyEventName::Other`].
+    #[serde(rename = "hookEventName")]
+    pub event_name: AgyEventName,
+    /// The proposed or executed tool call. Present on `PreToolUse`/`PostToolUse`.
+    #[serde(rename = "toolCall", default)]
+    pub tool_call: Option<AgyToolCall>,
+    /// Correlates a command's start and end across two hook invocations,
+    /// together with [`AgyHookEvent::step_idx`].
+    #[serde(rename = "conversationId", default)]
+    pub conversation_id: Option<String>,
+    /// The 0-based index of the current step in the trajectory.
+    #[serde(rename = "stepIdx", default)]
+    pub step_idx: Option<i64>,
+    /// Detailed runtime error message when the tool call failed. Empty or
+    /// absent on success. Present on `PostToolUse`; absent elsewhere.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// The lifecycle stage an Antigravity event represents.
+///
+/// The wire values are `PascalCase` and match these variant names exactly.
+/// Unrecognized values map to [`AgyEventName::Other`] so future or
+/// agent-specific events are skipped rather than rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum AgyEventName {
+    PreToolUse,
+    PostToolUse,
+    #[serde(other)]
+    Other,
+}
+
+/// See [`AgyHookEvent::tool_call`].
+#[derive(Debug, Deserialize)]
+pub struct AgyToolCall {
+    /// The tool being executed. We only record `run_command`.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The arguments passed to the tool.
+    #[serde(default)]
+    pub args: Option<AgyToolArgs>,
+}
+
+/// See [`AgyToolCall::args`].
+#[derive(Debug, Deserialize)]
+pub struct AgyToolArgs {
+    /// The shell command line. Present on `PreToolUse` for `run_command`.
+    #[serde(rename = "CommandLine", default)]
+    pub command_line: Option<NonNulStr>,
+}

@@ -1,12 +1,15 @@
 # AI Agent Hooks
 
-Atuin can capture commands run by AI coding agents (like Claude Code, Codex, opencode, and pi) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
+Atuin can capture commands run by AI coding agents (like Claude Code, Codex, opencode, pi, and Antigravity) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
 
 ## Quick Start
 
 Install hooks for your agent, then restart or reload the agent:
 
 ```shell
+# Antigravity (agy)
+atuin hook install agy
+
 # Claude Code
 atuin hook install claude-code
 
@@ -30,6 +33,7 @@ When `atuin hook install` runs, it writes the agent's config file or extension t
 
 | Agent | Config file / extension |
 |-------|-------------------------|
+| Antigravity | `~/.gemini/config/hooks.json` |
 | Claude Code | `~/.claude/settings.json` |
 | Codex | `~/.codex/hooks.json` |
 | opencode | `~/.config/opencode/plugins/atuin.ts` |
@@ -76,11 +80,24 @@ atuin search -- ''
 atuin search --author '$all-agent' -- ''
 ```
 
-Currently recognized agent names are: `claude-code`, `codex`, `copilot`, `opencode`, and `pi`.
+Currently recognized agent names are: `antigravity`, `claude-code`, `codex`, `copilot`, `opencode`, and `pi`.
 
 ## Supported Agents
 
 For support tiers, see [Supported platforms](../support.md).
+
+### Antigravity
+
+```shell
+atuin hook install agy
+```
+
+This adds hook entries to `~/.gemini/config/hooks.json`. Antigravity calls `atuin hook agy` on each `run_command` tool use, passing the event as JSON on `stdin`, and the hook answers `{"decision": "allow"}` so tool execution is never gated.
+
+Two details are worth knowing:
+
+- Antigravity sends no tool-use id, so a command's start is matched to its end through the conversation id plus the step index, and completion carries no numeric exit code: an empty `error` records exit 0, anything else records exit 1.
+- The hook answers `allow` unconditionally — Atuin observes but never gates execution. Entries open at `PreToolUse`; a command denied at the permission prompt may never reach `PostToolUse`, leaving its entry open.
 
 ### Claude Code
 
