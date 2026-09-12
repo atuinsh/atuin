@@ -29,6 +29,7 @@
 //!                      `[ h ( e l ] o w ) o ( r l ) d`.
 use std::borrow::Cow;
 use std::fmt;
+use std::fmt::Write as _;
 use std::ops::Range;
 
 use thiserror::Error;
@@ -215,19 +216,16 @@ impl<S: AsRef<str>> fmt::Display for DisplaySubs<'_, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let h = self.src.highlighter;
         let [open_sub, close_sub] = self.subs;
-        let mut rest = self.src.data.as_ref();
-        while let Some(at) = rest.find([h.open, h.close]) {
-            f.write_str(&rest[..at])?;
-            let after = &rest[at..];
-            if after.starts_with(h.open) {
-                write!(f, "{open_sub}")?;
-                rest = &after[h.open.len_utf8()..];
+        for c in self.src.data.as_ref().chars() {
+            if c == h.open {
+                f.write_char(open_sub)?;
+            } else if c == h.close {
+                f.write_char(close_sub)?;
             } else {
-                write!(f, "{close_sub}")?;
-                rest = &after[h.close.len_utf8()..];
+                f.write_char(c)?;
             }
         }
-        f.write_str(rest)
+        Ok(())
     }
 }
 
@@ -413,6 +411,41 @@ mod tests {
     fn markers_are_positional_so_swapping_them_inverts_parsing() {
         let swapped = TextHighlighter::with_markers(['»', '«']).unwrap();
         assert_eq!(swapped.as_highlighted("«failed»").ranges().count(), 0);
+    }
+
+    // The `display_*` views are context-free per-marker transforms: every marker char is acted on
+    // whether or not it pairs up, so orphan and nested markers get substituted/stripped just like
+    // matched ones. This is deliberately unlike `ranges()`, which reports only matched pairs — so
+    // no marker (a private-use codepoint by default) can ever leak into the rendered output.
+    #[rstest]
+    #[case::clean("clean text", "clean text")]
+    #[case::single_span("the build «failed» now", "the build [failed] now")]
+    #[case::two_spans("«a» b «c»", "[a] b [c]")]
+    #[case::orphan_open("«a", "[a")]
+    #[case::orphan_close("a»", "a]")]
+    #[case::nested_open("«a«b»", "[a[b]")]
+    #[case::doubled("««x»»", "[[x]]")]
+    #[case::empty_span("«»", "[]")]
+    #[case::multibyte_text("café «error»", "café [error]")]
+    fn display_subs_substitutes_every_marker(#[case] body: &str, #[case] expected: &str) {
+        let out = highlighter().as_highlighted(body).display_subs(['[', ']']).to_string();
+        assert_eq!(out, expected);
+    }
+
+    #[rstest]
+    #[case::clean("clean text", "clean text")]
+    #[case::single_span("the build «failed» now", "the build failed now")]
+    #[case::orphan_and_nested("«a«b»", "ab")]
+    #[case::doubled("««x»»", "x")]
+    fn display_plain_strips_every_marker(#[case] body: &str, #[case] expected: &str) {
+        let out = highlighter().as_highlighted(body).display_plain().to_string();
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn display_raw_is_verbatim() {
+        let body = "«a«b»";
+        assert_eq!(highlighter().as_highlighted(body).display_raw().to_string(), body);
     }
 
     /// Alphabet that stresses the byte-offset arithmetic: plain ASCII for clean runs plus the two
