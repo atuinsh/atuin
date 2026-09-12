@@ -20,7 +20,6 @@ use super::{
 #[derive(Debug)]
 pub struct OutputCaptureEngine {
     store: Arc<AnyOutputStore>,
-    // Held only to abort their background tasks on drop; never read.
     _gc: Option<Gc>,
     _reconciler: Option<Reconciler>,
 }

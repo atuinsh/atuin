@@ -65,9 +65,15 @@ where
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroUsize;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering::SeqCst;
+    use std::task::{Context, Poll};
 
     use futures::executor::block_on;
-    use futures::{StreamExt, stream};
+    use futures::{Stream, StreamExt, stream};
     use proptest::prelude::*;
     use rstest::rstest;
 
@@ -82,6 +88,38 @@ mod tests {
         )
     }
 
+    fn poll_now<S: Stream + Unpin>(s: &mut S) -> Poll<Option<S::Item>> {
+        let w = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&w);
+        Pin::new(s).poll_next(&mut cx)
+    }
+
+    fn scheduled_items(
+        items: Vec<i32>,
+        schedule: Vec<bool>,
+    ) -> impl Stream<Item = i32> + Send + Unpin {
+        enum Step {
+            Pending,
+            Yield(i32),
+        }
+        let mut sched = schedule.into_iter();
+        let mut steps = std::collections::VecDeque::new();
+        for item in items {
+            if sched.next().unwrap_or(false) {
+                steps.push_back(Step::Pending);
+            }
+            steps.push_back(Step::Yield(item));
+        }
+        stream::poll_fn(move |cx| match steps.pop_front() {
+            Some(Step::Pending) => {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+            Some(Step::Yield(v)) => Poll::Ready(Some(v)),
+            None => Poll::Ready(None),
+        })
+    }
+
     #[rstest]
     #[case::empty(vec![], 3, vec![])]
     #[case::single(vec![5], 3, vec![vec![5]])]
@@ -90,6 +128,8 @@ mod tests {
     #[case::run_exactly_max(vec![1, 1], 2, vec![vec![1, 1]])]
     #[case::run_longer_than_max(vec![1, 1, 1, 1, 1], 2, vec![vec![1, 1], vec![1, 1], vec![1]])]
     #[case::mixed(vec![1, 1, 1, 2, 2, 3], 5, vec![vec![1, 1, 1], vec![2, 2], vec![3]])]
+    #[case::split_run_then_key_change(vec![1, 1, 1, 2], 2, vec![vec![1, 1], vec![1], vec![2]])]
+    #[case::huge_max(vec![1, 1, 1], usize::MAX, vec![vec![1, 1, 1]])]
     fn chunks_match_expected(
         #[case] items: Vec<i32>,
         #[case] max: usize,
@@ -110,6 +150,145 @@ mod tests {
         );
 
         assert_eq!(chunks, vec![(0, vec![2, 4]), (1, vec![3]), (0, vec![6]), (1, vec![5])]);
+    }
+
+    #[test]
+    fn split_run_stays_grouped_by_key() {
+        let chunks: Vec<(i32, Vec<i32>)> = block_on(
+            chunk_by_bounded(stream::iter([2, 4, 6]), NonZeroUsize::new(2).unwrap(), |x| x % 2)
+                .collect(),
+        );
+        assert_eq!(chunks, vec![(0, vec![2, 4]), (0, vec![6])]);
+    }
+
+    #[rstest]
+    #[case(
+        vec!["a", "b", "cc", "dd", "e"],
+        5,
+        vec![(1, vec!["a", "b"]), (2, vec!["cc", "dd"]), (1, vec!["e"])],
+    )]
+    #[case(vec!["aa", "bb", "cc"], 2, vec![(2, vec!["aa", "bb"]), (2, vec!["cc"])])]
+    fn groups_owned_items_by_projected_key(
+        #[case] items: Vec<&str>,
+        #[case] max: usize,
+        #[case] expected: Vec<(usize, Vec<&str>)>,
+    ) {
+        let owned: Vec<String> = items.into_iter().map(String::from).collect();
+        let chunks: Vec<(usize, Vec<String>)> = block_on(
+            chunk_by_bounded(stream::iter(owned), NonZeroUsize::new(max).unwrap(), |s: &String| {
+                s.len()
+            })
+            .collect(),
+        );
+        let expected: Vec<(usize, Vec<String>)> = expected
+            .into_iter()
+            .map(|(k, v)| (k, v.into_iter().map(String::from).collect()))
+            .collect();
+        assert_eq!(chunks, expected);
+    }
+
+    #[test]
+    fn sub_max_run_withheld_until_a_differing_key_is_peeked() {
+        let (tx, rx) = futures::channel::mpsc::unbounded::<i32>();
+        let mut s = Box::pin(chunk_by_bounded(rx, NonZeroUsize::new(3).unwrap(), |x| *x));
+
+        tx.unbounded_send(1).unwrap();
+        tx.unbounded_send(1).unwrap();
+        assert!(poll_now(&mut s).is_pending());
+
+        tx.unbounded_send(2).unwrap();
+        assert_eq!(poll_now(&mut s), Poll::Ready(Some((1, vec![1, 1]))));
+
+        assert!(poll_now(&mut s).is_pending());
+    }
+
+    #[test]
+    fn full_chunk_emits_without_peeking_past_the_bound() {
+        let (tx, rx) = futures::channel::mpsc::unbounded::<i32>();
+        let mut s = Box::pin(chunk_by_bounded(rx, NonZeroUsize::new(2).unwrap(), |x| *x));
+
+        tx.unbounded_send(1).unwrap();
+        tx.unbounded_send(1).unwrap();
+        assert_eq!(poll_now(&mut s), Poll::Ready(Some((1, vec![1, 1]))));
+    }
+
+    #[test]
+    fn pending_then_closed_empty_source_yields_nothing() {
+        let stage = AtomicUsize::new(0);
+        let src = stream::poll_fn(move |cx| {
+            if stage.swap(1, SeqCst) == 0 {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            } else {
+                Poll::Ready(None)
+            }
+        });
+        let chunks: Vec<(i32, Vec<i32>)> =
+            block_on(chunk_by_bounded(src, NonZeroUsize::new(3).unwrap(), |x| *x).collect());
+        assert_eq!(chunks, Vec::<(i32, Vec<i32>)>::new());
+    }
+
+    #[test]
+    fn key_panic_surfaces_on_the_poll_that_peeks_the_offending_item() {
+        let mut s = Box::pin(chunk_by_bounded(
+            stream::iter([1, 2, 3]),
+            NonZeroUsize::new(5).unwrap(),
+            |x| {
+                if *x == 3 {
+                    panic!("boom")
+                } else {
+                    *x
+                }
+            },
+        ));
+        assert_eq!(poll_now(&mut s), Poll::Ready(Some((1, vec![1]))));
+        assert!(catch_unwind(AssertUnwindSafe(|| poll_now(&mut s))).is_err());
+    }
+
+    #[rstest]
+    #[case(vec![1], 5, 2)]
+    #[case(vec![1, 1], 5, 3)]
+    #[case(vec![1, 2], 5, 5)]
+    #[case(vec![1, 1], 1, 4)]
+    fn key_is_invoked_per_peek_and_per_chunk_target(
+        #[case] items: Vec<i32>,
+        #[case] max: usize,
+        #[case] expected_calls: usize,
+    ) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        block_on(
+            chunk_by_bounded(
+                stream::iter(items),
+                NonZeroUsize::new(max).unwrap(),
+                move |x: &i32| {
+                    c.fetch_add(1, SeqCst);
+                    *x
+                },
+            )
+            .collect::<Vec<(i32, Vec<i32>)>>(),
+        );
+        assert_eq!(calls.load(SeqCst), expected_calls);
+    }
+
+    #[test]
+    fn items_are_borrowed_for_keying_and_moved_into_chunks_never_cloned() {
+        #[derive(Debug, PartialEq)]
+        struct Loud(u8);
+        impl Clone for Loud {
+            fn clone(&self) -> Self {
+                panic!("must not clone")
+            }
+        }
+        let chunks: Vec<(u8, Vec<Loud>)> = block_on(
+            chunk_by_bounded(
+                stream::iter([Loud(1), Loud(1), Loud(2)]),
+                NonZeroUsize::new(5).unwrap(),
+                |l: &Loud| l.0,
+            )
+            .collect(),
+        );
+        assert_eq!(chunks, vec![(1, vec![Loud(1), Loud(1)]), (2, vec![Loud(2)])]);
     }
 
     proptest! {
@@ -137,6 +316,48 @@ mod tests {
                     prop_assert_ne!(pair[0].last().unwrap(), pair[1].first().unwrap());
                 }
             }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn key_tagged_invariants(
+            items in prop::collection::vec((0u8..3, any::<u8>()), 0..50),
+            max in 1usize..8,
+        ) {
+            let size = NonZeroUsize::new(max).expect("proptest max is non-zero");
+            let chunks: Vec<(u8, Vec<(u8, u8)>)> =
+                block_on(chunk_by_bounded(stream::iter(items.clone()), size, |&(t, _)| t).collect());
+
+            let flat: Vec<(u8, u8)> = chunks.iter().flat_map(|(_, c)| c.iter().copied()).collect();
+            prop_assert_eq!(&flat, &items);
+
+            for (k, c) in &chunks {
+                prop_assert!(!c.is_empty());
+                prop_assert!(c.len() <= max);
+                prop_assert!(c.iter().all(|(t, _)| t == k));
+            }
+
+            for pair in chunks.windows(2) {
+                if pair[0].1.len() < max {
+                    prop_assert_ne!(pair[0].0, pair[1].0);
+                }
+            }
+        }
+
+        #[test]
+        fn grouping_is_invariant_to_upstream_readiness(
+            items in prop::collection::vec(0i32..4, 0..50),
+            max in 1usize..8,
+            schedule in prop::collection::vec(any::<bool>(), 0..60),
+        ) {
+            let size = NonZeroUsize::new(max).expect("proptest max is non-zero");
+            let scheduled: Vec<Vec<i32>> = block_on(
+                chunk_by_bounded(scheduled_items(items.clone(), schedule), size, |x| *x)
+                    .map(|(_, c)| c)
+                    .collect(),
+            );
+            prop_assert_eq!(scheduled, chunks_of(items, max));
         }
     }
 }

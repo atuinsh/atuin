@@ -1,3 +1,4 @@
+//! Background task which reconciles the index against the actual output store.
 use std::sync::Arc;
 use std::time::Duration;
 
