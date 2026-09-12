@@ -1,4 +1,5 @@
 use atuin_domain::record::DecryptedData;
+use easy_cast::Conv;
 use eyre::{Result, bail, ensure};
 use rmp::decode::{self, Bytes};
 use rmp::encode;
@@ -50,7 +51,7 @@ impl Script {
         encode::write_str(&mut output, &self.name)?;
         encode::write_str(&mut output, &self.description)?;
         encode::write_str(&mut output, &self.shebang)?;
-        encode::write_array_len(&mut output, self.tags.len() as u32)?;
+        encode::write_array_len(&mut output, u32::conv(self.tags.len()))?;
 
         for tag in &tags {
             encode::write_str(&mut output, tag)?;

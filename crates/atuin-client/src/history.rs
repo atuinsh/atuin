@@ -4,17 +4,24 @@ use std::sync::LazyLock;
 use atuin_common::filter::OrFilter;
 use atuin_common::rmp::decode::{self, Bytes, DecodeError};
 use atuin_common::rmp::encode::{self, ByteBuf, EncodeError};
+use atuin_common::secrets::contains_secret;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils::{normalize_optional_string, uuid_v7};
 use atuin_domain::record::{CmdOrigin, DecryptedData, UNKNOWN_USER};
-use eyre::{Result, bail};
+use easy_cast::Conv;
+use eyre::Result;
+use serde::{Deserialize, Serialize};
+use thiserror;
 use time::OffsetDateTime;
+use uuid::Uuid;
 
-use crate::secrets::SECRET_PATTERNS_RE;
 use crate::settings::Settings;
 
 pub(crate) mod builder;
+pub mod capture;
 pub mod store;
+
+pub use capture::CommandCapture;
 
 /// Known AI agent author values. Used by [`History::is_agent`] to guess who ran a command when the
 /// entry does not state it, and so when matching against [`AuthorPattern::AllAgent`] and
@@ -120,7 +127,7 @@ pub fn probe_author() -> Option<String> {
     normalize_optional_string(env::var(HISTORY_AUTHOR_ENV).ok())
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, derive_more::Display)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, derive_more::Display)]
 #[display("{}", self.name())]
 #[repr(u16)]
 pub enum Version {
@@ -189,9 +196,94 @@ const LATEST_SERIALIZED_FIELDS: u32 = 13;
 /// [`LATEST_SERIALIZED_FIELDS`].
 const V2_AUTHOR_KIND_FIELD_NUMBER: u32 = 13;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, derive_more::Display, derive_more::From)]
-#[display("{_0}")]
-pub struct HistoryId(pub String);
+// Because of how our encoding/decoding protocol worked, unlike all other UUID types in Atuin, which
+// use hyphenated encoding, this one displays as the simple (hyphen-less) representation. This
+// `Display` is the single source of that form — `.to_string()` derives from it.
+//
+// Be very, very careful changing this.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, derive_more::Display, derive_more::From)]
+#[display("{}", _0.as_simple())]
+pub struct HistoryId(uuid::Uuid);
+
+impl std::str::FromStr for HistoryId {
+    type Err = uuid::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(uuid::Uuid::parse_str(s)?))
+    }
+}
+
+impl Serialize for HistoryId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for HistoryId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = <std::borrow::Cow<'de, str>>::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+impl sqlx::Type<sqlx::Sqlite> for HistoryId {
+    fn type_info() -> <sqlx::Sqlite as sqlx::Database>::TypeInfo {
+        <String as sqlx::Type<sqlx::Sqlite>>::type_info()
+    }
+
+    fn compatible(ty: &<sqlx::Sqlite as sqlx::Database>::TypeInfo) -> bool {
+        <String as sqlx::Type<sqlx::Sqlite>>::compatible(ty)
+    }
+}
+
+impl sqlx::Encode<'_, sqlx::Sqlite> for HistoryId {
+    fn encode_by_ref(
+        &self,
+        buf: &mut <sqlx::Sqlite as sqlx::Database>::ArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        <String as sqlx::Encode<sqlx::Sqlite>>::encode(self.to_string(), buf)
+    }
+}
+
+impl<'r> sqlx::Decode<'r, sqlx::Sqlite> for HistoryId {
+    fn decode(
+        value: <sqlx::Sqlite as sqlx::Database>::ValueRef<'r>,
+    ) -> Result<Self, sqlx::error::BoxDynError> {
+        let s = <&str as sqlx::Decode<sqlx::Sqlite>>::decode(value)?;
+        Ok(s.parse()?)
+    }
+}
+
+impl HistoryId {
+    #[must_use]
+    pub fn new(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
+
+    #[must_use]
+    pub fn into_bytes(self) -> [u8; 16] {
+        self.0.into_bytes()
+    }
+
+    /// Reconstruct a [`HistoryId`] from the raw 16 bytes of its UUID.
+    ///
+    /// This is the inverse of [`HistoryId::into_bytes`].
+    #[must_use]
+    pub fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(Uuid::from_bytes(bytes))
+    }
+
+    #[must_use]
+    pub fn to_string(&self) -> String {
+        self.0.as_simple().to_string()
+    }
+}
 
 /// Client-side history entry.
 ///
@@ -242,22 +334,40 @@ pub struct History {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryStats {
-    /// The command that was ran after this one in the session
-    pub next: Option<History>,
-    ///
-    /// The command that was ran before this one in the session
-    pub previous: Option<History>,
-
     /// How many times has this command been ran?
     pub total: u64,
-
     pub average_duration: u64,
-
     pub exits: Vec<(i64, i64)>,
-
     pub day_of_week: Vec<(String, i64)>,
-
     pub duration_over_time: Vec<(String, i64)>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum HistoryDeserializeError<'a> {
+    #[error("invalid version: {0}")]
+    InvalidVersion(&'a str),
+    #[error("failed to perform rmp decoding: {0}")]
+    DecodeError(DecodeError<'a>),
+    #[error("expected to decode {expected} record, found v{found}")]
+    VersionMismatch {
+        expected: Version,
+        found: u16,
+    },
+    #[error("unexpected number of fields ({fields}) for history version {version}")]
+    WrongFieldCount {
+        fields: u32,
+        version: Version,
+    },
+    #[error("trailing bytes found in encoded history.")]
+    TrailingBytes,
+    #[error("malformed history id")]
+    MalformedHistoryId(#[source] uuid::Error),
+}
+
+impl<'a> From<DecodeError<'a>> for HistoryDeserializeError<'a> {
+    fn from(e: DecodeError<'a>) -> Self {
+        Self::DecodeError(e)
+    }
 }
 
 impl History {
@@ -288,7 +398,7 @@ impl History {
         let shell = normalize_optional_string(shell);
 
         Self {
-            id: uuid_v7().as_simple().to_string().into(),
+            id: HistoryId::from(uuid_v7()),
             timestamp,
             command,
             cwd,
@@ -348,8 +458,8 @@ impl History {
         encode::write_u16(&mut output, Version::LATEST.as_int())?;
         encode::write_array_len(&mut output, LATEST_SERIALIZED_FIELDS)?;
 
-        encode::write_str(&mut output, &self.id.0)?;
-        encode::write_u64(&mut output, self.timestamp.unix_timestamp_nanos() as u64)?;
+        encode::write_str(&mut output, &self.id.to_string())?;
+        encode::write_u64(&mut output, u64::conv(self.timestamp.unix_timestamp_nanos()))?;
         encode::write_sint(&mut output, self.duration)?;
         encode::write_sint(&mut output, self.exit)?;
         encode::write_str(&mut output, &self.command)?;
@@ -359,7 +469,7 @@ impl History {
 
         encode::write_optional(
             &mut output,
-            self.deleted_at.map(|d| d.unix_timestamp_nanos() as u64),
+            self.deleted_at.map(|d| u64::conv(d.unix_timestamp_nanos())),
             encode::write_u64,
         )?;
         encode::write_str(&mut output, self.author.as_str())?;
@@ -373,28 +483,36 @@ impl History {
         Ok(DecryptedData(output.into_vec()))
     }
 
-    pub fn deserialize(bytes: &[u8], version: &str) -> Result<Self> {
-        let Some(version) = Version::from_name(version) else {
-            bail!("unknown version {version:?}");
-        };
+    pub fn deserialize<'a>(
+        bytes: &'a [u8],
+        version: &'a str,
+    ) -> std::result::Result<Self, HistoryDeserializeError<'a>> {
+        let version =
+            Version::from_name(version).ok_or(HistoryDeserializeError::InvalidVersion(version))?;
 
         let mut bytes = Bytes::new(bytes);
 
-        let real_version = decode::read_u16(&mut bytes).map_err(DecodeError::from)?;
+        let real_version = decode::read_u16(&mut bytes)?;
         if real_version != version.as_int() {
-            bail!("expected to decode {version} record, found v{real_version}");
+            return Err(HistoryDeserializeError::VersionMismatch {
+                expected: version,
+                found: real_version,
+            });
         }
 
-        let nfields = decode::read_array_len(&mut bytes).map_err(DecodeError::from)?;
+        let nfields = decode::read_array_len(&mut bytes)?;
         let min_fields = version.min_fields();
         if nfields < min_fields || version.max_fields().is_some_and(|max| nfields > max) {
-            bail!("unexpected number of fields ({nfields}) for history version {version}");
+            return Err(HistoryDeserializeError::WrongFieldCount {
+                fields: nfields,
+                version,
+            });
         }
 
         let id = decode::read_string(&mut bytes)?;
-        let timestamp = decode::read_u64(&mut bytes).map_err(DecodeError::from)?;
-        let duration = decode::read_int(&mut bytes).map_err(DecodeError::from)?;
-        let exit = decode::read_int(&mut bytes).map_err(DecodeError::from)?;
+        let timestamp = decode::read_u64(&mut bytes)?;
+        let duration = decode::read_int(&mut bytes)?;
+        let exit = decode::read_int(&mut bytes)?;
 
         let command = decode::read_string(&mut bytes)?;
         let cwd = decode::read_string(&mut bytes)?;
@@ -433,11 +551,11 @@ impl History {
         };
 
         if version < Version::Two && !bytes.remaining_slice().is_empty() {
-            bail!("trailing bytes in encoded history. malformed");
+            return Err(HistoryDeserializeError::TrailingBytes);
         }
 
         Ok(Self {
-            id: id.into(),
+            id: id.parse().map_err(HistoryDeserializeError::MalformedHistoryId)?,
             timestamp: OffsetDateTime::from_unix_nanos_u64(timestamp),
             duration,
             exit,
@@ -606,12 +724,13 @@ impl History {
         self.exit == 0 || self.duration == -1
     }
 
+    #[must_use]
     pub fn should_save(&self, settings: &Settings) -> bool {
         !(self.command.starts_with(' ')
             || self.command.is_empty()
             || settings.history_filter.is_match(&self.command)
             || settings.cwd_filter.is_match(&self.cwd)
-            || (settings.secrets_filter && SECRET_PATTERNS_RE.is_match(&self.command)))
+            || (settings.secrets_filter && contains_secret(&self.command)))
     }
 }
 
@@ -688,7 +807,7 @@ mod tests {
     /// The SQL author filter derives its recognised-kind list from [`AuthorKind::VARIANTS`] while
     /// Rust decoding goes through [`AuthorKind::from_repr`]; a value present in one but not the
     /// other would split the two classifiers, so pin them to agree over the whole u8 range.
-    #[test]
+    #[rstest]
     fn author_kind_variants_and_from_repr_agree() {
         for value in 0..=u8::MAX {
             assert_eq!(
@@ -745,14 +864,14 @@ mod tests {
         assert!(author_matches_filters(&ellie, users.as_slice_filter()));
     }
 
-    #[test]
+    #[rstest]
     fn an_all_author_filter_matches_everyone() {
         let all = OrFilter::all();
         assert!(author_matches_filters(&entry("pi", "raspberry:ellie", None), all));
         assert!(author_matches_filters(&entry("ellie", "raspberry:ellie", None), all));
     }
 
-    #[test]
+    #[rstest]
     fn the_all_user_filter_excludes_agents() {
         let filter = all_user_author_filter();
         assert!(!author_matches_filters(&entry("pi", "raspberry:ellie", None), filter));
@@ -805,7 +924,7 @@ mod tests {
 
     #[rstest]
     #[case::basic(History {
-        id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
+        id: "66d16cbee7cd47538e5c5b8b44e9006e".parse().unwrap(),
         timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
         duration: 49_206_000,
         exit: 0,
@@ -820,7 +939,7 @@ mod tests {
         author_kind: None,
     })]
     #[case::deleted(History {
-        id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
+        id: "66d16cbee7cd47538e5c5b8b44e9006e".parse().unwrap(),
         timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
         duration: 49_206_000,
         exit: 0,
@@ -835,7 +954,7 @@ mod tests {
         author_kind: Some(AuthorKind::User),
     })]
     #[case::with_author_and_intent(History {
-        id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
+        id: "66d16cbee7cd47538e5c5b8b44e9006e".parse().unwrap(),
         timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
         duration: 49_206_000,
         exit: 0,
@@ -886,7 +1005,7 @@ mod tests {
 
     fn expected_v2() -> History {
         History {
-            id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
+            id: "66d16cbee7cd47538e5c5b8b44e9006e".parse().unwrap(),
             timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
             duration: 49_206_000,
             exit: 0,
@@ -920,7 +1039,7 @@ mod tests {
     /// A V2 record from before `author_kind` was appended: same version, one field short. New
     /// fields are only read when the encoded array is long enough to hold them, so this must still
     /// decode rather than error or misread the missing field.
-    #[test]
+    #[rstest]
     fn deserialize_v2_written_without_author_kind() {
         let history = History {
             author_kind: Some(AuthorKind::Agent),

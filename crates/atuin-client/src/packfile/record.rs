@@ -194,7 +194,7 @@ impl PackManifestDataV1 {
 #[derive(Debug, Error)]
 pub enum PackError {
     #[error("failed to decrypt a history record: {0}")]
-    Decrypt(eyre::Report),
+    Decrypt(#[from] paseto_v4::DecryptionError),
     #[error("failed to serialize the records: {0}")]
     Serialize(#[from] EncodeError),
     #[error("failed to compress the packfile: {0}")]
@@ -403,6 +403,7 @@ impl<'a> PackManifestRecordView<'a> {
 mod tests {
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::Host;
+    use easy_cast::Conv;
     use rstest::{fixture, rstest};
     use uuid::Uuid;
 
@@ -423,7 +424,7 @@ mod tests {
                     .host(host.clone())
                     .version("v1".into())
                     .tag("history".into())
-                    .idx(i as u64)
+                    .idx(u64::conv(i))
                     .data(DecryptedData(b"ls -la /very/repetitive/path".to_vec()))
                     .build()
             })

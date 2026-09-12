@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 pub use atuin_common::encryption::paseto_v4::{self, EncryptedData};
-use eyre::WrapErr;
+use easy_cast::Conv;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
@@ -11,7 +11,7 @@ pub use tag::RecordTag;
 mod version;
 pub use version::RecordVersion;
 mod cmd_origin;
-pub use cmd_origin::{CmdHost, CmdOrigin, CmdUser, UNKNOWN_USER};
+pub use cmd_origin::{CmdHost, CmdOrigin, CmdOriginParseError, CmdUser, UNKNOWN_USER};
 
 #[derive(Clone, Debug, PartialEq, Eq, derive_more::Deref, derive_more::From)]
 pub struct DecryptedData(pub Vec<u8>);
@@ -102,7 +102,7 @@ pub struct Record<Data> {
     pub host: Host,
 
     /// The creation time in nanoseconds since unix epoch
-    #[builder(default = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as u64)]
+    #[builder(default = u64::conv(time::OffsetDateTime::now_utc().unix_timestamp_nanos()))]
     pub timestamp: u64,
 
     /// The version the data in the entry conforms to
@@ -187,12 +187,14 @@ impl Record<DecryptedData> {
 }
 
 impl Record<paseto_v4::EncryptedData> {
-    pub fn decrypt(&self, key: &paseto_v4::Key) -> eyre::Result<Record<DecryptedData>> {
+    pub fn decrypt(
+        &self,
+        key: &paseto_v4::Key,
+    ) -> Result<Record<DecryptedData>, paseto_v4::DecryptionError> {
         let ad = serde_json::to_string(&AdditionalData::from(self))
             .expect("could not serialize implicit assertions");
         let assertion = paseto_v4::ImplicitAssertion::from(ad.as_str());
-        let data = paseto_v4::decrypt_sync(&self.data, Some(assertion), key)
-            .context("could not decrypt entry")?;
+        let data = paseto_v4::decrypt_sync(&self.data, Some(assertion), key)?;
         Ok(self.with_data_clone(data.into()))
     }
 }

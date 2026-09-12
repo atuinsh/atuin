@@ -30,14 +30,19 @@ static META_CONFIG: OnceLock<(String, f64)> = OnceLock::new();
 static META_STORE: OnceCell<crate::meta::MetaStore> = OnceCell::const_new();
 
 pub mod daemon;
+pub mod disk_usage_limit;
 mod dotfiles;
 mod kv;
 pub(crate) mod meta;
+pub mod output;
 mod scripts;
 pub mod shells;
 pub mod watcher;
 
 pub use daemon::Daemon;
+pub use disk_usage_limit::{DiskUsageLimit, DiskUsageLimitParseError};
+use output::OutputCaptureConfig;
+pub use output::{CaptureLimits, OutputCapture};
 pub use shells::Shells;
 
 /// Default sync address for Atuin's hosted service, parsed once.
@@ -1095,6 +1100,9 @@ pub struct Settings {
     pub pty_proxy: PtyProxy,
 
     #[serde(default)]
+    pub output: OutputCapture,
+
+    #[serde(default)]
     pub search: Search,
 
     #[serde(default)]
@@ -1158,8 +1166,21 @@ impl Settings {
             .unwrap_or_else(|| self.search_mode())
     }
 
-    pub(crate) fn effective_data_dir() -> PathBuf {
+    /// The resolved data directory: a custom `data_dir` / `ATUIN_DATA_DIR` if one was configured
+    /// when settings were last built this process, otherwise [`atuin_common::utils::data_dir`].
+    #[must_use]
+    pub fn effective_data_dir() -> PathBuf {
         DATA_DIR.get().cloned().unwrap_or_else(atuin_common::utils::data_dir)
+    }
+
+    /// Directory of the durable command-output capture store, under the [effective data
+    /// dir](Self::effective_data_dir). Unlike the sqlite stores this is a fjall database
+    /// directory, not a single file.
+    ///
+    /// The user should not mess with this directory. Bad things can happen.
+    #[must_use]
+    pub fn command_capture_dir() -> PathBuf {
+        Self::effective_data_dir().join("output-capture")
     }
 
     // -- Meta store: lazily initialized on first access --
@@ -1463,6 +1484,8 @@ impl Settings {
         let key_path = data_dir.join("key");
         let meta_path = data_dir.join("meta.db");
 
+        let output = OutputCaptureConfig::default();
+
         Ok(Config::builder()
             .set_default("history_format", "{time}\t{command}\t{duration}")?
             .set_default("db_path", db_path.to_str())?
@@ -1528,6 +1551,10 @@ impl Settings {
             .set_default("daemon.pidfile_path", pidfile_path.to_str())?
             .set_default("daemon.systemd_socket", false)?
             .set_default("daemon.tcp_port", 8889)?
+            .set_default("output.enabled", output.enabled)?
+            .set_default("output.max_output_size", output.max_output_size.to_string())?
+            .set_default("output.sync", output.sync)?
+            .set_default("output.max_disk_usage", output.max_disk_usage.to_string())?
             .set_default("logs.enabled", true)?
             .set_default("logs.dir", logs_dir.to_str())?
             .set_default("logs.level", "info")?
@@ -1568,6 +1595,7 @@ impl Settings {
                     .unwrap_or_else(|| config::Value::new(None, config::ValueKind::Boolean(false))),
             )?
             .set_default("no_mouse", false)?
+            .set_default("pty_proxy.enabled", false)?
             .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__")))
     }
 

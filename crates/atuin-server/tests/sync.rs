@@ -9,6 +9,7 @@ use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag};
 use atuin_server::db::DbSettings;
 use atuin_server::{Settings as ServerSettings, launch_with_tcp_listener};
+use easy_cast::Conv;
 use futures_util::TryFutureExt;
 use rstest::{fixture, rstest};
 use tokio::net::TcpListener;
@@ -72,7 +73,7 @@ async fn server() -> TestServer {
         port: 0,
         path: String::new(),
         open_registration: true,
-        max_record_size: 1024 * 1024 * 1024,
+        max_record_size: atuin_common::units::ByteSize::b(1024 * 1024 * 1024),
         register_webhook_url: None,
         register_webhook_username: String::new(),
         db_settings: DbSettings {
@@ -146,7 +147,7 @@ async fn download(
 
     let store = SqliteStore::in_memory(Duration::from_secs(2)).await.unwrap();
     if let Some(local_max) = local_max {
-        store.push_batch(records.iter().take(local_max as usize + 1)).await.unwrap();
+        store.push_batch(records.iter().take(usize::conv(local_max) + 1)).await.unwrap();
     }
 
     let key = key();
@@ -213,7 +214,7 @@ async fn upload(
     store.push_batch(records.iter()).await.unwrap();
 
     if let Some(remote_max) = remote_max {
-        client.post_records(&records[..=remote_max as usize]).await.unwrap();
+        client.post_records(&records[..=usize::conv(remote_max)]).await.unwrap();
     }
 
     let key = key();

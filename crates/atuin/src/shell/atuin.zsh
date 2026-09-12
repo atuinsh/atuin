@@ -33,18 +33,32 @@ if [[ -z "${ATUIN_SESSION:-}" || "${ATUIN_SHLVL:-}" != "$SHLVL" ]]; then
 fi
 ATUIN_HISTORY_ID=""
 
+if [[ -z ${__atuin_pty_proxy_owns_tty-} ]]; then
+    # The pty-proxy preamble also sets this variable, but make sure it's set here,
+    # so a manually started proxy still functions when `pty_proxy.enabled` is false.
+    __atuin_pty_proxy_owns_tty=0
+    if [[ -n ${ATUIN_PTY_PROXY_ACTIVE-} ]]; then
+        if __atuin_pty_proxy_answer=$(atuin __internal pty-proxy-active 2>/dev/null) &&
+            [[ $__atuin_pty_proxy_answer = 1 ]]
+        then
+            __atuin_pty_proxy_owns_tty=1
+        fi
+        unset __atuin_pty_proxy_answer
+    fi
+fi
+
 __atuin_osc133_command_executed() {
-    [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || return
+    [[ "${__atuin_pty_proxy_owns_tty:-0}" = 1 ]] || return
     [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return
 
     printf '\033]133;C\a'
 }
 
 __atuin_osc133_command_finished() {
-    [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || return
+    [[ "${__atuin_pty_proxy_owns_tty:-0}" = 1 ]] || return
     [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return
 
-    printf '\033]133;D;%s;history_id=%s;session_id=%s\a' "$1" "$ATUIN_HISTORY_ID" "${ATUIN_SESSION:-}"
+    printf '\033]133;D;%s;history_id=%s\a' "$1" "$ATUIN_HISTORY_ID"
 }
 
 __atuin_osc133_prompt_start=$'%{\033]133;A;cl=line\a%}'
@@ -64,7 +78,7 @@ __atuin_osc133_wrap_prompt() {
     __atuin_rprompt="${__atuin_rprompt//$__atuin_osc133_prompt_start/}"
     __atuin_rprompt="${__atuin_rprompt//$__atuin_osc133_prompt_end/}"
 
-    if [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]]; then
+    if [[ "${__atuin_pty_proxy_owns_tty:-0}" = 1 ]]; then
         PROMPT="${__atuin_osc133_prompt_start}${__atuin_prompt}"
         RPROMPT="${__atuin_rprompt}${__atuin_osc133_prompt_end}"
     else
@@ -93,6 +107,7 @@ _atuin_precmd() {
     local duration=""
     if [[ -n $__atuin_preexec_time && -n $__atuin_precmd_time ]]; then
         printf -v duration %.0f $(((__atuin_precmd_time - __atuin_preexec_time) * 1000000000))
+        ((duration < 0)) && duration=0
     fi
 
     __atuin_osc133_command_finished "$EXIT"

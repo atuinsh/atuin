@@ -3,6 +3,7 @@
 //! build (see the note in Cargo.toml), commands are left unhighlighted.
 
 use atuin_client::theme::Meaning;
+use easy_cast::Conv;
 
 /// Style every byte of `cmd` with a `Syntax*` meaning, parsing with the
 /// grammar for the entry's shell. Anything unrecognized (plain arguments,
@@ -136,8 +137,8 @@ fn highlight_powershell(node: tree_sitter::Node, src: &[u8], meanings: &mut [Mea
     let mut captures = cursor.captures(&HIGHLIGHTS_QUERY, node, src);
 
     while let Some((m, capture_index)) = captures.next() {
-        let capture = m.captures[*capture_index];
-        let capture_name = HIGHLIGHTS_QUERY.capture_names()[capture.index as usize];
+        let capture = m.captures()[*capture_index];
+        let capture_name = HIGHLIGHTS_QUERY.capture_names()[usize::conv(capture.index)];
 
         let meaning = match capture_name {
             "base" => Meaning::Base,

@@ -3,7 +3,7 @@
 //! See [`encrypt_sync`] for the encryption description.
 use std::array::TryFromSliceError;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
 
 use base64::Engine;
@@ -11,6 +11,7 @@ use base64::engine::general_purpose::{
     STANDARD as B64_STANDARD, URL_SAFE_NO_PAD as B64_URL_SAFE_NO_PAD,
 };
 use crypto_secretbox::{KeyInit, XSalsa20Poly1305, aead};
+use easy_cast::Conv;
 use rusty_paseto::{Paseto, core as rusty_paseto};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -64,8 +65,14 @@ pub enum KeyFileLoadingError {
 pub enum KeyFileStoringError {
     #[error("the given key path already exists")]
     AlreadyExists,
+
     #[error("unexpected io error: {_0}")]
     Io(#[from] std::io::Error),
+
+    /// This error will essentially never happen in practice. It requires
+    /// `/path/to/.key.atuin-tmp.{i}` to exist for *every* `i` up to `usize::MAX`.
+    #[error("all temporary file paths are in use")]
+    TempFilesExhausted,
 }
 
 #[derive(Debug, Error)]
@@ -75,6 +82,11 @@ pub enum KeyFileLoadOrGenerateError {
 
     #[error("unexpected io error: {_0}")]
     Io(#[from] std::io::Error),
+
+    /// See comment on [`KeyFileStoringError::TempFilesExhausted`] -- this error will essentially
+    /// never happen.
+    #[error("failed to create key: all temporary file paths are in use")]
+    TempFilesExhausted,
 }
 
 /// A type which contains a [`Key`] encoded as a B64 string. See [`Key::encode`] for more details.
@@ -157,7 +169,7 @@ impl Key {
         // A msgpack array16 header (3 bytes) followed by each byte as at most a 2-byte uint.
         let mut buf = Vec::with_capacity(3 + 2 * key_bytes.len());
         // Writing to a `Vec` is infallible, so neither of these can actually error.
-        rmp::encode::write_array_len(&mut buf, key_bytes.len() as u32)
+        rmp::encode::write_array_len(&mut buf, u32::conv(key_bytes.len()))
             .expect("writing to a Vec is infallible");
         for b in key_bytes {
             rmp::encode::write_uint(&mut buf, u64::from(*b))
@@ -231,21 +243,74 @@ impl Key {
     ///
     /// Refuses to overwrite a file that already exists.
     pub fn try_write_path(&self, path: &Path) -> Result<(), KeyFileStoringError> {
-        if path.exists() {
-            // We could try to load the path real fast and check whether the contents are the same
-            // as to what the user wants -- save them an error handling if we can:
-            let mut data = String::new();
-            fs::File::open(path)?.read_to_string(&mut data)?;
-            if data == self.encode().dangerously_leak_secret() {
-                return Ok(());
-            }
+        use std::io::{Error, ErrorKind};
 
-            return Err(KeyFileStoringError::AlreadyExists);
+        // To avoid race conditions, this function:
+        //
+        // 1. Creates a temporary file in the same directory as `path`, but with `.` prepended to
+        //    the filename, and `.atuin-tmp.{i}` appended. `i` starts at 0 and is incremented until
+        //    we find a path that doesn't exist yet.
+        //
+        //    For example, `/path/to/key` -> `/path/to/.key.atuin-tmp.0`.
+        //
+        // 2. Writes the key to the temporary path.
+        //
+        // 3. Hardlinks the temporary path to the real key path (`path`). Hardlinking will fail if
+        //    the destination already exists, which is what we want.
+        //
+        // 4. Removes the temporary file.
+
+        let dir = path.parent().ok_or(Error::from(ErrorKind::IsADirectory))?;
+        let name = path.file_name().ok_or(Error::from(ErrorKind::IsADirectory))?;
+        let base_tmp_name: std::ffi::OsString = [".".as_ref(), name].into_iter().collect();
+
+        let mut i: usize = 0;
+        match loop {
+            let mut tmp_path = dir.join(&base_tmp_name);
+            tmp_path.add_extension(format!("atuin-tmp.{i}"));
+
+            // `tmp_path` is first so it gets dropped after `tmp_file`. `tmp_path` is a
+            // `RemoveOnDropPath` so it will remove the file when dropped, but this will fail on
+            // Windows if the file is still open.
+            let (tmp_path, mut tmp_file) =
+                match fs::OpenOptions::new().write(true).create_new(true).open(&tmp_path) {
+                    Ok(file) => (crate::fs::RemoveOnDropPath(tmp_path), file),
+                    Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                        // This error will essentially never happen in practice. It requires
+                        // `/path/to/.key.atuin-tmp.{i}` to exist for *every* `i` up to
+                        // `usize::MAX`.
+                        i = i.checked_add(1).ok_or(KeyFileStoringError::TempFilesExhausted)?;
+                        continue;
+                    }
+                    Err(e) => return Err(e.into()),
+                };
+
+            tmp_file.write_all(self.encode().dangerously_leak_secret().as_bytes())?;
+            tmp_file.sync_all()?;
+            drop(tmp_file);
+            break std::fs::hard_link(&tmp_path, path);
+        } {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                return Err(KeyFileStoringError::AlreadyExists);
+            }
+            Err(e) if e.kind() == ErrorKind::Unsupported => {}
+            Err(e) => return Err(e.into()),
         }
 
-        let mut file = fs::File::create(path)?;
+        // Hardlinks are unsupported. This is unlikely but can happen on FAT32/exFAT filesystems.
+        // Fall back to creating the file and then writing to it. This has the possibility of a race
+        // condition where another process could observe a partially written key file, but it is
+        // better than unconditionally failing to create the key file. In any case we are careful
+        // not to overwrite an existing key file.
+        let mut file = match std::fs::OpenOptions::new().write(true).create_new(true).open(path) {
+            Ok(file) => file,
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                return Err(KeyFileStoringError::AlreadyExists);
+            }
+            Err(e) => return Err(e.into()),
+        };
         file.write_all(self.encode().dangerously_leak_secret().as_bytes())?;
-
         Ok(())
     }
 
@@ -253,6 +318,10 @@ impl Key {
     ///
     /// Unlike [`Self::try_write_path`], this deliberately overwrites an existing key.
     pub fn overwrite_path(&self, path: &Path) -> std::io::Result<()> {
+        // TODO(taylordotfish): This has a race condition where another process can observe a
+        // partially written key file. We should write to a temp file, similar to
+        // `Self::try_write_path`, and then use `rename` to move it to the key path (not `hardlink`
+        // because we do want it to overwrite an existing key).
         let mut file = fs::File::create(path)?;
         file.write_all(self.encode().dangerously_leak_secret().as_bytes())?;
 
@@ -285,6 +354,9 @@ impl Key {
                             }
                         }),
                     Err(KeyFileStoringError::Io(io)) => Err(io.into()),
+                    Err(KeyFileStoringError::TempFilesExhausted) => {
+                        Err(KeyFileLoadOrGenerateError::TempFilesExhausted)
+                    }
                 }
             }
             Err(KeyFileLoadingError::Io(io)) => Err(io.into()),
@@ -744,5 +816,60 @@ mod test {
         assert_eq!(Key::try_load_from_path(&path).unwrap(), new);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[rstest]
+    fn concurrent_generation_yields_one_complete_key() {
+        // `try_write_path` used to create the key file and only then write the key into it, so a
+        // concurrent reader could observe a zero-length file and fail with
+        // `KeyDecodingError::EmptyKey`. Nothing in shell startup creates the key, so the first
+        // writers really are concurrent in practice: the backgrounded `atuin history end` hook and
+        // a foreground `atuin search`.
+        const THREADS: usize = 8;
+        const ROUNDS: usize = 100;
+
+        for round in 0..ROUNDS {
+            let dir = tempfile::tempdir().expect("create temp dir");
+            let path = dir.path().join("key");
+            let barrier = std::sync::Barrier::new(THREADS);
+
+            let keys: Vec<Key> = std::thread::scope(|scope| {
+                let threads: Vec<_> = (0..THREADS)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            barrier.wait();
+                            Key::try_load_or_generate(&path)
+                                .unwrap_or_else(|e| panic!("round {round}: {e}"))
+                        })
+                    })
+                    .collect();
+                threads.into_iter().map(|t| t.join().expect("thread panicked")).collect()
+            });
+
+            // Every racer must end up holding the one key that actually landed on disk; a racer
+            // that kept a key the file does not have would encrypt records nothing can decrypt.
+            let stored = Key::try_load_from_path(&path).expect("key file is readable");
+            for (i, key) in keys.iter().enumerate() {
+                assert_eq!(
+                    *key, stored,
+                    "round {round}: thread {i} kept a key that is not on disk"
+                );
+            }
+        }
+    }
+
+    #[rstest]
+    fn try_write_path_leaves_no_temporary_files() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("key");
+
+        Key::from([0x33u8; 32]).try_write_path(&path).expect("write creates the key");
+
+        let mut names: Vec<String> = fs::read_dir(dir.path())
+            .expect("read temp dir")
+            .map(|entry| entry.expect("dir entry").file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["key"], "the temporary file was left behind");
     }
 }

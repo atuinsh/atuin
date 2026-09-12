@@ -1,220 +1,354 @@
-//! Integration tests for the daemon server lifecycle.
-//!
-//! Each test spins up a real gRPC server on a temporary unix socket,
-//! connects a client, and exercises the daemon RPCs.
+//! Integration tests for the daemon server lifecycle: every RPC round-trips through a real gRPC
+//! server on a temporary unix socket.
+#![cfg(unix)]
 
-#[cfg(unix)]
-mod unix {
-    use std::time::Duration;
+mod common;
 
-    use atuin_client::database::Sqlite;
-    use atuin_client::record::sqlite_store::SqliteStore;
-    use atuin_client::settings::{Settings, init_meta_config_for_testing};
-    use atuin_daemon::client::HistoryClient;
-    use atuin_daemon::components::HistoryComponent;
-    use atuin_daemon::{Daemon, DaemonHandle};
-    use rstest::*;
-    use tempfile::TempDir;
-    use tokio::net::UnixListener;
-    use tokio_stream::wrappers::UnixListenerStream;
-    use tonic::transport::Server;
+use std::time::Duration;
 
-    /// Spins up a daemon server on a temp socket and returns a connected client,
-    /// the daemon handle (for shutdown), and the temp dir (must be held to keep paths alive).
-    #[fixture]
-    async fn daemon() -> (HistoryClient, DaemonHandle, TempDir) {
-        let tmp = tempfile::tempdir().unwrap();
+use atuin_client::history::{History, HistoryId};
+use atuin_client::settings::Search;
+use atuin_common::range::PyStyleIdxRange;
+use atuin_daemon::grpc::history::pb::tail_history_reply::Event;
+use atuin_daemon::search::IndexFilterMode;
+use common::{TestEnv, history};
+use rstest::*;
 
-        let db_path = tmp.path().join("history.db");
-        let record_path = tmp.path().join("records.db");
-        let key_path = tmp.path().join("key");
-        let socket_path = tmp.path().join("test.sock");
-        let meta_path = tmp.path().join("meta.db");
+#[fixture]
+async fn env() -> TestEnv {
+    TestEnv::builder().build().await
+}
 
-        // Initialize the meta store config for testing (required for Settings::host_id())
-        init_meta_config_for_testing(meta_path.to_str().unwrap(), 5.0);
+#[rstest]
+#[tokio::test]
+async fn test_status(#[future(awt)] env: TestEnv) {
+    let mut client = env.history_client().await;
+    let status = client.status().await.unwrap();
+    assert!(status.healthy);
+    assert_eq!(status.version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(status.protocol, 2);
+    assert!(status.pid > 0);
+}
 
-        // Build settings with test paths
-        let settings: Settings = Settings::builder()
-            .expect("could not build settings builder")
-            .set_override("db_path", db_path.to_str().unwrap())
-            .expect("failed to set db_path")
-            .set_override("record_store_path", record_path.to_str().unwrap())
-            .expect("failed to set record_store_path")
-            .set_override("key_path", key_path.to_str().unwrap())
-            .expect("failed to set key_path")
-            .set_override("daemon.socket_path", socket_path.to_str().unwrap())
-            .expect("failed to set socket_path")
-            .set_override("meta.db_path", meta_path.to_str().unwrap())
-            .expect("failed to set meta.db_path")
-            .build()
-            .expect("could not build settings")
-            .try_deserialize()
-            .expect("could not deserialize settings");
+#[rstest]
+#[tokio::test]
+async fn test_start_end_history(#[future(awt)] env: TestEnv) {
+    let mut client = env.history_client().await;
+    let history = History::daemon()
+        .timestamp(time::OffsetDateTime::now_utc())
+        .command("echo hello".to_string())
+        .cwd("/tmp".to_string())
+        .session("test-session".to_string())
+        .cmd_origin(
+            #[allow(deprecated)]
+            atuin_domain::record::CmdOrigin::parse_lenient("test-host"),
+        )
+        .build()
+        .into();
 
-        // Create databases
-        let history_db = Sqlite::new(&db_path, Duration::from_secs(5)).await.unwrap();
-        let store = SqliteStore::new(&record_path, Duration::from_secs(5)).await.unwrap();
+    let start_reply = client.start_history(history).await.unwrap();
+    assert!(start_reply.id.is_some());
 
-        // Create the history component and get its gRPC service
-        let history_component = HistoryComponent::new();
-        let history_service = history_component.grpc_service();
+    let id: HistoryId = start_reply.id.unwrap().try_into().unwrap();
+    let end_reply = client.end_history(id, Some(Duration::from_nanos(1_000_000)), 0).await.unwrap();
+    assert!(end_reply.record_id.is_some());
+}
 
-        // Build and start the daemon
-        let mut daemon = Daemon::builder(settings)
-            .store(store)
-            .history_db(history_db)
-            .component(history_component)
-            .build()
-            .unwrap();
-
-        let handle = daemon.handle();
-
-        // Start components (this initializes the history component with the handle)
-        daemon.start_components().await.unwrap();
-
-        // Start the gRPC server
-        let uds = UnixListener::bind(&socket_path).unwrap();
-        let stream = UnixListenerStream::new(uds);
-
-        let server_handle = handle.clone();
-        tokio::spawn(async move {
-            let mut rx = server_handle.subscribe();
-            Server::builder()
-                .add_service(history_service)
-                .serve_with_incoming_shutdown(stream, async move {
-                    loop {
-                        match rx.recv().await {
-                            Ok(atuin_daemon::DaemonEvent::ShutdownRequested) => break,
-                            Ok(_) => {}
-                            Err(_) => break,
-                        }
-                    }
-                })
-                .await
-                .unwrap();
-        });
-
-        // Spawn the daemon event loop in the background
-        tokio::spawn(async move {
-            daemon.run_event_loop().await.unwrap();
-        });
-
-        // Give the server a moment to bind.
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        let client = HistoryClient::new(socket_path.clone()).await.unwrap();
-
-        (client, handle, tmp)
+#[rstest]
+#[case::key("atuin key", false)]
+#[case::account_login("atuin account login -u me", false)]
+#[case::ordinary("echo hello", true)]
+#[tokio::test]
+async fn output_is_stored_only_for_commands_that_cannot_print_the_key(
+    #[future(awt)] env: TestEnv,
+    #[case] command: &str,
+    #[case] stored: bool,
+    #[values(false, true)] ended_before_capture: bool,
+) {
+    let mut client = env.history_client().await;
+    let history: History = History::daemon()
+        .timestamp(time::OffsetDateTime::now_utc())
+        .command(command.to_string())
+        .cwd("/tmp".to_string())
+        .session("test-session".to_string())
+        .cmd_origin(
+            #[allow(deprecated)]
+            atuin_domain::record::CmdOrigin::parse_lenient("test-host"),
+        )
+        .build()
+        .into();
+    let id: HistoryId =
+        client.start_history(history).await.unwrap().id.unwrap().try_into().unwrap();
+    if ended_before_capture {
+        client.end_history(id, Some(Duration::from_nanos(1_000_000)), 0).await.unwrap();
     }
 
-    #[rstest]
-    #[tokio::test]
-    async fn test_status(#[future] daemon: (HistoryClient, DaemonHandle, TempDir)) {
-        let (mut client, _handle, _tmp) = daemon.await;
+    client
+        .register_command_output(id, "adapt amused able anxiety mother", None, 32, 80, 24)
+        .await
+        .unwrap();
 
-        let status = client.status().await.unwrap();
-        assert!(status.healthy);
-        assert_eq!(status.version, env!("CARGO_PKG_VERSION"));
-        assert_eq!(status.protocol, 1);
-        assert!(status.pid > 0);
-    }
+    assert_eq!(client.get_command_output(id, vec![]).await.unwrap().is_some(), stored);
+}
 
-    #[rstest]
-    #[tokio::test]
-    async fn test_start_end_history(#[future] daemon: (HistoryClient, DaemonHandle, TempDir)) {
-        use atuin_client::history::History;
+/// A capture whose middle was discarded has to survive the whole round trip -- proto, storage
+/// schema, and chunking -- with its two halves still distinguishable. Storing only the first
+/// bytes, as the capture used to, threw away the end of every long-running command's output.
+#[rstest]
+#[tokio::test]
+async fn a_capture_that_lost_its_middle_round_trips(#[future(awt)] env: TestEnv) {
+    let mut client = env.history_client().await;
+    let history: History = History::daemon()
+        .timestamp(time::OffsetDateTime::now_utc())
+        .command("seq 1 10000000".to_string())
+        .cwd("/tmp".to_string())
+        .session("test-session".to_string())
+        .cmd_origin(
+            #[allow(deprecated)]
+            atuin_domain::record::CmdOrigin::parse_lenient("test-host"),
+        )
+        .build()
+        .into();
+    let id: HistoryId =
+        client.start_history(history).await.unwrap().id.unwrap().try_into().unwrap();
 
-        let (mut client, _handle, _tmp) = daemon.await;
+    client
+        .register_command_output(
+            id,
+            "first\nsecond",
+            Some("penultimate\nlast".to_string()),
+            9_000_000,
+            80,
+            24,
+        )
+        .await
+        .unwrap();
 
-        let history = History::daemon()
-            .timestamp(time::OffsetDateTime::now_utc())
-            .command("echo hello".to_string())
-            .cwd("/tmp".to_string())
-            .session("test-session".to_string())
-            .cmd_origin(
-                #[allow(deprecated)]
-                atuin_domain::record::CmdOrigin::parse_lenient("test-host"),
-            )
-            .build()
-            .into();
+    // Ask for the whole thing: both kept halves come back, and the caller is told the middle is
+    // missing rather than being handed four lines as if they were the entire output.
+    let whole = vec![PyStyleIdxRange::new(0, -1)];
+    let response = client.get_command_output(id, whole).await.unwrap().expect("stored");
+    assert!(response.truncated);
+    assert_eq!(response.total_lines, 4);
 
-        let start_reply = client.start_history(history).await.unwrap();
-        assert!(!start_reply.id.is_empty());
+    let lines: Vec<(i64, &str)> = response.lines().map(|view| (view.line, view.content)).collect();
+    assert_eq!(lines, vec![
+        (0, "first"),
+        (1, "second"),
+        // Numbered from the end: how many lines the discarded middle held is not knowable.
+        (-2, "penultimate"),
+        (-1, "last"),
+    ]);
 
-        let end_reply = client.end_history(start_reply.id, 1_000_000, 0).await.unwrap();
-        assert!(!end_reply.id.is_empty());
-    }
+    // The observed byte count is of everything the terminal saw, not of what survived.
+    assert_eq!(response.meta.expect("meta").output_observed_bytes, 9_000_000);
 
-    #[rstest]
-    #[tokio::test]
-    async fn test_tail_history_streams_started_and_ended_events(
-        #[future] daemon: (HistoryClient, DaemonHandle, TempDir),
-    ) {
-        use atuin_client::history::History;
-        use atuin_daemon::history::HistoryEventKind;
+    // Asking only for the tail is answered from the tail alone, with nothing reported missing.
+    let tail = vec![PyStyleIdxRange::new(-1, -1)];
+    let response = client.get_command_output(id, tail).await.unwrap().expect("stored");
+    assert!(!response.truncated);
+    let lines: Vec<(i64, &str)> = response.lines().map(|view| (view.line, view.content)).collect();
+    assert_eq!(lines, vec![(-1, "last")]);
+}
 
-        let (mut client, _handle, _tmp) = daemon.await;
-        let mut stream = client.tail_history().await.unwrap();
+#[rstest]
+#[tokio::test]
+async fn output_for_a_cancelled_command_is_not_stored(#[future(awt)] env: TestEnv) {
+    let mut client = env.history_client().await;
+    let history: History = History::daemon()
+        .timestamp(time::OffsetDateTime::now_utc())
+        .command("echo hello".to_string())
+        .cwd("/tmp".to_string())
+        .session("test-session".to_string())
+        .cmd_origin(
+            #[allow(deprecated)]
+            atuin_domain::record::CmdOrigin::parse_lenient("test-host"),
+        )
+        .build()
+        .into();
+    let id: HistoryId =
+        client.start_history(history).await.unwrap().id.unwrap().try_into().unwrap();
+    client.cancel_history(id).await.unwrap();
 
-        let history = History::daemon()
-            .timestamp(time::OffsetDateTime::now_utc())
-            .command("git status".to_string())
-            .cwd("/tmp/repo".to_string())
-            .session("tail-session".to_string())
-            .cmd_origin(atuin_domain::record::CmdOrigin::try_from("test-host:ellie").unwrap())
-            .author("claude".to_string())
-            .intent("inspect repository state".to_string())
-            .shell("bash")
-            .build()
-            .into();
+    // The command was cancelled, so it is gone: its output is refused, not silently stored.
+    assert!(client.register_command_output(id, "hello", None, 5, 80, 24).await.is_err());
 
-        let start_reply = client.start_history(history).await.unwrap();
+    assert!(client.get_command_output(id, vec![]).await.unwrap().is_none());
+}
 
-        let started = stream.message().await.unwrap().unwrap();
-        assert_eq!(HistoryEventKind::try_from(started.kind).unwrap(), HistoryEventKind::Started);
-        let started_history = started.history.unwrap();
-        assert_eq!(started_history.id, start_reply.id);
-        assert_eq!(started_history.command, "git status");
-        assert_eq!(started_history.cwd, "/tmp/repo");
-        assert_eq!(started_history.hostname, "test-host:ellie");
-        assert_eq!(started_history.author, "claude");
-        assert_eq!(started_history.intent, "inspect repository state");
+#[rstest]
+#[tokio::test]
+async fn output_for_an_unknown_command_is_not_stored(#[future(awt)] env: TestEnv) {
+    let mut client = env.history_client().await;
+    let id = HistoryId::from_bytes(*uuid::Uuid::from_u128(7).as_bytes());
 
-        client.end_history(start_reply.id.clone(), 1_000_000, 0).await.unwrap();
+    // The id was never started, so it is unknown: its output is refused, not silently stored.
+    assert!(client.register_command_output(id, "hello", None, 5, 80, 24).await.is_err());
 
-        let ended = stream.message().await.unwrap().unwrap();
-        assert_eq!(HistoryEventKind::try_from(ended.kind).unwrap(), HistoryEventKind::Ended);
-        let ended_history = ended.history.unwrap();
-        assert_eq!(ended_history.id, start_reply.id);
-        assert_eq!(ended_history.exit, 0);
-        assert_eq!(ended_history.duration, 1_000_000);
-    }
+    assert!(client.get_command_output(id, vec![]).await.unwrap().is_none());
+}
 
-    #[rstest]
-    #[tokio::test]
-    async fn test_end_unknown_history_fails(
-        #[future] daemon: (HistoryClient, DaemonHandle, TempDir),
-    ) {
-        let (mut client, _handle, _tmp) = daemon.await;
+#[rstest]
+#[tokio::test]
+async fn end_history_without_duration_derives_from_start(#[future(awt)] env: TestEnv) {
+    let mut client = env.history_client().await;
+    let history: History = History::daemon()
+        .timestamp(time::OffsetDateTime::now_utc() - Duration::from_millis(20))
+        .command("sleep 0".to_string())
+        .cwd("/tmp".to_string())
+        .session("no-duration-session".to_string())
+        .cmd_origin(atuin_domain::record::CmdOrigin::try_from("test-host:ellie").unwrap())
+        .build()
+        .into();
 
-        let result = client.end_history("nonexistent-id".to_string(), 1000, 0).await;
-        assert!(result.is_err());
-    }
+    let start_reply = client.start_history(history).await.unwrap();
+    let id: HistoryId = start_reply.id.unwrap().try_into().unwrap();
 
-    #[rstest]
-    #[tokio::test]
-    async fn test_shutdown(#[future] daemon: (HistoryClient, DaemonHandle, TempDir)) {
-        let (mut client, _handle, _tmp) = daemon.await;
+    // The timeout guards against a regression that hangs while reading the start time and
+    // finishing the same entry (the old self-deadlock).
+    let end_reply = tokio::time::timeout(Duration::from_secs(5), client.end_history(id, None, 0))
+        .await
+        .expect("end_history deadlocked on the in-flight borrow")
+        .unwrap();
+    assert!(end_reply.record_id.is_some());
+    let row = env.history_db.load(id).await.unwrap().expect("row saved");
+    assert!(row.duration >= 20_000_000, "derived duration too small: {}", row.duration);
+}
 
-        let accepted = client.shutdown().await.unwrap();
-        assert!(accepted);
+#[rstest]
+#[tokio::test]
+async fn test_tail_history_streams_started_and_ended_events(#[future(awt)] env: TestEnv) {
+    let mut client = env.history_client().await;
+    let mut stream = client.tail_history().await.unwrap();
 
-        // Give server time to shut down.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+    let history = History::daemon()
+        .timestamp(time::OffsetDateTime::now_utc())
+        .command("git status".to_string())
+        .cwd("/tmp/repo".to_string())
+        .session("tail-session".to_string())
+        .cmd_origin(atuin_domain::record::CmdOrigin::try_from("test-host:ellie").unwrap())
+        .author("claude".to_string())
+        .intent("inspect repository state".to_string())
+        .shell("bash")
+        .build()
+        .into();
 
-        // Subsequent calls should fail since the server is gone.
-        let result = client.status().await;
-        assert!(result.is_err());
-    }
+    let start_reply = client.start_history(history).await.unwrap();
+
+    let started = stream.message().await.unwrap().unwrap();
+    let started_history = match started.event {
+        Some(Event::Started(history)) => history,
+        other => panic!("expected a Started event, got {other:?}"),
+    };
+    assert_eq!(started_history.id, start_reply.id);
+    assert_eq!(started_history.command, "git status");
+    assert_eq!(started_history.cwd, "/tmp/repo");
+    assert_eq!(started_history.hostname, "test-host:ellie");
+    assert_eq!(started_history.author, "claude");
+    assert_eq!(started_history.intent, "inspect repository state");
+
+    let end_id: HistoryId = start_reply.id.clone().unwrap().try_into().unwrap();
+    client.end_history(end_id, Some(Duration::from_nanos(1_000_000)), 0).await.unwrap();
+
+    let ended = stream.message().await.unwrap().unwrap();
+    let ended_history = match ended.event {
+        Some(Event::Ended(history)) => history,
+        other => panic!("expected an Ended event, got {other:?}"),
+    };
+    assert_eq!(ended_history.id, start_reply.id);
+    assert_eq!(ended_history.exit, 0);
+    assert_eq!(ended_history.duration, 1_000_000);
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_end_unknown_history_fails(#[future(awt)] env: TestEnv) {
+    let mut client = env.history_client().await;
+    let result = client
+        .end_history(HistoryId::from_bytes([0u8; 16]), Some(Duration::from_nanos(1000)), 0)
+        .await;
+    assert!(result.is_err());
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_shutdown(#[future(awt)] env: TestEnv) {
+    let mut client = env.history_client().await;
+    assert!(client.shutdown().await.unwrap());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(client.status().await.is_err());
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_delete_history_removes_entry(#[future(awt)] env: TestEnv) {
+    let mut client = env.history_client().await;
+    let id = env.record(&mut client, "echo delete-me").await;
+    assert_eq!(env.active_rows().await, 1);
+
+    let reply = client.delete_history(vec![id]).await.unwrap();
+    assert_eq!(reply.deleted, 1);
+    assert_eq!(reply.protocol, 2);
+    assert_eq!(env.active_rows().await, 0);
+
+    // Deleting an already-deleted id still succeeds (idempotent), counting the record write.
+    let reply = client.delete_history(vec![id]).await.unwrap();
+    assert_eq!(reply.deleted, 1);
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_rebuild_history(#[future(awt)] env: TestEnv) {
+    let mut client = env.history_client().await;
+    env.record(&mut client, "echo before-rebuild").await;
+
+    let reply = client.rebuild_history().await.unwrap();
+    assert_eq!(reply.protocol, 2);
+
+    // The journal keeps working after a rebuild.
+    let id = env.record(&mut client, "echo after-rebuild").await;
+    assert_eq!(client.delete_history(vec![id]).await.unwrap().deleted, 1);
+}
+
+#[rstest]
+#[tokio::test]
+async fn journal_delete_removes_entry_and_rebuilds_index(#[future(awt)] env: TestEnv) {
+    let journal = &env.journal;
+    let id_a = journal.start_cmd(history("delete_me"));
+    journal.finish(id_a, 0, Duration::from_millis(1)).await.unwrap();
+    let id_b = journal.start_cmd(history("keep_me"));
+    journal.finish(id_b, 0, Duration::from_millis(1)).await.unwrap();
+    assert_eq!(env.index_count().await, 2);
+
+    assert_eq!(journal.delete(&[id_a], &Search::default()).await.unwrap(), 1);
+
+    let index = env.index.read().await;
+    assert_eq!(index.command_count(), 1, "index should be rebuilt without the deleted command");
+    assert_eq!(index.search("delete_me", &IndexFilterMode::Global, 10).count(), 0);
+    assert_eq!(index.search("keep_me", &IndexFilterMode::Global, 10).count(), 1);
+}
+
+#[rstest]
+#[tokio::test]
+async fn journal_rebuild_reloads_index(#[future(awt)] env: TestEnv) {
+    let journal = &env.journal;
+    let id_a = journal.start_cmd(history("first_cmd"));
+    journal.finish(id_a, 0, Duration::from_millis(1)).await.unwrap();
+    let id_b = journal.start_cmd(history("second_cmd"));
+    journal.finish(id_b, 0, Duration::from_millis(1)).await.unwrap();
+    assert_eq!(env.index_count().await, 2);
+
+    // Wipe both the history db and the index; only the record store still holds the commands.
+    env.history_db.delete_rows([id_a, id_b]).await.unwrap();
+    assert_eq!(env.active_rows().await, 0);
+    *env.index.write().await = atuin_daemon::search::SearchIndex::default();
+    assert_eq!(env.index_count().await, 0);
+
+    journal.rebuild(&Search::default()).await.unwrap();
+
+    assert_eq!(env.active_rows().await, 2);
+    let index = env.index.read().await;
+    assert_eq!(index.command_count(), 2, "rebuild should repopulate the index from the store");
+    assert_eq!(index.search("first_cmd", &IndexFilterMode::Global, 10).count(), 1);
+    assert_eq!(index.search("second_cmd", &IndexFilterMode::Global, 10).count(), 1);
 }

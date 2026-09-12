@@ -11,16 +11,6 @@ const MIN_UNIX_NANOS: i128 = -377_705_116_800 * 1_000_000_000;
 /// Highest `time::OffsetDateTime` can represent (unix)`9999-12-31 23:59:59.999_999_999 UTC`.
 const MAX_UNIX_NANOS: i128 = 253_402_300_799 * 1_000_000_000 + 999_999_999;
 
-/// Returned when an instant cannot be represented by an [`OffsetDateTime`].
-///
-/// [`OffsetDateTime::from_unix_timestamp_nanos`] reports some of these as a *successful* conversion
-/// to the wrong date -- see <https://github.com/time-rs/time/issues/802>.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("timestamp of {nanos}ns since the unix epoch is out of range")]
-pub struct TimestampOutOfRange {
-    pub nanos: i128,
-}
-
 /// Returned when a seconds/nanoseconds pair cannot be represented by an [`OffsetDateTime`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("timespec of {secs}s + {nsecs}ns is out of range")]
@@ -31,9 +21,6 @@ pub struct TimespecOutOfRange {
 
 /// Utilities for operating on [`OffsetDateTime`]s.
 pub trait OffsetDateTimeExt {
-    /// Build an [`OffsetDateTime`] from nanoseconds since the unix epoch.
-    fn from_unix_nanos(nanos: i128) -> Result<OffsetDateTime, TimestampOutOfRange>;
-
     /// Build an [`OffsetDateTime`] from an `i64` count of nanoseconds since the unix epoch.
     fn from_unix_nanos_i64(nanos: i64) -> OffsetDateTime;
 
@@ -42,12 +29,6 @@ pub trait OffsetDateTimeExt {
 
     /// Build an [`OffsetDateTime`] from a seconds/nanoseconds pair counted from the unix epoch.
     fn from_timespec(secs: i128, nsecs: i128) -> Result<OffsetDateTime, TimespecOutOfRange>;
-
-    /// Nanoseconds since the unix epoch as an `i64`. Fails outside roughly 1677..2262 AD.
-    fn try_unix_nanos_i64(self) -> Result<i64, TimestampOutOfRange>;
-
-    /// Nanoseconds since the unix epoch as a `u64`. Fails before 1970 and after roughly 2554 AD.
-    fn try_unix_nanos_u64(self) -> Result<u64, TimestampOutOfRange>;
 
     /// How much time has passed since `earlier`, clamped to zero if it is in the future.
     fn saturating_duration_since(self, earlier: OffsetDateTime) -> std::time::Duration;
@@ -125,6 +106,8 @@ impl fmt::Display for OffsetDateTimeDisplay {
 }
 
 const _: () = assert!(
+    // Using plain `as` casts here because trait methods like `try_from` aren't available in const
+    // contexts.
     (i64::MIN as i128) >= MIN_UNIX_NANOS
         && (i64::MAX as i128) <= MAX_UNIX_NANOS
         && (u64::MAX as i128) <= MAX_UNIX_NANOS,
@@ -132,22 +115,13 @@ const _: () = assert!(
 );
 
 impl OffsetDateTimeExt for OffsetDateTime {
-    #[allow(clippy::disallowed_methods)]
-    fn from_unix_nanos(nanos: i128) -> Result<OffsetDateTime, TimestampOutOfRange> {
-        if !(MIN_UNIX_NANOS..=MAX_UNIX_NANOS).contains(&nanos) {
-            return Err(TimestampOutOfRange { nanos });
-        }
-
-        Self::from_unix_timestamp_nanos(nanos).map_err(|_| TimestampOutOfRange { nanos })
-    }
-
     fn from_unix_nanos_i64(nanos: i64) -> OffsetDateTime {
-        Self::from_unix_nanos(i128::from(nanos))
+        Self::from_unix_timestamp_nanos(i128::from(nanos))
             .expect("the full i64 nanosecond range is representable; asserted at compile time")
     }
 
     fn from_unix_nanos_u64(nanos: u64) -> OffsetDateTime {
-        Self::from_unix_nanos(i128::from(nanos))
+        Self::from_unix_timestamp_nanos(i128::from(nanos))
             .expect("the full u64 nanosecond range is representable; asserted at compile time")
     }
 
@@ -159,17 +133,7 @@ impl OffsetDateTimeExt for OffsetDateTime {
             .and_then(|n| n.checked_add(nsecs))
             .ok_or_else(out_of_range)?;
 
-        Self::from_unix_nanos(nanos).map_err(|_| out_of_range())
-    }
-
-    fn try_unix_nanos_i64(self) -> Result<i64, TimestampOutOfRange> {
-        let nanos = self.unix_timestamp_nanos();
-        i64::try_from(nanos).map_err(|_| TimestampOutOfRange { nanos })
-    }
-
-    fn try_unix_nanos_u64(self) -> Result<u64, TimestampOutOfRange> {
-        let nanos = self.unix_timestamp_nanos();
-        u64::try_from(nanos).map_err(|_| TimestampOutOfRange { nanos })
+        Self::from_unix_timestamp_nanos(nanos).map_err(|_| out_of_range())
     }
 
     fn saturating_duration_since(self, earlier: OffsetDateTime) -> std::time::Duration {
@@ -276,33 +240,6 @@ mod tests {
         assert_eq!(now.saturating_duration_since(earlier).as_secs(), expected_secs);
     }
 
-    #[rstest]
-    #[case::epoch(0)]
-    #[case::typical(1_639_162_832_500_000_000)]
-    #[case::max_i64(i64::MAX)]
-    fn try_unix_nanos_i64_round_trips(#[case] nanos: i64) {
-        let t = OffsetDateTime::from_unix_nanos_i64(nanos);
-        assert_eq!(t.try_unix_nanos_i64(), Ok(nanos));
-    }
-
-    #[rstest]
-    #[case::epoch(0)]
-    #[case::typical(1_639_162_832_500_000_000)]
-    #[case::max_u64(u64::MAX)]
-    fn try_unix_nanos_u64_round_trips(#[case] nanos: u64) {
-        let t = OffsetDateTime::from_unix_nanos_u64(nanos);
-        assert_eq!(t.try_unix_nanos_u64(), Ok(nanos));
-    }
-
-    #[test]
-    fn try_unix_nanos_u64_rejects_pre_epoch() {
-        // the silent `as u64` wrap this replaces turned this into ~2554 AD
-        let before_epoch = OffsetDateTime::from_unix_nanos_i64(-1);
-        assert!(before_epoch.try_unix_nanos_u64().is_err());
-        // ...but it is perfectly fine as an i64
-        assert_eq!(before_epoch.try_unix_nanos_i64(), Ok(-1));
-    }
-
     #[test]
     fn datetime_formats_render_as_documented() {
         let t = OffsetDateTime::from_unix_nanos_i64(1_705_934_107_000_000_000);
@@ -322,17 +259,6 @@ mod tests {
     fn display_matches_the_format_descriptors(#[case] t: OffsetDateTime) {
         assert_eq!(t.display().ymd_hms().to_string(), t.format(YMD_HMS).unwrap());
         assert_eq!(t.display().ymd_hm().to_string(), t.format(YMD_HM).unwrap());
-    }
-
-    #[allow(clippy::disallowed_methods)]
-    #[test]
-    fn from_timespec_guards_a_hole_upstream_still_has() {
-        let two_pow_64: i128 = 1 << 64;
-        assert!(
-            OffsetDateTime::from_unix_timestamp_nanos(two_pow_64 * 1_000_000_000).is_ok(),
-            "precondition: upstream still wraps here"
-        );
-        assert!(OffsetDateTime::from_timespec(two_pow_64, 0).is_err());
     }
 
     proptest! {
@@ -356,9 +282,8 @@ mod tests {
             }
         }
 
-        /// Where upstream is sound (no `i64` truncation), we agree with it exactly.
-        /// This pins the helper to `time`'s own semantics rather than just to itself.
-        #[allow(clippy::disallowed_methods)]
+        /// Where upstream is sound, we agree with it exactly. This pins the helper to
+        /// `time`'s own semantics rather than just to itself.
         #[test]
         fn from_timespec_agrees_with_upstream_in_the_sound_range(
             secs in -400_000_000_000i128..=400_000_000_000,

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use directories::BaseDirs;
+use easy_cast::Conv;
 use eyre::{Result, eyre};
 use time::{Duration, OffsetDateTime};
 
@@ -73,7 +74,7 @@ impl Importer for PowerShell {
 
     async fn load(mut self, h: &mut impl Loader) -> Result<()> {
         let line_count = self.entries().await?;
-        let start = OffsetDateTime::now_utc() - Duration::milliseconds(line_count as i64);
+        let start = OffsetDateTime::now_utc() - Duration::milliseconds(i64::conv(line_count));
 
         let mut counter = 0;
         let mut iter = unix_byte_lines(&self.bytes);

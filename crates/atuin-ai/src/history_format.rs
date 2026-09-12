@@ -66,7 +66,7 @@ fn format_duration(nanos: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::history::{History, HistoryId};
+    use atuin_client::history::History;
     use atuin_domain::record::CmdOrigin;
     use rstest::rstest;
     use time::{OffsetDateTime, UtcOffset};
@@ -75,7 +75,7 @@ mod tests {
 
     fn history(duration: i64) -> History {
         History {
-            id: HistoryId("018f011c-9a0a-7000-8000-000000000001".to_string()),
+            id: "018f011c-9a0a-7000-8000-000000000001".parse().unwrap(),
             timestamp: OffsetDateTime::UNIX_EPOCH,
             duration,
             exit: 2,
@@ -95,8 +95,8 @@ mod tests {
     fn formats_last_command() {
         assert_eq!(
             format_last_command(&history(1_234_000_000), UtcOffset::UTC),
-            "History ID: 018f011c-9a0a-7000-8000-000000000001 - `cargo test`\n[1970-01-01 \
-             00:00:00] (in `/repo`, exit 2), 1.234s"
+            "History ID: 018f011c9a0a70008000000000000001 - `cargo test`\n[1970-01-01 00:00:00] \
+             (in `/repo`, exit 2), 1.234s"
         );
     }
 
@@ -104,8 +104,8 @@ mod tests {
     fn formats_history_search_result() {
         assert_eq!(
             format_history_search_result(3, &history(0), UtcOffset::UTC),
-            "## #3. (History ID: 018f011c-9a0a-7000-8000-000000000001):\n`cargo \
-             test`\n[1970-01-01 00:00:00] (in `/repo`, exit 2)\n"
+            "## #3. (History ID: 018f011c9a0a70008000000000000001):\n`cargo test`\n[1970-01-01 \
+             00:00:00] (in `/repo`, exit 2)\n"
         );
     }
 

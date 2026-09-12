@@ -10,6 +10,7 @@ use atuin_domain::record::{
     DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag,
     RecordVersion,
 };
+use easy_cast::Conv;
 use eyre::{Result, bail, eyre};
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
@@ -71,7 +72,7 @@ impl HistoryRecord {
             Self::Delete(id) => {
                 // 1 -> a history delete
                 encode::write_u8(&mut output, 1)?;
-                encode::write_str(&mut output, id.0.as_str())?;
+                encode::write_str(&mut output, &id.0.as_simple().to_string())?;
             }
         };
 
@@ -96,7 +97,8 @@ impl HistoryRecord {
                 // written by write_bin above
                 let _ = decode::read_bin_len(&mut bytes).map_err(error_report)?;
 
-                let record = History::deserialize(bytes.remaining_slice(), version)?;
+                let record =
+                    History::deserialize(bytes.remaining_slice(), version).map_err(error_report)?;
 
                 Ok(Self::Create(record))
             }
@@ -112,7 +114,7 @@ impl HistoryRecord {
                     );
                 }
 
-                Ok(Self::Delete(id.to_string().into()))
+                Ok(Self::Delete(id.parse()?))
             }
 
             n => {
@@ -144,25 +146,28 @@ impl HistoryStore {
     #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     async fn push_record(&self, record: HistoryRecord) -> Result<(RecordId, RecordIdx)> {
         let bytes = record.serialize()?;
-        let idx = self
-            .store
-            .last(&RecordSeriesKey::new(self.host_id, RecordTag::History))
-            .await?
-            .map_or(0, |p| p.idx + 1);
+        let series = RecordSeriesKey::new(self.host_id, RecordTag::History);
 
-        let record = Record::builder()
-            .host(Host::new(self.host_id))
-            .version(RecordVersion::from(Version::LATEST.name()))
-            .tag(RecordTag::History)
-            .idx(idx)
-            .data(bytes)
-            .build();
+        // Allocate the append index optimistically: read `last().idx + 1`, then try to claim it.
+        // Concurrent writers may read the same tail and compute the same idx. `push_unique` reports
+        // `false` when a racer already took the slot, and we recompute and retry.
+        loop {
+            let idx = self.store.last(&series).await?.map_or(0, |p| p.idx + 1);
 
-        let id = record.id;
+            let record = Record::builder()
+                .host(Host::new(self.host_id))
+                .version(RecordVersion::from(Version::LATEST.name()))
+                .tag(RecordTag::History)
+                .idx(idx)
+                .data(bytes.clone())
+                .build();
 
-        self.store.push(&record.encrypt(&self.encryption_key)).await?;
+            let id = record.id;
 
-        Ok((id, idx))
+            if self.store.push_unique(&record.encrypt(&self.encryption_key)).await? {
+                return Ok((id, idx));
+            }
+        }
     }
 
     #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
@@ -184,7 +189,7 @@ impl HistoryStore {
                 .host(Host::new(self.host_id))
                 .version(RecordVersion::from(Version::LATEST.name()))
                 .tag(RecordTag::History)
-                .idx(idx + n as u64)
+                .idx(idx + u64::conv(n))
                 .data(bytes)
                 .build();
 
@@ -243,12 +248,13 @@ impl HistoryStore {
 
             // A record we can't decrypt or decode must not block the rest of the store -
             // skip it, and load everything else.
-            let hist = match Version::from_name(version.as_str()) {
-                Some(_) => record.decrypt(&self.encryption_key).and_then(|decrypted| {
-                    HistoryRecord::deserialize(&decrypted.data, version.as_str())
-                }),
-                None => Err(eyre!("unknown history version {version:?}")),
-            };
+            let hist =
+                match Version::from_name(version.as_str()) {
+                    Some(_) => record.decrypt(&self.encryption_key).map_err(Into::into).and_then(
+                        |decrypted| HistoryRecord::deserialize(&decrypted.data, version.as_str()),
+                    ),
+                    None => Err(eyre!("unknown history version {version:?}")),
+                };
 
             match hist {
                 Ok(hist) => ret.push(hist),
@@ -271,6 +277,12 @@ impl HistoryStore {
         Ok(ret)
     }
 
+    /// This function builds the history database from the current history record state.
+    ///
+    /// Invariants:
+    ///   - I1: Records which have been created and then subsequently deleted via a delete record
+    ///         will *not* be committed to the history store, at any point during the operation of
+    ///         this function.
     #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     pub async fn build(&self, database: &Sqlite) -> Result<()> {
         // I'd like to change how we rebuild and not couple this with the database, but need to
@@ -297,6 +309,12 @@ impl HistoryStore {
                 }
             }
         }
+
+        // Upholds I1.
+        //
+        // TODO(markovejnovic): Make this an iterator. The extra allocation is not useful.
+        let deleted: HashSet<HistoryId> = deletes.iter().copied().collect();
+        creates.retain(|h| !deleted.contains(&h.id));
 
         database.save_bulk(&creates).await?;
         database.delete_rows(deletes).await?;
@@ -367,9 +385,11 @@ impl HistoryStore {
 
         // Skip records we can't decrypt or decode, rather than failing the entire build.
         let record = match Version::from_name(version.as_str()) {
-            Some(_) => record.decrypt(&self.encryption_key).and_then(|decrypted| {
-                HistoryRecord::deserialize(&decrypted.data, version.as_str())
-            }),
+            Some(_) => {
+                record.decrypt(&self.encryption_key).map_err(Into::into).and_then(|decrypted| {
+                    HistoryRecord::deserialize(&decrypted.data, version.as_str())
+                })
+            }
             None => Err(eyre!("unknown history version {version:?}")),
         };
 
@@ -399,8 +419,8 @@ impl HistoryStore {
         let history = self.history().await?;
 
         let ret = HashSet::from_iter(history.iter().map(|h| match h {
-            HistoryRecord::Create(h) => h.id.clone(),
-            HistoryRecord::Delete(id) => id.clone(),
+            HistoryRecord::Create(h) => h.id,
+            HistoryRecord::Delete(id) => *id,
         }));
 
         Ok(ret)
@@ -462,6 +482,7 @@ mod tests {
     use atuin_domain::record::{
         CmdOrigin, DecryptedData, Host, HostId, Record, RecordTag, RecordVersion,
     };
+    use easy_cast::Conv;
     use futures::TryStreamExt;
     use rstest::*;
     use time::Duration;
@@ -478,7 +499,7 @@ mod tests {
     #[fixture]
     fn sample_history() -> History {
         History {
-            id: "018cd4fe81757cd2aee65cd7861f9c81".to_owned().into(),
+            id: "018cd4fe81757cd2aee65cd7861f9c81".parse().unwrap(),
             timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00),
             duration: 100,
             exit: 0,
@@ -526,7 +547,7 @@ mod tests {
     #[rstest]
     #[case::create(
         HistoryRecord::Create(History {
-            id: "018cd4fe81757cd2aee65cd7861f9c81".to_owned().into(),
+            id: "018cd4fe81757cd2aee65cd7861f9c81".parse().unwrap(),
             timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00),
             duration: 100,
             exit: 0,
@@ -553,7 +574,7 @@ mod tests {
         ]
     )]
     #[case::delete(
-        HistoryRecord::Delete("018cd4fe81757cd2aee65cd7861f9c81".to_string().into()),
+        HistoryRecord::Delete("018cd4fe81757cd2aee65cd7861f9c81".parse().unwrap()),
         vec![
             204, 1, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 56, 49, 55, 53, 55, 99, 100, 50,
             97, 101, 101, 54, 53, 99, 100, 55, 56, 54, 49, 102, 57, 99, 56, 49,
@@ -620,8 +641,9 @@ mod tests {
 
     fn history_n(n: usize) -> History {
         History {
-            id: format!("{n:032x}").into(),
-            timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00) + Duration::seconds(n as i64),
+            id: format!("{n:032x}").parse().unwrap(),
+            timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00)
+                + Duration::seconds(i64::conv(n)),
             command: format!("command {n}"),
             ..sample_history()
         }
@@ -688,7 +710,7 @@ mod tests {
 
         let first = history_n(1);
         let (create_first, _) = history_store.push(first.clone()).await.unwrap();
-        let (delete_first, _) = history_store.delete(first.id.clone()).await.unwrap();
+        let (delete_first, _) = history_store.delete(first.id).await.unwrap();
         let (create_second, _) = history_store.push(history_n(2)).await.unwrap();
 
         // Three flushes: the create, the delete (which creates nothing), then the create.
@@ -773,5 +795,31 @@ mod tests {
         db.close().await;
 
         assert!(history_store.build_all(&db, &[record_id]).await.is_err());
+    }
+
+    /// A full rebuild never writes a row for an id the store also deletes. The end state (deleted
+    /// absent, kept present) is what this pins; that no row is written even transiently is by
+    /// construction of `build`, which filters the creates before touching the database.
+    #[rstest]
+    #[tokio::test]
+    async fn build_skips_rows_the_store_deletes(
+        #[future(awt)]
+        #[from(stores)]
+        parts: (SqliteStore, HostId, HistoryStore),
+        #[from(sample_history)] history: History,
+    ) {
+        let (_store, _host_id, history_store) = parts;
+        let deleted_id = history.id;
+        let mut kept = history.clone();
+        kept.id = "018cd4fe81757cd2aee65cd7861f9c82".parse().unwrap();
+        history_store.push(history).await.unwrap();
+        history_store.delete(deleted_id).await.unwrap();
+        history_store.push(kept.clone()).await.unwrap();
+
+        let db = memory_db().await;
+        history_store.build(&db).await.unwrap();
+
+        assert!(db.load(deleted_id).await.unwrap().is_none());
+        assert!(db.load(kept.id).await.unwrap().is_some());
     }
 }

@@ -1,6 +1,14 @@
 syntax = "proto3";
 package history;
 
+import "common.proto";
+import "google/protobuf/duration.proto";
+
+// Identifies a single history entry.
+message HistoryId {
+  common.Uuid uuid = 1;
+}
+
 // Whether a human or an agent ran a command. Unspecified means the caller did
 // not say, and the author name is all the receiver has to go on. Unspecified is
 // also what keeps this backwards compatible: it is proto3's zero value, so a
@@ -12,8 +20,13 @@ enum AuthorKind {
 }
 
 message StartHistoryRequest {
-  // If people are still using my software in ~530 years, they can figure out a u128 migration
-  uint64 timestamp = 1; // nanosecond unix epoch
+  // Nanosecond UNIX epoch
+  //
+  // Please note this **must** be an i64.
+  // The database timestamp is also an i64, so it is better for this to be an i64 too.
+  //
+  // TODO(markovejnovic): Use google.Duration.
+  int64 timestamp = 1;
   string command = 2;
   string cwd = 3;
   string session = 4;
@@ -25,25 +38,27 @@ message StartHistoryRequest {
 }
 
 message EndHistoryRequest {
-  string id = 1;
+  HistoryId id = 1;
   int64 exit = 2;
-  uint64 duration = 3;
+  // Measured command runtime. Absent means the client didn't measure it; the daemon then derives
+  // it from the command's start timestamp.
+  google.protobuf.Duration duration = 3;
 }
 
 // Cancel an in-progress history entry without adding it to the database.
 message CancelHistoryRequest {
-  string id = 1;
+  HistoryId id = 1;
 }
 
 message StartHistoryReply {
-  string id = 1;
+  HistoryId id = 1;
   string version = 2;
   uint32 protocol = 3;
 }
 
 message EndHistoryReply {
-  string id = 1;
-  uint64 idx = 2;
+  common.RecordId record_id = 1;
+  uint64 record_idx = 2;
   string version = 3;
   uint32 protocol = 4;
 }
@@ -53,8 +68,30 @@ message CancelHistoryReply {
   uint32 protocol = 2;
 }
 
+// One chunk of a client-streamed delete.
+message DeleteHistoryRequest {
+  repeated HistoryId ids = 1;
+}
+
+message DeleteHistoryReply {
+  // Number of entries processed for deletion.
+  uint64 deleted = 1;
+  string version = 2;
+  uint32 protocol = 3;
+}
+
+// The daemon rebuilds the history db from the record store and reloads its search index.
+message RebuildHistoryRequest {}
+
+message RebuildHistoryReply {
+  string version = 1;
+  uint32 protocol = 2;
+}
+
+// Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
 message StatusRequest {}
 
+// Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
 message StatusReply {
   bool healthy = 1;
   string version = 2;
@@ -62,23 +99,25 @@ message StatusReply {
   uint32 protocol = 4;
 }
 
+// Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
 message ShutdownRequest {}
 
+// Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
 message ShutdownReply {
   bool accepted = 1;
 }
 
 message TailHistoryRequest {}
 
-enum HistoryEventKind {
-  HISTORY_EVENT_KIND_UNSPECIFIED = 0;
-  HISTORY_EVENT_KIND_STARTED = 1;
-  HISTORY_EVENT_KIND_ENDED = 2;
-}
-
 message HistoryEntry {
-  uint64 timestamp = 1; // nanosecond unix epoch
-  string id = 2;
+  // Nanosecond UNIX epoch
+  //
+  // Please note this **must** be an i64.
+  // The database timestamp is also an i64, so it is better for this to be an i64 too.
+  //
+  // TODO(markovejnovic): Use google.Duration.
+  int64 timestamp = 1;
+  HistoryId id = 2;
   string command = 3;
   string cwd = 4;
   string session = 5;
@@ -91,16 +130,149 @@ message HistoryEntry {
   AuthorKind author_kind = 12;
 }
 
+// The consumer fell behind the daemon's stream and events were dropped.
+message Lagged {
+  // Number of events dropped before the consumer caught back up.
+  uint64 dropped = 1;
+}
+
+// The reply event returned by the TailHistoryRequest.
 message TailHistoryReply {
-  HistoryEventKind kind = 1;
-  HistoryEntry history = 2;
+  oneof event {
+    // A command started running.
+    HistoryEntry started = 1;
+    // A command finished; the entry now carries its exit code and duration.
+    HistoryEntry ended = 2;
+    // A command has been "cancelled", ie. no history has been recorded.
+    HistoryEntry cancelled = 3;
+    // An in-band notice that the consumer fell behind and lost events.
+    Lagged lagged = 4;
+  }
+}
+
+// Some metadata associated with every command capture.
+message CommandCaptureMeta {
+  // The total number of bytes that were pushed to the virtual terminal.
+  //
+  // This is not the same as the number of bytes in the *rendered* output --
+  // this byte count happens *before* rendering.
+  uint64 output_observed_bytes = 1;
+  // The width of the terminal when the command finished.
+  uint32 terminal_width = 2;
+  // The height of the terminal when the command finished.
+  uint32 terminal_height = 3;
+}
+
+// A completed command's captured output.
+message CommandCapture {
+  // Rendered output which may contain SGR escapes.
+  //
+  // Note this output is mostly *VISIBLE* output. Many characters are stripped, including, but not
+  // limited to `\r` characters, some control bytes and newlines trimmed at the end of the output.
+  string output_start = 1;
+  optional string output_end = 2;
+  // Metadata on this particular command capture. Logically required.
+  CommandCaptureMeta meta = 3;
+}
+
+// Request which associates a command capture with a history ID.
+message RegisterCommandOutputRequest  {
+  // The history id to associate with the command. Logically required.
+  HistoryId history_id = 1;
+  // The command capture itself. Logically required.
+  CommandCapture capture = 2;
+}
+
+message RegisterCommandOutputResponse {}
+
+// Request to fetch specific line ranges of the command output for a given `id`.
+//
+// You can request specific ranges, expressed within the `line_ranges` field. Those ranges are
+// `PyStyleIdxRange`s, so **both ends are inclusive**: asking for `[0, 3]` and `[8, 10]` returns the
+// content of lines `0, 1, 2, 3` and `8, 9, 10`. Lines are 0-offset, and a trailing newline
+// terminates its line rather than starting an empty one, so `"a\nb\n"` is two lines, not three.
+//
+// Note the reply speaks a different dialect: each chunk reports the resolved span it covers as an
+// `UnsignedIdxRange`, which is half-open.
+message GetCommandOutputRequest {
+  // The history ID you're searching for. Logically required.
+  HistoryId id = 1;
+  // An or-filter for requesting specific lines.
+  //
+  // Passing one value returns that range explicitly.
+  // Passing multiple values returns the multiple values.
+  // Request the whole output with a single `[0, -1]` range.
+  repeated common.PyStyleIdxRange line_ranges = 2;
+}
+
+// The per-line chunks for the requested `line_ranges`.
+message GetCommandOutputResponse {
+  repeated OutputChunk chunks = 1;
+  // The total number of bytes in the stored output.
+  //
+  // The chunks you get will always uphold:
+  // `sum(chunk.content.len() for chunk in chunks) <= total_bytes`.
+  uint64 total_bytes = 2;
+  // The total number of lines in the stored output.
+  //
+  // The chunks you get will always uphold:
+  // `sum(chunk.line_range.len() for chunk in chunks) <= total_lines`.
+  uint64 total_lines = 3;
+  CommandCaptureMeta meta = 4;
+  // Whether the output was truncated and a truncated portion of the output
+  // was requested.
+  bool truncated = 5;
+}
+
+// Encodes one single chunk of an output.
+message OutputChunk {
+  // The already-resolved, inclusive range of lines that this content encapsulates. Logically
+  // required.
+  //
+  // Non-negative line numbers are 0-offset from the start of the output. Negative line numbers
+  // count backward from the end (-1 is the last line); these indicate lines taken from the end
+  // chunk of an output whose middle was discarded.
+  common.PyStyleIdxRange line_range = 1;
+  // The content of the chunk itself.
+  string content = 2;
 }
 
 service History {
   rpc StartHistory(StartHistoryRequest) returns (StartHistoryReply);
+
   rpc EndHistory(EndHistoryRequest) returns (EndHistoryReply);
+
   rpc CancelHistory(CancelHistoryRequest) returns (CancelHistoryReply);
+
+  // Delete history entries by id.
+  //
+  // Clients may want to delete millions of rows and tonic will limit a request at 4MB, so this
+  // stream serves to circumvent this limitation.
+  //
+  // The server will accumulate up to 10M history entries and then delete them all in one go.
+  //
+  // TODO(markovejnovic): It would be really good if we could stream the reply back so that the
+  //                      user can see a progress bar.
+  rpc DeleteHistory(stream DeleteHistoryRequest) returns (DeleteHistoryReply);
+
+  rpc RebuildHistory(RebuildHistoryRequest) returns (RebuildHistoryReply);
+
   rpc TailHistory(TailHistoryRequest) returns (stream TailHistoryReply);
+
+  // Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
   rpc Status(StatusRequest) returns (StatusReply);
+
+  // Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
   rpc Shutdown(ShutdownRequest) returns (ShutdownReply);
+
+  // Store a completed command's captured output. Errors if output already exists for this id.
+  rpc RegisterCommandOutput(RegisterCommandOutputRequest) returns (RegisterCommandOutputResponse);
+
+  // Retrieve a command's captured output, sliced by line ranges.
+  //
+  // See the docs for `GetCommandOutputRequest` for the calling convention.
+  //
+  // Returns:
+  //  - `tonic::Status::not_found` if the given output is not found.
+  rpc GetCommandOutput(GetCommandOutputRequest) returns (GetCommandOutputResponse);
 }

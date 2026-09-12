@@ -3,6 +3,8 @@
 use core::fmt;
 use std::ops::ControlFlow;
 
+use easy_cast::Conv;
+
 /// Returned by [`DurationExt::try_new`] when the requested seconds/nanoseconds cannot be
 /// represented by the target `Duration` type.
 ///
@@ -164,7 +166,7 @@ impl DurationExt<Self> for std::time::Duration {
     #[allow(clippy::disallowed_methods)]
     fn try_new(secs: u64, nsecs: u64) -> Result<Self, DurationOverflow> {
         let carry = nsecs / 1_000_000_000;
-        let nanos = (nsecs % 1_000_000_000) as u32;
+        let nanos = u32::conv(nsecs % 1_000_000_000);
         let secs = secs.checked_add(carry).ok_or(DurationOverflow { secs, nsecs })?;
         Ok(Self::new(secs, nanos))
     }
@@ -209,13 +211,13 @@ mod tests {
     #[case::positive(1_500_000_000, 1_500_000_000)]
     #[case::negative_clamps_to_zero(-1, 0)]
     #[case::min_clamps_to_zero(i64::MIN, 0)]
-    #[case::max(i64::MAX, i64::MAX as u128)]
+    #[case::max(i64::MAX, u128::conv(i64::MAX))]
     fn saturating_from_nanos_i64_clamps(#[case] nanos: i64, #[case] expected: u128) {
         assert_eq!(std::time::Duration::saturating_from_nanos_i64(nanos).as_nanos(), expected);
         assert_eq!(
             <time::Duration as DurationExt<_>>::saturating_from_nanos_i64(nanos)
                 .whole_nanoseconds(),
-            expected as i128
+            i128::conv(expected)
         );
     }
 
@@ -227,7 +229,7 @@ mod tests {
         assert_eq!(std::time::Duration::try_new(secs, nsecs).unwrap().as_nanos(), expected);
         assert_eq!(
             <time::Duration as DurationExt<_>>::try_new(secs, nsecs).unwrap().whole_nanoseconds(),
-            expected as i128
+            i128::conv(expected)
         );
     }
 
@@ -240,9 +242,9 @@ mod tests {
     }
 
     #[rstest]
-    #[case::max_i64_seconds(i64::MAX as u64, 0, true)]
-    #[case::one_second_past_i64(i64::MAX as u64 + 1, 0, false)]
-    #[case::carry_crosses_i64(i64::MAX as u64, 1_000_000_000, false)]
+    #[case::max_i64_seconds(u64::conv(i64::MAX), 0, true)]
+    #[case::one_second_past_i64(u64::conv(i64::MAX) + 1, 0, false)]
+    #[case::carry_crosses_i64(u64::conv(i64::MAX), 1_000_000_000, false)]
     #[case::past_u64_seconds(u64::MAX, 0, false)]
     #[case::carry_overflows_u64_seconds(u64::MAX, 1_000_000_000, false)]
     fn time_try_new_range(#[case] secs: u64, #[case] nsecs: u64, #[case] representable: bool) {
@@ -312,9 +314,11 @@ mod tests {
             let time_result = <time::Duration as DurationExt<_>>::try_new(secs, nsecs);
 
             match (std_result, time_result) {
-                (Ok(s), Ok(t)) => prop_assert_eq!(t.whole_nanoseconds(), s.as_nanos() as i128),
+                (Ok(s), Ok(t)) => {
+                    prop_assert_eq!(t.whole_nanoseconds(), i128::conv(s.as_nanos()));
+                }
                 // time is narrower: it rejects what does not fit an i64 of seconds
-                (Ok(s), Err(_)) => prop_assert!(s.as_secs() > i64::MAX as u64),
+                (Ok(s), Err(_)) => prop_assert!(s.as_secs() > u64::conv(i64::MAX)),
                 (Err(_), Err(_)) => {}
                 (Err(_), Ok(_)) => prop_assert!(false, "time succeeded where std failed"),
             }

@@ -133,12 +133,11 @@ impl Cmd {
         }
     }
 
-    /// When `pty_proxy.enabled` is set, prepend the pty-proxy exec preamble
-    /// to the init script so the shell re-execs itself inside
-    /// `atuin pty-proxy` — no separate `atuin pty-proxy init` line needed in
-    /// shell config. The preamble is guarded by `ATUIN_PTY_PROXY_ACTIVE`, so
-    /// users who still have the standalone line keep working: whichever copy
-    /// runs first wins and the other no-ops.
+    /// When `pty_proxy.enabled` is set, prepend the pty-proxy exec preamble to the init script so
+    /// the shell re-execs itself inside `atuin pty-proxy` — no separate `atuin pty-proxy init` line
+    /// needed in shell config. The preamble checks whether a PTY proxy has already been spawned and
+    /// won't spawn another, so users who still have the standalone line keep working: whichever
+    /// copy runs first wins and the other no-ops.
     #[cfg(all(feature = "pty-proxy", unix))]
     fn pty_proxy_init(&self, settings: &Settings) {
         if !settings.pty_proxy.enabled {

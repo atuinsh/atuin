@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use atuin_client::database::{Sqlite, current_context};
 use atuin_client::history::store::HistoryStore;
-use atuin_client::history::{AuthorKind, History, probe_author};
+use atuin_client::history::{AuthorKind, History, HistoryId, probe_author};
 #[cfg(feature = "sync")]
 use atuin_client::record;
 use atuin_client::record::sqlite_store::SqliteStore;
@@ -17,7 +17,9 @@ use atuin_common::time::{DurationExt, OffsetDateTimeExt, UtcOffsetSpec};
 use atuin_common::utils;
 use atuin_common::utils::normalize_optional_string;
 #[cfg(feature = "daemon")]
-use atuin_daemon::history::{HistoryEventKind, TailHistoryReply};
+use atuin_daemon::grpc::history::pb::{
+    TailHistoryReply, tail_history_reply::Event as TailEventProto,
+};
 use atuin_domain::record::CmdOrigin;
 use clap::Subcommand;
 #[cfg(feature = "daemon")]
@@ -29,8 +31,6 @@ use serde::Serialize;
 use time::OffsetDateTime;
 use tracing::{debug, instrument, warn};
 
-#[cfg(feature = "daemon")]
-use super::daemon as daemon_cmd;
 #[cfg(feature = "daemon")]
 use super::daemon;
 
@@ -68,7 +68,7 @@ pub enum Cmd {
 
     /// Finishes a new command in the history (adds time, exit code)
     End {
-        id: String,
+        id: HistoryId,
         #[arg(long, short)]
         exit: i64,
         #[arg(long, short)]
@@ -194,7 +194,6 @@ impl ListMode {
     }
 }
 
-#[allow(clippy::cast_sign_loss)]
 #[instrument(level = "trace", skip_all, fields(count = h.len()))]
 pub fn print_list(
     h: &[History],
@@ -318,7 +317,6 @@ impl CmdFormat {
 
 /// defines how to format the history
 impl FormatKey for FmtHistory<'_> {
-    #[allow(clippy::cast_sign_loss)]
     fn fmt(&self, key: &str, f: &mut fmt::Formatter<'_>) -> Result<(), FormatKeyError> {
         match key {
             "command" => match self.cmd_format {
@@ -345,7 +343,7 @@ impl FormatKey for FmtHistory<'_> {
             "intent" => f.write_str(self.history.intent.as_deref().unwrap_or_default())?,
             "user" => f.write_str(self.history.cmd_origin.user().into_inner())?,
             "session" => f.write_str(&self.history.session)?,
-            "uuid" => f.write_str(&self.history.id.0)?,
+            "uuid" => write!(f, "{}", self.history.id)?,
             _ => return Err(FormatKeyError::UnknownKey),
         }
         Ok(())
@@ -444,7 +442,7 @@ async fn handle_start(
     author: Option<&str>,
     author_kind: Option<AuthorKind>,
     intent: Option<&str>,
-) -> Result<Option<String>> {
+) -> Result<Option<HistoryId>> {
     let Some(h) = make_starting_history(settings, command, author, author_kind, intent) else {
         return Ok(None);
     };
@@ -455,7 +453,7 @@ async fn handle_start(
         debug!("failed to save history: {e}");
     }
 
-    Ok(Some(h.id.0.clone()))
+    Ok(Some(h.id))
 }
 
 #[cfg(feature = "daemon")]
@@ -466,12 +464,12 @@ async fn handle_daemon_start(
     author: Option<&str>,
     author_kind: Option<AuthorKind>,
     intent: Option<&str>,
-) -> Result<Option<String>> {
+) -> Result<Option<HistoryId>> {
     let Some(h) = make_starting_history(settings, command, author, author_kind, intent) else {
         return Ok(None);
     };
 
-    let local_id = h.id.0.clone();
+    let local_id = h.id;
 
     // Attempt to start history via daemon, but silently ignore errors
     // to avoid breaking the shell when the daemon is unavailable or disk is full
@@ -493,14 +491,10 @@ async fn handle_end(
     store: SqliteStore,
     history_store: HistoryStore,
     settings: &Settings,
-    id: &str,
+    id: HistoryId,
     exit: i64,
     duration: Option<u64>,
 ) -> Result<()> {
-    if id.trim() == "" {
-        return Ok(());
-    }
-
     let Some(mut h) = db.load(id).await? else {
         warn!("history entry is missing");
         return Ok(());
@@ -562,15 +556,16 @@ async fn handle_end(
 #[instrument(level = "trace", skip_all, fields(id = %id, exit, duration = ?duration), err)]
 async fn handle_daemon_end(
     settings: &Settings,
-    id: &str,
+    id: HistoryId,
     exit: i64,
     duration: Option<u64>,
 ) -> Result<()> {
     if !settings.store_failed && exit > 0 {
         debug!("history has non-zero exit code, and store_failed is false");
-        daemon::cancel_history(settings, id.to_string()).await?;
+        daemon::cancel_history(settings, id).await?;
     } else {
-        daemon::end_history(settings, id.to_string(), duration.unwrap_or(0), exit).await?;
+        let duration = duration.map(Duration::from_nanos);
+        daemon::end_history(settings, id, duration, exit).await?;
     }
 
     Ok(())
@@ -583,7 +578,7 @@ pub(super) async fn start_history_entry(
     author: Option<&str>,
     author_kind: Option<AuthorKind>,
     intent: Option<&str>,
-) -> Result<Option<String>> {
+) -> Result<Option<HistoryId>> {
     #[cfg(feature = "daemon")]
     if settings.daemon.enabled {
         return handle_daemon_start(settings, command, author, author_kind, intent).await;
@@ -597,7 +592,7 @@ pub(super) async fn start_history_entry(
 #[instrument(level = "trace", skip_all, fields(id = %id, exit, duration = ?duration), err)]
 pub(super) async fn end_history_entry(
     settings: &Settings,
-    id: &str,
+    id: HistoryId,
     exit: i64,
     duration: Option<u64>,
 ) -> Result<()> {
@@ -622,11 +617,37 @@ pub(super) async fn end_history_entry(
     handle_end(&db, store, history_store, settings, id, exit, duration).await
 }
 
+/// Delete history entries, routing through the daemon when it owns the store.
+///
+/// When `daemon.enabled`, the daemon performs the deletion and updates its in-memory search index,
+/// and its errors propagate: we deliberately do not delete locally instead, since that would leave a
+/// running daemon serving a stale index. Otherwise we delete directly via the record store and
+/// rebuild the affected rows locally.
+#[cfg_attr(not(feature = "daemon"), allow(unused_variables))]
+pub(super) async fn delete_history_entries(
+    settings: &Settings,
+    history_store: &HistoryStore,
+    db: &Sqlite,
+    entries: impl IntoIterator<Item = History>,
+) -> Result<()> {
+    #[cfg(feature = "daemon")]
+    if settings.daemon.enabled {
+        let ids: Vec<HistoryId> = entries.into_iter().map(|h| h.id).collect();
+        daemon::delete_history(settings, ids).await?;
+        return Ok(());
+    }
+
+    let ids = history_store.delete_entries(entries).await?;
+    history_store.build_all(db, &ids).await?;
+    Ok(())
+}
+
 #[cfg(feature = "daemon")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TailKind {
     Started,
     Ended,
+    Cancelled,
 }
 
 #[cfg(feature = "daemon")]
@@ -646,7 +667,7 @@ struct TailJsonEvent<'a> {
 #[cfg(feature = "daemon")]
 #[derive(Serialize)]
 struct TailJsonHistory<'a> {
-    id: &'a str,
+    id: HistoryId,
     timestamp: String,
     timestamp_unix_ns: u64,
     command: &'a str,
@@ -673,23 +694,25 @@ struct TailJsonHistory<'a> {
 #[cfg(feature = "daemon")]
 impl TailEvent {
     fn from_proto(reply: TailHistoryReply) -> Result<Self> {
-        let history = reply
-            .history
-            .ok_or_else(|| eyre::eyre!("daemon sent a history tail event without history"))?;
-        let timestamp = OffsetDateTime::from_unix_nanos_u64(history.timestamp);
-        let author_kind = history.author_kind();
-        let kind = match HistoryEventKind::try_from(reply.kind)
-            .unwrap_or(HistoryEventKind::Unspecified)
-        {
-            HistoryEventKind::Started => TailKind::Started,
-            HistoryEventKind::Ended => TailKind::Ended,
-            HistoryEventKind::Unspecified => bail!("daemon sent an unspecified history tail event"),
+        let (kind, history) = match reply.event {
+            Some(TailEventProto::Started(history)) => (TailKind::Started, history),
+            Some(TailEventProto::Ended(history)) => (TailKind::Ended, history),
+            Some(TailEventProto::Cancelled(history)) => (TailKind::Cancelled, history),
+            Some(TailEventProto::Lagged(_)) => {
+                bail!("daemon sent a lag notice as a history event")
+            }
+            None => bail!("daemon sent an unspecified history tail event"),
         };
+        let timestamp = OffsetDateTime::from_unix_nanos_i64(history.timestamp);
+        let author_kind = history.author_kind();
 
         Ok(Self {
             kind,
             history: History {
-                id: history.id.into(),
+                id: history
+                    .id
+                    .ok_or_else(|| eyre::eyre!("daemon tail event is missing the history id"))?
+                    .try_into()?,
                 timestamp,
                 duration: history.duration,
                 exit: history.exit,
@@ -721,7 +744,7 @@ impl TailEvent {
         let payload = TailJsonEvent {
             event: self.kind.as_str(),
             history: TailJsonHistory {
-                id: &self.history.id.0,
+                id: self.history.id,
                 timestamp: self.history.timestamp.to_offset(tz.0).display().ymd_hms().to_string(),
                 timestamp_unix_ns: u64::try_from(self.history.timestamp.unix_timestamp_nanos())
                     .context("history timestamp predates unix epoch")?,
@@ -754,6 +777,7 @@ impl TailEvent {
             TailKind::Started => "-".repeat(72).bright_blue().to_string(),
             TailKind::Ended if self.history.exit == 0 => "-".repeat(72).bright_green().to_string(),
             TailKind::Ended => "-".repeat(72).bright_red().to_string(),
+            TailKind::Cancelled => "-".repeat(72).bright_yellow().to_string(),
         };
 
         out.push_str(&border);
@@ -781,7 +805,7 @@ impl TailEvent {
             "start",
             &self.history.timestamp.to_offset(tz.0).display().ymd_hms().to_string(),
         );
-        push_pretty_field(&mut out, "history", &self.history.id.0);
+        push_pretty_field(&mut out, "history", &self.history.id.to_string());
         push_pretty_field(&mut out, "session", &self.history.session);
         push_pretty_field(&mut out, "exit", &self.exit_display());
         push_pretty_field(&mut out, "duration", &self.duration_display());
@@ -860,6 +884,7 @@ impl TailKind {
         match self {
             Self::Started => "started",
             Self::Ended => "ended",
+            Self::Cancelled => "cancelled",
         }
     }
 
@@ -868,6 +893,7 @@ impl TailKind {
             Self::Started => "STARTED".bold().bright_blue(),
             Self::Ended if exit == 0 => "ENDED".bold().bright_green(),
             Self::Ended => "ENDED".bold().bright_red(),
+            Self::Cancelled => "CANCELLED".bold().bright_yellow(),
         }
     }
 }
@@ -899,11 +925,19 @@ impl Cmd {
     #[instrument(level = "trace", skip_all, err)]
     async fn handle_tail(settings: &Settings) -> Result<()> {
         let tty = std::io::stdout().is_terminal();
-        let mut client = daemon::tail_client(settings).await?;
+        let mut client = daemon::ready_client(settings).await?;
         let mut stream = client.tail_history().await?;
         let stdout = std::io::stdout();
 
         while let Some(reply) = stream.message().await? {
+            if let Some(TailEventProto::Lagged(lagged)) = &reply.event {
+                eprintln!(
+                    "WARNING: atuin daemon dropped {} history events; tail fell behind",
+                    lagged.dropped
+                );
+                continue;
+            }
+
             let event = TailEvent::from_proto(reply)?;
             let rendered = event.render(tty, settings.timezone)?;
             let mut out = stdout.lock();
@@ -918,7 +952,7 @@ impl Cmd {
         Ok(())
     }
 
-    #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
+    #[allow(clippy::too_many_lines)]
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::fn_params_excessive_bools)]
     #[instrument(level = "trace", skip_all, err)]
@@ -1000,14 +1034,11 @@ impl Cmd {
             let host_id = Settings::host_id().await?;
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
-            for entry in matches {
+            for entry in &matches {
                 eprintln!("deleting {}", entry.id);
-                let (id, _) = history_store.delete(entry.id.clone()).await?;
-                history_store.build_all(db, &[id]).await?;
             }
 
-            #[cfg(feature = "daemon")]
-            daemon_cmd::emit_event(settings, atuin_daemon::DaemonEvent::HistoryPruned).await;
+            delete_history_entries(settings, &history_store, db, matches).await?;
         }
         Ok(())
     }
@@ -1055,18 +1086,11 @@ impl Cmd {
             let host_id = Settings::host_id().await?;
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
-            #[cfg(feature = "daemon")]
-            let ids = matches.iter().map(|h| h.id.clone()).collect::<Vec<_>>();
-
-            for entry in matches {
+            for entry in &matches {
                 eprintln!("deleting {}", entry.id);
-                let (id, _) = history_store.delete(entry.id).await?;
-                history_store.build_all(db, &[id]).await?;
             }
 
-            #[cfg(feature = "daemon")]
-            daemon_cmd::emit_event(settings, atuin_daemon::DaemonEvent::HistoryDeleted { ids })
-                .await;
+            delete_history_entries(settings, &history_store, db, matches).await?;
         }
         Ok(())
     }
@@ -1105,7 +1129,7 @@ impl Cmd {
             }
             Self::End {
                 id, exit, duration, ..
-            } => end_history_entry(settings, &id, exit, duration).await,
+            } => end_history_entry(settings, id, exit, duration).await,
             Self::Tail => {
                 #[cfg(feature = "daemon")]
                 {
@@ -1209,7 +1233,8 @@ impl Cmd {
 
     fn logs_enabled(&self) -> bool {
         match self {
-            // Enable logs if not invoked from a shell hook.
+            // Enable logs if not invoked from a shell hook. History commands invoked from shell
+            // hooks are performance-sensitive, so we want to skip any unnecessary initialization.
             Self::Start { hook, .. } | Self::End { hook, .. } => !*hook,
             _ => true,
         }
@@ -1307,7 +1332,7 @@ mod tests {
         TailEvent {
             kind,
             history: History {
-                id: "history-id".to_owned().into(),
+                id: "018f011c-9a0a-7000-8000-000000000001".parse().unwrap(),
                 timestamp: datetime!(2026-04-09 17:18:19 UTC),
                 duration: 12_345_678,
                 exit: 0,
@@ -1331,7 +1356,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(value["event"], "ended");
-        assert_eq!(value["history"]["id"], "history-id");
+        assert_eq!(value["history"]["id"], "018f011c9a0a70008000000000000001");
         assert_eq!(value["history"]["duration_ns"], 12_345_678);
         assert_eq!(value["history"]["success"], true);
         assert!(value.get("record").is_none());
@@ -1350,5 +1375,57 @@ mod tests {
         assert!(plain.contains("pending"));
         assert!(plain.contains("duration:"));
         assert!(plain.contains("running"));
+    }
+
+    /// With the daemon enabled, a delete is the daemon's job: if it cannot be reached the command
+    /// fails loudly and nothing is deleted behind its back (a running daemon would otherwise serve
+    /// a stale index). With the daemon disabled, the CLI deletes locally.
+    #[cfg(feature = "daemon")]
+    #[rstest]
+    #[case::daemon_enabled_but_unreachable(true, true, 2)]
+    #[case::daemon_disabled(false, false, 0)]
+    #[tokio::test]
+    async fn delete_routes_through_the_daemon_only_when_enabled(
+        #[future] db: Sqlite,
+        #[case] daemon_enabled: bool,
+        #[case] expect_error: bool,
+        #[case] rows_left: i64,
+    ) {
+        use atuin_client::record::sqlite_store::SqliteStore;
+        use atuin_common::utils::uuid_v7;
+        use atuin_domain::record::HostId;
+
+        let db = db.await;
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SqliteStore::in_memory(Duration::from_secs(2)).await.unwrap();
+        let history_store = HistoryStore::new(store, HostId(uuid_v7()), paseto_v4::Key::generate());
+        let settings = Settings {
+            daemon: atuin_client::settings::Daemon {
+                enabled: daemon_enabled,
+                autostart: false,
+                socket_path: Some(tmp.path().join("no-daemon-here.sock")),
+                ..Default::default()
+            },
+            ..Settings::utc()
+        };
+        let entries: Vec<History> = ["echo one", "echo two"]
+            .into_iter()
+            .map(|cmd| {
+                History::capture()
+                    .timestamp(time::OffsetDateTime::now_utc())
+                    .command(cmd)
+                    .cwd("/")
+                    .build()
+                    .into()
+            })
+            .collect();
+        for entry in &entries {
+            db.save(entry).await.unwrap();
+        }
+
+        let result = delete_history_entries(&settings, &history_store, &db, entries).await;
+
+        assert_eq!(result.is_err(), expect_error, "{result:?}");
+        assert_eq!(db.history_count(false).await.unwrap(), rows_left);
     }
 }

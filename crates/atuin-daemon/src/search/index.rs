@@ -10,26 +10,29 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
+use std::pin::pin;
 use std::sync::Arc;
 
-use atuin_client::history::History;
+use atuin_client::database::Sqlite;
+use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::Search;
 use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
 use dashmap::DashMap;
+use easy_cast::Conv;
+use futures::{Stream, TryStreamExt, stream};
 use lasso::{Spur, ThreadedRodeo};
 use parking_lot::RwLock;
 use time::OffsetDateTime;
 use tracing::{Level, instrument};
 use uuid::Uuid;
 
-use super::normalize_diacritics;
+/// Failure to (re)build a [`SearchIndex`] from the history database.
+#[derive(Debug, thiserror::Error)]
+#[error("failed to load history from the database: {0}")]
+pub struct LoadFromDbError(eyre::Report);
 
-/// Parse a UUID string into a 16-byte array.
-/// Returns None if the string is not a valid UUID.
-fn parse_uuid_bytes(s: &str) -> Option<[u8; 16]> {
-    Uuid::parse_str(s).ok().map(|u| *u.as_bytes())
-}
+use atuin_common::string::NormalizeDiacriticsExt;
 
 /// Pre-computed frecency data for O(1) lookup.
 #[derive(Debug, Clone, Default)]
@@ -67,7 +70,7 @@ impl FrecencyData {
         }
 
         // Time-based decay: score decreases as time passes
-        let age_seconds = (now - self.last_used).max(0) as u64;
+        let age_seconds = u64::conv((now - self.last_used).max(0));
         let age_hours = age_seconds / 3600;
 
         // Decay factor: recent commands get higher scores
@@ -89,14 +92,22 @@ impl FrecencyData {
         let frequency_score = (f64::from(self.count).ln() * 20.0).min(100.0);
 
         // Apply multipliers and combine scores, then round to u32
-        ((recency_score * recency_mul) + (frequency_score * frequency_mul)).round() as u32
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "frecency is used for ordering only -- saturating is ok"
+        )]
+        {
+            ((recency_score * recency_mul) + (frequency_score * frequency_mul)).round() as u32
+        }
     }
 }
 
 /// Data for a unique command.
+#[derive(Debug)]
 pub struct CommandData {
-    /// History ID of the most recent invocation (16-byte UUID).
-    most_recent_id: [u8; 16],
+    /// History ID of the most recent invocation.
+    most_recent_id: HistoryId,
     /// Timestamp of the most recent invocation.
     most_recent_timestamp: i64,
     /// Pre-computed global frecency.
@@ -109,7 +120,7 @@ pub struct CommandData {
     /// All hostnames where this command has been run (interned keys).
     hosts: HashSet<Spur>,
     /// All sessions where this command has been run (as 16-byte UUIDs).
-    sessions: HashSet<[u8; 16]>,
+    sessions: HashSet<Uuid>,
     /// Position of this command in `SearchIndex::haystack`, so filtered
     /// searches can walk the command map without hashing command strings.
     haystack_index: u32,
@@ -128,8 +139,7 @@ impl CommandData {
             return None;
         };
 
-        let history_id = parse_uuid_bytes(&history.id.0)?;
-        let session = parse_uuid_bytes(&history.session)?;
+        let session = Uuid::parse_str(&history.session).ok()?;
         let timestamp = history.timestamp.unix_timestamp();
 
         let dir_key =
@@ -140,7 +150,7 @@ impl CommandData {
         global_frecency.record_use(timestamp);
 
         Some(Self {
-            most_recent_id: history_id,
+            most_recent_id: history.id,
             most_recent_timestamp: timestamp,
             global_frecency,
             directories: HashSet::from([dir_key]),
@@ -153,10 +163,7 @@ impl CommandData {
     /// Add an invocation from a history entry.
     /// Returns false if the history entry has invalid UUIDs.
     pub fn add_invocation(&mut self, history: &History, interner: &ThreadedRodeo) -> bool {
-        let Some(history_id) = parse_uuid_bytes(&history.id.0) else {
-            return false;
-        };
-        let Some(session) = parse_uuid_bytes(&history.session) else {
+        let Some(session) = Uuid::parse_str(&history.session).ok() else {
             return false;
         };
 
@@ -174,7 +181,7 @@ impl CommandData {
 
         // Update most recent if this invocation is newer
         if timestamp > self.most_recent_timestamp {
-            self.most_recent_id = history_id;
+            self.most_recent_id = history.id;
             self.most_recent_timestamp = timestamp;
         }
 
@@ -182,7 +189,7 @@ impl CommandData {
     }
 
     /// Get the most recent history ID for this command.
-    pub fn most_recent_id(&self) -> [u8; 16] {
+    pub fn most_recent_id(&self) -> HistoryId {
         self.most_recent_id
     }
 
@@ -208,7 +215,7 @@ impl CommandData {
 
     /// Check if any invocation matches a session (as parsed UUID bytes).
     /// O(1) lookup; the caller parses the session string once per search.
-    pub fn has_invocation_in_session(&self, session: &[u8; 16]) -> bool {
+    pub fn has_invocation_in_session(&self, session: &Uuid) -> bool {
         self.sessions.contains(session)
     }
 }
@@ -234,7 +241,7 @@ enum CompiledFilter<'a> {
     Directory(Spur),
     Workspace(&'a str),
     Host(Spur),
-    Session([u8; 16]),
+    Session(Uuid),
     /// Used when a target (host/dir/session) has never been seen by the index -- nothing can match.
     Nothing,
 }
@@ -252,7 +259,7 @@ impl IndexFilterMode {
                 interner.get(hostname).map_or(CompiledFilter::Nothing, CompiledFilter::Host)
             }
             Self::Session(session) => {
-                parse_uuid_bytes(session).map_or(CompiledFilter::Nothing, CompiledFilter::Session)
+                Uuid::parse_str(session).map_or(CompiledFilter::Nothing, CompiledFilter::Session)
             }
         }
     }
@@ -263,17 +270,19 @@ type FrecencyMap = Arc<Vec<u32>>;
 
 /// One entry in the fuzzy matcher's haystack: the original string plus the normalized version
 /// (diacritics removed) we actually match against.
+#[derive(Debug)]
 struct HaystackEntry {
     /// The original text of the entry.
     pub original: Arc<str>,
-    /// The [normalized](normalize_diacritics) version of the text, with diacritics removed.
+    /// The [normalized](NormalizeDiacriticsExt::normalize_diacritics) version of the text, with
+    /// diacritics removed.
     pub normalized: Arc<str>,
 }
 
 impl HaystackEntry {
     /// Create a new [`HaystackEntry`] from an [`Arc<str>`].
     pub fn new(text: Arc<str>) -> Self {
-        let normalized = match normalize_diacritics(&text) {
+        let normalized = match text.normalize_diacritics() {
             Cow::Borrowed(_) => text.clone(),
             Cow::Owned(normalized) => normalized.into(),
         };
@@ -324,6 +333,7 @@ impl PartialOrd for Score {
 /// Global frecency is precomputed by a background task and used for scoring.
 /// If frecency data is not available, search still works but without frecency ranking;
 /// although this should never happen due to precomputing the frecency map.
+#[derive(Debug)]
 pub struct SearchIndex {
     /// Map from command text to command data.
     ///
@@ -364,6 +374,44 @@ impl SearchIndex {
             interner: Arc::new(ThreadedRodeo::new()),
             shells,
         }
+    }
+
+    /// Build a fresh index for `shells`, populated from `db` and with its frecency map ready.
+    pub async fn from_db(
+        shells: OrFilter<Vec<String>>,
+        db: &Sqlite,
+        search_settings: &Search,
+    ) -> Result<Self, LoadFromDbError> {
+        let new_index = Self::new(shells);
+        new_index.load_from_db(db).await?;
+        new_index.rebuild_frecency(search_settings);
+        Ok(new_index)
+    }
+
+    /// Number of history rows loaded per page when (re)building an index from the database.
+    pub const HISTORY_LOAD_PAGE_SIZE: usize = 5000;
+
+    /// Load every history entry from `db` into this index.
+    pub async fn load_from_db(&self, db: &Sqlite) -> Result<(), LoadFromDbError> {
+        let mut pages = pin!(Self::history_pages(db));
+        while let Some(histories) = pages.try_next().await? {
+            self.add_histories(&histories);
+        }
+        Ok(())
+    }
+
+    /// Stream every history entry in `db`, one page at a time.
+    pub fn history_pages(db: &Sqlite) -> impl Stream<Item = Result<Vec<History>, LoadFromDbError>> {
+        stream::try_unfold(
+            db.all_paged(Self::HISTORY_LOAD_PAGE_SIZE, false, true),
+            |mut pager| async move {
+                match pager.next().await {
+                    Ok(Some(histories)) => Ok(Some((histories, pager))),
+                    Ok(None) => Ok(None),
+                    Err(e) => Err(LoadFromDbError(e.into())),
+                }
+            },
+        )
     }
 
     /// Add a history entry to the index.
@@ -425,14 +473,14 @@ impl SearchIndex {
         query: &str,
         filter_mode: &IndexFilterMode,
         limit: u32,
-    ) -> impl Iterator<Item = [u8; 16]> {
+    ) -> impl Iterator<Item = HistoryId> {
         // Get precomputed frecency map (may be None if not yet computed)
         let frecency_map = self.frecency_map.read().clone();
 
         let query = super::truncate_query(query);
         // Match accent-insensitively: the haystack side is normalized in
         // add_history, so an accented query must be normalized too
-        let query = normalize_diacritics(query);
+        let query = query.normalize_diacritics();
 
         let haystack = self.haystack.read();
         let filter = filter_mode.compile(&self.interner);
@@ -440,13 +488,13 @@ impl SearchIndex {
         // Filter pre-pass: collect the candidate commands for this filter mode. This is sorted
         // vector of haystack indices.
         let get_candidates = || match &filter {
-            CompiledFilter::All => haystack.iter().enumerate().map(|(i, _)| i as u32).collect(),
+            CompiledFilter::All => haystack.iter().enumerate().map(|(i, _)| u32::conv(i)).collect(),
             CompiledFilter::Nothing => Vec::new(),
             _ => {
                 let mut indices: Vec<u32> = self
                     .commands
                     .iter()
-                    .filter(|entry| (entry.haystack_index as usize) < haystack.len())
+                    .filter(|entry| usize::conv(entry.haystack_index) < haystack.len())
                     .filter(|entry| match &filter {
                         CompiledFilter::All | CompiledFilter::Nothing => unreachable!(),
                         CompiledFilter::Directory(dir) => entry.has_invocation_in_dir(*dir),
@@ -469,7 +517,7 @@ impl SearchIndex {
             tracing::span!(Level::TRACE, "index_search_filter").in_scope(get_candidates);
 
         let candidate_frecency = |candidate_index: usize| {
-            let hay_idx = candidates[candidate_index] as usize;
+            let hay_idx = usize::conv(candidates[candidate_index]);
             frecency_map.as_ref().and_then(|f| f.get(hay_idx).copied()).unwrap_or(0)
         };
 
@@ -485,14 +533,14 @@ impl SearchIndex {
                 .map(|i| Score {
                     fuzzy_score: 0,
                     frecency: candidate_frecency(i),
-                    index: i as u32,
+                    index: u32::conv(i),
                 })
                 .collect()
         } else {
             // This is a vec of `&Arc<str>` instead of `&str` because `&Arc<str>` is the size of one
             // pointer while `&str` is the size of two.
             let normalized_commands: Vec<&Arc<str>> =
-                candidates.iter().map(|i| &haystack[*i as usize].normalized).collect();
+                candidates.iter().map(|i| &haystack[usize::conv(*i)].normalized).collect();
             // Use all cores when the number of commands is sufficiently large.
             let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
             let matches = tracing::span!(Level::TRACE, "index_search_match").in_scope(|| {
@@ -506,7 +554,7 @@ impl SearchIndex {
                 .iter()
                 .map(|m| Score {
                     fuzzy_score: m.score,
-                    frecency: candidate_frecency(m.index as usize),
+                    frecency: candidate_frecency(usize::conv(m.index)),
                     index: m.index,
                 })
                 .collect()
@@ -515,16 +563,16 @@ impl SearchIndex {
         tracing::span!(Level::TRACE, "index_search_results").in_scope(|| {
             // only the top `limit` results are returned, so partition them
             // out before sorting instead of sorting every match
-            let limit = limit as usize;
+            let limit = usize::conv(limit);
             if scored.len() > limit {
                 scored.select_nth_unstable(limit);
                 scored.truncate(limit);
             }
             scored.sort_unstable();
             scored.into_iter().filter_map(move |score| {
-                let haystack_index = candidates[score.index as usize];
+                let haystack_index = candidates[usize::conv(score.index)];
                 self.commands
-                    .get(haystack[haystack_index as usize].original.as_ref())
+                    .get(haystack[usize::conv(haystack_index)].original.as_ref())
                     .map(|data| data.most_recent_id())
             })
         })
@@ -559,7 +607,14 @@ impl SearchIndex {
                         let frecency =
                             data.global_frecency.compute(now, recency_mul, frequency_mul);
                         // Apply overall frecency multiplier and round to u32
-                        (f64::from(frecency) * frecency_mul).round() as u32
+                        #[allow(
+                            clippy::cast_possible_truncation,
+                            clippy::cast_sign_loss,
+                            reason = "frecency is used for ordering only -- saturating is ok"
+                        )]
+                        {
+                            (f64::from(frecency) * frecency_mul).round() as u32
+                        }
                     })
                 })
                 .collect()
@@ -900,7 +955,7 @@ mod tests {
         let index = SearchIndex::default();
         for (i, command) in equivalence_corpus().iter().enumerate() {
             // spread timestamps so frecency scores actually differ
-            let ts = datetime!(2024-01-01 00:00 UTC) + time::Duration::minutes((i % 1440) as i64);
+            let ts = datetime!(2024-01-01 00:00 UTC) + time::Duration::minutes(i64::conv(i % 1440));
             index.add_history(&make_history(command, "/tmp", ts));
         }
         assert!(index.command_count() > 10_000, "corpus must cross threshold");

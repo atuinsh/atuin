@@ -1,22 +1,117 @@
 //! String-related utilities and extension traits.
+
+use std::borrow::Cow;
 use std::fmt::{self, Write as _};
 
 #[cfg(feature = "unicode")]
+use unicode_width::UnicodeWidthStr;
+use url::{Position, Url};
+
+#[cfg(feature = "unicode")]
 pub mod align;
+pub mod bounded_buffer;
 #[cfg(feature = "unicode")]
 pub mod ellipsis;
+pub mod trim;
+
 mod escape_non_printable_posix_ext;
 mod non_nul_str;
 
+#[allow(clippy::manual_range_contains, clippy::must_use_candidate, reason = "vendored file")]
+mod normalize;
+
 #[cfg(feature = "unicode")]
 pub use align::{AlignExt, Alignment};
+pub use bounded_buffer::BoundedBuffer;
 #[cfg(feature = "unicode")]
 pub use ellipsis::EllipsizeExt;
 pub use escape_non_printable_posix_ext::EscapeNonPrintablePosixExt;
 pub use non_nul_str::{ContainsNul, NonNulStr};
-#[cfg(feature = "unicode")]
-use unicode_width::UnicodeWidthStr;
-use url::{Position, Url};
+pub use normalize::normalize;
+pub use trim::TrimExt;
+
+pub trait TruncateCharsExt: AsRef<str> {
+    fn truncate_chars(&self, max_chars: usize) -> &str {
+        let s = self.as_ref();
+        if s.len() <= max_chars {
+            return s;
+        }
+
+        match s.char_indices().nth(max_chars) {
+            Some((end, _)) => &s[..end],
+            None => s,
+        }
+    }
+}
+
+impl<T: AsRef<str> + ?Sized> TruncateCharsExt for T {}
+
+/// Extension trait adding diacritic normalization to string slices.
+pub trait NormalizeDiacriticsExt: AsRef<str> {
+    /// Normalize Latin diacritics to their ASCII equivalents (`é` -> `e`).
+    fn normalize_diacritics(&self) -> Cow<'_, str> {
+        let s = self.as_ref();
+        if s.is_ascii() || !s.chars().any(|c| normalize(c) != c) {
+            return Cow::Borrowed(s);
+        }
+        Cow::Owned(s.chars().map(normalize).collect())
+    }
+}
+
+impl<T: AsRef<str> + ?Sized> NormalizeDiacriticsExt for T {}
+
+/// Extension trait for owned strings providing an empty-string fallback.
+pub trait NonEmptyOrExt: Sized {
+    /// Return the string if it is non-empty, otherwise `value`.
+    #[must_use]
+    fn nonempty_or(self, value: Self) -> Self {
+        self.nonempty_or_else(|| value)
+    }
+
+    /// Same as [`Self::nonempty_or`] but takes a factory function.
+    #[must_use]
+    fn nonempty_or_else(self, default: impl FnOnce() -> Self) -> Self;
+}
+
+impl NonEmptyOrExt for String {
+    fn nonempty_or_else(self, default: impl FnOnce() -> Self) -> Self {
+        if self.is_empty() {
+            default()
+        } else {
+            self
+        }
+    }
+}
+
+impl NonEmptyOrExt for &str {
+    fn nonempty_or_else(self, default: impl FnOnce() -> Self) -> Self {
+        if self.is_empty() {
+            default()
+        } else {
+            self
+        }
+    }
+}
+
+impl<T> NonEmptyOrExt for &[T] {
+    fn nonempty_or_else(self, default: impl FnOnce() -> Self) -> Self {
+        if self.is_empty() {
+            default()
+        } else {
+            self
+        }
+    }
+}
+
+impl<T> NonEmptyOrExt for Vec<T> {
+    fn nonempty_or_else(self, default: impl FnOnce() -> Self) -> Self {
+        if self.is_empty() {
+            default()
+        } else {
+            self
+        }
+    }
+}
 
 /// Extension trait for [`Url`] to render a `Debug` representation with any
 /// password redacted.
@@ -77,7 +172,52 @@ mod tests {
     use rstest::rstest;
     use url::Url;
 
-    use super::FormatSafeUrlExt;
+    use super::{FormatSafeUrlExt, NonEmptyOrExt, NormalizeDiacriticsExt, TruncateCharsExt};
+
+    #[rstest]
+    #[case::empty("", "")]
+    #[case::ascii_unchanged("hello world", "hello world")]
+    #[case::accented("café", "cafe")]
+    #[case::keeps_unmappable("naïve Æ", "naive Æ")] // ï -> i, but Æ has no single-ASCII mapping
+    #[case::position_preserved("élève", "eleve")]
+    fn normalizes_diacritics(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(input.normalize_diacritics(), expected);
+    }
+
+    #[rstest]
+    #[case::empty("")]
+    #[case::plain_ascii("just ascii text")]
+    #[case::unmappable("日本語")]
+    fn normalize_diacritics_borrows_when_unchanged(#[case] input: &str) {
+        assert!(matches!(input.normalize_diacritics(), std::borrow::Cow::Borrowed(_)));
+    }
+
+    #[rstest]
+    #[case::under_budget("hello", 10, "hello")]
+    #[case::exact_budget("hello", 5, "hello")]
+    #[case::over_budget("hello", 3, "hel")] // codespell:ignore hel
+    #[case::zero("hello", 0, "")]
+    #[case::empty("", 5, "")]
+    #[case::multibyte_cut("café", 3, "caf")] // never splits a multibyte char; codespell:ignore caf
+    #[case::multibyte_kept("café", 4, "café")]
+    fn truncates_by_char_count(#[case] input: &str, #[case] max: usize, #[case] expected: &str) {
+        let out = input.truncate_chars(max);
+        assert_eq!(out, expected);
+        assert!(out.chars().count() <= max);
+    }
+
+    #[rstest]
+    #[case::empty("", "fallback")]
+    #[case::non_empty("value", "value")]
+    fn nonempty_or_falls_back_only_when_empty(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(input.to_string().nonempty_or_else(|| "fallback".into()), expected);
+    }
+
+    #[rstest]
+    fn truncate_chars_returns_the_original_slice_when_it_fits() {
+        let s = "borrow me";
+        assert!(std::ptr::eq(s.truncate_chars(100), s));
+    }
 
     struct Safe<'a>(&'a Url);
 

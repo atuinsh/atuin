@@ -6,6 +6,8 @@ use atuin_client::history::History;
 use atuin_client::settings::AiCapabilities;
 use atuin_common::time::UtcOffsetExt;
 
+use crate::tools::descriptor;
+
 /// Session-scoped context for the AI chat session.
 /// Holds the API configuration and client settings needed by the event loop and stream task.
 #[derive(Clone, Debug)]
@@ -37,30 +39,49 @@ pub fn history_output_capability_available(daemon_enabled: bool) -> bool {
     cfg!(feature = "daemon") && daemon_enabled
 }
 
+/// The `client_v1_*` capability strings this client sends with every AI
+/// request to the Hub (`ai.endpoint`), which runs the model and sends back
+/// tool calls. The Hub reads the list to decide which tools it may ask this
+/// client to run: a tool whose capability string is missing here is never
+/// offered to the model. Requests are built in more than one place, but they
+/// all get their capabilities from this function — separately maintained
+/// lists could drift apart, and the model would then see different tools
+/// depending on how the user launched the AI.
+pub fn capability_strings(capabilities: &AiCapabilities, daemon_enabled: bool) -> Vec<String> {
+    // Each tool's capability string lives on its ToolDescriptor. Reuse it
+    // rather than retyping the string: the fsm later accepts or rejects the
+    // server's tool calls by comparing against those same descriptors, so a
+    // mismatched literal here would silently disable a tool.
+    let cap = |d: &descriptor::ToolDescriptor| {
+        d.capability.expect("client-side tools declare a capability").to_string()
+    };
+    let mut caps = vec!["client_invocations".to_string(), cap(descriptor::LOAD_SKILL)];
+    if capabilities.enable_history_search.unwrap_or(true) {
+        caps.push(cap(descriptor::ATUIN_HISTORY));
+        caps.push(descriptor::ATUIN_HISTORY_V2_CAPABILITY.to_string());
+    }
+    if capabilities.enable_file_tools.unwrap_or(true) {
+        caps.push(cap(descriptor::READ));
+        caps.push(cap(descriptor::EDIT));
+        caps.push(cap(descriptor::WRITE));
+    }
+    if capabilities.enable_command_execution.unwrap_or(true) {
+        caps.push(cap(descriptor::SHELL));
+    }
+    if history_output_capability_available(daemon_enabled)
+        && capabilities.enable_history_output.unwrap_or(true)
+    {
+        caps.push(cap(descriptor::ATUIN_OUTPUT));
+    }
+    if let Ok(extra) = std::env::var("ATUIN_AI__ADDITIONAL_CAPS") {
+        caps.extend(extra.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
+    }
+    caps
+}
+
 impl AppContext {
     pub(crate) fn capabilities_as_strings(&self) -> Vec<String> {
-        let mut caps = vec!["client_invocations".to_string()];
-        if self.capabilities.enable_history_search.unwrap_or(true) {
-            caps.push("client_v1_atuin_history".to_string());
-        }
-        if self.capabilities.enable_file_tools.unwrap_or(true) {
-            caps.push("client_v1_read_file".to_string());
-            caps.push("client_v1_edit_file".to_string());
-            caps.push("client_v1_write_file".to_string());
-        }
-        if self.capabilities.enable_command_execution.unwrap_or(true) {
-            caps.push("client_v1_execute_shell_command".to_string());
-        }
-        if history_output_capability_available(self.daemon_enabled)
-            && self.capabilities.enable_history_output.unwrap_or(true)
-        {
-            caps.push("client_v1_atuin_output".to_string());
-        }
-        caps.push("client_v1_load_skill".to_string());
-        if let Ok(extra) = std::env::var("ATUIN_AI__ADDITIONAL_CAPS") {
-            caps.extend(extra.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
-        }
-        caps
+        capability_strings(&self.capabilities, self.daemon_enabled)
     }
 }
 

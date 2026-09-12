@@ -10,6 +10,10 @@ on:
     paths-ignore:
       - "ui/**"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -124,6 +128,29 @@ jobs:
       - name: Run cargo test
         run: cargo nextest run --lib --bins
 
+      - name: Show new proptest regressions
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          echo "::group::proptest regression files changed by this run"
+          echo "A proptest failure appends a 'cc <seed>' line to a regression file."
+          echo "New/changed regression files (download the artifact below to reproduce):"
+          git add -N -- '*proptest-regressions*' || true
+          git status --porcelain
+          git --no-pager diff
+          echo "::endgroup::"
+
+      - name: Upload proptest regressions
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: proptest-regressions-unit-${{ matrix.os }}
+          path: |
+            **/proptest-regressions/**
+            **/*.proptest-regressions
+          if-no-files-found: ignore
+          retention-days: 14
+
   check:
     strategy:
       matrix:
@@ -168,6 +195,44 @@ jobs:
       - name: Run cargo check (client only)
         run: cargo check --no-default-features --features client --workspace
 
+  msrv:
+    name: MSRV (1.95.0)
+    runs-on: depot-ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install OpenSSL dev libraries (Linux)
+        if: runner.os == 'Linux'
+        uses: awalsh128/cache-apt-pkgs-action@v1.6.3
+        with:
+          packages: libssl-dev pkg-config
+          version: 1.0
+
+      - name: Install MSRV rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-msrv-${{ hashFiles('**/Cargo.lock') }}
+
+      # Verifies the declared MSRV (workspace.package.rust-version) still holds
+      # with all features enabled. --all-features isn't a strict superset (it
+      # skips `cfg(not(feature))` and no-default-features paths), but atuin's
+      # features are additive, so this catches MSRV regressions cheaply.
+      - name: Check MSRV (all features)
+        # rust-toolchain.toml pins the dev toolchain and outranks dtolnay's
+        # `rustup default`, so force the MSRV toolchain explicitly here.
+        env:
+          RUSTUP_TOOLCHAIN: 1.95.0
+        run: cargo check --locked --workspace --all-features
+
   integration-test:
     runs-on: depot-ubuntu-24.04
 
@@ -210,9 +275,93 @@ jobs:
           key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run cargo test
-        run: cargo nextest run --test '*'
+        # E2e tests have a separate job with shell dependencies.
+        run: cargo nextest run --test '*' -E 'not binary(/e2e_.*/)'
         env:
           ATUIN_DB_URI: postgres://atuin:pass@localhost:5432/atuin
+
+      - name: Show new proptest regressions
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          echo "::group::proptest regression files changed by this run"
+          echo "A proptest failure appends a 'cc <seed>' line to a regression file."
+          echo "New/changed regression files (download the artifact below to reproduce):"
+          git add -N -- '*proptest-regressions*' || true
+          git status --porcelain
+          git --no-pager diff
+          echo "::endgroup::"
+
+      - name: Upload proptest regressions
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: proptest-regressions-integration
+          path: |
+            **/proptest-regressions/**
+            **/*.proptest-regressions
+          if-no-files-found: ignore
+          retention-days: 14
+
+  e2e:
+    name: e2e (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [depot-ubuntu-24.04, depot-macos-26]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install OpenSSL dev libraries (Linux)
+        if: runner.os == 'Linux'
+        uses: awalsh128/cache-apt-pkgs-action@v1.6.3
+        with:
+          packages: libssl-dev pkg-config
+          version: 1.0
+
+      - name: Install shells (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh fish
+
+      - name: Install shells (macOS)
+        if: runner.os == 'macOS'
+        run: brew install bash fish
+
+      - name: Select Homebrew Bash (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          echo "ATUIN_E2E_BASH=$(brew --prefix bash)/bin/bash" >> "$GITHUB_ENV"
+
+      - name: Install ble.sh
+        run: |
+          mkdir -p "$HOME/.local/share"
+          curl -fsSL https://github.com/akinomyoga/ble.sh/releases/download/v0.4.0-devel3/ble-0.4.0-devel3.tar.xz | tar xJ -C "$HOME/.local/share"
+          mv "$HOME/.local/share/ble-0.4.0-devel3" "$HOME/.local/share/blesh"
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.0
+
+      - uses: taiki-e/install-action@v2
+        name: Install nextest
+        with:
+          tool: cargo-nextest
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run fresh-install and PTY e2e tests
+        run: cargo nextest run -p atuin --test 'e2e_*'
+        env:
+          ATUIN_E2E_REQUIRE_SHELLS: "1"
 
   clippy:
     runs-on: depot-ubuntu-24.04
@@ -302,6 +451,34 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
+
+      # atuin-common is a library crate; enforce (crate-scoped) that it never
+      # (re)adds eyre or anyhow. Config: crates/atuin-common/deny.toml
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: crates/atuin-common/Cargo.toml
+          command: check bans
+
+      # atuin-history is a library crate; enforce (crate-scoped) that it never
+      # (re)adds eyre or anyhow. Config: crates/atuin-history/deny.toml
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: crates/atuin-history/Cargo.toml
+          command: check bans
+
+      # atuin-domain is a library crate; enforce (crate-scoped) that it never
+      # (re)adds eyre or anyhow. Config: crates/atuin-domain/deny.toml
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: crates/atuin-domain/Cargo.toml
+          command: check bans
+
+      # atuin-pty-proxy is a library crate; enforce (crate-scoped) that it
+      # never (re)adds eyre or anyhow. Config: crates/atuin-pty-proxy/deny.toml
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: crates/atuin-pty-proxy/Cargo.toml
+          command: check bans
 
   package:
     runs-on: depot-ubuntu-24.04

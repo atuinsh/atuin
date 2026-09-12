@@ -55,6 +55,11 @@
             RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
 
             shellHook = ''
+              # See atuin.nix's preBuild for explanation.
+              export LD_LIBRARY_PATH="${
+                pkgs.lib.makeLibraryPath [ pkgs.openssl ]
+              }''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
               echo >&2 "Setting development database path"
               export ATUIN_DB_PATH="/tmp/atuin_dev.db"
               export ATUIN_RECORD_STORE_PATH="/tmp/atuin_records.db"

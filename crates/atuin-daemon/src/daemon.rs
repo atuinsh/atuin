@@ -21,7 +21,7 @@ use enum_dispatch::enum_dispatch;
 use eyre::{Context, Result};
 use tokio::sync::{RwLock, broadcast};
 
-use crate::components::{HistoryComponent, SearchComponent, SemanticComponent, SyncComponent};
+use crate::components::{SearchComponent, SyncComponent};
 use crate::events::DaemonEvent;
 
 // ============================================================================
@@ -69,8 +69,8 @@ pub struct DaemonState {
 /// # Example
 ///
 /// ```ignore
-/// // Emit an event
-/// handle.emit(DaemonEvent::HistoryPruned);
+/// // Request a graceful shutdown
+/// handle.shutdown();
 ///
 /// // Access settings
 /// let settings = handle.settings().await;
@@ -122,20 +122,10 @@ impl DaemonHandle {
         self.state.settings.read().await
     }
 
-    /// Reload settings from disk and emit a SettingsReloaded event.
-    ///
-    /// Components listening for `SettingsReloaded` can then re-read settings
-    /// via `handle.settings()` to pick up the changes.
-    pub async fn reload_settings(&self) -> Result<()> {
-        let new_settings = Settings::new()?;
-        self.apply_settings(new_settings).await;
-        Ok(())
-    }
-
     /// Apply already-loaded settings and emit a SettingsReloaded event.
     ///
-    /// Use this when settings have already been loaded (e.g., from a file watcher)
-    /// to avoid parsing the config file twice.
+    /// Components listening for `SettingsReloaded` can then re-read settings via
+    /// `handle.settings()` to pick up the changes.
     pub async fn apply_settings(&self, settings: Settings) {
         *self.state.settings.write().await = settings;
         self.emit(DaemonEvent::SettingsReloaded);
@@ -260,9 +250,7 @@ pub trait Component: Send + Sync + Into<AnyComponent> {
 /// Static-dispatch enum over the daemon components.
 #[enum_dispatch(Component)]
 pub enum AnyComponent {
-    History(HistoryComponent),
     Search(SearchComponent),
-    Semantic(SemanticComponent),
     Sync(SyncComponent),
 }
 
@@ -403,7 +391,6 @@ impl Daemon {
 /// let daemon = Daemon::builder(settings)
 ///     .store(store)
 ///     .history_db(history_db)
-///     .component(HistoryComponent::new())
 ///     .component(SearchComponent::new())
 ///     .component(SyncComponent::new())
 ///     .build()

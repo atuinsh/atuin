@@ -2,7 +2,7 @@ use atuin_common::utils::normalize_optional_string;
 use atuin_domain::record::CmdOrigin;
 use typed_builder::TypedBuilder;
 
-use super::{AuthorKind, History, is_known_agent};
+use super::{AuthorKind, History, HistoryId, is_known_agent};
 
 /// Builder for a history entry that is imported from shell history.
 ///
@@ -120,7 +120,7 @@ impl From<HistoryCaptured> for History {
 /// All fields are required, as they are all present in the database.
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct HistoryFromDb {
-    id: String,
+    id: HistoryId,
     timestamp: time::OffsetDateTime,
     command: String,
     cwd: String,
@@ -139,7 +139,7 @@ impl From<HistoryFromDb> for History {
     // Reads a `hostname` column that predates the strict `host:user` format.
     fn from(from_db: HistoryFromDb) -> Self {
         Self {
-            id: from_db.id.into(),
+            id: from_db.id,
             timestamp: from_db.timestamp,
             exit: from_db.exit,
             command: from_db.command,
