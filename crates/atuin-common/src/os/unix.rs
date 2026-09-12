@@ -1,5 +1,6 @@
 //! Unix-specific utilities.
 
+pub mod disk;
 pub mod process;
 pub mod tty;
 
