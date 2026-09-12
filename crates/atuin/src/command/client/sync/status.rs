@@ -1,5 +1,6 @@
 use atuin_client::api_client;
 use atuin_client::settings::Settings;
+use atuin_common::time::DurationExt;
 use colored::Colorize;
 use eyre::{Result, bail};
 
@@ -28,7 +29,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
     println!("{}", "[Local]".green());
 
     if settings.auto_sync {
-        println!("Sync frequency: {}", settings.sync_frequency);
+        println!("Sync frequency: {}", settings.sync_frequency.display().largest_unit());
         println!("Last sync: {}", last_sync.to_offset(settings.timezone.0));
     }
 

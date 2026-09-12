@@ -969,8 +969,15 @@ mod packfile_sync_tests {
     /// A [`Client`] pointed at a wiremock server, authenticated with a dummy token.
     pub(super) fn mock_client(addr: &url::Url) -> Client {
         let caps = caps_client_anonymous(addr, &HashMap::new()).unwrap();
-        Client::new(addr.clone(), &AuthToken::Token("t".into()), 30, 30, &HashMap::new(), caps)
-            .unwrap()
+        Client::new(
+            addr.clone(),
+            &AuthToken::Token("t".into()),
+            std::time::Duration::from_secs(30),
+            std::time::Duration::from_secs(30),
+            &HashMap::new(),
+            caps,
+        )
+        .unwrap()
     }
 
     /// A fresh in-memory record store.
@@ -1488,7 +1495,15 @@ mod packfile_sync_tests {
     fn dead_client() -> Client {
         let addr: url::Url = "http://127.0.0.1:1/".parse().unwrap();
         let caps = caps_client_anonymous(&addr, &HashMap::new()).unwrap();
-        Client::new(addr, &AuthToken::Token("t".into()), 1, 1, &HashMap::new(), caps).unwrap()
+        Client::new(
+            addr,
+            &AuthToken::Token("t".into()),
+            std::time::Duration::from_secs(1),
+            std::time::Duration::from_secs(1),
+            &HashMap::new(),
+            caps,
+        )
+        .unwrap()
     }
 
     /// Building the view rejects an inverted plaintext range (`start_idx > end_idx`) -- the

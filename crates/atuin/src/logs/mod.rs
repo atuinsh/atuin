@@ -131,11 +131,7 @@ fn get_base_filter(config: &LogConfig) -> EnvFilter {
 }
 
 fn clean_up_old_logs(config: &FileConfig) {
-    let Some(cutoff) = config
-        .retention_days
-        .checked_mul(24 * 60 * 60)
-        .and_then(|s| std::time::SystemTime::now().checked_sub(std::time::Duration::from_secs(s)))
-    else {
+    let Some(cutoff) = std::time::SystemTime::now().checked_sub(config.retention) else {
         return;
     };
 
