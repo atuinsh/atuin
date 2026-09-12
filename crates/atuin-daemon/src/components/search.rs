@@ -9,7 +9,7 @@ use std::sync::Arc;
 use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
 use eyre::Result;
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use tokio::sync::RwLock;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
@@ -17,13 +17,14 @@ use tracing::{Level, debug, error, info, instrument, span, trace};
 
 use crate::daemon::{Component, DaemonHandle};
 use crate::events::DaemonEvent;
+use crate::output_capture::OutputStore;
 use crate::search::search_server::{Search as SearchSvc, SearchServer};
 use crate::search::{
-    FilterMode, IndexFilterMode, PrepareIndexRequest, PrepareIndexResponse, SearchIndex,
-    SearchRequest, SearchResponse,
+    FilterMode, IndexFilterMode, OutputSearchMatch, PrepareIndexRequest, PrepareIndexResponse,
+    SearchCommandOutputRequest, SearchIndex, SearchRequest, SearchResponse,
 };
 
-const RESULTS_LIMIT: u32 = 200;
+const RESULTS_LIMIT: usize = 200;
 /// How often to rebuild the frecency map (in seconds).
 const FRECENCY_REFRESH_INTERVAL_SECS: u64 = 60;
 
@@ -55,9 +56,10 @@ impl SearchComponent {
 
     /// Get the gRPC service for this component.
     #[must_use]
-    pub fn grpc_service(&self) -> SearchGrpcServiceBuilder {
+    pub fn grpc_service(&self, output_store: Arc<OutputStore>) -> SearchGrpcServiceBuilder {
         SearchGrpcServiceBuilder {
             index: self.index.clone(),
+            output_store,
         }
     }
 
@@ -196,6 +198,7 @@ impl Component for SearchComponent {
 
 pub struct SearchGrpcServiceBuilder {
     index: Arc<RwLock<SearchIndex>>,
+    output_store: Arc<OutputStore>,
 }
 
 impl SearchGrpcServiceBuilder {
@@ -203,6 +206,7 @@ impl SearchGrpcServiceBuilder {
     pub fn build(self, handle: DaemonHandle) -> SearchServer<SearchGrpcService> {
         SearchServer::new(SearchGrpcService {
             index: self.index,
+            output_store: self.output_store,
             handle,
         })
     }
@@ -212,6 +216,7 @@ impl SearchGrpcServiceBuilder {
 #[derive(Clone)]
 pub struct SearchGrpcService {
     index: Arc<RwLock<SearchIndex>>,
+    output_store: Arc<OutputStore>,
     handle: DaemonHandle,
 }
 
@@ -239,6 +244,8 @@ impl SearchGrpcService {
 #[tonic::async_trait]
 impl SearchSvc for SearchGrpcService {
     type SearchStream = Pin<Box<dyn Stream<Item = Result<SearchResponse, Status>> + Send>>;
+    type SearchCommandOutputStream =
+        Pin<Box<dyn Stream<Item = Result<OutputSearchMatch, Status>> + Send>>;
 
     #[instrument(skip_all, level = Level::TRACE, name = "search_rpc")]
     async fn search(
@@ -342,6 +349,36 @@ impl SearchSvc for SearchGrpcService {
             *self.index.write().await = index;
         }
         Ok(Response::new(PrepareIndexResponse {}))
+    }
+
+    #[instrument(skip_all, level = Level::TRACE, name = "search_command_output_rpc")]
+    async fn search_command_output(
+        &self,
+        request: Request<SearchCommandOutputRequest>,
+    ) -> Result<Response<Self::SearchCommandOutputStream>, Status> {
+        let request = request.into_inner();
+
+        let limit = match usize::try_from(request.limit).unwrap_or(RESULTS_LIMIT) {
+            0 => RESULTS_LIMIT,
+            n => n.min(RESULTS_LIMIT),
+        };
+
+        let matches =
+            self.output_store.search(&request.query, limit).await.items().map(
+                |result| match result {
+                    Ok(m) => Ok(OutputSearchMatch {
+                        history_id: Some(m.history_id.into()),
+                        output: Some((&m.output).into()),
+                        score: m.score,
+                    }),
+                    Err(err) => {
+                        error!(?err, "output full-text search failed");
+                        Err(Status::internal("output search failed"))
+                    }
+                },
+            );
+
+        Ok(Response::new(Box::pin(matches)))
     }
 }
 
