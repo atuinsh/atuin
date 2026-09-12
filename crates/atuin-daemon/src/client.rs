@@ -352,8 +352,6 @@ impl SearchClient {
         Ok(response.into_inner())
     }
 
-    /// Full-text search over captured command output. `limit` of 0 uses the server default.
-    /// Matches stream back most-relevant-first; the caller consumes them however it needs to.
     pub async fn search_command_output(
         &mut self,
         query: impl Into<String>,
