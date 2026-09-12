@@ -22,8 +22,9 @@ pub enum AtuinCmd {
     Client(client::Cmd),
 
     /// PTY proxy for atuin
+    // Plumbing: spawned by the shell integration to capture command output; not for interactive use.
     #[cfg(feature = "pty-proxy")]
-    #[command(alias = "hex")]
+    #[command(alias = "hex", hide = true)]
     PtyProxy(atuin_pty_proxy::PtyProxy),
 
     /// Generate a UUID
