@@ -6,13 +6,21 @@ use std::sync::Arc;
 
 use atuin_client::history::{CommandCapture, HistoryId};
 use atuin_client::settings::DiskUsageLimit;
+use atuin_common::string::highlighted::HighlightedString;
 pub use backend::{
-    AnyOutputStore, CaptureError, DeleteOutputError, GetOutputError, OutputMatch, OutputStoreKind,
+    AnyOutputStore, CaptureError, DeleteOutputError, GetOutputError, OutputStoreKind,
     OutputStoreOps,
 };
 use backend::{FjallStorage, Gc, NopIndex, OutputStore, SqliteIndex};
 use tokio::task::JoinHandle;
 use tracing::{error, warn};
+
+#[derive(Debug)]
+pub struct OutputMatch {
+    pub history_id: HistoryId,
+    pub output: HighlightedString,
+    pub score: f64,
+}
 
 /// [`OutputCaptureEngine`] is the core engine responsible for collecting command output.
 ///
@@ -169,6 +177,7 @@ fn index_path(fjall_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use easy_cast::Conv;
+    use futures::TryStreamExt;
     use uuid::Uuid;
 
     use super::*;
@@ -192,6 +201,10 @@ mod tests {
         let store =
             OutputCaptureEngine::open(dir.path().join("capture"), DiskUsageLimit::Unlimited).await;
         (store, dir)
+    }
+
+    async fn search_hits(store: &AnyOutputStore, query: &str, limit: usize) -> Vec<OutputMatch> {
+        store.search(query, limit).await.items().try_collect().await.expect("search")
     }
 
     #[tokio::test]
@@ -225,7 +238,7 @@ mod tests {
         assert_eq!(store.kind(), OutputStoreKind::FjallUnindexed);
         store.capture(hid(1), cap("stored but unsearchable")).await.expect("capture");
         assert!(store.get(hid(1)).await.expect("get").is_some());
-        assert!(store.store().search("unsearchable", 10).await.expect("search").is_empty());
+        assert!(search_hits(&store.store(), "unsearchable", 10).await.is_empty());
     }
 
     #[tokio::test]
@@ -257,18 +270,18 @@ mod tests {
         let searcher = store.store();
         store.capture(hid(1), cap("compilation error: missing semicolon")).await.expect("capture");
 
-        let hits = searcher.search("semicolon", 10).await.expect("search");
+        let hits = search_hits(&searcher, "semicolon", 10).await;
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].history_id, hid(1));
 
         store.remove([hid(1)]).await.expect("remove");
-        assert!(searcher.search("semicolon", 10).await.expect("search").is_empty());
+        assert!(search_hits(&searcher, "semicolon", 10).await.is_empty());
     }
 
     #[tokio::test]
     async fn search_on_a_nop_store_is_empty() {
         let store = OutputCaptureEngine::nop();
         store.capture(hid(1), cap("nothing is indexed here")).await.expect("capture");
-        assert!(store.store().search("nothing", 10).await.expect("search").is_empty());
+        assert!(search_hits(&store.store(), "nothing", 10).await.is_empty());
     }
 }

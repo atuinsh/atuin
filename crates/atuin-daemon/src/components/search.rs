@@ -9,7 +9,7 @@ use std::sync::Arc;
 use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
 use eyre::Result;
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use tokio::sync::RwLock;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
@@ -363,25 +363,19 @@ impl SearchSvc for SearchGrpcService {
             n => n.min(RESULTS_LIMIT),
         };
 
-        let matches: Vec<Result<OutputSearchMatch, Status>> = self
-            .output_store
-            .search(&request.query, limit)
-            .await
-            .map_err(|err| {
+        let matches = self.output_store.search(&request.query, limit).await.items().map(|result| {
+            let m = result.map_err(|err| {
                 error!(?err, "output full-text search failed");
                 Status::internal("output search failed")
-            })?
-            .into_iter()
-            .map(|m| {
-                Ok(OutputSearchMatch {
-                    history_id: Some(m.history_id.into()),
-                    output: Some((&m.output).into()),
-                    score: m.score,
-                })
+            })?;
+            Ok(OutputSearchMatch {
+                history_id: Some(m.history_id.into()),
+                output: Some((&m.output).into()),
+                score: m.score,
             })
-            .collect();
+        });
 
-        Ok(Response::new(Box::pin(tokio_stream::iter(matches))))
+        Ok(Response::new(Box::pin(matches)))
     }
 }
 

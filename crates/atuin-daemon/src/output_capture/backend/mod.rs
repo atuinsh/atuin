@@ -6,18 +6,22 @@ mod index;
 mod storage;
 
 use std::collections::HashSet;
+use std::pin::pin;
 
 use atuin_client::history::{CommandCapture, HistoryId};
+use atuin_common::futures::stream::ChunkedStream;
 use enum_dispatch::enum_dispatch;
 use futures::TryStreamExt;
 pub use gc::Gc;
-pub use index::{Index, IndexError, NopIndex, OutputMatch, SqliteIndex};
+pub use index::{Index, IndexError, NopIndex, SqliteIndex};
 #[cfg(test)]
 pub use storage::FailingStorage;
 pub use storage::{
     CaptureError, DeleteOutputError, FjallStorage, GetOutputError, NopStorage, Storage,
 };
 use tracing::warn;
+
+use super::OutputMatch;
 
 /// Failure to reconcile the derived search index against the storage.
 #[derive(Debug, thiserror::Error)]
@@ -52,7 +56,11 @@ pub trait OutputStoreOps {
 
     async fn remove(&self, ids: &[HistoryId]) -> Result<(), DeleteOutputError>;
 
-    async fn search(&self, query: &str, limit: usize) -> Result<Vec<OutputMatch>, IndexError>;
+    async fn search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> ChunkedStream<Result<OutputMatch, IndexError>>;
 
     fn estimated_disk_space(&self) -> u64;
 
@@ -91,8 +99,12 @@ impl<S: Storage, I: Index> OutputStoreOps for OutputStore<S, I> {
         result
     }
 
-    async fn search(&self, query: &str, limit: usize) -> Result<Vec<OutputMatch>, IndexError> {
-        self.index.search(query, limit).await.items().try_collect().await
+    async fn search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
+        self.index.search(query, limit).await
     }
 
     fn estimated_disk_space(&self) -> u64 {
@@ -107,26 +119,25 @@ impl<S: Storage, I: Index> OutputStoreOps for OutputStore<S, I> {
     }
 
     async fn reconcile(&self) -> Result<(), ReconcileError> {
-        let indexed_ids: Vec<HistoryId> =
+        // Start from every id the index holds; as we walk storage we strike out the ones still
+        // present, so whatever remains is stale (indexed but no longer stored) and gets dropped.
+        let mut unseen: HashSet<HistoryId> =
             self.index.indexed_ids().await.items().try_collect().await?;
-        let index_set: HashSet<HistoryId> = indexed_ids.into_iter().collect();
-        let storage_ids: Vec<HistoryId> =
-            self.storage.all_ids().await.items().try_collect().await?;
-        let storage_set: HashSet<HistoryId> = storage_ids.iter().copied().collect();
 
-        let stale: Vec<HistoryId> = index_set.difference(&storage_set).copied().collect();
-        if !stale.is_empty() {
-            self.index.remove(stale.iter().copied()).await?;
-        }
-
-        for id in storage_ids {
-            if index_set.contains(&id) {
+        let mut storage_ids = pin!(self.storage.all_ids().await.items());
+        while let Some(id) = storage_ids.try_next().await? {
+            if unseen.remove(&id) {
                 continue;
             }
-            // A concurrent delete may have removed it since we listed ids; only index what's there.
+            // Not indexed. A concurrent delete may have dropped it since it was listed, so only
+            // index what's still there.
             if let Some(capture) = self.storage.get(id).await? {
                 self.index.insert(id, &capture.plaintext()).await?;
             }
+        }
+
+        if !unseen.is_empty() {
+            self.index.remove(unseen.into_iter()).await?;
         }
         Ok(())
     }
@@ -185,6 +196,14 @@ mod tests {
         OutputStore::new(storage, index)
     }
 
+    async fn search_hits(
+        store: &impl OutputStoreOps,
+        query: &str,
+        limit: usize,
+    ) -> Vec<OutputMatch> {
+        store.search(query, limit).await.items().try_collect().await.expect("search")
+    }
+
     #[tokio::test]
     async fn capture_then_search_finds_the_output() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -194,7 +213,7 @@ mod tests {
             .await
             .expect("capture");
 
-        let hits = backend.search("semicolon", 10).await.expect("search");
+        let hits = search_hits(&backend, "semicolon", 10).await;
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].history_id, hid(1));
     }
@@ -206,7 +225,7 @@ mod tests {
         // Red "fatal", reset, then plain text -- the escapes must not hide the word.
         backend.capture(hid(1), cap("\x1b[31mfatal\x1b[0m: disk full")).await.expect("capture");
 
-        let hits = backend.search("fatal", 10).await.expect("search");
+        let hits = search_hits(&backend, "fatal", 10).await;
         assert_eq!(hits.len(), 1);
         let output = &hits[0].output;
         assert_eq!(output.display_plain().to_string(), "fatal: disk full");
@@ -221,7 +240,7 @@ mod tests {
         let backend = temp_backend(dir.path()).await;
         backend.capture(hid(1), cap("searchable content")).await.expect("capture");
         backend.remove(&[hid(1)]).await.expect("remove");
-        assert!(backend.search("searchable", 10).await.expect("search").is_empty());
+        assert!(search_hits(&backend, "searchable", 10).await.is_empty());
     }
 
     #[tokio::test]
@@ -231,13 +250,10 @@ mod tests {
         // Write straight to the storage so the index never sees it -- as if the index write was lost.
         backend.storage.capture(hid(1), cap("orphaned output text")).await.expect("capture");
 
-        assert!(
-            backend.search("orphaned", 10).await.expect("search").is_empty(),
-            "not yet indexed"
-        );
+        assert!(search_hits(&backend, "orphaned", 10).await.is_empty(), "not yet indexed");
         backend.reconcile().await.expect("reconcile");
 
-        let hits = backend.search("orphaned", 10).await.expect("search");
+        let hits = search_hits(&backend, "orphaned", 10).await;
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].history_id, hid(1));
     }
@@ -250,6 +266,6 @@ mod tests {
         backend.index.insert(hid(9), "ghost entry").await.expect("insert");
 
         backend.reconcile().await.expect("reconcile");
-        assert!(backend.search("ghost", 10).await.expect("search").is_empty());
+        assert!(search_hits(&backend, "ghost", 10).await.is_empty());
     }
 }

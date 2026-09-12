@@ -5,10 +5,9 @@
 
 mod common;
 
-use atuin_client::history::HistoryId;
-use atuin_common::string::highlighted::HighlightedString;
 use common::TestEnv;
 use easy_cast::Conv;
+use futures::TryStreamExt;
 use rstest::*;
 
 #[fixture]
@@ -30,22 +29,19 @@ async fn search_returns_the_visible_output_and_where_it_matched(#[future(awt)] e
         .unwrap();
 
     let mut search = env.search_client().await;
-    let mut stream = search.search_command_output("disk", 0).await.unwrap();
-    let mut matches = Vec::new();
-    while let Some(m) = stream.message().await.unwrap() {
-        matches.push(m);
-    }
+    let matches: Vec<_> =
+        search.search_command_output("disk", 0).await.unwrap().try_collect().await.unwrap();
     assert_eq!(matches.len(), 1);
     let m = &matches[0];
-    assert_eq!(HistoryId::try_from(m.history_id.clone().unwrap()).unwrap(), id);
-    let highlighted: HighlightedString = m.output.clone().unwrap().try_into().unwrap();
-    assert_eq!(highlighted.display_plain().to_string(), "error: disk full\nnext line");
-    let marked = highlighted.as_ref();
-    let got: Vec<&str> = highlighted.ranges().map(|r| &marked[r]).collect();
+    assert_eq!(m.history_id, id);
+    assert_eq!(m.output.display_plain().to_string(), "error: disk full\nnext line");
+    let marked = m.output.as_ref();
+    let got: Vec<&str> = m.output.ranges().map(|r| &marked[r]).collect();
     assert_eq!(got, vec!["disk"]);
 
     // Deleting the entry drops it from search along with its output.
     assert_eq!(history.delete_history(vec![id]).await.unwrap().deleted, 1);
-    let mut stream = search.search_command_output("disk", 0).await.unwrap();
-    assert!(stream.message().await.unwrap().is_none());
+    let remaining: Vec<_> =
+        search.search_command_output("disk", 0).await.unwrap().try_collect().await.unwrap();
+    assert!(remaining.is_empty());
 }

@@ -6,6 +6,7 @@ use atuin_common::db::sqlite::Sqlite;
 use atuin_common::db::sqlite::fts::{TextHighlighter, TextHighlighterBindExt};
 use atuin_common::db::{self};
 use atuin_common::futures::stream::ChunkedStream;
+use futures::stream;
 use sqlx::Row;
 
 use super::{Index, IndexError, OutputMatch};
@@ -169,18 +170,41 @@ impl Index for SqliteIndex {
     }
 
     async fn indexed_ids(&self) -> ChunkedStream<Result<HistoryId, IndexError>> {
-        let rows = db::query("SELECT history_id FROM output_fts").fetch_all(self.db.pool()).await;
-        let rows = match rows {
-            Ok(rows) => rows,
-            Err(err) => return ChunkedStream::from_chunks([vec![Err(store(err))]]),
-        };
+        let pool = self.db.pool().clone();
+        let page = i64::try_from(CHUNK.get()).unwrap_or(i64::MAX);
 
-        let ids: Vec<Result<HistoryId, IndexError>> = rows
-            .into_iter()
-            .map(|row| id_from_bytes(row.try_get::<&[u8], _>("history_id").map_err(store)?))
-            .collect();
+        ChunkedStream::new(stream::unfold(Some(0_i64), move |after| {
+            let pool = pool.clone();
+            async move {
+                let after = after?;
 
-        ChunkedStream::from_items(ids, CHUNK)
+                let rows = match db::query(
+                    "SELECT rowid, history_id FROM output_fts WHERE rowid > ? ORDER BY rowid \
+                     LIMIT ?",
+                )
+                .bind(after)
+                .bind(page)
+                .fetch_all(&pool)
+                .await
+                {
+                    Ok(rows) => rows,
+                    Err(err) => return Some((vec![Err(store(err))], None)),
+                };
+
+                let next = match rows.last().map(|row| row.try_get::<i64, _>("rowid")) {
+                    None => return None,
+                    Some(Ok(rowid)) => Some(rowid),
+                    Some(Err(err)) => return Some((vec![Err(store(err))], None)),
+                };
+
+                let chunk: Vec<Result<HistoryId, IndexError>> = rows
+                    .into_iter()
+                    .map(|row| id_from_bytes(row.try_get::<&[u8], _>("history_id").map_err(store)?))
+                    .collect();
+
+                Some((chunk, next))
+            }
+        }))
     }
 }
 
@@ -207,6 +231,8 @@ fn sanitize_query(query: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use futures::TryStreamExt;
 
     use super::*;
@@ -304,6 +330,20 @@ mod tests {
             index.indexed_ids().await.items().try_collect().await.expect("indexed_ids");
         ids.sort_by_key(|id| id.to_string());
         assert_eq!(ids, vec![hid(1), hid(2)]);
+    }
+
+    #[tokio::test]
+    async fn indexed_ids_pages_past_the_chunk_boundary() {
+        let (index, _dir) = temp_index().await;
+        let count = CHUNK.get() as u128 + 17;
+        for n in 1..=count {
+            index.insert(hid(n), "body").await.expect("insert");
+        }
+
+        let ids: HashSet<HistoryId> =
+            index.indexed_ids().await.items().try_collect().await.expect("indexed_ids");
+        let expected: HashSet<HistoryId> = (1..=count).map(hid).collect();
+        assert_eq!(ids, expected);
     }
 
     #[tokio::test]

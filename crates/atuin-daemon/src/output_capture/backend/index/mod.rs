@@ -8,10 +8,11 @@ mod sqlite;
 
 use atuin_client::history::HistoryId;
 use atuin_common::futures::stream::ChunkedStream;
-use atuin_common::string::highlighted::HighlightedString;
 pub use nop::NopIndex;
 pub use sqlite::SqliteIndex;
 use thiserror::Error;
+
+use crate::output_capture::OutputMatch;
 
 pub type IndexStorageError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
@@ -19,14 +20,6 @@ pub type IndexStorageError = Box<dyn std::error::Error + Send + Sync + 'static>;
 pub enum IndexError {
     #[error("search index storage error: {0}")]
     Storage(#[source] IndexStorageError),
-}
-
-/// A single relevance-ranked full-text match over captured output.
-#[derive(Debug)]
-pub struct OutputMatch {
-    pub history_id: HistoryId,
-    pub output: HighlightedString,
-    pub score: f64,
 }
 
 #[allow(async_fn_in_trait, reason = "only used within our code; no Send bound needed")]
