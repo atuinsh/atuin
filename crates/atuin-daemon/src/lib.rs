@@ -31,8 +31,7 @@ pub use history_journal::{
     GetCmdInFlightError, HistoryJournal, RegisterOutputError,
 };
 pub use output_capture::{
-    CaptureError, DeleteOutputError, GetOutputError, OutputCaptureEngine, OutputSearcher,
-    OutputStoreKind,
+    CaptureError, DeleteOutputError, GetOutputError, OutputCaptureEngine, OutputStoreKind,
 };
 
 /// Boot the daemon using the new component-based architecture.
@@ -57,7 +56,7 @@ pub async fn boot(
 
     // Get the gRPC services before moving components into the daemon
     // (The services share state with the components via Arc)
-    let search_service = search_component.grpc_service(output_capture.searcher());
+    let search_service = search_component.grpc_service(output_capture.store());
     let search_index = search_component.index();
 
     // Build the daemon

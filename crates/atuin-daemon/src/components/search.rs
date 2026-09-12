@@ -17,7 +17,7 @@ use tracing::{Level, debug, error, info, instrument, span, trace};
 
 use crate::daemon::{Component, DaemonHandle};
 use crate::events::DaemonEvent;
-use crate::output_capture::OutputSearcher;
+use crate::output_capture::{AnyOutputStore, OutputStoreOps};
 use crate::search::search_server::{Search as SearchSvc, SearchServer};
 use crate::search::{
     FilterMode, IndexFilterMode, OutputSearchMatch, PrepareIndexRequest, PrepareIndexResponse,
@@ -61,10 +61,10 @@ impl SearchComponent {
     ///
     /// [`SearchCommandOutput`]: SearchSvc::search_command_output
     #[must_use]
-    pub fn grpc_service(&self, output_searcher: OutputSearcher) -> SearchGrpcServiceBuilder {
+    pub fn grpc_service(&self, output_store: Arc<AnyOutputStore>) -> SearchGrpcServiceBuilder {
         SearchGrpcServiceBuilder {
             index: self.index.clone(),
-            output_searcher,
+            output_store,
         }
     }
 
@@ -203,7 +203,7 @@ impl Component for SearchComponent {
 
 pub struct SearchGrpcServiceBuilder {
     index: Arc<RwLock<SearchIndex>>,
-    output_searcher: OutputSearcher,
+    output_store: Arc<AnyOutputStore>,
 }
 
 impl SearchGrpcServiceBuilder {
@@ -211,7 +211,7 @@ impl SearchGrpcServiceBuilder {
     pub fn build(self, handle: DaemonHandle) -> SearchServer<SearchGrpcService> {
         SearchServer::new(SearchGrpcService {
             index: self.index,
-            output_searcher: self.output_searcher,
+            output_store: self.output_store,
             handle,
         })
     }
@@ -221,7 +221,7 @@ impl SearchGrpcServiceBuilder {
 #[derive(Clone)]
 pub struct SearchGrpcService {
     index: Arc<RwLock<SearchIndex>>,
-    output_searcher: OutputSearcher,
+    output_store: Arc<AnyOutputStore>,
     handle: DaemonHandle,
 }
 
@@ -372,7 +372,7 @@ impl SearchSvc for SearchGrpcService {
         };
 
         let matches: Vec<Result<OutputSearchMatch, Status>> = self
-            .output_searcher
+            .output_store
             .search(&request.query, limit)
             .await
             .map_err(|err| {

@@ -87,7 +87,7 @@ mod unix {
         let search_component = SearchComponent::new();
         // This test exercises command search only; there is no output store, so the searcher is a
         // nop.
-        let search_service = search_component.grpc_service(OutputCaptureEngine::nop().searcher());
+        let search_service = search_component.grpc_service(OutputCaptureEngine::nop().store());
 
         let mut daemon = Daemon::builder(settings)
             .store(store)

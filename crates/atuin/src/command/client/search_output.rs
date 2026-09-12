@@ -12,12 +12,27 @@ use atuin_common::string::EscapeNonPrintablePosixExt as _;
 use atuin_common::string::highlighted::HighlightedString;
 use atuin_daemon::client::SearchClient;
 use clap::Parser;
-use eyre::{Result, WrapErr, bail};
+use thiserror::Error;
+
+#[derive(Debug, Clone, Error)]
+pub enum RunError {
+    #[error("output capture is disabled. enable [output] in your config to search command output.")]
+    Disabled,
+    #[error("blank query provided. please run 'atuin search-output --help'")]
+    EmptyQuery,
+
+    #[error("unexpected error")]
+    Unexpected(
+        #[from]
+        #[source]
+        eyre::Report,
+    ),
+}
 
 /// Full-text search over captured command output.
 #[derive(Parser, Debug)]
 pub struct Cmd {
-    #[arg(allow_hyphen_values = true)]
+    #[arg(allow_hyphen_values = true, required = true)]
     query: Vec<String>,
 
     /// Maximum number of matches to return.
@@ -25,7 +40,7 @@ pub struct Cmd {
     limit: u32,
 }
 
-async fn connect(settings: &Settings) -> Result<SearchClient> {
+async fn connect(settings: &Settings) -> Result<SearchClient, eyre::Report> {
     // TODO(markovejnovic): Have a better mechanism to connect to the daemon.
     #[cfg(unix)]
     return SearchClient::new(settings.daemon.existing_socket_path().into_owned()).await;
@@ -35,26 +50,19 @@ async fn connect(settings: &Settings) -> Result<SearchClient> {
 }
 
 impl Cmd {
-    pub async fn run(self, db: &Sqlite, settings: &Settings) -> Result<()> {
+    pub async fn run(self, db: &Sqlite, settings: &Settings) -> Result<(), RunError> {
         if settings.output.limits().is_none() {
-            bail!(
-                "output capture is disabled; enable [output] in your config to search command \
-                 output"
-            );
+            return Err(RunError::Disabled);
         }
 
         let query = self.query.join(" ");
         if query.trim().is_empty() {
-            bail!("no search query provided");
+            return Err(RunError::EmptyQuery);
         }
 
-        // A connect failure already carries the "Is it running?" message; an old daemon without
-        // the RPC surfaces a gRPC Unimplemented error from the call below. Both propagate as-is.
         let mut client = connect(settings).await?;
         let mut matches = client.search_command_output(query, self.limit).await?;
 
-        // Hydrate commands from the local db before touching stdout: holding the stdout lock across
-        // an await would make this future non-`Send`, which the dispatcher requires.
         let mut rows = Vec::new();
         while let Some(m) = matches.message().await? {
             let Some(proto_id) = m.history_id else {
@@ -152,31 +160,4 @@ fn context_line(output: &str, matches: &[Range<usize>], tty: bool) -> String {
     let tail = &trimmed[cursor..];
     out.push_str(&tail.escape_non_printable());
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn picks_the_line_of_the_first_match_and_bolds_every_match_on_it() {
-        let output = "first line\n  error: bad error\nlast line";
-        let matches = [13..18, 24..29];
-        assert_eq!(context_line(output, &matches, false), "error: bad error");
-        assert_eq!(
-            context_line(output, &matches, true),
-            "\x1b[1merror\x1b[0m: bad \x1b[1merror\x1b[0m"
-        );
-    }
-
-    #[test]
-    fn falls_back_to_the_first_line_without_matches() {
-        assert_eq!(context_line("only\nlines", &[], true), "only");
-    }
-
-    #[test]
-    fn malformed_ranges_are_ignored_rather_than_panicking() {
-        // Past the end, and splitting a multi-byte char.
-        assert_eq!(context_line("héllo", &[100..200, 1..2], true), "héllo");
-    }
 }

@@ -6,12 +6,11 @@ use std::sync::Arc;
 
 use atuin_client::history::{CommandCapture, HistoryId};
 use atuin_client::settings::DiskUsageLimit;
-use backend::{
-    AnyOutputStore, FjallStorage, Gc, NopIndex, OutputStore, OutputStoreOps, SqliteIndex,
-};
 pub use backend::{
-    CaptureError, DeleteOutputError, GetOutputError, IndexError, OutputMatch, OutputStoreKind,
+    AnyOutputStore, CaptureError, DeleteOutputError, GetOutputError, OutputStoreKind,
+    OutputStoreOps,
 };
+use backend::{FjallStorage, Gc, NopIndex, OutputStore, SqliteIndex};
 use tokio::task::JoinHandle;
 use tracing::{error, warn};
 
@@ -144,12 +143,9 @@ impl OutputCaptureEngine {
         self.store.remove(&ids).await
     }
 
-    /// A read-only handle for querying captured output, for the search service.
     #[must_use]
-    pub fn searcher(&self) -> OutputSearcher {
-        OutputSearcher {
-            store: self.store.clone(),
-        }
+    pub fn store(&self) -> Arc<AnyOutputStore> {
+        self.store.clone()
     }
 }
 
@@ -158,20 +154,6 @@ impl Drop for OutputCaptureEngine {
         if let Some(task) = self.reconcile_task.take() {
             task.abort();
         }
-    }
-}
-
-/// Search over captured output, and nothing else: the one part of [`OutputCaptureEngine`] the search
-/// service gets to hold.
-#[derive(Debug, Clone)]
-pub struct OutputSearcher {
-    store: Arc<AnyOutputStore>,
-}
-
-impl OutputSearcher {
-    /// Relevance-ranked full-text matches over captured output, most relevant first.
-    pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<OutputMatch>, IndexError> {
-        self.store.search(query, limit).await
     }
 }
 
@@ -243,7 +225,7 @@ mod tests {
         assert_eq!(store.kind(), OutputStoreKind::FjallUnindexed);
         store.capture(hid(1), cap("stored but unsearchable")).await.expect("capture");
         assert!(store.get(hid(1)).await.expect("get").is_some());
-        assert!(store.searcher().search("unsearchable", 10).await.expect("search").is_empty());
+        assert!(store.store().search("unsearchable", 10).await.expect("search").is_empty());
     }
 
     #[tokio::test]
@@ -272,7 +254,7 @@ mod tests {
     #[tokio::test]
     async fn searcher_sees_what_the_store_captures() {
         let (store, _dir) = temp_store().await;
-        let searcher = store.searcher();
+        let searcher = store.store();
         store.capture(hid(1), cap("compilation error: missing semicolon")).await.expect("capture");
 
         let hits = searcher.search("semicolon", 10).await.expect("search");
@@ -287,6 +269,6 @@ mod tests {
     async fn search_on_a_nop_store_is_empty() {
         let store = OutputCaptureEngine::nop();
         store.capture(hid(1), cap("nothing is indexed here")).await.expect("capture");
-        assert!(store.searcher().search("nothing", 10).await.expect("search").is_empty());
+        assert!(store.store().search("nothing", 10).await.expect("search").is_empty());
     }
 }
