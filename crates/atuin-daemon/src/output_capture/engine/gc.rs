@@ -1,3 +1,5 @@
+//! Disk-budget garbage collection for the output capture backend.
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -5,7 +7,7 @@ use atuin_common::units::{ByteSize, Percent};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
-use super::FjallBackendInner;
+use crate::output_capture::OutputStore;
 
 #[derive(Debug)]
 pub struct Gc {
@@ -22,7 +24,7 @@ impl Gc {
     /// The share of the budget we trim down to once cleanup runs.
     const TARGET_SHARE: Percent = Percent::new(90.0);
 
-    pub fn spawn(inner: Arc<FjallBackendInner>, budget: ByteSize) -> Self {
+    pub fn spawn(backend: Arc<OutputStore>, budget: ByteSize) -> Self {
         let budget = budget.as_u64();
         let task = tokio::task::spawn(async move {
             let mut interval = tokio::time::interval(Self::INTERVAL);
@@ -31,7 +33,7 @@ impl Gc {
             loop {
                 interval.tick().await;
 
-                let size = inner.estimated_disk_space();
+                let size = backend.estimated_disk_space();
 
                 let trigger = budget * Self::TRIGGER_SHARE;
                 if size < trigger {
@@ -41,8 +43,16 @@ impl Gc {
                 let target = budget * Self::TARGET_SHARE;
                 let reclaim = size.saturating_sub(target);
 
-                if let Err(err) = inner.reclaim(reclaim).await {
-                    tracing::warn!(?err, "output capture gc failed to reclaim entries");
+                let victims = match backend.eviction_candidates(reclaim).await {
+                    Ok(victims) => victims,
+                    Err(err) => {
+                        tracing::error!(?err, "failed to select entries to evict");
+                        continue;
+                    }
+                };
+
+                if let Err(err) = backend.remove(&victims).await {
+                    tracing::error!(?err, "failed to evict entries");
                 }
             }
         });
