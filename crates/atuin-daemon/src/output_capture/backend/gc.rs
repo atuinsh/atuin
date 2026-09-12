@@ -7,7 +7,7 @@ use atuin_common::units::{ByteSize, Percent};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
-use super::{AnyBackend, OutputBackend};
+use super::{AnyOutputStore, OutputStoreOps};
 
 #[derive(Debug)]
 pub struct Gc {
@@ -24,7 +24,7 @@ impl Gc {
     /// The share of the budget we trim down to once cleanup runs.
     const TARGET_SHARE: Percent = Percent::new(90.0);
 
-    pub fn spawn(backend: Arc<AnyBackend>, budget: ByteSize) -> Self {
+    pub fn spawn(backend: Arc<AnyOutputStore>, budget: ByteSize) -> Self {
         let budget = budget.as_u64();
         let task = tokio::task::spawn(async move {
             let mut interval = tokio::time::interval(Self::INTERVAL);

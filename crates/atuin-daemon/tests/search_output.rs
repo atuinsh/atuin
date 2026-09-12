@@ -30,7 +30,11 @@ async fn search_returns_the_visible_output_and_where_it_matched(#[future(awt)] e
         .unwrap();
 
     let mut search = env.search_client().await;
-    let matches = search.search_command_output("disk", 0).await.unwrap();
+    let mut stream = search.search_command_output("disk", 0).await.unwrap();
+    let mut matches = Vec::new();
+    while let Some(m) = stream.message().await.unwrap() {
+        matches.push(m);
+    }
     assert_eq!(matches.len(), 1);
     let m = &matches[0];
     assert_eq!(HistoryId::try_from(m.history_id.clone().unwrap()).unwrap(), id);
@@ -42,5 +46,6 @@ async fn search_returns_the_visible_output_and_where_it_matched(#[future(awt)] e
 
     // Deleting the entry drops it from search along with its output.
     assert_eq!(history.delete_history(vec![id]).await.unwrap().deleted, 1);
-    assert!(search.search_command_output("disk", 0).await.unwrap().is_empty());
+    let mut stream = search.search_command_output("disk", 0).await.unwrap();
+    assert!(stream.message().await.unwrap().is_none());
 }

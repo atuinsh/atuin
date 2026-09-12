@@ -29,14 +29,14 @@ pub enum ReconcileError {
 
 /// A [`Storage`] and a derived [`Index`] over it.
 #[derive(Debug)]
-pub struct Backend<S, I> {
+pub struct OutputStore<S, I> {
     /// The source of truth for captured output.
     storage: S,
     /// A rebuildable full-text index over that output.
     index: I,
 }
 
-impl<S: Storage, I: Index> Backend<S, I> {
+impl<S: Storage, I: Index> OutputStore<S, I> {
     pub fn new(storage: S, index: I) -> Self {
         Self { storage, index }
     }
@@ -44,7 +44,7 @@ impl<S: Storage, I: Index> Backend<S, I> {
 
 #[enum_dispatch]
 #[allow(async_fn_in_trait, reason = "only used within our code; no Send bound needed")]
-pub trait OutputBackend {
+pub trait OutputStoreOps {
     async fn capture(&self, id: HistoryId, capture: CommandCapture) -> Result<(), CaptureError>;
 
     async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError>;
@@ -63,7 +63,7 @@ pub trait OutputBackend {
     async fn reconcile(&self) -> Result<(), ReconcileError>;
 }
 
-impl<S: Storage, I: Index> OutputBackend for Backend<S, I> {
+impl<S: Storage, I: Index> OutputStoreOps for OutputStore<S, I> {
     async fn capture(&self, id: HistoryId, capture: CommandCapture) -> Result<(), CaptureError> {
         let text = capture.plaintext();
         self.storage.capture(id, capture).await?;
@@ -129,27 +129,27 @@ impl<S: Storage, I: Index> OutputBackend for Backend<S, I> {
 }
 
 /// The fjall store with its sqlite full-text index beside it.
-pub type FjallBackend = Backend<FjallStorage, SqliteIndex>;
+pub type FjallStore = OutputStore<FjallStorage, SqliteIndex>;
 /// The fjall store alone: captures persist, but the index failed to open so search finds nothing.
-pub type FjallUnindexedBackend = Backend<FjallStorage, NopIndex>;
+pub type FjallUnindexedStore = OutputStore<FjallStorage, NopIndex>;
 /// Output capture is disabled: everything is discarded and nothing is found.
-pub type NopBackend = Backend<NopStorage, NopIndex>;
+pub type NopStore = OutputStore<NopStorage, NopIndex>;
 /// A backend whose every storage operation fails; see [`FailingStorage`].
 #[cfg(test)]
-pub type FailingBackend = Backend<FailingStorage, NopIndex>;
+pub type FailingStore = OutputStore<FailingStorage, NopIndex>;
 
 /// Every pairing of storage and index the daemon can run on.
 #[derive(Debug, strum_macros::EnumDiscriminants)]
-#[strum_discriminants(name(BackendKind))]
-#[enum_dispatch(OutputBackend)]
-pub enum AnyBackend {
-    Fjall(FjallBackend),
-    FjallUnindexed(FjallUnindexedBackend),
-    Nop(NopBackend),
-    /// Built only by the [`OutputCapture::failing`](crate::OutputCapture::failing) test hook.
+#[strum_discriminants(name(OutputStoreKind))]
+#[enum_dispatch(OutputStoreOps)]
+pub enum AnyOutputStore {
+    Fjall(FjallStore),
+    FjallUnindexed(FjallUnindexedStore),
+    Nop(NopStore),
+    /// Built only by the [`OutputCaptureEngine::failing`](crate::OutputCaptureEngine::failing) test hook.
     /// Never selected in production.
     #[cfg(test)]
-    Failing(FailingBackend),
+    Failing(FailingStore),
 }
 
 #[cfg(test)]
@@ -175,10 +175,10 @@ mod tests {
         }
     }
 
-    async fn temp_backend(dir: &Path) -> FjallBackend {
+    async fn temp_backend(dir: &Path) -> FjallStore {
         let storage = FjallStorage::open(dir.join("store")).expect("open storage");
         let index = SqliteIndex::open(&dir.join("index.sqlite")).await.expect("open index");
-        Backend::new(storage, index)
+        OutputStore::new(storage, index)
     }
 
     #[tokio::test]

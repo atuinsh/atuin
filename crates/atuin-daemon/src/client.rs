@@ -353,21 +353,18 @@ impl SearchClient {
     }
 
     /// Full-text search over captured command output. `limit` of 0 uses the server default.
+    /// Matches stream back most-relevant-first; the caller consumes them however it needs to.
     pub async fn search_command_output(
         &mut self,
         query: impl Into<String>,
         limit: u32,
-    ) -> Result<Vec<OutputSearchMatch>> {
+    ) -> Result<tonic::Streaming<OutputSearchMatch>> {
         let request = SearchCommandOutputRequest {
             query: query.into(),
             limit,
         };
-        let mut stream = self.client.search_command_output(request).await?.into_inner();
-        let mut matches = Vec::new();
-        while let Some(m) = stream.message().await? {
-            matches.push(m);
-        }
-        Ok(matches)
+        let response = self.client.search_command_output(request).await?;
+        Ok(response.into_inner())
     }
 
     /// Tell the daemon to build the search index for the given list of shells.

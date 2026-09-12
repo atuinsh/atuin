@@ -56,7 +56,7 @@ impl SearchComponent {
 
     /// Get the gRPC service for this component.
     ///
-    /// `output_searcher` is a read-only handle over captured output, owned by the `OutputCapture`
+    /// `output_searcher` is a read-only handle over captured output, owned by the `OutputCaptureEngine`
     /// facade, used to serve [`SearchCommandOutput`] queries.
     ///
     /// [`SearchCommandOutput`]: SearchSvc::search_command_output

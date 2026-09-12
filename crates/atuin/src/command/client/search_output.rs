@@ -1,3 +1,7 @@
+//! The client command which is responsible for querying the daemon for any stored command output.
+//!
+//! The code quality isn't great here, and is a little messy, but it is what it is. Can be cleaned
+//! up in the future.
 use std::io::{self, IsTerminal, Write};
 use std::ops::Range;
 
@@ -11,11 +15,6 @@ use clap::Parser;
 use eyre::{Result, WrapErr, bail};
 
 /// Full-text search over captured command output.
-///
-/// Captured output lives only in the daemon (fjall + a sidecar sqlite FTS index), so this always
-/// goes through the daemon's `SearchCommandOutput` RPC. Each match is printed as
-/// `command<TAB>line`, most relevant first, where `line` is the line of output holding the first
-/// match (with every match on it bolded when stdout is a terminal).
 #[derive(Parser, Debug)]
 pub struct Cmd {
     #[arg(allow_hyphen_values = true)]
@@ -27,6 +26,7 @@ pub struct Cmd {
 }
 
 async fn connect(settings: &Settings) -> Result<SearchClient> {
+    // TODO(markovejnovic): Have a better mechanism to connect to the daemon.
     #[cfg(unix)]
     return SearchClient::new(settings.daemon.existing_socket_path().into_owned()).await;
 
@@ -51,12 +51,12 @@ impl Cmd {
         // A connect failure already carries the "Is it running?" message; an old daemon without
         // the RPC surfaces a gRPC Unimplemented error from the call below. Both propagate as-is.
         let mut client = connect(settings).await?;
-        let matches = client.search_command_output(query, self.limit).await?;
+        let mut matches = client.search_command_output(query, self.limit).await?;
 
         // Hydrate commands from the local db before touching stdout: holding the stdout lock across
         // an await would make this future non-`Send`, which the dispatcher requires.
-        let mut rows = Vec::with_capacity(matches.len());
-        for m in matches {
+        let mut rows = Vec::new();
+        while let Some(m) = matches.message().await? {
             let Some(proto_id) = m.history_id else {
                 bail!("daemon returned a match with no history id");
             };

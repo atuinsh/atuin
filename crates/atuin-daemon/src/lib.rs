@@ -31,7 +31,8 @@ pub use history_journal::{
     GetCmdInFlightError, HistoryJournal, RegisterOutputError,
 };
 pub use output_capture::{
-    BackendKind, CaptureError, DeleteOutputError, GetOutputError, OutputCapture, OutputSearcher,
+    CaptureError, DeleteOutputError, GetOutputError, OutputCaptureEngine, OutputSearcher,
+    OutputStoreKind,
 };
 
 /// Boot the daemon using the new component-based architecture.
@@ -49,9 +50,9 @@ pub async fn boot(
 
     let output_capture = match settings.output.limits() {
         Some(limits) => {
-            OutputCapture::open(Settings::command_capture_dir(), limits.max_disk_usage).await
+            OutputCaptureEngine::open(Settings::command_capture_dir(), limits.max_disk_usage).await
         }
-        None => OutputCapture::nop(),
+        None => OutputCaptureEngine::nop(),
     };
 
     // Get the gRPC services before moving components into the daemon

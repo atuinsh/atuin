@@ -16,7 +16,7 @@ mod unix {
     use atuin_common::filter::OrFilter;
     use atuin_daemon::client::{SearchClient, SearchParams};
     use atuin_daemon::components::SearchComponent;
-    use atuin_daemon::{Daemon, DaemonHandle, OutputCapture};
+    use atuin_daemon::{Daemon, DaemonHandle, OutputCaptureEngine};
     use tempfile::TempDir;
     use tokio::net::UnixListener;
     use tokio_stream::wrappers::UnixListenerStream;
@@ -87,7 +87,7 @@ mod unix {
         let search_component = SearchComponent::new();
         // This test exercises command search only; there is no output store, so the searcher is a
         // nop.
-        let search_service = search_component.grpc_service(OutputCapture::nop().searcher());
+        let search_service = search_component.grpc_service(OutputCaptureEngine::nop().searcher());
 
         let mut daemon = Daemon::builder(settings)
             .store(store)
