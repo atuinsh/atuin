@@ -48,7 +48,7 @@ const QUERIES: &[&str] =
     &["", "g", "git", "git p", "cargo build", "docker compose up", "zzznomatchzzz"];
 
 /// The interactive UI requests up to 200 results per query.
-const LIMIT: u32 = 200;
+const LIMIT: usize = 200;
 
 /// Working directories assigned round-robin to history entries, so the
 /// directory-filtered benchmark has a realistic candidate subset.
