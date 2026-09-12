@@ -47,6 +47,9 @@ message SearchCommandOutputRequest {
   // A fuzzy search string to query the full-text index of the command output.
   string query = 1;
   // The limit of entries to return. 0 means "use the server default".
+  //
+  // There is a maximum limit. Do not expect to receive as many items as you
+  // requested.
   uint32 limit = 2;
 }
 

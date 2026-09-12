@@ -24,7 +24,7 @@ use crate::search::{
     SearchCommandOutputRequest, SearchIndex, SearchRequest, SearchResponse,
 };
 
-const RESULTS_LIMIT: u32 = 200;
+const RESULTS_LIMIT: usize = 200;
 /// How often to rebuild the frecency map (in seconds).
 const FRECENCY_REFRESH_INTERVAL_SECS: u64 = 60;
 
@@ -55,11 +55,6 @@ impl SearchComponent {
     }
 
     /// Get the gRPC service for this component.
-    ///
-    /// `output_searcher` is a read-only handle over captured output, owned by the `OutputCaptureEngine`
-    /// facade, used to serve [`SearchCommandOutput`] queries.
-    ///
-    /// [`SearchCommandOutput`]: SearchSvc::search_command_output
     #[must_use]
     pub fn grpc_service(&self, output_store: Arc<AnyOutputStore>) -> SearchGrpcServiceBuilder {
         SearchGrpcServiceBuilder {
@@ -363,12 +358,9 @@ impl SearchSvc for SearchGrpcService {
     ) -> Result<Response<Self::SearchCommandOutputStream>, Status> {
         let request = request.into_inner();
 
-        // A client `limit` of 0 means "server default"; anything larger is capped at that default so
-        // one query can't ask the index for an unbounded result set.
-        let default_limit = usize::try_from(RESULTS_LIMIT).unwrap_or(usize::MAX);
-        let limit = match usize::try_from(request.limit).unwrap_or(default_limit) {
-            0 => default_limit,
-            n => n.min(default_limit),
+        let limit = match usize::try_from(request.limit).unwrap_or(RESULTS_LIMIT) {
+            0 => RESULTS_LIMIT,
+            n => n.min(RESULTS_LIMIT),
         };
 
         let matches: Vec<Result<OutputSearchMatch, Status>> = self
