@@ -13,6 +13,7 @@ pub struct Disk {
 }
 
 impl Disk {
+    /// Get information on the disk behind this path.
     pub fn of_path(path: &Path) -> io::Result<Self> {
         #[cfg(unix)]
         {
@@ -30,6 +31,7 @@ impl Disk {
     }
 
     #[must_use]
+    /// How much total space does the disk behind `path` have.
     pub fn total_space(&self) -> ByteSize {
         self.total
     }
