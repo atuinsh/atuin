@@ -113,8 +113,10 @@ pub enum Cmd {
     #[command()]
     Mcp,
 
+    /// Show a fun, year-in-review recap of your shell history
     #[command()]
     Wrapped {
+        /// Year to recap (defaults to last year)
         year: Option<i32>,
     },
 
@@ -122,6 +124,7 @@ pub enum Cmd {
     #[command()]
     DefaultConfig,
 
+    /// Get, set, or print values in your atuin config file
     #[command(subcommand)]
     Config(config::Cmd),
 
