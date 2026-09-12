@@ -2,6 +2,7 @@
 
 mod builder;
 mod compactor;
+pub mod fts;
 mod info;
 
 use std::ffi::OsStr;
