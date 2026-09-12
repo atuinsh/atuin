@@ -150,7 +150,7 @@ impl Index for SqliteIndex {
 
         let rows = match rows {
             Ok(rows) => rows,
-            Err(err) => return ChunkedStream::from_chunks([vec![Err(store(err))]]),
+            Err(err) => return ChunkedStream::from_error(store(err)),
         };
 
         let matches: Vec<Result<OutputMatch, IndexError>> = rows

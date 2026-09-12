@@ -71,3 +71,70 @@ pub trait Storage {
         reclaim_bytes: u64,
     ) -> Result<Vec<HistoryId>, DeleteOutputError>;
 }
+
+#[derive(Debug)]
+pub enum AnyStorage {
+    Fjall(FjallStorage),
+    Nop(NopStorage),
+    #[cfg(test)]
+    Failing(FailingStorage),
+}
+
+impl Storage for AnyStorage {
+    async fn capture(&self, id: HistoryId, capture: CommandCapture) -> Result<(), CaptureError> {
+        match self {
+            Self::Fjall(s) => s.capture(id, capture).await,
+            Self::Nop(s) => s.capture(id, capture).await,
+            #[cfg(test)]
+            Self::Failing(s) => s.capture(id, capture).await,
+        }
+    }
+
+    async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError> {
+        match self {
+            Self::Fjall(s) => s.get(id).await,
+            Self::Nop(s) => s.get(id).await,
+            #[cfg(test)]
+            Self::Failing(s) => s.get(id).await,
+        }
+    }
+
+    async fn remove(&self, ids: impl Iterator<Item = HistoryId>) -> Result<(), DeleteOutputError> {
+        match self {
+            Self::Fjall(s) => s.remove(ids).await,
+            Self::Nop(s) => s.remove(ids).await,
+            #[cfg(test)]
+            Self::Failing(s) => s.remove(ids).await,
+        }
+    }
+
+    fn estimated_disk_space(&self) -> u64 {
+        match self {
+            Self::Fjall(s) => s.estimated_disk_space(),
+            Self::Nop(s) => s.estimated_disk_space(),
+            #[cfg(test)]
+            Self::Failing(s) => s.estimated_disk_space(),
+        }
+    }
+
+    async fn all_ids(&self) -> ChunkedStream<Result<HistoryId, GetOutputError>> {
+        match self {
+            Self::Fjall(s) => s.all_ids().await,
+            Self::Nop(s) => s.all_ids().await,
+            #[cfg(test)]
+            Self::Failing(s) => s.all_ids().await,
+        }
+    }
+
+    async fn eviction_candidates(
+        &self,
+        reclaim_bytes: u64,
+    ) -> Result<Vec<HistoryId>, DeleteOutputError> {
+        match self {
+            Self::Fjall(s) => s.eviction_candidates(reclaim_bytes).await,
+            Self::Nop(s) => s.eviction_candidates(reclaim_bytes).await,
+            #[cfg(test)]
+            Self::Failing(s) => s.eviction_candidates(reclaim_bytes).await,
+        }
+    }
+}

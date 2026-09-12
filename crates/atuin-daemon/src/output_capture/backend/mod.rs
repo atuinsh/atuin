@@ -1,5 +1,3 @@
-//! Output storage, generic on [`Storage`] and coupled with the [`Index`].
-
 mod index;
 mod storage;
 
@@ -8,19 +6,17 @@ use std::pin::pin;
 
 use atuin_client::history::{CommandCapture, HistoryId};
 use atuin_common::futures::stream::ChunkedStream;
-use enum_dispatch::enum_dispatch;
 use futures::TryStreamExt;
-pub use index::{Index, IndexError, NopIndex, SqliteIndex};
+pub use index::{AnyIndex, Index, IndexError, NopIndex, SqliteIndex};
 #[cfg(test)]
 pub use storage::FailingStorage;
 pub use storage::{
-    CaptureError, DeleteOutputError, FjallStorage, GetOutputError, NopStorage, Storage,
+    AnyStorage, CaptureError, DeleteOutputError, FjallStorage, GetOutputError, NopStorage, Storage,
 };
 use tracing::warn;
 
 use super::OutputMatch;
 
-/// Failure to reconcile the derived search index against the storage.
 #[derive(Debug, thiserror::Error)]
 pub enum ReconcileError {
     #[error(transparent)]
@@ -29,65 +25,36 @@ pub enum ReconcileError {
     Index(#[from] IndexError),
 }
 
-/// A [`Storage`] and a derived [`Index`] over it.
 #[derive(Debug)]
-pub struct OutputStore<S, I> {
-    /// The source of truth for captured output.
-    storage: S,
-    /// A rebuildable full-text index over that output.
-    index: I,
+pub struct OutputStore {
+    storage: AnyStorage,
+    index: AnyIndex,
 }
 
-impl<S: Storage, I: Index> OutputStore<S, I> {
-    pub fn new(storage: S, index: I) -> Self {
+impl OutputStore {
+    pub fn new(storage: AnyStorage, index: AnyIndex) -> Self {
         Self { storage, index }
     }
-}
 
-/// The trait here is necessary for `enum_dispatch` to be able to do its magic.
-#[enum_dispatch]
-#[allow(async_fn_in_trait, reason = "only used within our code; no Send bound needed")]
-pub trait OutputStoreOps {
-    async fn capture(&self, id: HistoryId, capture: CommandCapture) -> Result<(), CaptureError>;
-
-    async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError>;
-
-    async fn remove(&self, ids: &[HistoryId]) -> Result<(), DeleteOutputError>;
-
-    async fn search(
+    pub async fn capture(
         &self,
-        query: &str,
-        limit: usize,
-    ) -> ChunkedStream<Result<OutputMatch, IndexError>>;
-
-    fn estimated_disk_space(&self) -> u64;
-
-    async fn eviction_candidates(
-        &self,
-        reclaim_bytes: u64,
-    ) -> Result<Vec<HistoryId>, DeleteOutputError>;
-
-    async fn reconcile(&self) -> Result<(), ReconcileError>;
-}
-
-impl<S: Storage, I: Index> OutputStoreOps for OutputStore<S, I> {
-    async fn capture(&self, id: HistoryId, capture: CommandCapture) -> Result<(), CaptureError> {
+        id: HistoryId,
+        capture: CommandCapture,
+    ) -> Result<(), CaptureError> {
         let text = capture.plaintext();
         self.storage.capture(id, capture).await?;
 
-        // Indexing here is best-effort. If we fail -- we fail. It's sad but hopefully the next
-        // reconcile will pick it up.
         if let Err(err) = self.index.insert(id, &text).await {
             warn!(?err, %id, "failed to index captured output; search may miss it until reconcile");
         }
         Ok(())
     }
 
-    async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError> {
+    pub async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError> {
         self.storage.get(id).await
     }
 
-    async fn remove(&self, ids: &[HistoryId]) -> Result<(), DeleteOutputError> {
+    pub async fn remove(&self, ids: &[HistoryId]) -> Result<(), DeleteOutputError> {
         let result = self.storage.remove(ids.iter().copied()).await;
 
         if let Err(err) = self.index.remove(ids.iter().copied()).await {
@@ -97,7 +64,7 @@ impl<S: Storage, I: Index> OutputStoreOps for OutputStore<S, I> {
         result
     }
 
-    async fn search(
+    pub async fn search(
         &self,
         query: &str,
         limit: usize,
@@ -105,30 +72,25 @@ impl<S: Storage, I: Index> OutputStoreOps for OutputStore<S, I> {
         self.index.search(query, limit).await
     }
 
-    fn estimated_disk_space(&self) -> u64 {
+    pub fn estimated_disk_space(&self) -> u64 {
         self.storage.estimated_disk_space()
     }
 
-    async fn eviction_candidates(
+    pub async fn eviction_candidates(
         &self,
         reclaim_bytes: u64,
     ) -> Result<Vec<HistoryId>, DeleteOutputError> {
         self.storage.eviction_candidates(reclaim_bytes).await
     }
 
-    async fn reconcile(&self) -> Result<(), ReconcileError> {
-        // Start from every id the index holds; as we walk storage we strike out the ones still
-        // present, so whatever remains is stale (indexed but no longer stored) and gets dropped.
-        let mut unseen: HashSet<HistoryId> =
-            self.index.indexed_ids().await.items().try_collect().await?;
+    pub async fn reconcile(&self) -> Result<(), ReconcileError> {
+        let mut unseen: HashSet<HistoryId> = self.index.indexed_ids().await.try_collect().await?;
 
         let mut storage_ids = pin!(self.storage.all_ids().await.items());
         while let Some(id) = storage_ids.try_next().await? {
             if unseen.remove(&id) {
                 continue;
             }
-            // Not indexed. A concurrent delete may have dropped it since it was listed, so only
-            // index what's still there.
             if let Some(capture) = self.storage.get(id).await? {
                 self.index.insert(id, &capture.plaintext()).await?;
             }
@@ -139,30 +101,6 @@ impl<S: Storage, I: Index> OutputStoreOps for OutputStore<S, I> {
         }
         Ok(())
     }
-}
-
-/// The fjall store with its sqlite full-text index beside it.
-pub type FjallStore = OutputStore<FjallStorage, SqliteIndex>;
-/// The fjall store alone: captures persist, but the index failed to open so search finds nothing.
-pub type FjallUnindexedStore = OutputStore<FjallStorage, NopIndex>;
-/// Output capture is disabled: everything is discarded and nothing is found.
-pub type NopStore = OutputStore<NopStorage, NopIndex>;
-/// A backend whose every storage operation fails; see [`FailingStorage`].
-#[cfg(test)]
-pub type FailingStore = OutputStore<FailingStorage, NopIndex>;
-
-/// Every pairing of storage and index the daemon can run on.
-#[derive(Debug, strum_macros::EnumDiscriminants)]
-#[strum_discriminants(name(OutputStoreKind))]
-#[enum_dispatch(OutputStoreOps)]
-pub enum AnyOutputStore {
-    Fjall(FjallStore),
-    FjallUnindexed(FjallUnindexedStore),
-    Nop(NopStore),
-    /// Built only by the [`OutputCaptureEngine::failing`](crate::OutputCaptureEngine::failing) test hook.
-    /// Never selected in production.
-    #[cfg(test)]
-    Failing(FailingStore),
 }
 
 #[cfg(test)]
@@ -188,18 +126,14 @@ mod tests {
         }
     }
 
-    async fn temp_backend(dir: &Path) -> FjallStore {
+    async fn temp_backend(dir: &Path) -> OutputStore {
         let storage = FjallStorage::open(dir.join("store")).expect("open storage");
         let index = SqliteIndex::open(&dir.join("index.sqlite")).await.expect("open index");
-        OutputStore::new(storage, index)
+        OutputStore::new(AnyStorage::Fjall(storage), AnyIndex::Sqlite(index))
     }
 
-    async fn search_hits(
-        store: &impl OutputStoreOps,
-        query: &str,
-        limit: usize,
-    ) -> Vec<OutputMatch> {
-        store.search(query, limit).await.items().try_collect().await.expect("search")
+    async fn search_hits(store: &OutputStore, query: &str, limit: usize) -> Vec<OutputMatch> {
+        store.search(query, limit).await.try_collect().await.expect("search")
     }
 
     #[tokio::test]
@@ -220,7 +154,6 @@ mod tests {
     async fn search_matches_the_visible_text_of_colorized_output() {
         let dir = tempfile::tempdir().expect("tempdir");
         let backend = temp_backend(dir.path()).await;
-        // Red "fatal", reset, then plain text -- the escapes must not hide the word.
         backend.capture(hid(1), cap("\x1b[31mfatal\x1b[0m: disk full")).await.expect("capture");
 
         let hits = search_hits(&backend, "fatal", 10).await;
@@ -245,7 +178,6 @@ mod tests {
     async fn reconcile_indexes_captures_missing_from_the_index() {
         let dir = tempfile::tempdir().expect("tempdir");
         let backend = temp_backend(dir.path()).await;
-        // Write straight to the storage so the index never sees it -- as if the index write was lost.
         backend.storage.capture(hid(1), cap("orphaned output text")).await.expect("capture");
 
         assert!(search_hits(&backend, "orphaned", 10).await.is_empty(), "not yet indexed");
@@ -260,7 +192,6 @@ mod tests {
     async fn reconcile_drops_index_entries_without_a_capture() {
         let dir = tempfile::tempdir().expect("tempdir");
         let backend = temp_backend(dir.path()).await;
-        // An index entry whose capture never existed in the storage (drift from a crashed delete).
         backend.index.insert(hid(9), "ghost entry").await.expect("insert");
 
         backend.reconcile().await.expect("reconcile");

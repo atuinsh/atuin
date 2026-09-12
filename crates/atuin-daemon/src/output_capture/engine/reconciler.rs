@@ -6,7 +6,7 @@ use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use tracing::warn;
 
-use crate::output_capture::{AnyOutputStore, OutputStoreOps};
+use crate::output_capture::OutputStore;
 
 #[derive(Debug)]
 pub struct Reconciler {
@@ -16,7 +16,7 @@ pub struct Reconciler {
 impl Reconciler {
     const INTERVAL: Duration = Duration::from_mins(15);
 
-    pub fn spawn(store: Arc<AnyOutputStore>) -> Self {
+    pub fn spawn(store: Arc<OutputStore>) -> Self {
         let task = tokio::task::spawn(async move {
             let mut interval = tokio::time::interval(Self::INTERVAL);
             interval.set_missed_tick_behavior(MissedTickBehavior::Skip);

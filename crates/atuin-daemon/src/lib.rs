@@ -32,7 +32,6 @@ pub use history_journal::{
 };
 pub use output_capture::{
     CaptureError, DeleteOutputError, GetOutputError, OutputCaptureEngine, OutputMatch,
-    OutputStoreKind,
 };
 
 /// Boot the daemon using the new component-based architecture.

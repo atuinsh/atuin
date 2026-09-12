@@ -11,15 +11,14 @@ use gc::Gc;
 use reconciler::Reconciler;
 use tracing::{error, warn};
 
-use super::backend::{FjallStorage, NopIndex, NopStorage, OutputStore, SqliteIndex};
-use super::{
-    AnyOutputStore, CaptureError, DeleteOutputError, GetOutputError, OutputStoreKind,
-    OutputStoreOps,
+use super::backend::{
+    AnyIndex, AnyStorage, FjallStorage, NopIndex, NopStorage, OutputStore, SqliteIndex,
 };
+use super::{CaptureError, DeleteOutputError, GetOutputError};
 
 #[derive(Debug)]
 pub struct OutputCaptureEngine {
-    store: Arc<AnyOutputStore>,
+    store: Arc<OutputStore>,
     _gc: Option<Gc>,
     _reconciler: Option<Reconciler>,
 }
@@ -43,7 +42,7 @@ impl OutputCaptureEngine {
 
         // The index is derived, so a failure to open it leaves capture working; only search is lost.
         let store = match SqliteIndex::open(&index_path(path)).await {
-            Ok(index) => AnyOutputStore::Fjall(OutputStore::new(storage, index)),
+            Ok(index) => OutputStore::new(AnyStorage::Fjall(storage), AnyIndex::Sqlite(index)),
             Err(err) => {
                 error!(
                     ?err,
@@ -51,7 +50,7 @@ impl OutputCaptureEngine {
                     "failed to open the output search index; search over captured output is \
                      disabled"
                 );
-                AnyOutputStore::FjallUnindexed(OutputStore::new(storage, NopIndex))
+                OutputStore::new(AnyStorage::Fjall(storage), AnyIndex::Nop(NopIndex))
             }
         };
         let store = Arc::new(store);
@@ -77,7 +76,7 @@ impl OutputCaptureEngine {
 
     #[must_use]
     pub fn nop() -> Self {
-        Self::without_tasks(AnyOutputStore::Nop(OutputStore::new(NopStorage, NopIndex)))
+        Self::without_tasks(OutputStore::new(AnyStorage::Nop(NopStorage), AnyIndex::Nop(NopIndex)))
     }
 
     /// A capture store whose every storage operation fails, standing in for a broken store.
@@ -88,23 +87,18 @@ impl OutputCaptureEngine {
     #[cfg(test)]
     #[must_use]
     pub fn failing() -> Self {
-        Self::without_tasks(AnyOutputStore::Failing(OutputStore::new(
-            super::backend::FailingStorage,
-            NopIndex,
-        )))
+        Self::without_tasks(OutputStore::new(
+            AnyStorage::Failing(super::backend::FailingStorage),
+            AnyIndex::Nop(NopIndex),
+        ))
     }
 
-    fn without_tasks(store: AnyOutputStore) -> Self {
+    fn without_tasks(store: OutputStore) -> Self {
         Self {
             store: Arc::new(store),
             _gc: None,
             _reconciler: None,
         }
-    }
-
-    #[must_use]
-    pub fn kind(&self) -> OutputStoreKind {
-        OutputStoreKind::from(&*self.store)
     }
 
     /// Capture a command and associate it with the given history id.
@@ -133,7 +127,7 @@ impl OutputCaptureEngine {
     }
 
     #[must_use]
-    pub fn store(&self) -> Arc<AnyOutputStore> {
+    pub fn store(&self) -> Arc<OutputStore> {
         self.store.clone()
     }
 }
@@ -177,16 +171,16 @@ mod tests {
         (store, dir)
     }
 
-    async fn search_hits(store: &AnyOutputStore, query: &str, limit: usize) -> Vec<OutputMatch> {
+    async fn search_hits(store: &OutputStore, query: &str, limit: usize) -> Vec<OutputMatch> {
         store.search(query, limit).await.items().try_collect().await.expect("search")
     }
 
     #[tokio::test]
     async fn open_uses_the_fjall_backend_when_the_path_is_usable() {
         let (store, _dir) = temp_store().await;
-        assert_eq!(store.kind(), OutputStoreKind::Fjall);
         store.capture(hid(1), cap("hello")).await.expect("capture");
         assert_eq!(store.get(hid(1)).await.expect("get").expect("present").output_start, "hello");
+        assert_eq!(search_hits(&store.store(), "hello", 10).await.len(), 1);
     }
 
     #[tokio::test]
@@ -196,7 +190,6 @@ mod tests {
         std::fs::write(&path, b"not a database").expect("write file");
 
         let store = OutputCaptureEngine::open(&path, DiskUsageLimit::Unlimited).await;
-        assert_eq!(store.kind(), OutputStoreKind::Nop);
         store.capture(hid(1), cap("hello")).await.expect("capture is discarded, not failed");
         assert!(store.get(hid(1)).await.expect("get").is_none());
     }
@@ -209,7 +202,6 @@ mod tests {
         std::fs::create_dir_all(index_path(&path)).expect("occupy index path");
 
         let store = OutputCaptureEngine::open(&path, DiskUsageLimit::Unlimited).await;
-        assert_eq!(store.kind(), OutputStoreKind::FjallUnindexed);
         store.capture(hid(1), cap("stored but unsearchable")).await.expect("capture");
         assert!(store.get(hid(1)).await.expect("get").is_some());
         assert!(search_hits(&store.store(), "unsearchable", 10).await.is_empty());
@@ -218,7 +210,6 @@ mod tests {
     #[tokio::test]
     async fn nop_constructor_discards_everything() {
         let store = OutputCaptureEngine::nop();
-        assert_eq!(store.kind(), OutputStoreKind::Nop);
         store.capture(hid(1), cap("first")).await.expect("first");
         store.capture(hid(1), cap("second")).await.expect("second");
         assert!(store.get(hid(1)).await.expect("get").is_none());

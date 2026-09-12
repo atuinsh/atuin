@@ -40,3 +40,43 @@ pub trait Index {
     /// Every id currently held in the index.
     async fn indexed_ids(&self) -> ChunkedStream<Result<HistoryId, IndexError>>;
 }
+
+#[derive(Debug)]
+pub enum AnyIndex {
+    Sqlite(SqliteIndex),
+    Nop(NopIndex),
+}
+
+impl Index for AnyIndex {
+    async fn insert(&self, id: HistoryId, text: &str) -> Result<(), IndexError> {
+        match self {
+            Self::Sqlite(i) => i.insert(id, text).await,
+            Self::Nop(i) => i.insert(id, text).await,
+        }
+    }
+
+    async fn remove(&self, ids: impl Iterator<Item = HistoryId>) -> Result<(), IndexError> {
+        match self {
+            Self::Sqlite(i) => i.remove(ids).await,
+            Self::Nop(i) => i.remove(ids).await,
+        }
+    }
+
+    async fn search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
+        match self {
+            Self::Sqlite(i) => i.search(query, limit).await,
+            Self::Nop(i) => i.search(query, limit).await,
+        }
+    }
+
+    async fn indexed_ids(&self) -> ChunkedStream<Result<HistoryId, IndexError>> {
+        match self {
+            Self::Sqlite(i) => i.indexed_ids().await,
+            Self::Nop(i) => i.indexed_ids().await,
+        }
+    }
+}

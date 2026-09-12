@@ -67,7 +67,7 @@ impl<T: Send + 'static, E: Send + 'static> ChunkedStream<Result<T, E>> {
         }
     }
 
-    pub async fn try_collect(self) -> Result<Vec<T>, E> {
+    pub async fn try_collect<C: Default + Extend<T>>(self) -> Result<C, E> {
         self.items().try_collect().await
     }
 }
@@ -286,7 +286,7 @@ mod tests {
         }
         let s: ChunkedStream<Result<i32, E>> =
             ChunkedStream::from_chunks([vec![Ok(1), Err(E::First)], vec![Err(E::Second)]]);
-        assert_eq!(block_on(s.try_collect()), Err(E::First));
+        assert_eq!(block_on(s.try_collect::<Vec<_>>()), Err(E::First));
     }
 
     #[test]
@@ -306,7 +306,7 @@ mod tests {
 
         let err =
             ChunkedStream::<Result<i32, &str>>::from_fallible_items::<Vec<i32>>(Err("boom"), two);
-        assert_eq!(block_on(err.try_collect()), Err("boom"));
+        assert_eq!(block_on(err.try_collect::<Vec<_>>()), Err("boom"));
     }
 
     #[rstest]
@@ -495,7 +495,7 @@ mod tests {
         });
         let src = stream::iter([vec![Ok(1), Err("boom")]]).chain(tail);
         let s = ChunkedStream::new(src);
-        assert_eq!(block_on(s.try_collect()), Err("boom"));
+        assert_eq!(block_on(s.try_collect::<Vec<_>>()), Err("boom"));
     }
 
     #[tokio::test(flavor = "multi_thread")]

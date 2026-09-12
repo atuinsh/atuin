@@ -17,7 +17,7 @@ use tracing::{Level, debug, error, info, instrument, span, trace};
 
 use crate::daemon::{Component, DaemonHandle};
 use crate::events::DaemonEvent;
-use crate::output_capture::{AnyOutputStore, OutputStoreOps};
+use crate::output_capture::OutputStore;
 use crate::search::search_server::{Search as SearchSvc, SearchServer};
 use crate::search::{
     FilterMode, IndexFilterMode, OutputSearchMatch, PrepareIndexRequest, PrepareIndexResponse,
@@ -56,7 +56,7 @@ impl SearchComponent {
 
     /// Get the gRPC service for this component.
     #[must_use]
-    pub fn grpc_service(&self, output_store: Arc<AnyOutputStore>) -> SearchGrpcServiceBuilder {
+    pub fn grpc_service(&self, output_store: Arc<OutputStore>) -> SearchGrpcServiceBuilder {
         SearchGrpcServiceBuilder {
             index: self.index.clone(),
             output_store,
@@ -198,7 +198,7 @@ impl Component for SearchComponent {
 
 pub struct SearchGrpcServiceBuilder {
     index: Arc<RwLock<SearchIndex>>,
-    output_store: Arc<AnyOutputStore>,
+    output_store: Arc<OutputStore>,
 }
 
 impl SearchGrpcServiceBuilder {
@@ -216,7 +216,7 @@ impl SearchGrpcServiceBuilder {
 #[derive(Clone)]
 pub struct SearchGrpcService {
     index: Arc<RwLock<SearchIndex>>,
-    output_store: Arc<AnyOutputStore>,
+    output_store: Arc<OutputStore>,
     handle: DaemonHandle,
 }
 

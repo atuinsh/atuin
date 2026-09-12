@@ -31,7 +31,7 @@ impl Storage for FailingStorage {
     }
 
     async fn all_ids(&self) -> ChunkedStream<Result<HistoryId, GetOutputError>> {
-        ChunkedStream::from_chunks([vec![Err(GetOutputError::Storage(unavailable()))]])
+        ChunkedStream::from_error(GetOutputError::Storage(unavailable()))
     }
 
     async fn eviction_candidates(
