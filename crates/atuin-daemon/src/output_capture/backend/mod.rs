@@ -9,6 +9,7 @@ use std::collections::HashSet;
 
 use atuin_client::history::{CommandCapture, HistoryId};
 use enum_dispatch::enum_dispatch;
+use futures::TryStreamExt;
 pub use gc::Gc;
 pub use index::{Index, IndexError, NopIndex, OutputMatch, SqliteIndex};
 #[cfg(test)]
@@ -91,7 +92,7 @@ impl<S: Storage, I: Index> OutputStoreOps for OutputStore<S, I> {
     }
 
     async fn search(&self, query: &str, limit: usize) -> Result<Vec<OutputMatch>, IndexError> {
-        self.index.search(query, limit).await
+        self.index.search(query, limit).await.items().try_collect().await
     }
 
     fn estimated_disk_space(&self) -> u64 {
@@ -106,8 +107,11 @@ impl<S: Storage, I: Index> OutputStoreOps for OutputStore<S, I> {
     }
 
     async fn reconcile(&self) -> Result<(), ReconcileError> {
-        let index_set: HashSet<HistoryId> = self.index.indexed_ids().await?.into_iter().collect();
-        let storage_ids = self.storage.all_ids().await?;
+        let indexed_ids: Vec<HistoryId> =
+            self.index.indexed_ids().await.items().try_collect().await?;
+        let index_set: HashSet<HistoryId> = indexed_ids.into_iter().collect();
+        let storage_ids: Vec<HistoryId> =
+            self.storage.all_ids().await.items().try_collect().await?;
         let storage_set: HashSet<HistoryId> = storage_ids.iter().copied().collect();
 
         let stale: Vec<HistoryId> = index_set.difference(&storage_set).copied().collect();

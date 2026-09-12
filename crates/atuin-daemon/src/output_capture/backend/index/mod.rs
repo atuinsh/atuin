@@ -7,6 +7,7 @@ mod nop;
 mod sqlite;
 
 use atuin_client::history::HistoryId;
+use atuin_common::futures::stream::ChunkedStream;
 use atuin_common::string::highlighted::HighlightedString;
 pub use nop::NopIndex;
 pub use sqlite::SqliteIndex;
@@ -38,8 +39,12 @@ pub trait Index {
 
     /// Relevance-ranked matches, most relevant first: each carries the full output and the byte
     /// ranges of every match within it.
-    async fn search(&self, query: &str, limit: usize) -> Result<Vec<OutputMatch>, IndexError>;
+    async fn search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> ChunkedStream<Result<OutputMatch, IndexError>>;
 
     /// Every id currently held in the index, for reconciling against the storage.
-    async fn indexed_ids(&self) -> Result<Vec<HistoryId>, IndexError>;
+    async fn indexed_ids(&self) -> ChunkedStream<Result<HistoryId, IndexError>>;
 }

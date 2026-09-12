@@ -121,6 +121,10 @@ impl<S> HighlightedText<S> {
     pub fn raw_mut(&mut self) -> &mut S {
         &mut self.data
     }
+
+    pub fn markers(&self) -> [char; 2] {
+        self.highlighter.markers()
+    }
 }
 
 impl<S: AsRef<str>> AsRef<str> for HighlightedText<S> {

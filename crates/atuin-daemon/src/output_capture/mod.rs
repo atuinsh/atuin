@@ -7,7 +7,7 @@ use std::sync::Arc;
 use atuin_client::history::{CommandCapture, HistoryId};
 use atuin_client::settings::DiskUsageLimit;
 pub use backend::{
-    AnyOutputStore, CaptureError, DeleteOutputError, GetOutputError, OutputStoreKind,
+    AnyOutputStore, CaptureError, DeleteOutputError, GetOutputError, OutputMatch, OutputStoreKind,
     OutputStoreOps,
 };
 use backend::{FjallStorage, Gc, NopIndex, OutputStore, SqliteIndex};

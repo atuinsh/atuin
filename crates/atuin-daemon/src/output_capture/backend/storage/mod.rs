@@ -6,6 +6,7 @@ mod fjall;
 mod nop;
 
 use atuin_client::history::{CommandCapture, HistoryId};
+use atuin_common::futures::stream::ChunkedStream;
 #[cfg(test)]
 pub use failing::FailingStorage;
 pub use fjall::FjallStorage;
@@ -53,7 +54,7 @@ pub trait Storage {
     fn estimated_disk_space(&self) -> u64;
 
     /// Every stored id, oldest first (by key order).
-    async fn all_ids(&self) -> Result<Vec<HistoryId>, GetOutputError>;
+    async fn all_ids(&self) -> ChunkedStream<Result<HistoryId, GetOutputError>>;
 
     /// The oldest stored ids whose values total at least `reclaim_bytes`.
     ///

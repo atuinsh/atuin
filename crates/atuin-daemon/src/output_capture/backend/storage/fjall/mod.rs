@@ -7,12 +7,14 @@
 //! `spawn_blocking`.
 mod schema;
 
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use atuin_client::history::{CommandCapture, HistoryId};
+use atuin_common::futures::stream::ChunkedStream;
 use fjall::{OptimisticTxDatabase, OptimisticTxKeyspace, PersistMode, Readable};
 use schema::{Schema as _, SchemaV2};
 use tokio::task::JoinHandle;
@@ -22,6 +24,8 @@ use super::{CaptureError, DeleteOutputError, GetOutputError, Storage};
 
 /// The schema currently in use for stored output.
 type ActiveSchema = SchemaV2;
+
+const CHUNK: NonZeroUsize = NonZeroUsize::new(512).unwrap();
 
 /// The store and every operation on it.
 ///
@@ -125,21 +129,27 @@ impl FjallStorageInner {
     }
 
     /// Every stored id, oldest first (fjall key order). Reads keys only.
-    async fn all_ids(&self) -> Result<Vec<HistoryId>, GetOutputError> {
+    async fn all_ids(&self) -> ChunkedStream<Result<HistoryId, GetOutputError>> {
         let keyspace = self.keyspace.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut ids = Vec::new();
-            for guard in keyspace.inner().iter() {
-                // Read the key only; the value (a KV-separated blob) stays on disk.
-                let key = guard.key().map_err(|err| GetOutputError::Storage(Box::new(err)))?;
-                let id = ActiveSchema::deserialize_key(key.as_ref())
-                    .map_err(|err| GetOutputError::Storage(Box::new(err)))?;
-                ids.push(id);
-            }
-            Ok(ids)
-        })
-        .await
-        .expect("output-capture scan task panicked")
+        let scanned: Result<Vec<HistoryId>, GetOutputError> =
+            tokio::task::spawn_blocking(move || {
+                let mut ids = Vec::new();
+                for guard in keyspace.inner().iter() {
+                    // Read the key only; the value (a KV-separated blob) stays on disk.
+                    let key = guard.key().map_err(|err| GetOutputError::Storage(Box::new(err)))?;
+                    let id = ActiveSchema::deserialize_key(key.as_ref())
+                        .map_err(|err| GetOutputError::Storage(Box::new(err)))?;
+                    ids.push(id);
+                }
+                Ok(ids)
+            })
+            .await
+            .expect("output-capture scan task panicked");
+
+        match scanned {
+            Ok(ids) => ChunkedStream::from_items(ids.into_iter().map(Ok), CHUNK),
+            Err(err) => ChunkedStream::from_chunks([vec![Err(err)]]),
+        }
     }
 
     /// The oldest ids whose values total at least `reclaim_bytes` (or all of them, if the store
@@ -307,7 +317,7 @@ impl Storage for FjallStorage {
         self.inner.estimated_disk_space()
     }
 
-    async fn all_ids(&self) -> Result<Vec<HistoryId>, GetOutputError> {
+    async fn all_ids(&self) -> ChunkedStream<Result<HistoryId, GetOutputError>> {
         self.inner.all_ids().await
     }
 
@@ -322,6 +332,7 @@ impl Storage for FjallStorage {
 #[cfg(test)]
 mod tests {
     use easy_cast::Conv;
+    use futures::TryStreamExt;
     use uuid::Uuid;
 
     use super::*;
@@ -509,6 +520,8 @@ mod tests {
         for n in 1..=3u128 {
             store.capture(hid(n), cap(&format!("out{n}"))).await.expect("capture");
         }
-        assert_eq!(store.all_ids().await.expect("all_ids"), vec![hid(1), hid(2), hid(3)]);
+        let ids: Vec<HistoryId> =
+            store.all_ids().await.items().try_collect().await.expect("all_ids");
+        assert_eq!(ids, vec![hid(1), hid(2), hid(3)]);
     }
 }

@@ -1,12 +1,16 @@
+use std::num::NonZeroUsize;
 use std::path::Path;
 
 use atuin_client::history::HistoryId;
 use atuin_common::db::sqlite::Sqlite;
 use atuin_common::db::sqlite::fts::{TextHighlighter, TextHighlighterBindExt};
 use atuin_common::db::{self};
+use atuin_common::futures::stream::ChunkedStream;
 use sqlx::Row;
 
 use super::{Index, IndexError, OutputMatch};
+
+const CHUNK: NonZeroUsize = NonZeroUsize::new(512).unwrap();
 
 /// Bump this whenever the on-disk index shape changes. On open a mismatch drops the table; the
 /// fjall store is the source of truth, so the next reconcile repopulates it.
@@ -119,47 +123,64 @@ impl Index for SqliteIndex {
         Ok(())
     }
 
-    async fn search(&self, query: &str, limit: usize) -> Result<Vec<OutputMatch>, IndexError> {
+    async fn search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
         let match_expr = sanitize_query(query);
         if match_expr.is_empty() {
-            return Ok(Vec::new());
+            return ChunkedStream::empty();
         }
 
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let highlighter = self.highlighter;
         // `highlight()` hands back the whole body with every match wrapped in the markers, which is
         // the one pass that yields both the full output and where the matches sit in it.
         let rows = db::query(
             "SELECT history_id, highlight(output_fts, 1, ?, ?) AS body, -bm25(output_fts) AS \
              score FROM output_fts WHERE output_fts MATCH ? ORDER BY score DESC LIMIT ?",
         )
-        .bind_highlight(self.highlighter)
+        .bind_highlight(highlighter)
         .bind(&match_expr)
         .bind(limit)
         .fetch_all(self.db.pool())
-        .await
-        .map_err(store)?;
+        .await;
 
-        rows.into_iter()
-            .map(|row| {
+        let rows = match rows {
+            Ok(rows) => rows,
+            Err(err) => return ChunkedStream::from_chunks([vec![Err(store(err))]]),
+        };
+
+        let matches: Vec<Result<OutputMatch, IndexError>> = rows
+            .into_iter()
+            .map(move |row| {
                 let raw: &[u8] = row.try_get("history_id").map_err(store)?;
                 let body: &str = row.try_get("body").map_err(store)?;
                 Ok(OutputMatch {
                     history_id: id_from_bytes(raw)?,
-                    output: self.highlighter.as_highlighted(body.to_owned()),
+                    output: highlighter.as_highlighted(body.to_owned()),
                     score: row.try_get("score").map_err(store)?,
                 })
             })
-            .collect()
+            .collect();
+
+        ChunkedStream::from_items(matches, CHUNK)
     }
 
-    async fn indexed_ids(&self) -> Result<Vec<HistoryId>, IndexError> {
-        let rows = db::query("SELECT history_id FROM output_fts")
-            .fetch_all(self.db.pool())
-            .await
-            .map_err(store)?;
-        rows.into_iter()
+    async fn indexed_ids(&self) -> ChunkedStream<Result<HistoryId, IndexError>> {
+        let rows = db::query("SELECT history_id FROM output_fts").fetch_all(self.db.pool()).await;
+        let rows = match rows {
+            Ok(rows) => rows,
+            Err(err) => return ChunkedStream::from_chunks([vec![Err(store(err))]]),
+        };
+
+        let ids: Vec<Result<HistoryId, IndexError>> = rows
+            .into_iter()
             .map(|row| id_from_bytes(row.try_get::<&[u8], _>("history_id").map_err(store)?))
-            .collect()
+            .collect();
+
+        ChunkedStream::from_items(ids, CHUNK)
     }
 }
 
@@ -186,10 +207,16 @@ fn sanitize_query(query: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use futures::TryStreamExt;
+
     use super::*;
 
     fn hid(n: u128) -> HistoryId {
         HistoryId::from_bytes(*uuid::Uuid::from_u128(n).as_bytes())
+    }
+
+    async fn search_hits(index: &SqliteIndex, query: &str, limit: usize) -> Vec<OutputMatch> {
+        index.search(query, limit).await.items().try_collect().await.expect("search")
     }
 
     async fn temp_index() -> (SqliteIndex, tempfile::TempDir) {
@@ -203,7 +230,7 @@ mod tests {
         let (index, _dir) = temp_index().await;
         index.insert(hid(1), "the build failed with an error").await.expect("insert");
 
-        let hits = index.search("error", 10).await.expect("search");
+        let hits = search_hits(&index, "error", 10).await;
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].history_id, hid(1));
         let output = &hits[0].output;
@@ -218,7 +245,7 @@ mod tests {
         let (index, _dir) = temp_index().await;
         index.insert(hid(1), "error one\nfine\nerror two").await.expect("insert");
 
-        let hits = index.search("error", 10).await.expect("search");
+        let hits = search_hits(&index, "error", 10).await;
         let output = &hits[0].output;
         let marked = output.as_ref();
         let got: Vec<&str> = output.ranges().map(|r| &marked[r]).collect();
@@ -234,7 +261,7 @@ mod tests {
         let text = format!("{open}fake{close} real");
         index.insert(hid(1), &text).await.expect("insert");
 
-        let hits = index.search("real", 10).await.expect("search");
+        let hits = search_hits(&index, "real", 10).await;
         let output = &hits[0].output;
         assert_eq!(output.display_plain().to_string(), "fake real");
         let marked = output.as_ref();
@@ -246,7 +273,7 @@ mod tests {
     async fn search_returns_nothing_for_a_miss() {
         let (index, _dir) = temp_index().await;
         index.insert(hid(1), "hello world").await.expect("insert");
-        assert!(index.search("absent", 10).await.expect("search").is_empty());
+        assert!(search_hits(&index, "absent", 10).await.is_empty());
     }
 
     #[tokio::test]
@@ -255,7 +282,7 @@ mod tests {
         index.insert(hid(1), "first text apple").await.expect("insert");
         index.insert(hid(1), "second text apple").await.expect("reinsert");
 
-        let hits = index.search("apple", 10).await.expect("search");
+        let hits = search_hits(&index, "apple", 10).await;
         assert_eq!(hits.len(), 1, "the id appears once, not twice");
     }
 
@@ -264,7 +291,7 @@ mod tests {
         let (index, _dir) = temp_index().await;
         index.insert(hid(1), "removable content").await.expect("insert");
         index.remove([hid(1)].into_iter()).await.expect("remove");
-        assert!(index.search("removable", 10).await.expect("search").is_empty());
+        assert!(search_hits(&index, "removable", 10).await.is_empty());
     }
 
     #[tokio::test]
@@ -273,7 +300,8 @@ mod tests {
         index.insert(hid(1), "one").await.expect("insert");
         index.insert(hid(2), "two").await.expect("insert");
 
-        let mut ids = index.indexed_ids().await.expect("indexed_ids");
+        let mut ids: Vec<HistoryId> =
+            index.indexed_ids().await.items().try_collect().await.expect("indexed_ids");
         ids.sort_by_key(|id| id.to_string());
         assert_eq!(ids, vec![hid(1), hid(2)]);
     }
@@ -284,7 +312,13 @@ mod tests {
         index.insert(hid(1), "a line with a path /usr/bin and a colon").await.expect("insert");
         // Bare FTS5 syntax chars would be a syntax error unquoted; sanitizing must swallow them.
         for q in ["\"unbalanced", "a OR", "path:", "(", "*", "-x"] {
-            index.search(q, 10).await.unwrap_or_else(|e| panic!("query {q:?} errored: {e}"));
+            index
+                .search(q, 10)
+                .await
+                .items()
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap_or_else(|e| panic!("query {q:?} errored: {e}"));
         }
     }
 
@@ -298,7 +332,7 @@ mod tests {
         }
         let index = SqliteIndex::open(&path).await.expect("reopen");
         // A matching schema version must not drop the table, so the row survives the reopen.
-        let hits = index.search("persistent", 10).await.expect("search");
+        let hits = search_hits(&index, "persistent", 10).await;
         assert_eq!(hits.len(), 1);
     }
 }

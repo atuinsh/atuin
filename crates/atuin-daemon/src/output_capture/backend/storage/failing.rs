@@ -1,4 +1,5 @@
 use atuin_client::history::{CommandCapture, HistoryId};
+use atuin_common::futures::stream::ChunkedStream;
 
 use super::{CaptureError, DeleteOutputError, GetOutputError, Storage, StorageError};
 
@@ -29,8 +30,8 @@ impl Storage for FailingStorage {
         0
     }
 
-    async fn all_ids(&self) -> Result<Vec<HistoryId>, GetOutputError> {
-        Err(GetOutputError::Storage(unavailable()))
+    async fn all_ids(&self) -> ChunkedStream<Result<HistoryId, GetOutputError>> {
+        ChunkedStream::from_chunks([vec![Err(GetOutputError::Storage(unavailable()))]])
     }
 
     async fn eviction_candidates(

@@ -1,4 +1,5 @@
 use atuin_client::history::HistoryId;
+use atuin_common::futures::stream::ChunkedStream;
 
 use super::{Index, IndexError, OutputMatch};
 
@@ -15,11 +16,15 @@ impl Index for NopIndex {
         Ok(())
     }
 
-    async fn search(&self, _query: &str, _limit: usize) -> Result<Vec<OutputMatch>, IndexError> {
-        Ok(Vec::new())
+    async fn search(
+        &self,
+        _query: &str,
+        _limit: usize,
+    ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
+        ChunkedStream::empty()
     }
 
-    async fn indexed_ids(&self) -> Result<Vec<HistoryId>, IndexError> {
-        Ok(Vec::new())
+    async fn indexed_ids(&self) -> ChunkedStream<Result<HistoryId, IndexError>> {
+        ChunkedStream::empty()
     }
 }
