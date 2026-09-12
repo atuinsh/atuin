@@ -98,7 +98,7 @@ mod tests {
     use rstest::rstest;
 
     use super::EitherOrBoth::{Both, Left, Right};
-    use super::{EitherOrBoth, try_merge_join};
+    use super::{EitherOrBoth, try_merge_join, try_merge_join_by};
 
     fn ok_stream(items: Vec<i32>) -> impl Stream<Item = Result<i32, ()>> {
         stream::iter(items).map(Ok)
@@ -124,12 +124,42 @@ mod tests {
         assert_eq!(merged(a, b), expected);
     }
 
+    // Each case carries exactly one error, so the merge must surface it whichever side and
+    // position it sits at.
+    #[rstest]
+    #[case::left_first(vec![Err("e")], vec![Ok(1)])]
+    #[case::left_mid(vec![Ok(1), Err("e"), Ok(9)], vec![Ok(2)])]
+    #[case::right_first(vec![Ok(1)], vec![Err("e")])]
+    #[case::right_mid(vec![Ok(1)], vec![Ok(2), Err("e"), Ok(9)])]
+    fn surfaces_the_first_error(
+        #[case] left: Vec<Result<i32, &'static str>>,
+        #[case] right: Vec<Result<i32, &'static str>>,
+    ) {
+        let out: Result<Vec<_>, &str> =
+            block_on(try_merge_join(stream::iter(left), stream::iter(right)).try_collect());
+        assert_eq!(out, Err("e"));
+    }
+
     #[test]
-    fn propagates_the_first_error_and_stops() {
-        let left = stream::iter(vec![Ok(1), Err("boom"), Ok(3)]);
-        let right = stream::iter(vec![Ok::<i32, &str>(2)]);
+    fn stops_reading_after_the_first_error() {
+        // A tail that panics if polled proves the merge short-circuits at the first error rather
+        // than draining the rest of the side.
+        let left = stream::iter(vec![Ok::<i32, &str>(1), Err("boom")])
+            .chain(stream::poll_fn(|_| panic!("polled past the first error")));
+        let right = stream::iter(vec![Ok::<i32, &str>(2), Ok(3)]);
         let out: Result<Vec<_>, &str> = block_on(try_merge_join(left, right).try_collect());
         assert_eq!(out, Err("boom"));
+    }
+
+    #[test]
+    fn joins_by_key_across_differing_item_types() {
+        // The `_by` variant allows `L != R`: left carries a tag, right is a bare key, joined on key.
+        let left = stream::iter(vec![Ok::<_, ()>((1, "a")), Ok((3, "c"))]);
+        let right = stream::iter(vec![Ok::<_, ()>(2), Ok(3)]);
+        let out: Vec<EitherOrBoth<(i32, &str), i32>> =
+            block_on(try_merge_join_by(left, right, |l, r| l.0.cmp(r)).try_collect())
+                .expect("no error");
+        assert_eq!(out, vec![Left((1, "a")), Right(2), Both((3, "c"), 3)]);
     }
 
     proptest! {
@@ -143,6 +173,24 @@ mod tests {
             let expected: Vec<EitherOrBoth<i32, i32>> =
                 itertools::merge_join_by(a.clone(), b.clone(), i32::cmp).collect();
             prop_assert_eq!(merged(a, b), expected);
+        }
+
+        #[test]
+        fn by_variant_matches_itertools_under_a_custom_order(
+            mut a in prop::collection::vec(0i32..6, 0..25),
+            mut b in prop::collection::vec(0i32..6, 0..25),
+        ) {
+            // A non-natural (descending) comparator exercises the `_by` path itself, not just the
+            // natural-order wrapper.
+            let rev = |x: &i32, y: &i32| y.cmp(x);
+            a.sort_unstable_by(rev);
+            b.sort_unstable_by(rev);
+            let expected: Vec<EitherOrBoth<i32, i32>> =
+                itertools::merge_join_by(a.clone(), b.clone(), rev).collect();
+            let got: Vec<EitherOrBoth<i32, i32>> =
+                block_on(try_merge_join_by(ok_stream(a), ok_stream(b), rev).try_collect())
+                    .expect("no error");
+            prop_assert_eq!(got, expected);
         }
     }
 }
