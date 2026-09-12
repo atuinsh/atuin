@@ -51,7 +51,6 @@ impl Gc {
                     }
                 };
 
-                // Evict through the backend so the derived search index drops these ids too.
                 if let Err(err) = backend.remove(&victims).await {
                     tracing::error!(?err, "failed to evict entries");
                 }
