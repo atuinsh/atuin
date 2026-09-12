@@ -9,24 +9,43 @@ use atuin_client::database::Sqlite;
 use atuin_client::history::HistoryId;
 use atuin_client::settings::Settings;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
-use atuin_common::string::highlighted::HighlightedString;
+use atuin_common::string::highlighted::{FromHighlightedTextProtoError, HighlightedString};
 use atuin_daemon::client::SearchClient;
+use atuin_daemon::grpc::history::pb::IdParseError;
 use clap::Parser;
 use thiserror::Error;
 
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Error)]
 pub enum RunError {
     #[error("output capture is disabled. enable [output] in your config to search command output.")]
     Disabled,
+
     #[error("blank query provided. please run 'atuin search-output --help'")]
     EmptyQuery,
 
-    #[error("unexpected error")]
-    Unexpected(
-        #[from]
-        #[source]
-        eyre::Report,
-    ),
+    #[error("could not connect to the daemon")]
+    Connect(#[source] eyre::Report),
+
+    #[error("the daemon failed to search command output")]
+    Search(#[source] eyre::Report),
+
+    #[error("the daemon returned a match with no history id")]
+    MissingHistoryId,
+
+    #[error("the daemon returned a malformed history id")]
+    MalformedHistoryId(#[from] IdParseError),
+
+    #[error("could not load history from the local database")]
+    LoadHistory(#[source] eyre::Report),
+
+    #[error("the daemon returned a match with no output")]
+    MissingOutput,
+
+    #[error("the daemon returned invalid highlighted output")]
+    InvalidOutput(#[from] FromHighlightedTextProtoError),
+
+    #[error("could not write search results")]
+    Write(#[from] io::Error),
 }
 
 /// Full-text search over captured command output.
@@ -40,13 +59,15 @@ pub struct Cmd {
     limit: u32,
 }
 
-async fn connect(settings: &Settings) -> Result<SearchClient, eyre::Report> {
+async fn connect(settings: &Settings) -> Result<SearchClient, RunError> {
     // TODO(markovejnovic): Have a better mechanism to connect to the daemon.
     #[cfg(unix)]
-    return SearchClient::new(settings.daemon.existing_socket_path().into_owned()).await;
+    return SearchClient::new(settings.daemon.existing_socket_path().into_owned())
+        .await
+        .map_err(RunError::Connect);
 
     #[cfg(not(unix))]
-    SearchClient::new(settings.daemon.tcp_port).await
+    SearchClient::new(settings.daemon.tcp_port).await.map_err(RunError::Connect)
 }
 
 impl Cmd {
@@ -61,26 +82,26 @@ impl Cmd {
         }
 
         let mut client = connect(settings).await?;
-        let mut matches = client.search_command_output(query, self.limit).await?;
+        let mut matches =
+            client.search_command_output(query, self.limit).await.map_err(RunError::Search)?;
 
         let mut rows = Vec::new();
-        while let Some(m) = matches.message().await? {
+        while let Some(m) = matches.message().await.map_err(|s| RunError::Search(s.into()))? {
             let Some(proto_id) = m.history_id else {
-                bail!("daemon returned a match with no history id");
+                return Err(RunError::MissingHistoryId);
             };
-            let id: HistoryId =
-                proto_id.try_into().wrap_err("daemon returned a malformed history id")?;
-            let Some(history) = db.load(id).await? else {
+            let id: HistoryId = proto_id.try_into()?;
+            let Some(history) = db.load(id).await.map_err(|e| RunError::LoadHistory(e.into()))?
+            else {
                 // The daemon may hold captured output for a history row that no longer exists
                 // locally; skip it rather than error.
                 continue;
             };
             let Some(output) = m.output else {
-                bail!("daemon returned a match with no output");
+                return Err(RunError::MissingOutput);
             };
             let (open, close) = (output.open, output.close);
-            let highlighted: HighlightedString =
-                output.try_into().wrap_err("daemon returned an invalid highlighted output")?;
+            let highlighted: HighlightedString = output.try_into()?;
             let plain = highlighted.display_plain().to_string();
             let open_len = char::from_u32(open).map_or(0, char::len_utf8);
             let close_len = char::from_u32(close).map_or(0, char::len_utf8);

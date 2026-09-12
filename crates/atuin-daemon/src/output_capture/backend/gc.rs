@@ -46,14 +46,14 @@ impl Gc {
                 let victims = match backend.eviction_candidates(reclaim).await {
                     Ok(victims) => victims,
                     Err(err) => {
-                        tracing::warn!(?err, "output capture gc failed to select entries to evict");
+                        tracing::error!(?err, "failed to select entries to evict");
                         continue;
                     }
                 };
 
                 // Evict through the backend so the derived search index drops these ids too.
                 if let Err(err) = backend.remove(&victims).await {
-                    tracing::warn!(?err, "output capture gc failed to evict entries");
+                    tracing::error!(?err, "failed to evict entries");
                 }
             }
         });
