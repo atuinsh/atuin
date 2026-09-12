@@ -1,8 +1,7 @@
 mod gc;
 mod reconciler;
 
-use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use atuin_client::history::{CommandCapture, HistoryId};
@@ -41,7 +40,7 @@ impl OutputCaptureEngine {
         };
 
         // The index is derived, so a failure to open it leaves capture working; only search is lost.
-        let store = match SqliteIndex::open(&index_path(path)).await {
+        let store = match SqliteIndex::open(&SqliteIndex::path(path)).await {
             Ok(index) => OutputStore::new(AnyBlobStore::Fjall(storage), AnyIndex::Sqlite(index)),
             Err(err) => {
                 error!(
@@ -129,15 +128,6 @@ impl OutputCaptureEngine {
     }
 }
 
-/// The sqlite index lives beside the fjall store directory as a sibling file, so it never lands
-/// among fjall's own files. `.../output-capture` becomes `.../output-capture-index.sqlite`.
-fn index_path(fjall_dir: &Path) -> PathBuf {
-    let mut name =
-        fjall_dir.file_name().map_or_else(|| OsString::from("output-capture"), OsString::from);
-    name.push("-index.sqlite");
-    fjall_dir.with_file_name(name)
-}
-
 #[cfg(test)]
 mod tests {
     use easy_cast::Conv;
@@ -195,7 +185,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("capture");
         // Occupy the index's path with a directory so sqlite cannot open it as a file.
-        std::fs::create_dir_all(index_path(&path)).expect("occupy index path");
+        std::fs::create_dir_all(SqliteIndex::path(&path)).expect("occupy index path");
 
         let store = OutputCaptureEngine::open(&path, DiskUsageLimit::Unlimited).await;
         store.capture(hid(1), cap("stored but unsearchable")).await.expect("capture");

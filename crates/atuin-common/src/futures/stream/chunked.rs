@@ -4,7 +4,7 @@ use std::task::{Context, Poll};
 
 use futures::{Stream, StreamExt, TryStreamExt, stream};
 
-/// A chunked stream is a stream that holds [`Vec<T>`] as its items.
+/// A chunked stream is a stream that holds `Vec<T>` as its items.
 ///
 /// It provides useful helper utilities that allow you to iterate over each element.
 ///
@@ -16,10 +16,12 @@ use futures::{Stream, StreamExt, TryStreamExt, stream};
 /// The convenience this stream enables is to do
 ///
 /// ```
-/// let mut stream = ChunkedStream::from_items([[1, 2], [3, 4]])
-/// stream.map(|i| i * 2)
+/// use atuin_common::futures::stream::ChunkedStream;
+/// use futures::{StreamExt, executor::block_on};
 ///
-/// assert_eq(ChunkedStream::from_items([[2, 4], [6, 8]]), stream)
+/// let doubled = ChunkedStream::from_chunks([vec![1, 2], vec![3, 4]]).map(|i| i * 2);
+/// let chunks: Vec<Vec<i32>> = block_on(doubled.collect());
+/// assert_eq!(chunks, vec![vec![2, 4], vec![6, 8]]);
 /// ```
 #[must_use]
 pub struct ChunkedStream<T> {

@@ -55,7 +55,7 @@ impl Default for TextHighlighter {
         const DEFAULT_MATCH_OPEN: char = '\u{E000}';
         const DEFAULT_MATCH_CLOSE: char = '\u{E001}';
 
-        TextHighlighter::with_markers([DEFAULT_MATCH_OPEN, DEFAULT_MATCH_CLOSE])
+        Self::with_markers([DEFAULT_MATCH_OPEN, DEFAULT_MATCH_CLOSE])
             .expect("the default markers are distinct")
     }
 }
@@ -67,13 +67,14 @@ impl TextHighlighter {
             return Err(NewTextHighlighterError::IdenticalMarkers(markers));
         }
 
-        Ok(TextHighlighter {
+        Ok(Self {
             open: markers[0],
             close: markers[1],
         })
     }
 
     /// The `[open, close]` markers this highlighter wraps matches in.
+    #[must_use]
     pub fn markers(self) -> [char; 2] {
         [self.open, self.close]
     }
@@ -82,7 +83,8 @@ impl TextHighlighter {
     /// markers.
     ///
     /// TODO(markovejnovic): Could be more optimized for mutable strings and sanitize them in-place.
-    pub fn sanitize<'a>(self, text: &'a str) -> Cow<'a, str> {
+    #[must_use]
+    pub fn sanitize(self, text: &str) -> Cow<'_, str> {
         if text.contains([self.open, self.close]) {
             Cow::Owned(text.replace([self.open, self.close], ""))
         } else {
@@ -105,7 +107,7 @@ impl TextHighlighter {
 
 /// Represents text which was highlighted by the `TextHighlighter`.
 ///
-/// [`Display`] implementations come in the form of [`Self::display_plain`], [`Self::display_subs`]
+/// `Display` implementations come in the form of [`Self::display_plain`], [`Self::display_subs`]
 /// and [`Self::display_raw`].
 pub struct HighlightedText<S> {
     data: S,
@@ -149,17 +151,17 @@ impl<S: AsRef<str>> HighlightedText<S> {
         }
     }
 
-    /// [`Display`] the highlighted text, stripping away the highlight markers.
+    /// `Display` the highlighted text, stripping away the highlight markers.
     pub fn display_plain(&self) -> impl fmt::Display + '_ {
         DisplayPlain(self)
     }
 
-    /// [`Display`] the highlighted text, replacing highlighted markers with `subs`.
+    /// `Display` the highlighted text, replacing highlighted markers with `subs`.
     pub fn display_subs(&self, subs: [char; 2]) -> impl fmt::Display + '_ {
         DisplaySubs { src: self, subs }
     }
 
-    /// [`Display`] the highlighted text as-is, including markers.
+    /// `Display` the highlighted text as-is, including markers.
     pub fn display_raw(&self) -> impl fmt::Display + '_ {
         DisplayRaw(self)
     }
@@ -247,7 +249,7 @@ mod proto {
 
     use super::{HighlightedString, HighlightedText, NewTextHighlighterError, TextHighlighter};
 
-    #[derive(Clone, PartialEq, prost::Message)]
+    #[derive(Clone, PartialEq, Eq, prost::Message)]
     pub struct HighlightedTextProto {
         #[prost(uint32, tag = "1")]
         pub open: u32,

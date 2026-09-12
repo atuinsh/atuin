@@ -16,13 +16,15 @@ pub trait TextHighlighterBindExt {
     /// Bind the relevant highlight points into a `highlight(table, index, ?, ?)` sql query.
     ///
     /// See [`TextHighlighter`].
+    #[must_use]
     fn bind_highlight(self, highlighter: TextHighlighter) -> Self;
 
     /// Sanitize `highlightable` for `highlighter` and bind it. See [`TextHighlighter::sanitize`].
+    #[must_use]
     fn bind_highlightable(self, highlighter: TextHighlighter, highlightable: &str) -> Self;
 }
 
-impl<'q> TextHighlighterBindExt for Query<'q, Sqlite, <Sqlite as Database>::Arguments> {
+impl TextHighlighterBindExt for Query<'_, Sqlite, <Sqlite as Database>::Arguments> {
     fn bind_highlight(self, highlighter: TextHighlighter) -> Self {
         // sqlite has no native `char` type; bind the markers as one-char strings.
         let [open, close] = highlighter.markers();

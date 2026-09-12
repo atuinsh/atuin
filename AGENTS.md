@@ -2,6 +2,10 @@
 
 Shell history tool. Replaces your shell's built-in history with a SQLite database, adds context (cwd, exit code, duration, hostname), and optionally syncs across machines with end-to-end encryption.
 
+## NEVER write comments, prose, or docs
+
+Do not write code comments, doc comments (`///`, `//!`), rustdoc, prose, or standalone documentation of any kind. Not `// why`, not `// what`, not module headers, not doc comments on public items — none. Write only the code that is asked for. Let the code speak for itself. This overrides any default instinct to explain, document, or annotate.
+
 ## Workspace crates
 
 ```

@@ -61,13 +61,9 @@ pub trait BlobStore {
     /// The oldest stored ids whose values total at least `reclaim_bytes`.
     ///
     /// TODO(markovejnovic): Don't return Vec. In a pathological case, this can be a lot of memory,
-    ///                      but we call this relatively frequently so the candidate count should
-    ///                      be relatively small.
-    ///
-    ///                      Check the invocation site to see it is called in a periodic (1m) task
-    ///                      which cleans up old entries. I wouldn't worry about this too much.
-    ///
-    ///                      Famous last words.
+    /// but we call this relatively frequently so the candidate count should be relatively small.
+    /// Check the invocation site to see it is called in a periodic (1m) task which cleans up old
+    /// entries. I wouldn't worry about this too much. Famous last words.
     async fn eviction_candidates(
         &self,
         reclaim_bytes: u64,

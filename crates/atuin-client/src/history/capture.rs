@@ -37,6 +37,7 @@ pub struct CommandCapture {
 
 impl CommandCapture {
     /// Write the command capture as a plaintext string, stripping away all escape codes.
+    #[must_use]
     pub fn plaintext(&self) -> String {
         let mut out = String::with_capacity(
             self.output_start.len() + self.output_end.as_ref().map_or(0, |end| end.len() + 1),

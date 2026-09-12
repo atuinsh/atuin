@@ -32,6 +32,7 @@ impl BenchCtx {
     ///
     /// Using the standard library will provide timestamps which are not stable and will result in
     /// irreproducible benchmarks.
+    #[allow(clippy::unused_self, reason = "a method for symmetry with the other accessors")]
     pub fn now(&self) -> OffsetDateTime {
         Self::SEED_NOW
     }

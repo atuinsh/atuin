@@ -6,13 +6,11 @@ use std::io::{self, IsTerminal, Write};
 use std::ops::Range;
 
 use atuin_client::database::Sqlite;
-use atuin_client::history::HistoryId;
 use atuin_client::settings::Settings;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
-use atuin_common::string::highlighted::{FromHighlightedTextProtoError, HighlightedString};
 use atuin_daemon::client::SearchClient;
-use atuin_daemon::grpc::history::pb::IdParseError;
 use clap::Parser;
+use futures_util::TryStreamExt;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -29,20 +27,8 @@ pub enum RunError {
     #[error("the daemon failed to search command output")]
     Search(#[source] eyre::Report),
 
-    #[error("the daemon returned a match with no history id")]
-    MissingHistoryId,
-
-    #[error("the daemon returned a malformed history id")]
-    MalformedHistoryId(#[from] IdParseError),
-
     #[error("could not load history from the local database")]
     LoadHistory(#[source] eyre::Report),
-
-    #[error("the daemon returned a match with no output")]
-    MissingOutput,
-
-    #[error("the daemon returned invalid highlighted output")]
-    InvalidOutput(#[from] FromHighlightedTextProtoError),
 
     #[error("could not write search results")]
     Write(#[from] io::Error),
@@ -82,29 +68,22 @@ impl Cmd {
         }
 
         let mut client = connect(settings).await?;
-        let mut matches =
+        let matches =
             client.search_command_output(query, self.limit).await.map_err(RunError::Search)?;
+        let mut matches = std::pin::pin!(matches);
 
         let mut rows = Vec::new();
-        while let Some(m) = matches.message().await.map_err(|s| RunError::Search(s.into()))? {
-            let Some(proto_id) = m.history_id else {
-                return Err(RunError::MissingHistoryId);
-            };
-            let id: HistoryId = proto_id.try_into()?;
-            let Some(history) = db.load(id).await.map_err(|e| RunError::LoadHistory(e.into()))?
+        while let Some(m) = matches.try_next().await.map_err(RunError::Search)? {
+            let Some(history) =
+                db.load(m.history_id).await.map_err(|e| RunError::LoadHistory(e.into()))?
             else {
-                // The daemon may hold captured output for a history row that no longer exists
-                // locally; skip it rather than error.
                 continue;
             };
-            let Some(output) = m.output else {
-                return Err(RunError::MissingOutput);
-            };
-            let (open, close) = (output.open, output.close);
-            let highlighted: HighlightedString = output.try_into()?;
+            let highlighted = m.output;
+            let [open, close] = highlighted.markers();
             let plain = highlighted.display_plain().to_string();
-            let open_len = char::from_u32(open).map_or(0, char::len_utf8);
-            let close_len = char::from_u32(close).map_or(0, char::len_utf8);
+            let open_len = open.len_utf8();
+            let close_len = close.len_utf8();
             let matches: Vec<Range<usize>> = highlighted
                 .ranges()
                 .scan(0usize, |stripped, r| {

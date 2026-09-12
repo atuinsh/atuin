@@ -1,5 +1,6 @@
+use std::ffi::OsString;
 use std::num::NonZeroUsize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use atuin_client::history::HistoryId;
 use atuin_common::db::sqlite::Sqlite;
@@ -48,6 +49,18 @@ impl SqliteIndex {
 
         index.migrate().await?;
         Ok(index)
+    }
+
+    /// Create a new path that's appropriate for the [`SqliteIndex`] relative to the `BlobStore`'s
+    /// path.
+    ///
+    /// # Panics
+    ///
+    /// If the given directory is the root directory.
+    pub fn path(blob_dir: &Path) -> PathBuf {
+        let mut name = OsString::from(blob_dir.file_name().expect("the blob_dir cannot be root."));
+        name.push(format!("-index-{SCHEMA_VERSION}.sqlite"));
+        blob_dir.with_file_name(name)
     }
 
     async fn migrate(&self) -> Result<(), IndexError> {
@@ -321,7 +334,7 @@ mod tests {
     async fn remove_drops_the_entry() {
         let (index, _dir) = temp_index().await;
         index.insert(hid(1), "removable content").await.expect("insert");
-        index.remove([hid(1)].into_iter()).await.expect("remove");
+        index.remove(std::iter::once(hid(1))).await.expect("remove");
         assert!(search_hits(&index, "removable", 10).await.is_empty());
     }
 
