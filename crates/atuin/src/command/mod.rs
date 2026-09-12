@@ -27,8 +27,11 @@ pub enum AtuinCmd {
     PtyProxy(atuin_pty_proxy::PtyProxy),
 
     /// Generate a UUID
+    // Plumbing: every shell init calls `atuin uuid` to seed ATUIN_SESSION; not for interactive use.
+    #[command(hide = true)]
     Uuid,
 
+    /// List the people who have contributed to Atuin
     Contributors,
 
     /// Generate shell completions
