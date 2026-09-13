@@ -17,6 +17,10 @@ fn main() -> std::io::Result<()> {
         .build_server(true)
         .file_descriptor_set_path(&file_descriptor_path)
         .extern_path(".common.PyStyleIdxRange", "::atuin_common::range::PyStyleIdxRange")
+        .extern_path(
+            ".common.HighlightedText",
+            "::atuin_common::string::highlighted::HighlightedTextProto",
+        )
         .skip_protoc_run()
         .compile_protos(&proto_paths, &proto_include_dirs)
 }
