@@ -5,9 +5,8 @@ use async_stream::try_stream;
 use futures::{Stream, TryStreamExt};
 pub use itertools::EitherOrBoth;
 
-/// Merge two ascending-sorted fallible streams into their [`EitherOrBoth`] outer join.
-///
-/// The async streaming analog of `itertools::merge_join_by`.
+/// Merge two ascending fallible streams into their [`EitherOrBoth`] outer join - the async
+/// streaming analog of [`itertools::merge_join_by`].
 ///
 /// # Examples
 ///
@@ -140,7 +139,7 @@ mod tests {
         assert_eq!(out, Err("e"));
     }
 
-    #[test]
+    #[rstest]
     fn stops_reading_after_the_first_error() {
         // A tail that panics if polled proves the merge short-circuits at the first error rather
         // than draining the rest of the side.
@@ -151,7 +150,7 @@ mod tests {
         assert_eq!(out, Err("boom"));
     }
 
-    #[test]
+    #[rstest]
     fn joins_by_key_across_differing_item_types() {
         // The `_by` variant allows `L != R`: left carries a tag, right is a bare key, joined on key.
         let left = stream::iter(vec![Ok::<_, ()>((1, "a")), Ok((3, "c"))]);
@@ -165,11 +164,10 @@ mod tests {
     proptest! {
         #[test]
         fn matches_itertools_merge_join_by(
-            mut a in prop::collection::vec(0i32..6, 0..25),
-            mut b in prop::collection::vec(0i32..6, 0..25),
+            a in prop::collection::vec(0i32..6, 0..25),
+            b in prop::collection::vec(0i32..6, 0..25),
         ) {
-            a.sort_unstable();
-            b.sort_unstable();
+            // Same greedy algorithm as itertools, so we match it on any input, sorted or not.
             let expected: Vec<EitherOrBoth<i32, i32>> =
                 itertools::merge_join_by(a.clone(), b.clone(), i32::cmp).collect();
             prop_assert_eq!(merged(a, b), expected);
@@ -177,14 +175,12 @@ mod tests {
 
         #[test]
         fn by_variant_matches_itertools_under_a_custom_order(
-            mut a in prop::collection::vec(0i32..6, 0..25),
-            mut b in prop::collection::vec(0i32..6, 0..25),
+            a in prop::collection::vec(0i32..6, 0..25),
+            b in prop::collection::vec(0i32..6, 0..25),
         ) {
-            // A non-natural (descending) comparator exercises the `_by` path itself, not just the
-            // natural-order wrapper.
+            // A non-natural (descending) comparator exercises the `_by` path itself; same greedy
+            // algorithm as itertools, so we match it on any input.
             let rev = |x: &i32, y: &i32| y.cmp(x);
-            a.sort_unstable_by(rev);
-            b.sort_unstable_by(rev);
             let expected: Vec<EitherOrBoth<i32, i32>> =
                 itertools::merge_join_by(a.clone(), b.clone(), rev).collect();
             let got: Vec<EitherOrBoth<i32, i32>> =
