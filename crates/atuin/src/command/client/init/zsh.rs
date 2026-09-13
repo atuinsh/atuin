@@ -1,21 +1,18 @@
-use atuin_client::settings::Tmux;
 use atuin_dotfiles::store::AliasStore;
 use atuin_dotfiles::store::var::VarStore;
 use eyre::Result;
 
 use super::StaticInitOptions;
 
-fn print_tmux_config(tmux: &Tmux) {
-    if tmux.enabled {
-        println!("export ATUIN_TMUX_POPUP_WIDTH='{}'", tmux.width);
-        println!("export ATUIN_TMUX_POPUP_HEIGHT='{}'", tmux.height);
-    } else {
-        println!("export ATUIN_TMUX_POPUP=false");
-    }
+fn print_popup_config(enabled: bool, width: &str, height: &str) {
+    // Keep the configured size available when popup mode is toggled on at runtime.
+    println!("export ATUIN_POPUP_ENABLED={enabled}");
+    println!("export ATUIN_POPUP_WIDTH='{width}'");
+    println!("export ATUIN_POPUP_HEIGHT='{height}'");
 }
 
 pub fn init_static(options: &StaticInitOptions<'_>) {
-    print_tmux_config(options.tmux);
+    print_popup_config(options.popup.enabled, &options.popup.width, &options.popup.height);
     println!("{}", crate::shell::ZSH);
 
     if std::env::var("ATUIN_NOBIND").is_err() {

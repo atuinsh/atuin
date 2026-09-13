@@ -59,16 +59,15 @@ You may also prefer the compact UI mode:
 style = "compact"
 ```
 
-### tmux popup
+### Multiplexer popups
 
-If you use tmux, Atuin can open the search UI in a popup floating above your
-current pane rather than drawing over it:
+If you use tmux or Zellij, Atuin can open the search UI in a popup floating
+above your current pane rather than drawing over it:
 
 ```toml
-[tmux]
+[popup]
 enabled = true
 ```
 
-See the [`tmux` config reference](../configuration/config.md#tmux) for sizing and
-requirements. If you use iTerm2's native tmux integration, keep the popup off —
-it can't display tmux popups.
+See the [popup config reference](../configuration/config.md#popup) for sizing,
+requirements, multiplexer selection, and the iTerm2 native tmux limitation.

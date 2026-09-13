@@ -10,7 +10,7 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
         (options.enable_ctrl_r, options.enable_up_arrow)
     };
 
-    // TODO: tmux popup for Powershell
+    // TODO: multiplexer popup for Powershell
     println!("{}", crate::shell::POWERSHELL);
     println!(
         "Enable-AtuinSearchKeys -CtrlR {} -UpArrow {}",

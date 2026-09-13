@@ -32,7 +32,7 @@ const BIND_UP_ARROW: &str = r"$env.config = (
 )";
 
 pub fn init_static(options: &StaticInitOptions<'_>) {
-    // TODO: tmux popup for Nu
+    // TODO: multiplexer popup for Nu
     println!("{}", crate::shell::NU);
 
     if std::env::var("ATUIN_NOBIND").is_err() {

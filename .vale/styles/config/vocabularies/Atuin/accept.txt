@@ -75,4 +75,5 @@ unhighlighted
 unstyled
 walkthrough
 YOLO
+Zellij
 zinit
