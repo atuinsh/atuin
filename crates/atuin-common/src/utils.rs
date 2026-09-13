@@ -3,7 +3,6 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use base64::prelude::{BASE64_URL_SAFE_NO_PAD, Engine};
-use eyre::{Result, eyre};
 use getrandom::fill;
 use uuid::Uuid;
 
@@ -167,9 +166,17 @@ pub fn get_current_dir() -> String {
     }
 }
 
-pub fn unquote(s: &str) -> Result<String> {
+#[derive(Debug, thiserror::Error)]
+pub enum UnquoteError {
+    #[error("not enough chars")]
+    NotEnoughChars,
+    #[error("unexpected eof, quotes do not match")]
+    MismatchedQuotes,
+}
+
+pub fn unquote(s: &str) -> Result<String, UnquoteError> {
     if s.chars().count() < 2 {
-        return Err(eyre!("not enough chars"));
+        return Err(UnquoteError::NotEnoughChars);
     }
 
     let quote = s.chars().next().unwrap();
@@ -180,7 +187,7 @@ pub fn unquote(s: &str) -> Result<String> {
     }
 
     if s.chars().last().unwrap() != quote {
-        return Err(eyre!("unexpected eof, quotes do not match"));
+        return Err(UnquoteError::MismatchedQuotes);
     }
 
     // removes quote characters

@@ -1233,7 +1233,8 @@ impl Cmd {
 
     fn logs_enabled(&self) -> bool {
         match self {
-            // Enable logs if not invoked from a shell hook.
+            // Enable logs if not invoked from a shell hook. History commands invoked from shell
+            // hooks are performance-sensitive, so we want to skip any unnecessary initialization.
             Self::Start { hook, .. } | Self::End { hook, .. } => !*hook,
             _ => true,
         }

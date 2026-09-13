@@ -5,7 +5,7 @@ use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
 use directories::UserDirs;
-use easy_cast::{CastTo, Floor, Nearest};
+use easy_cast::CastFloat;
 use eyre::{Result, eyre};
 use serde::Deserialize;
 use time::OffsetDateTime;
@@ -108,9 +108,9 @@ impl Importer for Resh {
             };
 
             let try_to_time = |realtime: f64| {
-                let secs: i64 = realtime.try_cast_to(Floor).ok()?;
+                let secs: i64 = realtime.try_cast_floor().ok()?;
                 let nanosecs: i64 =
-                    (realtime.fract() * 1_000_000_000_f64).try_cast_to(Nearest).ok()?;
+                    (realtime.fract() * 1_000_000_000_f64).try_cast_nearest().ok()?;
                 OffsetDateTime::from_timespec(i128::from(secs), i128::from(nanosecs)).ok()
             };
             let start = try_to_time(entry.realtime_before);

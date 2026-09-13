@@ -1,9 +1,8 @@
+use num_traits::FromPrimitive;
 use rmp::Marker;
 pub use rmp::decode::bytes::{Bytes, BytesReadError};
 pub use rmp::decode::{
-    DecodeStringError, NumValueReadError, RmpRead, RmpReadErr, ValueReadError, read_array_len,
-    read_bin_len, read_bool, read_i8, read_i16, read_i32, read_i64, read_int, read_map_len,
-    read_str_from_slice, read_str_len, read_u8, read_u16, read_u32, read_u64,
+    DecodeStringError, NumValueReadError, RmpRead, RmpReadErr, ValueReadError, read_str_from_slice,
 };
 
 /// An error encountered while trying to decode a message with [`rmp`].
@@ -12,10 +11,6 @@ pub use rmp::decode::{
 /// functions. Unlike those types, this type implements [`Display`] with an error message that
 /// indicates which variant the error is ([`rmp`]'s error types are enums; some unconditionally
 /// print a static string and others don't even implement [`Display`] for all `E`).
-///
-/// Conversion to [`eyre::Report`] is supported. This cannot be done by implementing
-/// [`std::error::Error`] because this type is not, in general, `'static`, so a manual
-/// implementation is provided.
 ///
 /// [`Display`]: std::fmt::Display
 #[derive(Debug, derive_more::Display, derive_more::From)]
@@ -66,10 +61,41 @@ impl<E: RmpReadErr> DecodeError<'_, E> {
     }
 }
 
-impl<E: RmpReadErr> From<DecodeError<'_, E>> for eyre::Report {
-    fn from(e: DecodeError<'_, E>) -> Self {
-        eyre::eyre!("{e}")
-    }
+impl<E: RmpReadErr> std::error::Error for DecodeError<'_, E> {}
+
+/// Define wrappers over [`rmp`]'s primitive readers that return [`DecodeError`].
+macro_rules! primitive_readers {
+    ($($(#[$doc:meta])* $name:ident -> $ty:ty;)*) => {$(
+        $(#[$doc])*
+        pub fn $name<'a>(bytes: &mut Bytes<'a>) -> Result<$ty, DecodeError<'a>> {
+            rmp::decode::$name(bytes).map_err(DecodeError::from)
+        }
+    )*};
+}
+
+primitive_readers! {
+    read_u8 -> u8;
+    read_u16 -> u16;
+    read_u32 -> u32;
+    read_u64 -> u64;
+    read_i8 -> i8;
+    read_i16 -> i16;
+    read_i32 -> i32;
+    read_i64 -> i64;
+    read_bool -> bool;
+    read_array_len -> u32;
+    read_map_len -> u32;
+    read_bin_len -> u32;
+    read_str_len -> u32;
+}
+
+/// Read a MessagePack integer, decoding whatever integer marker is present into `T`.
+///
+/// Unlike [`read_u64`] and friends, this accepts any integer encoding.
+pub fn read_int<'a, T: FromPrimitive, R: RmpRead>(
+    reader: &mut R,
+) -> Result<T, DecodeError<'a, R::Error>> {
+    rmp::decode::read_int(reader).map_err(DecodeError::from)
 }
 
 /// Read an owned string from a [`Bytes`] object.
@@ -148,7 +174,7 @@ where
     F: FnMut(&mut R) -> Result<T, E>,
     E: Into<DecodeError<'a, R::Error>>,
 {
-    read_array_impl(reader, read_array_len, read)
+    read_array_impl(reader, rmp::decode::read_array_len, read)
 }
 
 /// Like [`read_array`], but reads into a fixed-size Rust array.
@@ -163,7 +189,7 @@ where
     F: FnMut(&mut R) -> Result<T, E>,
     E: Into<DecodeError<'a, R::Error>>,
 {
-    read_fixed_array_impl(reader, read_array_len, read)
+    read_fixed_array_impl(reader, rmp::decode::read_array_len, read)
 }
 
 /// Read a MessagePack binary array as an iterator of bytes.
@@ -173,7 +199,7 @@ pub fn read_binary_array<'a, R>(
 where
     R: RmpRead,
 {
-    read_array_impl(reader, read_bin_len, |reader| {
+    read_array_impl(reader, rmp::decode::read_bin_len, |reader| {
         reader.read_u8().map_err(ValueReadError::InvalidDataRead)
     })
 }
@@ -187,7 +213,7 @@ pub fn read_fixed_binary_array<'a, const N: usize, R>(
 where
     R: RmpRead,
 {
-    read_fixed_array_impl(reader, read_bin_len, |reader| {
+    read_fixed_array_impl(reader, rmp::decode::read_bin_len, |reader| {
         reader.read_u8().map_err(ValueReadError::InvalidDataRead)
     })
 }

@@ -1,6 +1,7 @@
 //! Unix-specific utilities.
 
 pub mod process;
+pub mod tty;
 
 use std::path::{Path, PathBuf};
 

@@ -355,6 +355,7 @@ async fn run_non_interactive(
     Ok(results)
 }
 
+#[instrument(level = "trace", skip_all, err)]
 pub async fn prepare_index(settings: &Settings) -> Result<()> {
     use engines::AnySearchEngine;
     #[cfg(feature = "daemon")]

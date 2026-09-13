@@ -18,9 +18,9 @@ use std::time::Duration;
 
 use atuin_client::database::{Context, Sqlite};
 use atuin_client::history::store::{HistoryRecord, HistoryStore};
-use atuin_client::history::{History, HistoryId};
+use atuin_client::history::{CommandCapture, History, HistoryId};
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::settings::{FilterMode, Settings};
+use atuin_client::settings::{DiskUsageLimit, FilterMode, Settings};
 use atuin_common::db::sqlite::Sqlite as CommonSqlite;
 use atuin_common::filter::OrFilter;
 use atuin_common::utils::uuid_v7;
@@ -34,6 +34,7 @@ use atuin_daemon::{
 };
 use atuin_domain::record::{CmdOrigin, HostId, RecordTag};
 use corpus::{HistoryGen, Seeded};
+use easy_cast::Conv;
 use hyper_util::rt::TokioIo;
 use tempfile::TempDir;
 use tokio::net::{UnixListener, UnixStream};
@@ -64,6 +65,17 @@ pub fn history_at(cmd: &str, timestamp: time::OffsetDateTime) -> History {
         .author("test-user")
         .build()
         .into()
+}
+
+/// A complete capture holding `output`, in the daemon's domain representation.
+pub fn capture(output: &str) -> CommandCapture {
+    CommandCapture {
+        output_start: output.to_string(),
+        output_end: None,
+        output_observed_bytes: u64::conv(output.len()),
+        terminal_width: 80,
+        terminal_height: 24,
+    }
 }
 
 pub struct TestEnvBuilder {
@@ -133,7 +145,8 @@ impl TestEnvBuilder {
         let history_db = Sqlite::new(&db_path, self.db_timeout).await.unwrap();
         let store = SqliteStore::new(&record_path, self.db_timeout).await.unwrap();
 
-        let output_capture = OutputCapture::open(tmp.path().join("capture")).unwrap();
+        let output_capture =
+            OutputCapture::open(tmp.path().join("capture"), DiskUsageLimit::Unlimited);
         let search_component = SearchComponent::new();
         let index = search_component.index();
         let search_service = search_component.grpc_service();

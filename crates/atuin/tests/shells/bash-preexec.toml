@@ -1,0 +1,6 @@
+shell = "bash"
+rc = ".bashrc"
+script = '''
+eval "$(atuin init bash)"
+PS1="E2E_PROMPT> "
+'''

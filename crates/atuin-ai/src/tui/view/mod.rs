@@ -6,7 +6,7 @@
 //! app's keymap, not here — elements are display-only.
 
 use atuin_common::path::DisplayRichExt;
-use easy_cast::{Cast, CastTo, Conv, Nearest};
+use easy_cast::{Cast, CastFloat, Conv};
 use eye_declare::{
     AnyElement, Element, ElementExt, Fluent, Markdown, MarkdownStyles, Spinner, col, empty,
     markdown, row, spinner, text, viewport,
@@ -790,8 +790,7 @@ pub fn status_bar_view(
         return left.any();
     };
 
-    let filled: usize =
-        ((pct / 100.0).clamp(0.0, 1.0) * f64::conv(USAGE_BAR_WIDTH)).cast_to(Nearest);
+    let filled: usize = ((pct / 100.0).clamp(0.0, 1.0) * f64::conv(USAGE_BAR_WIDTH)).cast_nearest();
     let bar_filled = "█".repeat(filled);
     let bar_empty = "░".repeat(USAGE_BAR_WIDTH - filled);
     let pct_text = format!(" {pct:.0}%");

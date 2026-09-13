@@ -468,7 +468,7 @@ impl SqliteStore {
         all.into_iter()
             .filter(|record| !record.tag.is_plaintext())
             .map(|record| record.decrypt(key))
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(())
     }

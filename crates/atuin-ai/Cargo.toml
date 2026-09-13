@@ -35,7 +35,6 @@ easy-cast = { workspace = true }
 enum_dispatch = { workspace = true }
 eventsource-stream = { workspace = true }
 eye_declare = { workspace = true }
-eye_declare_engine = { workspace = true }
 eyre = { workspace = true }
 fs-err = { workspace = true }
 futures = { workspace = true }
@@ -45,7 +44,6 @@ parking_lot = { workspace = true }
 pulldown-cmark = { workspace = true }
 ratatui = { workspace = true }
 ratatui-core = { workspace = true }
-ratatui-widgets = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
 rmcp = { workspace = true }
@@ -60,7 +58,6 @@ tokio = { workspace = true }
 toml = { workspace = true }
 toml_edit = { workspace = true }
 tracing = { workspace = true }
-tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["ansi", "fmt", "registry", "env-filter"] }
 tree-sitter = { workspace = true, optional = true }
 tree-sitter-bash = { workspace = true, optional = true }
@@ -76,7 +73,7 @@ strum = { workspace = true }
 strum_macros = { workspace = true }
 
 [dev-dependencies]
-pretty_assertions = { workspace = true }
+eye_declare_engine = { workspace = true }
 rstest = { workspace = true }
 
 [lints]

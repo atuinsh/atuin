@@ -18,7 +18,6 @@ atuin-domain = { workspace = true }
 
 derive_more = { workspace = true }
 eyre = { workspace = true }
-pretty_assertions = { workspace = true }
 rmp = { workspace = true }
 semver = { workspace = true }
 sqlx = { workspace = true }

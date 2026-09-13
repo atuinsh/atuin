@@ -509,14 +509,12 @@ impl Keyed<'_> {
         let view = PackManifestRecordView::new(manifest)?;
         let store = &self.engine.store;
 
-        // Skip if we already have the whole range (history is contiguous, packfiles are prefixes).
-        let head = store
-            .last(&RecordSeriesKey::new(view.record.host.id, RecordTag::History))
+        // Skip only if this manifest's whole covered range is already present locally.
+        let first_gap = store
+            .first_gap(&RecordSeriesKey::new(view.record.host.id, RecordTag::History))
             .await
             .map_err(PackfileDownloadError::Store)?;
-        if let Some(head) = head
-            && head.idx >= view.range().end - 1
-        {
+        if first_gap >= view.range().end {
             // Range already available locally. Return the IDs.
             let existing = view
                 .load_encrypted_packed_records(store)
@@ -1639,6 +1637,56 @@ mod packfile_sync_tests {
             .await
             .unwrap();
         assert_eq!(ids, expected_ids, "range already local -> covered ids returned anyway");
+    }
+
+    /// REGRESSION: `expand_manifests` expands a page's manifests concurrently, so a manifest
+    /// covering a *higher* range can commit its history before a *lower* manifest runs its
+    /// already-local check. The lower manifest must NOT read the raised store head as proof its
+    /// own range is present -- its range can still be an unfilled hole below the head, and it must
+    /// download and fill it. The old head-index test (`last().idx >= end - 1`) got this wrong and
+    /// silently dropped the lower range ("packfiles not unpacking"); the `first_gap` check does not.
+    #[rstest]
+    #[tokio::test]
+    async fn download_packed_fills_a_hole_a_higher_range_masks(
+        key: paseto_v4::Key,
+        #[future] server: MockServer,
+    ) {
+        let host = HostId(uuid_v7());
+        // A manifest covering history 0..=2, plus the blob a server would serve and its covered ids.
+        let (manifest, blob, covered_ids) = packed_packfile_with_ids(host, &key, 3).await;
+
+        // The store already holds a *higher* range (idx 3,4,5) but not 0..=2 -- exactly the state a
+        // concurrently-expanded, higher manifest leaves behind. The head is now idx 5, past this
+        // manifest's range end (3), yet [0, 3) is still a hole.
+        let down = memory_store().await;
+        for idx in 3..6 {
+            let record = Record::builder()
+                .host(Host::new(host))
+                .version("v1".into())
+                .tag(RecordTag::History)
+                .idx(idx)
+                .data(DecryptedData(format!("cmd {idx}").into_bytes()))
+                .build()
+                .encrypt(&key);
+            down.push(&record).await.unwrap();
+        }
+
+        let server = server.await;
+        mount_packfile(&server, &manifest, blob).await;
+        let addr: url::Url = server.uri().parse().unwrap();
+
+        let returned = build_engine(mock_client(&addr), down.clone())
+            .await
+            .keyed(&key)
+            .download_packed(&manifest)
+            .await
+            .unwrap();
+
+        assert_eq!(returned, covered_ids, "the covered range's ids must be returned");
+        let history =
+            down.next(&RecordSeriesKey::new(host, RecordTag::History), 0, 6).await.unwrap();
+        assert_eq!(history.len(), 6, "the masked hole (idx 0..=2) must be filled, not skipped");
+        assert_eq!(history[0].clone().decrypt(&key).unwrap().data.0, b"cmd 0");
     }
 
     /// A malformed manifest (unknown version / bad JSON / inverted range) fails at parse before any

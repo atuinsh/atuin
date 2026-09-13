@@ -13,21 +13,74 @@
 //!
 //! ## Commands in flight
 //!
-//! Commands-in-flight are commands which have been started but have just started running. These
-//! commands are uniquely identified by their [`HistoryId`].
+//! Commands-in-flight are commands which have been started but are already running. These commands
+//! are uniquely identified by their [`HistoryId`].
 //!
-//! Commands in flight can be terminated in one of two ways:
+//! Commands in flight can be terminated in one of three ways:
 //!
 //!   - [`HistoryJournal::finish`] marks the command as finished, which will create and store a new
 //!     history entry.
 //!   - [`HistoryJournal::cancel`] cancels the command, disposing of any in-memory resources, but
-//!     without the logic of persisting the history entry.
+//!     without the logic of persisting the history entry. This will discard any captured output
+//!     too.
+//!   - [`HistoryJournal::delete`] deletes a history entry which will dispose of a command, if it is
+//!     in flight, announcing the command as "cancelled". This will discard any captured output
+//!     too.
 //!
 //! ## Streaming
 //!
 //! It is possible to stream events out of [`HistoryJournal`] via [`HistoryJournal::subscribe`]
-//! which returns a new [`futures::Stream`] of [`CmdEvent`] events.
+//! which returns a new [`futures::Stream`] of [`Result<CmdEvent, _>`] events.
+//!
+//! ## Output Capture
+//!
+//! When deleting entries from the history journal, we have to be careful to gracefully handle
+//! output command capture.
+//!
+//! A command can be in one of many states:
+//!
+//!   1. The command is considered "in flight", ie. it has been started but not stopped. In this
+//!      case, it will be a member of the `active_cmds` hashmap.
+//!   2. The command is considered "settled", ie. it has been stopped and committed into the
+//!      database.
+//!   3. A command is deleted, ie. it has been added at some point, and has been subsequently
+//!      deleted through [`HistoryJournal::delete`].
+//!
+//! In all of these states, the note that a caller can request a command can have associated output
+//! capture enter out-of-band, via [`HistoryJournal::register_command_output`]. This **must** be
+//! rejected if the command is deleted.
+//!
+//! ## Deletion
+//!
+//! Deletion is handled through [`HistoryJournal::delete`]. This is a potentially long process and
+//! requires the following invariants be upheld:
+//!
+//!   - During deletion, [`HistoryJournal::register_command_output`] requests going in parallel must
+//!     be rejected.
+//!
+//! ## Concurrency
+//!
+//! Concurrency in this module is quite difficult. Here are the important things to know about:
+//!
+//!   - [`HistoryJournal::deleting`] is a hashmap which refcounts each history ID which is currently
+//!     under the process of deletion. This enables us to reject any command output capture requests
+//!     which run in parallel to a deletion.
+//!   - [`HistoryJournal::lifecycle_mutex`] is a [sharded
+//!     mutex](http://quinnftw.com/sharding-to-reduce-mutex-contention/) which guards [`HistoryId`]s
+//!     as they transition between states. _**Note to maintainers**: This sharded mutex **can
+//!     deadlock** if you are awaiting a [`HistoryId`], while holding the same or another
+//!     [`HistoryId`]. **Always** avoid nesting [`HistoryJournal::lifecycle_mutex`] accesses._
+//!
+//!     This utility is critical as it prevents parallel [`HistoryJournal::cancel`],
+//!     [`HistoryJournal::delete`], [`HistoryJournal::register_command_output`], etc. requests from
+//!     stomping over each other and putting us in an inconsistent state.
+//!   - [`InFlightCmd::finalization_mutex`] is used to prevent the cancellation of a command as it
+//!     is being finalized. It is acquired at the start of [`HistoryJournal::finish`],
+//!     [`HistoryJournal::cancel`] and for each in-flight entry deleted during
+//!     [`HistoryJournal::delete`].
+//!
 
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -36,6 +89,7 @@ use atuin_client::history::store::HistoryStore;
 use atuin_client::history::{CommandCapture, History, HistoryId};
 use atuin_client::packfile;
 use atuin_client::settings::Search;
+use atuin_common::sync::AsyncShardedMutex;
 use atuin_domain::caps::{CapClient, PackfileCap};
 use atuin_domain::record::{RecordId, RecordIdx, RecordSeriesKey, RecordTag};
 use dashmap::DashMap;
@@ -101,8 +155,27 @@ struct InFlightCmd {
     finalization_mutex: Arc<tokio::sync::Mutex<()>>,
 }
 
-/// Registry of in-flight commands which performs output capture, management, storage and
-/// retrieval.
+/// Increments each id's entry in [`HistoryJournal::deleting`] on creation and decrements it on
+/// drop, so `deleting[id] > 0` for exactly as long as some [`HistoryJournal::delete`] is running
+/// against `id`.
+struct DeletingGuard<'s, 'i> {
+    deleting: &'s DashMap<HistoryId, usize>,
+    ids: &'i [HistoryId],
+    marked: usize,
+}
+
+impl Drop for DeletingGuard<'_, '_> {
+    fn drop(&mut self) {
+        for id in &self.ids[..self.marked] {
+            self.deleting.remove_if_mut(id, |_, count| {
+                *count -= 1;
+                *count == 0
+            });
+        }
+    }
+}
+
+/// Registry of in-flight commands which performs output capture, management, storage and retrieval.
 #[derive(Debug)]
 pub struct HistoryJournal {
     /// Capabilities client used for packing.
@@ -134,6 +207,17 @@ pub struct HistoryJournal {
 
     /// Durable store for captured command output.
     output_capture: OutputCapture,
+
+    /// Ids a [`Self::delete`] is currently tearing down, reference-counted across concurrent
+    /// deletes. [`Self::register_command_output`] refuses these, so no capture can land between a
+    /// delete's output removal and its record removal.
+    deleting: DashMap<HistoryId, usize>,
+
+    /// Serialises the lifecycle check + write in [`Self::register_command_output`] against the
+    /// marking in [`Self::delete`] and the teardown in [`Self::cancel`], one shard per history id.
+    ///
+    /// Please see the [moduledoc](self) for a (hopefully better) explanation.
+    lifecycle_mutex: AsyncShardedMutex<HistoryId>,
 }
 
 /// Errors returned by [`HistoryJournal::finish`].
@@ -170,6 +254,17 @@ pub enum CmdCancelError {
     NotFound(HistoryId),
 }
 
+/// Errors returned by [`HistoryJournal::register_command_output`].
+#[derive(Debug, thiserror::Error)]
+pub enum RegisterOutputError {
+    #[error("command {0} is neither in flight nor persisted; refusing its output")]
+    NotLive(HistoryId),
+    #[error("checking the history db failed: {0}")]
+    HistoryDbFailed(eyre::Report),
+    #[error(transparent)]
+    Capture(#[from] CaptureError),
+}
+
 /// Errors returned by [`HistoryJournal::get`].
 #[derive(Debug, thiserror::Error)]
 pub enum GetCmdInFlightError {
@@ -186,6 +281,8 @@ impl HistoryJournal {
         search_index: Arc<tokio::sync::RwLock<SearchIndex>>,
         output_capture: OutputCapture,
     ) -> Self {
+        const DEFAULT_LIFECYCLE_SHARDS: NonZeroUsize = NonZeroUsize::new(64).unwrap();
+
         let (broadcast, _) = broadcast::channel(128);
         Self {
             caps,
@@ -195,6 +292,8 @@ impl HistoryJournal {
             search_index,
             broadcast,
             output_capture,
+            deleting: DashMap::new(),
+            lifecycle_mutex: AsyncShardedMutex::new(DEFAULT_LIFECYCLE_SHARDS),
         }
     }
 
@@ -311,8 +410,10 @@ impl HistoryJournal {
         })
     }
 
-    /// Cancel a command, discarding its in-memory state without persisting a history entry.
+    /// Cancel a command, discarding its in-memory state -- and any output captured for it.
     pub async fn cancel(&self, history_id: HistoryId) -> Result<(), CmdCancelError> {
+        let _lifecycle = self.lifecycle_mutex.lock(&history_id).await;
+
         let lock = self
             .active_cmds
             .get(&history_id)
@@ -320,26 +421,59 @@ impl HistoryJournal {
             .ok_or(CmdCancelError::NotFound(history_id))?;
         let _guard = lock.lock().await;
 
-        let Some((_id, cmd)) = self.active_cmds.remove(&history_id) else {
+        if !self.active_cmds.contains_key(&history_id) {
             return Err(CmdCancelError::NotFound(history_id));
-        };
+        }
+
+        if let Err(err) = self.output_capture.remove([history_id]).await {
+            tracing::error!(
+                %history_id,
+                ?err,
+                "failed to discard the captured output of a cancelled command"
+            );
+        }
+
+        let (_id, cmd) = self
+            .active_cmds
+            .remove(&history_id)
+            .expect("still present: re-checked under the finalization mutex every remover holds");
 
         let _ = self.broadcast.send(CmdEvent::Cancelled(cmd.history));
 
         Ok(())
     }
 
-    /// Delete the given history entries from Atuin's memory completely.
+    /// Delete the given history entries from Atuin's memory completely, including any captured
+    /// output they have, and refuse output for them from then on.
     ///
     /// `search_settings` is needed to rebuild the search index's frecency map after the deletion,
     /// so the swapped-in index has correct rankings immediately rather than after the next refresh.
     ///
     /// Returns how many history entries Atuin forgot.
+    ///
+    /// This function is serialized on the **bundle** of the `ids` you're passing in, eg. if you
+    /// pass `ids = [1, 2]` and then in parallel another delete call with `ids = [2, 3]`, the latter
+    /// will wait for the former request to completely go through.
     pub async fn delete(
         &self,
-        ids: impl IntoIterator<Item = HistoryId>,
+        ids: &[HistoryId],
         search_settings: &Search,
     ) -> Result<usize, CmdDeleteError> {
+        // This delete guard is important since it serializes, per HistoryId, the deletion of
+        // history IDs.
+        //
+        // In effect, if concurrent `delete`s come through here, they'll have to wait on ids.
+        let _delete_guard = self.guard_deleting(ids).await;
+
+        if let Err(err) = self.output_capture.remove(ids.iter().copied()).await {
+            tracing::error!(
+                ?ids,
+                ?err,
+                "failed to remove captured output while deleting history; deleting the entry \
+                 anyway. the orphaned output will be reclaimed by the store's garbage collector",
+            );
+        }
+
         // Remove records from the record store.
         //
         // This returns a tuple where the first element is the total number of history elements that
@@ -355,7 +489,7 @@ impl HistoryJournal {
         let delete_records = async || {
             let mut deleted: usize = 0;
             let mut record_ids = Vec::new();
-            for id in ids {
+            for &id in ids {
                 let mutex = self.active_cmds.get(&id).map(|cmd| cmd.finalization_mutex.clone());
                 let cancelled = if let Some(mutex) = mutex {
                     let _lock = mutex.lock().await;
@@ -420,6 +554,10 @@ impl HistoryJournal {
     async fn reload_search_index(&self, search_settings: &Search) {
         // Clone the shell filter and drop the read guard before the (full) reload, so the scan
         // doesn't hold the search-index lock across the database load.
+        //
+        // TODO(#4052): This is inherently racy -- any add_history operations added between this
+        //              .read() and the subsequent .write() are completely discarded from the new
+        //              index.
         let shells = self.search_index.read().await.shells.clone();
         let rebuilt = SearchIndex::from_db(shells, &self.history_db, search_settings).await;
         match rebuilt {
@@ -440,13 +578,62 @@ impl HistoryJournal {
         }
     }
 
-    /// Store a command's captured output. Errors if an output already exists for this id.
+    /// Claim `ids` for a running delete. See [`DeletingGuard`].
+    async fn guard_deleting<'i>(&self, ids: &'i [HistoryId]) -> DeletingGuard<'_, 'i> {
+        let mut marks = DeletingGuard {
+            deleting: &self.deleting,
+            ids,
+            marked: 0,
+        };
+
+        for &id in ids {
+            let _lifecycle = self.lifecycle_mutex.lock(&id).await;
+            *self.deleting.entry(id).or_insert(0) += 1;
+            marks.marked += 1;
+        }
+
+        marks
+    }
+
+    /// Store a command's captured output.
+    ///
+    /// If the output is received for an unknown command, this returns a
+    /// [`RegisterOutputError::NotLive`].
     pub async fn register_command_output(
         &self,
         id: HistoryId,
         capture: CommandCapture,
-    ) -> Result<(), CaptureError> {
-        self.output_capture.capture(id, capture).await
+    ) -> Result<(), RegisterOutputError> {
+        let _lifecycle = self.lifecycle_mutex.lock(&id).await;
+
+        if self.deleting.contains_key(&id) {
+            return Err(RegisterOutputError::NotLive(id));
+        }
+
+        // Resolve the command backing this id: an in-flight entry wins, otherwise the
+        // (non-deleted) history row. `None` means the command is gone or already deleted.
+        let command = if let Some(cmd) = self.active_cmds.get(&id) {
+            Some(cmd.history.command.clone())
+        } else {
+            self.history_db
+                .load(id)
+                .await
+                .map_err(|e| RegisterOutputError::HistoryDbFailed(e.into()))?
+                .filter(|h| h.deleted_at.is_none())
+                .map(|h| h.command)
+        };
+
+        let Some(command) = command else {
+            return Err(RegisterOutputError::NotLive(id));
+        };
+
+        // Never persist output for commands that may carry secrets.
+        if atuin_common::secrets::output_unsafe(&command) {
+            return Ok(());
+        }
+
+        self.output_capture.capture(id, capture).await?;
+        Ok(())
     }
 
     /// Retrieve a command's captured output, if any.
@@ -464,5 +651,62 @@ impl HistoryJournal {
     #[must_use]
     pub fn subscribe(&self) -> BroadcastStream<CmdEvent> {
         BroadcastStream::new(self.broadcast.subscribe())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use atuin_client::record::sqlite_store::SqliteStore;
+    use atuin_common::encryption::paseto_v4;
+    use atuin_common::filter::OrFilter;
+    use atuin_common::utils::uuid_v7;
+    use atuin_domain::record::{CmdOrigin, HostId};
+    use tokio::sync::RwLock;
+
+    use super::*;
+
+    /// A journal wired to real temp stores, so `finish`/`delete` run for real against a
+    /// caller-chosen output-capture backend. The returned `TempDir` must outlive the journal.
+    async fn journal(output_capture: OutputCapture) -> (HistoryJournal, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let timeout = Duration::from_secs(5);
+        let history_db =
+            HistoryDatabase::new(tmp.path().join("history.db"), timeout).await.unwrap();
+        let store = SqliteStore::new(tmp.path().join("records.db"), timeout).await.unwrap();
+        let history_store = HistoryStore::new(store, HostId(uuid_v7()), paseto_v4::Key::generate());
+        let search_index = Arc::new(RwLock::new(SearchIndex::new(OrFilter::all())));
+        let caps = CapClient::new("http://127.0.0.1:1".parse().unwrap(), reqwest::Client::new());
+        let journal =
+            HistoryJournal::new(caps, history_store, history_db, search_index, output_capture);
+        (journal, tmp)
+    }
+
+    fn entry(cmd: &str) -> History {
+        History::daemon()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command(cmd)
+            .cwd("/tmp")
+            .session(uuid_v7().as_simple().to_string())
+            .cmd_origin(CmdOrigin::try_from("test-host:test-user").unwrap())
+            .shell("bash")
+            .author("test-user")
+            .build()
+            .into()
+    }
+
+    /// A broken output store must not sink a deletion: the entry the user asked to forget is still
+    /// removed rather than the whole delete being refused.
+    #[tokio::test]
+    async fn delete_survives_a_broken_output_store() {
+        let (journal, _tmp) = journal(OutputCapture::failing()).await;
+        let id = journal.start_cmd(entry("echo goodbye"));
+        journal.finish(id, 0, Duration::from_millis(1)).await.unwrap();
+
+        let deleted = journal
+            .delete(&[id], &Search::default())
+            .await
+            .expect("a failed output removal must not fail the whole delete");
+        assert_eq!(deleted, 1);
+        assert!(journal.history_db.load(id).await.unwrap().is_none());
     }
 }

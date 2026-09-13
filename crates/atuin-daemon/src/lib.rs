@@ -28,9 +28,11 @@ pub use daemon::{AnyComponent, Daemon, DaemonBuilder, DaemonHandle};
 pub use events::DaemonEvent;
 pub use history_journal::{
     CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, CmdRebuildError, FinishedCmd,
-    GetCmdInFlightError, HistoryJournal,
+    GetCmdInFlightError, HistoryJournal, RegisterOutputError,
 };
-pub use output_capture::OutputCapture;
+pub use output_capture::{
+    BackendKind, CaptureError, DeleteOutputError, GetOutputError, OutputCapture,
+};
 
 /// Boot the daemon using the new component-based architecture.
 ///
@@ -63,7 +65,10 @@ pub async fn boot(
     let host_id = Settings::host_id().await?;
     let history_store =
         HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
-    let output_capture = OutputCapture::open(Settings::command_capture_dir())?;
+    let output_capture = match settings.output.limits() {
+        Some(limits) => OutputCapture::open(Settings::command_capture_dir(), limits.max_disk_usage),
+        None => OutputCapture::nop(),
+    };
     let journal = Arc::new(HistoryJournal::new(
         handle.caps().clone(),
         history_store,

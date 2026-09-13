@@ -1,0 +1,12 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 8088cdc05a016f91f42cb9cdcc58796072ac6f7f475ab98336f7eaeff116774d # shrinks to (limit, writes) = (Limit { start: 0, end: 6 }, ["A"])
+cc 0ea043e8a717bd71d16cd5a376813613324abf33714fa4cc63cb6570f437f4b0 # shrinks to (limit, writes) = (Limit { start: 6, end: 3 }, ["ࠀ", "𐀀"])
+cc 15a1aade5e4e5c7e0ad2f6388ca8b015c178ebdcd8ed6d14ad0c36da039bd540 # shrinks to (limit, writes) = (Limit { start: 0, end: 0 }, ["¡", ""])
+cc b08b4aaca1ad640f104b496a0163e0fd7f01f3491a0cb3e09807d3b7af7896ed # shrinks to (limit, writes) = (Limit { start: 0, end: 4 }, ["\0𐀀"])
+cc 9ebdbdea4cee11d4841ac125a21609153c8075e2071c6f588add0a7fd4b3e69c # shrinks to (limit, writes) = (Limit { start: 0, end: 0 }, ["¡"])
+cc 8f6614b9f2928d62ec70783b56b2f6e72f8540b87183e2e984ddbb4eaf4949f5 # shrinks to (limit, writes) = (Limit { start: 0, end: 0 }, [" "])

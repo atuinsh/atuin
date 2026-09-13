@@ -14,8 +14,9 @@ use atuin_client::database::Sqlite;
 use atuin_client::history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, KNOWN_AGENTS};
 use eyre::Result;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, ContentBlock, ErrorData, Implementation,
-    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
+    Implementation, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
+    ToolAnnotations,
 };
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler, ServiceExt};
@@ -83,7 +84,7 @@ impl ServerHandler for AtuinMcp {
         &self,
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
+    ) -> Result<CallToolResponse, ErrorData> {
         let arguments = Value::Object(request.arguments.unwrap_or_default());
         let outcome = match request.name.as_ref() {
             "atuin_history" => {
@@ -103,7 +104,7 @@ impl ServerHandler for AtuinMcp {
             }
         };
 
-        Ok(match outcome {
+        let result = match outcome {
             ToolOutcome::Success(text) => CallToolResult::success(vec![ContentBlock::text(text)]),
             ToolOutcome::Error(text) => CallToolResult::error(vec![ContentBlock::text(text)]),
             // The atuin tools only produce Success/Error; fall back to the
@@ -111,7 +112,8 @@ impl ServerHandler for AtuinMcp {
             outcome @ ToolOutcome::Structured { .. } => {
                 CallToolResult::success(vec![ContentBlock::text(outcome.format_for_llm(None))])
             }
-        })
+        };
+        Ok(result.into())
     }
 }
 

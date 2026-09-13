@@ -63,8 +63,6 @@ tracing-futures = { workspace = true }
 typed-builder = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-whoami = { workspace = true }
-zeroize = { workspace = true }
 
 # encryption
 rusty_paserk = { workspace = true }
@@ -74,7 +72,6 @@ rusty_paseto = { workspace = true }
 indicatif = { workspace = true }
 reqwest = { workspace = true, optional = true }
 reqwest-middleware = { workspace = true, optional = true, features = ["json", "query"] }
-tiny-bip39 = { workspace = true }
 
 # theme
 crossterm = { workspace = true, features = ["serde"] }
@@ -84,7 +81,6 @@ strum_macros = { workspace = true }
 
 # packfile
 zstd = { workspace = true }
-serde_bytes = { workspace = true }
 
 [dev-dependencies]
 # This crate's tests require the `test-utils` feature in atuin-common.

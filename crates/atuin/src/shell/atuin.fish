@@ -4,15 +4,28 @@ if not set -q ATUIN_SESSION; or test "$ATUIN_SHLVL" != "$SHLVL"
 end
 set --erase ATUIN_HISTORY_ID
 
+if not set -q __atuin_pty_proxy_owns_tty
+    # The pty-proxy preamble also sets this variable, but make sure it's set here,
+    # so a manually started proxy still functions when `pty_proxy.enabled` is false.
+    set -g __atuin_pty_proxy_owns_tty 0
+    if set -q ATUIN_PTY_PROXY_ACTIVE
+        set -l __atuin_pty_proxy_answer (atuin __internal pty-proxy-active 2>/dev/null)
+        set -l __atuin_pty_proxy_status $status
+        if test $__atuin_pty_proxy_status -eq 0; and test "$__atuin_pty_proxy_answer" = 1
+            set -g __atuin_pty_proxy_owns_tty 1
+        end
+    end
+end
+
 function _atuin_osc133_command_executed
-    set -q ATUIN_PTY_PROXY_ACTIVE; or return
+    test "$__atuin_pty_proxy_owns_tty" = 1; or return
     test -n "$ATUIN_HISTORY_ID"; or return
 
     printf '\033]133;C\a'
 end
 
 function _atuin_osc133_command_finished --argument-names exit_code
-    set -q ATUIN_PTY_PROXY_ACTIVE; or return
+    test "$__atuin_pty_proxy_owns_tty" = 1; or return
     test -n "$ATUIN_HISTORY_ID"; or return
 
     printf '\033]133;D;%s;history_id=%s\a' "$exit_code" "$ATUIN_HISTORY_ID"

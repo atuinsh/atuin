@@ -91,14 +91,15 @@ fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy, prev_umask: Mode) {
     let child_umask = Some(u32::from(prev_umask.bits()));
 
     #[cfg(feature = "daemon")]
-    proxy.run(semantic_command_capture_sink(), child_umask);
+    proxy.run(semantic_command_capture_config(), child_umask);
 
     #[cfg(not(feature = "daemon"))]
     proxy.run(None, child_umask);
 }
 
 #[cfg(all(feature = "daemon", feature = "pty-proxy", unix))]
-fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink> {
+fn semantic_command_capture_config() -> Option<atuin_pty_proxy::CaptureConfig> {
+    use std::borrow::Cow;
     use std::sync::mpsc;
 
     if is_truthy_env("ATUIN_TERMINAL") {
@@ -106,6 +107,8 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
     }
 
     let settings = atuin_client::settings::Settings::new().ok()?;
+    let max_output_bytes =
+        usize::try_from(settings.output.limits()?.max_output_size.as_u64()).unwrap_or(usize::MAX);
     let (tx, rx) = mpsc::sync_channel::<(
         atuin_client::history::HistoryId,
         atuin_pty_proxy::CommandCapture,
@@ -122,23 +125,49 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
             };
 
             while let Ok((history_id, capture)) = rx.recv() {
-                let _ = client
+                // Output can carry credentials the command line never showed, e.g. `cat .env`.
+                // Swap the string only when something was actually taken out, so that clean
+                // output -- nearly all of it -- reaches the daemon without being copied.
+                let redact = |output: &mut String| {
+                    if settings.secrets_filter
+                        && let Cow::Owned(redacted) = atuin_common::secrets::redact(output)
+                    {
+                        *output = redacted;
+                    }
+                };
+
+                let mut output_start = capture.output_start;
+                redact(&mut output_start);
+                let mut output_end = capture.output_end;
+                if let Some(output_end) = output_end.as_mut() {
+                    redact(output_end);
+                }
+
+                if let Err(err) = client
                     .register_command_output(
                         history_id,
-                        capture.output,
-                        capture.output_truncated,
+                        output_start,
+                        output_end,
                         capture.output_observed_bytes,
                         capture.terminal_width,
                         capture.terminal_height,
                     )
-                    .await;
+                    .await
+                {
+                    tracing::debug!(%history_id, ?err, "could not record command output; dropping it");
+                }
             }
         });
     });
 
-    Some(Box::new(move |history_id, capture| {
+    let sink: atuin_pty_proxy::CommandCaptureSink = Box::new(move |history_id, capture| {
         let _ = tx.try_send((history_id, capture));
-    }))
+    });
+
+    Some(atuin_pty_proxy::CaptureConfig {
+        sink,
+        max_output_bytes,
+    })
 }
 
 #[cfg(all(feature = "daemon", feature = "pty-proxy", unix))]

@@ -152,25 +152,15 @@ message TailHistoryReply {
 
 // Some metadata associated with every command capture.
 message CommandCaptureMeta {
-  // Whether the `output` field is considered truncated.
-  //
-  // The field is considered truncated iff `output` would have exceeded a maximal limit.
-  bool output_truncated = 1;
   // The total number of bytes that were pushed to the virtual terminal.
   //
-  // Note that there's an easy misconception to make: `output_truncated := output.len() !=
-  // output_observed_bytes`. Unfortunately, this is **NOT** true.
-  //
-  // `output_observed_bytes` counts the total number of bytes that were pushed to the virtual
-  // terminal **BEFORE** rasterizing the terminal.
-  //
-  // Think about this example -- a command outputs "hello\rhello\rhello\rhello". What is rendered?
-  // "hello". `output_observed_bytes` will be 23 -- ie. how many bytes the terminal saw.
-  uint64 output_observed_bytes = 2;
+  // This is not the same as the number of bytes in the *rendered* output --
+  // this byte count happens *before* rendering.
+  uint64 output_observed_bytes = 1;
   // The width of the terminal when the command finished.
-  uint32 terminal_width = 3;
+  uint32 terminal_width = 2;
   // The height of the terminal when the command finished.
-  uint32 terminal_height = 4;
+  uint32 terminal_height = 3;
 }
 
 // A completed command's captured output.
@@ -179,9 +169,10 @@ message CommandCapture {
   //
   // Note this output is mostly *VISIBLE* output. Many characters are stripped, including, but not
   // limited to `\r` characters, some control bytes and newlines trimmed at the end of the output.
-  string output = 1;
+  string output_start = 1;
+  optional string output_end = 2;
   // Metadata on this particular command capture. Logically required.
-  CommandCaptureMeta meta = 2;
+  CommandCaptureMeta meta = 3;
 }
 
 // Request which associates a command capture with a history ID.
@@ -228,13 +219,20 @@ message GetCommandOutputResponse {
   // `sum(chunk.line_range.len() for chunk in chunks) <= total_lines`.
   uint64 total_lines = 3;
   CommandCaptureMeta meta = 4;
+  // Whether the output was truncated and a truncated portion of the output
+  // was requested.
+  bool truncated = 5;
 }
 
 // Encodes one single chunk of an output.
 message OutputChunk {
-  // The already-resolved, non-negative range of lines that this content encapsulates.
-  // Logically required.
-  common.UnsignedIdxRange line_range = 1;
+  // The already-resolved, inclusive range of lines that this content encapsulates. Logically
+  // required.
+  //
+  // Non-negative line numbers are 0-offset from the start of the output. Negative line numbers
+  // count backward from the end (-1 is the last line); these indicate lines taken from the end
+  // chunk of an output whose middle was discarded.
+  common.PyStyleIdxRange line_range = 1;
   // The content of the chunk itself.
   string content = 2;
 }

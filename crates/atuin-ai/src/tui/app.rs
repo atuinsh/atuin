@@ -1017,6 +1017,7 @@ impl App for AiApp {
                     InputEvent::Paste(s) => {
                         self.input.get_mut().insert_str(s);
                     }
+                    _ => {}
                 }
                 self.refresh_slash();
             }

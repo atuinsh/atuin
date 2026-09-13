@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 pub use atuin_common::encryption::paseto_v4::{self, EncryptedData};
 use easy_cast::Conv;
-use eyre::WrapErr;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
@@ -188,12 +187,14 @@ impl Record<DecryptedData> {
 }
 
 impl Record<paseto_v4::EncryptedData> {
-    pub fn decrypt(&self, key: &paseto_v4::Key) -> eyre::Result<Record<DecryptedData>> {
+    pub fn decrypt(
+        &self,
+        key: &paseto_v4::Key,
+    ) -> Result<Record<DecryptedData>, paseto_v4::DecryptionError> {
         let ad = serde_json::to_string(&AdditionalData::from(self))
             .expect("could not serialize implicit assertions");
         let assertion = paseto_v4::ImplicitAssertion::from(ad.as_str());
-        let data = paseto_v4::decrypt_sync(&self.data, Some(assertion), key)
-            .context("could not decrypt entry")?;
+        let data = paseto_v4::decrypt_sync(&self.data, Some(assertion), key)?;
         Ok(self.with_data_clone(data.into()))
     }
 }

@@ -3,10 +3,9 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use atuin_common::db;
-use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::record::CmdOrigin;
 use directories::BaseDirs;
-use easy_cast::{CastTo, Conv, Trunc};
+use easy_cast::{CastFloat, Conv};
 use eyre::{Result, eyre};
 use futures::TryStreamExt;
 use sqlx::sqlite::SqlitePool;
@@ -33,9 +32,9 @@ struct HistDbEntry {
 impl HistDbEntry {
     fn into_hist_with_cmd_origin(self, cmd_origin: CmdOrigin) -> History {
         let timestamp = (self.tsb * 1_000_000_000_f64)
-            .try_cast_to(Trunc)
+            .try_cast_trunc()
             .ok()
-            .and_then(|nanos: i128| OffsetDateTime::from_unix_nanos(nanos).ok())
+            .and_then(|nanos: i128| OffsetDateTime::from_unix_timestamp_nanos(nanos).ok())
             .unwrap_or(OffsetDateTime::UNIX_EPOCH);
 
         #[expect(
@@ -50,7 +49,7 @@ impl HistDbEntry {
         let session_ts = Timestamp::from_unix(NoContext, session_ts_seconds, session_ts_nanos);
         let session_id = Uuid::new_v7(session_ts).to_string();
         let duration = ((self.tse - self.tsb) * 1_000_000_000_f64)
-            .try_cast_to(Trunc)
+            .try_cast_trunc()
             .unwrap_or(HistoryImported::DEFAULT_DURATION);
 
         History::import()

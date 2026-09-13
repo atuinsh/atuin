@@ -18,7 +18,6 @@ async-trait = { workspace = true }
 axum = { workspace = true, optional = true }
 derive_more = { workspace = true }
 easy-cast = { workspace = true }
-eyre = { workspace = true }
 http = { workspace = true }
 parking_lot = { workspace = true }
 reqwest = { workspace = true }

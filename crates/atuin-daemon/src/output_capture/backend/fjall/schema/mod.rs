@@ -8,13 +8,13 @@
 //!  - Versioning the [`Schema::Key`] and [`Schema::Value`] types, which are the types that are
 //!    directly inserted into [`fjall`].
 //!
-//! There is currently only one implementation of this schema -- [`SchemaV1`]. This trait is,
+//! There is currently only one implementation of this schema -- [`SchemaV2`]. This trait is,
 //! however, quite useful as it enables us to upgrade between schemas. Please be very careful
 //! deleting it, even though there is only one implementation.
 
-mod v1;
+mod v2;
 use fjall::{UserKey, UserValue};
-pub use v1::Schema as SchemaV1;
+pub use v2::Schema as SchemaV2;
 
 /// See the moduledoc.
 pub trait Schema {
