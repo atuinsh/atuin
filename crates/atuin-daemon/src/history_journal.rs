@@ -98,7 +98,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tracing::field::Empty;
 use tracing::{Instrument, Span};
 
-use crate::output_capture::{CaptureError, GetOutputError, OutputCapture};
+use crate::output_capture::{CaptureError, GetOutputError, OutputCaptureEngine};
 use crate::search::SearchIndex;
 
 /// An event describing a change in the lifecycle of a command.
@@ -206,7 +206,7 @@ pub struct HistoryJournal {
     broadcast: broadcast::Sender<CmdEvent>,
 
     /// Durable store for captured command output.
-    output_capture: OutputCapture,
+    output_capture: OutputCaptureEngine,
 
     /// Ids a [`Self::delete`] is currently tearing down, reference-counted across concurrent
     /// deletes. [`Self::register_command_output`] refuses these, so no capture can land between a
@@ -279,7 +279,7 @@ impl HistoryJournal {
         history_store: HistoryStore,
         history_db: HistoryDatabase,
         search_index: Arc<tokio::sync::RwLock<SearchIndex>>,
-        output_capture: OutputCapture,
+        output_capture: OutputCaptureEngine,
     ) -> Self {
         const DEFAULT_LIFECYCLE_SHARDS: NonZeroUsize = NonZeroUsize::new(64).unwrap();
 
@@ -667,7 +667,7 @@ mod tests {
 
     /// A journal wired to real temp stores, so `finish`/`delete` run for real against a
     /// caller-chosen output-capture backend. The returned `TempDir` must outlive the journal.
-    async fn journal(output_capture: OutputCapture) -> (HistoryJournal, tempfile::TempDir) {
+    async fn journal(output_capture: OutputCaptureEngine) -> (HistoryJournal, tempfile::TempDir) {
         let tmp = tempfile::tempdir().unwrap();
         let timeout = Duration::from_secs(5);
         let history_db =
@@ -698,7 +698,7 @@ mod tests {
     /// removed rather than the whole delete being refused.
     #[tokio::test]
     async fn delete_survives_a_broken_output_store() {
-        let (journal, _tmp) = journal(OutputCapture::failing()).await;
+        let (journal, _tmp) = journal(OutputCaptureEngine::failing()).await;
         let id = journal.start_cmd(entry("echo goodbye"));
         journal.finish(id, 0, Duration::from_millis(1)).await.unwrap();
 
