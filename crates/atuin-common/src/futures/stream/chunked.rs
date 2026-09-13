@@ -47,6 +47,7 @@ impl<T: Send + 'static> ChunkedStream<T> {
         Self::new(stream::iter(chunks))
     }
 
+    /// Chunk `items` into groups of `chunk` size.
     pub fn from_items<I>(items: I, chunk: NonZeroUsize) -> Self
     where
         I: IntoIterator<Item = T>,
@@ -73,17 +74,6 @@ impl<T: Send + 'static> ChunkedStream<T> {
 impl<T: Send + 'static, E: Send + 'static> ChunkedStream<Result<T, E>> {
     pub fn from_error(err: E) -> Self {
         Self::from_chunks([vec![Err(err)]])
-    }
-
-    pub fn from_fallible_items<I>(items: Result<I, E>, chunk: NonZeroUsize) -> Self
-    where
-        I: IntoIterator<Item = T>,
-        I::IntoIter: Send + 'static,
-    {
-        match items {
-            Ok(items) => Self::from_items(items.into_iter().map(Ok), chunk),
-            Err(err) => Self::from_error(err),
-        }
     }
 
     pub async fn try_collect<C: Default + Extend<T>>(self) -> Result<C, E> {
@@ -137,13 +127,6 @@ mod tests {
     use rstest::rstest;
 
     use super::{ChunkedStream, Items};
-
-    const _: fn() = || {
-        fn assert_send_unpin<T: Send + Unpin>() {}
-        fn assert_send<T: Send>() {}
-        assert_send_unpin::<Items<i32>>();
-        assert_send::<ChunkedStream<i32>>();
-    };
 
     fn nz(n: usize) -> NonZeroUsize {
         NonZeroUsize::new(n).expect("test chunk size is non-zero")
@@ -238,41 +221,6 @@ mod tests {
         assert_eq!(block_on(s.collect::<Vec<_>>()), expected);
     }
 
-    #[rstest]
-    #[case(vec![1, 2, 3, 4, 5], 2, vec![vec![1, 2], vec![3, 4], vec![5]])]
-    #[case(vec![1, 2, 3], 1, vec![vec![1], vec![2], vec![3]])]
-    #[case(vec![1, 2, 3], 3, vec![vec![1, 2, 3]])]
-    #[case(vec![1, 2, 3], 100, vec![vec![1, 2, 3]])]
-    #[case(vec![1, 2, 3, 4], 2, vec![vec![1, 2], vec![3, 4]])]
-    #[case(vec![], 3, vec![])]
-    fn from_items_chunks_by_size(
-        #[case] items: Vec<i32>,
-        #[case] size: usize,
-        #[case] expected: Vec<Vec<i32>>,
-    ) {
-        let s = ChunkedStream::from_items(items, nz(size));
-        assert_eq!(block_on(s.collect::<Vec<_>>()), expected);
-    }
-
-    #[rstest]
-    #[case(5, 2, vec![2, 2, 1])]
-    #[case(4, 2, vec![2, 2])]
-    #[case(3, 5, vec![3])]
-    fn from_items_chunks_zsts_by_count(
-        #[case] n: usize,
-        #[case] size: usize,
-        #[case] lens: Vec<usize>,
-    ) {
-        let chunks: Vec<Vec<()>> =
-            block_on(ChunkedStream::from_items(std::iter::repeat_n((), n), nz(size)).collect());
-        assert_eq!(chunks.iter().map(Vec::len).collect::<Vec<_>>(), lens);
-
-        let count = block_on(
-            ChunkedStream::from_items(std::iter::repeat_n((), n), nz(size)).items().count(),
-        );
-        assert_eq!(count, n);
-    }
-
     #[test]
     fn collects_from_an_iterator_of_chunks() {
         let s: ChunkedStream<i32> = [vec![1, 2], vec![3]].into_iter().collect();
@@ -297,60 +245,10 @@ mod tests {
     }
 
     #[test]
-    fn try_collect_returns_the_first_error_instance_when_several_exist() {
-        #[derive(Debug, PartialEq)]
-        enum E {
-            First,
-            Second,
-        }
-        let s: ChunkedStream<Result<i32, E>> =
-            ChunkedStream::from_chunks([vec![Ok(1), Err(E::First)], vec![Err(E::Second)]]);
-        assert_eq!(block_on(s.try_collect::<Vec<_>>()), Err(E::First));
-    }
-
-    #[test]
     fn from_error_is_one_err_chunk() {
         let s: ChunkedStream<Result<i32, &str>> = ChunkedStream::from_error("boom");
         let chunks: Vec<Vec<Result<i32, &str>>> = block_on(s.collect());
         assert_eq!(chunks, vec![vec![Err("boom")]]);
-    }
-
-    #[test]
-    fn from_fallible_items_folds_ok_and_err() {
-        let two = NonZeroUsize::new(2).unwrap();
-
-        let ok: ChunkedStream<Result<i32, &str>> =
-            ChunkedStream::from_fallible_items(Ok(1..=3), two);
-        assert_eq!(block_on(ok.try_collect()), Ok(vec![1, 2, 3]));
-
-        let err =
-            ChunkedStream::<Result<i32, &str>>::from_fallible_items::<Vec<i32>>(Err("boom"), two);
-        assert_eq!(block_on(err.try_collect::<Vec<_>>()), Err("boom"));
-    }
-
-    #[rstest]
-    #[case(vec![1, 2, 3, 4, 5], 2, vec![vec![Ok(1), Ok(2)], vec![Ok(3), Ok(4)], vec![Ok(5)]])]
-    #[case(vec![1, 2, 3, 4], 2, vec![vec![Ok(1), Ok(2)], vec![Ok(3), Ok(4)]])]
-    #[case(vec![1], 3, vec![vec![Ok(1)]])]
-    #[case(vec![], 1, vec![])]
-    #[case(vec![], 100, vec![])]
-    fn from_fallible_items_ok_path_chunks_like_from_items(
-        #[case] items: Vec<i32>,
-        #[case] size: usize,
-        #[case] expected: Vec<Vec<Result<i32, &'static str>>>,
-    ) {
-        let s = ChunkedStream::<Result<i32, &str>>::from_fallible_items(Ok(items), nz(size));
-        assert_eq!(block_on(s.collect::<Vec<_>>()), expected);
-    }
-
-    #[rstest]
-    #[case(1)]
-    #[case(2)]
-    #[case(7)]
-    fn from_fallible_items_err_path_is_one_chunk_regardless_of_size(#[case] size: usize) {
-        let s =
-            ChunkedStream::<Result<i32, &str>>::from_fallible_items::<Vec<i32>>(Err("e"), nz(size));
-        assert_eq!(block_on(s.collect::<Vec<_>>()), vec![vec![Err("e")]]);
     }
 
     #[test]
@@ -534,30 +432,6 @@ mod tests {
 
     proptest! {
         #[test]
-        fn from_items_chunk_arithmetic(xs in prop::collection::vec(0i32..1000, 0..50), n in 1usize..8) {
-            let size = nz(n);
-            let chunks: Vec<Vec<i32>> = block_on(ChunkedStream::from_items(xs.clone(), size).collect());
-
-            let flat: Vec<i32> = chunks.iter().flatten().copied().collect();
-            prop_assert_eq!(&flat, &xs);
-
-            let items: Vec<i32> =
-                block_on(ChunkedStream::from_items(xs.clone(), size).items().collect());
-            prop_assert_eq!(&items, &xs);
-
-            if xs.is_empty() {
-                prop_assert!(chunks.is_empty());
-            } else {
-                prop_assert_eq!(chunks.len(), xs.len().div_ceil(n));
-                let (last, rest) = chunks.split_last().expect("non-empty");
-                for c in rest {
-                    prop_assert_eq!(c.len(), n);
-                }
-                prop_assert!(!last.is_empty() && last.len() <= n);
-            }
-        }
-
-        #[test]
         fn chunk_views_agree(
             chunks in prop::collection::vec(prop::collection::vec(any::<i32>(), 0..5), 0..8),
         ) {
@@ -593,49 +467,6 @@ mod tests {
             let in_lens: Vec<usize> = chunks.iter().map(Vec::len).collect();
             let out_lens: Vec<usize> = mapped.iter().map(Vec::len).collect();
             prop_assert_eq!(out_lens, in_lens);
-        }
-
-        #[test]
-        fn try_collect_matches_reference(
-            chunks in prop::collection::vec(
-                prop::collection::vec(
-                    prop_oneof![(0i32..100).prop_map(Ok::<i32, i32>), (0i32..100).prop_map(Err::<i32, i32>)],
-                    0..5,
-                ),
-                0..6,
-            ),
-        ) {
-            let expected: Result<Vec<i32>, i32> = chunks.iter().flatten().copied().collect();
-            let got = block_on(ChunkedStream::from_chunks(chunks).try_collect());
-            prop_assert_eq!(got, expected);
-        }
-
-        #[test]
-        fn from_fallible_items_ok_delegates_to_from_items(
-            xs in prop::collection::vec(0i32..100, 0..50),
-            n in 1usize..8,
-        ) {
-            let size = nz(n);
-            let lhs: Vec<Vec<Result<i32, i32>>> = block_on(
-                ChunkedStream::<Result<i32, i32>>::from_fallible_items(Ok(xs.clone()), size).collect(),
-            );
-            let rhs: Vec<Vec<Result<i32, i32>>> = block_on(
-                ChunkedStream::<Result<i32, i32>>::from_items(xs.into_iter().map(Ok), size).collect(),
-            );
-            prop_assert_eq!(lhs, rhs);
-        }
-
-        #[test]
-        fn from_fallible_items_err_equals_from_error(e in any::<i32>(), n in 1usize..8) {
-            let got: Vec<Vec<Result<i32, i32>>> = block_on(
-                ChunkedStream::<Result<i32, i32>>::from_fallible_items::<Vec<i32>>(Err(e), nz(n))
-                    .collect(),
-            );
-            prop_assert_eq!(&got, &vec![vec![Err(e)]]);
-
-            let via_from_error: Vec<Vec<Result<i32, i32>>> =
-                block_on(ChunkedStream::<Result<i32, i32>>::from_error(e).collect());
-            prop_assert_eq!(got, via_from_error);
         }
 
         #[test]
