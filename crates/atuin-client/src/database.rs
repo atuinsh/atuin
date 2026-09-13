@@ -34,9 +34,11 @@ pub struct Context {
 
 #[derive(Clone, Copy, Default)]
 pub struct OptFilters<'a> {
-    pub exit: Option<i64>,
-    pub exclude_exit: Option<i64>,
-    /// Only commands that recorded a non-zero exit. Unlike `exclude_exit: 0`,
+    /// Include any of these exit codes. An empty slice means no restriction.
+    pub exit: &'a [i64],
+    /// Exclude all of these exit codes. An empty slice means no restriction.
+    pub exclude_exit: &'a [i64],
+    /// Only commands that recorded a non-zero exit. Unlike `exclude_exit: &[0]`,
     /// this also skips the `exit = -1` sentinel rows for commands still
     /// running (or whose end hook never fired).
     pub only_failed: bool,
@@ -764,9 +766,16 @@ impl Sqlite {
             sql.and_where("command regexp ?".bind(&regex));
         }
 
-        filter_options.exit.map(|exit| sql.and_where_eq("exit", exit));
+        if !filter_options.exit.is_empty() {
+            sql.and_where(format!("exit in ({})", filter_options.exit.iter().join(", ")));
+        }
 
-        filter_options.exclude_exit.map(|exclude_exit| sql.and_where_ne("exit", exclude_exit));
+        if !filter_options.exclude_exit.is_empty() {
+            sql.and_where(format!(
+                "exit not in ({})",
+                filter_options.exclude_exit.iter().join(", ")
+            ));
+        }
 
         if filter_options.only_failed {
             sql.and_where("exit != 0 AND exit != -1");
@@ -1649,6 +1658,140 @@ mod test {
         }
 
         db
+    }
+
+    #[fixture]
+    async fn exit_db() -> Sqlite {
+        let db = empty_db().await;
+        for exit in [-1, 0, 1, 2, 130] {
+            let mut entry = save_history_item(&db, &format!("cargo exit {exit}")).await;
+            entry.exit = exit;
+            db.update(&entry).await.unwrap();
+        }
+        db
+    }
+
+    #[rstest]
+    #[case::default(&[], &[], false, &[-1, 0, 1, 2, 130])]
+    #[case::single(&[1], &[], false, &[1])]
+    #[case::single_exclusion(&[], &[0], false, &[-1, 1, 2, 130])]
+    #[case::include_union(&[1, 2], &[], false, &[1, 2])]
+    #[case::exclude_multiple(&[], &[0, 130], false, &[-1, 1, 2])]
+    #[case::overlap(&[0, 1, 2], &[0, 2], false, &[1])]
+    #[case::all_excluded(&[1, 2], &[1, 2], false, &[])]
+    #[case::duplicates(&[1, 1, 2], &[2, 2], false, &[1])]
+    #[case::sentinel(&[-1, 0], &[], false, &[-1, 0])]
+    #[case::only_failed(&[-1, 0, 1, 2], &[2], true, &[1])]
+    #[case::unknown(&[999], &[], false, &[])]
+    #[tokio::test]
+    async fn test_search_exit_filters(
+        #[future(awt)] exit_db: Sqlite,
+        #[case] exit: &[i64],
+        #[case] exclude_exit: &[i64],
+        #[case] only_failed: bool,
+        #[case] expected: &[i64],
+        #[values(DbSearchMode::FullText, DbSearchMode::Prefix, DbSearchMode::Fuzzy)]
+        mode: DbSearchMode,
+    ) {
+        let filters = OptFilters {
+            exit,
+            exclude_exit,
+            only_failed,
+            ..Default::default()
+        };
+        let results = exit_db
+            .search(mode, FilterMode::Global, &new_context(), "cargo", filters)
+            .await
+            .unwrap();
+        let mut actual: Vec<_> = results.iter().map(|h| h.exit).collect();
+        actual.sort_unstable();
+        assert_eq!(actual, expected);
+
+        let results = exit_db
+            .search(mode, FilterMode::Global, &new_context(), "unmatched", filters)
+            .await
+            .unwrap();
+        assert!(results.is_empty());
+        let results = exit_db
+            .search(mode, FilterMode::Global, &new_context(), "", OptFilters {
+                cwd: Some("/other"),
+                ..filters
+            })
+            .await
+            .unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_search_exit_filters_before_deduplication(
+        #[future(awt)] empty_db: Sqlite,
+        #[values(false, true)] include_duplicates: bool,
+    ) {
+        let mut matching_ids = Vec::new();
+        for (timestamp, exit) in [(1, 1), (2, 2), (3, 0)] {
+            let mut entry = save_history_item(&empty_db, "cargo test").await;
+            entry.timestamp = OffsetDateTime::from_unix_timestamp(timestamp).unwrap();
+            entry.exit = exit;
+            empty_db.update(&entry).await.unwrap();
+            if exit != 0 {
+                matching_ids.push(entry.id);
+            }
+        }
+        matching_ids.reverse();
+        if !include_duplicates {
+            matching_ids.truncate(1);
+        }
+        let results = empty_db
+            .search(DbSearchMode::FullText, FilterMode::Global, &new_context(), "", OptFilters {
+                exit: &[0, 1, 2],
+                exclude_exit: &[0, 130],
+                include_duplicates,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(results.iter().map(|h| h.id).collect::<Vec<_>>(), matching_ids);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_search_exit_filters_deletion_selection(#[future(awt)] exit_db: Sqlite) {
+        let filters = OptFilters {
+            exit: &[0, 1, 2],
+            exclude_exit: &[0, 130],
+            limit: Some(1),
+            ..Default::default()
+        };
+        let mut deleted = Vec::new();
+        for _ in 0..3 {
+            let results = exit_db
+                .search(DbSearchMode::FullText, FilterMode::Global, &new_context(), "", filters)
+                .await
+                .unwrap();
+            if results.is_empty() {
+                break;
+            }
+            for entry in results {
+                deleted.push(entry.exit);
+                exit_db.delete(entry).await.unwrap();
+            }
+        }
+        deleted.sort_unstable();
+        assert_eq!(deleted, [1, 2]);
+        let remaining = exit_db
+            .search(
+                DbSearchMode::FullText,
+                FilterMode::Global,
+                &new_context(),
+                "",
+                OptFilters::default(),
+            )
+            .await
+            .unwrap();
+        let mut exits: Vec<_> = remaining.iter().map(|h| h.exit).collect();
+        exits.sort_unstable();
+        assert_eq!(exits, [-1, 0, 130]);
     }
 
     #[rstest]

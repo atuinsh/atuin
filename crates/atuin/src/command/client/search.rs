@@ -38,13 +38,13 @@ pub struct Cmd {
     #[arg(long)]
     exclude_cwd: Option<String>,
 
-    /// Filter search result by exit code
+    /// Filter by exit code; repeat to include any of the given codes
     #[arg(long, short)]
-    exit: Option<i64>,
+    exit: Vec<i64>,
 
-    /// Exclude results with this exit code
+    /// Exclude results with this exit code; repeat to exclude multiple codes
     #[arg(long)]
-    exclude_exit: Option<i64>,
+    exclude_exit: Vec<i64>,
 
     /// Only include results added before this date
     #[arg(long, short)]
@@ -263,8 +263,8 @@ impl Cmd {
             let shells = OrFilter::from_list(self.shell).unwrap_or_default();
 
             let opt_filter = OptFilters {
-                exit: self.exit,
-                exclude_exit: self.exclude_exit,
+                exit: &self.exit,
+                exclude_exit: &self.exclude_exit,
                 only_failed: false,
                 cwd: self.cwd.as_deref(),
                 exclude_cwd: self.exclude_cwd.as_deref(),
@@ -371,6 +371,41 @@ mod tests {
     use rstest::rstest;
 
     use super::{AuthorPattern, Cmd};
+
+    #[rstest]
+    #[case::default(vec![], vec![], vec![])]
+    #[case::single(vec!["--exit", "0"], vec![0], vec![])]
+    #[case::single_exclusion(vec!["--exclude-exit", "0"], vec![], vec![0])]
+    #[case::repeated(vec!["--exit", "1", "--exit", "2"], vec![1, 2], vec![])]
+    #[case::short(vec!["-e", "1", "-e", "2"], vec![1, 2], vec![])]
+    #[case::excluded(vec!["--exclude-exit", "0", "--exclude-exit", "130"], vec![], vec![0, 130])]
+    #[case::combined(vec!["--exit", "1", "--exit", "2", "--exclude-exit", "2"], vec![1, 2], vec![2])]
+    #[case::duplicates(vec!["--exit", "1", "--exit", "1"], vec![1, 1], vec![])]
+    #[case::signed(vec!["--exit=-1", "--exclude-exit=-2"], vec![-1], vec![-2])]
+    fn parses_exit_filters(
+        #[case] args: Vec<&str>,
+        #[case] exit: Vec<i64>,
+        #[case] exclude_exit: Vec<i64>,
+        #[values(None, Some("--delete"), Some("--delete-it-all"))] delete: Option<&str>,
+    ) {
+        let cmd = Cmd::try_parse_from(
+            std::iter::once("search").chain(args).chain(delete).chain(["cargo"]),
+        )
+        .unwrap();
+        assert_eq!(cmd.exit, exit);
+        assert_eq!(cmd.exclude_exit, exclude_exit);
+        assert_eq!(cmd.query, ["cargo"]);
+        assert_eq!(cmd.delete, delete == Some("--delete"));
+        assert_eq!(cmd.delete_it_all, delete == Some("--delete-it-all"));
+    }
+
+    #[rstest]
+    fn rejects_invalid_exit_filters(
+        #[values("--exit", "--exclude-exit")] flag: &str,
+        #[values("invalid", "9223372036854775808")] value: &str,
+    ) {
+        assert!(Cmd::try_parse_from(["search", flag, value]).is_err());
+    }
 
     #[rstest]
     // triple_dash: Issue #3028 - searching for `---` should not be treated as a CLI flag
