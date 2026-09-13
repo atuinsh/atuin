@@ -472,7 +472,7 @@ impl SearchIndex {
         &self,
         query: &str,
         filter_mode: &IndexFilterMode,
-        limit: u32,
+        limit: usize,
     ) -> impl Iterator<Item = HistoryId> {
         // Get precomputed frecency map (may be None if not yet computed)
         let frecency_map = self.frecency_map.read().clone();

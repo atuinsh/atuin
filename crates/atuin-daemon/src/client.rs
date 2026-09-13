@@ -8,6 +8,7 @@ use atuin_common::filter::{self, OrFilter};
 use atuin_common::range::PyStyleIdxRange;
 use easy_cast::Conv;
 use eyre::{Context as EyreContext, Result};
+use futures::{Stream, StreamExt};
 use hyper_util::rt::TokioIo;
 use itertools::Itertools;
 #[cfg(windows)]
@@ -27,10 +28,11 @@ use crate::grpc::history::pb::{
     RegisterCommandOutputRequest, ShutdownRequest, StartHistoryReply, StartHistoryRequest,
     StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
 };
+use crate::output_capture::OutputMatch;
 use crate::search::search_client::SearchClient as SearchServiceClient;
 use crate::search::{
-    FilterMode as RpcFilterMode, PrepareIndexRequest, SearchContext as RpcSearchContext,
-    SearchRequest, SearchResponse,
+    FilterMode as RpcFilterMode, PrepareIndexRequest, SearchCommandOutputRequest,
+    SearchContext as RpcSearchContext, SearchRequest, SearchResponse,
 };
 
 pub struct HistoryClient {
@@ -350,6 +352,24 @@ impl SearchClient {
             .await?;
 
         Ok(response.into_inner())
+    }
+
+    #[instrument(
+        skip_all,
+        level = Level::TRACE,
+        name = "search_command_output",
+    )]
+    pub async fn search_command_output(
+        &mut self,
+        query: impl Into<String>,
+        limit: u32,
+    ) -> Result<impl Stream<Item = Result<OutputMatch>> + Send> {
+        let request = SearchCommandOutputRequest {
+            query: query.into(),
+            limit,
+        };
+        let stream = self.client.search_command_output(request).await?.into_inner();
+        Ok(stream.map(|item| -> Result<OutputMatch> { Ok(OutputMatch::try_from(item?)?) }))
     }
 
     /// Tell the daemon to build the search index for the given list of shells.
