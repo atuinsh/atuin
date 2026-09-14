@@ -27,6 +27,9 @@ pub trait Schema {
     /// Error thrown when trying to serialize keys.
     type KeySerializationError;
 
+    /// Error thrown when trying to deserialize a key back from its stored bytes.
+    type KeyDeserializationError;
+
     /// The type of the value in the output capture.
     type Value;
 
@@ -45,6 +48,9 @@ pub trait Schema {
 
     /// Try to serialize the key into a serialized form.
     fn serialize_key(key: Self::Key) -> Result<Self::KeySerialized, Self::KeySerializationError>;
+
+    /// Try to reconstruct a key from the raw bytes stored for it in the keyspace.
+    fn deserialize_key(serialized: &[u8]) -> Result<Self::Key, Self::KeyDeserializationError>;
 
     /// Try to serialize the value.
     fn serialize_value(
