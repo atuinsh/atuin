@@ -108,6 +108,7 @@ futures-util = { workspace = true }
 indicatif = { workspace = true }
 interim = { workspace = true }
 itertools = { workspace = true }
+locked-tripwire = { workspace = true }
 norm = { workspace = true }
 opentelemetry = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }

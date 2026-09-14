@@ -95,6 +95,7 @@ libc = "0.2"
 # `links = "sqlite3"` package (one bundled SQLite).
 libsqlite3-sys = ">=0.30.1, <0.38.0"
 listenfd = "1"
+locked-tripwire = "0.1"
 memchr = "2"
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
@@ -181,7 +182,8 @@ typed-builder = "0.23"
 unicode-segmentation = "1"
 unicode-width = "0.2"
 url = { version = "2", features = ["serde"] }
-uuid = { version = "1", features = ["v4", "v7", "serde"] }
+# Explicitly 1.6 is necessary because the v7 UUID was only added then.
+uuid = { version = "1.6", features = ["v4", "v7", "serde"] }
 whoami = "2"
 windows-sys = {
     version = "0.61",
