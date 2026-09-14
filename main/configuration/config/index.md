@@ -78,9 +78,9 @@ sync_address = "https://api.atuin.sh"
 
 Default: `5m`
 
-How often to automatically sync with the server. This can be given in a "human-readable" format. For example, `10s`, `20m`, `1h`, etc.
+How often to automatically sync with the server, as a duration like `10s`, `20m`, `1h`, or `1d`.
 
-If set to `0`, Atuin will sync after every command. Some servers may rate limit frequent syncs, but this won't cause any issues.
+A bare number is read as a count of seconds, for backwards compatibility. If set to `0`, Atuin will sync after every command — some servers may rate limit frequent syncs, but this won't cause any issues.
 
 ```
 sync_frequency = "5m"
@@ -423,22 +423,26 @@ show_numeric_shortcuts = true
 
 ### `network_timeout`
 
-Default: `30`
+Default: `30s`
 
-The max amount of time (in seconds) to wait for a network request. If any operations with a sync server take longer than this, the code will fail - rather than wait indefinitely.
+The maximum time to wait for a network request, as a duration like `500ms`, `30s`, or `5m`. If any operation with a sync server takes longer than this, it fails rather than waiting indefinitely.
+
+A bare number is read as a count of seconds (`network_timeout = 30`), for backwards compatibility.
 
 ```
-network_timeout = 30
+network_timeout = "30s"
 ```
 
 ### `network_connect_timeout`
 
-Default: `5`
+Default: `5s`
 
-The max time (in seconds) Atuin waits for a connection to become established with a remote sync server. Any longer than this and the request will fail.
+The maximum time Atuin waits for a connection to a remote sync server to be established, as a duration like `500ms`, `5s`, or `1m`. Any longer and the request fails.
+
+A bare number is read as a count of seconds (`network_connect_timeout = 5`), for backwards compatibility.
 
 ```
-network_connect_timeout = 5
+network_connect_timeout = "5s"
 ```
 
 ### `extra_headers`
@@ -457,12 +461,14 @@ extra_headers = { "CF-Access-Client-Id" = "...", "CF-Access-Client-Secret" = "..
 
 ### `local_timeout`
 
-Default: `2`
+Default: `2s`
 
-Timeout (in seconds) for acquiring a local database connection (SQLite).
+Timeout for acquiring a local database (SQLite) connection, as a duration like `500ms`, `2s`, or `1m`.
+
+A bare number is read as a count of seconds (`local_timeout = 2`), for backwards compatibility.
 
 ```
-local_timeout = 2
+local_timeout = "2s"
 ```
 
 ### `command_chaining`
@@ -897,12 +903,14 @@ autostart = false
 
 ### `sync_frequency`
 
-Default: `300`
+Default: `5m`
 
-How often the daemon should sync, in seconds
+How often the daemon should sync, as a duration like `30s`, `5m`, or `1h`.
+
+A bare number is read as a count of seconds (`sync_frequency = 300`), for backwards compatibility.
 
 ```
-sync_frequency = 300
+sync_frequency = "5m"
 ```
 
 ### `socket_path`
@@ -958,7 +966,7 @@ Behavior of log files.
 enabled = true
 dir = "~/.atuin/logs"
 level = "info"
-retention = 4
+retention = "4d"
 ```
 
 ### enabled
@@ -993,12 +1001,14 @@ level = "info"
 
 ### retention
 
-Default: `4`
+Default: `4d`
 
-How many days of log files to keep (per file type). Files older than this will be removed.
+How long to keep log files, per file type, as a duration like `12h` or `7d`. Files older than this are removed.
+
+A bare number is read as a count of days (`retention = 4`), for backwards compatibility.
 
 ```
-retention = 4
+retention = "4d"
 ```
 
 ### ai
@@ -1008,14 +1018,14 @@ A sub-object with specific options for AI logging:
 - `enabled` - whether to output AI logs; defaults to `logs.enabled`
 - `file` - the filename to use for the AI logs; defaults to `"ai.log"`. Always relative to `logs.dir`.
 - `level` - override the log level for the AI logs; defaults to `logs.level`
-- `retention` - how many days to store AI logs; defaults to `logs.retention`
+- `retention` - how long to keep AI logs; defaults to `logs.retention`
 
 ```
 [logs.ai]
 enabled = true
 file = "ai.log"
 level = "info"
-retention = 4
+retention = "4d"
 ```
 
 ### daemon
@@ -1025,14 +1035,14 @@ A sub-object with specific options for daemon logging:
 - `enabled` - whether to output daemon logs; defaults to `logs.enabled`
 - `file` - the filename to use for the daemon logs; defaults to `"daemon.log"`. Always relative to `logs.dir`.
 - `level` - override the log level for the daemon logs; defaults to `logs.level`
-- `retention` - how many days to store daemon logs; defaults to `logs.retention`
+- `retention` - how long to keep daemon logs; defaults to `logs.retention`
 
 ```
 [logs.daemon]
 enabled = true
 file = "daemon.log"
 level = "info"
-retention = 4
+retention = "4d"
 ```
 
 ### search
@@ -1042,14 +1052,14 @@ A sub-object with specific options for search logging:
 - `enabled` - whether to output search logs; defaults to `logs.enabled`
 - `file` - the filename to use for the search logs; defaults to `"search.log"`. Always relative to `logs.dir`.
 - `level` - override the log level for the search logs; defaults to `logs.level`
-- `retention` - how many days to store search logs; defaults to `logs.retention`
+- `retention` - how long to keep search logs; defaults to `logs.retention`
 
 ```
 [logs.search]
 enabled = true
 file = "search.log"
 level = "info"
-retention = 4
+retention = "4d"
 ```
 
 ## theme
