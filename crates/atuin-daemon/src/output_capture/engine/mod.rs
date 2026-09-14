@@ -1,4 +1,5 @@
 mod gc;
+mod reconciler;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -6,20 +7,24 @@ use std::sync::Arc;
 use atuin_client::history::{CommandCapture, HistoryId};
 use atuin_client::settings::DiskUsageLimit;
 use gc::Gc;
+use reconciler::Reconciler;
 use tracing::{error, warn};
 
-use super::persistence::{AnyBlobStore, FjallBlobStore, NopBlobStore, OutputStore};
+use super::persistence::{
+    AnyBlobStore, AnyIndex, FjallBlobStore, NopBlobStore, NopIndex, OutputStore, SqliteIndex,
+};
 use super::{CaptureError, DeleteOutputError, GetOutputError};
 
 #[derive(Debug)]
 pub struct OutputCaptureEngine {
     store: Arc<OutputStore>,
     _gc: Option<Gc>,
+    _reconciler: Option<Reconciler>,
 }
 
 impl OutputCaptureEngine {
     #[must_use]
-    pub fn open(path: impl AsRef<Path>, max_disk_usage: DiskUsageLimit) -> Self {
+    pub async fn open(path: impl AsRef<Path>, max_disk_usage: DiskUsageLimit) -> Self {
         let path = path.as_ref();
 
         let storage = match FjallBlobStore::open(path) {
@@ -33,7 +38,23 @@ impl OutputCaptureEngine {
                 return Self::nop();
             }
         };
-        let store = Arc::new(OutputStore::new(AnyBlobStore::Fjall(storage)));
+
+        // The index is derived, so a failure to open it leaves capture working; only search is lost.
+        let store = match SqliteIndex::open(&SqliteIndex::path(path)).await {
+            Ok(index) => OutputStore::new(AnyBlobStore::Fjall(storage), AnyIndex::Sqlite(index)),
+            Err(err) => {
+                error!(
+                    ?err,
+                    ?path,
+                    "failed to open the output search index; search over captured output is \
+                     disabled"
+                );
+                OutputStore::new(AnyBlobStore::Fjall(storage), AnyIndex::Nop(NopIndex))
+            }
+        };
+        let store = Arc::new(store);
+
+        let reconciler = Reconciler::spawn(store.clone());
 
         let gc = match max_disk_usage.resolve_for_path(path) {
             Ok(budget) => budget.map(|budget| Gc::spawn(store.clone(), budget)),
@@ -43,14 +64,22 @@ impl OutputCaptureEngine {
             }
         };
 
-        Self { store, _gc: gc }
+        Self {
+            store,
+            _gc: gc,
+            _reconciler: Some(reconciler),
+        }
     }
 
     #[must_use]
     pub fn nop() -> Self {
         Self {
-            store: Arc::new(OutputStore::new(AnyBlobStore::Nop(NopBlobStore))),
+            store: Arc::new(OutputStore::new(
+                AnyBlobStore::Nop(NopBlobStore),
+                AnyIndex::Nop(NopIndex),
+            )),
             _gc: None,
+            _reconciler: None,
         }
     }
 
@@ -59,10 +88,12 @@ impl OutputCaptureEngine {
     #[must_use]
     pub fn failing() -> Self {
         Self {
-            store: Arc::new(OutputStore::new(AnyBlobStore::Failing(
-                super::persistence::FailingBlobStore,
-            ))),
+            store: Arc::new(OutputStore::new(
+                AnyBlobStore::Failing(super::persistence::FailingBlobStore),
+                AnyIndex::Nop(NopIndex),
+            )),
             _gc: None,
+            _reconciler: None,
         }
     }
 
@@ -90,6 +121,11 @@ impl OutputCaptureEngine {
         let ids: Vec<HistoryId> = ids.into_iter().collect();
         self.store.remove(&ids).await
     }
+
+    #[must_use]
+    pub fn store(&self) -> Arc<OutputStore> {
+        self.store.clone()
+    }
 }
 
 #[cfg(test)]
@@ -98,6 +134,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::output_capture::OutputMatch;
 
     fn hid(n: u128) -> HistoryId {
         HistoryId::from_bytes(*Uuid::from_u128(n).as_bytes())
@@ -113,18 +150,23 @@ mod tests {
         }
     }
 
-    fn temp_store() -> (OutputCaptureEngine, tempfile::TempDir) {
+    async fn temp_store() -> (OutputCaptureEngine, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
         let store =
-            OutputCaptureEngine::open(dir.path().join("capture"), DiskUsageLimit::Unlimited);
+            OutputCaptureEngine::open(dir.path().join("capture"), DiskUsageLimit::Unlimited).await;
         (store, dir)
+    }
+
+    async fn search_hits(store: &OutputStore, query: &str, limit: usize) -> Vec<OutputMatch> {
+        store.search(query, limit).await.try_collect().await.expect("search")
     }
 
     #[tokio::test]
     async fn open_uses_the_fjall_backend_when_the_path_is_usable() {
-        let (store, _dir) = temp_store();
+        let (store, _dir) = temp_store().await;
         store.capture(hid(1), cap("hello")).await.expect("capture");
         assert_eq!(store.get(hid(1)).await.expect("get").expect("present").output_start, "hello");
+        assert_eq!(search_hits(&store.store(), "hello", 10).await.len(), 1);
     }
 
     #[tokio::test]
@@ -133,9 +175,22 @@ mod tests {
         let path = dir.path().join("occupied");
         std::fs::write(&path, b"not a database").expect("write file");
 
-        let store = OutputCaptureEngine::open(&path, DiskUsageLimit::Unlimited);
+        let store = OutputCaptureEngine::open(&path, DiskUsageLimit::Unlimited).await;
         store.capture(hid(1), cap("hello")).await.expect("capture is discarded, not failed");
         assert!(store.get(hid(1)).await.expect("get").is_none());
+    }
+
+    #[tokio::test]
+    async fn open_keeps_capturing_when_only_the_index_cannot_open() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("capture");
+        // Occupy the index's path with a directory so sqlite cannot open it as a file.
+        std::fs::create_dir_all(SqliteIndex::path(&path)).expect("occupy index path");
+
+        let store = OutputCaptureEngine::open(&path, DiskUsageLimit::Unlimited).await;
+        store.capture(hid(1), cap("stored but unsearchable")).await.expect("capture");
+        assert!(store.get(hid(1)).await.expect("get").is_some());
+        assert!(search_hits(&store.store(), "unsearchable", 10).await.is_empty());
     }
 
     #[tokio::test]
@@ -148,7 +203,7 @@ mod tests {
 
     #[tokio::test]
     async fn remove_forgets_captured_output() {
-        let (store, _dir) = temp_store();
+        let (store, _dir) = temp_store().await;
         store.capture(hid(1), cap("hello")).await.expect("capture");
         store.remove([hid(1)]).await.expect("remove");
         assert!(store.get(hid(1)).await.expect("get").is_none());
@@ -158,5 +213,26 @@ mod tests {
     async fn remove_on_the_nop_backend_is_ok() {
         let store = OutputCaptureEngine::nop();
         store.remove([hid(1), hid(2)]).await.expect("remove is discarded, not failed");
+    }
+
+    #[tokio::test]
+    async fn searcher_sees_what_the_store_captures() {
+        let (store, _dir) = temp_store().await;
+        let searcher = store.store();
+        store.capture(hid(1), cap("compilation error: missing semicolon")).await.expect("capture");
+
+        let hits = search_hits(&searcher, "semicolon", 10).await;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].history_id, hid(1));
+
+        store.remove([hid(1)]).await.expect("remove");
+        assert!(search_hits(&searcher, "semicolon", 10).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_on_a_nop_store_is_empty() {
+        let store = OutputCaptureEngine::nop();
+        store.capture(hid(1), cap("nothing is indexed here")).await.expect("capture");
+        assert!(search_hits(&store.store(), "nothing", 10).await.is_empty());
     }
 }

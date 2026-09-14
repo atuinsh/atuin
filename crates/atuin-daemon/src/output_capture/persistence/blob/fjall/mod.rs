@@ -7,15 +7,18 @@
 //! `spawn_blocking`.
 mod schema;
 
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use atuin_client::history::{CommandCapture, HistoryId};
+use atuin_common::futures::stream::ChunkedStream;
 use fjall::{OptimisticTxDatabase, OptimisticTxKeyspace, PersistMode, Readable};
 use schema::{Schema as _, SchemaV2};
 use tokio::task::JoinHandle;
+use tokio_stream::wrappers::ReceiverStream;
 use tracing::error;
 
 use super::{BlobStore, CaptureError, DeleteOutputError, GetOutputError};
@@ -122,6 +125,46 @@ impl FjallStorageInner {
         })
         .await
         .expect("output-capture delete task panicked")
+    }
+
+    /// Every stored id, oldest first (fjall key order), streamed in chunks.
+    fn all_ids(&self) -> ChunkedStream<Result<HistoryId, GetOutputError>> {
+        const SCAN_CHUNKS_IN_FLIGHT: usize = 4;
+        const CHUNK: NonZeroUsize = NonZeroUsize::new(512).unwrap();
+
+        let (tx, rx) = tokio::sync::mpsc::channel(SCAN_CHUNKS_IN_FLIGHT);
+
+        let keyspace = self.keyspace.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut ids = keyspace.inner().iter().map(|guard| {
+                // Read the key only; the value (a KV-separated blob) stays on disk.
+                guard.key().map_err(|err| GetOutputError::Storage(Box::new(err))).and_then(|key| {
+                    ActiveSchema::deserialize_key(key.as_ref())
+                        .map_err(|err| GetOutputError::Storage(Box::new(err)))
+                })
+            });
+
+            loop {
+                let batch: Vec<_> = ids.by_ref().take(CHUNK.get()).collect();
+                if batch.is_empty() {
+                    return; // the walk is done
+                }
+
+                let stop = {
+                    let err = batch.iter().find_map(|item| item.as_ref().err());
+                    if let Some(err) = err {
+                        error!(?err, "output-capture id scan hit an unreadable key");
+                    }
+                    err.is_some()
+                };
+
+                if tx.blocking_send(batch).is_err() || stop {
+                    return;
+                }
+            }
+        });
+
+        ChunkedStream::new(ReceiverStream::new(rx))
     }
 
     /// The oldest ids whose values total at least `reclaim_bytes`.
@@ -288,6 +331,10 @@ impl BlobStore for FjallBlobStore {
 
     fn estimated_disk_space(&self) -> u64 {
         self.inner.estimated_disk_space()
+    }
+
+    async fn all_ids(&self) -> ChunkedStream<Result<HistoryId, GetOutputError>> {
+        self.inner.all_ids()
     }
 
     async fn eviction_candidates(
@@ -480,5 +527,30 @@ mod tests {
         let (store, _dir) = temp_storage();
         store.capture(hid(1), cap("keep")).await.expect("capture");
         assert!(store.eviction_candidates(0).await.expect("candidates").is_empty());
+    }
+
+    #[tokio::test]
+    async fn all_ids_lists_every_stored_id_oldest_first() {
+        let (store, _dir) = temp_storage();
+        for n in 1..=3u128 {
+            store.capture(hid(n), cap(&format!("out{n}"))).await.expect("capture");
+        }
+        let ids: Vec<HistoryId> = store.all_ids().await.try_collect().await.expect("all_ids");
+        assert_eq!(ids, vec![hid(1), hid(2), hid(3)]);
+    }
+
+    #[tokio::test]
+    async fn all_ids_streams_every_id_across_chunk_boundaries() {
+        let (store, _dir) = temp_storage();
+        // More ids than one internal scan chunk (512), so the walker must send a full chunk and
+        // keep walking -- the flush-and-continue path a single-chunk store never reaches.
+        let count = 600u128;
+        for n in 1..=count {
+            store.capture(hid(n), cap("x")).await.expect("capture");
+        }
+
+        let ids: Vec<HistoryId> = store.all_ids().await.try_collect().await.expect("all_ids");
+        let expected: Vec<HistoryId> = (1..=count).map(hid).collect();
+        assert_eq!(ids, expected);
     }
 }

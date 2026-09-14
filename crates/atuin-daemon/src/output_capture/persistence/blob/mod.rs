@@ -6,6 +6,7 @@ mod fjall;
 mod nop;
 
 use atuin_client::history::{CommandCapture, HistoryId};
+use atuin_common::futures::stream::ChunkedStream;
 use enum_dispatch::enum_dispatch;
 #[cfg(test)]
 pub use failing::FailingBlobStore;
@@ -53,6 +54,9 @@ pub trait BlobStore {
     ///
     /// Doesn't have to be exact -- just try to be within 100MB of error.
     fn estimated_disk_space(&self) -> u64;
+
+    /// Every stored id, oldest first (by key order).
+    async fn all_ids(&self) -> ChunkedStream<Result<HistoryId, GetOutputError>>;
 
     /// The oldest stored ids whose values total at least `reclaim_bytes`.
     ///
