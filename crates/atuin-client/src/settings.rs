@@ -2166,17 +2166,22 @@ mod tests {
     }
 
     #[rstest]
-    fn sync_frequency_accepts_only_humantime_strings() {
-        // humantime strings work; "0" means always-sync (zero)
+    fn sync_frequency_accepts_humantime_strings_and_bare_zero() {
+        // humantime strings work
         assert_eq!(
             parse_settings("sync_frequency = \"5m\"\n").sync_frequency,
             std::time::Duration::from_secs(300),
         );
+        // `0` is the documented always-sync sentinel; both the string and bare forms mean zero
         assert_eq!(
             parse_settings("sync_frequency = \"0\"\n").sync_frequency,
             std::time::Duration::ZERO,
         );
-        // bare numbers (int or unit-less string) are rejected — no unit-less durations
+        assert_eq!(
+            parse_settings("sync_frequency = 0\n").sync_frequency,
+            std::time::Duration::ZERO,
+        );
+        // any other unit-less number (int or string) is rejected
         assert!(Settings::validate_str("sync_frequency = 30\n").is_err());
         assert!(Settings::validate_str("sync_frequency = \"30\"\n").is_err());
     }

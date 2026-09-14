@@ -406,21 +406,38 @@ impl<U> SerializeAs<Option<NonZeroDuration>> for AsDisableableDuration<U> {
     }
 }
 
-/// `serde_with` marker for a [`Duration`](std::time::Duration) accepted ONLY as a units string
-/// (`"500ms"`, `"5m"`, `"1h"`; `"0"` is zero). Unlike [`AsDuration`], bare numbers are rejected.
+/// `serde_with` marker for a [`Duration`](std::time::Duration) parsed from a units string
+/// (`"500ms"`, `"5m"`, `"1h"`; `"0"` is zero). A bare `0` is also accepted.
 pub struct AsHumantimeDuration;
 
 impl<'de> DeserializeAs<'de, std::time::Duration> for AsHumantimeDuration {
     fn deserialize_as<D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<std::time::Duration, D::Error> {
+        const UNITLESS_ERR: &str = "bare numbers need a unit like \"5m\"; only 0 is allowed";
+
         struct HumantimeVisitor;
 
         impl Visitor<'_> for HumantimeVisitor {
             type Value = std::time::Duration;
 
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("a duration string like \"5m\" or \"500ms\"")
+                f.write_str("a duration string like \"5m\", or 0")
+            }
+
+            fn visit_u64<E: de::Error>(self, n: u64) -> Result<Self::Value, E> {
+                if n == 0 {
+                    Ok(std::time::Duration::ZERO)
+                } else {
+                    Err(E::custom(UNITLESS_ERR))
+                }
+            }
+
+            fn visit_i64<E: de::Error>(self, n: i64) -> Result<Self::Value, E> {
+                match u64::try_from(n) {
+                    Ok(n) => self.visit_u64(n),
+                    Err(_) => Err(E::custom(UNITLESS_ERR)),
+                }
             }
 
             fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
