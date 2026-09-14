@@ -257,12 +257,21 @@ impl DurationUnit for Days {
 
 /// Parse a duration written as a bare number (interpreted in `U`) or a units string (`"500ms"`,
 /// `"5m"`). humantime units are absolute; a unit-less number string is interpreted in `U`.
-fn parse_duration_in<'de, U, D>(deserializer: D) -> Result<std::time::Duration, D::Error>
+///
+/// When `clamp_negative_to_zero` is set, a negative value yields [`Duration::ZERO`] instead of an
+/// error; disableable fields rely on this to fold any non-positive value into "disabled".
+fn parse_duration_in<'de, U, D>(
+    deserializer: D,
+    clamp_negative_to_zero: bool,
+) -> Result<std::time::Duration, D::Error>
 where
     U: DurationUnit,
     D: Deserializer<'de>,
 {
-    struct DurationVisitor<U>(PhantomData<U>);
+    struct DurationVisitor<U> {
+        clamp_negative_to_zero: bool,
+        _unit: PhantomData<U>,
+    }
 
     impl<U: DurationUnit> Visitor<'_> for DurationVisitor<U> {
         type Value = std::time::Duration;
@@ -278,12 +287,17 @@ where
         }
 
         fn visit_i64<E: de::Error>(self, n: i64) -> Result<Self::Value, E> {
-            let n = u64::try_from(n)
-                .map_err(|_| E::custom(format!("duration cannot be negative: {n}")))?;
-            self.visit_u64(n)
+            match u64::try_from(n) {
+                Ok(n) => self.visit_u64(n),
+                Err(_) if self.clamp_negative_to_zero => Ok(std::time::Duration::ZERO),
+                Err(_) => Err(E::custom(format!("duration cannot be negative: {n}"))),
+            }
         }
 
         fn visit_f64<E: de::Error>(self, n: f64) -> Result<Self::Value, E> {
+            if n < 0.0 && self.clamp_negative_to_zero {
+                return Ok(std::time::Duration::ZERO);
+            }
             if !n.is_finite() || n < 0.0 {
                 return Err(E::custom(format!("invalid duration: {n}")));
             }
@@ -305,7 +319,10 @@ where
         }
     }
 
-    deserializer.deserialize_any(DurationVisitor::<U>(PhantomData))
+    deserializer.deserialize_any(DurationVisitor::<U> {
+        clamp_negative_to_zero,
+        _unit: PhantomData,
+    })
 }
 
 /// Render a duration as a units string that round-trips through the duration deserializers.
@@ -321,7 +338,7 @@ impl serde::Serialize for NonZeroDuration {
 
 impl<'de> serde::Deserialize<'de> for NonZeroDuration {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::new(parse_duration_in::<Seconds, D>(deserializer)?)
+        Self::new(parse_duration_in::<Seconds, D>(deserializer, false)?)
             .ok_or_else(|| de::Error::custom("duration must be non-zero"))
     }
 }
@@ -337,13 +354,13 @@ impl<'de, U: DurationUnit> DeserializeAs<'de, std::time::Duration> for AsDuratio
     fn deserialize_as<D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<std::time::Duration, D::Error> {
-        parse_duration_in::<U, D>(deserializer)
+        parse_duration_in::<U, D>(deserializer, false)
     }
 }
 
 impl<'de, U: DurationUnit> DeserializeAs<'de, NonZeroDuration> for AsDuration<U> {
     fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<NonZeroDuration, D::Error> {
-        NonZeroDuration::new(parse_duration_in::<U, D>(deserializer)?)
+        NonZeroDuration::new(parse_duration_in::<U, D>(deserializer, false)?)
             .ok_or_else(|| de::Error::custom("duration must be non-zero"))
     }
 }
@@ -366,10 +383,12 @@ impl<U> SerializeAs<NonZeroDuration> for AsDuration<U> {
     }
 }
 
-/// `serde_with` marker for `Option<NonZeroDuration>` where a zero value means `None` ("disabled").
+/// `serde_with` marker for `Option<NonZeroDuration>` where any non-positive value means `None`
+/// ("disabled").
 ///
-/// Bare numbers use unit `U`; units strings are also accepted. Serializes `None` as `"0"`. Use as
-/// `#[serde_as(as = "AsDisableableDuration<Seconds>")]`.
+/// Bare numbers use unit `U`; units strings are also accepted. Zero and negatives both deserialize
+/// to `None`, matching the legacy clamp-to-zero behavior of the fields it replaces. Serializes
+/// `None` as `"0"`. Use as `#[serde_as(as = "AsDisableableDuration<Seconds>")]`.
 pub struct AsDisableableDuration<U>(PhantomData<U>);
 
 impl<'de, U: DurationUnit> DeserializeAs<'de, Option<NonZeroDuration>>
@@ -378,7 +397,7 @@ impl<'de, U: DurationUnit> DeserializeAs<'de, Option<NonZeroDuration>>
     fn deserialize_as<D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<Option<NonZeroDuration>, D::Error> {
-        Ok(NonZeroDuration::new(parse_duration_in::<U, D>(deserializer)?))
+        Ok(NonZeroDuration::new(parse_duration_in::<U, D>(deserializer, true)?))
     }
 }
 
@@ -394,6 +413,43 @@ impl<U> SerializeAs<Option<NonZeroDuration>> for AsDisableableDuration<U> {
     }
 }
 
+/// `serde_with` marker for a [`Duration`](std::time::Duration) accepted ONLY as a units string
+/// (`"500ms"`, `"5m"`, `"1h"`; `"0"` is zero). Unlike [`AsDuration`], bare numbers are rejected —
+/// use it where the config value has always been a units string and unit-less numbers are unwanted.
+pub struct AsHumantimeDuration;
+
+impl<'de> DeserializeAs<'de, std::time::Duration> for AsHumantimeDuration {
+    fn deserialize_as<D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<std::time::Duration, D::Error> {
+        struct HumantimeVisitor;
+
+        impl Visitor<'_> for HumantimeVisitor {
+            type Value = std::time::Duration;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a duration string like \"5m\" or \"500ms\"")
+            }
+
+            fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                humantime::parse_duration(value)
+                    .map_err(|e| E::custom(format!("invalid duration {value:?}: {e}")))
+            }
+        }
+
+        deserializer.deserialize_any(HumantimeVisitor)
+    }
+}
+
+impl SerializeAs<std::time::Duration> for AsHumantimeDuration {
+    fn serialize_as<S: Serializer>(
+        source: &std::time::Duration,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&duration_to_string(*source))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
@@ -401,7 +457,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[rstest]
     fn nonzero_duration_rejects_zero() {
         assert!(NonZeroDuration::new(std::time::Duration::ZERO).is_none());
         assert_eq!(
@@ -410,7 +466,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn disableable_duration_marker_uses_unit_and_zero_is_none() {
         use serde::{Deserialize, Serialize};
         use serde_with::serde_as;
@@ -449,7 +505,32 @@ mod tests {
         assert_eq!(serde_json::from_str::<Holder>(&json).unwrap(), h);
     }
 
-    #[test]
+    #[rstest]
+    fn disableable_duration_treats_negative_as_none() {
+        use serde::Deserialize;
+        use serde_with::serde_as;
+
+        #[serde_as]
+        #[derive(Deserialize)]
+        struct Holder {
+            #[serde_as(as = "AsDisableableDuration<Minutes>")]
+            window: Option<NonZeroDuration>,
+            #[serde_as(as = "AsDuration<Seconds>")]
+            strict: std::time::Duration,
+        }
+
+        // legacy `.max(0)`: any non-positive value disables (None)
+        let h: Holder = serde_json::from_str(r#"{"window":-5,"strict":1}"#).unwrap();
+        assert_eq!(h.window, None);
+        assert_eq!(h.strict, std::time::Duration::from_secs(1));
+        let h: Holder = serde_json::from_str(r#"{"window":"-5","strict":1}"#).unwrap();
+        assert_eq!(h.window, None);
+
+        // the non-disableable marker still rejects negatives
+        assert!(serde_json::from_str::<Holder>(r#"{"window":1,"strict":-1}"#).is_err());
+    }
+
+    #[rstest]
     fn required_duration_marker_uses_unit_and_zero_policy() {
         use serde::Deserialize;
         use serde_with::serde_as;
@@ -474,7 +555,7 @@ mod tests {
         assert!(serde_json::from_str::<Holder>(r#"{"retention":2,"timeout":0}"#).is_err());
     }
 
-    #[test]
+    #[rstest]
     fn nonzero_duration_deserialize_rejects_zero() {
         assert!(serde_json::from_str::<NonZeroDuration>("0").is_err());
         assert_eq!(
@@ -564,7 +645,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn stopwatch_clamps_a_negative_time_duration() {
         let negative = time::Duration::nanoseconds(-5_000_000_000);
         assert_eq!(negative.display().stopwatch().to_string(), "0ms");
@@ -572,7 +653,7 @@ mod tests {
 
     proptest! {
         /// `try_new` never panics, and reports the exact total when it succeeds.
-        #[test]
+        #[rstest]
         fn std_try_new_is_total(secs in any::<u64>(), nsecs in any::<u64>()) {
             // u128 is wide enough that this oracle cannot itself overflow
             let expected = u128::from(secs) * 1_000_000_000 + u128::from(nsecs);
@@ -589,7 +670,7 @@ mod tests {
 
         /// The `time::Duration` impl delegates to the `std` one, so it must succeed
         /// on exactly the same inputs, minus those that overflow `i64` seconds.
-        #[test]
+        #[rstest]
         fn time_try_new_tracks_std_try_new(secs in any::<u64>(), nsecs in any::<u64>()) {
             let std_result = std::time::Duration::try_new(secs, nsecs);
             let time_result = <time::Duration as DurationExt<_>>::try_new(secs, nsecs);

@@ -523,7 +523,7 @@ mod tests {
         assert_eq!(input.pad_ellipsize(budget, side, Indicator::UNICODE, align).as_ref(), expected);
     }
 
-    #[test]
+    #[rstest]
     fn pad_ellipsize_borrows_only_when_no_alloc_needed() {
         // Exact fit: no padding, no elision -> borrowed.
         assert!(matches!(
@@ -557,7 +557,7 @@ mod tests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(2048))]
 
-        #[test]
+        #[rstest]
         fn never_overflows(
             s in r"(?s).*",
             budget in any_budget(),
@@ -568,7 +568,7 @@ mod tests {
             prop_assert!(cost(budget, out.as_ref()) <= amount(budget));
         }
 
-        #[test]
+        #[rstest]
         fn borrowed_when_it_fits(
             s in r"(?s).*",
             budget in any_budget(),
@@ -585,7 +585,7 @@ mod tests {
             }
         }
 
-        #[test]
+        #[rstest]
         fn never_grows(
             s in r"(?s).*",
             budget in any_budget(),
@@ -596,7 +596,7 @@ mod tests {
             prop_assert!(cost(budget, out.as_ref()) <= cost(budget, &s));
         }
 
-        #[test]
+        #[rstest]
         fn valid_byte_cut(
             s in r"(?s).*",
             n in 0usize..40,
@@ -607,7 +607,7 @@ mod tests {
             prop_assert!(out.len() <= n);
         }
 
-        #[test]
+        #[rstest]
         fn ellipsis_present_when_needed(
             s in r"(?s).*",
             budget in any_budget(),
@@ -622,7 +622,7 @@ mod tests {
             }
         }
 
-        #[test]
+        #[rstest]
         fn source_index_round_trips(
             s in r"(?s).*",
             budget in any_budget(),
@@ -639,7 +639,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn source_index_middle_maps_head_gap_tail() {
         let e = "hello world".ellipsize(Measure::Columns(7), Pos::Middle, Indicator::ASCII);
         assert_eq!(e.to_string(), "he...ld");
@@ -651,7 +651,7 @@ mod tests {
         assert_eq!(e.source_index(6), Some(10));
     }
 
-    #[test]
+    #[rstest]
     fn source_index_fits_is_identity() {
         let e = "hi".ellipsize(Measure::Columns(10), Pos::Middle, Indicator::ASCII);
         assert!(matches!(std::borrow::Cow::from(e), std::borrow::Cow::Borrowed(_)));
@@ -659,7 +659,7 @@ mod tests {
         assert_eq!(e.source_index(1), Some(1));
     }
 
-    #[test]
+    #[rstest]
     fn display_writes_without_allocating_via_cow() {
         let e = "hello world".ellipsize(Measure::Columns(8), Pos::End, Indicator::ASCII);
         assert_eq!(e.to_string(), "hello...");

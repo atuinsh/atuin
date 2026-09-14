@@ -193,14 +193,13 @@ async fn run_inline_tui(
     let cwd = std::env::current_dir().ok().map(|p| p.to_string_lossy().into_owned());
     let git_root_str = ctx.git_root.as_ref().map(|p| p.to_string_lossy().into_owned());
 
-    // `None` (0 in config) disables auto-resume.
-    let max_age_secs: i64 = settings
-        .ai
-        .session_continue_minutes
-        .map_or(0, |d| i64::try_from(d.get().as_secs()).unwrap_or(i64::MAX));
-
-    let resumable =
-        service.find_resumable(cwd.as_deref(), git_root_str.as_deref(), max_age_secs).await?;
+    let resumable = service
+        .find_resumable(
+            cwd.as_deref(),
+            git_root_str.as_deref(),
+            settings.ai.session_continue_minutes,
+        )
+        .await?;
 
     // ─── Build FSM ───────────────────────────────────────────────
     let (session_mgr, mut fsm, file_tracker, edit_permissions) = if let Some(stored) = resumable {

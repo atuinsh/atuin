@@ -7,7 +7,7 @@ use std::time::Duration;
 use atuin_common::logs::LogLevel;
 use atuin_common::path::PathExt;
 use atuin_common::time::{
-    AsDisableableDuration, AsDuration, Days, Minutes, NonZeroDuration, Seconds,
+    AsDisableableDuration, AsDuration, AsHumantimeDuration, Days, Minutes, NonZeroDuration, Seconds,
 };
 use atuin_domain::record::HostId;
 use clap::ValueEnum;
@@ -583,9 +583,9 @@ pub struct LogConfig {
     /// Override global level setting for this log type.
     pub level: Option<LogLevel>,
 
-    /// Override the global retention for this log type (a bare number is days).
+    /// Override the global retention for this log type (a bare number is days). `0` keeps nothing.
     #[serde_as(as = "Option<AsDuration<Days>>")]
-    pub retention: Option<NonZeroDuration>,
+    pub retention: Option<Duration>,
 }
 
 impl LogConfig {
@@ -612,10 +612,11 @@ pub struct Logs {
     #[serde(default)]
     pub level: LogLevel,
 
-    /// Default retention for log files (a bare number is days). Defaults to 4 days.
+    /// Default retention for log files (a bare number is days). Defaults to 4 days. `0` keeps
+    /// nothing (prunes every rotated log).
     #[serde(default = "Logs::default_retention")]
     #[serde_as(as = "AsDuration<Days>")]
-    pub retention: NonZeroDuration,
+    pub retention: Duration,
 
     /// Search log settings; only used with `--interactive`
     #[serde(default)]
@@ -756,8 +757,8 @@ impl Logs {
         true
     }
 
-    fn default_retention() -> NonZeroDuration {
-        NonZeroDuration::new(Duration::from_secs(4 * 86_400)).expect("4 days is nonzero")
+    fn default_retention() -> Duration {
+        Duration::from_secs(4 * 86_400)
     }
 }
 
@@ -1027,7 +1028,7 @@ pub struct Settings {
     #[serde(default)]
     pub sync_protocol: SyncProtocol,
 
-    #[serde_as(as = "AsDuration<Seconds>")]
+    #[serde_as(as = "AsHumantimeDuration")]
     pub sync_frequency: Duration,
     pub db_path: PathBuf,
     pub record_store_path: PathBuf,
@@ -2139,6 +2140,45 @@ mod tests {
             .expect("could not build config")
             .try_deserialize()
             .expect("could not deserialize config")
+    }
+
+    #[rstest]
+    fn zero_log_retention_is_accepted() {
+        // `retention = 0` = keep for zero seconds (prune everything); it must load, not error.
+        Settings::validate_str("[logs]\nretention = 0\n").expect("retention 0 must load");
+
+        let settings = parse_settings("[logs]\nretention = 0\n");
+        assert_eq!(settings.logs.retention, std::time::Duration::ZERO);
+        // an unset per-type override inherits the global; an explicit 0 override is accepted too
+        assert_eq!(settings.logs.search.retention, None);
+        let overridden = parse_settings("[logs.search]\nretention = 0\n");
+        assert_eq!(overridden.logs.search.retention, Some(std::time::Duration::ZERO));
+    }
+
+    #[rstest]
+    fn negative_session_continue_minutes_disables_resume() {
+        // Legacy clamped a negative value to 0 (disabled); it must load, not error.
+        Settings::validate_str("[ai]\nsession_continue_minutes = -5\n")
+            .expect("negative session_continue_minutes must load");
+
+        let settings = parse_settings("[ai]\nsession_continue_minutes = -5\n");
+        assert_eq!(settings.ai.session_continue_minutes, None);
+    }
+
+    #[rstest]
+    fn sync_frequency_accepts_only_humantime_strings() {
+        // humantime strings work; "0" means always-sync (zero)
+        assert_eq!(
+            parse_settings("sync_frequency = \"5m\"\n").sync_frequency,
+            std::time::Duration::from_secs(300),
+        );
+        assert_eq!(
+            parse_settings("sync_frequency = \"0\"\n").sync_frequency,
+            std::time::Duration::ZERO,
+        );
+        // bare numbers (int or unit-less string) are rejected — no unit-less durations
+        assert!(Settings::validate_str("sync_frequency = 30\n").is_err());
+        assert!(Settings::validate_str("sync_frequency = \"30\"\n").is_err());
     }
 
     #[test]

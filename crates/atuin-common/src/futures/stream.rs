@@ -94,7 +94,7 @@ mod tests {
         assert_eq!(chunks_of(items, max), expected);
     }
 
-    #[test]
+    #[rstest]
     fn groups_by_key_not_value() {
         // The key collapses values into residue classes; equal residues chunk together, and each
         // chunk is tagged with that residue.
@@ -111,7 +111,7 @@ mod tests {
     proptest! {
         /// The four properties that fully characterise `chunk_by_bounded`, over arbitrary input.
         /// The small value domain makes runs of equal keys common.
-        #[test]
+        #[rstest]
         fn holds_invariants(items in prop::collection::vec(0i32..4, 0..50), max in 1usize..8) {
             let chunks = chunks_of(items.clone(), max);
 

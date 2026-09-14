@@ -8,6 +8,7 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use atuin_common::time::NonZeroDuration;
 use eyre::Result;
 
 use crate::event_serde;
@@ -37,7 +38,7 @@ pub trait SessionService: Send + Sync {
         &self,
         directory: Option<&str>,
         git_root: Option<&str>,
-        max_age_secs: i64,
+        window: Option<NonZeroDuration>,
     ) -> Result<Option<StoredSession>>;
 
     async fn load_events(&self, session_id: &str) -> Result<Vec<StoredEvent>>;
@@ -105,9 +106,9 @@ impl SessionService for LocalSessionService {
         &self,
         directory: Option<&str>,
         git_root: Option<&str>,
-        max_age_secs: i64,
+        window: Option<NonZeroDuration>,
     ) -> Result<Option<StoredSession>> {
-        self.store.find_resumable_session(directory, git_root, max_age_secs).await
+        self.store.find_resumable_session(directory, git_root, window).await
     }
 
     async fn load_events(&self, session_id: &str) -> Result<Vec<StoredEvent>> {
@@ -413,7 +414,11 @@ mod tests {
 
         // Now find and resume the session with a fresh service connection
         let stored = svc
-            .find_resumable(Some("/project"), Some("/project"), 3600)
+            .find_resumable(
+                Some("/project"),
+                Some("/project"),
+                NonZeroDuration::new(Duration::from_secs(3600)),
+            )
             .await
             .unwrap()
             .expect("should find session");
