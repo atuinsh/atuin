@@ -12,6 +12,16 @@ While we are very happy for you to use AI to build your contribution, it is esse
 
 We commit to supporting the latest stable version of Rust - nothing more, nothing less, no nightly.
 
+### Locked builds
+
+The workspace depends on [`locked-tripwire`](https://github.com/nextest-rs/locked-tripwire), a guard that fails the build when dependencies are resolved without `--locked`. This stops a plain `cargo install atuin` from silently swapping our audited `Cargo.lock` for newer, unreviewed dependency versions.
+
+One side effect: a bulk `cargo update` bumps `locked-tripwire` past its pinned version and breaks your build. Re-pin it to recover:
+
+```shell
+cargo update -p locked-tripwire --precise 0.1.1
+```
+
 Before working on anything, we suggest taking a copy of your Atuin data directory (`~/.local/share/atuin` on most \*nix platforms). If anything goes wrong, you can always restore it!
 
 While data directory backups are always a good idea, you can instruct Atuin to use custom path using the following environment variables:
