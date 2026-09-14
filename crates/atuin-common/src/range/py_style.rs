@@ -246,7 +246,7 @@ mod tests {
     proptest! {
         /// The same invariant `resolve_for` upholds, across the pair: whatever bounds and whatever
         /// the two halves look like, both ranges can index their slice without panicking.
-        #[test]
+        #[rstest]
         fn resolve_for_split_is_always_sliceable(
             start_bound in -20i64..20,
             end_bound in -20i64..20,
@@ -264,7 +264,7 @@ mod tests {
 
         /// A request that picks something out of the kept tail must never also claim that tail was
         /// unreachable, and one that reaches past a kept half must always report the gap.
-        #[test]
+        #[rstest]
         fn resolve_for_split_reports_the_gap_when_a_bound_overshoots(
             start_bound in -20i64..20,
             end_bound in -20i64..20,

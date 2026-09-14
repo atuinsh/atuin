@@ -240,7 +240,7 @@ mod tests {
         assert_eq!(now.saturating_duration_since(earlier).as_secs(), expected_secs);
     }
 
-    #[test]
+    #[rstest]
     fn datetime_formats_render_as_documented() {
         let t = OffsetDateTime::from_unix_nanos_i64(1_705_934_107_000_000_000);
         assert_eq!(t.display().ymd_hms().to_string(), "2024-01-22 14:35:07");
@@ -264,7 +264,7 @@ mod tests {
     proptest! {
         /// `from_timespec` accepts exactly the representable instants, and never
         /// panics -- for *any* pair of `i128`s, however absurd.
-        #[test]
+        #[rstest]
         fn from_timespec_is_total(secs in any::<i128>(), nsecs in any::<i128>()) {
             let result = OffsetDateTime::from_timespec(secs, nsecs);
 
@@ -284,7 +284,7 @@ mod tests {
 
         /// Where upstream is sound, we agree with it exactly. This pins the helper to
         /// `time`'s own semantics rather than just to itself.
-        #[test]
+        #[rstest]
         fn from_timespec_agrees_with_upstream_in_the_sound_range(
             secs in -400_000_000_000i128..=400_000_000_000,
             nsecs in -2_000_000_000i128..=2_000_000_000,
