@@ -106,6 +106,13 @@ atuin hook install opencode
 
 This writes Atuin's plugin to `~/.config/opencode/plugins/atuin.ts`, or to `$XDG_CONFIG_HOME/opencode/plugins/atuin.ts` if you have set `XDG_CONFIG_HOME`.
 
+The plugin imports the opencode plugin SDK, which opencode does not install for file plugins, so install it once inside your opencode config directory (opencode 1.x needs nothing more than this at runtime; the legacy `server()` implementation it uses is type-only):
+
+```shell
+# or $XDG_CONFIG_HOME/opencode if you have XDG_CONFIG_HOME set
+npm --prefix ~/.config/opencode install --save-exact @opencode/plugin
+```
+
 Then restart opencode. The plugin records every `bash` tool command with author `opencode`, using the tool's description as the entry's intent when opencode supplies one.
 
 Two details are worth knowing:
