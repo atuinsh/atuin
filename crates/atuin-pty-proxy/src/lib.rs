@@ -20,6 +20,20 @@ pub use pty_proxy::{PtyProxy, Shell, init_script};
 #[cfg(unix)]
 pub use screen::{is_pty_proxy_child, parent_socket_path};
 
+/// Drive the OSC 133 parser over `data`, returning the number of markers found.
+///
+/// Exposed only so benchmarks can exercise the parser directly; not part of the stable public API.
+#[cfg(unix)]
+#[doc(hidden)]
+#[must_use]
+pub fn bench_osc133_parse(data: &[u8]) -> usize {
+    let mut parser = osc133::Parser::new();
+    let mut chunks = parser.push(data);
+    let count = chunks.by_ref().count();
+    std::hint::black_box(chunks.trailing_data());
+    count
+}
+
 #[cfg(not(unix))]
 #[allow(dead_code)]
 mod unsupported {

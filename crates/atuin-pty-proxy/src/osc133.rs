@@ -113,10 +113,23 @@ impl<'data> Iterator for EventChunks<'_, 'data> {
         if self.exhausted {
             return None;
         }
-        for (i, b) in self.data.iter().copied().enumerate() {
+        let mut i = 0;
+        while i < self.data.len() {
+            // Fast path: in the ground state the only byte that matters is ESC, so skip straight
+            // over plain output — the overwhelming bulk of a terminal stream — to the next escape
+            // instead of inspecting every byte. Escape sequences themselves are short, so the
+            // byte-at-a-time state machine below only runs inside them.
+            if matches!(self.parser.state, State::Ground) {
+                match memchr::memchr(ESC, &self.data[i..]) {
+                    Some(rel) => i += rel,
+                    None => break,
+                }
+            }
+            let b = self.data[i];
             if let Some(item) = self.handle_byte(b, i) {
                 return Some(item);
             }
+            i += 1;
         }
         self.exhausted = true;
         None
