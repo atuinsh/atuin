@@ -32,6 +32,7 @@ easy-cast = { workspace = true }
 fs-err = { workspace = true }
 futures = { workspace = true }
 getrandom = { workspace = true }
+humantime = { workspace = true }
 itertools = { workspace = true }
 libsqlite3-sys = { workspace = true, optional = true }
 num-traits = { workspace = true }
@@ -72,6 +73,7 @@ proptest = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use atuin_client::api_client;
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::record::sync::{ClientSource, SyncEngine};
+use atuin_client::record::sync::{ClientSource, SyncSession};
 use atuin_common::encryption::paseto_v4;
 use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag};
@@ -39,8 +39,8 @@ impl TestServer {
         api_client::Client::new(
             self.address.clone(),
             &api_client::AuthToken::Token(resp.session),
-            5,
-            30,
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(30),
             &Default::default(),
             api_client::caps_client_anonymous(&self.address, &Default::default()).unwrap(),
         )
@@ -151,7 +151,7 @@ async fn download(
     }
 
     let key = key();
-    let engine = SyncEngine::builder()
+    let session = SyncSession::builder()
         .store(store.clone())
         .client_source(ClientSource::FromClient(client))
         .build()
@@ -159,9 +159,9 @@ async fn download(
         .await
         .unwrap()
         .with_page_size(std::num::NonZeroU64::new(page_size).unwrap());
-    let (diff, _) = engine.diff().await.unwrap();
-    let operations = SyncEngine::operations(diff).unwrap();
-    let (_, downloaded) = engine.keyed(&key).sync_remote(operations).await.unwrap();
+    let (diff, _) = session.diff().await.unwrap();
+    let operations = SyncSession::operations(diff).unwrap();
+    let (_, downloaded) = session.keyed(&key).sync_remote(operations).await.unwrap();
 
     let status = store.status().await.unwrap();
     let local_idx = *status.hosts.get(&host).unwrap().get(&tag).unwrap();
@@ -218,7 +218,7 @@ async fn upload(
     }
 
     let key = key();
-    let engine = SyncEngine::builder()
+    let session = SyncSession::builder()
         .store(store)
         .client_source(ClientSource::FromClient(client))
         .build()
@@ -226,11 +226,11 @@ async fn upload(
         .await
         .unwrap()
         .with_page_size(std::num::NonZeroU64::new(page_size).unwrap());
-    let (diff, _) = engine.diff().await.unwrap();
-    let operations = SyncEngine::operations(diff).unwrap();
-    let (uploaded, _) = engine.keyed(&key).sync_remote(operations).await.unwrap();
+    let (diff, _) = session.diff().await.unwrap();
+    let operations = SyncSession::operations(diff).unwrap();
+    let (uploaded, _) = session.keyed(&key).sync_remote(operations).await.unwrap();
 
-    let status = engine.record_status().await.unwrap();
+    let status = session.record_status().await.unwrap();
     let remote_idx = *status.hosts.get(&host).unwrap().get(&tag).unwrap();
 
     // The PR that added these tests also changed the type of `uploaded` from `i64` to `u64`; the

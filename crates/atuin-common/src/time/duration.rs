@@ -1,9 +1,14 @@
 //! Duration construction and formatting.
 
 use core::fmt;
+use core::marker::PhantomData;
+use std::num::NonZeroU64;
 use std::ops::ControlFlow;
 
 use easy_cast::Conv;
+use serde::de::{self, Visitor};
+use serde::{Deserializer, Serializer};
+use serde_with::{DeserializeAs, SerializeAs};
 
 /// Returned by [`DurationExt::try_new`] when the requested seconds/nanoseconds cannot be
 /// represented by the target `Duration` type.
@@ -199,12 +204,288 @@ impl DurationExt<Self> for time::Duration {
     }
 }
 
+/// A [`Duration`](std::time::Duration) guaranteed to be non-zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NonZeroDuration(std::time::Duration);
+
+impl NonZeroDuration {
+    /// Wrap `duration`, returning `None` if it is zero.
+    #[must_use]
+    pub const fn new(duration: std::time::Duration) -> Option<Self> {
+        if duration.is_zero() {
+            None
+        } else {
+            Some(Self(duration))
+        }
+    }
+
+    /// Build from a non-zero number of whole seconds.
+    #[must_use]
+    pub const fn from_secs(secs: NonZeroU64) -> Self {
+        Self(std::time::Duration::from_secs(secs.get()))
+    }
+
+    /// The wrapped, always-non-zero duration.
+    #[must_use]
+    pub const fn get(self) -> std::time::Duration {
+        self.0
+    }
+}
+
+/// A time unit used to interpret a bare number in a config duration field.
+pub trait DurationUnit {
+    /// The number of seconds in one unit.
+    const SECS_PER_UNIT: u64;
+}
+
+/// A bare number is a count of whole seconds.
+pub enum Seconds {}
+/// A bare number is a count of whole minutes.
+pub enum Minutes {}
+/// A bare number is a count of whole days.
+pub enum Days {}
+
+impl DurationUnit for Seconds {
+    const SECS_PER_UNIT: u64 = 1;
+}
+impl DurationUnit for Minutes {
+    const SECS_PER_UNIT: u64 = 60;
+}
+impl DurationUnit for Days {
+    const SECS_PER_UNIT: u64 = 86_400;
+}
+
+/// Parse a duration written as a bare number (interpreted in `U`) or a units string (`"500ms"`,
+/// `"5m"`). humantime units are absolute; a unit-less number string is interpreted in `U`.
+fn parse_duration_in<'de, U, D>(deserializer: D) -> Result<std::time::Duration, D::Error>
+where
+    U: DurationUnit,
+    D: Deserializer<'de>,
+{
+    struct DurationVisitor<U>(PhantomData<U>);
+
+    impl<U: DurationUnit> Visitor<'_> for DurationVisitor<U> {
+        type Value = std::time::Duration;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a number, or a duration string like \"500ms\"")
+        }
+
+        fn visit_u64<E: de::Error>(self, n: u64) -> Result<Self::Value, E> {
+            n.checked_mul(U::SECS_PER_UNIT)
+                .map(std::time::Duration::from_secs)
+                .ok_or_else(|| E::custom("duration is too large"))
+        }
+
+        fn visit_i64<E: de::Error>(self, n: i64) -> Result<Self::Value, E> {
+            let n = u64::try_from(n)
+                .map_err(|_| E::custom(format!("duration cannot be negative: {n}")))?;
+            self.visit_u64(n)
+        }
+
+        fn visit_f64<E: de::Error>(self, n: f64) -> Result<Self::Value, E> {
+            if !n.is_finite() || n < 0.0 {
+                return Err(E::custom(format!("invalid duration: {n}")));
+            }
+            std::time::Duration::try_from_secs_f64(n * U::SECS_PER_UNIT as f64)
+                .map_err(|_| E::custom("duration is out of range"))
+        }
+
+        fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+            if let Ok(duration) = humantime::parse_duration(value) {
+                return Ok(duration);
+            }
+            if let Ok(n) = value.parse::<u64>() {
+                return self.visit_u64(n);
+            }
+            if let Ok(n) = value.parse::<f64>() {
+                return self.visit_f64(n);
+            }
+            Err(E::custom(format!("invalid duration: {value:?}")))
+        }
+    }
+
+    deserializer.deserialize_any(DurationVisitor::<U>(PhantomData))
+}
+
+/// Render a duration as a units string that round-trips through the duration deserializers.
+fn duration_to_string(duration: std::time::Duration) -> String {
+    humantime::format_duration(duration).to_string()
+}
+
+impl serde::Serialize for NonZeroDuration {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&duration_to_string(self.0))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for NonZeroDuration {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::new(parse_duration_in::<Seconds, D>(deserializer)?)
+            .ok_or_else(|| de::Error::custom("duration must be non-zero"))
+    }
+}
+
+/// `serde_with` marker for a duration whose bare-number unit is `U` (e.g. [`Seconds`], [`Minutes`],
+/// [`Days`]), also accepting units strings like `"500ms"`; serializes as a units string.
+///
+/// Targets both [`std::time::Duration`] (zero allowed) and [`NonZeroDuration`] (zero rejected). Use
+/// as `#[serde_as(as = "AsDuration<Minutes>")]`.
+pub struct AsDuration<U>(PhantomData<U>);
+
+impl<'de, U: DurationUnit> DeserializeAs<'de, std::time::Duration> for AsDuration<U> {
+    fn deserialize_as<D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<std::time::Duration, D::Error> {
+        parse_duration_in::<U, D>(deserializer)
+    }
+}
+
+impl<'de, U: DurationUnit> DeserializeAs<'de, NonZeroDuration> for AsDuration<U> {
+    fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<NonZeroDuration, D::Error> {
+        NonZeroDuration::new(parse_duration_in::<U, D>(deserializer)?)
+            .ok_or_else(|| de::Error::custom("duration must be non-zero"))
+    }
+}
+
+impl<U> SerializeAs<std::time::Duration> for AsDuration<U> {
+    fn serialize_as<S: Serializer>(
+        source: &std::time::Duration,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&duration_to_string(*source))
+    }
+}
+
+impl<U> SerializeAs<NonZeroDuration> for AsDuration<U> {
+    fn serialize_as<S: Serializer>(
+        source: &NonZeroDuration,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&duration_to_string(source.get()))
+    }
+}
+
+/// `serde_with` marker for `Option<NonZeroDuration>` where a zero value means `None` ("disabled").
+///
+/// Bare numbers use unit `U`; units strings are also accepted. Serializes `None` as `"0"`. Use as
+/// `#[serde_as(as = "AsDisableableDuration<Seconds>")]`.
+pub struct AsDisableableDuration<U>(PhantomData<U>);
+
+impl<'de, U: DurationUnit> DeserializeAs<'de, Option<NonZeroDuration>>
+    for AsDisableableDuration<U>
+{
+    fn deserialize_as<D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<NonZeroDuration>, D::Error> {
+        Ok(NonZeroDuration::new(parse_duration_in::<U, D>(deserializer)?))
+    }
+}
+
+impl<U> SerializeAs<Option<NonZeroDuration>> for AsDisableableDuration<U> {
+    fn serialize_as<S: Serializer>(
+        source: &Option<NonZeroDuration>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match source {
+            Some(duration) => serializer.serialize_str(&duration_to_string(duration.get())),
+            None => serializer.serialize_str("0"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
     use rstest::rstest;
 
     use super::*;
+
+    #[test]
+    fn nonzero_duration_rejects_zero() {
+        assert!(NonZeroDuration::new(std::time::Duration::ZERO).is_none());
+        assert_eq!(
+            NonZeroDuration::new(std::time::Duration::from_secs(5)).map(NonZeroDuration::get),
+            Some(std::time::Duration::from_secs(5)),
+        );
+    }
+
+    #[test]
+    fn disableable_duration_marker_uses_unit_and_zero_is_none() {
+        use serde::{Deserialize, Serialize};
+        use serde_with::serde_as;
+
+        #[serde_as]
+        #[derive(Serialize, Deserialize, PartialEq, Debug)]
+        struct Holder {
+            #[serde_as(as = "AsDisableableDuration<Seconds>")]
+            secs: Option<NonZeroDuration>,
+            #[serde_as(as = "AsDisableableDuration<Minutes>")]
+            mins: Option<NonZeroDuration>,
+        }
+
+        let of = |json: &str| serde_json::from_str::<Holder>(json).unwrap();
+        let d = |ms| NonZeroDuration::new(std::time::Duration::from_millis(ms));
+
+        // bare int uses the field's unit; 0 disables (None)
+        let h = of(r#"{"secs":300,"mins":0}"#);
+        assert_eq!(h.secs, d(300_000));
+        assert_eq!(h.mins, None);
+        // minutes field: bare 5 = 5 minutes
+        let h = of(r#"{"secs":0,"mins":5}"#);
+        assert_eq!(h.secs, None);
+        assert_eq!(h.mins, d(300_000));
+        // unit strings are absolute regardless of the field's unit
+        let h = of(r#"{"secs":"500ms","mins":"90s"}"#);
+        assert_eq!(h.secs, d(500));
+        assert_eq!(h.mins, d(90_000));
+
+        // serialize round-trips
+        let h = Holder {
+            secs: d(500),
+            mins: d(300_000),
+        };
+        let json = serde_json::to_string(&h).unwrap();
+        assert_eq!(serde_json::from_str::<Holder>(&json).unwrap(), h);
+    }
+
+    #[test]
+    fn required_duration_marker_uses_unit_and_zero_policy() {
+        use serde::Deserialize;
+        use serde_with::serde_as;
+
+        #[serde_as]
+        #[derive(Deserialize)]
+        struct Holder {
+            #[serde_as(as = "AsDuration<Days>")]
+            retention: std::time::Duration,
+            #[serde_as(as = "AsDuration<Seconds>")]
+            timeout: NonZeroDuration,
+        }
+
+        // days unit; the plain-Duration target allows zero, and accepts unit strings
+        let h: Holder = serde_json::from_str(r#"{"retention":2,"timeout":"1500ms"}"#).unwrap();
+        assert_eq!(h.retention, std::time::Duration::from_secs(2 * 86_400));
+        assert_eq!(h.timeout.get(), std::time::Duration::from_millis(1500));
+        let h: Holder = serde_json::from_str(r#"{"retention":0,"timeout":30}"#).unwrap();
+        assert_eq!(h.retention, std::time::Duration::ZERO);
+
+        // the NonZeroDuration target rejects zero
+        assert!(serde_json::from_str::<Holder>(r#"{"retention":2,"timeout":0}"#).is_err());
+    }
+
+    #[test]
+    fn nonzero_duration_deserialize_rejects_zero() {
+        assert!(serde_json::from_str::<NonZeroDuration>("0").is_err());
+        assert_eq!(
+            serde_json::from_str::<NonZeroDuration>(r#""5m""#).unwrap().get(),
+            std::time::Duration::from_secs(300),
+        );
+        assert_eq!(
+            serde_json::from_str::<NonZeroDuration>("300").unwrap().get(),
+            std::time::Duration::from_secs(300),
+        );
+    }
 
     #[rstest]
     #[case::zero(0, 0)]
