@@ -45,7 +45,7 @@ mod wrapped;
 pub enum Cmd {
     /// Setup Atuin features
     #[command()]
-    Setup,
+    Setup(setup::Cmd),
 
     /// Manipulate shell history
     #[command(subcommand)]
@@ -262,7 +262,7 @@ impl Cmd {
         let theme = theme_manager.load_theme(theme_name.as_str(), settings.theme.max_depth);
 
         match self {
-            Self::Setup => setup::run(&settings).await,
+            Self::Setup(setup) => setup.run(&settings, &db, sqlite_store).await,
             Self::Import(import) => import.run(&db).await,
             Self::Stats(stats) => stats.run(&db, &settings, theme).await,
             Self::Search(search) => search.run(db, &mut settings, sqlite_store, theme).await,
