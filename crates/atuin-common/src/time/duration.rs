@@ -258,7 +258,7 @@ impl DurationUnit for Days {
 /// Parse a duration written as a bare number (interpreted in `U`) or a units string (`"500ms"`,
 /// `"5m"`). humantime units are absolute; a unit-less number string is interpreted in `U`.
 ///
-/// When `clamp_negative_to_zero` is set, a negative value yields [`Duration::ZERO`] instead of an
+/// When `clamp_negative_to_zero` is set, a negative value yields [`Duration::ZERO`](std::time::Duration::ZERO) instead of an
 /// error; disableable fields rely on this to fold any non-positive value into "disabled".
 fn parse_duration_in<'de, U, D>(
     deserializer: D,
