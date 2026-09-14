@@ -9,6 +9,7 @@ use atuin_client::history::HistoryId;
 use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sync::{ClientSource, SyncEngine};
 use atuin_client::settings::Settings;
+use atuin_common::time::NonZeroDuration;
 use atuin_dotfiles::store::AliasStore;
 use atuin_dotfiles::store::var::VarStore;
 use easy_cast::Conv;
@@ -20,6 +21,8 @@ use tokio::time::{self, MissedTickBehavior};
 
 use crate::daemon::{Component, DaemonHandle};
 use crate::events::DaemonEvent;
+
+const DISABLED_SYNC_POLL: Duration = Duration::from_secs(300);
 
 /// Commands that can be sent to the sync task.
 enum SyncCommand {
@@ -123,7 +126,9 @@ async fn sync_loop(handle: DaemonHandle, mut cmd_rx: mpsc::Receiver<SyncCommand>
     // Don't backoff by more than 30 mins (with a random jitter of up to 1 min)
     let max_interval: f64 = 60.0 * 30.0 + rand::thread_rng().gen_range(0.0..60.0);
 
-    let mut ticker = time::interval(time::Duration::from_secs(settings.daemon.sync_frequency));
+    let mut ticker = time::interval(
+        settings.daemon.sync_frequency.map_or(DISABLED_SYNC_POLL, NonZeroDuration::get),
+    );
 
     // IMPORTANT: without this, if we miss ticks because a sync takes ages or is otherwise delayed,
     // we may end up running a lot of syncs in a hot loop.
@@ -138,7 +143,9 @@ async fn sync_loop(handle: DaemonHandle, mut cmd_rx: mpsc::Receiver<SyncCommand>
 
                 // Skip periodic ticks if auto_sync is disabled AND we're not retrying
                 // a previous failure. Retries must continue regardless of auto_sync.
-                if !settings.auto_sync && sync_state == SyncState::Idle {
+                if (!settings.auto_sync || settings.daemon.sync_frequency.is_none())
+                    && sync_state == SyncState::Idle
+                {
                     drop(settings);
                     tracing::debug!("auto_sync disabled, skipping periodic sync tick");
                     continue;
@@ -283,12 +290,10 @@ async fn do_sync_tick(
             }
 
             // Reset backoff on success
-            if ticker.period().as_secs() != settings.daemon.sync_frequency {
-                *ticker = time::interval_at(
-                    tokio::time::Instant::now()
-                        + Duration::from_secs(settings.daemon.sync_frequency),
-                    time::Duration::from_secs(settings.daemon.sync_frequency),
-                );
+            let target =
+                settings.daemon.sync_frequency.map_or(DISABLED_SYNC_POLL, NonZeroDuration::get);
+            if ticker.period() != target {
+                *ticker = time::interval_at(tokio::time::Instant::now() + target, target);
                 ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
             }
 
