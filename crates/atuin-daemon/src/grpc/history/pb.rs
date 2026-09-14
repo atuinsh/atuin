@@ -21,6 +21,7 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use tonic::Status;
 
+pub use crate::grpc::common::pb::HistoryId;
 use crate::grpc::common::pb::{self as common, Uuid};
 use crate::grpc::common::{CollectCappedError, TryCollectResultsCappedExt};
 use crate::history_journal::{
