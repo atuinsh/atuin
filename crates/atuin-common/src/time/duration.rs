@@ -325,14 +325,9 @@ where
     })
 }
 
-/// Render a duration as a units string that round-trips through the duration deserializers.
-fn duration_to_string(duration: std::time::Duration) -> String {
-    humantime::format_duration(duration).to_string()
-}
-
 impl serde::Serialize for NonZeroDuration {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&duration_to_string(self.0))
+        serializer.serialize_str(&humantime::format_duration(self.0).to_string())
     }
 }
 
@@ -370,7 +365,7 @@ impl<U> SerializeAs<std::time::Duration> for AsDuration<U> {
         source: &std::time::Duration,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&duration_to_string(*source))
+        serializer.serialize_str(&humantime::format_duration(*source).to_string())
     }
 }
 
@@ -379,16 +374,12 @@ impl<U> SerializeAs<NonZeroDuration> for AsDuration<U> {
         source: &NonZeroDuration,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&duration_to_string(source.get()))
+        serializer.serialize_str(&humantime::format_duration(source.get()).to_string())
     }
 }
 
 /// `serde_with` marker for `Option<NonZeroDuration>` where any non-positive value means `None`
 /// ("disabled").
-///
-/// Bare numbers use unit `U`; units strings are also accepted. Zero and negatives both deserialize
-/// to `None`, matching the legacy clamp-to-zero behavior of the fields it replaces. Serializes
-/// `None` as `"0"`. Use as `#[serde_as(as = "AsDisableableDuration<Seconds>")]`.
 pub struct AsDisableableDuration<U>(PhantomData<U>);
 
 impl<'de, U: DurationUnit> DeserializeAs<'de, Option<NonZeroDuration>>
@@ -407,15 +398,16 @@ impl<U> SerializeAs<Option<NonZeroDuration>> for AsDisableableDuration<U> {
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
         match source {
-            Some(duration) => serializer.serialize_str(&duration_to_string(duration.get())),
+            Some(duration) => {
+                serializer.serialize_str(&humantime::format_duration(duration.get()).to_string())
+            }
             None => serializer.serialize_str("0"),
         }
     }
 }
 
 /// `serde_with` marker for a [`Duration`](std::time::Duration) accepted ONLY as a units string
-/// (`"500ms"`, `"5m"`, `"1h"`; `"0"` is zero). Unlike [`AsDuration`], bare numbers are rejected —
-/// use it where the config value has always been a units string and unit-less numbers are unwanted.
+/// (`"500ms"`, `"5m"`, `"1h"`; `"0"` is zero). Unlike [`AsDuration`], bare numbers are rejected.
 pub struct AsHumantimeDuration;
 
 impl<'de> DeserializeAs<'de, std::time::Duration> for AsHumantimeDuration {
@@ -446,7 +438,7 @@ impl SerializeAs<std::time::Duration> for AsHumantimeDuration {
         source: &std::time::Duration,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&duration_to_string(*source))
+        serializer.serialize_str(&humantime::format_duration(*source).to_string())
     }
 }
 
