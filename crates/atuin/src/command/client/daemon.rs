@@ -269,9 +269,8 @@ fn spawn_daemon_process() -> Result<()> {
     Ok(())
 }
 
-fn startup_timeout(settings: &Settings) -> Result<Duration> {
-    Duration::try_from_secs_f64(settings.local_timeout.max(0.5) + 2.0)
-        .wrap_err("invalid local_timeout setting")
+fn startup_timeout(settings: &Settings) -> Duration {
+    settings.local_timeout.max(Duration::from_millis(500)) + Duration::from_secs(2)
 }
 
 /// An error that occurred while trying to remove a socket.
@@ -378,7 +377,7 @@ fn ensure_autostart_supported(settings: &Settings) -> Result<()> {
 pub async fn ensure_daemon_running(settings: &Settings) -> Result<()> {
     ensure_autostart_supported(settings)?;
 
-    let timeout = startup_timeout(settings)?;
+    let timeout = startup_timeout(settings);
     let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
     let startup_lock_path = daemon_startup_lock_path(&pidfile_path);
     let startup_lock = wait_for_lock(&startup_lock_path, timeout).await?;
@@ -578,7 +577,7 @@ async fn restart_cmd(settings: &Settings) -> Result<()> {
     spawn_daemon_process()?;
     println!("Starting daemon...");
 
-    let timeout = startup_timeout(settings)?;
+    let timeout = startup_timeout(settings);
     let status = wait_until_ready(settings, timeout).await?.status().await?;
 
     println!("Daemon restarted");

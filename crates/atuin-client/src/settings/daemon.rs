@@ -1,3 +1,4 @@
+use std::num::NonZeroU64;
 use std::path::PathBuf;
 #[cfg(unix)]
 use std::{borrow::Cow, path::Path};
@@ -6,11 +7,17 @@ use std::{borrow::Cow, path::Path};
 use atuin_common::os::unix::{SecureTempDirError, create_secure_temp_dir};
 #[cfg(unix)]
 use atuin_common::path::EnvDependentPathBuf;
+use atuin_common::time::{AsDisableableDuration, NonZeroDuration, Seconds};
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 
 #[cfg(unix)]
 const SOCKET_NAME: &str = "atuin.sock";
 
+const DEFAULT_SYNC_FREQUENCY: NonZeroDuration =
+    NonZeroDuration::from_secs(NonZeroU64::new(300).unwrap());
+
+#[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Daemon {
     /// Use the daemon to sync
@@ -21,8 +28,10 @@ pub struct Daemon {
     /// Automatically start and manage a local daemon when needed.
     pub autostart: bool,
 
-    /// The daemon will handle sync on an interval. How often to sync, in seconds.
-    pub sync_frequency: u64,
+    /// The daemon will handle sync on an interval. How often to sync, in seconds. `0` disables
+    /// periodic sync.
+    #[serde_as(as = "AsDisableableDuration<Seconds>")]
+    pub sync_frequency: Option<NonZeroDuration>,
 
     /// The path to the unix socket used by the daemon.
     /// When unset, [`Daemon::socket_path`] picks the default location.
@@ -43,7 +52,7 @@ impl Default for Daemon {
         Self {
             enabled: false,
             autostart: false,
-            sync_frequency: 300,
+            sync_frequency: Some(DEFAULT_SYNC_FREQUENCY),
             socket_path: None,
             pidfile_path: "".to_string(),
             systemd_socket: false,

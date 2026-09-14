@@ -4,7 +4,10 @@ mod duration;
 mod offset_date_time;
 mod utc_offset;
 
-pub use duration::{DurationDisplay, DurationExt, DurationOverflow, DurationStyle};
+pub use duration::{
+    AsDisableableDuration, AsDuration, AsHumantimeDuration, Days, DurationDisplay, DurationExt,
+    DurationOverflow, DurationStyle, DurationUnit, Minutes, NonZeroDuration, Seconds,
+};
 pub use offset_date_time::{
     OffsetDateTimeDisplay, OffsetDateTimeExt, OffsetDateTimeStyle, TimespecOutOfRange, YMD_HM,
     YMD_HMS,

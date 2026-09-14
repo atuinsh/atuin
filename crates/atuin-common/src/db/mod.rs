@@ -327,7 +327,7 @@ mod tests {
         assert!(matches!(uri.parse::<OwnedDbUrl>(), Err(DbUrlParseError::UnknownScheme)));
     }
 
-    #[test]
+    #[rstest]
     fn db_url_serde_round_trips_through_the_real_connection_string() {
         let owned: OwnedDbUrl = "postgres://user:hunter2@host/atuin".parse().unwrap();
         let json = serde_json::to_string(&owned).unwrap();
@@ -356,13 +356,13 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[rstest]
         fn explicit_column_lists_are_allowed(cols in prop::collection::vec("[b-z][a-z0-9_]{0,7}", 1..8)) {
             let sql = format!("select {} from t", cols.join(", "));
             prop_assert_eq!(BannedPattern::test(&sql), None);
         }
 
-        #[test]
+        #[rstest]
         fn a_bare_star_selector_is_always_rejected(lead in prop::collection::vec("[b-z][a-z0-9_]{0,7}", 0..4)) {
             let mut fields = lead;
             fields.push("*".to_owned());
@@ -370,7 +370,7 @@ mod tests {
             prop_assert_eq!(BannedPattern::test(&sql), Some(BannedPattern::StarGlob));
         }
 
-        #[test]
+        #[rstest]
         fn a_qualified_star_is_always_rejected(alias in "[b-z][a-z0-9_]{0,7}") {
             let sql = format!("select {alias}.* from t {alias}");
             prop_assert_eq!(BannedPattern::test(&sql), Some(BannedPattern::StarGlob));

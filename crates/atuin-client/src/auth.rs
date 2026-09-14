@@ -103,8 +103,8 @@ pub async fn auth_client(settings: &Settings) -> AnyAuthClient {
 pub struct LegacyAuthClient {
     address: Url,
     session_token: Option<String>,
-    connect_timeout: u64,
-    timeout: u64,
+    connect_timeout: std::time::Duration,
+    timeout: std::time::Duration,
     extra_headers: HashMap<String, String>,
 }
 
@@ -113,8 +113,8 @@ impl LegacyAuthClient {
     pub fn new(
         address: &Url,
         session_token: Option<String>,
-        connect_timeout: u64,
-        timeout: u64,
+        connect_timeout: std::time::Duration,
+        timeout: std::time::Duration,
         extra_headers: HashMap<String, String>,
     ) -> Self {
         Self {
@@ -136,8 +136,8 @@ impl LegacyAuthClient {
 
         Ok(crate::api_client::client_builder(&self.extra_headers)
             .default_headers(headers)
-            .connect_timeout(std::time::Duration::from_secs(self.connect_timeout))
-            .timeout(std::time::Duration::from_secs(self.timeout))
+            .connect_timeout(self.connect_timeout)
+            .timeout(self.timeout)
             .build()?)
     }
 }

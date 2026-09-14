@@ -286,13 +286,13 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[rstest]
         fn display_round_trips(value in 0.0..=f64::MAX) {
             let pct = Percent::new(value);
             prop_assert_eq!(pct.to_string().parse::<Percent>().unwrap(), pct);
         }
 
-        #[test]
+        #[rstest]
         fn a_share_of_at_most_the_whole_never_exceeds_it(
             pct in 0.0..=100.0_f64,
             value in 0..(1_u64 << 40),
@@ -300,13 +300,13 @@ mod tests {
             prop_assert!(Percent::new(pct) * value <= value);
         }
 
-        #[test]
+        #[rstest]
         fn an_integer_share_keeps_the_sign(pct in 0.0..=1e6_f64, value in any::<i64>()) {
             let share = Percent::new(pct) * value;
             prop_assert_eq!(share < 0, value < 0 && share != 0);
         }
 
-        #[test]
+        #[rstest]
         fn a_float_share_matches_the_formula(pct in 0.0..=1e6_f64, value in -1e12..=1e12_f64) {
             let expected = value * pct / 100.0;
             prop_assert!((Percent::new(pct) * value - expected).abs() <= expected.abs() * f64::EPSILON);
