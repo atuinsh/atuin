@@ -1,5 +1,8 @@
 //! Duration construction and formatting.
 
+// This module defines and implements the deprecated `AsDuration`/`AsDisableableDuration` markers.
+#![allow(deprecated)]
+
 use core::fmt;
 use core::marker::PhantomData;
 use std::num::NonZeroU64;
@@ -343,6 +346,10 @@ impl<'de> serde::Deserialize<'de> for NonZeroDuration {
 ///
 /// Targets both [`std::time::Duration`] (zero allowed) and [`NonZeroDuration`] (zero rejected). Use
 /// as `#[serde_as(as = "AsDuration<Minutes>")]`.
+#[deprecated(note = "accepts a bare, unit-less number only for backward compatibility with older \
+                     configs; write durations as unit strings like \"30s\", \"5m\", or \"4d\". \
+                     New config fields should require unit strings rather than adding \
+                     bare-number parsing.")]
 pub struct AsDuration<U>(PhantomData<U>);
 
 impl<'de, U: DurationUnit> DeserializeAs<'de, std::time::Duration> for AsDuration<U> {
@@ -380,6 +387,10 @@ impl<U> SerializeAs<NonZeroDuration> for AsDuration<U> {
 
 /// `serde_with` marker for `Option<NonZeroDuration>` where any non-positive value means `None`
 /// ("disabled").
+#[deprecated(note = "accepts a bare, unit-less number only for backward compatibility with older \
+                     configs; write durations as unit strings like \"30s\" or \"5m\" (or \"0\" \
+                     to disable). New config fields should require unit strings rather than \
+                     adding bare-number parsing.")]
 pub struct AsDisableableDuration<U>(PhantomData<U>);
 
 impl<'de, U: DurationUnit> DeserializeAs<'de, Option<NonZeroDuration>>

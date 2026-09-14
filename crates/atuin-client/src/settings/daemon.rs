@@ -7,6 +7,8 @@ use std::{borrow::Cow, path::Path};
 use atuin_common::os::unix::{SecureTempDirError, create_secure_temp_dir};
 #[cfg(unix)]
 use atuin_common::path::EnvDependentPathBuf;
+// `AsDisableableDuration` is deprecated.
+#[allow(deprecated)]
 use atuin_common::time::{AsDisableableDuration, NonZeroDuration, Seconds};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -17,6 +19,7 @@ const SOCKET_NAME: &str = "atuin.sock";
 const DEFAULT_SYNC_FREQUENCY: NonZeroDuration =
     NonZeroDuration::from_secs(NonZeroU64::new(300).unwrap());
 
+#[allow(deprecated)]
 #[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Daemon {

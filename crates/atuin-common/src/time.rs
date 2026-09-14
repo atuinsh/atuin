@@ -4,6 +4,7 @@ mod duration;
 mod offset_date_time;
 mod utc_offset;
 
+#[allow(deprecated)]
 pub use duration::{
     AsDisableableDuration, AsDuration, Days, DurationDisplay, DurationExt, DurationOverflow,
     DurationStyle, DurationUnit, Minutes, NonZeroDuration, Seconds,

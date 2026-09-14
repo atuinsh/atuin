@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use atuin_common::logs::LogLevel;
 use atuin_common::path::PathExt;
+// `AsDuration`/`AsDisableableDuration` are deprecated.
+#[allow(deprecated)]
 use atuin_common::time::{
     AsDisableableDuration, AsDuration, Days, Minutes, NonZeroDuration, Seconds,
 };
@@ -571,6 +573,7 @@ pub struct Tmux {
 }
 
 /// Configuration for a specific log type (search or daemon).
+#[allow(deprecated)]
 #[serde_as]
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct LogConfig {
@@ -597,6 +600,7 @@ impl LogConfig {
     }
 }
 
+#[allow(deprecated)]
 #[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Logs {
@@ -650,6 +654,7 @@ pub enum AiEndpointProtocol {
     Auto,
 }
 
+#[allow(deprecated)]
 #[serde_as]
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
 pub struct Ai {
@@ -1008,6 +1013,7 @@ impl Default for Ui {
     }
 }
 
+#[allow(deprecated)]
 #[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Settings {
