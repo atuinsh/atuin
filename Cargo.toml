@@ -115,7 +115,7 @@ prost = "0.14"
 prost-types = "0.14"
 protox = "0.9"
 pulldown-cmark = "0.13.0"
-rand = { version = "0.8.5", features = ["std"] }
+rand = { version = "0.10.1", features = ["std"] }
 ratatui = "0.30.0"
 ratatui-core = "0.1"
 regex = "1.10.5"

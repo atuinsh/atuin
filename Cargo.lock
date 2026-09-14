@@ -416,7 +416,7 @@ dependencies = [
  "palette",
  "pretty_assertions",
  "proptest",
- "rand 0.8.7",
+ "rand 0.10.1",
  "regex",
  "reqwest",
  "reqwest-middleware",
@@ -522,7 +522,7 @@ dependencies = [
  "prost",
  "prost-types",
  "protox",
- "rand 0.8.7",
+ "rand 0.10.1",
  "reqwest",
  "rstest",
  "strum 0.27.2",
@@ -586,7 +586,7 @@ dependencies = [
  "crypto_secretbox",
  "derive_more",
  "eyre",
- "rand 0.8.7",
+ "rand 0.10.1",
  "rmp",
  "rstest",
  "serde",
@@ -602,7 +602,7 @@ dependencies = [
  "codspeed-divan-compat",
  "crossterm",
  "easy-cast",
- "rand 0.8.7",
+ "rand 0.10.1",
  "rstest",
  "serde",
  "time",
@@ -707,7 +707,7 @@ dependencies = [
  "futures-util",
  "metrics",
  "metrics-exporter-prometheus",
- "rand 0.8.7",
+ "rand 0.10.1",
  "regex",
  "reqwest",
  "rstest",
@@ -3955,7 +3955,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c80231409c20246a13fddb31776fb942c38553c51e871f8cbd687a4cfb5843d"
 dependencies = [
  "phf_shared",
- "rand 0.8.7",
+ "rand 0.8.8",
 ]
 
 [[package]]
@@ -4330,9 +4330,9 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rand"
-version = "0.8.7"
+version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22f6172bdec972074665ed81ed53b71da00bfc44b65a753cfde883ec4c702a1a"
+checksum = "e058c7de0b26af77780c769414d6257830bb240f3c38477dbc2c16e5f54d6d4c"
 dependencies = [
  "libc",
  "rand_chacha 0.3.1",
@@ -4834,7 +4834,7 @@ dependencies = [
  "digest 0.10.7",
  "ed25519-dalek",
  "generic-array",
- "rand 0.8.7",
+ "rand 0.8.8",
  "rusty_paseto",
  "serde",
  "sha2 0.10.9",
@@ -5844,7 +5844,7 @@ checksum = "a30fd743a02bf35236f6faf99adb03089bb77e91c998dac2c2ad76bb424f668c"
 dependencies = [
  "once_cell",
  "pbkdf2",
- "rand 0.8.7",
+ "rand 0.8.8",
  "rustc-hash 1.1.0",
  "sha2 0.10.9",
  "thiserror 1.0.69",
