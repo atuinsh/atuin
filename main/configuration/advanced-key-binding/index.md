@@ -189,9 +189,9 @@ Actions are specified as kebab-case strings.
 | `scroll-page-down`        | Scroll a full page down                                 |
 | `scroll-to-top`           | Jump to the top of the list                             |
 | `scroll-to-bottom`        | Jump to the bottom of the list                          |
-| `scroll-to-screen-top`    | Jump to the top of the visible screen                   |
-| `scroll-to-screen-middle` | Jump to the middle of the visible screen                |
-| `scroll-to-screen-bottom` | Jump to the bottom of the visible screen                |
+| `scroll-to-screen-top`    | Jump to the top of the visible search results           |
+| `scroll-to-screen-middle` | Jump to the middle of the visible search results        |
+| `scroll-to-screen-bottom` | Jump to the bottom of the visible search results        |
 
 Note: `select-next` and `select-previous` respect the `invert` setting. When `invert` is true, the visual direction is flipped.
 
@@ -233,10 +233,16 @@ The difference between `accept` and `return-selection`: `accept` runs the comman
 
 ### Inspector
 
-| Action             | Description                                       |
-| ------------------ | ------------------------------------------------- |
-| `inspect-previous` | Inspect the previous entry (in the inspector tab) |
-| `inspect-next`     | Inspect the next entry (in the inspector tab)     |
+| Action             | Description                                 |
+| ------------------ | ------------------------------------------- |
+| `inspect-previous` | Select the row above, or scroll output up   |
+| `inspect-next`     | Select the row below, or scroll output down |
+| `inspect-runs`     | Open Runs                                   |
+| `inspect-session`  | Open Session                                |
+| `inspect-stats`    | Open Stats                                  |
+| `inspect-output`   | Open captured output                        |
+
+List conditions apply to the current inspector view, not the search results. In Output, start/end conditions describe scroll boundaries.
 
 ### Special
 
