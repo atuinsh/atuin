@@ -72,11 +72,11 @@ impl Backoff {
         tokio::time::timeout(timeout, async {
             match self {
                 Self::Linear(period) => loop {
+                    tokio::time::sleep(jittered(period)).await;
                     match fxn().await {
                         ControlFlow::Break(value) => return value,
                         ControlFlow::Continue(reason) => last = reason,
                     }
-                    tokio::time::sleep(jittered(period)).await;
                 },
                 Self::Exponential {
                     initial,
@@ -85,12 +85,12 @@ impl Backoff {
                 } => {
                     let mut backoff = initial.min(max);
                     loop {
+                        tokio::time::sleep(jittered(backoff).min(max)).await;
+                        backoff = backoff.saturating_mul(factor.get()).min(max);
                         match fxn().await {
                             ControlFlow::Break(value) => return value,
                             ControlFlow::Continue(reason) => last = reason,
                         }
-                        tokio::time::sleep(jittered(backoff).min(max)).await;
-                        backoff = backoff.saturating_mul(factor.get()).min(max);
                     }
                 }
             }
@@ -106,5 +106,50 @@ impl Backoff {
         F: FnMut() -> ControlFlow<B, C>,
     {
         self.retry(|| std::future::ready(fxn()), timeout).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use tokio::time::Instant;
+
+    use super::*;
+
+    /// A failed attempt must wait a full backoff before the next one: only the eager first call is
+    /// un-delayed. Guards against the retry loop firing a second attempt back-to-back with the
+    /// first at the start of an episode.
+    #[tokio::test(start_paused = true)]
+    async fn second_attempt_waits_for_the_backoff() {
+        let initial = Duration::from_secs(10);
+        let calls = AtomicUsize::new(0);
+        let backoff = Backoff::Exponential {
+            initial,
+            max: Duration::from_secs(600),
+            factor: NonZeroU32::new(2).unwrap(),
+        };
+
+        let start = Instant::now();
+        // Fail once, succeed on the second attempt.
+        let _: Result<(), ()> = backoff
+            .retry_sync(
+                || {
+                    if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                        ControlFlow::Continue(())
+                    } else {
+                        ControlFlow::Break(())
+                    }
+                },
+                Duration::from_secs(3600),
+            )
+            .await;
+
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "expected exactly two attempts");
+        assert!(
+            start.elapsed() >= initial / 2,
+            "second attempt fired without a backoff delay ({:?} elapsed)",
+            start.elapsed()
+        );
     }
 }
