@@ -7,7 +7,7 @@ use std::time::Duration;
 use atuin_common::logs::LogLevel;
 use atuin_common::path::PathExt;
 use atuin_common::time::{
-    AsDisableableDuration, AsDuration, AsHumantimeDuration, Days, Minutes, NonZeroDuration, Seconds,
+    AsDisableableDuration, AsDuration, Days, Minutes, NonZeroDuration, Seconds,
 };
 use atuin_domain::record::HostId;
 use clap::ValueEnum;
@@ -1028,7 +1028,7 @@ pub struct Settings {
     #[serde(default)]
     pub sync_protocol: SyncProtocol,
 
-    #[serde_as(as = "AsHumantimeDuration")]
+    #[serde_as(as = "AsDuration<Seconds>")]
     pub sync_frequency: Duration,
     pub db_path: PathBuf,
     pub record_store_path: PathBuf,
@@ -2166,24 +2166,21 @@ mod tests {
     }
 
     #[rstest]
-    fn sync_frequency_accepts_humantime_strings_and_bare_zero() {
-        // humantime strings work
-        assert_eq!(
-            parse_settings("sync_frequency = \"5m\"\n").sync_frequency,
-            std::time::Duration::from_secs(300),
-        );
-        // `0` is the documented always-sync sentinel; both the string and bare forms mean zero
-        assert_eq!(
-            parse_settings("sync_frequency = \"0\"\n").sync_frequency,
-            std::time::Duration::ZERO,
-        );
-        assert_eq!(
-            parse_settings("sync_frequency = 0\n").sync_frequency,
-            std::time::Duration::ZERO,
-        );
-        // any other unit-less number (int or string) is rejected
-        assert!(Settings::validate_str("sync_frequency = 30\n").is_err());
-        assert!(Settings::validate_str("sync_frequency = \"30\"\n").is_err());
+    fn sync_frequency_accepts_humantime_and_bare_seconds() {
+        let secs = std::time::Duration::from_secs;
+        let zero = std::time::Duration::ZERO;
+        // humantime strings
+        assert_eq!(parse_settings("sync_frequency = \"5m\"\n").sync_frequency, secs(300));
+        // a bare number (int or float) is seconds — the historical unit
+        assert_eq!(parse_settings("sync_frequency = 300\n").sync_frequency, secs(300));
+        assert_eq!(parse_settings("sync_frequency = 30.0\n").sync_frequency, secs(30));
+        assert_eq!(parse_settings("sync_frequency = \"30\"\n").sync_frequency, secs(30));
+        // `0` in any form is the documented always-sync sentinel
+        assert_eq!(parse_settings("sync_frequency = 0\n").sync_frequency, zero);
+        assert_eq!(parse_settings("sync_frequency = 0.0\n").sync_frequency, zero);
+        assert_eq!(parse_settings("sync_frequency = \"0\"\n").sync_frequency, zero);
+        // negatives remain rejected
+        assert!(Settings::validate_str("sync_frequency = -5\n").is_err());
     }
 
     #[test]
