@@ -114,6 +114,7 @@ opentelemetry-otlp = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
 ratatui = { workspace = true }
 regex = { workspace = true }
+reqwest = { workspace = true }
 rpassword = { workspace = true }
 runtime-format = { workspace = true }
 rustix = { workspace = true }

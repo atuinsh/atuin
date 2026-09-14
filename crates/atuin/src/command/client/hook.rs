@@ -228,7 +228,7 @@ async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
     Ok(())
 }
 
-fn install(agent_name: &str) -> Result<()> {
+pub(crate) fn install(agent_name: &str) -> Result<()> {
     let agent = Agent::from_name(agent_name)?;
 
     match agent.install_kind() {
