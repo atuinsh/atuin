@@ -63,7 +63,7 @@ mod tests {
         assert_eq!(version_segment(version), expected);
     }
 
-    #[test]
+    #[rstest]
     fn this_build_resolves_to_a_published_version() {
         // Either `X.Y` or `main`; never a full version, and never empty.
         assert!(!VERSION.is_empty());
@@ -71,7 +71,7 @@ mod tests {
         assert!(!VERSION.contains('-'));
     }
 
-    #[test]
+    #[rstest]
     fn urls_are_absolute_and_versioned() {
         assert_eq!(
             url("guide/sync/#login"),

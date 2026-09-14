@@ -399,7 +399,7 @@ mod tests {
         /// The whole point of the type: whatever it is fed, it never outgrows its limit. Once a
         /// middle has been dropped each half is bounded on its own; until then the two budgets
         /// are one, because everything kept comes back joined in `start`.
-        #[test]
+        #[rstest]
         fn never_exceeds_the_limit((limit, writes) in limit_and_writes()) {
             let contents = filled(limit, &writes);
             if let Some(end) = &contents.end {
@@ -412,7 +412,7 @@ mod tests {
 
         /// A middle is reported as dropped if and only if bytes really went missing. `end` being
         /// `Some` is the only signal callers get, so it must never cry wolf and never stay quiet.
-        #[test]
+        #[rstest]
         fn reports_a_dropped_middle_exactly_when_data_was_dropped(
             (limit, writes) in limit_and_writes(),
         ) {
@@ -424,7 +424,7 @@ mod tests {
 
         /// The bounds either side of that: what fits in the start half alone is never touched,
         /// and what outgrows both halves together always loses something.
-        #[test]
+        #[rstest]
         fn the_limits_decide_whether_anything_is_dropped((limit, writes) in limit_and_writes()) {
             let all = writes.concat();
             let contents = filled(limit, &writes);
@@ -437,7 +437,7 @@ mod tests {
 
         /// What is kept really is the start and the end of what was written, cut on character
         /// boundaries: prefix ++ suffix, with only the middle missing.
-        #[test]
+        #[rstest]
         fn keeps_a_prefix_and_a_suffix((limit, writes) in limit_and_writes()) {
             let all = writes.concat();
             let contents = filled(limit, &writes);
@@ -453,7 +453,7 @@ mod tests {
 
         /// Each half is as long as its limit allows, given that characters stay whole. A cut can
         /// only be pulled back by less than one character's worth of bytes.
-        #[test]
+        #[rstest]
         fn keeps_as_much_as_it_can((limit, writes) in limit_and_writes()) {
             let all = writes.concat();
             let contents = filled(limit, &writes);
@@ -464,13 +464,13 @@ mod tests {
         }
 
         /// How the data is split across writes cannot change the result.
-        #[test]
+        #[rstest]
         fn chunking_does_not_matter((limit, writes) in limit_and_writes()) {
             prop_assert_eq!(filled(limit, &writes), filled(limit, &[writes.concat()]));
         }
 
         /// Writing never fails, however much is written.
-        #[test]
+        #[rstest]
         fn writes_never_fail((limit, writes) in limit_and_writes()) {
             let mut buffer = BoundedBuffer::new(limit);
             for write in &writes {
@@ -479,7 +479,7 @@ mod tests {
         }
 
         /// `take` leaves a buffer indistinguishable from a new one.
-        #[test]
+        #[rstest]
         fn take_resets_the_buffer((limit, writes) in limit_and_writes()) {
             let mut buffer = BoundedBuffer::new(limit);
             for write in &writes {
@@ -494,7 +494,7 @@ mod tests {
         }
 
         /// So does `clear`.
-        #[test]
+        #[rstest]
         fn clear_resets_the_buffer((limit, writes) in limit_and_writes()) {
             let mut buffer = BoundedBuffer::new(limit);
             for write in &writes {

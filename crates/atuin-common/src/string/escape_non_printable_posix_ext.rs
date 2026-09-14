@@ -78,7 +78,7 @@ mod tests {
         assert_eq!(input.escape_non_printable(), expected);
     }
 
-    #[test]
+    #[rstest]
     fn escapes_all_c0_controls_as_caret() {
         // Exhaustively check every C0 control 0x00..=0x1f → '^' + (byte ^ 0x40).
         for byte in 0x00u8..=0x1f {
@@ -91,7 +91,7 @@ mod tests {
     proptest! {
         /// The whole point of the function: for ANY input string, the escaped
         /// output never contains a control character.
-        #[test]
+        #[rstest]
         fn output_never_contains_control_chars(s in r"(?s).*") {
             let escaped = s.escape_non_printable();
             prop_assert!(!escaped.chars().any(char::is_control));
@@ -99,14 +99,14 @@ mod tests {
 
         /// A string with no control characters is returned borrowed (zero-copy),
         /// and is therefore byte-for-byte unchanged.
-        #[test]
+        #[rstest]
         fn control_free_input_is_borrowed(s in r"[^\p{Cc}]*") {
             prop_assert!(matches!(s.escape_non_printable(), Cow::Borrowed(_)));
         }
 
         /// Escaping is idempotent: the output is already fully printable, so
         /// escaping it a second time changes nothing.
-        #[test]
+        #[rstest]
         fn escaping_is_idempotent(s in r"(?s).*") {
             let once = s.escape_non_printable().into_owned();
             let twice = once.escape_non_printable().into_owned();
