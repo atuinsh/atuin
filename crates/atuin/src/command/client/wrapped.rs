@@ -6,7 +6,7 @@ use atuin_client::settings::Settings;
 use atuin_client::theme::Theme;
 use atuin_common::encryption::paseto_v4;
 use atuin_dotfiles::store::AliasStore;
-use atuin_history::stats::{Stats, compute};
+use atuin_history::stats::{Stats, compute, split_common_prefix};
 use crossterm::style::{ResetColor, SetAttribute};
 use eyre::Result;
 use time::{Date, Duration, Month, OffsetDateTime, Time};
@@ -114,8 +114,17 @@ impl WrappedStats {
         let mut hours: HashMap<String, usize> = HashMap::new();
 
         for entry in history {
-            let raw_cmd = entry.command.split_whitespace().next().unwrap_or("").to_string();
-            let cmd = expand_alias(&raw_cmd);
+            let command = entry.command.trim_start();
+            let command =
+                split_common_prefix(settings, command).map_or(command, |(prefix, rest)| {
+                    if rest.is_empty() {
+                        prefix
+                    } else {
+                        rest
+                    }
+                });
+            let raw_cmd = command.split_whitespace().next().unwrap_or("");
+            let cmd = expand_alias(raw_cmd);
             let (total, errors) = command_errors.entry(cmd.clone()).or_insert((0, 0));
             *total += 1;
             if entry.exit != 0 {
@@ -353,4 +362,66 @@ pub async fn run(
     print_fun_facts(&wrapped_stats, &stats, year);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use atuin_client::history::History;
+    use rstest::rstest;
+    use time::macros::datetime;
+
+    use super::*;
+
+    #[rstest]
+    #[case::default_prefix(None, "sudo echo hello", "echo")]
+    #[case::default_doas(None, "doas echo hello", "echo")]
+    #[case::custom_prefix(Some(vec!["please"]), "please echo hello", "echo")]
+    #[case::longest_prefix(Some(vec!["sudo", "sudo -u root"]), "sudo -u root echo hello", "echo")]
+    #[case::empty_prefixes(Some(vec![]), "sudo echo hello", "sudo")]
+    #[case::unconfigured_prefix(Some(vec!["please"]), "sudo echo hello", "sudo")]
+    #[case::prefix_only(None, "sudo", "sudo")]
+    #[case::whitespace(None, " \t sudo \t echo hello", "echo")]
+    #[case::empty(None, " \t ", "")]
+    #[case::subcommand(None, "sudo git status", "git")]
+    #[case::alias(None, "ll /tmp", "ls")]
+    #[case::prefixed_alias(None, "sudo ll /tmp", "ls")]
+    #[case::multiword_prefix_only(Some(vec!["sudo -u root"]), "sudo -u root  ", "sudo")]
+    #[case::one_removal(None, "sudo doas echo hello", "doas")]
+    #[case::partial_word(None, "sudoedit file", "edit")]
+    fn evolution_respects_common_prefix(
+        #[case] prefixes: Option<Vec<&str>>,
+        #[case] command: &str,
+        #[case] expected: &str,
+    ) {
+        let mut settings = Settings::utc();
+        if let Some(prefixes) = prefixes {
+            settings.stats.common_prefix = prefixes.into_iter().map(str::to_owned).collect();
+        }
+        let history: Vec<History> =
+            [datetime!(2024-01-01 0:00 UTC), datetime!(2024-10-01 0:00 UTC)]
+                .into_iter()
+                .flat_map(|timestamp| {
+                    [(command, 0), (expected, 1)].map(|(command, exit)| {
+                        History::import()
+                            .timestamp(timestamp)
+                            .command(command)
+                            .exit(exit)
+                            .build()
+                            .into()
+                    })
+                })
+                .collect();
+        let stats = Stats {
+            total_commands: 4,
+            unique_commands: 2,
+            top: vec![],
+        };
+        let aliases = HashMap::from([("ll".to_string(), "ls -l".to_string())]);
+
+        let wrapped = WrappedStats::new(&settings, &stats, &history, &aliases);
+
+        assert_eq!(wrapped.first_half_commands, vec![(expected.to_string(), 2)]);
+        assert_eq!(wrapped.second_half_commands, vec![(expected.to_string(), 2)]);
+        assert!((wrapped.error_rate - 0.5).abs() < f64::EPSILON);
+    }
 }
