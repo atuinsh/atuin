@@ -16,6 +16,7 @@ impl super::Schema for Schema {
     type Key = HistoryId;
     type KeySerialized = [u8; 16];
     type KeySerializationError = Infallible;
+    type KeyDeserializationError = std::array::TryFromSliceError;
 
     type Value = CommandCapture;
     type ValueSerialized = Vec<u8>;
@@ -24,6 +25,11 @@ impl super::Schema for Schema {
 
     fn serialize_key(key: Self::Key) -> Result<Self::KeySerialized, Self::KeySerializationError> {
         Ok(key.into_bytes())
+    }
+
+    fn deserialize_key(serialized: &[u8]) -> Result<Self::Key, Self::KeyDeserializationError> {
+        let bytes: [u8; 16] = serialized.try_into()?;
+        Ok(HistoryId::from_bytes(bytes))
     }
 
     fn serialize_value(
