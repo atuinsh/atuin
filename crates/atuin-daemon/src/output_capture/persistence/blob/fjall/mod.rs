@@ -10,7 +10,7 @@ mod schema;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use atuin_client::history::{CommandCapture, HistoryId};
@@ -35,14 +35,23 @@ struct FjallStorageInner {
     /// Set on every mutation; the flusher clears it and persists. See `Flusher` for the
     /// memory-ordering rationale.
     dirty: Arc<AtomicBool>,
+    /// Running estimate of stored bytes for the disk budget.
+    estimated_usage: AtomicU64,
 }
 
 impl FjallStorageInner {
-    /// On-disk bytes used by the store's segments and blob files.
-    ///
-    /// Might over/under-report by a couple dozen MB.
     fn estimated_disk_space(&self) -> u64 {
-        self.keyspace.inner().disk_space()
+        self.estimated_usage.load(Ordering::Relaxed)
+    }
+
+    fn add_estimated(&self, bytes: u64) {
+        self.estimated_usage.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    fn sub_estimated(&self, bytes: u64) {
+        let _ = self.estimated_usage.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+            Some(cur.saturating_sub(bytes))
+        });
     }
 
     async fn capture(&self, id: HistoryId, capture: CommandCapture) -> Result<(), CaptureError> {
@@ -52,8 +61,9 @@ impl FjallStorageInner {
         let key = ActiveSchema::serialize_key(id).expect("history id serialization is infallible");
         let value = ActiveSchema::serialize_value(capture)
             .map_err(|err| CaptureError::Serialize(Box::new(err)))?;
+        let value_len = u64::try_from(value.len()).unwrap_or(u64::MAX);
 
-        tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             let mut tx = db.write_tx().map_err(|err| CaptureError::Storage(Box::new(err)))?;
             if tx
                 .contains_key(&keyspace, key)
@@ -73,7 +83,13 @@ impl FjallStorageInner {
             }
         })
         .await
-        .expect("output-capture write task panicked")
+        .expect("output-capture write task panicked");
+
+        if result.is_ok() {
+            self.add_estimated(value_len);
+        }
+
+        result
     }
 
     async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError> {
@@ -84,7 +100,7 @@ impl FjallStorageInner {
             match keyspace.get(key).map_err(|err| GetOutputError::Storage(Box::new(err)))? {
                 Some(slice) => {
                     let capture = ActiveSchema::deserialize_value(slice.to_vec())
-                        .expect("stored value is a valid CommandCapture");
+                        .map_err(|err| GetOutputError::Storage(Box::new(err)))?;
                     Ok(Some(capture))
                 }
                 None => Ok(None),
@@ -92,6 +108,17 @@ impl FjallStorageInner {
         })
         .await
         .expect("output-capture read task panicked")
+    }
+
+    async fn contains(&self, id: HistoryId) -> Result<bool, GetOutputError> {
+        let keyspace = self.keyspace.clone();
+        let key = ActiveSchema::serialize_key(id).expect("history id serialization is infallible");
+
+        tokio::task::spawn_blocking(move || {
+            keyspace.contains_key(key).map_err(|err| GetOutputError::Storage(Box::new(err)))
+        })
+        .await
+        .expect("output-capture contains task panicked")
     }
 
     async fn remove(&self, ids: impl Iterator<Item = HistoryId>) -> Result<(), DeleteOutputError> {
@@ -107,7 +134,14 @@ impl FjallStorageInner {
         let db = self.db.clone();
         let keyspace = self.keyspace.clone();
         let dirty = self.dirty.clone();
-        tokio::task::spawn_blocking(move || {
+        let freed = tokio::task::spawn_blocking(move || {
+            let freed = keys.iter().try_fold(0u64, |acc, key| {
+                keyspace
+                    .size_of(key)
+                    .map(|size| acc.saturating_add(u64::from(size.unwrap_or(0))))
+                    .map_err(|err| DeleteOutputError::Storage(Box::new(err)))
+            })?;
+
             let mut tx = db.write_tx().map_err(|err| DeleteOutputError::Storage(Box::new(err)))?;
             for key in keys {
                 tx.remove(&keyspace, key);
@@ -115,7 +149,7 @@ impl FjallStorageInner {
             match tx.commit().map_err(|err| DeleteOutputError::Storage(Box::new(err)))? {
                 Ok(()) => {
                     dirty.store(true, Ordering::Release);
-                    Ok(())
+                    Ok(freed)
                 }
                 // fjall only reports conflicts for transactions that read; this one never does.
                 Err(fjall::Conflict) => {
@@ -124,7 +158,10 @@ impl FjallStorageInner {
             }
         })
         .await
-        .expect("output-capture delete task panicked")
+        .expect("output-capture delete task panicked")?;
+
+        self.sub_estimated(freed);
+        Ok(())
     }
 
     /// Every stored id, oldest first (fjall key order), streamed in chunks.
@@ -306,10 +343,13 @@ impl FjallBlobStore {
 
     pub fn new(db: OptimisticTxDatabase) -> fjall::Result<Self> {
         let keyspace = db.keyspace(ActiveSchema::NAME, ActiveSchema::create_options)?;
+        let seed = keyspace.inner().disk_space();
+
         let inner = Arc::new(FjallStorageInner {
             db,
             keyspace,
             dirty: Arc::new(AtomicBool::new(false)),
+            estimated_usage: AtomicU64::new(seed),
         });
 
         let flusher = Arc::new(Flusher::spawn(inner.clone()));
@@ -328,6 +368,10 @@ impl BlobStore for FjallBlobStore {
 
     async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError> {
         self.inner.get(id).await
+    }
+
+    async fn contains(&self, id: HistoryId) -> Result<bool, GetOutputError> {
+        self.inner.contains(id).await
     }
 
     async fn remove(&self, ids: impl Iterator<Item = HistoryId>) -> Result<(), DeleteOutputError> {
@@ -576,5 +620,42 @@ mod tests {
 
         let ids: Vec<HistoryId> = store.all_ids().await.try_collect().await.expect("all_ids");
         assert_eq!(ids, vec![hid(1), hid(2), hid(3)], "the bad key is skipped, the rest survive");
+    }
+
+    #[tokio::test]
+    async fn get_surfaces_an_error_for_an_undecodable_value() {
+        let (store, _dir) = temp_storage();
+
+        // A stored value that isn't valid MessagePack -- disk corruption or a torn write. `get`
+        // must surface a recoverable error, not panic (search/reconcile/the RPC all call it).
+        {
+            let mut tx = store.inner.db.write_tx().expect("write tx");
+            tx.insert(
+                &store.inner.keyspace,
+                hid(1).into_bytes().as_slice(),
+                b"not messagepack".as_slice(),
+            );
+            tx.commit().expect("commit").expect("no conflict");
+        }
+
+        let err = store.get(hid(1)).await.unwrap_err();
+        assert!(matches!(err, GetOutputError::Storage(_)));
+    }
+
+    #[tokio::test]
+    async fn estimated_disk_space_shrinks_when_entries_are_removed() {
+        let (store, _dir) = temp_storage();
+        let base = store.estimated_disk_space();
+
+        store.capture(hid(1), cap(&"x".repeat(50_000))).await.expect("capture");
+        let after_capture = store.estimated_disk_space();
+        assert!(after_capture > base, "the estimate grows with a capture");
+
+        store.remove(std::iter::once(hid(1))).await.expect("remove");
+        let after_remove = store.estimated_disk_space();
+        // The point of the estimate: a removal shrinks it at once, unlike physical disk_space()
+        // (whose value-log reclamation lags), so GC won't re-evict the same freed space.
+        assert!(after_remove < after_capture, "the estimate shrinks on removal");
+        assert_eq!(after_remove, base, "removing what we added returns the estimate to baseline");
     }
 }

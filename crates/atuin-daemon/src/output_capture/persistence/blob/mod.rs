@@ -47,12 +47,16 @@ pub trait BlobStore {
     /// Fetch the [`CommandCapture`] for the given [`HistoryId`].
     async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError>;
 
+    /// Whether a capture is stored for `id`. Cheaper than [`Self::get`] where the backend can
+    /// answer without reading the value.
+    async fn contains(&self, id: HistoryId) -> Result<bool, GetOutputError>;
+
     /// Forget the captured output of every history id in `ids`. Absent ids are ignored.
     async fn remove(&self, ids: impl Iterator<Item = HistoryId>) -> Result<(), DeleteOutputError>;
 
-    /// On-disk bytes the store occupies. A store that persists nothing reports 0.
-    ///
-    /// Doesn't have to be exact -- just try to be within 100MB of error.
+    /// Estimated stored bytes, used to drive the disk-usage budget. A store that persists nothing
+    /// reports 0. Need not equal the exact physical footprint, but it MUST shrink promptly when
+    /// entries are removed -- otherwise a budget-driven evictor keeps re-freeing the same space.
     fn estimated_disk_space(&self) -> u64;
 
     /// Every stored id, oldest first (by key order).

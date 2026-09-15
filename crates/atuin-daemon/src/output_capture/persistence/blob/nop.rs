@@ -16,6 +16,10 @@ impl BlobStore for NopBlobStore {
         Ok(None)
     }
 
+    async fn contains(&self, _id: HistoryId) -> Result<bool, GetOutputError> {
+        Ok(false)
+    }
+
     async fn remove(&self, _ids: impl Iterator<Item = HistoryId>) -> Result<(), DeleteOutputError> {
         Ok(())
     }

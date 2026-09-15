@@ -22,6 +22,10 @@ impl BlobStore for FailingBlobStore {
         Err(GetOutputError::Storage(unavailable()))
     }
 
+    async fn contains(&self, _id: HistoryId) -> Result<bool, GetOutputError> {
+        Err(GetOutputError::Storage(unavailable()))
+    }
+
     async fn remove(&self, _ids: impl Iterator<Item = HistoryId>) -> Result<(), DeleteOutputError> {
         Err(DeleteOutputError::Storage(unavailable()))
     }
