@@ -19,9 +19,8 @@ impl super::Schema for Schema {
         for statement in [
             "DROP TABLE IF EXISTS output_fts",
             "DROP TABLE IF EXISTS indexed",
-            "CREATE VIRTUAL TABLE output_fts USING fts5(history_id UNINDEXED, body, tokenize = \
-             'unicode61')",
-            "CREATE TABLE indexed(history_id BLOB PRIMARY KEY) WITHOUT ROWID",
+            "CREATE TABLE indexed(id INTEGER PRIMARY KEY, history_id BLOB NOT NULL UNIQUE)",
+            "CREATE VIRTUAL TABLE output_fts USING fts5(body, tokenize = 'unicode61')",
         ] {
             db::query(statement).execute(pool).await.map_err(store)?;
         }
@@ -37,19 +36,17 @@ impl super::Schema for Schema {
         let pool = db.pool();
         let key = id.into_bytes();
         let mut tx = pool.begin().await.map_err(store)?;
-        db::query("DELETE FROM output_fts WHERE history_id = ?")
-            .bind(&key[..])
-            .execute(&mut *tx)
-            .await
-            .map_err(store)?;
-        db::query("INSERT INTO output_fts(history_id, body) VALUES (?, ?)")
-            .bind(&key[..])
+        let rowid: i64 = db::query_scalar(
+            "INSERT INTO indexed(history_id) VALUES (?) ON CONFLICT(history_id) DO UPDATE SET \
+             history_id = excluded.history_id RETURNING id",
+        )
+        .bind(&key[..])
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(store)?;
+        db::query("INSERT OR REPLACE INTO output_fts(rowid, body) VALUES (?, ?)")
+            .bind(rowid)
             .bind_highlightable(highlighter, text)
-            .execute(&mut *tx)
-            .await
-            .map_err(store)?;
-        db::query("INSERT OR IGNORE INTO indexed(history_id) VALUES (?)")
-            .bind(&key[..])
             .execute(&mut *tx)
             .await
             .map_err(store)?;
@@ -68,11 +65,14 @@ impl super::Schema for Schema {
         let mut tx = pool.begin().await.map_err(store)?;
         for id in ids {
             let key = id.into_bytes();
-            db::query("DELETE FROM output_fts WHERE history_id = ?")
-                .bind(&key[..])
-                .execute(&mut *tx)
-                .await
-                .map_err(store)?;
+            db::query(
+                "DELETE FROM output_fts WHERE rowid = (SELECT id FROM indexed WHERE history_id = \
+                 ?)",
+            )
+            .bind(&key[..])
+            .execute(&mut *tx)
+            .await
+            .map_err(store)?;
             db::query("DELETE FROM indexed WHERE history_id = ?")
                 .bind(&key[..])
                 .execute(&mut *tx)
@@ -92,8 +92,9 @@ impl super::Schema for Schema {
     ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let stmt = db::query(
-            "SELECT history_id, highlight(output_fts, 1, ?, ?) AS body, -bm25(output_fts) AS \
-             score FROM output_fts WHERE output_fts MATCH ? ORDER BY score DESC LIMIT ?",
+            "SELECT indexed.history_id, highlight(output_fts, 0, ?, ?) AS body, -bm25(output_fts) \
+             AS score FROM output_fts JOIN indexed ON indexed.id = output_fts.rowid WHERE \
+             output_fts MATCH ? ORDER BY score DESC LIMIT ?",
         )
         .bind_highlight(highlighter);
         let Some(stmt) = stmt.bind_match_query(query) else {
