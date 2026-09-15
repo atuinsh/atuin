@@ -30,7 +30,9 @@ pub use history_journal::{
     CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, CmdRebuildError, FinishedCmd,
     GetCmdInFlightError, HistoryJournal, RegisterOutputError,
 };
-pub use output_capture::{CaptureError, DeleteOutputError, GetOutputError, OutputCaptureEngine};
+pub use output_capture::{
+    CaptureError, DeleteOutputError, GetOutputError, OutputCaptureEngine, OutputMatch,
+};
 
 /// Boot the daemon using the new component-based architecture.
 ///
@@ -65,7 +67,7 @@ pub async fn boot(
         HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
     let output_capture = match settings.output.limits() {
         Some(limits) => {
-            OutputCaptureEngine::open(Settings::command_capture_dir(), limits.max_disk_usage)
+            OutputCaptureEngine::open(Settings::command_capture_dir(), limits.max_disk_usage).await
         }
         None => OutputCaptureEngine::nop(),
     };

@@ -25,6 +25,7 @@ vendored-tls = ["reqwest?/native-tls-vendored"]
 [dependencies]
 atuin-common = { workspace = true, features = ["os", "sqlite"] }
 atuin-domain = { workspace = true }
+atuin-vt100 = { workspace = true }
 
 async-stream = { workspace = true }
 async-trait = { workspace = true }

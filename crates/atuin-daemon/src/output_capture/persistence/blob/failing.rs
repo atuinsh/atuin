@@ -1,4 +1,5 @@
 use atuin_client::history::{CommandCapture, HistoryId};
+use atuin_common::futures::stream::ChunkedStream;
 
 use super::{BlobStore, CaptureError, DeleteOutputError, GetOutputError, StorageError};
 
@@ -21,12 +22,20 @@ impl BlobStore for FailingBlobStore {
         Err(GetOutputError::Storage(unavailable()))
     }
 
+    async fn contains(&self, _id: HistoryId) -> Result<bool, GetOutputError> {
+        Err(GetOutputError::Storage(unavailable()))
+    }
+
     async fn remove(&self, _ids: impl Iterator<Item = HistoryId>) -> Result<(), DeleteOutputError> {
         Err(DeleteOutputError::Storage(unavailable()))
     }
 
     fn estimated_disk_space(&self) -> u64 {
         0
+    }
+
+    async fn all_ids(&self) -> ChunkedStream<Result<HistoryId, GetOutputError>> {
+        ChunkedStream::from_error(GetOutputError::Storage(unavailable()))
     }
 
     async fn eviction_candidates(

@@ -146,7 +146,7 @@ impl TestEnvBuilder {
         let store = SqliteStore::new(&record_path, self.db_timeout).await.unwrap();
 
         let output_capture =
-            OutputCaptureEngine::open(tmp.path().join("capture"), DiskUsageLimit::Unlimited);
+            OutputCaptureEngine::open(tmp.path().join("capture"), DiskUsageLimit::Unlimited).await;
         let search_component = SearchComponent::new();
         let index = search_component.index();
         let search_service = search_component.grpc_service();
