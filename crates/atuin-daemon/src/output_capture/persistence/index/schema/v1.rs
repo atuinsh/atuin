@@ -35,7 +35,7 @@ impl super::Schema for Schema {
     ) -> Result<(), IndexError> {
         let pool = db.pool();
         let key = id.into_bytes();
-        let mut tx = pool.begin().await.map_err(store)?;
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(store)?;
         let rowid: i64 = db::query_scalar(
             "INSERT INTO indexed(history_id) VALUES (?) ON CONFLICT(history_id) DO UPDATE SET \
              history_id = excluded.history_id RETURNING id",
@@ -62,7 +62,7 @@ impl super::Schema for Schema {
         }
 
         let pool = db.pool();
-        let mut tx = pool.begin().await.map_err(store)?;
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(store)?;
         for id in ids {
             let key = id.into_bytes();
             db::query(
