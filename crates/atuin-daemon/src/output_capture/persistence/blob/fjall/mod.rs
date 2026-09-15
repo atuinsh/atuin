@@ -359,6 +359,14 @@ impl FjallBlobStore {
             _flusher: flusher,
         })
     }
+
+    /// Store bytes under `id` that `get` cannot decode, standing in for disk corruption.
+    #[cfg(test)]
+    pub(in crate::output_capture::persistence) fn corrupt(&self, id: HistoryId) {
+        let mut tx = self.inner.db.write_tx().expect("write tx");
+        tx.insert(&self.inner.keyspace, id.into_bytes().as_slice(), b"not messagepack".as_slice());
+        tx.commit().expect("commit").expect("no conflict");
+    }
 }
 
 impl BlobStore for FjallBlobStore {
@@ -628,15 +636,7 @@ mod tests {
 
         // A stored value that isn't valid MessagePack -- disk corruption or a torn write. `get`
         // must surface a recoverable error, not panic (search/reconcile/the RPC all call it).
-        {
-            let mut tx = store.inner.db.write_tx().expect("write tx");
-            tx.insert(
-                &store.inner.keyspace,
-                hid(1).into_bytes().as_slice(),
-                b"not messagepack".as_slice(),
-            );
-            tx.commit().expect("commit").expect("no conflict");
-        }
+        store.corrupt(hid(1));
 
         let err = store.get(hid(1)).await.unwrap_err();
         assert!(matches!(err, GetOutputError::Storage(_)));
