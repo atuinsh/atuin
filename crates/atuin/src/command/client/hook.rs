@@ -19,6 +19,9 @@ mod wire;
 use event::HookEvent;
 
 const HOOK_EVENT_TYPES: &[&str] = &["PreToolUse", "PostToolUse", "PostToolUseFailure"];
+/// Antigravity has no `PostToolUseFailure` event; a failed tool call arrives
+/// as `PostToolUse` with a non-empty `error` string instead.
+const AGY_HOOK_EVENT_TYPES: &[&str] = &["PreToolUse", "PostToolUse"];
 const PI_EXTENSION_SOURCE: &str = include_str!("../../../contrib/pi/atuin.ts");
 const OPENCODE_PLUGIN_SOURCE: &str = include_str!("../../../contrib/opencode/atuin.ts");
 
@@ -27,6 +30,12 @@ enum InstallKind {
         config_path: &'static [&'static str],
         hook_command: &'static str,
         matcher: &'static str,
+        /// Where the hook entries live: under a top-level `hooks` object
+        /// (Claude Code, Codex) or under a named container object
+        /// (Antigravity maps hook names to event configurations).
+        container: Option<&'static str>,
+        /// Which lifecycle events to install entries for.
+        events: &'static [&'static str],
     },
     /// An agent that loads TypeScript extensions from a directory, rather than
     /// invoking `atuin hook <agent>` from its config.
@@ -36,6 +45,17 @@ enum InstallKind {
         /// How the user makes the agent pick the file up.
         reload_hint: &'static str,
     },
+}
+
+/// The wire format an agent's hook events arrive in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HookFormat {
+    /// `{hook_event_name, tool_name, tool_use_id, tool_input, tool_response}`.
+    Claude,
+    /// `{hookEventName, toolCall: {name, args: {CommandLine}}, conversationId,
+    /// stepIdx, error}`. Antigravity additionally requires an answer on
+    /// stdout: `{"decision": "allow"}` for `PreToolUse`, `{}` afterwards.
+    Agy,
 }
 
 /// The directory an agent's [`InstallKind`] path is relative to.
@@ -57,6 +77,7 @@ struct AgentSpec {
     actor_name: &'static str,
     path_root: PathRoot,
     install_kind: InstallKind,
+    hook_format: HookFormat,
 }
 
 const CLAUDE_CODE: AgentSpec = AgentSpec {
@@ -67,7 +88,10 @@ const CLAUDE_CODE: AgentSpec = AgentSpec {
         config_path: &[".claude", "settings.json"],
         hook_command: "atuin hook claude-code",
         matcher: "Bash",
+        container: None,
+        events: HOOK_EVENT_TYPES,
     },
+    hook_format: HookFormat::Claude,
 };
 
 const CODEX: AgentSpec = AgentSpec {
@@ -78,7 +102,24 @@ const CODEX: AgentSpec = AgentSpec {
         config_path: &[".codex", "hooks.json"],
         hook_command: "atuin hook codex",
         matcher: "^Bash$",
+        container: None,
+        events: HOOK_EVENT_TYPES,
     },
+    hook_format: HookFormat::Claude,
+};
+
+const AGY: AgentSpec = AgentSpec {
+    aliases: &["agy", "antigravity"],
+    actor_name: "antigravity",
+    path_root: PathRoot::Home,
+    install_kind: InstallKind::JsonHooks {
+        config_path: &[".gemini", "config", "hooks.json"],
+        hook_command: "atuin hook agy",
+        matcher: "run_command",
+        container: Some("atuin"),
+        events: AGY_HOOK_EVENT_TYPES,
+    },
+    hook_format: HookFormat::Agy,
 };
 
 const PI: AgentSpec = AgentSpec {
@@ -90,6 +131,7 @@ const PI: AgentSpec = AgentSpec {
         source: PI_EXTENSION_SOURCE,
         reload_hint: "Reload pi with `/reload` or restart pi.",
     },
+    hook_format: HookFormat::Claude,
 };
 
 const OPENCODE: AgentSpec = AgentSpec {
@@ -101,9 +143,10 @@ const OPENCODE: AgentSpec = AgentSpec {
         source: OPENCODE_PLUGIN_SOURCE,
         reload_hint: "Restart opencode to load the plugin.",
     },
+    hook_format: HookFormat::Claude,
 };
 
-const AGENTS: &[&AgentSpec] = &[&CLAUDE_CODE, &CODEX, &OPENCODE, &PI];
+const AGENTS: &[&AgentSpec] = &[&AGY, &CLAUDE_CODE, &CODEX, &OPENCODE, &PI];
 
 struct Agent(&'static AgentSpec);
 
@@ -111,9 +154,9 @@ impl Agent {
     fn from_name(name: &str) -> Result<Self> {
         AGENTS.iter().copied().find(|spec| spec.aliases.contains(&name)).map(Self).ok_or_else(
             || {
-                eyre::eyre!(
-                    "unknown agent: {name}. Supported agents: claude-code, codex, opencode, pi"
-                )
+                let supported =
+                    AGENTS.iter().map(|spec| spec.aliases[0]).collect::<Vec<_>>().join(", ");
+                eyre::eyre!("unknown agent: {name}. Supported agents: {supported}")
             },
         )
     }
@@ -194,7 +237,27 @@ async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
         return Ok(());
     }
 
+    // Antigravity requires an answer on stdout for every invocation: allow
+    // pre-tool-use hooks (including ones for tools Atuin ignores) and acknowledge
+    // everything else with an empty object.
+    if agent.0.hook_format == HookFormat::Agy {
+        let (is_pre, event) = HookEvent::from_agy_json_str(&input)?;
+        if is_pre {
+            println!(r#"{{"decision":"allow"}}"#);
+        } else {
+            println!("{{}}");
+        }
+        return handle_event(settings, &agent, event).await;
+    }
+
     match HookEvent::from_json_str(&input)? {
+        Some(event) => handle_event(settings, &agent, Some(event)).await,
+        None => Ok(()),
+    }
+}
+
+async fn handle_event(settings: &Settings, agent: &Agent, event: Option<HookEvent>) -> Result<()> {
+    match event {
         Some(HookEvent::Start {
             command,
             intent,
@@ -236,6 +299,8 @@ fn install(agent_name: &str) -> Result<()> {
             config_path,
             hook_command: _,
             matcher: _,
+            container: _,
+            events: _,
         } => {
             let config_path = agent.path(config_path);
 
@@ -304,12 +369,30 @@ fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
         config_path: _,
         hook_command,
         matcher,
+        container,
+        events,
     } = agent.install_kind()
     else {
         bail!("agent does not use JSON hooks");
     };
 
-    for event_type in HOOK_EVENT_TYPES {
+    // Claude Code and Codex keep hook entries under a top-level `hooks`
+    // object; Antigravity maps hook names to event configurations, so entries
+    // live under a named container instead.
+    let hooks = match container {
+        Some(name) => hooks
+            .as_object_mut()
+            .ok_or_else(|| eyre::eyre!("config is not a JSON object"))?
+            .entry(*name)
+            .or_insert_with(|| Value::Object(serde_json::Map::new())),
+        None => hooks
+            .as_object_mut()
+            .ok_or_else(|| eyre::eyre!("config is not a JSON object"))?
+            .entry("hooks")
+            .or_insert_with(|| Value::Object(serde_json::Map::new())),
+    };
+
+    for event_type in *events {
         let event_hooks = hooks
             .as_object_mut()
             .ok_or_else(|| eyre::eyre!("hooks is not a JSON object"))?
@@ -353,7 +436,7 @@ mod tests {
     use crate::Atuin;
     use crate::command::{AtuinCmd, client};
 
-    #[test]
+    #[rstest]
     fn parse_hook_agent_command() {
         let cmd = Cmd::try_parse_from(["hook", "codex"]).unwrap();
 
@@ -382,9 +465,19 @@ mod tests {
         assert!(matches!(agent.install_kind(), InstallKind::Extension { .. }));
     }
 
+    #[rstest]
+    #[case::agy("agy")]
+    #[case::antigravity("antigravity")]
+    fn agent_from_name_supports_antigravity(#[case] agent_name: &str) {
+        let agent = Agent::from_name(agent_name).unwrap();
+        assert_eq!(agent.actor_name(), "antigravity");
+        assert!(matches!(agent.install_kind(), InstallKind::JsonHooks { .. }));
+        assert_eq!(agent.0.hook_format, HookFormat::Agy);
+    }
+
     /// An agent missing from `KNOWN_AGENTS` would be installable but invisible
     /// to `$all-agent`, and would pollute `$all-user` with its commands.
-    #[test]
+    #[rstest]
     fn every_agent_author_is_a_known_agent() {
         for spec in AGENTS {
             assert!(
@@ -406,8 +499,59 @@ mod tests {
         assert_eq!(xdg_config_home(var.map(OsString::from)), expected);
     }
 
+    /// Antigravity maps hook names to event configurations, so entries live
+    /// under a named container — not under a top-level `hooks` object like
+    /// Claude Code — and only for the two events Antigravity sends.
+    #[rstest]
+    fn agy_install_writes_named_container() {
+        let agent = Agent::from_name("agy").unwrap();
+        let mut root = serde_json::Value::Object(serde_json::Map::new());
+        add_hook_entries(&mut root, &agent).unwrap();
+
+        assert!(root.get("hooks").is_none(), "must not write a Claude-style hooks object");
+        let container = root.get("atuin").expect("must write the atuin container");
+        for event_type in ["PreToolUse", "PostToolUse"] {
+            let entries = container
+                .get(event_type)
+                .and_then(Value::as_array)
+                .expect("event must hold an array of entries");
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].get("matcher").and_then(Value::as_str), Some("run_command"));
+            let hook = entries[0]
+                .get("hooks")
+                .and_then(Value::as_array)
+                .and_then(|hooks| hooks.first())
+                .expect("entry must hold a hook");
+            assert_eq!(hook.get("type").and_then(Value::as_str), Some("command"));
+            assert_eq!(hook.get("command").and_then(Value::as_str), Some("atuin hook agy"));
+        }
+        assert!(
+            container.get("PostToolUseFailure").is_none(),
+            "Antigravity sends no PostToolUseFailure"
+        );
+    }
+
+    /// Installing twice is idempotent: the second run finds the entries and
+    /// skips them instead of duplicating.
+    #[rstest]
+    fn agy_install_is_idempotent() {
+        let agent = Agent::from_name("antigravity").unwrap();
+        let mut root = serde_json::Value::Object(serde_json::Map::new());
+        add_hook_entries(&mut root, &agent).unwrap();
+        add_hook_entries(&mut root, &agent).unwrap();
+
+        let container = root.get("atuin").expect("must write the atuin container");
+        for event_type in ["PreToolUse", "PostToolUse"] {
+            let entries = container
+                .get(event_type)
+                .and_then(Value::as_array)
+                .expect("event must hold an array of entries");
+            assert_eq!(entries.len(), 1, "{event_type} must not duplicate entries");
+        }
+    }
+
     /// opencode reads plugins from its XDG config directory, not from `$HOME`.
-    #[test]
+    #[rstest]
     fn opencode_plugin_is_rooted_in_the_xdg_config_dir() {
         let agent = Agent::from_name("opencode").unwrap();
         let InstallKind::Extension { extension_path, .. } = agent.install_kind() else {
@@ -421,7 +565,7 @@ mod tests {
         assert!(installed.ends_with("opencode/plugins/atuin.ts"));
     }
 
-    #[test]
+    #[rstest]
     fn parse_top_level_hook_command() {
         let cmd = Atuin::try_parse_from(["atuin", "hook", "codex"]).unwrap();
 
