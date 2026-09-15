@@ -134,13 +134,19 @@ impl OutputStore {
         try_merge_join(blob, index)
             .try_for_each(|side| async move {
                 match side {
-                    EitherOrBoth::Left(id) => {
-                        if let Some(capture) = self.blob.get(id).await? {
+                    EitherOrBoth::Left(id) => match self.blob.get(id).await {
+                        Ok(Some(capture)) => {
                             self.index.insert(id, &capture.plaintext()).await?;
                         }
-                    }
+                        Ok(None) => {}
+                        // One unreadable capture must not stall reconciliation of everything
+                        // sorted after it; index failures still abort, since those are systemic.
+                        Err(err) => {
+                            warn!(?err, %id, "skipping an unreadable capture during reconcile");
+                        }
+                    },
                     EitherOrBoth::Right(id) => {
-                        if self.blob.get(id).await?.is_none() {
+                        if !self.blob.contains(id).await? {
                             self.index.remove(std::iter::once(id)).await?;
                         }
                     }
@@ -270,6 +276,26 @@ mod tests {
         let hits = search_hits(&backend, "orphaned", 10).await;
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].history_id, hid(1));
+    }
+
+    #[tokio::test]
+    async fn reconcile_skips_an_unreadable_capture_and_indexes_the_rest() {
+        use std::collections::HashSet;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = temp_backend(dir.path()).await;
+        let AnyBlobStore::Fjall(blob) = &backend.blob else {
+            unreachable!()
+        };
+        blob.capture(hid(1), cap("stored 1")).await.expect("capture");
+        blob.corrupt(hid(2));
+        blob.capture(hid(3), cap("stored 3")).await.expect("capture");
+
+        backend.reconcile().await.expect("reconcile");
+
+        let indexed: HashSet<HistoryId> =
+            backend.index.indexed_ids().await.try_collect().await.expect("indexed_ids");
+        assert_eq!(indexed, [hid(1), hid(3)].into_iter().collect());
     }
 
     #[tokio::test]
