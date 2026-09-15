@@ -4,6 +4,7 @@
 //! [`super::blob::BlobStore`] for the storage layer.
 
 mod nop;
+mod schema;
 mod sqlite;
 
 use atuin_client::history::HistoryId;

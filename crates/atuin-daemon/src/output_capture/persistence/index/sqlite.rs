@@ -1,20 +1,14 @@
 use std::ffi::OsString;
-use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use atuin_client::history::HistoryId;
 use atuin_common::db::sqlite::Sqlite;
-use atuin_common::db::sqlite::fts::{FtsQueryExt, TextHighlighter};
+use atuin_common::db::sqlite::fts::TextHighlighter;
 use atuin_common::db::{self};
 use atuin_common::futures::stream::ChunkedStream;
-use futures::stream;
-use sqlx::Row;
 
+use super::schema::{Current, Schema, store};
 use super::{Index, IndexError, OutputMatch};
-
-const CHUNK: NonZeroUsize = NonZeroUsize::new(512).unwrap();
-
-const SCHEMA_VERSION: i64 = 3;
 
 /// A full-text search index backed by a sidecar sqlite FTS5 table.
 #[derive(Debug)]
@@ -22,15 +16,6 @@ pub struct SqliteIndex {
     db: Sqlite,
     /// A type which allows type-safe operation on SQL `highlight` statements.
     highlighter: TextHighlighter,
-}
-
-fn store(err: sqlx::Error) -> IndexError {
-    IndexError::Storage(Box::new(err))
-}
-
-fn id_from_bytes(raw: &[u8]) -> Result<HistoryId, IndexError> {
-    let bytes: [u8; 16] = raw.try_into().map_err(|err| IndexError::Storage(Box::new(err)))?;
-    Ok(HistoryId::from_bytes(bytes))
 }
 
 impl SqliteIndex {
@@ -59,7 +44,7 @@ impl SqliteIndex {
     /// If the given directory is the root directory.
     pub fn path(blob_dir: &Path) -> PathBuf {
         let mut name = OsString::from(blob_dir.file_name().expect("the blob_dir cannot be root."));
-        name.push(format!("-index-{SCHEMA_VERSION}.sqlite"));
+        name.push(format!("-index-{}.sqlite", Current::VERSION));
         blob_dir.with_file_name(name)
     }
 
@@ -67,24 +52,12 @@ impl SqliteIndex {
         let pool = self.db.pool();
         let version: i64 =
             db::query_scalar("PRAGMA user_version").fetch_one(pool).await.map_err(store)?;
-        if version == SCHEMA_VERSION {
+        if version == Current::VERSION {
             return Ok(());
         }
 
-        db::query("DROP TABLE IF EXISTS output_fts").execute(pool).await.map_err(store)?;
-        db::query("DROP TABLE IF EXISTS indexed").execute(pool).await.map_err(store)?;
-        db::query(
-            "CREATE VIRTUAL TABLE output_fts USING fts5(history_id UNINDEXED, body, tokenize = \
-             'unicode61')",
-        )
-        .execute(pool)
-        .await
-        .map_err(store)?;
-        db::query("CREATE TABLE indexed(history_id BLOB PRIMARY KEY) WITHOUT ROWID")
-            .execute(pool)
-            .await
-            .map_err(store)?;
-        db::query(sqlx::AssertSqlSafe(format!("PRAGMA user_version = {SCHEMA_VERSION}")))
+        Current::setup(&self.db).await?;
+        db::query(sqlx::AssertSqlSafe(format!("PRAGMA user_version = {}", Current::VERSION)))
             .execute(pool)
             .await
             .map_err(store)?;
@@ -94,54 +67,11 @@ impl SqliteIndex {
 
 impl Index for SqliteIndex {
     async fn insert(&self, id: HistoryId, text: &str) -> Result<(), IndexError> {
-        let pool = self.db.pool();
-        let key = id.into_bytes();
-        let mut tx = pool.begin().await.map_err(store)?;
-        db::query("DELETE FROM output_fts WHERE history_id = ?")
-            .bind(&key[..])
-            .execute(&mut *tx)
-            .await
-            .map_err(store)?;
-        db::query("INSERT INTO output_fts(history_id, body) VALUES (?, ?)")
-            .bind(&key[..])
-            .bind_highlightable(self.highlighter, text)
-            .execute(&mut *tx)
-            .await
-            .map_err(store)?;
-        db::query("INSERT OR IGNORE INTO indexed(history_id) VALUES (?)")
-            .bind(&key[..])
-            .execute(&mut *tx)
-            .await
-            .map_err(store)?;
-        tx.commit().await.map_err(store)?;
-        Ok(())
+        Current::insert(&self.db, self.highlighter, id, text).await
     }
 
     async fn remove(&self, ids: impl Iterator<Item = HistoryId>) -> Result<(), IndexError> {
-        let mut ids = ids.peekable();
-
-        if ids.peek().is_none() {
-            return Ok(());
-        }
-
-        let pool = self.db.pool();
-        let mut tx = pool.begin().await.map_err(store)?;
-        for id in ids {
-            let key = id.into_bytes();
-            db::query("DELETE FROM output_fts WHERE history_id = ?")
-                .bind(&key[..])
-                .execute(&mut *tx)
-                .await
-                .map_err(store)?;
-            db::query("DELETE FROM indexed WHERE history_id = ?")
-                .bind(&key[..])
-                .execute(&mut *tx)
-                .await
-                .map_err(store)?;
-        }
-        tx.commit().await.map_err(store)?;
-
-        Ok(())
+        Current::remove(&self.db, ids).await
     }
 
     async fn search(
@@ -149,77 +79,11 @@ impl Index for SqliteIndex {
         query: &str,
         limit: usize,
     ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
-        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        let highlighter = self.highlighter;
-        // `highlight()` hands back the whole body with every match wrapped in the markers, which is
-        // the one pass that yields both the full output and where the matches sit in it.
-        let stmt = db::query(
-            "SELECT history_id, highlight(output_fts, 1, ?, ?) AS body, -bm25(output_fts) AS \
-             score FROM output_fts WHERE output_fts MATCH ? ORDER BY score DESC LIMIT ?",
-        )
-        .bind_highlight(highlighter);
-        let Some(stmt) = stmt.bind_match_query(query) else {
-            return ChunkedStream::empty();
-        };
-        let rows = stmt.bind(limit).fetch_all(self.db.pool()).await;
-
-        let rows = match rows {
-            Ok(rows) => rows,
-            Err(err) => return ChunkedStream::from_error(store(err)),
-        };
-
-        let matches: Vec<Result<OutputMatch, IndexError>> = rows
-            .into_iter()
-            .map(move |row| {
-                let raw: &[u8] = row.try_get("history_id").map_err(store)?;
-                let body: &str = row.try_get("body").map_err(store)?;
-                Ok(OutputMatch {
-                    history_id: id_from_bytes(raw)?,
-                    output: highlighter.as_highlighted(body.to_owned()),
-                    score: row.try_get("score").map_err(store)?,
-                })
-            })
-            .collect();
-
-        ChunkedStream::from_items(matches, CHUNK)
+        Current::search(&self.db, self.highlighter, query, limit).await
     }
 
     async fn indexed_ids(&self) -> ChunkedStream<Result<HistoryId, IndexError>> {
-        let pool = self.db.pool().clone();
-        let page = i64::try_from(CHUNK.get()).unwrap_or(i64::MAX);
-
-        ChunkedStream::new(stream::unfold(Some(Vec::new()), move |after| {
-            let pool = pool.clone();
-            async move {
-                let after: Vec<u8> = after?;
-
-                let rows = match db::query(
-                    "SELECT history_id FROM indexed WHERE history_id > ? ORDER BY history_id \
-                     LIMIT ?",
-                )
-                .bind(after)
-                .bind(page)
-                .fetch_all(&pool)
-                .await
-                {
-                    Ok(rows) => rows,
-                    Err(err) => return Some((vec![Err(store(err))], None)),
-                };
-
-                let next = match rows.last().map(|row| row.try_get::<Vec<u8>, _>("history_id")) {
-                    None => return None,
-                    Some(Ok(bytes)) => Some(bytes),
-                    Some(Err(err)) => return Some((vec![Err(store(err))], None)),
-                };
-
-                let chunk: Vec<Result<HistoryId, IndexError>> = rows
-                    .into_iter()
-                    .map(|row| id_from_bytes(row.try_get::<&[u8], _>("history_id").map_err(store)?))
-                    .collect();
-
-                Some((chunk, next))
-            }
-        }))
+        Current::indexed_ids(&self.db).await
     }
 }
 
@@ -227,6 +91,7 @@ impl Index for SqliteIndex {
 mod tests {
     use std::collections::HashSet;
 
+    use super::super::schema::CHUNK;
     use super::*;
 
     fn hid(n: u128) -> HistoryId {
@@ -241,6 +106,14 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let index = SqliteIndex::open(&dir.path().join("index.sqlite")).await.expect("open");
         (index, dir)
+    }
+
+    #[tokio::test]
+    async fn open_stamps_the_schema_version() {
+        let (index, _dir) = temp_index().await;
+        let version: i64 =
+            db::query_scalar("PRAGMA user_version").fetch_one(index.db.pool()).await.unwrap();
+        assert_eq!(version, Current::VERSION);
     }
 
     #[tokio::test]
