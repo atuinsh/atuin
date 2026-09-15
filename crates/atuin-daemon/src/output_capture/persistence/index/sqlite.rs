@@ -78,8 +78,9 @@ impl Index for SqliteIndex {
         &self,
         query: &str,
         limit: usize,
+        body: impl AsyncFn(HistoryId) -> Option<String>,
     ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
-        Current::search(&self.db, self.highlighter, query, limit).await
+        Current::search(&self.db, self.highlighter, query, limit, body).await
     }
 
     async fn indexed_ids(&self) -> ChunkedStream<Result<HistoryId, IndexError>> {
@@ -98,8 +99,13 @@ mod tests {
         HistoryId::from_bytes(*uuid::Uuid::from_u128(n).as_bytes())
     }
 
-    async fn search_hits(index: &SqliteIndex, query: &str, limit: usize) -> Vec<OutputMatch> {
-        index.search(query, limit).await.try_collect().await.expect("search")
+    async fn search_hits(index: &SqliteIndex, query: &str, body: &str) -> Vec<OutputMatch> {
+        index
+            .search(query, 10, async |_| Some(body.to_owned()))
+            .await
+            .try_collect()
+            .await
+            .expect("search")
     }
 
     async fn temp_index() -> (SqliteIndex, tempfile::TempDir) {
@@ -121,7 +127,7 @@ mod tests {
         let (index, _dir) = temp_index().await;
         index.insert(hid(1), "the build failed with an error").await.expect("insert");
 
-        let hits = search_hits(&index, "error", 10).await;
+        let hits = search_hits(&index, "error", "the build failed with an error").await;
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].history_id, hid(1));
         let output = &hits[0].output;
@@ -136,7 +142,7 @@ mod tests {
         let (index, _dir) = temp_index().await;
         index.insert(hid(1), "error one\nfine\nerror two").await.expect("insert");
 
-        let hits = search_hits(&index, "error", 10).await;
+        let hits = search_hits(&index, "error", "error one\nfine\nerror two").await;
         let output = &hits[0].output;
         let marked = output.as_ref();
         let got: Vec<&str> = output.ranges().map(|r| &marked[r]).collect();
@@ -152,7 +158,7 @@ mod tests {
         let text = format!("{open}fake{close} real");
         index.insert(hid(1), &text).await.expect("insert");
 
-        let hits = search_hits(&index, "real", 10).await;
+        let hits = search_hits(&index, "real", &text).await;
         let output = &hits[0].output;
         assert_eq!(output.display_plain().to_string(), "fake real");
         let marked = output.as_ref();
@@ -161,10 +167,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_index_stores_no_body() {
+        let (index, _dir) = temp_index().await;
+        index.insert(hid(1), "kept only in the blob store").await.expect("insert");
+
+        let content_tables: i64 =
+            db::query_scalar("SELECT count(*) FROM sqlite_master WHERE name LIKE '%_content'")
+                .fetch_one(index.db.pool())
+                .await
+                .unwrap();
+        assert_eq!(content_tables, 0);
+    }
+
+    #[tokio::test]
+    async fn a_body_that_drifted_from_the_index_is_returned_unhighlighted() {
+        let (index, _dir) = temp_index().await;
+        index.insert(hid(1), "indexed with an error").await.expect("insert");
+
+        let hits = search_hits(&index, "error", "re-rendered without the term").await;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].output.display_plain().to_string(), "re-rendered without the term");
+        assert_eq!(hits[0].output.ranges().count(), 0);
+    }
+
+    #[tokio::test]
     async fn search_returns_nothing_for_a_miss() {
         let (index, _dir) = temp_index().await;
         index.insert(hid(1), "hello world").await.expect("insert");
-        assert!(search_hits(&index, "absent", 10).await.is_empty());
+        assert!(search_hits(&index, "absent", "hello world").await.is_empty());
     }
 
     #[tokio::test]
@@ -173,7 +203,7 @@ mod tests {
         // hand FTS5 an empty MATCH (which errors).
         let (index, _dir) = temp_index().await;
         index.insert(hid(1), "hello world").await.expect("insert");
-        assert!(search_hits(&index, "   ", 10).await.is_empty());
+        assert!(search_hits(&index, "   ", "hello world").await.is_empty());
     }
 
     #[tokio::test]
@@ -182,7 +212,7 @@ mod tests {
         index.insert(hid(1), "first text apple").await.expect("insert");
         index.insert(hid(1), "second text apple").await.expect("reinsert");
 
-        let hits = search_hits(&index, "apple", 10).await;
+        let hits = search_hits(&index, "apple", "second text apple").await;
         assert_eq!(hits.len(), 1, "the id appears once, not twice");
     }
 
@@ -191,7 +221,7 @@ mod tests {
         let (index, _dir) = temp_index().await;
         index.insert(hid(1), "removable content").await.expect("insert");
         index.remove(std::iter::once(hid(1))).await.expect("remove");
-        assert!(search_hits(&index, "removable", 10).await.is_empty());
+        assert!(search_hits(&index, "removable", "removable content").await.is_empty());
     }
 
     #[tokio::test]
@@ -227,7 +257,7 @@ mod tests {
         // Bare FTS5 syntax chars would be a syntax error unquoted; sanitizing must swallow them.
         for q in ["\"unbalanced", "a OR", "path:", "(", "*", "-x"] {
             index
-                .search(q, 10)
+                .search(q, 10, async |_| None)
                 .await
                 .try_collect::<Vec<_>>()
                 .await
@@ -245,7 +275,7 @@ mod tests {
         }
         let index = SqliteIndex::open(&path).await.expect("reopen");
         // A matching schema version must not drop the table, so the row survives the reopen.
-        let hits = search_hits(&index, "persistent", 10).await;
+        let hits = search_hits(&index, "persistent", "persistent data").await;
         assert_eq!(hits.len(), 1);
     }
 
@@ -282,7 +312,7 @@ mod tests {
 
         removing.await.expect("join").expect("remove waits for the lock");
         inserting.await.expect("join").expect("insert waits for the lock");
-        assert!(search_hits(&index, "held", 10).await.is_empty());
-        assert_eq!(search_hits(&index, "queued", 10).await.len(), 1);
+        assert!(search_hits(&index, "held", "held").await.is_empty());
+        assert_eq!(search_hits(&index, "queued", "queued").await.len(), 1);
     }
 }

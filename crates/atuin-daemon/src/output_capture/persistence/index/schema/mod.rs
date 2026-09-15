@@ -35,6 +35,7 @@ pub trait Schema {
         highlighter: TextHighlighter,
         query: &str,
         limit: usize,
+        body: impl AsyncFn(HistoryId) -> Option<String>,
     ) -> ChunkedStream<Result<OutputMatch, IndexError>>;
 
     async fn indexed_ids(db: &Sqlite) -> ChunkedStream<Result<HistoryId, IndexError>>;

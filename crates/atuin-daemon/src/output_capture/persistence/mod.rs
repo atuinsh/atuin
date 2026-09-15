@@ -1,8 +1,6 @@
 mod blob;
 mod index;
 
-use std::num::NonZeroUsize;
-
 use atuin_client::history::{CommandCapture, HistoryId};
 use atuin_common::futures::stream::{ChunkedStream, EitherOrBoth, try_merge_join};
 #[cfg(test)]
@@ -71,32 +69,21 @@ impl OutputStore {
         query: &str,
         limit: usize,
     ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
-        let ranked = self.index.search(query, limit).await;
-        let hits: Vec<OutputMatch> = match ranked.try_collect().await {
-            Ok(hits) => hits,
-            Err(err) => return ChunkedStream::from_error(err),
-        };
-
         // The index is derived and can briefly hold entries whose blob was deleted -- a
         // capture/remove race, a swallowed index write, or reconcile lag. The blob is
-        // authoritative, so never surface a hit whose capture is gone. (This can return fewer
-        // than `limit` hits even when more live matches exist further down the ranking.)
-        let mut live = Vec::with_capacity(hits.len());
-        for hit in hits {
-            match self.blob.contains(hit.history_id).await {
-                Ok(true) => live.push(Ok(hit)),
-                Ok(false) => {} // the capture is gone; drop the stale index hit
-                // A transient existence check hides only this hit, not the whole search.
-                Err(err) => warn!(
-                    ?err,
-                    id = %hit.history_id,
-                    "failed to confirm a search hit's capture; dropping it",
-                ),
-            }
-        }
-
-        const CHUNK: NonZeroUsize = NonZeroUsize::new(512).unwrap();
-        ChunkedStream::from_items(live, CHUNK)
+        // authoritative: a hit is highlighted from its stored capture, and one whose capture is
+        // gone is dropped. (This can return fewer than `limit` hits even when more live matches
+        // exist further down the ranking.)
+        self.index
+            .search(query, limit, async |id| match self.blob.get(id).await {
+                Ok(capture) => capture.map(|capture| capture.plaintext()),
+                // A transient read failure hides only this hit, not the whole search.
+                Err(err) => {
+                    warn!(?err, %id, "failed to read a search hit's capture; dropping it");
+                    None
+                }
+            })
+            .await
     }
 
     pub fn estimated_disk_space(&self) -> u64 {

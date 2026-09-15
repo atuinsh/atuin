@@ -20,6 +20,7 @@ impl Index for NopIndex {
         &self,
         _query: &str,
         _limit: usize,
+        _body: impl AsyncFn(HistoryId) -> Option<String>,
     ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
         ChunkedStream::empty()
     }

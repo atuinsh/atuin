@@ -1,7 +1,8 @@
 //! The full-text search index over captured output.
 //!
 //! Note this is intended to be a **shallow** index and should not actually store the data. See
-//! [`super::blob::BlobStore`] for the storage layer.
+//! [`super::blob::BlobStore`] for the storage layer; search hits are highlighted at query time
+//! from the body the caller fetches out of it.
 
 #[cfg(test)]
 mod failing;
@@ -37,11 +38,13 @@ pub trait Index {
     /// Drop every id in `ids` from the index. Absent ids are ignored.
     async fn remove(&self, ids: impl Iterator<Item = HistoryId>) -> Result<(), IndexError>;
 
-    /// Relevance-ranked matches, most relevant first.
+    /// Relevance-ranked matches, most relevant first. `body` supplies the visible text of a hit
+    /// for highlighting; a hit it has no body for is dropped.
     async fn search(
         &self,
         query: &str,
         limit: usize,
+        body: impl AsyncFn(HistoryId) -> Option<String>,
     ) -> ChunkedStream<Result<OutputMatch, IndexError>>;
 
     /// Every id currently held in the index.

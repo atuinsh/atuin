@@ -26,6 +26,7 @@ impl Index for FailingIndex {
         &self,
         _query: &str,
         _limit: usize,
+        _body: impl AsyncFn(HistoryId) -> Option<String>,
     ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
         ChunkedStream::from_error(unavailable())
     }

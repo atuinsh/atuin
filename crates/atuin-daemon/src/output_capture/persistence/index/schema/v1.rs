@@ -1,8 +1,11 @@
+use std::collections::HashMap;
+
 use atuin_client::history::HistoryId;
 use atuin_common::db::sqlite::Sqlite;
-use atuin_common::db::sqlite::fts::{FtsQueryExt, TextHighlighter};
+use atuin_common::db::sqlite::fts::{FtsQueryExt, TextHighlighter, match_expression};
 use atuin_common::db::{self};
 use atuin_common::futures::stream::ChunkedStream;
+use easy_cast::Conv;
 use futures::stream;
 use sqlx::Row;
 
@@ -10,6 +13,91 @@ use super::super::{IndexError, OutputMatch};
 use super::{CHUNK, id_from_bytes, store};
 
 pub struct Schema;
+
+impl Schema {
+    async fn ranked(
+        db: &Sqlite,
+        highlighter: TextHighlighter,
+        query: &str,
+        limit: usize,
+        body: impl AsyncFn(HistoryId) -> Option<String>,
+    ) -> Result<Vec<OutputMatch>, IndexError> {
+        let Some(expr) = match_expression(query) else {
+            return Ok(Vec::new());
+        };
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+
+        let mut conn = db.pool().acquire().await.map_err(store)?;
+        let rows = db::query(
+            "SELECT indexed.history_id, -bm25(output_fts) AS score FROM output_fts JOIN indexed \
+             ON indexed.id = output_fts.rowid WHERE output_fts MATCH ? ORDER BY score DESC LIMIT ?",
+        )
+        .bind(expr.clone())
+        .bind(limit)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(store)?;
+
+        let mut hits = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id = id_from_bytes(row.try_get("history_id").map_err(store)?)?;
+            let score: f64 = row.try_get("score").map_err(store)?;
+            if let Some(text) = body(id).await {
+                hits.push((id, score, text));
+            }
+        }
+        if hits.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // The index is contentless, so highlights come from re-tokenizing the bodies in a
+        // connection-private scratch table with the same tokenizer and match expression.
+        db::query(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS temp.highlights USING fts5(body, tokenize = \
+             'unicode61')",
+        )
+        .execute(&mut *conn)
+        .await
+        .map_err(store)?;
+        db::query("DELETE FROM temp.highlights").execute(&mut *conn).await.map_err(store)?;
+        for (n, (_, _, text)) in hits.iter().enumerate() {
+            db::query("INSERT INTO temp.highlights(rowid, body) VALUES (?, ?)")
+                .bind(i64::conv(n))
+                .bind_highlightable(highlighter, text)
+                .execute(&mut *conn)
+                .await
+                .map_err(store)?;
+        }
+        let mut highlighted: HashMap<i64, String> = db::query(
+            "SELECT rowid, highlight(highlights, 0, ?, ?) AS body FROM temp.highlights WHERE \
+             highlights MATCH ?",
+        )
+        .bind_highlight(highlighter)
+        .bind(expr)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(store)?
+        .into_iter()
+        .map(|row| Ok((row.try_get("rowid").map_err(store)?, row.try_get("body").map_err(store)?)))
+        .collect::<Result<_, IndexError>>()?;
+
+        Ok(hits
+            .into_iter()
+            .enumerate()
+            .map(|(n, (history_id, score, text))| OutputMatch {
+                history_id,
+                // A body that no longer matches (its plaintext changed since it was indexed) is
+                // still a hit, just an unhighlighted one.
+                output: highlighter.as_highlighted(
+                    highlighted
+                        .remove(&i64::conv(n))
+                        .unwrap_or_else(|| highlighter.sanitize(&text).into_owned()),
+                ),
+                score,
+            })
+            .collect())
+    }
+}
 
 impl super::Schema for Schema {
     const VERSION: i64 = 1;
@@ -20,7 +108,8 @@ impl super::Schema for Schema {
             "DROP TABLE IF EXISTS output_fts",
             "DROP TABLE IF EXISTS indexed",
             "CREATE TABLE indexed(id INTEGER PRIMARY KEY, history_id BLOB NOT NULL UNIQUE)",
-            "CREATE VIRTUAL TABLE output_fts USING fts5(body, tokenize = 'unicode61')",
+            "CREATE VIRTUAL TABLE output_fts USING fts5(body, content = '', contentless_delete = \
+             1, tokenize = 'unicode61')",
         ] {
             db::query(statement).execute(pool).await.map_err(store)?;
         }
@@ -89,38 +178,12 @@ impl super::Schema for Schema {
         highlighter: TextHighlighter,
         query: &str,
         limit: usize,
+        body: impl AsyncFn(HistoryId) -> Option<String>,
     ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
-        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        let stmt = db::query(
-            "SELECT indexed.history_id, highlight(output_fts, 0, ?, ?) AS body, -bm25(output_fts) \
-             AS score FROM output_fts JOIN indexed ON indexed.id = output_fts.rowid WHERE \
-             output_fts MATCH ? ORDER BY score DESC LIMIT ?",
-        )
-        .bind_highlight(highlighter);
-        let Some(stmt) = stmt.bind_match_query(query) else {
-            return ChunkedStream::empty();
-        };
-        let rows = stmt.bind(limit).fetch_all(db.pool()).await;
-
-        let rows = match rows {
-            Ok(rows) => rows,
-            Err(err) => return ChunkedStream::from_error(store(err)),
-        };
-
-        let matches: Vec<Result<OutputMatch, IndexError>> = rows
-            .into_iter()
-            .map(move |row| {
-                let raw: &[u8] = row.try_get("history_id").map_err(store)?;
-                let body: &str = row.try_get("body").map_err(store)?;
-                Ok(OutputMatch {
-                    history_id: id_from_bytes(raw)?,
-                    output: highlighter.as_highlighted(body.to_owned()),
-                    score: row.try_get("score").map_err(store)?,
-                })
-            })
-            .collect();
-
-        ChunkedStream::from_items(matches, CHUNK)
+        match Self::ranked(db, highlighter, query, limit, body).await {
+            Ok(matches) => ChunkedStream::from_items(matches.into_iter().map(Ok), CHUNK),
+            Err(err) => ChunkedStream::from_error(err),
+        }
     }
 
     async fn indexed_ids(db: &Sqlite) -> ChunkedStream<Result<HistoryId, IndexError>> {
