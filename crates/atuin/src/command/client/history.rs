@@ -529,7 +529,7 @@ async fn handle_end(
     if settings.should_sync().await? {
         #[cfg(feature = "sync")]
         {
-            let engine = record::sync::SyncEngine::builder()
+            let session = record::sync::SyncSession::builder()
                 .store(store.clone())
                 .client_source(record::sync::ClientSource::FromSettings {
                     settings,
@@ -538,7 +538,7 @@ async fn handle_end(
                 .build()
                 .connect()
                 .await?;
-            let (_, downloaded) = engine.keyed(&history_store.encryption_key).sync().await?;
+            let (_, downloaded) = session.keyed(&history_store.encryption_key).sync().await?;
             Settings::save_sync_time().await?;
 
             crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
