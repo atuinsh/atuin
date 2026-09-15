@@ -15,7 +15,7 @@ pub type Current = SchemaV1;
 
 pub(super) const CHUNK: NonZeroUsize = NonZeroUsize::new(512).unwrap();
 
-#[allow(async_fn_in_trait)]
+#[allow(async_fn_in_trait, reason = "only used within our code; no Send bound needed")]
 pub trait Schema {
     const VERSION: i64;
 

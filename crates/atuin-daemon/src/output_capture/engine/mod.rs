@@ -40,8 +40,10 @@ impl OutputCaptureEngine {
         };
 
         // The index is derived, so a failure to open it leaves capture working; only search is lost.
-        let store = match SqliteIndex::open(&SqliteIndex::path(path)).await {
-            Ok(index) => OutputStore::new(AnyBlobStore::Fjall(storage), AnyIndex::Sqlite(index)),
+        let (store, searchable) = match SqliteIndex::open(&SqliteIndex::path(path)).await {
+            Ok(index) => {
+                (OutputStore::new(AnyBlobStore::Fjall(storage), AnyIndex::Sqlite(index)), true)
+            }
             Err(err) => {
                 error!(
                     ?err,
@@ -49,12 +51,14 @@ impl OutputCaptureEngine {
                     "failed to open the output search index; search over captured output is \
                      disabled"
                 );
-                OutputStore::new(AnyBlobStore::Fjall(storage), AnyIndex::Nop(NopIndex))
+                (OutputStore::new(AnyBlobStore::Fjall(storage), AnyIndex::Nop(NopIndex)), false)
             }
         };
         let store = Arc::new(store);
 
-        let reconciler = Reconciler::spawn(store.clone());
+        // A Nop index has nothing to reconcile; reconciling it would rescan the whole blob store
+        // every interval only to discard the work.
+        let reconciler = searchable.then(|| Reconciler::spawn(store.clone()));
 
         let gc = match max_disk_usage.resolve_for_path(path) {
             Ok(budget) => budget.map(|budget| Gc::spawn(store.clone(), budget)),
@@ -67,7 +71,7 @@ impl OutputCaptureEngine {
         Self {
             store,
             _gc: gc,
-            _reconciler: Some(reconciler),
+            _reconciler: reconciler,
         }
     }
 
@@ -191,6 +195,24 @@ mod tests {
         store.capture(hid(1), cap("stored but unsearchable")).await.expect("capture");
         assert!(store.get(hid(1)).await.expect("get").is_some());
         assert!(search_hits(&store.store(), "unsearchable", 10).await.is_empty());
+    }
+
+    #[allow(
+        clippy::used_underscore_binding,
+        reason = "reading the field is how this test observes whether the reconciler was spawned"
+    )]
+    #[tokio::test]
+    async fn the_reconciler_is_spawned_only_when_the_index_opens() {
+        // A real index is reconciled against the store...
+        let (engine, _dir) = temp_store().await;
+        assert!(engine._reconciler.is_some(), "a real index gets a reconciler");
+
+        // ...but a Nop fallback has nothing to reconcile, so no periodic full-store rescan runs.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("capture");
+        std::fs::create_dir_all(SqliteIndex::path(&path)).expect("occupy index path");
+        let engine = OutputCaptureEngine::open(&path, DiskUsageLimit::Unlimited).await;
+        assert!(engine._reconciler.is_none(), "a Nop index is not reconciled");
     }
 
     #[tokio::test]

@@ -17,7 +17,6 @@ atuin-common = { workspace = true, features = ["os", "proto", "sqlite"] }
 atuin-domain = { workspace = true }
 atuin-dotfiles = { workspace = true }
 atuin-history = { workspace = true }
-atuin-vt100 = { workspace = true }
 dashmap = { workspace = true }
 derive_more = { workspace = true }
 easy-cast = { workspace = true }

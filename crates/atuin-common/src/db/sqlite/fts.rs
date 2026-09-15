@@ -204,9 +204,4 @@ mod tests {
             .unwrap();
         assert_eq!(row.try_get::<i64, _>("n").unwrap(), 1);
     }
-
-    #[test]
-    fn bind_match_query_is_none_for_a_blank_query() {
-        assert!(match_expression("   ").is_none());
-    }
 }

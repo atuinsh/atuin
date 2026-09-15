@@ -3,6 +3,8 @@
 //! Note this is intended to be a **shallow** index and should not actually store the data. See
 //! [`super::blob::BlobStore`] for the storage layer.
 
+#[cfg(test)]
+mod failing;
 mod nop;
 mod schema;
 mod sqlite;
@@ -10,6 +12,8 @@ mod sqlite;
 use atuin_client::history::HistoryId;
 use atuin_common::futures::stream::ChunkedStream;
 use enum_dispatch::enum_dispatch;
+#[cfg(test)]
+pub use failing::FailingIndex;
 pub use nop::NopIndex;
 pub use sqlite::SqliteIndex;
 use thiserror::Error;
@@ -49,4 +53,6 @@ pub trait Index {
 pub enum AnyIndex {
     Sqlite(SqliteIndex),
     Nop(NopIndex),
+    #[cfg(test)]
+    Failing(FailingIndex),
 }

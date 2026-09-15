@@ -9,7 +9,9 @@ pub use blob::{
     AnyBlobStore, BlobStore, CaptureError, DeleteOutputError, FjallBlobStore, GetOutputError,
     NopBlobStore,
 };
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
+#[cfg(test)]
+pub use index::FailingIndex;
 pub use index::{AnyIndex, Index, IndexError, NopIndex, SqliteIndex};
 use tracing::warn;
 
@@ -82,8 +84,25 @@ impl OutputStore {
     }
 
     pub async fn reconcile(&self) -> Result<(), ReconcileError> {
-        let blob = self.blob.all_ids().await.items().map_err(ReconcileError::BlobStore);
-        let index = self.index.indexed_ids().await.items().map_err(ReconcileError::Index);
+        let blob = self.blob.all_ids().await.items().filter_map(|res| async move {
+            match res {
+                Ok(id) => Some(Ok::<HistoryId, ReconcileError>(id)),
+                Err(err) => {
+                    warn!(?err, "skipping an unreadable id from the output store during reconcile");
+                    None
+                }
+            }
+        });
+
+        let index = self.index.indexed_ids().await.items().filter_map(|res| async move {
+            match res {
+                Ok(id) => Some(Ok::<HistoryId, ReconcileError>(id)),
+                Err(err) => {
+                    warn!(?err, "skipping an unreadable id from the search index during reconcile");
+                    None
+                }
+            }
+        });
 
         try_merge_join(blob, index)
             .try_for_each(|side| async move {
@@ -175,6 +194,24 @@ mod tests {
         backend.capture(hid(1), cap("searchable content")).await.expect("capture");
         backend.remove(&[hid(1)]).await.expect("remove");
         assert!(search_hits(&backend, "searchable", 10).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn capture_and_remove_survive_an_erroring_index() {
+        // The index is derived, so a live index failure must not fail the capture or the removal;
+        // the blob store stays authoritative and reconcile heals the index later.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let blob = FjallBlobStore::open(dir.path().join("store")).expect("open blob");
+        let store = OutputStore::new(AnyBlobStore::Fjall(blob), AnyIndex::Failing(FailingIndex));
+
+        store.capture(hid(1), cap("still stored")).await.expect("capture survives index failure");
+        assert_eq!(
+            store.get(hid(1)).await.expect("get").expect("present").output_start,
+            "still stored"
+        );
+
+        store.remove(&[hid(1)]).await.expect("remove survives index failure");
+        assert!(store.get(hid(1)).await.expect("get").is_none());
     }
 
     #[tokio::test]

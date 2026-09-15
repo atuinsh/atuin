@@ -145,20 +145,25 @@ impl FjallStorageInner {
             });
 
             loop {
-                let batch: Vec<_> = ids.by_ref().take(CHUNK.get()).collect();
+                let batch: Vec<_> = ids
+                    .by_ref()
+                    .filter(|item| {
+                        if let Err(err) = item {
+                            error!(
+                                ?err,
+                                "skipping an unreadable key during the output-capture id scan"
+                            );
+                        }
+                        item.is_ok()
+                    })
+                    .take(CHUNK.get())
+                    .collect();
+
                 if batch.is_empty() {
                     return; // the walk is done
                 }
 
-                let stop = {
-                    let err = batch.iter().find_map(|item| item.as_ref().err());
-                    if let Some(err) = err {
-                        error!(?err, "output-capture id scan hit an unreadable key");
-                    }
-                    err.is_some()
-                };
-
-                if tx.blocking_send(batch).is_err() || stop {
+                if tx.blocking_send(batch).is_err() {
                     return;
                 }
             }
@@ -552,5 +557,24 @@ mod tests {
         let ids: Vec<HistoryId> = store.all_ids().await.try_collect().await.expect("all_ids");
         let expected: Vec<HistoryId> = (1..=count).map(hid).collect();
         assert_eq!(ids, expected);
+    }
+
+    #[tokio::test]
+    async fn all_ids_skips_unreadable_keys_and_keeps_walking() {
+        let (store, _dir) = temp_storage();
+        for n in 1..=3u128 {
+            store.capture(hid(n), cap(&format!("out{n}"))).await.expect("capture");
+        }
+
+        // Write a key that isn't 16 bytes straight into the keyspace, so `deserialize_key` rejects
+        // it. It sorts ahead of the real ids, so a scan that aborted on it would drop every id.
+        {
+            let mut tx = store.inner.db.write_tx().expect("write tx");
+            tx.insert(&store.inner.keyspace, [0u8; 4].as_slice(), b"".as_slice());
+            tx.commit().expect("commit").expect("no conflict");
+        }
+
+        let ids: Vec<HistoryId> = store.all_ids().await.try_collect().await.expect("all_ids");
+        assert_eq!(ids, vec![hid(1), hid(2), hid(3)], "the bad key is skipped, the rest survive");
     }
 }
