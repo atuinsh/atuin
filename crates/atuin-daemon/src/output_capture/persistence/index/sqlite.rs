@@ -248,4 +248,41 @@ mod tests {
         let hits = search_hits(&index, "persistent", 10).await;
         assert_eq!(hits.len(), 1);
     }
+
+    #[tokio::test]
+    async fn writes_wait_for_a_held_write_lock_on_a_cold_connection() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("index.sqlite");
+        {
+            let index = SqliteIndex::open(&path).await.expect("open");
+            index.insert(hid(1), "held").await.expect("insert");
+        }
+        // Reopening only reads `user_version`, so no pool connection has touched the FTS table
+        // yet. FTS5 connects the virtual table when a connection first prepares a statement
+        // against it, and inside a deferred transaction that read pins a snapshot which makes the
+        // following write fail with SQLITE_BUSY at once instead of waiting on the busy handler.
+        let index = SqliteIndex::open(&path).await.expect("reopen");
+
+        let mut locker = index.db.pool().acquire().await.expect("acquire");
+        db::query("BEGIN IMMEDIATE").execute(&mut *locker).await.expect("lock");
+
+        let index = std::sync::Arc::new(index);
+        let removing = tokio::spawn({
+            let index = index.clone();
+            async move { index.remove(std::iter::once(hid(1))).await }
+        });
+        let inserting = tokio::spawn({
+            let index = index.clone();
+            async move { index.insert(hid(2), "queued").await }
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        db::query("COMMIT").execute(&mut *locker).await.expect("unlock");
+        drop(locker);
+
+        removing.await.expect("join").expect("remove waits for the lock");
+        inserting.await.expect("join").expect("insert waits for the lock");
+        assert!(search_hits(&index, "held", 10).await.is_empty());
+        assert_eq!(search_hits(&index, "queued", 10).await.len(), 1);
+    }
 }
