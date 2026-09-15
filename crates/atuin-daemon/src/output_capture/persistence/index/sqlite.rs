@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use atuin_client::history::HistoryId;
 use atuin_common::db::sqlite::Sqlite;
-use atuin_common::db::sqlite::fts::{TextHighlighter, TextHighlighterBindExt};
+use atuin_common::db::sqlite::fts::{FtsQueryExt, TextHighlighter};
 use atuin_common::db::{self};
 use atuin_common::futures::stream::ChunkedStream;
 use futures::stream;
@@ -149,24 +149,19 @@ impl Index for SqliteIndex {
         query: &str,
         limit: usize,
     ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
-        let match_expr = sanitize_query(query);
-        if match_expr.is_empty() {
-            return ChunkedStream::empty();
-        }
-
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let highlighter = self.highlighter;
         // `highlight()` hands back the whole body with every match wrapped in the markers, which is
         // the one pass that yields both the full output and where the matches sit in it.
-        let rows = db::query(
+        let stmt = db::query(
             "SELECT history_id, highlight(output_fts, 1, ?, ?) AS body, -bm25(output_fts) AS \
              score FROM output_fts WHERE output_fts MATCH ? ORDER BY score DESC LIMIT ?",
         )
-        .bind_highlight(highlighter)
-        .bind(&match_expr)
-        .bind(limit)
-        .fetch_all(self.db.pool())
-        .await;
+        .bind_highlight(highlighter);
+        let Some(stmt) = stmt.bind_match_query(query) else {
+            return ChunkedStream::empty();
+        };
+        let rows = stmt.bind(limit).fetch_all(self.db.pool()).await;
 
         let rows = match rows {
             Ok(rows) => rows,
@@ -226,27 +221,6 @@ impl Index for SqliteIndex {
             }
         }))
     }
-}
-
-/// Turn free-form user input into a safe FTS5 `MATCH` expression: each whitespace-separated term
-/// becomes a quoted string (doubling any embedded quote), ANDed together. Quoting sidesteps FTS5's
-/// query syntax so punctuation in the query can never raise a syntax error.
-fn sanitize_query(query: &str) -> String {
-    let mut out = String::with_capacity(query.len() + 2);
-    for term in query.split_whitespace() {
-        if !out.is_empty() {
-            out.push(' ');
-        }
-        out.push('"');
-        for ch in term.chars() {
-            if ch == '"' {
-                out.push('"'); // FTS5 escapes an embedded double-quote by doubling it.
-            }
-            out.push(ch);
-        }
-        out.push('"');
-    }
-    out
 }
 
 #[cfg(test)]
@@ -318,6 +292,15 @@ mod tests {
         let (index, _dir) = temp_index().await;
         index.insert(hid(1), "hello world").await.expect("insert");
         assert!(search_hits(&index, "absent", 10).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn blank_query_yields_no_results() {
+        // A whitespace-only query has no searchable terms; search must short-circuit rather than
+        // hand FTS5 an empty MATCH (which errors).
+        let (index, _dir) = temp_index().await;
+        index.insert(hid(1), "hello world").await.expect("insert");
+        assert!(search_hits(&index, "   ", 10).await.is_empty());
     }
 
     #[tokio::test]

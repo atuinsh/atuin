@@ -3,16 +3,16 @@
 //! Please see <https://www.sqlite.org/fts5.html> for more details in the Sqlite implementation of
 //! FTS.
 //!
-//! The [`TextHighlighterBindExt`] extension trait binds a [`TextHighlighter`]'s markers into an
-//! FTS5 `highlight(table, index, ?, ?)` query and sanitizes text on the way into the index. The
-//! highlighter itself lives in [`crate::string::highlighted`].
+//! The [`FtsQueryExt`] extension trait binds FTS5 values into a query: a [`TextHighlighter`]'s
+//! markers, text sanitized on the way into the index, and free-form user input escaped into a
+//! `MATCH` expression. The highlighter itself lives in [`crate::string::highlighted`].
 
 use sqlx::query::Query;
 use sqlx::{Database, Sqlite};
 
 pub use crate::string::highlighted::TextHighlighter;
 
-pub trait TextHighlighterBindExt {
+pub trait FtsQueryExt {
     /// Bind the relevant highlight points into a `highlight(table, index, ?, ?)` sql query.
     ///
     /// See [`TextHighlighter`].
@@ -22,9 +22,17 @@ pub trait TextHighlighterBindExt {
     /// Sanitize `highlightable` for `highlighter` and bind it. See [`TextHighlighter::sanitize`].
     #[must_use]
     fn bind_highlightable(self, highlighter: TextHighlighter, highlightable: &str) -> Self;
+
+    /// Escape free-form `input` into an FTS5 `MATCH` expression (see `match_expression`) and bind
+    /// it. Returns `None` when `input` has no searchable terms, so the caller can skip the query
+    /// rather than run an empty `MATCH`, which FTS5 rejects as a syntax error.
+    #[must_use]
+    fn bind_match_query(self, input: &str) -> Option<Self>
+    where
+        Self: Sized;
 }
 
-impl TextHighlighterBindExt for Query<'_, Sqlite, <Sqlite as Database>::Arguments> {
+impl FtsQueryExt for Query<'_, Sqlite, <Sqlite as Database>::Arguments> {
     fn bind_highlight(self, highlighter: TextHighlighter) -> Self {
         // sqlite has no native `char` type; bind the markers as one-char strings.
         let [open, close] = highlighter.markers();
@@ -35,6 +43,23 @@ impl TextHighlighterBindExt for Query<'_, Sqlite, <Sqlite as Database>::Argument
         // `into_owned` so the bound value outlives this call rather than borrowing the local `Cow`.
         self.bind(highlighter.sanitize(highlightable).into_owned())
     }
+
+    fn bind_match_query(self, input: &str) -> Option<Self> {
+        match_expression(input).map(|expr| self.bind(expr))
+    }
+}
+
+/// Escape free-form match input into an FTS5 `MATCH` expression.
+///
+/// The language is minimal: `T K` is translated to `"T" AND "K"`, effectively.
+///
+/// Returns `None` when the input has no searchable terms.
+#[must_use]
+pub fn match_expression(input: &str) -> Option<String> {
+    input
+        .split_whitespace()
+        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+        .reduce(|expr, term| format!("{expr} {term}"))
 }
 
 #[cfg(test)]
@@ -138,5 +163,50 @@ mod tests {
 
         assert_eq!(h.as_highlighted(marked.as_str()).ranges().count(), 0);
         assert!(matches!(h.sanitize(&marked), Cow::Borrowed(_)));
+    }
+
+    #[rstest]
+    #[case::single_term("error", Some("\"error\""))]
+    #[case::terms_are_anded("build failed", Some("\"build\" \"failed\""))]
+    #[case::embedded_quote_is_doubled("a\"b", Some("\"a\"\"b\""))]
+    #[case::surrounding_whitespace_trimmed("  spaced  ", Some("\"spaced\""))]
+    // `:` would be an FTS5 column filter raw; quoting keeps it a literal.
+    #[case::operator_char_kept_literal("refused:", Some("\"refused:\""))]
+    #[case::empty_is_none("", None)]
+    #[case::whitespace_only_is_none("  \t\n ", None)]
+    fn match_expression_escapes_free_form_input(
+        #[case] input: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(match_expression(input).as_deref(), expected);
+    }
+
+    #[tokio::test]
+    async fn bind_match_query_neutralizes_fts5_operators() {
+        // `refused:` is a column filter to raw FTS5 (a hard error); bound as a MATCH query it must
+        // instead match the literal token in the stored body.
+        let sqlite = crate::db::sqlite::Sqlite::builder_in_memory().open().await.unwrap();
+        let mut conn = sqlite.pool().acquire().await.unwrap();
+        crate::db::query::<Sqlite>("create virtual table docs using fts5(body)")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        crate::db::query::<Sqlite>("insert into docs(body) values ('connection refused: oops')")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+
+        let row = crate::db::query::<Sqlite>("select count(*) as n from docs where docs match ?")
+            .bind_match_query("refused:")
+            .expect("non-blank query")
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap();
+        assert_eq!(row.try_get::<i64, _>("n").unwrap(), 1);
+    }
+
+    #[test]
+    fn bind_match_query_is_none_for_a_blank_query() {
+        assert!(match_expression("   ").is_none());
     }
 }
