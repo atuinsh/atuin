@@ -335,6 +335,16 @@ impl SearchClient {
         Ok(SearchClient { client })
     }
 
+    #[cfg(unix)]
+    pub async fn from_settings(settings: &Settings) -> Result<Self> {
+        Self::new(settings.daemon.existing_socket_path().into_owned()).await
+    }
+
+    #[cfg(not(unix))]
+    pub async fn from_settings(settings: &Settings) -> Result<Self> {
+        Self::new(settings.daemon.tcp_port).await
+    }
+
     #[instrument(
         skip_all,
         level = Level::TRACE,

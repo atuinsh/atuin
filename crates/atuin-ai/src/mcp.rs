@@ -2,11 +2,12 @@
 //! `rmcp` SDK.
 //!
 //! This exposes the same history tools the AI assistant uses (`atuin_history`
-//! and `atuin_output`) to external MCP clients such as Claude Code or Cursor.
+//! and `atuin_output`), plus `atuin_output_search`, to external MCP clients
+//! such as Claude Code or Cursor.
 //!
 //! History search reads the sqlite database directly and works without the
-//! daemon; output retrieval talks to the daemon and returns a tool error when
-//! it is not running.
+//! daemon; output retrieval and output search talk to the daemon and return a
+//! tool error when it is not running.
 
 use std::sync::LazyLock;
 
@@ -23,6 +24,9 @@ use rmcp::{RoleServer, ServerHandler, ServiceExt};
 use serde_json::{Value, json};
 use strum::IntoEnumIterator;
 
+use crate::tools::output_search::{
+    AtuinOutputSearchToolCall, DEFAULT_OUTPUT_SEARCH_RESULTS, MAX_OUTPUT_SEARCH_RESULTS,
+};
 use crate::tools::{
     AtuinHistoryToolCall, AtuinOutputToolCall, DEFAULT_HISTORY_RESULTS, HistorySearchFilterMode,
     MAX_HISTORY_RESULTS, ToolOutcome,
@@ -47,7 +51,9 @@ Search atuin_history instead of guessing, asking the user, or re-running things 
      terminal activity is relevant: how the user last invoked something ('what flags did I use'), \
      whether and when something ran and if it succeeded, why a command failed (search with \
      only_failed: true, then read the actual error with atuin_output), or what an AI agent ran. \
-     When debugging, checking recent history early often reveals what the user already tried.
+     When debugging, checking recent history early often reveals what the user already tried. \
+     When you know what was printed but not which command printed it — an error message, a \
+     version, a hostname, a path — search the captured output itself with atuin_output_search.
 
 When a question is about the user themselves — 'what do I use', 'how do I connect', 'what's my \
      setup' — run one atuin_history search BEFORE searching the filesystem. It is a single cheap \
@@ -97,6 +103,12 @@ impl ServerHandler for AtuinMcp {
                 AtuinOutputToolCall::try_from(&arguments)
                     .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?
                     .execute()
+                    .await
+            }
+            "atuin_output_search" => {
+                AtuinOutputSearchToolCall::try_from(&arguments)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?
+                    .execute(&self.db)
                     .await
             }
             name => {
@@ -218,6 +230,29 @@ fn tool_definitions() -> Vec<Tool> {
         unreachable!()
     };
 
+    let Value::Object(output_search_schema) = json!({
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Words to look for in captured command output. Terms are \
+                    AND-ed and matched as whole words (case-insensitive; no regex, no \
+                    prefix matching), so use a few distinctive words from the text you \
+                    remember, e.g. 'connection refused' or 'ENOSPC', not a sentence.",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_OUTPUT_SEARCH_RESULTS,
+                "default": DEFAULT_OUTPUT_SEARCH_RESULTS,
+                "description": "Maximum number of commands to return, most relevant first.",
+            },
+        },
+        "required": ["query"],
+    }) else {
+        unreachable!()
+    };
+
     vec![
         Tool::new(
             "atuin_history",
@@ -243,6 +278,17 @@ fn tool_definitions() -> Vec<Tool> {
             output_schema,
         )
         .annotate(ToolAnnotations::with_title("Read past command output").read_only(true)),
+        Tool::new(
+            "atuin_output_search",
+            "Full-text search over the terminal output of every captured command. Use it when you \
+             know what was printed but not which command printed it: an error message, a version \
+             string, a hostname, a file path, a test name. Each result gives the command (with \
+             its history ID, timestamp, directory and exit code) and the numbered output lines \
+             around each match; pass the history ID and line numbers to atuin_output to read \
+             more. Requires the Atuin daemon with output capture enabled.",
+            output_search_schema,
+        )
+        .annotate(ToolAnnotations::with_title("Search past command output").read_only(true)),
     ]
 }
 
@@ -257,10 +303,10 @@ mod tests {
     const MAX_INSTRUCTIONS_LEN: usize = 2_000;
 
     #[rstest]
-    fn tool_definitions_list_both_tools_as_read_only() {
+    fn tool_definitions_list_all_tools_as_read_only() {
         let tools = tool_definitions();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-        assert_eq!(names, ["atuin_history", "atuin_output"]);
+        assert_eq!(names, ["atuin_history", "atuin_output", "atuin_output_search"]);
 
         for tool in &tools {
             assert_eq!(tool.annotations.as_ref().unwrap().read_only_hint, Some(true));
@@ -278,6 +324,7 @@ mod tests {
         let instructions = server_info().instructions.expect("initialize result has instructions");
         assert!(instructions.contains("atuin_history"));
         assert!(instructions.contains("atuin_output"));
+        assert!(instructions.contains("atuin_output_search"));
         assert!(instructions.len() < MAX_INSTRUCTIONS_LEN, "instructions should stay concise");
     }
 }

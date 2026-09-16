@@ -29,6 +29,7 @@ const NO_OUTPUT_ADVICE: &str = "If the command is safe and cheap to repeat, re-r
                                 instead.";
 
 pub mod descriptor;
+pub mod output_search;
 
 use crate::permissions::rule::Rule;
 
