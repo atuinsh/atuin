@@ -1,77 +1,70 @@
 //! A string proven to hold something other than whitespace.
 
 use std::borrow::Cow;
-use std::fmt;
-use std::ops::Deref;
-use std::str::FromStr;
 
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize};
 
-/// A string with at least one non-whitespace character, stored without surrounding whitespace.
+/// A string with at least one non-whitespace character, held verbatim. `T` is any string type:
+/// `String`, `&str`, `Cow<str>`, `Box<str>`, ...
 ///
 /// Deserializing a blank value fails and the JSON schema says so (`minLength: 1`), so a free-text
 /// parameter such as a search query carries its own validation.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
-pub struct NonBlankString(String);
+#[derive(
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    derive_more::AsRef,
+    derive_more::Debug,
+    derive_more::Deref,
+    derive_more::Display,
+)]
+#[as_ref(forward)]
+#[debug("{_0:?}")]
+#[deref(forward)]
+#[display("{_0}")]
+pub struct NonBlank<T = String>(T);
+
+pub type NonBlankString = NonBlank<String>;
 
 /// The error returned when a string is empty or all whitespace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("string is blank")]
 pub struct Blank;
 
-impl NonBlankString {
-    /// Trim `inner`, or fail if nothing is left.
-    pub fn new(inner: impl AsRef<str>) -> Result<Self, Blank> {
-        match inner.as_ref().trim() {
-            "" => Err(Blank),
-            trimmed => Ok(Self(trimmed.to_owned())),
+impl<T: AsRef<str>> NonBlank<T> {
+    /// Wrap `inner`, or fail if it is empty or all whitespace.
+    pub fn new(inner: T) -> Result<Self, Blank> {
+        if inner.as_ref().trim().is_empty() {
+            Err(Blank)
+        } else {
+            Ok(Self(inner))
         }
     }
 
-    #[must_use]
+    /// The wrapped string as a slice.
     pub fn as_str(&self) -> &str {
-        &self.0
+        self.0.as_ref()
+    }
+
+    pub fn into_inner(self) -> T {
+        self.0
     }
 }
 
-impl Deref for NonBlankString {
-    type Target = str;
-
-    fn deref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl AsRef<str> for NonBlankString {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for NonBlankString {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl FromStr for NonBlankString {
-    type Err = Blank;
-
-    fn from_str(s: &str) -> Result<Self, Blank> {
-        Self::new(s)
-    }
-}
-
-impl<'de> Deserialize<'de> for NonBlankString {
+impl<'de, T: AsRef<str> + Deserialize<'de>> Deserialize<'de> for NonBlank<T> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::new(<Cow<'de, str>>::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+        Self::new(T::deserialize(deserializer)?).map_err(serde::de::Error::custom)
     }
 }
 
-impl JsonSchema for NonBlankString {
+impl<T> JsonSchema for NonBlank<T> {
     fn schema_name() -> Cow<'static, str> {
-        "NonBlankString".into()
+        "NonBlank".into()
     }
 
     fn inline_schema() -> bool {
@@ -98,19 +91,25 @@ mod tests {
     }
 
     #[rstest]
-    #[case::plain("disk", "disk")]
-    #[case::trimmed("  disk full \n", "disk full")]
-    fn keeps_the_trimmed_text(#[case] input: &str, #[case] expected: &str) {
-        assert_eq!(NonBlankString::new(input).unwrap().as_str(), expected);
+    #[case::plain("disk")]
+    #[case::padded("  disk full \n")]
+    fn holds_the_text_verbatim(#[case] input: &str) {
+        let borrowed: NonBlank<&str> = NonBlank::new(input).unwrap();
+        assert_eq!(borrowed.as_str(), input);
+        assert_eq!(&*borrowed, input);
+        assert_eq!(borrowed.to_string(), input);
+        assert_eq!(NonBlankString::new(input.to_owned()).unwrap().as_str(), input);
         let params: Params = serde_json::from_value(json!({"query": input})).unwrap();
-        assert_eq!(params.query.as_str(), expected);
+        assert_eq!(params.query.as_str(), input);
+        assert_eq!(serde_json::to_value(&params.query).unwrap(), json!(input));
+        assert_eq!(params.query.into_inner(), input);
     }
 
     #[rstest]
     #[case::empty("")]
     #[case::whitespace(" \t\n")]
     fn rejects_blank_text(#[case] input: &str) {
-        assert_eq!(NonBlankString::new(input), Err(Blank));
+        assert_eq!(NonBlank::new(input), Err(Blank));
         assert!(serde_json::from_value::<Params>(json!({"query": input})).is_err());
     }
 

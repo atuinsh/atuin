@@ -69,16 +69,9 @@ clamp_int!(u8, u16, u32, u64, usize, i8, i16, i32, i64, i128, isize);
 /// # use atuin_common::range::Clamped;
 /// let _ = Clamped::<u32, 1, 20, 50>::default();
 /// ```
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, derive_more::Debug)]
+#[debug("{_0:?}")]
 pub struct Clamped<T: ClampInt, const MIN: i128, const MAX: i128, const DEFAULT: i128>(T);
-
-impl<T: ClampInt, const MIN: i128, const MAX: i128, const DEFAULT: i128> fmt::Debug
-    for Clamped<T, MIN, MAX, DEFAULT>
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&self.0, f)
-    }
-}
 
 impl<T: ClampInt, const MIN: i128, const MAX: i128, const DEFAULT: i128>
     Clamped<T, MIN, MAX, DEFAULT>

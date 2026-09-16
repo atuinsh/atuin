@@ -28,7 +28,7 @@ pub use bounded_buffer::BoundedBuffer;
 #[cfg(feature = "unicode")]
 pub use ellipsis::EllipsizeExt;
 pub use escape_non_printable_posix_ext::EscapeNonPrintablePosixExt;
-pub use non_blank::{Blank, NonBlankString};
+pub use non_blank::{Blank, NonBlank, NonBlankString};
 pub use non_nul_str::{ContainsNul, NonNulStr};
 pub use normalize::normalize;
 pub use trim::TrimExt;

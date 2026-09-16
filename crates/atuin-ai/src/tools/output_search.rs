@@ -106,7 +106,7 @@ impl AtuinOutputSearchToolCall {
                  terminal while the daemon was running are searchable, and older output may have \
                  been dropped. Terms are AND-ed and matched as whole words, so try fewer or \
                  different terms.",
-                self.query.as_str()
+                self.query.trim()
             ));
         }
         ToolOutcome::Success(formatted.join("\n"))
