@@ -273,7 +273,7 @@ impl Cmd {
             Self::Search(search) => search.run(db, &mut settings, sqlite_store, theme).await,
 
             #[cfg(feature = "daemon")]
-            Self::SearchOutput(cmd) => cmd.run(&db, &settings).await.map_err(Into::into),
+            Self::SearchOutput(cmd) => cmd.run(&db, &settings, theme).await.map_err(Into::into),
 
             #[cfg(feature = "sync")]
             Self::Sync(sync) => sync.run(settings, &db, sqlite_store).await,
