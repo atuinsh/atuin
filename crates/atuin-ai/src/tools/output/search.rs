@@ -14,8 +14,9 @@ use futures::TryStreamExt;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use super::{NO_OUTPUT_ADVICE, ToolOutcome};
+use super::NO_OUTPUT_ADVICE;
 use crate::history_format::format_history_search_result;
+use crate::tools::ToolOutcome;
 
 /// Output lines shown on each side of a matching line.
 const CONTEXT_LINES: usize = 1;
@@ -44,6 +45,9 @@ impl AtuinOutputSearchToolCall {
             );
         }
 
+        // TODO(markovejnovic): It would be good if this was injected into the tool rather than
+        //                      built ad-hoc. However, the anti-pattern already exists, and I'd like
+        //                      to keep the ball rolling.
         let mut client = match SearchClient::from_settings(settings).await {
             Ok(client) => client,
             Err(e) => {

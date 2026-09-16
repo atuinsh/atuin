@@ -27,7 +27,7 @@ use rmcp::{RoleServer, ServerHandler, ServiceExt};
 use serde_json::{Value, json};
 use strum::IntoEnumIterator;
 
-use crate::tools::output_search::AtuinOutputSearchToolCall;
+use crate::tools::output::search::AtuinOutputSearchToolCall;
 use crate::tools::{
     AtuinHistoryToolCall, AtuinOutputToolCall, DEFAULT_HISTORY_RESULTS, HistorySearchFilterMode,
     MAX_HISTORY_RESULTS, ToolOutcome,
