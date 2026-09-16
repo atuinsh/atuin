@@ -698,16 +698,14 @@ mod tests {
             parser.push(b"\x1b]133;D;0;history_id=one\x07\x1b]133;D;1;history_id=two\x07");
 
         assert!(iter.next().is_some());
-        assert_eq!(
-            iter.params().map(OwnedParam::from).collect::<Vec<_>>(),
-            vec![OwnedParam::key_value("history_id", "one")]
-        );
+        assert_eq!(iter.params().map(OwnedParam::from).collect::<Vec<_>>(), vec![
+            OwnedParam::key_value("history_id", "one")
+        ]);
 
         assert!(iter.next().is_some());
-        assert_eq!(
-            iter.params().map(OwnedParam::from).collect::<Vec<_>>(),
-            vec![OwnedParam::key_value("history_id", "two")]
-        );
+        assert_eq!(iter.params().map(OwnedParam::from).collect::<Vec<_>>(), vec![
+            OwnedParam::key_value("history_id", "two")
+        ]);
     }
 
     // -- Split across push boundaries -----------------------------------------
@@ -735,13 +733,10 @@ mod tests {
 
         let result = push(&mut parser, b";session_id=abcd\x07rest");
         assert_eq!(result.chunks.len(), 1);
-        assert_eq!(
-            result.chunks[0].params,
-            vec![
-                OwnedParam::key_value("history_id", "018f"),
-                OwnedParam::key_value("session_id", "abcd"),
-            ]
-        );
+        assert_eq!(result.chunks[0].params, vec![
+            OwnedParam::key_value("history_id", "018f"),
+            OwnedParam::key_value("session_id", "abcd"),
+        ]);
         assert_eq!(result.trailing_data, b"rest");
     }
 
@@ -757,17 +752,14 @@ mod tests {
             events.extend(push(&mut parser, chunk).events());
         }
 
-        assert_eq!(
-            events,
-            vec![
-                Event::PromptStart,
-                Event::CommandStart,
-                Event::CommandExecuted,
-                Event::CommandFinished {
-                    exit_code: Some(99)
-                },
-            ]
-        );
+        assert_eq!(events, vec![
+            Event::PromptStart,
+            Event::CommandStart,
+            Event::CommandExecuted,
+            Event::CommandFinished {
+                exit_code: Some(99)
+            },
+        ]);
     }
 
     // -- Input that must not produce events -----------------------------------
@@ -841,9 +833,8 @@ mod tests {
 
     #[rstest]
     fn parser_default_matches_new() {
-        assert_eq!(
-            push(&mut Parser::default(), b"\x1b]133;A\x07").events(),
-            vec![Event::PromptStart]
-        );
+        assert_eq!(push(&mut Parser::default(), b"\x1b]133;A\x07").events(), vec![
+            Event::PromptStart
+        ]);
     }
 }
