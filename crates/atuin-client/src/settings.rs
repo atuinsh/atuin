@@ -1614,8 +1614,12 @@ impl Settings {
     pub fn get_config_path() -> Result<PathBuf> {
         let config_dir = atuin_common::utils::config_dir();
 
-        create_dir_all(&config_dir)
-            .wrap_err_with(|| format!("could not create dir {config_dir:?}"))?;
+        // `create_dir_all` is idempotent, but the existence check keeps the
+        // already-initialized common case (every hook) off the syscall.
+        if !config_dir.exists() {
+            create_dir_all(&config_dir)
+                .wrap_err_with(|| format!("could not create dir {config_dir:?}"))?;
+        }
 
         let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
             PathBuf::from(p)
@@ -1630,97 +1634,135 @@ impl Settings {
         Ok(config_file)
     }
 
+    /// Path-valued keys whose `~`/`$VAR` are expanded after the config is built.
+    const PATH_KEYS: [&'static str; 8] = [
+        "db_path",
+        "record_store_path",
+        "key_path",
+        "daemon.socket_path",
+        "daemon.pidfile_path",
+        "logs.dir",
+        "logs.search.file",
+        "logs.daemon.file",
+    ];
+
+    /// Layer defaults (seeded from `data_dir`), the config file, and the
+    /// environment into a single built [`Config`].
+    fn build_layered(data_dir: &Path, config_file: Option<&str>) -> Result<Config> {
+        let mut builder = Self::builder_with_data_dir(data_dir)?;
+        if let Some(path) = config_file {
+            builder = builder.add_source(ConfigFile::new(path, FileFormat::Toml));
+        }
+        Ok(builder.build()?)
+    }
+
+    /// The configured `data_dir`, if any, with the historical precedence:
+    /// `ATUIN_DATA_DIR` in the environment wins over the config file value.
+    fn configured_data_dir(config: &Config) -> Option<String> {
+        // `Environment::with_prefix("atuin")` maps `ATUIN_DATA_DIR` -> `data_dir`;
+        // reading the env var directly reproduces that mapping without a build.
+        std::env::var("ATUIN_DATA_DIR").ok().or_else(|| config.get_string("data_dir").ok())
+    }
+
+    /// Overwrite the string at a dotted `key` in the built config's cache.
+    /// A no-op if the key is missing or not a string, matching the old
+    /// override-then-rebuild behaviour without a second full build.
+    fn set_config_string(config: &mut Config, key: &str, value: String) {
+        use config::ValueKind;
+
+        let segments: Vec<&str> = key.split('.').collect();
+        let mut current = &mut config.cache;
+        for (i, segment) in segments.iter().enumerate() {
+            let ValueKind::Table(map) = &mut current.kind else {
+                return;
+            };
+            let Some(next) = map.get_mut(*segment) else {
+                return;
+            };
+            if i == segments.len() - 1 {
+                next.kind = ValueKind::String(value);
+                return;
+            }
+            current = next;
+        }
+    }
+
     /// Build a merged `Config` from defaults, config file, and environment.
     ///
     /// This resolves `data_dir`, initializes the data directory on disk,
     /// and layers defaults → config file → env overrides. Both `new()` and
     /// `get_config_value()` use this so the resolution logic lives in one place.
+    ///
+    /// The layered config is materialized once: the merge happens with the
+    /// default data dir, and is only redone if a custom `data_dir` is in effect
+    /// (it seeds the other path defaults). Path expansion is applied in place on
+    /// the built config rather than via a second full rebuild.
     fn build_config() -> Result<Config> {
         let config_file = Self::get_config_path()?;
-
-        // extract data_dir first so we can use it as the base for other path defaults
-        let effective_data_dir = if config_file.exists() {
-            #[derive(Deserialize, Default)]
-            struct DataDirOnly {
-                data_dir: Option<String>,
-            }
-
-            let config_file_str =
-                config_file.to_str().ok_or_else(|| eyre!("config file path is not valid UTF-8"))?;
-
-            let partial_config = Config::builder()
-                .add_source(ConfigFile::new(config_file_str, FileFormat::Toml))
-                .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__"))
-                .build()
-                .ok();
-
-            let custom_data_dir = partial_config
-                .and_then(|c| c.try_deserialize::<DataDirOnly>().ok())
-                .and_then(|d| d.data_dir);
-
-            match custom_data_dir {
-                Some(dir) => {
-                    let expanded = shellexpand::full(&dir)
-                        .map_err(|e| eyre!("failed to expand data_dir path: {}", e))?;
-                    PathBuf::from(expanded.as_ref())
-                }
-                None => atuin_common::utils::data_dir(),
-            }
+        let config_exists = config_file.exists();
+        let config_file_str = if config_exists {
+            Some(
+                config_file
+                    .to_str()
+                    .ok_or_else(|| eyre!("config file path is not valid UTF-8"))?
+                    .to_owned(),
+            )
         } else {
-            atuin_common::utils::data_dir()
+            None
         };
+
+        let default_data_dir = atuin_common::utils::data_dir();
+        let mut config = Self::build_layered(&default_data_dir, config_file_str.as_deref())?;
+
+        // `data_dir` is resolved from the config file / environment only when a
+        // config file exists, matching the historical two-phase resolution.
+        let effective_data_dir = match config_exists.then(|| Self::configured_data_dir(&config)).flatten() {
+            Some(dir) => {
+                let expanded = shellexpand::full(&dir)
+                    .map_err(|e| eyre!("failed to expand data_dir path: {}", e))?;
+                PathBuf::from(expanded.as_ref())
+            }
+            None => default_data_dir.clone(),
+        };
+
+        // The path defaults above were seeded with the default data dir; only a
+        // custom data dir needs the merge redone.
+        if effective_data_dir != default_data_dir {
+            config = Self::build_layered(&effective_data_dir, config_file_str.as_deref())?;
+        }
 
         DATA_DIR.set(effective_data_dir.clone()).ok();
 
-        create_dir_all(&effective_data_dir)
-            .wrap_err_with(|| format!("could not create dir {effective_data_dir:?}"))?;
+        // `create_dir_all` is idempotent, but skipping it when the dir already
+        // exists keeps the common (initialized) path off the syscall.
+        if !effective_data_dir.exists() {
+            create_dir_all(&effective_data_dir)
+                .wrap_err_with(|| format!("could not create dir {effective_data_dir:?}"))?;
+        }
 
-        let mut config_builder = Self::builder_with_data_dir(&effective_data_dir)?;
-
-        config_builder = if config_file.exists() {
-            let config_file_str =
-                config_file.to_str().ok_or_else(|| eyre!("config file path is not valid UTF-8"))?;
-            config_builder.add_source(ConfigFile::new(config_file_str, FileFormat::Toml))
-        } else {
-            let mut file = File::create(config_file).wrap_err("could not create config file")?;
+        if !config_exists {
+            let mut file = File::create(&config_file).wrap_err("could not create config file")?;
             file.write_all(EXAMPLE_CONFIG.as_bytes())
                 .wrap_err("could not write default config file")?;
+        }
 
-            config_builder
-        };
-
-        // all paths should be expanded
-        let built = config_builder.build_cloned()?;
-
-        config_builder = [
-            "db_path",
-            "record_store_path",
-            "key_path",
-            "daemon.socket_path",
-            "daemon.pidfile_path",
-            "logs.dir",
-            "logs.search.file",
-            "logs.daemon.file",
-        ]
-        .iter()
-        .map(|key| (key, built.get_string(key).unwrap_or_default()))
-        // An unset optional path (`daemon.socket_path`) must stay unset rather
-        // than be overridden with an empty one.
-        .filter(|(_, value)| !value.is_empty())
-        .filter_map(|(key, value)| match Self::expand_path(&value) {
-            Ok(expanded) => Some((key, expanded)),
-            Err(e) => {
-                tracing::warn!("failed to expand path for {key}: {e}");
-                None
+        // Expand `~`/`$VAR` in the resolved path values in place.
+        for key in Self::PATH_KEYS {
+            let Ok(value) = config.get_string(key) else {
+                // An unset optional path (`daemon.socket_path`) stays unset.
+                continue;
+            };
+            if value.is_empty() {
+                continue;
             }
-        })
-        .fold(config_builder, |builder, (key, value)| {
-            builder
-                .set_override(key, value)
-                .unwrap_or_else(|_| panic!("failed to set absolute path override for {key}"))
-        });
+            match Self::expand_path(&value) {
+                Ok(expanded) if expanded != value => Self::set_config_string(&mut config, key, expanded),
+                Ok(_) => {}
+                Err(e) => tracing::warn!("failed to expand path for {key}: {e}"),
+            }
+        }
 
-        config_builder.build().map_err(Into::into)
+        Ok(config)
     }
 
     /// Look up a single config value by dotted key (e.g. `"daemon.sync_frequency"`).
@@ -2005,6 +2047,25 @@ mod tests {
         settings.workspaces = workspaces;
 
         assert_eq!(settings.default_filter_mode(git_root), expected);
+    }
+
+    /// `set_config_string` must reach nested keys and no-op on missing ones,
+    /// since `build_config` uses it to expand paths in place.
+    #[test]
+    fn set_config_string_navigates_nested_keys() -> Result<()> {
+        let mut config = Settings::builder_with_data_dir(std::path::Path::new("/data"))?.build()?;
+
+        Settings::set_config_string(&mut config, "db_path", "/expanded/history.db".into());
+        Settings::set_config_string(&mut config, "logs.search.file", "/expanded/search.log".into());
+        // A missing leaf and a missing intermediate must both be silent no-ops.
+        Settings::set_config_string(&mut config, "logs.nope", "ignored".into());
+        Settings::set_config_string(&mut config, "does.not.exist", "ignored".into());
+
+        assert_eq!(config.get_string("db_path")?, "/expanded/history.db");
+        assert_eq!(config.get_string("logs.search.file")?, "/expanded/search.log");
+        // Untouched siblings survive.
+        assert_eq!(config.get_string("logs.daemon.file")?, "daemon.log");
+        Ok(())
     }
 
     #[test]
