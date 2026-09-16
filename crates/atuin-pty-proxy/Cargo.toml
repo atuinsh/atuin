@@ -37,5 +37,9 @@ tempfile = { workspace = true }
 name = "osc133"
 harness = false
 
+[[bench]]
+name = "stdout_write"
+harness = false
+
 [lints]
 workspace = true
