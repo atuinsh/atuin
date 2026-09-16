@@ -24,9 +24,7 @@ use rmcp::{RoleServer, ServerHandler, ServiceExt};
 use serde_json::{Value, json};
 use strum::IntoEnumIterator;
 
-use crate::tools::output_search::{
-    AtuinOutputSearchToolCall, DEFAULT_OUTPUT_SEARCH_RESULTS, MAX_OUTPUT_SEARCH_RESULTS,
-};
+use crate::tools::output_search::{AtuinOutputSearchToolCall, Limit};
 use crate::tools::{
     AtuinHistoryToolCall, AtuinOutputToolCall, DEFAULT_HISTORY_RESULTS, HistorySearchFilterMode,
     MAX_HISTORY_RESULTS, ToolOutcome,
@@ -242,9 +240,9 @@ fn tool_definitions() -> Vec<Tool> {
             },
             "limit": {
                 "type": "integer",
-                "minimum": 1,
-                "maximum": MAX_OUTPUT_SEARCH_RESULTS,
-                "default": DEFAULT_OUTPUT_SEARCH_RESULTS,
+                "minimum": Limit::MIN,
+                "maximum": Limit::MAX,
+                "default": Limit::DEFAULT,
                 "description": "Maximum number of commands to return, most relevant first.",
             },
         },

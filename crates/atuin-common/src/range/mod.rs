@@ -3,9 +3,11 @@
 use std::ops::Range;
 
 mod chunks;
+mod clamped;
 pub mod py_style;
 
 pub use chunks::{ChunkInt, Chunks};
+pub use clamped::{Bounds, Clamped};
 pub use py_style::PyStyleIdxRange;
 
 /// Chunk a [`Range`] into fixed-size sub-ranges. See [`Chunks`].

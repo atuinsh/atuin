@@ -5,19 +5,28 @@ use std::ops::Range;
 
 use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
+use atuin_common::range::{Bounds, Clamped};
 use atuin_common::string::highlighted::Piece;
 use atuin_common::time::UtcOffsetExt;
 use atuin_daemon::client::SearchClient;
 use eyre::Result;
 use futures::TryStreamExt;
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 
 use super::{NO_OUTPUT_ADVICE, ToolOutcome};
 use crate::history_format::format_history_search_result;
 
-/// Page-size bounds for `atuin_output_search`; mirrored in the MCP schema.
-pub const DEFAULT_OUTPUT_SEARCH_RESULTS: u32 = 5;
-pub const MAX_OUTPUT_SEARCH_RESULTS: u32 = 20;
+/// Page size for `atuin_output_search`; the MCP schema reads its bounds from here.
+pub type Limit = Clamped<LimitBounds>;
+
+pub struct LimitBounds;
+
+impl Bounds for LimitBounds {
+    type Int = u32;
+    const MIN: u32 = 1;
+    const MAX: u32 = 20;
+    const DEFAULT: u32 = 5;
+}
 
 /// Output lines shown on each side of a matching line.
 const CONTEXT_LINES: usize = 1;
@@ -25,19 +34,8 @@ const CONTEXT_LINES: usize = 1;
 #[derive(Debug, Clone, Deserialize)]
 pub struct AtuinOutputSearchToolCall {
     pub query: String,
-    #[serde(default = "default_limit", deserialize_with = "deserialize_limit")]
-    pub limit: u32,
-}
-
-fn default_limit() -> u32 {
-    DEFAULT_OUTPUT_SEARCH_RESULTS
-}
-
-/// Models often send `null` for optional params, so it counts as omitted; anything else is
-/// clamped into the schema's bounds rather than rejected.
-fn deserialize_limit<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
-    let limit = Option::<u32>::deserialize(deserializer)?;
-    Ok(limit.map_or(DEFAULT_OUTPUT_SEARCH_RESULTS, |l| l.clamp(1, MAX_OUTPUT_SEARCH_RESULTS)))
+    #[serde(default)]
+    pub limit: Limit,
 }
 
 impl TryFrom<&serde_json::Value> for AtuinOutputSearchToolCall {
@@ -88,7 +86,7 @@ impl AtuinOutputSearchToolCall {
 
         let local_offset = time::UtcOffset::local_or_utc();
         let mut formatted = Vec::new();
-        while formatted.len() < self.limit as usize {
+        while formatted.len() < self.limit.get() as usize {
             let m = match matches.try_next().await {
                 Ok(Some(m)) => m,
                 Ok(None) => break,
@@ -182,7 +180,7 @@ mod tests {
     fn parses_query_and_clamps_limit(#[case] input: serde_json::Value, #[case] limit: u32) {
         let call = AtuinOutputSearchToolCall::try_from(&input).unwrap();
         assert_eq!(call.query, input["query"].as_str().unwrap());
-        assert_eq!(call.limit, limit);
+        assert_eq!(call.limit.get(), limit);
     }
 
     #[rstest]
