@@ -12,14 +12,14 @@ mod sqlite;
 
 use atuin_client::history::HistoryId;
 use atuin_common::futures::stream::ChunkedStream;
+use atuin_common::string::highlighted::HighlightedString;
 use enum_dispatch::enum_dispatch;
 #[cfg(test)]
 pub use failing::FailingIndex;
+use futures::Stream;
 pub use nop::NopIndex;
 pub use sqlite::SqliteIndex;
 use thiserror::Error;
-
-use crate::output_capture::OutputMatch;
 
 pub type IndexStorageError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
@@ -27,6 +27,19 @@ pub type IndexStorageError = Box<dyn std::error::Error + Send + Sync + 'static>;
 pub enum IndexError {
     #[error("search index storage error: {0}")]
     Storage(#[source] IndexStorageError),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RankedMatch {
+    pub history_id: HistoryId,
+    pub score: f64,
+}
+
+#[derive(Debug)]
+pub struct OutputMatch {
+    pub history_id: HistoryId,
+    pub output: HighlightedString,
+    pub score: f64,
 }
 
 #[enum_dispatch]
@@ -38,13 +51,19 @@ pub trait Index {
     /// Drop every id in `ids` from the index. Absent ids are ignored.
     async fn remove(&self, ids: impl Iterator<Item = HistoryId>) -> Result<(), IndexError>;
 
-    /// Relevance-ranked matches, most relevant first. `body` supplies the visible text of a hit
-    /// for highlighting; a hit it has no body for is dropped.
+    /// Relevance-ranked matches, most relevant first.
     async fn search(
         &self,
         query: &str,
         limit: usize,
-        body: impl AsyncFn(HistoryId) -> Option<String>,
+    ) -> ChunkedStream<Result<RankedMatch, IndexError>>;
+
+    /// Mark where `query` matches in each body, tokenized the way the index was. Hits come back
+    /// in order; a body the query no longer matches comes back unmarked.
+    async fn highlight(
+        &self,
+        query: &str,
+        bodies: impl Stream<Item = (RankedMatch, String)> + Send + 'static,
     ) -> ChunkedStream<Result<OutputMatch, IndexError>>;
 
     /// Every id currently held in the index.

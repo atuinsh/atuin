@@ -138,7 +138,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::output_capture::OutputMatch;
+    use crate::output_capture::persistence::OutputMatch;
 
     fn hid(n: u128) -> HistoryId {
         HistoryId::from_bytes(*Uuid::from_u128(n).as_bytes())

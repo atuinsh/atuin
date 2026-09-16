@@ -4,11 +4,14 @@ use atuin_client::history::HistoryId;
 use atuin_common::db::sqlite::Sqlite;
 use atuin_common::db::sqlite::fts::TextHighlighter;
 use atuin_common::futures::stream::ChunkedStream;
+use futures::Stream;
 
-use super::{IndexError, OutputMatch};
+use super::{IndexError, OutputMatch, RankedMatch};
 
 mod v1;
 
+#[cfg(test)]
+pub(super) use v1::HIGHLIGHT_BATCH;
 pub use v1::Schema as SchemaV1;
 
 pub type Current = SchemaV1;
@@ -32,10 +35,15 @@ pub trait Schema {
 
     async fn search(
         db: &Sqlite,
-        highlighter: TextHighlighter,
         query: &str,
         limit: usize,
-        body: impl AsyncFn(HistoryId) -> Option<String>,
+    ) -> ChunkedStream<Result<RankedMatch, IndexError>>;
+
+    async fn highlight(
+        db: &Sqlite,
+        highlighter: TextHighlighter,
+        query: &str,
+        bodies: impl Stream<Item = (RankedMatch, String)> + Send + 'static,
     ) -> ChunkedStream<Result<OutputMatch, IndexError>>;
 
     async fn indexed_ids(db: &Sqlite) -> ChunkedStream<Result<HistoryId, IndexError>>;

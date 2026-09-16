@@ -6,9 +6,10 @@ use atuin_common::db::sqlite::Sqlite;
 use atuin_common::db::sqlite::fts::TextHighlighter;
 use atuin_common::db::{self};
 use atuin_common::futures::stream::ChunkedStream;
+use futures::Stream;
 
 use super::schema::{Current, Schema, store};
-use super::{Index, IndexError, OutputMatch};
+use super::{Index, IndexError, OutputMatch, RankedMatch};
 
 /// A full-text search index backed by a sidecar sqlite FTS5 table.
 #[derive(Debug)]
@@ -78,9 +79,16 @@ impl Index for SqliteIndex {
         &self,
         query: &str,
         limit: usize,
-        body: impl AsyncFn(HistoryId) -> Option<String>,
+    ) -> ChunkedStream<Result<RankedMatch, IndexError>> {
+        Current::search(&self.db, query, limit).await
+    }
+
+    async fn highlight(
+        &self,
+        query: &str,
+        bodies: impl Stream<Item = (RankedMatch, String)> + Send + 'static,
     ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
-        Current::search(&self.db, self.highlighter, query, limit, body).await
+        Current::highlight(&self.db, self.highlighter, query, bodies).await
     }
 
     async fn indexed_ids(&self) -> ChunkedStream<Result<HistoryId, IndexError>> {
@@ -92,7 +100,9 @@ impl Index for SqliteIndex {
 mod tests {
     use std::collections::HashSet;
 
-    use super::super::schema::CHUNK;
+    use futures::stream;
+
+    use super::super::schema::{CHUNK, HIGHLIGHT_BATCH};
     use super::*;
 
     fn hid(n: u128) -> HistoryId {
@@ -100,12 +110,10 @@ mod tests {
     }
 
     async fn search_hits(index: &SqliteIndex, query: &str, body: &str) -> Vec<OutputMatch> {
-        index
-            .search(query, 10, async |_| Some(body.to_owned()))
-            .await
-            .try_collect()
-            .await
-            .expect("search")
+        let ranked: Vec<RankedMatch> =
+            index.search(query, 10).await.try_collect().await.expect("search");
+        let bodies: Vec<_> = ranked.into_iter().map(|hit| (hit, body.to_owned())).collect();
+        index.highlight(query, stream::iter(bodies)).await.try_collect().await.expect("highlight")
     }
 
     async fn temp_index() -> (SqliteIndex, tempfile::TempDir) {
@@ -182,12 +190,39 @@ mod tests {
     #[tokio::test]
     async fn a_body_that_drifted_from_the_index_is_returned_unhighlighted() {
         let (index, _dir) = temp_index().await;
-        index.insert(hid(1), "indexed with an error").await.expect("insert");
+        let hit = RankedMatch {
+            history_id: hid(1),
+            score: 1.0,
+        };
+        let bodies = stream::iter([(hit, "re-rendered without the term".to_owned())]);
 
-        let hits = search_hits(&index, "error", "re-rendered without the term").await;
+        let hits: Vec<OutputMatch> =
+            index.highlight("error", bodies).await.try_collect().await.expect("highlight");
         assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].history_id, hid(1));
         assert_eq!(hits[0].output.display_plain().to_string(), "re-rendered without the term");
         assert_eq!(hits[0].output.ranges().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn highlighting_spans_batches_in_order() {
+        let (index, _dir) = temp_index().await;
+        let count = HIGHLIGHT_BATCH as u128 + 17;
+        let bodies: Vec<_> = (1..=count)
+            .map(|n| {
+                let hit = RankedMatch {
+                    history_id: hid(n),
+                    score: 1.0,
+                };
+                (hit, format!("body {n} with an error"))
+            })
+            .collect();
+
+        let hits: Vec<OutputMatch> =
+            index.highlight("error", stream::iter(bodies)).await.try_collect().await.expect("hl");
+        let ids: Vec<HistoryId> = hits.iter().map(|hit| hit.history_id).collect();
+        assert_eq!(ids, (1..=count).map(hid).collect::<Vec<_>>());
+        assert!(hits.iter().all(|hit| hit.output.ranges().count() == 1));
     }
 
     #[tokio::test]
@@ -257,7 +292,7 @@ mod tests {
         // Bare FTS5 syntax chars would be a syntax error unquoted; sanitizing must swallow them.
         for q in ["\"unbalanced", "a OR", "path:", "(", "*", "-x"] {
             index
-                .search(q, 10, async |_| None)
+                .search(q, 10)
                 .await
                 .try_collect::<Vec<_>>()
                 .await

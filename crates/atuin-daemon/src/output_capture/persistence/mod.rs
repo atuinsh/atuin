@@ -9,13 +9,11 @@ pub use blob::{
     AnyBlobStore, BlobStore, CaptureError, DeleteOutputError, FjallBlobStore, GetOutputError,
     NopBlobStore,
 };
-use futures::{StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt, stream};
 #[cfg(test)]
 pub use index::FailingIndex;
-pub use index::{AnyIndex, Index, IndexError, NopIndex, SqliteIndex};
+pub use index::{AnyIndex, Index, IndexError, NopIndex, OutputMatch, RankedMatch, SqliteIndex};
 use tracing::warn;
-
-use super::OutputMatch;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReconcileError {
@@ -69,21 +67,32 @@ impl OutputStore {
         query: &str,
         limit: usize,
     ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
+        let ranked: Vec<RankedMatch> =
+            match self.index.search(query, limit).await.try_collect().await {
+                Ok(ranked) => ranked,
+                Err(err) => return ChunkedStream::from_error(err),
+            };
+
         // The index is derived and can briefly hold entries whose blob was deleted -- a
         // capture/remove race, a swallowed index write, or reconcile lag. The blob is
         // authoritative: a hit is highlighted from its stored capture, and one whose capture is
         // gone is dropped. (This can return fewer than `limit` hits even when more live matches
         // exist further down the ranking.)
-        self.index
-            .search(query, limit, async |id| match self.blob.get(id).await {
-                Ok(capture) => capture.map(|capture| capture.plaintext()),
+        let mut bodies = Vec::with_capacity(ranked.len());
+        for hit in ranked {
+            match self.blob.get(hit.history_id).await {
+                Ok(Some(capture)) => bodies.push((hit, capture.plaintext())),
+                Ok(None) => {}
                 // A transient read failure hides only this hit, not the whole search.
-                Err(err) => {
-                    warn!(?err, %id, "failed to read a search hit's capture; dropping it");
-                    None
-                }
-            })
-            .await
+                Err(err) => warn!(
+                    ?err,
+                    id = %hit.history_id,
+                    "failed to read a search hit's capture; dropping it",
+                ),
+            }
+        }
+
+        self.index.highlight(query, stream::iter(bodies)).await
     }
 
     pub fn estimated_disk_space(&self) -> u64 {
