@@ -25,8 +25,27 @@ impl Schema {
         expr: &str,
         batch: Vec<(RankedMatch, String)>,
     ) -> Result<Vec<OutputMatch>, IndexError> {
-        // The index is contentless, so highlights come from re-tokenizing the bodies in a
-        // connection-private scratch table with the same tokenizer and match expression.
+        // Okay this looks so confusing if you're reading this for the first-time, so let me guide
+        // you through the reasoning here.
+        //
+        // The Sqlite index doesn't contain the full text output. It merely contains an index of the
+        // text that was indexed, but not the text itself.
+        //
+        // This means that we can't use the Sqlite `highlight(...)` functino naively, which is what
+        // we'd really like to use at the end of the day.
+        //
+        // Now, you'd think that we can use the sqlite index to find the history ID, get the output
+        // capture and then _manually_ highlight the text the user searched for.
+        //
+        // However, this unfortunately doesn't highlight as Sqlite would highlight -- they do
+        // something called 'unicode61', which matches stuff like café for a search string 'cafe',
+        // so the only way to *exactly* present the Sqlite highlighting is to, well, go through
+        // Sqlite.
+        //
+        // So here's what we do -- we create a new `temp.highlight` table, we stick entries in it,
+        // we then immediately invoke MATCH with a `highlight` on the same call the user made.
+        //
+        // Hacky and dirty, but works!
         let mut conn = db.pool().acquire().await.map_err(store)?;
         db::query(
             "CREATE VIRTUAL TABLE IF NOT EXISTS temp.highlights USING fts5(body, tokenize = \
