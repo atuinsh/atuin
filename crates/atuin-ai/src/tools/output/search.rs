@@ -1,12 +1,12 @@
 //! `atuin_output_search`: full-text search over captured command output.
 
-use std::collections::BTreeSet;
 use std::ops::Range;
 
 use atuin_client::database::Sqlite;
 use atuin_client::settings::{OutputCapture, Settings};
 use atuin_common::range::Clamped;
 use atuin_common::string::NonBlankString;
+use atuin_common::string::highlighted::Plain;
 use atuin_common::time::UtcOffsetExt;
 use atuin_daemon::client::SearchClient;
 use futures::{StreamExt, TryStreamExt};
@@ -84,11 +84,10 @@ impl AtuinOutputSearchToolCall {
             .iter()
             .enumerate()
             .map(|(i, (history, m))| {
-                let plain = m.output.to_plain();
                 format!(
                     "{}Matching output lines:\n{}\n",
                     format_history_search_result(i + 1, history, local_offset),
-                    matching_lines(&plain.text, &plain.ranges, CONTEXT_LINES),
+                    matching_lines(&m.output.to_plain(), CONTEXT_LINES),
                 )
             })
             .collect();
@@ -106,38 +105,48 @@ impl AtuinOutputSearchToolCall {
     }
 }
 
-/// Render only the lines of `plain` that overlap a match range, plus `context` lines on either
-/// side, numbered 1-based (so they line up with `atuin_output` ranges) and with `[...]` where
-/// lines were skipped. `ranges` are byte ranges into `plain`, ascending.
-fn matching_lines(plain: &str, ranges: &[Range<usize>], context: usize) -> String {
-    let lines: Vec<&str> = plain.split_inclusive('\n').collect();
+/// `grep -C context` over `plain`: the lines overlapping a match, with context, 1-based numbered
+/// (matching `atuin_output` ranges) and `[...]` between windows.
+fn matching_lines(plain: &Plain<'_>, context: usize) -> String {
+    let lines: Vec<&str> = plain.text.split_inclusive('\n').collect();
+    let windows = merge(
+        lines
+            .iter()
+            .scan(0, |start, line| {
+                let span = *start..*start + line.len();
+                *start = span.end;
+                Some(span)
+            })
+            .enumerate()
+            .filter(|(_, span)| overlaps(&plain.ranges, span))
+            .map(|(idx, _)| idx.saturating_sub(context)..(idx + context + 1).min(lines.len())),
+    );
+    let width = windows.last().map_or(0, |w| w.end.to_string().len());
+    let window = |w: Range<usize>| {
+        w.map(|idx| {
+            format!("{:>width$}\t{}", idx + 1, lines[idx].strip_suffix('\n').unwrap_or(lines[idx]))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+    };
+    windows.into_iter().map(window).collect::<Vec<_>>().join("\n[...]\n")
+}
 
-    let mut selected = BTreeSet::new();
-    let mut ranges = ranges.iter().filter(|r| !r.is_empty()).peekable();
-    let mut line_start = 0;
-    for (idx, line) in lines.iter().enumerate() {
-        let line_end = line_start + line.len();
-        while ranges.peek().is_some_and(|r| r.end <= line_start) {
-            ranges.next();
-        }
-        if ranges.peek().is_some_and(|r| r.start < line_end) {
-            selected.extend(idx.saturating_sub(context)..=(idx + context).min(lines.len() - 1));
-        }
-        line_start = line_end;
-    }
+/// Whether `span` intersects any of `ranges` (non-empty, ascending).
+fn overlaps(ranges: &[Range<usize>], span: &Range<usize>) -> bool {
+    let next = ranges.partition_point(|r| r.end <= span.start);
+    ranges.get(next).is_some_and(|r| r.start < span.end)
+}
 
-    let width = selected.last().map_or(0, |last| (last + 1).to_string().len());
-    let mut out = Vec::new();
-    let mut previous = None;
-    for idx in selected {
-        if previous.is_some_and(|p| idx > p + 1) {
-            out.push("[...]".to_string());
+/// Coalesce ascending ranges that overlap or touch.
+fn merge(ranges: impl Iterator<Item = Range<usize>>) -> Vec<Range<usize>> {
+    ranges.fold(Vec::new(), |mut merged, r| {
+        match merged.last_mut() {
+            Some(last) if r.start <= last.end => last.end = last.end.max(r.end),
+            _ => merged.push(r),
         }
-        let content = lines[idx].strip_suffix('\n').unwrap_or(lines[idx]);
-        out.push(format!("{:>width$}\t{content}", idx + 1));
-        previous = Some(idx);
-    }
-    out.join("\n")
+        merged
+    })
 }
 
 #[cfg(test)]
@@ -167,8 +176,11 @@ mod tests {
         assert!(serde_json::from_value::<AtuinOutputSearchToolCall>(input).is_err());
     }
 
-    fn ranges(plain: &str, needle: &str) -> Vec<std::ops::Range<usize>> {
-        plain.match_indices(needle).map(|(i, m)| i..i + m.len()).collect()
+    fn plain<'a>(text: &'a str, needle: &str) -> Plain<'a> {
+        Plain {
+            text: text.into(),
+            ranges: text.match_indices(needle).map(|(i, m)| i..i + m.len()).collect(),
+        }
     }
 
     #[rstest]
@@ -191,10 +203,10 @@ mod tests {
     )]
     #[case::line_numbers_align("a\nb\nc\nd\ne\nf\ng\nh\ni\nerror", "error", " 9\ti\n10\terror")]
     fn matching_lines_show_hits_with_context(
-        #[case] plain: &str,
+        #[case] text: &str,
         #[case] needle: &str,
         #[case] expected: &str,
     ) {
-        assert_eq!(matching_lines(plain, &ranges(plain, needle), 1), expected);
+        assert_eq!(matching_lines(&plain(text, needle), 1), expected);
     }
 }
