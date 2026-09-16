@@ -260,7 +260,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[rstest]
         fn never_panics_and_strips_controls(
             bytes in proptest::collection::vec(any::<u8>(), 0..4096),
             // The emulator allocates the whole grid up front, so keep `rows * cols` to a size that
@@ -274,7 +274,7 @@ mod tests {
 
         /// Nothing is dropped just because the screen is short: however few rows the emulator has,
         /// every line of output comes back.
-        #[test]
+        #[rstest]
         fn all_rows_are_returned_however_short_the_screen(
             lines in 1usize..256,
             rows in 1u16..=64,
@@ -284,21 +284,21 @@ mod tests {
             prop_assert_eq!(out.lines().count(), lines);
         }
 
-        #[test]
+        #[rstest]
         fn to_plain_text_is_idempotent_on_clean_single_line(s in "[ -~]{0,80}") {
             let once = to_plain_text(s.as_bytes(), nz(24), nz(200));
             let twice = to_plain_text(once.as_bytes(), nz(24), nz(200));
             prop_assert_eq!(once, twice);
         }
 
-        #[test]
+        #[rstest]
         fn onlcr_agrees_with_the_byte_at_a_time_implementation(
             bytes in proptest::collection::vec(prop_oneof![Just(b'\r'), Just(b'\n'), any::<u8>()], 0..256),
         ) {
             prop_assert_eq!(onlcr_bytes(&bytes), onlcr_reference(&bytes));
         }
 
-        #[test]
+        #[rstest]
         fn onlcr_is_idempotent(
             bytes in proptest::collection::vec(prop_oneof![Just(b'\r'), Just(b'\n'), any::<u8>()], 0..256),
         ) {

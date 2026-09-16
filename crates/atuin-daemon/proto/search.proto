@@ -1,6 +1,8 @@
 syntax = "proto3";
 package search;
 
+import "common.proto";
+
 enum FilterMode {
   GLOBAL = 0;
   HOST = 1;
@@ -40,7 +42,31 @@ message PrepareIndexRequest {
 
 message PrepareIndexResponse {}
 
+// Full-text search over all captured command output.
+message SearchCommandOutputRequest {
+  // A fuzzy search string to query the full-text index of the command output.
+  string query = 1;
+  // Maximum number of matches to return, most-relevant first. 0 means unbounded:
+  // results stream lazily, so consume what you need and drop the stream.
+  uint32 limit = 2;
+}
+
+// A single matching command output.
+message OutputSearchMatch {
+  // The history ID of the matching output.
+  common.HistoryId history_id = 1;
+  // The text that matched within this output search.
+  common.HighlightedText output = 2;
+  // Relevance -- higher means more relevant.
+  double score = 4;
+}
+
 service Search {
   rpc Search(stream SearchRequest) returns (stream SearchResponse);
   rpc PrepareIndex(PrepareIndexRequest) returns (PrepareIndexResponse);
+
+  // Search the pool of output commands for a matching history request.
+  //
+  // Returns the matches in a stream, ordered by relevancy -- most-relevant first.
+  rpc SearchCommandOutput(SearchCommandOutputRequest) returns (stream OutputSearchMatch);
 }

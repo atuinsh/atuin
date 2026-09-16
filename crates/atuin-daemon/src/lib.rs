@@ -31,7 +31,7 @@ pub use history_journal::{
     GetCmdInFlightError, HistoryJournal, RegisterOutputError,
 };
 pub use output_capture::{
-    BackendKind, CaptureError, DeleteOutputError, GetOutputError, OutputCapture,
+    CaptureError, DeleteOutputError, GetOutputError, OutputCaptureEngine, OutputMatch,
 };
 
 /// Boot the daemon using the new component-based architecture.
@@ -47,9 +47,16 @@ pub async fn boot(
     let search_component = SearchComponent::new();
     let sync_component = SyncComponent::new();
 
+    let output_capture = match settings.output.limits() {
+        Some(limits) => {
+            OutputCaptureEngine::open(Settings::command_capture_dir(), limits.max_disk_usage).await
+        }
+        None => OutputCaptureEngine::nop(),
+    };
+
     // Get the gRPC services before moving components into the daemon
     // (The services share state with the components via Arc)
-    let search_service = search_component.grpc_service();
+    let search_service = search_component.grpc_service(output_capture.store());
     let search_index = search_component.index();
 
     // Build the daemon
@@ -65,10 +72,6 @@ pub async fn boot(
     let host_id = Settings::host_id().await?;
     let history_store =
         HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
-    let output_capture = match settings.output.limits() {
-        Some(limits) => OutputCapture::open(Settings::command_capture_dir(), limits.max_disk_usage),
-        None => OutputCapture::nop(),
-    };
     let journal = Arc::new(HistoryJournal::new(
         handle.caps().clone(),
         history_store,

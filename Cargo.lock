@@ -286,6 +286,7 @@ dependencies = [
  "indicatif",
  "interim",
  "itertools 0.15.0",
+ "locked-tripwire",
  "nix 0.28.0",
  "norm",
  "opentelemetry",
@@ -393,6 +394,7 @@ dependencies = [
  "async-trait",
  "atuin-common",
  "atuin-domain",
+ "atuin-vt100",
  "base64",
  "clap",
  "config",
@@ -405,7 +407,6 @@ dependencies = [
  "eyre",
  "fs-err",
  "futures",
- "humantime",
  "indicatif",
  "interim",
  "itertools 0.15.0",
@@ -451,6 +452,7 @@ dependencies = [
 name = "atuin-common"
 version = "18.22.0"
 dependencies = [
+ "async-stream",
  "atuin-vt100",
  "base64",
  "bytesize",
@@ -462,6 +464,7 @@ dependencies = [
  "fs-err",
  "futures",
  "getrandom 0.4.3",
+ "humantime",
  "itertools 0.15.0",
  "libsqlite3-sys",
  "memchr",
@@ -509,6 +512,7 @@ dependencies = [
  "atuin-history",
  "dashmap",
  "derive_more",
+ "divan",
  "easy-cast",
  "enum_dispatch",
  "eyre",
@@ -527,9 +531,9 @@ dependencies = [
  "rand 0.8.7",
  "reqwest",
  "rstest",
+ "sqlx",
  "strum 0.27.2",
  "strum_macros 0.28.0",
- "sysinfo",
  "tempfile",
  "thiserror 2.0.19",
  "time",
@@ -3006,6 +3010,12 @@ checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
 dependencies = [
  "scopeguard",
 ]
+
+[[package]]
+name = "locked-tripwire"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d18841f136ee0993c6637a1387eb3758acc9fa24d558f540d329b2d8bb901c67"
 
 [[package]]
 name = "log"

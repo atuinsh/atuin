@@ -1,5 +1,6 @@
 //! Unix-specific utilities.
 
+pub mod disk;
 pub mod process;
 pub mod tty;
 
@@ -127,6 +128,8 @@ mod tests {
     use std::os::unix::fs::{MetadataExt, symlink};
     use std::os::unix::net::UnixListener;
 
+    use rstest::rstest;
+
     use super::*;
 
     /// Set a file's timestamp to the Unix epoch.
@@ -148,7 +151,7 @@ mod tests {
         assert_eq!(fs_err::symlink_metadata(path).unwrap().mtime(), 0);
     }
 
-    #[test]
+    #[rstest]
     fn touching_a_socket_refreshes_its_timestamps() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("atuin.sock");
@@ -158,7 +161,7 @@ mod tests {
         assert!(fs_err::symlink_metadata(&path).unwrap().mtime() > 0);
     }
 
-    #[test]
+    #[rstest]
     fn touching_a_symlink_leaves_its_target_alone() {
         let tmp = tempfile::tempdir().unwrap();
         let (target, link) = (tmp.path().join("target"), tmp.path().join("link"));

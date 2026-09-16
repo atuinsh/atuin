@@ -167,7 +167,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[rstest]
         fn partition_dedup_matches_vec_dedup(input in prop::collection::vec(0u8..4, 0..32)) {
             let mut actual = input.clone();
             let (dedup, _) = partition_dedup(&mut actual);
@@ -176,7 +176,7 @@ mod tests {
             prop_assert_eq!(dedup.to_vec(), expected);
         }
 
-        #[test]
+        #[rstest]
         fn partition_dedup_leaves_no_consecutive_duplicates(
             input in prop::collection::vec(0u8..4, 0..32),
         ) {
@@ -186,7 +186,7 @@ mod tests {
         }
 
         /// Nothing is added or removed: the two partitions together are a permutation of the input.
-        #[test]
+        #[rstest]
         fn partition_dedup_permutes_the_input(input in prop::collection::vec(0u8..4, 0..32)) {
             let mut actual = input.clone();
             {
@@ -199,7 +199,7 @@ mod tests {
             prop_assert_eq!(actual, expected);
         }
 
-        #[test]
+        #[rstest]
         fn comparer_matches_set_equality(
             slice in sorted_deduped_slice(),
             iter in prop::collection::vec(0u8..16, 0..16),
@@ -212,7 +212,7 @@ mod tests {
             );
         }
 
-        #[test]
+        #[rstest]
         fn comparer_ignores_the_stack_size(
             slice in sorted_deduped_slice(),
             iter in prop::collection::vec(0u8..16, 0..16),
@@ -223,7 +223,7 @@ mod tests {
             prop_assert_eq!(SortedDedupedSliceComparer::new(&slice, &iter).eq::<64>(), expected);
         }
 
-        #[test]
+        #[rstest]
         fn comparer_ignores_order_and_duplicates(
             slice in sorted_deduped_slice(),
             iter in prop::collection::vec(0u8..16, 0..16),
@@ -238,7 +238,7 @@ mod tests {
             );
         }
 
-        #[test]
+        #[rstest]
         fn comparer_is_reflexive(slice in sorted_deduped_slice()) {
             prop_assert!(SortedDedupedSliceComparer::new(&slice, &slice).eq::<8>());
 

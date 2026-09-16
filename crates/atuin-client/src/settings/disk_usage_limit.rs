@@ -1,8 +1,10 @@
 //! How much disk a store may use: an absolute size, a share of the disk, or no limit.
 
 use std::fmt;
+use std::path::Path;
 use std::str::FromStr;
 
+use atuin_common::os::disk::Disk;
 use atuin_common::units::{ByteSize, Percent, PercentParseError};
 use serde::de::{Deserialize, Deserializer, Error, Visitor};
 use serde_with::SerializeDisplay;
@@ -46,6 +48,14 @@ impl DiskUsageLimit {
             Self::Unlimited => None,
             Self::Bytes(bytes) => Some(bytes),
             Self::Percent(percent) => Some(ByteSize::b(disk_size.as_u64() * percent)),
+        }
+    }
+
+    pub fn resolve_for_path(self, path: &Path) -> std::io::Result<Option<ByteSize>> {
+        match self {
+            Self::Unlimited => Ok(None),
+            Self::Bytes(bytes) => Ok(Some(bytes)),
+            Self::Percent(_) => Ok(self.resolve(Disk::of_path(path)?.total_space())),
         }
     }
 }
@@ -199,6 +209,13 @@ mod tests {
     #[case::bad_text(r#""some""#)]
     fn rejects_other_json_values(#[case] json: &str) {
         assert!(serde_json::from_str::<DiskUsageLimit>(json).is_err());
+    }
+
+    #[test]
+    fn an_absolute_limit_never_touches_the_filesystem() {
+        let missing = std::path::Path::new("/atuin/does/not/exist");
+        assert_eq!(bytes(1024).resolve_for_path(missing).unwrap(), Some(ByteSize::b(1024)));
+        assert_eq!(DiskUsageLimit::Unlimited.resolve_for_path(missing).unwrap(), None);
     }
 
     #[rstest]
