@@ -98,5 +98,9 @@ wiremock = { workspace = true }
 name = "benchmarks"
 harness = false
 
+[[bench]]
+name = "settings"
+harness = false
+
 [lints]
 workspace = true
