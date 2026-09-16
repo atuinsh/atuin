@@ -361,13 +361,10 @@ impl SearchClient {
     )]
     pub async fn search_command_output(
         &mut self,
-        query: impl Into<String>,
+        query: String,
         limit: u32,
-    ) -> Result<impl Stream<Item = Result<OutputMatch>> + Send> {
-        let request = SearchCommandOutputRequest {
-            query: query.into(),
-            limit,
-        };
+    ) -> Result<impl Stream<Item = Result<OutputMatch>> + Send + use<>> {
+        let request = SearchCommandOutputRequest { query, limit };
         let stream = self.client.search_command_output(request).await?.into_inner();
         Ok(stream.map(|item| -> Result<OutputMatch> { Ok(OutputMatch::try_from(item?)?) }))
     }

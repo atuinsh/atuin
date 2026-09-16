@@ -14,10 +14,13 @@ use clap::{Parser, ValueEnum};
 use futures_util::TryStreamExt;
 use thiserror::Error;
 use time::OffsetDateTime;
+use tracing::debug;
 
 mod writers;
 
 use writers::{Hit, MatchRenderer, PlainWriter, PrettyWriter, Writer};
+
+use crate::command::client::daemon;
 
 #[derive(Debug, Error)]
 pub enum RunError {
@@ -62,29 +65,28 @@ pub struct Cmd {
     style: Style,
 }
 
-async fn connect(settings: &Settings) -> Result<SearchClient, RunError> {
-    // TODO(markovejnovic): Have a better mechanism to connect to the daemon.
-    #[cfg(unix)]
-    return SearchClient::new(settings.daemon.existing_socket_path().into_owned())
-        .await
-        .map_err(RunError::Connect);
-
-    #[cfg(not(unix))]
-    SearchClient::new(settings.daemon.tcp_port).await.map_err(RunError::Connect)
+/// Map a daemon client failure to the right user-facing error: a connection-class failure (the
+/// daemon is down, unreachable, or too old) reads as a connect error; anything else is a genuine
+/// search failure.
+fn to_run_error(err: eyre::Report) -> RunError {
+    if daemon::should_retry_after_error(&err) {
+        RunError::Connect(err)
+    } else {
+        RunError::Search(err)
+    }
 }
 
 /// Check whether the given command string refers to an `atuin output search ...` command.
 ///
 /// TODO(markovejnovic): This is a little bit of a massive hack, but it seems to work for now.
-///                      Perhaps a better solution would be to inject some sort of magic invisible
-///                      codes in the output so that we can later catch that.
+/// Perhaps a better solution would be to inject some sort of magic invisible codes in the output
+/// so that we can later catch that.
 ///
-///                      Another option is to have the `atuin` command inject some sort of magic
-///                      metadata into the history on the daemon to communicate what it was, so the
-///                      daemon doesn't return it.
+/// Another option is to have the `atuin` command inject some sort of magic metadata into the
+/// history on the daemon to communicate what it was, so the daemon doesn't return it.
 ///
-///                      I don't know, but I could bikeshed this for eons. Keeping this in to ship
-///                      the feature rather than waste time.
+/// I don't know, but I could bikeshed this for eons. Keeping this in to ship the feature rather
+/// than waste time.
 fn is_own_search(command: &str) -> bool {
     let Some(words) = shlex::split(command) else {
         return false;
@@ -102,9 +104,8 @@ fn is_own_search(command: &str) -> bool {
     // Match subcommands as prefixes, not exact strings, so abbreviated invocations
     // (`atuin out sea ...`, which clap's infer_subcommands accepts) are still recognized as ours.
     let mut subcommands = words.filter(|t| !t.starts_with('-'));
-    let prefixes = |full: &str, tok: Option<&str>| {
-        tok.is_some_and(|t| !t.is_empty() && full.starts_with(t))
-    };
+    let prefixes =
+        |full: &str, tok: Option<&str>| tok.is_some_and(|t| !t.is_empty() && full.starts_with(t));
     prefixes("output", subcommands.next()) && prefixes("search", subcommands.next())
 }
 
@@ -124,10 +125,35 @@ impl Cmd {
             return Err(RunError::EmptyQuery);
         }
 
-        let mut client = connect(settings).await?;
-        // 0 = unbounded; the daemon streams by relevance and we stop once we've shown `--limit`
-        // matches, so filtering out our own runs never starves the result set.
-        let matches = client.search_command_output(query, 0).await.map_err(RunError::Search)?;
+        // Open the search stream, auto-starting/restarting the daemon and retrying once if it is
+        // down or too old -- mirroring the interactive search client. A bare SearchClient::new
+        // would make `atuin output search` fail when the daemon is stopped (even with
+        // `daemon.autostart = true`) or return UNIMPLEMENTED against an older daemon instead of
+        // restarting it.
+        let open = async || {
+            #[cfg(unix)]
+            let mut client =
+                SearchClient::new(settings.daemon.existing_socket_path().into_owned()).await?;
+            #[cfg(not(unix))]
+            let mut client = SearchClient::new(settings.daemon.tcp_port).await?;
+            // 0 = unbounded; the daemon streams by relevance and we stop once we've shown `--limit`
+            // matches, so filtering out our own runs never starves the result set.
+            client.search_command_output(query.clone(), 0).await
+        };
+
+        let matches = match open().await {
+            Ok(stream) => stream,
+            Err(err) if settings.daemon.autostart && daemon::should_retry_after_error(&err) => {
+                debug!("daemon unavailable for output search; attempting auto-start");
+                daemon::ensure_daemon_running(settings).await.map_err(|start_err| {
+                    RunError::Connect(
+                        err.wrap_err(format!("failed to auto-start daemon: {start_err:#}")),
+                    )
+                })?;
+                open().await.map_err(to_run_error)?
+            }
+            Err(err) => return Err(to_run_error(err)),
+        };
         let mut matches = std::pin::pin!(matches);
 
         let pretty = match self.style {
