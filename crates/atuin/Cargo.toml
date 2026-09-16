@@ -161,16 +161,26 @@ tree-sitter-powershell = { workspace = true }
 windows-sys = { workspace = true }
 
 [dev-dependencies]
+divan = { workspace = true }
+hyper-util = { workspace = true }
 parking_lot = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
 tempfile = { workspace = true }
+tokio-stream = { workspace = true }
 toml_edit = { workspace = true, features = ["serde"] }
+tonic = { workspace = true }
+tower = { workspace = true }
 
 # for the PTY e2e tests (tests/e2e_pty.rs)
 [target.'cfg(unix)'.dev-dependencies]
 nix-pty = { package = "nix", version = "0.28", features = ["term"] }
 portable-pty = "0.9"
+
+[[bench]]
+name = "daemon_optimistic_rpc"
+harness = false
+required-features = ["daemon"]
 
 [lints]
 workspace = true
