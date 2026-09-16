@@ -64,8 +64,7 @@ impl Drop for TestServer {
     }
 }
 
-#[fixture]
-async fn server() -> TestServer {
+async fn spawn_server(max_record_size: u64) -> TestServer {
     let db = temp_dir().join(format!("atuin-record-sync-{}.db", uuid_v7().as_simple()));
 
     let server_settings = ServerSettings {
@@ -73,7 +72,7 @@ async fn server() -> TestServer {
         port: 0,
         path: String::new(),
         open_registration: true,
-        max_record_size: atuin_common::units::ByteSize::b(1024 * 1024 * 1024),
+        max_record_size: atuin_common::units::ByteSize::b(max_record_size),
         register_webhook_url: None,
         register_webhook_username: String::new(),
         db_settings: DbSettings {
@@ -104,6 +103,16 @@ async fn server() -> TestServer {
         shutdown: Some(shutdown_tx),
         handle,
     }
+}
+
+#[fixture]
+async fn server() -> TestServer {
+    spawn_server(1024 * 1024 * 1024).await
+}
+
+#[fixture]
+async fn server_small() -> TestServer {
+    spawn_server(500).await // 500 bytes limit
 }
 
 fn key() -> paseto_v4::Key {
@@ -261,4 +270,42 @@ async fn upload_sends_exactly_the_missing_records(
 
     assert_eq!(remote_idx, local_max, "remote is missing records");
     assert_eq!(uploaded, expected);
+}
+
+#[rstest]
+#[tokio::test]
+async fn upload_oversized_record(#[future(awt)] server_small: TestServer) {
+    let client = server_small.register().await;
+
+    let host = HostId(uuid_v7());
+    let tag = RecordTag::Other(uuid_v7().as_simple().to_string());
+
+    let record_idx = 0;
+    let mut r = record(host, &tag, record_idx);
+    // max_record_size is at least 1MB.
+    r.data.raw = "x".repeat(10_000_000);
+    let records = std::iter::once(&r);
+    let expected_records_len = records.len();
+
+    let store = SqliteStore::in_memory(Duration::from_secs(2)).await.unwrap();
+    store.push_batch(records).await.unwrap();
+
+    let key = key();
+    let engine = SyncSession::builder()
+        .store(store)
+        .client_source(ClientSource::FromClient(client.clone()))
+        .build()
+        .connect()
+        .await
+        .unwrap();
+
+    let (diff, _) = engine.diff().await.unwrap();
+    let operations = SyncSession::operations(diff).unwrap();
+    let (uploaded, _) = engine.keyed(&key).sync_remote(operations).await.unwrap();
+
+    assert_eq!(uploaded, u64::conv(expected_records_len));
+
+    let status = engine.record_status().await.unwrap();
+    let remote_idx = *status.hosts.get(&host).unwrap().get(&tag).unwrap();
+    assert_eq!(remote_idx, 0);
 }
