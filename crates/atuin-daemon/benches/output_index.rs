@@ -120,6 +120,17 @@ fn remove_batch(bencher: divan::Bencher, n: usize) {
         .bench_values(|ids| rt.block_on(e.engine.remove(ids)).unwrap());
 }
 
+#[divan::bench(args = [10, 50, 200], sample_count = 10, sample_size = 5)]
+fn search(bencher: divan::Bencher, limit: usize) {
+    let rt = Runtime::new().unwrap();
+    let e = seeded(&rt, 4000);
+    let store = e.engine.store();
+    bencher.bench_local(|| {
+        rt.block_on(async { store.search("error", limit).await.try_collect::<Vec<_>>().await })
+            .unwrap()
+    });
+}
+
 #[divan::bench(args = [1000, 2000, 10_000], sample_count = 3, sample_size = 1)]
 fn fill(bencher: divan::Bencher, n: usize) {
     let rt = Runtime::new().unwrap();
