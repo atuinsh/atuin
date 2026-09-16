@@ -9,11 +9,13 @@ use atuin_common::string::NonBlankString;
 use atuin_common::string::highlighted::Plain;
 use atuin_common::time::UtcOffsetExt;
 use atuin_daemon::client::SearchClient;
+use atuin_daemon::grpc::history::pb::ChunkedOutputLineView;
+use easy_cast::Conv;
 use futures::{StreamExt, TryStreamExt};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use super::NO_OUTPUT_ADVICE;
+use super::{NO_OUTPUT_ADVICE, format_chunked_output_line_views_for_llm};
 use crate::history_format::format_history_search_result;
 use crate::tools::ToolOutcome;
 
@@ -84,10 +86,13 @@ impl AtuinOutputSearchToolCall {
             .iter()
             .enumerate()
             .map(|(i, (history, m))| {
+                let plain = m.output.to_plain();
                 format!(
                     "{}Matching output lines:\n{}\n",
                     format_history_search_result(i + 1, history, local_offset),
-                    matching_lines(&m.output.to_plain(), CONTEXT_LINES),
+                    format_chunked_output_line_views_for_llm(
+                        matching_lines(&plain, CONTEXT_LINES).into_iter()
+                    ),
                 )
             })
             .collect();
@@ -105,9 +110,8 @@ impl AtuinOutputSearchToolCall {
     }
 }
 
-/// `grep -C context` over `plain`: the lines overlapping a match, with context, 1-based numbered
-/// (matching `atuin_output` ranges) and `[...]` between windows.
-fn matching_lines(plain: &Plain<'_>, context: usize) -> String {
+/// `grep -C context` over `plain`: the lines overlapping a match, with context.
+fn matching_lines<'p>(plain: &'p Plain<'_>, context: usize) -> Vec<ChunkedOutputLineView<'p>> {
     /// Whether `span` intersects any of `ranges` (non-empty, ascending).
     fn overlaps(ranges: &[Range<usize>], span: &Range<usize>) -> bool {
         let next = ranges.partition_point(|r| r.end <= span.start);
@@ -138,15 +142,14 @@ fn matching_lines(plain: &Plain<'_>, context: usize) -> String {
             .filter(|(_, span)| overlaps(&plain.ranges, span))
             .map(|(idx, _)| idx.saturating_sub(context)..(idx + context + 1).min(lines.len())),
     );
-    let width = windows.last().map_or(0, |w| w.end.to_string().len());
-    let window = |w: Range<usize>| {
-        w.map(|idx| {
-            format!("{:>width$}\t{}", idx + 1, lines[idx].strip_suffix('\n').unwrap_or(lines[idx]))
+    windows
+        .into_iter()
+        .flatten()
+        .map(|idx| ChunkedOutputLineView {
+            line: i64::conv(idx),
+            content: lines[idx].strip_suffix('\n').unwrap_or(lines[idx]),
         })
-        .collect::<Vec<_>>()
-        .join("\n")
-    };
-    windows.into_iter().map(window).collect::<Vec<_>>().join("\n[...]\n")
+        .collect()
 }
 
 #[cfg(test)]
@@ -194,7 +197,7 @@ mod tests {
     #[case::distant_windows_are_separated(
         "error\nb\nc\nd\nerror\nf",
         "error",
-        "1\terror\n2\tb\n[...]\n4\td\n5\terror\n6\tf"
+        "1\terror\n2\tb\n[...skipped 1 lines...]\n4\td\n5\terror\n6\tf"
     )]
     #[case::two_hits_on_one_line_show_it_once(
         "x\nerror error\ny",
@@ -207,6 +210,8 @@ mod tests {
         #[case] needle: &str,
         #[case] expected: &str,
     ) {
-        assert_eq!(matching_lines(&plain(text, needle), 1), expected);
+        let plain = plain(text, needle);
+        let lines = matching_lines(&plain, 1);
+        assert_eq!(format_chunked_output_line_views_for_llm(lines.into_iter()), expected);
     }
 }

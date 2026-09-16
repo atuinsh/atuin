@@ -5,10 +5,9 @@ use std::str::FromStr;
 
 use atuin_client::history::HistoryId;
 use atuin_common::range::PyStyleIdxRange;
-use atuin_daemon::grpc::history::pb::ChunkedOutputLineView;
 use eyre::Result;
 
-use super::NO_OUTPUT_ADVICE;
+use super::{NO_OUTPUT_ADVICE, format_chunked_output_line_views_for_llm};
 use crate::permissions::rule::Rule;
 use crate::tools::{PermissibleToolCall, ToolOutcome};
 
@@ -72,43 +71,6 @@ impl PermissibleToolCall for AtuinOutputToolCall {
     fn matches_rule(&self, rule: &Rule) -> bool {
         rule.tool == "AtuinOutput"
     }
-}
-
-fn format_line_no(line: i64) -> String {
-    if line < 0 {
-        line.to_string()
-    } else {
-        (line + 1).to_string()
-    }
-}
-
-/// Render `ChunkedOutputLineView`s as `read_file`-style numbered output for the LLM, inserting
-/// `[...skipped N lines...]` markers wherever the line numbers jump.
-fn format_chunked_output_line_views_for_llm<'a>(
-    lines: impl Iterator<Item = ChunkedOutputLineView<'a>> + Clone,
-) -> String {
-    let width = lines.clone().map(|line| format_line_no(line.line).len()).max();
-    let Some(width) = width else {
-        return String::new();
-    };
-
-    let mut formatted = Vec::new();
-    let mut previous_idx = None;
-    for line in lines {
-        if let Some(previous) = previous_idx {
-            if previous >= 0 && line.line < 0 {
-                formatted.push("[...skipped an unknown number of lines...]".to_string());
-            } else {
-                let skipped = line.line.saturating_sub(previous).saturating_sub(1).max(0);
-                if skipped > 0 {
-                    formatted.push(format!("[...skipped {skipped} lines...]"));
-                }
-            }
-        }
-        formatted.push(format!("{:>width$}\t{}", format_line_no(line.line), line.content));
-        previous_idx = Some(line.line);
-    }
-    formatted.join("\n")
 }
 
 impl AtuinOutputToolCall {
@@ -178,7 +140,7 @@ impl AtuinOutputToolCall {
 #[cfg(test)]
 mod tests {
     use atuin_daemon::grpc::history::pb::{
-        CommandCapture, CommandCaptureMeta, GetCommandOutputResponse,
+        ChunkedOutputLineView, CommandCapture, CommandCaptureMeta, GetCommandOutputResponse,
     };
     use rstest::rstest;
 
