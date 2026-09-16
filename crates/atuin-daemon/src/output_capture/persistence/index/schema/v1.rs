@@ -173,30 +173,59 @@ impl super::Schema for Schema {
         query: &str,
         limit: usize,
     ) -> ChunkedStream<Result<RankedMatch, IndexError>> {
-        let stmt = db::query(
-            "SELECT indexed.history_id, -bm25(output_fts) AS score FROM output_fts JOIN indexed \
-             ON indexed.id = output_fts.rowid WHERE output_fts MATCH ? ORDER BY score DESC LIMIT ?",
-        );
-        let Some(stmt) = stmt.bind_match_query(query) else {
-            return ChunkedStream::empty();
-        };
-        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        let rows = match stmt.bind(limit).fetch_all(db.pool()).await {
-            Ok(rows) => rows,
-            Err(err) => return ChunkedStream::from_error(store(err)),
-        };
+        let pool = db.pool().clone();
+        let query = query.to_owned();
 
-        let ranked: Vec<Result<RankedMatch, IndexError>> = rows
-            .into_iter()
-            .map(|row| {
-                Ok(RankedMatch {
-                    history_id: id_from_bytes(row.try_get("history_id").map_err(store)?)?,
-                    score: row.try_get("score").map_err(store)?,
-                })
-            })
-            .collect();
+        // Page the ranked matches with OFFSET so a caller can stop early without the daemon
+        // materializing the whole result set. `limit == 0` means unbounded; `indexed.history_id`
+        // breaks bm25 ties so the OFFSET window is stable across pages. The index is contentless,
+        // so this returns only the ranking -- bodies are hydrated and highlighted downstream.
+        ChunkedStream::new(stream::unfold(Some(0usize), move |offset| {
+            let pool = pool.clone();
+            let query = query.clone();
+            async move {
+                let offset = offset?;
+                let want = if limit == 0 {
+                    CHUNK.get()
+                } else {
+                    limit.saturating_sub(offset).min(CHUNK.get())
+                };
+                if want == 0 {
+                    return None;
+                }
 
-        ChunkedStream::from_items(ranked, CHUNK)
+                let stmt = db::query(
+                    "SELECT indexed.history_id, -bm25(output_fts) AS score FROM output_fts JOIN \
+                     indexed ON indexed.id = output_fts.rowid WHERE output_fts MATCH ? ORDER BY \
+                     score DESC, indexed.history_id LIMIT ? OFFSET ?",
+                );
+                let stmt = stmt.bind_match_query(&query)?;
+                let page = i64::try_from(want).unwrap_or(i64::MAX);
+                let skip = i64::try_from(offset).unwrap_or(i64::MAX);
+                let rows = match stmt.bind(page).bind(skip).fetch_all(&pool).await {
+                    Ok(rows) => rows,
+                    Err(err) => return Some((vec![Err(store(err))], None)),
+                };
+                if rows.is_empty() {
+                    return None;
+                }
+
+                let got = rows.len();
+                let chunk: Vec<Result<RankedMatch, IndexError>> = rows
+                    .into_iter()
+                    .map(|row| {
+                        Ok(RankedMatch {
+                            history_id: id_from_bytes(row.try_get("history_id").map_err(store)?)?,
+                            score: row.try_get("score").map_err(store)?,
+                        })
+                    })
+                    .collect();
+
+                // A short page means the index is exhausted; yield it, then stop.
+                let next = (got == want).then_some(offset + got);
+                Some((chunk, next))
+            }
+        }))
     }
 
     async fn highlight(

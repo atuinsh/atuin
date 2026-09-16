@@ -73,10 +73,6 @@ async fn connect(settings: &Settings) -> Result<SearchClient, RunError> {
     SearchClient::new(settings.daemon.tcp_port).await.map_err(RunError::Connect)
 }
 
-// Fetch this many extra results beyond `--limit` so dropping our own `output search`
-// runs from the results still leaves roughly `limit` to show.
-const FILTER_HEADROOM: u32 = 64;
-
 fn is_own_search(command: &str) -> bool {
     // Tokenize like a shell so a quoted/escaped binary path (spaces and all) stays one word.
     let Some(words) = shlex::split(command) else {
@@ -110,10 +106,9 @@ impl Cmd {
         }
 
         let mut client = connect(settings).await?;
-        let matches = client
-            .search_command_output(query, self.limit.saturating_add(FILTER_HEADROOM))
-            .await
-            .map_err(RunError::Search)?;
+        // 0 = unbounded; the daemon streams by relevance and we stop once we've shown `--limit`
+        // matches, so filtering out our own runs never starves the result set.
+        let matches = client.search_command_output(query, 0).await.map_err(RunError::Search)?;
         let mut matches = std::pin::pin!(matches);
 
         let pretty = match self.style {

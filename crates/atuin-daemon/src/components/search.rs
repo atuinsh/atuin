@@ -358,10 +358,9 @@ impl SearchSvc for SearchGrpcService {
     ) -> Result<Response<Self::SearchCommandOutputStream>, Status> {
         let request = request.into_inner();
 
-        let limit = match usize::try_from(request.limit).unwrap_or(RESULTS_LIMIT) {
-            0 => RESULTS_LIMIT,
-            n => n.min(RESULTS_LIMIT),
-        };
+        // 0 means unbounded: the index streams results lazily by relevance, so the client can
+        // consume what it needs and drop the stream. There is no server-side ceiling here.
+        let limit = usize::try_from(request.limit).unwrap_or(0);
 
         let matches =
             self.output_store.search(&request.query, limit).await.items().map(

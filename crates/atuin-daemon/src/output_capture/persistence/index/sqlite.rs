@@ -233,6 +233,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn limit_zero_is_unbounded_and_a_positive_limit_caps() {
+        let (index, _dir) = temp_index().await;
+        for i in 1..=5 {
+            index.insert(hid(i), "error").await.expect("insert");
+        }
+        // 0 pages until the index is exhausted; a positive limit stops early.
+        assert_eq!(search_hits(&index, "error", 0).await.len(), 5);
+        assert_eq!(search_hits(&index, "error", 2).await.len(), 2);
+    }
+
+    #[tokio::test]
     async fn blank_query_yields_no_results() {
         // A whitespace-only query has no searchable terms; search must short-circuit rather than
         // hand FTS5 an empty MATCH (which errors).
