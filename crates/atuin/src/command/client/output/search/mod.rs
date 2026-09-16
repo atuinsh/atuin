@@ -99,8 +99,13 @@ fn is_own_search(command: &str) -> bool {
         return false;
     }
 
+    // Match subcommands as prefixes, not exact strings, so abbreviated invocations
+    // (`atuin out sea ...`, which clap's infer_subcommands accepts) are still recognized as ours.
     let mut subcommands = words.filter(|t| !t.starts_with('-'));
-    subcommands.next() == Some("output") && subcommands.next() == Some("search")
+    let prefixes = |full: &str, tok: Option<&str>| {
+        tok.is_some_and(|t| !t.is_empty() && full.starts_with(t))
+    };
+    prefixes("output", subcommands.next()) && prefixes("search", subcommands.next())
 }
 
 impl Cmd {
@@ -203,6 +208,8 @@ mod tests {
 
     #[rstest]
     #[case::bare("atuin output search hello", true)]
+    #[case::abbreviated_output("atuin out search hello", true)]
+    #[case::abbreviated_both("atuin out sea hello", true)]
     #[case::relative_path("./target/debug/atuin output search cargo", true)]
     #[case::absolute_path("/usr/bin/atuin output search x", true)]
     #[case::quoted_path_with_spaces("\"/opt/my tools/atuin\" output search x", true)]
