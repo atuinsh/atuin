@@ -31,7 +31,7 @@ impl Schema {
         // The Sqlite index doesn't contain the full text output. It merely contains an index of the
         // text that was indexed, but not the text itself.
         //
-        // This means that we can't use the Sqlite `highlight(...)` functino naively, which is what
+        // This means that we can't use the Sqlite `highlight(...)` function naively, which is what
         // we'd really like to use at the end of the day.
         //
         // Now, you'd think that we can use the sqlite index to find the history ID, get the output
