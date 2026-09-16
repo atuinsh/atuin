@@ -24,7 +24,7 @@ pub enum RunError {
     #[error("output capture is disabled. enable [output] in your config to search command output.")]
     Disabled,
 
-    #[error("blank query provided. please run 'atuin search-output --help'")]
+    #[error("blank query provided. please run 'atuin output search --help'")]
     EmptyQuery,
 
     #[error("could not connect to the daemon")]
@@ -73,7 +73,7 @@ async fn connect(settings: &Settings) -> Result<SearchClient, RunError> {
     SearchClient::new(settings.daemon.tcp_port).await.map_err(RunError::Connect)
 }
 
-// Fetch this many extra results beyond `--limit` so dropping our own `search-output`
+// Fetch this many extra results beyond `--limit` so dropping our own `output search`
 // runs from the results still leaves roughly `limit` to show.
 const FILTER_HEADROOM: u32 = 64;
 
@@ -85,7 +85,8 @@ fn is_own_search(command: &str) -> bool {
     if bin.rsplit('/').next().unwrap_or(bin) != "atuin" {
         return false;
     }
-    tokens.find(|t| !t.starts_with('-')).is_some_and(|sub| sub == "search-output")
+    let mut subcommands = tokens.filter(|t| !t.starts_with('-'));
+    subcommands.next() == Some("output") && subcommands.next() == Some("search")
 }
 
 impl Cmd {
@@ -188,13 +189,15 @@ mod tests {
     use super::is_own_search;
 
     #[rstest]
-    #[case::bare("atuin search-output hello", true)]
-    #[case::relative_path("./target/debug/atuin search-output cargo", true)]
-    #[case::absolute_path("/usr/bin/atuin search-output x", true)]
-    #[case::global_flag_before_subcommand("atuin --foo search-output x", true)]
+    #[case::bare("atuin output search hello", true)]
+    #[case::relative_path("./target/debug/atuin output search cargo", true)]
+    #[case::absolute_path("/usr/bin/atuin output search x", true)]
+    #[case::global_flag_before_subcommand("atuin --foo output search x", true)]
+    #[case::flag_between_subcommands("atuin output --foo search x", true)]
+    #[case::output_other_subcommand("atuin output stats", false)]
     #[case::other_subcommand("atuin search foo", false)]
-    #[case::not_atuin("echo atuin search-output", false)]
-    #[case::query_only_contains_it("atuin search \"search-output\"", false)]
+    #[case::not_atuin("echo atuin output search", false)]
+    #[case::query_only_contains_it("atuin search \"output search\"", false)]
     #[case::empty("", false)]
     fn detects_own_search(#[case] command: &str, #[case] expected: bool) {
         assert_eq!(is_own_search(command), expected);

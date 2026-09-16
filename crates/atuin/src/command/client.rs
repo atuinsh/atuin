@@ -29,10 +29,10 @@ mod info;
 mod init;
 mod internal;
 mod kv;
+#[cfg(feature = "daemon")]
+mod output;
 mod scripts;
 mod search;
-#[cfg(feature = "daemon")]
-mod search_output;
 mod setup;
 mod stats;
 mod store;
@@ -48,9 +48,10 @@ pub enum Cmd {
     /// Interactive history search
     Search(search::Cmd),
 
-    /// Full-text search over captured command output
+    /// Work with captured command output
     #[cfg(feature = "daemon")]
-    SearchOutput(search_output::Cmd),
+    #[command(subcommand)]
+    Output(output::Cmd),
 
     /// Calculate statistics for your history
     Stats(stats::Cmd),
@@ -273,7 +274,7 @@ impl Cmd {
             Self::Search(search) => search.run(db, &mut settings, sqlite_store, theme).await,
 
             #[cfg(feature = "daemon")]
-            Self::SearchOutput(cmd) => cmd.run(&db, &settings, theme).await.map_err(Into::into),
+            Self::Output(cmd) => cmd.run(&db, &settings, theme).await,
 
             #[cfg(feature = "sync")]
             Self::Sync(sync) => sync.run(settings, &db, sqlite_store).await,
