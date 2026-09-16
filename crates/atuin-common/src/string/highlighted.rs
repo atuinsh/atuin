@@ -151,6 +151,29 @@ impl<S: AsRef<str>> HighlightedText<S> {
         }
     }
 
+    /// Walk the text as a stream of marker-free chunks: [`Piece::Text`] for unhighlighted runs and
+    /// [`Piece::Match`] for each highlighted span.
+    ///
+    /// Concatenating every chunk yields the same string as [`Self::display_plain`], and the
+    /// [`Piece::Match`] chunks are exactly the spans [`Self::ranges`] reports. Empty chunks are
+    /// skipped.
+    pub fn pieces(&self) -> impl Iterator<Item = Piece<'_>> + '_ {
+        Pieces {
+            text: self.data.as_ref(),
+            open: self.highlighter.open,
+            close: self.highlighter.close,
+            ranges: HighlightedRanges {
+                src: self,
+                cursor: 0,
+                start: None,
+            },
+            cursor: 0,
+            gap: "",
+            pending: None,
+            tail_done: false,
+        }
+    }
+
     /// `Display` the highlighted text, stripping away the highlight markers.
     pub fn display_plain(&self) -> impl fmt::Display + '_ {
         DisplayPlain(self)
@@ -164,6 +187,79 @@ impl<S: AsRef<str>> HighlightedText<S> {
     /// `Display` the highlighted text as-is, including markers.
     pub fn display_raw(&self) -> impl fmt::Display + '_ {
         DisplayRaw(self)
+    }
+}
+
+/// One marker-free chunk of a [`HighlightedText`], produced by [`HighlightedText::pieces`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Piece<'a> {
+    /// A run of text outside any highlight.
+    Text(&'a str),
+    /// The content of one highlighted match.
+    Match(&'a str),
+}
+
+struct Pieces<'a, S> {
+    text: &'a str,
+    open: char,
+    close: char,
+    ranges: HighlightedRanges<'a, S>,
+    /// Start of the not-yet-emitted region of `text`, just past the previous match's close marker.
+    cursor: usize,
+    /// The gap before `pending`, drained into marker-free [`Piece::Text`] runs before it is emitted.
+    gap: &'a str,
+    /// A match whose content is emitted once `gap` is drained.
+    pending: Option<&'a str>,
+    /// Whether the trailing gap after the final match has been queued into `gap`.
+    tail_done: bool,
+}
+
+impl<'a, S: AsRef<str>> Iterator for Pieces<'a, S> {
+    type Item = Piece<'a>;
+
+    fn next(&mut self) -> Option<Piece<'a>> {
+        loop {
+            // Drain the current gap into marker-free text runs, dropping any stray markers.
+            if !self.gap.is_empty() {
+                let Some(at) = self.gap.find([self.open, self.close]) else {
+                    return Some(Piece::Text(std::mem::take(&mut self.gap)));
+                };
+                let seg = &self.gap[..at];
+                let marker_len = if self.gap[at..].starts_with(self.open) {
+                    self.open.len_utf8()
+                } else {
+                    self.close.len_utf8()
+                };
+                self.gap = &self.gap[at + marker_len..];
+                if !seg.is_empty() {
+                    return Some(Piece::Text(seg));
+                }
+                continue;
+            }
+
+            // Gap drained: emit the pending match, then advance to the next span.
+            if let Some(matched) = self.pending.take() {
+                if !matched.is_empty() {
+                    return Some(Piece::Match(matched));
+                }
+                continue;
+            }
+
+            match self.ranges.next() {
+                Some(r) => {
+                    let open_start = (r.start - self.open.len_utf8()).max(self.cursor);
+                    let next_cursor = r.end + self.close.len_utf8();
+                    self.gap = &self.text[self.cursor..open_start];
+                    self.pending = Some(&self.text[r]);
+                    self.cursor = next_cursor;
+                }
+                None if !self.tail_done => {
+                    self.tail_done = true;
+                    self.gap = &self.text[self.cursor..];
+                }
+                None => return None,
+            }
+        }
     }
 }
 
@@ -450,6 +546,28 @@ mod tests {
         assert_eq!(highlighter().as_highlighted(body).display_raw().to_string(), body);
     }
 
+    #[rstest]
+    #[case::clean("clean text", vec![(false, "clean text")])]
+    #[case::span_between_text("the «build» failed", vec![(false, "the "), (true, "build"), (false, " failed")])]
+    #[case::back_to_back("«a»«b»", vec![(true, "a"), (true, "b")])]
+    #[case::no_markers("", vec![])]
+    #[case::empty_span_skipped("«»", vec![])]
+    // Markers are stripped context-free (like `display_plain`), but only paired spans are matches
+    // (like `ranges`): the abandoned outer open's content is plain text, only the inner span matches.
+    #[case::nested_open_outer_is_text("«a«b»", vec![(false, "a"), (true, "b")])]
+    #[case::orphan_close_stripped("»a«c»", vec![(false, "a"), (true, "c")])]
+    fn pieces_split_text_and_matches(#[case] body: &str, #[case] expected: Vec<(bool, &str)>) {
+        let hl = highlighter().as_highlighted(body);
+        let got: Vec<(bool, &str)> = hl
+            .pieces()
+            .map(|p| match p {
+                Piece::Text(t) => (false, t),
+                Piece::Match(m) => (true, m),
+            })
+            .collect();
+        assert_eq!(got, expected);
+    }
+
     /// Alphabet that stresses the byte-offset arithmetic: plain ASCII for clean runs plus the two
     /// visible markers, the private-use defaults, and a spread of multi-byte / zero-width /
     /// combining / RTL code points so marker collisions and mid-grapheme splits are frequent.
@@ -595,6 +713,34 @@ mod tests {
             prop_assert_eq!(stripped.as_ref(), clean.as_str());
             let ranges = h.as_highlighted(marked.as_str()).ranges().collect::<Vec<_>>();
             prop_assert_eq!(ranges, expected);
+        }
+
+        // (G) `pieces()` strips exactly the markers `display_plain` does, and its `Match` chunks are
+        // exactly the non-empty spans `ranges()` reports.
+        #[test]
+        fn pieces_reconstruct_plain_and_report_matches(
+            markers in distinct_markers(),
+            text in nasty_string(),
+        ) {
+            let h = TextHighlighter::with_markers(markers).unwrap();
+            let hl = h.as_highlighted(text.as_str());
+
+            let mut plain = String::new();
+            let mut matches: Vec<&str> = Vec::new();
+            for piece in hl.pieces() {
+                match piece {
+                    Piece::Text(t) => plain.push_str(t),
+                    Piece::Match(m) => {
+                        plain.push_str(m);
+                        matches.push(m);
+                    }
+                }
+            }
+            prop_assert_eq!(plain, hl.display_plain().to_string());
+
+            let raw: &str = hl.as_ref();
+            let want: Vec<&str> = hl.ranges().map(|r| &raw[r]).filter(|s| !s.is_empty()).collect();
+            prop_assert_eq!(matches, want);
         }
     }
 }

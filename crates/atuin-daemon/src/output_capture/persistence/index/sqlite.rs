@@ -233,6 +233,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn limit_zero_is_unbounded_and_a_positive_limit_caps() {
+        let (index, _dir) = temp_index().await;
+        for i in 1..=5 {
+            index.insert(hid(i), "error").await.expect("insert");
+        }
+        // 0 pages until the index is exhausted; a positive limit stops early.
+        let unbounded: Vec<RankedMatch> =
+            index.search("error", 0).await.try_collect().await.expect("search");
+        assert_eq!(unbounded.len(), 5);
+        let capped: Vec<RankedMatch> =
+            index.search("error", 2).await.try_collect().await.expect("search");
+        assert_eq!(capped.len(), 2);
+    }
+
+    #[tokio::test]
     async fn blank_query_yields_no_results() {
         // A whitespace-only query has no searchable terms; search must short-circuit rather than
         // hand FTS5 an empty MATCH (which errors).

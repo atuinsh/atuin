@@ -29,6 +29,8 @@ mod info;
 mod init;
 mod internal;
 mod kv;
+#[cfg(feature = "daemon")]
+mod output;
 mod scripts;
 mod search;
 mod setup;
@@ -45,6 +47,11 @@ pub enum Cmd {
     // most (search, sync, stats) at the top and the plumbing/config commands lower down.
     /// Interactive history search
     Search(search::Cmd),
+
+    /// Work with captured command output
+    #[cfg(feature = "daemon")]
+    #[command(subcommand)]
+    Output(output::Cmd),
 
     /// Calculate statistics for your history
     Stats(stats::Cmd),
@@ -265,6 +272,9 @@ impl Cmd {
             Self::Import(import) => import.run(&db).await,
             Self::Stats(stats) => stats.run(&db, &settings, theme).await,
             Self::Search(search) => search.run(db, &mut settings, sqlite_store, theme).await,
+
+            #[cfg(feature = "daemon")]
+            Self::Output(cmd) => cmd.run(&db, &settings, theme).await,
 
             #[cfg(feature = "sync")]
             Self::Sync(sync) => sync.run(settings, &db, sqlite_store).await,

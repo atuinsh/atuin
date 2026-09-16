@@ -75,7 +75,7 @@ pub trait BlobStore {
 }
 
 #[enum_dispatch(BlobStore)]
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum AnyBlobStore {
     Fjall(FjallBlobStore),
     Nop(NopBlobStore),
