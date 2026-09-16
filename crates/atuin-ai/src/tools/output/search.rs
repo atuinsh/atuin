@@ -7,7 +7,6 @@ use atuin_client::database::Sqlite;
 use atuin_client::settings::{OutputCapture, Settings};
 use atuin_common::range::Clamped;
 use atuin_common::string::NonBlankString;
-use atuin_common::string::highlighted::{HighlightedText, Piece};
 use atuin_common::time::UtcOffsetExt;
 use atuin_daemon::client::SearchClient;
 use futures::{StreamExt, TryStreamExt};
@@ -85,11 +84,11 @@ impl AtuinOutputSearchToolCall {
             .iter()
             .enumerate()
             .map(|(i, (history, m))| {
-                let (plain, ranges) = plain_and_ranges(&m.output);
+                let plain = m.output.to_plain();
                 format!(
                     "{}Matching output lines:\n{}\n",
                     format_history_search_result(i + 1, history, local_offset),
-                    matching_lines(&plain, &ranges, CONTEXT_LINES),
+                    matching_lines(&plain.text, &plain.ranges, CONTEXT_LINES),
                 )
             })
             .collect();
@@ -105,20 +104,6 @@ impl AtuinOutputSearchToolCall {
         }
         ToolOutcome::Success(formatted.join("\n"))
     }
-}
-
-fn plain_and_ranges<S: AsRef<str>>(output: &HighlightedText<S>) -> (String, Vec<Range<usize>>) {
-    output.pieces().fold((String::new(), Vec::new()), |(mut plain, mut ranges), piece| {
-        let start = plain.len();
-        match piece {
-            Piece::Text(text) => plain.push_str(text),
-            Piece::Match(text) => {
-                plain.push_str(text);
-                ranges.push(start..plain.len());
-            }
-        }
-        (plain, ranges)
-    })
 }
 
 /// Render only the lines of `plain` that overlap a match range, plus `context` lines on either
