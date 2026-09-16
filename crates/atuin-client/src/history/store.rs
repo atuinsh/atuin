@@ -54,27 +54,37 @@ impl HistoryRecord {
     ///
     /// Deletion simply refers to the history by ID
     pub fn serialize(&self) -> Result<DecryptedData> {
-        // probably don't actually need to use rmp here, but if we ever need to extend it, it's a
-        // nice wrapper around raw byte stuff
+        match self {
+            Self::Create(history) => Self::serialize_create(history),
+            Self::Delete(id) => {
+                // probably don't actually need to use rmp here, but if we ever need to extend it,
+                // it's a nice wrapper around raw byte stuff
+                use atuin_common::rmp::encode;
+
+                let mut output = vec![];
+                // 1 -> a history delete
+                encode::write_u8(&mut output, 1)?;
+                encode::write_str(&mut output, &id.0.as_simple().to_string())?;
+                Ok(DecryptedData(output))
+            }
+        }
+    }
+
+    /// The bytes of a `Create` record, produced without owning the [`History`].
+    ///
+    /// Byte-identical to `HistoryRecord::Create(history.clone()).serialize()`, so callers holding
+    /// a borrow (e.g. the daemon finishing a command) can append without cloning the entry.
+    pub fn serialize_create(history: &History) -> Result<DecryptedData> {
         use atuin_common::rmp::encode;
 
         let mut output = vec![];
 
-        match self {
-            Self::Create(history) => {
-                // 0 -> a history create
-                encode::write_u8(&mut output, 0)?;
+        // 0 -> a history create
+        encode::write_u8(&mut output, 0)?;
 
-                let bytes = history.serialize()?;
+        let bytes = history.serialize()?;
 
-                encode::write_bin(&mut output, &bytes.0)?;
-            }
-            Self::Delete(id) => {
-                // 1 -> a history delete
-                encode::write_u8(&mut output, 1)?;
-                encode::write_str(&mut output, &id.0.as_simple().to_string())?;
-            }
-        };
+        encode::write_bin(&mut output, &bytes.0)?;
 
         Ok(DecryptedData(output))
     }
@@ -143,9 +153,12 @@ impl HistoryStore {
         }
     }
 
-    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     async fn push_record(&self, record: HistoryRecord) -> Result<(RecordId, RecordIdx)> {
-        let bytes = record.serialize()?;
+        self.push_serialized(record.serialize()?).await
+    }
+
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
+    async fn push_serialized(&self, bytes: DecryptedData) -> Result<(RecordId, RecordIdx)> {
         let series = RecordSeriesKey::new(self.host_id, RecordTag::History);
 
         // Allocate the append index optimistically: read `last().idx + 1`, then try to claim it.
@@ -225,13 +238,19 @@ impl HistoryStore {
         Ok(record_ids)
     }
 
-    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     pub async fn push(&self, history: History) -> Result<(RecordId, RecordIdx)> {
         // TODO(ellie): move the history store to its own file
         // it's tiny rn so fine as is
-        let record = HistoryRecord::Create(history);
+        self.push_ref(&history).await
+    }
 
-        self.push_record(record).await
+    /// Append a `Create` record for `history` without taking ownership.
+    ///
+    /// Equivalent to [`HistoryStore::push`], but serializes from a borrow so callers that still
+    /// need the entry afterwards (e.g. the daemon's finish path) avoid cloning it.
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
+    pub async fn push_ref(&self, history: &History) -> Result<(RecordId, RecordIdx)> {
+        self.push_serialized(HistoryRecord::serialize_create(history)?).await
     }
 
     #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]

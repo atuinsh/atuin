@@ -373,7 +373,7 @@ impl HistoryJournal {
 
         let (history_record_id, history_record_idx) = self
             .history_store
-            .push(history.clone())
+            .push_ref(&history)
             .instrument(span.clone())
             .await
             .map_err(CmdFinishError::HistoryStoreFailed)?;
