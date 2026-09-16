@@ -2,11 +2,22 @@ fn main() {
     divan::main();
 }
 
+// Compile the parser straight into the bench binary rather than exposing it through the library's
+// public API just to measure it. The module is self-contained (std + memchr), and `harness = false`
+// means it builds without `cfg(test)`, so its test submodule is dropped. It lives at the crate root
+// (not inside `mod unix`) so `#[path]` resolves against `benches/`, a directory that actually exists.
+#[cfg(unix)]
+#[allow(dead_code)] // only Parser/push are exercised here; the rest of the API is unused.
+#[path = "../src/osc133.rs"]
+mod osc133;
+
 // The parser is unix-gated, so the benchmarks are too. On other platforms this
 // leaves `divan::main()` with nothing registered, which is fine.
 #[cfg(unix)]
 mod unix {
     use divan::Bencher;
+
+    use super::osc133;
 
     /// Build a stream of shell interactions: OSC 133 markers wrapping plain
     /// command output. Real terminal output is overwhelmingly plain text with
@@ -34,6 +45,12 @@ mod unix {
         bencher
             .with_inputs(|| stream(cycles))
             .input_counter(|data| divan::counter::BytesCount::of_slice(data.as_slice()))
-            .bench_values(|data| atuin_pty_proxy::bench_osc133_parse(&data));
+            .bench_values(|data| {
+                let mut parser = osc133::Parser::new();
+                let mut chunks = parser.push(&data);
+                let count = chunks.by_ref().count();
+                divan::black_box(chunks.trailing_data());
+                count
+            });
     }
 }
