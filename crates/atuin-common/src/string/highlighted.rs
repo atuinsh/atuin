@@ -174,6 +174,34 @@ impl<S: AsRef<str>> HighlightedText<S> {
         }
     }
 
+    /// The marker-free text together with the byte range of every match within *that* text --
+    /// unlike [`Self::ranges`], whose offsets index the raw, marker-bearing string.
+    pub fn to_plain(&self) -> Plain<'_> {
+        let raw = self.data.as_ref();
+        if !raw.contains(self.highlighter.markers()) {
+            return Plain {
+                text: Cow::Borrowed(raw),
+                ranges: Vec::new(),
+            };
+        }
+        let (text, ranges) =
+            self.pieces().fold((String::new(), Vec::new()), |(mut plain, mut ranges), piece| {
+                let start = plain.len();
+                match piece {
+                    Piece::Text(text) => plain.push_str(text),
+                    Piece::Match(text) => {
+                        plain.push_str(text);
+                        ranges.push(start..plain.len());
+                    }
+                }
+                (plain, ranges)
+            });
+        Plain {
+            text: Cow::Owned(text),
+            ranges,
+        }
+    }
+
     /// `Display` the highlighted text, stripping away the highlight markers.
     pub fn display_plain(&self) -> impl fmt::Display + '_ {
         DisplayPlain(self)
@@ -188,6 +216,15 @@ impl<S: AsRef<str>> HighlightedText<S> {
     pub fn display_raw(&self) -> impl fmt::Display + '_ {
         DisplayRaw(self)
     }
+}
+
+/// The marker-free view of a [`HighlightedText`], from [`HighlightedText::to_plain`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Plain<'a> {
+    /// Borrowed from the source when it holds no markers.
+    pub text: Cow<'a, str>,
+    /// Byte ranges of the matches within `text`.
+    pub ranges: Vec<Range<usize>>,
 }
 
 /// One marker-free chunk of a [`HighlightedText`], produced by [`HighlightedText::pieces`].
@@ -538,6 +575,26 @@ mod tests {
     fn display_plain_strips_every_marker(#[case] body: &str, #[case] expected: &str) {
         let out = highlighter().as_highlighted(body).display_plain().to_string();
         assert_eq!(out, expected);
+    }
+
+    #[rstest]
+    #[case::clean("clean text", "clean text", vec![])]
+    #[case::span_between_text("the «build» failed", "the build failed", vec![4..9])]
+    #[case::back_to_back("«a»«b»", "ab", vec![0..1, 1..2])]
+    #[case::multibyte_before_span("héllo «wörld»", "héllo wörld", vec![7..13])]
+    fn to_plain_indexes_the_plain_text(
+        #[case] body: &str,
+        #[case] plain: &str,
+        #[case] ranges: Vec<Range<usize>>,
+    ) {
+        let hl = highlighter().as_highlighted(body);
+        let got = hl.to_plain();
+        assert_eq!(got.text, plain);
+        assert_eq!(got.ranges, ranges);
+        assert_eq!(matches!(got.text, Cow::Borrowed(_)), ranges.is_empty());
+        for r in got.ranges {
+            assert!(got.text.is_char_boundary(r.start) && got.text.is_char_boundary(r.end));
+        }
     }
 
     #[test]

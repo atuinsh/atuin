@@ -51,7 +51,7 @@ default = [
 ]
 client = ["atuin-client"]
 sync = ["atuin-client/sync"]
-daemon = ["atuin-client/daemon", "atuin-daemon", "atuin-ai?/daemon"]
+daemon = ["dep:async-stream", "atuin-client/daemon", "atuin-daemon", "atuin-ai?/daemon"]
 ai = ["atuin-ai"]
 pty-proxy = ["dep:atuin-pty-proxy"]
 hex = ["pty-proxy"]
@@ -92,6 +92,7 @@ atuin-pty-proxy = { workspace = true, optional = true }
 atuin-scripts = { workspace = true }
 
 ansi-to-tui = { workspace = true }
+async-stream = { workspace = true, optional = true }
 async-trait = { workspace = true }
 axoupdater = { workspace = true, optional = true }
 clap = { workspace = true }
