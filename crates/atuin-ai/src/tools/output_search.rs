@@ -1,7 +1,4 @@
 //! `atuin_output_search`: full-text search over captured command output.
-//!
-//! MCP-only for now: it is not a [`super::ClientToolCall`] variant, so the in-app assistant
-//! cannot call it until the Hub advertises a capability for it.
 
 use std::collections::BTreeSet;
 use std::ops::Range;
@@ -13,6 +10,7 @@ use atuin_common::time::UtcOffsetExt;
 use atuin_daemon::client::SearchClient;
 use eyre::Result;
 use futures::TryStreamExt;
+use serde::{Deserialize, Deserializer};
 
 use super::{NO_OUTPUT_ADVICE, ToolOutcome};
 use crate::history_format::format_history_search_result;
@@ -20,38 +18,38 @@ use crate::history_format::format_history_search_result;
 /// Page-size bounds for `atuin_output_search`; mirrored in the MCP schema.
 pub const DEFAULT_OUTPUT_SEARCH_RESULTS: u32 = 5;
 pub const MAX_OUTPUT_SEARCH_RESULTS: u32 = 20;
+
 /// Output lines shown on each side of a matching line.
 const CONTEXT_LINES: usize = 1;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct AtuinOutputSearchToolCall {
     pub query: String,
+    #[serde(default = "default_limit", deserialize_with = "deserialize_limit")]
     pub limit: u32,
+}
+
+fn default_limit() -> u32 {
+    DEFAULT_OUTPUT_SEARCH_RESULTS
+}
+
+/// Models often send `null` for optional params, so it counts as omitted; anything else is
+/// clamped into the schema's bounds rather than rejected.
+fn deserialize_limit<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    let limit = Option::<u32>::deserialize(deserializer)?;
+    Ok(limit.map_or(DEFAULT_OUTPUT_SEARCH_RESULTS, |l| l.clamp(1, MAX_OUTPUT_SEARCH_RESULTS)))
 }
 
 impl TryFrom<&serde_json::Value> for AtuinOutputSearchToolCall {
     type Error = eyre::Error;
 
     fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
-        let query = value
-            .get("query")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|q| !q.is_empty())
-            .ok_or_else(|| eyre::eyre!("Missing query"))?;
-
-        let limit = value
-            .get("limit")
-            .and_then(|v| v.as_u64())
-            .map_or(DEFAULT_OUTPUT_SEARCH_RESULTS, |l| {
-                u32::try_from(l).unwrap_or(MAX_OUTPUT_SEARCH_RESULTS)
-            })
-            .clamp(1, MAX_OUTPUT_SEARCH_RESULTS);
-
-        Ok(Self {
-            query: query.to_string(),
-            limit,
-        })
+        let mut call = Self::deserialize(value)?;
+        call.query = call.query.trim().to_string();
+        if call.query.is_empty() {
+            eyre::bail!("query must not be blank");
+        }
+        Ok(call)
     }
 }
 
