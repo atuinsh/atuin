@@ -1,6 +1,8 @@
 use std::io::{Read, Write};
 use std::sync::mpsc;
+use std::time::Duration;
 
+use atuin_common::os::unix::io::WriteAllExt;
 use atuin_common::os::unix::tty::TtyId;
 use crossterm::terminal;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
@@ -164,6 +166,9 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
         // second syscall. The terminal is unbuffered anyway, so we emit each
         // read with a single `write`.
         let stdout = rustix::stdio::stdout();
+        // fd 1 is blocking, so writes never hit EAGAIN and this cap is never
+        // reached; MAX just says we never want to drop terminal output.
+        const WRITE_TIMEOUT: Duration = Duration::MAX;
         let mut highlighter = options.debug_osc133.then(Osc133DebugHighlighter::new);
         let mut buf = [0u8; 8192];
 
@@ -183,7 +188,7 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
                         raw_data
                     };
 
-                    if write_all_fd(stdout, data).is_err() {
+                    if stdout.write_all_retrying(data, WRITE_TIMEOUT).is_err() {
                         break;
                     }
                 }
@@ -191,7 +196,7 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
         }
 
         if highlighter.is_some() {
-            let _ = write_all_fd(stdout, RESET);
+            let _ = stdout.write_all_retrying(RESET, WRITE_TIMEOUT);
         }
     });
 
@@ -246,25 +251,6 @@ fn spawn_resize_handler(
 
 fn process_exit_code(code: u32) -> i32 {
     i32::try_from(code).unwrap_or(1)
-}
-
-/// Write every byte of `data` to `fd`, retrying the interruptions a `write` to a
-/// terminal can report. Returns `Err` on a genuine failure (the terminal went
-/// away), which the caller treats as end-of-stream.
-fn write_all_fd(fd: rustix::fd::BorrowedFd<'_>, mut data: &[u8]) -> Result<(), rustix::io::Errno> {
-    use rustix::io::Errno;
-
-    while !data.is_empty() {
-        match rustix::io::write(fd, data) {
-            // A zero-length write on a non-empty buffer would spin forever.
-            Ok(0) => return Err(Errno::IO),
-            Ok(n) => data = &data[n..],
-            Err(Errno::INTR | Errno::AGAIN) => {}
-            Err(e) => return Err(e),
-        }
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

@@ -64,7 +64,7 @@ uuid = { workspace = true }
 zeroize = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { workspace = true, optional = true }
+rustix = { workspace = true, optional = true, features = ["event", "pipe"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, optional = true }

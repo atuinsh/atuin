@@ -10,22 +10,21 @@ fn main() {
 //        since output usually finishes on a prompt fragment — is written as the
 //        newline-terminated prefix (one `write`) with the tail buffered, then the
 //        `flush()` emits that tail as a second `write`: two syscalls per read.
-//   NEW: a raw `rustix::io::write` loop straight to the fd: one syscall per read.
+//   NEW: `WriteAllExt::write_all_retrying` (the shipped helper): one syscall per read.
 //
-// Neither approach is reachable from a bench (the forwarder is buried in `run`),
-// so both are replicated here; the real fix lives in src/runtime.rs. stdout can't
-// be used from a bench, so both write to /dev/null, whose per-write syscall cost
-// is what the comparison isolates.
+// The OLD forwarder is buried in `run` and can't be reached from a bench, so it is
+// replicated here; NEW calls the real helper. stdout can't be used from a bench, so
+// both write to /dev/null, whose per-write syscall cost is what this isolates.
 #[cfg(unix)]
 mod unix {
     use std::fs::{File, OpenOptions};
     use std::io::{LineWriter, Write};
     use std::os::fd::AsFd;
+    use std::time::Duration;
 
+    use atuin_common::os::unix::io::WriteAllExt;
     use divan::Bencher;
     use divan::counter::ItemsCount;
-    use rustix::fd::BorrowedFd;
-    use rustix::io::Errno;
 
     // A single `read()` from a 8 KiB PTY buffer during interactive use: a couple
     // of finished output lines followed by a fresh prompt, so it carries embedded
@@ -69,21 +68,9 @@ mod unix {
             .bench_values(|(chunks, file)| {
                 let fd = file.as_fd();
                 for chunk in &chunks {
-                    write_all_fd(fd, divan::black_box(chunk)).unwrap();
+                    fd.write_all_retrying(divan::black_box(chunk), Duration::MAX).unwrap();
                 }
                 divan::black_box(&file);
             });
-    }
-
-    fn write_all_fd(fd: BorrowedFd<'_>, mut data: &[u8]) -> Result<(), Errno> {
-        while !data.is_empty() {
-            match rustix::io::write(fd, data) {
-                Ok(0) => return Err(Errno::IO),
-                Ok(n) => data = &data[n..],
-                Err(Errno::INTR | Errno::AGAIN) => {}
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(())
     }
 }
