@@ -464,8 +464,42 @@ where
     Ok(resp)
 }
 
+/// Like [`try_with_restart`], but skips the up-front Status probe on the happy path.
+///
+/// Every shell hook fires this once per command, so the probe was a redundant round-trip: it
+/// dialed the daemon and asked its version only to immediately dial again for the real request.
+/// Instead we send `send_request` optimistically on a freshly connected client and validate the
+/// reply's own version/protocol. We fall back to [`try_with_restart`] (probe, then restart) only
+/// when the optimistic attempt cannot connect, hits a retryable transport error (see
+/// [`should_retry_after_error`]), or comes back version-skewed — exactly the cases the probe would
+/// have caught, so autostart, legacy-daemon, and restart-on-mismatch semantics are unchanged.
+///
+/// This is reserved for `start_history`/`end_history`, whose optimistic retry is harmless (a start
+/// just yields a fresh id; an end's id already comes from the post-restart daemon). The rarer,
+/// side-effecting RPCs stay on the probe-first [`try_with_restart`] so their replies are never
+/// double-counted across a restart.
+async fn send_optimistic<C, F, R>(settings: &Settings, send_request: F, context: C) -> Result<R>
+where
+    F: AsyncFn(&mut HistoryClient, C) -> Result<R> + Sync,
+    R: atuin_daemon::grpc::VersionedReply,
+    C: Clone,
+{
+    if let Ok(mut client) = connect_client(settings).await {
+        // Clone so the request survives for the restart fallback. A hook clones one
+        // History/HistoryId per command, far cheaper than the Status round-trip this replaces.
+        match send_request(&mut client, context.clone()).await {
+            Ok(resp) if daemon_matches_expected(resp.version(), resp.protocol()) => return Ok(resp),
+            Ok(_) => {}
+            Err(err) if should_retry_after_error(&err) => {}
+            Err(err) => return Err(err),
+        }
+    }
+
+    try_with_restart(settings, send_request, context).await
+}
+
 pub async fn start_history(settings: &Settings, history: History) -> Result<HistoryId> {
-    let resp = try_with_restart(
+    let resp = send_optimistic(
         settings,
         async |client, history| client.start_history(history).await,
         history,
@@ -481,7 +515,7 @@ pub async fn end_history(
     duration: Option<std::time::Duration>,
     exit: i64,
 ) -> Result<()> {
-    try_with_restart(settings, async |client, id| client.end_history(id, duration, exit).await, id)
+    send_optimistic(settings, async |client, id| client.end_history(id, duration, exit).await, id)
         .await?;
     Ok(())
 }
