@@ -67,32 +67,42 @@ impl OutputStore {
         query: &str,
         limit: usize,
     ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
+        // Only the ranking (history_id + score) comes from the contentless index; it is small, so
+        // collecting it keeps error handling simple. The bodies -- each up to `max_output_size` --
+        // are the memory risk, so they are hydrated lazily from the blob as `highlight` pulls its
+        // batches, and the caller dropping the stream stops that work early.
         let ranked: Vec<RankedMatch> =
             match self.index.search(query, limit).await.try_collect().await {
                 Ok(ranked) => ranked,
                 Err(err) => return ChunkedStream::from_error(err),
             };
 
+        let blob = self.blob.clone();
         // The index is derived and can briefly hold entries whose blob was deleted -- a
         // capture/remove race, a swallowed index write, or reconcile lag. The blob is
         // authoritative: a hit is highlighted from its stored capture, and one whose capture is
-        // gone is dropped. (This can return fewer than `limit` hits even when more live matches
+        // gone is dropped. (This can yield fewer than `limit` hits even when more live matches
         // exist further down the ranking.)
-        let mut bodies = Vec::with_capacity(ranked.len());
-        for hit in ranked {
-            match self.blob.get(hit.history_id).await {
-                Ok(Some(capture)) => bodies.push((hit, capture.plaintext())),
-                Ok(None) => {}
-                // A transient read failure hides only this hit, not the whole search.
-                Err(err) => warn!(
-                    ?err,
-                    id = %hit.history_id,
-                    "failed to read a search hit's capture; dropping it",
-                ),
+        let bodies = stream::iter(ranked).filter_map(move |hit| {
+            let blob = blob.clone();
+            async move {
+                match blob.get(hit.history_id).await {
+                    Ok(Some(capture)) => Some((hit, capture.plaintext())),
+                    Ok(None) => None, // the capture is gone; drop the stale index hit
+                    // A transient read failure hides only this hit, not the whole search.
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            id = %hit.history_id,
+                            "failed to read a search hit's capture; dropping it",
+                        );
+                        None
+                    }
+                }
             }
-        }
+        });
 
-        self.index.highlight(query, stream::iter(bodies)).await
+        self.index.highlight(query, bodies).await
     }
 
     pub fn estimated_disk_space(&self) -> u64 {
