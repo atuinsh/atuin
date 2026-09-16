@@ -7,9 +7,6 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 /// A string with at least one non-whitespace character, held verbatim. `T` is any string type:
 /// `String`, `&str`, `Cow<str>`, `Box<str>`, ...
-///
-/// Deserializing a blank value fails and the JSON schema says so (`minLength: 1`), so a free-text
-/// parameter such as a search query carries its own validation.
 #[derive(
     Clone,
     PartialEq,
