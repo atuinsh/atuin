@@ -1,3 +1,4 @@
+use std::num::NonZeroU32;
 #[cfg(unix)]
 use std::path::PathBuf;
 
@@ -372,9 +373,12 @@ impl SearchClient {
     pub async fn search_command_output(
         &mut self,
         query: String,
-        limit: u32,
+        limit: Option<NonZeroU32>,
     ) -> Result<impl Stream<Item = Result<OutputMatch>> + Send + use<>> {
-        let request = SearchCommandOutputRequest { query, limit };
+        let request = SearchCommandOutputRequest {
+            query,
+            limit: limit.map_or(0, NonZeroU32::get),
+        };
         let stream = self.client.search_command_output(request).await?.into_inner();
         Ok(stream.map(|item| -> Result<OutputMatch> { Ok(OutputMatch::try_from(item?)?) }))
     }

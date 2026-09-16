@@ -30,7 +30,7 @@ async fn search_returns_the_visible_output_and_where_it_matched(#[future(awt)] e
 
     let mut search = env.search_client().await;
     let matches: Vec<_> = search
-        .search_command_output("disk".to_string(), 0)
+        .search_command_output("disk".to_string(), None)
         .await
         .unwrap()
         .try_collect()
@@ -47,7 +47,7 @@ async fn search_returns_the_visible_output_and_where_it_matched(#[future(awt)] e
     // Deleting the entry drops it from search along with its output.
     assert_eq!(history.delete_history(vec![id]).await.unwrap().deleted, 1);
     let remaining: Vec<_> = search
-        .search_command_output("disk".to_string(), 0)
+        .search_command_output("disk".to_string(), None)
         .await
         .unwrap()
         .try_collect()

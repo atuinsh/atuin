@@ -7,10 +7,10 @@ use atuin_client::database::Sqlite;
 use atuin_client::settings::{OutputCapture, Settings};
 use atuin_common::range::Clamped;
 use atuin_common::string::NonBlankString;
-use atuin_common::string::highlighted::Piece;
+use atuin_common::string::highlighted::{HighlightedText, Piece};
 use atuin_common::time::UtcOffsetExt;
 use atuin_daemon::client::SearchClient;
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -58,47 +58,41 @@ impl AtuinOutputSearchToolCall {
             }
         };
 
-        // 0 = unbounded: the daemon streams by relevance and we stop once `limit` hits have been
-        // rendered, so hits without a local history entry never starve the page.
-        let matches = match client.search_command_output(self.query.to_string(), 0).await {
-            Ok(matches) => matches,
-            Err(e) => return ToolOutcome::Error(format!("Output search failed: {e}")),
+        let hits = async {
+            client
+                .search_command_output(self.query.to_string(), None)
+                .await
+                .map_err(|e| format!("Output search failed: {e}"))?
+                .map_err(|e| format!("Output search failed: {e}"))
+                .try_filter_map(|m| async move {
+                    db.load(m.history_id)
+                        .await
+                        .map(|history| history.map(|history| (history, m)))
+                        .map_err(|e| format!("Failed to load history: {e}"))
+                })
+                .take(self.limit.get() as usize)
+                .try_collect::<Vec<_>>()
+                .await
+        }
+        .await;
+        let hits = match hits {
+            Ok(hits) => hits,
+            Err(e) => return ToolOutcome::Error(e),
         };
-        let mut matches = std::pin::pin!(matches);
 
         let local_offset = time::UtcOffset::local_or_utc();
-        let mut formatted = Vec::new();
-        while formatted.len() < self.limit.get() as usize {
-            let m = match matches.try_next().await {
-                Ok(Some(m)) => m,
-                Ok(None) => break,
-                Err(e) => return ToolOutcome::Error(format!("Output search failed: {e}")),
-            };
-            let history = match db.load(m.history_id).await {
-                Ok(Some(history)) => history,
-                Ok(None) => continue,
-                Err(e) => return ToolOutcome::Error(format!("Failed to load history: {e}")),
-            };
-
-            let mut plain = String::new();
-            let mut ranges = Vec::new();
-            for piece in m.output.pieces() {
-                match piece {
-                    Piece::Text(text) => plain.push_str(text),
-                    Piece::Match(text) => {
-                        let start = plain.len();
-                        plain.push_str(text);
-                        ranges.push(start..plain.len());
-                    }
-                }
-            }
-
-            formatted.push(format!(
-                "{}Matching output lines:\n{}\n",
-                format_history_search_result(formatted.len() + 1, &history, local_offset),
-                matching_lines(&plain, &ranges, CONTEXT_LINES),
-            ));
-        }
+        let formatted: Vec<String> = hits
+            .iter()
+            .enumerate()
+            .map(|(i, (history, m))| {
+                let (plain, ranges) = plain_and_ranges(&m.output);
+                format!(
+                    "{}Matching output lines:\n{}\n",
+                    format_history_search_result(i + 1, history, local_offset),
+                    matching_lines(&plain, &ranges, CONTEXT_LINES),
+                )
+            })
+            .collect();
 
         if formatted.is_empty() {
             return ToolOutcome::Success(format!(
@@ -111,6 +105,20 @@ impl AtuinOutputSearchToolCall {
         }
         ToolOutcome::Success(formatted.join("\n"))
     }
+}
+
+fn plain_and_ranges<S: AsRef<str>>(output: &HighlightedText<S>) -> (String, Vec<Range<usize>>) {
+    output.pieces().fold((String::new(), Vec::new()), |(mut plain, mut ranges), piece| {
+        let start = plain.len();
+        match piece {
+            Piece::Text(text) => plain.push_str(text),
+            Piece::Match(text) => {
+                plain.push_str(text);
+                ranges.push(start..plain.len());
+            }
+        }
+        (plain, ranges)
+    })
 }
 
 /// Render only the lines of `plain` that overlap a match range, plus `context` lines on either
