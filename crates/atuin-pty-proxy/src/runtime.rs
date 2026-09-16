@@ -157,7 +157,13 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
     terminal::enable_raw_mode()?;
 
     let stdout_thread = std::thread::spawn(move || {
-        let mut stdout = std::io::stdout();
+        // Forward straight to fd 1. `std::io::stdout()` wraps a `LineWriter`, so a
+        // read that ends mid-line (a prompt fragment, cursor movement — most PTY
+        // reads) is split into a direct write of the newline-terminated prefix
+        // plus a buffered tail that the explicit `flush()` then writes as a
+        // second syscall. The terminal is unbuffered anyway, so we emit each
+        // read with a single `write`.
+        let stdout = rustix::stdio::stdout();
         let mut highlighter = options.debug_osc133.then(Osc133DebugHighlighter::new);
         let mut buf = [0u8; 8192];
 
@@ -177,17 +183,15 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
                         raw_data
                     };
 
-                    if stdout.write_all(data).is_err() {
+                    if write_all_fd(stdout, data).is_err() {
                         break;
                     }
-                    let _ = stdout.flush();
                 }
             }
         }
 
         if highlighter.is_some() {
-            let _ = stdout.write_all(RESET);
-            let _ = stdout.flush();
+            let _ = write_all_fd(stdout, RESET);
         }
     });
 
@@ -242,6 +246,25 @@ fn spawn_resize_handler(
 
 fn process_exit_code(code: u32) -> i32 {
     i32::try_from(code).unwrap_or(1)
+}
+
+/// Write every byte of `data` to `fd`, retrying the interruptions a `write` to a
+/// terminal can report. Returns `Err` on a genuine failure (the terminal went
+/// away), which the caller treats as end-of-stream.
+fn write_all_fd(fd: rustix::fd::BorrowedFd<'_>, mut data: &[u8]) -> Result<(), rustix::io::Errno> {
+    use rustix::io::Errno;
+
+    while !data.is_empty() {
+        match rustix::io::write(fd, data) {
+            // A zero-length write on a non-empty buffer would spin forever.
+            Ok(0) => return Err(Errno::IO),
+            Ok(n) => data = &data[n..],
+            Err(Errno::INTR | Errno::AGAIN) => {}
+            Err(e) => return Err(e),
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
