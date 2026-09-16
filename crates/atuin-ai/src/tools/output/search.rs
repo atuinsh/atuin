@@ -108,6 +108,23 @@ impl AtuinOutputSearchToolCall {
 /// `grep -C context` over `plain`: the lines overlapping a match, with context, 1-based numbered
 /// (matching `atuin_output` ranges) and `[...]` between windows.
 fn matching_lines(plain: &Plain<'_>, context: usize) -> String {
+    /// Whether `span` intersects any of `ranges` (non-empty, ascending).
+    fn overlaps(ranges: &[Range<usize>], span: &Range<usize>) -> bool {
+        let next = ranges.partition_point(|r| r.end <= span.start);
+        ranges.get(next).is_some_and(|r| r.start < span.end)
+    }
+
+    /// Coalesce ascending ranges that overlap or touch.
+    fn merge(ranges: impl Iterator<Item = Range<usize>>) -> Vec<Range<usize>> {
+        ranges.fold(Vec::new(), |mut merged, r| {
+            match merged.last_mut() {
+                Some(last) if r.start <= last.end => last.end = last.end.max(r.end),
+                _ => merged.push(r),
+            }
+            merged
+        })
+    }
+
     let lines: Vec<&str> = plain.text.split_inclusive('\n').collect();
     let windows = merge(
         lines
@@ -130,23 +147,6 @@ fn matching_lines(plain: &Plain<'_>, context: usize) -> String {
         .join("\n")
     };
     windows.into_iter().map(window).collect::<Vec<_>>().join("\n[...]\n")
-}
-
-/// Whether `span` intersects any of `ranges` (non-empty, ascending).
-fn overlaps(ranges: &[Range<usize>], span: &Range<usize>) -> bool {
-    let next = ranges.partition_point(|r| r.end <= span.start);
-    ranges.get(next).is_some_and(|r| r.start < span.end)
-}
-
-/// Coalesce ascending ranges that overlap or touch.
-fn merge(ranges: impl Iterator<Item = Range<usize>>) -> Vec<Range<usize>> {
-    ranges.fold(Vec::new(), |mut merged, r| {
-        match merged.last_mut() {
-            Some(last) if r.start <= last.end => last.end = last.end.max(r.end),
-            _ => merged.push(r),
-        }
-        merged
-    })
 }
 
 #[cfg(test)]
