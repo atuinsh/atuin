@@ -197,6 +197,48 @@ struct DrawState<'a> {
 // Yes, this is a hack, but it makes me feel happy
 static SLICES: &str = " > 1 2 3 4 5 6 7 8 9   ";
 
+/// Theme styles for the `Meaning`s that `syntax::classify` can emit, resolved
+/// once per row. The command render loop runs per character, and each
+/// `Theme::as_style` call probes a `HashMap`; caching here turns that per-char
+/// probe into a cheap match over the fixed set of syntax meanings.
+struct SyntaxStyles {
+    base: style::ContentStyle,
+    command: style::ContentStyle,
+    flag: style::ContentStyle,
+    string: style::ContentStyle,
+    variable: style::ContentStyle,
+    operator: style::ContentStyle,
+    comment: style::ContentStyle,
+}
+
+impl SyntaxStyles {
+    fn resolve(theme: &Theme) -> Self {
+        Self {
+            base: theme.as_style(Meaning::Base),
+            command: theme.as_style(Meaning::SyntaxCommand),
+            flag: theme.as_style(Meaning::SyntaxFlag),
+            string: theme.as_style(Meaning::SyntaxString),
+            variable: theme.as_style(Meaning::SyntaxVariable),
+            operator: theme.as_style(Meaning::SyntaxOperator),
+            comment: theme.as_style(Meaning::SyntaxComment),
+        }
+    }
+
+    fn get(&self, meaning: Meaning) -> style::ContentStyle {
+        match meaning {
+            Meaning::SyntaxCommand => self.command,
+            Meaning::SyntaxFlag => self.flag,
+            Meaning::SyntaxString => self.string,
+            Meaning::SyntaxVariable => self.variable,
+            Meaning::SyntaxOperator => self.operator,
+            Meaning::SyntaxComment => self.comment,
+            // `classify` fills unrecognized bytes with `Base`; any other
+            // meaning would fall back to it in the theme anyway.
+            _ => self.base,
+        }
+    }
+}
+
 impl DrawState<'_> {
     /// Render a complete row for a history item based on configured columns.
     fn render_row(&mut self, h: &History) {
@@ -322,6 +364,11 @@ impl DrawState<'_> {
             Vec::new()
         };
 
+        // Resolve the theme styles for this row once, so the per-character loop
+        // below is a cheap match instead of a `HashMap` probe per character.
+        let syntax_styles = (!syntax.is_empty()).then(|| SyntaxStyles::resolve(self.theme));
+        let highlight_style = row_highlighted.then(|| self.theme.as_style(Meaning::AlertWarn));
+
         // Calculate the available width for the command text.
         // `self.x` is already past the indicator and any preceding columns,
         // so the remaining width is how far we can draw.
@@ -341,12 +388,13 @@ impl DrawState<'_> {
             // never highlighted (this is why the "…" is never bolded).
             let source_byte = ellipsized.source_index(i);
             let highlighted = source_byte.is_some_and(|b| highlight_indices.contains(&b));
-            let mut char_style = source_byte
-                .and_then(|b| syntax.get(b))
-                .map_or(style, |&meaning| self.theme.as_style(meaning));
+            let mut char_style = match source_byte.and_then(|b| syntax.get(b)) {
+                Some(&meaning) => syntax_styles.as_ref().map_or(style, |s| s.get(meaning)),
+                None => style,
+            };
             if highlighted {
-                if row_highlighted {
-                    char_style = self.theme.as_style(Meaning::AlertWarn);
+                if let Some(warn) = highlight_style {
+                    char_style = warn;
                 }
                 char_style.attributes.set(style::Attribute::Bold);
             }
