@@ -5,7 +5,7 @@ use std::ops::Range;
 
 use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
-use atuin_common::range::{Bounds, Clamped};
+use atuin_common::range::Clamped;
 use atuin_common::string::highlighted::Piece;
 use atuin_common::time::UtcOffsetExt;
 use atuin_daemon::client::SearchClient;
@@ -18,16 +18,7 @@ use super::{NO_OUTPUT_ADVICE, ToolOutcome};
 use crate::history_format::format_history_search_result;
 
 /// Page size for `atuin_output_search`; the MCP schema reads its bounds from here.
-pub type Limit = Clamped<LimitBounds>;
-
-pub struct LimitBounds;
-
-impl Bounds for LimitBounds {
-    type Int = u32;
-    const MIN: u32 = 1;
-    const MAX: u32 = 20;
-    const DEFAULT: u32 = 5;
-}
+pub type Limit = Clamped<u32, 1, 20, 5>;
 
 /// Output lines shown on each side of a matching line.
 const CONTEXT_LINES: usize = 1;

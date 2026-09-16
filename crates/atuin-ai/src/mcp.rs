@@ -307,9 +307,9 @@ mod tests {
         assert!(schema["properties"]["query"]["description"].as_str().unwrap().contains("AND-ed"));
         let limit = &schema["properties"]["limit"];
         assert_eq!(limit["type"], "integer");
-        assert_eq!(limit["minimum"], Limit::MIN);
-        assert_eq!(limit["maximum"], Limit::MAX);
-        assert_eq!(limit["default"], Limit::DEFAULT);
+        assert_eq!(limit["minimum"], Limit::min());
+        assert_eq!(limit["maximum"], Limit::max());
+        assert_eq!(limit["default"], Limit::default_value());
         assert!(limit["description"].as_str().unwrap().contains("most relevant first"));
     }
 

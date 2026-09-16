@@ -2,63 +2,143 @@
 
 use std::borrow::Cow;
 use std::fmt;
-use std::marker::PhantomData;
 
-use num_traits::PrimInt;
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 
-/// The range a [`Clamped`] integer lives in, carried by a marker type so the bounds are part of
-/// the field's type: `Clamped<PageSize>` rather than a bare `u32` that every reader must
-/// re-validate.
-pub trait Bounds {
-    type Int: PrimInt + fmt::Debug + Serialize + DeserializeOwned;
-    const MIN: Self::Int;
-    const MAX: Self::Int;
-    /// The value an omitted or `null` field takes. Clamped into `MIN..=MAX` like any other.
-    const DEFAULT: Self::Int;
+mod sealed {
+    pub trait Sealed {}
 }
 
-/// An integer that is always within `B::MIN..=B::MAX`.
+/// The integer types [`Clamped`] can hold.
+///
+/// A const generic cannot be typed by another generic parameter on stable Rust, so the bounds
+/// are written as `i128` literals and converted to the wrapped type at runtime; `MIN_VALUE` and
+/// `MAX_VALUE` let [`Clamped`] check at compile time that they fit. Sealed to the primitive
+/// integers (all but `u128`, whose upper half does not fit an `i128`).
+pub trait ClampInt:
+    Copy + Ord + fmt::Debug + Serialize + DeserializeOwned + sealed::Sealed
+{
+    const MIN_VALUE: i128;
+    const MAX_VALUE: i128;
+    /// Lossless for any `value` within `MIN_VALUE..=MAX_VALUE`.
+    fn from_i128(value: i128) -> Self;
+}
+
+macro_rules! clamp_int {
+    ($($t:ty),*) => {$(
+        impl sealed::Sealed for $t {}
+
+        #[allow(
+            clippy::cast_lossless,
+            clippy::cast_possible_truncation,
+            clippy::cast_possible_wrap,
+            clippy::cast_sign_loss,
+            clippy::unnecessary_cast,
+            reason = "widening to i128 in a const context has no From, and narrowing is \
+                      guarded by the compile-time bounds check"
+        )]
+        impl ClampInt for $t {
+            const MIN_VALUE: i128 = <$t>::MIN as i128;
+            const MAX_VALUE: i128 = <$t>::MAX as i128;
+
+            fn from_i128(value: i128) -> Self {
+                value as Self
+            }
+        }
+    )*};
+}
+
+clamp_int!(u8, u16, u32, u64, usize, i8, i16, i32, i64, i128, isize);
+
+/// An integer that is always within `MIN..=MAX`, e.g. `Clamped<u32, 1, 20, 5>`.
 ///
 /// Deserializing clamps out-of-range values instead of rejecting them, and `null` becomes
-/// `B::DEFAULT` -- the lenient contract LLM tool parameters need, where a model sending
-/// `limit: 0` or `limit: null` should not fail the whole call. Mark the field `#[serde(default)]`
-/// so an omitted value becomes `B::DEFAULT` as well.
-pub struct Clamped<B: Bounds>(B::Int, PhantomData<B>);
+/// `DEFAULT` -- the lenient contract LLM tool parameters need, where a model sending `limit: 0`
+/// or `limit: null` should not fail the whole call. Mark the field `#[serde(default)]` so an
+/// omitted value becomes `DEFAULT` as well.
+///
+/// The bounds are checked when the type is used: `MIN <= DEFAULT <= MAX`, all within `T`.
+///
+/// ```compile_fail
+/// # use atuin_common::range::Clamped;
+/// let _ = Clamped::<u8, 0, 300, 5>::default();
+/// ```
+/// ```compile_fail
+/// # use atuin_common::range::Clamped;
+/// let _ = Clamped::<u32, 1, 20, 50>::default();
+/// ```
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Clamped<T: ClampInt, const MIN: i128, const MAX: i128, const DEFAULT: i128>(T);
 
-impl<B: Bounds> Clamped<B> {
-    pub const MIN: B::Int = B::MIN;
-    pub const MAX: B::Int = B::MAX;
-    pub const DEFAULT: B::Int = B::DEFAULT;
+impl<T: ClampInt, const MIN: i128, const MAX: i128, const DEFAULT: i128> fmt::Debug
+    for Clamped<T, MIN, MAX, DEFAULT>
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl<T: ClampInt, const MIN: i128, const MAX: i128, const DEFAULT: i128>
+    Clamped<T, MIN, MAX, DEFAULT>
+{
+    // Evaluated per instantiation, when `new` first forces it: an invalid range is a build
+    // error at the use site rather than a silently clamped default.
+    const VALID: () = assert!(
+        T::MIN_VALUE <= MIN && MIN <= DEFAULT && DEFAULT <= MAX && MAX <= T::MAX_VALUE,
+        "Clamped bounds must satisfy T::MIN <= MIN <= DEFAULT <= MAX <= T::MAX"
+    );
 
     #[must_use]
-    pub fn new(value: B::Int) -> Self {
-        Self(value.clamp(B::MIN, B::MAX), PhantomData)
+    pub fn new(value: T) -> Self {
+        let () = Self::VALID;
+        Self(value.clamp(Self::min(), Self::max()))
     }
 
     #[must_use]
-    pub fn get(self) -> B::Int {
+    pub fn get(self) -> T {
         self.0
     }
-}
 
-impl<B: Bounds> Default for Clamped<B> {
-    fn default() -> Self {
-        Self::new(B::DEFAULT)
+    #[must_use]
+    pub fn min() -> T {
+        T::from_i128(MIN)
+    }
+
+    #[must_use]
+    pub fn max() -> T {
+        T::from_i128(MAX)
+    }
+
+    #[must_use]
+    pub fn default_value() -> T {
+        T::from_i128(DEFAULT)
     }
 }
 
-impl<'de, B: Bounds> Deserialize<'de> for Clamped<B> {
+impl<T: ClampInt, const MIN: i128, const MAX: i128, const DEFAULT: i128> Default
+    for Clamped<T, MIN, MAX, DEFAULT>
+{
+    fn default() -> Self {
+        Self::new(Self::default_value())
+    }
+}
+
+impl<'de, T: ClampInt, const MIN: i128, const MAX: i128, const DEFAULT: i128> Deserialize<'de>
+    for Clamped<T, MIN, MAX, DEFAULT>
+{
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(Option::<B::Int>::deserialize(deserializer)?.map_or_else(Self::default, Self::new))
+        Ok(Option::<T>::deserialize(deserializer)?.map_or_else(Self::default, Self::new))
     }
 }
 
 /// The schema states the bounds and default, so a client (or a model reading a tool schema)
-/// sees the same contract the deserializer enforces. Inlined: the name is not unique per `B`.
-impl<B: Bounds> JsonSchema for Clamped<B> {
+/// sees the same contract the deserializer enforces. Inlined: the name is not unique per
+/// instantiation.
+impl<T: ClampInt, const MIN: i128, const MAX: i128, const DEFAULT: i128> JsonSchema
+    for Clamped<T, MIN, MAX, DEFAULT>
+{
     fn schema_name() -> Cow<'static, str> {
         "Clamped".into()
     }
@@ -70,33 +150,10 @@ impl<B: Bounds> JsonSchema for Clamped<B> {
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
         json_schema!({
             "type": "integer",
-            "minimum": B::MIN,
-            "maximum": B::MAX,
-            "default": B::DEFAULT,
+            "minimum": Self::min(),
+            "maximum": Self::max(),
+            "default": Self::default_value(),
         })
-    }
-}
-
-// Manual impls: deriving would demand the traits of the marker `B` too, which is only a name.
-impl<B: Bounds> Clone for Clamped<B> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<B: Bounds> Copy for Clamped<B> {}
-
-impl<B: Bounds> PartialEq for Clamped<B> {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl<B: Bounds> Eq for Clamped<B> {}
-
-impl<B: Bounds> fmt::Debug for Clamped<B> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&self.0, f)
     }
 }
 
@@ -109,30 +166,12 @@ mod tests {
 
     use super::*;
 
-    struct PageSize;
-
-    impl Bounds for PageSize {
-        type Int = u32;
-        const MIN: u32 = 1;
-        const MAX: u32 = 20;
-        const DEFAULT: u32 = 5;
-    }
-
-    struct Offset;
-
-    impl Bounds for Offset {
-        type Int = i8;
-        const MIN: i8 = -10;
-        const MAX: i8 = 10;
-        const DEFAULT: i8 = 0;
-    }
-
     #[derive(Deserialize, JsonSchema)]
     struct Params {
         #[serde(default)]
-        limit: Clamped<PageSize>,
+        limit: Clamped<u32, 1, 20, 5>,
         #[serde(default)]
-        offset: Clamped<Offset>,
+        offset: Clamped<i8, -10, 10, 0>,
     }
 
     #[rstest]
@@ -168,8 +207,8 @@ mod tests {
 
     #[rstest]
     fn exposes_its_bounds() {
-        type Limit = Clamped<PageSize>;
-        assert_eq!((Limit::MIN, Limit::MAX, Limit::DEFAULT), (1, 20, 5));
+        type Limit = Clamped<u32, 1, 20, 5>;
+        assert_eq!((Limit::min(), Limit::max(), Limit::default_value()), (1, 20, 5));
         assert_eq!(Limit::default().get(), 5);
         assert_eq!(Limit::new(0).get(), 1);
         assert_eq!(format!("{:?}", Limit::new(7)), "7");
