@@ -54,12 +54,9 @@ clamp_int!(u8, u16, u32, u64, usize, i8, i16, i32, i64, i128, isize);
 
 /// An integer that is always within `MIN..=MAX`, e.g. `Clamped<u32, 1, 20, 5>`.
 ///
-/// Deserializing clamps out-of-range values instead of rejecting them, and `null` becomes
-/// `DEFAULT` -- the lenient contract LLM tool parameters need, where a model sending `limit: 0`
-/// or `limit: null` should not fail the whole call. Mark the field `#[serde(default)]` so an
-/// omitted value becomes `DEFAULT` as well.
-///
-/// The bounds are checked when the type is used: `MIN <= DEFAULT <= MAX`, all within `T`.
+/// Deserializing clamps out-of-range values rather than rejecting them; `null` (and, with
+/// `#[serde(default)]`, a missing field) becomes `DEFAULT`. `MIN <= DEFAULT <= MAX` within `T` is
+/// checked at compile time:
 ///
 /// ```compile_fail
 /// # use atuin_common::range::Clamped;
@@ -126,9 +123,8 @@ impl<'de, T: ClampInt, const MIN: i128, const MAX: i128, const DEFAULT: i128> De
     }
 }
 
-/// The schema states the bounds and default, so a client (or a model reading a tool schema)
-/// sees the same contract the deserializer enforces. Inlined: the name is not unique per
-/// instantiation.
+/// The schema carries the bounds and default the deserializer enforces. Inlined: the name is not
+/// unique per instantiation.
 impl<T: ClampInt, const MIN: i128, const MAX: i128, const DEFAULT: i128> JsonSchema
     for Clamped<T, MIN, MAX, DEFAULT>
 {
