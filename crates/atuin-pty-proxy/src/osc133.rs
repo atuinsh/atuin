@@ -115,10 +115,11 @@ impl<'data> Iterator for EventChunks<'_, 'data> {
         }
         let mut i = 0;
         while i < self.data.len() {
-            // Fast path: in the ground state the only byte that matters is ESC, so skip straight
-            // over plain output — the overwhelming bulk of a terminal stream — to the next escape
-            // instead of inspecting every byte. Escape sequences themselves are short, so the
-            // byte-at-a-time state machine below only runs inside them.
+            // This is a tiny optimization. The only way we can get out of the [`State::Ground`] is
+            // by seeing an `ESC` character. For proof, see [`Self::handle_byte`].
+            //
+            // In order to speed up this parsing, we use a memchr call. Surprisingly, it's ~10X
+            // improvement, so it is really worth doing.
             if matches!(self.parser.state, State::Ground) {
                 match memchr::memchr(ESC, &self.data[i..]) {
                     Some(rel) => i += rel,
@@ -170,6 +171,10 @@ impl<'data> EventChunks<'_, 'data> {
     fn handle_byte(&mut self, byte: u8, offset: usize) -> Option<EventChunk<'data>> {
         match self.parser.state {
             State::Ground => {
+                // Warning: If you change the lgoic here, make sure you visit
+                // `<EventChunks as Iterator>::next` and edit the logic there too.
+                //
+                // There's a nice comment there to guide you! Make sure you look at it!
                 if byte == ESC {
                     self.parser.state = State::Esc;
                 }
@@ -693,14 +698,16 @@ mod tests {
             parser.push(b"\x1b]133;D;0;history_id=one\x07\x1b]133;D;1;history_id=two\x07");
 
         assert!(iter.next().is_some());
-        assert_eq!(iter.params().map(OwnedParam::from).collect::<Vec<_>>(), vec![
-            OwnedParam::key_value("history_id", "one")
-        ]);
+        assert_eq!(
+            iter.params().map(OwnedParam::from).collect::<Vec<_>>(),
+            vec![OwnedParam::key_value("history_id", "one")]
+        );
 
         assert!(iter.next().is_some());
-        assert_eq!(iter.params().map(OwnedParam::from).collect::<Vec<_>>(), vec![
-            OwnedParam::key_value("history_id", "two")
-        ]);
+        assert_eq!(
+            iter.params().map(OwnedParam::from).collect::<Vec<_>>(),
+            vec![OwnedParam::key_value("history_id", "two")]
+        );
     }
 
     // -- Split across push boundaries -----------------------------------------
@@ -728,10 +735,13 @@ mod tests {
 
         let result = push(&mut parser, b";session_id=abcd\x07rest");
         assert_eq!(result.chunks.len(), 1);
-        assert_eq!(result.chunks[0].params, vec![
-            OwnedParam::key_value("history_id", "018f"),
-            OwnedParam::key_value("session_id", "abcd"),
-        ]);
+        assert_eq!(
+            result.chunks[0].params,
+            vec![
+                OwnedParam::key_value("history_id", "018f"),
+                OwnedParam::key_value("session_id", "abcd"),
+            ]
+        );
         assert_eq!(result.trailing_data, b"rest");
     }
 
@@ -747,14 +757,17 @@ mod tests {
             events.extend(push(&mut parser, chunk).events());
         }
 
-        assert_eq!(events, vec![
-            Event::PromptStart,
-            Event::CommandStart,
-            Event::CommandExecuted,
-            Event::CommandFinished {
-                exit_code: Some(99)
-            },
-        ]);
+        assert_eq!(
+            events,
+            vec![
+                Event::PromptStart,
+                Event::CommandStart,
+                Event::CommandExecuted,
+                Event::CommandFinished {
+                    exit_code: Some(99)
+                },
+            ]
+        );
     }
 
     // -- Input that must not produce events -----------------------------------
@@ -828,8 +841,9 @@ mod tests {
 
     #[rstest]
     fn parser_default_matches_new() {
-        assert_eq!(push(&mut Parser::default(), b"\x1b]133;A\x07").events(), vec![
-            Event::PromptStart
-        ]);
+        assert_eq!(
+            push(&mut Parser::default(), b"\x1b]133;A\x07").events(),
+            vec![Event::PromptStart]
+        );
     }
 }
