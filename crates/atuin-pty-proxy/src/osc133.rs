@@ -113,10 +113,24 @@ impl<'data> Iterator for EventChunks<'_, 'data> {
         if self.exhausted {
             return None;
         }
-        for (i, b) in self.data.iter().copied().enumerate() {
+        let mut i = 0;
+        while i < self.data.len() {
+            // This is a tiny optimization. The only way we can get out of the [`State::Ground`] is
+            // by seeing an `ESC` character. For proof, see [`Self::handle_byte`].
+            //
+            // In order to speed up this parsing, we use a memchr call. Surprisingly, it's ~10X
+            // improvement, so it is really worth doing.
+            if matches!(self.parser.state, State::Ground) {
+                match memchr::memchr(ESC, &self.data[i..]) {
+                    Some(rel) => i += rel,
+                    None => break,
+                }
+            }
+            let b = self.data[i];
             if let Some(item) = self.handle_byte(b, i) {
                 return Some(item);
             }
+            i += 1;
         }
         self.exhausted = true;
         None
@@ -157,6 +171,10 @@ impl<'data> EventChunks<'_, 'data> {
     fn handle_byte(&mut self, byte: u8, offset: usize) -> Option<EventChunk<'data>> {
         match self.parser.state {
             State::Ground => {
+                // Warning: If you change the lgoic here, make sure you visit
+                // `<EventChunks as Iterator>::next` and edit the logic there too.
+                //
+                // There's a nice comment there to guide you! Make sure you look at it!
                 if byte == ESC {
                     self.parser.state = State::Esc;
                 }

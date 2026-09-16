@@ -63,7 +63,7 @@ derive_more = {
     ],
 }
 directories = "6"
-divan = { version = "5", package = "codspeed-divan-compat" }
+divan = "0.1"
 # easy-cast 0.5.5+ raises its MSRV to 1.96.
 #
 # The assert_nonzero feature patches a bug fixed in:

@@ -97,7 +97,7 @@ pub fn onlcr(mut bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
             return None;
         }
 
-        for i in bytes.iter().copied().enumerate().filter_map(|(i, b)| (b == b'\n').then_some(i)) {
+        for i in memchr::memchr_iter(b'\n', bytes) {
             if i.checked_sub(1).is_some_and(|prev| bytes[prev] == b'\r') {
                 continue;
             }

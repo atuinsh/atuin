@@ -21,15 +21,21 @@ atuin-common = { workspace = true, features = ["ansi", "os"] }
 atuin-vt100 = { workspace = true }
 crossterm = { workspace = true }
 libc = { workspace = true }
+memchr = { workspace = true }
 portable-pty = { workspace = true }
 rustix = { workspace = true }
 signal-hook = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+divan = { workspace = true }
 parking_lot = { workspace = true }
 rstest = { workspace = true }
 tempfile = { workspace = true }
+
+[[bench]]
+name = "osc133"
+harness = false
 
 [lints]
 workspace = true

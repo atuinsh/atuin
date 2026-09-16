@@ -2,9 +2,7 @@
 //!
 //! Measures the daemon's `SearchIndex::search` end-to-end — index built from
 //! shell-history-shaped data, then queried the way the interactive UI does —
-//! using divan, so results are tracked on CodSpeed (the `divan` dependency is
-//! CodSpeed's drop-in compat crate; it behaves as plain divan outside
-//! `cargo-codspeed` builds).
+//! using divan.
 //!
 //! Benchmark names (`daemon_search[<scale>/<query>]`) are deliberately
 //! engine-agnostic: they measure whatever fuzzy matcher the daemon currently
