@@ -14,6 +14,7 @@ use std::sync::LazyLock;
 use atuin_client::database::Sqlite;
 use atuin_client::history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, KNOWN_AGENTS};
 use eyre::Result;
+use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
     Implementation, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
@@ -24,7 +25,7 @@ use rmcp::{RoleServer, ServerHandler, ServiceExt};
 use serde_json::{Value, json};
 use strum::IntoEnumIterator;
 
-use crate::tools::output_search::{AtuinOutputSearchToolCall, Limit};
+use crate::tools::output_search::AtuinOutputSearchToolCall;
 use crate::tools::{
     AtuinHistoryToolCall, AtuinOutputToolCall, DEFAULT_HISTORY_RESULTS, HistorySearchFilterMode,
     MAX_HISTORY_RESULTS, ToolOutcome,
@@ -139,8 +140,9 @@ pub async fn run(db: &Sqlite) -> Result<()> {
 
 /// Tool metadata for `tools/list`, built once: the schemas and descriptions
 /// are assembled from consts and the filter-mode enum, none of which change
-/// at runtime. The input schemas mirror what the `TryFrom<&serde_json::Value>`
-/// impls in [`crate::tools`] accept.
+/// at runtime. The history and output schemas are written by hand and must
+/// mirror what the `TryFrom<&serde_json::Value>` impls in [`crate::tools`]
+/// accept; the output-search schema is derived from its call struct.
 static TOOLS: LazyLock<Vec<Tool>> = LazyLock::new(tool_definitions);
 
 fn tool_definitions() -> Vec<Tool> {
@@ -228,29 +230,6 @@ fn tool_definitions() -> Vec<Tool> {
         unreachable!()
     };
 
-    let Value::Object(output_search_schema) = json!({
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "Words to look for in captured command output. Terms are \
-                    AND-ed and matched as whole words (case-insensitive; no regex, no \
-                    prefix matching), so use a few distinctive words from the text you \
-                    remember, e.g. 'connection refused' or 'ENOSPC', not a sentence.",
-            },
-            "limit": {
-                "type": "integer",
-                "minimum": Limit::MIN,
-                "maximum": Limit::MAX,
-                "default": Limit::DEFAULT,
-                "description": "Maximum number of commands to return, most relevant first.",
-            },
-        },
-        "required": ["query"],
-    }) else {
-        unreachable!()
-    };
-
     vec![
         Tool::new(
             "atuin_history",
@@ -284,7 +263,7 @@ fn tool_definitions() -> Vec<Tool> {
              its history ID, timestamp, directory and exit code) and the numbered output lines \
              around each match; pass the history ID and line numbers to atuin_output to read \
              more. Requires the Atuin daemon with output capture enabled.",
-            output_search_schema,
+            schema_for_type::<AtuinOutputSearchToolCall>(),
         )
         .annotate(ToolAnnotations::with_title("Search past command output").read_only(true)),
     ]
@@ -295,6 +274,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::tools::output_search::Limit;
 
     /// MCP clients inject the instructions into the model's system prompt on
     /// every session, so the block must stay small.
@@ -315,6 +295,22 @@ mod tests {
         // comment in AtuinHistoryToolCall::try_from for why.
         let required = tools[0].input_schema.get("required").unwrap();
         assert_eq!(required, &json!(["query"]));
+    }
+
+    /// The output-search schema is derived from the call struct, so this pins what the model
+    /// sees rather than how the struct is annotated.
+    #[rstest]
+    fn output_search_schema_is_derived_from_the_call_struct() {
+        let tools = tool_definitions();
+        let schema = &tools[2].input_schema;
+        assert_eq!(schema["required"], json!(["query"]));
+        assert!(schema["properties"]["query"]["description"].as_str().unwrap().contains("AND-ed"));
+        let limit = &schema["properties"]["limit"];
+        assert_eq!(limit["type"], "integer");
+        assert_eq!(limit["minimum"], Limit::MIN);
+        assert_eq!(limit["maximum"], Limit::MAX);
+        assert_eq!(limit["default"], Limit::DEFAULT);
+        assert!(limit["description"].as_str().unwrap().contains("most relevant first"));
     }
 
     #[rstest]

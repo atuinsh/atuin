@@ -11,6 +11,7 @@ use atuin_common::time::UtcOffsetExt;
 use atuin_daemon::client::SearchClient;
 use eyre::Result;
 use futures::TryStreamExt;
+use schemars::JsonSchema;
 use serde::Deserialize;
 
 use super::{NO_OUTPUT_ADVICE, ToolOutcome};
@@ -31,9 +32,15 @@ impl Bounds for LimitBounds {
 /// Output lines shown on each side of a matching line.
 const CONTEXT_LINES: usize = 1;
 
-#[derive(Debug, Clone, Deserialize)]
+// Doc comments on the fields are the descriptions the model reads in the tool schema; the
+// struct deliberately has none, as it would become the schema's top-level description.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct AtuinOutputSearchToolCall {
+    /// Words to look for in captured command output. Terms are AND-ed and matched as whole
+    /// words (case-insensitive; no regex, no prefix matching), so use a few distinctive words
+    /// from the text you remember, e.g. 'connection refused' or 'ENOSPC', not a sentence.
     pub query: String,
+    /// Maximum number of commands to return, most relevant first.
     #[serde(default)]
     pub limit: Limit,
 }

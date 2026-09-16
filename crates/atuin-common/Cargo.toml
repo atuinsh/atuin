@@ -42,6 +42,7 @@ parking_lot = { workspace = true }
 prost = { workspace = true, optional = true }
 regex = { workspace = true }
 rmp = { workspace = true }
+schemars = { workspace = true }
 rusty_paserk = { workspace = true }
 rusty_paseto = { workspace = true }
 semver = { workspace = true }

@@ -1,16 +1,19 @@
 //! An integer held within a fixed range, with a default for when it is omitted.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::marker::PhantomData;
 
 use num_traits::PrimInt;
-use serde::{Deserialize, Deserializer};
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// The range a [`Clamped`] integer lives in, carried by a marker type so the bounds are part of
 /// the field's type: `Clamped<PageSize>` rather than a bare `u32` that every reader must
 /// re-validate.
 pub trait Bounds {
-    type Int: PrimInt + fmt::Debug;
+    type Int: PrimInt + fmt::Debug + Serialize + DeserializeOwned;
     const MIN: Self::Int;
     const MAX: Self::Int;
     /// The value an omitted or `null` field takes. Clamped into `MIN..=MAX` like any other.
@@ -47,12 +50,30 @@ impl<B: Bounds> Default for Clamped<B> {
     }
 }
 
-impl<'de, B: Bounds> Deserialize<'de> for Clamped<B>
-where
-    B::Int: Deserialize<'de>,
-{
+impl<'de, B: Bounds> Deserialize<'de> for Clamped<B> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         Ok(Option::<B::Int>::deserialize(deserializer)?.map_or_else(Self::default, Self::new))
+    }
+}
+
+/// The schema states the bounds and default, so a client (or a model reading a tool schema)
+/// sees the same contract the deserializer enforces. Inlined: the name is not unique per `B`.
+impl<B: Bounds> JsonSchema for Clamped<B> {
+    fn schema_name() -> Cow<'static, str> {
+        "Clamped".into()
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "integer",
+            "minimum": B::MIN,
+            "maximum": B::MAX,
+            "default": B::DEFAULT,
+        })
     }
 }
 
@@ -82,6 +103,7 @@ impl<B: Bounds> fmt::Debug for Clamped<B> {
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
+    use schemars::JsonSchema;
     use serde::Deserialize;
     use serde_json::json;
 
@@ -105,7 +127,7 @@ mod tests {
         const DEFAULT: i8 = 0;
     }
 
-    #[derive(Deserialize)]
+    #[derive(Deserialize, JsonSchema)]
     struct Params {
         #[serde(default)]
         limit: Clamped<PageSize>,
@@ -151,5 +173,18 @@ mod tests {
         assert_eq!(Limit::default().get(), 5);
         assert_eq!(Limit::new(0).get(), 1);
         assert_eq!(format!("{:?}", Limit::new(7)), "7");
+    }
+
+    #[rstest]
+    fn json_schema_carries_the_bounds() {
+        let schema = schemars::schema_for!(Params);
+        let limit = &schema.as_value()["properties"]["limit"];
+        assert_eq!(limit["type"], "integer");
+        assert_eq!(limit["minimum"], 1);
+        assert_eq!(limit["maximum"], 20);
+        assert_eq!(limit["default"], 5);
+        assert_eq!(schema.as_value()["properties"]["offset"]["minimum"], -10);
+        // Both fields have defaults, so neither is required.
+        assert_eq!(schema.as_value().get("required"), None);
     }
 }
