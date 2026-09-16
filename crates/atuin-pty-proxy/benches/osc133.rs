@@ -35,7 +35,11 @@ mod unix {
             for _ in 0..20 {
                 out.extend_from_slice(line);
             }
-            out.extend_from_slice(if i % 2 == 0 { b"\x1b]133;D;0\x07" } else { b"\x1b]133;D;1\x07" });
+            out.extend_from_slice(if i % 2 == 0 {
+                b"\x1b]133;D;0\x07"
+            } else {
+                b"\x1b]133;D;1\x07"
+            });
         }
         out
     }
