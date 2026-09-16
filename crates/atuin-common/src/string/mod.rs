@@ -16,6 +16,7 @@ pub mod highlighted;
 pub mod trim;
 
 mod escape_non_printable_posix_ext;
+mod non_blank;
 mod non_nul_str;
 
 #[allow(clippy::manual_range_contains, clippy::must_use_candidate, reason = "vendored file")]
@@ -27,6 +28,7 @@ pub use bounded_buffer::BoundedBuffer;
 #[cfg(feature = "unicode")]
 pub use ellipsis::EllipsizeExt;
 pub use escape_non_printable_posix_ext::EscapeNonPrintablePosixExt;
+pub use non_blank::{Blank, NonBlankString};
 pub use non_nul_str::{ContainsNul, NonNulStr};
 pub use normalize::normalize;
 pub use trim::TrimExt;

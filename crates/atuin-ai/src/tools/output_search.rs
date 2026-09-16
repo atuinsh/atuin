@@ -6,19 +6,16 @@ use std::ops::Range;
 use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
 use atuin_common::range::Clamped;
+use atuin_common::string::NonBlankString;
 use atuin_common::string::highlighted::Piece;
 use atuin_common::time::UtcOffsetExt;
 use atuin_daemon::client::SearchClient;
-use eyre::Result;
 use futures::TryStreamExt;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
 use super::{NO_OUTPUT_ADVICE, ToolOutcome};
 use crate::history_format::format_history_search_result;
-
-/// Page size for `atuin_output_search`; the MCP schema reads its bounds from here.
-pub type Limit = Clamped<u32, 1, 20, 5>;
 
 /// Output lines shown on each side of a matching line.
 const CONTEXT_LINES: usize = 1;
@@ -30,23 +27,10 @@ pub struct AtuinOutputSearchToolCall {
     /// Words to look for in captured command output. Terms are AND-ed and matched as whole
     /// words (case-insensitive; no regex, no prefix matching), so use a few distinctive words
     /// from the text you remember, e.g. 'connection refused' or 'ENOSPC', not a sentence.
-    pub query: String,
+    pub query: NonBlankString,
     /// Maximum number of commands to return, most relevant first.
     #[serde(default)]
-    pub limit: Limit,
-}
-
-impl TryFrom<&serde_json::Value> for AtuinOutputSearchToolCall {
-    type Error = eyre::Error;
-
-    fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
-        let mut call = Self::deserialize(value)?;
-        call.query = call.query.trim().to_string();
-        if call.query.is_empty() {
-            eyre::bail!("query must not be blank");
-        }
-        Ok(call)
-    }
+    pub limit: Clamped<u32, 1, 20, 5>,
 }
 
 impl AtuinOutputSearchToolCall {
@@ -76,7 +60,7 @@ impl AtuinOutputSearchToolCall {
 
         // 0 = unbounded: the daemon streams by relevance and we stop once `limit` hits have been
         // rendered, so hits without a local history entry never starve the page.
-        let matches = match client.search_command_output(self.query.clone(), 0).await {
+        let matches = match client.search_command_output(self.query.to_string(), 0).await {
             Ok(matches) => matches,
             Err(e) => return ToolOutcome::Error(format!("Output search failed: {e}")),
         };
@@ -122,7 +106,7 @@ impl AtuinOutputSearchToolCall {
                  terminal while the daemon was running are searchable, and older output may have \
                  been dropped. Terms are AND-ed and matched as whole words, so try fewer or \
                  different terms.",
-                self.query
+                self.query.as_str()
             ));
         }
         ToolOutcome::Success(formatted.join("\n"))
@@ -176,8 +160,8 @@ mod tests {
     #[case::clamped_low(json!({"query": "disk", "limit": 0}), 1)]
     #[case::null_limit(json!({"query": "disk", "limit": null}), 5)]
     fn parses_query_and_clamps_limit(#[case] input: serde_json::Value, #[case] limit: u32) {
-        let call = AtuinOutputSearchToolCall::try_from(&input).unwrap();
-        assert_eq!(call.query, input["query"].as_str().unwrap());
+        let call: AtuinOutputSearchToolCall = serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(call.query.as_str(), input["query"].as_str().unwrap());
         assert_eq!(call.limit.get(), limit);
     }
 
@@ -187,7 +171,7 @@ mod tests {
     #[case::blank(json!({"query": "   "}))]
     #[case::not_a_string(json!({"query": 3}))]
     fn rejects_a_blank_query(#[case] input: serde_json::Value) {
-        assert!(AtuinOutputSearchToolCall::try_from(&input).is_err());
+        assert!(serde_json::from_value::<AtuinOutputSearchToolCall>(input).is_err());
     }
 
     fn ranges(plain: &str, needle: &str) -> Vec<std::ops::Range<usize>> {

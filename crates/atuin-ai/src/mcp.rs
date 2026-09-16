@@ -15,6 +15,7 @@ use atuin_client::database::Sqlite;
 use atuin_client::history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, KNOWN_AGENTS};
 use eyre::Result;
 use rmcp::handler::server::common::schema_for_type;
+use rmcp::handler::server::tool::parse_json_object;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
     Implementation, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
@@ -90,25 +91,22 @@ impl ServerHandler for AtuinMcp {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let arguments = Value::Object(request.arguments.unwrap_or_default());
+        let arguments = request.arguments.unwrap_or_default();
         let outcome = match request.name.as_ref() {
             "atuin_history" => {
-                AtuinHistoryToolCall::try_from(&arguments)
+                AtuinHistoryToolCall::try_from(&Value::Object(arguments))
                     .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?
                     .execute(&self.db)
                     .await
             }
             "atuin_output" => {
-                AtuinOutputToolCall::try_from(&arguments)
+                AtuinOutputToolCall::try_from(&Value::Object(arguments))
                     .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?
                     .execute()
                     .await
             }
             "atuin_output_search" => {
-                AtuinOutputSearchToolCall::try_from(&arguments)
-                    .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?
-                    .execute(&self.db)
-                    .await
+                parse_json_object::<AtuinOutputSearchToolCall>(arguments)?.execute(&self.db).await
             }
             name => {
                 return Err(ErrorData::invalid_params(format!("unknown tool: {name}"), None));
@@ -274,7 +272,6 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::tools::output_search::Limit;
 
     /// MCP clients inject the instructions into the model's system prompt on
     /// every session, so the block must stay small.
@@ -304,12 +301,15 @@ mod tests {
         let tools = tool_definitions();
         let schema = &tools[2].input_schema;
         assert_eq!(schema["required"], json!(["query"]));
-        assert!(schema["properties"]["query"]["description"].as_str().unwrap().contains("AND-ed"));
+        let query = &schema["properties"]["query"];
+        assert_eq!(query["type"], "string");
+        assert_eq!(query["minLength"], 1);
+        assert!(query["description"].as_str().unwrap().contains("AND-ed"));
         let limit = &schema["properties"]["limit"];
         assert_eq!(limit["type"], "integer");
-        assert_eq!(limit["minimum"], Limit::min());
-        assert_eq!(limit["maximum"], Limit::max());
-        assert_eq!(limit["default"], Limit::default_value());
+        assert_eq!(limit["minimum"], 1);
+        assert_eq!(limit["maximum"], 20);
+        assert_eq!(limit["default"], 5);
         assert!(limit["description"].as_str().unwrap().contains("most relevant first"));
     }
 
