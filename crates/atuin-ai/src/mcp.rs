@@ -13,6 +13,7 @@ use std::sync::LazyLock;
 
 use atuin_client::database::Sqlite;
 use atuin_client::history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, KNOWN_AGENTS};
+use atuin_client::settings::Settings;
 use eyre::Result;
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::handler::server::tool::parse_json_object;
@@ -34,6 +35,7 @@ use crate::tools::{
 
 struct AtuinMcp {
     db: Sqlite,
+    settings: Settings,
 }
 
 /// Server-level instructions, surfaced by MCP clients (Claude Code injects
@@ -106,7 +108,9 @@ impl ServerHandler for AtuinMcp {
                     .await
             }
             "atuin_output_search" => {
-                parse_json_object::<AtuinOutputSearchToolCall>(arguments)?.execute(&self.db).await
+                parse_json_object::<AtuinOutputSearchToolCall>(arguments)?
+                    .execute(&self.db, &self.settings)
+                    .await
             }
             name => {
                 return Err(ErrorData::invalid_params(format!("unknown tool: {name}"), None));
@@ -130,8 +134,13 @@ impl ServerHandler for AtuinMcp {
 ///
 /// stdout carries only JSON-RPC messages; anything else (logs, errors) must
 /// go to stderr or it will corrupt the protocol stream.
-pub async fn run(db: &Sqlite) -> Result<()> {
-    let server = AtuinMcp { db: db.clone() }.serve(rmcp::transport::stdio()).await?;
+pub async fn run(db: &Sqlite, settings: &Settings) -> Result<()> {
+    let server = AtuinMcp {
+        db: db.clone(),
+        settings: settings.clone(),
+    }
+    .serve(rmcp::transport::stdio())
+    .await?;
     server.waiting().await?;
     Ok(())
 }

@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::ops::Range;
 
 use atuin_client::database::Sqlite;
-use atuin_client::settings::Settings;
+use atuin_client::settings::{OutputCapture, Settings};
 use atuin_common::range::Clamped;
 use atuin_common::string::NonBlankString;
 use atuin_common::string::highlighted::Piece;
@@ -34,12 +34,8 @@ pub struct AtuinOutputSearchToolCall {
 }
 
 impl AtuinOutputSearchToolCall {
-    pub(crate) async fn execute(&self, db: &Sqlite) -> ToolOutcome {
-        let settings = match Settings::new() {
-            Ok(settings) => settings,
-            Err(e) => return ToolOutcome::Error(format!("Failed to load Atuin settings: {e}")),
-        };
-        if settings.output.limits().is_none() {
+    pub(crate) async fn execute(&self, db: &Sqlite, settings: &Settings) -> ToolOutcome {
+        if matches!(settings.output, OutputCapture::Disabled) {
             return ToolOutcome::Error(
                 "Output search is unavailable: output capture is disabled in the Atuin config \
                  (the [output] section), so no command output has been recorded. History search \
@@ -48,7 +44,7 @@ impl AtuinOutputSearchToolCall {
             );
         }
 
-        let mut client = match SearchClient::from_settings(&settings).await {
+        let mut client = match SearchClient::from_settings(settings).await {
             Ok(client) => client,
             Err(e) => {
                 return ToolOutcome::Error(format!(
