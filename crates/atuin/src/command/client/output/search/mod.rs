@@ -78,14 +78,18 @@ async fn connect(settings: &Settings) -> Result<SearchClient, RunError> {
 const FILTER_HEADROOM: u32 = 64;
 
 fn is_own_search(command: &str) -> bool {
-    let mut tokens = command.split_whitespace();
-    let Some(bin) = tokens.next() else {
+    // Tokenize like a shell so a quoted/escaped binary path (spaces and all) stays one word.
+    let Some(words) = shlex::split(command) else {
+        return false;
+    };
+    let mut words = words.iter().map(String::as_str);
+    let Some(bin) = words.next() else {
         return false;
     };
     if bin.rsplit('/').next().unwrap_or(bin) != "atuin" {
         return false;
     }
-    let mut subcommands = tokens.filter(|t| !t.starts_with('-'));
+    let mut subcommands = words.filter(|t| !t.starts_with('-'));
     subcommands.next() == Some("output") && subcommands.next() == Some("search")
 }
 
@@ -192,6 +196,7 @@ mod tests {
     #[case::bare("atuin output search hello", true)]
     #[case::relative_path("./target/debug/atuin output search cargo", true)]
     #[case::absolute_path("/usr/bin/atuin output search x", true)]
+    #[case::quoted_path_with_spaces("\"/opt/my tools/atuin\" output search x", true)]
     #[case::global_flag_before_subcommand("atuin --foo output search x", true)]
     #[case::flag_between_subcommands("atuin output --foo search x", true)]
     #[case::output_other_subcommand("atuin output stats", false)]
