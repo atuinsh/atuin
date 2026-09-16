@@ -230,22 +230,58 @@ impl SearchEngine for Search {
 
         Ok(ordered_results)
     }
+}
 
-    #[instrument(skip_all, level = Level::TRACE, name = "daemon_highlight")]
-    fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize> {
+impl Search {
+    /// Build the query-invariant highlighter state once, so the per-row work
+    /// reuses the frizbee matcher instead of compiling it (and normalizing the
+    /// query) for every visible row on every frame.
+    ///
+    /// This does not depend on the engine instance — highlighting mirrors the
+    /// daemon's stateless query handling — so it is an associated function.
+    pub fn prepare_highlighter(search_input: &str) -> DaemonHighlighter {
+        // Empty input can never highlight anything: skip building any matcher
+        // and skip per-row command normalization.
+        if search_input.is_empty() {
+            return DaemonHighlighter::Empty;
+        }
+
         // Use fulltext highlighting for regex queries
         if Self::contains_regex_pattern(search_input) {
-            return super::db::get_highlight_indices_fulltext(command, search_input);
+            return DaemonHighlighter::FullText(search_input.to_owned());
         }
 
         // Mirror the daemon's query handling: truncate before frizbee sees
         // the query (a long enough atom panics Matcher::from_query) and
         // normalize diacritics so highlighting agrees with matching
-        let search_input = truncate_query(search_input).normalize_diacritics();
-        let matchable = command.normalize_diacritics();
-
+        let query = truncate_query(search_input).normalize_diacritics();
         let config = frizbee::Config::default().casing(frizbee::CaseMatching::Smart);
-        let mut matcher = frizbee::Matcher::from_query(&search_input, &config);
+        // Boxed because the compiled matcher dwarfs the other variants.
+        DaemonHighlighter::Fuzzy(Box::new(frizbee::Matcher::from_query(&query, &config)))
+    }
+}
+
+/// Query-invariant highlighter state, built once per render frame.
+pub enum DaemonHighlighter {
+    /// Empty input — nothing is ever highlighted.
+    Empty,
+    /// Regex query — highlighting falls back to the fulltext matcher.
+    FullText(String),
+    Fuzzy(Box<frizbee::Matcher>),
+}
+
+impl DaemonHighlighter {
+    #[instrument(skip_all, level = Level::TRACE, name = "daemon_highlight")]
+    pub fn highlight_indices(&mut self, command: &str) -> Vec<usize> {
+        let matcher = match self {
+            Self::Empty => return Vec::new(),
+            Self::FullText(query) => {
+                return super::db::get_highlight_indices_fulltext(command, query);
+            }
+            Self::Fuzzy(matcher) => matcher,
+        };
+
+        let matchable = command.normalize_diacritics();
         let Some(result) = matcher.match_one_indices(&matchable, 0) else {
             return Vec::new();
         };
@@ -289,9 +325,8 @@ mod tests {
     /// atom past frizbee's needle limit panicked in `Matcher::from_query`.
     #[test]
     fn long_query_does_not_panic_highlighting() {
-        let engine = Search::new(&Settings::default());
         let long_query = "a".repeat(5000);
-        let indices = engine.get_highlight_indices("echo hello", &long_query);
+        let indices = Search::prepare_highlighter(&long_query).highlight_indices("echo hello");
         assert!(indices.is_empty());
     }
 
@@ -301,8 +336,7 @@ mod tests {
     /// e0 c1 h2 o3 ␣4 d5 é6 j8 à9; é and à are two bytes each).
     #[test]
     fn accented_command_highlights_unaccented_query() {
-        let engine = Search::new(&Settings::default());
-        let indices = engine.get_highlight_indices("echo déjà", "deja");
+        let indices = Search::prepare_highlighter("deja").highlight_indices("echo déjà");
         assert_eq!(indices, vec![5, 6, 8, 9]);
     }
 
@@ -311,8 +345,7 @@ mod tests {
     /// is one byte shorter than the command wherever é shrank to e.
     #[test]
     fn multibyte_char_before_match_does_not_shift_highlight() {
-        let engine = Search::new(&Settings::default());
-        let indices = engine.get_highlight_indices("émacs test", "test");
+        let indices = Search::prepare_highlighter("test").highlight_indices("émacs test");
         assert_eq!(indices, vec![7, 8, 9, 10]);
     }
 
@@ -321,8 +354,7 @@ mod tests {
     /// ␣6 g7 i8 t9).
     #[test]
     fn cjk_prefix_highlights_at_correct_bytes() {
-        let engine = Search::new(&Settings::default());
-        let indices = engine.get_highlight_indices("日本 git", "git");
+        let indices = Search::prepare_highlighter("git").highlight_indices("日本 git");
         assert_eq!(indices, vec![7, 8, 9]);
     }
 }

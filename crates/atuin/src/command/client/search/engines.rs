@@ -78,8 +78,6 @@ pub trait SearchEngine: Send + Sync + 'static {
             self.full_query(state, db).await
         }
     }
-
-    fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize>;
 }
 
 impl<T: SearchEngine> SearchEngine for Box<T> {
@@ -90,10 +88,6 @@ impl<T: SearchEngine> SearchEngine for Box<T> {
     async fn query(&mut self, state: &SearchState, db: &mut Sqlite) -> Result<Vec<History>> {
         T::query(self, state, db).await
     }
-
-    fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize> {
-        T::get_highlight_indices(self, command, search_input)
-    }
 }
 
 /// Static-dispatch enum over the search-engine backends.
@@ -102,4 +96,39 @@ pub enum AnySearchEngine {
     Db(db::Search),
     #[cfg(feature = "daemon")]
     Daemon(Box<daemon::Search>),
+}
+
+impl AnySearchEngine {
+    /// Build the query-invariant highlighter state once per render frame; its
+    /// per-row `highlight_indices` reuses the scorer/matcher across rows
+    /// instead of rebuilding it for every visible row.
+    pub fn prepare_highlighter(&self, search_input: &str) -> PreparedHighlighter {
+        match self {
+            Self::Db(engine) => {
+                PreparedHighlighter::Db(engine.prepare_highlighter(search_input))
+            }
+            #[cfg(feature = "daemon")]
+            Self::Daemon(_) => {
+                PreparedHighlighter::Daemon(daemon::Search::prepare_highlighter(search_input))
+            }
+        }
+    }
+}
+
+/// A highlighter prepared for a single frame, dispatching per-row highlighting
+/// to whichever backend built it.
+pub enum PreparedHighlighter {
+    Db(db::DbHighlighter),
+    #[cfg(feature = "daemon")]
+    Daemon(daemon::DaemonHighlighter),
+}
+
+impl PreparedHighlighter {
+    pub fn highlight_indices(&mut self, command: &str) -> Vec<usize> {
+        match self {
+            Self::Db(prepared) => prepared.highlight_indices(command),
+            #[cfg(feature = "daemon")]
+            Self::Daemon(prepared) => prepared.highlight_indices(command),
+        }
+    }
 }

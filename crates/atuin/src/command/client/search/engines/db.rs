@@ -27,22 +27,62 @@ impl SearchEngine for Search {
             .map_or(Vec::new(), |r| r.into_iter().collect());
         Ok(results)
     }
+}
 
-    #[instrument(skip_all, level = Level::TRACE, name = "db_highlight")]
-    fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize> {
-        if self.0 == DbSearchMode::Prefix {
-            return vec![];
-        } else if self.0 == DbSearchMode::FullText {
-            return get_highlight_indices_fulltext(command, search_input);
+impl Search {
+    /// Build the query-invariant highlighter state once, so the per-row work
+    /// (`highlight_indices`) reuses the fzf scorer + parser instead of
+    /// rebuilding them for every visible row on every frame.
+    pub fn prepare_highlighter(&self, search_input: &str) -> DbHighlighter {
+        // Empty input can never highlight anything: skip building any matcher.
+        if search_input.is_empty() || self.0 == DbSearchMode::Prefix {
+            return DbHighlighter::Empty;
         }
-        let mut fzf = FzfV2::new();
-        let mut parser = FzfParser::new();
-        let query = parser.parse(search_input);
-        let mut ranges: Vec<Range<usize>> = Vec::new();
-        let _ = fzf.distance_and_ranges(query, command, &mut ranges);
+        if self.0 == DbSearchMode::FullText {
+            return DbHighlighter::FullText(search_input.to_owned());
+        }
+        // `FzfV2` heap-allocates ~5kb of scoring scratch; hoisting it out of
+        // the per-row loop is the whole point of this type. Boxed because it
+        // dwarfs the other variants.
+        DbHighlighter::Fuzzy(Box::new(FuzzyHighlighter {
+            fzf: FzfV2::new(),
+            parser: FzfParser::new(),
+            query: search_input.to_owned(),
+        }))
+    }
+}
 
-        // convert ranges to all indices
-        ranges.into_iter().flatten().collect()
+/// Query-invariant highlighter state, built once per render frame.
+pub enum DbHighlighter {
+    /// Prefix mode or empty input — nothing is ever highlighted.
+    Empty,
+    FullText(String),
+    Fuzzy(Box<FuzzyHighlighter>),
+}
+
+pub struct FuzzyHighlighter {
+    fzf: FzfV2,
+    parser: FzfParser,
+    query: String,
+}
+
+impl DbHighlighter {
+    #[instrument(skip_all, level = Level::TRACE, name = "db_highlight")]
+    pub fn highlight_indices(&mut self, command: &str) -> Vec<usize> {
+        match self {
+            Self::Empty => Vec::new(),
+            Self::FullText(query) => get_highlight_indices_fulltext(command, query),
+            Self::Fuzzy(state) => {
+                let state = &mut **state;
+                // `FzfQuery` borrows `parser`, so it is re-parsed per row; the
+                // parse reuses the parser's buffers and is cheap next to the
+                // scorer allocation this type hoists out.
+                let parsed = state.parser.parse(&state.query);
+                let mut ranges: Vec<Range<usize>> = Vec::new();
+                let _ = state.fzf.distance_and_ranges(parsed, command, &mut ranges);
+                ranges.into_iter().flatten().collect()
+            }
+        }
     }
 }
 

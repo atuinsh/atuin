@@ -17,7 +17,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, StatefulWidget, Widget};
 use time::{OffsetDateTime, UtcOffset};
 
-use super::engines::{AnySearchEngine, SearchEngine};
+use super::engines::{AnySearchEngine, PreparedHighlighter};
 use super::syntax;
 
 pub struct HistoryHighlighter<'a> {
@@ -26,8 +26,10 @@ pub struct HistoryHighlighter<'a> {
 }
 
 impl HistoryHighlighter<'_> {
-    pub fn get_highlight_indices(&self, command: &str) -> Vec<usize> {
-        self.engine.get_highlight_indices(command, self.search_input)
+    /// Build the query-invariant highlighter once, to be reused across every
+    /// row of the frame rather than rebuilt per row.
+    fn prepare(&self) -> PreparedHighlighter {
+        self.engine.prepare_highlighter(self.search_input)
     }
 }
 
@@ -94,6 +96,10 @@ impl StatefulWidget for HistoryList<'_> {
         state.offset = start;
         state.max_entries = end - start;
 
+        // Build the highlighter once per frame; its per-row `highlight_indices`
+        // reuses the scorer/matcher across every visible row.
+        let prepared_highlighter = self.history_highlighter.prepare();
+
         let mut s = DrawState {
             buf,
             list_area,
@@ -106,7 +112,7 @@ impl StatefulWidget for HistoryList<'_> {
             tz: self.tz,
             indicator: self.indicator,
             theme: self.theme,
-            history_highlighter: self.history_highlighter,
+            prepared_highlighter,
             show_numeric_shortcuts: self.show_numeric_shortcuts,
             syntax_highlight: self.syntax_highlight,
             columns: self.columns,
@@ -187,7 +193,7 @@ struct DrawState<'a> {
     tz: UtcOffset,
     indicator: &'a str,
     theme: &'a Theme,
-    history_highlighter: HistoryHighlighter<'a>,
+    prepared_highlighter: PreparedHighlighter,
     show_numeric_shortcuts: bool,
     syntax_highlight: bool,
     columns: &'a [UiColumn],
@@ -313,7 +319,7 @@ impl DrawState<'_> {
         let normalized: String =
             h.command.escape_non_printable().split_ascii_whitespace().join(" ");
 
-        let highlight_indices = self.history_highlighter.get_highlight_indices(&normalized);
+        let highlight_indices = self.prepared_highlighter.highlight_indices(&normalized);
 
         // The selected row keeps its single highlight color.
         let syntax = if self.syntax_highlight && !row_highlighted {
