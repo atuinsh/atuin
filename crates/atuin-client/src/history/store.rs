@@ -152,7 +152,7 @@ impl HistoryStore {
         // Concurrent writers may read the same tail and compute the same idx. `push_unique` reports
         // `false` when a racer already took the slot, and we recompute and retry.
         loop {
-            let idx = self.store.last(&series).await?.map_or(0, |p| p.idx + 1);
+            let idx = self.store.tail_idx(&series).await?.map_or(0, |idx| idx + 1);
 
             let record = Record::builder()
                 .host(Host::new(self.host_id))
@@ -176,9 +176,9 @@ impl HistoryStore {
 
         let idx = self
             .store
-            .last(&RecordSeriesKey::new(self.host_id, RecordTag::History))
+            .tail_idx(&RecordSeriesKey::new(self.host_id, RecordTag::History))
             .await?
-            .map_or(0, |p| p.idx + 1);
+            .map_or(0, |idx| idx + 1);
 
         // Could probably _also_ do this as an iterator, but let's see how this is for now.
         // optimizing for minimal sqlite transactions, this code can be optimised later

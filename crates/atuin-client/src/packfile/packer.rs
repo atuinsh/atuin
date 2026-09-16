@@ -48,9 +48,7 @@ pub async fn try_pack(
     };
     let mut pack_idx = last_pack.map_or(0, |record| record.idx + 1);
 
-    let Some(ceiling) =
-        store.last(series).await.map_err(PackingError::Store)?.map(|record| record.idx)
-    else {
+    let Some(ceiling) = store.tail_idx(series).await.map_err(PackingError::Store)? else {
         trace!("no history yet; nothing to pack");
         return Ok(());
     };

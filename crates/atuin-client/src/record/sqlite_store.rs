@@ -263,6 +263,24 @@ impl SqliteStore {
         }
     }
 
+    /// The `idx` of the latest record in `(host, tag)`, or `None` when the series is empty.
+    ///
+    /// Unlike [`last`](Self::last), this reads only the `idx` column, so the `record_uniq` index
+    /// on `(host, tag, idx)` satisfies it without touching a row -- no blob load, no UUID parses.
+    /// Callers that need the whole record still use `last`.
+    #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag), err)]
+    pub async fn tail_idx(&self, series: &RecordSeriesKey) -> Result<Option<RecordIdx>> {
+        let idx: Option<i64> = db::query_scalar(
+            "select idx from store where host = ?1 and tag = ?2 order by idx desc limit 1",
+        )
+        .bind(series.host_id.as_hyphenated().to_string())
+        .bind(series.tag.as_str())
+        .fetch_optional(self.sqlite.pool())
+        .await?;
+
+        Ok(idx.map(u64::conv))
+    }
+
     #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag), err)]
     pub async fn first(
         &self,
@@ -296,13 +314,7 @@ impl SqliteStore {
 
     #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag), err)]
     pub async fn len(&self, series: &RecordSeriesKey) -> Result<u64> {
-        let last = self.last(series).await?;
-
-        if let Some(last) = last {
-            return Ok(last.idx + 1);
-        }
-
-        Ok(0)
+        Ok(self.tail_idx(series).await?.map_or(0, |idx| idx + 1))
     }
 
     /// The smallest `idx >= 0` with no record for `(host, tag)`: Unlike `last().idx + 1`, this
