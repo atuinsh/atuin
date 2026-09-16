@@ -131,27 +131,29 @@ struct PrettyLine<'a> {
 impl std::fmt::Display for PrettyLine<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let end = self.line_start + self.line.len();
-        let cursor = self.ranges.iter().try_fold(0, |cursor, m| {
-            let (start, stop) = (m.start.max(self.line_start), m.end.min(end));
-            if start >= stop || start < self.line_start + cursor {
-                return Ok(cursor);
-            }
+        let cursor =
+            self.ranges.iter().try_fold(0, |cursor, m| -> Result<usize, std::fmt::Error> {
+                let (start, stop) = (m.start.max(self.line_start), m.end.min(end));
+                if start >= stop || start < self.line_start + cursor {
+                    return Ok(cursor);
+                }
 
-            let (start, stop) = (start - self.line_start, stop - self.line_start);
-            let (Some(gap), Some(hit)) = (self.line.get(cursor..start), self.line.get(start..stop))
-            else {
-                return Ok(cursor);
-            };
+                let (start, stop) = (start - self.line_start, stop - self.line_start);
+                let (Some(gap), Some(hit)) =
+                    (self.line.get(cursor..start), self.line.get(start..stop))
+                else {
+                    return Ok(cursor);
+                };
 
-            write!(
-                f,
-                "{}{}",
-                gap.escape_non_printable(),
-                hit.escape_non_printable().as_ref().red().bold()
-            )?;
+                write!(
+                    f,
+                    "{}{}",
+                    gap.escape_non_printable(),
+                    hit.escape_non_printable().as_ref().red().bold()
+                )?;
 
-            Ok(stop)
-        })?;
+                Ok(stop)
+            })?;
 
         let tail = &self.line[cursor..];
         write!(f, "{}", tail.escape_non_printable())
