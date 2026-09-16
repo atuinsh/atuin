@@ -176,10 +176,6 @@ impl super::Schema for Schema {
         let pool = db.pool().clone();
         let query = query.to_owned();
 
-        // Page the ranked matches with OFFSET so a caller can stop early without the daemon
-        // materializing the whole result set. `limit == 0` means unbounded; `indexed.history_id`
-        // breaks bm25 ties so the OFFSET window is stable across pages. The index is contentless,
-        // so this returns only the ranking -- bodies are hydrated and highlighted downstream.
         ChunkedStream::new(stream::unfold(Some(0usize), move |offset| {
             let pool = pool.clone();
             let query = query.clone();

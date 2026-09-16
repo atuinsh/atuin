@@ -73,18 +73,32 @@ async fn connect(settings: &Settings) -> Result<SearchClient, RunError> {
     SearchClient::new(settings.daemon.tcp_port).await.map_err(RunError::Connect)
 }
 
+/// Check whether the given command string refers to an `atuin output search ...` command.
+///
+/// TODO(markovejnovic): This is a little bit of a massive hack, but it seems to work for now.
+///                      Perhaps a better solution would be to inject some sort of magic invisible
+///                      codes in the output so that we can later catch that.
+///
+///                      Another option is to have the `atuin` command inject some sort of magic
+///                      metadata into the history on the daemon to communicate what it was, so the
+///                      daemon doesn't return it.
+///
+///                      I don't know, but I could bikeshed this for eons. Keeping this in to ship
+///                      the feature rather than waste time.
 fn is_own_search(command: &str) -> bool {
-    // Tokenize like a shell so a quoted/escaped binary path (spaces and all) stays one word.
     let Some(words) = shlex::split(command) else {
         return false;
     };
+
     let mut words = words.iter().map(String::as_str);
     let Some(bin) = words.next() else {
         return false;
     };
+
     if bin.rsplit('/').next().unwrap_or(bin) != "atuin" {
         return false;
     }
+
     let mut subcommands = words.filter(|t| !t.starts_with('-'));
     subcommands.next() == Some("output") && subcommands.next() == Some("search")
 }

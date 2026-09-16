@@ -239,8 +239,12 @@ mod tests {
             index.insert(hid(i), "error").await.expect("insert");
         }
         // 0 pages until the index is exhausted; a positive limit stops early.
-        assert_eq!(search_hits(&index, "error", 0).await.len(), 5);
-        assert_eq!(search_hits(&index, "error", 2).await.len(), 2);
+        let unbounded: Vec<RankedMatch> =
+            index.search("error", 0).await.try_collect().await.expect("search");
+        assert_eq!(unbounded.len(), 5);
+        let capped: Vec<RankedMatch> =
+            index.search("error", 2).await.try_collect().await.expect("search");
+        assert_eq!(capped.len(), 2);
     }
 
     #[tokio::test]
