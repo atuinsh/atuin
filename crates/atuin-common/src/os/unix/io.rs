@@ -89,9 +89,8 @@ mod tests {
         // Nobody reads `_read`, so a non-blocking write fills the pipe and stalls.
         let (_read, write_end) = pipe().unwrap();
         ioctl_fionbio(&write_end, true).unwrap();
-        let err = write_end
-            .write_all_retrying(&vec![0u8; BIG], Duration::from_millis(50))
-            .unwrap_err();
+        let err =
+            write_end.write_all_retrying(&vec![0u8; BIG], Duration::from_millis(50)).unwrap_err();
         assert_eq!(err, Errno::TIMEDOUT);
     }
 }

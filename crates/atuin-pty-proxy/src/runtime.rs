@@ -159,15 +159,8 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
     terminal::enable_raw_mode()?;
 
     let stdout_thread = std::thread::spawn(move || {
-        // Forward straight to fd 1. `std::io::stdout()` wraps a `LineWriter`, so a
-        // read that ends mid-line (a prompt fragment, cursor movement — most PTY
-        // reads) is split into a direct write of the newline-terminated prefix
-        // plus a buffered tail that the explicit `flush()` then writes as a
-        // second syscall. The terminal is unbuffered anyway, so we emit each
-        // read with a single `write`.
         let stdout = rustix::stdio::stdout();
-        // fd 1 is blocking, so writes never hit EAGAIN and this cap is never
-        // reached; MAX just says we never want to drop terminal output.
+
         const WRITE_TIMEOUT: Duration = Duration::MAX;
         let mut highlighter = options.debug_osc133.then(Osc133DebugHighlighter::new);
         let mut buf = [0u8; 8192];

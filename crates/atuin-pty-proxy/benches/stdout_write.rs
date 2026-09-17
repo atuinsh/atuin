@@ -30,7 +30,8 @@ mod unix {
     // of finished output lines followed by a fresh prompt, so it carries embedded
     // newlines but ends mid-line. This is exactly the shape that costs the
     // LineWriter a second syscall.
-    const CHUNK: &[u8] = b"file_a.rs  file_b.rs  file_c.rs\r\ntarget  Cargo.toml\r\nuser@host ~/project (main) $ ";
+    const CHUNK: &[u8] =
+        b"file_a.rs  file_b.rs  file_c.rs\r\ntarget  Cargo.toml\r\nuser@host ~/project (main) $ ";
 
     // Roughly a screen-second of interactive output.
     const CHUNKS: usize = 2000;
