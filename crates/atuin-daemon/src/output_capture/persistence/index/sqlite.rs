@@ -86,7 +86,7 @@ impl Index for SqliteIndex {
     async fn highlight(
         &self,
         query: &str,
-        bodies: Vec<String>,
+        bodies: impl IntoIterator<Item = impl AsRef<str>> + Send,
     ) -> Result<Vec<HighlightedString>, IndexError> {
         Current::highlight(&self.db, self.highlighter, query, bodies).await
     }
@@ -114,7 +114,7 @@ mod tests {
     ) -> Vec<(RankedMatch, HighlightedString)> {
         let ranked: Vec<RankedMatch> =
             index.search(query, 10).await.try_collect().await.expect("search");
-        let bodies = vec![body.to_owned(); ranked.len()];
+        let bodies = std::iter::repeat_n(body, ranked.len());
         let highlighted = index.highlight(query, bodies).await.expect("highlight");
         ranked.into_iter().zip(highlighted).collect()
     }
@@ -193,10 +193,8 @@ mod tests {
     #[tokio::test]
     async fn a_body_that_drifted_from_the_index_is_returned_unhighlighted() {
         let (index, _dir) = temp_index().await;
-        let hits = index
-            .highlight("error", vec!["re-rendered without the term".to_owned()])
-            .await
-            .expect("highlight");
+        let hits =
+            index.highlight("error", ["re-rendered without the term"]).await.expect("highlight");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].display_plain().to_string(), "re-rendered without the term");
         assert_eq!(hits[0].ranges().count(), 0);
@@ -207,7 +205,7 @@ mod tests {
         let (index, _dir) = temp_index().await;
         let bodies: Vec<String> = (1..=100).map(|n| format!("body {n} with an error")).collect();
 
-        let hits = index.highlight("error", bodies.clone()).await.expect("highlight");
+        let hits = index.highlight("error", &bodies).await.expect("highlight");
         let plain: Vec<String> = hits.iter().map(|h| h.display_plain().to_string()).collect();
         assert_eq!(plain, bodies);
         assert!(hits.iter().all(|output| output.ranges().count() == 1));

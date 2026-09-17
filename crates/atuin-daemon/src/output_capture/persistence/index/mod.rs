@@ -55,7 +55,7 @@ pub trait Index {
     async fn highlight(
         &self,
         query: &str,
-        bodies: Vec<String>,
+        bodies: impl IntoIterator<Item = impl AsRef<str>> + Send,
     ) -> Result<Vec<HighlightedString>, IndexError>;
 
     /// Every id currently held in the index.

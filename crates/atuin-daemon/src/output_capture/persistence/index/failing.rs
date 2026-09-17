@@ -34,7 +34,7 @@ impl Index for FailingIndex {
     async fn highlight(
         &self,
         _query: &str,
-        _bodies: Vec<String>,
+        _bodies: impl IntoIterator<Item = impl AsRef<str>> + Send,
     ) -> Result<Vec<HighlightedString>, IndexError> {
         Err(unavailable())
     }

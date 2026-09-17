@@ -29,12 +29,14 @@ impl Index for NopIndex {
     async fn highlight(
         &self,
         _query: &str,
-        bodies: Vec<String>,
+        bodies: impl IntoIterator<Item = impl AsRef<str>> + Send,
     ) -> Result<Vec<HighlightedString>, IndexError> {
         let highlighter = TextHighlighter::default();
         Ok(bodies
             .into_iter()
-            .map(|body| highlighter.as_highlighted(highlighter.sanitize(&body).into_owned()))
+            .map(|body| {
+                highlighter.as_highlighted(highlighter.sanitize(body.as_ref()).into_owned())
+            })
             .collect())
     }
 

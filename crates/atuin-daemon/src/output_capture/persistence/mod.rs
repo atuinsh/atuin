@@ -116,7 +116,7 @@ impl OutputStore {
             let index = index.clone();
             let query = query.clone();
             async move {
-                let bodies = batch.iter().map(|(_, capture)| capture.plaintext()).collect();
+                let bodies = batch.iter().map(|(_, capture)| capture.plaintext());
                 let highlighted = match index.highlight(&query, bodies).await {
                     Ok(highlighted) => highlighted,
                     Err(err) => return vec![Err(err)],

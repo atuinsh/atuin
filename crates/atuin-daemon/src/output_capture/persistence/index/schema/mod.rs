@@ -41,7 +41,7 @@ pub trait Schema {
         db: &Sqlite,
         highlighter: TextHighlighter,
         query: &str,
-        bodies: Vec<String>,
+        bodies: impl IntoIterator<Item = impl AsRef<str>> + Send,
     ) -> Result<Vec<HighlightedString>, IndexError>;
 
     async fn indexed_ids(db: &Sqlite) -> ChunkedStream<Result<HistoryId, IndexError>>;

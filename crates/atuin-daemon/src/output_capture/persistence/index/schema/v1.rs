@@ -22,7 +22,7 @@ impl Schema {
         db: &Sqlite,
         highlighter: TextHighlighter,
         expr: &str,
-        bodies: Vec<String>,
+        bodies: impl IntoIterator<Item = impl AsRef<str>> + Send,
     ) -> Result<Vec<HighlightedString>, IndexError> {
         // Okay this looks so confusing if you're reading this for the first-time, so let me guide
         // you through the reasoning here.
@@ -45,6 +45,7 @@ impl Schema {
         // we then immediately invoke MATCH with a `highlight` on the same call the user made.
         //
         // Hacky and dirty, but works!
+        let bodies: Vec<_> = bodies.into_iter().collect();
         let mut conn = db.pool().acquire().await.map_err(store)?;
         db::query(
             "CREATE VIRTUAL TABLE IF NOT EXISTS temp.highlights USING fts5(body, tokenize = \
@@ -57,7 +58,7 @@ impl Schema {
         for (n, body) in bodies.iter().enumerate() {
             db::query("INSERT INTO temp.highlights(rowid, body) VALUES (?, ?)")
                 .bind(i64::conv(n))
-                .bind_highlightable(highlighter, body)
+                .bind_highlightable(highlighter, body.as_ref())
                 .execute(&mut *conn)
                 .await
                 .map_err(store)?;
@@ -84,7 +85,7 @@ impl Schema {
                 highlighter.as_highlighted(
                     highlighted
                         .remove(&i64::conv(n))
-                        .unwrap_or_else(|| highlighter.sanitize(&body).into_owned()),
+                        .unwrap_or_else(|| highlighter.sanitize(body.as_ref()).into_owned()),
                 )
             })
             .collect())
@@ -225,13 +226,15 @@ impl super::Schema for Schema {
         db: &Sqlite,
         highlighter: TextHighlighter,
         query: &str,
-        bodies: Vec<String>,
+        bodies: impl IntoIterator<Item = impl AsRef<str>> + Send,
     ) -> Result<Vec<HighlightedString>, IndexError> {
         match match_expression(query) {
             Some(expr) => Self::highlight_all(db, highlighter, &expr, bodies).await,
             None => Ok(bodies
                 .into_iter()
-                .map(|body| highlighter.as_highlighted(highlighter.sanitize(&body).into_owned()))
+                .map(|body| {
+                    highlighter.as_highlighted(highlighter.sanitize(body.as_ref()).into_owned())
+                })
                 .collect()),
         }
     }
