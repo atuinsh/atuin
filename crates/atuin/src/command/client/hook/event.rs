@@ -80,7 +80,8 @@ impl From<WireHookEvent> for Option<HookEvent> {
                 })
             }
             HookEventName::PostToolUse => {
-                let exit = wire.tool_response.and_then(|response| response.exit_code).unwrap_or(0);
+                let exit =
+                    wire.tool_response.and_then(|response| response.exit_code()).unwrap_or(0);
                 Some(HookEvent::End { tool_use_id, exit })
             }
             HookEventName::PostToolUseFailure => Some(HookEvent::End {
@@ -291,6 +292,22 @@ mod tests {
     )]
     fn parses_agent_event(#[case] input: serde_json::Value, #[case] expected: Option<HookEvent>) {
         assert_eq!(HookEvent::from_json_str(&input.to_string()).unwrap(), expected);
+    }
+
+    /// Codex serializes `tool_response` as a bare string, unlike the object
+    /// Claude Code sends. Dropping the completion leaves the history entry
+    /// opened by the matching `PreToolUse` unfinished, so nothing is recorded
+    /// when the daemon owns the store (issue #4169).
+    #[rstest]
+    #[case::string_tool_response(
+        r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"example-call","session_id":"example-session","cwd":"/tmp","tool_input":{"command":"printf probe"},"tool_response":"probe"}"#,
+        Some(HookEvent::End { tool_use_id: "example-call".into(), exit: 0 })
+    )]
+    fn completion_accepts_string_tool_response(
+        #[case] input: &str,
+        #[case] expected: Option<HookEvent>,
+    ) {
+        assert_eq!(HookEvent::from_json_str(input).unwrap(), expected);
     }
 
     /// Well-formed JSON that isn't a hook event we model is skipped, not an

@@ -58,7 +58,29 @@ pub struct WireToolInput {
 
 /// See [`WireHookEvent::tool_response`].
 #[derive(Debug, Deserialize)]
-pub struct WireToolResponse {
-    #[serde(rename = "exitCode", default)]
-    pub exit_code: Option<i64>,
+#[serde(untagged)]
+pub enum WireToolResponse {
+    /// Codex serializes the response as the tool's output string. It carries no
+    /// exit code; see [`WireToolResponse::exit_code`].
+    Output(String),
+    /// Claude Code serializes the response as an object carrying the exit code.
+    Object {
+        #[serde(rename = "exitCode", default)]
+        exit_code: Option<i64>,
+    },
+}
+
+impl WireToolResponse {
+    /// The exit code the agent reported, if any.
+    ///
+    /// A bare string carries no exit code. Codex reports failures through a
+    /// separate `PostToolUseFailure` event, so a `PostToolUse` with no exit code
+    /// means the command ran; callers default the missing value to zero, exactly
+    /// as they do for an object without `exitCode`.
+    pub fn exit_code(&self) -> Option<i64> {
+        match self {
+            WireToolResponse::Output(_) => None,
+            WireToolResponse::Object { exit_code } => *exit_code,
+        }
+    }
 }
