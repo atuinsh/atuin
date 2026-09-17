@@ -16,7 +16,8 @@ fn main() {
 /// A realistic long command: mixed ASCII plus a few multi-byte characters,
 /// roughly the width of a wide-terminal history row (~120 chars).
 fn command() -> String {
-    let s = "git commit -m \"café: résumé the naïve piñata — 日本語 test\" && cargo build --release --features sqlite,daemon 2>&1 | grep -i warning";
+    let s = "git commit -m \"café: résumé the naïve piñata — 日本語 test\" && cargo build \
+             --release --features sqlite,daemon 2>&1 | grep -i warning";
     debug_assert!((110..=130).contains(&s.chars().count()));
     s.to_string()
 }

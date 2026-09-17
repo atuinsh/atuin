@@ -278,6 +278,7 @@ dependencies = [
  "crossterm",
  "daemonix",
  "derive_more",
+ "divan",
  "easy-cast",
  "enum_dispatch",
  "eyre",
