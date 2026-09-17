@@ -16,6 +16,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  RUSTC_BOOTSTRAP: "1"
+  CARGO_UNSTABLE_BUILD_ANALYSIS: "true"
+  CARGO_UNSTABLE_SECTION_TIMINGS: "true"
+  CARGO_BUILD_ANALYSIS_ENABLED: "true"
 
 jobs:
   build:
@@ -39,6 +43,13 @@ jobs:
         with:
           toolchain: 1.98.0
 
+      - name: Runner facts
+        shell: bash
+        run: |
+          echo "cores=$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
+          df -h . | tail -1
+          echo "target size before: $(du -sh target 2>/dev/null | cut -f1)"
+
       - uses: actions/cache@v6
         with:
           path: |
@@ -48,16 +59,25 @@ jobs:
           key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run cargo build common
-        run: cargo build -p atuin-common --locked --release
+        run: cargo build -p atuin-common --locked --release --timings
 
       - name: Run cargo build client
-        run: cargo build -p atuin-client --locked --release
+        run: cargo build -p atuin-client --locked --release --timings
 
       - name: Run cargo build server
-        run: cargo build -p atuin-server --locked --release
+        run: cargo build -p atuin-server --locked --release --timings
 
       - name: Run cargo build main
-        run: cargo build --all --locked --release
+        run: cargo build --all --locked --release --timings
+
+      - name: Upload build analysis
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-analysis-${{ github.job }}-${{ matrix.os }}
+          path: |
+            ~/.cargo/log/*.jsonl
+            target/cargo-timings/*.html
 
   # This used to use cross compilling via `cross` but it's more reliable to just
   # run this on a real illumos (OmniOS) system.
@@ -112,6 +132,13 @@ jobs:
         with:
           toolchain: 1.98.0
 
+      - name: Runner facts
+        shell: bash
+        run: |
+          echo "cores=$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
+          df -h . | tail -1
+          echo "target size before: $(du -sh target 2>/dev/null | cut -f1)"
+
       - uses: taiki-e/install-action@v2
         name: Install nextest
         with:
@@ -125,8 +152,11 @@ jobs:
              target
           key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Compile tests
+        run: cargo nextest run --lib --bins --no-run --timings
+
       - name: Run cargo test
-        run: cargo nextest run --lib --bins
+        run: cargo nextest run --lib --bins --timings
 
       - name: Show new proptest regressions
         if: ${{ failure() }}
@@ -151,6 +181,15 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      - name: Upload build analysis
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-analysis-${{ github.job }}-${{ matrix.os }}
+          path: |
+            ~/.cargo/log/*.jsonl
+            target/cargo-timings/*.html
+
   check:
     strategy:
       matrix:
@@ -172,6 +211,13 @@ jobs:
         with:
           toolchain: 1.98.0
 
+      - name: Runner facts
+        shell: bash
+        run: |
+          echo "cores=$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
+          df -h . | tail -1
+          echo "target size before: $(du -sh target 2>/dev/null | cut -f1)"
+
       - uses: actions/cache@v6
         with:
           path: |
@@ -181,19 +227,28 @@ jobs:
           key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run cargo check (all features)
-        run: cargo check --all-features --workspace
+        run: cargo check --all-features --workspace --timings
 
       - name: Run cargo check (no features)
-        run: cargo check --no-default-features --workspace
+        run: cargo check --no-default-features --workspace --timings
 
       - name: Run cargo check (sync)
-        run: cargo check --no-default-features --features sync --workspace
+        run: cargo check --no-default-features --features sync --workspace --timings
 
       - name: Run cargo check (server)
-        run: cargo check -p atuin-server
+        run: cargo check -p atuin-server --timings
 
       - name: Run cargo check (client only)
-        run: cargo check --no-default-features --features client --workspace
+        run: cargo check --no-default-features --features client --workspace --timings
+
+      - name: Upload build analysis
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-analysis-${{ github.job }}-${{ matrix.os }}
+          path: |
+            ~/.cargo/log/*.jsonl
+            target/cargo-timings/*.html
 
   msrv:
     name: MSRV (1.95.0)
