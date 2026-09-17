@@ -19,9 +19,9 @@ use tokio::time;
 use crate::daemon::DaemonHandle;
 use crate::search::SearchIndex;
 
-/// Cap on the exponential backoff between failed sync attempts, and the budget for a single retry
-/// episode: once a failing sync has been retried for this long we fall back to the normal periodic
-/// cadence and start a fresh ramp on the next tick.
+/// Cap on the exponential backoff between failed sync attempts. Once a failing sync has ramped to
+/// this interval it keeps retrying at that cadence until it succeeds -- it is never abandoned, and
+/// the ramp is never reset out from under an ongoing outage.
 const MAX_BACKOFF: Duration = Duration::from_mins(30);
 
 /// Factor by which the sync retry backoff grows after each failure.
@@ -125,7 +125,11 @@ impl Worker {
                     max: MAX_BACKOFF,
                     factor: BACKOFF_FACTOR,
                 };
-                let _ = backoff.retry(|| self.sync_tick(&settings), MAX_BACKOFF).await;
+                // Retry a transient failure forever, ramping to MAX_BACKOFF and holding there until
+                // it succeeds. Crucially there is no episode timeout: the old `retry(.., timeout)`
+                // both abandoned a still-failing sync (resetting the ramp) and could cancel a tick
+                // mid-build -- the two regressions this refactor introduced.
+                backoff.retry_forever(|| self.sync_tick(&settings)).await;
             } else {
                 tracing::debug!("auto_sync disabled, skipping periodic sync tick");
             }
