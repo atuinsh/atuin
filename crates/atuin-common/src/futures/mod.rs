@@ -1,9 +1,21 @@
 use std::future::Future;
 use std::num::NonZeroU32;
 use std::ops::ControlFlow;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub mod stream;
+
+/// Jitter a delay by up to +/-10%.
+#[must_use]
+fn jittered(delay: Duration) -> Duration {
+    let Ok(random) = getrandom::u64() else {
+        return delay;
+    };
+    let nanos = u64::try_from(delay.as_nanos()).unwrap_or(u64::MAX);
+    let magnitude = nanos / 10;
+    let offset = random % magnitude.saturating_mul(2).saturating_add(1);
+    Duration::from_nanos(nanos.saturating_sub(magnitude).saturating_add(offset))
+}
 
 /// See [`Backoff::retry`].
 #[derive(Debug, Clone, Copy)]
@@ -53,17 +65,6 @@ impl Backoff {
         F: FnMut() -> Fut,
         Fut: Future<Output = ControlFlow<B, C>>,
     {
-        #[must_use]
-        fn jittered(delay: Duration) -> Duration {
-            let Ok(random) = getrandom::u64() else {
-                return delay;
-            };
-            let nanos = u64::try_from(delay.as_nanos()).unwrap_or(u64::MAX);
-            let magnitude = nanos / 10;
-            let offset = random % magnitude.saturating_mul(2).saturating_add(1);
-            Duration::from_nanos(nanos.saturating_sub(magnitude).saturating_add(offset))
-        }
-
         let mut last = match fxn().await {
             ControlFlow::Break(value) => return Ok(value),
             ControlFlow::Continue(reason) => reason,
@@ -107,12 +108,52 @@ impl Backoff {
     {
         self.retry(|| std::future::ready(fxn()), timeout).await
     }
+
+    /// A blocking analogue of [`Self::retry`] for synchronous callers: it sleeps the current
+    /// thread between attempts.
+    pub fn retry_blocking<B, C, F>(self, mut fxn: F, timeout: Duration) -> Result<B, C>
+    where
+        F: FnMut() -> ControlFlow<B, C>,
+    {
+        let mut last = match fxn() {
+            ControlFlow::Break(value) => return Ok(value),
+            ControlFlow::Continue(reason) => reason,
+        };
+
+        let deadline = Instant::now().checked_add(timeout);
+        let (mut backoff, max) = match self {
+            Self::Linear(period) => (period, Duration::MAX),
+            Self::Exponential { initial, max, .. } => (initial.min(max), max),
+        };
+
+        loop {
+            let mut nap = jittered(backoff).min(max);
+            if let Some(deadline) = deadline {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(last);
+                }
+                nap = nap.min(remaining);
+            }
+            std::thread::sleep(nap);
+
+            if let Self::Exponential { factor, .. } = self {
+                backoff = backoff.saturating_mul(factor.get()).min(max);
+            }
+
+            match fxn() {
+                ControlFlow::Break(value) => return Ok(value),
+                ControlFlow::Continue(reason) => last = reason,
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use rstest::rstest;
     use tokio::time::Instant;
 
     use super::*;
@@ -151,5 +192,34 @@ mod tests {
             "second attempt fired without a backoff delay ({:?} elapsed)",
             start.elapsed()
         );
+    }
+
+    #[rstest]
+    #[case::first_attempt(1)]
+    #[case::after_retries(4)]
+    fn retry_blocking_breaks_after(#[case] attempts: u32) {
+        let backoff = Backoff::Linear(Duration::from_millis(1));
+        let mut calls = 0;
+        let result: Result<u32, ()> = backoff.retry_blocking(
+            || {
+                calls += 1;
+                if calls < attempts {
+                    ControlFlow::Continue(())
+                } else {
+                    ControlFlow::Break(calls)
+                }
+            },
+            Duration::from_secs(1),
+        );
+        assert_eq!(result, Ok(attempts));
+    }
+
+    #[rstest]
+    fn retry_blocking_gives_up_after_timeout() {
+        // Never breaks: returns the last Continue reason once the timeout elapses.
+        let backoff = Backoff::Linear(Duration::from_millis(1));
+        let result: Result<(), u32> =
+            backoff.retry_blocking(|| ControlFlow::Continue(7), Duration::from_millis(20));
+        assert_eq!(result, Err(7));
     }
 }
