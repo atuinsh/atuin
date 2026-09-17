@@ -15,7 +15,7 @@ pub trait WriteAllExt: AsFd {
     /// (sleeping the thread) and retries up to `timeout`, then returns `ETIMEDOUT`; other errors
     /// propagate.
     fn write_all_retrying(&self, buf: &[u8], timeout: Duration) -> Result<(), Errno> {
-        if buf.len() == 0 {
+        if buf.is_empty() {
             return Ok(());
         }
 
