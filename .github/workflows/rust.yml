@@ -75,9 +75,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: build-analysis-${{ github.job }}-${{ matrix.os }}
-          path: |
-            ~/.cargo/log/*.jsonl
-            target/cargo-timings/*.html
+          path: ~/.cargo/log/*.jsonl
 
   # This used to use cross compilling via `cross` but it's more reliable to just
   # run this on a real illumos (OmniOS) system.
@@ -186,9 +184,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: build-analysis-${{ github.job }}-${{ matrix.os }}
-          path: |
-            ~/.cargo/log/*.jsonl
-            target/cargo-timings/*.html
+          path: ~/.cargo/log/*.jsonl
 
   check:
     strategy:
@@ -246,9 +242,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: build-analysis-${{ github.job }}-${{ matrix.os }}
-          path: |
-            ~/.cargo/log/*.jsonl
-            target/cargo-timings/*.html
+          path: ~/.cargo/log/*.jsonl
 
   msrv:
     name: MSRV (1.95.0)
