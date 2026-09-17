@@ -2,10 +2,8 @@ mod blob;
 mod index;
 mod snippet;
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use atuin_client::history::{CommandCapture, HistoryId};
+use atuin_common::db::sqlite::fts::TextHighlighter;
 use atuin_common::futures::stream::{ChunkedStream, EitherOrBoth, try_merge_join};
 #[cfg(test)]
 pub use blob::FailingBlobStore;
@@ -13,11 +11,10 @@ pub use blob::{
     AnyBlobStore, BlobStore, CaptureError, DeleteOutputError, FjallBlobStore, GetOutputError,
     NopBlobStore,
 };
-use futures::{StreamExt, TryStreamExt, stream};
+use futures::{StreamExt, TryStreamExt, future, stream};
 #[cfg(test)]
 pub use index::FailingIndex;
 pub use index::{AnyIndex, Index, IndexError, NopIndex, RankedMatch, SqliteIndex};
-use parking_lot::Mutex;
 pub use snippet::{OutputLine, OutputMatch};
 use tracing::warn;
 
@@ -28,6 +25,11 @@ pub enum ReconcileError {
     #[error(transparent)]
     Index(#[from] IndexError),
 }
+
+/// Hits fetched and highlighted ahead of the consumer, in order.
+const SEARCH_CONCURRENCY: usize = 4;
+/// Hits per chunk of the search stream.
+const SEARCH_CHUNK: usize = 16;
 
 #[derive(Debug)]
 pub struct OutputStore {
@@ -77,76 +79,71 @@ impl OutputStore {
     ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
         // Only the ranking (history_id + score) comes from the contentless index; it is small, so
         // collecting it keeps error handling simple. The bodies -- each up to `max_output_size` --
-        // are the memory risk, so they are hydrated lazily from the blob as `highlight` pulls its
-        // batches, and the caller dropping the stream stops that work early.
+        // are the memory risk, so they are hydrated from the blob only as the caller pulls, and
+        // dropping the stream stops that work early.
         let ranked: Vec<RankedMatch> =
             match self.index.search(query, limit).await.try_collect().await {
                 Ok(ranked) => ranked,
                 Err(err) => return ChunkedStream::from_error(err),
             };
 
-        // The index is derived and can briefly hold entries whose blob was deleted -- a
-        // capture/remove race, a swallowed index write, or reconcile lag. The blob is
-        // authoritative: a hit is highlighted from its stored capture, and one whose capture is
-        // gone is dropped. (This can yield fewer than `limit` hits even when more live matches
-        // exist further down the ranking.)
         let blob = self.blob.clone();
-        let hits = stream::iter(ranked).filter_map(move |hit| {
-            let blob = blob.clone();
-            async move {
-                match blob.get(hit.history_id).await {
-                    Ok(Some(capture)) => Some((hit, capture)),
-                    Ok(None) => None, // the capture is gone; drop the stale index hit
-                    // A transient read failure hides only this hit, not the whole search.
-                    Err(err) => {
-                        warn!(
-                            ?err,
-                            id = %hit.history_id,
-                            "failed to read a search hit's capture; dropping it",
-                        );
-                        None
-                    }
+        let index = self.index.clone();
+        let query = query.to_owned();
+        let hits = stream::iter(ranked)
+            .map(move |hit| {
+                let blob = blob.clone();
+                let index = index.clone();
+                let query = query.clone();
+                async move {
+                    // The index is derived and can briefly hold entries whose blob was deleted --
+                    // a capture/remove race, a swallowed index write, or reconcile lag. The blob
+                    // is authoritative: a hit whose capture is gone is dropped. (This can yield
+                    // fewer than `limit` hits even when more live matches exist further down the
+                    // ranking.)
+                    let capture = match blob.get(hit.history_id).await {
+                        Ok(Some(capture)) => capture,
+                        Ok(None) => return None,
+                        // A transient read failure hides only this hit, not the whole search.
+                        Err(err) => {
+                            warn!(
+                                ?err,
+                                id = %hit.history_id,
+                                "failed to read a search hit's capture; dropping it",
+                            );
+                            return None;
+                        }
+                    };
+                    let body = capture.plaintext();
+                    let body = match index.highlight(&query, &body).await {
+                        Ok(body) => body,
+                        // Still a hit, just unhighlighted: highlighting is cosmetic and must not
+                        // fail the search.
+                        Err(err) => {
+                            warn!(
+                                ?err,
+                                id = %hit.history_id,
+                                "failed to highlight a search hit; showing it unmarked",
+                            );
+                            let highlighter = TextHighlighter::default();
+                            highlighter.as_highlighted(highlighter.sanitize(&body).into_owned())
+                        }
+                    };
+                    // `plaintext` joins the kept head and tail with one newline, so the tail
+                    // starts right after the head's last line.
+                    let tail_from =
+                        capture.output_end.as_ref().map(|_| capture.output_start.lines().count());
+                    Some(Ok(OutputMatch {
+                        history_id: hit.history_id,
+                        lines: snippet::snippet(&body, tail_from, context),
+                        score: hit.score,
+                    }))
                 }
-            }
-        });
-
-        // The index hands each highlighted body back under its id; what else the snippet needs
-        // waits here for it.
-        struct Pending {
-            score: f64,
-            /// Index of the first line of the kept tail, when the middle was discarded.
-            tail_from: Option<usize>,
-        }
-        let pending: Arc<Mutex<HashMap<HistoryId, Pending>>> = Arc::default();
-        let bodies = hits.map({
-            let pending = Arc::clone(&pending);
-            move |(hit, capture)| {
-                // `plaintext` joins the kept head and tail with one newline, so the tail starts
-                // right after the head's last line.
-                let tail_from =
-                    capture.output_end.as_ref().map(|_| capture.output_start.lines().count());
-                pending.lock().insert(hit.history_id, Pending {
-                    score: hit.score,
-                    tail_from,
-                });
-                (hit.history_id, capture.plaintext())
-            }
-        });
-
-        self.index.highlight(query, bodies).await.map(move |result| {
-            let (history_id, body) = result?;
-            let Pending { score, tail_from } =
-                pending.lock().remove(&history_id).ok_or_else(|| {
-                    IndexError::Storage(
-                        format!("highlight returned an unrequested id {history_id}").into(),
-                    )
-                })?;
-            Ok(OutputMatch {
-                history_id,
-                lines: snippet::snippet(&body, tail_from, context),
-                score,
             })
-        })
+            .buffered(SEARCH_CONCURRENCY)
+            .filter_map(future::ready);
+
+        ChunkedStream::new(hits.chunks(SEARCH_CHUNK))
     }
 
     pub fn estimated_disk_space(&self) -> u64 {

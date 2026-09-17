@@ -2,7 +2,6 @@ use atuin_client::history::HistoryId;
 use atuin_common::db::sqlite::fts::TextHighlighter;
 use atuin_common::futures::stream::ChunkedStream;
 use atuin_common::string::highlighted::HighlightedString;
-use futures::{Stream, StreamExt};
 
 use super::{Index, IndexError, RankedMatch};
 
@@ -27,18 +26,9 @@ impl Index for NopIndex {
         ChunkedStream::empty()
     }
 
-    async fn highlight(
-        &self,
-        _query: &str,
-        bodies: impl Stream<Item = (HistoryId, impl AsRef<str> + Send + Sync + 'static)>
-        + Send
-        + 'static,
-    ) -> ChunkedStream<Result<(HistoryId, HighlightedString), IndexError>> {
+    async fn highlight(&self, _query: &str, body: &str) -> Result<HighlightedString, IndexError> {
         let highlighter = TextHighlighter::default();
-        ChunkedStream::new(bodies.map(move |(id, body)| {
-            let body = highlighter.as_highlighted(highlighter.sanitize(body.as_ref()).into_owned());
-            vec![Ok((id, body))]
-        }))
+        Ok(highlighter.as_highlighted(highlighter.sanitize(body).into_owned()))
     }
 
     async fn indexed_ids(&self) -> ChunkedStream<Result<HistoryId, IndexError>> {

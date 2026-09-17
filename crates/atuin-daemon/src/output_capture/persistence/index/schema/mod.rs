@@ -5,14 +5,11 @@ use atuin_common::db::sqlite::Sqlite;
 use atuin_common::db::sqlite::fts::TextHighlighter;
 use atuin_common::futures::stream::ChunkedStream;
 use atuin_common::string::highlighted::HighlightedString;
-use futures::Stream;
 
 use super::{IndexError, RankedMatch};
 
 mod v1;
 
-#[cfg(test)]
-pub(super) use v1::HIGHLIGHT_BATCH;
 pub use v1::Schema as SchemaV1;
 
 pub type Current = SchemaV1;
@@ -44,10 +41,8 @@ pub trait Schema {
         db: &Sqlite,
         highlighter: TextHighlighter,
         query: &str,
-        bodies: impl Stream<Item = (HistoryId, impl AsRef<str> + Send + Sync + 'static)>
-        + Send
-        + 'static,
-    ) -> ChunkedStream<Result<(HistoryId, HighlightedString), IndexError>>;
+        body: &str,
+    ) -> Result<HighlightedString, IndexError>;
 
     async fn indexed_ids(db: &Sqlite) -> ChunkedStream<Result<HistoryId, IndexError>>;
 }
