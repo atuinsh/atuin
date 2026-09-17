@@ -129,7 +129,6 @@ impl Search {
     #[instrument(skip_all, level = Level::TRACE, name = "hydrate_from_db", fields(count = ids.len()))]
     async fn hydrate_from_db(&self, db: &Sqlite, ids: &[HistoryId]) -> Result<Vec<History>> {
         let placeholders: Vec<String> = ids.iter().map(|id| format!("'{id}'")).collect();
-        // No ORDER BY: the caller rebuilds the daemon's relevance ranking from `ids`.
         let sql_query = format!(
             "SELECT {} FROM history WHERE id IN ({})",
             atuin_client::database::HISTORY_COLUMNS,
@@ -211,11 +210,10 @@ impl SearchEngine for Search {
             return Ok(Vec::new());
         }
 
-        // Hydrate from local database (rows come back in arbitrary order).
+        // Hydrate from local database.
         let results = self.hydrate_from_db(db, &ids).await?;
 
-        // Reorder to match the daemon's relevance ranking. Draining the rows into a map lets us
-        // move each hit out by id in one pass, instead of an O(n^2) scan that cloned every hit.
+        // Reorder to match the daemon's relevance ranking.
         let ordered_results = span!(Level::TRACE, "reorder_results").in_scope(|| {
             let mut by_id: HashMap<HistoryId, History> =
                 results.into_iter().map(|h| (h.id, h)).collect();
