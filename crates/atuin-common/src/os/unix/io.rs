@@ -56,6 +56,7 @@ mod tests {
     use std::io::{Read, pipe};
     use std::thread;
 
+    use rstest::rstest;
     use rustix::io::ioctl_fionbio;
 
     use super::*;
@@ -64,8 +65,10 @@ mod tests {
     /// `write` calls (and, on a full non-blocking pipe, `EAGAIN`).
     const BIG: usize = 512 * 1024;
 
-    #[test]
-    fn writes_everything_across_short_writes() {
+    #[rstest]
+    #[case::single_write(4 * 1024)]
+    #[case::short_write_loop(BIG)]
+    fn writes_everything(#[case] size: usize) {
         let (mut reader, writer) = pipe().unwrap();
         let collector = thread::spawn(move || {
             let mut got = Vec::new();
@@ -73,14 +76,14 @@ mod tests {
             got
         });
 
-        let data = vec![0xACu8; BIG];
+        let data = vec![0xACu8; size];
         writer.write_all_retrying(&data, Duration::from_secs(10)).unwrap();
         drop(writer); // EOF for the reader
 
         assert_eq!(collector.join().unwrap(), data);
     }
 
-    #[test]
+    #[rstest]
     fn times_out_when_the_fd_never_drains() {
         // Nobody reads `_reader`, so a non-blocking write fills the pipe and stalls.
         let (_reader, writer) = pipe().unwrap();

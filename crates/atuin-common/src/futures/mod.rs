@@ -156,6 +156,7 @@ impl Backoff {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use rstest::rstest;
     use tokio::time::Instant;
 
     use super::*;
@@ -196,23 +197,28 @@ mod tests {
         );
     }
 
-    #[test]
-    fn retry_blocking_breaks_and_times_out() {
+    #[rstest]
+    #[case::first_attempt(1)]
+    #[case::after_retries(4)]
+    fn retry_blocking_breaks_after(#[case] attempts: u32) {
         let backoff = Backoff::Linear(Duration::from_millis(1));
-
         let mut calls = 0;
-        let ok: Result<u32, ()> = backoff.retry_blocking(
+        let result: Result<u32, ()> = backoff.retry_blocking(
             || {
                 calls += 1;
-                if calls < 3 { ControlFlow::Continue(()) } else { ControlFlow::Break(calls) }
+                if calls < attempts { ControlFlow::Continue(()) } else { ControlFlow::Break(calls) }
             },
             Duration::from_secs(1),
         );
-        assert_eq!(ok, Ok(3));
+        assert_eq!(result, Ok(attempts));
+    }
 
-        // Never breaks: gives up with the last Continue reason once the timeout elapses.
-        let err: Result<(), u32> =
+    #[rstest]
+    fn retry_blocking_gives_up_after_timeout() {
+        // Never breaks: returns the last Continue reason once the timeout elapses.
+        let backoff = Backoff::Linear(Duration::from_millis(1));
+        let result: Result<(), u32> =
             backoff.retry_blocking(|| ControlFlow::Continue(7), Duration::from_millis(20));
-        assert_eq!(err, Err(7));
+        assert_eq!(result, Err(7));
     }
 }
