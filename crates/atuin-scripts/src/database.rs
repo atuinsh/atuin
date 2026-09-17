@@ -40,7 +40,7 @@ impl Database {
         Ok(self.sqlite.info().await.version?)
     }
 
-    async fn setup_db(pool: &SqlitePool) -> Result<()> {
+    async fn setup_db(pool: &SqlitePool) -> eyre::Result<()> {
         debug!("running sqlite database setup");
 
         db::migrate!(pool, "./migrations").await?;

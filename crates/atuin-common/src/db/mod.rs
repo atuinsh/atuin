@@ -321,7 +321,7 @@ mod tests {
     fn missing_migration_explains_recovery_and_preserves_cause() {
         use std::error::Error;
 
-        let original = sqlx::migrate::MigrateError::VersionMissing(20260224000100);
+        let original = sqlx::migrate::MigrateError::VersionMissing(20_260_224_000_100);
         let expected_cause = original.to_string();
         let error = MigrationError::from(original);
         let message = error.to_string();
