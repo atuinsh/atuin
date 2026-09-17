@@ -1,10 +1,12 @@
 mod blob;
 mod index;
-mod snippet;
 
 use atuin_client::history::{CommandCapture, HistoryId};
 use atuin_common::db::sqlite::fts::TextHighlighter;
 use atuin_common::futures::stream::{ChunkedStream, EitherOrBoth, try_merge_join};
+use atuin_common::range::KeptEnds;
+use atuin_common::slice::excerpt;
+use atuin_common::string::highlighted::HighlightedText;
 #[cfg(test)]
 pub use blob::FailingBlobStore;
 pub use blob::{
@@ -15,8 +17,9 @@ use futures::{StreamExt, TryStreamExt, future, stream};
 #[cfg(test)]
 pub use index::FailingIndex;
 pub use index::{AnyIndex, Index, IndexError, NopIndex, RankedMatch, SqliteIndex};
-pub use snippet::{OutputLine, OutputMatch};
 use tracing::warn;
+
+use super::{OutputLine, OutputMatch};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReconcileError {
@@ -96,12 +99,8 @@ impl OutputStore {
                 let blob = blob.clone();
                 let index = index.clone();
                 let query = query.clone();
+
                 async move {
-                    // The index is derived and can briefly hold entries whose blob was deleted --
-                    // a capture/remove race, a swallowed index write, or reconcile lag. The blob
-                    // is authoritative: a hit whose capture is gone is dropped. (This can yield
-                    // fewer than `limit` hits even when more live matches exist further down the
-                    // ranking.)
                     let capture = match blob.get(hit.history_id).await {
                         Ok(Some(capture)) => capture,
                         Ok(None) => return None,
@@ -130,13 +129,21 @@ impl OutputStore {
                             highlighter.as_highlighted(highlighter.sanitize(&body).into_owned())
                         }
                     };
-                    // `plaintext` joins the kept head and tail with one newline, so the tail
-                    // starts right after the head's last line.
+
                     let tail_from =
                         capture.output_end.as_ref().map(|_| capture.output_start.lines().count());
+
+                    let body_lines: Vec<HighlightedText<&str>> = body.lines().collect();
+                    let ends = KeptEnds::from_fold(body_lines.len(), tail_from);
+                    let lines = excerpt(&body_lines, |line| line.has_match(), context)
+                        .map(|(idx, line)| OutputLine {
+                            line: ends.number(idx),
+                            content: line.map(str::to_owned),
+                        })
+                        .collect();
                     Some(Ok(OutputMatch {
                         history_id: hit.history_id,
-                        lines: snippet::snippet(&body, tail_from, context),
+                        lines,
                         score: hit.score,
                     }))
                 }
