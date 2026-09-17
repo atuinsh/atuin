@@ -72,11 +72,7 @@ pub enum WireToolResponse {
 
 impl WireToolResponse {
     /// The exit code the agent reported, if any.
-    ///
-    /// A bare string carries no exit code. Codex reports failures through a
-    /// separate `PostToolUseFailure` event, so a `PostToolUse` with no exit code
-    /// means the command ran; callers default the missing value to zero, exactly
-    /// as they do for an object without `exitCode`.
+    /// Get the exit code the agent reported, if any.
     pub fn exit_code(&self) -> Option<i64> {
         match self {
             WireToolResponse::Output(_) => None,
