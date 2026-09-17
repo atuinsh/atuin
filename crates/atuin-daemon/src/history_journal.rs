@@ -313,12 +313,15 @@ impl HistoryJournal {
             duration = Empty,
         );
 
+        if self.broadcast.receiver_count() > 0 {
+            let _ = self.broadcast.send(CmdEvent::Started(history.clone()));
+        }
+
         self.active_cmds.insert(id, InFlightCmd {
-            history: history.clone(),
+            history,
             span,
             finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
         });
-        let _ = self.broadcast.send(CmdEvent::Started(history));
         id
     }
 
