@@ -110,8 +110,7 @@ impl Backoff {
     }
 
     /// A blocking analogue of [`Self::retry`] for synchronous callers: it sleeps the current
-    /// thread between attempts instead of yielding to an async runtime, so it needs no runtime.
-    /// The eager-first-call, backoff, and `timeout` semantics match [`Self::retry`].
+    /// thread between attempts.
     pub fn retry_blocking<B, C, F>(self, mut fxn: F, timeout: Duration) -> Result<B, C>
     where
         F: FnMut() -> ControlFlow<B, C>,
@@ -121,8 +120,6 @@ impl Backoff {
             ControlFlow::Continue(reason) => reason,
         };
 
-        // `None` (a `checked_add` overflow) means no deadline. Linear has no cap, so `max` is
-        // `Duration::MAX` there, making the `.min(max)` below a no-op.
         let deadline = Instant::now().checked_add(timeout);
         let (mut backoff, max) = match self {
             Self::Linear(period) => (period, Duration::MAX),
