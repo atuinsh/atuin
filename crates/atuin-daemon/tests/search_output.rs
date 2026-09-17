@@ -30,7 +30,7 @@ async fn search_returns_the_visible_output_and_where_it_matched(#[future(awt)] e
 
     let mut search = env.search_client().await;
     let matches: Vec<_> = search
-        .search_command_output("disk".to_string(), None)
+        .search_command_output("disk".to_string(), None, 1)
         .await
         .unwrap()
         .try_collect()
@@ -39,15 +39,16 @@ async fn search_returns_the_visible_output_and_where_it_matched(#[future(awt)] e
     assert_eq!(matches.len(), 1);
     let m = &matches[0];
     assert_eq!(m.history_id, id);
-    assert_eq!(m.output.display_plain().to_string(), "error: disk full\nnext line");
-    let marked = m.output.as_ref();
-    let got: Vec<&str> = m.output.ranges().map(|r| &marked[r]).collect();
-    assert_eq!(got, vec!["disk"]);
+    let lines: Vec<(i64, String)> =
+        m.lines.iter().map(|l| (l.line, l.content.display_plain().to_string())).collect();
+    assert_eq!(lines, vec![(0, "error: disk full".to_owned()), (1, "next line".to_owned())]);
+    let plain = m.lines[0].content.to_plain();
+    assert_eq!(&plain.text[plain.ranges[0].clone()], "disk");
 
     // Deleting the entry drops it from search along with its output.
     assert_eq!(history.delete_history(vec![id]).await.unwrap().deleted, 1);
     let remaining: Vec<_> = search
-        .search_command_output("disk".to_string(), None)
+        .search_command_output("disk".to_string(), None, 1)
         .await
         .unwrap()
         .try_collect()

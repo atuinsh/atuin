@@ -370,14 +370,17 @@ impl SearchClient {
         level = Level::TRACE,
         name = "search_command_output",
     )]
+    /// Relevance-ranked hits, each reduced to the lines within `context` of a match.
     pub async fn search_command_output(
         &mut self,
         query: String,
         limit: Option<NonZeroU32>,
+        context: u32,
     ) -> Result<impl Stream<Item = Result<OutputMatch>> + Send + use<>> {
         let request = SearchCommandOutputRequest {
             query,
             limit: limit.map_or(0, NonZeroU32::get),
+            context,
         };
         let stream = self.client.search_command_output(request).await?.into_inner();
         Ok(stream.map(|item| -> Result<OutputMatch> { Ok(OutputMatch::try_from(item?)?) }))

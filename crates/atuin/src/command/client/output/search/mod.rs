@@ -64,6 +64,10 @@ pub struct Cmd {
     #[arg(long, default_value_t = 5)]
     limit: u32,
 
+    /// Lines of output to show on either side of each matching line.
+    #[arg(short = 'C', long, default_value_t = 2)]
+    context: u32,
+
     /// How matches are rendered.
     #[arg(long, value_enum, default_value_t = Style::Auto)]
     style: Style,
@@ -164,7 +168,7 @@ impl Cmd {
                 SearchClient::new(settings.daemon.existing_socket_path().into_owned()).await?;
             #[cfg(not(unix))]
             let mut client = SearchClient::new(settings.daemon.tcp_port).await?;
-            client.search_command_output(query.clone(), None).await
+            client.search_command_output(query.clone(), None, self.context).await
         };
 
         let matches = match open().await {

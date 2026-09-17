@@ -20,8 +20,8 @@ use crate::events::DaemonEvent;
 use crate::output_capture::OutputStore;
 use crate::search::search_server::{Search as SearchSvc, SearchServer};
 use crate::search::{
-    FilterMode, IndexFilterMode, OutputSearchMatch, PrepareIndexRequest, PrepareIndexResponse,
-    SearchCommandOutputRequest, SearchIndex, SearchRequest, SearchResponse,
+    FilterMode, IndexFilterMode, OutputSearchLine, OutputSearchMatch, PrepareIndexRequest,
+    PrepareIndexResponse, SearchCommandOutputRequest, SearchIndex, SearchRequest, SearchResponse,
 };
 
 const RESULTS_LIMIT: usize = 200;
@@ -361,21 +361,29 @@ impl SearchSvc for SearchGrpcService {
         // 0 means unbounded: the index streams results lazily by relevance, so the client can
         // consume what it needs and drop the stream. There is no server-side ceiling here.
         let limit = usize::try_from(request.limit).unwrap_or(0);
+        let context = usize::try_from(request.context).unwrap_or(usize::MAX);
 
         let matches =
-            self.output_store.search(&request.query, limit).await.items().map(
-                |result| match result {
+            self.output_store.search(&request.query, limit, context).await.items().map(|result| {
+                match result {
                     Ok(m) => Ok(OutputSearchMatch {
                         history_id: Some(m.history_id.into()),
-                        output: Some((&m.output).into()),
+                        lines: m
+                            .lines
+                            .iter()
+                            .map(|l| OutputSearchLine {
+                                line: l.line,
+                                content: Some((&l.content).into()),
+                            })
+                            .collect(),
                         score: m.score,
                     }),
                     Err(err) => {
                         error!(?err, "output full-text search failed");
                         Err(Status::internal("output search failed"))
                     }
-                },
-            );
+                }
+            });
 
         Ok(Response::new(Box::pin(matches)))
     }

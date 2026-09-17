@@ -109,6 +109,7 @@ impl TextHighlighter {
 ///
 /// `Display` implementations come in the form of [`Self::display_plain`], [`Self::display_subs`]
 /// and [`Self::display_raw`].
+#[derive(Clone, Copy)]
 pub struct HighlightedText<S> {
     data: S,
     highlighter: TextHighlighter,
@@ -127,6 +128,14 @@ impl<S> HighlightedText<S> {
 
     pub fn markers(&self) -> [char; 2] {
         self.highlighter.markers()
+    }
+
+    /// Swap the underlying string type, keeping the highlighter (e.g. `line.map(str::to_owned)`).
+    pub fn map<T>(self, f: impl FnOnce(S) -> T) -> HighlightedText<T> {
+        HighlightedText {
+            data: f(self.data),
+            highlighter: self.highlighter,
+        }
     }
 }
 
@@ -172,6 +181,17 @@ impl<S: AsRef<str>> HighlightedText<S> {
             pending: None,
             tail_done: false,
         }
+    }
+
+    /// Whether any highlighted span is present.
+    pub fn has_match(&self) -> bool {
+        self.ranges().next().is_some()
+    }
+
+    /// Each line as its own highlighted text. A match never spans a newline, so every span stays
+    /// within one line.
+    pub fn lines(&self) -> impl Iterator<Item = HighlightedText<&str>> + '_ {
+        self.data.as_ref().lines().map(|line| self.highlighter.as_highlighted(line))
     }
 
     /// The marker-free text together with the byte range of every match within *that* text --
@@ -382,7 +402,7 @@ mod proto {
 
     use super::{HighlightedString, HighlightedText, NewTextHighlighterError, TextHighlighter};
 
-    #[derive(Clone, PartialEq, Eq, prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, prost::Message)]
     pub struct HighlightedTextProto {
         #[prost(uint32, tag = "1")]
         pub open: u32,
@@ -622,6 +642,20 @@ mod tests {
                 Piece::Match(m) => (true, m),
             })
             .collect();
+        assert_eq!(got, expected);
+    }
+
+    #[rstest]
+    #[case::single("a «b»", vec![("a b", true)])]
+    #[case::mixed("x\n«hit» here\ny\n", vec![("x", false), ("hit here", true), ("y", false)])]
+    #[case::blank_lines("\n\n«a»", vec![("", false), ("", false), ("a", true)])]
+    #[case::empty("", vec![])]
+    fn lines_keep_each_lines_own_markers(#[case] body: &str, #[case] expected: Vec<(&str, bool)>) {
+        let hl = highlighter().as_highlighted(body);
+        let got: Vec<(String, bool)> =
+            hl.lines().map(|l| (l.display_plain().to_string(), l.has_match())).collect();
+        let expected: Vec<(String, bool)> =
+            expected.into_iter().map(|(t, m)| (t.to_owned(), m)).collect();
         assert_eq!(got, expected);
     }
 

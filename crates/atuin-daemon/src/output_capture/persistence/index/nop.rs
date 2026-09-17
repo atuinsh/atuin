@@ -1,9 +1,10 @@
 use atuin_client::history::HistoryId;
 use atuin_common::db::sqlite::fts::TextHighlighter;
 use atuin_common::futures::stream::ChunkedStream;
+use atuin_common::string::highlighted::HighlightedString;
 use futures::{Stream, StreamExt};
 
-use super::{Index, IndexError, OutputMatch, RankedMatch};
+use super::{Index, IndexError, RankedMatch};
 
 /// An [`Index`] that stores nothing and matches nothing.
 #[derive(Debug, Clone, Copy)]
@@ -26,18 +27,14 @@ impl Index for NopIndex {
         ChunkedStream::empty()
     }
 
-    async fn highlight(
+    async fn highlight<M: Send + Sync + 'static>(
         &self,
         _query: &str,
-        bodies: impl Stream<Item = (RankedMatch, String)> + Send + 'static,
-    ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
+        bodies: impl Stream<Item = (M, String)> + Send + 'static,
+    ) -> ChunkedStream<Result<(M, HighlightedString), IndexError>> {
         let highlighter = TextHighlighter::default();
-        ChunkedStream::new(bodies.map(move |(hit, body)| {
-            vec![Ok(OutputMatch {
-                history_id: hit.history_id,
-                output: highlighter.as_highlighted(highlighter.sanitize(&body).into_owned()),
-                score: hit.score,
-            })]
+        ChunkedStream::new(bodies.map(move |(m, body)| {
+            vec![Ok((m, highlighter.as_highlighted(highlighter.sanitize(&body).into_owned())))]
         }))
     }
 

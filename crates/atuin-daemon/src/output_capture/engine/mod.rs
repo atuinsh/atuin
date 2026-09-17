@@ -162,7 +162,7 @@ mod tests {
     }
 
     async fn search_hits(store: &OutputStore, query: &str, limit: usize) -> Vec<OutputMatch> {
-        store.search(query, limit).await.try_collect().await.expect("search")
+        store.search(query, limit, 0).await.try_collect().await.expect("search")
     }
 
     #[tokio::test]

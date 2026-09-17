@@ -126,7 +126,7 @@ fn search(bencher: divan::Bencher, limit: usize) {
     let e = seeded(&rt, 4000);
     let store = e.engine.store();
     bencher.bench_local(|| {
-        rt.block_on(async { store.search("error", limit).await.try_collect::<Vec<_>>().await })
+        rt.block_on(async { store.search("error", limit, 2).await.try_collect::<Vec<_>>().await })
             .unwrap()
     });
 }

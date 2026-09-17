@@ -5,11 +5,12 @@ use atuin_common::db::sqlite::Sqlite;
 use atuin_common::db::sqlite::fts::{FtsQueryExt, TextHighlighter, match_expression};
 use atuin_common::db::{self};
 use atuin_common::futures::stream::ChunkedStream;
+use atuin_common::string::highlighted::HighlightedString;
 use easy_cast::Conv;
 use futures::{Stream, StreamExt, stream};
 use sqlx::Row;
 
-use super::super::{IndexError, OutputMatch, RankedMatch};
+use super::super::{IndexError, RankedMatch};
 use super::{CHUNK, id_from_bytes, store};
 
 pub struct Schema;
@@ -19,12 +20,12 @@ pub struct Schema;
 pub(in crate::output_capture::persistence::index) const HIGHLIGHT_BATCH: usize = 64;
 
 impl Schema {
-    async fn highlight_batch(
+    async fn highlight_batch<M>(
         db: &Sqlite,
         highlighter: TextHighlighter,
         expr: &str,
-        batch: Vec<(RankedMatch, String)>,
-    ) -> Result<Vec<OutputMatch>, IndexError> {
+        batch: Vec<(M, String)>,
+    ) -> Result<Vec<(M, HighlightedString)>, IndexError> {
         // Okay this looks so confusing if you're reading this for the first-time, so let me guide
         // you through the reasoning here.
         //
@@ -79,16 +80,15 @@ impl Schema {
         Ok(batch
             .into_iter()
             .enumerate()
-            .map(|(n, (hit, body))| OutputMatch {
-                history_id: hit.history_id,
+            .map(|(n, (m, body))| {
                 // A body that no longer matches (its plaintext changed since it was indexed) is
                 // still a hit, just an unhighlighted one.
-                output: highlighter.as_highlighted(
+                let output = highlighter.as_highlighted(
                     highlighted
                         .remove(&i64::conv(n))
                         .unwrap_or_else(|| highlighter.sanitize(&body).into_owned()),
-                ),
-                score: hit.score,
+                );
+                (m, output)
             })
             .collect())
     }
@@ -224,19 +224,15 @@ impl super::Schema for Schema {
         }))
     }
 
-    async fn highlight(
+    async fn highlight<M: Send + Sync + 'static>(
         db: &Sqlite,
         highlighter: TextHighlighter,
         query: &str,
-        bodies: impl Stream<Item = (RankedMatch, String)> + Send + 'static,
-    ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
+        bodies: impl Stream<Item = (M, String)> + Send + 'static,
+    ) -> ChunkedStream<Result<(M, HighlightedString), IndexError>> {
         let Some(expr) = match_expression(query) else {
-            return ChunkedStream::new(bodies.map(move |(hit, body)| {
-                vec![Ok(OutputMatch {
-                    history_id: hit.history_id,
-                    output: highlighter.as_highlighted(highlighter.sanitize(&body).into_owned()),
-                    score: hit.score,
-                })]
+            return ChunkedStream::new(bodies.map(move |(m, body)| {
+                vec![Ok((m, highlighter.as_highlighted(highlighter.sanitize(&body).into_owned())))]
             }));
         };
 

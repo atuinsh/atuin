@@ -1,5 +1,6 @@
 mod blob;
 mod index;
+mod snippet;
 
 use atuin_client::history::{CommandCapture, HistoryId};
 use atuin_common::futures::stream::{ChunkedStream, EitherOrBoth, try_merge_join};
@@ -12,7 +13,8 @@ pub use blob::{
 use futures::{StreamExt, TryStreamExt, stream};
 #[cfg(test)]
 pub use index::FailingIndex;
-pub use index::{AnyIndex, Index, IndexError, NopIndex, OutputMatch, RankedMatch, SqliteIndex};
+pub use index::{AnyIndex, Index, IndexError, NopIndex, RankedMatch, SqliteIndex};
+pub use snippet::{OutputLine, OutputMatch};
 use tracing::warn;
 
 #[derive(Debug, thiserror::Error)]
@@ -62,10 +64,12 @@ impl OutputStore {
         result
     }
 
+    /// Relevance-ranked hits, each reduced to the lines within `context` of a match.
     pub async fn search(
         &self,
         query: &str,
         limit: usize,
+        context: usize,
     ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
         // Only the ranking (history_id + score) comes from the contentless index; it is small, so
         // collecting it keeps error handling simple. The bodies -- each up to `max_output_size` --
@@ -87,7 +91,15 @@ impl OutputStore {
             let blob = blob.clone();
             async move {
                 match blob.get(hit.history_id).await {
-                    Ok(Some(capture)) => Some((hit, capture.plaintext())),
+                    Ok(Some(capture)) => {
+                        // `plaintext` joins the kept head and tail with one newline, so the tail
+                        // starts right after the head's last line.
+                        let tail_from = capture
+                            .output_end
+                            .as_ref()
+                            .map(|_| capture.output_start.lines().count());
+                        Some(((hit, tail_from), capture.plaintext()))
+                    }
                     Ok(None) => None, // the capture is gone; drop the stale index hit
                     // A transient read failure hides only this hit, not the whole search.
                     Err(err) => {
@@ -102,7 +114,13 @@ impl OutputStore {
             }
         });
 
-        self.index.highlight(query, bodies).await
+        self.index.highlight(query, bodies).await.map(move |result| {
+            result.map(|((hit, tail_from), body)| OutputMatch {
+                history_id: hit.history_id,
+                lines: snippet::snippet(&body, tail_from, context),
+                score: hit.score,
+            })
+        })
     }
 
     pub fn estimated_disk_space(&self) -> u64 {
@@ -194,7 +212,7 @@ mod tests {
     }
 
     async fn search_hits(store: &OutputStore, query: &str, limit: usize) -> Vec<OutputMatch> {
-        store.search(query, limit).await.try_collect().await.expect("search")
+        store.search(query, limit, 0).await.try_collect().await.expect("search")
     }
 
     #[tokio::test]
@@ -219,11 +237,10 @@ mod tests {
 
         let hits = search_hits(&backend, "fatal", 10).await;
         assert_eq!(hits.len(), 1);
-        let output = &hits[0].output;
-        assert_eq!(output.display_plain().to_string(), "fatal: disk full");
-        let marked = output.as_ref();
-        let got: Vec<&str> = output.ranges().map(|r| &marked[r]).collect();
-        assert_eq!(got, vec!["fatal"]);
+        assert_eq!(hits[0].lines.len(), 1);
+        let plain = hits[0].lines[0].content.to_plain();
+        assert_eq!(plain.text, "fatal: disk full");
+        assert_eq!(plain.ranges, vec![0..5]);
     }
 
     #[tokio::test]

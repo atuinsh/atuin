@@ -6,10 +6,11 @@ use atuin_common::db::sqlite::Sqlite;
 use atuin_common::db::sqlite::fts::TextHighlighter;
 use atuin_common::db::{self};
 use atuin_common::futures::stream::ChunkedStream;
+use atuin_common::string::highlighted::HighlightedString;
 use futures::Stream;
 
 use super::schema::{Current, Schema, store};
-use super::{Index, IndexError, OutputMatch, RankedMatch};
+use super::{Index, IndexError, RankedMatch};
 
 /// A full-text search index backed by a sidecar sqlite FTS5 table.
 #[derive(Debug)]
@@ -83,11 +84,11 @@ impl Index for SqliteIndex {
         Current::search(&self.db, query, limit).await
     }
 
-    async fn highlight(
+    async fn highlight<M: Send + Sync + 'static>(
         &self,
         query: &str,
-        bodies: impl Stream<Item = (RankedMatch, String)> + Send + 'static,
-    ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
+        bodies: impl Stream<Item = (M, String)> + Send + 'static,
+    ) -> ChunkedStream<Result<(M, HighlightedString), IndexError>> {
         Current::highlight(&self.db, self.highlighter, query, bodies).await
     }
 
@@ -109,7 +110,11 @@ mod tests {
         HistoryId::from_bytes(*uuid::Uuid::from_u128(n).as_bytes())
     }
 
-    async fn search_hits(index: &SqliteIndex, query: &str, body: &str) -> Vec<OutputMatch> {
+    async fn search_hits(
+        index: &SqliteIndex,
+        query: &str,
+        body: &str,
+    ) -> Vec<(RankedMatch, HighlightedString)> {
         let ranked: Vec<RankedMatch> =
             index.search(query, 10).await.try_collect().await.expect("search");
         let bodies: Vec<_> = ranked.into_iter().map(|hit| (hit, body.to_owned())).collect();
@@ -137,8 +142,8 @@ mod tests {
 
         let hits = search_hits(&index, "error", "the build failed with an error").await;
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].history_id, hid(1));
-        let output = &hits[0].output;
+        assert_eq!(hits[0].0.history_id, hid(1));
+        let output = &hits[0].1;
         assert_eq!(output.display_plain().to_string(), "the build failed with an error");
         let marked = output.as_ref();
         let got: Vec<&str> = output.ranges().map(|r| &marked[r]).collect();
@@ -151,7 +156,7 @@ mod tests {
         index.insert(hid(1), "error one\nfine\nerror two").await.expect("insert");
 
         let hits = search_hits(&index, "error", "error one\nfine\nerror two").await;
-        let output = &hits[0].output;
+        let output = &hits[0].1;
         let marked = output.as_ref();
         let got: Vec<&str> = output.ranges().map(|r| &marked[r]).collect();
         assert_eq!(got, vec!["error", "error"]);
@@ -167,7 +172,7 @@ mod tests {
         index.insert(hid(1), &text).await.expect("insert");
 
         let hits = search_hits(&index, "real", &text).await;
-        let output = &hits[0].output;
+        let output = &hits[0].1;
         assert_eq!(output.display_plain().to_string(), "fake real");
         let marked = output.as_ref();
         let got: Vec<&str> = output.ranges().map(|r| &marked[r]).collect();
@@ -196,12 +201,12 @@ mod tests {
         };
         let bodies = stream::iter([(hit, "re-rendered without the term".to_owned())]);
 
-        let hits: Vec<OutputMatch> =
+        let hits: Vec<(RankedMatch, HighlightedString)> =
             index.highlight("error", bodies).await.try_collect().await.expect("highlight");
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].history_id, hid(1));
-        assert_eq!(hits[0].output.display_plain().to_string(), "re-rendered without the term");
-        assert_eq!(hits[0].output.ranges().count(), 0);
+        assert_eq!(hits[0].0.history_id, hid(1));
+        assert_eq!(hits[0].1.display_plain().to_string(), "re-rendered without the term");
+        assert_eq!(hits[0].1.ranges().count(), 0);
     }
 
     #[tokio::test]
@@ -218,11 +223,11 @@ mod tests {
             })
             .collect();
 
-        let hits: Vec<OutputMatch> =
+        let hits: Vec<(RankedMatch, HighlightedString)> =
             index.highlight("error", stream::iter(bodies)).await.try_collect().await.expect("hl");
-        let ids: Vec<HistoryId> = hits.iter().map(|hit| hit.history_id).collect();
+        let ids: Vec<HistoryId> = hits.iter().map(|(hit, _)| hit.history_id).collect();
         assert_eq!(ids, (1..=count).map(hid).collect::<Vec<_>>());
-        assert!(hits.iter().all(|hit| hit.output.ranges().count() == 1));
+        assert!(hits.iter().all(|(_, output)| output.ranges().count() == 1));
     }
 
     #[tokio::test]

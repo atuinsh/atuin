@@ -4,9 +4,10 @@ use atuin_client::history::HistoryId;
 use atuin_common::db::sqlite::Sqlite;
 use atuin_common::db::sqlite::fts::TextHighlighter;
 use atuin_common::futures::stream::ChunkedStream;
+use atuin_common::string::highlighted::HighlightedString;
 use futures::Stream;
 
-use super::{IndexError, OutputMatch, RankedMatch};
+use super::{IndexError, RankedMatch};
 
 mod v1;
 
@@ -39,12 +40,12 @@ pub trait Schema {
         limit: usize,
     ) -> ChunkedStream<Result<RankedMatch, IndexError>>;
 
-    async fn highlight(
+    async fn highlight<M: Send + Sync + 'static>(
         db: &Sqlite,
         highlighter: TextHighlighter,
         query: &str,
-        bodies: impl Stream<Item = (RankedMatch, String)> + Send + 'static,
-    ) -> ChunkedStream<Result<OutputMatch, IndexError>>;
+        bodies: impl Stream<Item = (M, String)> + Send + 'static,
+    ) -> ChunkedStream<Result<(M, HighlightedString), IndexError>>;
 
     async fn indexed_ids(db: &Sqlite) -> ChunkedStream<Result<HistoryId, IndexError>>;
 }

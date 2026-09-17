@@ -35,13 +35,6 @@ pub struct RankedMatch {
     pub score: f64,
 }
 
-#[derive(Debug)]
-pub struct OutputMatch {
-    pub history_id: HistoryId,
-    pub output: HighlightedString,
-    pub score: f64,
-}
-
 #[enum_dispatch]
 #[allow(async_fn_in_trait, reason = "only used within our code; no Send bound needed")]
 pub trait Index {
@@ -58,13 +51,14 @@ pub trait Index {
         limit: usize,
     ) -> ChunkedStream<Result<RankedMatch, IndexError>>;
 
-    /// Mark where `query` matches in each body, tokenized the way the index was. Hits come back
-    /// in order; a body the query no longer matches comes back unmarked.
-    async fn highlight(
+    /// Mark where `query` matches in each body, tokenized the way the index was. Bodies come back
+    /// in order, each with its `M` passed through; one the query no longer matches comes back
+    /// unmarked.
+    async fn highlight<M: Send + Sync + 'static>(
         &self,
         query: &str,
-        bodies: impl Stream<Item = (RankedMatch, String)> + Send + 'static,
-    ) -> ChunkedStream<Result<OutputMatch, IndexError>>;
+        bodies: impl Stream<Item = (M, String)> + Send + 'static,
+    ) -> ChunkedStream<Result<(M, HighlightedString), IndexError>>;
 
     /// Every id currently held in the index.
     async fn indexed_ids(&self) -> ChunkedStream<Result<HistoryId, IndexError>>;

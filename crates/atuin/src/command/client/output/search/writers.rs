@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::io::{self, Write};
 use std::ops::Range;
 use std::pin::pin;
@@ -7,7 +8,7 @@ use atuin_client::history::{History, HistoryId};
 use atuin_client::theme::{Meaning, Theme};
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
 use atuin_common::time::{DurationExt as _, OffsetDateTimeExt as _};
-use atuin_daemon::OutputMatch;
+use atuin_daemon::{OutputLine, OutputMatch};
 use colored::Colorize;
 use futures_util::{Stream, StreamExt as _};
 use serde::Serialize;
@@ -46,6 +47,34 @@ pub(super) trait MatchRenderer {
     ) -> io::Result<()>;
 }
 
+/// The output left out between `previous` and `line`, if any.
+fn gap(previous: Option<&OutputLine>, line: &OutputLine) -> Option<Gap> {
+    let previous = previous?;
+    if previous.line >= 0 && line.line < 0 {
+        Some(Gap::Unknown)
+    } else {
+        match line.line - previous.line - 1 {
+            n if n > 0 => Some(Gap::Lines(n)),
+            _ => None,
+        }
+    }
+}
+
+enum Gap {
+    Lines(i64),
+    /// The discarded middle of a truncated output separates the two lines.
+    Unknown,
+}
+
+impl std::fmt::Display for Gap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Lines(n) => write!(f, "[skipped {n} lines...]"),
+            Self::Unknown => f.write_str("[skipped an unknown number of lines...]"),
+        }
+    }
+}
+
 pub(super) struct PlainWriter;
 
 impl MatchRenderer for PlainWriter {
@@ -58,14 +87,18 @@ impl MatchRenderer for PlainWriter {
         let mut stream = pin!(stream);
         let mut first = true;
         while let Some(hm) = stream.next().await {
-            let plain = hm.output_match.output.to_plain();
             if !first {
                 writeln!(out)?;
             }
             first = false;
             writeln!(out, "{}", hm.history.command.trim())?;
-            for line in plain.text.split_inclusive('\n') {
-                writeln!(out, "{}", line.strip_suffix('\n').unwrap_or(line))?;
+            let mut previous = None;
+            for line in &hm.output_match.lines {
+                if let Some(gap) = gap(previous, line) {
+                    writeln!(out, "{gap}")?;
+                }
+                writeln!(out, "{}", line.content.display_plain())?;
+                previous = Some(line);
             }
         }
         Ok(())
@@ -113,17 +146,21 @@ impl PrettyWriter {
 
     fn write_match(out: &mut dyn Write, hit: &Hit) -> io::Result<()> {
         Self::write_header(out, hit)?;
-        let plain = hit.m.output_match.output.to_plain();
-        let mut line_start = 0;
-        for line in plain.text.split_inclusive('\n') {
-            let content = line.strip_suffix('\n').unwrap_or(line);
+        let mut previous = None;
+        for line in &hit.m.output_match.lines {
+            if let Some(gap) = gap(previous, line) {
+                let label = gap.to_string();
+                let pad = hit.ctx.width.saturating_sub(label.width()) / 2;
+                let label = hit.ctx.theme.as_style(Meaning::Annotation).apply(label);
+                writeln!(out, "{:pad$}{label}", "")?;
+            }
+            let plain = line.content.to_plain();
             let rendered = PrettyLine {
-                line: content,
-                line_start,
+                line: &plain.text,
                 ranges: &plain.ranges,
             };
             writeln!(out, "  {rendered}")?;
-            line_start += line.len();
+            previous = Some(line);
         }
         Ok(())
     }
@@ -152,7 +189,8 @@ impl MatchRenderer for PrettyWriter {
 }
 
 /// One search match, serialized to JSON. Every field borrows from the match, so a record allocates
-/// nothing of its own and `serde_json::to_writer` streams it straight to the output.
+/// nothing of its own beyond the lines' plain text and `serde_json::to_writer` streams it straight
+/// to the output.
 #[derive(Serialize)]
 struct JsonRecord<'a> {
     id: &'a HistoryId,
@@ -162,7 +200,15 @@ struct JsonRecord<'a> {
     session: &'a str,
     exit: i64,
     duration_ns: i64,
-    output: &'a str,
+    /// The lines around each match, ascending; a jump in `line` is output left out.
+    lines: Vec<JsonLine<'a>>,
+}
+
+#[derive(Serialize)]
+struct JsonLine<'a> {
+    /// 0-based from the start; negative counts back from the end of a truncated output.
+    line: i64,
+    text: Cow<'a, str>,
 }
 
 /// Renders each match as JSON. With `array`, the run is framed as one JSON document
@@ -184,7 +230,6 @@ impl MatchRenderer for JsonWriter {
         }
         let mut first = true;
         while let Some(hm) = stream.next().await {
-            let plain = hm.output_match.output.to_plain();
             if self.array && !first {
                 write!(out, ",")?;
             }
@@ -198,7 +243,15 @@ impl MatchRenderer for JsonWriter {
                 session: &history.session,
                 exit: history.exit,
                 duration_ns: history.duration,
-                output: &plain.text,
+                lines: hm
+                    .output_match
+                    .lines
+                    .iter()
+                    .map(|l| JsonLine {
+                        line: l.line,
+                        text: l.content.to_plain().text,
+                    })
+                    .collect(),
             };
             serde_json::to_writer(&mut *out, &record).map_err(json_io_error)?;
             if !self.array {
@@ -252,24 +305,21 @@ impl std::fmt::Display for HorizontalRule {
     }
 }
 
-/// One output line of the pretty formatter.
+/// One output line of the pretty formatter; `ranges` index `line`.
 struct PrettyLine<'a> {
     line: &'a str,
-    line_start: usize,
     ranges: &'a [Range<usize>],
 }
 
 impl std::fmt::Display for PrettyLine<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let end = self.line_start + self.line.len();
         let cursor =
             self.ranges.iter().try_fold(0, |cursor, m| -> Result<usize, std::fmt::Error> {
-                let (start, stop) = (m.start.max(self.line_start), m.end.min(end));
-                if start >= stop || start < self.line_start + cursor {
+                let (start, stop) = (m.start, m.end.min(self.line.len()));
+                if start >= stop || start < cursor {
                     return Ok(cursor);
                 }
 
-                let (start, stop) = (start - self.line_start, stop - self.line_start);
                 let (Some(gap), Some(hit)) =
                     (self.line.get(cursor..start), self.line.get(start..stop))
                 else {
@@ -346,10 +396,23 @@ mod tests {
         TextHighlighter::default().as_highlighted(raw)
     }
 
-    fn match_of(history: History, output: HighlightedString) -> HistoryMatch {
+    /// A match whose output is every line of `output`, numbered from 0.
+    fn match_of(history: History, output: &HighlightedString) -> HistoryMatch {
+        let lines = output
+            .lines()
+            .enumerate()
+            .map(|(n, line)| OutputLine {
+                line: i64::try_from(n).unwrap(),
+                content: line.map(str::to_owned),
+            })
+            .collect();
+        match_lines(history, lines)
+    }
+
+    fn match_lines(history: History, lines: Vec<OutputLine>) -> HistoryMatch {
         let output_match = OutputMatch {
             history_id: history.id,
-            output,
+            lines,
             score: 0.0,
         };
         HistoryMatch {
@@ -358,9 +421,20 @@ mod tests {
         }
     }
 
+    /// Explicitly numbered lines, each highlighted from `(line, text)` with `«matches»` marked.
+    fn numbered(spec: &[(i64, &str)]) -> Vec<OutputLine> {
+        let highlighter = TextHighlighter::with_markers(['«', '»']).expect("distinct markers");
+        spec.iter()
+            .map(|&(line, text)| OutputLine {
+                line,
+                content: highlighter.as_highlighted(text.to_owned()),
+            })
+            .collect()
+    }
+
     /// A match with plain (unhighlighted) output -- the common case in these tests.
     fn hm(command: &str, output: &str) -> HistoryMatch {
-        match_of(hist(command, 0, 0), highlighted(output, &[]))
+        match_of(hist(command, 0, 0), &highlighted(output, &[]))
     }
 
     fn ctx(theme: &Theme) -> RenderCtx<'_> {
@@ -390,10 +464,45 @@ mod tests {
         assert_eq!(out, expected);
     }
 
+    #[rstest]
+    #[case::gap_between_windows(&[(0, "one"), (5, "six")], "ls\none\n[skipped 4 lines...]\nsix\n")]
+    #[case::discarded_middle(
+        &[(0, "one"), (-1, "last")],
+        "ls\none\n[skipped an unknown number of lines...]\nlast\n"
+    )]
+    #[tokio::test]
+    async fn plain_marks_gaps(#[case] lines: &[(i64, &str)], #[case] expected: &str) {
+        let mut manager = ThemeManager::new(Some(false), None);
+        let theme = manager.load_theme("default", None);
+        let rows = vec![match_lines(hist("ls", 0, 0), numbered(lines))];
+        assert_eq!(render(&Writer::Plain(PlainWriter), theme, rows).await, expected);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn pretty_centers_a_gap_marker() {
+        let mut manager = ThemeManager::new(Some(false), None);
+        let theme = manager.load_theme("default", None);
+        let rows = vec![match_lines(hist("cmd", 0, 0), numbered(&[(0, "«a»"), (7, "«b»")]))];
+        let mut buf = Vec::new();
+        let ctx = RenderCtx {
+            width: 40,
+            ..ctx(theme)
+        };
+        Writer::Pretty(PrettyWriter)
+            .write_stream(&mut buf, &ctx, futures_util::stream::iter(rows))
+            .await
+            .unwrap();
+        let out = strip_ansi(&String::from_utf8(buf).unwrap());
+        let body = out.split_once('\n').map(|(_, body)| body.to_string()).unwrap();
+        // "[skipped 6 lines...]" is 20 wide; centered in 40 leaves 10 on the left.
+        assert_eq!(body, format!("  a\n{:10}[skipped 6 lines...]\n  b\n", ""));
+    }
+
     async fn body(output: &str, ranges: &[(usize, usize)]) -> String {
         let mut manager = ThemeManager::new(Some(false), None);
         let theme = manager.load_theme("default", None);
-        let rows = vec![match_of(hist("cmd", 0, 0), highlighted(output, ranges))];
+        let rows = vec![match_of(hist("cmd", 0, 0), &highlighted(output, ranges))];
         let full = render(&Writer::Pretty(PrettyWriter), theme, rows).await;
         full.split_once('\n').map(|(_, body)| body.to_string()).unwrap_or(full)
     }
@@ -432,7 +541,7 @@ mod tests {
         let now = OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(age_secs);
         let mut manager = ThemeManager::new(Some(false), None);
         let theme = manager.load_theme("default", None);
-        let m = match_of(hist(command, duration_nanos, exit), highlighted("", &[]));
+        let m = match_of(hist(command, duration_nanos, exit), &highlighted("", &[]));
         let ctx = RenderCtx { now, width, theme };
         let hit = Hit { m: &m, ctx: &ctx };
 
@@ -452,14 +561,17 @@ mod tests {
         let mut manager = ThemeManager::new(Some(false), None);
         let theme = manager.load_theme("default", None);
         let match_ =
-            match_of(hist("cargo build", 1_234, 2), highlighted("compiling\nerror here", &[]));
+            match_of(hist("cargo build", 1_234, 2), &highlighted("compiling\nerror here", &[]));
         let id = match_.history.id.to_string();
         let out = render(&Writer::Json(JsonWriter { array: false }), theme, vec![match_]).await;
 
         assert!(out.ends_with('\n'), "ndjson rows are newline-terminated: {out:?}");
         let record: serde_json::Value = serde_json::from_str(out.trim_end()).unwrap();
         assert_eq!(record["command"].as_str(), Some("cargo build"));
-        assert_eq!(record["output"].as_str(), Some("compiling\nerror here"));
+        assert_eq!(
+            record["lines"],
+            serde_json::json!([{"line": 0, "text": "compiling"}, {"line": 1, "text": "error here"}])
+        );
         assert_eq!(record["exit"].as_i64(), Some(2));
         assert_eq!(record["duration_ns"].as_i64(), Some(1_234));
         assert_eq!(record["cwd"].as_str(), Some("/"));
@@ -541,6 +653,12 @@ mod tests {
         let out =
             render(&Writer::Json(JsonWriter { array: false }), theme, vec![hm("cmd", raw)]).await;
         let record: serde_json::Value = serde_json::from_str(out.trim_end()).unwrap();
-        assert_eq!(record["output"].as_str(), Some(raw));
+        let text: Vec<&str> = record["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l["text"].as_str().unwrap())
+            .collect();
+        assert_eq!(text.join("\n"), raw);
     }
 }
