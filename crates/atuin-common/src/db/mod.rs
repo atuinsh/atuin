@@ -93,6 +93,40 @@ where
     sqlx::query_scalar(sql)
 }
 
+/// A migration failure, with recovery guidance for incompatible Atuin versions.
+#[derive(Debug, Error)]
+pub enum MigrationError {
+    #[error(
+        "This copy of Atuin cannot open a database likely updated by a newer version.\nYou may \
+         have multiple versions of Atuin installed, and your shell is running an older \
+         copy.\nRunning executable: {executable}\n\nCheck `atuin --version` and `which -a atuin` \
+         (`where.exe atuin` on Windows).\nUpdate Atuin and remove older copies from your PATH, \
+         then restart your shells and any Atuin daemon.\nDo not delete your database files or \
+         migration records: this may lose your history."
+    )]
+    IncompatibleVersion {
+        executable: String,
+        #[source]
+        source: sqlx::migrate::MigrateError,
+    },
+    #[error(transparent)]
+    Other(sqlx::migrate::MigrateError),
+}
+
+impl From<sqlx::migrate::MigrateError> for MigrationError {
+    fn from(error: sqlx::migrate::MigrateError) -> Self {
+        match error {
+            sqlx::migrate::MigrateError::VersionMissing(_) => Self::IncompatibleVersion {
+                executable: std::env::current_exe()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|_| "<unable to determine executable path>".to_owned()),
+                source: error,
+            },
+            _ => Self::Other(error),
+        }
+    }
+}
+
 #[macro_export]
 macro_rules! __atuin_db_migrate {
     ($pool:expr, $dir:literal) => {{
@@ -111,8 +145,10 @@ macro_rules! __atuin_db_migrate {
             // to effectively clear the cached statements:
             //
             // See https://github.com/transact-rs/sqlx/issues/2517
-            ::sqlx::Connection::clear_cached_statements(&mut *conn).await?;
-            ::core::result::Result::<(), ::sqlx::migrate::MigrateError>::Ok(())
+            ::sqlx::Connection::clear_cached_statements(&mut *conn)
+                .await
+                .map_err(::sqlx::migrate::MigrateError::Execute)?;
+            ::core::result::Result::<(), $crate::db::MigrationError>::Ok(())
         }
     }};
 }
@@ -280,6 +316,35 @@ mod tests {
 
     use super::*;
     use crate::db::sqlite::Sqlite as AtuinSqlite;
+
+    #[rstest]
+    fn missing_migration_explains_recovery_and_preserves_cause() {
+        use std::error::Error;
+
+        let original = sqlx::migrate::MigrateError::VersionMissing(20260224000100);
+        let expected_cause = original.to_string();
+        let error = MigrationError::from(original);
+        let message = error.to_string();
+
+        assert!(matches!(error, MigrationError::IncompatibleVersion { .. }));
+        let executable = std::env::current_exe().unwrap();
+        assert!(message.contains(&format!("Running executable: {}", executable.display())));
+        assert!(message.contains("newer version"));
+        assert!(message.contains("which -a atuin"));
+        assert!(message.contains("atuin --version"));
+        assert!(message.contains("Do not delete"));
+        assert_eq!(error.source().unwrap().to_string(), expected_cause);
+    }
+
+    #[rstest]
+    #[case::checksum(sqlx::migrate::MigrateError::VersionMismatch(123))]
+    #[case::database(sqlx::migrate::MigrateError::Execute(sqlx::Error::PoolClosed))]
+    fn other_migration_errors_keep_their_message(#[case] original: sqlx::migrate::MigrateError) {
+        let expected = original.to_string();
+        let error = MigrationError::from(original);
+        assert!(matches!(error, MigrationError::Other(_)));
+        assert_eq!(error.to_string(), expected);
+    }
 
     #[rstest]
     #[case::postgres_password(

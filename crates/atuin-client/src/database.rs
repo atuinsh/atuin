@@ -354,7 +354,7 @@ impl Sqlite {
     }
 
     #[instrument(level = "trace", skip_all, err)]
-    async fn setup_db(pool: &SqlitePool) -> Result<()> {
+    async fn setup_db(pool: &SqlitePool) -> eyre::Result<()> {
         debug!("running sqlite database setup");
 
         db::migrate!(pool, "./migrations").await?;
