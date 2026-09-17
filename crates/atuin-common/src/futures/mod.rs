@@ -206,7 +206,11 @@ mod tests {
         let result: Result<u32, ()> = backoff.retry_blocking(
             || {
                 calls += 1;
-                if calls < attempts { ControlFlow::Continue(()) } else { ControlFlow::Break(calls) }
+                if calls < attempts {
+                    ControlFlow::Continue(())
+                } else {
+                    ControlFlow::Break(calls)
+                }
             },
             Duration::from_secs(1),
         );
