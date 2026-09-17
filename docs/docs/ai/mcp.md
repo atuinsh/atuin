@@ -57,7 +57,7 @@ Output capture requires the [daemon](../reference/daemon.md) and [pty-proxy](../
 
 ### `atuin_output_search`
 
-Searches the captured output of every command, for when the agent knows *what* was printed but not *which* command printed it — an error message, a version string, a hostname. It is the same search as `atuin output search`: terms are matched as whole words and all of them must appear.
+Searches the captured output of every command, for when the agent knows *what* was printed but not *which* command printed it — an error message, a version string, a hostname. It's the same search as `atuin output search`: terms are matched as whole words and all of them must appear.
 
 Each result gives the command and its history metadata, followed by the output lines around each match with their line numbers, so the agent can pass the history ID and a line range to `atuin_output` to read more.
 
