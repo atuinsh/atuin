@@ -57,7 +57,7 @@ impl AtuinOutputSearchToolCall {
 
         let hits = async {
             client
-                .search_command_output(self.query.to_string(), None, CONTEXT_LINES)
+                .search_command_output(self.query.to_string(), None, Some(CONTEXT_LINES))
                 .await
                 .map_err(|e| format!("Output search failed: {e}"))?
                 .map_err(|e| format!("Output search failed: {e}"))

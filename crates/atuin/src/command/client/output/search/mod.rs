@@ -65,9 +65,10 @@ pub struct Cmd {
     #[arg(long, default_value_t = 5)]
     limit: u32,
 
-    /// Lines of output to show on either side of each matching line.
-    #[arg(short = 'C', long, default_value_t = 2)]
-    context: u32,
+    /// Show only the matching lines, with this many lines of context on either side; without it,
+    /// each match's whole output.
+    #[arg(short = 'C', long)]
+    context: Option<u32>,
 
     /// How matches are rendered.
     #[arg(long, value_enum, default_value_t = Style::Auto)]

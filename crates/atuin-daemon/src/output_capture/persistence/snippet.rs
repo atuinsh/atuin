@@ -25,12 +25,13 @@ pub struct OutputLine {
     pub content: HighlightedString,
 }
 
-/// The lines of `body` within `context` lines of a match. `tail_from` is the index of the first
-/// line of the kept tail when the output's middle was discarded; those are numbered from the end.
+/// The lines of `body` within `context` lines of a match, or every line when `context` is `None`.
+/// `tail_from` is the index of the first line of the kept tail when the output's middle was
+/// discarded; those are numbered from the end.
 pub fn snippet<S: AsRef<str>>(
     body: &HighlightedText<S>,
     tail_from: Option<usize>,
-    context: usize,
+    context: Option<usize>,
 ) -> Vec<OutputLine> {
     /// Coalesce ascending ranges that overlap or touch.
     fn merge(ranges: impl Iterator<Item = Range<usize>>) -> Vec<Range<usize>> {
@@ -48,13 +49,15 @@ pub fn snippet<S: AsRef<str>>(
         Some(tail) if idx >= tail => i64::conv(idx) - i64::conv(lines.len()),
         _ => i64::conv(idx),
     };
-    let windows = merge(
-        lines
-            .iter()
-            .enumerate()
-            .filter(|(_, line)| line.has_match())
-            .map(|(idx, _)| idx.saturating_sub(context)..(idx + context + 1).min(lines.len())),
-    );
+    let all = 0..lines.len();
+    let windows = match context {
+        None => vec![all],
+        Some(context) => {
+            merge(lines.iter().enumerate().filter(|(_, line)| line.has_match()).map(|(idx, _)| {
+                idx.saturating_sub(context)..idx.saturating_add(context + 1).min(lines.len())
+            }))
+        }
+    };
     windows
         .into_iter()
         .flatten()
@@ -95,7 +98,17 @@ mod tests {
     #[case::two_hits_on_one_line_show_it_once("x\nerror error\ny", vec![(0, "x"), (1, "error error"), (2, "y")])]
     #[case::no_hits("a\nb", vec![])]
     fn windows_the_lines_around_each_hit(#[case] text: &str, #[case] expected: Vec<(i64, &str)>) {
-        let lines = snippet(&body(text, "error"), None, 1);
+        let lines = snippet(&body(text, "error"), None, Some(1));
+        let expected: Vec<(i64, String)> =
+            expected.into_iter().map(|(n, s)| (n, s.to_owned())).collect();
+        assert_eq!(numbered(&lines), expected);
+    }
+
+    #[rstest]
+    #[case::with_hits("a\nerror\nc", vec![(0, "a"), (1, "error"), (2, "c")])]
+    #[case::without_hits("a\nb", vec![(0, "a"), (1, "b")])]
+    fn no_context_is_every_line(#[case] text: &str, #[case] expected: Vec<(i64, &str)>) {
+        let lines = snippet(&body(text, "error"), None, None);
         let expected: Vec<(i64, String)> =
             expected.into_iter().map(|(n, s)| (n, s.to_owned())).collect();
         assert_eq!(numbered(&lines), expected);
@@ -104,13 +117,13 @@ mod tests {
     #[rstest]
     fn kept_tail_lines_are_numbered_from_the_end() {
         // Five lines; the last two are the kept tail of a truncated output.
-        let lines = snippet(&body("a\nerror\nc\nd\nerror", "error"), Some(3), 0);
+        let lines = snippet(&body("a\nerror\nc\nd\nerror", "error"), Some(3), Some(0));
         assert_eq!(numbered(&lines), vec![(1, "error".to_owned()), (-1, "error".to_owned())]);
     }
 
     #[rstest]
     fn each_line_keeps_its_own_highlight() {
-        let lines = snippet(&body("x\nan error here\ny", "error"), None, 0);
+        let lines = snippet(&body("x\nan error here\ny", "error"), None, Some(0));
         assert_eq!(lines.len(), 1);
         let ranges: Vec<_> = lines[0].content.to_plain().ranges;
         assert_eq!(ranges, vec![3..8]);

@@ -70,12 +70,13 @@ impl OutputStore {
         result
     }
 
-    /// Relevance-ranked hits, each reduced to the lines within `context` of a match.
+    /// Relevance-ranked hits, each reduced to the lines within `context` of a match, or whole
+    /// when `context` is `None`.
     pub async fn search(
         &self,
         query: &str,
         limit: usize,
-        context: usize,
+        context: Option<usize>,
     ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
         // Only the ranking (history_id + score) comes from the contentless index; it is small, so
         // collecting it keeps error handling simple. The bodies -- each up to `max_output_size` --
@@ -235,7 +236,7 @@ mod tests {
     }
 
     async fn search_hits(store: &OutputStore, query: &str, limit: usize) -> Vec<OutputMatch> {
-        store.search(query, limit, 0).await.try_collect().await.expect("search")
+        store.search(query, limit, Some(0)).await.try_collect().await.expect("search")
     }
 
     #[tokio::test]
