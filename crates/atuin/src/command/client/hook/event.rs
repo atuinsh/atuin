@@ -7,7 +7,7 @@
 use atuin_common::string::NonNulStr;
 use serde_json::error::Category;
 
-use super::wire::{HookEventName, WireHookEvent, WireToolName};
+use super::wire::{AgyEventName, AgyHookEvent, HookEventName, WireHookEvent, WireToolName};
 
 /// Why a hook payload could not be parsed.
 ///
@@ -110,6 +110,79 @@ impl HookEvent {
                 column: err.column(),
                 source: err,
             }),
+        }
+    }
+
+    /// Parse a raw Antigravity hook payload into a [`HookEvent`], or `None`
+    /// when there is nothing to record.
+    ///
+    /// Returns whether the event was a `PreToolUse`, which the caller needs
+    /// even when there is nothing to record: Antigravity requires every
+    /// `PreToolUse` hook to answer `{"decision": "allow"}` on stdout (and
+    /// `{}` for `PostToolUse`), including invocations for tools Atuin ignores.
+    ///
+    /// Antigravity sends no tool-use id, so a start is correlated with its end
+    /// through `conversationId` plus `stepIdx`, and completion carries no
+    /// numeric exit code — a non-empty `error` string means exit 1.
+    pub fn from_agy_json_str(input: &str) -> Result<(bool, Option<Self>), ParseError> {
+        let wire = match serde_json::from_str::<AgyHookEvent>(input) {
+            Ok(wire) => wire,
+            Err(err) if err.classify() == Category::Data => {
+                return Ok((false, None));
+            }
+            Err(err) => {
+                return Err(ParseError::MalformedJson {
+                    line: err.line(),
+                    column: err.column(),
+                    source: err,
+                });
+            }
+        };
+
+        let is_pre = matches!(wire.event_name, AgyEventName::PreToolUse);
+        Ok((is_pre, Self::from_agy(wire)))
+    }
+
+    /// Reduce a decoded Antigravity wire event to a [`HookEvent`], or `None`
+    /// when we don't care about the given event.
+    ///
+    /// We **don't** care about:
+    ///   - Non-`run_command` tool invocations.
+    ///   - Tool invocations missing a command, a conversation id, or a step index:
+    ///     a start could never be matched to its end without all three.
+    fn from_agy(wire: AgyHookEvent) -> Option<Self> {
+        let tool_use_id = match (wire.conversation_id, wire.step_idx) {
+            (Some(conversation_id), Some(step_idx)) if !conversation_id.is_empty() => {
+                format!("{conversation_id}-{step_idx}")
+            }
+            _ => return None,
+        };
+
+        match wire.event_name {
+            AgyEventName::PreToolUse => {
+                let command = wire
+                    .tool_call
+                    .as_ref()
+                    .filter(|call| call.name.as_deref() == Some("run_command"))
+                    .and_then(|call| call.args.as_ref())
+                    .and_then(|args| args.command_line.clone())
+                    .filter(|command| !command.is_empty())?;
+
+                // Antigravity's pre-tool-use args carry no description.
+                Some(HookEvent::Start {
+                    command,
+                    intent: None,
+                    tool_use_id,
+                })
+            }
+            AgyEventName::PostToolUse => {
+                let failed = wire.error.as_deref().is_some_and(|error| !error.is_empty());
+                Some(HookEvent::End {
+                    tool_use_id,
+                    exit: i64::from(failed),
+                })
+            }
+            AgyEventName::Other => None,
         }
     }
 }
@@ -291,6 +364,146 @@ mod tests {
     )]
     fn parses_agent_event(#[case] input: serde_json::Value, #[case] expected: Option<HookEvent>) {
         assert_eq!(HookEvent::from_json_str(&input.to_string()).unwrap(), expected);
+    }
+
+    /// Antigravity payloads decode through [`HookEvent::from_agy_json_str`],
+    /// which additionally reports whether the event was a `PreToolUse` — the
+    /// caller needs that even for skipped events to answer Antigravity's
+    /// mandatory stdout contract.
+    #[rstest]
+    #[case::agy_pre_run_command_starts(
+        json!({
+            "hookEventName": "PreToolUse",
+            "toolCall": {"name": "run_command", "args": {"CommandLine": "npm test", "Cwd": "/workspace"}},
+            "stepIdx": 19,
+            "conversationId": "ec33ebf9",
+        }),
+        (true, Some(HookEvent::Start {
+            command: non_nul("npm test"),
+            intent: None,
+            tool_use_id: "ec33ebf9-19".into(),
+        }))
+    )]
+    // Antigravity's pre-tool-use args carry no description, so there is never
+    // an intent.
+    #[case::agy_pre_has_no_intent(
+        json!({
+            "hookEventName": "PreToolUse",
+            "toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}},
+            "stepIdx": 0,
+            "conversationId": "conv",
+        }),
+        (true, Some(HookEvent::Start {
+            command: non_nul("ls"),
+            intent: None,
+            tool_use_id: "conv-0".into(),
+        }))
+    )]
+    // Non-shell tools are never recorded, but still count as pre-tool-use for
+    // the stdout answer.
+    #[case::agy_pre_other_tool_skipped_but_pre(
+        json!({
+            "hookEventName": "PreToolUse",
+            "toolCall": {"name": "list_dir", "args": {"DirectoryPath": "/tmp"}},
+            "stepIdx": 4,
+            "conversationId": "conv",
+        }),
+        (true, None)
+    )]
+    // A missing tool call has nothing to record.
+    #[case::agy_pre_missing_tool_call_skipped(
+        json!({
+            "hookEventName": "PreToolUse",
+            "stepIdx": 4,
+            "conversationId": "conv",
+        }),
+        (true, None)
+    )]
+    // Without a conversation id a start could never be matched to its end.
+    #[case::agy_pre_missing_conversation_skipped(
+        json!({
+            "hookEventName": "PreToolUse",
+            "toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}},
+            "stepIdx": 4,
+        }),
+        (true, None)
+    )]
+    // Without a step index a start could never be matched to its end.
+    #[case::agy_pre_missing_step_skipped(
+        json!({
+            "hookEventName": "PreToolUse",
+            "toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}},
+            "conversationId": "conv",
+        }),
+        (true, None)
+    )]
+    // An empty command has nothing to record.
+    #[case::agy_pre_empty_command_skipped(
+        json!({
+            "hookEventName": "PreToolUse",
+            "toolCall": {"name": "run_command", "args": {"CommandLine": ""}},
+            "stepIdx": 4,
+            "conversationId": "conv",
+        }),
+        (true, None)
+    )]
+    // A successful post-tool-use (empty error) records exit 0.
+    #[case::agy_post_success_exits_zero(
+        json!({
+            "hookEventName": "PostToolUse",
+            "toolCall": {"name": "run_command", "args": {"CommandLine": "npm test"}},
+            "stepIdx": 5,
+            "error": "",
+            "conversationId": "ec33ebf9",
+        }),
+        (false, Some(HookEvent::End { tool_use_id: "ec33ebf9-5".into(), exit: 0 }))
+    )]
+    // A missing error field also means success.
+    #[case::agy_post_missing_error_exits_zero(
+        json!({
+            "hookEventName": "PostToolUse",
+            "toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}},
+            "stepIdx": 5,
+            "conversationId": "conv",
+        }),
+        (false, Some(HookEvent::End { tool_use_id: "conv-5".into(), exit: 0 }))
+    )]
+    // A non-empty error string records exit 1; Antigravity sends no numeric code.
+    #[case::agy_post_error_exits_one(
+        json!({
+            "hookEventName": "PostToolUse",
+            "toolCall": {"name": "run_command", "args": {"CommandLine": "false"}},
+            "stepIdx": 5,
+            "error": "exit status 1",
+            "conversationId": "conv",
+        }),
+        (false, Some(HookEvent::End { tool_use_id: "conv-5".into(), exit: 1 }))
+    )]
+    // An event name we don't model is ignored and is not pre-tool-use.
+    #[case::agy_unknown_event_skipped(
+        json!({
+            "hookEventName": "Stop",
+            "stepIdx": 5,
+            "conversationId": "conv",
+        }),
+        (false, None)
+    )]
+    // A Claude-shaped payload carries no hookEventName, so the Antigravity
+    // parser skips it rather than cross-reading another agent's events.
+    #[case::agy_parser_ignores_claude_payload(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+            "tool_use_id": "toolu_abc123"
+        }),
+        (false, None)
+    )]
+    fn parses_agy_event(
+        #[case] input: serde_json::Value,
+        #[case] expected: (bool, Option<HookEvent>),
+    ) {
+        assert_eq!(HookEvent::from_agy_json_str(&input.to_string()).unwrap(), expected);
     }
 
     /// Well-formed JSON that isn't a hook event we model is skipped, not an
