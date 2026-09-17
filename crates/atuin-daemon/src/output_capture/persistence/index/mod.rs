@@ -16,7 +16,6 @@ use atuin_common::string::highlighted::HighlightedString;
 use enum_dispatch::enum_dispatch;
 #[cfg(test)]
 pub use failing::FailingIndex;
-use futures::Stream;
 pub use nop::NopIndex;
 pub use sqlite::SqliteIndex;
 use thiserror::Error;
@@ -32,13 +31,6 @@ pub enum IndexError {
 #[derive(Debug, Clone, Copy)]
 pub struct RankedMatch {
     pub history_id: HistoryId,
-    pub score: f64,
-}
-
-#[derive(Debug)]
-pub struct OutputMatch {
-    pub history_id: HistoryId,
-    pub output: HighlightedString,
     pub score: f64,
 }
 
@@ -58,20 +50,16 @@ pub trait Index {
         limit: usize,
     ) -> ChunkedStream<Result<RankedMatch, IndexError>>;
 
-    /// Mark where `query` matches in each body, tokenized the way the index was. Hits come back
-    /// in order; a body the query no longer matches comes back unmarked.
-    async fn highlight(
-        &self,
-        query: &str,
-        bodies: impl Stream<Item = (RankedMatch, String)> + Send + 'static,
-    ) -> ChunkedStream<Result<OutputMatch, IndexError>>;
+    /// Mark where `query` matches in `body`, tokenized the way the index was; unmarked when it no
+    /// longer matches. Markers already present in `body` are sanitized away first.
+    async fn highlight(&self, query: &str, body: &str) -> Result<HighlightedString, IndexError>;
 
     /// Every id currently held in the index.
     async fn indexed_ids(&self) -> ChunkedStream<Result<HistoryId, IndexError>>;
 }
 
 #[enum_dispatch(Index)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AnyIndex {
     Sqlite(SqliteIndex),
     Nop(NopIndex),

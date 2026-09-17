@@ -32,7 +32,7 @@ pub use history_journal::{
     GetCmdInFlightError, HistoryJournal, RegisterOutputError,
 };
 pub use output_capture::{
-    CaptureError, DeleteOutputError, GetOutputError, OutputCaptureEngine, OutputMatch,
+    CaptureError, DeleteOutputError, GetOutputError, OutputCaptureEngine, OutputLine, OutputMatch,
 };
 
 /// Boot the daemon using the new component-based architecture.

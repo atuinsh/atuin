@@ -138,7 +138,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::output_capture::persistence::OutputMatch;
+    use crate::output_capture::OutputMatch;
 
     fn hid(n: u128) -> HistoryId {
         HistoryId::from_bytes(*Uuid::from_u128(n).as_bytes())
@@ -162,7 +162,7 @@ mod tests {
     }
 
     async fn search_hits(store: &OutputStore, query: &str, limit: usize) -> Vec<OutputMatch> {
-        store.search(query, limit).await.try_collect().await.expect("search")
+        store.search(query, limit, Some(0)).await.try_collect().await.expect("search")
     }
 
     #[tokio::test]
