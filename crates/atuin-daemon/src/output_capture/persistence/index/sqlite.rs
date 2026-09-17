@@ -7,6 +7,7 @@ use atuin_common::db::sqlite::fts::TextHighlighter;
 use atuin_common::db::{self};
 use atuin_common::futures::stream::ChunkedStream;
 use atuin_common::string::highlighted::HighlightedString;
+use futures::Stream;
 
 use super::schema::{Current, Schema, store};
 use super::{Index, IndexError, RankedMatch};
@@ -86,8 +87,10 @@ impl Index for SqliteIndex {
     async fn highlight(
         &self,
         query: &str,
-        bodies: impl IntoIterator<Item = impl AsRef<str>> + Send,
-    ) -> Result<Vec<HighlightedString>, IndexError> {
+        bodies: impl Stream<Item = (HistoryId, impl AsRef<str> + Send + Sync + 'static)>
+        + Send
+        + 'static,
+    ) -> ChunkedStream<Result<(HistoryId, HighlightedString), IndexError>> {
         Current::highlight(&self.db, self.highlighter, query, bodies).await
     }
 
@@ -100,23 +103,37 @@ impl Index for SqliteIndex {
 mod tests {
     use std::collections::HashSet;
 
-    use super::super::schema::CHUNK;
+    use futures::stream;
+
+    use super::super::schema::{CHUNK, HIGHLIGHT_BATCH};
     use super::*;
 
     fn hid(n: u128) -> HistoryId {
         HistoryId::from_bytes(*uuid::Uuid::from_u128(n).as_bytes())
     }
 
+    /// Highlight `bodies` under ids `1..`, in order.
+    async fn highlight_all(
+        index: &SqliteIndex,
+        query: &str,
+        bodies: Vec<String>,
+    ) -> Vec<(HistoryId, HighlightedString)> {
+        let bodies =
+            stream::iter(bodies.into_iter().enumerate().map(|(n, b)| (hid(n as u128 + 1), b)));
+        index.highlight(query, bodies).await.try_collect().await.expect("highlight")
+    }
+
     async fn search_hits(
         index: &SqliteIndex,
         query: &str,
         body: &str,
-    ) -> Vec<(RankedMatch, HighlightedString)> {
+    ) -> Vec<(HistoryId, HighlightedString)> {
         let ranked: Vec<RankedMatch> =
             index.search(query, 10).await.try_collect().await.expect("search");
-        let bodies = std::iter::repeat_n(body, ranked.len());
-        let highlighted = index.highlight(query, bodies).await.expect("highlight");
-        ranked.into_iter().zip(highlighted).collect()
+        let body = body.to_owned();
+        let bodies =
+            stream::iter(ranked.into_iter().map(move |hit| (hit.history_id, body.clone())));
+        index.highlight(query, bodies).await.try_collect().await.expect("highlight")
     }
 
     async fn temp_index() -> (SqliteIndex, tempfile::TempDir) {
@@ -140,7 +157,7 @@ mod tests {
 
         let hits = search_hits(&index, "error", "the build failed with an error").await;
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].0.history_id, hid(1));
+        assert_eq!(hits[0].0, hid(1));
         let output = &hits[0].1;
         assert_eq!(output.display_plain().to_string(), "the build failed with an error");
         let marked = output.as_ref();
@@ -194,21 +211,25 @@ mod tests {
     async fn a_body_that_drifted_from_the_index_is_returned_unhighlighted() {
         let (index, _dir) = temp_index().await;
         let hits =
-            index.highlight("error", ["re-rendered without the term"]).await.expect("highlight");
+            highlight_all(&index, "error", vec!["re-rendered without the term".into()]).await;
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].display_plain().to_string(), "re-rendered without the term");
-        assert_eq!(hits[0].ranges().count(), 0);
+        assert_eq!(hits[0].0, hid(1));
+        assert_eq!(hits[0].1.display_plain().to_string(), "re-rendered without the term");
+        assert_eq!(hits[0].1.ranges().count(), 0);
     }
 
     #[tokio::test]
-    async fn highlighting_keeps_the_input_order() {
+    async fn highlighting_spans_batches_and_keeps_ids() {
         let (index, _dir) = temp_index().await;
-        let bodies: Vec<String> = (1..=100).map(|n| format!("body {n} with an error")).collect();
+        let count = HIGHLIGHT_BATCH + 17;
+        let bodies: Vec<String> = (1..=count).map(|n| format!("body {n} with an error")).collect();
 
-        let hits = index.highlight("error", &bodies).await.expect("highlight");
-        let plain: Vec<String> = hits.iter().map(|h| h.display_plain().to_string()).collect();
+        let hits = highlight_all(&index, "error", bodies.clone()).await;
+        let ids: Vec<HistoryId> = hits.iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids, (1..=count).map(|n| hid(n as u128)).collect::<Vec<_>>());
+        let plain: Vec<String> = hits.iter().map(|(_, h)| h.display_plain().to_string()).collect();
         assert_eq!(plain, bodies);
-        assert!(hits.iter().all(|output| output.ranges().count() == 1));
+        assert!(hits.iter().all(|(_, output)| output.ranges().count() == 1));
     }
 
     #[tokio::test]

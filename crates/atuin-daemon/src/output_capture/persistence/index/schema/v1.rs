@@ -7,7 +7,7 @@ use atuin_common::db::{self};
 use atuin_common::futures::stream::ChunkedStream;
 use atuin_common::string::highlighted::HighlightedString;
 use easy_cast::Conv;
-use futures::stream;
+use futures::{Stream, StreamExt, stream};
 use sqlx::Row;
 
 use super::super::{IndexError, RankedMatch};
@@ -17,13 +17,15 @@ pub struct Schema;
 
 /// Bodies highlighted per scratch-table round. Each can be up to `max_output_size`, so this is
 /// deliberately far below the other chunk sizes.
+pub(in crate::output_capture::persistence::index) const HIGHLIGHT_BATCH: usize = 64;
+
 impl Schema {
-    async fn highlight_all(
+    async fn highlight_batch<S: AsRef<str>>(
         db: &Sqlite,
         highlighter: TextHighlighter,
         expr: &str,
-        bodies: impl IntoIterator<Item = impl AsRef<str>> + Send,
-    ) -> Result<Vec<HighlightedString>, IndexError> {
+        batch: Vec<(HistoryId, S)>,
+    ) -> Result<Vec<(HistoryId, HighlightedString)>, IndexError> {
         // Okay this looks so confusing if you're reading this for the first-time, so let me guide
         // you through the reasoning here.
         //
@@ -45,7 +47,6 @@ impl Schema {
         // we then immediately invoke MATCH with a `highlight` on the same call the user made.
         //
         // Hacky and dirty, but works!
-        let bodies: Vec<_> = bodies.into_iter().collect();
         let mut conn = db.pool().acquire().await.map_err(store)?;
         db::query(
             "CREATE VIRTUAL TABLE IF NOT EXISTS temp.highlights USING fts5(body, tokenize = \
@@ -55,7 +56,7 @@ impl Schema {
         .await
         .map_err(store)?;
         db::query("DELETE FROM temp.highlights").execute(&mut *conn).await.map_err(store)?;
-        for (n, body) in bodies.iter().enumerate() {
+        for (n, (_, body)) in batch.iter().enumerate() {
             db::query("INSERT INTO temp.highlights(rowid, body) VALUES (?, ?)")
                 .bind(i64::conv(n))
                 .bind_highlightable(highlighter, body.as_ref())
@@ -76,17 +77,18 @@ impl Schema {
         .map(|row| Ok((row.try_get("rowid").map_err(store)?, row.try_get("body").map_err(store)?)))
         .collect::<Result<_, IndexError>>()?;
 
-        Ok(bodies
+        Ok(batch
             .into_iter()
             .enumerate()
-            .map(|(n, body)| {
+            .map(|(n, (id, body))| {
                 // A body that no longer matches (its plaintext changed since it was indexed) is
                 // still a hit, just an unhighlighted one.
-                highlighter.as_highlighted(
+                let body = highlighter.as_highlighted(
                     highlighted
                         .remove(&i64::conv(n))
                         .unwrap_or_else(|| highlighter.sanitize(body.as_ref()).into_owned()),
-                )
+                );
+                (id, body)
             })
             .collect())
     }
@@ -226,17 +228,29 @@ impl super::Schema for Schema {
         db: &Sqlite,
         highlighter: TextHighlighter,
         query: &str,
-        bodies: impl IntoIterator<Item = impl AsRef<str>> + Send,
-    ) -> Result<Vec<HighlightedString>, IndexError> {
-        match match_expression(query) {
-            Some(expr) => Self::highlight_all(db, highlighter, &expr, bodies).await,
-            None => Ok(bodies
-                .into_iter()
-                .map(|body| {
-                    highlighter.as_highlighted(highlighter.sanitize(body.as_ref()).into_owned())
-                })
-                .collect()),
-        }
+        bodies: impl Stream<Item = (HistoryId, impl AsRef<str> + Send + Sync + 'static)>
+        + Send
+        + 'static,
+    ) -> ChunkedStream<Result<(HistoryId, HighlightedString), IndexError>> {
+        let Some(expr) = match_expression(query) else {
+            return ChunkedStream::new(bodies.map(move |(id, body)| {
+                let body =
+                    highlighter.as_highlighted(highlighter.sanitize(body.as_ref()).into_owned());
+                vec![Ok((id, body))]
+            }));
+        };
+
+        let db = db.clone();
+        ChunkedStream::new(bodies.chunks(HIGHLIGHT_BATCH).then(move |batch| {
+            let db = db.clone();
+            let expr = expr.clone();
+            async move {
+                match Self::highlight_batch(&db, highlighter, &expr, batch).await {
+                    Ok(matches) => matches.into_iter().map(Ok).collect(),
+                    Err(err) => vec![Err(err)],
+                }
+            }
+        }))
     }
 
     async fn indexed_ids(db: &Sqlite) -> ChunkedStream<Result<HistoryId, IndexError>> {

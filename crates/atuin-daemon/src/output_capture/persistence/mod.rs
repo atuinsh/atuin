@@ -2,6 +2,9 @@ mod blob;
 mod index;
 mod snippet;
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use atuin_client::history::{CommandCapture, HistoryId};
 use atuin_common::futures::stream::{ChunkedStream, EitherOrBoth, try_merge_join};
 #[cfg(test)]
@@ -14,6 +17,7 @@ use futures::{StreamExt, TryStreamExt, stream};
 #[cfg(test)]
 pub use index::FailingIndex;
 pub use index::{AnyIndex, Index, IndexError, NopIndex, RankedMatch, SqliteIndex};
+use parking_lot::Mutex;
 pub use snippet::{OutputLine, OutputMatch};
 use tracing::warn;
 
@@ -24,9 +28,6 @@ pub enum ReconcileError {
     #[error(transparent)]
     Index(#[from] IndexError),
 }
-
-/// Bodies highlighted per sqlite round trip.
-const HIGHLIGHT_BATCH: usize = 64;
 
 #[derive(Debug)]
 pub struct OutputStore {
@@ -109,37 +110,43 @@ impl OutputStore {
             }
         });
 
-        // Highlighting goes through sqlite in batches; each batch is one round trip.
-        let index = self.index.clone();
-        let query = query.to_owned();
-        ChunkedStream::new(hits.chunks(HIGHLIGHT_BATCH).then(move |batch| {
-            let index = index.clone();
-            let query = query.clone();
-            async move {
-                let bodies = batch.iter().map(|(_, capture)| capture.plaintext());
-                let highlighted = match index.highlight(&query, bodies).await {
-                    Ok(highlighted) => highlighted,
-                    Err(err) => return vec![Err(err)],
-                };
-                batch
-                    .into_iter()
-                    .zip(highlighted)
-                    .map(|((hit, capture), body)| {
-                        // `plaintext` joins the kept head and tail with one newline, so the tail
-                        // starts right after the head's last line.
-                        let tail_from = capture
-                            .output_end
-                            .as_ref()
-                            .map(|_| capture.output_start.lines().count());
-                        Ok(OutputMatch {
-                            history_id: hit.history_id,
-                            lines: snippet::snippet(&body, tail_from, context),
-                            score: hit.score,
-                        })
-                    })
-                    .collect()
+        // The index hands each highlighted body back under its id; what else the snippet needs
+        // waits here for it.
+        struct Pending {
+            score: f64,
+            /// Index of the first line of the kept tail, when the middle was discarded.
+            tail_from: Option<usize>,
+        }
+        let pending: Arc<Mutex<HashMap<HistoryId, Pending>>> = Arc::default();
+        let bodies = hits.map({
+            let pending = Arc::clone(&pending);
+            move |(hit, capture)| {
+                // `plaintext` joins the kept head and tail with one newline, so the tail starts
+                // right after the head's last line.
+                let tail_from =
+                    capture.output_end.as_ref().map(|_| capture.output_start.lines().count());
+                pending.lock().insert(hit.history_id, Pending {
+                    score: hit.score,
+                    tail_from,
+                });
+                (hit.history_id, capture.plaintext())
             }
-        }))
+        });
+
+        self.index.highlight(query, bodies).await.map(move |result| {
+            let (history_id, body) = result?;
+            let Pending { score, tail_from } =
+                pending.lock().remove(&history_id).ok_or_else(|| {
+                    IndexError::Storage(
+                        format!("highlight returned an unrequested id {history_id}").into(),
+                    )
+                })?;
+            Ok(OutputMatch {
+                history_id,
+                lines: snippet::snippet(&body, tail_from, context),
+                score,
+            })
+        })
     }
 
     pub fn estimated_disk_space(&self) -> u64 {
