@@ -1,6 +1,8 @@
 use std::io::{Read, Write};
 use std::sync::mpsc;
+use std::time::Duration;
 
+use atuin_common::os::unix::io::WriteAllExt;
 use atuin_common::os::unix::tty::TtyId;
 use crossterm::terminal;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
@@ -157,7 +159,9 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
     terminal::enable_raw_mode()?;
 
     let stdout_thread = std::thread::spawn(move || {
-        let mut stdout = std::io::stdout();
+        let stdout = rustix::stdio::stdout();
+
+        const WRITE_TIMEOUT: Duration = Duration::from_millis(150);
         let mut highlighter = options.debug_osc133.then(Osc133DebugHighlighter::new);
         let mut buf = [0u8; 8192];
 
@@ -177,17 +181,15 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
                         raw_data
                     };
 
-                    if stdout.write_all(data).is_err() {
+                    if stdout.write_all_retrying(data, WRITE_TIMEOUT).is_err() {
                         break;
                     }
-                    let _ = stdout.flush();
                 }
             }
         }
 
         if highlighter.is_some() {
-            let _ = stdout.write_all(RESET);
-            let _ = stdout.flush();
+            let _ = stdout.write_all_retrying(RESET, WRITE_TIMEOUT);
         }
     });
 
