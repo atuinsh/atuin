@@ -21,7 +21,7 @@ def _atuin_precommand(cmd: str):
 
 @events.on_postcommand
 def _atuin_postcommand(cmd: str, rtn: int, out, ts):
-    if "ATUIN_HISTORY_ID" not in ${...}:
+    if not ${...}.get("ATUIN_HISTORY_ID"):
         return
 
     duration = ts[1] - ts[0]
