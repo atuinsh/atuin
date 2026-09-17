@@ -11,15 +11,17 @@ use crate::futures::Backoff;
 
 /// Write an entire buffer to a file descriptor.
 pub trait WriteAllExt: AsFd {
-    /// Write all of `buf`, looping over short writes and retrying `EINTR`. On
-    /// `EAGAIN` it backs off (sleeping the thread) and retries up to `timeout`,
-    /// then returns `ETIMEDOUT`; other errors propagate.
+    /// Write all of `buf`, looping over short writes and retrying `EINTR`. On `EAGAIN` it backs off
+    /// (sleeping the thread) and retries up to `timeout`, then returns `ETIMEDOUT`; other errors
+    /// propagate.
     fn write_all_retrying(&self, buf: &[u8], timeout: Duration) -> Result<(), Errno> {
+        if buf.len() == 0 {
+            return Ok(());
+        }
+
         let fd = self.as_fd();
         let mut buf = buf;
 
-        // The backoff only sleeps while the fd is unwritable (`EAGAIN`); short
-        // writes advance without sleeping via the inner loop.
         let backoff = Backoff::Exponential {
             initial: Duration::from_millis(1),
             max: Duration::from_millis(50),

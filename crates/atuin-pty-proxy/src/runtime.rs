@@ -161,7 +161,7 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
     let stdout_thread = std::thread::spawn(move || {
         let stdout = rustix::stdio::stdout();
 
-        const WRITE_TIMEOUT: Duration = Duration::MAX;
+        const WRITE_TIMEOUT: Duration = Duration::from_millis(150);
         let mut highlighter = options.debug_osc133.then(Osc133DebugHighlighter::new);
         let mut buf = [0u8; 8192];
 
