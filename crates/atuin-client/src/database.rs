@@ -14,6 +14,7 @@ use sql_builder::bind::Bind;
 use sql_builder::{SqlBuilder, SqlName, esc, quote};
 use sqlx::sqlite::{SqlitePool, SqliteRow};
 use sqlx::{Result, Row};
+use thiserror::Error;
 use time::OffsetDateTime;
 use tracing::instrument;
 use uuid::Uuid;
@@ -321,6 +322,40 @@ struct HistoryWithCount {
     count: i32,
 }
 
+/// A failure while migrating a local sqlite database on startup.
+#[derive(Debug, Error)]
+pub enum DbSetupError {
+    #[error(
+        "This copy of Atuin cannot open a database likely updated by a newer version.\nYou may \
+         have multiple versions of Atuin installed, and your shell is running an older \
+         copy.\nRunning executable: {}\n\nCheck `atuin --version` and `which -a atuin` \
+         (`where.exe atuin` on Windows).\nUpdate Atuin and remove older copies from your PATH, \
+         then restart your shells and any Atuin daemon.\nDo not delete your database files or \
+         migration records: this may lose your history.",
+        .executable.display()
+    )]
+    IncompatibleVersion {
+        executable: PathBuf,
+        #[source]
+        source: sqlx::migrate::MigrateError,
+    },
+    #[error(transparent)]
+    Migrate(sqlx::migrate::MigrateError),
+}
+
+impl From<sqlx::migrate::MigrateError> for DbSetupError {
+    fn from(error: sqlx::migrate::MigrateError) -> Self {
+        match error {
+            sqlx::migrate::MigrateError::VersionMissing(_) => Self::IncompatibleVersion {
+                executable: env::current_exe()
+                    .unwrap_or_else(|_| PathBuf::from("<unable to determine executable path>")),
+                source: error,
+            },
+            other => Self::Migrate(other),
+        }
+    }
+}
+
 impl Sqlite {
     #[instrument(level = "trace", skip_all, fields(timeout = ?timeout), err)]
     pub async fn new(path: impl AsRef<OsStr>, timeout: Duration) -> eyre::Result<Self> {
@@ -354,7 +389,7 @@ impl Sqlite {
     }
 
     #[instrument(level = "trace", skip_all, err)]
-    async fn setup_db(pool: &SqlitePool) -> Result<()> {
+    async fn setup_db(pool: &SqlitePool) -> std::result::Result<(), DbSetupError> {
         debug!("running sqlite database setup");
 
         db::migrate!(pool, "./migrations").await?;
@@ -2555,5 +2590,30 @@ mod test {
             .unwrap();
 
         assert_eq!(results.len(), expected_count, "{results:?}");
+    }
+
+    #[rstest]
+    fn missing_migration_becomes_incompatible_version_guidance() {
+        use std::error::Error;
+
+        let original = sqlx::migrate::MigrateError::VersionMissing(20_260_224_000_100);
+        let raw = original.to_string();
+        let error = DbSetupError::from(original);
+
+        assert!(matches!(error, DbSetupError::IncompatibleVersion { .. }));
+        // Users get recovery guidance, not sqlx's terse "migration not found",
+        assert!(error.to_string().contains("multiple versions of Atuin"));
+        // while the original error stays reachable as the source.
+        assert_eq!(error.source().unwrap().to_string(), raw);
+    }
+
+    #[rstest]
+    fn other_migration_errors_pass_through_unchanged() {
+        let original = sqlx::migrate::MigrateError::VersionMismatch(123);
+        let raw = original.to_string();
+        let error = DbSetupError::from(original);
+
+        assert!(matches!(error, DbSetupError::Migrate(_)));
+        assert_eq!(error.to_string(), raw);
     }
 }
