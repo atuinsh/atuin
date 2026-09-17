@@ -60,10 +60,10 @@ pub struct WireToolInput {
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum WireToolResponse {
-    /// Codex serializes the response as the tool's output string. It carries no
-    /// exit code; see [`WireToolResponse::exit_code`].
+    /// Some harnesses (ie. Codex) only return the tool output string.
     Output(String),
-    /// Claude Code serializes the response as an object carrying the exit code.
+    /// Other harnesses return more details.
+    /// TODO(markovejnovic): Should we split the enum per-harness?
     Object {
         #[serde(rename = "exitCode", default)]
         exit_code: Option<i64>,

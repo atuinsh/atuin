@@ -80,6 +80,8 @@ impl From<WireHookEvent> for Option<HookEvent> {
                 })
             }
             HookEventName::PostToolUse => {
+                // TODO(markovejnovic): Is it safe to assume that no exit code
+                //                      means "success"?
                 let exit =
                     wire.tool_response.and_then(|response| response.exit_code()).unwrap_or(0);
                 Some(HookEvent::End { tool_use_id, exit })
