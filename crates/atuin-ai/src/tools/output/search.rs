@@ -15,9 +15,6 @@ use super::{NO_OUTPUT_ADVICE, format_chunked_output_line_views_for_llm};
 use crate::history_format::format_history_search_result;
 use crate::tools::ToolOutcome;
 
-/// Output lines shown on each side of a matching line.
-const CONTEXT_LINES: u32 = 1;
-
 // Doc comments on the fields are the descriptions the model reads in the tool schema; the
 // struct deliberately has none, as it would become the schema's top-level description.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -29,6 +26,11 @@ pub struct AtuinOutputSearchToolCall {
     /// Maximum number of commands to return, most relevant first.
     #[serde(default)]
     pub limit: Clamped<u32, 1, 20, 5>,
+    /// Lines of surrounding output to show on each side of every matching line. 0 shows only the
+    /// matching lines; raise it when you need more of the surrounding output to understand a
+    /// match. Keep it small to avoid flooding the results.
+    #[serde(default)]
+    pub context: Clamped<u32, 0, 20, 1>,
 }
 
 impl AtuinOutputSearchToolCall {
@@ -57,7 +59,7 @@ impl AtuinOutputSearchToolCall {
 
         let hits = async {
             client
-                .search_command_output(self.query.to_string(), None, Some(CONTEXT_LINES))
+                .search_command_output(self.query.to_string(), None, Some(self.context.get()))
                 .await
                 .map_err(|e| format!("Output search failed: {e}"))?
                 .map_err(|e| format!("Output search failed: {e}"))
@@ -134,5 +136,16 @@ mod tests {
     #[case::not_a_string(json!({"query": 3}))]
     fn rejects_a_blank_query(#[case] input: serde_json::Value) {
         assert!(serde_json::from_value::<AtuinOutputSearchToolCall>(input).is_err());
+    }
+
+    #[rstest]
+    #[case::default(json!({"query": "disk"}), 1)]
+    #[case::explicit(json!({"query": "disk", "context": 3}), 3)]
+    #[case::zero_is_matching_lines_only(json!({"query": "disk", "context": 0}), 0)]
+    #[case::clamped_high(json!({"query": "disk", "context": 999}), 20)]
+    #[case::null_context(json!({"query": "disk", "context": null}), 1)]
+    fn parses_and_clamps_context(#[case] input: serde_json::Value, #[case] context: u32) {
+        let call: AtuinOutputSearchToolCall = serde_json::from_value(input).unwrap();
+        assert_eq!(call.context.get(), context);
     }
 }

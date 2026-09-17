@@ -7,11 +7,6 @@ use easy_cast::Conv;
 use super::py_style::PyStyleIdxRange;
 
 /// A sequence whose middle was discarded: `head` kept lines followed by `tail` kept lines.
-///
-/// The concrete→signed dual of [`PyStyleIdxRange`] resolution. Where `PyStyleIdxRange::resolve_for`
-/// turns a signed index into a concrete position, `KeptEnds` turns a concrete position in the
-/// reassembled `head` ++ `tail` sequence back into a signed one: head positions count up from the
-/// start (`0, 1, …`), tail positions count back from the end (`…, -2, -1`).
 #[derive(Debug, Clone, Copy)]
 pub struct KeptEnds {
     /// Number of kept lines at the start.
@@ -21,8 +16,6 @@ pub struct KeptEnds {
 }
 
 impl KeptEnds {
-    /// From a reassembled length and the index of the first tail line. `tail_from` is `None` when
-    /// nothing was discarded, so the whole sequence is head.
     #[must_use]
     pub fn from_fold(len: usize, tail_from: Option<usize>) -> Self {
         let head = tail_from.unwrap_or(len);
@@ -32,8 +25,6 @@ impl KeptEnds {
         }
     }
 
-    /// The signed index of reassembled position `idx`: `idx` itself when it lands in the head,
-    /// otherwise `idx - len`, counting back from the end.
     #[must_use]
     pub fn number(self, idx: usize) -> i64 {
         if idx < self.head {
@@ -43,15 +34,11 @@ impl KeptEnds {
         }
     }
 
-    /// The signed, inclusive [`PyStyleIdxRange`] naming a non-empty half-open `range` within the
-    /// head. Empty ranges are not meaningful; the caller must filter them.
     #[must_use]
     pub fn head_range(self, range: Range<usize>) -> PyStyleIdxRange {
         PyStyleIdxRange::new(i64::conv(range.start), i64::conv(range.end) - 1)
     }
 
-    /// The signed, inclusive [`PyStyleIdxRange`] naming a non-empty half-open `range` *within the
-    /// tail* — its indices 0-based into the tail. Empty ranges must be filtered by the caller.
     #[must_use]
     pub fn tail_range(self, range: Range<usize>) -> PyStyleIdxRange {
         let tail = i64::conv(self.tail);
