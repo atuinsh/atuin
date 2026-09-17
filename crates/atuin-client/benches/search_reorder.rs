@@ -70,26 +70,30 @@ fn inputs(n: usize) -> (Vec<History>, Vec<HistoryId>) {
 /// Shipped approach: linear find + clone per id.
 #[divan::bench]
 fn old_find_clone(bencher: divan::Bencher) {
-    bencher.with_inputs(|| inputs(N)).bench_values(|(results, ids): (Vec<History>, Vec<HistoryId>)| {
-        let mut ordered = Vec::with_capacity(results.len());
-        for id in &ids {
-            if let Some(history) = results.iter().find(|h| h.id == *id) {
-                ordered.push(history.clone());
+    bencher.with_inputs(|| inputs(N)).bench_values(
+        |(results, ids): (Vec<History>, Vec<HistoryId>)| {
+            let mut ordered = Vec::with_capacity(results.len());
+            for id in &ids {
+                if let Some(history) = results.iter().find(|h| h.id == *id) {
+                    ordered.push(history.clone());
+                }
             }
-        }
-        divan::black_box(ordered)
-    });
+            divan::black_box(ordered)
+        },
+    );
 }
 
 /// New approach: drain into a map once, move each hit out by id.
 #[divan::bench]
 fn new_map_move(bencher: divan::Bencher) {
-    bencher.with_inputs(|| inputs(N)).bench_values(|(results, ids): (Vec<History>, Vec<HistoryId>)| {
-        let mut by_id: HashMap<HistoryId, History> =
-            results.into_iter().map(|h| (h.id, h)).collect();
-        let ordered: Vec<History> = ids.iter().filter_map(|id| by_id.remove(id)).collect();
-        divan::black_box(ordered)
-    });
+    bencher.with_inputs(|| inputs(N)).bench_values(
+        |(results, ids): (Vec<History>, Vec<HistoryId>)| {
+            let mut by_id: HashMap<HistoryId, History> =
+                results.into_iter().map(|h| (h.id, h)).collect();
+            let ordered: Vec<History> = ids.iter().filter_map(|id| by_id.remove(id)).collect();
+            divan::black_box(ordered)
+        },
+    );
 }
 
 fn main() {

@@ -219,9 +219,7 @@ impl SearchEngine for Search {
         let ordered_results = span!(Level::TRACE, "reorder_results").in_scope(|| {
             let mut by_id: HashMap<HistoryId, History> =
                 results.into_iter().map(|h| (h.id, h)).collect();
-            ids.iter()
-                .filter_map(|id| by_id.remove(id))
-                .collect::<Vec<History>>()
+            ids.iter().filter_map(|id| by_id.remove(id)).collect::<Vec<History>>()
         });
 
         debug!(
