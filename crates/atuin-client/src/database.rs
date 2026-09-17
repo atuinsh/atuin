@@ -323,10 +323,6 @@ struct HistoryWithCount {
 }
 
 /// A failure while migrating a local sqlite database on startup.
-///
-/// The interesting case is a missing migration: sqlx only knows the version it
-/// can't find, so we translate that into recovery guidance for the common cause
-/// — an older Atuin trying to open a database a newer one already upgraded.
 #[derive(Debug, Error)]
 pub enum DbSetupError {
     #[error(
