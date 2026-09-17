@@ -1,11 +1,10 @@
 //! The lines of a highlighted body around each match, numbered the way `GetCommandOutput` numbers
 //! them.
 
-use std::ops::Range;
-
 use atuin_client::history::HistoryId;
+use atuin_common::range::KeptEnds;
+use atuin_common::slice::excerpt;
 use atuin_common::string::highlighted::{HighlightedString, HighlightedText};
-use easy_cast::Conv;
 
 /// One search hit: the lines around each match in one command's output.
 #[derive(Debug)]
@@ -33,37 +32,12 @@ pub fn snippet<S: AsRef<str>>(
     tail_from: Option<usize>,
     context: Option<usize>,
 ) -> Vec<OutputLine> {
-    /// Coalesce ascending ranges that overlap or touch.
-    fn merge(ranges: impl Iterator<Item = Range<usize>>) -> Vec<Range<usize>> {
-        ranges.fold(Vec::new(), |mut merged, r| {
-            match merged.last_mut() {
-                Some(last) if r.start <= last.end => last.end = last.end.max(r.end),
-                _ => merged.push(r),
-            }
-            merged
-        })
-    }
-
     let lines: Vec<HighlightedText<&str>> = body.lines().collect();
-    let number = |idx: usize| match tail_from {
-        Some(tail) if idx >= tail => i64::conv(idx) - i64::conv(lines.len()),
-        _ => i64::conv(idx),
-    };
-    let all = 0..lines.len();
-    let windows = match context {
-        None => vec![all],
-        Some(context) => {
-            merge(lines.iter().enumerate().filter(|(_, line)| line.has_match()).map(|(idx, _)| {
-                idx.saturating_sub(context)..idx.saturating_add(context + 1).min(lines.len())
-            }))
-        }
-    };
-    windows
-        .into_iter()
-        .flatten()
-        .map(|idx| OutputLine {
-            line: number(idx),
-            content: lines[idx].map(str::to_owned),
+    let ends = KeptEnds::from_fold(lines.len(), tail_from);
+    excerpt(&lines, |line| line.has_match(), context)
+        .map(|(idx, line)| OutputLine {
+            line: ends.number(idx),
+            content: line.map(str::to_owned),
         })
         .collect()
 }
