@@ -1,5 +1,7 @@
 //! `atuin_output_search`: full-text search over captured command output.
 
+use std::num::NonZeroU32;
+
 use atuin_client::database::Sqlite;
 use atuin_client::settings::{OutputCapture, Settings};
 use atuin_common::range::Clamped;
@@ -7,7 +9,7 @@ use atuin_common::string::NonBlankString;
 use atuin_common::time::UtcOffsetExt;
 use atuin_daemon::client::SearchClient;
 use atuin_daemon::grpc::history::pb::ChunkedOutputLineView;
-use futures::{StreamExt, TryStreamExt};
+use futures::TryStreamExt;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -23,7 +25,8 @@ pub struct AtuinOutputSearchToolCall {
     /// words (case-insensitive; no regex, no prefix matching), so use a few distinctive words
     /// from the text you remember, e.g. 'connection refused' or 'ENOSPC', not a sentence.
     pub query: NonBlankString,
-    /// Maximum number of commands to return, most relevant first.
+    /// Maximum number of commands to return, most relevant first. Fewer may come back even when
+    /// more would match, so an under-full page does not mean the results are exhausted.
     #[serde(default)]
     pub limit: Clamped<u32, 1, 20, 5>,
     /// Lines of surrounding output to show on each side of every matching line. 0 shows only the
@@ -57,9 +60,13 @@ impl AtuinOutputSearchToolCall {
             }
         };
 
+        // The limit is enforced by the daemon so a broad query is ranked with a bounded sorter
+        // rather than materialising every hit. Hits whose history row is missing locally are
+        // dropped below, so a page may be shorter than `limit`; the tool copy says as much.
+        let limit = NonZeroU32::new(self.limit.get());
         let hits = async {
             client
-                .search_command_output(self.query.to_string(), None, Some(self.context.get()))
+                .search_command_output(self.query.to_string(), limit, Some(self.context.get()))
                 .await
                 .map_err(|e| format!("Output search failed: {e}"))?
                 .map_err(|e| format!("Output search failed: {e}"))
@@ -69,7 +76,6 @@ impl AtuinOutputSearchToolCall {
                         .map(|history| history.map(|history| (history, m)))
                         .map_err(|e| format!("Failed to load history: {e}"))
                 })
-                .take(self.limit.get() as usize)
                 .try_collect::<Vec<_>>()
                 .await
         }
