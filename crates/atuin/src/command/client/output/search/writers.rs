@@ -141,8 +141,7 @@ impl MatchRenderer for PrettyWriter {
         while let Some(hm) = stream.next().await {
             let hit = Hit { m: &hm, ctx };
             if !first {
-                let rule =
-                    ctx.theme.as_style(Meaning::Annotation).apply(HorizontalRule(ctx.width));
+                let rule = ctx.theme.as_style(Meaning::Annotation).apply(HorizontalRule(ctx.width));
                 writeln!(out, "{rule}")?;
             }
             first = false;
@@ -348,8 +347,15 @@ mod tests {
     }
 
     fn match_of(history: History, output: HighlightedString) -> HistoryMatch {
-        let output_match = OutputMatch { history_id: history.id, output, score: 0.0 };
-        HistoryMatch { history, output_match }
+        let output_match = OutputMatch {
+            history_id: history.id,
+            output,
+            score: 0.0,
+        };
+        HistoryMatch {
+            history,
+            output_match,
+        }
     }
 
     /// A match with plain (unhighlighted) output -- the common case in these tests.
@@ -358,7 +364,11 @@ mod tests {
     }
 
     fn ctx(theme: &Theme) -> RenderCtx<'_> {
-        RenderCtx { now: OffsetDateTime::UNIX_EPOCH, width: 0, theme }
+        RenderCtx {
+            now: OffsetDateTime::UNIX_EPOCH,
+            width: 0,
+            theme,
+        }
     }
 
     /// Render `rows` through `writer` the way the command does, and return everything it wrote.
@@ -441,10 +451,8 @@ mod tests {
     async fn ndjson_record_has_expected_fields() {
         let mut manager = ThemeManager::new(Some(false), None);
         let theme = manager.load_theme("default", None);
-        let match_ = match_of(
-            hist("cargo build", 1_234, 2),
-            highlighted("compiling\nerror here", &[]),
-        );
+        let match_ =
+            match_of(hist("cargo build", 1_234, 2), highlighted("compiling\nerror here", &[]));
         let id = match_.history.id.to_string();
         let out = render(&Writer::Json(JsonWriter { array: false }), theme, vec![match_]).await;
 
