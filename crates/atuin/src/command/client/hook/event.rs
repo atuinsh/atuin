@@ -7,7 +7,7 @@
 use atuin_common::string::NonNulStr;
 use serde_json::error::Category;
 
-use super::wire::{HookEventName, WireHookEvent, WireToolName};
+use super::wire::{HookEventName, WireHookEvent, WireToolName, WireToolResponse};
 
 /// Why a hook payload could not be parsed.
 ///
@@ -80,7 +80,13 @@ impl From<WireHookEvent> for Option<HookEvent> {
                 })
             }
             HookEventName::PostToolUse => {
-                let exit = wire.tool_response.and_then(|response| response.exit_code).unwrap_or(0);
+                let exit = wire
+                    .tool_response
+                    .and_then(|response| match response {
+                        WireToolResponse::Structured(response) => response.exit_code,
+                        WireToolResponse::Text(_) => Some(-1),
+                    })
+                    .unwrap_or(0);
                 Some(HookEvent::End { tool_use_id, exit })
             }
             HookEventName::PostToolUseFailure => Some(HookEvent::End {
@@ -160,6 +166,25 @@ mod tests {
             "tool_use_id": "toolu_abc123"
         }),
         Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: 3 })
+    )]
+    // Codex sends its completion output as a string without an exit code.
+    #[case::post_tool_use_text_response_uses_unknown_exit(
+        json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_response": "hello\n",
+            "tool_use_id": "toolu_abc123"
+        }),
+        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: -1 })
+    )]
+    #[case::post_tool_use_empty_text_response_uses_unknown_exit(
+        json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_response": "",
+            "tool_use_id": "toolu_abc123"
+        }),
+        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: -1 })
     )]
     #[case::post_tool_use_without_exit_code_defaults_zero(
         json!({
@@ -300,6 +325,9 @@ mod tests {
     #[case::missing_required_fields(r#"{"tool_name": "Bash"}"#)]
     #[case::wrong_typed_tool_use_id(
         r#"{"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": 5, "tool_input": {"command": "ls"}}"#
+    )]
+    #[case::malformed_object_tool_response(
+        r#"{"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_use_id": "toolu_abc123", "tool_response": {"exitCode": "not an exit code"}}"#
     )]
     fn well_formed_non_events_are_skipped(#[case] input: &str) {
         assert_eq!(HookEvent::from_json_str(input).unwrap(), None);

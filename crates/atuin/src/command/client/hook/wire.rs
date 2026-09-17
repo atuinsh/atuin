@@ -58,7 +58,15 @@ pub struct WireToolInput {
 
 /// See [`WireHookEvent::tool_response`].
 #[derive(Debug, Deserialize)]
-pub struct WireToolResponse {
+#[serde(untagged)]
+pub enum WireToolResponse {
+    Structured(WireToolResponseFields),
+    Text(String),
+}
+
+/// Fields in an object-valued [`WireToolResponse`].
+#[derive(Debug, Deserialize)]
+pub struct WireToolResponseFields {
     #[serde(rename = "exitCode", default)]
     pub exit_code: Option<i64>,
 }
