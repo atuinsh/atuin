@@ -240,6 +240,80 @@ async fn break_before_timeout_returns_the_ok_value() {
     assert_eq!(calls.load(Ordering::SeqCst), 3);
 }
 
+/// `retry_forever` has no timeout: it retries until the closure returns `Break`, backing off
+/// geometrically between attempts, and returns the break value directly (there is no error case, so
+/// no `Result` to unwrap). Guards the "retry until it works" entry point the sync worker relies on.
+#[tokio::test(start_paused = true)]
+async fn retry_forever_backs_off_until_break() {
+    let backoff = Backoff::Exponential {
+        initial: SEC,
+        max: Duration::from_secs(1000),
+        factor: NonZeroU32::new(2).unwrap(),
+    };
+    let start = Instant::now();
+    let mut stamps = Vec::new();
+    let out: &str = backoff
+        .retry_forever(|| {
+            stamps.push(start.elapsed());
+            ready(if stamps.len() > 5 {
+                ControlFlow::Break("done")
+            } else {
+                ControlFlow::Continue(())
+            })
+        })
+        .await;
+
+    assert_eq!(out, "done", "retry_forever returns the Break value directly");
+    assert_eq!(stamps.len(), 6, "five failures then a break");
+    assert_eq!(stamps[0], Duration::ZERO, "the first attempt fires eagerly");
+    let expected = [SEC, 2 * SEC, 4 * SEC, 8 * SEC, 16 * SEC];
+    for (i, (got, want)) in gaps(&stamps).iter().zip(expected).enumerate() {
+        assert_in_band(*got, want, &format!("retry_forever backoff #{}", i + 1));
+    }
+}
+
+/// `retry_forever` never gives up. Unlike `retry`, there is no episode budget that could abandon a
+/// still-failing operation and let the caller reset the ramp back to `initial`. It saturates at
+/// `max` and keeps probing there until success, however long that takes -- the "hit the ceiling and
+/// keep retrying at that cadence until it works" contract the daemon sync loop needs.
+#[tokio::test(start_paused = true)]
+async fn retry_forever_saturates_at_max_and_never_gives_up() {
+    let max = 5 * SEC;
+    let backoff = Backoff::Exponential {
+        initial: SEC,
+        max,
+        factor: NonZeroU32::new(10).unwrap(), // saturates after a single step
+    };
+    // Fail far more times than any sane timeout episode would tolerate, then finally succeed.
+    let fails = 100usize;
+    let start = Instant::now();
+    let mut stamps = Vec::new();
+    let out: usize = backoff
+        .retry_forever(|| {
+            stamps.push(start.elapsed());
+            ready(if stamps.len() > fails {
+                ControlFlow::Break(stamps.len())
+            } else {
+                ControlFlow::Continue(())
+            })
+        })
+        .await;
+
+    assert_eq!(out, fails + 1, "it kept retrying through every failure until Break");
+    assert_eq!(stamps.len(), fails + 1);
+    // Every delay after the first saturates at ~max and never collapses back to `initial`: the ramp
+    // is never reset out from under us.
+    for (i, got) in gaps(&stamps).iter().enumerate().skip(1) {
+        assert_in_band(*got, max, &format!("saturated retry_forever gap #{}", i + 1));
+    }
+    // Total virtual time far exceeds any single bounded episode -- proof it did not give up.
+    assert!(
+        start.elapsed() > 50 * max,
+        "retry_forever gave up early: only {:?} elapsed across {fails} failures",
+        start.elapsed()
+    );
+}
+
 /// `retry_sync` is `retry` for a synchronous closure: identical timing, identical result threading.
 /// A caller must be able to reach for whichever fits without changing behavior.
 #[tokio::test(start_paused = true)]
