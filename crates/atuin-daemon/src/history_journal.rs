@@ -313,17 +313,18 @@ impl HistoryJournal {
             duration = Empty,
         );
 
-        // Only clone the (heap-heavy) history when a tail consumer is subscribed, matching the
-        // guard finish() uses. In the common no-subscriber case we move it straight into the map.
         if self.broadcast.receiver_count() > 0 {
             let _ = self.broadcast.send(CmdEvent::Started(history.clone()));
         }
 
-        self.active_cmds.insert(id, InFlightCmd {
-            history,
-            span,
-            finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
-        });
+        self.active_cmds.insert(
+            id,
+            InFlightCmd {
+                history,
+                span,
+                finalization_mutex: Arc::new(tokio::sync::Mutex::new(())),
+            },
+        );
         id
     }
 
