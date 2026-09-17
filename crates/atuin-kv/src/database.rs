@@ -1,6 +1,7 @@
 use std::ffi::OsStr;
 use std::time::Duration;
 
+use atuin_client::database::DbSetupError;
 use atuin_common::db;
 use atuin_common::db::sqlite::{Sqlite, SqliteBuilder};
 use sqlx::Result;
@@ -40,7 +41,7 @@ impl Database {
         Ok(self.sqlite.info().await.version?)
     }
 
-    async fn setup_db(pool: &SqlitePool) -> eyre::Result<()> {
+    async fn setup_db(pool: &SqlitePool) -> std::result::Result<(), DbSetupError> {
         debug!("running sqlite database setup");
 
         db::migrate!(pool, "./migrations").await?;
