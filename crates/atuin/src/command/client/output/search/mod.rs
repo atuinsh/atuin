@@ -57,7 +57,8 @@ enum Style {
 /// Full-text search over captured command output.
 #[derive(Parser, Debug)]
 pub struct Cmd {
-    #[arg(allow_hyphen_values = true, required = true)]
+    /// Words to search for; all must appear. Use `--` before a query that starts with `-`.
+    #[arg(required = true)]
     query: Vec<String>,
 
     /// Maximum number of matches to return.
