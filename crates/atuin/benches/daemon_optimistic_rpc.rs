@@ -12,9 +12,8 @@
 
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use atuin_daemon::grpc::history::pb;
 use atuin_daemon::grpc::history::pb::history_client::HistoryClient;
@@ -169,7 +168,12 @@ fn harness() -> &'static Harness {
             panic!("mock daemon never came up");
         });
 
-        Harness { rt, socket, rpcs, _tmp: tmp }
+        Harness {
+            rt,
+            socket,
+            rpcs,
+            _tmp: tmp,
+        }
     })
 }
 
@@ -201,7 +205,11 @@ fn start_request() -> pb::StartHistoryRequest {
 }
 
 fn end_request() -> pb::EndHistoryRequest {
-    pb::EndHistoryRequest { id: None, exit: 0, duration: None }
+    pb::EndHistoryRequest {
+        id: None,
+        exit: 0,
+        duration: None,
+    }
 }
 
 // OLD flow: probe (Status) then the real RPC, on a fresh connection per operation.
@@ -257,29 +265,29 @@ fn lifecycle_new(bencher: divan::Bencher) {
 #[divan::bench(min_time = 1)]
 fn rpcs_old(bencher: divan::Bencher) {
     let h = harness();
-    bencher
-        .with_inputs(|| h.rt.block_on(connect(&h.socket)).unwrap())
-        .bench_values(|mut client| {
+    bencher.with_inputs(|| h.rt.block_on(connect(&h.socket)).unwrap()).bench_values(
+        |mut client| {
             h.rt.block_on(async {
                 black_box(client.status(pb::StatusRequest {}).await.unwrap());
                 black_box(client.start_history(start_request()).await.unwrap());
                 black_box(client.status(pb::StatusRequest {}).await.unwrap());
                 black_box(client.end_history(end_request()).await.unwrap());
             });
-        });
+        },
+    );
 }
 
 #[divan::bench(min_time = 1)]
 fn rpcs_new(bencher: divan::Bencher) {
     let h = harness();
-    bencher
-        .with_inputs(|| h.rt.block_on(connect(&h.socket)).unwrap())
-        .bench_values(|mut client| {
+    bencher.with_inputs(|| h.rt.block_on(connect(&h.socket)).unwrap()).bench_values(
+        |mut client| {
             h.rt.block_on(async {
                 black_box(client.start_history(start_request()).await.unwrap());
                 black_box(client.end_history(end_request()).await.unwrap());
             });
-        });
+        },
+    );
 }
 
 fn main() {
@@ -301,7 +309,9 @@ fn main() {
     });
     let new_rpcs = h.rpcs.load(Ordering::Relaxed) - before;
 
-    eprintln!("RPC round-trips per command lifecycle (start+end): OLD = {old_rpcs}, NEW = {new_rpcs}");
+    eprintln!(
+        "RPC round-trips per command lifecycle (start+end): OLD = {old_rpcs}, NEW = {new_rpcs}"
+    );
     assert_eq!(old_rpcs, 4, "old flow should issue 2 Status probes + 2 real RPCs");
     assert_eq!(new_rpcs, 2, "new flow should issue only the 2 real RPCs");
 
