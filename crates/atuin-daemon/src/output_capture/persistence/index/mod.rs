@@ -16,7 +16,6 @@ use atuin_common::string::highlighted::HighlightedString;
 use enum_dispatch::enum_dispatch;
 #[cfg(test)]
 pub use failing::FailingIndex;
-use futures::Stream;
 pub use nop::NopIndex;
 pub use sqlite::SqliteIndex;
 use thiserror::Error;
@@ -51,21 +50,20 @@ pub trait Index {
         limit: usize,
     ) -> ChunkedStream<Result<RankedMatch, IndexError>>;
 
-    /// Mark where `query` matches in each body, tokenized the way the index was. Bodies come back
-    /// in order, each with its `M` passed through; one the query no longer matches comes back
-    /// unmarked.
-    async fn highlight<M: Send + Sync + 'static>(
+    /// Mark where `query` matches in each body, tokenized the way the index was. Results align
+    /// with `bodies`; one the query no longer matches comes back unmarked.
+    async fn highlight(
         &self,
         query: &str,
-        bodies: impl Stream<Item = (M, String)> + Send + 'static,
-    ) -> ChunkedStream<Result<(M, HighlightedString), IndexError>>;
+        bodies: Vec<String>,
+    ) -> Result<Vec<HighlightedString>, IndexError>;
 
     /// Every id currently held in the index.
     async fn indexed_ids(&self) -> ChunkedStream<Result<HistoryId, IndexError>>;
 }
 
 #[enum_dispatch(Index)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AnyIndex {
     Sqlite(SqliteIndex),
     Nop(NopIndex),

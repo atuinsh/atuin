@@ -25,6 +25,9 @@ pub enum ReconcileError {
     Index(#[from] IndexError),
 }
 
+/// Bodies highlighted per sqlite round trip.
+const HIGHLIGHT_BATCH: usize = 64;
+
 #[derive(Debug)]
 pub struct OutputStore {
     blob: AnyBlobStore,
@@ -81,25 +84,17 @@ impl OutputStore {
                 Err(err) => return ChunkedStream::from_error(err),
             };
 
-        let blob = self.blob.clone();
         // The index is derived and can briefly hold entries whose blob was deleted -- a
         // capture/remove race, a swallowed index write, or reconcile lag. The blob is
         // authoritative: a hit is highlighted from its stored capture, and one whose capture is
         // gone is dropped. (This can yield fewer than `limit` hits even when more live matches
         // exist further down the ranking.)
-        let bodies = stream::iter(ranked).filter_map(move |hit| {
+        let blob = self.blob.clone();
+        let hits = stream::iter(ranked).filter_map(move |hit| {
             let blob = blob.clone();
             async move {
                 match blob.get(hit.history_id).await {
-                    Ok(Some(capture)) => {
-                        // `plaintext` joins the kept head and tail with one newline, so the tail
-                        // starts right after the head's last line.
-                        let tail_from = capture
-                            .output_end
-                            .as_ref()
-                            .map(|_| capture.output_start.lines().count());
-                        Some(((hit, tail_from), capture.plaintext()))
-                    }
+                    Ok(Some(capture)) => Some((hit, capture)),
                     Ok(None) => None, // the capture is gone; drop the stale index hit
                     // A transient read failure hides only this hit, not the whole search.
                     Err(err) => {
@@ -114,13 +109,37 @@ impl OutputStore {
             }
         });
 
-        self.index.highlight(query, bodies).await.map(move |result| {
-            result.map(|((hit, tail_from), body)| OutputMatch {
-                history_id: hit.history_id,
-                lines: snippet::snippet(&body, tail_from, context),
-                score: hit.score,
-            })
-        })
+        // Highlighting goes through sqlite in batches; each batch is one round trip.
+        let index = self.index.clone();
+        let query = query.to_owned();
+        ChunkedStream::new(hits.chunks(HIGHLIGHT_BATCH).then(move |batch| {
+            let index = index.clone();
+            let query = query.clone();
+            async move {
+                let bodies = batch.iter().map(|(_, capture)| capture.plaintext()).collect();
+                let highlighted = match index.highlight(&query, bodies).await {
+                    Ok(highlighted) => highlighted,
+                    Err(err) => return vec![Err(err)],
+                };
+                batch
+                    .into_iter()
+                    .zip(highlighted)
+                    .map(|((hit, capture), body)| {
+                        // `plaintext` joins the kept head and tail with one newline, so the tail
+                        // starts right after the head's last line.
+                        let tail_from = capture
+                            .output_end
+                            .as_ref()
+                            .map(|_| capture.output_start.lines().count());
+                        Ok(OutputMatch {
+                            history_id: hit.history_id,
+                            lines: snippet::snippet(&body, tail_from, context),
+                            score: hit.score,
+                        })
+                    })
+                    .collect()
+            }
+        }))
     }
 
     pub fn estimated_disk_space(&self) -> u64 {
