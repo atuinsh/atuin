@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use atuin_client::database::{DbSearchMode, OptFilters, Sqlite};
 use atuin_client::history::{History, HistoryId, all_user_author_filter};
 use atuin_client::settings::Settings;
@@ -211,13 +209,17 @@ impl SearchEngine for Search {
         }
 
         // Hydrate from local database.
-        let results = self.hydrate_from_db(db, &ids).await?;
+        let mut results = self.hydrate_from_db(db, &ids).await?;
 
-        // Reorder to match the daemon's relevance ranking.
+        // Reorder to match the daemon's relevance ranking. `swap_remove` moves each hit out rather
+        // than cloning it; the scan stays O(n^2) but `ids` is capped at 200, where that beats a map.
         let ordered_results = span!(Level::TRACE, "reorder_results").in_scope(|| {
-            let mut by_id: HashMap<HistoryId, History> =
-                results.into_iter().map(|h| (h.id, h)).collect();
-            ids.iter().filter_map(|id| by_id.remove(id)).collect::<Vec<History>>()
+            ids.iter()
+                .filter_map(|id| {
+                    let pos = results.iter().position(|h| h.id == *id)?;
+                    Some(results.swap_remove(pos))
+                })
+                .collect::<Vec<History>>()
         });
 
         debug!(
