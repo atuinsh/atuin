@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::io::{self, Write};
 use std::ops::Range;
 use std::pin::pin;
@@ -189,7 +188,7 @@ impl MatchRenderer for PrettyWriter {
 }
 
 /// One search match, serialized to JSON. Every field borrows from the match, so a record allocates
-/// nothing of its own beyond the lines' plain text and `serde_json::to_writer` streams it straight
+/// nothing of its own beyond the joined output text and `serde_json::to_writer` streams it straight
 /// to the output.
 #[derive(Serialize)]
 struct JsonRecord<'a> {
@@ -200,15 +199,7 @@ struct JsonRecord<'a> {
     session: &'a str,
     exit: i64,
     duration_ns: i64,
-    /// The lines around each match, ascending; a jump in `line` is output left out.
-    lines: Vec<JsonLine<'a>>,
-}
-
-#[derive(Serialize)]
-struct JsonLine<'a> {
-    /// 0-based from the start; negative counts back from the end of a truncated output.
-    line: i64,
-    text: Cow<'a, str>,
+    output: &'a str,
 }
 
 /// Renders each match as JSON. With `array`, the run is framed as one JSON document
@@ -235,6 +226,15 @@ impl MatchRenderer for JsonWriter {
             }
             first = false;
             let history = &hm.history;
+            // `-C` windowing and truncation live in the human-readable renderers; the machine shape
+            // keeps its long-standing single `output` string, rejoining the daemon's lines.
+            let output = hm
+                .output_match
+                .lines
+                .iter()
+                .map(|l| l.content.display_plain().to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
             let record = JsonRecord {
                 id: &history.id,
                 timestamp_unix_ns: history.timestamp.unix_timestamp_nanos(),
@@ -243,15 +243,7 @@ impl MatchRenderer for JsonWriter {
                 session: &history.session,
                 exit: history.exit,
                 duration_ns: history.duration,
-                lines: hm
-                    .output_match
-                    .lines
-                    .iter()
-                    .map(|l| JsonLine {
-                        line: l.line,
-                        text: l.content.to_plain().text,
-                    })
-                    .collect(),
+                output: &output,
             };
             serde_json::to_writer(&mut *out, &record).map_err(json_io_error)?;
             if !self.array {
@@ -568,10 +560,7 @@ mod tests {
         assert!(out.ends_with('\n'), "ndjson rows are newline-terminated: {out:?}");
         let record: serde_json::Value = serde_json::from_str(out.trim_end()).unwrap();
         assert_eq!(record["command"].as_str(), Some("cargo build"));
-        assert_eq!(
-            record["lines"],
-            serde_json::json!([{"line": 0, "text": "compiling"}, {"line": 1, "text": "error here"}])
-        );
+        assert_eq!(record["output"].as_str(), Some("compiling\nerror here"));
         assert_eq!(record["exit"].as_i64(), Some(2));
         assert_eq!(record["duration_ns"].as_i64(), Some(1_234));
         assert_eq!(record["cwd"].as_str(), Some("/"));
@@ -653,12 +642,6 @@ mod tests {
         let out =
             render(&Writer::Json(JsonWriter { array: false }), theme, vec![hm("cmd", raw)]).await;
         let record: serde_json::Value = serde_json::from_str(out.trim_end()).unwrap();
-        let text: Vec<&str> = record["lines"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|l| l["text"].as_str().unwrap())
-            .collect();
-        assert_eq!(text.join("\n"), raw);
+        assert_eq!(record["output"].as_str(), Some(raw));
     }
 }
