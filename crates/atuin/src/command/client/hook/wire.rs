@@ -72,7 +72,6 @@ pub enum WireToolResponse {
 
 impl WireToolResponse {
     /// The exit code the agent reported, if any.
-    /// Get the exit code the agent reported, if any.
     pub fn exit_code(&self) -> Option<i64> {
         match self {
             WireToolResponse::Output(_) => None,
