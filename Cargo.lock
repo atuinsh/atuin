@@ -258,6 +258,7 @@ version = "18.22.0"
 dependencies = [
  "ansi-to-tui",
  "arboard",
+ "async-stream",
  "async-trait",
  "atuin-ai",
  "atuin-client",

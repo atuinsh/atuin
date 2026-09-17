@@ -2,23 +2,23 @@
 //!
 //! The code quality isn't great here, and is a little messy, but it is what it is. Can be cleaned
 //! up in the future.
+
 use std::io::{self, IsTerminal};
-use std::ops::Range;
+use std::sync::OnceLock;
 
 use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
 use atuin_client::theme::Theme;
-use atuin_common::string::highlighted::Piece;
 use atuin_daemon::client::SearchClient;
 use clap::{Parser, ValueEnum};
-use futures_util::TryStreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use thiserror::Error;
 use time::OffsetDateTime;
 use tracing::debug;
 
 mod writers;
 
-use writers::{Hit, MatchRenderer, PlainWriter, PrettyWriter, Writer};
+use writers::{HistoryMatch, JsonWriter, PlainWriter, PrettyWriter, RenderCtx, Writer};
 
 use crate::command::client::daemon;
 
@@ -48,6 +48,10 @@ enum Style {
     Auto,
     Plain,
     Pretty,
+    /// A single JSON array of match objects.
+    Json,
+    /// Newline-delimited JSON: one match object per line.
+    Ndjson,
 }
 
 /// Full-text search over captured command output.
@@ -65,9 +69,6 @@ pub struct Cmd {
     style: Style,
 }
 
-/// Map a daemon client failure to the right user-facing error: a connection-class failure (the
-/// daemon is down, unreachable, or too old) reads as a connect error; anything else is a genuine
-/// search failure.
 fn to_run_error(err: eyre::Report) -> RunError {
     if daemon::should_retry_after_error(&err) {
         RunError::Connect(err)
@@ -109,6 +110,36 @@ fn is_own_search(command: &str) -> bool {
     prefixes("output", subcommands.next()) && prefixes("search", subcommands.next())
 }
 
+fn writer_for(style: Style) -> Writer {
+    match style {
+        Style::Plain => {
+            colored::control::set_override(false);
+            Writer::Plain(PlainWriter)
+        }
+        Style::Pretty => {
+            colored::control::set_override(true);
+            Writer::Pretty(PrettyWriter)
+        }
+        Style::Auto => {
+            let pretty = io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+            colored::control::set_override(pretty);
+            if pretty {
+                Writer::Pretty(PrettyWriter)
+            } else {
+                Writer::Plain(PlainWriter)
+            }
+        }
+        Style::Json => {
+            colored::control::set_override(false);
+            Writer::Json(JsonWriter { array: true })
+        }
+        Style::Ndjson => {
+            colored::control::set_override(false);
+            Writer::Json(JsonWriter { array: false })
+        }
+    }
+}
+
 impl Cmd {
     pub async fn run(
         self,
@@ -125,11 +156,8 @@ impl Cmd {
             return Err(RunError::EmptyQuery);
         }
 
-        // Open the search stream, auto-starting/restarting the daemon and retrying once if it is
-        // down or too old -- mirroring the interactive search client. A bare SearchClient::new
-        // would make `atuin output search` fail when the daemon is stopped (even with
-        // `daemon.autostart = true`) or return UNIMPLEMENTED against an older daemon instead of
-        // restarting it.
+        // TODO(markovejnovic): This should ideally be injected rather than prepared here ad-hoc.
+        //                      Existing precedent.
         let open = async || {
             #[cfg(unix)]
             let mut client =
@@ -156,70 +184,65 @@ impl Cmd {
         };
         let mut matches = std::pin::pin!(matches);
 
-        let pretty = match self.style {
-            Style::Plain => false,
-            Style::Pretty => true,
-            Style::Auto => io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none(),
+        let writer = writer_for(self.style);
+        let ctx = RenderCtx {
+            now: OffsetDateTime::now_utc(),
+            width: crossterm::terminal::size().map_or(80, |(cols, _)| cols as usize),
+            theme,
         };
-        colored::control::set_override(pretty);
 
-        let writer: Writer = if pretty {
-            PrettyWriter.into()
-        } else {
-            PlainWriter.into()
-        };
-        let now = OffsetDateTime::now_utc();
-        let width = crossterm::terminal::size().map_or(80, |(cols, _)| cols as usize);
+        // A load/search failure can't ride out through a stream item, so stash it and surface it
+        // after rendering. A write-once `OnceLock` (not a `Cell`) keeps the stream `Send`, since
+        // `async_stream::stream!` captures the slot by shared reference.
+        let load_err: OnceLock<RunError> = OnceLock::new();
+        let write_result = {
+            let err_slot = &load_err;
 
-        let mut rendered = 0;
-        while rendered < self.limit {
-            let Some(m) = matches.try_next().await.map_err(RunError::Search)? else {
-                break;
-            };
-            let Some(history) =
-                db.load(m.history_id).await.map_err(|e| RunError::LoadHistory(e.into()))?
-            else {
-                continue;
-            };
-            if is_own_search(&history.command) {
-                continue;
-            }
+            let rows = async_stream::stream! {
+                loop {
+                    let m = match matches.try_next().await {
+                        Ok(Some(m)) => m,
+                        Ok(None) => break,
+                        Err(err) => {
+                            let _ = err_slot.set(RunError::Search(err));
+                            break;
+                        }
+                    };
 
-            let mut plain = String::new();
-            let mut match_ranges: Vec<Range<usize>> = Vec::new();
-            for piece in m.output.pieces() {
-                match piece {
-                    Piece::Text(text) => plain.push_str(text),
-                    Piece::Match(text) => {
-                        let start = plain.len();
-                        plain.push_str(text);
-                        match_ranges.push(start..plain.len());
+                    // TODO(markovejnovic): This is a little bit of a hack -- we should really be
+                    //                      querying the daemon. Future improvement.
+                    //
+                    //                      Another option is to have the daemon return the full
+                    //                      history struct.
+                    let history = match db.load(m.history_id).await {
+                        Ok(Some(history)) => history,
+                        Ok(None) => continue,
+                        Err(err) => {
+                            let _ = err_slot.set(RunError::LoadHistory(err.into()));
+                            break;
+                        }
+                    };
+
+                    if is_own_search(&history.command) {
+                        continue;
                     }
+
+                    yield HistoryMatch { history, output_match: m };
                 }
-            }
-
-            let hit = Hit {
-                history: &history,
-                output: &plain,
-                ranges: &match_ranges,
-                now,
-                width,
-                theme,
             };
 
-            let mut out = io::stdout().lock();
-            let result = if rendered > 0 {
-                writer
-                    .write_separator(&mut out, &hit)
-                    .and_then(|()| writer.write_row(&mut out, &hit))
-            } else {
-                writer.write_row(&mut out, &hit)
-            };
-            match result {
-                Ok(()) => rendered += 1,
-                Err(err) if err.kind() == io::ErrorKind::BrokenPipe => break,
-                Err(err) => return Err(err.into()),
-            }
+            let mut out = io::stdout();
+            writer.write_stream(&mut out, &ctx, rows.take(self.limit as usize)).await
+        };
+
+        match write_result {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::BrokenPipe => {}
+            Err(err) => return Err(err.into()),
+        }
+
+        if let Some(err) = load_err.into_inner() {
+            return Err(err);
         }
 
         Ok(())
