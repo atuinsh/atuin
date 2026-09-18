@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use notify::event::{EventKind, ModifyKind, RenameMode};
+
 #[derive(Debug, thiserror::Error)]
 pub enum TreeWatcherError {
     #[error("watch root is not a directory: {0}")]
@@ -170,6 +172,42 @@ where
             }
         }
     }
+
+    fn observe_path(&mut self, path: PathBuf, origin: Origin) {
+        if self.entries.contains_key(&path) {
+            return;
+        }
+        let Ok(kind) = file_kind_of(&path) else {
+            return;
+        };
+        self.observe(path, kind, origin);
+    }
+
+    fn apply_event(&mut self, event: &notify::Event) {
+        match &event.kind {
+            EventKind::Create(_) | EventKind::Modify(ModifyKind::Name(RenameMode::To)) => {
+                for path in &event.paths {
+                    self.observe_path(path.clone(), Origin::Notify);
+                }
+            }
+            EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(RenameMode::From)) => {
+                for path in &event.paths {
+                    self.forget_tree(path);
+                }
+            }
+            EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => {
+                if let [from, to] = event.paths.as_slice() {
+                    self.forget_tree(from);
+                    self.observe_path(to.clone(), Origin::Notify);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn file_kind_of(path: &Path) -> std::io::Result<FileKind> {
+    Ok(FileKind::from(std::fs::symlink_metadata(path)?.file_type()))
 }
 
 #[cfg(test)]
@@ -217,6 +255,27 @@ mod tests {
             recursive: true,
             factory: move |_ctx| Some(CountingHandler::new(counters.clone())),
             entries: HashMap::new(),
+        }
+    }
+
+    fn accept_all_engine_rooted(
+        counters: &Arc<Counters>,
+        root: &Path,
+    ) -> Engine<CountingHandler, impl Fn(NodeContext) -> Option<CountingHandler>> {
+        let counters = counters.clone();
+        Engine {
+            root: root.to_path_buf(),
+            recursive: true,
+            factory: move |_ctx| Some(CountingHandler::new(counters.clone())),
+            entries: HashMap::new(),
+        }
+    }
+
+    fn event(kind: EventKind, paths: Vec<PathBuf>) -> notify::Event {
+        notify::Event {
+            kind,
+            paths,
+            attrs: notify::event::EventAttributes::new(),
         }
     }
 
@@ -394,6 +453,64 @@ mod tests {
         assert_eq!(counters.alive.load(Ordering::SeqCst), 3);
         drop(engine);
         assert_eq!(counters.alive.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn apply_create_event_observes_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a");
+        std::fs::write(&file, b"x").unwrap();
+        let counters = Arc::new(Counters::default());
+        let mut engine = accept_all_engine_rooted(&counters, dir.path());
+        engine.apply_event(&event(EventKind::Create(notify::event::CreateKind::Any), vec![
+            file.clone(),
+        ]));
+        assert!(engine.entries.contains_key(&file));
+        assert_eq!(counters.alive.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn apply_create_event_skips_vanished_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("gone");
+        let counters = Arc::new(Counters::default());
+        let mut engine = accept_all_engine_rooted(&counters, dir.path());
+        engine.apply_event(&event(EventKind::Create(notify::event::CreateKind::Any), vec![
+            file.clone(),
+        ]));
+        assert!(engine.entries.is_empty());
+    }
+
+    #[test]
+    fn apply_remove_event_forgets() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a");
+        std::fs::write(&file, b"x").unwrap();
+        let counters = Arc::new(Counters::default());
+        let mut engine = accept_all_engine_rooted(&counters, dir.path());
+        engine.observe(file.clone(), FileKind::File, Origin::Notify);
+        engine.apply_event(&event(EventKind::Remove(notify::event::RemoveKind::Any), vec![
+            file.clone(),
+        ]));
+        assert!(engine.entries.is_empty());
+        assert_eq!(counters.dropped.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn apply_rename_both_moves_handler() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("from");
+        let to = dir.path().join("to");
+        std::fs::write(&to, b"x").unwrap();
+        let counters = Arc::new(Counters::default());
+        let mut engine = accept_all_engine_rooted(&counters, dir.path());
+        engine.observe(from.clone(), FileKind::File, Origin::Notify);
+        engine.apply_event(&event(EventKind::Modify(ModifyKind::Name(RenameMode::Both)), vec![
+            from.clone(),
+            to.clone(),
+        ]));
+        assert!(!engine.entries.contains_key(&from));
+        assert!(engine.entries.contains_key(&to));
     }
 
     proptest! {
