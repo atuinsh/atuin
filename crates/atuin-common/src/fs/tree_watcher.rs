@@ -254,10 +254,10 @@ async fn run_engine<H, F>(
                             }
                             engine.apply_event(&debounced.event);
                         }
-                        if force_scan {
-                            if let Some(truth) = scan(&engine.root, engine.recursive).await {
-                                engine.reconcile(truth);
-                            }
+                        if force_scan
+                            && let Some(truth) = scan(&engine.root, engine.recursive).await
+                        {
+                            engine.reconcile(truth);
                         }
                     }
                     Some(Err(_)) => {}
@@ -639,9 +639,7 @@ mod tests {
         let file = dir.path().join("gone");
         let counters = Arc::new(Counters::default());
         let mut engine = accept_all_engine_rooted(&counters, dir.path());
-        engine.apply_event(&event(EventKind::Create(notify::event::CreateKind::Any), vec![
-            file.clone(),
-        ]));
+        engine.apply_event(&event(EventKind::Create(notify::event::CreateKind::Any), vec![file]));
         assert!(engine.entries.is_empty());
     }
 
@@ -653,9 +651,7 @@ mod tests {
         let counters = Arc::new(Counters::default());
         let mut engine = accept_all_engine_rooted(&counters, dir.path());
         engine.observe(file.clone(), FileKind::File, Origin::Notify);
-        engine.apply_event(&event(EventKind::Remove(notify::event::RemoveKind::Any), vec![
-            file.clone(),
-        ]));
+        engine.apply_event(&event(EventKind::Remove(notify::event::RemoveKind::Any), vec![file]));
         assert!(engine.entries.is_empty());
         assert_eq!(counters.dropped.load(Ordering::SeqCst), 1);
     }
@@ -699,8 +695,8 @@ mod tests {
             let created = counters.created.load(Ordering::SeqCst);
             let dropped = counters.dropped.load(Ordering::SeqCst);
             let alive = counters.alive.load(Ordering::SeqCst);
-            prop_assert_eq!(created - dropped, alive as u64);
-            prop_assert_eq!(alive as usize, engine.entries.len());
+            prop_assert_eq!(created - dropped, alive.cast_unsigned());
+            prop_assert_eq!(usize::try_from(alive).unwrap(), engine.entries.len());
         }
 
         #[test]
@@ -727,7 +723,7 @@ mod tests {
                     .collect();
                 engine.reconcile(truth);
             }
-            let alive = counters.alive.load(Ordering::SeqCst) as usize;
+            let alive = usize::try_from(counters.alive.load(Ordering::SeqCst)).unwrap();
             let active = engine
                 .entries
                 .values()
