@@ -259,9 +259,7 @@ async fn store_key(settings: &Settings, store: &SqliteStore, key: &paseto_v4::Ke
     }
 
     #[cfg(feature = "daemon")]
-    if settings.daemon.enabled {
-        stop_for_key_change(settings).await?;
-    }
+    let _key_change_guard = stop_for_key_change(settings).await?;
 
     println!("\nRe-encrypting local store with new key");
     store.re_encrypt(&current_key, key).await?;
