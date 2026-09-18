@@ -266,4 +266,43 @@ mod tests {
             session.messages().take(2).map_ok(|m| m.role()).try_collect().await.unwrap();
         assert_eq!(roles.last(), Some(&Role::Assistant));
     }
+
+    #[rstest]
+    #[case(include_str!("../../../res/harnesstools/fixtures/pi/session1.jsonl"))]
+    #[case(include_str!("../../../res/harnesstools/fixtures/pi/session2.jsonl"))]
+    fn normalizes_a_real_redacted_session(#[case] jsonl: &str) {
+        let msgs: Vec<PiMessage> = jsonl
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str::<PiMessage>(l).expect("fixture record parses"))
+            .collect();
+        assert!(msgs.len() >= 10);
+
+        let mut saw_user = false;
+        let mut saw_assistant = false;
+        let mut tool_uses = 0usize;
+        let mut tool_results = 0usize;
+        for m in &msgs {
+            let _ = m.timestamp();
+            saw_user |= m.role() == Role::User;
+            saw_assistant |= m.role() == Role::Assistant;
+            for c in m.content() {
+                match c {
+                    Content::ToolUse(u) => {
+                        assert!(!u.name.is_empty(), "toolCall normalized to an empty name");
+                        assert!(!u.id.to_string().is_empty(), "toolCall normalized to an empty id");
+                        tool_uses += 1;
+                    }
+                    Content::ToolResult(r) => {
+                        assert!(!r.call.to_string().is_empty(), "toolResult lost its call id");
+                        tool_results += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert!(saw_user && saw_assistant, "expected both user and assistant turns");
+        assert!(tool_uses >= 1, "expected at least one normalized toolCall");
+        assert!(tool_results >= 1, "expected at least one normalized toolResult");
+    }
 }

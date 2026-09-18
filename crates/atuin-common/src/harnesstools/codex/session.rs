@@ -254,4 +254,25 @@ mod tests {
             session.messages().take(2).map_ok(|m| m.role()).try_collect().await.unwrap();
         assert_eq!(roles.last(), Some(&Role::User));
     }
+
+    #[rstest]
+    #[case(include_str!("../../../res/harnesstools/fixtures/codex/session1.jsonl"))]
+    fn normalizes_a_real_redacted_session(#[case] jsonl: &str) {
+        let msgs: Vec<CodexMessage> = jsonl
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str::<CodexMessage>(l).expect("fixture record parses"))
+            .collect();
+        assert!(msgs.len() >= 15);
+
+        let mut saw_user = false;
+        let mut saw_assistant = false;
+        for m in &msgs {
+            let _ = m.timestamp();
+            let _ = m.content();
+            saw_user |= m.role() == Role::User;
+            saw_assistant |= m.role() == Role::Assistant;
+        }
+        assert!(saw_user && saw_assistant, "expected both user and assistant turns");
+    }
 }
