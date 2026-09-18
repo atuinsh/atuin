@@ -20,6 +20,7 @@
 //! ```
 
 use std::collections::HashMap;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,15 +32,13 @@ use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
+use crate::time::NonZeroDuration;
+
 /// Reason a [`TreeWatcher`] could not be started.
 #[derive(Debug, thiserror::Error)]
 pub enum TreeWatcherError {
     #[error("watch root is not a directory: {0}")]
     NotADirectory(PathBuf),
-    #[error("scan interval must be non-zero")]
-    ZeroScanInterval,
-    #[error("must be called from within a Tokio runtime")]
-    NoRuntime,
     #[error(transparent)]
     Notify(#[from] notify::Error),
     #[error(transparent)]
@@ -292,11 +291,11 @@ where
     async fn run(
         mut self,
         mut events: UnboundedReceiver<DebounceEventResult>,
-        scan_interval: Duration,
+        scan_interval: NonZeroDuration,
     ) {
         self.rescan().await;
 
-        let mut interval = tokio::time::interval(scan_interval);
+        let mut interval = tokio::time::interval(scan_interval.get());
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         interval.tick().await;
 
@@ -342,13 +341,14 @@ where
     }
 }
 
-const DEFAULT_SCAN_INTERVAL: Duration = Duration::from_secs(30);
+const DEFAULT_SCAN_INTERVAL: NonZeroDuration =
+    NonZeroDuration::from_secs(NonZeroU64::new(30).unwrap());
 const DEFAULT_DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Builder for a [`TreeWatcher`].
 pub struct TreeWatcherBuilder {
     recursive: bool,
-    scan_interval: Duration,
+    scan_interval: NonZeroDuration,
     debounce_timeout: Duration,
 }
 
@@ -372,7 +372,7 @@ impl TreeWatcherBuilder {
 
     /// Interval between reconciling full scans (default: 30s).
     #[must_use]
-    pub fn scan_interval(mut self, interval: Duration) -> Self {
+    pub fn scan_interval(mut self, interval: NonZeroDuration) -> Self {
         self.scan_interval = interval;
         self
     }
@@ -397,12 +397,6 @@ impl TreeWatcherBuilder {
         H: Send + 'static,
         F: Fn(NodeContext) -> Option<H> + Send + 'static,
     {
-        let handle =
-            tokio::runtime::Handle::try_current().map_err(|_| TreeWatcherError::NoRuntime)?;
-        if self.scan_interval.is_zero() {
-            return Err(TreeWatcherError::ZeroScanInterval);
-        }
-
         let root = std::fs::canonicalize(root.as_ref())?;
         if !root.is_dir() {
             return Err(TreeWatcherError::NotADirectory(root));
@@ -427,7 +421,7 @@ impl TreeWatcherBuilder {
             factory,
             entries: HashMap::new(),
         };
-        let task = handle.spawn(engine.run(rx, self.scan_interval));
+        let task = tokio::spawn(engine.run(rx, self.scan_interval));
 
         Ok(TreeWatcher {
             task,
@@ -524,6 +518,10 @@ mod tests {
 
     fn ap(path: &str) -> Arc<Path> {
         Arc::from(Path::new(path))
+    }
+
+    fn nz(d: Duration) -> NonZeroDuration {
+        NonZeroDuration::new(d).unwrap()
     }
 
     fn event(kind: EventKind, paths: Vec<PathBuf>) -> notify::Event {
@@ -627,22 +625,6 @@ mod tests {
         let (found, complete) = scan_fs(Path::new("/this/does/not/exist/anywhere"), true);
         assert!(found.is_empty());
         assert!(!complete);
-    }
-
-    #[rstest]
-    fn watch_without_runtime_errors() {
-        let dir = tempfile::tempdir().unwrap();
-        let result = TreeWatcher::watch(dir.path(), |_ctx: NodeContext| Some(()));
-        assert!(matches!(result, Err(TreeWatcherError::NoRuntime)));
-    }
-
-    #[tokio::test]
-    async fn watch_with_zero_scan_interval_errors() {
-        let dir = tempfile::tempdir().unwrap();
-        let result = TreeWatcher::builder()
-            .scan_interval(Duration::ZERO)
-            .watch(dir.path(), |_ctx: NodeContext| Some(()));
-        assert!(matches!(result, Err(TreeWatcherError::ZeroScanInterval)));
     }
 
     #[rstest]
@@ -892,7 +874,7 @@ mod tests {
         let (created_tx, mut created_rx) = unbounded_channel();
         let (drop_tx, _drop_rx) = unbounded_channel::<PathBuf>();
         let _watcher = TreeWatcher::builder()
-            .scan_interval(Duration::from_millis(100))
+            .scan_interval(nz(Duration::from_millis(100)))
             .debounce_timeout(Duration::from_millis(50))
             .watch(dir.path(), move |ctx| {
                 let path = ctx.path().to_owned();
@@ -920,7 +902,7 @@ mod tests {
         let (created_tx, mut created_rx) = unbounded_channel::<PathBuf>();
         let (drop_tx, mut drop_rx) = unbounded_channel::<PathBuf>();
         let _watcher = TreeWatcher::builder()
-            .scan_interval(Duration::from_millis(100))
+            .scan_interval(nz(Duration::from_millis(100)))
             .debounce_timeout(Duration::from_millis(50))
             .watch(dir.path(), move |ctx| {
                 let path = ctx.path().to_owned();
@@ -958,7 +940,7 @@ mod tests {
         let (drop_tx, _drop_rx) = unbounded_channel::<PathBuf>();
         let _watcher = TreeWatcher::builder()
             .recursive(recursive)
-            .scan_interval(Duration::from_millis(100))
+            .scan_interval(nz(Duration::from_millis(100)))
             .debounce_timeout(Duration::from_millis(50))
             .watch(dir.path(), move |ctx| {
                 if !ctx.is_file() {
@@ -988,7 +970,7 @@ mod tests {
         let (created_tx, mut created_rx) = unbounded_channel::<PathBuf>();
         let (drop_tx, mut drop_rx) = unbounded_channel::<PathBuf>();
         let watcher = TreeWatcher::builder()
-            .scan_interval(Duration::from_millis(100))
+            .scan_interval(nz(Duration::from_millis(100)))
             .debounce_timeout(Duration::from_millis(50))
             .watch(dir.path(), move |ctx| {
                 let path = ctx.path().to_owned();
