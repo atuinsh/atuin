@@ -1,8 +1,8 @@
 use atuin_client::history::HistoryId;
 use atuin_common::futures::stream::ChunkedStream;
-use futures::Stream;
+use atuin_common::string::highlighted::HighlightedString;
 
-use super::{Index, IndexError, OutputMatch, RankedMatch};
+use super::{Index, IndexError, RankedMatch};
 
 /// An [`Index`] whose every operation fails, standing in for a broken search index.
 ///
@@ -31,12 +31,8 @@ impl Index for FailingIndex {
         ChunkedStream::from_error(unavailable())
     }
 
-    async fn highlight(
-        &self,
-        _query: &str,
-        _bodies: impl Stream<Item = (RankedMatch, String)> + Send + 'static,
-    ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
-        ChunkedStream::from_error(unavailable())
+    async fn highlight(&self, _query: &str, _body: &str) -> Result<HighlightedString, IndexError> {
+        Err(unavailable())
     }
 
     async fn indexed_ids(&self) -> ChunkedStream<Result<HistoryId, IndexError>> {

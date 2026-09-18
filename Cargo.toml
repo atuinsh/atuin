@@ -126,12 +126,13 @@ reqwest = {
     features = ["json", "native-tls", "stream", "gzip", "zstd"],
 }
 reqwest-middleware = "0.5"
-rmcp = { version = "3", default-features = false, features = ["server", "transport-io"] }
+rmcp = { version = "3", default-features = false, features = ["server", "transport-io", "schemars"] }
 rmp = "0.8"
 rpassword = "7"
 rstest = "0.27"
 runtime-format = "0.1"
 rustix = { version = "1", features = ["process", "fs", "pty", "termios", "stdio"] }
+schemars = "1"
 rusty_paserk = { version = "0.5", default-features = false, features = ["v4", "serde"] }
 # rusty_paserk 0.5.0 (latest) requires rusty_paseto 0.8.0 unfortunately
 rusty_paseto = { version = "0.8", default-features = false }

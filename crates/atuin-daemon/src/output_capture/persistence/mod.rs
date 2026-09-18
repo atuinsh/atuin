@@ -2,18 +2,24 @@ mod blob;
 mod index;
 
 use atuin_client::history::{CommandCapture, HistoryId};
+use atuin_common::db::sqlite::fts::TextHighlighter;
 use atuin_common::futures::stream::{ChunkedStream, EitherOrBoth, try_merge_join};
+use atuin_common::range::KeptEnds;
+use atuin_common::slice::excerpt;
+use atuin_common::string::highlighted::HighlightedText;
 #[cfg(test)]
 pub use blob::FailingBlobStore;
 pub use blob::{
     AnyBlobStore, BlobStore, CaptureError, DeleteOutputError, FjallBlobStore, GetOutputError,
     NopBlobStore,
 };
-use futures::{StreamExt, TryStreamExt, stream};
+use futures::{StreamExt, TryStreamExt, future, stream};
 #[cfg(test)]
 pub use index::FailingIndex;
-pub use index::{AnyIndex, Index, IndexError, NopIndex, OutputMatch, RankedMatch, SqliteIndex};
+pub use index::{AnyIndex, Index, IndexError, NopIndex, RankedMatch, SqliteIndex};
 use tracing::warn;
+
+use super::{OutputLine, OutputMatch};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReconcileError {
@@ -22,6 +28,11 @@ pub enum ReconcileError {
     #[error(transparent)]
     Index(#[from] IndexError),
 }
+
+/// Hits fetched and highlighted ahead of the consumer, in order.
+const SEARCH_CONCURRENCY: usize = 4;
+/// Hits per chunk of the search stream.
+const SEARCH_CHUNK: usize = 16;
 
 #[derive(Debug)]
 pub struct OutputStore {
@@ -62,15 +73,18 @@ impl OutputStore {
         result
     }
 
+    /// Relevance-ranked hits, each reduced to the lines within `context` of a match, or whole
+    /// when `context` is `None`.
     pub async fn search(
         &self,
         query: &str,
         limit: usize,
+        context: Option<usize>,
     ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
         // Only the ranking (history_id + score) comes from the contentless index; it is small, so
         // collecting it keeps error handling simple. The bodies -- each up to `max_output_size` --
-        // are the memory risk, so they are hydrated lazily from the blob as `highlight` pulls its
-        // batches, and the caller dropping the stream stops that work early.
+        // are the memory risk, so they are hydrated from the blob only as the caller pulls, and
+        // dropping the stream stops that work early.
         let ranked: Vec<RankedMatch> =
             match self.index.search(query, limit).await.try_collect().await {
                 Ok(ranked) => ranked,
@@ -78,31 +92,66 @@ impl OutputStore {
             };
 
         let blob = self.blob.clone();
-        // The index is derived and can briefly hold entries whose blob was deleted -- a
-        // capture/remove race, a swallowed index write, or reconcile lag. The blob is
-        // authoritative: a hit is highlighted from its stored capture, and one whose capture is
-        // gone is dropped. (This can yield fewer than `limit` hits even when more live matches
-        // exist further down the ranking.)
-        let bodies = stream::iter(ranked).filter_map(move |hit| {
-            let blob = blob.clone();
-            async move {
-                match blob.get(hit.history_id).await {
-                    Ok(Some(capture)) => Some((hit, capture.plaintext())),
-                    Ok(None) => None, // the capture is gone; drop the stale index hit
-                    // A transient read failure hides only this hit, not the whole search.
-                    Err(err) => {
-                        warn!(
-                            ?err,
-                            id = %hit.history_id,
-                            "failed to read a search hit's capture; dropping it",
-                        );
-                        None
-                    }
-                }
-            }
-        });
+        let index = self.index.clone();
+        let query = query.to_owned();
+        let hits = stream::iter(ranked)
+            .map(move |hit| {
+                let blob = blob.clone();
+                let index = index.clone();
+                let query = query.clone();
 
-        self.index.highlight(query, bodies).await
+                async move {
+                    let capture = match blob.get(hit.history_id).await {
+                        Ok(Some(capture)) => capture,
+                        Ok(None) => return None,
+                        // A transient read failure hides only this hit, not the whole search.
+                        Err(err) => {
+                            warn!(
+                                ?err,
+                                id = %hit.history_id,
+                                "failed to read a search hit's capture; dropping it",
+                            );
+                            return None;
+                        }
+                    };
+                    let body = capture.plaintext();
+                    let body = match index.highlight(&query, &body).await {
+                        Ok(body) => body,
+                        // Still a hit, just unhighlighted: highlighting is cosmetic and must not
+                        // fail the search.
+                        Err(err) => {
+                            warn!(
+                                ?err,
+                                id = %hit.history_id,
+                                "failed to highlight a search hit; showing it unmarked",
+                            );
+                            let highlighter = TextHighlighter::default();
+                            highlighter.as_highlighted(highlighter.sanitize(&body).into_owned())
+                        }
+                    };
+
+                    let tail_from =
+                        capture.output_end.as_ref().map(|_| capture.output_start.lines().count());
+
+                    let body_lines: Vec<HighlightedText<&str>> = body.lines().collect();
+                    let ends = KeptEnds::from_fold(body_lines.len(), tail_from);
+                    let lines = excerpt(&body_lines, |line| line.has_match(), context)
+                        .map(|(idx, line)| OutputLine {
+                            line: ends.number(idx),
+                            content: line.map(str::to_owned),
+                        })
+                        .collect();
+                    Some(Ok(OutputMatch {
+                        history_id: hit.history_id,
+                        lines,
+                        score: hit.score,
+                    }))
+                }
+            })
+            .buffered(SEARCH_CONCURRENCY)
+            .filter_map(future::ready);
+
+        ChunkedStream::new(hits.chunks(SEARCH_CHUNK))
     }
 
     pub fn estimated_disk_space(&self) -> u64 {
@@ -194,7 +243,7 @@ mod tests {
     }
 
     async fn search_hits(store: &OutputStore, query: &str, limit: usize) -> Vec<OutputMatch> {
-        store.search(query, limit).await.try_collect().await.expect("search")
+        store.search(query, limit, Some(0)).await.try_collect().await.expect("search")
     }
 
     #[tokio::test]
@@ -219,11 +268,10 @@ mod tests {
 
         let hits = search_hits(&backend, "fatal", 10).await;
         assert_eq!(hits.len(), 1);
-        let output = &hits[0].output;
-        assert_eq!(output.display_plain().to_string(), "fatal: disk full");
-        let marked = output.as_ref();
-        let got: Vec<&str> = output.ranges().map(|r| &marked[r]).collect();
-        assert_eq!(got, vec!["fatal"]);
+        assert_eq!(hits[0].lines.len(), 1);
+        let plain = hits[0].lines[0].content.to_plain();
+        assert_eq!(plain.text, "fatal: disk full");
+        assert_eq!(plain.ranges, vec![0..5]);
     }
 
     #[tokio::test]

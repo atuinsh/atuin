@@ -322,7 +322,7 @@ impl Cmd {
             Self::Ai(cli) => atuin_ai::commands::run(cli, &settings).await,
 
             #[cfg(feature = "ai")]
-            Self::Mcp => Box::pin(atuin_ai::mcp::run(&db)).await,
+            Self::Mcp => Box::pin(atuin_ai::mcp::run(&db, &settings)).await,
         }
     }
 

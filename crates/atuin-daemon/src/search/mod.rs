@@ -9,7 +9,7 @@ use thiserror::Error;
 
 use crate::grpc::common::pb::{self as common};
 use crate::grpc::history::pb::IdParseError;
-use crate::output_capture::OutputMatch;
+use crate::output_capture::{OutputLine, OutputMatch};
 
 // Include the generated proto code
 mod proto {
@@ -23,8 +23,8 @@ pub use proto::*;
 pub enum OutputMatchParseError {
     #[error("output match is missing its history id")]
     MissingHistoryId,
-    #[error("output match is missing its output")]
-    MissingOutput,
+    #[error("output match line is missing its content")]
+    MissingContent,
     #[error(transparent)]
     BadHistoryId(#[from] IdParseError),
     #[error(transparent)]
@@ -37,10 +37,19 @@ impl TryFrom<OutputSearchMatch> for OutputMatch {
     fn try_from(value: OutputSearchMatch) -> Result<Self, Self::Error> {
         let history_id =
             value.history_id.ok_or(OutputMatchParseError::MissingHistoryId)?.try_into()?;
-        let output = value.output.ok_or(OutputMatchParseError::MissingOutput)?.try_into()?;
+        let lines = value
+            .lines
+            .into_iter()
+            .map(|l| {
+                Ok(OutputLine {
+                    line: l.line,
+                    content: l.content.ok_or(OutputMatchParseError::MissingContent)?.try_into()?,
+                })
+            })
+            .collect::<Result<_, OutputMatchParseError>>()?;
         Ok(Self {
             history_id,
-            output,
+            lines,
             score: value.score,
         })
     }
@@ -91,21 +100,25 @@ mod tests {
     fn converts_a_well_formed_match_into_domain_types() {
         let proto = OutputSearchMatch {
             history_id: Some(history_id([1u8; 16])),
-            output: Some(output("\u{E000}disk\u{E001} full")),
+            lines: vec![OutputSearchLine {
+                line: -2,
+                content: Some(output("\u{E000}disk\u{E001} full")),
+            }],
             score: 0.5,
         };
 
         let m = OutputMatch::try_from(proto).unwrap();
 
         assert_eq!(m.history_id, HistoryId::from_bytes([1u8; 16]));
-        assert_eq!(m.output.display_plain().to_string(), "disk full");
+        assert_eq!(m.lines[0].line, -2);
+        assert_eq!(m.lines[0].content.display_plain().to_string(), "disk full");
     }
 
     #[rstest]
     fn rejects_a_match_missing_its_history_id() {
         let proto = OutputSearchMatch {
             history_id: None,
-            output: Some(output("x")),
+            lines: vec![],
             score: 0.0,
         };
         assert!(matches!(
@@ -115,20 +128,23 @@ mod tests {
     }
 
     #[rstest]
-    fn rejects_a_match_missing_its_output() {
+    fn rejects_a_line_missing_its_content() {
         let proto = OutputSearchMatch {
             history_id: Some(history_id([1u8; 16])),
-            output: None,
+            lines: vec![OutputSearchLine {
+                line: 0,
+                content: None,
+            }],
             score: 0.0,
         };
-        assert!(matches!(OutputMatch::try_from(proto), Err(OutputMatchParseError::MissingOutput)));
+        assert!(matches!(OutputMatch::try_from(proto), Err(OutputMatchParseError::MissingContent)));
     }
 
     #[rstest]
     fn surfaces_a_malformed_history_id() {
         let proto = OutputSearchMatch {
             history_id: Some(common::HistoryId { uuid: None }),
-            output: Some(output("x")),
+            lines: vec![],
             score: 0.0,
         };
         assert!(matches!(
@@ -141,11 +157,14 @@ mod tests {
     fn surfaces_malformed_output() {
         let proto = OutputSearchMatch {
             history_id: Some(history_id([1u8; 16])),
-            output: Some(HighlightedTextProto {
-                open: 0xD800,
-                close: 0xE001,
-                raw: "x".into(),
-            }),
+            lines: vec![OutputSearchLine {
+                line: 0,
+                content: Some(HighlightedTextProto {
+                    open: 0xD800,
+                    close: 0xE001,
+                    raw: "x".into(),
+                }),
+            }],
             score: 0.0,
         };
         assert!(matches!(OutputMatch::try_from(proto), Err(OutputMatchParseError::BadOutput(_))));

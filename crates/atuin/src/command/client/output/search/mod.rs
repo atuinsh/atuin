@@ -57,12 +57,18 @@ enum Style {
 /// Full-text search over captured command output.
 #[derive(Parser, Debug)]
 pub struct Cmd {
-    #[arg(allow_hyphen_values = true, required = true)]
+    /// Words to search for; all must appear. Use `--` before a query that starts with `-`.
+    #[arg(required = true)]
     query: Vec<String>,
 
     /// Maximum number of matches to return.
     #[arg(long, default_value_t = 5)]
     limit: u32,
+
+    /// Show only the matching lines, with this many lines of context on either side; without it,
+    /// each match's whole output.
+    #[arg(short = 'C', long)]
+    context: Option<u32>,
 
     /// How matches are rendered.
     #[arg(long, value_enum, default_value_t = Style::Auto)]
@@ -164,9 +170,7 @@ impl Cmd {
                 SearchClient::new(settings.daemon.existing_socket_path().into_owned()).await?;
             #[cfg(not(unix))]
             let mut client = SearchClient::new(settings.daemon.tcp_port).await?;
-            // 0 = unbounded; the daemon streams by relevance and we stop once we've shown `--limit`
-            // matches, so filtering out our own runs never starves the result set.
-            client.search_command_output(query.clone(), 0).await
+            client.search_command_output(query.clone(), None, self.context).await
         };
 
         let matches = match open().await {

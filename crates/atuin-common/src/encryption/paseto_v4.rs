@@ -244,14 +244,19 @@ impl Key {
     /// Refuses to overwrite a file that already exists.
     pub fn try_write_path(&self, path: &Path) -> Result<(), KeyFileStoringError> {
         use std::io::{Error, ErrorKind};
+        use std::sync::atomic::{AtomicUsize, Ordering};
 
         // To avoid race conditions, this function:
         //
-        // 1. Creates a temporary file in the same directory as `path`, but with `.` prepended to
-        //    the filename, and `.atuin-tmp.{i}` appended. `i` starts at 0 and is incremented until
-        //    we find a path that doesn't exist yet.
+        // 1. Creates a temporary file in the same directory as `path`, named after the key file
+        //    with a per-writer-unique tag (this process's id plus a monotonic counter) so that
+        //    concurrent writers never pick the same temp name. That collision is not benign on
+        //    Windows: `create_new` on a name another writer has just removed hits the file's
+        //    "delete pending" window and fails with `ERROR_ACCESS_DENIED` rather than
+        //    `AlreadyExists`. The trailing `.{i}` (starting at 0) only disambiguates the
+        //    near-impossible case where a stale temp file already holds the name.
         //
-        //    For example, `/path/to/key` -> `/path/to/.key.atuin-tmp.0`.
+        //    For example, `/path/to/key` -> `/path/to/.key.atuin-tmp.4321.7.0`.
         //
         // 2. Writes the key to the temporary path.
         //
@@ -262,12 +267,21 @@ impl Key {
 
         let dir = path.parent().ok_or(Error::from(ErrorKind::IsADirectory))?;
         let name = path.file_name().ok_or(Error::from(ErrorKind::IsADirectory))?;
-        let base_tmp_name: std::ffi::OsString = [".".as_ref(), name].into_iter().collect();
+
+        static TMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let tag = format!(
+            ".atuin-tmp.{}.{}",
+            std::process::id(),
+            TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let mut base_tmp_name = std::ffi::OsString::from(".");
+        base_tmp_name.push(name);
+        base_tmp_name.push(tag);
 
         let mut i: usize = 0;
         match loop {
             let mut tmp_path = dir.join(&base_tmp_name);
-            tmp_path.add_extension(format!("atuin-tmp.{i}"));
+            tmp_path.add_extension(i.to_string());
 
             // `tmp_path` is first so it gets dropped after `tmp_file`. `tmp_path` is a
             // `RemoveOnDropPath` so it will remove the file when dropped, but this will fail on

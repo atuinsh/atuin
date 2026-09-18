@@ -147,6 +147,52 @@ impl Backoff {
             }
         }
     }
+
+    /// Poll the given function until it returns [`ControlFlow::Break`], returning that value.
+    ///
+    /// Unlike [`Self::retry`], there is no timeout and thus no error case: a persistently failing
+    /// operation is retried forever. The delay between attempts follows the backoff schedule and,
+    /// for [`Self::Exponential`], saturates at `max` and stays there -- so a long outage keeps being
+    /// probed at the ceiling cadence until it recovers, never abandoned and never reset back to
+    /// `initial`. Timing matches [`Self::retry`]: the first call is eager (no initial delay).
+    ///
+    /// [`ControlFlow::Continue`] values are discarded (there is no error to carry them into).
+    ///
+    /// # Panics
+    ///
+    /// Panics if called outside the context of a Tokio runtime with a time driver enabled.
+    pub async fn retry_forever<B, C, Fut, F>(self, mut fxn: F) -> B
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = ControlFlow<B, C>>,
+    {
+        if let ControlFlow::Break(value) = fxn().await {
+            return value;
+        }
+
+        match self {
+            Self::Linear(period) => loop {
+                tokio::time::sleep(jittered(period)).await;
+                if let ControlFlow::Break(value) = fxn().await {
+                    return value;
+                }
+            },
+            Self::Exponential {
+                initial,
+                max,
+                factor,
+            } => {
+                let mut backoff = initial.min(max);
+                loop {
+                    tokio::time::sleep(jittered(backoff).min(max)).await;
+                    backoff = backoff.saturating_mul(factor.get()).min(max);
+                    if let ControlFlow::Break(value) = fxn().await {
+                        return value;
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

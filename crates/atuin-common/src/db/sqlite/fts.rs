@@ -7,7 +7,7 @@
 //! markers, text sanitized on the way into the index, and free-form user input escaped into a
 //! `MATCH` expression. The highlighter itself lives in [`crate::string::highlighted`].
 
-use sqlx::query::Query;
+use sqlx::query::{Query, QueryScalar};
 use sqlx::{Database, Sqlite};
 
 pub use crate::string::highlighted::TextHighlighter;
@@ -41,6 +41,21 @@ impl FtsQueryExt for Query<'_, Sqlite, <Sqlite as Database>::Arguments> {
 
     fn bind_highlightable(self, highlighter: TextHighlighter, highlightable: &str) -> Self {
         // `into_owned` so the bound value outlives this call rather than borrowing the local `Cow`.
+        self.bind(highlighter.sanitize(highlightable).into_owned())
+    }
+
+    fn bind_match_query(self, input: &str) -> Option<Self> {
+        match_expression(input).map(|expr| self.bind(expr))
+    }
+}
+
+impl<O> FtsQueryExt for QueryScalar<'_, Sqlite, O, <Sqlite as Database>::Arguments> {
+    fn bind_highlight(self, highlighter: TextHighlighter) -> Self {
+        let [open, close] = highlighter.markers();
+        self.bind(open.to_string()).bind(close.to_string())
+    }
+
+    fn bind_highlightable(self, highlighter: TextHighlighter, highlightable: &str) -> Self {
         self.bind(highlighter.sanitize(highlightable).into_owned())
     }
 
