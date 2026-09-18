@@ -9,6 +9,7 @@ pub mod codex;
 mod json_hooks;
 pub mod opencode;
 pub mod pi;
+pub mod session;
 
 use ccode::Ccode;
 use codex::Codex;
