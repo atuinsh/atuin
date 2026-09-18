@@ -15,7 +15,7 @@ version.workspace = true
 ai = []
 ansi = ["dep:atuin-vt100", "dep:memchr"]
 db = ["dep:sqlx"]
-os = ["dep:rustix", "dep:windows-sys"]
+os = ["dep:rustix"]
 proto = ["dep:prost"]
 sqlite = ["db", "sqlx/sqlite", "sqlx/regexp", "dep:libsqlite3-sys", "dep:tokio-util"]
 test-utils = ["dep:tracing-subscriber"]
@@ -56,6 +56,7 @@ sysinfo = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true, features = ["formatting", "parsing"] }
 tiny-bip39 = { workspace = true }
+typed-builder = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true, optional = true }
 tracing = { workspace = true }
@@ -70,7 +71,7 @@ zeroize = { workspace = true }
 rustix = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true, optional = true }
+windows-sys = { workspace = true }
 
 [dev-dependencies]
 divan = { workspace = true }
