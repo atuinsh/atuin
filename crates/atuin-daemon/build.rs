@@ -9,7 +9,7 @@ fn main() -> std::io::Result<()> {
         "proto/history.proto",
         "proto/search.proto",
         "proto/ai/agent.proto",
-        "proto/ai/agent/session_service.proto",
+        "proto/ai/session.proto",
     ];
     let proto_include_dirs = ["proto"];
 

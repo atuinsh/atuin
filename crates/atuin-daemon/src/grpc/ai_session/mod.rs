@@ -7,10 +7,14 @@ use tonic::{Request, Response, Status};
 
 use crate::grpc::ai_session::pb::ai_session_server::AiSession as GrpcService;
 use crate::grpc::ai_session::pb::{
-    GetSessionRequest, GetSessionResponse, GetTranscriptRequest, GetTranscriptResponse,
+    GetSessionEvent, GetSessionRequest, GetTranscriptChunk, GetTranscriptRequest,
     ListSessionsRequest, ListSessionsResponse, SearchSessionsMatch, SearchSessionsRequest,
     TailSessionsEvent, TailSessionsRequest,
 };
+// Brought into scope so the generated `ai.session` code can resolve its
+// cross-package references to the `common` package (e.g. `common.Uuid`,
+// `common.Lagged`).
+use crate::grpc::common::pb as common;
 
 #[derive(Clone, Default)]
 pub struct Service;
@@ -24,6 +28,9 @@ impl Service {
 
 #[tonic::async_trait]
 impl GrpcService for Service {
+    type GetSessionStream = Pin<Box<dyn Stream<Item = Result<GetSessionEvent, Status>> + Send>>;
+    type GetTranscriptStream =
+        Pin<Box<dyn Stream<Item = Result<GetTranscriptChunk, Status>> + Send>>;
     type SearchSessionsStream =
         Pin<Box<dyn Stream<Item = Result<SearchSessionsMatch, Status>> + Send>>;
     type TailSessionsStream = Pin<Box<dyn Stream<Item = Result<TailSessionsEvent, Status>> + Send>>;
@@ -38,14 +45,14 @@ impl GrpcService for Service {
     async fn get_session(
         &self,
         _request: Request<GetSessionRequest>,
-    ) -> Result<Response<GetSessionResponse>, Status> {
+    ) -> Result<Response<Self::GetSessionStream>, Status> {
         Err(Status::unimplemented(""))
     }
 
     async fn get_transcript(
         &self,
         _request: Request<GetTranscriptRequest>,
-    ) -> Result<Response<GetTranscriptResponse>, Status> {
+    ) -> Result<Response<Self::GetTranscriptStream>, Status> {
         Err(Status::unimplemented(""))
     }
 
