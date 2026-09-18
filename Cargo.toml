@@ -203,6 +203,19 @@ zeroize = "1"
 # held at 0.13: compression-codecs (via reqwest) pins zstd 0.13; bumping would add a 2nd copy
 zstd = "0.13"
 
+# Dependencies that are pure hot loops (the bundled SQLite and the record-store
+# crypto) run 10x+ slower unoptimized, which makes every test that touches a
+# database or the record store crawl. Optimize just those in dev/test builds; the
+# workspace crates themselves stay fast to compile and easy to debug.
+[profile.dev.package]
+libsqlite3-sys.opt-level = 3
+chacha20.opt-level = 3
+poly1305.opt-level = 3
+blake2.opt-level = 3
+rusty_paseto.opt-level = 3
+rusty_paserk.opt-level = 3
+base64.opt-level = 3
+
 # The profile that 'cargo dist' will build with
 [profile.dist]
 inherits = "release"
