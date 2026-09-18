@@ -210,7 +210,6 @@ zstd = "0.13"
 [profile.dev.package]
 libsqlite3-sys.opt-level = 3
 chacha20.opt-level = 3
-poly1305.opt-level = 3
 blake2.opt-level = 3
 rusty_paseto.opt-level = 3
 rusty_paserk.opt-level = 3

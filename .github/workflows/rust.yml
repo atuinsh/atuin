@@ -59,7 +59,7 @@ jobs:
           # The suffix keeps this entry apart from caches built with the default
           # release profile: the CARGO_PROFILE_RELEASE_* overrides above change
           # every unit's fingerprint. Bump it when they change.
-          key: ${{ runner.os }}-cargo-release-nolto-cgu256-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-release-nolto-cgu256-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
           restore-keys: ${{ runner.os }}-cargo-release-nolto-cgu256-
 
       - name: Run cargo build (release)
@@ -129,7 +129,7 @@ jobs:
             ~/.cargo/registry
              ~/.cargo/git
              target
-          key: ${{ runner.os }}-cargo-unit-test-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-unit-test-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
           restore-keys: ${{ runner.os }}-cargo-unit-test-
 
       - name: Run cargo test
@@ -185,7 +185,7 @@ jobs:
             ~/.cargo/registry
              ~/.cargo/git
              target
-          key: ${{ runner.os }}-cargo-check-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-check-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
           restore-keys: ${{ runner.os }}-cargo-check-
 
       - name: Run cargo check (all features)
@@ -237,7 +237,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-msrv-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-msrv-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
           restore-keys: ${{ runner.os }}-cargo-msrv-
 
       # Verifies the declared MSRV (workspace.package.rust-version) still holds
@@ -290,7 +290,7 @@ jobs:
             ~/.cargo/registry
              ~/.cargo/git
              target
-          key: ${{ runner.os }}-cargo-integration-test-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-integration-test-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
           restore-keys: ${{ runner.os }}-cargo-integration-test-
 
       - name: Run cargo test
@@ -379,7 +379,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-e2e-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-e2e-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
           restore-keys: ${{ runner.os }}-cargo-e2e-
 
       - name: Run fresh-install and PTY e2e tests
@@ -412,7 +412,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
           restore-keys: ${{ runner.os }}-cargo-clippy-
 
       - name: Run clippy
@@ -445,7 +445,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-doc-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-doc-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
           restore-keys: ${{ runner.os }}-cargo-doc-
 
       - name: Run cargo doc
@@ -523,7 +523,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-package-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-package-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
           restore-keys: ${{ runner.os }}-cargo-package-
 
       - name: Build packaged tarballs
