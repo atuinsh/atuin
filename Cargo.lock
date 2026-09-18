@@ -600,6 +600,7 @@ dependencies = [
  "rmp",
  "rstest",
  "serde",
+ "shlex",
  "tokio",
  "tracing",
 ]

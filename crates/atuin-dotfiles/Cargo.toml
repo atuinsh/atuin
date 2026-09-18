@@ -22,6 +22,7 @@ eyre = { workspace = true }
 rand = { workspace = true }
 rmp = { workspace = true }
 serde = { workspace = true }
+shlex = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 

@@ -6,29 +6,6 @@
 //! shell startup. Names and values must therefore be escaped here, at the point
 //! of generation, regardless of where the record originated.
 
-/// Quote a value for a POSIX-style shell (bash, zsh, fish).
-///
-/// Wraps the value in single quotes and renders every embedded single quote as
-/// `'\''` — close the quote, emit an escaped literal quote, reopen the quote.
-/// This is the only fully safe way to quote in POSIX shells: no character is
-/// special inside single quotes, so nothing in `value` can break out.
-///
-/// It is also safe in fish, which treats `\'` outside quotes as a literal quote,
-/// so the pieces concatenate to the same string.
-pub fn posix_quote(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2);
-    out.push('\'');
-    for c in value.chars() {
-        if c == '\'' {
-            out.push_str("'\\''");
-        } else {
-            out.push(c);
-        }
-    }
-    out.push('\'');
-    out
-}
-
 /// Quote a value as a Python single-quoted string literal, for xonsh.
 pub fn python_quote(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
@@ -61,18 +38,7 @@ pub fn is_safe_name(name: &str) -> bool {
 mod tests {
     use rstest::rstest;
 
-    use super::{is_safe_name, posix_quote, python_quote};
-
-    #[rstest]
-    #[case::simple("simple", "'simple'")]
-    #[case::spaces("git push", "'git push'")]
-    #[case::empty("", "''")]
-    #[case::single_quote("don't", "'don'\\''t'")]
-    // The injection payload: a single quote must not be able to close our quoting.
-    #[case::breakout("x'; touch pwned #", "'x'\\''; touch pwned #'")]
-    fn posix_quote_cases(#[case] input: &str, #[case] expected: &str) {
-        assert_eq!(posix_quote(input), expected);
-    }
+    use super::{is_safe_name, python_quote};
 
     #[rstest]
     #[case::simple("simple", "'simple'")]

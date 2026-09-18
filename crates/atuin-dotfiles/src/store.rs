@@ -160,14 +160,18 @@ impl AliasStore {
             }
 
             // If it's quoted, remove the quotes. If it's not quoted, do nothing.
-            // We re-quote it safely ourselves below.
+            // We re-quote it safely with shlex below.
             let value = unquote(alias.value.as_str()).unwrap_or_else(|_| alias.value.clone());
 
-            config.push_str(&format!(
-                "alias {}={}\n",
-                alias.name,
-                crate::escape::posix_quote(&value)
-            ));
+            // shlex refuses values that can't be represented in a POSIX shell (i.e.
+            // ones containing a nul byte); skip those rather than emit a line where
+            // the byte is silently swallowed.
+            let Ok(quoted) = shlex::try_quote(&value) else {
+                tracing::warn!(name = %alias.name, "skipping alias with unquotable value");
+                continue;
+            };
+
+            config.push_str(&format!("alias {}={}\n", alias.name, quoted));
         }
 
         config
@@ -441,7 +445,7 @@ mod tests {
         assert_eq!(
             build,
             "alias gp='git push'
-alias k='kubectl'
+alias k=kubectl
 alias kgap='kubectl get pods --all-namespaces'
 "
         );
@@ -478,16 +482,34 @@ alias kgap='kubectl get pods --all-namespaces'
         });
     }
 
+    // Each case tries to run `touch <marker>` via a different breakout technique
+    // when the generated alias line is evaluated by a shell (as it is at init).
+    // `{m}` is replaced with a unique marker path.
+    #[cfg(unix)]
     #[rstest]
-    fn format_posix_escapes_single_quotes() {
-        // A single quote in the value must not be able to close our quoting and
-        // reach command position when the generated file is sourced at shell init.
-        let aliases = [Alias {
-            name: String::from("ll"),
-            value: String::from("ls'; touch pwned #"),
-        }];
+    #[case::single_quote("ls'; touch {m} #")]
+    #[case::command_sub("ls$(touch {m})")]
+    #[case::backtick("ls`touch {m}`")]
+    // A single quote forces shlex onto its double-quoting path, where `$` and `` ` ``
+    // are special and must be escaped.
+    #[case::quote_and_command_sub("a'$(touch {m})")]
+    fn format_posix_output_is_not_injectable(#[case] payload: &str) {
+        use std::process::Command;
 
-        assert_eq!(AliasStore::format_posix(&aliases), "alias ll='ls'\\''; touch pwned #'\n");
+        let marker =
+            std::env::temp_dir().join(format!("atuin-inject-{}", atuin_common::utils::uuid_v7()));
+        let value = payload.replace("{m}", &marker.display().to_string());
+        let config = AliasStore::format_posix(&[Alias {
+            name: String::from("ll"),
+            value,
+        }]);
+
+        let status = Command::new("sh").arg("-c").arg(&config).status().unwrap();
+
+        let injected = marker.exists();
+        let _ = std::fs::remove_file(&marker);
+        assert!(status.success(), "generated alias config was not valid shell: {config:?}");
+        assert!(!injected, "alias value escaped its quoting and executed: {config:?}");
     }
 
     #[rstest]
@@ -497,6 +519,18 @@ alias kgap='kubectl get pods --all-namespaces'
         let aliases = [Alias {
             name: String::from("x; touch pwned #"),
             value: String::from("ls"),
+        }];
+
+        assert_eq!(AliasStore::format_posix(&aliases), "");
+    }
+
+    #[rstest]
+    fn format_posix_skips_nul_values() {
+        // A nul byte can't be represented in a POSIX shell string at all, so the
+        // record is dropped rather than emitted with the byte silently swallowed.
+        let aliases = [Alias {
+            name: String::from("ll"),
+            value: String::from("ls\0rm"),
         }];
 
         assert_eq!(AliasStore::format_posix(&aliases), "");
