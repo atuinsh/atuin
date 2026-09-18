@@ -151,7 +151,8 @@ impl SqliteStore {
     /// `BEGIN` would only lock at the first insert), so no other writer can claim a slot while
     /// the batch is going in. If any row's `(host, tag, idx)` slot was already held the batch is
     /// rolled back and `Ok(false)` is returned: the caller re-stamps its indices from the new
-    /// tail and retries.
+    /// tail and retries. Unlike `push_unique` there is no idempotent re-push: a record whose id
+    /// is already stored counts as a conflict too, so callers must build fresh ids per attempt.
     #[instrument(level = "trace", skip_all, err)]
     pub async fn push_batch_unique(
         &self,
@@ -811,6 +812,20 @@ mod tests {
         store.verify(&new_key).await.unwrap();
     }
 
+    /// A record in `series` at `idx` with a fresh id.
+    fn series_record(host: &Host, tag: &RecordTag, idx: u64) -> Record<paseto_v4::EncryptedData> {
+        Record::builder()
+            .host(host.clone())
+            .version("v1".into())
+            .tag(tag.clone())
+            .data(paseto_v4::EncryptedData {
+                raw: "1234".into(),
+                cek: "1234".into(),
+            })
+            .idx(idx)
+            .build()
+    }
+
     /// A batch whose `(host, tag, idx)` slots are partly taken is rejected whole, so the caller
     /// can re-stamp from the new tail; a batch on free slots lands whole.
     #[rstest]
@@ -818,18 +833,7 @@ mod tests {
     async fn push_batch_unique_is_all_or_nothing(#[future(awt)] store: SqliteStore) {
         let host = Host::new(HostId(uuid_v7()));
         let tag = RecordTag::Other(uuid_v7().simple().to_string());
-        let at = |idx| {
-            Record::builder()
-                .host(host.clone())
-                .version("v1".into())
-                .tag(tag.clone())
-                .data(paseto_v4::EncryptedData {
-                    raw: "1234".into(),
-                    cek: "1234".into(),
-                })
-                .idx(idx)
-                .build()
-        };
+        let at = |idx| series_record(&host, &tag, idx);
 
         let taken = at(0);
         store.push(&taken).await.unwrap();
@@ -843,5 +847,24 @@ mod tests {
         assert!(store.push_batch_unique([&first, &second].into_iter()).await.unwrap());
         assert_eq!(store.len_all().await.unwrap(), 3);
         assert_eq!(store.get(second.id).await.unwrap(), second);
+    }
+
+    /// A conflict in the last chunk of a multi-chunk batch rolls back the earlier chunks too.
+    #[rstest]
+    #[tokio::test]
+    async fn push_batch_unique_rolls_back_across_chunks(#[future(awt)] store: SqliteStore) {
+        let host = Host::new(HostId(uuid_v7()));
+        let tag = RecordTag::Other(uuid_v7().simple().to_string());
+        let rows_per_insert = store.sqlite.info().await.variable_number_limit() / 8;
+
+        let taken = series_record(&host, &tag, u64::try_from(rows_per_insert).unwrap());
+        store.push(&taken).await.unwrap();
+
+        // idx 0..=rows_per_insert: the first chunk is clean, the last row of the second collides.
+        let batch: Vec<_> = (0..=rows_per_insert)
+            .map(|idx| series_record(&host, &tag, u64::try_from(idx).unwrap()))
+            .collect();
+        assert!(!store.push_batch_unique(batch.iter()).await.unwrap());
+        assert_eq!(store.len_all().await.unwrap(), 1);
     }
 }
