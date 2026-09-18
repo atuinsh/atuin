@@ -18,17 +18,28 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The one full release build. Platform-specific compile errors are caught by
+  # unit-test's debug builds on every OS, release-profile breakage is
+  # platform-independent (the check job type-checks the profile everywhere),
+  # and release.yml builds every target for real. Windows spent ~5 min on two
+  # serial crates here and macOS ~3 min of scarce runner capacity for nothing.
   build:
-    strategy:
-      matrix:
-        os: [depot-ubuntu-24.04, depot-macos-26, depot-windows-2025-16]
-    runs-on: ${{ matrix.os }}
+    runs-on: depot-ubuntu-24.04-8
+
+    env:
+      # This job only proves the release profile compiles; nothing it builds is
+      # shipped (release.yml uses the `dist` profile, which sets lto = "fat"
+      # explicitly). Skip the default thin-local LTO pass on the final binary.
+      CARGO_PROFILE_RELEASE_LTO: "off"
+      # Experiment: the two crates that dominate this job (atuin, atuin-daemon)
+      # leave most cores idle with the default 16 codegen units; more, smaller
+      # units let LLVM spread them out. Drop if the timings don't improve.
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "256"
 
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install OpenSSL dev libraries (Linux)
-        if: runner.os == 'Linux'
+      - name: Install OpenSSL dev libraries
         uses: awalsh128/cache-apt-pkgs-action@v1.6.3
         with:
           packages: libssl-dev pkg-config
@@ -45,19 +56,14 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          # The suffix keeps this entry apart from caches built with the default
+          # release profile: the CARGO_PROFILE_RELEASE_* overrides above change
+          # every unit's fingerprint. Bump it when they change.
+          key: ${{ runner.os }}-cargo-release-nolto-cgu256-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-release-nolto-cgu256-
 
-      - name: Run cargo build common
-        run: cargo build -p atuin-common --locked --release
-
-      - name: Run cargo build client
-        run: cargo build -p atuin-client --locked --release
-
-      - name: Run cargo build server
-        run: cargo build -p atuin-server --locked --release
-
-      - name: Run cargo build main
-        run: cargo build --all --locked --release
+      - name: Run cargo build (release)
+        run: cargo build --workspace --locked --release
 
   # This used to use cross compilling via `cross` but it's more reliable to just
   # run this on a real illumos (OmniOS) system.
@@ -94,7 +100,7 @@ jobs:
   unit-test:
     strategy:
       matrix:
-        os: [depot-ubuntu-24.04, depot-macos-26, depot-windows-2025-16]
+        os: [depot-ubuntu-24.04-8, depot-macos-26, depot-windows-2025-16]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -123,7 +129,8 @@ jobs:
             ~/.cargo/registry
              ~/.cargo/git
              target
-          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-unit-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-unit-test-
 
       - name: Run cargo test
         run: cargo nextest run --lib --bins
@@ -178,10 +185,17 @@ jobs:
             ~/.cargo/registry
              ~/.cargo/git
              target
-          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-check-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-check-
 
       - name: Run cargo check (all features)
         run: cargo check --all-features --workspace
+        env:
+          # --all-features enables vendored-tls, which compiles OpenSSL from
+          # source. Type-checking doesn't need that; link against the system
+          # libssl where one is installed (Linux only). openssl-sys treats any
+          # value other than "0" as "don't vendor".
+          OPENSSL_NO_VENDOR: ${{ runner.os == 'Linux' && '1' || '0' }}
 
       - name: Run cargo check (no features)
         run: cargo check --no-default-features --workspace
@@ -194,6 +208,9 @@ jobs:
 
       - name: Run cargo check (client only)
         run: cargo check --no-default-features --features client --workspace
+
+      - name: Run cargo check (release profile)
+        run: cargo check --workspace --locked --release
 
   msrv:
     name: MSRV (1.95.0)
@@ -221,6 +238,7 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-msrv-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-msrv-
 
       # Verifies the declared MSRV (workspace.package.rust-version) still holds
       # with all features enabled. --all-features isn't a strict superset (it
@@ -234,7 +252,7 @@ jobs:
         run: cargo check --locked --workspace --all-features
 
   integration-test:
-    runs-on: depot-ubuntu-24.04
+    runs-on: depot-ubuntu-24.04-8
 
     services:
       postgres:
@@ -272,13 +290,18 @@ jobs:
             ~/.cargo/registry
              ~/.cargo/git
              target
-          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-integration-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-integration-test-
 
       - name: Run cargo test
         # E2e tests have a separate job with shell dependencies.
         run: cargo nextest run --test '*' -E 'not binary(/e2e_.*/)'
         env:
           ATUIN_DB_URI: postgres://atuin:pass@localhost:5432/atuin
+          # Test databases live in tempdirs. With 8 tests writing SQLite WALs
+          # at once the runner disk stalls for seconds and unrelated tests miss
+          # their 5 s pool-open timeout; tmpfs takes fsync out of the picture.
+          TMPDIR: /dev/shm
 
       - name: Show new proptest regressions
         if: ${{ failure() }}
@@ -356,7 +379,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-e2e-
 
       - name: Run fresh-install and PTY e2e tests
         run: cargo nextest run -p atuin --test 'e2e_*'
@@ -388,7 +412,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-clippy-
 
       - name: Run clippy
         run: cargo clippy -- -D warnings
@@ -421,6 +446,7 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-doc-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-doc-
 
       - name: Run cargo doc
         run: cargo doc --document-private-items --no-deps --workspace
@@ -498,6 +524,7 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-package-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-package-
 
       - name: Build packaged tarballs
         run: |
