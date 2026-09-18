@@ -109,6 +109,18 @@ struct PidfileGuard {
     file: File,
 }
 
+pub(super) struct KeyChangeGuard {
+    startup_lock: File,
+    pidfile_lock: File,
+}
+
+impl Drop for KeyChangeGuard {
+    fn drop(&mut self) {
+        let _ = self.pidfile_lock.unlock();
+        let _ = self.startup_lock.unlock();
+    }
+}
+
 impl PidfileGuard {
     fn acquire(path: &Path) -> Result<Self> {
         let mut file = open_lock_file(path)?;
@@ -529,6 +541,32 @@ async fn status_cmd(settings: &Settings) -> Result<()> {
     Ok(())
 }
 
+pub(super) async fn stop_for_key_change(settings: &Settings) -> Result<KeyChangeGuard> {
+    let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
+    let startup_lock_path = daemon_startup_lock_path(&pidfile_path);
+    let timeout = Duration::from_secs(5);
+    let startup_lock = wait_for_lock(&startup_lock_path, timeout)
+        .await
+        .wrap_err("could not prevent daemon startup during key change")?;
+
+    if let Ok(mut client) = connect_client(settings).await {
+        match client.shutdown().await {
+            Ok(true) => {}
+            Ok(false) => bail!("Daemon rejected shutdown request"),
+            Err(err) => return Err(err.wrap_err("Failed to send shutdown request")),
+        }
+    }
+
+    let pidfile_lock = wait_for_lock(&pidfile_path, timeout)
+        .await
+        .wrap_err("daemon did not shut down successfully")?;
+
+    Ok(KeyChangeGuard {
+        startup_lock,
+        pidfile_lock,
+    })
+}
+
 async fn stop_cmd(settings: &Settings) -> Result<()> {
     let Ok(mut client) = connect_client(settings).await else {
         println!("Daemon is not running");
@@ -685,7 +723,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn test_startup_lock_path() {
         let pidfile = Path::new("/tmp/atuin-daemon.pid");
         let lock = daemon_startup_lock_path(pidfile);
