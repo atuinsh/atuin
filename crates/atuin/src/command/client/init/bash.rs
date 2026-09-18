@@ -1,9 +1,6 @@
 use std::io::{self, Write};
 
 use atuin_client::settings::Tmux;
-use atuin_dotfiles::store::AliasStore;
-use atuin_dotfiles::store::var::VarStore;
-use eyre::Result;
 
 use super::StaticInitOptions;
 use crate::shell::BASH;
@@ -55,20 +52,4 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
         // than panicking, so we manually panic here to keep the same behavior.
         panic!("failed printing to stdout: {e}");
     }
-}
-
-pub async fn init(
-    aliases: AliasStore,
-    vars: VarStore,
-    options: &StaticInitOptions<'_>,
-) -> Result<()> {
-    init_static(options);
-
-    let aliases = atuin_dotfiles::shell::bash::alias_config(&aliases).await;
-    let vars = atuin_dotfiles::shell::bash::var_config(&vars).await;
-
-    println!("{aliases}");
-    println!("{vars}");
-
-    Ok(())
 }

@@ -10,8 +10,6 @@ use atuin_client::record::sync::{ClientSource, SyncError as ClientSyncError, Syn
 use atuin_client::settings::Settings;
 use atuin_common::futures::Backoff;
 use atuin_domain::record::RecordId;
-use atuin_dotfiles::store::AliasStore;
-use atuin_dotfiles::store::var::VarStore;
 use futures::StreamExt;
 use tokio::sync::RwLock;
 use tokio::time;
@@ -34,10 +32,7 @@ const DISABLED_SYNC_POLL: Duration = Duration::from_secs(300);
 pub struct Worker {
     handle: DaemonHandle,
     index: Arc<RwLock<SearchIndex>>,
-    /// TODO(markovejnovic): Would be good to have a StoreCtx which is a bundle of all these stores.
     history_store: HistoryStore,
-    alias_store: AliasStore,
-    var_store: VarStore,
 }
 
 /// Errors that prevent the sync worker from starting.
@@ -92,15 +87,11 @@ impl Worker {
         //                      us having the concept of a "store bundle".
         let history_store =
             HistoryStore::new(handle.store().clone(), host_id, encryption_key.clone());
-        let alias_store = AliasStore::new(handle.store().clone(), host_id, encryption_key.clone());
-        let var_store = VarStore::new(handle.store().clone(), host_id, encryption_key.clone());
 
         Ok(Self {
             handle,
             index,
             history_store,
-            alias_store,
-            var_store,
         })
     }
 
@@ -181,21 +172,7 @@ impl Worker {
             "sync complete"
         );
 
-        let history_build = self.index_downloaded_records(&downloaded_records);
-
-        let alias_build = async {
-            if let Err(e) = self.alias_store.build().await {
-                tracing::error!("failed to rebuild alias store: {e}");
-            }
-        };
-
-        let var_build = async {
-            if let Err(e) = self.var_store.build().await {
-                tracing::error!("failed to rebuild var store: {e}");
-            }
-        };
-
-        tokio::join!(history_build, alias_build, var_build);
+        self.index_downloaded_records(&downloaded_records).await;
 
         // Store sync time
         if let Err(e) = Settings::save_sync_time().await {

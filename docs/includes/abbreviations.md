@@ -19,7 +19,6 @@
 *[TLS]: The standard encryption that protects data as it travels the internet — the same technology behind the padlock in your browser
 *[UUID]: A long, randomly generated ID that is effectively unique, so different machines can create them without ever clashing
 *[daemon]: A program that runs quietly in the background; Atuin's daemon makes history writes instant and syncs on a schedule
-*[dotfiles]: Your shell's personal settings — aliases, functions, and environment variables — which Atuin can sync across your machines
 *[frecency]: A ranking that blends how often and how recently you have run a command, so your go-to commands show up first
 *[regex]: Regular expression — a compact pattern for matching text, for example finding every command that starts with "git"
 *[systemd]: The service manager on most Linux systems; it starts and supervises background programs like the Atuin daemon or server

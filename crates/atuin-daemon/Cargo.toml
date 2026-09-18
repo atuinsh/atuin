@@ -15,7 +15,6 @@ version.workspace = true
 atuin-client = { workspace = true }
 atuin-common = { workspace = true, features = ["os", "proto", "sqlite"] }
 atuin-domain = { workspace = true }
-atuin-dotfiles = { workspace = true }
 atuin-history = { workspace = true }
 dashmap = { workspace = true }
 derive_more = { workspace = true }

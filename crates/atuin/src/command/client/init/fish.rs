@@ -1,7 +1,4 @@
 use atuin_client::settings::Tmux;
-use atuin_dotfiles::store::AliasStore;
-use atuin_dotfiles::store::var::VarStore;
-use eyre::Result;
 
 use super::StaticInitOptions;
 
@@ -88,20 +85,4 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
             println!("{}", atuin_ai::shell::FISH_INIT);
         }
     }
-}
-
-pub async fn init(
-    aliases: AliasStore,
-    vars: VarStore,
-    options: &StaticInitOptions<'_>,
-) -> Result<()> {
-    init_static(options);
-
-    let aliases = atuin_dotfiles::shell::fish::alias_config(&aliases).await;
-    let vars = atuin_dotfiles::shell::fish::var_config(&vars).await;
-
-    println!("{aliases}");
-    println!("{vars}");
-
-    Ok(())
 }
