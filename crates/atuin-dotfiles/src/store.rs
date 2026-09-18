@@ -152,11 +152,22 @@ impl AliasStore {
         let mut config = String::new();
 
         for alias in aliases {
-            // If it's quoted, remove the quotes. If it's not quoted, do nothing.
-            let value = unquote(alias.value.as_str()).unwrap_or(alias.value.clone());
+            // A forged record can carry shell metacharacters in the name; never
+            // interpolate one into the `alias <name>=...` position.
+            if !crate::escape::is_safe_name(&alias.name) {
+                tracing::warn!(name = %alias.name, "skipping alias with unsafe name");
+                continue;
+            }
 
-            // we're about to quote it ourselves anyway!
-            config.push_str(&format!("alias {}='{}'\n", alias.name, value));
+            // If it's quoted, remove the quotes. If it's not quoted, do nothing.
+            // We re-quote it safely ourselves below.
+            let value = unquote(alias.value.as_str()).unwrap_or_else(|_| alias.value.clone());
+
+            config.push_str(&format!(
+                "alias {}={}\n",
+                alias.name,
+                crate::escape::posix_quote(&value)
+            ));
         }
 
         config
@@ -166,7 +177,16 @@ impl AliasStore {
         let mut config = String::new();
 
         for alias in aliases {
-            config.push_str(&format!("aliases['{}'] ='{}'\n", alias.name, alias.value));
+            if !crate::escape::is_safe_name(&alias.name) {
+                tracing::warn!(name = %alias.name, "skipping alias with unsafe name");
+                continue;
+            }
+
+            config.push_str(&format!(
+                "aliases['{}'] ={}\n",
+                alias.name,
+                crate::escape::python_quote(&alias.value)
+            ));
         }
 
         config
@@ -176,6 +196,11 @@ impl AliasStore {
         let mut config = String::new();
 
         for alias in aliases {
+            if !crate::escape::is_safe_name(&alias.name) {
+                tracing::warn!(name = %alias.name, "skipping alias with unsafe name");
+                continue;
+            }
+
             config.push_str(&crate::shell::powershell::format_alias(alias));
         }
 
@@ -451,5 +476,55 @@ alias kgap='kubectl get pods --all-namespaces'
             name: String::from("k"),
             value: String::from("kubectl")
         });
+    }
+
+    #[rstest]
+    fn format_posix_escapes_single_quotes() {
+        // A single quote in the value must not be able to close our quoting and
+        // reach command position when the generated file is sourced at shell init.
+        let aliases = [Alias {
+            name: String::from("ll"),
+            value: String::from("ls'; touch pwned #"),
+        }];
+
+        assert_eq!(AliasStore::format_posix(&aliases), "alias ll='ls'\\''; touch pwned #'\n");
+    }
+
+    #[rstest]
+    fn format_posix_skips_unsafe_names() {
+        // A forged record can carry shell metacharacters in the name; those must
+        // not be interpolated into `alias <name>=...`.
+        let aliases = [Alias {
+            name: String::from("x; touch pwned #"),
+            value: String::from("ls"),
+        }];
+
+        assert_eq!(AliasStore::format_posix(&aliases), "");
+    }
+
+    #[rstest]
+    fn format_xonsh_escapes_and_skips_unsafe_names() {
+        let aliases = [
+            Alias {
+                name: String::from("ll"),
+                value: String::from("ls'; bad"),
+            },
+            Alias {
+                name: String::from("x;bad"),
+                value: String::from("ls"),
+            },
+        ];
+
+        assert_eq!(AliasStore::format_xonsh(&aliases), "aliases['ll'] ='ls\\'; bad'\n");
+    }
+
+    #[rstest]
+    fn format_powershell_skips_unsafe_names() {
+        let aliases = [Alias {
+            name: String::from("x;bad"),
+            value: String::from("ls"),
+        }];
+
+        assert_eq!(AliasStore::format_powershell(&aliases), "");
     }
 }

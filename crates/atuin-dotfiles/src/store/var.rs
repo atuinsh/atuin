@@ -143,8 +143,10 @@ impl VarStore {
         {
             value.to_string()
         } else {
-            // Use single quotes and escape any embedded single quotes
-            format!("'{}'", value.replace('\'', "\\'"))
+            // Use single quotes and escape embedded backslashes and single quotes.
+            // Backslash must be escaped first, otherwise a trailing backslash would
+            // swallow the closing quote and let the value break out.
+            format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
         }
     }
 
@@ -187,6 +189,11 @@ impl VarStore {
         let mut config = String::new();
 
         for env in env {
+            if !crate::escape::is_safe_name(&env.name) {
+                tracing::warn!(name = %env.name, "skipping var with unsafe name");
+                continue;
+            }
+
             let escaped_value = Self::escape_xonsh_value(&env.value);
             config.push_str(&format!("${}={}\n", env.name, escaped_value));
         }
@@ -198,6 +205,11 @@ impl VarStore {
         let mut config = String::new();
 
         for env in env {
+            if !crate::escape::is_safe_name(&env.name) {
+                tracing::warn!(name = %env.name, "skipping var with unsafe name");
+                continue;
+            }
+
             let escaped_value = Self::escape_fish_value(&env.value);
             config.push_str(&format!("set -gx {} {}\n", env.name, escaped_value));
         }
@@ -209,6 +221,11 @@ impl VarStore {
         let mut config = String::new();
 
         for env in env {
+            if !crate::escape::is_safe_name(&env.name) {
+                tracing::warn!(name = %env.name, "skipping var with unsafe name");
+                continue;
+            }
+
             let escaped_value = Self::escape_posix_value(&env.value);
             if env.export {
                 config.push_str(&format!("export {}={}\n", env.name, escaped_value));
@@ -224,6 +241,11 @@ impl VarStore {
         let mut config = String::new();
 
         for var in env {
+            if !crate::escape::is_safe_name(&var.name) {
+                tracing::warn!(name = %var.name, "skipping var with unsafe name");
+                continue;
+            }
+
             config.push_str(&crate::shell::powershell::format_var(var));
         }
 
@@ -439,8 +461,27 @@ mod tests {
     #[case::spaces_short("bar baz", "'bar baz'")]
     // Values with single quotes should be escaped
     #[case::single_quote("don't", "'don\\'t'")]
+    // Backslashes must be escaped too, otherwise a trailing backslash swallows
+    // our closing quote and the value breaks out into command position.
+    #[case::backslash("a\\b", "'a\\\\b'")]
     fn escapes_fish_value(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(VarStore::escape_fish_value(input), expected);
+    }
+
+    #[rstest]
+    fn format_skips_unsafe_names() {
+        // A forged record can carry shell metacharacters in the name; those must
+        // not be interpolated into any generated assignment.
+        let vars = [Var {
+            name: String::from("x; touch pwned #"),
+            value: String::from("1"),
+            export: true,
+        }];
+
+        assert_eq!(VarStore::format_posix(&vars), "");
+        assert_eq!(VarStore::format_fish(&vars), "");
+        assert_eq!(VarStore::format_xonsh(&vars), "");
+        assert_eq!(VarStore::format_powershell(&vars), "");
     }
 
     #[rstest]
