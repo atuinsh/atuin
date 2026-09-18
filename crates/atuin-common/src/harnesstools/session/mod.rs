@@ -79,3 +79,17 @@ mod tests {
         assert_eq!(m.id(), Some(MessageId::from("m1".to_owned())));
     }
 }
+
+pub mod any;
+
+use crate::harnesstools::ccode::session::CcodeMessage;
+use crate::harnesstools::codex::session::CodexMessage;
+use crate::harnesstools::pi::session::PiMessage;
+
+#[enum_dispatch(Message)]
+#[derive(Debug, Clone)]
+pub enum AnyMessage {
+    Ccode(CcodeMessage),
+    Codex(CodexMessage),
+    Pi(PiMessage),
+}

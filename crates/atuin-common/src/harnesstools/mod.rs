@@ -15,6 +15,8 @@ use ccode::Ccode;
 use codex::Codex;
 use opencode::Opencode;
 use pi::Pi;
+use session::Observable;
+use session::any::AnySessions;
 
 /// Defines a generic harness trait that all implementations need to implement.
 #[enum_dispatch]
@@ -93,5 +95,31 @@ impl AnyHarness {
     #[must_use]
     pub fn all() -> &'static [Self] {
         &[Self::ClaudeCode(Ccode), Self::Codex(Codex), Self::Opencode(Opencode), Self::Pi(Pi)]
+    }
+
+    #[must_use]
+    pub fn sessions(&self) -> Option<AnySessions> {
+        match self {
+            Self::ClaudeCode(h) => Some(h.sessions().into()),
+            Self::Codex(h) => Some(h.sessions().into()),
+            Self::Pi(h) => Some(h.sessions().into()),
+            Self::Opencode(_) => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    fn only_opencode_has_no_session_listener() {
+        for harness in AnyHarness::all() {
+            let observable = harness.sessions().is_some();
+            let is_opencode = harness.name() == "opencode";
+            assert_eq!(observable, !is_opencode, "mismatch for {}", harness.name());
+        }
     }
 }
