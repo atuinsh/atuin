@@ -22,6 +22,13 @@ jobs:
     strategy:
       matrix:
         os: [depot-ubuntu-24.04-8, depot-macos-26, depot-windows-2025-16]
+        include:
+          # Windows only type-checks the release profile: Windows-specific
+          # compile errors are caught by unit-test's debug build, and
+          # release-profile breakage is platform-independent, so full release
+          # codegen (~5 min, two serial crates) buys nothing here.
+          - os: depot-windows-2025-16
+            cargo: check
     runs-on: ${{ matrix.os }}
 
     env:
@@ -29,6 +36,10 @@ jobs:
       # shipped (release.yml uses the `dist` profile, which sets lto = "fat"
       # explicitly). Skip the default thin-local LTO pass on the final binary.
       CARGO_PROFILE_RELEASE_LTO: "off"
+      # Experiment: the two crates that dominate this job (atuin, atuin-daemon)
+      # leave most cores idle with the default 16 codegen units; more, smaller
+      # units let LLVM spread them out. Drop if the timings don't improve.
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "256"
 
     steps:
       - uses: actions/checkout@v7
@@ -39,6 +50,21 @@ jobs:
         with:
           packages: libssl-dev pkg-config
           version: 1.0
+
+      - name: Exclude the checkout from Defender (Windows)
+        # Experiment: real-time scanning of the thousands of files cargo writes
+        # is a known Rust-build tax on Windows images. Logs whether it was even
+        # on so the timing comparison is interpretable; never fails the job.
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          try {
+            Write-Host "RealTimeProtectionEnabled: $((Get-MpComputerStatus).RealTimeProtectionEnabled)"
+            Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE"
+            Write-Host "excluded $env:GITHUB_WORKSPACE"
+          } catch {
+            Write-Host "::warning::Defender exclusion not applied: $_"
+          }
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
@@ -51,21 +77,13 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          # `nolto` keeps this entry apart from caches built with the default release
-          # profile: CARGO_PROFILE_RELEASE_LTO changes every unit's fingerprint.
-          key: ${{ runner.os }}-cargo-release-nolto-${{ hashFiles('**/Cargo.lock') }}
+          # The suffix keeps this entry apart from caches built with the default
+          # release profile: the CARGO_PROFILE_RELEASE_* overrides above change
+          # every unit's fingerprint. Bump it when they change.
+          key: ${{ runner.os }}-cargo-release-nolto-cgu256-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Run cargo build common
-        run: cargo build -p atuin-common --locked --release
-
-      - name: Run cargo build client
-        run: cargo build -p atuin-client --locked --release
-
-      - name: Run cargo build server
-        run: cargo build -p atuin-server --locked --release
-
-      - name: Run cargo build main
-        run: cargo build --all --locked --release
+      - name: Run cargo ${{ matrix.cargo || 'build' }} (release)
+        run: cargo ${{ matrix.cargo || 'build' }} --workspace --locked --release
 
   # This used to use cross compilling via `cross` but it's more reliable to just
   # run this on a real illumos (OmniOS) system.
@@ -114,6 +132,21 @@ jobs:
         with:
           packages: libssl-dev pkg-config
           version: 1.0
+
+      - name: Exclude the checkout from Defender (Windows)
+        # Experiment: real-time scanning of the thousands of files cargo writes
+        # is a known Rust-build tax on Windows images. Logs whether it was even
+        # on so the timing comparison is interpretable; never fails the job.
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          try {
+            Write-Host "RealTimeProtectionEnabled: $((Get-MpComputerStatus).RealTimeProtectionEnabled)"
+            Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE"
+            Write-Host "excluded $env:GITHUB_WORKSPACE"
+          } catch {
+            Write-Host "::warning::Defender exclusion not applied: $_"
+          }
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
