@@ -4,10 +4,11 @@ use std::path::PathBuf;
 use super::{Harness, InstallHookError, json_hooks};
 use crate::utils::home_dir;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Ccode;
 
 impl Ccode {
+    #[must_use]
     pub fn new() -> Self {
         Self {}
     }

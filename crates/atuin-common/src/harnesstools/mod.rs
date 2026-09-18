@@ -78,7 +78,9 @@ impl AnyHarness {
         Self::all()
             .iter()
             .find(|harness| {
-                harness.name() == name || harness.alias_names().iter().any(|alias| *alias == name)
+                std::iter::once(harness.name())
+                    .chain(harness.alias_names().iter().copied())
+                    .any(|candidate| candidate == name)
             })
             .copied()
             .ok_or_else(|| {
@@ -87,6 +89,7 @@ impl AnyHarness {
     }
 
     /// Every known harness.
+    #[must_use]
     pub fn all() -> &'static [Self] {
         &[Self::ClaudeCode(Ccode), Self::Codex(Codex), Self::Opencode(Opencode), Self::Pi(Pi)]
     }

@@ -3,10 +3,11 @@ use std::path::PathBuf;
 use super::{Harness, InstallHookError};
 use crate::utils::{env_nonempty, home_dir};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Opencode;
 
 impl Opencode {
+    #[must_use]
     pub fn new() -> Self {
         Self {}
     }
