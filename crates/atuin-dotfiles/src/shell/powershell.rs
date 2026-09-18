@@ -76,15 +76,21 @@ pub fn format_alias(alias: &Alias) -> String {
     // Set-Alias doesn't support adding implicit arguments, so use a function.
     // See https://github.com/PowerShell/PowerShell/issues/12962
 
+    // The value comes from a synced record, which is untrusted. Interpolating it raw
+    // into the function body lets a `}` close the block early and run the rest at
+    // profile load. Instead, keep the value inside a single-quoted string and compile
+    // it to a script block at call time: any value is then contained and only runs
+    // when the alias is invoked.
+    let call_prefix = if alias.value.starts_with(['"', '\'']) {
+        "& "
+    } else {
+        ""
+    };
+    let body = format!("{call_prefix}{} @args", alias.value).replace('\'', "''");
+
     let mut result = secure_command(&format!(
-        "function {} {{\n    {}{} @args\n}}",
-        alias.name,
-        if alias.value.starts_with(['"', '\'']) {
-            "& "
-        } else {
-            ""
-        },
-        alias.value
+        "function {} {{\n    & ([scriptblock]::Create('{}')) @args\n}}",
+        alias.name, body
     ));
 
     // This makes the file layout prettier
@@ -119,11 +125,29 @@ mod tests {
     use super::*;
 
     #[rstest]
-    #[case::simple("gp", "git push", "function gp {\n    git push @args\n}")]
+    #[case::simple(
+        "gp",
+        "git push",
+        "function gp {\n    & ([scriptblock]::Create('git push @args')) @args\n}"
+    )]
     #[case::quoted_path(
         "spc",
         "\"path with spaces\" arg",
-        "function spc {\n    & \"path with spaces\" arg @args\n}"
+        "function spc {\n    & ([scriptblock]::Create('& \"path with spaces\" arg @args')) \
+         @args\n}"
+    )]
+    // Single quotes in the value are doubled so it stays a single PowerShell string.
+    #[case::single_quote(
+        "e",
+        "echo 'hi'",
+        "function e {\n    & ([scriptblock]::Create('echo ''hi'' @args')) @args\n}"
+    )]
+    // A `}` in the value stays inside the quoted string and cannot close the function
+    // block, so nothing runs at profile load.
+    #[case::brace_breakout(
+        "x",
+        "a }; calc",
+        "function x {\n    & ([scriptblock]::Create('a }; calc @args')) @args\n}"
     )]
     fn aliases(#[case] name: &str, #[case] value: &str, #[case] expected_inner: &str) {
         assert_eq!(
