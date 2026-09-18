@@ -1,7 +1,14 @@
 use std::collections::HashMap;
+use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use notify::event::{EventKind, ModifyKind, RenameMode};
+use notify::{RecommendedWatcher, RecursiveMode};
+use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
+use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+use tokio::task::JoinHandle;
+use tokio::time::MissedTickBehavior;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TreeWatcherError {
@@ -163,8 +170,8 @@ where
         let truth: HashMap<PathBuf, FileKind> = truth.into_iter().collect();
         let gone: Vec<PathBuf> =
             self.entries.keys().filter(|key| !truth.contains_key(*key)).cloned().collect();
-        for path in gone {
-            self.entries.remove(&path);
+        for path in &gone {
+            self.forget(path);
         }
         for (path, kind) in truth {
             if !self.entries.contains_key(&path) {
@@ -210,6 +217,162 @@ fn file_kind_of(path: &Path) -> std::io::Result<FileKind> {
     Ok(FileKind::from(std::fs::symlink_metadata(path)?.file_type()))
 }
 
+const DEFAULT_SCAN_INTERVAL: Duration = Duration::from_secs(30);
+const DEFAULT_DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(250);
+
+async fn run_engine<H, F>(
+    mut engine: Engine<H, F>,
+    mut events: UnboundedReceiver<DebounceEventResult>,
+    scan_interval: Duration,
+) where
+    H: TreeNode,
+    F: Fn(NodeContext) -> Option<H> + Send + 'static,
+{
+    if let Some(truth) = scan(&engine.root, engine.recursive).await {
+        engine.reconcile(truth);
+    }
+
+    let mut interval = tokio::time::interval(scan_interval);
+    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    interval.tick().await;
+
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                if let Some(truth) = scan(&engine.root, engine.recursive).await {
+                    engine.reconcile(truth);
+                }
+            }
+            received = events.recv() => {
+                match received {
+                    Some(Ok(batch)) => {
+                        let mut force_scan = false;
+                        for debounced in batch {
+                            if debounced.need_rescan() {
+                                force_scan = true;
+                                continue;
+                            }
+                            engine.apply_event(&debounced.event);
+                        }
+                        if force_scan {
+                            if let Some(truth) = scan(&engine.root, engine.recursive).await {
+                                engine.reconcile(truth);
+                            }
+                        }
+                    }
+                    Some(Err(_)) => {}
+                    None => break,
+                }
+            }
+        }
+    }
+}
+
+pub struct TreeWatcherBuilder<H> {
+    recursive: bool,
+    scan_interval: Duration,
+    debounce_timeout: Duration,
+    _marker: PhantomData<fn() -> H>,
+}
+
+impl<H: TreeNode> Default for TreeWatcherBuilder<H> {
+    fn default() -> Self {
+        Self {
+            recursive: true,
+            scan_interval: DEFAULT_SCAN_INTERVAL,
+            debounce_timeout: DEFAULT_DEBOUNCE_TIMEOUT,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<H: TreeNode> TreeWatcherBuilder<H> {
+    #[must_use]
+    pub fn recursive(mut self, yes: bool) -> Self {
+        self.recursive = yes;
+        self
+    }
+
+    #[must_use]
+    pub fn scan_interval(mut self, interval: Duration) -> Self {
+        self.scan_interval = interval;
+        self
+    }
+
+    #[must_use]
+    pub fn debounce_timeout(mut self, timeout: Duration) -> Self {
+        self.debounce_timeout = timeout;
+        self
+    }
+
+    pub fn watch<F>(
+        self,
+        root: impl AsRef<Path>,
+        factory: F,
+    ) -> Result<TreeWatcher<H>, TreeWatcherError>
+    where
+        F: Fn(NodeContext) -> Option<H> + Send + 'static,
+    {
+        let root = std::fs::canonicalize(root.as_ref())?;
+        if !root.is_dir() {
+            return Err(TreeWatcherError::NotADirectory(root));
+        }
+
+        let (tx, rx) = unbounded_channel();
+        let mode = if self.recursive {
+            RecursiveMode::Recursive
+        } else {
+            RecursiveMode::NonRecursive
+        };
+
+        let mut debouncer =
+            new_debouncer(self.debounce_timeout, None, move |result: DebounceEventResult| {
+                let _ = tx.send(result);
+            })?;
+        debouncer.watch(&root, mode)?;
+
+        let engine = Engine {
+            root,
+            recursive: self.recursive,
+            factory,
+            entries: HashMap::new(),
+        };
+        let task = tokio::spawn(run_engine(engine, rx, self.scan_interval));
+
+        Ok(TreeWatcher {
+            task,
+            _debouncer: debouncer,
+            _marker: PhantomData,
+        })
+    }
+}
+
+pub struct TreeWatcher<H> {
+    task: JoinHandle<()>,
+    _debouncer: Debouncer<RecommendedWatcher, RecommendedCache>,
+    _marker: PhantomData<fn() -> H>,
+}
+
+impl<H: TreeNode> TreeWatcher<H> {
+    #[must_use]
+    pub fn builder() -> TreeWatcherBuilder<H> {
+        TreeWatcherBuilder::default()
+    }
+
+    pub fn watch<F>(root: impl AsRef<Path>, factory: F) -> Result<Self, TreeWatcherError>
+    where
+        F: Fn(NodeContext) -> Option<H> + Send + 'static,
+    {
+        Self::builder().watch(root, factory)
+    }
+}
+
+impl<H> Drop for TreeWatcher<H> {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -217,6 +380,7 @@ mod tests {
 
     use proptest::prelude::*;
     use rstest::rstest;
+    use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
     use super::*;
 
@@ -571,5 +735,138 @@ mod tests {
                 .count();
             prop_assert_eq!(alive, active);
         }
+    }
+
+    struct Probe {
+        path: PathBuf,
+        dropped: UnboundedSender<PathBuf>,
+    }
+
+    impl Drop for Probe {
+        fn drop(&mut self) {
+            let _ = self.dropped.send(self.path.clone());
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn created_file_builds_handler() {
+        let dir = tempfile::tempdir().unwrap();
+        let (created_tx, mut created_rx) = unbounded_channel();
+        let (drop_tx, _drop_rx) = unbounded_channel::<PathBuf>();
+        let _watcher = TreeWatcher::<Probe>::builder()
+            .scan_interval(Duration::from_millis(100))
+            .debounce_timeout(Duration::from_millis(50))
+            .watch(dir.path(), move |ctx| {
+                let path = ctx.path().to_owned();
+                created_tx.send(path.clone()).ok();
+                Some(Probe {
+                    path,
+                    dropped: drop_tx.clone(),
+                })
+            })
+            .unwrap();
+
+        std::fs::write(dir.path().join("a.log"), b"x").unwrap();
+        let got = tokio::time::timeout(Duration::from_secs(5), created_rx.recv())
+            .await
+            .expect("handler should be built")
+            .unwrap();
+        assert!(got.ends_with("a.log"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn deleted_file_drops_handler() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("b.log");
+        std::fs::write(&file, b"x").unwrap();
+        let (created_tx, mut created_rx) = unbounded_channel::<PathBuf>();
+        let (drop_tx, mut drop_rx) = unbounded_channel::<PathBuf>();
+        let _watcher = TreeWatcher::<Probe>::builder()
+            .scan_interval(Duration::from_millis(100))
+            .debounce_timeout(Duration::from_millis(50))
+            .watch(dir.path(), move |ctx| {
+                let path = ctx.path().to_owned();
+                created_tx.send(path.clone()).ok();
+                Some(Probe {
+                    path,
+                    dropped: drop_tx.clone(),
+                })
+            })
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(5), created_rx.recv())
+            .await
+            .expect("initial handler should be built")
+            .unwrap();
+        std::fs::remove_file(&file).unwrap();
+        let dropped = tokio::time::timeout(Duration::from_secs(5), drop_rx.recv())
+            .await
+            .expect("handler should be dropped")
+            .unwrap();
+        assert!(dropped.ends_with("b.log"));
+    }
+
+    #[rstest]
+    #[case(true, true)]
+    #[case(false, false)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn recursion_controls_nested_files(#[case] recursive: bool, #[case] expect_fire: bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let (created_tx, mut created_rx) = unbounded_channel::<PathBuf>();
+        let (drop_tx, _drop_rx) = unbounded_channel::<PathBuf>();
+        let _watcher = TreeWatcher::<Probe>::builder()
+            .recursive(recursive)
+            .scan_interval(Duration::from_millis(100))
+            .debounce_timeout(Duration::from_millis(50))
+            .watch(dir.path(), move |ctx| {
+                if !ctx.is_file() {
+                    return None;
+                }
+                let path = ctx.path().to_owned();
+                created_tx.send(path.clone()).ok();
+                Some(Probe {
+                    path,
+                    dropped: drop_tx.clone(),
+                })
+            })
+            .unwrap();
+
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/c.log"), b"x").unwrap();
+
+        let fired =
+            tokio::time::timeout(Duration::from_millis(1500), created_rx.recv()).await.is_ok();
+        assert_eq!(fired, expect_fire);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dropping_watcher_drops_handlers() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.log"), b"x").unwrap();
+        let (created_tx, mut created_rx) = unbounded_channel::<PathBuf>();
+        let (drop_tx, mut drop_rx) = unbounded_channel::<PathBuf>();
+        let watcher = TreeWatcher::<Probe>::builder()
+            .scan_interval(Duration::from_millis(100))
+            .debounce_timeout(Duration::from_millis(50))
+            .watch(dir.path(), move |ctx| {
+                let path = ctx.path().to_owned();
+                created_tx.send(path.clone()).ok();
+                Some(Probe {
+                    path,
+                    dropped: drop_tx.clone(),
+                })
+            })
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(5), created_rx.recv())
+            .await
+            .expect("initial handler should be built")
+            .unwrap();
+        drop(watcher);
+        let dropped = tokio::time::timeout(Duration::from_secs(5), drop_rx.recv())
+            .await
+            .expect("handler should be dropped when watcher is dropped")
+            .unwrap();
+        assert!(dropped.ends_with("a.log"));
     }
 }
