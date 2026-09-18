@@ -51,7 +51,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          # `nolto` keeps this entry apart from caches built with the default release
+          # profile: CARGO_PROFILE_RELEASE_LTO changes every unit's fingerprint.
+          key: ${{ runner.os }}-cargo-release-nolto-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run cargo build common
         run: cargo build -p atuin-common --locked --release
