@@ -1,11 +1,18 @@
+//! Streaming values from a JSONL file, following appends.
+
 use std::path::PathBuf;
 
 use futures::{Stream, StreamExt};
 use serde::de::DeserializeOwned;
 
 use super::JsonlError;
-use crate::fs::tail::Tail;
+use crate::fs::tail::{Positioned, Tail};
 
+fn blank(bytes: &[u8]) -> bool {
+    bytes.iter().all(u8::is_ascii_whitespace)
+}
+
+/// Follow a JSONL file, deserializing each non-blank line into `T`.
 pub fn from_tail<T>(tail: Tail) -> impl Stream<Item = Result<T, JsonlError>> + Send
 where
     T: DeserializeOwned + Send + 'static,
@@ -17,21 +24,17 @@ where
         while let Some(line) = lines.next().await {
             line_no += 1;
             match line {
-                Ok(text) => {
-                    if text.trim().is_empty() {
-                        continue;
-                    }
-                    match serde_json::from_str::<T>(&text) {
-                        Ok(value) => yield Ok(value),
-                        Err(source) => yield Err(JsonlError::Parse { source, line: line_no }),
-                    }
-                }
+                Ok(bytes) if blank(&bytes) => {}
+                Ok(bytes) => yield serde_json::from_slice::<T>(&bytes)
+                    .map_err(|source| JsonlError::Parse { source, line: line_no }),
                 Err(e) => yield Err(JsonlError::Io(e)),
             }
         }
     }
 }
 
+/// [`from_tail`] with default options for the file at `path` (follows by default, so it does not
+/// end on a static file; build a [`Tail`] with `Read::Once` for a one-shot read).
 pub fn from_path<T>(path: impl Into<PathBuf>) -> impl Stream<Item = Result<T, JsonlError>> + Send
 where
     T: DeserializeOwned + Send + 'static,
@@ -39,9 +42,10 @@ where
     from_tail(Tail::builder().path(path).build())
 }
 
+/// Like [`from_tail`], pairing each value with the byte offset just past its line.
 pub fn from_tail_positioned<T>(
     tail: Tail,
-) -> impl Stream<Item = (u64, Result<T, JsonlError>)> + Send
+) -> impl Stream<Item = Positioned<Result<T, JsonlError>>> + Send
 where
     T: DeserializeOwned + Send + 'static,
 {
@@ -49,27 +53,25 @@ where
     async_stream::stream! {
         futures::pin_mut!(lines);
         let mut line_no: u64 = 0;
-        while let Some((at, line)) = lines.next().await {
+        while let Some(Positioned { offset, value }) = lines.next().await {
             line_no += 1;
-            match line {
-                Ok(text) => {
-                    if text.trim().is_empty() {
-                        continue;
-                    }
-                    match serde_json::from_str::<T>(&text) {
-                        Ok(value) => yield (at, Ok(value)),
-                        Err(source) => yield (at, Err(JsonlError::Parse { source, line: line_no })),
-                    }
-                }
-                Err(e) => yield (at, Err(JsonlError::Io(e))),
+            match value {
+                Ok(bytes) if blank(&bytes) => {}
+                Ok(bytes) => yield Positioned {
+                    offset,
+                    value: serde_json::from_slice::<T>(&bytes)
+                        .map_err(|source| JsonlError::Parse { source, line: line_no }),
+                },
+                Err(e) => yield Positioned { offset, value: Err(JsonlError::Io(e)) },
             }
         }
     }
 }
 
+/// [`from_tail_positioned`] with default options for the file at `path`.
 pub fn from_path_positioned<T>(
     path: impl Into<PathBuf>,
-) -> impl Stream<Item = (u64, Result<T, JsonlError>)> + Send
+) -> impl Stream<Item = Positioned<Result<T, JsonlError>>> + Send
 where
     T: DeserializeOwned + Send + 'static,
 {
@@ -84,7 +86,7 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use super::*;
-    use crate::fs::tail::Start;
+    use crate::fs::tail::{Anchor, Read};
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     struct Rec {
@@ -103,7 +105,7 @@ mod tests {
     where
         T: DeserializeOwned + Send + 'static,
     {
-        from_tail(Tail::builder().path(path).follow(false).build())
+        from_tail(Tail::builder().path(path).read(Read::Once(Anchor::Beginning)).build())
     }
 
     #[rstest]
@@ -137,16 +139,14 @@ mod tests {
     #[tokio::test]
     async fn positioned_offsets_allow_resuming_from_a_checkpoint() {
         let (_dir, path) = write_jsonl(&["1", "2", "3", ""]);
-        let tail = Tail::builder().path(&path).follow(false).build();
-        let positioned: Vec<(u64, i64)> = from_tail_positioned::<i64>(tail)
-            .map(|(at, value)| (at, value.unwrap()))
-            .collect()
-            .await;
+        let tail = Tail::builder().path(&path).read(Read::Once(Anchor::Beginning)).build();
+        let positioned: Vec<(u64, i64)> =
+            from_tail_positioned::<i64>(tail).map(|p| (p.offset, p.value.unwrap())).collect().await;
         assert_eq!(positioned, vec![(2, 1), (4, 2), (6, 3)]);
 
         let checkpoint = positioned[0].0;
         let resumed: Vec<i64> = from_tail::<i64>(
-            Tail::builder().path(&path).follow(false).start(Start::Offset(checkpoint)).build(),
+            Tail::builder().path(&path).read(Read::Once(Anchor::Offset(checkpoint))).build(),
         )
         .map(Result::unwrap)
         .collect()

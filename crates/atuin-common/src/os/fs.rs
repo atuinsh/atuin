@@ -1,5 +1,8 @@
+//! Cross-platform file identity.
+
 use std::io;
 
+/// A stable identity for an open file, equal iff two handles refer to the same file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FdIdentity {
     device: u64,
@@ -13,8 +16,10 @@ impl FdIdentity {
     }
 }
 
+/// Exposes the [`FdIdentity`] of any file handle.
 #[cfg(unix)]
 pub trait FdIdentityExt: std::os::fd::AsFd {
+    /// The identity of the file this handle refers to.
     fn identity(&self) -> io::Result<FdIdentity> {
         use std::os::unix::fs::MetadataExt;
 
@@ -30,8 +35,10 @@ pub trait FdIdentityExt: std::os::fd::AsFd {
 #[cfg(unix)]
 impl<T: std::os::fd::AsFd + ?Sized> FdIdentityExt for T {}
 
+/// Exposes the [`FdIdentity`] of any file handle.
 #[cfg(windows)]
 pub trait FdIdentityExt: std::os::windows::io::AsHandle {
+    /// The identity of the file this handle refers to.
     fn identity(&self) -> io::Result<FdIdentity> {
         use std::os::windows::io::AsRawHandle;
 

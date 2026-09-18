@@ -1,3 +1,6 @@
+//! TODO(markovejnovic): This is complete slop, I have no time to review this in-depth.
+//! Following a growing file, `tail -f`-style.
+
 use std::io::{self, SeekFrom};
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::path::PathBuf;
@@ -7,8 +10,7 @@ use futures::{Stream, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use typed_builder::TypedBuilder;
 
-use crate::futures::Backoff;
-use crate::futures::stream::ChunkedStream;
+use crate::futures::{Backoff, Schedule};
 use crate::os::fs::{FdIdentity, FdIdentityExt};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,9 +18,16 @@ pub(crate) struct LineTooLong {
     pub(crate) len: usize,
 }
 
+impl From<LineTooLong> for io::Error {
+    fn from(LineTooLong { len }: LineTooLong) -> Self {
+        Self::new(io::ErrorKind::InvalidData, format!("line exceeds maximum length ({len} bytes)"))
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct LineAccumulator {
     carry: Vec<u8>,
+    start: usize,
     max: Option<usize>,
     discarding: bool,
     consumed: u64,
@@ -28,6 +37,7 @@ impl LineAccumulator {
     pub(crate) fn new(max: Option<usize>) -> Self {
         Self {
             carry: Vec::new(),
+            start: 0,
             max,
             discarding: false,
             consumed: 0,
@@ -35,10 +45,15 @@ impl LineAccumulator {
     }
 
     pub(crate) fn push(&mut self, buf: &[u8]) {
+        if self.start > 0 {
+            self.carry.drain(..self.start);
+            self.start = 0;
+        }
         self.carry.extend_from_slice(buf);
     }
 
     fn advance(&mut self, bytes: usize) {
+        self.start += bytes;
         self.consumed += u64::try_from(bytes).expect("consumed byte count fits u64");
     }
 
@@ -48,18 +63,16 @@ impl LineAccumulator {
 
     pub(crate) fn next_line(&mut self) -> Option<Result<Vec<u8>, LineTooLong>> {
         loop {
-            let newline = self.carry.iter().position(|&b| b == b'\n');
+            let newline = memchr::memchr(b'\n', &self.carry[self.start..]);
 
             if self.discarding {
                 match newline {
                     Some(pos) => {
-                        self.carry.drain(..=pos);
                         self.advance(pos + 1);
                         self.discarding = false;
                     }
                     None => {
-                        let len = self.carry.len();
-                        self.carry.clear();
+                        let len = self.carry.len() - self.start;
                         self.advance(len);
                         return None;
                     }
@@ -70,18 +83,16 @@ impl LineAccumulator {
             match newline {
                 Some(pos) => {
                     if self.max.is_some_and(|max| pos > max) {
-                        self.carry.drain(..=pos);
                         self.advance(pos + 1);
                         return Some(Err(LineTooLong { len: pos }));
                     }
-                    let line: Vec<u8> = self.carry.drain(..=pos).take(pos).collect();
+                    let line = self.carry[self.start..self.start + pos].to_vec();
                     self.advance(pos + 1);
                     return Some(Ok(line));
                 }
                 None => {
-                    if self.max.is_some_and(|max| self.carry.len() > max) {
-                        let len = self.carry.len();
-                        self.carry.clear();
+                    let len = self.carry.len() - self.start;
+                    if self.max.is_some_and(|max| len > max) {
                         self.advance(len);
                         self.discarding = true;
                         return Some(Err(LineTooLong { len }));
@@ -93,42 +104,76 @@ impl LineAccumulator {
     }
 
     pub(crate) fn finish(&mut self) -> Option<Result<Vec<u8>, LineTooLong>> {
+        let len = self.carry.len() - self.start;
         if self.discarding {
-            let len = self.carry.len();
-            self.carry.clear();
             self.advance(len);
             return None;
         }
-        if self.carry.is_empty() {
+        if len == 0 {
             return None;
         }
-        let len = self.carry.len();
-        self.advance(len);
         if self.max.is_some_and(|max| len > max) {
-            self.carry.clear();
+            self.advance(len);
             return Some(Err(LineTooLong { len }));
         }
-        Some(Ok(std::mem::take(&mut self.carry)))
+        let line = self.carry[self.start..].to_vec();
+        self.advance(len);
+        Some(Ok(line))
     }
 
     pub(crate) fn reset(&mut self) {
         self.carry.clear();
+        self.start = 0;
         self.discarding = false;
         self.consumed = 0;
     }
 }
 
+/// Where a bounded [`Read::Once`] begins reading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Start {
+pub enum Anchor {
+    /// From the start of the file.
     Beginning,
-    End,
+    /// From a specific byte offset, e.g. a persisted resume point.
     Offset(u64),
 }
 
+/// Where a following [`Read::Follow`] begins reading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Start {
+    /// From the start of the file.
+    Beginning,
+    /// From the current end, emitting only what is appended afterwards.
+    End,
+    /// From a specific byte offset, e.g. a persisted resume point.
+    Offset(u64),
+}
+
+/// How a [`Tail`] consumes its file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Read {
+    /// Read existing content from `Anchor`, then stop at end of file.
+    Once(Anchor),
+    /// Follow the file from `Start`, waiting for data appended afterwards.
+    Follow(Start),
+}
+
+/// How a [`Tail`] reacts when the file at its path is replaced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Rotation {
+    /// Keep following the originally opened file (`tail -f`).
     Fd,
+    /// Reopen the path when it is replaced by a different file (`tail -F`).
     Name,
+}
+
+/// A [`Tail`] item paired with the byte offset immediately after it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Positioned<T> {
+    /// Byte offset just past `value`; use as an [`Anchor::Offset`] / [`Start::Offset`] to resume here.
+    pub offset: u64,
+    /// The item at this position.
+    pub value: T,
 }
 
 #[derive(Debug)]
@@ -165,42 +210,31 @@ trait Waiter: Send {
 }
 
 struct BackoffWaiter {
-    backoff: Backoff,
-    current: Duration,
+    schedule: Schedule,
 }
 
 impl BackoffWaiter {
     fn new(backoff: Backoff) -> Self {
         Self {
-            backoff,
-            current: Self::initial(backoff),
-        }
-    }
-
-    fn initial(backoff: Backoff) -> Duration {
-        match backoff {
-            Backoff::Linear(period) => period,
-            Backoff::Exponential { initial, max, .. } => initial.min(max),
+            schedule: backoff.schedule(),
         }
     }
 }
 
 impl Waiter for BackoffWaiter {
     async fn wait(&mut self) {
-        tokio::time::sleep(self.current).await;
-        if let Backoff::Exponential { max, factor, .. } = self.backoff {
-            self.current = self.current.saturating_mul(factor.get()).min(max);
-        }
+        tokio::time::sleep(self.schedule.next_delay()).await;
     }
 
     fn reset(&mut self) {
-        self.current = Self::initial(self.backoff);
+        self.schedule.reset();
     }
 }
 
 struct FileSource {
     file: tokio::fs::File,
     path: PathBuf,
+    pos: u64,
 }
 
 impl FileSource {
@@ -212,14 +246,21 @@ impl FileSource {
                 "tail target is not a regular file",
             ));
         }
-        Ok(Self { file, path })
+        Ok(Self { file, path, pos: 0 })
     }
 }
 
 impl TailSource for FileSource {
     async fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
-        self.file.seek(SeekFrom::Start(offset)).await?;
-        self.file.read(buf).await
+        // Reads walk forward sequentially, so the cursor is usually already at `offset`; only
+        // seek when it is not (resume, anchor probe, rotation).
+        if self.pos != offset {
+            self.file.seek(SeekFrom::Start(offset)).await?;
+            self.pos = offset;
+        }
+        let n = self.file.read(buf).await?;
+        self.pos += u64::try_from(n).expect("read count fits u64");
+        Ok(n)
     }
 
     async fn size(&mut self) -> io::Result<u64> {
@@ -240,14 +281,14 @@ impl TailSource for FileSource {
 
     async fn reopen(&mut self) -> io::Result<()> {
         self.file = tokio::fs::File::open(&self.path).await?;
+        self.pos = 0;
         Ok(())
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 struct EngineCfg {
-    start: Start,
-    follow: bool,
+    read: Read,
     rotation: Rotation,
     read_size: NonZeroUsize,
     backoff: Backoff,
@@ -257,9 +298,6 @@ async fn anchor_mismatch<S: TailSource>(src: &mut S, offset: u64, last_byte: Opt
     let Some(expected) = last_byte else {
         return false;
     };
-    if offset == 0 {
-        return false;
-    }
     let mut one = [0u8; 1];
     match src.read_at(offset - 1, &mut one).await {
         Ok(1) => one[0] != expected,
@@ -274,10 +312,10 @@ where
     W: Waiter + 'static,
 {
     async_stream::stream! {
-        let mut offset: u64 = match cfg.start {
-            Start::Beginning => 0,
-            Start::Offset(at) => at,
-            Start::End => match src.size().await {
+        let mut offset: u64 = match cfg.read {
+            Read::Once(Anchor::Beginning) | Read::Follow(Start::Beginning) => 0,
+            Read::Once(Anchor::Offset(at)) | Read::Follow(Start::Offset(at)) => at,
+            Read::Follow(Start::End) => match src.size().await {
                 Ok(size) => size,
                 Err(e) => {
                     yield Event::Error(e);
@@ -285,6 +323,7 @@ where
                 }
             },
         };
+        let follow = matches!(cfg.read, Read::Follow(_));
 
         let mut open_id = if cfg.rotation == Rotation::Name {
             src.identity().await.ok()
@@ -294,7 +333,7 @@ where
         let mut last_byte: Option<u8> = None;
         let mut buf = vec![0u8; cfg.read_size.get()];
 
-        loop {
+        'follow: loop {
             loop {
                 match src.read_at(offset, &mut buf).await {
                     Ok(0) => break,
@@ -305,12 +344,16 @@ where
                     }
                     Err(e) => {
                         yield Event::Error(e);
-                        break;
+                        if !follow {
+                            return;
+                        }
+                        waiter.wait().await;
+                        continue 'follow;
                     }
                 }
             }
 
-            if !cfg.follow {
+            if !follow {
                 return;
             }
             waiter.reset();
@@ -326,7 +369,7 @@ where
 
                 if cfg.rotation == Rotation::Name {
                     let path_id = src.path_identity().await.ok().flatten();
-                    if path_id.is_some() && path_id != open_id {
+                    if matches!((path_id, open_id), (Some(path), Some(open)) if path != open) {
                         loop {
                             match src.read_at(offset, &mut buf).await {
                                 Ok(0) => break,
@@ -343,6 +386,8 @@ where
                         }
                         if let Err(e) = src.reopen().await {
                             yield Event::Error(e);
+                            waiter.wait().await;
+                            continue;
                         }
                         open_id = src.identity().await.ok();
                         break true;
@@ -373,14 +418,13 @@ fn default_backoff() -> Backoff {
     }
 }
 
+/// A `tail -f`-style follower for a single file, built via [`Tail::builder`].
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct Tail {
     #[builder(setter(into))]
     path: PathBuf,
-    #[builder(default = Start::Beginning)]
-    start: Start,
-    #[builder(default = true)]
-    follow: bool,
+    #[builder(default = Read::Follow(Start::Beginning))]
+    read: Read,
     #[builder(default = Rotation::Fd)]
     rotation: Rotation,
     #[builder(default = default_read_size())]
@@ -394,8 +438,7 @@ pub struct Tail {
 impl Tail {
     fn engine_cfg(&self) -> EngineCfg {
         EngineCfg {
-            start: self.start,
-            follow: self.follow,
+            read: self.read,
             rotation: self.rotation,
             read_size: self.read_size,
             backoff: self.backoff,
@@ -421,6 +464,7 @@ impl Tail {
         }
     }
 
+    /// Stream the file as raw read chunks of bytes.
     pub fn chunks(self) -> impl Stream<Item = io::Result<Vec<u8>>> + Send {
         let events = self.events();
         async_stream::stream! {
@@ -435,7 +479,8 @@ impl Tail {
         }
     }
 
-    pub fn lines(self) -> impl Stream<Item = io::Result<String>> + Send {
+    /// Stream the file as newline-delimited byte lines, with the trailing `\n` stripped.
+    pub fn lines(self) -> impl Stream<Item = io::Result<Vec<u8>>> + Send {
         let max = self.max_line_len;
         let events = self.events();
         async_stream::stream! {
@@ -446,7 +491,7 @@ impl Tail {
                     Event::Data { bytes, .. } => {
                         acc.push(&bytes);
                         while let Some(line) = acc.next_line() {
-                            yield decode_line(line);
+                            yield line.map_err(io::Error::from);
                         }
                     }
                     Event::Reset => acc.reset(),
@@ -454,12 +499,24 @@ impl Tail {
                 }
             }
             if let Some(line) = acc.finish() {
-                yield decode_line(line);
+                yield line.map_err(io::Error::from);
             }
         }
     }
 
-    pub fn lines_positioned(self) -> impl Stream<Item = (u64, io::Result<String>)> + Send {
+    /// Stream the file as UTF-8 line strings; invalid UTF-8 yields an error.
+    pub fn lines_utf8(self) -> impl Stream<Item = io::Result<String>> + Send {
+        let lines = self.lines();
+        async_stream::stream! {
+            futures::pin_mut!(lines);
+            while let Some(line) = lines.next().await {
+                yield line.and_then(decode_utf8);
+            }
+        }
+    }
+
+    /// Stream byte lines, each paired with the byte offset just past it for resumable follows.
+    pub fn lines_positioned(self) -> impl Stream<Item = Positioned<io::Result<Vec<u8>>>> + Send {
         let max = self.max_line_len;
         let events = self.events();
         async_stream::stream! {
@@ -475,8 +532,8 @@ impl Tail {
                         }
                         acc.push(&bytes);
                         while let Some(line) = acc.next_line() {
-                            let at = epoch_start.unwrap_or(0) + acc.consumed();
-                            yield (at, decode_line(line));
+                            let offset = epoch_start.unwrap_or(0) + acc.consumed();
+                            yield Positioned { offset, value: line.map_err(io::Error::from) };
                         }
                     }
                     Event::Reset => {
@@ -484,48 +541,33 @@ impl Tail {
                         epoch_start = None;
                     }
                     Event::Error(e) => {
-                        let at = epoch_start.unwrap_or(0) + acc.consumed();
-                        yield (at, Err(e));
+                        let offset = epoch_start.unwrap_or(0) + acc.consumed();
+                        yield Positioned { offset, value: Err(e) };
                     }
                 }
             }
             if let Some(line) = acc.finish() {
-                let at = epoch_start.unwrap_or(0) + acc.consumed();
-                yield (at, decode_line(line));
+                let offset = epoch_start.unwrap_or(0) + acc.consumed();
+                yield Positioned { offset, value: line.map_err(io::Error::from) };
             }
         }
     }
-
-    #[must_use]
-    pub fn bytes(self) -> ChunkedStream<io::Result<u8>> {
-        ChunkedStream::new(self.chunks().map(|item| match item {
-            Ok(buf) => buf.into_iter().map(Ok).collect(),
-            Err(e) => vec![Err(e)],
-        }))
-    }
 }
 
-fn decode_line(line: Result<Vec<u8>, LineTooLong>) -> io::Result<String> {
-    match line {
-        Ok(bytes) => {
-            String::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-        }
-        Err(LineTooLong { len }) => Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("line exceeds maximum length ({len} bytes)"),
-        )),
-    }
+fn decode_utf8(bytes: Vec<u8>) -> io::Result<String> {
+    String::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::pin::Pin;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
     use std::task::{Context, Poll};
 
     use futures::channel::mpsc;
     use futures::task::noop_waker;
+    use parking_lot::Mutex;
     use proptest::prelude::*;
     use rstest::rstest;
 
@@ -575,7 +617,7 @@ mod tests {
 
     #[rstest]
     #[case(vec![b"a\nb\nc".as_slice()], vec![b"a".to_vec(), b"b".to_vec()])]
-    #[case(vec![b"hel".as_slice(), b"lo\n".as_slice()], vec![b"hello".to_vec()])]
+    #[case(vec![b"hell".as_slice(), b"o\n".as_slice()], vec![b"hello".to_vec()])]
     #[case(vec![b"\n\n".as_slice()], vec![vec![], vec![]])]
     #[case(vec![b"".as_slice()], vec![])]
     #[case(vec![b"a\n".as_slice(), b"".as_slice(), b"b\n".as_slice()], vec![b"a".to_vec(), b"b".to_vec()])]
@@ -699,7 +741,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("f");
         std::fs::write(&path, b"one\ntwo\nthree\n").unwrap();
-        let lines = collect_lines(Tail::builder().path(&path).follow(false).build().lines()).await;
+        let lines = collect_lines(
+            Tail::builder().path(&path).read(Read::Once(Anchor::Beginning)).build().lines_utf8(),
+        )
+        .await;
         assert_eq!(lines, vec!["one", "two", "three"]);
     }
 
@@ -709,21 +754,28 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("f");
         std::fs::write(&path, b"a\nb\nno-newline").unwrap();
-        let lines = collect_lines(Tail::builder().path(&path).follow(false).build().lines()).await;
+        let lines = collect_lines(
+            Tail::builder().path(&path).read(Read::Once(Anchor::Beginning)).build().lines_utf8(),
+        )
+        .await;
         assert_eq!(lines, vec!["a", "b", "no-newline"]);
     }
 
     #[rstest]
-    #[tokio::test]
-    async fn start_end_skips_existing_content() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("f");
-        std::fs::write(&path, b"old\n").unwrap();
-        let lines = collect_lines(
-            Tail::builder().path(&path).follow(false).start(Start::End).build().lines(),
-        )
-        .await;
-        assert_eq!(lines, Vec::<String>::new());
+    fn follow_from_end_skips_existing_content() {
+        let (tx, rx) = mpsc::unbounded();
+        let (handle, src) = MemHandle::new(b"old\n");
+        let cfg = EngineCfg {
+            read: Read::Follow(Start::End),
+            rotation: Rotation::Fd,
+            read_size: NonZeroUsize::new(4).expect("4 is nonzero"),
+            backoff: default_backoff(),
+        };
+        let mut stream: EventStream = Box::pin(follow(src, ManualWaiter { rx }, cfg));
+        assert_eq!(data_of(&drain(&mut stream)), b"");
+        handle.append(b"new\n");
+        tx.unbounded_send(()).unwrap();
+        assert_eq!(data_of(&drain(&mut stream)), b"new\n");
     }
 
     #[rstest]
@@ -731,20 +783,10 @@ mod tests {
     async fn a_missing_file_yields_an_error() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nope");
-        let stream = Tail::builder().path(&path).follow(false).build().lines();
+        let stream =
+            Tail::builder().path(&path).read(Read::Once(Anchor::Beginning)).build().lines_utf8();
         futures::pin_mut!(stream);
         assert!(stream.next().await.expect("one item").is_err());
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn bytes_streams_raw_content() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("f");
-        std::fs::write(&path, b"abc").unwrap();
-        let got: Vec<u8> =
-            Tail::builder().path(&path).follow(false).build().bytes().try_collect().await.unwrap();
-        assert_eq!(got, b"abc");
     }
 
     #[derive(Debug, Clone)]
@@ -789,19 +831,19 @@ mod tests {
         }
 
         fn append(&self, data: &[u8]) {
-            let mut world = self.world.lock().unwrap();
+            let mut world = self.world.lock();
             let id = world.path_id;
             world.files.get_mut(&id).expect("path file exists").extend_from_slice(data);
         }
 
         fn truncate(&self, len: usize) {
-            let mut world = self.world.lock().unwrap();
+            let mut world = self.world.lock();
             let id = world.path_id;
             world.files.get_mut(&id).expect("path file exists").truncate(len);
         }
 
         fn rotate(&self) {
-            let mut world = self.world.lock().unwrap();
+            let mut world = self.world.lock();
             let id = FdIdentity::from_raw(0, world.next);
             world.next += 1;
             world.files.insert(id, Vec::new());
@@ -811,34 +853,35 @@ mod tests {
 
     impl TailSource for MemSource {
         async fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
-            let world = self.world.lock().unwrap();
-            let data = world.files.get(&world.open_id).expect("open file exists");
             let start = usize::try_from(offset).expect("offset fits usize");
-            if start >= data.len() {
-                return Ok(0);
-            }
-            let n = buf.len().min(data.len() - start);
+            let world = self.world.lock();
+            let data = world.files.get(&world.open_id).expect("open file exists");
+            let n = buf.len().min(data.len().saturating_sub(start));
             buf[..n].copy_from_slice(&data[start..start + n]);
+            drop(world);
             Ok(n)
         }
 
         async fn size(&mut self) -> io::Result<u64> {
-            let world = self.world.lock().unwrap();
-            let len = world.files.get(&world.open_id).expect("open file exists").len();
+            let len = {
+                let world = self.world.lock();
+                world.files.get(&world.open_id).expect("open file exists").len()
+            };
             Ok(u64::try_from(len).expect("len fits u64"))
         }
 
         async fn identity(&mut self) -> io::Result<FdIdentity> {
-            Ok(self.world.lock().unwrap().open_id)
+            Ok(self.world.lock().open_id)
         }
 
         async fn path_identity(&mut self) -> io::Result<Option<FdIdentity>> {
-            Ok(Some(self.world.lock().unwrap().path_id))
+            Ok(Some(self.world.lock().path_id))
         }
 
         async fn reopen(&mut self) -> io::Result<()> {
-            let mut world = self.world.lock().unwrap();
+            let mut world = self.world.lock();
             world.open_id = world.path_id;
+            drop(world);
             Ok(())
         }
     }
@@ -859,8 +902,7 @@ mod tests {
 
     fn test_cfg(rotation: Rotation) -> EngineCfg {
         EngineCfg {
-            start: Start::Beginning,
-            follow: true,
+            read: Read::Follow(Start::Beginning),
             rotation,
             read_size: NonZeroUsize::new(4).expect("4 is nonzero"),
             backoff: default_backoff(),
@@ -879,11 +921,8 @@ mod tests {
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
         let mut out = Vec::new();
-        loop {
-            match stream.as_mut().poll_next(&mut cx) {
-                Poll::Ready(Some(event)) => out.push(event),
-                Poll::Ready(None) | Poll::Pending => break,
-            }
+        while let Poll::Ready(Some(event)) = stream.as_mut().poll_next(&mut cx) {
+            out.push(event);
         }
         out
     }
@@ -995,13 +1034,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("f");
         std::fs::write(&path, b"aa\nbbb\nc\n").unwrap();
-        let stream = Tail::builder().path(&path).follow(false).build().lines_positioned();
+        let stream = Tail::builder()
+            .path(&path)
+            .read(Read::Once(Anchor::Beginning))
+            .build()
+            .lines_positioned();
         futures::pin_mut!(stream);
         let mut got = Vec::new();
-        while let Some((at, line)) = stream.next().await {
-            got.push((at, line.unwrap()));
+        while let Some(Positioned { offset, value }) = stream.next().await {
+            got.push((offset, value.unwrap()));
         }
-        assert_eq!(got, vec![(3, "aa".to_string()), (7, "bbb".to_string()), (9, "c".to_string())]);
+        assert_eq!(got, vec![(3, b"aa".to_vec()), (7, b"bbb".to_vec()), (9, b"c".to_vec())]);
     }
 
     #[rstest]
@@ -1011,7 +1054,7 @@ mod tests {
         let path = dir.path().join("f");
         std::fs::write(&path, b"aa\nbbb\nc\n").unwrap();
         let lines = collect_lines(
-            Tail::builder().path(&path).follow(false).start(Start::Offset(7)).build().lines(),
+            Tail::builder().path(&path).read(Read::Once(Anchor::Offset(7))).build().lines_utf8(),
         )
         .await;
         assert_eq!(lines, vec!["c"]);
@@ -1025,7 +1068,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("f");
         std::fs::write(&path, b"one\n").unwrap();
-        let stream = Tail::builder().path(&path).build().lines();
+        let stream = Tail::builder().path(&path).build().lines_utf8();
         futures::pin_mut!(stream);
         assert_eq!(stream.next().await.unwrap().unwrap(), "one");
         let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();

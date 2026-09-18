@@ -1,7 +1,10 @@
+//! Newline-delimited JSON (JSONL) streaming.
+
 pub mod tail;
 
 use std::io;
 
+/// An error encountered while tailing a JSONL stream.
 #[derive(Debug, thiserror::Error)]
 pub enum JsonlError {
     #[error(transparent)]

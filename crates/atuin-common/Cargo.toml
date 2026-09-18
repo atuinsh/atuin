@@ -13,7 +13,7 @@ version.workspace = true
 
 [features]
 ai = []
-ansi = ["dep:atuin-vt100", "dep:memchr"]
+ansi = ["dep:atuin-vt100"]
 db = ["dep:sqlx"]
 os = ["dep:rustix"]
 proto = ["dep:prost"]
@@ -38,7 +38,7 @@ getrandom = { workspace = true }
 humantime = { workspace = true }
 itertools = { workspace = true }
 libsqlite3-sys = { workspace = true, optional = true }
-memchr = { workspace = true, optional = true }
+memchr = { workspace = true }
 num-traits = { workspace = true }
 parking_lot = { workspace = true }
 prost = { workspace = true, optional = true }
