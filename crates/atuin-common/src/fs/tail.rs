@@ -203,8 +203,17 @@ enum Event {
         bytes: Vec<u8>,
         offset: u64,
     },
+    /// The file was truncated or rewritten under us; discard any buffered partial line.
     Reset,
+    /// The path was rotated to a new file; flush the old file's buffered partial line first.
+    Rotated,
     Error(io::Error),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ResetKind {
+    Discard,
+    Flush,
 }
 
 trait TailSource: Send {
@@ -381,11 +390,16 @@ where
 
             let reset = loop {
                 match src.size().await {
-                    Ok(size) if size < offset => break true,
-                    Ok(size) if size > offset => {
-                        break anchor_mismatch(&mut src, offset, last_byte).await;
+                    Ok(size) if size < offset => break Some(ResetKind::Discard),
+                    Ok(size) => {
+                        if anchor_mismatch(&mut src, offset, last_byte).await {
+                            break Some(ResetKind::Discard);
+                        }
+                        if size > offset {
+                            break None;
+                        }
                     }
-                    _ => {}
+                    Err(_) => {}
                 }
 
                 if cfg.rotation == Rotation::Name {
@@ -411,15 +425,18 @@ where
                             continue;
                         }
                         open_id = src.identity().await.ok();
-                        break true;
+                        break Some(ResetKind::Flush);
                     }
                 }
 
                 waiter.wait().await;
             };
 
-            if reset {
-                yield Event::Reset;
+            if let Some(kind) = reset {
+                yield match kind {
+                    ResetKind::Flush => Event::Rotated,
+                    ResetKind::Discard => Event::Reset,
+                };
                 offset = 0;
                 last_byte = None;
             }
@@ -470,11 +487,20 @@ impl Tail {
         let cfg = self.engine_cfg();
         let path = self.path;
         async_stream::stream! {
-            let src = match FileSource::open(path).await {
-                Ok(src) => src,
-                Err(e) => {
-                    yield Event::Error(e);
-                    return;
+            let mut schedule = cfg.backoff.schedule();
+            let src = loop {
+                match FileSource::open(path.clone()).await {
+                    Ok(src) => break src,
+                    Err(e)
+                        if cfg.rotation == Rotation::Name
+                            && e.kind() == io::ErrorKind::NotFound =>
+                    {
+                        tokio::time::sleep(schedule.next_delay()).await;
+                    }
+                    Err(e) => {
+                        yield Event::Error(e);
+                        return;
+                    }
                 }
             };
             let inner = follow(src, BackoffWaiter::new(cfg.backoff), cfg);
@@ -494,7 +520,7 @@ impl Tail {
                 match event {
                     Event::Data { bytes, .. } => yield Ok(bytes),
                     Event::Error(e) => yield Err(e),
-                    Event::Reset => {}
+                    Event::Reset | Event::Rotated => {}
                 }
             }
         }
@@ -502,27 +528,7 @@ impl Tail {
 
     /// Stream the file as newline-delimited byte lines, with the trailing `\n` stripped.
     pub fn lines(self) -> impl Stream<Item = io::Result<Vec<u8>>> + Send {
-        let max = self.max_line_len;
-        let events = self.events();
-        async_stream::stream! {
-            let mut acc = LineAccumulator::new(max);
-            futures::pin_mut!(events);
-            while let Some(event) = events.next().await {
-                match event {
-                    Event::Data { bytes, .. } => {
-                        acc.push(&bytes);
-                        while let Some(line) = acc.next_line() {
-                            yield line.map_err(io::Error::from);
-                        }
-                    }
-                    Event::Reset => acc.reset(),
-                    Event::Error(e) => yield Err(e),
-                }
-            }
-            if let Some(line) = acc.finish() {
-                yield line.map_err(io::Error::from);
-            }
-        }
+        line_bytes_stream(self.max_line_len, self.events())
     }
 
     /// Stream the file as UTF-8 line strings; invalid UTF-8 yields an error.
@@ -557,6 +563,14 @@ impl Tail {
                             yield Positioned { offset, value: line.map_err(io::Error::from) };
                         }
                     }
+                    Event::Rotated => {
+                        if let Some(line) = acc.finish() {
+                            let offset = epoch_start.unwrap_or(0) + acc.consumed();
+                            yield Positioned { offset, value: line.map_err(io::Error::from) };
+                        }
+                        acc.reset();
+                        epoch_start = None;
+                    }
                     Event::Reset => {
                         acc.reset();
                         epoch_start = None;
@@ -571,6 +585,37 @@ impl Tail {
                 let offset = epoch_start.unwrap_or(0) + acc.consumed();
                 yield Positioned { offset, value: line.map_err(io::Error::from) };
             }
+        }
+    }
+}
+
+fn line_bytes_stream(
+    max: Option<usize>,
+    events: impl Stream<Item = Event> + Send + 'static,
+) -> impl Stream<Item = io::Result<Vec<u8>>> + Send {
+    async_stream::stream! {
+        let mut acc = LineAccumulator::new(max);
+        futures::pin_mut!(events);
+        while let Some(event) = events.next().await {
+            match event {
+                Event::Data { bytes, .. } => {
+                    acc.push(&bytes);
+                    while let Some(line) = acc.next_line() {
+                        yield line.map_err(io::Error::from);
+                    }
+                }
+                Event::Rotated => {
+                    if let Some(line) = acc.finish() {
+                        yield line.map_err(io::Error::from);
+                    }
+                    acc.reset();
+                }
+                Event::Reset => acc.reset(),
+                Event::Error(e) => yield Err(e),
+            }
+        }
+        if let Some(line) = acc.finish() {
+            yield line.map_err(io::Error::from);
         }
     }
 }
@@ -870,6 +915,12 @@ mod tests {
             world.files.insert(id, Vec::new());
             world.path_id = id;
         }
+
+        fn rewrite(&self, data: &[u8]) {
+            let mut world = self.world.lock();
+            let id = world.path_id;
+            *world.files.get_mut(&id).expect("path file exists") = data.to_vec();
+        }
     }
 
     impl TailSource for MemSource {
@@ -948,6 +999,18 @@ mod tests {
         out
     }
 
+    type LineStream = Pin<Box<dyn Stream<Item = io::Result<Vec<u8>>> + Send>>;
+
+    fn drain_lines(stream: &mut LineStream) -> Vec<Vec<u8>> {
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let mut out = Vec::new();
+        while let Poll::Ready(Some(line)) = stream.as_mut().poll_next(&mut cx) {
+            out.push(line.expect("line is ok"));
+        }
+        out
+    }
+
     fn data_of(events: &[Event]) -> Vec<u8> {
         events
             .iter()
@@ -961,6 +1024,10 @@ mod tests {
 
     fn resets(events: &[Event]) -> usize {
         events.iter().filter(|event| matches!(event, Event::Reset)).count()
+    }
+
+    fn rotations(events: &[Event]) -> usize {
+        events.iter().filter(|event| matches!(event, Event::Rotated)).count()
     }
 
     #[rstest]
@@ -1014,7 +1081,49 @@ mod tests {
         tx.unbounded_send(()).unwrap();
         let events = drain(&mut stream);
         assert_eq!(data_of(&events), b"old2\nnew1\n");
+        assert_eq!(rotations(&events), 1);
+        assert_eq!(resets(&events), 0);
+    }
+
+    #[rstest]
+    fn rotation_flushes_the_old_files_unterminated_final_line() {
+        let (tx, rx) = mpsc::unbounded();
+        let (handle, src) = MemHandle::new(b"old1\nold2");
+        let mut lines: LineStream =
+            Box::pin(line_bytes_stream(None, follow_mem(src, rx, Rotation::Name)));
+        assert_eq!(drain_lines(&mut lines), vec![b"old1".to_vec()]);
+        handle.rotate();
+        handle.append(b"new1\n");
+        tx.unbounded_send(()).unwrap();
+        assert_eq!(drain_lines(&mut lines), vec![b"old2".to_vec(), b"new1".to_vec()]);
+    }
+
+    #[rstest]
+    fn follow_detects_a_same_length_rewrite() {
+        let (tx, rx) = mpsc::unbounded();
+        let (handle, src) = MemHandle::new(b"aaaa\n");
+        let mut stream = follow_mem(src, rx, Rotation::Fd);
+        assert_eq!(data_of(&drain(&mut stream)), b"aaaa\n");
+        handle.rewrite(b"bbbbX");
+        tx.unbounded_send(()).unwrap();
+        let events = drain(&mut stream);
         assert_eq!(resets(&events), 1);
+        assert_eq!(data_of(&events), b"bbbbX");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn name_follow_waits_for_a_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("later.log");
+        let stream = Tail::builder().path(&path).rotation(Rotation::Name).build().lines_utf8();
+        futures::pin_mut!(stream);
+        let create = async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            std::fs::write(&path, b"appeared\n").unwrap();
+        };
+        let (_, line) = tokio::join!(create, stream.next());
+        assert_eq!(line.expect("a line").expect("utf8"), "appeared");
     }
 
     fn op_strategy() -> impl Strategy<Value = Op> {
