@@ -36,6 +36,10 @@ use tokio::time::MissedTickBehavior;
 pub enum TreeWatcherError {
     #[error("watch root is not a directory: {0}")]
     NotADirectory(PathBuf),
+    #[error("scan interval must be non-zero")]
+    ZeroScanInterval,
+    #[error("must be called from within a Tokio runtime")]
+    NoRuntime,
     #[error(transparent)]
     Notify(#[from] notify::Error),
     #[error(transparent)]
@@ -126,13 +130,27 @@ impl NodeContext {
     }
 }
 
-fn scan_fs(root: &Path, recursive: bool) -> std::io::Result<Vec<(Arc<Path>, FileKind)>> {
+/// Walk `root` best-effort, returning every readable entry and whether the walk
+/// finished without a read error. Callers must not prune on an incomplete walk: a
+/// missing entry may be unreadable rather than gone.
+fn scan_fs(root: &Path, recursive: bool) -> (Vec<(Arc<Path>, FileKind)>, bool) {
     let mut out = Vec::new();
+    let mut complete = true;
     let mut stack: Vec<Arc<Path>> = vec![Arc::from(root)];
     while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir)? {
-            let entry = entry?;
-            let file_type = entry.file_type()?;
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            complete = false;
+            continue;
+        };
+        for entry in entries {
+            let Ok(entry) = entry else {
+                complete = false;
+                continue;
+            };
+            let Ok(file_type) = entry.file_type() else {
+                complete = false;
+                continue;
+            };
             let path: Arc<Path> = Arc::from(entry.path());
             if recursive && file_type.is_dir() {
                 stack.push(Arc::clone(&path));
@@ -140,15 +158,14 @@ fn scan_fs(root: &Path, recursive: bool) -> std::io::Result<Vec<(Arc<Path>, File
             out.push((path, FileKind::from(file_type)));
         }
     }
-    Ok(out)
+    (out, complete)
 }
 
-async fn scan(root: &Path, recursive: bool) -> std::io::Result<Vec<(Arc<Path>, FileKind)>> {
+async fn scan(root: &Path, recursive: bool) -> (Vec<(Arc<Path>, FileKind)>, bool) {
     let root = root.to_path_buf();
-    match tokio::task::spawn_blocking(move || scan_fs(&root, recursive)).await {
-        Ok(result) => result,
-        Err(join) => Err(std::io::Error::other(join)),
-    }
+    tokio::task::spawn_blocking(move || scan_fs(&root, recursive))
+        .await
+        .unwrap_or_else(|_| (Vec::new(), false))
 }
 
 /// Stat every path referenced by `events` off the async executor, keeping only
@@ -215,9 +232,11 @@ where
         self.entries.retain(|key, _| !key.starts_with(path));
     }
 
-    fn reconcile(&mut self, truth: Vec<(Arc<Path>, FileKind)>) {
+    fn reconcile(&mut self, truth: Vec<(Arc<Path>, FileKind)>, prune: bool) {
         let truth: HashMap<Arc<Path>, FileKind> = truth.into_iter().collect();
-        self.entries.retain(|key, _| truth.contains_key(key));
+        if prune {
+            self.entries.retain(|key, _| truth.contains_key(key));
+        }
         for (path, kind) in truth {
             self.observe(path, kind, Origin::Scan);
         }
@@ -315,10 +334,11 @@ where
     }
 
     async fn rescan(&mut self) {
-        match scan(&self.root, self.recursive).await {
-            Ok(truth) => self.reconcile(truth),
-            Err(err) => tracing::warn!(?err, "tree watcher scan failed; skipping reconcile"),
+        let (truth, complete) = scan(&self.root, self.recursive).await;
+        if !complete {
+            tracing::warn!("tree watcher scan was incomplete; reconciling without pruning");
         }
+        self.reconcile(truth, complete);
     }
 }
 
@@ -367,6 +387,7 @@ impl TreeWatcherBuilder {
     /// Start watching `root`, building a handler for each node the factory accepts.
     ///
     /// A factory returning `None` declines the node; the decision is remembered.
+    /// Must be called from within a Tokio runtime.
     pub fn watch<H, F>(
         self,
         root: impl AsRef<Path>,
@@ -376,6 +397,12 @@ impl TreeWatcherBuilder {
         H: Send + 'static,
         F: Fn(NodeContext) -> Option<H> + Send + 'static,
     {
+        let handle =
+            tokio::runtime::Handle::try_current().map_err(|_| TreeWatcherError::NoRuntime)?;
+        if self.scan_interval.is_zero() {
+            return Err(TreeWatcherError::ZeroScanInterval);
+        }
+
         let root = std::fs::canonicalize(root.as_ref())?;
         if !root.is_dir() {
             return Err(TreeWatcherError::NotADirectory(root));
@@ -400,7 +427,7 @@ impl TreeWatcherBuilder {
             factory,
             entries: HashMap::new(),
         };
-        let task = tokio::spawn(engine.run(rx, self.scan_interval));
+        let task = handle.spawn(engine.run(rx, self.scan_interval));
 
         Ok(TreeWatcher {
             task,
@@ -563,7 +590,8 @@ mod tests {
         std::fs::create_dir(dir.path().join("sub")).unwrap();
         std::fs::write(dir.path().join("sub/b"), b"x").unwrap();
 
-        let found = scan_fs(dir.path(), recursive).unwrap();
+        let (found, complete) = scan_fs(dir.path(), recursive);
+        assert!(complete);
         let map = scanned_kinds(&found, dir.path());
         assert_eq!(map.get("a"), Some(&FileKind::File));
         assert_eq!(map.get("sub"), Some(&FileKind::Dir));
@@ -578,7 +606,8 @@ mod tests {
         std::fs::write(dir.path().join("real/inner"), b"x").unwrap();
         std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("link")).unwrap();
 
-        let found = scan_fs(dir.path(), true).unwrap();
+        let (found, complete) = scan_fs(dir.path(), true);
+        assert!(complete);
         let map = scanned_kinds(&found, dir.path());
         assert_eq!(map.get("link"), Some(&FileKind::Symlink));
         assert!(!map.contains_key("link/inner"));
@@ -586,9 +615,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scan_errors_for_missing_root() {
+    async fn scan_reports_incomplete_for_missing_root() {
         let missing = Path::new("/this/does/not/exist/anywhere");
-        assert!(scan(missing, true).await.is_err());
+        let (found, complete) = scan(missing, true).await;
+        assert!(found.is_empty());
+        assert!(!complete);
+    }
+
+    #[rstest]
+    fn scan_fs_reports_incomplete_on_unreadable_root() {
+        let (found, complete) = scan_fs(Path::new("/this/does/not/exist/anywhere"), true);
+        assert!(found.is_empty());
+        assert!(!complete);
+    }
+
+    #[rstest]
+    fn watch_without_runtime_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = TreeWatcher::watch(dir.path(), |_ctx: NodeContext| Some(()));
+        assert!(matches!(result, Err(TreeWatcherError::NoRuntime)));
+    }
+
+    #[tokio::test]
+    async fn watch_with_zero_scan_interval_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = TreeWatcher::builder()
+            .scan_interval(Duration::ZERO)
+            .watch(dir.path(), |_ctx: NodeContext| Some(()));
+        assert!(matches!(result, Err(TreeWatcherError::ZeroScanInterval)));
     }
 
     #[rstest]
@@ -657,9 +711,9 @@ mod tests {
     fn reconcile_adds_and_removes() {
         let counters = Arc::new(Counters::default());
         let mut engine = accept_all_engine(&counters);
-        engine.reconcile(truth(&["a", "b"]));
+        engine.reconcile(truth(&["a", "b"]), true);
         assert_eq!(counters.alive.load(Ordering::SeqCst), 2);
-        engine.reconcile(truth(&["b", "c"]));
+        engine.reconcile(truth(&["b", "c"]), true);
         assert_eq!(keys(&engine), [ap("/r/b"), ap("/r/c")].into_iter().collect());
         assert_eq!(counters.alive.load(Ordering::SeqCst), 2);
         assert_eq!(counters.created.load(Ordering::SeqCst), 3);
@@ -670,8 +724,8 @@ mod tests {
     fn reconcile_repairs_kind_swap() {
         let counters = Arc::new(Counters::default());
         let mut engine = accept_all_engine(&counters);
-        engine.reconcile(vec![(ap("/r/x"), FileKind::Dir)]);
-        engine.reconcile(vec![(ap("/r/x"), FileKind::File)]);
+        engine.reconcile(vec![(ap("/r/x"), FileKind::Dir)], true);
+        engine.reconcile(vec![(ap("/r/x"), FileKind::File)], true);
         assert_eq!(
             engine.entries.get(Path::new("/r/x")).map(|slot| slot.kind()),
             Some(FileKind::File)
@@ -679,6 +733,17 @@ mod tests {
         assert_eq!(counters.created.load(Ordering::SeqCst), 2);
         assert_eq!(counters.dropped.load(Ordering::SeqCst), 1);
         assert_eq!(counters.alive.load(Ordering::SeqCst), 1);
+    }
+
+    #[rstest]
+    fn reconcile_without_prune_keeps_missing() {
+        let counters = Arc::new(Counters::default());
+        let mut engine = accept_all_engine(&counters);
+        engine.reconcile(truth(&["a", "b"]), true);
+        // An incomplete scan sees only "a"; without pruning, "b" must survive.
+        engine.reconcile(truth(&["a"]), false);
+        assert_eq!(keys(&engine), [ap("/r/a"), ap("/r/b")].into_iter().collect());
+        assert_eq!(counters.alive.load(Ordering::SeqCst), 2);
     }
 
     #[rstest]
@@ -766,7 +831,7 @@ mod tests {
                     .collect();
                 let truth: Vec<(Arc<Path>, FileKind)> =
                     want.iter().cloned().map(|p| (p, FileKind::File)).collect();
-                engine.reconcile(truth);
+                engine.reconcile(truth, true);
                 prop_assert_eq!(keys(&engine), want);
             }
             let created = counters.created.load(Ordering::SeqCst);
@@ -798,7 +863,7 @@ mod tests {
                         (ap(&format!("/r/{id}")), kind)
                     })
                     .collect();
-                engine.reconcile(truth);
+                engine.reconcile(truth, true);
             }
             let alive = usize::try_from(counters.alive.load(Ordering::SeqCst)).unwrap();
             let active = engine
