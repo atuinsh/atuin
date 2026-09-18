@@ -82,10 +82,42 @@ impl NodeContext {
     }
 }
 
+fn scan_fs(root: &Path, recursive: bool) -> std::io::Result<Vec<(PathBuf, FileKind)>> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let path = entry.path();
+            if recursive && file_type.is_dir() {
+                stack.push(path.clone());
+            }
+            out.push((path, FileKind::from(file_type)));
+        }
+    }
+    Ok(out)
+}
+
+async fn scan(root: &Path, recursive: bool) -> Option<Vec<(PathBuf, FileKind)>> {
+    let root = root.to_path_buf();
+    match tokio::task::spawn_blocking(move || scan_fs(&root, recursive)).await {
+        Ok(Ok(entries)) => Some(entries),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use rstest::rstest;
+
+    fn kinds(entries: &[(PathBuf, FileKind)], root: &Path) -> std::collections::BTreeMap<String, FileKind> {
+        entries
+            .iter()
+            .map(|(p, k)| (p.strip_prefix(root).unwrap().to_string_lossy().into_owned(), *k))
+            .collect()
+    }
 
     #[test]
     fn not_a_directory_displays_path() {
@@ -126,5 +158,51 @@ mod tests {
         assert_eq!(ctx.is_symlink(), is_symlink);
         assert_eq!(ctx.path(), Path::new("/root/x"));
         assert_eq!(ctx.origin(), Origin::Scan);
+    }
+
+    #[test]
+    fn scan_fs_lists_direct_children_only_when_not_recursive() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a"), b"x").unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/b"), b"x").unwrap();
+
+        let found = scan_fs(dir.path(), false).unwrap();
+        let map = kinds(&found, dir.path());
+        assert_eq!(map.get("a"), Some(&FileKind::File));
+        assert_eq!(map.get("sub"), Some(&FileKind::Dir));
+        assert!(map.get("sub/b").is_none());
+    }
+
+    #[test]
+    fn scan_fs_descends_when_recursive() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/b"), b"x").unwrap();
+
+        let found = scan_fs(dir.path(), true).unwrap();
+        let map = kinds(&found, dir.path());
+        assert_eq!(map.get("sub/b"), Some(&FileKind::File));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_fs_does_not_follow_symlinked_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("real")).unwrap();
+        std::fs::write(dir.path().join("real/inner"), b"x").unwrap();
+        std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("link")).unwrap();
+
+        let found = scan_fs(dir.path(), true).unwrap();
+        let map = kinds(&found, dir.path());
+        assert_eq!(map.get("link"), Some(&FileKind::Symlink));
+        assert!(map.get("link/inner").is_none());
+        assert_eq!(map.get("real/inner"), Some(&FileKind::File));
+    }
+
+    #[tokio::test]
+    async fn scan_returns_none_for_missing_root() {
+        let missing = PathBuf::from("/this/does/not/exist/anywhere");
+        assert!(scan(&missing, true).await.is_none());
     }
 }
