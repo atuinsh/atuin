@@ -350,7 +350,9 @@ impl DrawState<'_> {
                 }
                 char_style.attributes.set(style::Attribute::Bold);
             }
-            self.draw(&ch.to_string(), Style::from_crossterm(char_style));
+
+            let mut ch_buf = [0u8; 4];
+            self.draw(ch.encode_utf8(&mut ch_buf), Style::from_crossterm(char_style));
         }
     }
 

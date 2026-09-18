@@ -25,5 +25,5 @@ reason = "eyre and anyhow are considered anti-patterns for library crates. atuin
 
 [[bans.deny]]
 crate = "anyhow"
-wrappers = ["codspeed", "reqwest-middleware", "sql-builder"]
+wrappers = ["reqwest-middleware", "sql-builder"]
 reason = "eyre and anyhow are considered anti-patterns for library crates. atuin-history is a library crate."

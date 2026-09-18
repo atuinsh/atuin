@@ -128,7 +128,7 @@ mod tests {
         assert_eq!(range.chunks(size).collect::<Vec<_>>(), expected);
     }
 
-    #[test]
+    #[rstest]
     fn exposes_its_bounds_and_stride() {
         let plan = (3u64..9).chunks(4);
         assert_eq!(plan.start(), 3);
@@ -136,7 +136,7 @@ mod tests {
         assert_eq!(plan.size(), NonZero::new(4u64).unwrap());
     }
 
-    #[test]
+    #[rstest]
     fn is_generic_over_the_index_type() {
         let chunks: Vec<_> = (0usize..5).chunks(2).collect();
         assert_eq!(chunks, vec![0..2, 2..4, 4..5]);

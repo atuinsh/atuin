@@ -51,7 +51,7 @@ default = [
 ]
 client = ["atuin-client"]
 sync = ["atuin-client/sync"]
-daemon = ["atuin-client/daemon", "atuin-daemon", "atuin-ai?/daemon"]
+daemon = ["dep:async-stream", "atuin-client/daemon", "atuin-daemon", "atuin-ai?/daemon"]
 ai = ["atuin-ai"]
 pty-proxy = ["dep:atuin-pty-proxy"]
 hex = ["pty-proxy"]
@@ -81,7 +81,7 @@ atuin-client = {
     optional = true,
     default-features = false,
 }
-atuin-common = { workspace = true, features = ["unicode", "os"] }
+atuin-common = { workspace = true, features = ["unicode", "os", "ai"] }
 atuin-daemon = { workspace = true, optional = true }
 atuin-domain = { workspace = true }
 atuin-dotfiles = { workspace = true }
@@ -92,6 +92,7 @@ atuin-pty-proxy = { workspace = true, optional = true }
 atuin-scripts = { workspace = true }
 
 ansi-to-tui = { workspace = true }
+async-stream = { workspace = true, optional = true }
 async-trait = { workspace = true }
 axoupdater = { workspace = true, optional = true }
 clap = { workspace = true }
@@ -108,6 +109,7 @@ futures-util = { workspace = true }
 indicatif = { workspace = true }
 interim = { workspace = true }
 itertools = { workspace = true }
+locked-tripwire = { workspace = true }
 norm = { workspace = true }
 opentelemetry = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }
@@ -160,11 +162,16 @@ tree-sitter-powershell = { workspace = true }
 windows-sys = { workspace = true }
 
 [dev-dependencies]
+divan = { workspace = true }
 parking_lot = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
 tempfile = { workspace = true }
 toml_edit = { workspace = true, features = ["serde"] }
+
+[[bench]]
+name = "render_char"
+harness = false
 
 # for the PTY e2e tests (tests/e2e_pty.rs)
 [target.'cfg(unix)'.dev-dependencies]

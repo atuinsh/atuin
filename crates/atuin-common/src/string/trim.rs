@@ -257,21 +257,21 @@ mod tests {
     proptest! {
         /// However the pattern and haystack are chosen, trimming in place must agree with
         /// `str::trim_matches` and never leave the string on a non-char boundary.
-        #[test]
+        #[rstest]
         fn agrees_with_str_trim_matches(input in ".{0,64}", pattern in prop::char::range('a', 'e')) {
             let mut string = input.clone();
             string.trim_matches_in_place(pattern);
             prop_assert_eq!(string, input.trim_matches(pattern));
         }
 
-        #[test]
+        #[rstest]
         fn agrees_with_str_trim(input in ".{0,64}") {
             let mut string = input.clone();
             string.trim_in_place();
             prop_assert_eq!(string, input.trim());
         }
 
-        #[test]
+        #[rstest]
         fn agrees_with_str_trim_start_matches(
             input in ".{0,64}",
             pattern in prop::char::range('a', 'e'),
@@ -281,7 +281,7 @@ mod tests {
             prop_assert_eq!(string, input.trim_start_matches(pattern));
         }
 
-        #[test]
+        #[rstest]
         fn agrees_with_str_trim_end_matches(
             input in ".{0,64}",
             pattern in prop::char::range('a', 'e'),
@@ -291,14 +291,14 @@ mod tests {
             prop_assert_eq!(string, input.trim_end_matches(pattern));
         }
 
-        #[test]
+        #[rstest]
         fn agrees_with_str_trim_start(input in ".{0,64}") {
             let mut string = input.clone();
             string.trim_start_in_place();
             prop_assert_eq!(string, input.trim_start());
         }
 
-        #[test]
+        #[rstest]
         fn agrees_with_str_trim_end(input in ".{0,64}") {
             let mut string = input.clone();
             string.trim_end_in_place();
@@ -306,7 +306,7 @@ mod tests {
         }
 
         /// Trimming both ends is exactly trimming each end in turn, however they are ordered.
-        #[test]
+        #[rstest]
         fn both_ends_is_the_two_one_sided_trims(
             input in ".{0,64}",
             pattern in prop::char::range('a', 'e'),

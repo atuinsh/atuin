@@ -18,12 +18,13 @@ pub(crate) mod history_journal;
 mod output_capture;
 pub mod search;
 pub mod server;
+mod sync;
 
 // Re-export core daemon types for convenience
 // Re-export client helpers
 pub use client::HistoryClient;
 // Re-export components
-pub use components::{SearchComponent, SyncComponent};
+pub use components::SearchComponent;
 pub use daemon::{AnyComponent, Daemon, DaemonBuilder, DaemonHandle};
 pub use events::DaemonEvent;
 pub use history_journal::{
@@ -31,13 +32,13 @@ pub use history_journal::{
     GetCmdInFlightError, HistoryJournal, RegisterOutputError,
 };
 pub use output_capture::{
-    BackendKind, CaptureError, DeleteOutputError, GetOutputError, OutputCapture,
+    CaptureError, DeleteOutputError, GetOutputError, OutputCaptureEngine, OutputLine, OutputMatch,
 };
 
 /// Boot the daemon using the new component-based architecture.
 ///
-/// This creates a daemon with the standard components (history, search, sync),
-/// starts the gRPC server with their services, and runs the event loop.
+/// This creates a daemon with the search component, spawns the background sync
+/// engine, starts the gRPC server with their services, and runs the event loop.
 pub async fn boot(
     settings: Settings,
     store: SqliteStore,
@@ -45,11 +46,17 @@ pub async fn boot(
 ) -> Result<()> {
     // Create the components
     let search_component = SearchComponent::new();
-    let sync_component = SyncComponent::new();
+
+    let output_capture = match settings.output.limits() {
+        Some(limits) => {
+            OutputCaptureEngine::open(Settings::command_capture_dir(), limits.max_disk_usage).await
+        }
+        None => OutputCaptureEngine::nop(),
+    };
 
     // Get the gRPC services before moving components into the daemon
     // (The services share state with the components via Arc)
-    let search_service = search_component.grpc_service();
+    let search_service = search_component.grpc_service(output_capture.store());
     let search_index = search_component.index();
 
     // Build the daemon
@@ -57,18 +64,15 @@ pub async fn boot(
         .store(store)
         .history_db(history_db)
         .component(search_component)
-        .component(sync_component)
         .build()?;
 
     let handle = daemon.handle();
 
+    let _sync_engine = sync::SyncEngine::spawn(handle.clone(), search_index.clone());
+
     let host_id = Settings::host_id().await?;
     let history_store =
         HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
-    let output_capture = match settings.output.limits() {
-        Some(limits) => OutputCapture::open(Settings::command_capture_dir(), limits.max_disk_usage),
-        None => OutputCapture::nop(),
-    };
     let journal = Arc::new(HistoryJournal::new(
         handle.caps().clone(),
         history_store,

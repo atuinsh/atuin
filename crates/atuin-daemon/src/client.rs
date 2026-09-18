@@ -1,3 +1,4 @@
+use std::num::NonZeroU32;
 #[cfg(unix)]
 use std::path::PathBuf;
 
@@ -8,6 +9,7 @@ use atuin_common::filter::{self, OrFilter};
 use atuin_common::range::PyStyleIdxRange;
 use easy_cast::Conv;
 use eyre::{Context as EyreContext, Result};
+use futures::{Stream, StreamExt};
 use hyper_util::rt::TokioIo;
 use itertools::Itertools;
 #[cfg(windows)]
@@ -27,10 +29,11 @@ use crate::grpc::history::pb::{
     RegisterCommandOutputRequest, ShutdownRequest, StartHistoryReply, StartHistoryRequest,
     StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
 };
+use crate::output_capture::OutputMatch;
 use crate::search::search_client::SearchClient as SearchServiceClient;
 use crate::search::{
-    FilterMode as RpcFilterMode, PrepareIndexRequest, SearchContext as RpcSearchContext,
-    SearchRequest, SearchResponse,
+    FilterMode as RpcFilterMode, PrepareIndexRequest, SearchCommandOutputRequest,
+    SearchContext as RpcSearchContext, SearchRequest, SearchResponse,
 };
 
 pub struct HistoryClient {
@@ -333,6 +336,16 @@ impl SearchClient {
         Ok(SearchClient { client })
     }
 
+    #[cfg(unix)]
+    pub async fn from_settings(settings: &Settings) -> Result<Self> {
+        Self::new(settings.daemon.existing_socket_path().into_owned()).await
+    }
+
+    #[cfg(not(unix))]
+    pub async fn from_settings(settings: &Settings) -> Result<Self> {
+        Self::new(settings.daemon.tcp_port).await
+    }
+
     #[instrument(
         skip_all,
         level = Level::TRACE,
@@ -350,6 +363,28 @@ impl SearchClient {
             .await?;
 
         Ok(response.into_inner())
+    }
+
+    #[instrument(
+        skip_all,
+        level = Level::TRACE,
+        name = "search_command_output",
+    )]
+    /// Relevance-ranked hits, each reduced to the lines within `context` of a match, or whole
+    /// when `context` is `None`.
+    pub async fn search_command_output(
+        &mut self,
+        query: String,
+        limit: Option<NonZeroU32>,
+        context: Option<u32>,
+    ) -> Result<impl Stream<Item = Result<OutputMatch>> + Send + use<>> {
+        let request = SearchCommandOutputRequest {
+            query,
+            limit: limit.map_or(0, NonZeroU32::get),
+            context,
+        };
+        let stream = self.client.search_command_output(request).await?.into_inner();
+        Ok(stream.map(|item| -> Result<OutputMatch> { Ok(OutputMatch::try_from(item?)?) }))
     }
 
     /// Tell the daemon to build the search index for the given list of shells.

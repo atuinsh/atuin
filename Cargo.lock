@@ -258,6 +258,7 @@ version = "18.22.0"
 dependencies = [
  "ansi-to-tui",
  "arboard",
+ "async-stream",
  "async-trait",
  "atuin-ai",
  "atuin-client",
@@ -274,10 +275,11 @@ dependencies = [
  "clap",
  "clap_complete",
  "clap_complete_nushell",
- "colored 2.2.0",
+ "colored",
  "crossterm",
  "daemonix",
  "derive_more",
+ "divan",
  "easy-cast",
  "enum_dispatch",
  "eyre",
@@ -286,6 +288,7 @@ dependencies = [
  "indicatif",
  "interim",
  "itertools 0.15.0",
+ "locked-tripwire",
  "nix 0.28.0",
  "norm",
  "opentelemetry",
@@ -360,6 +363,7 @@ dependencies = [
  "reqwest",
  "rmcp",
  "rstest",
+ "schemars 1.2.1",
  "serde",
  "serde_json",
  "shellexpand",
@@ -393,19 +397,19 @@ dependencies = [
  "async-trait",
  "atuin-common",
  "atuin-domain",
+ "atuin-vt100",
  "base64",
  "clap",
- "codspeed-divan-compat",
  "config",
  "crossterm",
  "derive_more",
  "directories",
+ "divan",
  "easy-cast",
  "enum_dispatch",
  "eyre",
  "fs-err",
  "futures",
- "humantime",
  "indicatif",
  "interim",
  "itertools 0.15.0",
@@ -451,18 +455,23 @@ dependencies = [
 name = "atuin-common"
 version = "18.22.0"
 dependencies = [
+ "async-stream",
  "atuin-vt100",
  "base64",
  "bytesize",
  "crypto_secretbox",
  "derive_more",
  "directories",
+ "divan",
  "easy-cast",
+ "enum_dispatch",
  "fs-err",
  "futures",
  "getrandom 0.4.3",
+ "humantime",
  "itertools 0.15.0",
  "libsqlite3-sys",
+ "memchr",
  "num-traits",
  "parking_lot",
  "pretty_assertions",
@@ -474,6 +483,7 @@ dependencies = [
  "rustix",
  "rusty_paserk",
  "rusty_paseto",
+ "schemars 1.2.1",
  "semver",
  "serde",
  "serde_json",
@@ -507,6 +517,7 @@ dependencies = [
  "atuin-history",
  "dashmap",
  "derive_more",
+ "divan",
  "easy-cast",
  "enum_dispatch",
  "eyre",
@@ -525,9 +536,9 @@ dependencies = [
  "rand 0.8.7",
  "reqwest",
  "rstest",
+ "sqlx",
  "strum 0.27.2",
  "strum_macros 0.28.0",
- "sysinfo",
  "tempfile",
  "thiserror 2.0.19",
  "time",
@@ -599,8 +610,8 @@ name = "atuin-history"
 version = "18.22.0"
 dependencies = [
  "atuin-client",
- "codspeed-divan-compat",
  "crossterm",
+ "divan",
  "easy-cast",
  "rand 0.8.7",
  "rstest",
@@ -637,8 +648,10 @@ dependencies = [
  "atuin-vt100",
  "clap",
  "crossterm",
+ "divan",
  "easy-cast",
  "libc",
+ "memchr",
  "parking_lot",
  "portable-pty",
  "rstest",
@@ -681,7 +694,7 @@ dependencies = [
  "atuin-client",
  "atuin-common",
  "atuin-daemon",
- "codspeed-divan-compat",
+ "divan",
  "easy-cast",
  "parking_lot",
  "time",
@@ -1181,66 +1194,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
-name = "codspeed"
-version = "5.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7083f253260bcb4aaa3b4aa4c52973703dabc1a85c2f193997e2689aafa8a919"
-dependencies = [
- "anyhow",
- "cc",
- "colored 3.1.1",
- "getrandom 0.4.3",
- "glob",
- "libc",
- "nix 0.31.3",
- "serde",
- "serde_json",
- "statrs",
-]
-
-[[package]]
-name = "codspeed-divan-compat"
-version = "5.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc1065d507e1cbab731a7976db4cef7e47e49b87b4dbc0a925df07d343558420"
-dependencies = [
- "clap",
- "codspeed",
- "codspeed-divan-compat-macros",
- "codspeed-divan-compat-walltime",
- "regex",
-]
-
-[[package]]
-name = "codspeed-divan-compat-macros"
-version = "5.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2fd05482a95823ffe421e8a9ba24fa22a6a30d594e2c60455cbb43a41bf2d8fa"
-dependencies = [
- "divan-macros",
- "itertools 0.14.0",
- "proc-macro-crate",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "codspeed-divan-compat-walltime"
-version = "5.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2f8eae75b8fa85357020a404899c4280d590c9fd1c47640b3ce53106c62d2ee"
-dependencies = [
- "cfg-if",
- "clap",
- "codspeed",
- "condtype",
- "divan-macros",
- "libc",
- "regex-lite",
-]
-
-[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1254,15 +1207,6 @@ checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
  "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "colored"
-version = "3.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
-dependencies = [
- "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1770,10 +1714,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "divan-macros"
-version = "0.1.17"
+name = "divan"
+version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8dc51d98e636f5e3b0759a39257458b22619cac7e96d932da6eeb052891bb67c"
+checksum = "a405457ec78b8fe08b0e32b4a3570ab5dff6dd16eb9e76a5ee0a9d9cbd898933"
+dependencies = [
+ "cfg-if",
+ "clap",
+ "condtype",
+ "divan-macros",
+ "libc",
+ "regex-lite",
+]
+
+[[package]]
+name = "divan-macros"
+version = "0.1.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9556bc800956545d6420a640173e5ba7dfa82f38d3ea5a167eb555bc69ac3323"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1966,10 +1924,11 @@ dependencies = [
 
 [[package]]
 name = "eyre"
-version = "0.6.12"
+version = "0.6.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cd915d99f24784cdc19fd37ef22b97e3ff0ae756c7e492e9fbfe897d61e2aec"
+checksum = "c08309dbcc659c5549a24ddb9b27027640641b282ef5768267c7e675558986a3"
 dependencies = [
+ "autocfg",
  "indenter",
  "once_cell",
 ]
@@ -3058,6 +3017,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "locked-tripwire"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d18841f136ee0993c6637a1387eb3758acc9fa24d558f540d329b2d8bb901c67"
+
+[[package]]
 name = "log"
 version = "0.4.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3374,18 +3339,6 @@ name = "nix"
 version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
-dependencies = [
- "bitflags 2.13.0",
- "cfg-if",
- "cfg_aliases 0.2.1",
- "libc",
-]
-
-[[package]]
-name = "nix"
-version = "0.31.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
 dependencies = [
  "bitflags 2.13.0",
  "cfg-if",
@@ -5053,9 +5006,9 @@ dependencies = [
 
 [[package]]
 name = "serde_regex"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8136f1a4ea815d7eac4101cfd0b16dc0cb5e1fe1b8609dfd728058656b7badf"
+checksum = "bafc8d0c5330cecff10f16b459b479fd9acaa5b4acd7167301414e21b0057012"
 dependencies = [
  "regex",
  "serde",
@@ -5513,16 +5466,6 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
-
-[[package]]
-name = "statrs"
-version = "0.18.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a3fe7c28c6512e766b0874335db33c94ad7b8f9054228ae1c2abd47ce7d335e"
-dependencies = [
- "approx",
- "num-traits",
-]
 
 [[package]]
 name = "streaming-iterator"
@@ -6488,9 +6431,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.25.0"
+version = "1.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f053576934f05a761a402421fbbe3d425d9366f75f978806a037b3ca481abecc"
+checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
 dependencies = [
  "atomic",
  "getrandom 0.4.3",

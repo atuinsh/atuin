@@ -2,17 +2,21 @@
 //! `rmcp` SDK.
 //!
 //! This exposes the same history tools the AI assistant uses (`atuin_history`
-//! and `atuin_output`) to external MCP clients such as Claude Code or Cursor.
+//! and `atuin_output`), plus `atuin_output_search`, to external MCP clients
+//! such as Claude Code or Cursor.
 //!
 //! History search reads the sqlite database directly and works without the
-//! daemon; output retrieval talks to the daemon and returns a tool error when
-//! it is not running.
+//! daemon; output retrieval and output search talk to the daemon and return a
+//! tool error when it is not running.
 
 use std::sync::LazyLock;
 
 use atuin_client::database::Sqlite;
 use atuin_client::history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, KNOWN_AGENTS};
+use atuin_client::settings::Settings;
 use eyre::Result;
+use rmcp::handler::server::common::schema_for_type;
+use rmcp::handler::server::tool::parse_json_object;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
     Implementation, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
@@ -23,6 +27,7 @@ use rmcp::{RoleServer, ServerHandler, ServiceExt};
 use serde_json::{Value, json};
 use strum::IntoEnumIterator;
 
+use crate::tools::output::search::AtuinOutputSearchToolCall;
 use crate::tools::{
     AtuinHistoryToolCall, AtuinOutputToolCall, DEFAULT_HISTORY_RESULTS, HistorySearchFilterMode,
     MAX_HISTORY_RESULTS, ToolOutcome,
@@ -30,6 +35,7 @@ use crate::tools::{
 
 struct AtuinMcp {
     db: Sqlite,
+    settings: Settings,
 }
 
 /// Server-level instructions, surfaced by MCP clients (Claude Code injects
@@ -47,7 +53,9 @@ Search atuin_history instead of guessing, asking the user, or re-running things 
      terminal activity is relevant: how the user last invoked something ('what flags did I use'), \
      whether and when something ran and if it succeeded, why a command failed (search with \
      only_failed: true, then read the actual error with atuin_output), or what an AI agent ran. \
-     When debugging, checking recent history early often reveals what the user already tried.
+     When debugging, checking recent history early often reveals what the user already tried. \
+     When you know what was printed but not which command printed it — an error message, a \
+     version, a hostname, a path — search the captured output itself with atuin_output_search.
 
 When a question is about the user themselves — 'what do I use', 'how do I connect', 'what's my \
      setup' — run one atuin_history search BEFORE searching the filesystem. It is a single cheap \
@@ -85,18 +93,23 @@ impl ServerHandler for AtuinMcp {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let arguments = Value::Object(request.arguments.unwrap_or_default());
+        let arguments = request.arguments.unwrap_or_default();
         let outcome = match request.name.as_ref() {
             "atuin_history" => {
-                AtuinHistoryToolCall::try_from(&arguments)
+                AtuinHistoryToolCall::try_from(&Value::Object(arguments))
                     .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?
                     .execute(&self.db)
                     .await
             }
             "atuin_output" => {
-                AtuinOutputToolCall::try_from(&arguments)
+                AtuinOutputToolCall::try_from(&Value::Object(arguments))
                     .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?
                     .execute()
+                    .await
+            }
+            "atuin_output_search" => {
+                parse_json_object::<AtuinOutputSearchToolCall>(arguments)?
+                    .execute(&self.db, &self.settings)
                     .await
             }
             name => {
@@ -121,16 +134,22 @@ impl ServerHandler for AtuinMcp {
 ///
 /// stdout carries only JSON-RPC messages; anything else (logs, errors) must
 /// go to stderr or it will corrupt the protocol stream.
-pub async fn run(db: &Sqlite) -> Result<()> {
-    let server = AtuinMcp { db: db.clone() }.serve(rmcp::transport::stdio()).await?;
+pub async fn run(db: &Sqlite, settings: &Settings) -> Result<()> {
+    let server = AtuinMcp {
+        db: db.clone(),
+        settings: settings.clone(),
+    }
+    .serve(rmcp::transport::stdio())
+    .await?;
     server.waiting().await?;
     Ok(())
 }
 
 /// Tool metadata for `tools/list`, built once: the schemas and descriptions
 /// are assembled from consts and the filter-mode enum, none of which change
-/// at runtime. The input schemas mirror what the `TryFrom<&serde_json::Value>`
-/// impls in [`crate::tools`] accept.
+/// at runtime. The history and output schemas are written by hand and must
+/// mirror what the `TryFrom<&serde_json::Value>` impls in [`crate::tools`]
+/// accept; the output-search schema is derived from its call struct.
 static TOOLS: LazyLock<Vec<Tool>> = LazyLock::new(tool_definitions);
 
 fn tool_definitions() -> Vec<Tool> {
@@ -243,6 +262,17 @@ fn tool_definitions() -> Vec<Tool> {
             output_schema,
         )
         .annotate(ToolAnnotations::with_title("Read past command output").read_only(true)),
+        Tool::new(
+            "atuin_output_search",
+            "Full-text search over the terminal output of every captured command. Use it when you \
+             know what was printed but not which command printed it: an error message, a version \
+             string, a hostname, a file path, a test name. Each result gives the command (with \
+             its history ID, timestamp, directory and exit code) and the numbered output lines \
+             around each match; pass the history ID and line numbers to atuin_output to read \
+             more. Requires the Atuin daemon with output capture enabled.",
+            schema_for_type::<AtuinOutputSearchToolCall>(),
+        )
+        .annotate(ToolAnnotations::with_title("Search past command output").read_only(true)),
     ]
 }
 
@@ -257,10 +287,10 @@ mod tests {
     const MAX_INSTRUCTIONS_LEN: usize = 2_000;
 
     #[rstest]
-    fn tool_definitions_list_both_tools_as_read_only() {
+    fn tool_definitions_list_all_tools_as_read_only() {
         let tools = tool_definitions();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-        assert_eq!(names, ["atuin_history", "atuin_output"]);
+        assert_eq!(names, ["atuin_history", "atuin_output", "atuin_output_search"]);
 
         for tool in &tools {
             assert_eq!(tool.annotations.as_ref().unwrap().read_only_hint, Some(true));
@@ -273,11 +303,31 @@ mod tests {
         assert_eq!(required, &json!(["query"]));
     }
 
+    /// The output-search schema is derived from the call struct, so this pins what the model
+    /// sees rather than how the struct is annotated.
+    #[rstest]
+    fn output_search_schema_is_derived_from_the_call_struct() {
+        let tools = tool_definitions();
+        let schema = &tools[2].input_schema;
+        assert_eq!(schema["required"], json!(["query"]));
+        let query = &schema["properties"]["query"];
+        assert_eq!(query["type"], "string");
+        assert_eq!(query["minLength"], 1);
+        assert!(query["description"].as_str().unwrap().contains("AND-ed"));
+        let limit = &schema["properties"]["limit"];
+        assert_eq!(limit["type"], "integer");
+        assert_eq!(limit["minimum"], 1);
+        assert_eq!(limit["maximum"], 20);
+        assert_eq!(limit["default"], 5);
+        assert!(limit["description"].as_str().unwrap().contains("most relevant first"));
+    }
+
     #[rstest]
     fn server_info_carries_instructions() {
         let instructions = server_info().instructions.expect("initialize result has instructions");
         assert!(instructions.contains("atuin_history"));
         assert!(instructions.contains("atuin_output"));
+        assert!(instructions.contains("atuin_output_search"));
         assert!(instructions.len() < MAX_INSTRUCTIONS_LEN, "instructions should stay concise");
     }
 }

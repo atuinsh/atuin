@@ -58,7 +58,24 @@ pub struct WireToolInput {
 
 /// See [`WireHookEvent::tool_response`].
 #[derive(Debug, Deserialize)]
-pub struct WireToolResponse {
-    #[serde(rename = "exitCode", default)]
-    pub exit_code: Option<i64>,
+#[serde(untagged)]
+pub enum WireToolResponse {
+    /// Some harnesses (ie. Codex) only return the tool output string.
+    Output(String),
+    /// Other harnesses return more details.
+    /// TODO(markovejnovic): Should we split the enum per-harness?
+    Object {
+        #[serde(rename = "exitCode", default)]
+        exit_code: Option<i64>,
+    },
+}
+
+impl WireToolResponse {
+    /// The exit code the agent reported, if any.
+    pub fn exit_code(&self) -> Option<i64> {
+        match self {
+            WireToolResponse::Output(_) => None,
+            WireToolResponse::Object { exit_code } => *exit_code,
+        }
+    }
 }

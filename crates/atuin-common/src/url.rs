@@ -141,7 +141,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn dot_segments_are_rejected_by_append_path() {
         assert_eq!(
             parse("https://h.example").append_path("api/../v0"),
@@ -149,7 +149,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn dot_lookalikes_are_still_appended() {
         assert_eq!(
             parse("https://h.example").append(["...", ".hidden", "a.b"]).unwrap().as_str(),
@@ -157,7 +157,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn append_encodes_each_segment_independently() {
         // Two segments: each is encoded on its own, so the space in "john doe"
         // becomes %20 but does not merge with "user".
@@ -186,7 +186,7 @@ mod tests {
         assert_eq!(parse(base).append_path(path).unwrap().as_str(), expected);
     }
 
-    #[test]
+    #[rstest]
     fn cannot_be_a_base_url_is_an_error() {
         let url = parse("mailto:me@example.com");
         assert_eq!(url.append(["x"]), Err(UrlAppendError::NonSplittable));

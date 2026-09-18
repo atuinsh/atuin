@@ -899,6 +899,8 @@ static SUPERSCRIPTS_AND_SUBSCRIPTS: [char; 48] = [
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     /// Helper function for test assertions.
@@ -909,7 +911,7 @@ mod tests {
     }
 
     /// General conversion checks
-    #[test]
+    #[rstest]
     fn general() {
         check_conversions(&[
             ('ą', 'a'),
@@ -937,13 +939,13 @@ mod tests {
     }
 
     /// Some checks for characters which are not visible.
-    #[test]
+    #[rstest]
     fn invisible_chars() {
         check_conversions(&[('\u{a0}', '\u{a0}'), ('\u{ad}', '\u{ad}')]);
     }
 
     /// Check boundary cases in case ranges are modified.
-    #[test]
+    #[rstest]
     fn boundary_cases() {
         check_conversions(&[
             ('\u{9f}', '\u{9f}'),
@@ -964,7 +966,7 @@ mod tests {
     }
 
     /// Check that conversions outside the blocks are unchanged.
-    #[test]
+    #[rstest]
     fn unchanged_outside_blocks() {
         check_conversions(&[
             ('a', 'a'),

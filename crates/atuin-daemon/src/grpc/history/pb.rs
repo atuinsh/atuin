@@ -11,7 +11,7 @@ use std::time::Duration;
 use atuin_client::history::{
     CommandCapture as DomainCommandCapture, History, HistoryId as DomainHistoryId,
 };
-use atuin_common::range::PyStyleIdxRange;
+use atuin_common::range::{KeptEnds, PyStyleIdxRange};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::record::{CmdOrigin, CmdOriginParseError};
 pub use codegen::*;
@@ -21,6 +21,7 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use tonic::Status;
 
+pub use crate::grpc::common::pb::HistoryId;
 use crate::grpc::common::pb::{self as common, Uuid};
 use crate::grpc::common::{CollectCappedError, TryCollectResultsCappedExt};
 use crate::history_journal::{
@@ -387,27 +388,17 @@ impl GetCommandOutputResponse {
         let lines_end: Option<Vec<&str>> =
             capture.output_end.as_ref().map(|end| end.lines().collect());
 
-        /// How to represent a line number.
-        enum Anchor {
-            /// Use a positive number, indicating an offset from the start.
-            Start,
-            /// Use a negative number, indicating an offset from the end.
-            End,
-        }
+        // The kept layout, numbering head positions up from the start and tail positions back from
+        // the end (the concrete→signed dual of the `resolve_for*` calls below).
+        let ends = KeptEnds {
+            head: lines_start.len(),
+            tail: lines_end.as_ref().map_or(0, Vec::len),
+        };
 
-        let to_output_chunk = |range: Range<usize>, lines: &[&str], anchor| {
-            if range.is_empty() {
-                return None;
-            }
-            let offset = match anchor {
-                Anchor::Start => 0,
-                Anchor::End => i64::conv(lines.len()),
-            };
-            Some(OutputChunk {
-                line_range: Some(PyStyleIdxRange::new(
-                    i64::conv(range.start) - offset,
-                    i64::conv(range.end) - 1 - offset,
-                )),
+        // A chunk for a non-empty concrete `range` into `lines`, carrying its signed line range.
+        let to_output_chunk = |range: Range<usize>, lines: &[&str], signed: PyStyleIdxRange| {
+            (!range.is_empty()).then(|| OutputChunk {
+                line_range: Some(signed),
                 content: lines[range].join("\n"),
             })
         };
@@ -417,11 +408,15 @@ impl GetCommandOutputResponse {
             ranges
                 .iter()
                 .flat_map(|range| {
-                    let ranges = range.resolve_for_split(&lines_start, lines_end);
-                    truncated |= ranges.truncated;
+                    let split = range.resolve_for_split(&lines_start, lines_end);
+                    truncated |= split.truncated;
                     [
-                        to_output_chunk(ranges.start, &lines_start, Anchor::Start),
-                        to_output_chunk(ranges.end, lines_end, Anchor::End),
+                        to_output_chunk(
+                            split.start.clone(),
+                            &lines_start,
+                            ends.head_range(split.start),
+                        ),
+                        to_output_chunk(split.end.clone(), lines_end, ends.tail_range(split.end)),
                     ]
                 })
                 .flatten()
@@ -430,7 +425,9 @@ impl GetCommandOutputResponse {
             ranges
                 .iter()
                 .map(|range| range.resolve_for(&lines_start))
-                .filter_map(|range| to_output_chunk(range, &lines_start, Anchor::Start))
+                .filter_map(|range| {
+                    to_output_chunk(range.clone(), &lines_start, ends.head_range(range))
+                })
                 .collect()
         };
 

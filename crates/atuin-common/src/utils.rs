@@ -227,7 +227,7 @@ mod tests {
     use super::*;
 
     #[cfg(not(windows))]
-    #[test]
+    #[rstest]
     fn test_dirs() {
         // these tests need to be run sequentially to prevent race condition
         test_config_dir_xdg();
@@ -313,7 +313,7 @@ mod tests {
     }
 
     #[cfg(not(windows))]
-    #[test]
+    #[rstest]
     fn in_git_repo_regular() {
         // regular git repo should resolve to the directory containing .git
         let tmp = std::env::temp_dir().join("atuin-test-regular-git");
@@ -329,7 +329,7 @@ mod tests {
     }
 
     #[cfg(not(windows))]
-    #[test]
+    #[rstest]
     fn in_git_repo_worktree_resolves_to_main_repo() {
         // worktree .git is a file pointing back to the main repo —
         // in_git_repo should follow it so all worktrees share a workspace

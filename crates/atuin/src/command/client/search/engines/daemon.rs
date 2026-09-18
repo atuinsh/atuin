@@ -128,7 +128,7 @@ impl Search {
     async fn hydrate_from_db(&self, db: &Sqlite, ids: &[HistoryId]) -> Result<Vec<History>> {
         let placeholders: Vec<String> = ids.iter().map(|id| format!("'{id}'")).collect();
         let sql_query = format!(
-            "SELECT {} FROM history WHERE id IN ({}) ORDER BY timestamp DESC",
+            "SELECT {} FROM history WHERE id IN ({})",
             atuin_client::database::HISTORY_COLUMNS,
             placeholders.join(",")
         );
@@ -210,23 +210,23 @@ impl SearchEngine for Search {
             return Ok(Vec::new());
         }
 
-        // // Hydrate from local database
-        let results = self.hydrate_from_db(db, &ids).await?;
+        // Hydrate from local database.
+        let mut results = self.hydrate_from_db(db, &ids).await?;
 
-        // // Reorder results to match the order from the daemon (which is ranked by relevance)
+        // Reorder to match the daemon's relevance ranking. `swap_remove` moves each hit out rather
+        // than cloning it; the scan stays O(n^2) but `ids` is capped at 200, where that beats a map.
         let ordered_results = span!(Level::TRACE, "reorder_results").in_scope(|| {
-            let mut ordered_results = Vec::with_capacity(results.len());
-            for id in &ids {
-                if let Some(history) = results.iter().find(|h| h.id == *id) {
-                    ordered_results.push(history.clone());
-                }
-            }
-            ordered_results
+            ids.iter()
+                .filter_map(|id| {
+                    let pos = results.iter().position(|h| h.id == *id)?;
+                    Some(results.swap_remove(pos))
+                })
+                .collect::<Vec<History>>()
         });
 
         debug!(
             query = %query,
-            results = results.len(),
+            results = ordered_results.len(),
             "[daemon-client]"
         );
 

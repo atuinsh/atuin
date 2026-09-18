@@ -10,10 +10,7 @@
 //! Available components:
 //!
 //! - [`search::SearchComponent`]: Fuzzy search over history
-//! - [`sync::SyncComponent`]: Cloud sync
 
 pub mod search;
-pub mod sync;
 
 pub use search::SearchComponent;
-pub use sync::SyncComponent;

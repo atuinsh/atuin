@@ -25,5 +25,5 @@ reason = "eyre and anyhow are considered anti-patterns for library crates. atuin
 
 [[bans.deny]]
 crate = "anyhow"
-wrappers = ["codspeed", "portable-pty", "reqwest-middleware", "sql-builder"]
+wrappers = ["portable-pty", "reqwest-middleware", "sql-builder"]
 reason = "eyre and anyhow are considered anti-patterns for library crates. atuin-pty-proxy is a library crate."

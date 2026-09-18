@@ -2,6 +2,7 @@
 
 mod builder;
 mod compactor;
+pub mod fts;
 mod info;
 
 use std::ffi::OsStr;
@@ -43,7 +44,7 @@ pub enum SqliteOpenOrCreateError {
     #[error("failed to parse connection options: {0}")]
     ConenctOptionsParsing(sqlx::Error),
 
-    #[error("failed to create the sqlite pool")]
+    #[error("failed to create the sqlite pool: {0}")]
     PoolCreateError(sqlx::Error),
 
     #[error("failed to restrict permissions on the sqlite database: {0}")]

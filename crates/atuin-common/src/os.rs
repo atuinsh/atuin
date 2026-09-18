@@ -1,5 +1,6 @@
 //! OS-specific utilities.
 
+pub mod disk;
 pub mod process;
 
 #[cfg(unix)]

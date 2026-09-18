@@ -554,7 +554,7 @@ mod tests {
     /// A generator that never produces a credential makes every property test vacuous: each one
     /// collapses to "clean input comes back Borrowed". This pins that the generator below does
     /// reach the Owned path, so the properties driven by it mean what they say.
-    #[test]
+    #[rstest]
     fn the_credential_dense_generator_reaches_the_owned_path() {
         use proptest::strategy::ValueTree;
         use proptest::test_runner::TestRunner;
@@ -662,7 +662,7 @@ mod tests {
 
     /// The contract `redact` relies on: without this group it would not know which part of a match
     /// is the credential and which is the variable name holding it.
-    #[test]
+    #[rstest]
     fn every_pattern_names_its_secret_group() {
         for (pattern, regex) in SECRET_PATTERNS.iter().zip(REGEXES.iter()) {
             assert!(
@@ -673,7 +673,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn every_pattern_is_recognised() {
         for pattern in SECRET_PATTERNS {
             for test in pattern.tests {
@@ -838,7 +838,7 @@ mod tests {
         /// Lowercase filler cannot form a credential of its own (every pattern needs an uppercase
         /// letter, a digit, punctuation or whitespace), and the spaces around each planted value stop a
         /// greedy class from reaching into its neighbours.
-        #[test]
+        #[rstest]
         fn planted_credentials_go_and_their_surroundings_stay(
             parts in prop::collection::vec(("[a-z]{0,16}", prop::sample::select(plantable())), 1..6),
             tail in "[a-z]{0,16}",
@@ -865,7 +865,7 @@ mod tests {
         }
 
         /// The contract callers rely on to avoid copying clean output.
-        #[test]
+        #[rstest]
         fn borrowed_exactly_when_nothing_changed(s in credential_dense()) {
             match redact(&s) {
                 Cow::Borrowed(out) => prop_assert_eq!(out, s.as_str()),
@@ -874,7 +874,7 @@ mod tests {
         }
 
         /// Redacting again must be a no-op, or the marker itself would be feeding the patterns.
-        #[test]
+        #[rstest]
         fn redaction_is_idempotent(s in credential_dense()) {
             let once = redact(&s).into_owned();
             prop_assert_eq!(&*redact(&once), once.as_str());
@@ -882,7 +882,7 @@ mod tests {
 
         /// Arbitrary unicode either side of a planted credential: the credential still goes, and
         /// the byte-offset splicing must not land mid-character.
-        #[test]
+        #[rstest]
         fn a_planted_credential_goes_whatever_surrounds_it(
             prefix in "\\PC{0,20}",
             suffix in "\\PC{0,20}",
@@ -896,12 +896,12 @@ mod tests {
         /// `contains_secret` must recognise exactly what the old set did. A string that stops
         /// matching would start being stored, and its output captured; one that starts matching
         /// would silently vanish from history.
-        #[test]
+        #[rstest]
         fn contains_secret_matches_the_old_pattern_set_exactly(s in credential_dense()) {
             prop_assert_eq!(contains_secret(&s), OLD.is_match(&s), "{:?}", s);
         }
 
-        #[test]
+        #[rstest]
         fn each_prefilter_matches_exactly_where_its_pattern_does(s in credential_dense()) {
             for pattern in SECRET_PATTERNS {
                 let Some(prefilter) = pattern.prefilter else { continue };
@@ -924,7 +924,7 @@ mod tests {
         // are rejected, and proptest's global-reject cap (1024) does not scale with the case
         // count, so `prop_assume!` would fail the test under PROPTEST_CASES=2000. Local rejects
         // from a filter are capped far higher.
-        #[test]
+        #[rstest]
         fn text_with_nothing_recognisable_is_returned_as_is(
             s in credential_dense().prop_filter("contains a secret", |s| !contains_secret(s)),
         ) {
@@ -1104,7 +1104,7 @@ mod tests {
     /// stalled the capture sink long enough to drop later commands' output; bounded it is under
     /// 2 s debug. The budget leaves room for a slow CI box while still catching a return to
     /// quadratic.
-    #[test]
+    #[rstest]
     fn many_login_mentions_on_one_line_stay_linear() {
         use std::time::{Duration, Instant};
 
@@ -1134,7 +1134,7 @@ mod tests {
         line
     }
 
-    #[test]
+    #[rstest]
     fn irregularly_spaced_login_mentions_stay_fast() {
         use std::time::{Duration, Instant};
 
@@ -1146,7 +1146,7 @@ mod tests {
         assert!(took < Duration::from_secs(10), "took {took:?}");
     }
 
-    #[test]
+    #[rstest]
     fn a_hostile_capture_does_not_slow_later_scans_on_the_same_thread() {
         use std::time::{Duration, Instant};
 
@@ -1208,7 +1208,7 @@ mod tests {
     /// The table-driven tests and the planted-credential properties only cover a pattern if it
     /// brings its own cases. Without this floor, `tests: &[]` silently removes a pattern from all
     /// of them and the suite stays green.
-    #[test]
+    #[rstest]
     fn every_pattern_has_a_case_that_actually_redacts() {
         for pattern in SECRET_PATTERNS {
             assert!(!pattern.tests.is_empty(), "{} has no test cases", pattern.name);

@@ -2,9 +2,7 @@
 //!
 //! Measures the daemon's `SearchIndex::search` end-to-end — index built from
 //! shell-history-shaped data, then queried the way the interactive UI does —
-//! using divan, so results are tracked on CodSpeed (the `divan` dependency is
-//! CodSpeed's drop-in compat crate; it behaves as plain divan outside
-//! `cargo-codspeed` builds).
+//! using divan.
 //!
 //! Benchmark names (`daemon_search[<scale>/<query>]`) are deliberately
 //! engine-agnostic: they measure whatever fuzzy matcher the daemon currently
@@ -48,7 +46,7 @@ const QUERIES: &[&str] =
     &["", "g", "git", "git p", "cargo build", "docker compose up", "zzznomatchzzz"];
 
 /// The interactive UI requests up to 200 results per query.
-const LIMIT: u32 = 200;
+const LIMIT: usize = 200;
 
 /// Working directories assigned round-robin to history entries, so the
 /// directory-filtered benchmark has a realistic candidate subset.
