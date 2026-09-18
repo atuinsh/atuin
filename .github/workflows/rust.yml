@@ -51,21 +51,6 @@ jobs:
           packages: libssl-dev pkg-config
           version: 1.0
 
-      - name: Exclude the checkout from Defender (Windows)
-        # Experiment: real-time scanning of the thousands of files cargo writes
-        # is a known Rust-build tax on Windows images. Logs whether it was even
-        # on so the timing comparison is interpretable; never fails the job.
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          try {
-            Write-Host "RealTimeProtectionEnabled: $((Get-MpComputerStatus).RealTimeProtectionEnabled)"
-            Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE"
-            Write-Host "excluded $env:GITHUB_WORKSPACE"
-          } catch {
-            Write-Host "::warning::Defender exclusion not applied: $_"
-          }
-
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
@@ -81,6 +66,7 @@ jobs:
           # release profile: the CARGO_PROFILE_RELEASE_* overrides above change
           # every unit's fingerprint. Bump it when they change.
           key: ${{ runner.os }}-cargo-release-nolto-cgu256-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-release-nolto-cgu256-
 
       - name: Run cargo ${{ matrix.cargo || 'build' }} (release)
         run: cargo ${{ matrix.cargo || 'build' }} --workspace --locked --release
@@ -133,21 +119,6 @@ jobs:
           packages: libssl-dev pkg-config
           version: 1.0
 
-      - name: Exclude the checkout from Defender (Windows)
-        # Experiment: real-time scanning of the thousands of files cargo writes
-        # is a known Rust-build tax on Windows images. Logs whether it was even
-        # on so the timing comparison is interpretable; never fails the job.
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          try {
-            Write-Host "RealTimeProtectionEnabled: $((Get-MpComputerStatus).RealTimeProtectionEnabled)"
-            Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE"
-            Write-Host "excluded $env:GITHUB_WORKSPACE"
-          } catch {
-            Write-Host "::warning::Defender exclusion not applied: $_"
-          }
-
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
@@ -164,7 +135,8 @@ jobs:
             ~/.cargo/registry
              ~/.cargo/git
              target
-          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-unit-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-unit-test-
 
       - name: Run cargo test
         run: cargo nextest run --lib --bins
@@ -219,7 +191,8 @@ jobs:
             ~/.cargo/registry
              ~/.cargo/git
              target
-          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-check-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-check-
 
       - name: Run cargo check (all features)
         run: cargo check --all-features --workspace
@@ -268,6 +241,7 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-msrv-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-msrv-
 
       # Verifies the declared MSRV (workspace.package.rust-version) still holds
       # with all features enabled. --all-features isn't a strict superset (it
@@ -319,7 +293,8 @@ jobs:
             ~/.cargo/registry
              ~/.cargo/git
              target
-          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-integration-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-integration-test-
 
       - name: Run cargo test
         # E2e tests have a separate job with shell dependencies.
@@ -403,7 +378,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-e2e-
 
       - name: Run fresh-install and PTY e2e tests
         run: cargo nextest run -p atuin --test 'e2e_*'
@@ -435,7 +411,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-clippy-
 
       - name: Run clippy
         run: cargo clippy -- -D warnings
@@ -468,6 +445,7 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-doc-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-doc-
 
       - name: Run cargo doc
         run: cargo doc --document-private-items --no-deps --workspace
@@ -545,6 +523,7 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-package-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-package-
 
       - name: Build packaged tarballs
         run: |
