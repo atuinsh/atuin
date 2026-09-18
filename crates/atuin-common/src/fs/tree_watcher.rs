@@ -527,7 +527,7 @@ mod tests {
     ) -> std::collections::BTreeMap<String, FileKind> {
         entries
             .iter()
-            .map(|(p, k)| (p.strip_prefix(root).unwrap().to_string_lossy().into_owned(), *k))
+            .map(|(p, k)| (p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/"), *k))
             .collect()
     }
 
