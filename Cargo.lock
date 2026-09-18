@@ -464,6 +464,7 @@ dependencies = [
  "directories",
  "divan",
  "easy-cast",
+ "enum_dispatch",
  "fs-err",
  "futures",
  "getrandom 0.4.3",
