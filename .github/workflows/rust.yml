@@ -21,8 +21,14 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [depot-ubuntu-24.04, depot-macos-26, depot-windows-2025-16]
+        os: [depot-ubuntu-24.04-8, depot-macos-26, depot-windows-2025-16]
     runs-on: ${{ matrix.os }}
+
+    env:
+      # This job only proves the release profile compiles; nothing it builds is
+      # shipped (release.yml uses the `dist` profile, which sets lto = "fat"
+      # explicitly). Skip the default thin-local LTO pass on the final binary.
+      CARGO_PROFILE_RELEASE_LTO: "off"
 
     steps:
       - uses: actions/checkout@v7
@@ -94,7 +100,7 @@ jobs:
   unit-test:
     strategy:
       matrix:
-        os: [depot-ubuntu-24.04, depot-macos-26, depot-windows-2025-16]
+        os: [depot-ubuntu-24.04-8, depot-macos-26, depot-windows-2025-16]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -182,6 +188,12 @@ jobs:
 
       - name: Run cargo check (all features)
         run: cargo check --all-features --workspace
+        env:
+          # --all-features enables vendored-tls, which compiles OpenSSL from
+          # source. Type-checking doesn't need that; link against the system
+          # libssl where one is installed (Linux only). openssl-sys treats any
+          # value other than "0" as "don't vendor".
+          OPENSSL_NO_VENDOR: ${{ runner.os == 'Linux' && '1' || '0' }}
 
       - name: Run cargo check (no features)
         run: cargo check --no-default-features --workspace
@@ -234,7 +246,7 @@ jobs:
         run: cargo check --locked --workspace --all-features
 
   integration-test:
-    runs-on: depot-ubuntu-24.04
+    runs-on: depot-ubuntu-24.04-8
 
     services:
       postgres:
