@@ -1,0 +1,75 @@
+syntax = "proto3";
+package ai_session;
+
+import "ai/agent.proto";
+import "common.proto";
+
+message ListSessionsRequest {
+  ai_agent.HarnessKind harness = 1;
+  uint32 limit = 2;
+}
+
+message ListSessionsResponse {
+  repeated ai_agent.Session sessions = 1;
+}
+
+message GetSessionRequest {
+  ai_agent.HarnessKind harness = 1;
+  string session_id = 2;
+}
+
+message GetSessionResponse {
+  ai_agent.Session session = 1;
+  repeated ai_agent.Message messages = 2;
+}
+
+message GetTranscriptRequest {
+  ai_agent.HarnessKind harness = 1;
+  string session_id = 2;
+}
+
+message GetTranscriptResponse {
+  string transcript = 1;
+}
+
+message SearchSessionsRequest {
+  string query = 1;
+  uint32 limit = 2;
+}
+
+message SearchSessionsMatch {
+  ai_agent.Session session = 1;
+  common.HighlightedText title = 2;
+  common.HighlightedText preview = 3;
+  double score = 4;
+}
+
+message TailSessionsRequest {}
+
+message SessionLagged {
+  uint64 dropped = 1;
+}
+
+message TailSessionsEvent {
+  oneof event {
+    ai_agent.Message message = 1;
+    SessionLagged lagged = 2;
+  }
+}
+
+service AiSession {
+  // List derived session summaries.
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+
+  // Fetch one session and its messages.
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+
+  // Render one session as a plain-text transcript.
+  rpc GetTranscript(GetTranscriptRequest) returns (GetTranscriptResponse);
+
+  // Fuzzy-search sessions, streamed most-relevant-first.
+  rpc SearchSessions(SearchSessionsRequest) returns (stream SearchSessionsMatch);
+
+  // Stream messages as they are recorded.
+  rpc TailSessions(TailSessionsRequest) returns (stream TailSessionsEvent);
+}

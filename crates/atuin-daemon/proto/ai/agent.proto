@@ -1,0 +1,122 @@
+syntax = "proto3";
+package ai_agent;
+
+import "common.proto";
+import "google/protobuf/timestamp.proto";
+
+// The AI coding harnesses Atuin recognises.
+enum HarnessKind {
+  HARNESS_KIND_UNSPECIFIED = 0;
+  HARNESS_KIND_CLAUDE_CODE = 1;
+  HARNESS_KIND_CODEX = 2;
+  HARNESS_KIND_COPILOT = 3;
+  HARNESS_KIND_OPENCODE = 4;
+  HARNESS_KIND_PI = 5;
+}
+
+enum Role {
+  // Not stated by the harness.
+  ROLE_UNSPECIFIED = 0;
+  // Something you typed to the AI.
+  ROLE_USER = 1;
+  // The AI's reply.
+  ROLE_ASSISTANT = 2;
+  // Behind-the-scenes instructions the harness gives the AI.
+  ROLE_SYSTEM = 3;
+  // Output from a tool the AI ran.
+  ROLE_TOOL = 4;
+  // A short name for the session.
+  ROLE_TITLE = 5;
+}
+
+enum StopReason {
+  // Not stated by the harness.
+  STOP_REASON_UNSPECIFIED = 0;
+  // The AI finished its reply on its own.
+  STOP_REASON_END_TURN = 1;
+  // The AI paused to run a tool.
+  STOP_REASON_TOOL_USE = 2;
+  // The reply hit its length limit and was cut off.
+  STOP_REASON_MAX_TOKENS = 3;
+  // You or the harness stopped it early.
+  STOP_REASON_ABORTED = 4;
+  // Something went wrong before it could finish.
+  STOP_REASON_ERROR = 5;
+}
+
+message Tokens {
+  // How much text was fed into the model, in tokens.
+  uint64 input = 1;
+  // How much text the model produced, in tokens.
+  uint64 output = 2;
+  // Tokens reused from an earlier prompt instead of resent (cheaper).
+  uint64 cache_read = 3;
+  // Tokens saved so a later prompt can reuse them.
+  uint64 cache_write = 4;
+}
+
+message ToolCall {
+  // Unique id for this tool run, used to match its result.
+  string id = 1;
+  // Which tool the AI used, such as reading a file or running a command.
+  string name = 2;
+  // The arguments the AI passed to the tool, as JSON.
+  string input = 3;
+}
+
+message Message {
+  // The unique identifier of a single harness message.
+  common.Uuid id = 1;
+  // The harness that produced this message.
+  HarnessKind harness = 2;
+  // Harness-native session identifier.
+  string session_id = 3;
+  // Session this one was handed off from, if any.
+  optional string parent_session_id = 4;
+  // Harness owning parent_session_id; unspecified when the same as harness.
+  HarnessKind parent_harness = 5;
+  // Harness-native thread identifier, if any.
+  optional string thread = 6;
+  // Harness-native message identifier, unique within the session.
+  string source_id = 7;
+  // Harness-native identifier of the message this one replies to.
+  optional string parent_source_id = 8;
+  // When the message was produced.
+  google.protobuf.Timestamp timestamp = 9;
+  // Who or what produced this message.
+  Role role = 10;
+  // The message text.
+  string content = 11;
+  // Tool invocations issued in this message.
+  repeated ToolCall tool_calls = 12;
+  // Identifier of the tool call this result answers.
+  optional string tool_use_id = 13;
+  // Working directory at the time of the message.
+  optional string cwd = 14;
+  // Git branch checked out at the time of the message.
+  optional string git_branch = 15;
+  // Model that produced the message.
+  optional string model = 16;
+  // Token usage attributed to this message.
+  Tokens tokens = 17;
+  // Whether a tool result reported failure.
+  bool is_error = 18;
+  // Why an assistant turn ended.
+  StopReason stop_reason = 19;
+}
+
+message Session {
+  HarnessKind harness = 1;
+  string session_id = 2;
+  optional string parent_session_id = 3;
+  HarnessKind parent_harness = 4;
+  optional string cwd = 5;
+  optional string git_branch = 6;
+  optional string model = 7;
+  google.protobuf.Timestamp started_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+  uint64 message_count = 10;
+  Tokens tokens = 11;
+  optional string title = 12;
+  optional string preview = 13;
+}
