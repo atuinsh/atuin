@@ -14,6 +14,7 @@ readme = "README.md"
 
 [workspace.dependencies]
 atuin-ai = { path = "crates/atuin-ai", version = "18.22.0", default-features = false }
+atuin-ai-session = { path = "crates/atuin-ai-session", version = "18.22.0" }
 atuin-client = { path = "crates/atuin-client", version = "18.22.0" }
 atuin-common = { path = "crates/atuin-common", version = "18.22.0" }
 atuin-daemon = { path = "crates/atuin-daemon", version = "18.22.0", default-features = false }

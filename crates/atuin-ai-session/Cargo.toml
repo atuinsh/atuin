@@ -1,0 +1,34 @@
+[package]
+name = "atuin-ai-session"
+edition = "2024"
+description = "Normalised AI coding-agent session history for Atuin"
+
+authors.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+atuin-common = { workspace = true, features = ["sqlite"] }
+
+eyre = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
+time = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v5"] }
+walkdir = "2"
+zstd = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

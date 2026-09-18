@@ -334,6 +334,7 @@ version = "18.22.0"
 dependencies = [
  "async-stream",
  "async-trait",
+ "atuin-ai-session",
  "atuin-client",
  "atuin-common",
  "atuin-daemon",
@@ -351,6 +352,7 @@ dependencies = [
  "eye_declare",
  "eye_declare_engine",
  "eyre",
+ "frizbee",
  "fs-err",
  "futures",
  "glob-match",
@@ -386,6 +388,26 @@ dependencies = [
  "uuid",
  "xxhash-rust",
  "yaml-rust2",
+]
+
+[[package]]
+name = "atuin-ai-session"
+version = "18.22.0"
+dependencies = [
+ "atuin-common",
+ "eyre",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "strum 0.27.2",
+ "strum_macros 0.28.0",
+ "tempfile",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+ "walkdir",
+ "zstd",
 ]
 
 [[package]]
@@ -5098,6 +5120,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
+
+[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6436,6 +6464,7 @@ dependencies = [
  "getrandom 0.4.3",
  "js-sys",
  "serde_core",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 
