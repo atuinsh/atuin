@@ -477,21 +477,23 @@ impl HistoryJournal {
             );
         }
 
-        // Remove records from the record store.
+        // Append delete tombstones to the record store.
         //
         // This returns a tuple where the first element is the total number of history elements that
-        // were erased from Atuin's memory, and the second element is a vector of [`RecordId`]s that
-        // must be subsequently removed from the history database via [`HistoryStore::build_all`].
-        // Note the passed database argument.
+        // were erased from Atuin's memory, and the second element is the ids that must be
+        // subsequently removed from the history database.
         //
-        // Furthermore, note that `.0 != .1.len()`, because there may very well be history entries
-        // that atuin has forgotten about that were never in the record store.
+        // Note that `.0 != .1.len()`, because there may very well be history entries that atuin has
+        // forgotten about that were never in the record store.
         //
         // This happens as a result of the fact that [`HistoryJournal`] might be tracking started,
         // but not finished commands. These get cancelled via [`HistoryJournal::cancel`].
+        //
+        // The tombstones go into the store as one batch: per-record pushes cost three sqlite
+        // round-trips each, which made large deletes take minutes.
         let delete_records = async || {
             let mut deleted: usize = 0;
-            let mut record_ids = Vec::new();
+            let mut to_delete = Vec::with_capacity(ids.len());
             for &id in ids {
                 let mutex = self.active_cmds.get(&id).map(|cmd| cmd.finalization_mutex.clone());
                 let cancelled = if let Some(mutex) = mutex {
@@ -509,32 +511,31 @@ impl HistoryJournal {
 
                 if cancelled {
                     deleted += 1;
-                    continue;
-                }
-
-                match self.history_store.delete(id).await {
-                    Ok((record_id, _)) => {
-                        record_ids.push(record_id);
-                        deleted += 1;
-                    }
-                    Err(e) => {
-                        return Err(CmdDeleteError::HistoryStoreFailed(e));
-                    }
+                } else {
+                    to_delete.push(id);
                 }
             }
 
-            Ok((deleted, record_ids))
+            self.history_store
+                .delete_batch(to_delete.iter().copied())
+                .await
+                .map_err(CmdDeleteError::HistoryStoreFailed)?;
+            deleted += to_delete.len();
+
+            Ok((deleted, to_delete))
         };
 
-        let (deleted, record_ids) = delete_records().await?;
-        if record_ids.is_empty() {
+        let (deleted, to_delete) = delete_records().await?;
+        if to_delete.is_empty() {
             return Ok(deleted);
         }
 
-        self.history_store
-            .build_all(&self.history_db, &record_ids)
+        // The tombstones were just written above, so replaying them through
+        // `HistoryStore::build_all` would only read and decrypt them back into these same ids.
+        self.history_db
+            .delete_rows(to_delete)
             .await
-            .map_err(CmdDeleteError::HistoryDbFailed)?;
+            .map_err(|e| CmdDeleteError::HistoryDbFailed(e.into()))?;
 
         self.reload_search_index(search_settings).await;
 
