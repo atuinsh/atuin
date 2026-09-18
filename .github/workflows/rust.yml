@@ -23,11 +23,15 @@ jobs:
       matrix:
         os: [depot-ubuntu-24.04-8, depot-macos-26, depot-windows-2025-16]
         include:
-          # Windows only type-checks the release profile: Windows-specific
-          # compile errors are caught by unit-test's debug build, and
-          # release-profile breakage is platform-independent, so full release
-          # codegen (~5 min, two serial crates) buys nothing here.
+          # Only Linux does full release codegen. Platform-specific compile
+          # errors are caught by unit-test's debug builds, release-profile
+          # breakage is platform-independent, and release.yml builds every
+          # target for real; the other two OSes just type-check the profile
+          # (Windows spent ~5 min on two serial crates, macOS ~3 min of
+          # scarce runner capacity).
           - os: depot-windows-2025-16
+            cargo: check
+          - os: depot-macos-26
             cargo: check
     runs-on: ${{ matrix.os }}
 
