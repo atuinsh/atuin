@@ -4,10 +4,15 @@
 //! an event we care about. If we don't know how to deserialize it/don't care for it, we need to
 //! drop that on the floor. The [`HookEvent`] type represents agent events we know/care about.
 
+use std::fmt::Write as _;
+use std::path::PathBuf;
+
+use atuin_client::history::CommandCapture;
 use atuin_common::string::NonNulStr;
+use atuin_common::string::bounded_buffer::{BoundedBuffer, Limit};
 use serde_json::error::Category;
 
-use super::wire::{HookEventName, WireHookEvent, WireToolName};
+use super::wire::{HookEventName, WireHookEvent, WireToolName, WireToolResponse};
 
 /// Why a hook payload could not be parsed.
 ///
@@ -41,7 +46,43 @@ pub enum HookEvent {
     End {
         tool_use_id: String,
         exit: i64,
+        output: Option<CommandOutput>,
     },
+}
+
+/// What the agent reported a command printed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandOutput {
+    /// The output as the agent saw it, which may be cut at the agent's own limit.
+    pub text: String,
+    /// Where the agent kept the whole output when `text` is only part of it.
+    pub file: Option<PathBuf>,
+}
+
+impl CommandOutput {
+    /// Fit `text` into a capture the daemon stores: the middle goes once it exceeds
+    /// `max_output_bytes`, and the cut lands on line boundaries so a secret can't straddle it
+    /// and slip past redaction.
+    pub fn into_capture(self, max_output_bytes: usize, secrets_filter: bool) -> CommandCapture {
+        let mut buffer = BoundedBuffer::new(Limit::split_evenly(max_output_bytes));
+        let _ = buffer.write_str(&self.text);
+        let mut contents = buffer.take();
+        if let Some(end) = &mut contents.end {
+            contents.start.truncate(contents.start.rfind('\n').unwrap_or(0));
+            end.drain(..end.find('\n').map_or(end.len(), |n| n + 1));
+        }
+        if secrets_filter {
+            contents.start = atuin_common::secrets::redact(&contents.start).into_owned();
+            contents.end = contents.end.map(|end| atuin_common::secrets::redact(&end).into_owned());
+        }
+        CommandCapture {
+            output_start: contents.start,
+            output_end: contents.end,
+            output_observed_bytes: u64::try_from(self.text.len()).unwrap_or(u64::MAX),
+            terminal_width: 0,
+            terminal_height: 0,
+        }
+    }
 }
 
 impl From<WireHookEvent> for Option<HookEvent> {
@@ -82,13 +123,41 @@ impl From<WireHookEvent> for Option<HookEvent> {
             HookEventName::PostToolUse => {
                 // TODO(markovejnovic): Is it safe to assume that no exit code
                 //                      means "success"?
-                let exit =
-                    wire.tool_response.and_then(|response| response.exit_code()).unwrap_or(0);
-                Some(HookEvent::End { tool_use_id, exit })
+                let (exit, output) = match wire.tool_response {
+                    Some(WireToolResponse::Object {
+                        exit_code,
+                        stdout,
+                        stderr,
+                        persisted_output_path,
+                    }) => {
+                        let mut text = stdout.unwrap_or_default();
+                        if let Some(stderr) = stderr.filter(|stderr| !stderr.is_empty()) {
+                            if !text.is_empty() {
+                                text.push('\n');
+                            }
+                            text.push_str(&stderr);
+                        }
+                        let output = (!text.is_empty()).then_some(CommandOutput {
+                            text,
+                            file: persisted_output_path,
+                        });
+                        (exit_code.unwrap_or(0), output)
+                    }
+                    Some(WireToolResponse::Output(text)) => {
+                        (0, Some(CommandOutput { text, file: None }))
+                    }
+                    None => (0, None),
+                };
+                Some(HookEvent::End {
+                    tool_use_id,
+                    exit,
+                    output,
+                })
             }
             HookEventName::PostToolUseFailure => Some(HookEvent::End {
                 tool_use_id,
                 exit: 1,
+                output: None,
             }),
             HookEventName::Other => None,
         }
@@ -129,6 +198,33 @@ mod tests {
         NonNulStr::new(s.to_owned()).unwrap()
     }
 
+    fn inline(text: &str) -> CommandOutput {
+        CommandOutput {
+            text: text.into(),
+            file: None,
+        }
+    }
+
+    #[test]
+    fn oversized_output_loses_its_middle_on_line_boundaries() {
+        let mut text = String::new();
+        for n in 0..40 {
+            writeln!(text, "line {n:02}").unwrap();
+        }
+        let capture = inline(&text).into_capture(64, true);
+        let end = capture.output_end.expect("a 320-byte output cannot fit in 64");
+        assert_eq!(capture.output_start, "line 00\nline 01\nline 02\nline 03");
+        assert_eq!(end, "line 37\nline 38\nline 39\n");
+        assert_eq!(capture.output_observed_bytes, 320);
+    }
+
+    #[test]
+    fn secrets_are_redacted_only_when_the_filter_is_on() {
+        let text = "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n";
+        assert!(!inline(text).into_capture(1024, true).output_start.contains("wJalrXUtnFEMI"));
+        assert!(inline(text).into_capture(1024, false).output_start.contains("wJalrXUtnFEMI"));
+    }
+
     #[rstest]
     #[case::pre_tool_use_with_intent(
         json!({
@@ -162,7 +258,47 @@ mod tests {
             "tool_response": {"exitCode": 3, "stdout": "hello\n"},
             "tool_use_id": "toolu_abc123"
         }),
-        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: 3 })
+        Some(HookEvent::End {
+            tool_use_id: "toolu_abc123".into(),
+            exit: 3,
+            output: Some(inline("hello\n")),
+        })
+    )]
+    // Claude Code reports stdout and stderr apart; stderr follows stdout.
+    #[case::post_tool_use_joins_stderr_after_stdout(
+        json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_response": {"exitCode": 1, "stdout": "partial", "stderr": "boom"},
+            "tool_use_id": "toolu_abc123"
+        }),
+        Some(HookEvent::End {
+            tool_use_id: "toolu_abc123".into(),
+            exit: 1,
+            output: Some(inline("partial\nboom")),
+        })
+    )]
+    // Claude Code cuts stdout inline and points at the whole output on disk.
+    #[case::post_tool_use_keeps_persisted_output_path(
+        json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_response": {
+                "exitCode": 0,
+                "stdout": "first 30000 chars",
+                "stderr": "",
+                "persistedOutputPath": "/tmp/tool-results/abc.txt"
+            },
+            "tool_use_id": "toolu_abc123"
+        }),
+        Some(HookEvent::End {
+            tool_use_id: "toolu_abc123".into(),
+            exit: 0,
+            output: Some(CommandOutput {
+                text: "first 30000 chars".into(),
+                file: Some("/tmp/tool-results/abc.txt".into()),
+            }),
+        })
     )]
     #[case::post_tool_use_without_exit_code_defaults_zero(
         json!({
@@ -171,7 +307,7 @@ mod tests {
             "tool_response": {},
             "tool_use_id": "toolu_abc123"
         }),
-        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: 0 })
+        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: 0, output: None })
     )]
     // A null exitCode also defaults to 0.
     #[case::null_exit_code_defaults_zero(
@@ -181,7 +317,7 @@ mod tests {
             "tool_response": {"exitCode": null},
             "tool_use_id": "toolu_abc123"
         }),
-        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: 0 })
+        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: 0, output: None })
     )]
     // PostToolUseFailure forces exit 1 and ignores tool_response entirely.
     #[case::failure_forces_exit_one_ignoring_response(
@@ -192,7 +328,7 @@ mod tests {
             "tool_response": {"exitCode": 0},
             "tool_use_id": "toolu_abc123"
         }),
-        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: 1 })
+        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: 1, output: None })
     )]
     // Non-Bash tools are never recorded.
     #[case::non_bash_tool_skipped(
@@ -303,7 +439,11 @@ mod tests {
     #[rstest]
     #[case::string_tool_response(
         r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"example-call","session_id":"example-session","cwd":"/tmp","tool_input":{"command":"printf probe"},"tool_response":"probe"}"#,
-        Some(HookEvent::End { tool_use_id: "example-call".into(), exit: 0 })
+        Some(HookEvent::End {
+            tool_use_id: "example-call".into(),
+            exit: 0,
+            output: Some(inline("probe")),
+        })
     )]
     fn completion_accepts_string_tool_response(
         #[case] input: &str,
@@ -383,7 +523,7 @@ mod tests {
 
             prop_assert_eq!(
                 HookEvent::from_json_str(&input.to_string()).unwrap(),
-                Some(HookEvent::End { tool_use_id, exit })
+                Some(HookEvent::End { tool_use_id, exit, output: None })
             );
         }
 
@@ -403,7 +543,7 @@ mod tests {
 
             prop_assert_eq!(
                 HookEvent::from_json_str(&input.to_string()).unwrap(),
-                Some(HookEvent::End { tool_use_id, exit: 1 })
+                Some(HookEvent::End { tool_use_id, exit: 1, output: None })
             );
         }
 

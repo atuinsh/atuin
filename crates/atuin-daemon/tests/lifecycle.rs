@@ -6,12 +6,12 @@ mod common;
 
 use std::time::Duration;
 
-use atuin_client::history::{History, HistoryId};
+use atuin_client::history::{CommandCapture, History, HistoryId};
 use atuin_client::settings::Search;
 use atuin_common::range::PyStyleIdxRange;
 use atuin_daemon::grpc::history::pb::tail_history_reply::Event;
 use atuin_daemon::search::IndexFilterMode;
-use common::{TestEnv, history};
+use common::{TestEnv, capture, history};
 use rstest::*;
 
 #[fixture]
@@ -83,10 +83,7 @@ async fn output_is_stored_only_for_commands_that_cannot_print_the_key(
         client.end_history(id, Some(Duration::from_nanos(1_000_000)), 0).await.unwrap();
     }
 
-    client
-        .register_command_output(id, "adapt amused able anxiety mother", None, 32, 80, 24)
-        .await
-        .unwrap();
+    client.register_command_output(id, capture("adapt amused able anxiety mother")).await.unwrap();
 
     assert_eq!(client.get_command_output(id, vec![]).await.unwrap().is_some(), stored);
 }
@@ -113,14 +110,11 @@ async fn a_capture_that_lost_its_middle_round_trips(#[future(awt)] env: TestEnv)
         client.start_history(history).await.unwrap().id.unwrap().try_into().unwrap();
 
     client
-        .register_command_output(
-            id,
-            "first\nsecond",
-            Some("penultimate\nlast".to_string()),
-            9_000_000,
-            80,
-            24,
-        )
+        .register_command_output(id, CommandCapture {
+            output_end: Some("penultimate\nlast".to_string()),
+            output_observed_bytes: 9_000_000,
+            ..capture("first\nsecond")
+        })
         .await
         .unwrap();
 
@@ -171,7 +165,7 @@ async fn output_for_a_cancelled_command_is_not_stored(#[future(awt)] env: TestEn
     client.cancel_history(id).await.unwrap();
 
     // The command was cancelled, so it is gone: its output is refused, not silently stored.
-    assert!(client.register_command_output(id, "hello", None, 5, 80, 24).await.is_err());
+    assert!(client.register_command_output(id, capture("hello")).await.is_err());
 
     assert!(client.get_command_output(id, vec![]).await.unwrap().is_none());
 }
@@ -183,7 +177,7 @@ async fn output_for_an_unknown_command_is_not_stored(#[future(awt)] env: TestEnv
     let id = HistoryId::from_bytes(*uuid::Uuid::from_u128(7).as_bytes());
 
     // The id was never started, so it is unknown: its output is refused, not silently stored.
-    assert!(client.register_command_output(id, "hello", None, 5, 80, 24).await.is_err());
+    assert!(client.register_command_output(id, capture("hello")).await.is_err());
 
     assert!(client.get_command_output(id, vec![]).await.unwrap().is_none());
 }

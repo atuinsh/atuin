@@ -17,7 +17,6 @@ use atuin_daemon::grpc::history::pb::tail_history_reply::Event;
 use atuin_daemon::search::SearchIndex;
 use atuin_daemon::{CmdDeleteError, CmdFinishError, RegisterOutputError};
 use common::{TestEnv, capture, history};
-use easy_cast::Conv;
 use rstest::*;
 use tonic::Code;
 
@@ -334,10 +333,7 @@ async fn delete_history_rpc_forgets_captured_output(#[future(awt)] env: TestEnv)
     let mut client = env.history_client().await;
     let id = env.record(&mut client, "echo secret").await;
     let output = "secret output";
-    client
-        .register_command_output(id, output, None, u64::conv(output.len()), 80, 24)
-        .await
-        .unwrap();
+    client.register_command_output(id, capture(output)).await.unwrap();
     assert!(client.get_command_output(id, vec![]).await.unwrap().is_some());
 
     assert_eq!(client.delete_history(vec![id]).await.unwrap().deleted, 1);
@@ -436,10 +432,7 @@ async fn abandoned_delete_still_completes(#[future(awt)] env: TestEnv) {
     let mut client = env.history_client().await;
     let id = env.record(&mut client, "echo secret").await;
     let output = "secret";
-    client
-        .register_command_output(id, output, None, u64::conv(output.len()), 80, 24)
-        .await
-        .unwrap();
+    client.register_command_output(id, capture(output)).await.unwrap();
 
     let lock = env.lock_record_store().await;
     // Let the RPC reach the daemon and block on the locked record store, then drop the client

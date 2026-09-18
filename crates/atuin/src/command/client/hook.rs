@@ -212,12 +212,35 @@ async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
                 std::fs::write(id_file_path(&tool_use_id), history_id.to_string())?;
             }
         }
-        Some(HookEvent::End { tool_use_id, exit }) => {
+        Some(HookEvent::End {
+            tool_use_id,
+            exit,
+            output,
+        }) => {
             let id_path = id_file_path(&tool_use_id);
 
             if let Ok(history_id) = std::fs::read_to_string(&id_path) {
                 if let Ok(history_id) = HistoryId::from_str(history_id.trim()) {
                     let _ = history::end_history_entry(settings, history_id, exit, None).await;
+                    #[cfg(feature = "daemon")]
+                    if let Some(mut output) = output
+                        && settings.daemon.enabled
+                        && let Some(limits) = settings.output.limits()
+                    {
+                        // The agent's copy of the whole output outlives the hook only briefly, so
+                        // read it now; if that fails, what the agent saw inline still gets kept.
+                        if let Some(bytes) =
+                            output.file.as_ref().and_then(|file| std::fs::read(file).ok())
+                        {
+                            output.text = String::from_utf8_lossy(&bytes).into_owned();
+                        }
+                        let max =
+                            usize::try_from(limits.max_output_size.as_u64()).unwrap_or(usize::MAX);
+                        let capture = output.into_capture(max, settings.secrets_filter);
+                        if let Ok(mut client) = super::daemon::ready_client(settings).await {
+                            let _ = client.register_command_output(history_id, capture).await;
+                        }
+                    }
                 }
                 let _ = std::fs::remove_file(&id_path);
             }

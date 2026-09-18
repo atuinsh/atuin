@@ -5,8 +5,7 @@
 
 mod common;
 
-use common::TestEnv;
-use easy_cast::Conv;
+use common::{TestEnv, capture};
 use futures::TryStreamExt;
 use rstest::*;
 
@@ -23,10 +22,7 @@ async fn search_returns_the_visible_output_and_where_it_matched(#[future(awt)] e
     // Colourised, as a terminal capture is: the escapes must not reach the client, and the ranges
     // must land on the visible text.
     let output = "\x1b[31merror\x1b[0m: disk full\nnext line";
-    history
-        .register_command_output(id, output, None, u64::conv(output.len()), 80, 24)
-        .await
-        .unwrap();
+    history.register_command_output(id, capture(output)).await.unwrap();
 
     let mut search = env.search_client().await;
     let matches: Vec<_> = search

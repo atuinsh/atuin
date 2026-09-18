@@ -2,7 +2,7 @@
 use std::path::PathBuf;
 
 use atuin_client::database::Context;
-use atuin_client::history::{History, HistoryId};
+use atuin_client::history::{CommandCapture, History, HistoryId};
 use atuin_client::settings::{FilterMode, Settings};
 use atuin_common::filter::{self, OrFilter};
 use atuin_common::range::PyStyleIdxRange;
@@ -22,9 +22,9 @@ use tracing::{Level, instrument, span};
 
 use crate::grpc::history::pb::history_client::HistoryClient as HistoryServiceClient;
 use crate::grpc::history::pb::{
-    AuthorKind, CancelHistoryReply, CancelHistoryRequest, CommandCapture, CommandCaptureMeta,
-    DeleteHistoryReply, DeleteHistoryRequest, EndHistoryReply, EndHistoryRequest,
-    GetCommandOutputRequest, GetCommandOutputResponse, RebuildHistoryReply, RebuildHistoryRequest,
+    AuthorKind, CancelHistoryReply, CancelHistoryRequest, CommandCaptureMeta, DeleteHistoryReply,
+    DeleteHistoryRequest, EndHistoryReply, EndHistoryRequest, GetCommandOutputRequest,
+    GetCommandOutputResponse, RebuildHistoryReply, RebuildHistoryRequest,
     RegisterCommandOutputRequest, ShutdownRequest, StartHistoryReply, StartHistoryRequest,
     StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
 };
@@ -215,19 +215,15 @@ impl HistoryClient {
     pub async fn register_command_output(
         &mut self,
         id: HistoryId,
-        output_start: impl Into<String>,
-        output_end: Option<String>,
-        output_observed_bytes: u64,
-        terminal_width: u16,
-        terminal_height: u16,
+        capture: CommandCapture,
     ) -> Result<()> {
-        let capture = CommandCapture {
-            output_start: output_start.into(),
-            output_end,
+        let capture = crate::grpc::history::pb::CommandCapture {
+            output_start: capture.output_start,
+            output_end: capture.output_end,
             meta: Some(CommandCaptureMeta {
-                output_observed_bytes,
-                terminal_width: terminal_width.into(),
-                terminal_height: terminal_height.into(),
+                output_observed_bytes: capture.output_observed_bytes,
+                terminal_width: capture.terminal_width.into(),
+                terminal_height: capture.terminal_height.into(),
             }),
         };
         self.client

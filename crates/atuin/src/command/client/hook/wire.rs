@@ -3,6 +3,8 @@
 //! Claude Code and Codex invoke `atuin hook <agent>` for each tool use and
 //! pass the event as JSON on stdin.
 
+use std::path::PathBuf;
+
 use atuin_common::string::NonNulStr;
 use serde::Deserialize;
 
@@ -57,6 +59,8 @@ pub struct WireToolInput {
 }
 
 /// See [`WireHookEvent::tool_response`].
+///
+/// Claude Code sends an object; Codex sends the model-facing text as a bare string.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum WireToolResponse {
@@ -67,15 +71,13 @@ pub enum WireToolResponse {
     Object {
         #[serde(rename = "exitCode", default)]
         exit_code: Option<i64>,
+        #[serde(default)]
+        stdout: Option<String>,
+        #[serde(default)]
+        stderr: Option<String>,
+        /// Claude Code cuts `stdout` at its inline limit; when it does, the whole output is in
+        /// this file.
+        #[serde(rename = "persistedOutputPath", default)]
+        persisted_output_path: Option<PathBuf>,
     },
-}
-
-impl WireToolResponse {
-    /// The exit code the agent reported, if any.
-    pub fn exit_code(&self) -> Option<i64> {
-        match self {
-            WireToolResponse::Output(_) => None,
-            WireToolResponse::Object { exit_code } => *exit_code,
-        }
-    }
 }

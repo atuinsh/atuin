@@ -139,24 +139,13 @@ fn semantic_command_capture_config() -> Option<atuin_pty_proxy::CaptureConfig> {
                     }
                 };
 
-                let mut output_start = capture.output_start;
-                redact(&mut output_start);
-                let mut output_end = capture.output_end;
-                if let Some(output_end) = output_end.as_mut() {
+                let mut capture = capture;
+                redact(&mut capture.output_start);
+                if let Some(output_end) = capture.output_end.as_mut() {
                     redact(output_end);
                 }
 
-                if let Err(err) = client
-                    .register_command_output(
-                        history_id,
-                        output_start,
-                        output_end,
-                        capture.output_observed_bytes,
-                        capture.terminal_width,
-                        capture.terminal_height,
-                    )
-                    .await
-                {
+                if let Err(err) = client.register_command_output(history_id, capture).await {
                     tracing::debug!(%history_id, ?err, "could not record command output; dropping it");
                 }
             }
