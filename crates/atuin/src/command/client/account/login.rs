@@ -9,6 +9,9 @@ use clap::Parser;
 use eyre::{Context, Result, bail};
 use rpassword::prompt_password;
 
+#[cfg(feature = "daemon")]
+use crate::command::client::daemon::stop_for_key_change;
+
 #[derive(Parser, Debug)]
 pub struct Cmd {
     #[clap(long, short)]
@@ -253,6 +256,11 @@ async fn store_key(settings: &Settings, store: &SqliteStore, key: &paseto_v4::Ke
     let current_key = paseto_v4::Key::try_load_from_path(key_path)?;
     if *key == current_key {
         return Ok(());
+    }
+
+    #[cfg(feature = "daemon")]
+    if settings.daemon.enabled {
+        stop_for_key_change(settings).await?;
     }
 
     println!("\nRe-encrypting local store with new key");

@@ -529,6 +529,24 @@ async fn status_cmd(settings: &Settings) -> Result<()> {
     Ok(())
 }
 
+pub(super) async fn stop_for_key_change(settings: &Settings) -> Result<()> {
+    let Ok(mut client) = connect_client(settings).await else {
+        return Ok(());
+    };
+
+    match client.shutdown().await {
+        Ok(true) => {
+            let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
+            let timeout = Duration::from_secs(5);
+            wait_for_pidfile_available(&pidfile_path, timeout)
+                .await
+                .wrap_err("daemon did not shut down successfully")
+        }
+        Ok(false) => bail!("Daemon rejected shutdown request"),
+        Err(err) => Err(err.wrap_err("Failed to send shutdown request")),
+    }
+}
+
 async fn stop_cmd(settings: &Settings) -> Result<()> {
     let Ok(mut client) = connect_client(settings).await else {
         println!("Daemon is not running");
@@ -685,7 +703,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn test_startup_lock_path() {
         let pidfile = Path::new("/tmp/atuin-daemon.pid");
         let lock = daemon_startup_lock_path(pidfile);
