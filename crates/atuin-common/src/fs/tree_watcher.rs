@@ -109,10 +109,14 @@ async fn scan(root: &Path, recursive: bool) -> Option<Vec<(PathBuf, FileKind)>> 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
 
-    fn kinds(entries: &[(PathBuf, FileKind)], root: &Path) -> std::collections::BTreeMap<String, FileKind> {
+    use super::*;
+
+    fn kinds(
+        entries: &[(PathBuf, FileKind)],
+        root: &Path,
+    ) -> std::collections::BTreeMap<String, FileKind> {
         entries
             .iter()
             .map(|(p, k)| (p.strip_prefix(root).unwrap().to_string_lossy().into_owned(), *k))
@@ -171,7 +175,7 @@ mod tests {
         let map = kinds(&found, dir.path());
         assert_eq!(map.get("a"), Some(&FileKind::File));
         assert_eq!(map.get("sub"), Some(&FileKind::Dir));
-        assert!(map.get("sub/b").is_none());
+        assert!(!map.contains_key("sub/b"));
     }
 
     #[test]
@@ -196,7 +200,7 @@ mod tests {
         let found = scan_fs(dir.path(), true).unwrap();
         let map = kinds(&found, dir.path());
         assert_eq!(map.get("link"), Some(&FileKind::Symlink));
-        assert!(map.get("link/inner").is_none());
+        assert!(!map.contains_key("link/inner"));
         assert_eq!(map.get("real/inner"), Some(&FileKind::File));
     }
 
