@@ -2,7 +2,7 @@ use derive_more::From;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 
-use crate::harnesstools::ccode::session::{CcodeListener, CcodeMessage, CcodeSession, CcodeSessions};
+use crate::harnesstools::ccode::session::{CcodeListener, CcodeSession, CcodeSessions};
 use crate::harnesstools::codex::session::{CodexListener, CodexSession, CodexSessions};
 use crate::harnesstools::pi::session::{PiListener, PiSession, PiSessions};
 use crate::harnesstools::session::{
@@ -78,8 +78,9 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::harnesstools::session::model::Role;
+    use crate::harnesstools::ccode::session::CcodeMessage;
     use crate::harnesstools::session::Message;
+    use crate::harnesstools::session::model::Role;
 
     #[rstest]
     fn any_sessions_listener_reports_not_found() {

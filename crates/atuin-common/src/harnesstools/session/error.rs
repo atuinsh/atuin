@@ -24,7 +24,9 @@ pub enum MessageError {
     #[error(transparent)]
     Jsonl(#[from] JsonlError),
     #[error("unrecognized record on line {line}")]
-    Unrecognized { line: u64 },
+    Unrecognized {
+        line: u64,
+    },
 }
 
 #[cfg(test)]

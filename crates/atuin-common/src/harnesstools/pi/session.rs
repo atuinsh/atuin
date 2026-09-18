@@ -8,7 +8,9 @@ use typed_builder::TypedBuilder;
 
 use crate::fs::tree_watcher::NodeContext;
 use crate::harnesstools::pi::Pi;
-use crate::harnesstools::session::model::{Content, MessageId, Role, ToolCallId, ToolResult, ToolUse};
+use crate::harnesstools::session::model::{
+    Content, MessageId, Role, ToolCallId, ToolResult, ToolUse,
+};
 use crate::harnesstools::session::{
     Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId, Sessions,
     WatchError,
@@ -147,11 +149,8 @@ impl Message for PiMessage {
     }
 
     fn role(&self) -> Role {
-        let role = self
-            .message
-            .as_ref()
-            .and_then(|m| m["role"].as_str())
-            .unwrap_or(self.kind.as_str());
+        let role =
+            self.message.as_ref().and_then(|m| m["role"].as_str()).unwrap_or(self.kind.as_str());
         match role {
             "user" => Role::User,
             "assistant" => Role::Assistant,

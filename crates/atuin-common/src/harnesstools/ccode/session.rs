@@ -8,7 +8,9 @@ use typed_builder::TypedBuilder;
 
 use crate::fs::tree_watcher::NodeContext;
 use crate::harnesstools::ccode::Ccode;
-use crate::harnesstools::session::model::{Content, MessageId, Role, ToolCallId, ToolResult, ToolUse};
+use crate::harnesstools::session::model::{
+    Content, MessageId, Role, ToolCallId, ToolResult, ToolUse,
+};
 use crate::harnesstools::session::{
     Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId, Sessions,
     WatchError,
@@ -131,7 +133,9 @@ impl CcodeMessage {
                 input: value["input"].clone(),
             }),
             Some("tool_result") => Content::ToolResult(ToolResult {
-                call: ToolCallId::from(value["tool_use_id"].as_str().unwrap_or_default().to_owned()),
+                call: ToolCallId::from(
+                    value["tool_use_id"].as_str().unwrap_or_default().to_owned(),
+                ),
                 output: value["content"].clone(),
                 error: value["is_error"].as_bool().unwrap_or(false),
             }),
@@ -146,11 +150,8 @@ impl Message for CcodeMessage {
     }
 
     fn role(&self) -> Role {
-        let role = self
-            .message
-            .as_ref()
-            .and_then(|m| m["role"].as_str())
-            .unwrap_or(self.kind.as_str());
+        let role =
+            self.message.as_ref().and_then(|m| m["role"].as_str()).unwrap_or(self.kind.as_str());
         match role {
             "user" => Role::User,
             "assistant" => Role::Assistant,
@@ -165,11 +166,12 @@ impl Message for CcodeMessage {
     }
 
     fn content(&self) -> Vec<Content> {
-        let raw =
-            self.message.as_ref().map(|m| &m["content"]).or(self.content.as_ref());
+        let raw = self.message.as_ref().map(|m| &m["content"]).or(self.content.as_ref());
         match raw {
             Some(serde_json::Value::String(text)) => vec![Content::Text(text.clone())],
-            Some(serde_json::Value::Array(blocks)) => blocks.iter().map(CcodeMessage::block).collect(),
+            Some(serde_json::Value::Array(blocks)) => {
+                blocks.iter().map(CcodeMessage::block).collect()
+            }
             _ => Vec::new(),
         }
     }
@@ -269,11 +271,8 @@ mod tests {
         )
         .unwrap();
 
-        let listener = CcodeSessions::builder()
-            .root(dir.path().to_path_buf())
-            .build()
-            .listener()
-            .unwrap();
+        let listener =
+            CcodeSessions::builder().root(dir.path().to_path_buf()).build().listener().unwrap();
         let seen: Vec<SessionId> =
             listener.watch().take(1).map_ok(|s| s.id()).try_collect().await.unwrap();
         assert_eq!(seen.len(), 1);

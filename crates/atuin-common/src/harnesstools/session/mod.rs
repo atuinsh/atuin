@@ -2,11 +2,10 @@ pub mod error;
 pub mod model;
 
 use enum_dispatch::enum_dispatch;
-use futures::Stream;
-use time::OffsetDateTime;
-
 pub use error::{MessageError, RuntimeError, WatchError};
+use futures::Stream;
 pub use model::{Content, MessageId, Role, SessionId, ToolCallId, ToolResult, ToolUse};
+use time::OffsetDateTime;
 
 #[enum_dispatch]
 pub trait Message {

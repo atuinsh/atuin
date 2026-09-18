@@ -8,7 +8,9 @@ use typed_builder::TypedBuilder;
 
 use crate::fs::tree_watcher::NodeContext;
 use crate::harnesstools::codex::Codex;
-use crate::harnesstools::session::model::{Content, MessageId, Role, ToolCallId, ToolResult, ToolUse};
+use crate::harnesstools::session::model::{
+    Content, MessageId, Role, ToolCallId, ToolResult, ToolUse,
+};
 use crate::harnesstools::session::{
     Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId, Sessions,
     WatchError,
@@ -171,7 +173,9 @@ impl Message for CodexMessage {
                 error: false,
             })],
             _ => match &payload["content"] {
-                serde_json::Value::Array(blocks) => blocks.iter().map(CodexMessage::block).collect(),
+                serde_json::Value::Array(blocks) => {
+                    blocks.iter().map(CodexMessage::block).collect()
+                }
                 serde_json::Value::String(text) => vec![Content::Text(text.clone())],
                 _ => Vec::new(),
             },
