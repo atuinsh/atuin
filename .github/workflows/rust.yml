@@ -298,6 +298,10 @@ jobs:
         run: cargo nextest run --test '*' -E 'not binary(/e2e_.*/)'
         env:
           ATUIN_DB_URI: postgres://atuin:pass@localhost:5432/atuin
+          # Test databases live in tempdirs. With 8 tests writing SQLite WALs
+          # at once the runner disk stalls for seconds and unrelated tests miss
+          # their 5 s pool-open timeout; tmpfs takes fsync out of the picture.
+          TMPDIR: /dev/shm
 
       - name: Show new proptest regressions
         if: ${{ failure() }}
