@@ -9,6 +9,8 @@ pub mod encryption;
 pub mod filter;
 pub mod fs;
 pub mod futures;
+#[cfg(feature = "ai")]
+pub mod harnesstools;
 pub mod logs;
 #[cfg(feature = "os")]
 pub mod os;

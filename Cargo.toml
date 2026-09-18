@@ -137,7 +137,11 @@ rusty_paserk = { version = "0.5", default-features = false, features = ["v4", "s
 rusty_paseto = { version = "0.8", default-features = false }
 semver = "1"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `preserve_order` keeps object key order on a round-trip, so installing agent
+# hooks never rewrites the user's JSON config into alphabetical order. Safe as a
+# global default: atuin's crypto/sync JSON (PASETO implicit assertions, records)
+# uses fixed-field structs and msgpack, neither of which this feature affects.
+serde_json = { version = "1", features = ["preserve_order"] }
 serde_regex = "1"
 serde_with = "3"
 shellexpand = "3"

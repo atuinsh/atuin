@@ -81,7 +81,7 @@ atuin-client = {
     optional = true,
     default-features = false,
 }
-atuin-common = { workspace = true, features = ["unicode", "os"] }
+atuin-common = { workspace = true, features = ["unicode", "os", "ai"] }
 atuin-daemon = { workspace = true, optional = true }
 atuin-domain = { workspace = true }
 atuin-dotfiles = { workspace = true }

@@ -12,13 +12,14 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
-test-utils = ["dep:tracing-subscriber"]
-unicode = ["dep:unicode-width", "dep:unicode-segmentation"]
+ai = []
 ansi = ["dep:atuin-vt100", "dep:memchr"]
+db = ["dep:sqlx"]
 os = ["dep:rustix", "dep:windows-sys"]
 proto = ["dep:prost"]
-db = ["dep:sqlx"]
 sqlite = ["db", "sqlx/sqlite", "sqlx/regexp", "dep:libsqlite3-sys", "dep:tokio-util"]
+test-utils = ["dep:tracing-subscriber"]
+unicode = ["dep:unicode-width", "dep:unicode-segmentation"]
 
 [dependencies]
 atuin-vt100 = { workspace = true, optional = true }
@@ -30,6 +31,7 @@ crypto_secretbox = { workspace = true }
 derive_more = { workspace = true }
 directories = { workspace = true }
 easy-cast = { workspace = true }
+enum_dispatch = { workspace = true }
 fs-err = { workspace = true }
 futures = { workspace = true }
 getrandom = { workspace = true }
