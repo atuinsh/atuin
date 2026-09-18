@@ -18,7 +18,7 @@ pub enum Role {
     Other(String),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Content {
     Text(String),
     Reasoning(String),
@@ -27,14 +27,14 @@ pub enum Content {
     Other(serde_json::Value),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolUse {
     pub id: ToolCallId,
     pub name: String,
     pub input: serde_json::Value,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolResult {
     pub call: ToolCallId,
     pub output: serde_json::Value,
