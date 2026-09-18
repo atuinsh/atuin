@@ -180,6 +180,13 @@ enter_accept = true
 ## mode in the Atuin search is forced to be the specified one.
 # keymap_mode = "emacs"
 
+## disable mouse capture in the interactive search TUI, so the terminal keeps
+## its native selection and scrolling behaviour
+# no_mouse = false
+
+## enable smart sorting of interactive search results
+# smart_sort = false
+
 ## Cursor style in each keymap mode. If specified, the cursor style is changed
 ## in entering the cursor shape. Available values are "default" and
 ## "{blink,steady}-{block,underline,bar}".
@@ -256,6 +263,9 @@ enter_accept = true
 
 # Defaults to false. The backspace key performs the same functionality as Tab and copies the selected line to the command line to be modified when at the start of the line.
 # accept_with_backspace = false
+
+## the prefix key used for prefix-based keybindings
+# prefix = "a"
 
 [preview]
 ## which preview strategy to use to calculate the preview height (respects max_preview_height).
@@ -338,6 +348,15 @@ enter_accept = true
 ## - array of strings: show commands run by any shell in the array; "" includes
 ##   commands that have no recorded shell
 # shells = "auto"
+
+## weight applied to the recency component when scoring search results
+# recency_score_multiplier = 1.0
+
+## weight applied to the frequency component when scoring search results
+# frequency_score_multiplier = 1.0
+
+## overall multiplier applied to the final frecency score
+# frecency_score_multiplier = 1.0
 
 [tmux]
 ## Enable using atuin with tmux popup (requires tmux >= 3.2)
