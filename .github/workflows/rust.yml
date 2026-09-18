@@ -18,22 +18,13 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The one full release build. Platform-specific compile errors are caught by
+  # unit-test's debug builds on every OS, release-profile breakage is
+  # platform-independent (the check job type-checks the profile everywhere),
+  # and release.yml builds every target for real. Windows spent ~5 min on two
+  # serial crates here and macOS ~3 min of scarce runner capacity for nothing.
   build:
-    strategy:
-      matrix:
-        os: [depot-ubuntu-24.04-8, depot-macos-26, depot-windows-2025-16]
-        include:
-          # Only Linux does full release codegen. Platform-specific compile
-          # errors are caught by unit-test's debug builds, release-profile
-          # breakage is platform-independent, and release.yml builds every
-          # target for real; the other two OSes just type-check the profile
-          # (Windows spent ~5 min on two serial crates, macOS ~3 min of
-          # scarce runner capacity).
-          - os: depot-windows-2025-16
-            cargo: check
-          - os: depot-macos-26
-            cargo: check
-    runs-on: ${{ matrix.os }}
+    runs-on: depot-ubuntu-24.04-8
 
     env:
       # This job only proves the release profile compiles; nothing it builds is
@@ -48,8 +39,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install OpenSSL dev libraries (Linux)
-        if: runner.os == 'Linux'
+      - name: Install OpenSSL dev libraries
         uses: awalsh128/cache-apt-pkgs-action@v1.6.3
         with:
           packages: libssl-dev pkg-config
@@ -72,8 +62,8 @@ jobs:
           key: ${{ runner.os }}-cargo-release-nolto-cgu256-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-release-nolto-cgu256-
 
-      - name: Run cargo ${{ matrix.cargo || 'build' }} (release)
-        run: cargo ${{ matrix.cargo || 'build' }} --workspace --locked --release
+      - name: Run cargo build (release)
+        run: cargo build --workspace --locked --release
 
   # This used to use cross compilling via `cross` but it's more reliable to just
   # run this on a real illumos (OmniOS) system.
@@ -218,6 +208,9 @@ jobs:
 
       - name: Run cargo check (client only)
         run: cargo check --no-default-features --features client --workspace
+
+      - name: Run cargo check (release profile)
+        run: cargo check --workspace --locked --release
 
   msrv:
     name: MSRV (1.95.0)
