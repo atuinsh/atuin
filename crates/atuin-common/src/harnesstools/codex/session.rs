@@ -1,0 +1,253 @@
+use std::path::{Path, PathBuf};
+
+use futures::{Stream, TryStreamExt};
+use serde::Deserialize;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
+use typed_builder::TypedBuilder;
+
+use crate::fs::tree_watcher::NodeContext;
+use crate::harnesstools::codex::Codex;
+use crate::harnesstools::session::model::{Content, MessageId, Role, ToolCallId, ToolResult, ToolUse};
+use crate::harnesstools::session::{
+    Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId, Sessions,
+    WatchError,
+};
+use crate::json::jsonl;
+use crate::utils::{env_nonempty, home_dir};
+
+#[derive(Debug, Clone, TypedBuilder)]
+pub struct CodexSessions {
+    #[builder(default, setter(strip_option, into))]
+    root: Option<PathBuf>,
+}
+
+impl CodexSessions {
+    fn resolve_root(&self) -> PathBuf {
+        self.root.clone().unwrap_or_else(|| {
+            env_nonempty("CODEX_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home_dir().join(".codex"))
+                .join("sessions")
+        })
+    }
+}
+
+impl Sessions for CodexSessions {
+    type Listener = CodexListener;
+
+    fn listener(&self) -> Result<CodexListener, RuntimeError> {
+        let root = self.resolve_root();
+        if !root.is_dir() {
+            return Err(RuntimeError::NotFound(root));
+        }
+        Ok(CodexListener { root })
+    }
+}
+
+impl Observable for Codex {
+    type Sessions = CodexSessions;
+
+    fn sessions(&self) -> CodexSessions {
+        CodexSessions::builder().build()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CodexListener {
+    root: PathBuf,
+}
+
+impl CodexListener {
+    fn accept(ctx: &NodeContext) -> Option<CodexSession> {
+        let path = ctx.path();
+        let name = path.file_name()?.to_string_lossy();
+        if !ctx.is_file() || !name.starts_with("rollout-") || !name.ends_with(".jsonl") {
+            return None;
+        }
+        let id = path.file_stem()?.to_string_lossy().rsplit('-').next()?.to_owned();
+        Some(CodexSession::open(SessionId::from(id), path.to_path_buf()))
+    }
+}
+
+impl Listener for CodexListener {
+    type Session = CodexSession;
+
+    fn watch(self) -> impl Stream<Item = Result<CodexSession, WatchError>> + Send + 'static {
+        let _ = (&self.root, CodexListener::accept);
+        futures::stream::empty()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CodexSession {
+    id: SessionId,
+    path: PathBuf,
+}
+
+impl CodexSession {
+    #[must_use]
+    pub fn open(id: SessionId, path: PathBuf) -> Self {
+        Self { id, path }
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Session for CodexSession {
+    type Message = CodexMessage;
+
+    fn id(&self) -> SessionId {
+        self.id.clone()
+    }
+
+    fn messages(self) -> impl Stream<Item = Result<CodexMessage, MessageError>> + Send + 'static {
+        jsonl::tail::from_path::<CodexMessage>(self.path).map_err(MessageError::from)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CodexMessage {
+    #[serde(rename = "type")]
+    kind: String,
+    timestamp: Option<String>,
+    payload: Option<serde_json::Value>,
+}
+
+impl CodexMessage {
+    fn block(value: &serde_json::Value) -> Content {
+        match value["type"].as_str() {
+            Some("input_text" | "output_text" | "text") => {
+                Content::Text(value["text"].as_str().unwrap_or_default().to_owned())
+            }
+            _ => Content::Other(value.clone()),
+        }
+    }
+}
+
+impl Message for CodexMessage {
+    fn id(&self) -> Option<MessageId> {
+        self.payload
+            .as_ref()
+            .and_then(|p| p["call_id"].as_str().or_else(|| p["id"].as_str()))
+            .map(|s| MessageId::from(s.to_owned()))
+    }
+
+    fn role(&self) -> Role {
+        let payload = self.payload.as_ref();
+        match payload.and_then(|p| p["type"].as_str()) {
+            Some("function_call") => Role::Assistant,
+            Some("function_call_output") => Role::Tool,
+            _ => match payload.and_then(|p| p["role"].as_str()).unwrap_or(self.kind.as_str()) {
+                "user" => Role::User,
+                "assistant" => Role::Assistant,
+                "system" => Role::System,
+                "tool" => Role::Tool,
+                other => Role::Other(other.to_owned()),
+            },
+        }
+    }
+
+    fn timestamp(&self) -> Option<OffsetDateTime> {
+        self.timestamp.as_deref().and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+    }
+
+    fn content(&self) -> Vec<Content> {
+        let Some(payload) = self.payload.as_ref() else {
+            return Vec::new();
+        };
+        match payload["type"].as_str() {
+            Some("function_call") => vec![Content::ToolUse(ToolUse {
+                id: ToolCallId::from(payload["call_id"].as_str().unwrap_or_default().to_owned()),
+                name: payload["name"].as_str().unwrap_or_default().to_owned(),
+                input: payload["arguments"].clone(),
+            })],
+            Some("function_call_output") => vec![Content::ToolResult(ToolResult {
+                call: ToolCallId::from(payload["call_id"].as_str().unwrap_or_default().to_owned()),
+                output: payload["output"].clone(),
+                error: false,
+            })],
+            _ => match &payload["content"] {
+                serde_json::Value::Array(blocks) => blocks.iter().map(CodexMessage::block).collect(),
+                serde_json::Value::String(text) => vec![Content::Text(text.clone())],
+                _ => Vec::new(),
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use futures::{StreamExt, TryStreamExt};
+    use rstest::rstest;
+
+    use super::*;
+    use crate::harnesstools::session::model::{Content, Role};
+    use crate::harnesstools::session::{Message, Session, Sessions};
+
+    #[rstest]
+    fn normalizes_a_codex_assistant_message() {
+        let raw = serde_json::json!({
+            "timestamp": "2026-09-18T10:00:00Z",
+            "type": "message",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "done"}],
+            },
+        })
+        .to_string();
+        let m: CodexMessage = serde_json::from_str(&raw).unwrap();
+        assert_eq!(m.role(), Role::Assistant);
+        assert_eq!(m.content(), vec![Content::Text("done".into())]);
+    }
+
+    #[rstest]
+    fn normalizes_a_codex_function_call() {
+        let raw = serde_json::json!({
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "shell",
+                "arguments": "{\"cmd\":\"ls\"}",
+                "call_id": "c1",
+            },
+        })
+        .to_string();
+        let m: CodexMessage = serde_json::from_str(&raw).unwrap();
+        assert!(matches!(m.content().as_slice(), [Content::ToolUse(_)]));
+    }
+
+    #[rstest]
+    fn listener_reports_not_found_for_a_missing_root() {
+        let sessions = CodexSessions::builder().root(PathBuf::from("/no/such/codex")).build();
+        assert!(matches!(sessions.listener(), Err(RuntimeError::NotFound(_))));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn messages_streams_turns_from_a_rollout_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout-2026-09-18-th1.jsonl");
+        let body = [
+            serde_json::json!({"type": "session_meta", "payload": {"id": "th1"}}).to_string(),
+            serde_json::json!({
+                "type": "message",
+                "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+            })
+            .to_string(),
+        ]
+        .join("\n");
+        std::fs::write(&path, body).unwrap();
+
+        let session = CodexSession::open(SessionId::from("th1".to_owned()), path);
+        let roles: Vec<Role> =
+            session.messages().take(2).map_ok(|m| m.role()).try_collect().await.unwrap();
+        assert_eq!(roles.last(), Some(&Role::User));
+    }
+}
