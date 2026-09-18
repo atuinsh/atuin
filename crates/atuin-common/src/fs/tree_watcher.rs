@@ -161,8 +161,8 @@ where
     fn forget_tree(&mut self, path: &Path) {
         let victims: Vec<PathBuf> =
             self.entries.keys().filter(|key| key.starts_with(path)).cloned().collect();
-        for victim in victims {
-            self.entries.remove(&victim);
+        for victim in &victims {
+            self.forget(victim);
         }
     }
 
@@ -206,6 +206,15 @@ where
                 if let [from, to] = event.paths.as_slice() {
                     self.forget_tree(from);
                     self.observe_path(to.clone(), Origin::Notify);
+                }
+            }
+            EventKind::Modify(ModifyKind::Name(RenameMode::Any | RenameMode::Other)) => {
+                for path in &event.paths {
+                    if std::fs::symlink_metadata(path).is_ok() {
+                        self.observe_path(path.clone(), Origin::Notify);
+                    } else {
+                        self.forget_tree(path);
+                    }
                 }
             }
             _ => {}
@@ -671,6 +680,34 @@ mod tests {
         ]));
         assert!(!engine.entries.contains_key(&from));
         assert!(engine.entries.contains_key(&to));
+    }
+
+    #[test]
+    fn apply_rename_any_observes_moved_in_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a");
+        std::fs::write(&file, b"x").unwrap();
+        let counters = Arc::new(Counters::default());
+        let mut engine = accept_all_engine_rooted(&counters, dir.path());
+        engine.apply_event(&event(EventKind::Modify(ModifyKind::Name(RenameMode::Any)), vec![
+            file.clone(),
+        ]));
+        assert!(engine.entries.contains_key(&file));
+        assert_eq!(counters.alive.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn apply_rename_any_forgets_moved_out_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a");
+        let counters = Arc::new(Counters::default());
+        let mut engine = accept_all_engine_rooted(&counters, dir.path());
+        engine.observe(file.clone(), FileKind::File, Origin::Notify);
+        assert!(engine.entries.contains_key(&file));
+        engine
+            .apply_event(&event(EventKind::Modify(ModifyKind::Name(RenameMode::Any)), vec![file]));
+        assert!(engine.entries.is_empty());
+        assert_eq!(counters.dropped.load(Ordering::SeqCst), 1);
     }
 
     proptest! {
