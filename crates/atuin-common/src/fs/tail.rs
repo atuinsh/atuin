@@ -1,5 +1,26 @@
 //! TODO(markovejnovic): This is complete slop, I have no time to review this in-depth.
 //! Following a growing file, `tail -f`-style.
+//!
+//! ```no_run
+//! use atuin_common::fs::tail::{Anchor, Read, Tail};
+//! use futures::StreamExt;
+//!
+//! # async fn example() -> std::io::Result<()> {
+//! // Follow a log file as UTF-8 lines, like `tail -f`.
+//! let mut lines = std::pin::pin!(Tail::builder().path("/var/log/app.log").build().lines_utf8());
+//! while let Some(line) = lines.next().await {
+//!     println!("{}", line?);
+//! }
+//!
+//! // Or read an existing file once, to completion, as raw byte lines.
+//! let bounded = Tail::builder().path("data.txt").read(Read::Once(Anchor::Beginning)).build();
+//! let mut lines = std::pin::pin!(bounded.lines());
+//! while let Some(line) = lines.next().await {
+//!     let _line: Vec<u8> = line?;
+//! }
+//! # Ok(())
+//! # }
+//! ```
 
 use std::io::{self, SeekFrom};
 use std::num::{NonZeroU32, NonZeroUsize};
