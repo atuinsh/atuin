@@ -129,14 +129,9 @@ impl PiMessage {
         match value["type"].as_str() {
             Some("text") => Content::Text(value["text"].as_str().unwrap_or_default().to_owned()),
             Some("toolCall") => Content::ToolUse(ToolUse {
-                id: ToolCallId::from(value["toolCallId"].as_str().unwrap_or_default().to_owned()),
-                name: value["toolName"].as_str().unwrap_or_default().to_owned(),
-                input: value["args"].clone(),
-            }),
-            Some("toolResult") => Content::ToolResult(ToolResult {
-                call: ToolCallId::from(value["toolCallId"].as_str().unwrap_or_default().to_owned()),
-                output: value["content"].clone(),
-                error: false,
+                id: ToolCallId::from(value["id"].as_str().unwrap_or_default().to_owned()),
+                name: value["name"].as_str().unwrap_or_default().to_owned(),
+                input: value["arguments"].clone(),
             }),
             _ => Content::Other(value.clone()),
         }
@@ -165,10 +160,21 @@ impl Message for PiMessage {
     }
 
     fn content(&self) -> Vec<Content> {
-        let raw = self.message.as_ref().map(|m| &m["content"]);
-        match raw {
-            Some(serde_json::Value::String(text)) => vec![Content::Text(text.clone())],
-            Some(serde_json::Value::Array(blocks)) => blocks.iter().map(PiMessage::block).collect(),
+        let Some(message) = self.message.as_ref() else {
+            return Vec::new();
+        };
+        if message["role"].as_str() == Some("toolResult") {
+            return vec![Content::ToolResult(ToolResult {
+                call: ToolCallId::from(
+                    message["toolCallId"].as_str().unwrap_or_default().to_owned(),
+                ),
+                output: message["content"].clone(),
+                error: message["isError"].as_bool().unwrap_or(false),
+            })];
+        }
+        match &message["content"] {
+            serde_json::Value::String(text) => vec![Content::Text(text.clone())],
+            serde_json::Value::Array(blocks) => blocks.iter().map(PiMessage::block).collect(),
             _ => Vec::new(),
         }
     }
@@ -198,6 +204,38 @@ mod tests {
         let m: PiMessage = serde_json::from_str(&raw).unwrap();
         assert_eq!(m.role(), Role::User);
         assert_eq!(m.content(), vec![Content::Text("hello pi".into())]);
+    }
+
+    #[rstest]
+    fn normalizes_pi_tool_call_and_result() {
+        let call: PiMessage = serde_json::from_str(
+            &serde_json::json!({
+                "type": "message",
+                "id": "m1",
+                "message": {"role": "assistant", "content": [
+                    {"type": "toolCall", "id": "c1", "name": "bash", "arguments": {"cmd": "ls"}}
+                ]},
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert!(
+            matches!(call.content().as_slice(), [Content::ToolUse(u)] if u.name == "bash" && u.id.as_ref() == "c1")
+        );
+
+        let result: PiMessage = serde_json::from_str(
+            &serde_json::json!({
+                "type": "message",
+                "id": "m2",
+                "message": {"role": "toolResult", "toolCallId": "c1", "isError": false, "content": "done"},
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(result.role(), Role::Tool);
+        assert!(
+            matches!(result.content().as_slice(), [Content::ToolResult(r)] if r.call.as_ref() == "c1" && !r.error)
+        );
     }
 
     #[rstest]
