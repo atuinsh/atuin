@@ -143,6 +143,11 @@ impl AliasStore {
         Ok(Self::format_xonsh(&aliases))
     }
 
+    pub async fn fish(&self) -> Result<String> {
+        let aliases = self.aliases().await?;
+        Ok(Self::format_fish(&aliases))
+    }
+
     pub async fn powershell(&self) -> Result<String> {
         let aliases = self.aliases().await?;
         Ok(Self::format_powershell(&aliases))
@@ -196,6 +201,30 @@ impl AliasStore {
         config
     }
 
+    fn format_fish(aliases: &[Alias]) -> String {
+        // Fish needs its own quoting: the POSIX `'\''` idiom shlex emits is unsafe
+        // here because fish treats `\'`/`\\` as escapes inside single quotes.
+        let mut config = String::new();
+
+        for alias in aliases {
+            if !crate::escape::is_safe_name(&alias.name) {
+                tracing::warn!(name = %alias.name, "skipping alias with unsafe name");
+                continue;
+            }
+
+            // If it's quoted, remove the quotes. We re-quote it safely below.
+            let value = unquote(alias.value.as_str()).unwrap_or_else(|_| alias.value.clone());
+
+            config.push_str(&format!(
+                "alias {}={}\n",
+                alias.name,
+                crate::escape::fish_quote(&value)
+            ));
+        }
+
+        config
+    }
+
     fn format_powershell(aliases: &[Alias]) -> String {
         let mut config = String::new();
 
@@ -220,6 +249,7 @@ impl AliasStore {
         // Build for all supported shells
         let posix = Self::format_posix(&aliases);
         let xonsh = Self::format_xonsh(&aliases);
+        let fsh = Self::format_fish(&aliases);
         let powershell = Self::format_powershell(&aliases);
 
         // All the same contents, maybe optimize in the future or perhaps there will be quirks
@@ -233,7 +263,7 @@ impl AliasStore {
 
         tokio::fs::write(zsh, &posix).await?;
         tokio::fs::write(bash, &posix).await?;
-        tokio::fs::write(fish, &posix).await?;
+        tokio::fs::write(fish, &fsh).await?;
         tokio::fs::write(xsh, &xonsh).await?;
         tokio::fs::write(ps1, &powershell).await?;
 
@@ -534,6 +564,18 @@ alias kgap='kubectl get pods --all-namespaces'
         }];
 
         assert_eq!(AliasStore::format_posix(&aliases), "");
+    }
+
+    #[rstest]
+    fn format_fish_escapes_backslash() {
+        // shlex's POSIX single-quoting would leave a trailing backslash escaping the
+        // closing quote in fish; the fish path must double the backslash instead.
+        let aliases = [Alias {
+            name: String::from("ll"),
+            value: String::from("ls\\"),
+        }];
+
+        assert_eq!(AliasStore::format_fish(&aliases), "alias ll='ls\\\\'\n");
     }
 
     #[rstest]

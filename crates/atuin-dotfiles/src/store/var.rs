@@ -133,23 +133,6 @@ impl VarStore {
         }
     }
 
-    /// Escape a value for use in fish shell
-    /// Fish uses single quotes for literal strings, but we need to handle embedded single quotes
-    fn escape_fish_value(value: &str) -> String {
-        // If the value contains no special characters, we can use it unquoted
-        if value
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '/' || c == '.')
-        {
-            value.to_string()
-        } else {
-            // Use single quotes and escape embedded backslashes and single quotes.
-            // Backslash must be escaped first, otherwise a trailing backslash would
-            // swallow the closing quote and let the value break out.
-            format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
-        }
-    }
-
     /// Escape a value for use in xonsh
     /// Xonsh uses Python-style string literals
     fn escape_xonsh_value(value: &str) -> String {
@@ -189,8 +172,8 @@ impl VarStore {
         let mut config = String::new();
 
         for env in env {
-            if !crate::escape::is_safe_name(&env.name) {
-                tracing::warn!(name = %env.name, "skipping var with unsafe name");
+            if !crate::escape::is_valid_var_name(&env.name) {
+                tracing::warn!(name = %env.name, "skipping var with invalid name");
                 continue;
             }
 
@@ -205,12 +188,12 @@ impl VarStore {
         let mut config = String::new();
 
         for env in env {
-            if !crate::escape::is_safe_name(&env.name) {
-                tracing::warn!(name = %env.name, "skipping var with unsafe name");
+            if !crate::escape::is_valid_var_name(&env.name) {
+                tracing::warn!(name = %env.name, "skipping var with invalid name");
                 continue;
             }
 
-            let escaped_value = Self::escape_fish_value(&env.value);
+            let escaped_value = crate::escape::fish_quote(&env.value);
             config.push_str(&format!("set -gx {} {}\n", env.name, escaped_value));
         }
 
@@ -221,8 +204,8 @@ impl VarStore {
         let mut config = String::new();
 
         for env in env {
-            if !crate::escape::is_safe_name(&env.name) {
-                tracing::warn!(name = %env.name, "skipping var with unsafe name");
+            if !crate::escape::is_valid_var_name(&env.name) {
+                tracing::warn!(name = %env.name, "skipping var with invalid name");
                 continue;
             }
 
@@ -241,8 +224,8 @@ impl VarStore {
         let mut config = String::new();
 
         for var in env {
-            if !crate::escape::is_safe_name(&var.name) {
-                tracing::warn!(name = %var.name, "skipping var with unsafe name");
+            if !crate::escape::is_valid_var_name(&var.name) {
+                tracing::warn!(name = %var.name, "skipping var with invalid name");
                 continue;
             }
 
@@ -453,27 +436,16 @@ mod tests {
     }
 
     #[rstest]
-    // Simple values should not be quoted
-    #[case::simple("simple", "simple")]
-    #[case::path("path/to/file", "path/to/file")]
-    // Values with spaces should be single-quoted
-    #[case::spaces("hello world", "'hello world'")]
-    #[case::spaces_short("bar baz", "'bar baz'")]
-    // Values with single quotes should be escaped
-    #[case::single_quote("don't", "'don\\'t'")]
-    // Backslashes must be escaped too, otherwise a trailing backslash swallows
-    // our closing quote and the value breaks out into command position.
-    #[case::backslash("a\\b", "'a\\\\b'")]
-    fn escapes_fish_value(#[case] input: &str, #[case] expected: &str) {
-        assert_eq!(VarStore::escape_fish_value(input), expected);
-    }
-
-    #[rstest]
-    fn format_skips_unsafe_names() {
-        // A forged record can carry shell metacharacters in the name; those must
-        // not be interpolated into any generated assignment.
+    // Forged metacharacters, and names that aren't valid identifiers (leading
+    // digit, hyphen, dot), are all dropped rather than emitted as broken or
+    // injectable assignments.
+    #[case::metachars("x; touch pwned #")]
+    #[case::leading_digit("1X")]
+    #[case::hyphen("A-B")]
+    #[case::dot("a.b")]
+    fn format_skips_invalid_names(#[case] name: &str) {
         let vars = [Var {
-            name: String::from("x; touch pwned #"),
+            name: name.to_string(),
             value: String::from("1"),
             export: true,
         }];
