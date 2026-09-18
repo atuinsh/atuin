@@ -19,6 +19,7 @@ os = ["dep:rustix", "dep:windows-sys"]
 proto = ["dep:prost"]
 db = ["dep:sqlx"]
 sqlite = ["db", "sqlx/sqlite", "sqlx/regexp", "dep:libsqlite3-sys", "dep:tokio-util"]
+fs-watch = ["dep:notify", "dep:notify-debouncer-full"]
 
 [dependencies]
 atuin-vt100 = { workspace = true, optional = true }
@@ -37,6 +38,8 @@ humantime = { workspace = true }
 itertools = { workspace = true }
 libsqlite3-sys = { workspace = true, optional = true }
 memchr = { workspace = true, optional = true }
+notify = { workspace = true, optional = true }
+notify-debouncer-full = { workspace = true, optional = true }
 num-traits = { workspace = true }
 parking_lot = { workspace = true }
 prost = { workspace = true, optional = true }

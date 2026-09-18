@@ -103,6 +103,7 @@ minijinja = "2"
 minspan = "0.1"
 norm = { version = "0.1", features = ["fzf-v2"] }
 notify = "8"
+notify-debouncer-full = "0.7"
 num-traits = "0.2"
 opentelemetry = "0.32"
 opentelemetry-otlp = "0.32"
