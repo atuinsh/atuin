@@ -1054,6 +1054,7 @@ pub struct Settings {
     pub invert: bool,
     pub show_preview: bool,
     pub max_preview_height: u16,
+    pub max_record_length: usize,
     pub show_help: bool,
     pub show_tabs: bool,
     pub show_numeric_shortcuts: bool,
@@ -1517,6 +1518,7 @@ impl Settings {
             .set_default("show_preview", true)?
             .set_default("preview.strategy", "auto")?
             .set_default("max_preview_height", 4)?
+            .set_default("max_record_length", 1_048_576)?
             .set_default("show_help", true)?
             .set_default("show_tabs", true)?
             .set_default("show_numeric_shortcuts", true)?

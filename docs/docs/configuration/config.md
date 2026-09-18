@@ -289,6 +289,18 @@ Useful when you have long scripts in your history that you want to distinguish b
 max_preview_height = 4
 ```
 
+### `max_record_length`
+
+Default : `1048576`
+
+Configure the maximum length of a command before it's ignored by Atuin. Set to `0` for unlimited
+
+Useful for preventing massive pasted shell scripts or binary data from polluting your local history and blocking sync.
+
+```toml
+max_record_length = 1048576
+```
+
 ### `show_help`
 
 Default: `true`

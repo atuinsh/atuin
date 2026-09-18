@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::db::DbSettings;
 
 static EXAMPLE_CONFIG: &str = include_str!("../server.toml");
-
+const MIN_RECORD_SIZE_FLOOR: u64 = 1024 * 1024; // 1MiB
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Metrics {
     #[serde(alias = "enabled")]
@@ -52,6 +52,17 @@ pub struct Settings {
 }
 
 impl Settings {
+    #[must_use]
+    pub fn verify_nonsensical_settings(mut self) -> Self {
+        if self.max_record_size.0 > 0 && self.max_record_size.0 < MIN_RECORD_SIZE_FLOOR {
+            println!(
+                "You have picked a max_record_size that is nonsensical : {}, updating it to 1MB",
+                self.max_record_size.0
+            );
+            self.max_record_size = ByteSize(MIN_RECORD_SIZE_FLOOR);
+        }
+        self
+    }
     pub fn new() -> Result<Self> {
         let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
             PathBuf::from(p)
@@ -90,7 +101,10 @@ impl Settings {
 
         let config = config_builder.build()?;
 
-        config.try_deserialize().map_err(|e| eyre!("failed to deserialize: {}", e))
+        config
+            .try_deserialize()
+            .map_err(|e| eyre!("failed to deserialize: {}", e))
+            .map(|invalidated_setting: Self| invalidated_setting.verify_nonsensical_settings())
     }
 }
 
