@@ -101,6 +101,10 @@ use tracing::{Instrument, Span};
 use crate::output_capture::{CaptureError, GetOutputError, OutputCaptureEngine};
 use crate::search::SearchIndex;
 
+/// History-db rows removed per transaction by [`HistoryJournal::delete`]; matches the chunking of
+/// `HistoryStore::build_all`, which this path used to go through.
+const DELETE_ROWS_BATCH_SIZE: usize = 5000;
+
 /// An event describing a change in the lifecycle of a command.
 #[derive(Debug, Clone)]
 pub enum CmdEvent {
@@ -532,10 +536,15 @@ impl HistoryJournal {
 
         // The tombstones were just written above, so replaying them through
         // `HistoryStore::build_all` would only read and decrypt them back into these same ids.
-        self.history_db
-            .delete_rows(to_delete)
-            .await
-            .map_err(|e| CmdDeleteError::HistoryDbFailed(e.into()))?;
+        // Chunked like `build_all` is: one transaction over the whole set would hold the history
+        // db's write lock for seconds at 100k+ ids, past the busy timeout a concurrent
+        // `finish()` is willing to wait.
+        for chunk in to_delete.chunks(DELETE_ROWS_BATCH_SIZE) {
+            self.history_db
+                .delete_rows(chunk.iter().copied())
+                .await
+                .map_err(|e| CmdDeleteError::HistoryDbFailed(e.into()))?;
+        }
 
         self.reload_search_index(search_settings).await;
 
