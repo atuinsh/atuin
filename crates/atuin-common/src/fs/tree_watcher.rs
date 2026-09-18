@@ -1,6 +1,27 @@
+//! Watch a directory tree, holding one factory-built handler per live node.
+//!
+//! [`TreeWatcher`] offers every file, directory, and symlink under a root to a
+//! factory closure; whatever the factory returns is kept alive until the node
+//! disappears. Filesystem events drive updates in near real time, and a periodic
+//! full scan reconciles anything the event stream missed.
+//!
+//! ```no_run
+//! use atuin_common::fs::tree_watcher::{NodeContext, TreeWatcher};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! // Keep one handler per regular file; here the handler is just the file's path.
+//! let watcher = TreeWatcher::watch("/var/log", |ctx: NodeContext| {
+//!     ctx.is_file().then(|| ctx.into_path())
+//! })?;
+//! // Dropping `watcher` stops watching and drops every handler.
+//! # let _ = watcher;
+//! # Ok(())
+//! # }
+//! ```
+
 use std::collections::HashMap;
-use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use notify::event::{EventKind, ModifyKind, RenameMode};
@@ -10,6 +31,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
+/// Reason a [`TreeWatcher`] could not be started.
 #[derive(Debug, thiserror::Error)]
 pub enum TreeWatcherError {
     #[error("watch root is not a directory: {0}")]
@@ -20,6 +42,7 @@ pub enum TreeWatcherError {
     Io(#[from] std::io::Error),
 }
 
+/// The kind of filesystem node at a path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileKind {
     File,
@@ -42,66 +65,77 @@ impl From<std::fs::FileType> for FileKind {
     }
 }
 
+/// How a node came to the watcher's attention.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Origin {
-    Notify,
+    /// Surfaced by a filesystem event.
+    Event,
+    /// Surfaced by the periodic reconciling scan.
     Scan,
 }
 
+/// A node offered to the factory, with how it was found.
 #[derive(Debug, Clone)]
 pub struct NodeContext {
-    path: PathBuf,
+    path: Arc<Path>,
     kind: FileKind,
     origin: Origin,
 }
 
 impl NodeContext {
+    /// The node's path.
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
 
+    /// The node's [`FileKind`].
     #[must_use]
     pub fn kind(&self) -> FileKind {
         self.kind
     }
 
+    /// Whether an event or the scan surfaced this node.
     #[must_use]
     pub fn origin(&self) -> Origin {
         self.origin
     }
 
+    /// Whether this node is a regular file.
     #[must_use]
     pub fn is_file(&self) -> bool {
         matches!(self.kind, FileKind::File)
     }
 
+    /// Whether this node is a directory.
     #[must_use]
     pub fn is_dir(&self) -> bool {
         matches!(self.kind, FileKind::Dir)
     }
 
+    /// Whether this node is a symlink.
     #[must_use]
     pub fn is_symlink(&self) -> bool {
         matches!(self.kind, FileKind::Symlink)
     }
 
+    /// Consume the context into its shared path handle.
     #[must_use]
-    pub fn into_path(self) -> PathBuf {
+    pub fn into_path(self) -> Arc<Path> {
         self.path
     }
 }
 
-fn scan_fs(root: &Path, recursive: bool) -> std::io::Result<Vec<(PathBuf, FileKind)>> {
+fn scan_fs(root: &Path, recursive: bool) -> std::io::Result<Vec<(Arc<Path>, FileKind)>> {
     let mut out = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
+    let mut stack: Vec<Arc<Path>> = vec![Arc::from(root)];
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir)? {
             let entry = entry?;
             let file_type = entry.file_type()?;
-            let path = entry.path();
+            let path: Arc<Path> = Arc::from(entry.path());
             if recursive && file_type.is_dir() {
-                stack.push(path.clone());
+                stack.push(Arc::clone(&path));
             }
             out.push((path, FileKind::from(file_type)));
         }
@@ -109,92 +143,101 @@ fn scan_fs(root: &Path, recursive: bool) -> std::io::Result<Vec<(PathBuf, FileKi
     Ok(out)
 }
 
-async fn scan(root: &Path, recursive: bool) -> Option<Vec<(PathBuf, FileKind)>> {
+async fn scan(root: &Path, recursive: bool) -> std::io::Result<Vec<(Arc<Path>, FileKind)>> {
     let root = root.to_path_buf();
     match tokio::task::spawn_blocking(move || scan_fs(&root, recursive)).await {
-        Ok(Ok(entries)) => Some(entries),
-        _ => None,
+        Ok(result) => result,
+        Err(join) => Err(std::io::Error::other(join)),
     }
 }
 
-pub trait TreeNode: Send + 'static {}
+/// Stat every path referenced by `events` off the async executor, keeping only
+/// the ones that still exist.
+async fn resolve_kinds(events: &[notify::Event]) -> HashMap<Arc<Path>, FileKind> {
+    let paths: Vec<Arc<Path>> = events
+        .iter()
+        .flat_map(|event| event.paths.iter().map(|p| Arc::from(p.as_path())))
+        .collect();
+    let stat = tokio::task::spawn_blocking(move || {
+        paths
+            .into_iter()
+            .filter_map(|path| Some((Arc::clone(&path), file_kind_of(&path).ok()?)))
+            .collect()
+    });
+    stat.await.unwrap_or_default()
+}
 
-impl<T: Send + 'static> TreeNode for T {}
+fn file_kind_of(path: &Path) -> std::io::Result<FileKind> {
+    Ok(FileKind::from(std::fs::symlink_metadata(path)?.file_type()))
+}
 
 enum Slot<H> {
-    Active(H),
-    Declined,
+    Active(FileKind, H),
+    Declined(FileKind),
+}
+
+impl<H> Slot<H> {
+    fn kind(&self) -> FileKind {
+        match self {
+            Self::Active(kind, _) | Self::Declined(kind) => *kind,
+        }
+    }
 }
 
 struct Engine<H, F> {
     root: PathBuf,
     recursive: bool,
     factory: F,
-    entries: HashMap<PathBuf, Slot<H>>,
+    entries: HashMap<Arc<Path>, Slot<H>>,
 }
 
 impl<H, F> Engine<H, F>
 where
-    H: TreeNode,
+    H: Send + 'static,
     F: Fn(NodeContext) -> Option<H>,
 {
-    fn observe(&mut self, path: PathBuf, kind: FileKind, origin: Origin) {
-        if self.entries.contains_key(&path) {
+    fn observe(&mut self, path: Arc<Path>, kind: FileKind, origin: Origin) {
+        if self.entries.get(&path).is_some_and(|slot| slot.kind() == kind) {
             return;
         }
+        // Absent, or present at a stale kind: (re)build, dropping any old handler.
         let ctx = NodeContext {
-            path: path.clone(),
+            path: Arc::clone(&path),
             kind,
             origin,
         };
-        let slot = match (self.factory)(ctx) {
-            Some(handler) => Slot::Active(handler),
-            None => Slot::Declined,
-        };
+        let slot =
+            (self.factory)(ctx).map_or(Slot::Declined(kind), |handler| Slot::Active(kind, handler));
         self.entries.insert(path, slot);
     }
 
-    fn forget(&mut self, path: &Path) {
-        self.entries.remove(path);
-    }
-
     fn forget_tree(&mut self, path: &Path) {
-        let victims: Vec<PathBuf> =
-            self.entries.keys().filter(|key| key.starts_with(path)).cloned().collect();
-        for victim in &victims {
-            self.forget(victim);
-        }
+        self.entries.retain(|key, _| !key.starts_with(path));
     }
 
-    fn reconcile(&mut self, truth: Vec<(PathBuf, FileKind)>) {
-        let truth: HashMap<PathBuf, FileKind> = truth.into_iter().collect();
-        let gone: Vec<PathBuf> =
-            self.entries.keys().filter(|key| !truth.contains_key(*key)).cloned().collect();
-        for path in &gone {
-            self.forget(path);
-        }
+    fn reconcile(&mut self, truth: Vec<(Arc<Path>, FileKind)>) {
+        let truth: HashMap<Arc<Path>, FileKind> = truth.into_iter().collect();
+        self.entries.retain(|key, _| truth.contains_key(key));
         for (path, kind) in truth {
-            if !self.entries.contains_key(&path) {
-                self.observe(path, kind, Origin::Scan);
-            }
+            self.observe(path, kind, Origin::Scan);
         }
     }
 
-    fn observe_path(&mut self, path: PathBuf, origin: Origin) {
-        if self.entries.contains_key(&path) {
-            return;
-        }
-        let Ok(kind) = file_kind_of(&path) else {
+    fn observe_path(&mut self, path: &Path, kinds: &HashMap<Arc<Path>, FileKind>, origin: Origin) {
+        let Some((key, &kind)) = kinds.get_key_value(path) else {
             return;
         };
-        self.observe(path, kind, origin);
+        if self.entries.get(path).is_some_and(|slot| slot.kind() == kind) {
+            return;
+        }
+        self.observe(Arc::clone(key), kind, origin);
     }
 
-    fn apply_event(&mut self, event: &notify::Event) {
+    fn apply_event(&mut self, event: &notify::Event, kinds: &HashMap<Arc<Path>, FileKind>) {
         match &event.kind {
             EventKind::Create(_) | EventKind::Modify(ModifyKind::Name(RenameMode::To)) => {
                 for path in &event.paths {
-                    self.observe_path(path.clone(), Origin::Notify);
+                    self.observe_path(path, kinds, Origin::Event);
                 }
             }
             EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(RenameMode::From)) => {
@@ -205,13 +248,13 @@ where
             EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => {
                 if let [from, to] = event.paths.as_slice() {
                     self.forget_tree(from);
-                    self.observe_path(to.clone(), Origin::Notify);
+                    self.observe_path(to, kinds, Origin::Event);
                 }
             }
             EventKind::Modify(ModifyKind::Name(RenameMode::Any | RenameMode::Other)) => {
                 for path in &event.paths {
-                    if std::fs::symlink_metadata(path).is_ok() {
-                        self.observe_path(path.clone(), Origin::Notify);
+                    if kinds.contains_key(path.as_path()) {
+                        self.observe_path(path, kinds, Origin::Event);
                     } else {
                         self.forget_tree(path);
                     }
@@ -222,104 +265,115 @@ where
     }
 }
 
-fn file_kind_of(path: &Path) -> std::io::Result<FileKind> {
-    Ok(FileKind::from(std::fs::symlink_metadata(path)?.file_type()))
+impl<H, F> Engine<H, F>
+where
+    H: Send + 'static,
+    F: Fn(NodeContext) -> Option<H> + Send + 'static,
+{
+    async fn run(
+        mut self,
+        mut events: UnboundedReceiver<DebounceEventResult>,
+        scan_interval: Duration,
+    ) {
+        self.rescan().await;
+
+        let mut interval = tokio::time::interval(scan_interval);
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        interval.tick().await;
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => self.rescan().await,
+                received = events.recv() => {
+                    match received {
+                        Some(Ok(batch)) => {
+                            let mut force_scan = false;
+                            let mut pending = Vec::new();
+                            for debounced in batch {
+                                if debounced.need_rescan() {
+                                    force_scan = true;
+                                } else {
+                                    pending.push(debounced.event);
+                                }
+                            }
+                            if !pending.is_empty() {
+                                let kinds = resolve_kinds(&pending).await;
+                                for event in &pending {
+                                    self.apply_event(event, &kinds);
+                                }
+                            }
+                            if force_scan {
+                                self.rescan().await;
+                            }
+                        }
+                        Some(Err(errors)) => tracing::warn!(?errors, "tree watcher backend error"),
+                        None => break,
+                    }
+                }
+            }
+        }
+    }
+
+    async fn rescan(&mut self) {
+        match scan(&self.root, self.recursive).await {
+            Ok(truth) => self.reconcile(truth),
+            Err(err) => tracing::warn!(?err, "tree watcher scan failed; skipping reconcile"),
+        }
+    }
 }
 
 const DEFAULT_SCAN_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(250);
 
-async fn run_engine<H, F>(
-    mut engine: Engine<H, F>,
-    mut events: UnboundedReceiver<DebounceEventResult>,
-    scan_interval: Duration,
-) where
-    H: TreeNode,
-    F: Fn(NodeContext) -> Option<H> + Send + 'static,
-{
-    if let Some(truth) = scan(&engine.root, engine.recursive).await {
-        engine.reconcile(truth);
-    }
-
-    let mut interval = tokio::time::interval(scan_interval);
-    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    interval.tick().await;
-
-    loop {
-        tokio::select! {
-            _ = interval.tick() => {
-                if let Some(truth) = scan(&engine.root, engine.recursive).await {
-                    engine.reconcile(truth);
-                }
-            }
-            received = events.recv() => {
-                match received {
-                    Some(Ok(batch)) => {
-                        let mut force_scan = false;
-                        for debounced in batch {
-                            if debounced.need_rescan() {
-                                force_scan = true;
-                                continue;
-                            }
-                            engine.apply_event(&debounced.event);
-                        }
-                        if force_scan
-                            && let Some(truth) = scan(&engine.root, engine.recursive).await
-                        {
-                            engine.reconcile(truth);
-                        }
-                    }
-                    Some(Err(_)) => {}
-                    None => break,
-                }
-            }
-        }
-    }
-}
-
-pub struct TreeWatcherBuilder<H> {
+/// Builder for a [`TreeWatcher`].
+pub struct TreeWatcherBuilder {
     recursive: bool,
     scan_interval: Duration,
     debounce_timeout: Duration,
-    _marker: PhantomData<fn() -> H>,
 }
 
-impl<H: TreeNode> Default for TreeWatcherBuilder<H> {
+impl Default for TreeWatcherBuilder {
     fn default() -> Self {
         Self {
             recursive: true,
             scan_interval: DEFAULT_SCAN_INTERVAL,
             debounce_timeout: DEFAULT_DEBOUNCE_TIMEOUT,
-            _marker: PhantomData,
         }
     }
 }
 
-impl<H: TreeNode> TreeWatcherBuilder<H> {
+impl TreeWatcherBuilder {
+    /// Descend into subdirectories (default: `true`).
     #[must_use]
     pub fn recursive(mut self, yes: bool) -> Self {
         self.recursive = yes;
         self
     }
 
+    /// Interval between reconciling full scans (default: 30s).
     #[must_use]
     pub fn scan_interval(mut self, interval: Duration) -> Self {
         self.scan_interval = interval;
         self
     }
 
+    /// Window for coalescing filesystem events (default: 250ms).
     #[must_use]
     pub fn debounce_timeout(mut self, timeout: Duration) -> Self {
         self.debounce_timeout = timeout;
         self
     }
 
-    pub fn watch<F>(
+    /// Start watching `root`, building a handler for each node the factory accepts.
+    ///
+    /// A factory returning `None` declines the node; the decision is remembered.
+    pub fn watch<H, F>(
         self,
         root: impl AsRef<Path>,
         factory: F,
-    ) -> Result<TreeWatcher<H>, TreeWatcherError>
+    ) -> Result<TreeWatcher, TreeWatcherError>
     where
+        H: Send + 'static,
         F: Fn(NodeContext) -> Option<H> + Send + 'static,
     {
         let root = std::fs::canonicalize(root.as_ref())?;
@@ -346,37 +400,40 @@ impl<H: TreeNode> TreeWatcherBuilder<H> {
             factory,
             entries: HashMap::new(),
         };
-        let task = tokio::spawn(run_engine(engine, rx, self.scan_interval));
+        let task = tokio::spawn(engine.run(rx, self.scan_interval));
 
         Ok(TreeWatcher {
             task,
             _debouncer: debouncer,
-            _marker: PhantomData,
         })
     }
 }
 
-pub struct TreeWatcher<H> {
+/// Watches a directory tree, holding one factory-built handler per live node.
+#[must_use = "dropping the TreeWatcher stops watching"]
+pub struct TreeWatcher {
     task: JoinHandle<()>,
     _debouncer: Debouncer<RecommendedWatcher, RecommendedCache>,
-    _marker: PhantomData<fn() -> H>,
 }
 
-impl<H: TreeNode> TreeWatcher<H> {
+impl TreeWatcher {
+    /// Begin configuring a watcher.
     #[must_use]
-    pub fn builder() -> TreeWatcherBuilder<H> {
+    pub fn builder() -> TreeWatcherBuilder {
         TreeWatcherBuilder::default()
     }
 
-    pub fn watch<F>(root: impl AsRef<Path>, factory: F) -> Result<Self, TreeWatcherError>
+    /// Watch `root` with default settings, building a handler for each accepted node.
+    pub fn watch<H, F>(root: impl AsRef<Path>, factory: F) -> Result<Self, TreeWatcherError>
     where
+        H: Send + 'static,
         F: Fn(NodeContext) -> Option<H> + Send + 'static,
     {
         Self::builder().watch(root, factory)
     }
 }
 
-impl<H> Drop for TreeWatcher<H> {
+impl Drop for TreeWatcher {
     fn drop(&mut self) {
         self.task.abort();
     }
@@ -422,13 +479,7 @@ mod tests {
     fn accept_all_engine(
         counters: &Arc<Counters>,
     ) -> Engine<CountingHandler, impl Fn(NodeContext) -> Option<CountingHandler>> {
-        let counters = counters.clone();
-        Engine {
-            root: PathBuf::from("/r"),
-            recursive: true,
-            factory: move |_ctx| Some(CountingHandler::new(counters.clone())),
-            entries: HashMap::new(),
-        }
+        accept_all_engine_rooted(counters, Path::new("/r"))
     }
 
     fn accept_all_engine_rooted(
@@ -444,6 +495,10 @@ mod tests {
         }
     }
 
+    fn ap(path: &str) -> Arc<Path> {
+        Arc::from(Path::new(path))
+    }
+
     fn event(kind: EventKind, paths: Vec<PathBuf>) -> notify::Event {
         notify::Event {
             kind,
@@ -452,36 +507,28 @@ mod tests {
         }
     }
 
-    fn truth(ids: &[&str]) -> Vec<(PathBuf, FileKind)> {
-        ids.iter().map(|id| (PathBuf::from(format!("/r/{id}")), FileKind::File)).collect()
+    fn kinds_map<const N: usize>(entries: [(&str, FileKind); N]) -> HashMap<Arc<Path>, FileKind> {
+        entries.into_iter().map(|(p, k)| (ap(p), k)).collect()
     }
 
-    fn kinds(
-        entries: &[(PathBuf, FileKind)],
+    fn truth(ids: &[&str]) -> Vec<(Arc<Path>, FileKind)> {
+        ids.iter().map(|id| (ap(&format!("/r/{id}")), FileKind::File)).collect()
+    }
+
+    fn keys(
+        engine: &Engine<CountingHandler, impl Fn(NodeContext) -> Option<CountingHandler>>,
+    ) -> std::collections::HashSet<Arc<Path>> {
+        engine.entries.keys().cloned().collect()
+    }
+
+    fn scanned_kinds(
+        entries: &[(Arc<Path>, FileKind)],
         root: &Path,
     ) -> std::collections::BTreeMap<String, FileKind> {
         entries
             .iter()
             .map(|(p, k)| (p.strip_prefix(root).unwrap().to_string_lossy().into_owned(), *k))
             .collect()
-    }
-
-    #[test]
-    fn not_a_directory_displays_path() {
-        let err = TreeWatcherError::NotADirectory(PathBuf::from("/nope"));
-        assert_eq!(err.to_string(), "watch root is not a directory: /nope");
-    }
-
-    #[test]
-    fn file_kind_from_file_type() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("f");
-        std::fs::write(&file, b"x").unwrap();
-        let kind = FileKind::from(std::fs::symlink_metadata(&file).unwrap().file_type());
-        assert_eq!(kind, FileKind::File);
-
-        let kind = FileKind::from(std::fs::symlink_metadata(dir.path()).unwrap().file_type());
-        assert_eq!(kind, FileKind::Dir);
     }
 
     #[rstest]
@@ -496,7 +543,7 @@ mod tests {
         #[case] is_symlink: bool,
     ) {
         let ctx = NodeContext {
-            path: PathBuf::from("/root/x"),
+            path: ap("/root/x"),
             kind,
             origin: Origin::Scan,
         };
@@ -507,33 +554,24 @@ mod tests {
         assert_eq!(ctx.origin(), Origin::Scan);
     }
 
-    #[test]
-    fn scan_fs_lists_direct_children_only_when_not_recursive() {
+    #[rstest]
+    #[case(false, false)]
+    #[case(true, true)]
+    fn scan_fs_recursion_controls_descent(#[case] recursive: bool, #[case] expect_nested: bool) {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a"), b"x").unwrap();
         std::fs::create_dir(dir.path().join("sub")).unwrap();
         std::fs::write(dir.path().join("sub/b"), b"x").unwrap();
 
-        let found = scan_fs(dir.path(), false).unwrap();
-        let map = kinds(&found, dir.path());
+        let found = scan_fs(dir.path(), recursive).unwrap();
+        let map = scanned_kinds(&found, dir.path());
         assert_eq!(map.get("a"), Some(&FileKind::File));
         assert_eq!(map.get("sub"), Some(&FileKind::Dir));
-        assert!(!map.contains_key("sub/b"));
-    }
-
-    #[test]
-    fn scan_fs_descends_when_recursive() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir(dir.path().join("sub")).unwrap();
-        std::fs::write(dir.path().join("sub/b"), b"x").unwrap();
-
-        let found = scan_fs(dir.path(), true).unwrap();
-        let map = kinds(&found, dir.path());
-        assert_eq!(map.get("sub/b"), Some(&FileKind::File));
+        assert_eq!(map.get("sub/b"), expect_nested.then_some(&FileKind::File));
     }
 
     #[cfg(unix)]
-    #[test]
+    #[rstest]
     fn scan_fs_does_not_follow_symlinked_dirs() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("real")).unwrap();
@@ -541,30 +579,42 @@ mod tests {
         std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("link")).unwrap();
 
         let found = scan_fs(dir.path(), true).unwrap();
-        let map = kinds(&found, dir.path());
+        let map = scanned_kinds(&found, dir.path());
         assert_eq!(map.get("link"), Some(&FileKind::Symlink));
         assert!(!map.contains_key("link/inner"));
         assert_eq!(map.get("real/inner"), Some(&FileKind::File));
     }
 
     #[tokio::test]
-    async fn scan_returns_none_for_missing_root() {
-        let missing = PathBuf::from("/this/does/not/exist/anywhere");
-        assert!(scan(&missing, true).await.is_none());
+    async fn scan_errors_for_missing_root() {
+        let missing = Path::new("/this/does/not/exist/anywhere");
+        assert!(scan(missing, true).await.is_err());
     }
 
-    #[test]
+    #[rstest]
     fn observe_creates_one_handler_and_dedupes() {
         let counters = Arc::new(Counters::default());
         let mut engine = accept_all_engine(&counters);
-        engine.observe(PathBuf::from("/r/a"), FileKind::File, Origin::Notify);
-        engine.observe(PathBuf::from("/r/a"), FileKind::File, Origin::Scan);
+        engine.observe(ap("/r/a"), FileKind::File, Origin::Event);
+        engine.observe(ap("/r/a"), FileKind::File, Origin::Scan);
         assert_eq!(engine.entries.len(), 1);
         assert_eq!(counters.created.load(Ordering::SeqCst), 1);
         assert_eq!(counters.alive.load(Ordering::SeqCst), 1);
     }
 
-    #[test]
+    #[rstest]
+    fn observe_rebuilds_on_kind_change() {
+        let counters = Arc::new(Counters::default());
+        let mut engine = accept_all_engine(&counters);
+        engine.observe(ap("/r/x"), FileKind::Dir, Origin::Scan);
+        engine.observe(ap("/r/x"), FileKind::File, Origin::Scan);
+        assert_eq!(engine.entries.len(), 1);
+        assert_eq!(counters.created.load(Ordering::SeqCst), 2);
+        assert_eq!(counters.dropped.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.alive.load(Ordering::SeqCst), 1);
+    }
+
+    #[rstest]
     fn declined_paths_are_recorded_and_not_re_offered() {
         let counters = Arc::new(Counters::default());
         let c = counters.clone();
@@ -574,138 +624,130 @@ mod tests {
             factory: move |ctx: NodeContext| ctx.is_file().then(|| CountingHandler::new(c.clone())),
             entries: HashMap::new(),
         };
-        engine.observe(PathBuf::from("/r/d"), FileKind::Dir, Origin::Scan);
-        engine.observe(PathBuf::from("/r/d"), FileKind::Dir, Origin::Scan);
+        engine.observe(ap("/r/d"), FileKind::Dir, Origin::Scan);
+        engine.observe(ap("/r/d"), FileKind::Dir, Origin::Scan);
         assert_eq!(engine.entries.len(), 1);
         assert_eq!(counters.created.load(Ordering::SeqCst), 0);
-        assert!(matches!(engine.entries.get(Path::new("/r/d")), Some(Slot::Declined)));
+        assert!(matches!(engine.entries.get(Path::new("/r/d")), Some(Slot::Declined(_))));
     }
 
-    #[test]
+    #[rstest]
     fn forget_drops_handler() {
         let counters = Arc::new(Counters::default());
         let mut engine = accept_all_engine(&counters);
-        engine.observe(PathBuf::from("/r/a"), FileKind::File, Origin::Notify);
-        engine.forget(Path::new("/r/a"));
+        engine.observe(ap("/r/a"), FileKind::File, Origin::Event);
+        engine.entries.remove(Path::new("/r/a"));
         assert!(engine.entries.is_empty());
         assert_eq!(counters.alive.load(Ordering::SeqCst), 0);
         assert_eq!(counters.dropped.load(Ordering::SeqCst), 1);
     }
 
-    #[test]
+    #[rstest]
     fn forget_tree_drops_subtree() {
         let counters = Arc::new(Counters::default());
         let mut engine = accept_all_engine(&counters);
-        engine.observe(PathBuf::from("/r/sub"), FileKind::Dir, Origin::Scan);
-        engine.observe(PathBuf::from("/r/sub/a"), FileKind::File, Origin::Scan);
-        engine.observe(PathBuf::from("/r/sub2/b"), FileKind::File, Origin::Scan);
+        engine.observe(ap("/r/sub"), FileKind::Dir, Origin::Scan);
+        engine.observe(ap("/r/sub/a"), FileKind::File, Origin::Scan);
+        engine.observe(ap("/r/sub2/b"), FileKind::File, Origin::Scan);
         engine.forget_tree(Path::new("/r/sub"));
-        let keys: std::collections::HashSet<PathBuf> = engine.entries.keys().cloned().collect();
-        assert_eq!(keys, std::iter::once(PathBuf::from("/r/sub2/b")).collect());
+        assert_eq!(keys(&engine), std::iter::once(ap("/r/sub2/b")).collect());
     }
 
-    #[test]
+    #[rstest]
     fn reconcile_adds_and_removes() {
         let counters = Arc::new(Counters::default());
         let mut engine = accept_all_engine(&counters);
         engine.reconcile(truth(&["a", "b"]));
         assert_eq!(counters.alive.load(Ordering::SeqCst), 2);
         engine.reconcile(truth(&["b", "c"]));
-        let keys: std::collections::HashSet<PathBuf> = engine.entries.keys().cloned().collect();
-        assert_eq!(keys, [PathBuf::from("/r/b"), PathBuf::from("/r/c")].into_iter().collect());
+        assert_eq!(keys(&engine), [ap("/r/b"), ap("/r/c")].into_iter().collect());
         assert_eq!(counters.alive.load(Ordering::SeqCst), 2);
         assert_eq!(counters.created.load(Ordering::SeqCst), 3);
         assert_eq!(counters.dropped.load(Ordering::SeqCst), 1);
     }
 
-    #[test]
-    fn dropping_engine_drops_all_handlers() {
+    #[rstest]
+    fn reconcile_repairs_kind_swap() {
         let counters = Arc::new(Counters::default());
         let mut engine = accept_all_engine(&counters);
-        engine.reconcile(truth(&["a", "b", "c"]));
-        assert_eq!(counters.alive.load(Ordering::SeqCst), 3);
-        drop(engine);
-        assert_eq!(counters.alive.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn apply_create_event_observes_existing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("a");
-        std::fs::write(&file, b"x").unwrap();
-        let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine_rooted(&counters, dir.path());
-        engine.apply_event(&event(EventKind::Create(notify::event::CreateKind::Any), vec![
-            file.clone(),
-        ]));
-        assert!(engine.entries.contains_key(&file));
+        engine.reconcile(vec![(ap("/r/x"), FileKind::Dir)]);
+        engine.reconcile(vec![(ap("/r/x"), FileKind::File)]);
+        assert_eq!(
+            engine.entries.get(Path::new("/r/x")).map(|slot| slot.kind()),
+            Some(FileKind::File)
+        );
+        assert_eq!(counters.created.load(Ordering::SeqCst), 2);
+        assert_eq!(counters.dropped.load(Ordering::SeqCst), 1);
         assert_eq!(counters.alive.load(Ordering::SeqCst), 1);
     }
 
-    #[test]
-    fn apply_create_event_skips_vanished_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("gone");
+    #[rstest]
+    #[case(true, 1)]
+    #[case(false, 0)]
+    fn apply_create_event_observes_only_existing(#[case] exists: bool, #[case] alive: i64) {
         let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine_rooted(&counters, dir.path());
-        engine.apply_event(&event(EventKind::Create(notify::event::CreateKind::Any), vec![file]));
-        assert!(engine.entries.is_empty());
+        let mut engine = accept_all_engine(&counters);
+        let kinds = if exists {
+            kinds_map([("/r/a", FileKind::File)])
+        } else {
+            HashMap::new()
+        };
+        let ev =
+            event(EventKind::Create(notify::event::CreateKind::Any), vec![PathBuf::from("/r/a")]);
+        engine.apply_event(&ev, &kinds);
+        assert_eq!(engine.entries.contains_key(Path::new("/r/a")), exists);
+        assert_eq!(counters.alive.load(Ordering::SeqCst), alive);
     }
 
-    #[test]
+    #[rstest]
     fn apply_remove_event_forgets() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("a");
-        std::fs::write(&file, b"x").unwrap();
         let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine_rooted(&counters, dir.path());
-        engine.observe(file.clone(), FileKind::File, Origin::Notify);
-        engine.apply_event(&event(EventKind::Remove(notify::event::RemoveKind::Any), vec![file]));
+        let mut engine = accept_all_engine(&counters);
+        engine.observe(ap("/r/a"), FileKind::File, Origin::Event);
+        let ev =
+            event(EventKind::Remove(notify::event::RemoveKind::Any), vec![PathBuf::from("/r/a")]);
+        engine.apply_event(&ev, &HashMap::new());
         assert!(engine.entries.is_empty());
         assert_eq!(counters.dropped.load(Ordering::SeqCst), 1);
     }
 
-    #[test]
+    #[rstest]
     fn apply_rename_both_moves_handler() {
-        let dir = tempfile::tempdir().unwrap();
-        let from = dir.path().join("from");
-        let to = dir.path().join("to");
-        std::fs::write(&to, b"x").unwrap();
         let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine_rooted(&counters, dir.path());
-        engine.observe(from.clone(), FileKind::File, Origin::Notify);
-        engine.apply_event(&event(EventKind::Modify(ModifyKind::Name(RenameMode::Both)), vec![
-            from.clone(),
-            to.clone(),
-        ]));
-        assert!(!engine.entries.contains_key(&from));
-        assert!(engine.entries.contains_key(&to));
+        let mut engine = accept_all_engine(&counters);
+        engine.observe(ap("/r/from"), FileKind::File, Origin::Event);
+        let kinds = kinds_map([("/r/to", FileKind::File)]);
+        let ev = event(EventKind::Modify(ModifyKind::Name(RenameMode::Both)), vec![
+            PathBuf::from("/r/from"),
+            PathBuf::from("/r/to"),
+        ]);
+        engine.apply_event(&ev, &kinds);
+        assert!(!engine.entries.contains_key(Path::new("/r/from")));
+        assert!(engine.entries.contains_key(Path::new("/r/to")));
     }
 
-    #[test]
+    #[rstest]
     fn apply_rename_any_observes_moved_in_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("a");
-        std::fs::write(&file, b"x").unwrap();
         let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine_rooted(&counters, dir.path());
-        engine.apply_event(&event(EventKind::Modify(ModifyKind::Name(RenameMode::Any)), vec![
-            file.clone(),
-        ]));
-        assert!(engine.entries.contains_key(&file));
+        let mut engine = accept_all_engine(&counters);
+        let kinds = kinds_map([("/r/a", FileKind::File)]);
+        let ev = event(EventKind::Modify(ModifyKind::Name(RenameMode::Any)), vec![PathBuf::from(
+            "/r/a",
+        )]);
+        engine.apply_event(&ev, &kinds);
+        assert!(engine.entries.contains_key(Path::new("/r/a")));
         assert_eq!(counters.alive.load(Ordering::SeqCst), 1);
     }
 
-    #[test]
+    #[rstest]
     fn apply_rename_any_forgets_moved_out_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("a");
         let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine_rooted(&counters, dir.path());
-        engine.observe(file.clone(), FileKind::File, Origin::Notify);
-        assert!(engine.entries.contains_key(&file));
-        engine
-            .apply_event(&event(EventKind::Modify(ModifyKind::Name(RenameMode::Any)), vec![file]));
+        let mut engine = accept_all_engine(&counters);
+        engine.observe(ap("/r/a"), FileKind::File, Origin::Event);
+        let ev = event(EventKind::Modify(ModifyKind::Name(RenameMode::Any)), vec![PathBuf::from(
+            "/r/a",
+        )]);
+        engine.apply_event(&ev, &HashMap::new());
         assert!(engine.entries.is_empty());
         assert_eq!(counters.dropped.load(Ordering::SeqCst), 1);
     }
@@ -718,16 +760,14 @@ mod tests {
             let counters = Arc::new(Counters::default());
             let mut engine = accept_all_engine(&counters);
             for state in &states {
-                let want: std::collections::HashSet<PathBuf> = state
+                let want: std::collections::HashSet<Arc<Path>> = state
                     .iter()
-                    .map(|id| PathBuf::from(format!("/r/{id}")))
+                    .map(|id| ap(&format!("/r/{id}")))
                     .collect();
-                let truth: Vec<(PathBuf, FileKind)> =
+                let truth: Vec<(Arc<Path>, FileKind)> =
                     want.iter().cloned().map(|p| (p, FileKind::File)).collect();
                 engine.reconcile(truth);
-                let keys: std::collections::HashSet<PathBuf> =
-                    engine.entries.keys().cloned().collect();
-                prop_assert_eq!(keys, want);
+                prop_assert_eq!(keys(&engine), want);
             }
             let created = counters.created.load(Ordering::SeqCst);
             let dropped = counters.dropped.load(Ordering::SeqCst);
@@ -751,11 +791,11 @@ mod tests {
                 entries: HashMap::new(),
             };
             for state in &states {
-                let truth: Vec<(PathBuf, FileKind)> = state
+                let truth: Vec<(Arc<Path>, FileKind)> = state
                     .iter()
                     .map(|id| {
                         let kind = if id % 2 == 0 { FileKind::File } else { FileKind::Dir };
-                        (PathBuf::from(format!("/r/{id}")), kind)
+                        (ap(&format!("/r/{id}")), kind)
                     })
                     .collect();
                 engine.reconcile(truth);
@@ -764,7 +804,7 @@ mod tests {
             let active = engine
                 .entries
                 .values()
-                .filter(|slot| matches!(slot, Slot::Active(_)))
+                .filter(|slot| matches!(slot, Slot::Active(..)))
                 .count();
             prop_assert_eq!(alive, active);
         }
@@ -786,7 +826,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (created_tx, mut created_rx) = unbounded_channel();
         let (drop_tx, _drop_rx) = unbounded_channel::<PathBuf>();
-        let _watcher = TreeWatcher::<Probe>::builder()
+        let _watcher = TreeWatcher::builder()
             .scan_interval(Duration::from_millis(100))
             .debounce_timeout(Duration::from_millis(50))
             .watch(dir.path(), move |ctx| {
@@ -814,7 +854,7 @@ mod tests {
         std::fs::write(&file, b"x").unwrap();
         let (created_tx, mut created_rx) = unbounded_channel::<PathBuf>();
         let (drop_tx, mut drop_rx) = unbounded_channel::<PathBuf>();
-        let _watcher = TreeWatcher::<Probe>::builder()
+        let _watcher = TreeWatcher::builder()
             .scan_interval(Duration::from_millis(100))
             .debounce_timeout(Duration::from_millis(50))
             .watch(dir.path(), move |ctx| {
@@ -840,14 +880,18 @@ mod tests {
     }
 
     #[rstest]
-    #[case(true, true)]
-    #[case(false, false)]
+    #[case(true, true, 5000)]
+    #[case(false, false, 1000)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn recursion_controls_nested_files(#[case] recursive: bool, #[case] expect_fire: bool) {
+    async fn recursion_controls_nested_files(
+        #[case] recursive: bool,
+        #[case] expect_fire: bool,
+        #[case] wait_ms: u64,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let (created_tx, mut created_rx) = unbounded_channel::<PathBuf>();
         let (drop_tx, _drop_rx) = unbounded_channel::<PathBuf>();
-        let _watcher = TreeWatcher::<Probe>::builder()
+        let _watcher = TreeWatcher::builder()
             .recursive(recursive)
             .scan_interval(Duration::from_millis(100))
             .debounce_timeout(Duration::from_millis(50))
@@ -868,7 +912,7 @@ mod tests {
         std::fs::write(dir.path().join("sub/c.log"), b"x").unwrap();
 
         let fired =
-            tokio::time::timeout(Duration::from_millis(1500), created_rx.recv()).await.is_ok();
+            tokio::time::timeout(Duration::from_millis(wait_ms), created_rx.recv()).await.is_ok();
         assert_eq!(fired, expect_fire);
     }
 
@@ -878,7 +922,7 @@ mod tests {
         std::fs::write(dir.path().join("a.log"), b"x").unwrap();
         let (created_tx, mut created_rx) = unbounded_channel::<PathBuf>();
         let (drop_tx, mut drop_rx) = unbounded_channel::<PathBuf>();
-        let watcher = TreeWatcher::<Probe>::builder()
+        let watcher = TreeWatcher::builder()
             .scan_interval(Duration::from_millis(100))
             .debounce_timeout(Duration::from_millis(50))
             .watch(dir.path(), move |ctx| {

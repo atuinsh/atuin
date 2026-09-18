@@ -1,4 +1,3 @@
-#[cfg(feature = "fs-watch")]
 pub mod tree_watcher;
 
 use std::path::{Path, PathBuf};

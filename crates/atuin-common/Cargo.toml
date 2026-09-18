@@ -15,7 +15,6 @@ version.workspace = true
 ai = []
 ansi = ["dep:atuin-vt100", "dep:memchr"]
 db = ["dep:sqlx"]
-fs-watch = ["dep:notify", "dep:notify-debouncer-full"]
 os = ["dep:rustix", "dep:windows-sys"]
 proto = ["dep:prost"]
 sqlite = ["db", "sqlx/sqlite", "sqlx/regexp", "dep:libsqlite3-sys", "dep:tokio-util"]
@@ -40,8 +39,8 @@ humantime = { workspace = true }
 itertools = { workspace = true }
 libsqlite3-sys = { workspace = true, optional = true }
 memchr = { workspace = true, optional = true }
-notify = { workspace = true, optional = true }
-notify-debouncer-full = { workspace = true, optional = true }
+notify = { workspace = true }
+notify-debouncer-full = { workspace = true }
 num-traits = { workspace = true }
 parking_lot = { workspace = true }
 prost = { workspace = true, optional = true }
