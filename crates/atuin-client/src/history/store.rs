@@ -170,35 +170,42 @@ impl HistoryStore {
         }
     }
 
+    /// Append `records` to this host's history series as one batch and return their record ids,
+    /// in order. Indices are claimed optimistically like [`Self::push_record`]: the batch is
+    /// stamped from the current tail, and if another writer took a slot in the meantime it is
+    /// re-stamped from the new tail and retried.
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id, count = records.len()), err)]
+    async fn push_records(&self, records: &[HistoryRecord]) -> Result<Vec<RecordId>> {
+        let series = RecordSeriesKey::new(self.host_id, RecordTag::History);
+        let payloads = records.iter().map(HistoryRecord::serialize).collect::<Result<Vec<_>>>()?;
+
+        loop {
+            let idx = self.store.last(&series).await?.map_or(0, |p| p.idx + 1);
+
+            let encrypted: Vec<_> = payloads
+                .iter()
+                .enumerate()
+                .map(|(n, bytes)| {
+                    Record::builder()
+                        .host(Host::new(self.host_id))
+                        .version(RecordVersion::from(Version::LATEST.name()))
+                        .tag(RecordTag::History)
+                        .idx(idx + u64::conv(n))
+                        .data(bytes.clone())
+                        .build()
+                        .encrypt(&self.encryption_key)
+                })
+                .collect();
+
+            if self.store.push_batch_unique(encrypted.iter()).await? {
+                return Ok(encrypted.into_iter().map(|r| r.id).collect());
+            }
+        }
+    }
+
     #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     async fn push_batch(&self, records: impl Iterator<Item = HistoryRecord>) -> Result<()> {
-        let mut ret = Vec::new();
-
-        let idx = self
-            .store
-            .last(&RecordSeriesKey::new(self.host_id, RecordTag::History))
-            .await?
-            .map_or(0, |p| p.idx + 1);
-
-        // Could probably _also_ do this as an iterator, but let's see how this is for now.
-        // optimizing for minimal sqlite transactions, this code can be optimised later
-        for (n, record) in records.enumerate() {
-            let bytes = record.serialize()?;
-
-            let record = Record::builder()
-                .host(Host::new(self.host_id))
-                .version(RecordVersion::from(Version::LATEST.name()))
-                .tag(RecordTag::History)
-                .idx(idx + u64::conv(n))
-                .data(bytes)
-                .build();
-
-            let record = record.encrypt(&self.encryption_key);
-
-            ret.push(record);
-        }
-
-        self.store.push_batch(ret.iter()).await?;
+        self.push_records(&records.collect::<Vec<_>>()).await?;
 
         Ok(())
     }
@@ -210,19 +217,28 @@ impl HistoryStore {
         self.push_record(record).await
     }
 
-    /// Delete a batch of history entries via the record store.
+    /// Delete a batch of history entries via the record store, atomically.
     /// Returns the record IDs so the caller can run incremental_build when ready.
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
+    pub async fn delete_batch(
+        &self,
+        ids: impl IntoIterator<Item = HistoryId>,
+    ) -> Result<Vec<RecordId>> {
+        let records: Vec<_> = ids.into_iter().map(HistoryRecord::Delete).collect();
+        if records.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        self.push_records(&records).await
+    }
+
+    /// [`Self::delete_batch`] for whole entries.
     #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     pub async fn delete_entries(
         &self,
         entries: impl IntoIterator<Item = History>,
     ) -> Result<Vec<RecordId>> {
-        let mut record_ids = Vec::new();
-        for entry in entries {
-            let (id, _) = self.delete(entry.id).await?;
-            record_ids.push(id);
-        }
-        Ok(record_ids)
+        self.delete_batch(entries.into_iter().map(|entry| entry.id)).await
     }
 
     #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
@@ -480,7 +496,7 @@ impl HistoryStore {
 #[cfg(test)]
 mod tests {
     use atuin_domain::record::{
-        CmdOrigin, DecryptedData, Host, HostId, Record, RecordTag, RecordVersion,
+        CmdOrigin, DecryptedData, Host, HostId, Record, RecordSeriesKey, RecordTag, RecordVersion,
     };
     use easy_cast::Conv;
     use futures::TryStreamExt;
@@ -821,5 +837,47 @@ mod tests {
 
         assert!(db.load(deleted_id).await.unwrap().is_none());
         assert!(db.load(kept.id).await.unwrap().is_some());
+    }
+
+    /// A batch delete appends one tombstone per id, in order, on consecutive indices, and
+    /// applying them empties the db of exactly those rows.
+    #[rstest]
+    #[tokio::test]
+    async fn delete_batch_appends_ordered_tombstones(
+        #[future(awt)]
+        #[from(stores)]
+        parts: (SqliteStore, HostId, HistoryStore),
+    ) {
+        let (store, host_id, history_store) = parts;
+        let db = memory_db().await;
+
+        let histories: Vec<_> = (0..3).map(history_n).collect();
+        let mut created = Vec::new();
+        for h in &histories {
+            created.push(history_store.push(h.clone()).await.unwrap().0);
+        }
+        history_store.build_all(&db, &created).await.unwrap();
+
+        let doomed = [histories[0].id, histories[2].id];
+        let tombstones = history_store.delete_batch(doomed).await.unwrap();
+        assert_eq!(tombstones.len(), 2);
+
+        let series = RecordSeriesKey::new(host_id, RecordTag::History);
+        assert_eq!(store.last(&series).await.unwrap().unwrap().idx, 4);
+        for (record_id, id) in tombstones.iter().zip(doomed) {
+            let record = store.get(*record_id).await.unwrap();
+            let decoded = HistoryRecord::deserialize(
+                &record.decrypt(&[0u8; 32].into()).unwrap().data,
+                record.version.as_str(),
+            )
+            .unwrap();
+            assert_eq!(decoded, HistoryRecord::Delete(id));
+        }
+
+        history_store.build_all(&db, &tombstones).await.unwrap();
+        assert!(db.load(histories[0].id).await.unwrap().is_none());
+        assert!(db.load(histories[1].id).await.unwrap().is_some());
+        assert!(db.load(histories[2].id).await.unwrap().is_none());
+        assert!(history_store.delete_batch([]).await.unwrap().is_empty());
     }
 }
