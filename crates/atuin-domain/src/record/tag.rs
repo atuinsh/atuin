@@ -24,10 +24,10 @@ pub enum RecordTag {
     DotfilesVar,
     #[strum(serialize = "config-shell-alias")]
     ConfigShellAlias,
-    #[strum(serialize = "ai-session")]
-    AiSession,
     #[strum(serialize = "packfile")]
     Packfile,
+    #[strum(serialize = "ai-session")]
+    AiSession,
     /// Legacy code supported arbitrary types, so we need to support this.
     #[strum(default, transparent)]
     Other(String),
@@ -65,9 +65,9 @@ impl RecordTag {
             Self::Script => 2,
             Self::DotfilesVar => 3,
             Self::ConfigShellAlias => 4,
-            Self::AiSession => 5,
-            Self::Packfile => 6,
-            Self::Other(_) => 7,
+            Self::Packfile => 5,
+            Self::Other(_) => 6,
+            Self::AiSession => 7,
         }
     }
 }
