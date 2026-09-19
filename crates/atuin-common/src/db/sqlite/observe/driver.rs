@@ -110,7 +110,7 @@ fn is_transient(e: &sqlx::Error) -> bool {
     matches!(e, sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut)
         || e.as_database_error().is_some_and(|db| {
             db.code().is_some_and(|code| {
-                matches!(code.as_ref(), "5" | "6" | "261" | "262" | "263" | "264" | "265" | "266" | "267")
+                matches!(code.as_ref(), "5" | "6" | "261" | "262" | "517" | "518" | "773")
             })
         })
 }
