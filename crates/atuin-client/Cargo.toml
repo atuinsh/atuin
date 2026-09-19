@@ -23,7 +23,7 @@ check-update = []
 vendored-tls = ["reqwest?/native-tls-vendored"]
 
 [dependencies]
-atuin-common = { workspace = true, features = ["os", "sqlite"] }
+atuin-common = { workspace = true, features = ["ai", "os", "sqlite"] }
 atuin-domain = { workspace = true }
 atuin-vt100 = { workspace = true }
 

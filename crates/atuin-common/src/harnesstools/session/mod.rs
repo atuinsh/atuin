@@ -5,8 +5,8 @@ use enum_dispatch::enum_dispatch;
 pub use error::{CaptureError, MessageError, RuntimeError, WatchError};
 use futures::{Stream, StreamExt};
 pub use model::{
-    Content, MessageId, Role, SessionEvent, SessionEventKind, SessionId, ToolCallId, ToolResult,
-    ToolUse,
+    Content, MessageId, Role, SessionEvent, SessionEventKind, SessionId, StopReason, ToolCallId,
+    ToolResult, ToolUse, Usage,
 };
 use time::OffsetDateTime;
 
@@ -16,6 +16,21 @@ pub trait Message: Send + 'static {
     fn role(&self) -> Role;
     fn timestamp(&self) -> Option<OffsetDateTime>;
     fn content(&self) -> Vec<Content>;
+    fn model(&self) -> Option<String> {
+        None
+    }
+    fn usage(&self) -> Option<Usage> {
+        None
+    }
+    fn stop_reason(&self) -> Option<StopReason> {
+        None
+    }
+    fn cwd(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+    fn git_branch(&self) -> Option<String> {
+        None
+    }
 }
 
 pub trait Session: Send + 'static {

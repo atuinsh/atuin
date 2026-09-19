@@ -15,6 +15,7 @@ use crate::grpc::ai_session::pb::{
     SearchSessionsRequest, SessionRefRequest, TailSessionsEvent, TailSessionsRequest,
     get_session_event, tail_sessions_event,
 };
+use crate::grpc::common::pb as common;
 use crate::grpc::common::pb::Lagged;
 use crate::session_capture::{AiHarnessSessionCapture, SessionTailEvent};
 
@@ -43,7 +44,7 @@ impl GrpcService for Service {
         &self,
         request: Request<ListSessionsRequest>,
     ) -> Result<Response<ListSessionsResponse>, Status> {
-        let harness = request.into_inner().harness()?;
+        let harness = HarnessFilterRequest::harness(&request.into_inner())?;
 
         let sessions = self
             .capture
@@ -112,7 +113,7 @@ impl GrpcService for Service {
         &self,
         request: Request<TailSessionsRequest>,
     ) -> Result<Response<Self::TailSessionsStream>, Status> {
-        let harness = request.into_inner().harness()?;
+        let harness = HarnessFilterRequest::harness(&request.into_inner())?;
 
         let stream = self
             .capture
@@ -179,15 +180,14 @@ mod tests {
         let cap = Arc::new(AiHarnessSessionCapture::nop().await);
         let svc = Service::new(cap);
 
-        let err = svc
+        let result = svc
             .search_sessions(Request::new(SearchSessionsRequest {
                 query: "x".to_owned(),
                 limit: 0,
                 harness: None,
             }))
-            .await
-            .unwrap_err();
+            .await;
 
-        assert_eq!(err.code(), tonic::Code::Unimplemented);
+        assert!(matches!(result, Err(ref e) if e.code() == tonic::Code::Unimplemented));
     }
 }

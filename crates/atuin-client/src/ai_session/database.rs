@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use atuin_common::db::sqlite::{Sqlite, SqliteOpenOrCreateError};
 use atuin_common::db::{self};
-use atuin_common::harnesstools::session::{Content, ReadFrom, Role, Usage};
+use atuin_common::harnesstools::session::{Content, Role, Usage};
 use atuin_domain::record::RecordId;
 use futures::{Stream, StreamExt, TryStreamExt};
 use time::OffsetDateTime;
@@ -289,44 +289,6 @@ impl AiSessionDatabase {
         self.messages(session).map(|result| result.map(|msg| Self::render_transcript_chunk(&msg)))
     }
 
-    pub async fn checkpoint(
-        &self,
-        harness: HarnessKind,
-        session: &NativeSessionId,
-    ) -> Result<ReadFrom, DbError> {
-        let offset: Option<i64> = db::query_scalar(
-            "SELECT \"offset\" FROM checkpoints WHERE harness = ? AND session_id = ?",
-        )
-        .bind(harness as i64)
-        .bind(session.as_ref())
-        .fetch_optional(self.db.pool())
-        .await?;
-
-        Ok(match offset {
-            Some(offset) => ReadFrom::Offset(u64::try_from(offset).unwrap_or(0)),
-            None => ReadFrom::Beginning,
-        })
-    }
-
-    pub async fn set_checkpoint(
-        &self,
-        harness: HarnessKind,
-        session: &NativeSessionId,
-        offset: u64,
-    ) -> Result<(), DbError> {
-        db::query(
-            "INSERT INTO checkpoints (harness, session_id, \"offset\") VALUES (?, ?, ?) ON \
-             CONFLICT(harness, session_id) DO UPDATE SET \"offset\" = excluded.\"offset\"",
-        )
-        .bind(harness as i64)
-        .bind(session.as_ref())
-        .bind(i64::try_from(offset).unwrap_or(i64::MAX))
-        .execute(self.db.pool())
-        .await?;
-
-        Ok(())
-    }
-
     fn split_content(&self, json: String) -> Result<(String, Option<Vec<u8>>), DbError> {
         if json.len() < COMPRESS_THRESHOLD {
             return Ok((json, None));
@@ -493,7 +455,7 @@ impl AiSessionDatabase {
 
 #[cfg(test)]
 mod tests {
-    use atuin_common::harnesstools::session::{Content, ReadFrom, Role};
+    use atuin_common::harnesstools::session::{Content, Role};
     use atuin_domain::record::RecordId;
     use futures::TryStreamExt;
     use rstest::rstest;
@@ -607,15 +569,5 @@ mod tests {
             _ => panic!("expected Content::Text"),
         };
         assert_eq!(text, long_text);
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn checkpoint_roundtrips() {
-        let db = AiSessionDatabase::in_memory().await.unwrap();
-        let (h, sid) = (HarnessKind::Codex, NativeSessionId::from("t".to_string()));
-        assert!(matches!(db.checkpoint(h, &sid).await.unwrap(), ReadFrom::Beginning));
-        db.set_checkpoint(h, &sid, 42).await.unwrap();
-        assert!(matches!(db.checkpoint(h, &sid).await.unwrap(), ReadFrom::Offset(42)));
     }
 }

@@ -1,15 +1,16 @@
 use derive_more::{AsRef, Display, From, Into};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Display, From, Into, AsRef)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Display, From, Into, AsRef, Serialize, Deserialize)]
 pub struct SessionId(#[as_ref(str)] String);
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Display, From, Into, AsRef)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Display, From, Into, AsRef, Serialize, Deserialize)]
 pub struct MessageId(#[as_ref(str)] String);
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Display, From, Into, AsRef)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Display, From, Into, AsRef, Serialize, Deserialize)]
 pub struct ToolCallId(#[as_ref(str)] String);
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Role {
     User,
     Assistant,
@@ -18,7 +19,7 @@ pub enum Role {
     Other(String),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Content {
     Text(String),
     Reasoning(String),
@@ -27,18 +28,37 @@ pub enum Content {
     Other(serde_json::Value),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolUse {
     pub id: ToolCallId,
     pub name: String,
     pub input: serde_json::Value,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolResult {
     pub call: ToolCallId,
     pub output: serde_json::Value,
     pub error: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Usage {
+    pub input: Option<u64>,
+    pub output: Option<u64>,
+    pub cache_read: Option<u64>,
+    pub cache_write: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StopReason {
+    EndTurn,
+    MaxTokens,
+    ToolUse,
+    StopSequence,
+    Refusal,
+    Aborted,
+    Other(String),
 }
 
 #[derive(Clone, Debug)]

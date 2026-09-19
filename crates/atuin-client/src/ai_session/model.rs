@@ -1,8 +1,7 @@
 use std::path::PathBuf;
 
-use atuin_common::harnesstools::session::{
-    Content, HarnessKind as HHarness, Role, StopReason, Usage,
-};
+use atuin_common::harnesstools::AnyHarness;
+use atuin_common::harnesstools::session::{Content, Role, StopReason, Usage};
 use atuin_domain::record::RecordId;
 use derive_more::{AsRef, Display, From, Into};
 use serde::{Deserialize, Serialize};
@@ -20,13 +19,13 @@ pub enum HarnessKind {
     Pi = 5,
 }
 
-impl From<HHarness> for HarnessKind {
-    fn from(value: HHarness) -> Self {
+impl From<&AnyHarness> for HarnessKind {
+    fn from(value: &AnyHarness) -> Self {
         match value {
-            HHarness::ClaudeCode => Self::ClaudeCode,
-            HHarness::Codex => Self::Codex,
-            HHarness::Opencode => Self::Opencode,
-            HHarness::Pi => Self::Pi,
+            AnyHarness::ClaudeCode(_) => Self::ClaudeCode,
+            AnyHarness::Codex(_) => Self::Codex,
+            AnyHarness::Opencode(_) => Self::Opencode,
+            AnyHarness::Pi(_) => Self::Pi,
         }
     }
 }
@@ -123,12 +122,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case(HHarness::ClaudeCode, HarnessKind::ClaudeCode)]
-    #[case(HHarness::Codex, HarnessKind::Codex)]
-    #[case(HHarness::Opencode, HarnessKind::Opencode)]
-    #[case(HHarness::Pi, HarnessKind::Pi)]
-    fn harness_kind_from_harnesstools_is_total(#[case] from: HHarness, #[case] want: HarnessKind) {
-        assert_eq!(HarnessKind::from(from), want);
+    fn harness_kind_covers_every_known_harness() {
+        for harness in AnyHarness::all() {
+            assert_ne!(HarnessKind::from(harness), HarnessKind::Unknown);
+        }
     }
 
     proptest! {

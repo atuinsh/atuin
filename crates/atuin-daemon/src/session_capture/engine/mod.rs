@@ -1,12 +1,13 @@
-mod actor;
-mod listener;
-
 use std::sync::Arc;
 
-use atuin_client::ai_session::HarnessKind;
+use atuin_client::ai_session::{HarnessKind, HarnessSession, Message, NativeSessionId, SourceId};
 use atuin_common::harnesstools::AnyHarness;
-use atuin_common::harnesstools::session::{Listener, Observable, Sessions};
-use listener::HarnessListener;
+use atuin_common::harnesstools::session::{
+    AnyMessage, Message as HarnessMessage, SessionEvent, SessionEventKind, SessionId,
+};
+use atuin_domain::record::RecordId;
+use futures::StreamExt;
+use time::OffsetDateTime;
 use tokio::task::JoinHandle;
 
 use super::Sink;
@@ -16,7 +17,7 @@ pub(crate) struct SessionCaptureEngine {
 }
 
 impl SessionCaptureEngine {
-    pub(crate) fn detached() -> Self {
+    pub(crate) fn nop() -> Self {
         Self {
             _listeners: Vec::new(),
         }
@@ -26,7 +27,31 @@ impl SessionCaptureEngine {
         let mut listeners = Vec::new();
 
         for harness in AnyHarness::all() {
-            Self::spawn_listener(*harness, &sink, &mut listeners);
+            let Some(sessions) = harness.sessions() else {
+                continue;
+            };
+            let Ok(listener) = sessions.listener() else {
+                continue;
+            };
+            let kind = HarnessKind::from(harness);
+            let sink = sink.clone();
+
+            listeners.push(tokio::spawn(async move {
+                let mut events = listener.events();
+                while let Some(ev) = events.next().await {
+                    match ev {
+                        Ok(SessionEvent {
+                            session,
+                            kind: SessionEventKind::Message(m),
+                        }) => {
+                            let msg = Self::enrich(kind, &session, m);
+                            let _ = sink.append(msg).await;
+                        }
+                        Ok(_started) => {}
+                        Err(e) => tracing::warn!(?e, "capture error"),
+                    }
+                }
+            }));
         }
 
         Self {
@@ -34,20 +59,27 @@ impl SessionCaptureEngine {
         }
     }
 
-    fn spawn_listener<O>(harness: O, sink: &Arc<Sink>, listeners: &mut Vec<JoinHandle<()>>)
-    where
-        O: Observable,
-    {
-        let Some(sessions) = harness.sessions() else {
-            return;
-        };
-        let Ok(listener) = sessions.listener() else {
-            return;
-        };
-
-        let watch = listener.watch();
-        let listener = HarnessListener::new(HarnessKind::from(harness.kind()), sink.clone(), watch);
-        listeners.push(tokio::spawn(listener.run()));
+    fn enrich(kind: HarnessKind, session: &SessionId, m: AnyMessage) -> Message {
+        Message::builder()
+            .id(RecordId(atuin_common::utils::uuid_v7()))
+            .session(HarnessSession {
+                harness: kind,
+                session: NativeSessionId::from(session.to_string()),
+            })
+            .source_id(
+                m.id()
+                    .map(|id| SourceId::from(String::from(id)))
+                    .unwrap_or_else(|| SourceId::from(atuin_common::utils::uuid_v7().to_string())),
+            )
+            .timestamp(m.timestamp().unwrap_or_else(OffsetDateTime::now_utc))
+            .role(m.role())
+            .content(m.content())
+            .model(m.model())
+            .usage(m.usage())
+            .stop_reason(m.stop_reason())
+            .cwd(m.cwd())
+            .git_branch(m.git_branch())
+            .build()
     }
 }
 

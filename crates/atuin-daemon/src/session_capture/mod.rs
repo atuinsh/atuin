@@ -109,7 +109,7 @@ impl AiHarnessSessionCapture {
 
         Self {
             sink: Arc::new(Sink::new(records, sidecar)),
-            _engine: SessionCaptureEngine::detached(),
+            _engine: SessionCaptureEngine::nop(),
         }
     }
 

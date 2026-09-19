@@ -95,31 +95,27 @@ impl From<Usage> for pb::Tokens {
     }
 }
 
-impl From<Content> for Option<pb::ContentBlock> {
+impl From<Content> for pb::ContentBlock {
     fn from(value: Content) -> Self {
         use pb::content_block::Block;
 
         let block = match value {
             Content::Text(text) => Block::Text(text),
             Content::Reasoning(text) => Block::Thinking(text),
-            Content::ToolUse { id, name, input } => Block::ToolCall(pb::ToolCall {
-                id: id.into(),
-                name,
-                input: serde_json::to_string(&input).unwrap_or_default(),
+            Content::ToolUse(tu) => Block::ToolCall(pb::ToolCall {
+                id: tu.id.into(),
+                name: tu.name,
+                input: serde_json::to_string(&tu.input).unwrap_or_default(),
             }),
-            Content::ToolResult {
-                call,
-                output,
-                error,
-            } => Block::ToolResult(pb::ToolResult {
-                tool_use_id: call.into(),
-                content: serde_json::to_string(&output).unwrap_or_default(),
-                is_error: error,
+            Content::ToolResult(tr) => Block::ToolResult(pb::ToolResult {
+                tool_use_id: tr.call.into(),
+                content: serde_json::to_string(&tr.output).unwrap_or_default(),
+                is_error: tr.error,
             }),
-            Content::Other(_) => return None,
+            Content::Other(v) => Block::Text(v.to_string()),
         };
 
-        Some(pb::ContentBlock { block: Some(block) })
+        Self { block: Some(block) }
     }
 }
 
@@ -140,11 +136,7 @@ impl From<Message> for pb::Message {
                 nanos: value.timestamp.nanosecond() as i32,
             }),
             role: pb::Role::from(value.role) as i32,
-            content: value
-                .content
-                .into_iter()
-                .filter_map(Option::<pb::ContentBlock>::from)
-                .collect(),
+            content: value.content.into_iter().map(pb::ContentBlock::from).collect(),
             cwd: value.cwd.map(|path| path.to_string_lossy().into_owned()),
             git_branch: value.git_branch,
             model: value.model,
