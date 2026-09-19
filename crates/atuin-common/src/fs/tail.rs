@@ -223,7 +223,11 @@ enum Event {
     Reset,
     /// The path was rotated to a new file; flush the old file's buffered partial line first.
     Rotated,
-    Error(io::Error),
+    /// A read or stat error at byte `offset`: the position the follower had reached when it failed.
+    Error {
+        error: io::Error,
+        offset: u64,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -370,7 +374,7 @@ where
             ReadMode::Follow(Start::End) => match src.size().await {
                 Ok(size) => size,
                 Err(e) => {
-                    yield Event::Error(e);
+                    yield Event::Error { error: e, offset: 0 };
                     return;
                 }
             },
@@ -395,7 +399,7 @@ where
                         yield Event::Data { bytes: chunk, offset };
                     }
                     Err(e) => {
-                        yield Event::Error(e);
+                        yield Event::Error { error: e, offset };
                         if !follow {
                             return;
                         }
@@ -431,7 +435,9 @@ where
                             break None;
                         }
                     }
-                    Err(_) => {}
+                    // A transient stat failure surfaces as an error and is retried on the next
+                    // poll; swallowing it would let a persistent stat error spin silently forever.
+                    Err(e) => yield Event::Error { error: e, offset },
                 }
 
                 if cfg.rotation == Rotation::Name {
@@ -452,13 +458,13 @@ where
                                     yield Event::Data { bytes: chunk, offset };
                                 }
                                 Err(e) => {
-                                    yield Event::Error(e);
+                                    yield Event::Error { error: e, offset };
                                     break;
                                 }
                             }
                         }
                         if let Err(e) = src.reopen().await {
-                            yield Event::Error(e);
+                            yield Event::Error { error: e, offset };
                             waiter.wait().await;
                             continue;
                         }
@@ -536,7 +542,7 @@ impl Tail {
                         tokio::time::sleep(schedule.next_delay()).await;
                     }
                     Err(e) => {
-                        yield Event::Error(e);
+                        yield Event::Error { error: e, offset: 0 };
                         return;
                     }
                 }
@@ -557,7 +563,7 @@ impl Tail {
             while let Some(event) = events.next().await {
                 match event {
                     Event::Data { bytes, .. } => yield Ok(bytes),
-                    Event::Error(e) => yield Err(e),
+                    Event::Error { error, .. } => yield Err(error),
                     Event::Reset | Event::Rotated => {}
                 }
             }
@@ -619,9 +625,15 @@ impl Tail {
                         epoch += 1;
                         epoch_start = None;
                     }
-                    Event::Error(e) => {
-                        let offset = epoch_start.unwrap_or(0) + acc.consumed();
-                        yield Positioned { offset, epoch, terminated: false, value: Err(e) };
+                    Event::Error { error, offset: at } => {
+                        // Once data has arrived this epoch, the last complete-line boundary is the
+                        // safe resume point. Before any data, `at` is the epoch's start offset --
+                        // non-zero for a Start::Offset / Start::End follow -- not 0.
+                        let offset = match epoch_start {
+                            Some(start) => start + acc.consumed(),
+                            None => at,
+                        };
+                        yield Positioned { offset, epoch, terminated: false, value: Err(error) };
                     }
                 }
             }
@@ -655,7 +667,7 @@ fn line_bytes_stream(
                     acc.reset();
                 }
                 Event::Reset => acc.reset(),
-                Event::Error(e) => yield Err(e),
+                Event::Error { error, .. } => yield Err(error),
             }
         }
         if let Some(line) = acc.finish() {
@@ -1021,6 +1033,7 @@ mod tests {
         read: Arc<AtomicUsize>,
         reopen: Arc<AtomicUsize>,
         identity: Arc<AtomicUsize>,
+        size: Arc<AtomicUsize>,
     }
 
     impl Faults {
@@ -1045,6 +1058,9 @@ mod tests {
         }
 
         async fn size(&mut self) -> io::Result<u64> {
+            if Faults::take(&self.faults.size) {
+                return Err(io::Error::other("injected size fault"));
+            }
             self.inner.size().await
         }
 
@@ -1140,7 +1156,7 @@ mod tests {
     }
 
     fn errors(events: &[Event]) -> usize {
-        events.iter().filter(|event| matches!(event, Event::Error(_))).count()
+        events.iter().filter(|event| matches!(event, Event::Error { .. })).count()
     }
 
     fn follow_faulty(
@@ -1235,6 +1251,28 @@ mod tests {
         // After the backoff wait, the retry reads the data that was there all along.
         tx.unbounded_send(()).unwrap();
         assert_eq!(data_of(&drain(&mut stream)), b"data\n");
+    }
+
+    #[rstest]
+    fn a_transient_size_error_surfaces_then_recovery_continues() {
+        let (tx, rx) = mpsc::unbounded();
+        let (handle, mem) = MemHandle::new(b"data\n");
+        let faults = Faults::default();
+        faults.size.store(1, Ordering::SeqCst);
+        let mut stream = follow_faulty(FaultySource { inner: mem, faults }, rx, Rotation::Fd);
+
+        // The initial content reads fine, but the first size() poll fails: the error is surfaced
+        // rather than swallowed into a silent spin.
+        let first = drain(&mut stream);
+        assert_eq!(data_of(&first), b"data\n");
+        assert_eq!(errors(&first), 1);
+
+        // After the backoff wait the poll's size() succeeds again and appended data flows.
+        handle.append(b"more\n");
+        tx.unbounded_send(()).unwrap();
+        let next = drain(&mut stream);
+        assert_eq!(data_of(&next), b"more\n");
+        assert_eq!(errors(&next), 0);
     }
 
     #[rstest]

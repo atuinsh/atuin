@@ -33,16 +33,20 @@ where
                 line_no = 0;
                 epoch = Some(line_epoch);
             }
-            line_no += 1;
+            // Only a real line advances the physical line counter. An I/O-error item is not a
+            // line, so counting it would inflate the `line` of every later parse error in the epoch.
             match value {
-                Ok(bytes) if blank(&bytes) => {}
-                Ok(bytes) => yield Positioned {
-                    offset,
-                    epoch: line_epoch,
-                    terminated,
-                    value: serde_json::from_slice::<T>(&bytes)
-                        .map_err(|source| JsonlError::Parse { source, line: line_no }),
-                },
+                Ok(bytes) if blank(&bytes) => line_no += 1,
+                Ok(bytes) => {
+                    line_no += 1;
+                    yield Positioned {
+                        offset,
+                        epoch: line_epoch,
+                        terminated,
+                        value: serde_json::from_slice::<T>(&bytes)
+                            .map_err(|source| JsonlError::Parse { source, line: line_no }),
+                    };
+                }
                 Err(e) => {
                     yield Positioned { offset, epoch: line_epoch, terminated, value: Err(JsonlError::Io(e)) }
                 }
@@ -56,13 +60,7 @@ pub fn from_tail<T>(tail: Tail) -> impl Stream<Item = Result<T, JsonlError>> + S
 where
     T: DeserializeOwned + Send + 'static,
 {
-    let values = parse_positioned::<T>(tail.lines_positioned());
-    async_stream::stream! {
-        futures::pin_mut!(values);
-        while let Some(item) = values.next().await {
-            yield item.value;
-        }
-    }
+    parse_positioned::<T>(tail.lines_positioned()).map(|positioned| positioned.value)
 }
 
 /// [`from_tail`] with default options for the file at `path` (follows by default, so it does not
@@ -182,6 +180,39 @@ mod tests {
         assert_eq!(out[2].epoch, 1);
         // The malformed line is line 1 of the new epoch, not the cumulative line 3.
         assert!(matches!(out[2].value, Err(JsonlError::Parse { line: 1, .. })));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn an_io_error_does_not_advance_the_parse_line_number() {
+        // A transient I/O error is not a physical line: the malformed line after it is still line
+        // 2, not line 3.
+        let lines = futures::stream::iter(vec![
+            Positioned {
+                offset: 2,
+                epoch: 0,
+                terminated: true,
+                value: Ok(Bytes::from_static(b"1")),
+            },
+            Positioned {
+                offset: 2,
+                epoch: 0,
+                terminated: false,
+                value: Err(std::io::Error::other("transient")),
+            },
+            Positioned {
+                offset: 7,
+                epoch: 0,
+                terminated: true,
+                value: Ok(Bytes::from_static(b"not-json")),
+            },
+        ]);
+        let out: Vec<Positioned<Result<i64, JsonlError>>> =
+            parse_positioned::<i64>(lines).collect().await;
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].value.as_ref().unwrap(), &1);
+        assert!(matches!(out[1].value, Err(JsonlError::Io(_))));
+        assert!(matches!(out[2].value, Err(JsonlError::Parse { line: 2, .. })));
     }
 
     #[rstest]
