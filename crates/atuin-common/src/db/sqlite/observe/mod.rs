@@ -1,23 +1,21 @@
 //! Observe changes to a SQLite database written by another process.
 //!
-//! [`SqliteObserver`] opens a dedicated, read-only connection to an existing
-//! database file and streams typed row changes as some other process commits
-//! to it (it detects cross-process commits via `PRAGMA data_version`). Two
-//! regimes are available:
+//! [`SqliteObserver`] opens a dedicated, read-only connection to an existing database file and
+//! streams typed row changes as some other process commits to it (it detects cross-process commits
+//! via `PRAGMA data_version`). Two regimes are available:
 //!
-//! - [`SqliteObserver::append`] tails newly-inserted rows via a monotonic
-//!   cursor column. Cheap: each change is an indexed range read.
-//! - [`SqliteObserver::mutate`] reports inserts, updates and deletes by
-//!   diffing successive whole-table snapshots. It rescans the table on every
-//!   change, so prefer it for bounded tables.
+//! - [`SqliteObserver::append`] tails newly-inserted rows via a monotonic cursor column.
+//! - [`SqliteObserver::mutate`] reports inserts, updates and deletes by diffing successive
+//!   whole-table snapshots. It rescans the table on every change, so prefer it for bounded tables.
 //!
-//! A row type implements [`TableSchema`] (its table name and explicit column
-//! list) plus [`Tailable`] (for `append`) or [`Diffable`] (for `mutate`).
-//! Each observer owns its own connection and background task; the returned
-//! [`SqliteTableObserver`] is a `Stream` of `Result<_, `[`ObserveError`]`>`,
-//! and dropping it stops the task.
+//! A row type implements [`TableSchema`] (its table name and explicit column list) plus
+//! [`Tailable`] (for `append`) or [`Diffable`] (for `mutate`). Each observer owns its own
+//! connection and background task; the returned [`SqliteTableObserver`] is a `Stream` of `Result<_,
+//! `[`ObserveError`]`>`, and dropping it stops the task.
 //!
-//! # Tailing new rows
+//! # Examples
+//!
+//! ## Tailing new rows
 //!
 //! ```no_run
 //! use atuin_common::db::sqlite::observe::{
@@ -35,6 +33,7 @@
 //!     const TABLE: &'static str = "messages";
 //!     const COLUMNS: &'static [&'static str] = &["id", "body"];
 //! }
+//!
 //! impl Tailable for Message {
 //!     type Cursor = i64;
 //!     const CURSOR_COLUMN: &'static str = "id";
@@ -59,10 +58,10 @@
 //! # }
 //! ```
 //!
-//! # Detecting updates and deletes
+//! ## Detecting updates and deletes
 //!
-//! `mutate` additionally requires [`Diffable`] (a stable key to match rows
-//! across snapshots) and yields [`Change`] values:
+//! `mutate` additionally requires [`Diffable`] (a stable key to match rows across snapshots) and
+//! yields [`Change`] values:
 //!
 //! ```no_run
 //! # use atuin_common::db::sqlite::observe::{Change, Diffable, ObserveConfig, SqliteObserver, TableSchema};
