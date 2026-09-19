@@ -9,7 +9,7 @@ use std::path::Path;
 use std::time::Duration;
 
 pub use config::{ObserveConfig, Replay};
-use driver::{AppendStrategy, MutateStrategy, Strategy, run};
+use driver::{AppendStrategy, DeliverError, MutateStrategy, Strategy, run};
 pub use error::ObserveError;
 pub use event::{Appended, Change, ChangeKind};
 pub use schema::{Cursor, Diffable, TableSchema, Tailable};
@@ -46,7 +46,7 @@ impl SqliteObserver {
     ) -> Result<SqliteTableObserver<Appended<T>>, ObserveError> {
         let conn =
             SqliteConnection::connect_with(&self.opts).await.map_err(ObserveError::Connect)?;
-        Ok(spawn_observer(self.opts.clone(), conn, AppendStrategy::<T>::new(), cfg))
+        spawn_observer(self.opts.clone(), conn, AppendStrategy::<T>::new(), cfg).await
     }
 
     pub async fn mutate<T: Diffable>(
@@ -55,17 +55,25 @@ impl SqliteObserver {
     ) -> Result<SqliteTableObserver<Change<T>>, ObserveError> {
         let conn =
             SqliteConnection::connect_with(&self.opts).await.map_err(ObserveError::Connect)?;
-        Ok(spawn_observer(self.opts.clone(), conn, MutateStrategy::<T>::new(), cfg))
+        spawn_observer(self.opts.clone(), conn, MutateStrategy::<T>::new(), cfg).await
     }
 }
 
-fn spawn_observer<S: Strategy>(
+async fn spawn_observer<S: Strategy>(
     opts: SqliteConnectOptions,
-    conn: SqliteConnection,
-    strategy: S,
+    mut conn: SqliteConnection,
+    mut strategy: S,
     cfg: ObserveConfig,
-) -> SqliteTableObserver<S::Event> {
+) -> Result<SqliteTableObserver<S::Event>, ObserveError> {
     let (tx, rx) = mpsc::channel(cfg.channel_capacity.get());
-    let task = tokio::spawn(run(opts, conn, strategy, cfg, tx));
-    SqliteTableObserver::new(rx, AbortOnDropHandle::new(task))
+    let seeded = if matches!(cfg.replay, Replay::FromNow) {
+        match strategy.seed(&mut conn, cfg.replay, &tx).await {
+            Ok(()) | Err(DeliverError::ConsumerGone) => true,
+            Err(DeliverError::Sqlx(e)) => return Err(ObserveError::Seed(e)),
+        }
+    } else {
+        false
+    };
+    let task = tokio::spawn(run(opts, conn, strategy, cfg, tx, seeded));
+    Ok(SqliteTableObserver::new(rx, AbortOnDropHandle::new(task)))
 }

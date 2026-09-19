@@ -88,25 +88,18 @@ impl<T: Tailable> Strategy for AppendStrategy<T> {
             None => query,
         };
 
-        let next = query
-            .fetch(conn)
-            .map_err(DeliverError::Sqlx)
-            .try_fold(self.cursor.clone(), |_, row| {
-                let cursor = row.cursor();
-                async move {
-                    tx.send(Ok(Appended(row))).await.map_err(|_| DeliverError::ConsumerGone)?;
-                    Ok(Some(cursor))
-                }
-            })
-            .await?;
-
-        self.cursor = next;
+        let mut rows = query.fetch(conn);
+        while let Some(row) = rows.try_next().await.map_err(DeliverError::Sqlx)? {
+            let cursor = row.cursor();
+            tx.send(Ok(Appended(row))).await.map_err(|_| DeliverError::ConsumerGone)?;
+            self.cursor = Some(cursor);
+        }
         Ok(())
     }
 }
 
 fn is_transient(e: &sqlx::Error) -> bool {
-    matches!(e, sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut)
+    matches!(e, sqlx::Error::Io(_))
         || e.as_database_error().is_some_and(|db| {
             db.code().is_some_and(|code| {
                 matches!(code.as_ref(), "5" | "6" | "261" | "262" | "517" | "518" | "773")
@@ -187,9 +180,9 @@ pub(super) async fn run<S: Strategy>(
     mut strategy: S,
     cfg: ObserveConfig,
     tx: mpsc::Sender<Result<S::Event, ObserveError>>,
+    mut seeded: bool,
 ) {
     let mut conn = Some(first);
-    let mut seeded = false;
     loop {
         let mut active = match conn.take() {
             Some(active) => active,
@@ -197,7 +190,9 @@ pub(super) async fn run<S: Strategy>(
         };
         match session(&mut active, &mut strategy, &cfg, &tx, &mut seeded).await {
             SessionEnd::Stop => return,
-            SessionEnd::Reconnect => {}
+            SessionEnd::Reconnect => {
+                tokio::time::sleep(cfg.poll_interval).await;
+            }
         }
     }
 }
@@ -343,7 +338,7 @@ mod tests {
     async fn exec_sql(path: &std::path::Path, sql: &str) {
         let status = tokio::process::Command::new("sqlite3")
             .arg(path)
-            .arg(sql)
+            .arg(format!("PRAGMA busy_timeout=10000; {sql}"))
             .status()
             .await
             .expect("observe tests require the `sqlite3` CLI on PATH");
