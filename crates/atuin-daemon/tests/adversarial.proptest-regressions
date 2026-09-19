@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc deeebd103a0eaae0ed030195aa5b2ea2007cb44fe573b84a4bde62cbd04d3ab7 # shrinks to req = StartHistoryRequest { timestamp: 9223372036854775808, command: "A", cwd: "", session: "00000000000000000000000000000000", hostname: "a:a", author: "", intent: "", shell: "", author_kind: Unspecified }, exit = 0, duration = None
+cc c2162e82456c324ad7e3fc3d28c4472e41f8b2ea3b0a20cb6b49a858a8b5ab7d # shrinks to h = History { id: HistoryId(01a0b725-9610-7183-950e-e1058386e4cb), timestamp: 2026-09-19 0:51:28.912055645 +00:00:00, duration: -1, exit: -1, command: "¡\"", cwd: "", session: "00000000000000000000000000000000", cmd_origin: CmdOrigin { raw: "a:a", sep: 1 }, author: "test-user", intent: None, deleted_at: None, shell: None, author_kind: None }

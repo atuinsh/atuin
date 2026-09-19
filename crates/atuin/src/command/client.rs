@@ -97,7 +97,7 @@ pub enum Cmd {
     #[command(subcommand)]
     Store(store::Cmd),
 
-    /// Manage your dotfiles with Atuin
+    /// List legacy synced dotfiles data
     #[command(subcommand)]
     Dotfiles(dotfiles::Cmd),
 
@@ -133,7 +133,7 @@ pub enum Cmd {
     #[command(subcommand)]
     Config(config::Cmd),
 
-    /// Information about dotfiles locations and ENV vars
+    /// Information about Atuin data locations and ENV vars
     #[command()]
     Info,
 

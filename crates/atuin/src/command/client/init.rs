@@ -1,10 +1,6 @@
-use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::{Settings, Tmux};
-use atuin_common::encryption::paseto_v4;
-use atuin_dotfiles::store::AliasStore;
-use atuin_dotfiles::store::var::VarStore;
 use clap::{Parser, ValueEnum};
-use eyre::{Result, WrapErr};
+use eyre::Result;
 use tracing::instrument;
 
 mod bash;
@@ -83,41 +79,6 @@ impl Cmd {
         }
     }
 
-    async fn dotfiles_init(&self, settings: &Settings) -> Result<()> {
-        let record_store_path = &settings.record_store_path;
-        let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
-
-        let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
-            .context("could not load or generate encryption key")?;
-        let host_id = Settings::host_id().await?;
-
-        let alias_store = AliasStore::new(sqlite_store.clone(), host_id, encryption_key.clone());
-        let var_store = VarStore::new(sqlite_store.clone(), host_id, encryption_key);
-
-        let options = self.to_options(settings);
-
-        match self.shell {
-            Shell::Zsh => {
-                zsh::init(alias_store, var_store, &options).await?;
-            }
-            Shell::Bash => {
-                bash::init(alias_store, var_store, &options).await?;
-            }
-            Shell::Fish => {
-                fish::init(alias_store, var_store, &options).await?;
-            }
-            Shell::Nu => nu::init_static(&options),
-            Shell::Xonsh => {
-                xonsh::init(alias_store, var_store, &options).await?;
-            }
-            Shell::PowerShell => {
-                powershell::init(alias_store, var_store, &options).await?;
-            }
-        }
-
-        Ok(())
-    }
-
     fn to_options<'a>(&self, settings: &'a Settings) -> StaticInitOptions<'a> {
         StaticInitOptions {
             enable_up_arrow: !self.disable_up_arrow,
@@ -177,11 +138,7 @@ impl Cmd {
 
         self.pty_proxy_init(settings);
 
-        if settings.dotfiles.enabled {
-            self.dotfiles_init(settings).await?;
-        } else {
-            self.static_init(settings);
-        }
+        self.static_init(settings);
 
         Ok(())
     }

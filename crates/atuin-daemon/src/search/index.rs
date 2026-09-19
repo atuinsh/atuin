@@ -478,9 +478,12 @@ impl SearchIndex {
         let frecency_map = self.frecency_map.read().clone();
 
         let query = super::truncate_query(query);
-        // Match accent-insensitively: the haystack side is normalized in
-        // add_history, so an accented query must be normalized too
-        let query = query.normalize_diacritics();
+        // Parse operators before normalization: e.g. `¡` normalizes to `!`, but must
+        // remain literal text rather than becoming a negation operator.
+        let mut patterns = frizbee::Pattern::parse_query(query);
+        for pattern in &mut patterns {
+            pattern.needle = pattern.needle.normalize_diacritics().into_owned();
+        }
 
         let haystack = self.haystack.read();
         let filter = filter_mode.compile(&self.interner);
@@ -524,7 +527,7 @@ impl SearchIndex {
         let config = frizbee::Config::default()
             .casing(frizbee::CaseMatching::Smart)
             .sort(frizbee::SortStrategy::IndexAsc);
-        let mut matcher = frizbee::Matcher::from_query(&query, &config);
+        let mut matcher = frizbee::Matcher::from_patterns(&patterns, &config);
 
         // An empty query matches every candidate with fuzzy score 0, so skip
         // the matcher and rank purely by frecency
@@ -899,6 +902,22 @@ mod tests {
 
         let results: Vec<_> = index.search("déjà", &IndexFilterMode::Global, 10).collect();
         assert_eq!(results, vec![expected]);
+    }
+
+    #[test]
+    fn normalization_does_not_introduce_query_operators() {
+        let index = SearchIndex::default();
+        let literal = make_history("¡\"", "/tmp", datetime!(2024-01-01 10:00 UTC));
+        let plain = make_history("plain", "/tmp", datetime!(2024-01-01 10:00 UTC));
+        index.add_history(&literal);
+        index.add_history(&plain);
+
+        for query in ["¡\"", "^¡\"$", "'¡\"", "\\!\""] {
+            let results: Vec<_> = index.search(query, &IndexFilterMode::Global, 10).collect();
+            assert_eq!(results, vec![literal.id], "query {query:?}");
+        }
+        let results: Vec<_> = index.search("!¡\"", &IndexFilterMode::Global, 10).collect();
+        assert_eq!(results, vec![plain.id]);
     }
 
     /// A deterministic synthetic corpus large enough to cross the 10k

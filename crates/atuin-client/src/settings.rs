@@ -35,7 +35,6 @@ static META_STORE: OnceCell<crate::meta::MetaStore> = OnceCell::const_new();
 
 pub mod daemon;
 pub mod disk_usage_limit;
-mod dotfiles;
 mod kv;
 pub(crate) mod meta;
 pub mod output;
@@ -1110,9 +1109,6 @@ pub struct Settings {
 
     #[serde(default)]
     pub preview: Preview,
-
-    #[serde(default)]
-    pub dotfiles: dotfiles::Settings,
 
     #[serde(default)]
     pub daemon: Daemon,

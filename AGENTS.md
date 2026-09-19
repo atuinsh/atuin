@@ -9,7 +9,7 @@ atuin                  CLI binary + TUI (clap, ratatui, crossterm)
 atuin-client           Client library: local DB, encryption, sync, settings, client-facing domain types
 atuin-common           Low-level cross-crate utilities and API models (not a home for client-facing domain types)
 atuin-daemon           Background gRPC daemon (tonic) for shell hooks
-atuin-dotfiles         Alias/var sync via record store
+atuin-dotfiles         Legacy read-only alias/var listing via record store
 atuin-history          Sorting algorithms, stats
 atuin-kv               Key-value store (synced)
 atuin-scripts          Script management (minijinja)

@@ -764,34 +764,6 @@ common_prefix = [
 
 Configures commands that should be totally stripped from stats calculations. For example, 'sudo' should be ignored.
 
-## `dotfiles`
-
-Default: `false`
-
-To enable sync of shell aliases between hosts.
-
-Add the new section to the bottom of your config file, for every machine you use Atuin with
-
-```toml
-[dotfiles]
-enabled = true
-```
-
-Manage aliases using the command line options
-
-```shell
-# Alias 'k' to 'kubectl'
-atuin dotfiles alias set k kubectl
-
-# List all aliases
-atuin dotfiles alias list
-
-# Delete an alias
-atuin dotfiles alias delete k
-```
-
-After setting an alias, you will either need to restart your shell or source the init file for the change to take effect
-
 ## keys
 
 This section of the client config is specifically for configuring key-related settings.

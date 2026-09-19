@@ -4,8 +4,6 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::RecordId;
-use atuin_dotfiles::store::AliasStore;
-use atuin_dotfiles::store::var::VarStore;
 use atuin_kv::store::KvStore;
 use atuin_scripts::store::ScriptStore;
 use eyre::{Context, Result};
@@ -36,8 +34,6 @@ pub async fn build(
     .await?;
 
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key.clone());
-    let alias_store = AliasStore::new(store.clone(), host_id, encryption_key.clone());
-    let var_store = VarStore::new(store.clone(), host_id, encryption_key.clone());
     let kv_store = KvStore::new(store.clone(), kv_db, host_id, encryption_key.clone());
     let script_store = ScriptStore::new(store.clone(), host_id, encryption_key);
 
@@ -45,14 +41,6 @@ pub async fn build(
     // possible, and warn about the rest.
     if let Err(e) = history_store.build_all(db, downloaded).await {
         eprintln!("Warning: failed to build history: {e}");
-    }
-
-    if let Err(e) = alias_store.build().await {
-        eprintln!("Warning: failed to build aliases: {e}");
-    }
-
-    if let Err(e) = var_store.build().await {
-        eprintln!("Warning: failed to build vars: {e}");
     }
 
     if let Err(e) = kv_store.build().await {

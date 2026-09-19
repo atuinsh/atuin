@@ -4,8 +4,6 @@ use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::theme::Theme;
-use atuin_common::encryption::paseto_v4;
-use atuin_dotfiles::store::AliasStore;
 use atuin_history::stats::{Stats, compute, split_common_prefix};
 use crossterm::style::{ResetColor, SetAttribute};
 use eyre::Result;
@@ -285,7 +283,7 @@ pub async fn run(
     year: Option<i32>,
     db: &Sqlite,
     settings: &Settings,
-    store: SqliteStore,
+    _store: SqliteStore,
     theme: &Theme,
 ) -> Result<()> {
     let now = OffsetDateTime::now_utc().to_offset(settings.timezone.0);
@@ -320,26 +318,6 @@ pub async fn run(
         return Ok(());
     }
 
-    // Load aliases for expansion
-    let alias_map: HashMap<String, String> = if settings.dotfiles.enabled {
-        if let Ok(encryption_key) = paseto_v4::Key::try_load_from_path(&settings.key_path) {
-            let host_id = Settings::host_id().await?;
-            let alias_store = AliasStore::new(store, host_id, encryption_key);
-
-            alias_store
-                .aliases()
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .map(|a| (a.name, a.value))
-                .collect()
-        } else {
-            HashMap::new()
-        }
-    } else {
-        HashMap::new()
-    };
-
     let Some(stats) = compute(settings, &history, 10, 1) else {
         println!(
             "No commands found in your {year} history. Run a command or check your config for for \
@@ -347,6 +325,7 @@ pub async fn run(
         );
         return Ok(());
     };
+    let alias_map = HashMap::new();
     let wrapped_stats = WrappedStats::new(settings, &stats, &history, &alias_map);
 
     // Print wrapped format

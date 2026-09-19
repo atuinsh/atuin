@@ -518,7 +518,6 @@ dependencies = [
  "atuin-client",
  "atuin-common",
  "atuin-domain",
- "atuin-dotfiles",
  "atuin-history",
  "dashmap",
  "derive_more",
