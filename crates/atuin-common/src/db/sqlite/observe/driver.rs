@@ -10,7 +10,6 @@ use tokio::sync::mpsc;
 use super::event::{Appended, Change};
 use super::schema::{Diffable, TableSchema, Tailable};
 use super::{ObserveConfig, ObserveError, Replay};
-use crate::futures::Backoff;
 
 pub(super) enum DeliverError {
     Sqlx(sqlx::Error),
@@ -100,78 +99,9 @@ impl<T: Tailable> Strategy for AppendStrategy<T> {
 
 fn is_transient(e: &sqlx::Error) -> bool {
     matches!(e, sqlx::Error::Io(_))
-        || e.as_database_error().is_some_and(|db| {
-            db.code().is_some_and(|code| {
-                matches!(code.as_ref(), "5" | "6" | "261" | "262" | "517" | "518" | "773")
-            })
-        })
-}
-
-enum SessionEnd {
-    Stop,
-    Reconnect,
-}
-
-async fn reconnect(opts: &SqliteConnectOptions, backoff: Backoff) -> SqliteConnection {
-    backoff
-        .retry_forever(|| async {
-            match SqliteConnection::connect_with(opts).await {
-                Ok(conn) => std::ops::ControlFlow::Break(conn),
-                Err(_) => std::ops::ControlFlow::Continue(()),
-            }
-        })
-        .await
-}
-
-async fn session<S: Strategy>(
-    conn: &mut SqliteConnection,
-    strategy: &mut S,
-    cfg: &ObserveConfig,
-    tx: &mpsc::Sender<Result<S::Event, ObserveError>>,
-    seeded: &mut bool,
-) -> SessionEnd {
-    if !*seeded {
-        match strategy.seed(conn, cfg.replay, tx).await {
-            Ok(()) => *seeded = true,
-            Err(DeliverError::ConsumerGone) => return SessionEnd::Stop,
-            Err(DeliverError::Sqlx(e)) if is_transient(&e) => return SessionEnd::Reconnect,
-            Err(DeliverError::Sqlx(e)) => {
-                let _ = tx.send(Err(ObserveError::Seed(e))).await;
-                return SessionEnd::Stop;
-            }
-        }
-    }
-
-    let mut ticker = tokio::time::interval(cfg.poll_interval);
-    let mut last: Option<i64> = None;
-    loop {
-        ticker.tick().await;
-
-        let version = match crate::db::query_scalar::<Sqlite, i64>("PRAGMA data_version")
-            .fetch_one(&mut *conn)
-            .await
-        {
-            Ok(version) => version,
-            Err(e) if is_transient(&e) => return SessionEnd::Reconnect,
-            Err(e) => {
-                let _ = tx.send(Err(ObserveError::Query(e))).await;
-                return SessionEnd::Stop;
-            }
-        };
-        if last == Some(version) {
-            continue;
-        }
-
-        match strategy.poll(&mut *conn, tx).await {
-            Ok(()) => last = Some(version),
-            Err(DeliverError::ConsumerGone) => return SessionEnd::Stop,
-            Err(DeliverError::Sqlx(e)) if is_transient(&e) => return SessionEnd::Reconnect,
-            Err(DeliverError::Sqlx(e)) => {
-                let _ = tx.send(Err(ObserveError::Query(e))).await;
-                return SessionEnd::Stop;
-            }
-        }
-    }
+        || e.as_database_error()
+            .and_then(|db| db.code())
+            .is_some_and(|code| crate::db::sqlite::TransientResultCode::from_code(&code).is_some())
 }
 
 pub(super) async fn run<S: Strategy>(
@@ -182,18 +112,69 @@ pub(super) async fn run<S: Strategy>(
     tx: mpsc::Sender<Result<S::Event, ObserveError>>,
     mut seeded: bool,
 ) {
-    let mut conn = Some(first);
+    let mut pending = Some(first);
     loop {
-        let mut active = match conn.take() {
-            Some(active) => active,
-            None => reconnect(&opts, cfg.reconnect).await,
+        let mut conn = match pending.take() {
+            Some(conn) => conn,
+            None => {
+                cfg.reconnect
+                    .retry_forever(|| async {
+                        match SqliteConnection::connect_with(&opts).await {
+                            Ok(conn) => std::ops::ControlFlow::Break(conn),
+                            Err(_) => std::ops::ControlFlow::Continue(()),
+                        }
+                    })
+                    .await
+            }
         };
-        match session(&mut active, &mut strategy, &cfg, &tx, &mut seeded).await {
-            SessionEnd::Stop => return,
-            SessionEnd::Reconnect => {
-                tokio::time::sleep(cfg.poll_interval).await;
+
+        if !seeded {
+            match strategy.seed(&mut conn, cfg.replay, &tx).await {
+                Ok(()) => seeded = true,
+                Err(DeliverError::ConsumerGone) => return,
+                Err(DeliverError::Sqlx(e)) if is_transient(&e) => {
+                    tokio::time::sleep(cfg.poll_interval).await;
+                    continue;
+                }
+                Err(DeliverError::Sqlx(e)) => {
+                    let _ = tx.send(Err(ObserveError::Seed(e))).await;
+                    return;
+                }
             }
         }
+
+        let mut ticker = tokio::time::interval(cfg.poll_interval);
+        let mut last: Option<i64> = None;
+        loop {
+            ticker.tick().await;
+
+            let version = match crate::db::query_scalar::<Sqlite, i64>("PRAGMA data_version")
+                .fetch_one(&mut conn)
+                .await
+            {
+                Ok(version) => version,
+                Err(e) if is_transient(&e) => break,
+                Err(e) => {
+                    let _ = tx.send(Err(ObserveError::Query(e))).await;
+                    return;
+                }
+            };
+            if last == Some(version) {
+                continue;
+            }
+
+            match strategy.poll(&mut conn, &tx).await {
+                Ok(()) => last = Some(version),
+                Err(DeliverError::ConsumerGone) => return,
+                Err(DeliverError::Sqlx(e)) if is_transient(&e) => break,
+                Err(DeliverError::Sqlx(e)) => {
+                    let _ = tx.send(Err(ObserveError::Query(e))).await;
+                    return;
+                }
+            }
+        }
+
+        tokio::time::sleep(cfg.poll_interval).await;
     }
 }
 
