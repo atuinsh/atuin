@@ -102,17 +102,19 @@ impl From<Content> for Option<pb::ContentBlock> {
         let block = match value {
             Content::Text(text) => Block::Text(text),
             Content::Reasoning(text) => Block::Thinking(text),
-            Content::ToolUse { id, name, input } => {
-                Block::ToolCall(pb::ToolCall { id, name, input })
-            }
+            Content::ToolUse { id, name, input } => Block::ToolCall(pb::ToolCall {
+                id: id.into(),
+                name,
+                input: serde_json::to_string(&input).unwrap_or_default(),
+            }),
             Content::ToolResult {
-                tool_use_id,
-                content,
-                is_error,
+                call,
+                output,
+                error,
             } => Block::ToolResult(pb::ToolResult {
-                tool_use_id,
-                content,
-                is_error,
+                tool_use_id: call.into(),
+                content: serde_json::to_string(&output).unwrap_or_default(),
+                is_error: error,
             }),
             Content::Other(_) => return None,
         };
@@ -135,7 +137,7 @@ impl From<Message> for pb::Message {
             parent_source_id: value.parent_source_id.map(Into::into),
             timestamp: Some(prost_types::Timestamp {
                 seconds: value.timestamp.unix_timestamp(),
-                nanos: i32::try_from(value.timestamp.nanosecond()).unwrap_or_default(),
+                nanos: value.timestamp.nanosecond() as i32,
             }),
             role: pb::Role::from(value.role) as i32,
             content: value
@@ -166,11 +168,11 @@ impl From<Session> for pb::Session {
             model: value.model,
             started_at: Some(prost_types::Timestamp {
                 seconds: value.started_at.unix_timestamp(),
-                nanos: i32::try_from(value.started_at.nanosecond()).unwrap_or_default(),
+                nanos: value.started_at.nanosecond() as i32,
             }),
             updated_at: Some(prost_types::Timestamp {
                 seconds: value.updated_at.unix_timestamp(),
-                nanos: i32::try_from(value.updated_at.nanosecond()).unwrap_or_default(),
+                nanos: value.updated_at.nanosecond() as i32,
             }),
             message_count: value.message_count,
             tokens: Some(value.usage.into()),
