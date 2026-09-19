@@ -49,7 +49,7 @@ impl SqliteObserver {
         let conn = SqliteConnection::connect_with(&self.opts)
             .await
             .map_err(ObserveError::Connect)?;
-        Ok(spawn_observer(conn, AppendStrategy::<T>::new(), cfg))
+        Ok(spawn_observer(self.opts.clone(), conn, AppendStrategy::<T>::new(), cfg))
     }
 
     pub async fn mutate<T: Diffable>(
@@ -59,16 +59,17 @@ impl SqliteObserver {
         let conn = SqliteConnection::connect_with(&self.opts)
             .await
             .map_err(ObserveError::Connect)?;
-        Ok(spawn_observer(conn, MutateStrategy::<T>::new(), cfg))
+        Ok(spawn_observer(self.opts.clone(), conn, MutateStrategy::<T>::new(), cfg))
     }
 }
 
 fn spawn_observer<S: Strategy>(
+    opts: SqliteConnectOptions,
     conn: SqliteConnection,
     strategy: S,
     cfg: ObserveConfig,
 ) -> SqliteTableObserver<S::Event> {
     let (tx, rx) = mpsc::channel(cfg.channel_capacity.get());
-    let task = tokio::spawn(run(conn, strategy, cfg, tx));
+    let task = tokio::spawn(run(opts, conn, strategy, cfg, tx));
     SqliteTableObserver::new(rx, AbortOnDropHandle::new(task))
 }

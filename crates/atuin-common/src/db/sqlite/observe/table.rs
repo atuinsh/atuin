@@ -34,6 +34,13 @@ impl<E: Send + 'static> Stream for SqliteTableObserver<E> {
 }
 
 #[cfg(test)]
+impl<E> SqliteTableObserver<E> {
+    pub(crate) fn task(&self) -> &std::sync::Arc<tokio_util::task::AbortOnDropHandle<()>> {
+        &self._task
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use futures::StreamExt;
     use rstest::rstest;

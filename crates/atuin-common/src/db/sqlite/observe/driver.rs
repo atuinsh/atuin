@@ -3,13 +3,15 @@ use std::future::Future;
 
 use futures::TryStreamExt;
 use itertools::{EitherOrBoth, Itertools};
-use sqlx::sqlite::SqliteConnection;
+use sqlx::Connection;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
 use sqlx::{AssertSqlSafe, Sqlite};
 use tokio::sync::mpsc;
 
 use super::event::{Appended, Change};
 use super::schema::{Diffable, Tailable, TableSchema};
 use super::{ObserveConfig, ObserveError, Replay};
+use crate::futures::Backoff;
 
 pub(super) enum DeliverError {
     Sqlx(sqlx::Error),
@@ -104,18 +106,47 @@ impl<T: Tailable> Strategy for AppendStrategy<T> {
     }
 }
 
-pub(super) async fn run<S: Strategy>(
-    mut conn: SqliteConnection,
-    mut strategy: S,
-    cfg: ObserveConfig,
-    tx: mpsc::Sender<Result<S::Event, ObserveError>>,
-) {
-    match strategy.seed(&mut conn, cfg.replay, &tx).await {
-        Ok(()) => {}
-        Err(DeliverError::ConsumerGone) => return,
-        Err(DeliverError::Sqlx(e)) => {
-            let _ = tx.send(Err(ObserveError::Seed(e))).await;
-            return;
+fn is_transient(e: &sqlx::Error) -> bool {
+    matches!(e, sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut)
+        || e.as_database_error().is_some_and(|db| {
+            db.code().is_some_and(|code| {
+                matches!(code.as_ref(), "5" | "6" | "261" | "262" | "263" | "264" | "265" | "266" | "267")
+            })
+        })
+}
+
+enum SessionEnd {
+    Stop,
+    Reconnect,
+}
+
+async fn reconnect(opts: &SqliteConnectOptions, backoff: Backoff) -> SqliteConnection {
+    backoff
+        .retry_forever(|| async {
+            match SqliteConnection::connect_with(opts).await {
+                Ok(conn) => std::ops::ControlFlow::Break(conn),
+                Err(_) => std::ops::ControlFlow::Continue(()),
+            }
+        })
+        .await
+}
+
+async fn session<S: Strategy>(
+    conn: &mut SqliteConnection,
+    strategy: &mut S,
+    cfg: &ObserveConfig,
+    tx: &mpsc::Sender<Result<S::Event, ObserveError>>,
+    seeded: &mut bool,
+) -> SessionEnd {
+    if !*seeded {
+        match strategy.seed(conn, cfg.replay, tx).await {
+            Ok(()) => *seeded = true,
+            Err(DeliverError::ConsumerGone) => return SessionEnd::Stop,
+            Err(DeliverError::Sqlx(e)) if is_transient(&e) => return SessionEnd::Reconnect,
+            Err(DeliverError::Sqlx(e)) => {
+                let _ = tx.send(Err(ObserveError::Seed(e))).await;
+                return SessionEnd::Stop;
+            }
         }
     }
 
@@ -125,26 +156,49 @@ pub(super) async fn run<S: Strategy>(
         ticker.tick().await;
 
         let version = match crate::db::query_scalar::<Sqlite, i64>("PRAGMA data_version")
-            .fetch_one(&mut conn)
+            .fetch_one(&mut *conn)
             .await
         {
             Ok(version) => version,
+            Err(e) if is_transient(&e) => return SessionEnd::Reconnect,
             Err(e) => {
                 let _ = tx.send(Err(ObserveError::Query(e))).await;
-                return;
+                return SessionEnd::Stop;
             }
         };
         if last == Some(version) {
             continue;
         }
 
-        match strategy.poll(&mut conn, &tx).await {
+        match strategy.poll(&mut *conn, tx).await {
             Ok(()) => last = Some(version),
-            Err(DeliverError::ConsumerGone) => return,
+            Err(DeliverError::ConsumerGone) => return SessionEnd::Stop,
+            Err(DeliverError::Sqlx(e)) if is_transient(&e) => return SessionEnd::Reconnect,
             Err(DeliverError::Sqlx(e)) => {
                 let _ = tx.send(Err(ObserveError::Query(e))).await;
-                return;
+                return SessionEnd::Stop;
             }
+        }
+    }
+}
+
+pub(super) async fn run<S: Strategy>(
+    opts: SqliteConnectOptions,
+    first: SqliteConnection,
+    mut strategy: S,
+    cfg: ObserveConfig,
+    tx: mpsc::Sender<Result<S::Event, ObserveError>>,
+) {
+    let mut conn = Some(first);
+    let mut seeded = false;
+    loop {
+        let mut active = match conn.take() {
+            Some(active) => active,
+            None => reconnect(&opts, cfg.reconnect).await,
+        };
+        match session(&mut active, &mut strategy, &cfg, &tx, &mut seeded).await {
+            SessionEnd::Stop => return,
+            SessionEnd::Reconnect => {}
         }
     }
 }
@@ -237,7 +291,7 @@ mod tests {
     use super::*;
     use crate::db::query;
     use crate::db::sqlite::Sqlite;
-    use crate::db::sqlite::observe::{ObserveConfig, Replay, SqliteObserver, TableSchema};
+    use crate::db::sqlite::observe::{ObserveConfig, ObserveError, Replay, SqliteObserver, TableSchema};
 
     #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
     struct Item {
@@ -509,5 +563,73 @@ mod tests {
                 Ok(())
             })?;
         }
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn slow_consumer_loses_no_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db.sqlite");
+        let _db = writer(dir.path()).await;
+        let observer = SqliteObserver::new(&path);
+        let cfg = ObserveConfig::builder()
+            .poll_interval(Duration::from_millis(10))
+            .channel_capacity(std::num::NonZeroUsize::new(1).unwrap())
+            .build();
+        let stream = observer.append::<Item>(cfg).await.unwrap();
+
+        let inserts: String =
+            (1..=20).map(|i| format!("INSERT INTO items (id, name) VALUES ({i}, 'x');")).collect();
+        exec_sql(&path, &inserts).await;
+
+        let got: Vec<i64> = stream
+            .take(20)
+            .then(|r| async move {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                r.unwrap().0.id
+            })
+            .collect()
+            .await;
+        assert_eq!(got, (1..=20).collect::<Vec<_>>());
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn drop_observer_ends_task() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db.sqlite");
+        let _db = writer(dir.path()).await;
+        let observer = SqliteObserver::new(&path);
+        let stream = observer.append::<Item>(cfg(Replay::FromNow)).await.unwrap();
+
+        let weak = std::sync::Arc::downgrade(stream.task());
+        drop(stream);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(weak.upgrade().is_none(), "dropping the observer must abort its task");
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn terminal_query_error_surfaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db.sqlite");
+        let _db = writer(dir.path()).await;
+        let observer = SqliteObserver::new(&path);
+        let mut stream = observer.append::<Item>(cfg(Replay::FromNow)).await.unwrap();
+
+        exec_sql(&path, "DROP TABLE items;").await;
+
+        let surfaced = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match stream.next().await {
+                    Some(Err(e)) => return Some(e),
+                    Some(Ok(_)) => continue,
+                    None => return None,
+                }
+            }
+        })
+        .await
+        .expect("observer must surface a terminal error rather than hang");
+        assert!(matches!(surfaced, Some(ObserveError::Query(_))));
     }
 }
