@@ -180,6 +180,11 @@ pub enum ReadMode {
     /// Read existing content from `Anchor`, then stop at end of file.
     Once(Anchor),
     /// Follow the file from `Start`, waiting for data appended afterwards.
+    ///
+    /// A follower tells appends apart from in-place rewrites heuristically, by comparing the file's
+    /// size and a short window of the most recently read bytes at the read cursor. A rewrite that
+    /// preserves both the length and those trailing bytes can therefore be mistaken for no change
+    /// (as with `tail`), leaving the rewritten prefix unread until the file next grows or shrinks.
     Follow(Start),
 }
 
@@ -362,6 +367,66 @@ struct EngineCfg {
     backoff: Backoff,
 }
 
+/// How many trailing bytes [`Fingerprint`] retains. Wide enough that a rewrite reproducing the
+/// whole window by chance is effectively impossible for real content, yet cheap to store and
+/// re-read on every idle poll.
+const FINGERPRINT_LEN: usize = 64;
+
+/// A rolling signature of the last [`FINGERPRINT_LEN`] bytes `follow` has read in the current
+/// epoch, used to tell an append apart from an in-place rewrite. Comparing a window (rather than a
+/// single byte) against the file at the read cursor makes a rewrite that happens to preserve the
+/// final byte far less likely to slip through as an append.
+#[derive(Debug)]
+struct Fingerprint {
+    bytes: [u8; FINGERPRINT_LEN],
+    len: usize,
+}
+
+impl Fingerprint {
+    fn new() -> Self {
+        Self {
+            bytes: [0; FINGERPRINT_LEN],
+            len: 0,
+        }
+    }
+
+    /// Fold a freshly-read chunk in, keeping only the last [`FINGERPRINT_LEN`] bytes. Only the
+    /// chunk's own tail is ever copied, so a large read chunk costs no more than a small one.
+    fn observe(&mut self, chunk: &[u8]) {
+        if chunk.len() >= FINGERPRINT_LEN {
+            self.bytes.copy_from_slice(&chunk[chunk.len() - FINGERPRINT_LEN..]);
+            self.len = FINGERPRINT_LEN;
+            return;
+        }
+        // Slide the retained bytes we still have room for to the front, then append the chunk.
+        let keep = self.len.min(FINGERPRINT_LEN - chunk.len());
+        self.bytes.copy_within(self.len - keep..self.len, 0);
+        self.bytes[keep..keep + chunk.len()].copy_from_slice(chunk);
+        self.len = keep + chunk.len();
+    }
+
+    /// Drop the signature at an epoch boundary (truncation, rewrite, rotation).
+    fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    /// Whether the file no longer ends with the bytes we last read at `offset` -- i.e. it was
+    /// rewritten rather than appended to. An empty signature (nothing read yet this epoch) never
+    /// diverges, and a transient read error is treated as "no divergence" so a blip does not
+    /// trigger a spurious reset.
+    async fn diverged<S: TailSource>(&self, src: &mut S, offset: u64) -> bool {
+        if self.len == 0 {
+            return false;
+        }
+        let at = offset - u64::try_from(self.len).expect("fingerprint len fits u64");
+        match src.read_at(at, self.len).await {
+            // A short read (the file shrank) leaves the slices unequal in length, so it diverges.
+            Ok(seen) => seen.as_ref() != &self.bytes[..self.len],
+            Err(_) => false,
+        }
+    }
+}
+
 fn follow<S, W>(mut src: S, mut waiter: W, cfg: EngineCfg) -> impl Stream<Item = Event> + Send
 where
     S: TailSource + 'static,
@@ -386,7 +451,7 @@ where
         } else {
             None
         };
-        let mut last_byte: Option<u8> = None;
+        let mut fingerprint = Fingerprint::new();
         let read_size = cfg.read_size.get();
 
         'follow: loop {
@@ -395,7 +460,7 @@ where
                     Ok(chunk) if chunk.is_empty() => break,
                     Ok(chunk) => {
                         offset += u64::try_from(chunk.len()).expect("read count fits u64");
-                        last_byte = chunk.last().copied();
+                        fingerprint.observe(&chunk);
                         yield Event::Data { bytes: chunk, offset };
                     }
                     Err(e) => {
@@ -418,17 +483,9 @@ where
                 match src.size().await {
                     Ok(size) if size < offset => break Some(ResetKind::Discard),
                     Ok(size) => {
-                        // If the byte just before `offset` is no longer the last one we read, the
-                        // file was rewritten in place rather than appended to: discard and restart.
-                        let anchor_mismatch = if let Some(expected) = last_byte {
-                            match src.read_at(offset - 1, 1).await {
-                                Ok(anchor) => anchor.first() != Some(&expected),
-                                Err(_) => false,
-                            }
-                        } else {
-                            false
-                        };
-                        if anchor_mismatch {
+                        // An in-place rewrite (rather than an append) shows up as the trailing
+                        // window at `offset` no longer matching what we last read there.
+                        if fingerprint.diverged(&mut src, offset).await {
                             break Some(ResetKind::Discard);
                         }
                         if size > offset {
@@ -454,7 +511,7 @@ where
                                 Ok(chunk) if chunk.is_empty() => break,
                                 Ok(chunk) => {
                                     offset += u64::try_from(chunk.len()).expect("read count fits u64");
-                                    last_byte = chunk.last().copied();
+                                    fingerprint.observe(&chunk);
                                     yield Event::Data { bytes: chunk, offset };
                                 }
                                 Err(e) => {
@@ -482,7 +539,7 @@ where
                     ResetKind::Discard => Event::Reset,
                 };
                 offset = 0;
-                last_byte = None;
+                fingerprint.clear();
             }
         }
     }
@@ -1330,6 +1387,21 @@ mod tests {
         let events = drain(&mut stream);
         assert_eq!(resets(&events), 1);
         assert_eq!(data_of(&events), b"bbbbX");
+    }
+
+    #[rstest]
+    fn follow_detects_a_same_length_rewrite_preserving_the_last_byte() {
+        // Same length *and* same final byte defeats a single-byte anchor check; the trailing-window
+        // fingerprint still catches the changed prefix and resets.
+        let (tx, rx) = mpsc::unbounded();
+        let (handle, src) = MemHandle::new(b"aaaa\n");
+        let mut stream = follow_mem(src, rx, Rotation::Fd);
+        assert_eq!(data_of(&drain(&mut stream)), b"aaaa\n");
+        handle.rewrite(b"bbbb\n");
+        tx.unbounded_send(()).unwrap();
+        let events = drain(&mut stream);
+        assert_eq!(resets(&events), 1);
+        assert_eq!(data_of(&events), b"bbbb\n");
     }
 
     #[rstest]
