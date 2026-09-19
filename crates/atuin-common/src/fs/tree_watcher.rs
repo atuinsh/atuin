@@ -56,7 +56,7 @@
 //!                      to have to return some sort of handler, which enables us to listen to more
 //!                      fs events, such as mutations, I suppose.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -165,25 +165,27 @@ impl NodeContext {
     }
 }
 
-/// Walk `root` best-effort, returning every readable entry and whether the walk
-/// finished without a read error. Callers must not prune on an incomplete walk: a
-/// missing entry may be unreadable rather than gone.
-fn scan_fs(root: &Path, recursive: bool) -> (Vec<(Arc<Path>, FileKind)>, bool) {
+/// Walk `root` best-effort, returning every readable entry plus the set of
+/// directories that were fully read without error. A node may be pruned only when its
+/// parent directory is in that set: a node missing from a directory we could not
+/// fully read may be unreadable rather than gone, so unread subtrees are left intact
+/// while readable ones reconcile independently.
+fn scan_fs(root: &Path, recursive: bool) -> (Vec<(Arc<Path>, FileKind)>, HashSet<Arc<Path>>) {
     let mut out = Vec::new();
-    let mut complete = true;
+    let mut scanned: HashSet<Arc<Path>> = HashSet::new();
     let mut stack: Vec<Arc<Path>> = vec![Arc::from(root)];
     while let Some(dir) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
-            complete = false;
             continue;
         };
+        let mut dir_complete = true;
         for entry in entries {
             let Ok(entry) = entry else {
-                complete = false;
+                dir_complete = false;
                 continue;
             };
             let Ok(file_type) = entry.file_type() else {
-                complete = false;
+                dir_complete = false;
                 continue;
             };
             let path: Arc<Path> = Arc::from(entry.path());
@@ -192,15 +194,19 @@ fn scan_fs(root: &Path, recursive: bool) -> (Vec<(Arc<Path>, FileKind)>, bool) {
             }
             out.push((path, FileKind::from(file_type)));
         }
+        // Only a fully enumerated directory lets us trust the absence of its children.
+        if dir_complete {
+            scanned.insert(dir);
+        }
     }
-    (out, complete)
+    (out, scanned)
 }
 
-async fn scan(root: &Path, recursive: bool) -> (Vec<(Arc<Path>, FileKind)>, bool) {
+async fn scan(root: &Path, recursive: bool) -> (Vec<(Arc<Path>, FileKind)>, HashSet<Arc<Path>>) {
     let root = root.to_path_buf();
     tokio::task::spawn_blocking(move || scan_fs(&root, recursive))
         .await
-        .unwrap_or_else(|_| (Vec::new(), false))
+        .unwrap_or_else(|_| (Vec::new(), HashSet::new()))
 }
 
 /// Stat every path referenced by `events` off the async executor, keeping only
@@ -265,11 +271,15 @@ where
         self.entries.retain(|key, _| !key.starts_with(path));
     }
 
-    fn reconcile(&mut self, truth: Vec<(Arc<Path>, FileKind)>, prune: bool) {
+    fn reconcile(&mut self, truth: Vec<(Arc<Path>, FileKind)>, scanned_dirs: &HashSet<Arc<Path>>) {
         let truth: HashMap<Arc<Path>, FileKind> = truth.into_iter().collect();
-        if prune {
-            self.entries.retain(|key, _| truth.contains_key(key));
-        }
+        // Prune a tracked node only when its parent directory was fully read this pass,
+        // so nodes under an unreadable subtree survive while readable directories
+        // reconcile independently.
+        self.entries.retain(|key, _| {
+            truth.contains_key(key)
+                || key.parent().is_none_or(|parent| !scanned_dirs.contains(parent))
+        });
         for (path, kind) in truth {
             self.observe(path, kind, Origin::Scan);
         }
@@ -382,11 +392,11 @@ where
     }
 
     async fn rescan(&mut self) {
-        let (truth, complete) = scan(&self.root, self.recursive).await;
-        if !complete {
-            tracing::warn!("tree watcher scan was incomplete; reconciling without pruning");
+        let (truth, scanned_dirs) = scan(&self.root, self.recursive).await;
+        if scanned_dirs.is_empty() {
+            tracing::warn!("tree watcher scan read no directories; skipping prune this pass");
         }
-        self.engine.reconcile(truth, complete);
+        self.engine.reconcile(truth, &scanned_dirs);
     }
 }
 
@@ -571,6 +581,10 @@ mod tests {
         NonZeroDuration::new(d).unwrap()
     }
 
+    fn scanned(dirs: &[&str]) -> HashSet<Arc<Path>> {
+        dirs.iter().map(|d| ap(d)).collect()
+    }
+
     fn event(kind: EventKind, paths: Vec<PathBuf>) -> notify::Event {
         notify::Event {
             kind,
@@ -635,8 +649,8 @@ mod tests {
         std::fs::create_dir(dir.path().join("sub")).unwrap();
         std::fs::write(dir.path().join("sub/b"), b"x").unwrap();
 
-        let (found, complete) = scan_fs(dir.path(), recursive);
-        assert!(complete);
+        let (found, dirs) = scan_fs(dir.path(), recursive);
+        assert!(dirs.contains(dir.path()));
         let map = scanned_kinds(&found, dir.path());
         assert_eq!(map.get("a"), Some(&FileKind::File));
         assert_eq!(map.get("sub"), Some(&FileKind::Dir));
@@ -651,8 +665,8 @@ mod tests {
         std::fs::write(dir.path().join("real/inner"), b"x").unwrap();
         std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("link")).unwrap();
 
-        let (found, complete) = scan_fs(dir.path(), true);
-        assert!(complete);
+        let (found, dirs) = scan_fs(dir.path(), true);
+        assert!(dirs.contains(dir.path()));
         let map = scanned_kinds(&found, dir.path());
         assert_eq!(map.get("link"), Some(&FileKind::Symlink));
         assert!(!map.contains_key("link/inner"));
@@ -662,16 +676,16 @@ mod tests {
     #[tokio::test]
     async fn scan_reports_incomplete_for_missing_root() {
         let missing = Path::new("/this/does/not/exist/anywhere");
-        let (found, complete) = scan(missing, true).await;
+        let (found, dirs) = scan(missing, true).await;
         assert!(found.is_empty());
-        assert!(!complete);
+        assert!(dirs.is_empty());
     }
 
     #[rstest]
     fn scan_fs_reports_incomplete_on_unreadable_root() {
-        let (found, complete) = scan_fs(Path::new("/this/does/not/exist/anywhere"), true);
+        let (found, dirs) = scan_fs(Path::new("/this/does/not/exist/anywhere"), true);
         assert!(found.is_empty());
-        assert!(!complete);
+        assert!(dirs.is_empty());
     }
 
     #[rstest]
@@ -738,9 +752,9 @@ mod tests {
     fn reconcile_adds_and_removes() {
         let counters = Arc::new(Counters::default());
         let mut engine = accept_all_engine(&counters);
-        engine.reconcile(truth(&["a", "b"]), true);
+        engine.reconcile(truth(&["a", "b"]), &scanned(&["/r"]));
         assert_eq!(counters.alive.load(Ordering::SeqCst), 2);
-        engine.reconcile(truth(&["b", "c"]), true);
+        engine.reconcile(truth(&["b", "c"]), &scanned(&["/r"]));
         assert_eq!(keys(&engine), [ap("/r/b"), ap("/r/c")].into_iter().collect());
         assert_eq!(counters.alive.load(Ordering::SeqCst), 2);
         assert_eq!(counters.created.load(Ordering::SeqCst), 3);
@@ -751,8 +765,8 @@ mod tests {
     fn reconcile_repairs_kind_swap() {
         let counters = Arc::new(Counters::default());
         let mut engine = accept_all_engine(&counters);
-        engine.reconcile(vec![(ap("/r/x"), FileKind::Dir)], true);
-        engine.reconcile(vec![(ap("/r/x"), FileKind::File)], true);
+        engine.reconcile(vec![(ap("/r/x"), FileKind::Dir)], &scanned(&["/r"]));
+        engine.reconcile(vec![(ap("/r/x"), FileKind::File)], &scanned(&["/r"]));
         assert_eq!(
             engine.entries.get(Path::new("/r/x")).map(|slot| slot.kind()),
             Some(FileKind::File)
@@ -766,11 +780,24 @@ mod tests {
     fn reconcile_without_prune_keeps_missing() {
         let counters = Arc::new(Counters::default());
         let mut engine = accept_all_engine(&counters);
-        engine.reconcile(truth(&["a", "b"]), true);
-        // An incomplete scan sees only "a"; without pruning, "b" must survive.
-        engine.reconcile(truth(&["a"]), false);
+        engine.reconcile(truth(&["a", "b"]), &scanned(&["/r"]));
+        // A scan that read no directories prunes nothing, so "b" must survive.
+        engine.reconcile(truth(&["a"]), &HashSet::new());
         assert_eq!(keys(&engine), [ap("/r/a"), ap("/r/b")].into_iter().collect());
         assert_eq!(counters.alive.load(Ordering::SeqCst), 2);
+    }
+
+    #[rstest]
+    fn reconcile_prunes_only_under_scanned_dirs() {
+        let counters = Arc::new(Counters::default());
+        let mut engine = accept_all_engine(&counters);
+        engine.observe(ap("/r/gone"), FileKind::File, Origin::Scan);
+        engine.observe(ap("/r/sub/kept"), FileKind::File, Origin::Scan);
+        // The scan read /r but not /r/sub (unreadable subtree); truth is empty.
+        engine.reconcile(vec![], &scanned(&["/r"]));
+        // /r/gone: parent /r was scanned and it is absent -> pruned.
+        // /r/sub/kept: parent /r/sub was not scanned -> retained.
+        assert_eq!(keys(&engine), std::iter::once(ap("/r/sub/kept")).collect());
     }
 
     #[rstest]
@@ -858,7 +885,7 @@ mod tests {
                     .collect();
                 let truth: Vec<(Arc<Path>, FileKind)> =
                     want.iter().cloned().map(|p| (p, FileKind::File)).collect();
-                engine.reconcile(truth, true);
+                engine.reconcile(truth, &scanned(&["/r"]));
                 prop_assert_eq!(keys(&engine), want);
             }
             let created = counters.created.load(Ordering::SeqCst);
@@ -888,7 +915,7 @@ mod tests {
                         (ap(&format!("/r/{id}")), kind)
                     })
                     .collect();
-                engine.reconcile(truth, true);
+                engine.reconcile(truth, &scanned(&["/r"]));
             }
             let alive = usize::try_from(counters.alive.load(Ordering::SeqCst)).unwrap();
             let active = engine
