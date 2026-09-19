@@ -2,7 +2,7 @@
 //! Following a growing file, `tail -f`-style.
 //!
 //! ```no_run
-//! use atuin_common::fs::tail::{Anchor, Read, Tail};
+//! use atuin_common::fs::tail::{Anchor, ReadMode, Tail};
 //! use futures::StreamExt;
 //!
 //! # async fn example() -> std::io::Result<()> {
@@ -13,7 +13,7 @@
 //! }
 //!
 //! // Or read an existing file once, to completion, as raw byte lines.
-//! let bounded = Tail::builder().path("data.txt").read(Read::Once(Anchor::Beginning)).build();
+//! let bounded = Tail::builder().path("data.txt").read(ReadMode::Once(Anchor::Beginning)).build();
 //! let mut lines = std::pin::pin!(bounded.lines());
 //! while let Some(line) = lines.next().await {
 //!     let _line: Vec<u8> = line?;
@@ -45,13 +45,22 @@ impl From<LineTooLong> for io::Error {
     }
 }
 
+/// Whether [`LineAccumulator`] is emitting lines or dropping an over-length one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum State {
+    /// Scanning `carry` for newlines and emitting the lines between them.
+    Scanning,
+    /// A line exceeded `max`; drop bytes until the next newline resynchronizes us.
+    Discarding,
+}
+
 #[derive(Debug)]
 pub(crate) struct LineAccumulator {
     carry: Vec<u8>,
     start: usize,
     max: Option<usize>,
-    discarding: bool,
-    consumed: u64,
+    state: State,
+    consumed: usize,
 }
 
 impl LineAccumulator {
@@ -60,7 +69,7 @@ impl LineAccumulator {
             carry: Vec::new(),
             start: 0,
             max,
-            discarding: false,
+            state: State::Scanning,
             consumed: 0,
         }
     }
@@ -75,58 +84,58 @@ impl LineAccumulator {
 
     fn advance(&mut self, bytes: usize) {
         self.start += bytes;
-        self.consumed += u64::try_from(bytes).expect("consumed byte count fits u64");
+        self.consumed += bytes;
     }
 
     pub(crate) fn consumed(&self) -> u64 {
-        self.consumed
+        u64::try_from(self.consumed).expect("consumed byte count fits u64")
     }
 
     pub(crate) fn next_line(&mut self) -> Option<Result<Vec<u8>, LineTooLong>> {
         loop {
             let newline = memchr::memchr(b'\n', &self.carry[self.start..]);
 
-            if self.discarding {
-                match newline {
+            match self.state {
+                // Drop bytes up to and including the next newline, then resume scanning; with no
+                // newline yet, consume what we have and wait for more.
+                State::Discarding => match newline {
                     Some(pos) => {
                         self.advance(pos + 1);
-                        self.discarding = false;
+                        self.state = State::Scanning;
                     }
                     None => {
                         let len = self.carry.len() - self.start;
                         self.advance(len);
                         return None;
                     }
-                }
-                continue;
-            }
-
-            match newline {
-                Some(pos) => {
-                    if self.max.is_some_and(|max| pos > max) {
+                },
+                State::Scanning => match newline {
+                    Some(pos) => {
+                        if self.max.is_some_and(|max| pos > max) {
+                            self.advance(pos + 1);
+                            return Some(Err(LineTooLong { len: pos }));
+                        }
+                        let line = self.carry[self.start..self.start + pos].to_vec();
                         self.advance(pos + 1);
-                        return Some(Err(LineTooLong { len: pos }));
+                        return Some(Ok(line));
                     }
-                    let line = self.carry[self.start..self.start + pos].to_vec();
-                    self.advance(pos + 1);
-                    return Some(Ok(line));
-                }
-                None => {
-                    let len = self.carry.len() - self.start;
-                    if self.max.is_some_and(|max| len > max) {
-                        self.advance(len);
-                        self.discarding = true;
-                        return Some(Err(LineTooLong { len }));
+                    None => {
+                        let len = self.carry.len() - self.start;
+                        if self.max.is_some_and(|max| len > max) {
+                            self.advance(len);
+                            self.state = State::Discarding;
+                            return Some(Err(LineTooLong { len }));
+                        }
+                        return None;
                     }
-                    return None;
-                }
+                },
             }
         }
     }
 
     pub(crate) fn finish(&mut self) -> Option<Result<Vec<u8>, LineTooLong>> {
         let len = self.carry.len() - self.start;
-        if self.discarding {
+        if self.state == State::Discarding {
             self.advance(len);
             return None;
         }
@@ -145,12 +154,12 @@ impl LineAccumulator {
     pub(crate) fn reset(&mut self) {
         self.carry.clear();
         self.start = 0;
-        self.discarding = false;
+        self.state = State::Scanning;
         self.consumed = 0;
     }
 }
 
-/// Where a bounded [`Read::Once`] begins reading.
+/// Where a bounded [`ReadMode::Once`] begins reading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Anchor {
     /// From the start of the file.
@@ -159,7 +168,7 @@ pub enum Anchor {
     Offset(u64),
 }
 
-/// Where a following [`Read::Follow`] begins reading.
+/// Where a following [`ReadMode::Follow`] begins reading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Start {
     /// From the start of the file.
@@ -172,7 +181,7 @@ pub enum Start {
 
 /// How a [`Tail`] consumes its file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Read {
+pub enum ReadMode {
     /// Read existing content from `Anchor`, then stop at end of file.
     Once(Anchor),
     /// Follow the file from `Start`, waiting for data appended afterwards.
@@ -188,11 +197,23 @@ pub enum Rotation {
     Name,
 }
 
-/// A [`Tail`] item paired with the byte offset immediately after it.
+/// A [`Tail`] item paired with its position in the followed file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Positioned<T> {
-    /// Byte offset just past `value`; use as an [`Anchor::Offset`] / [`Start::Offset`] to resume here.
+    /// Byte offset just past `value`, within [`epoch`](Self::epoch). Use it as an
+    /// [`Anchor::Offset`] / [`Start::Offset`] to resume from here -- but only when
+    /// [`terminated`](Self::terminated) is `true`.
     pub offset: u64,
+    /// Which generation of the file this item belongs to. Starts at `0` and increments each time the
+    /// file is truncated, rewritten, or rotated under the follower. Offsets are only comparable
+    /// within a single epoch: when this changes, the file restarted at offset `0`, so any offset
+    /// high-water-mark held from an earlier epoch is stale. For durable resume across process
+    /// restarts, pair `offset` with an [`FdIdentity`](crate::os::fs::FdIdentity).
+    pub epoch: u64,
+    /// Whether `value` was newline-terminated. `false` only for a trailing partial line with no
+    /// terminator, whose `offset` is **not** a safe resume point (resuming there would split the
+    /// record once the writer completes the line).
+    pub terminated: bool,
     /// The item at this position.
     pub value: T,
 }
@@ -302,8 +323,16 @@ impl TailSource for FileSource {
     }
 
     async fn path_identity(&mut self) -> io::Result<Option<FdIdentity>> {
-        match tokio::fs::File::open(&self.path).await {
-            Ok(file) => Ok(Some(file.identity()?)),
+        // A plain `stat` on the path is enough to spot a rotation and, on unix, avoids the open +
+        // fd dup that `identity()` needs; Windows still opens, since its file index requires a
+        // handle.
+        #[cfg(unix)]
+        let identity =
+            tokio::fs::metadata(&self.path).await.map(|meta| FdIdentity::from_metadata(&meta));
+        #[cfg(windows)]
+        let identity = tokio::fs::File::open(&self.path).await.and_then(|file| file.identity());
+        match identity {
+            Ok(id) => Ok(Some(id)),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e),
         }
@@ -318,22 +347,10 @@ impl TailSource for FileSource {
 
 #[derive(Debug, Clone, Copy)]
 struct EngineCfg {
-    read: Read,
+    read: ReadMode,
     rotation: Rotation,
     read_size: NonZeroUsize,
     backoff: Backoff,
-}
-
-async fn anchor_mismatch<S: TailSource>(src: &mut S, offset: u64, last_byte: Option<u8>) -> bool {
-    let Some(expected) = last_byte else {
-        return false;
-    };
-    let mut one = [0u8; 1];
-    match src.read_at(offset - 1, &mut one).await {
-        Ok(1) => one[0] != expected,
-        Ok(_) => true,
-        Err(_) => false,
-    }
 }
 
 fn follow<S, W>(mut src: S, mut waiter: W, cfg: EngineCfg) -> impl Stream<Item = Event> + Send
@@ -343,9 +360,9 @@ where
 {
     async_stream::stream! {
         let mut offset: u64 = match cfg.read {
-            Read::Once(Anchor::Beginning) | Read::Follow(Start::Beginning) => 0,
-            Read::Once(Anchor::Offset(at)) | Read::Follow(Start::Offset(at)) => at,
-            Read::Follow(Start::End) => match src.size().await {
+            ReadMode::Once(Anchor::Beginning) | ReadMode::Follow(Start::Beginning) => 0,
+            ReadMode::Once(Anchor::Offset(at)) | ReadMode::Follow(Start::Offset(at)) => at,
+            ReadMode::Follow(Start::End) => match src.size().await {
                 Ok(size) => size,
                 Err(e) => {
                     yield Event::Error(e);
@@ -353,7 +370,7 @@ where
                 }
             },
         };
-        let follow = matches!(cfg.read, Read::Follow(_));
+        let follow = matches!(cfg.read, ReadMode::Follow(_));
 
         let mut open_id = if cfg.rotation == Rotation::Name {
             src.identity().await.ok()
@@ -392,7 +409,19 @@ where
                 match src.size().await {
                     Ok(size) if size < offset => break Some(ResetKind::Discard),
                     Ok(size) => {
-                        if anchor_mismatch(&mut src, offset, last_byte).await {
+                        // If the byte just before `offset` is no longer the last one we read, the
+                        // file was rewritten in place rather than appended to: discard and restart.
+                        let anchor_mismatch = if let Some(expected) = last_byte {
+                            let mut one = [0u8; 1];
+                            match src.read_at(offset - 1, &mut one).await {
+                                Ok(1) => one[0] != expected,
+                                Ok(_) => true,
+                                Err(_) => false,
+                            }
+                        } else {
+                            false
+                        };
+                        if anchor_mismatch {
                             break Some(ResetKind::Discard);
                         }
                         if size > offset {
@@ -403,6 +432,12 @@ where
                 }
 
                 if cfg.rotation == Rotation::Name {
+                    // `open_id` can be None if identity() failed at open time (e.g. a transient
+                    // EMFILE); re-probe it here so a single early failure doesn't permanently
+                    // disable rotation detection (silently degrading tail -F into tail -f).
+                    if open_id.is_none() {
+                        open_id = src.identity().await.ok();
+                    }
                     let path_id = src.path_identity().await.ok().flatten();
                     if matches!((path_id, open_id), (Some(path), Some(open)) if path != open) {
                         loop {
@@ -461,8 +496,8 @@ fn default_backoff() -> Backoff {
 pub struct Tail {
     #[builder(setter(into))]
     path: PathBuf,
-    #[builder(default = Read::Follow(Start::Beginning))]
-    read: Read,
+    #[builder(default = ReadMode::Follow(Start::Beginning))]
+    read: ReadMode,
     #[builder(default = Rotation::Fd)]
     rotation: Rotation,
     #[builder(default = default_read_size())]
@@ -537,17 +572,20 @@ impl Tail {
         async_stream::stream! {
             futures::pin_mut!(lines);
             while let Some(line) = lines.next().await {
-                yield line.and_then(decode_utf8);
+                yield line.and_then(|bytes| {
+                    String::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+                });
             }
         }
     }
 
-    /// Stream byte lines, each paired with the byte offset just past it for resumable follows.
+    /// Stream byte lines, each paired with its [`Positioned`] location for resumable follows.
     pub fn lines_positioned(self) -> impl Stream<Item = Positioned<io::Result<Vec<u8>>>> + Send {
         let max = self.max_line_len;
         let events = self.events();
         async_stream::stream! {
             let mut acc = LineAccumulator::new(max);
+            let mut epoch: u64 = 0;
             let mut epoch_start: Option<u64> = None;
             futures::pin_mut!(events);
             while let Some(event) = events.next().await {
@@ -560,30 +598,32 @@ impl Tail {
                         acc.push(&bytes);
                         while let Some(line) = acc.next_line() {
                             let offset = epoch_start.unwrap_or(0) + acc.consumed();
-                            yield Positioned { offset, value: line.map_err(io::Error::from) };
+                            yield Positioned { offset, epoch, terminated: true, value: line.map_err(io::Error::from) };
                         }
                     }
                     Event::Rotated => {
                         if let Some(line) = acc.finish() {
                             let offset = epoch_start.unwrap_or(0) + acc.consumed();
-                            yield Positioned { offset, value: line.map_err(io::Error::from) };
+                            yield Positioned { offset, epoch, terminated: false, value: line.map_err(io::Error::from) };
                         }
                         acc.reset();
+                        epoch += 1;
                         epoch_start = None;
                     }
                     Event::Reset => {
                         acc.reset();
+                        epoch += 1;
                         epoch_start = None;
                     }
                     Event::Error(e) => {
                         let offset = epoch_start.unwrap_or(0) + acc.consumed();
-                        yield Positioned { offset, value: Err(e) };
+                        yield Positioned { offset, epoch, terminated: false, value: Err(e) };
                     }
                 }
             }
             if let Some(line) = acc.finish() {
                 let offset = epoch_start.unwrap_or(0) + acc.consumed();
-                yield Positioned { offset, value: line.map_err(io::Error::from) };
+                yield Positioned { offset, epoch, terminated: false, value: line.map_err(io::Error::from) };
             }
         }
     }
@@ -620,15 +660,12 @@ fn line_bytes_stream(
     }
 }
 
-fn decode_utf8(bytes: Vec<u8>) -> io::Result<String> {
-    String::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::pin::Pin;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::task::{Context, Poll};
 
     use futures::channel::mpsc;
@@ -808,7 +845,11 @@ mod tests {
         let path = dir.path().join("f");
         std::fs::write(&path, b"one\ntwo\nthree\n").unwrap();
         let lines = collect_lines(
-            Tail::builder().path(&path).read(Read::Once(Anchor::Beginning)).build().lines_utf8(),
+            Tail::builder()
+                .path(&path)
+                .read(ReadMode::Once(Anchor::Beginning))
+                .build()
+                .lines_utf8(),
         )
         .await;
         assert_eq!(lines, vec!["one", "two", "three"]);
@@ -821,7 +862,11 @@ mod tests {
         let path = dir.path().join("f");
         std::fs::write(&path, b"a\nb\nno-newline").unwrap();
         let lines = collect_lines(
-            Tail::builder().path(&path).read(Read::Once(Anchor::Beginning)).build().lines_utf8(),
+            Tail::builder()
+                .path(&path)
+                .read(ReadMode::Once(Anchor::Beginning))
+                .build()
+                .lines_utf8(),
         )
         .await;
         assert_eq!(lines, vec!["a", "b", "no-newline"]);
@@ -832,7 +877,7 @@ mod tests {
         let (tx, rx) = mpsc::unbounded();
         let (handle, src) = MemHandle::new(b"old\n");
         let cfg = EngineCfg {
-            read: Read::Follow(Start::End),
+            read: ReadMode::Follow(Start::End),
             rotation: Rotation::Fd,
             read_size: NonZeroUsize::new(4).expect("4 is nonzero"),
             backoff: default_backoff(),
@@ -849,8 +894,11 @@ mod tests {
     async fn a_missing_file_yields_an_error() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nope");
-        let stream =
-            Tail::builder().path(&path).read(Read::Once(Anchor::Beginning)).build().lines_utf8();
+        let stream = Tail::builder()
+            .path(&path)
+            .read(ReadMode::Once(Anchor::Beginning))
+            .build()
+            .lines_utf8();
         futures::pin_mut!(stream);
         assert!(stream.next().await.expect("one item").is_err());
     }
@@ -958,6 +1006,60 @@ mod tests {
         }
     }
 
+    /// A [`TailSource`] wrapper that injects a bounded number of transient errors into a real
+    /// [`MemSource`], for exercising `follow`'s retry/recovery branches (which `MemSource` alone,
+    /// being infallible, cannot reach).
+    #[derive(Clone, Default)]
+    struct Faults {
+        read: Arc<AtomicUsize>,
+        reopen: Arc<AtomicUsize>,
+        identity: Arc<AtomicUsize>,
+    }
+
+    impl Faults {
+        /// Consume one pending fault of this kind, returning whether one fired.
+        fn take(counter: &AtomicUsize) -> bool {
+            counter.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1)).is_ok()
+        }
+    }
+
+    #[derive(Clone)]
+    struct FaultySource {
+        inner: MemSource,
+        faults: Faults,
+    }
+
+    impl TailSource for FaultySource {
+        async fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
+            if Faults::take(&self.faults.read) {
+                return Err(io::Error::new(io::ErrorKind::Interrupted, "injected read fault"));
+            }
+            self.inner.read_at(offset, buf).await
+        }
+
+        async fn size(&mut self) -> io::Result<u64> {
+            self.inner.size().await
+        }
+
+        async fn identity(&mut self) -> io::Result<FdIdentity> {
+            if Faults::take(&self.faults.identity) {
+                return Err(io::Error::other("injected identity fault"));
+            }
+            self.inner.identity().await
+        }
+
+        async fn path_identity(&mut self) -> io::Result<Option<FdIdentity>> {
+            self.inner.path_identity().await
+        }
+
+        async fn reopen(&mut self) -> io::Result<()> {
+            if Faults::take(&self.faults.reopen) {
+                return Err(io::Error::other("injected reopen fault"));
+            }
+            self.inner.reopen().await
+        }
+    }
+
     struct ManualWaiter {
         rx: mpsc::UnboundedReceiver<()>,
     }
@@ -974,7 +1076,7 @@ mod tests {
 
     fn test_cfg(rotation: Rotation) -> EngineCfg {
         EngineCfg {
-            read: Read::Follow(Start::Beginning),
+            read: ReadMode::Follow(Start::Beginning),
             rotation,
             read_size: NonZeroUsize::new(4).expect("4 is nonzero"),
             backoff: default_backoff(),
@@ -1028,6 +1130,18 @@ mod tests {
 
     fn rotations(events: &[Event]) -> usize {
         events.iter().filter(|event| matches!(event, Event::Rotated)).count()
+    }
+
+    fn errors(events: &[Event]) -> usize {
+        events.iter().filter(|event| matches!(event, Event::Error(_))).count()
+    }
+
+    fn follow_faulty(
+        src: FaultySource,
+        rx: mpsc::UnboundedReceiver<()>,
+        rotation: Rotation,
+    ) -> EventStream {
+        Box::pin(follow(src, ManualWaiter { rx }, test_cfg(rotation)))
     }
 
     #[rstest]
@@ -1099,6 +1213,68 @@ mod tests {
     }
 
     #[rstest]
+    fn a_transient_read_error_is_retried_without_losing_data() {
+        let (tx, rx) = mpsc::unbounded();
+        let (_handle, mem) = MemHandle::new(b"data\n");
+        let faults = Faults::default();
+        faults.read.store(1, Ordering::SeqCst);
+        let mut stream = follow_faulty(FaultySource { inner: mem, faults }, rx, Rotation::Fd);
+
+        // The first read fails: an error surfaces and nothing is delivered yet.
+        let first = drain(&mut stream);
+        assert_eq!(errors(&first), 1);
+        assert_eq!(data_of(&first), b"");
+
+        // After the backoff wait, the retry reads the data that was there all along.
+        tx.unbounded_send(()).unwrap();
+        assert_eq!(data_of(&drain(&mut stream)), b"data\n");
+    }
+
+    #[rstest]
+    fn a_failed_reopen_is_retried_rather_than_ending_the_stream() {
+        let (tx, rx) = mpsc::unbounded();
+        let (handle, mem) = MemHandle::new(b"old\n");
+        let faults = Faults::default();
+        faults.reopen.store(1, Ordering::SeqCst);
+        let mut stream = follow_faulty(FaultySource { inner: mem, faults }, rx, Rotation::Name);
+        assert_eq!(data_of(&drain(&mut stream)), b"old\n");
+
+        handle.rotate();
+        handle.append(b"new\n");
+        tx.unbounded_send(()).unwrap();
+
+        // Rotation is detected but the reopen fails: an error surfaces, the stream stays alive.
+        let step = drain(&mut stream);
+        assert_eq!(errors(&step), 1);
+        assert_eq!(rotations(&step), 0);
+
+        // The next attempt reopens successfully and delivers the new file.
+        tx.unbounded_send(()).unwrap();
+        let step = drain(&mut stream);
+        assert_eq!(rotations(&step), 1);
+        assert_eq!(data_of(&step), b"new\n");
+    }
+
+    #[rstest]
+    fn rotation_recovers_after_a_transient_identity_failure() {
+        // A single identity() error at startup must not permanently wedge tail -F into tail -f:
+        // `open_id` starts None, and rotation detection needs it, so the engine must re-probe it.
+        let (tx, rx) = mpsc::unbounded();
+        let (handle, mem) = MemHandle::new(b"a\n");
+        let faults = Faults::default();
+        faults.identity.store(1, Ordering::SeqCst);
+        let mut stream = follow_faulty(FaultySource { inner: mem, faults }, rx, Rotation::Name);
+        assert_eq!(data_of(&drain(&mut stream)), b"a\n");
+
+        handle.rotate();
+        handle.append(b"b\n");
+        tx.unbounded_send(()).unwrap();
+        let events = drain(&mut stream);
+        assert_eq!(rotations(&events), 1);
+        assert_eq!(data_of(&events), b"b\n");
+    }
+
+    #[rstest]
     fn follow_detects_a_same_length_rewrite() {
         let (tx, rx) = mpsc::unbounded();
         let (handle, src) = MemHandle::new(b"aaaa\n");
@@ -1166,15 +1342,90 @@ mod tests {
         std::fs::write(&path, b"aa\nbbb\nc\n").unwrap();
         let stream = Tail::builder()
             .path(&path)
-            .read(Read::Once(Anchor::Beginning))
+            .read(ReadMode::Once(Anchor::Beginning))
             .build()
             .lines_positioned();
         futures::pin_mut!(stream);
         let mut got = Vec::new();
-        while let Some(Positioned { offset, value }) = stream.next().await {
+        while let Some(Positioned { offset, value, .. }) = stream.next().await {
             got.push((offset, value.unwrap()));
         }
         assert_eq!(got, vec![(3, b"aa".to_vec()), (7, b"bbb".to_vec()), (9, b"c".to_vec())]);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn lines_positioned_flags_the_unterminated_trailing_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f");
+        std::fs::write(&path, b"aa\nbbb\nc").unwrap();
+        let stream = Tail::builder()
+            .path(&path)
+            .read(ReadMode::Once(Anchor::Beginning))
+            .build()
+            .lines_positioned();
+        futures::pin_mut!(stream);
+        let mut got = Vec::new();
+        while let Some(p) = stream.next().await {
+            got.push((p.offset, p.epoch, p.terminated, p.value.unwrap()));
+        }
+        // The terminated lines are safe resume points; the trailing "c" (no newline) is not.
+        assert_eq!(got, vec![
+            (3, 0, true, b"aa".to_vec()),
+            (7, 0, true, b"bbb".to_vec()),
+            (8, 0, false, b"c".to_vec()),
+        ]);
+    }
+
+    #[rstest]
+    #[tokio::test(start_paused = true)]
+    async fn positioned_epoch_advances_and_offsets_restart_on_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.log");
+        std::fs::write(&path, b"a\n").unwrap();
+        let stream =
+            Tail::builder().path(&path).rotation(Rotation::Name).build().lines_positioned();
+        futures::pin_mut!(stream);
+
+        let p = stream.next().await.unwrap();
+        assert_eq!(
+            (p.offset, p.epoch, p.terminated, p.value.unwrap()),
+            (2, 0, true, b"a".to_vec())
+        );
+
+        // Rotate the path to a brand-new file (a real inode change).
+        std::fs::rename(&path, dir.path().join("app.log.1")).unwrap();
+        std::fs::write(&path, b"b\n").unwrap();
+        // New epoch, and the offset restarts at 2 (relative to the new file) rather than climbing.
+        let p = stream.next().await.unwrap();
+        assert_eq!(
+            (p.offset, p.epoch, p.terminated, p.value.unwrap()),
+            (2, 1, true, b"b".to_vec())
+        );
+    }
+
+    #[rstest]
+    #[tokio::test(start_paused = true)]
+    async fn positioned_epoch_advances_on_truncation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f");
+        std::fs::write(&path, b"aaaa\n").unwrap();
+        let stream = Tail::builder().path(&path).build().lines_positioned();
+        futures::pin_mut!(stream);
+
+        let p = stream.next().await.unwrap();
+        assert_eq!(
+            (p.offset, p.epoch, p.terminated, p.value.unwrap()),
+            (5, 0, true, b"aaaa".to_vec())
+        );
+
+        // Truncate in place to something shorter (same inode), then write fresh content.
+        std::fs::write(&path, b"bb\n").unwrap();
+        let p = stream.next().await.unwrap();
+        assert_eq!(
+            (p.offset, p.epoch, p.terminated, p.value.unwrap()),
+            (3, 1, true, b"bb".to_vec())
+        );
     }
 
     #[rstest]
@@ -1184,7 +1435,11 @@ mod tests {
         let path = dir.path().join("f");
         std::fs::write(&path, b"aa\nbbb\nc\n").unwrap();
         let lines = collect_lines(
-            Tail::builder().path(&path).read(Read::Once(Anchor::Offset(7))).build().lines_utf8(),
+            Tail::builder()
+                .path(&path)
+                .read(ReadMode::Once(Anchor::Offset(7)))
+                .build()
+                .lines_utf8(),
         )
         .await;
         assert_eq!(lines, vec!["c"]);
@@ -1206,5 +1461,34 @@ mod tests {
         file.flush().unwrap();
         drop(file);
         assert_eq!(stream.next().await.unwrap().unwrap(), "two");
+    }
+
+    #[rstest]
+    #[tokio::test(start_paused = true)]
+    async fn follows_a_real_file_across_truncation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f");
+        std::fs::write(&path, b"one\n").unwrap();
+        let stream = Tail::builder().path(&path).build().lines_utf8();
+        futures::pin_mut!(stream);
+        assert_eq!(stream.next().await.unwrap().unwrap(), "one");
+        // Truncate in place to something shorter, then write fresh content (same inode).
+        std::fs::write(&path, b"x\n").unwrap();
+        assert_eq!(stream.next().await.unwrap().unwrap(), "x");
+    }
+
+    #[rstest]
+    #[tokio::test(start_paused = true)]
+    async fn follows_a_real_file_across_name_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.log");
+        std::fs::write(&path, b"before\n").unwrap();
+        let stream = Tail::builder().path(&path).rotation(Rotation::Name).build().lines_utf8();
+        futures::pin_mut!(stream);
+        assert_eq!(stream.next().await.unwrap().unwrap(), "before");
+        // Rotate the path to a brand-new file (a real inode change).
+        std::fs::rename(&path, dir.path().join("app.log.1")).unwrap();
+        std::fs::write(&path, b"after\n").unwrap();
+        assert_eq!(stream.next().await.unwrap().unwrap(), "after");
     }
 }

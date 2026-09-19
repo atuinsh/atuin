@@ -14,6 +14,20 @@ impl FdIdentity {
     pub(crate) fn from_raw(device: u64, inode: u64) -> Self {
         Self { device, inode }
     }
+
+    /// The identity recorded in path-based [`std::fs::Metadata`], without opening a handle.
+    ///
+    /// Matches [`FdIdentityExt::identity`] for the same file, but lets a caller that already has
+    /// (or can cheaply `stat`) the path avoid an extra open + fd dup.
+    #[cfg(unix)]
+    pub(crate) fn from_metadata(meta: &std::fs::Metadata) -> Self {
+        use std::os::unix::fs::MetadataExt;
+
+        Self {
+            device: meta.dev(),
+            inode: meta.ino(),
+        }
+    }
 }
 
 /// Exposes the [`FdIdentity`] of any file handle.
@@ -69,7 +83,18 @@ impl<T: std::os::windows::io::AsHandle + ?Sized> FdIdentityExt for T {}
 mod tests {
     use std::fs::File;
 
+    use rstest::rstest;
+
     use super::*;
+
+    #[rstest]
+    fn metadata_identity_matches_the_handle_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f");
+        let handle = File::create(&path).unwrap();
+        let via_metadata = FdIdentity::from_metadata(&std::fs::metadata(&path).unwrap());
+        assert_eq!(handle.identity().unwrap(), via_metadata);
+    }
 
     #[test]
     fn distinct_files_have_distinct_identities() {
