@@ -1126,9 +1126,11 @@ mod tests {
         }
 
         async fn stat(&mut self) -> io::Result<Stat> {
-            let world = self.world.lock();
-            let len = world.files.get(&world.open_id).expect("open file exists").len();
-            let mtime = world.mtimes.get(&world.open_id).copied().unwrap_or(0);
+            let (len, mtime) = {
+                let world = self.world.lock();
+                let len = world.files.get(&world.open_id).expect("open file exists").len();
+                (len, world.mtimes.get(&world.open_id).copied().unwrap_or(0))
+            };
             Ok(Stat {
                 len: u64::try_from(len).expect("len fits u64"),
                 modified: Some(SystemTime::UNIX_EPOCH + Duration::from_nanos(mtime)),
@@ -1484,7 +1486,7 @@ mod tests {
         let mut stream = follow_mem(src, rx, Rotation::Fd);
         assert_eq!(data_of(&drain(&mut stream)), seed);
 
-        let mut rewritten = seed.clone();
+        let mut rewritten = seed;
         rewritten[0] = b'Z'; // change only outside the trailing window: same length, same tail
         handle.rewrite(&rewritten);
         tx.unbounded_send(()).unwrap();
