@@ -1,4 +1,7 @@
+mod engine;
 mod proto;
+#[cfg(test)]
+mod testkit;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,9 +13,9 @@ use atuin_client::ai_session::{
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4::Key;
 use atuin_domain::record::HostId;
+use engine::SessionCaptureEngine;
 use futures::Stream;
 use tokio::sync::broadcast;
-use tokio::task::JoinHandle;
 use tokio_stream::wrappers::BroadcastStream;
 
 const NOP_STORE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -52,6 +55,11 @@ impl Sink {
         BroadcastStream::new(self.tail.subscribe())
     }
 
+    #[cfg(test)]
+    pub(crate) fn tail_subscribe(&self) -> BroadcastStream<SessionTailEvent> {
+        self.subscribe()
+    }
+
     pub(crate) async fn append(&self, msg: Message) -> Result<(), AppendError> {
         let started = self.sidecar.get_session(&msg.session).await?.is_none();
         let appended = self.sidecar.append(&msg).await?;
@@ -75,18 +83,6 @@ impl Sink {
         }
 
         Ok(())
-    }
-}
-
-struct SessionCaptureEngine {
-    _listeners: Vec<JoinHandle<()>>,
-}
-
-impl SessionCaptureEngine {
-    fn spawn(_sink: Arc<Sink>) -> Self {
-        Self {
-            _listeners: Vec::new(),
-        }
     }
 }
 
@@ -114,15 +110,13 @@ impl AiHarnessSessionCapture {
             .host_id(HostId(atuin_common::utils::uuid_v7()))
             .key(Key::generate())
             .build();
-        let sidecar = AiSessionDatabase::in_memory()
-            .await
-            .expect("in-memory ai-session database must open for the nop ai-session capture facade");
+        let sidecar = AiSessionDatabase::in_memory().await.expect(
+            "in-memory ai-session database must open for the nop ai-session capture facade",
+        );
 
         Self {
             sink: Arc::new(Sink::new(records, sidecar)),
-            _engine: SessionCaptureEngine {
-                _listeners: Vec::new(),
-            },
+            _engine: SessionCaptureEngine::detached(),
         }
     }
 
