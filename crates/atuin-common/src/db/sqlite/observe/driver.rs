@@ -1,20 +1,15 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 
-use futures::{StreamExt as _, TryStreamExt};
+use async_stream::try_stream;
+use futures::Stream;
 use itertools::{EitherOrBoth, Itertools};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
 use sqlx::{AssertSqlSafe, Connection, Sqlite};
-use tokio::sync::mpsc;
 
 use super::event::{Appended, Change};
 use super::schema::{Diffable, TableSchema, Tailable};
 use super::{ObserveConfig, ObserveError, Replay};
-
-pub(super) enum DeliverError {
-    Sqlx(sqlx::Error),
-    ConsumerGone,
-}
 
 pub(super) trait Strategy: Send + 'static {
     type Event: Send + 'static;
@@ -23,14 +18,12 @@ pub(super) trait Strategy: Send + 'static {
         &mut self,
         conn: &mut SqliteConnection,
         replay: Replay,
-        tx: &mpsc::Sender<Result<Self::Event, ObserveError>>,
-    ) -> impl Future<Output = Result<(), DeliverError>> + Send;
+    ) -> impl Future<Output = Result<(), sqlx::Error>> + Send;
 
     fn poll(
         &mut self,
         conn: &mut SqliteConnection,
-        tx: &mpsc::Sender<Result<Self::Event, ObserveError>>,
-    ) -> impl Future<Output = Result<(), DeliverError>> + Send;
+    ) -> impl Future<Output = Result<Vec<Self::Event>, sqlx::Error>> + Send;
 }
 
 pub(super) struct AppendStrategy<T: Tailable> {
@@ -50,26 +43,20 @@ impl<T: Tailable> Strategy for AppendStrategy<T> {
         &mut self,
         conn: &mut SqliteConnection,
         replay: Replay,
-        _tx: &mpsc::Sender<Result<Self::Event, ObserveError>>,
-    ) -> Result<(), DeliverError> {
+    ) -> Result<(), sqlx::Error> {
         self.cursor = match replay {
             Replay::All => None,
             Replay::FromNow => {
                 let sql = format!("SELECT max({}) FROM {}", T::CURSOR_COLUMN, T::TABLE);
                 crate::db::query_scalar::<Sqlite, Option<T::Cursor>>(AssertSqlSafe(sql))
                     .fetch_one(conn)
-                    .await
-                    .map_err(DeliverError::Sqlx)?
+                    .await?
             }
         };
         Ok(())
     }
 
-    async fn poll(
-        &mut self,
-        conn: &mut SqliteConnection,
-        tx: &mpsc::Sender<Result<Self::Event, ObserveError>>,
-    ) -> Result<(), DeliverError> {
+    async fn poll(&mut self, conn: &mut SqliteConnection) -> Result<Vec<Self::Event>, sqlx::Error> {
         let cols = T::COLUMNS.join(", ");
         let sql = match self.cursor {
             Some(_) => format!(
@@ -87,13 +74,11 @@ impl<T: Tailable> Strategy for AppendStrategy<T> {
             None => query,
         };
 
-        let mut rows = query.fetch(conn);
-        while let Some(row) = rows.try_next().await.map_err(DeliverError::Sqlx)? {
-            let cursor = row.cursor();
-            tx.send(Ok(Appended(row))).await.map_err(|_| DeliverError::ConsumerGone)?;
-            self.cursor = Some(cursor);
+        let rows: Vec<T> = query.fetch_all(conn).await?;
+        if let Some(row) = rows.last() {
+            self.cursor = Some(row.cursor());
         }
-        Ok(())
+        Ok(rows.into_iter().map(Appended).collect())
     }
 }
 
@@ -104,99 +89,66 @@ fn is_transient(e: &sqlx::Error) -> bool {
             .is_some_and(|code| crate::db::sqlite::TransientResultCode::from_code(&code).is_some())
 }
 
-pub(super) async fn run<S: Strategy>(
+pub(super) fn run<S: Strategy>(
     opts: SqliteConnectOptions,
     first: SqliteConnection,
     mut strategy: S,
     cfg: ObserveConfig,
-    tx: mpsc::Sender<Result<S::Event, ObserveError>>,
-    mut seeded: bool,
-) {
-    let mut pending = Some(first);
-    loop {
-        let mut conn = match pending.take() {
-            Some(conn) => conn,
-            None => {
-                cfg.reconnect
-                    .retry_forever(|| async {
-                        match SqliteConnection::connect_with(&opts).await {
-                            Ok(conn) => std::ops::ControlFlow::Break(conn),
-                            Err(_) => std::ops::ControlFlow::Continue(()),
-                        }
-                    })
-                    .await
-            }
-        };
-
-        if !seeded {
-            match strategy.seed(&mut conn, cfg.replay, &tx).await {
-                Ok(()) => seeded = true,
-                Err(DeliverError::ConsumerGone) => return,
-                Err(DeliverError::Sqlx(e)) if is_transient(&e) => {
-                    tokio::time::sleep(cfg.poll_interval).await;
-                    continue;
-                }
-                Err(DeliverError::Sqlx(e)) => {
-                    let _ = tx.send(Err(ObserveError::Seed(e))).await;
-                    return;
-                }
-            }
-        }
-
-        let mut ticker = tokio::time::interval(cfg.poll_interval);
-        let mut last: Option<i64> = None;
+) -> impl Stream<Item = Result<S::Event, ObserveError>> + Send {
+    try_stream! {
+        let mut pending = Some(first);
         loop {
-            ticker.tick().await;
-
-            let version = match crate::db::query_scalar::<Sqlite, i64>("PRAGMA data_version")
-                .fetch_one(&mut conn)
-                .await
-            {
-                Ok(version) => version,
-                Err(e) if is_transient(&e) => break,
-                Err(e) => {
-                    let _ = tx.send(Err(ObserveError::Query(e))).await;
-                    return;
+            let mut conn = match pending.take() {
+                Some(conn) => conn,
+                None => {
+                    cfg.reconnect
+                        .retry_forever(|| async {
+                            match SqliteConnection::connect_with(&opts).await {
+                                Ok(conn) => std::ops::ControlFlow::Break(conn),
+                                Err(_) => std::ops::ControlFlow::Continue(()),
+                            }
+                        })
+                        .await
                 }
             };
-            if last == Some(version) {
-                continue;
-            }
 
-            match strategy.poll(&mut conn, &tx).await {
-                Ok(()) => last = Some(version),
-                Err(DeliverError::ConsumerGone) => return,
-                Err(DeliverError::Sqlx(e)) if is_transient(&e) => break,
-                Err(DeliverError::Sqlx(e)) => {
-                    let _ = tx.send(Err(ObserveError::Query(e))).await;
-                    return;
+            let mut ticker = tokio::time::interval(cfg.poll_interval);
+            let mut last: Option<i64> = None;
+            'gate: loop {
+                ticker.tick().await;
+
+                let version = match crate::db::query_scalar::<Sqlite, i64>("PRAGMA data_version")
+                    .fetch_one(&mut conn)
+                    .await
+                {
+                    Ok(version) => version,
+                    Err(e) if is_transient(&e) => break 'gate,
+                    Err(e) => Err(ObserveError::Query(e))?,
+                };
+                if last == Some(version) {
+                    continue;
+                }
+
+                let events = match strategy.poll(&mut conn).await {
+                    Ok(events) => events,
+                    Err(e) if is_transient(&e) => break 'gate,
+                    Err(e) => Err(ObserveError::Query(e))?,
+                };
+                last = Some(version);
+                for event in events {
+                    yield event;
                 }
             }
-        }
 
-        tokio::time::sleep(cfg.poll_interval).await;
+            tokio::time::sleep(cfg.poll_interval).await;
+        }
     }
 }
 
-async fn fetch_all<T: TableSchema>(conn: &mut SqliteConnection) -> Result<Vec<T>, DeliverError> {
+async fn fetch_all<T: TableSchema>(conn: &mut SqliteConnection) -> Result<Vec<T>, sqlx::Error> {
     let cols = T::COLUMNS.join(", ");
     let sql = format!("SELECT {cols} FROM {}", T::TABLE);
-    crate::db::query_as::<Sqlite, T>(AssertSqlSafe(sql))
-        .fetch_all(conn)
-        .await
-        .map_err(DeliverError::Sqlx)
-}
-
-async fn deliver<E>(
-    tx: &mpsc::Sender<Result<E, ObserveError>>,
-    events: Vec<E>,
-) -> Result<(), DeliverError> {
-    futures::stream::iter(events)
-        .map(Ok)
-        .try_for_each(|event| async move {
-            tx.send(Ok(event)).await.map_err(|_| DeliverError::ConsumerGone)
-        })
-        .await
+    crate::db::query_as::<Sqlite, T>(AssertSqlSafe(sql)).fetch_all(conn).await
 }
 
 pub(super) struct MutateStrategy<T: Diffable> {
@@ -218,28 +170,21 @@ impl<T: Diffable> Strategy for MutateStrategy<T> {
         &mut self,
         conn: &mut SqliteConnection,
         replay: Replay,
-        tx: &mpsc::Sender<Result<Self::Event, ObserveError>>,
-    ) -> Result<(), DeliverError> {
-        let snapshot: BTreeMap<T::Key, T> =
-            fetch_all::<T>(conn).await?.into_iter().map(|row| (row.key(), row)).collect();
-        if matches!(replay, Replay::All) {
-            let inserts: Vec<Change<T>> =
-                snapshot.values().cloned().map(Change::Inserted).collect();
-            deliver(tx, inserts).await?;
-        }
-        self.snapshot = snapshot;
+    ) -> Result<(), sqlx::Error> {
+        self.snapshot = match replay {
+            Replay::All => BTreeMap::new(),
+            Replay::FromNow => {
+                fetch_all::<T>(conn).await?.into_iter().map(|row| (row.key(), row)).collect()
+            }
+        };
         Ok(())
     }
 
-    async fn poll(
-        &mut self,
-        conn: &mut SqliteConnection,
-        tx: &mpsc::Sender<Result<Self::Event, ObserveError>>,
-    ) -> Result<(), DeliverError> {
+    async fn poll(&mut self, conn: &mut SqliteConnection) -> Result<Vec<Self::Event>, sqlx::Error> {
         let fresh: BTreeMap<T::Key, T> =
             fetch_all::<T>(conn).await?.into_iter().map(|row| (row.key(), row)).collect();
 
-        let changes: Vec<Change<T>> = self
+        let changes = self
             .snapshot
             .iter()
             .merge_join_by(fresh.iter(), |(a, _), (b, _)| a.cmp(b))
@@ -253,9 +198,8 @@ impl<T: Diffable> Strategy for MutateStrategy<T> {
             })
             .collect();
 
-        deliver(tx, changes).await?;
         self.snapshot = fresh;
-        Ok(())
+        Ok(changes)
     }
 }
 
@@ -547,10 +491,7 @@ mod tests {
         let path = dir.path().join("db.sqlite");
         let _db = writer(dir.path()).await;
         let observer = SqliteObserver::new(&path);
-        let cfg = ObserveConfig::builder()
-            .poll_interval(Duration::from_millis(10))
-            .channel_capacity(std::num::NonZeroUsize::new(1).unwrap())
-            .build();
+        let cfg = ObserveConfig::builder().poll_interval(Duration::from_millis(10)).build();
         let stream = observer.append::<Item>(cfg).await.unwrap();
 
         let inserts: String =
@@ -566,21 +507,6 @@ mod tests {
             .collect()
             .await;
         assert_eq!(got, (1..=20).collect::<Vec<_>>());
-    }
-
-    #[rstest]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn drop_observer_ends_task() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("db.sqlite");
-        let _db = writer(dir.path()).await;
-        let observer = SqliteObserver::new(&path);
-        let stream = observer.append::<Item>(cfg(Replay::FromNow)).await.unwrap();
-
-        let weak = std::sync::Arc::downgrade(stream.task());
-        drop(stream);
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(weak.upgrade().is_none(), "dropping the observer must abort its task");
     }
 
     #[rstest]

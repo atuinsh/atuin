@@ -1,4 +1,4 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::NonZeroU32;
 use std::time::Duration;
 
 use strum_macros::Display;
@@ -19,8 +19,6 @@ pub struct ObserveConfig {
     pub replay: Replay,
     #[builder(default = Duration::from_millis(250))]
     pub poll_interval: Duration,
-    #[builder(default = NonZeroUsize::new(1024).unwrap())]
-    pub channel_capacity: NonZeroUsize,
     #[builder(default = Backoff::Exponential {
         initial: Duration::from_millis(50),
         max: Duration::from_secs(5),
