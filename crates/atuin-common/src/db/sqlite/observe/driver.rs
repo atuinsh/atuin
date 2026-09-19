@@ -332,9 +332,21 @@ mod tests {
         }
     }
 
+    fn sqlite3_available() -> bool {
+        std::process::Command::new("sqlite3")
+            .arg("-version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok()
+    }
+
     #[rstest]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn append_tail_emits_new_rows_in_order() {
+        if !sqlite3_available() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("db.sqlite");
         let _db = writer(dir.path()).await;
@@ -354,6 +366,9 @@ mod tests {
     #[case::all(Replay::All, vec![item(1, "a"), item(2, "b"), item(3, "c")])]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn replay_controls_preexisting_rows(#[case] replay: Replay, #[case] expected: Vec<Item>) {
+        if !sqlite3_available() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("db.sqlite");
         let db = writer(dir.path()).await;
@@ -372,6 +387,9 @@ mod tests {
     #[rstest]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_writers_no_loss() {
+        if !sqlite3_available() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("db.sqlite");
         let _db = writer(dir.path()).await;
@@ -407,6 +425,9 @@ mod tests {
                 .build()
                 .unwrap();
             rt.block_on(async {
+                if !sqlite3_available() {
+                    return Ok(());
+                }
                 let dir = tempfile::tempdir().unwrap();
                 let path = dir.path().join("db.sqlite");
                 let _db = writer(dir.path()).await;
@@ -431,6 +452,9 @@ mod tests {
     #[rstest]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn mutate_detects_insert_update_delete() {
+        if !sqlite3_available() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("db.sqlite");
         let db = writer(dir.path()).await;
@@ -455,6 +479,9 @@ mod tests {
     #[rstest]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn mutate_ignores_value_preserving_write() {
+        if !sqlite3_available() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("db.sqlite");
         let db = writer(dir.path()).await;
@@ -481,6 +508,9 @@ mod tests {
                 .build()
                 .unwrap();
             rt.block_on(async {
+                if !sqlite3_available() {
+                    return Ok(());
+                }
                 let dir = tempfile::tempdir().unwrap();
                 let path = dir.path().join("db.sqlite");
                 let _db = writer(dir.path()).await;
@@ -525,6 +555,9 @@ mod tests {
     #[rstest]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn slow_consumer_loses_no_rows() {
+        if !sqlite3_available() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("db.sqlite");
         let _db = writer(dir.path()).await;
@@ -550,6 +583,9 @@ mod tests {
     #[rstest]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn terminal_query_error_surfaces() {
+        if !sqlite3_available() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("db.sqlite");
         let _db = writer(dir.path()).await;
