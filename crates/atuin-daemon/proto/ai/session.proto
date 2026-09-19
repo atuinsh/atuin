@@ -8,10 +8,6 @@ message ListSessionsRequest {
   optional ai.agent.HarnessKind harness = 1;
 }
 
-message ListSessionsResponse {
-  repeated ai.agent.Session sessions = 1;
-}
-
 message GetSessionRequest {
   ai.agent.HarnessSession session = 1;
 }
@@ -72,8 +68,9 @@ message TailSessionsEvent {
 }
 
 service AiSession {
-  // List session summaries, newest first.
-  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  // List session summaries, newest first, streamed one per message so a machine with a long
+  // harness history never has to fit every session into a single response.
+  rpc ListSessions(ListSessionsRequest) returns (stream ai.agent.Session);
 
   // Fetch one session and its messages, streamed: the session first, then each
   // message in order. Streamed so a large session never has to fit in one

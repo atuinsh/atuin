@@ -8,12 +8,13 @@ use tokio_stream::Stream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};
 
+use crate::grpc::ai_agent::pb as agent;
 use crate::grpc::ai_session::pb::ai_session_server::AiSession as GrpcService;
 use crate::grpc::ai_session::pb::{
     GetSessionEvent, GetSessionRequest, GetTranscriptChunk, GetTranscriptRequest,
-    HarnessFilterRequest, ListSessionsRequest, ListSessionsResponse, SearchSessionsMatch,
-    SearchSessionsRequest, SessionRefRequest, TailSessionsEvent, TailSessionsRequest,
-    get_session_event, tail_sessions_event,
+    HarnessFilterRequest, ListSessionsRequest, SearchSessionsMatch, SearchSessionsRequest,
+    SessionRefRequest, TailSessionsEvent, TailSessionsRequest, get_session_event,
+    tail_sessions_event,
 };
 use crate::grpc::common::pb as common;
 use crate::grpc::common::pb::Lagged;
@@ -33,6 +34,7 @@ impl Service {
 
 #[tonic::async_trait]
 impl GrpcService for Service {
+    type ListSessionsStream = Pin<Box<dyn Stream<Item = Result<agent::Session, Status>> + Send>>;
     type GetSessionStream = Pin<Box<dyn Stream<Item = Result<GetSessionEvent, Status>> + Send>>;
     type GetTranscriptStream =
         Pin<Box<dyn Stream<Item = Result<GetTranscriptChunk, Status>> + Send>>;
@@ -43,7 +45,7 @@ impl GrpcService for Service {
     async fn list_sessions(
         &self,
         request: Request<ListSessionsRequest>,
-    ) -> Result<Response<ListSessionsResponse>, Status> {
+    ) -> Result<Response<Self::ListSessionsStream>, Status> {
         let harness = HarnessFilterRequest::harness(&request.into_inner())?;
 
         let sessions = self
@@ -52,9 +54,12 @@ impl GrpcService for Service {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        Ok(Response::new(ListSessionsResponse {
-            sessions: sessions.into_iter().map(Into::into).collect(),
-        }))
+        // Stream one session per message so a long list never exceeds the gRPC message size limit.
+        let stream = futures::stream::iter(
+            sessions.into_iter().map(|session| Ok::<_, Status>(agent::Session::from(session))),
+        );
+
+        Ok(Response::new(Box::pin(stream)))
     }
 
     async fn get_session(

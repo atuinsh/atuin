@@ -500,6 +500,9 @@ impl AiClient {
     }
 
     /// All captured session summaries, newest first. `harness` filters to a single harness when set.
+    ///
+    /// The daemon streams the sessions one per message (so a long list never trips the gRPC message
+    /// size limit); they're collected here for callers that just want the whole list.
     pub async fn list_sessions(
         &mut self,
         harness: Option<AiHarnessKind>,
@@ -507,7 +510,12 @@ impl AiClient {
         let request = ListSessionsRequest {
             harness: harness.map(|h| h as i32),
         };
-        Ok(self.client.list_sessions(request).await?.into_inner().sessions)
+        let mut stream = self.client.list_sessions(request).await?.into_inner();
+        let mut sessions = Vec::new();
+        while let Some(session) = stream.next().await {
+            sessions.push(session?);
+        }
+        Ok(sessions)
     }
 
     /// Stream one session: the first event carries the [`AiSession`], each event after it a message.
