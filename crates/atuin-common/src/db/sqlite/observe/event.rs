@@ -1,4 +1,4 @@
-use strum::{Display, EnumDiscriminants, EnumIter};
+use strum_macros::{Display, EnumDiscriminants, EnumIter};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Appended<T>(pub T);

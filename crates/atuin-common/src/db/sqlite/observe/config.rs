@@ -1,7 +1,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::time::Duration;
 
-use strum::Display;
+use strum_macros::Display;
 use typed_builder::TypedBuilder;
 
 use crate::futures::Backoff;
