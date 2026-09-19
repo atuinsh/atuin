@@ -90,13 +90,14 @@ impl AiSessionStore {
 #[cfg(test)]
 mod tests {
     use atuin_common::harnesstools::session::{Content, Role};
-    use atuin_domain::record::{HarnessSession, HostId};
+    use atuin_domain::record::HostId;
     use proptest::prelude::*;
     use rstest::*;
     use time::OffsetDateTime;
 
     use super::{AiSessionRecord, AiSessionStore, Key, RecordTag, SqliteStore};
-    use crate::ai_session::{HarnessKind, Message, NativeSessionId, SourceId};
+    use crate::ai_session::{HarnessKind, HarnessSession, Message, NativeSessionId, SourceId};
+    use crate::settings::test_local_timeout;
 
     fn hid() -> HostId {
         HostId(atuin_common::utils::uuid_v7())
@@ -145,7 +146,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn push_then_read_back_one_message() {
-        let store = SqliteStore::in_memory(1).await;
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
         let s = AiSessionStore::builder().store(store.clone()).host_id(hid()).key(key()).build();
         let msg = sample_message();
         let id = s.push(&msg).await.unwrap();

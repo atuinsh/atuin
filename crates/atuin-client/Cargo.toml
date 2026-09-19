@@ -47,6 +47,7 @@ minspan = { workspace = true }
 notify = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
+rmp-serde = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
