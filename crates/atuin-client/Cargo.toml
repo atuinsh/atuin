@@ -88,6 +88,7 @@ atuin-common = { workspace = true, features = ["test-utils"] }
 divan = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
+rmp-serde = "1"
 rstest = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
