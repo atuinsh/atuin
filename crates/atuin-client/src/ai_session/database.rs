@@ -327,7 +327,7 @@ impl AiSessionDatabase {
                  parent_source_id, thread, timestamp, role, content, content_z, cwd, git_branch, \
                  model, usage_input, usage_output, usage_cache_read, usage_cache_write, \
                  stop_reason, usage_present FROM messages WHERE harness = ? AND session_id = ? \
-                 ORDER BY timestamp, source_id",
+                 ORDER BY timestamp, id",
             )
             .bind(harness)
             .bind(session_id)
@@ -606,6 +606,42 @@ mod tests {
         }
         let got: Vec<_> = db.messages(&session).try_collect().await.unwrap();
         assert!(got.windows(2).all(|w| w[0].timestamp <= w[1].timestamp));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn same_timestamp_orders_by_capture_id_not_source_id() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        let ts = OffsetDateTime::UNIX_EPOCH;
+
+        // Two messages sharing a stored timestamp; source_ids sort opposite to capture order, so
+        // ordering by source_id would reverse them. The monotonic capture id must break the tie.
+        let first = Message::builder()
+            .id(RecordId(atuin_common::utils::uuid_v7()))
+            .session(session.clone())
+            .source_id(SourceId::from("zzz-first".to_owned()))
+            .timestamp(ts)
+            .role(Role::User)
+            .content(vec![Content::Text("first".to_owned())])
+            .build();
+        let second = Message::builder()
+            .id(RecordId(atuin_common::utils::uuid_v7()))
+            .session(session.clone())
+            .source_id(SourceId::from("aaa-second".to_owned()))
+            .timestamp(ts)
+            .role(Role::User)
+            .content(vec![Content::Text("second".to_owned())])
+            .build();
+
+        db.append(&first).await.unwrap();
+        db.append(&second).await.unwrap();
+
+        let got: Vec<_> = db.messages(&session).try_collect().await.unwrap();
+        assert!(
+            got.windows(2).all(|w| w[0].id.0 <= w[1].id.0),
+            "same-timestamp messages must order by monotonic capture id, not source_id"
+        );
     }
 
     #[rstest]

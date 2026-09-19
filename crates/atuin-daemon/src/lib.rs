@@ -87,14 +87,24 @@ pub async fn boot(
         }
     };
     let ai_session_capture = Arc::new(match &ai_session_db {
-        Some(db) => AiHarnessSessionCapture::open(
-            AiSessionStore::builder()
+        Some(db) => {
+            let records = AiSessionStore::builder()
                 .store(handle.store().clone())
                 .host_id(host_id)
                 .key(handle.encryption_key().clone())
-                .build(),
-            db.clone(),
-        ),
+                .build();
+
+            // Reproject the sidecar from the synced record store before capture starts. The record
+            // store is the source of truth; a sidecar that missed an append (transient error,
+            // crash between the two writes, or a lost db file) is repaired here instead of being
+            // stranded until — or re-pushed as duplicate records by — file re-capture. append's
+            // ON CONFLICT keying makes the replay idempotent.
+            if let Err(err) = records.build(db).await {
+                tracing::error!(?err, "failed to reproject ai-session sidecar from records");
+            }
+
+            AiHarnessSessionCapture::open(records, db.clone())
+        }
         None => AiHarnessSessionCapture::nop().await,
     });
 
