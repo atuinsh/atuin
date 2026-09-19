@@ -458,6 +458,7 @@ dependencies = [
  "async-stream",
  "atuin-vt100",
  "base64",
+ "bytes",
  "bytesize",
  "crypto_secretbox",
  "derive_more",

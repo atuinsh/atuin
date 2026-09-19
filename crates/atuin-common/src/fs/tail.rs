@@ -16,7 +16,7 @@
 //! let bounded = Tail::builder().path("data.txt").read(ReadMode::Once(Anchor::Beginning)).build();
 //! let mut lines = std::pin::pin!(bounded.lines());
 //! while let Some(line) = lines.next().await {
-//!     let _line: Vec<u8> = line?;
+//!     let _line: bytes::Bytes = line?;
 //! }
 //! # Ok(())
 //! # }
@@ -27,6 +27,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use bytes::{Buf, Bytes, BytesMut};
 use futures::{Stream, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use typed_builder::TypedBuilder;
@@ -56,8 +57,7 @@ enum State {
 
 #[derive(Debug)]
 pub(crate) struct LineAccumulator {
-    carry: Vec<u8>,
-    start: usize,
+    carry: BytesMut,
     max: Option<usize>,
     state: State,
     consumed: usize,
@@ -66,8 +66,7 @@ pub(crate) struct LineAccumulator {
 impl LineAccumulator {
     pub(crate) fn new(max: Option<usize>) -> Self {
         Self {
-            carry: Vec::new(),
-            start: 0,
+            carry: BytesMut::new(),
             max,
             state: State::Scanning,
             consumed: 0,
@@ -75,15 +74,11 @@ impl LineAccumulator {
     }
 
     pub(crate) fn push(&mut self, buf: &[u8]) {
-        if self.start > 0 {
-            self.carry.drain(..self.start);
-            self.start = 0;
-        }
         self.carry.extend_from_slice(buf);
     }
 
-    fn advance(&mut self, bytes: usize) {
-        self.start += bytes;
+    fn consume(&mut self, bytes: usize) {
+        self.carry.advance(bytes);
         self.consumed += bytes;
     }
 
@@ -91,38 +86,39 @@ impl LineAccumulator {
         u64::try_from(self.consumed).expect("consumed byte count fits u64")
     }
 
-    pub(crate) fn next_line(&mut self) -> Option<Result<Vec<u8>, LineTooLong>> {
+    pub(crate) fn next_line(&mut self) -> Option<Result<Bytes, LineTooLong>> {
         loop {
-            let newline = memchr::memchr(b'\n', &self.carry[self.start..]);
+            let newline = memchr::memchr(b'\n', &self.carry);
 
             match self.state {
                 // Drop bytes up to and including the next newline, then resume scanning; with no
                 // newline yet, consume what we have and wait for more.
                 State::Discarding => match newline {
                     Some(pos) => {
-                        self.advance(pos + 1);
+                        self.consume(pos + 1);
                         self.state = State::Scanning;
                     }
                     None => {
-                        let len = self.carry.len() - self.start;
-                        self.advance(len);
+                        let len = self.carry.len();
+                        self.consume(len);
                         return None;
                     }
                 },
                 State::Scanning => match newline {
                     Some(pos) => {
                         if self.max.is_some_and(|max| pos > max) {
-                            self.advance(pos + 1);
+                            self.consume(pos + 1);
                             return Some(Err(LineTooLong { len: pos }));
                         }
-                        let line = self.carry[self.start..self.start + pos].to_vec();
-                        self.advance(pos + 1);
+                        let line = self.carry.split_to(pos).freeze();
+                        self.carry.advance(1);
+                        self.consumed += pos + 1;
                         return Some(Ok(line));
                     }
                     None => {
-                        let len = self.carry.len() - self.start;
+                        let len = self.carry.len();
                         if self.max.is_some_and(|max| len > max) {
-                            self.advance(len);
+                            self.consume(len);
                             self.state = State::Discarding;
                             return Some(Err(LineTooLong { len }));
                         }
@@ -133,27 +129,26 @@ impl LineAccumulator {
         }
     }
 
-    pub(crate) fn finish(&mut self) -> Option<Result<Vec<u8>, LineTooLong>> {
-        let len = self.carry.len() - self.start;
+    pub(crate) fn finish(&mut self) -> Option<Result<Bytes, LineTooLong>> {
+        let len = self.carry.len();
         if self.state == State::Discarding {
-            self.advance(len);
+            self.consume(len);
             return None;
         }
         if len == 0 {
             return None;
         }
         if self.max.is_some_and(|max| len > max) {
-            self.advance(len);
+            self.consume(len);
             return Some(Err(LineTooLong { len }));
         }
-        let line = self.carry[self.start..].to_vec();
-        self.advance(len);
+        let line = self.carry.split_to(len).freeze();
+        self.consumed += len;
         Some(Ok(line))
     }
 
     pub(crate) fn reset(&mut self) {
         self.carry.clear();
-        self.start = 0;
         self.state = State::Scanning;
         self.consumed = 0;
     }
@@ -208,7 +203,7 @@ pub struct Positioned<T> {
     /// file is truncated, rewritten, or rotated under the follower. Offsets are only comparable
     /// within a single epoch: when this changes, the file restarted at offset `0`, so any offset
     /// high-water-mark held from an earlier epoch is stale. For durable resume across process
-    /// restarts, pair `offset` with an [`FdIdentity`](crate::os::fs::FdIdentity).
+    /// restarts, pair `offset` with an [`FdIdentity`].
     pub epoch: u64,
     /// Whether `value` was newline-terminated. `false` only for a trailing partial line with no
     /// terminator, whose `offset` is **not** a safe resume point (resuming there would split the
@@ -221,7 +216,7 @@ pub struct Positioned<T> {
 #[derive(Debug)]
 enum Event {
     Data {
-        bytes: Vec<u8>,
+        bytes: Bytes,
         offset: u64,
     },
     /// The file was truncated or rewritten under us; discard any buffered partial line.
@@ -241,8 +236,8 @@ trait TailSource: Send {
     fn read_at(
         &mut self,
         offset: u64,
-        buf: &mut [u8],
-    ) -> impl std::future::Future<Output = io::Result<usize>> + Send;
+        len: usize,
+    ) -> impl std::future::Future<Output = io::Result<Bytes>> + Send;
 
     fn size(&mut self) -> impl std::future::Future<Output = io::Result<u64>> + Send;
 
@@ -286,6 +281,7 @@ struct FileSource {
     file: tokio::fs::File,
     path: PathBuf,
     pos: u64,
+    buf: BytesMut,
 }
 
 impl FileSource {
@@ -297,21 +293,30 @@ impl FileSource {
                 "tail target is not a regular file",
             ));
         }
-        Ok(Self { file, path, pos: 0 })
+        Ok(Self {
+            file,
+            path,
+            pos: 0,
+            buf: BytesMut::new(),
+        })
     }
 }
 
 impl TailSource for FileSource {
-    async fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
+    async fn read_at(&mut self, offset: u64, len: usize) -> io::Result<Bytes> {
         // Reads walk forward sequentially, so the cursor is usually already at `offset`; only
         // seek when it is not (resume, anchor probe, rotation).
         if self.pos != offset {
             self.file.seek(SeekFrom::Start(offset)).await?;
             self.pos = offset;
         }
-        let n = self.file.read(buf).await?;
+        // `read_buf` fills uninitialized capacity (no zeroing), and `take` caps it at `len`.
+        self.buf.clear();
+        self.buf.reserve(len);
+        let cap = u64::try_from(len).expect("read length fits u64");
+        let n = (&mut self.file).take(cap).read_buf(&mut self.buf).await?;
         self.pos += u64::try_from(n).expect("read count fits u64");
-        Ok(n)
+        Ok(self.buf.split_to(n).freeze())
     }
 
     async fn size(&mut self) -> io::Result<u64> {
@@ -378,16 +383,16 @@ where
             None
         };
         let mut last_byte: Option<u8> = None;
-        let mut buf = vec![0u8; cfg.read_size.get()];
+        let read_size = cfg.read_size.get();
 
         'follow: loop {
             loop {
-                match src.read_at(offset, &mut buf).await {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        offset += u64::try_from(n).expect("read count fits u64");
-                        last_byte = Some(buf[n - 1]);
-                        yield Event::Data { bytes: buf[..n].to_vec(), offset };
+                match src.read_at(offset, read_size).await {
+                    Ok(chunk) if chunk.is_empty() => break,
+                    Ok(chunk) => {
+                        offset += u64::try_from(chunk.len()).expect("read count fits u64");
+                        last_byte = chunk.last().copied();
+                        yield Event::Data { bytes: chunk, offset };
                     }
                     Err(e) => {
                         yield Event::Error(e);
@@ -412,10 +417,8 @@ where
                         // If the byte just before `offset` is no longer the last one we read, the
                         // file was rewritten in place rather than appended to: discard and restart.
                         let anchor_mismatch = if let Some(expected) = last_byte {
-                            let mut one = [0u8; 1];
-                            match src.read_at(offset - 1, &mut one).await {
-                                Ok(1) => one[0] != expected,
-                                Ok(_) => true,
+                            match src.read_at(offset - 1, 1).await {
+                                Ok(anchor) => anchor.first() != Some(&expected),
                                 Err(_) => false,
                             }
                         } else {
@@ -441,12 +444,12 @@ where
                     let path_id = src.path_identity().await.ok().flatten();
                     if matches!((path_id, open_id), (Some(path), Some(open)) if path != open) {
                         loop {
-                            match src.read_at(offset, &mut buf).await {
-                                Ok(0) => break,
-                                Ok(n) => {
-                                    offset += u64::try_from(n).expect("read count fits u64");
-                                    last_byte = Some(buf[n - 1]);
-                                    yield Event::Data { bytes: buf[..n].to_vec(), offset };
+                            match src.read_at(offset, read_size).await {
+                                Ok(chunk) if chunk.is_empty() => break,
+                                Ok(chunk) => {
+                                    offset += u64::try_from(chunk.len()).expect("read count fits u64");
+                                    last_byte = chunk.last().copied();
+                                    yield Event::Data { bytes: chunk, offset };
                                 }
                                 Err(e) => {
                                     yield Event::Error(e);
@@ -547,7 +550,7 @@ impl Tail {
     }
 
     /// Stream the file as raw read chunks of bytes.
-    pub fn chunks(self) -> impl Stream<Item = io::Result<Vec<u8>>> + Send {
+    pub fn chunks(self) -> impl Stream<Item = io::Result<Bytes>> + Send {
         let events = self.events();
         async_stream::stream! {
             futures::pin_mut!(events);
@@ -562,7 +565,7 @@ impl Tail {
     }
 
     /// Stream the file as newline-delimited byte lines, with the trailing `\n` stripped.
-    pub fn lines(self) -> impl Stream<Item = io::Result<Vec<u8>>> + Send {
+    pub fn lines(self) -> impl Stream<Item = io::Result<Bytes>> + Send {
         line_bytes_stream(self.max_line_len, self.events())
     }
 
@@ -573,14 +576,15 @@ impl Tail {
             futures::pin_mut!(lines);
             while let Some(line) = lines.next().await {
                 yield line.and_then(|bytes| {
-                    String::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+                    String::from_utf8(bytes.to_vec())
+                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
                 });
             }
         }
     }
 
     /// Stream byte lines, each paired with its [`Positioned`] location for resumable follows.
-    pub fn lines_positioned(self) -> impl Stream<Item = Positioned<io::Result<Vec<u8>>>> + Send {
+    pub fn lines_positioned(self) -> impl Stream<Item = Positioned<io::Result<Bytes>>> + Send {
         let max = self.max_line_len;
         let events = self.events();
         async_stream::stream! {
@@ -632,7 +636,7 @@ impl Tail {
 fn line_bytes_stream(
     max: Option<usize>,
     events: impl Stream<Item = Event> + Send + 'static,
-) -> impl Stream<Item = io::Result<Vec<u8>>> + Send {
+) -> impl Stream<Item = io::Result<Bytes>> + Send {
     async_stream::stream! {
         let mut acc = LineAccumulator::new(max);
         futures::pin_mut!(events);
@@ -676,7 +680,7 @@ mod tests {
 
     use super::*;
 
-    type Line = Result<Vec<u8>, LineTooLong>;
+    type Line = Result<Bytes, LineTooLong>;
 
     fn run(input: &[u8], chunks: &[usize], max: Option<usize>) -> (Vec<Line>, Option<Line>) {
         let mut acc = LineAccumulator::new(max);
@@ -704,7 +708,7 @@ mod tests {
         for p in pushes {
             acc.push(p);
             while let Some(line) = acc.next_line() {
-                lines.push(line.expect("no cap set"));
+                lines.push(line.expect("no cap set").to_vec());
             }
         }
         lines
@@ -714,7 +718,7 @@ mod tests {
     fn emits_a_complete_line_without_its_newline() {
         let mut acc = LineAccumulator::new(None);
         acc.push(b"hello\n");
-        assert_eq!(acc.next_line(), Some(Ok(b"hello".to_vec())));
+        assert_eq!(acc.next_line(), Some(Ok(Bytes::from_static(b"hello"))));
         assert_eq!(acc.next_line(), None);
     }
 
@@ -734,7 +738,7 @@ mod tests {
         let mut acc = LineAccumulator::new(None);
         acc.push(b"tail");
         assert_eq!(acc.next_line(), None);
-        assert_eq!(acc.finish(), Some(Ok(b"tail".to_vec())));
+        assert_eq!(acc.finish(), Some(Ok(Bytes::from_static(b"tail"))));
         assert_eq!(acc.finish(), None);
     }
 
@@ -742,7 +746,7 @@ mod tests {
     fn finish_emits_nothing_after_a_clean_newline() {
         let mut acc = LineAccumulator::new(None);
         acc.push(b"a\n");
-        assert_eq!(acc.next_line(), Some(Ok(b"a".to_vec())));
+        assert_eq!(acc.next_line(), Some(Ok(Bytes::from_static(b"a"))));
         assert_eq!(acc.finish(), None);
     }
 
@@ -752,7 +756,7 @@ mod tests {
         acc.push(b"half");
         acc.reset();
         acc.push(b"whole\n");
-        assert_eq!(acc.next_line(), Some(Ok(b"whole".to_vec())));
+        assert_eq!(acc.next_line(), Some(Ok(Bytes::from_static(b"whole"))));
     }
 
     #[rstest]
@@ -760,14 +764,14 @@ mod tests {
         let mut acc = LineAccumulator::new(Some(3));
         acc.push(b"toolong\nok\n");
         assert_eq!(acc.next_line(), Some(Err(LineTooLong { len: 7 })));
-        assert_eq!(acc.next_line(), Some(Ok(b"ok".to_vec())));
+        assert_eq!(acc.next_line(), Some(Ok(Bytes::from_static(b"ok"))));
     }
 
     #[rstest]
     fn a_line_exactly_at_the_cap_is_kept() {
         let mut acc = LineAccumulator::new(Some(3));
         acc.push(b"abc\n");
-        assert_eq!(acc.next_line(), Some(Ok(b"abc".to_vec())));
+        assert_eq!(acc.next_line(), Some(Ok(Bytes::from_static(b"abc"))));
     }
 
     #[rstest]
@@ -779,7 +783,7 @@ mod tests {
         acc.push(b"more");
         assert_eq!(acc.next_line(), None);
         acc.push(b"junk\nok\n");
-        assert_eq!(acc.next_line(), Some(Ok(b"ok".to_vec())));
+        assert_eq!(acc.next_line(), Some(Ok(Bytes::from_static(b"ok"))));
     }
 
     fn bytes_biased_to_newlines() -> impl Strategy<Value = Vec<u8>> {
@@ -972,14 +976,17 @@ mod tests {
     }
 
     impl TailSource for MemSource {
-        async fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
+        async fn read_at(&mut self, offset: u64, len: usize) -> io::Result<Bytes> {
             let start = usize::try_from(offset).expect("offset fits usize");
             let world = self.world.lock();
             let data = world.files.get(&world.open_id).expect("open file exists");
-            let n = buf.len().min(data.len().saturating_sub(start));
-            buf[..n].copy_from_slice(&data[start..start + n]);
+            let chunk = if start >= data.len() {
+                Bytes::new()
+            } else {
+                Bytes::copy_from_slice(&data[start..(start + len).min(data.len())])
+            };
             drop(world);
-            Ok(n)
+            Ok(chunk)
         }
 
         async fn size(&mut self) -> io::Result<u64> {
@@ -1030,11 +1037,11 @@ mod tests {
     }
 
     impl TailSource for FaultySource {
-        async fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
+        async fn read_at(&mut self, offset: u64, len: usize) -> io::Result<Bytes> {
             if Faults::take(&self.faults.read) {
                 return Err(io::Error::new(io::ErrorKind::Interrupted, "injected read fault"));
             }
-            self.inner.read_at(offset, buf).await
+            self.inner.read_at(offset, len).await
         }
 
         async fn size(&mut self) -> io::Result<u64> {
@@ -1101,14 +1108,14 @@ mod tests {
         out
     }
 
-    type LineStream = Pin<Box<dyn Stream<Item = io::Result<Vec<u8>>> + Send>>;
+    type LineStream = Pin<Box<dyn Stream<Item = io::Result<Bytes>> + Send>>;
 
     fn drain_lines(stream: &mut LineStream) -> Vec<Vec<u8>> {
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
         let mut out = Vec::new();
         while let Poll::Ready(Some(line)) = stream.as_mut().poll_next(&mut cx) {
-            out.push(line.expect("line is ok"));
+            out.push(line.expect("line is ok").to_vec());
         }
         out
     }
@@ -1348,7 +1355,7 @@ mod tests {
         futures::pin_mut!(stream);
         let mut got = Vec::new();
         while let Some(Positioned { offset, value, .. }) = stream.next().await {
-            got.push((offset, value.unwrap()));
+            got.push((offset, value.unwrap().to_vec()));
         }
         assert_eq!(got, vec![(3, b"aa".to_vec()), (7, b"bbb".to_vec()), (9, b"c".to_vec())]);
     }
@@ -1367,7 +1374,7 @@ mod tests {
         futures::pin_mut!(stream);
         let mut got = Vec::new();
         while let Some(p) = stream.next().await {
-            got.push((p.offset, p.epoch, p.terminated, p.value.unwrap()));
+            got.push((p.offset, p.epoch, p.terminated, p.value.unwrap().to_vec()));
         }
         // The terminated lines are safe resume points; the trailing "c" (no newline) is not.
         assert_eq!(got, vec![
@@ -1389,7 +1396,7 @@ mod tests {
 
         let p = stream.next().await.unwrap();
         assert_eq!(
-            (p.offset, p.epoch, p.terminated, p.value.unwrap()),
+            (p.offset, p.epoch, p.terminated, p.value.unwrap().to_vec()),
             (2, 0, true, b"a".to_vec())
         );
 
@@ -1399,7 +1406,7 @@ mod tests {
         // New epoch, and the offset restarts at 2 (relative to the new file) rather than climbing.
         let p = stream.next().await.unwrap();
         assert_eq!(
-            (p.offset, p.epoch, p.terminated, p.value.unwrap()),
+            (p.offset, p.epoch, p.terminated, p.value.unwrap().to_vec()),
             (2, 1, true, b"b".to_vec())
         );
     }
@@ -1415,7 +1422,7 @@ mod tests {
 
         let p = stream.next().await.unwrap();
         assert_eq!(
-            (p.offset, p.epoch, p.terminated, p.value.unwrap()),
+            (p.offset, p.epoch, p.terminated, p.value.unwrap().to_vec()),
             (5, 0, true, b"aaaa".to_vec())
         );
 
@@ -1423,7 +1430,7 @@ mod tests {
         std::fs::write(&path, b"bb\n").unwrap();
         let p = stream.next().await.unwrap();
         assert_eq!(
-            (p.offset, p.epoch, p.terminated, p.value.unwrap()),
+            (p.offset, p.epoch, p.terminated, p.value.unwrap().to_vec()),
             (3, 1, true, b"bb".to_vec())
         );
     }

@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use serde::de::DeserializeOwned;
 
@@ -18,7 +19,7 @@ fn blank(bytes: &[u8]) -> bool {
 /// [`epoch`](Positioned::epoch): it restarts at 1 whenever the file is truncated or rotated, so it
 /// always points at a line that exists in the file as it stands now.
 fn parse_positioned<T>(
-    lines: impl Stream<Item = Positioned<std::io::Result<Vec<u8>>>> + Send,
+    lines: impl Stream<Item = Positioned<std::io::Result<Bytes>>> + Send,
 ) -> impl Stream<Item = Positioned<Result<T, JsonlError>>> + Send
 where
     T: DeserializeOwned + Send + 'static,
@@ -159,19 +160,19 @@ mod tests {
                 offset: 2,
                 epoch: 0,
                 terminated: true,
-                value: Ok(b"1".to_vec()),
+                value: Ok(Bytes::from_static(b"1")),
             },
             Positioned {
                 offset: 4,
                 epoch: 0,
                 terminated: true,
-                value: Ok(b"2".to_vec()),
+                value: Ok(Bytes::from_static(b"2")),
             },
             Positioned {
                 offset: 9,
                 epoch: 1,
                 terminated: true,
-                value: Ok(b"not-json".to_vec()),
+                value: Ok(Bytes::from_static(b"not-json")),
             },
         ]);
         let out: Vec<Positioned<Result<i64, JsonlError>>> =
