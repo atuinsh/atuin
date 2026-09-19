@@ -135,11 +135,7 @@ impl AiSessionStore {
         Ok(())
     }
 
-    pub async fn incremental_build(
-        &self,
-        db: &AiSessionDatabase,
-        ids: &[RecordId],
-    ) -> Result<(), BuildError> {
+    pub async fn incremental_build(&self, db: &AiSessionDatabase, ids: &[RecordId]) {
         for id in ids {
             let record = match self.store.get(*id).await {
                 Ok(record) => record,
@@ -149,10 +145,13 @@ impl AiSessionStore {
                 }
             };
 
-            self.decode_and_append(record, db).await?;
+            // A single bad record must not abort the rest of the batch: these records are already
+            // downloaded and the sync cursor advances past them regardless, so propagating the
+            // error here would strand every later record out of the sidecar permanently.
+            if let Err(err) = self.decode_and_append(record, db).await {
+                warn!(?err, id = %id.0, "failed to append ai-session record to sidecar, skipping");
+            }
         }
-
-        Ok(())
     }
 }
 
@@ -277,7 +276,7 @@ mod tests {
         }
 
         let db = AiSessionDatabase::in_memory().await.unwrap();
-        s.incremental_build(&db, &ids).await.unwrap();
+        s.incremental_build(&db, &ids).await;
 
         let sess = db.get_session(&sample_handle()).await.unwrap().unwrap();
         assert_eq!(usize::try_from(sess.message_count).unwrap(), ids.len());

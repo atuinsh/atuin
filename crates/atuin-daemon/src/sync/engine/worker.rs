@@ -189,11 +189,7 @@ impl Worker {
             let Some(ai_session_db) = &self.ai_session_db else {
                 return;
             };
-            if let Err(e) =
-                self.ai_session_store.incremental_build(ai_session_db, &downloaded_records).await
-            {
-                tracing::error!("failed to rebuild ai-session store: {e}");
-            }
+            self.ai_session_store.incremental_build(ai_session_db, &downloaded_records).await;
         };
 
         tokio::join!(history_build, ai_session_build);

@@ -186,6 +186,7 @@ impl AiSessionDatabase {
                 cwd = COALESCE(excluded.cwd, sessions.cwd),
                 git_branch = COALESCE(excluded.git_branch, sessions.git_branch),
                 model = COALESCE(excluded.model, sessions.model),
+                started_at = MIN(sessions.started_at, excluded.started_at),
                 updated_at = MAX(sessions.updated_at, excluded.updated_at),
                 message_count = sessions.message_count + 1,
                 usage_input = sessions.usage_input + excluded.usage_input,
@@ -249,6 +250,23 @@ impl AiSessionDatabase {
         .await?;
 
         Ok(())
+    }
+
+    pub async fn contains_message(
+        &self,
+        session: &HarnessSession,
+        source_id: &SourceId,
+    ) -> Result<bool, DbError> {
+        let found: Option<(i64,)> = db::query_as(
+            "SELECT 1 FROM messages WHERE harness = ? AND session_id = ? AND source_id = ? LIMIT 1",
+        )
+        .bind(session.harness as i64)
+        .bind(session.session.as_ref())
+        .bind(source_id.as_ref())
+        .fetch_optional(self.db.pool())
+        .await?;
+
+        Ok(found.is_some())
     }
 
     pub async fn get_session(&self, session: &HarnessSession) -> Result<Option<Session>, DbError> {
@@ -456,7 +474,9 @@ impl AiSessionDatabase {
             .collect::<Vec<_>>()
             .join("\n");
 
-        format!("{role}: {body}")
+        // Trailing newline: chunks are concatenated verbatim by consumers, so the separator has
+        // to live in the chunk or every message would run together on one line.
+        format!("{role}: {body}\n")
     }
 
     fn session_from_row(row: SessionRow) -> Result<Session, DbError> {
@@ -603,5 +623,42 @@ mod tests {
             _ => panic!("expected Content::Text"),
         };
         assert_eq!(text, long_text);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn contains_message_reflects_presence() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let m = sample_message();
+        assert!(!db.contains_message(&m.session, &m.source_id).await.unwrap());
+        db.append(&m).await.unwrap();
+        assert!(db.contains_message(&m.session, &m.source_id).await.unwrap());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn started_at_tracks_earliest_message() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        // Later message arrives first, then an earlier one (out-of-order sync / replay).
+        db.append(&message_in(&session, 100, "later")).await.unwrap();
+        db.append(&message_in(&session, 50, "earlier")).await.unwrap();
+
+        let s = db.get_session(&session).await.unwrap().unwrap();
+        assert_eq!(s.started_at, OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(50));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn transcript_separates_messages() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        for m in ordered_messages(&session) {
+            db.append(&m).await.unwrap();
+        }
+
+        let chunks: Vec<String> = db.transcript(&session).try_collect().await.unwrap();
+        assert!(chunks.iter().all(|c| c.ends_with('\n')), "each chunk must be newline-terminated");
+        assert_eq!(chunks.concat().lines().count(), 3, "messages must not run together");
     }
 }

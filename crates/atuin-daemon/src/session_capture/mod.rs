@@ -55,14 +55,24 @@ impl Sink {
     }
 
     pub(crate) async fn append(&self, msg: Message) -> Result<(), AppendError> {
-        let started = self.sidecar.get_session(&msg.session).await?.is_none();
-        let appended = self.sidecar.append(&msg).await?;
-
-        if appended != Appended::New {
+        // Dedup gate: if this logical message is already projected it is already in the record
+        // store too, so there is nothing to do. Stable source ids (see engine::source_id) make
+        // this reliable across re-captures and keep the record store free of duplicates.
+        if self.sidecar.contains_message(&msg.session, &msg.source_id).await? {
             return Ok(());
         }
 
+        let started = self.sidecar.get_session(&msg.session).await?.is_none();
+
+        // Write the record store first: it is the synced source of truth and the sidecar is a
+        // pure projection of it. If the sidecar write fails afterwards a later rebuild repairs it;
+        // the reverse ordering could strand a message in the sidecar only -- lost on rebuild and
+        // never synced.
         self.records.push(&msg).await?;
+
+        if self.sidecar.append(&msg).await? != Appended::New {
+            return Ok(());
+        }
 
         if self.tail.receiver_count() > 0 {
             if let Some(session) = self.sidecar.get_session(&msg.session).await? {

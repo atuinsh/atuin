@@ -48,14 +48,18 @@ impl SessionCaptureEngine {
                                 harness: kind,
                                 session: NativeSessionId::from(session.to_string()),
                             };
-                            let _ = sink.record_session_meta(&handle, &meta).await;
+                            if let Err(e) = sink.record_session_meta(&handle, &meta).await {
+                                tracing::warn!(?e, "failed to record ai-session metadata");
+                            }
                         }
                         Ok(SessionEvent {
                             session,
                             kind: SessionEventKind::Message(m),
                         }) => {
                             let msg = Self::enrich(kind, &session, &m);
-                            let _ = sink.append(msg).await;
+                            if let Err(e) = sink.append(msg).await {
+                                tracing::warn!(?e, "failed to capture ai-session message");
+                            }
                         }
                         Err(e) => tracing::warn!(?e, "capture error"),
                     }
@@ -73,11 +77,7 @@ impl SessionCaptureEngine {
                 harness: kind,
                 session: NativeSessionId::from(session.to_string()),
             })
-            .source_id(
-                m.id()
-                    .map(|id| SourceId::from(String::from(id)))
-                    .unwrap_or_else(|| SourceId::from(atuin_common::utils::uuid_v7().to_string())),
-            )
+            .source_id(Self::source_id(session, m))
             .timestamp(m.timestamp().unwrap_or_else(OffsetDateTime::now_utc))
             .role(m.role())
             .content(m.content())
@@ -87,6 +87,21 @@ impl SessionCaptureEngine {
             .cwd(m.cwd())
             .git_branch(m.git_branch())
             .build()
+    }
+
+    /// A stable per-message identity for dedup. Harnesses that carry a native message id use it
+    /// directly; otherwise we content-address the message so re-capturing it (daemon restart,
+    /// transcript re-read) resolves to the same id instead of minting a fresh one each time.
+    fn source_id(session: &SessionId, m: &AnyMessage) -> SourceId {
+        if let Some(id) = m.id() {
+            return SourceId::from(String::from(id));
+        }
+
+        let ts = m.timestamp().map_or(0, |t| t.unix_timestamp_nanos());
+        let role = serde_json::to_string(&m.role()).unwrap_or_default();
+        let content = serde_json::to_string(&m.content()).unwrap_or_default();
+        let canonical = format!("{session}\u{1f}{ts}\u{1f}{role}\u{1f}{content}");
+        SourceId::from(format!("syn-{:016x}", xxhash_rust::xxh3::xxh3_64(canonical.as_bytes())))
     }
 }
 

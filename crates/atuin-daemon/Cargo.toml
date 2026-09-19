@@ -46,6 +46,7 @@ tower = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
+xxhash-rust = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 listenfd = { workspace = true }
