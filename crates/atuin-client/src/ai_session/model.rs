@@ -44,7 +44,7 @@ pub struct HarnessSession {
     pub session: NativeSessionId,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TypedBuilder)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TypedBuilder)]
 pub struct Message {
     pub id: RecordId,
     pub session: HarnessSession,
@@ -70,7 +70,7 @@ pub struct Message {
     pub stop_reason: Option<StopReason>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TypedBuilder)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TypedBuilder)]
 pub struct Session {
     pub handle: HarnessSession,
     #[builder(default)]

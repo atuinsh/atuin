@@ -133,7 +133,7 @@ impl From<Message> for pb::Message {
             parent_source_id: value.parent_source_id.map(Into::into),
             timestamp: Some(prost_types::Timestamp {
                 seconds: value.timestamp.unix_timestamp(),
-                nanos: value.timestamp.nanosecond() as i32,
+                nanos: value.timestamp.nanosecond().cast_signed(),
             }),
             role: pb::Role::from(value.role) as i32,
             content: value.content.into_iter().map(pb::ContentBlock::from).collect(),
@@ -160,11 +160,11 @@ impl From<Session> for pb::Session {
             model: value.model,
             started_at: Some(prost_types::Timestamp {
                 seconds: value.started_at.unix_timestamp(),
-                nanos: value.started_at.nanosecond() as i32,
+                nanos: value.started_at.nanosecond().cast_signed(),
             }),
             updated_at: Some(prost_types::Timestamp {
                 seconds: value.updated_at.unix_timestamp(),
-                nanos: value.updated_at.nanosecond() as i32,
+                nanos: value.updated_at.nanosecond().cast_signed(),
             }),
             message_count: value.message_count,
             tokens: Some(value.usage.into()),

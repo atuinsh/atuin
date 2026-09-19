@@ -85,9 +85,10 @@ pub struct AiHarnessSessionCapture {
 }
 
 impl AiHarnessSessionCapture {
+    #[must_use]
     pub fn open(records: AiSessionStore, sidecar: AiSessionDatabase) -> Self {
         let sink = Arc::new(Sink::new(records, sidecar));
-        let engine = SessionCaptureEngine::spawn(sink.clone());
+        let engine = SessionCaptureEngine::spawn(&sink);
         Self {
             sink,
             _engine: engine,
@@ -113,6 +114,7 @@ impl AiHarnessSessionCapture {
         }
     }
 
+    #[must_use]
     pub fn subscribe(&self) -> BroadcastStream<SessionTailEvent> {
         self.sink.subscribe()
     }

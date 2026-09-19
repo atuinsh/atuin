@@ -1,13 +1,13 @@
 mod codegen {
-    #![allow(clippy::must_use_candidate)]
-    #![allow(clippy::derive_partial_eq_without_eq)]
-    #![allow(clippy::large_enum_variant)]
+    #![allow(clippy::must_use_candidate, reason = "prost-generated code")]
+    #![allow(clippy::derive_partial_eq_without_eq, reason = "prost-generated code")]
+    #![allow(clippy::large_enum_variant, reason = "prost-generated code")]
+    #![allow(clippy::same_name_method, reason = "prost-generated code")]
     tonic::include_proto!("ai.session");
 }
 
-pub use codegen::*;
-
 use atuin_client::ai_session::{HarnessKind, HarnessSession};
+pub use codegen::*;
 
 use crate::grpc::ai_agent::pb as agent;
 

@@ -12,18 +12,18 @@ use tokio::task::JoinHandle;
 
 use super::Sink;
 
-pub(crate) struct SessionCaptureEngine {
-    _listeners: Vec<JoinHandle<()>>,
+pub struct SessionCaptureEngine {
+    listeners: Vec<JoinHandle<()>>,
 }
 
 impl SessionCaptureEngine {
-    pub(crate) fn nop() -> Self {
+    pub fn nop() -> Self {
         Self {
-            _listeners: Vec::new(),
+            listeners: Vec::new(),
         }
     }
 
-    pub(crate) fn spawn(sink: Arc<Sink>) -> Self {
+    pub fn spawn(sink: &Arc<Sink>) -> Self {
         let mut listeners = Vec::new();
 
         for harness in AnyHarness::all() {
@@ -44,7 +44,7 @@ impl SessionCaptureEngine {
                             session,
                             kind: SessionEventKind::Message(m),
                         }) => {
-                            let msg = Self::enrich(kind, &session, m);
+                            let msg = Self::enrich(kind, &session, &m);
                             let _ = sink.append(msg).await;
                         }
                         Ok(_started) => {}
@@ -54,12 +54,10 @@ impl SessionCaptureEngine {
             }));
         }
 
-        Self {
-            _listeners: listeners,
-        }
+        Self { listeners }
     }
 
-    fn enrich(kind: HarnessKind, session: &SessionId, m: AnyMessage) -> Message {
+    fn enrich(kind: HarnessKind, session: &SessionId, m: &AnyMessage) -> Message {
         Message::builder()
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .session(HarnessSession {
@@ -85,7 +83,7 @@ impl SessionCaptureEngine {
 
 impl Drop for SessionCaptureEngine {
     fn drop(&mut self) {
-        for listener in &self._listeners {
+        for listener in &self.listeners {
             listener.abort();
         }
     }

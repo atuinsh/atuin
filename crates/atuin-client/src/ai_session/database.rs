@@ -128,7 +128,7 @@ impl AiSessionDatabase {
         let timestamp = Self::millis(msg.timestamp);
         let role_json = serde_json::to_string(&msg.role)?;
         let content_json = serde_json::to_string(&msg.content)?;
-        let (content, content_z) = self.split_content(content_json)?;
+        let (content, content_z) = Self::split_content(content_json)?;
         let stop_reason_json = msg.stop_reason.as_ref().map(serde_json::to_string).transpose()?;
         let (usage_input, usage_output, usage_cache_read, usage_cache_write) =
             Self::fold_usage(msg.usage.as_ref());
@@ -289,7 +289,7 @@ impl AiSessionDatabase {
         self.messages(session).map(|result| result.map(|msg| Self::render_transcript_chunk(&msg)))
     }
 
-    fn split_content(&self, json: String) -> Result<(String, Option<Vec<u8>>), DbError> {
+    fn split_content(json: String) -> Result<(String, Option<Vec<u8>>), DbError> {
         if json.len() < COMPRESS_THRESHOLD {
             return Ok((json, None));
         }

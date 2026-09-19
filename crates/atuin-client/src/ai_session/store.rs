@@ -16,7 +16,7 @@ pub struct AiSessionStore {
     key: Key,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AiSessionRecord {
     Message(Message),
 }
@@ -48,6 +48,7 @@ pub enum BuildError {
 impl AiSessionRecord {
     const MESSAGE_KIND: u8 = 0;
 
+    #[must_use]
     pub fn serialize(&self) -> Vec<u8> {
         match self {
             Self::Message(msg) => {
@@ -112,8 +113,7 @@ impl AiSessionStore {
             }
         };
 
-        let AiSessionRecord::Message(msg) = match AiSessionRecord::deserialize(&decrypted.data.0)
-        {
+        let AiSessionRecord::Message(msg) = match AiSessionRecord::deserialize(&decrypted.data.0) {
             Ok(record) => record,
             Err(err) => {
                 warn!(?err, id = %id.0, "failed to deserialize ai-session record, skipping");
@@ -280,7 +280,7 @@ mod tests {
         s.incremental_build(&db, &ids).await.unwrap();
 
         let sess = db.get_session(&sample_handle()).await.unwrap().unwrap();
-        assert_eq!(sess.message_count as usize, ids.len());
+        assert_eq!(usize::try_from(sess.message_count).unwrap(), ids.len());
     }
 
     #[rstest]
@@ -298,6 +298,6 @@ mod tests {
         s.build(&db).await.unwrap();
 
         let sess = db.get_session(&sample_handle()).await.unwrap().unwrap();
-        assert_eq!(sess.message_count as usize, messages.len());
+        assert_eq!(usize::try_from(sess.message_count).unwrap(), messages.len());
     }
 }
