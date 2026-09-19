@@ -293,12 +293,13 @@ fn select_session(sessions: Vec<agent::Session>, selector: &str) -> Result<agent
         return Ok(handle_of(&latest));
     }
 
-    let mut matches = sessions.into_iter().filter(|s| s.session_id == selector);
+    // `list` prints ids truncated to 12 chars, so accept a unique id prefix as well as a full id.
+    let mut matches = sessions.into_iter().filter(|s| s.session_id.starts_with(selector));
     let first = matches
         .next()
         .ok_or_else(|| eyre!("no session with id `{selector}`. Run `atuin ai session list`."))?;
     if matches.next().is_some() {
-        bail!("id `{selector}` matches sessions from more than one harness; cannot disambiguate");
+        bail!("id `{selector}` matches more than one session; use a longer or full id");
     }
     Ok(handle_of(&first))
 }
@@ -669,6 +670,27 @@ mod tests {
         let handle = select_session(sessions, "bbb").unwrap();
         assert_eq!(handle.session_id, "bbb");
         assert_eq!(handle.harness, agent::HarnessKind::ClaudeCode as i32);
+    }
+
+    #[rstest]
+    fn id_prefix_resolves_a_session() {
+        // `list` prints ids truncated, so a copied prefix must resolve.
+        let sessions = vec![
+            session(agent::HarnessKind::Codex, "abcdef0123456789"),
+            session(agent::HarnessKind::ClaudeCode, "fedcba9876543210"),
+        ];
+        let handle = select_session(sessions, "abcdef012345").unwrap();
+        assert_eq!(handle.session_id, "abcdef0123456789");
+        assert_eq!(handle.harness, agent::HarnessKind::Codex as i32);
+    }
+
+    #[rstest]
+    fn ambiguous_prefix_is_an_error() {
+        let sessions = vec![
+            session(agent::HarnessKind::Codex, "abc111"),
+            session(agent::HarnessKind::ClaudeCode, "abc222"),
+        ];
+        assert!(select_session(sessions, "abc").is_err());
     }
 
     #[rstest]
