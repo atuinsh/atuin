@@ -84,12 +84,16 @@ where
             let mut stream = session.messages_from(from);
             while let Ok(Some((offset, result))) = timeout(FOLLOW_IDLE_TIMEOUT, stream.next()).await
             {
-                Self::ingest(kind, &native, meta.as_ref(), &sink, offset, result).await;
+                if !Self::ingest(kind, &native, meta.as_ref(), &sink, offset, result).await {
+                    break;
+                }
             }
         } else {
             let mut stream = session.messages_once_from(from);
             while let Some((offset, result)) = stream.next().await {
-                Self::ingest(kind, &native, meta.as_ref(), &sink, offset, result).await;
+                if !Self::ingest(kind, &native, meta.as_ref(), &sink, offset, result).await {
+                    break;
+                }
             }
         }
     }
@@ -105,11 +109,30 @@ where
         sink: &Sink,
         offset: u64,
         result: Result<S::Message, MessageError>,
-    ) {
-        if let Ok(message) = result {
-            let _ = sink.append(Self::enrich(kind, native, meta, offset, &message)).await;
+    ) -> bool {
+        match result {
+            Ok(message) => {
+                if let Err(e) =
+                    sink.append(Self::enrich(kind, native, meta, offset, &message)).await
+                {
+                    tracing::warn!(
+                        ?e,
+                        %offset,
+                        "failed to append ai-session message; stopping ingest without \
+                         advancing checkpoint"
+                    );
+                    return false;
+                }
+            }
+            Err(e) => {
+                tracing::warn!(?e, %offset, "failed to parse ai-session message; skipping");
+            }
         }
-        let _ = sink.sidecar.set_checkpoint(kind, native, offset).await;
+
+        if let Err(e) = sink.sidecar.set_checkpoint(kind, native, offset).await {
+            tracing::warn!(?e, %offset, "failed to persist ai-session checkpoint");
+        }
+        true
     }
 
     fn enrich(

@@ -15,6 +15,7 @@ use super::{HarnessKind, HarnessSession, Message, NativeSessionId, Session, Sour
 const COMPRESS_THRESHOLD: usize = 256;
 const ZSTD_LEVEL: i32 = 3;
 
+#[derive(Debug, Clone)]
 pub struct AiSessionDatabase {
     db: Sqlite,
 }
