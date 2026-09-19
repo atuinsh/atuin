@@ -29,23 +29,23 @@ impl Service {
     pub fn new(capture: Arc<AiHarnessSessionCapture>) -> Self {
         Self { capture }
     }
-}
 
-fn parse_harness(harness: Option<i32>) -> Result<Option<HarnessKind>, Status> {
-    harness
-        .map(|h| {
-            agent_pb::HarnessKind::try_from(h)
-                .map(HarnessKind::from)
-                .map_err(|_| Status::invalid_argument("unrecognized harness kind"))
-        })
-        .transpose()
-}
+    fn parse_harness(harness: Option<i32>) -> Result<Option<HarnessKind>, Status> {
+        harness
+            .map(|h| {
+                agent_pb::HarnessKind::try_from(h)
+                    .map(HarnessKind::from)
+                    .map_err(|_| Status::invalid_argument("unrecognized harness kind"))
+            })
+            .transpose()
+    }
 
-fn parse_session(session: Option<agent_pb::HarnessSession>) -> Result<HarnessSession, Status> {
-    session
-        .ok_or_else(|| Status::invalid_argument("missing session"))?
-        .try_into()
-        .map_err(|_| Status::invalid_argument("invalid harness session"))
+    fn parse_session(session: Option<agent_pb::HarnessSession>) -> Result<HarnessSession, Status> {
+        session
+            .ok_or_else(|| Status::invalid_argument("missing session"))?
+            .try_into()
+            .map_err(|_| Status::invalid_argument("invalid harness session"))
+    }
 }
 
 #[tonic::async_trait]
@@ -62,7 +62,7 @@ impl GrpcService for Service {
         request: Request<ListSessionsRequest>,
     ) -> Result<Response<ListSessionsResponse>, Status> {
         let request = request.into_inner();
-        let harness = parse_harness(request.harness)?;
+        let harness = Self::parse_harness(request.harness)?;
         let page = Page {
             size: request.page_size,
             token: (!request.page_token.is_empty()).then(|| PageToken::from(request.page_token)),
@@ -84,7 +84,7 @@ impl GrpcService for Service {
         &self,
         request: Request<GetSessionRequest>,
     ) -> Result<Response<Self::GetSessionStream>, Status> {
-        let handle = parse_session(request.into_inner().session)?;
+        let handle = Self::parse_session(request.into_inner().session)?;
 
         let session = self
             .capture
@@ -118,7 +118,7 @@ impl GrpcService for Service {
         &self,
         request: Request<GetTranscriptRequest>,
     ) -> Result<Response<Self::GetTranscriptStream>, Status> {
-        let handle = parse_session(request.into_inner().session)?;
+        let handle = Self::parse_session(request.into_inner().session)?;
 
         let chunks: Vec<Result<GetTranscriptChunk, Status>> = self
             .capture
@@ -143,24 +143,47 @@ impl GrpcService for Service {
 
     async fn tail_sessions(
         &self,
-        _request: Request<TailSessionsRequest>,
+        request: Request<TailSessionsRequest>,
     ) -> Result<Response<Self::TailSessionsStream>, Status> {
-        let stream = self.capture.subscribe().map(|event| {
-            Ok::<_, Status>(TailSessionsEvent {
-                event: Some(match event {
-                    Ok(SessionTailEvent::SessionStarted(s)) => {
-                        tail_sessions_event::Event::SessionStarted(s.into())
+        let harness = Self::parse_harness(request.into_inner().harness)?;
+
+        let stream = self
+            .capture
+            .subscribe()
+            .filter(move |event| {
+                let keep = match (harness, event) {
+                    (_, Err(BroadcastStreamRecvError::Lagged(_))) => true,
+                    (None, Ok(_)) => true,
+                    (Some(harness), Ok(SessionTailEvent::SessionStarted(s))) => {
+                        s.handle.harness == harness
                     }
-                    Ok(SessionTailEvent::SessionUpdated(s)) => {
-                        tail_sessions_event::Event::SessionUpdated(s.into())
+                    (Some(harness), Ok(SessionTailEvent::SessionUpdated(s))) => {
+                        s.handle.harness == harness
                     }
-                    Ok(SessionTailEvent::Message(m)) => tail_sessions_event::Event::Message(m.into()),
-                    Err(BroadcastStreamRecvError::Lagged(n)) => {
-                        tail_sessions_event::Event::Lagged(Lagged { dropped: n })
+                    (Some(harness), Ok(SessionTailEvent::Message(m))) => {
+                        m.session.harness == harness
                     }
-                }),
+                };
+                std::future::ready(keep)
             })
-        });
+            .map(|event| {
+                Ok::<_, Status>(TailSessionsEvent {
+                    event: Some(match event {
+                        Ok(SessionTailEvent::SessionStarted(s)) => {
+                            tail_sessions_event::Event::SessionStarted(s.into())
+                        }
+                        Ok(SessionTailEvent::SessionUpdated(s)) => {
+                            tail_sessions_event::Event::SessionUpdated(s.into())
+                        }
+                        Ok(SessionTailEvent::Message(m)) => {
+                            tail_sessions_event::Event::Message(m.into())
+                        }
+                        Err(BroadcastStreamRecvError::Lagged(n)) => {
+                            tail_sessions_event::Event::Lagged(Lagged { dropped: n })
+                        }
+                    }),
+                })
+            });
 
         Ok(Response::new(Box::pin(stream)))
     }
