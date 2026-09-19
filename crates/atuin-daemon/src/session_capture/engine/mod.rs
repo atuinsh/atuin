@@ -42,12 +42,21 @@ impl SessionCaptureEngine {
                     match ev {
                         Ok(SessionEvent {
                             session,
+                            kind: SessionEventKind::Started(meta),
+                        }) => {
+                            let handle = HarnessSession {
+                                harness: kind,
+                                session: NativeSessionId::from(session.to_string()),
+                            };
+                            let _ = sink.record_session_meta(&handle, &meta).await;
+                        }
+                        Ok(SessionEvent {
+                            session,
                             kind: SessionEventKind::Message(m),
                         }) => {
                             let msg = Self::enrich(kind, &session, &m);
                             let _ = sink.append(msg).await;
                         }
-                        Ok(_started) => {}
                         Err(e) => tracing::warn!(?e, "capture error"),
                     }
                 }

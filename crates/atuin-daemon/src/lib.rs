@@ -26,7 +26,7 @@ mod sync;
 
 // Re-export core daemon types for convenience
 // Re-export client helpers
-pub use client::HistoryClient;
+pub use client::{AiClient, HistoryClient};
 // Re-export components
 pub use components::SearchComponent;
 pub use daemon::{AnyComponent, Daemon, DaemonBuilder, DaemonHandle};

@@ -10,6 +10,7 @@ use atuin_client::ai_session::{
 };
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4::Key;
+use atuin_common::harnesstools::session::SessionMeta;
 use atuin_domain::record::HostId;
 use engine::SessionCaptureEngine;
 use futures::Stream;
@@ -73,6 +74,24 @@ impl Sink {
                 let _ = self.tail.send(event);
             }
             let _ = self.tail.send(SessionTailEvent::Message(msg));
+        }
+
+        Ok(())
+    }
+
+    pub(crate) async fn record_session_meta(
+        &self,
+        handle: &HarnessSession,
+        meta: &SessionMeta,
+    ) -> Result<(), AppendError> {
+        let created = self.sidecar.get_session(handle).await?.is_none();
+        self.sidecar.record_session_meta(handle, meta).await?;
+
+        if created
+            && self.tail.receiver_count() > 0
+            && let Some(session) = self.sidecar.get_session(handle).await?
+        {
+            let _ = self.tail.send(SessionTailEvent::SessionStarted(session));
         }
 
         Ok(())

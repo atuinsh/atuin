@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use atuin_common::db::sqlite::{Sqlite, SqliteOpenOrCreateError};
 use atuin_common::db::{self};
-use atuin_common::harnesstools::session::{Content, Role, Usage};
+use atuin_common::harnesstools::session::{Content, Role, SessionMeta, Usage};
 use atuin_domain::record::RecordId;
 use futures::{Stream, StreamExt, TryStreamExt};
 use time::OffsetDateTime;
@@ -215,6 +215,39 @@ impl AiSessionDatabase {
 
         tx.commit().await?;
         Ok(Appended::New)
+    }
+
+    pub async fn record_session_meta(
+        &self,
+        handle: &HarnessSession,
+        meta: &SessionMeta,
+    ) -> Result<(), DbError> {
+        let now = Self::millis(OffsetDateTime::now_utc());
+        let cwd = meta.cwd.as_ref().map(|p| p.to_string_lossy().into_owned());
+
+        db::query(
+            "INSERT INTO sessions (
+                harness, session_id, cwd, git_branch, model, started_at, updated_at,
+                message_count, usage_input, usage_output, usage_cache_read, usage_cache_write, title
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, ?)
+            ON CONFLICT(harness, session_id) DO UPDATE SET
+                cwd = COALESCE(sessions.cwd, excluded.cwd),
+                git_branch = COALESCE(sessions.git_branch, excluded.git_branch),
+                model = COALESCE(sessions.model, excluded.model),
+                title = COALESCE(excluded.title, sessions.title)",
+        )
+        .bind(handle.harness as i64)
+        .bind(handle.session.as_ref())
+        .bind(cwd)
+        .bind(meta.git_branch.as_deref())
+        .bind(meta.model.as_deref())
+        .bind(now)
+        .bind(now)
+        .bind(meta.title.as_deref())
+        .execute(self.db.pool())
+        .await?;
+
+        Ok(())
     }
 
     pub async fn get_session(&self, session: &HarnessSession) -> Result<Option<Session>, DbError> {
