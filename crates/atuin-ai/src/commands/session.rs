@@ -1,0 +1,719 @@
+//! `atuin ai session` -- a client for the daemon's `ai.session.AiSession` service.
+//!
+//! Thin wrappers around [`AiClient`] plus rendering. The daemon speaks protobuf, so every subcommand
+//! resolves a selector to a session, calls the matching RPC, and renders the raw messages either as
+//! human-readable text or as JSON/NDJSON for scripting.
+
+use std::io::{self, IsTerminal, Write};
+
+use atuin_client::settings::Settings;
+use atuin_daemon::AiClient;
+use atuin_daemon::grpc::ai_agent::pb as agent;
+use atuin_daemon::grpc::ai_session::pb::{get_session_event, tail_sessions_event};
+use chrono::{DateTime, Utc};
+use chrono_humanize::HumanTime;
+use clap::{Args, Subcommand, ValueEnum};
+use eyre::{Result, bail, eyre};
+use futures::StreamExt;
+use serde::Serialize;
+
+#[derive(Args, Debug)]
+pub struct Cmd {
+    #[command(subcommand)]
+    cmd: SubCmd,
+
+    /// How output is rendered.
+    #[arg(long, value_enum, default_value_t = Style::Auto, global = true)]
+    style: Style,
+}
+
+#[derive(Subcommand, Debug)]
+enum SubCmd {
+    /// List captured sessions, newest first.
+    List,
+
+    /// Show a session and its messages. Accepts a session id or `latest`.
+    Show {
+        #[arg(value_name = "ID|latest")]
+        session: String,
+    },
+
+    /// Print a session's rendered transcript. Accepts a session id or `latest`.
+    Transcript {
+        #[arg(value_name = "ID|latest")]
+        session: String,
+    },
+
+    /// Follow sessions and messages as they are recorded (until interrupted).
+    Tail,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum Style {
+    /// Pretty when writing to a terminal, plain otherwise.
+    Auto,
+    Plain,
+    Pretty,
+    /// A single JSON document.
+    Json,
+    /// Newline-delimited JSON: one object per line.
+    Ndjson,
+}
+
+impl Style {
+    /// Resolve `Auto` against whether stdout is a terminal.
+    fn resolve(self) -> Self {
+        match self {
+            Self::Auto if io::stdout().is_terminal() => Self::Pretty,
+            Self::Auto => Self::Plain,
+            other => other,
+        }
+    }
+
+    fn is_json(self) -> bool {
+        matches!(self, Self::Json | Self::Ndjson)
+    }
+}
+
+pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
+    let style = cmd.style.resolve();
+    let mut client = AiClient::from_settings(settings).await?;
+
+    match cmd.cmd {
+        SubCmd::List => list(&mut client, style).await,
+        SubCmd::Show { session } => show(&mut client, &session, style).await,
+        SubCmd::Transcript { session } => transcript(&mut client, &session, style).await,
+        SubCmd::Tail => tail(&mut client, style).await,
+    }
+}
+
+// --- subcommands --------------------------------------------------------------------------------
+
+async fn list(client: &mut AiClient, style: Style) -> Result<()> {
+    let sessions = client.list_sessions(None).await?;
+
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
+
+    match style {
+        Style::Json => {
+            let records: Vec<SessionJson> = sessions.iter().map(session_json).collect();
+            serde_json::to_writer(&mut out, &records)?;
+            writeln!(out)?;
+        }
+        Style::Ndjson => {
+            for s in &sessions {
+                serde_json::to_writer(&mut out, &session_json(s))?;
+                writeln!(out)?;
+            }
+        }
+        _ => {
+            if sessions.is_empty() {
+                writeln!(out, "No sessions captured yet.")?;
+                return Ok(());
+            }
+            writeln!(
+                out,
+                "{:<14} {:<12} {:<16} {:>5}  TITLE",
+                "SESSION", "HARNESS", "UPDATED", "MSGS"
+            )?;
+            for s in &sessions {
+                writeln!(
+                    out,
+                    "{:<14} {:<12} {:<16} {:>5}  {}",
+                    short_id(&s.session_id),
+                    harness_name(s.harness),
+                    age(s.updated_at.as_ref()),
+                    s.message_count,
+                    title_of(s),
+                )?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn show(client: &mut AiClient, selector: &str, style: Style) -> Result<()> {
+    let handle = resolve(client, selector).await?;
+
+    // Drain the stream first: the leading event is the session, the rest are messages.
+    let mut stream = client.get_session(handle).await?;
+    let mut session: Option<agent::Session> = None;
+    let mut messages: Vec<agent::Message> = Vec::new();
+    while let Some(event) = stream.next().await {
+        match event?.event {
+            Some(get_session_event::Event::Session(s)) => session = Some(s),
+            Some(get_session_event::Event::Message(m)) => messages.push(m),
+            None => {}
+        }
+    }
+    let session = session.ok_or_else(|| eyre!("the daemon returned no session"))?;
+
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
+
+    match style {
+        Style::Json => {
+            let detail = SessionDetailJson {
+                session: session_json(&session),
+                messages: messages.iter().map(message_json).collect(),
+            };
+            serde_json::to_writer(&mut out, &detail)?;
+            writeln!(out)?;
+        }
+        Style::Ndjson => {
+            serde_json::to_writer(&mut out, &ShowEventJson::Session(session_json(&session)))?;
+            writeln!(out)?;
+            for m in &messages {
+                serde_json::to_writer(&mut out, &ShowEventJson::Message(message_json(m)))?;
+                writeln!(out)?;
+            }
+        }
+        _ => {
+            write_session_header(&mut out, &session)?;
+            for m in &messages {
+                write_message_text(&mut out, m)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn transcript(client: &mut AiClient, selector: &str, style: Style) -> Result<()> {
+    let session = resolve(client, selector).await?;
+    let handle = session.clone();
+
+    let mut stream = client.get_transcript(handle).await?;
+    let mut text = String::new();
+    while let Some(chunk) = stream.next().await {
+        text.push_str(&chunk?.chunk);
+    }
+
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
+
+    if style.is_json() {
+        let record = TranscriptJson {
+            harness: harness_name(session.harness).to_owned(),
+            session_id: session.session_id,
+            transcript: text,
+        };
+        serde_json::to_writer(&mut out, &record)?;
+        writeln!(out)?;
+    } else {
+        write!(out, "{text}")?;
+        if !text.ends_with('\n') {
+            writeln!(out)?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn tail(client: &mut AiClient, style: Style) -> Result<()> {
+    let mut stream = client.tail_sessions(None).await?;
+
+    // Live streams re-lock stdout per event and flush, so nothing is buffered and the terminal
+    // shows events as they arrive.
+    while let Some(event) = stream.next().await {
+        let Some(event) = event?.event else {
+            continue;
+        };
+        let stdout = io::stdout();
+        let mut out = stdout.lock();
+
+        if style.is_json() {
+            let record = match &event {
+                tail_sessions_event::Event::SessionStarted(s) => {
+                    TailEventJson::SessionStarted(session_json(s))
+                }
+                tail_sessions_event::Event::SessionUpdated(s) => {
+                    TailEventJson::SessionUpdated(session_json(s))
+                }
+                tail_sessions_event::Event::Message(m) => TailEventJson::Message(message_json(m)),
+                tail_sessions_event::Event::Lagged(l) => {
+                    TailEventJson::Lagged { dropped: l.dropped }
+                }
+            };
+            serde_json::to_writer(&mut out, &record)?;
+            writeln!(out)?;
+        } else {
+            match &event {
+                tail_sessions_event::Event::SessionStarted(s) => writeln!(
+                    out,
+                    "+ session  {} {} {}",
+                    short_id(&s.session_id),
+                    harness_name(s.harness),
+                    title_of(s),
+                )?,
+                tail_sessions_event::Event::SessionUpdated(s) => writeln!(
+                    out,
+                    "~ session  {} {} {} ({} msgs)",
+                    short_id(&s.session_id),
+                    harness_name(s.harness),
+                    title_of(s),
+                    s.message_count,
+                )?,
+                tail_sessions_event::Event::Message(m) => writeln!(
+                    out,
+                    "> message  {} {} [{}] {}",
+                    short_id(&m.session_id),
+                    harness_name(m.harness),
+                    role_name(m.role),
+                    preview_of(&m.content),
+                )?,
+                tail_sessions_event::Event::Lagged(l) => {
+                    writeln!(out, "! lagged   dropped {} events", l.dropped)?;
+                }
+            }
+        }
+
+        out.flush()?;
+    }
+
+    Ok(())
+}
+
+// --- selector resolution ------------------------------------------------------------------------
+
+/// Turn a `latest`/id selector into a full session handle by matching it against the session list
+/// (the harness is only known from the listing, so an id alone cannot address a session).
+async fn resolve(client: &mut AiClient, selector: &str) -> Result<agent::HarnessSession> {
+    select_session(client.list_sessions(None).await?, selector)
+}
+
+/// Pure selector logic, split out from the RPC so it can be tested directly.
+fn select_session(sessions: Vec<agent::Session>, selector: &str) -> Result<agent::HarnessSession> {
+    if selector.eq_ignore_ascii_case("latest") {
+        // The daemon lists newest-first, so the first entry is the most recent.
+        let latest =
+            sessions.into_iter().next().ok_or_else(|| eyre!("no sessions captured yet"))?;
+        return Ok(handle_of(&latest));
+    }
+
+    let mut matches = sessions.into_iter().filter(|s| s.session_id == selector);
+    let first = matches
+        .next()
+        .ok_or_else(|| eyre!("no session with id `{selector}`. Run `atuin ai session list`."))?;
+    if matches.next().is_some() {
+        bail!("id `{selector}` matches sessions from more than one harness; cannot disambiguate");
+    }
+    Ok(handle_of(&first))
+}
+
+fn handle_of(session: &agent::Session) -> agent::HarnessSession {
+    agent::HarnessSession {
+        harness: session.harness,
+        session_id: session.session_id.clone(),
+    }
+}
+
+// --- human rendering ----------------------------------------------------------------------------
+
+fn write_session_header(out: &mut dyn Write, s: &agent::Session) -> io::Result<()> {
+    writeln!(out, "session   {}", s.session_id)?;
+    writeln!(out, "harness   {}", harness_name(s.harness))?;
+    if let Some(title) = &s.title {
+        writeln!(out, "title     {title}")?;
+    }
+    if let Some(cwd) = &s.cwd {
+        writeln!(out, "cwd       {cwd}")?;
+    }
+    if let Some(branch) = &s.git_branch {
+        writeln!(out, "branch    {branch}")?;
+    }
+    if let Some(model) = &s.model {
+        writeln!(out, "model     {model}")?;
+    }
+    writeln!(out, "started   {}", age(s.started_at.as_ref()))?;
+    writeln!(out, "updated   {}", age(s.updated_at.as_ref()))?;
+    writeln!(out, "messages  {}", s.message_count)?;
+    if let Some(t) = &s.tokens {
+        writeln!(
+            out,
+            "tokens    in {} / out {} / cache {}+{}",
+            t.input, t.output, t.cache_read, t.cache_write
+        )?;
+    }
+    writeln!(out)
+}
+
+fn write_message_text(out: &mut dyn Write, m: &agent::Message) -> io::Result<()> {
+    writeln!(out, "── {} · {} ──", role_name(m.role), age(m.timestamp.as_ref()))?;
+    for block in &m.content {
+        match &block.block {
+            Some(agent::content_block::Block::Text(t)) => writeln!(out, "{t}")?,
+            Some(agent::content_block::Block::Thinking(t)) => writeln!(out, "[thinking] {t}")?,
+            Some(agent::content_block::Block::ToolCall(tc)) => {
+                writeln!(out, "[tool-call {}] {}", tc.name, tc.input)?;
+            }
+            Some(agent::content_block::Block::ToolResult(tr)) => {
+                let tag = if tr.is_error {
+                    "tool-error"
+                } else {
+                    "tool-result"
+                };
+                writeln!(out, "[{tag}] {}", tr.content)?;
+            }
+            None => {}
+        }
+    }
+    writeln!(out)
+}
+
+fn short_id(session_id: &str) -> &str {
+    session_id.get(..12).unwrap_or(session_id)
+}
+
+fn title_of(s: &agent::Session) -> &str {
+    s.title.as_deref().or(s.preview.as_deref()).unwrap_or("")
+}
+
+/// A short, single-line preview of a message's content for the `tail` view.
+fn preview_of(content: &[agent::ContentBlock]) -> String {
+    let text = content
+        .iter()
+        .find_map(|b| match &b.block {
+            Some(agent::content_block::Block::Text(t)) => Some(t.as_str()),
+            Some(agent::content_block::Block::Thinking(t)) => Some(t.as_str()),
+            Some(agent::content_block::Block::ToolCall(tc)) => Some(tc.name.as_str()),
+            _ => None,
+        })
+        .unwrap_or("");
+    let one_line: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one_line.chars().count() > 60 {
+        format!("{}…", one_line.chars().take(60).collect::<String>())
+    } else {
+        one_line
+    }
+}
+
+/// A humanized age (e.g. "2 hours ago") for a protobuf timestamp, or "-" when absent.
+fn age(ts: Option<&prost_types::Timestamp>) -> String {
+    to_datetime(ts).map_or_else(|| "-".to_owned(), |dt| HumanTime::from(dt).to_string())
+}
+
+fn to_datetime(ts: Option<&prost_types::Timestamp>) -> Option<DateTime<Utc>> {
+    let ts = ts?;
+    DateTime::from_timestamp(ts.seconds, u32::try_from(ts.nanos).unwrap_or(0))
+}
+
+fn rfc3339(ts: Option<&prost_types::Timestamp>) -> Option<String> {
+    to_datetime(ts).map(|dt| dt.to_rfc3339())
+}
+
+fn harness_name(harness: i32) -> &'static str {
+    match agent::HarnessKind::try_from(harness) {
+        Ok(agent::HarnessKind::ClaudeCode) => "claude-code",
+        Ok(agent::HarnessKind::Codex) => "codex",
+        Ok(agent::HarnessKind::Copilot) => "copilot",
+        Ok(agent::HarnessKind::Opencode) => "opencode",
+        Ok(agent::HarnessKind::Pi) => "pi",
+        Ok(agent::HarnessKind::Unknown) | Err(_) => "unknown",
+    }
+}
+
+fn role_name(role: i32) -> &'static str {
+    match agent::Role::try_from(role) {
+        Ok(agent::Role::User) => "user",
+        Ok(agent::Role::Assistant) => "assistant",
+        Ok(agent::Role::System) => "system",
+        Ok(agent::Role::Tool) => "tool",
+        Ok(agent::Role::Unknown) | Err(_) => "unknown",
+    }
+}
+
+fn stop_reason_name(stop_reason: i32) -> &'static str {
+    match agent::StopReason::try_from(stop_reason) {
+        Ok(agent::StopReason::EndTurn) => "end_turn",
+        Ok(agent::StopReason::ToolUse) => "tool_use",
+        Ok(agent::StopReason::MaxTokens) => "max_tokens",
+        Ok(agent::StopReason::Aborted) => "aborted",
+        Ok(agent::StopReason::Error) => "error",
+        Ok(agent::StopReason::Unknown) | Err(_) => "unknown",
+    }
+}
+
+// --- JSON view structs --------------------------------------------------------------------------
+//
+// The protobuf types are not serde-serializable (and leak enum ints, raw uuid bytes and prost
+// timestamps), so JSON output goes through these owned views with a stable, documented shape.
+
+#[derive(Serialize)]
+struct TokensJson {
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_write: u64,
+}
+
+#[derive(Serialize)]
+struct HandleJson {
+    harness: String,
+    session_id: String,
+}
+
+#[derive(Serialize)]
+struct SessionJson {
+    harness: String,
+    session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent: Option<HandleJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    git_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    started_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_at: Option<String>,
+    message_count: u64,
+    tokens: TokensJson,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ContentJson {
+    Text {
+        text: String,
+    },
+    Thinking {
+        text: String,
+    },
+    ToolCall {
+        id: String,
+        name: String,
+        input: String,
+    },
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        is_error: bool,
+    },
+}
+
+#[derive(Serialize)]
+struct MessageJson {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timestamp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    git_branch: Option<String>,
+    content: Vec<ContentJson>,
+    tokens: TokensJson,
+    stop_reason: String,
+}
+
+#[derive(Serialize)]
+struct SessionDetailJson {
+    session: SessionJson,
+    messages: Vec<MessageJson>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ShowEventJson {
+    Session(SessionJson),
+    Message(MessageJson),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum TailEventJson {
+    SessionStarted(SessionJson),
+    SessionUpdated(SessionJson),
+    Message(MessageJson),
+    Lagged {
+        dropped: u64,
+    },
+}
+
+#[derive(Serialize)]
+struct TranscriptJson {
+    harness: String,
+    session_id: String,
+    transcript: String,
+}
+
+fn tokens_json(tokens: Option<&agent::Tokens>) -> TokensJson {
+    tokens.map_or(
+        TokensJson {
+            input: 0,
+            output: 0,
+            cache_read: 0,
+            cache_write: 0,
+        },
+        |t| TokensJson {
+            input: t.input,
+            output: t.output,
+            cache_read: t.cache_read,
+            cache_write: t.cache_write,
+        },
+    )
+}
+
+fn handle_json(handle: &agent::HarnessSession) -> HandleJson {
+    HandleJson {
+        harness: harness_name(handle.harness).to_owned(),
+        session_id: handle.session_id.clone(),
+    }
+}
+
+fn session_json(s: &agent::Session) -> SessionJson {
+    SessionJson {
+        harness: harness_name(s.harness).to_owned(),
+        session_id: s.session_id.clone(),
+        parent: s.parent.as_ref().map(handle_json),
+        cwd: s.cwd.clone(),
+        git_branch: s.git_branch.clone(),
+        model: s.model.clone(),
+        started_at: rfc3339(s.started_at.as_ref()),
+        updated_at: rfc3339(s.updated_at.as_ref()),
+        message_count: s.message_count,
+        tokens: tokens_json(s.tokens.as_ref()),
+        title: s.title.clone(),
+        preview: s.preview.clone(),
+    }
+}
+
+fn content_json(block: &agent::ContentBlock) -> Option<ContentJson> {
+    Some(match block.block.as_ref()? {
+        agent::content_block::Block::Text(t) => ContentJson::Text { text: t.clone() },
+        agent::content_block::Block::Thinking(t) => ContentJson::Thinking { text: t.clone() },
+        agent::content_block::Block::ToolCall(tc) => ContentJson::ToolCall {
+            id: tc.id.clone(),
+            name: tc.name.clone(),
+            input: tc.input.clone(),
+        },
+        agent::content_block::Block::ToolResult(tr) => ContentJson::ToolResult {
+            tool_use_id: tr.tool_use_id.clone(),
+            content: tr.content.clone(),
+            is_error: tr.is_error,
+        },
+    })
+}
+
+fn message_json(m: &agent::Message) -> MessageJson {
+    let id =
+        m.id.as_ref().and_then(|u| uuid::Uuid::from_slice(&u.value).ok()).map(|u| u.to_string());
+    MessageJson {
+        id,
+        role: role_name(m.role).to_owned(),
+        timestamp: rfc3339(m.timestamp.as_ref()),
+        model: m.model.clone(),
+        cwd: m.cwd.clone(),
+        git_branch: m.git_branch.clone(),
+        content: m.content.iter().filter_map(content_json).collect(),
+        tokens: tokens_json(m.tokens.as_ref()),
+        stop_reason: stop_reason_name(m.stop_reason).to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    fn session(harness: agent::HarnessKind, id: &str) -> agent::Session {
+        agent::Session {
+            harness: harness as i32,
+            session_id: id.to_owned(),
+            parent: None,
+            cwd: None,
+            git_branch: None,
+            model: None,
+            started_at: None,
+            updated_at: None,
+            message_count: 0,
+            tokens: None,
+            title: None,
+            preview: None,
+        }
+    }
+
+    #[rstest]
+    fn latest_picks_the_first_listed() {
+        let sessions = vec![
+            session(agent::HarnessKind::Codex, "newest"),
+            session(agent::HarnessKind::Pi, "old"),
+        ];
+        assert_eq!(select_session(sessions, "latest").unwrap().session_id, "newest");
+    }
+
+    #[rstest]
+    fn latest_on_empty_is_an_error() {
+        assert!(select_session(Vec::new(), "latest").is_err());
+    }
+
+    #[rstest]
+    fn exact_id_resolves_the_harness_from_the_listing() {
+        let sessions = vec![
+            session(agent::HarnessKind::Codex, "aaa"),
+            session(agent::HarnessKind::ClaudeCode, "bbb"),
+        ];
+        let handle = select_session(sessions, "bbb").unwrap();
+        assert_eq!(handle.session_id, "bbb");
+        assert_eq!(handle.harness, agent::HarnessKind::ClaudeCode as i32);
+    }
+
+    #[rstest]
+    fn unknown_id_is_an_error() {
+        let sessions = vec![session(agent::HarnessKind::Codex, "aaa")];
+        assert!(select_session(sessions, "zzz").is_err());
+    }
+
+    #[rstest]
+    fn ambiguous_id_across_harnesses_is_an_error() {
+        let sessions = vec![
+            session(agent::HarnessKind::Codex, "dup"),
+            session(agent::HarnessKind::ClaudeCode, "dup"),
+        ];
+        assert!(select_session(sessions, "dup").is_err());
+    }
+
+    #[rstest]
+    fn session_json_has_a_stable_shape() {
+        let mut s = session(agent::HarnessKind::ClaudeCode, "abcdef0123456789");
+        s.message_count = 3;
+        s.tokens = Some(agent::Tokens {
+            input: 10,
+            output: 20,
+            cache_read: 1,
+            cache_write: 2,
+        });
+        s.title = Some("hello".to_owned());
+
+        let v = serde_json::to_value(session_json(&s)).unwrap();
+        assert_eq!(v["harness"], "claude-code");
+        assert_eq!(v["session_id"], "abcdef0123456789");
+        assert_eq!(v["message_count"], 3);
+        assert_eq!(v["tokens"]["input"], 10);
+        assert_eq!(v["tokens"]["output"], 20);
+        assert_eq!(v["title"], "hello");
+        // Absent optionals are omitted rather than serialized as null.
+        assert!(v.get("cwd").is_none());
+    }
+
+    #[rstest]
+    #[case(agent::HarnessKind::ClaudeCode as i32, "claude-code")]
+    #[case(agent::HarnessKind::Pi as i32, "pi")]
+    #[case(999, "unknown")]
+    fn harness_name_maps_known_and_unknown(#[case] raw: i32, #[case] expected: &str) {
+        assert_eq!(harness_name(raw), expected);
+    }
+}

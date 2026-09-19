@@ -6,10 +6,11 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use typed_builder::TypedBuilder;
 
+use crate::fs::tail::{Anchor, ReadMode, Tail};
 use crate::fs::tree_watcher::{NodeContext, TreeWatcher};
 use crate::harnesstools::ccode::Ccode;
 use crate::harnesstools::session::model::{
-    Content, MessageId, Role, ToolCallId, ToolResult, ToolUse,
+    Content, MessageId, Role, SessionMeta, StopReason, ToolCallId, ToolResult, ToolUse, Usage,
 };
 use crate::harnesstools::session::{
     Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId, Sessions,
@@ -125,6 +126,24 @@ impl Session for CcodeSession {
     fn messages(self) -> impl Stream<Item = Result<CcodeMessage, MessageError>> + Send + 'static {
         jsonl::tail::from_path::<CcodeMessage>(self.path).map_err(MessageError::from)
     }
+
+    fn meta(&self) -> impl std::future::Future<Output = Result<SessionMeta, MessageError>> + Send {
+        let path = self.path.clone();
+        async move {
+            let tail = Tail::builder().path(path).read(ReadMode::Once(Anchor::Beginning)).build();
+            let messages: Vec<CcodeMessage> =
+                jsonl::tail::from_tail(tail).map_err(MessageError::from).try_collect().await?;
+            let title = messages.iter().rev().find_map(|m| m.ai_title.clone());
+            let cwd = messages.iter().find_map(|m| m.cwd.clone());
+            let git_branch = messages.iter().find_map(|m| m.git_branch.clone());
+            Ok(SessionMeta {
+                cwd,
+                git_branch,
+                model: None,
+                title,
+            })
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -135,6 +154,22 @@ pub struct CcodeMessage {
     timestamp: Option<String>,
     message: Option<serde_json::Value>,
     content: Option<serde_json::Value>,
+    cwd: Option<PathBuf>,
+    #[serde(rename = "gitBranch")]
+    git_branch: Option<String>,
+    #[serde(rename = "aiTitle")]
+    ai_title: Option<String>,
+}
+
+fn ccode_stop_reason(raw: &str) -> StopReason {
+    match raw {
+        "end_turn" => StopReason::EndTurn,
+        "max_tokens" => StopReason::MaxTokens,
+        "tool_use" => StopReason::ToolUse,
+        "stop_sequence" => StopReason::StopSequence,
+        "refusal" => StopReason::Refusal,
+        other => StopReason::Other(other.to_owned()),
+    }
 }
 
 impl CcodeMessage {
@@ -190,6 +225,38 @@ impl Message for CcodeMessage {
             _ => Vec::new(),
         }
     }
+
+    fn model(&self) -> Option<String> {
+        self.message.as_ref()?.get("model")?.as_str().map(str::to_owned)
+    }
+
+    fn usage(&self) -> Option<Usage> {
+        let usage = self.message.as_ref()?.get("usage")?;
+        if usage.is_null() {
+            return None;
+        }
+        Some(Usage {
+            input: usage.get("input_tokens").and_then(serde_json::Value::as_u64),
+            output: usage.get("output_tokens").and_then(serde_json::Value::as_u64),
+            cache_read: usage.get("cache_read_input_tokens").and_then(serde_json::Value::as_u64),
+            cache_write: usage
+                .get("cache_creation_input_tokens")
+                .and_then(serde_json::Value::as_u64),
+        })
+    }
+
+    fn stop_reason(&self) -> Option<StopReason> {
+        let raw = self.message.as_ref()?.get("stop_reason")?.as_str()?;
+        Some(ccode_stop_reason(raw))
+    }
+
+    fn cwd(&self) -> Option<PathBuf> {
+        self.cwd.clone()
+    }
+
+    fn git_branch(&self) -> Option<String> {
+        self.git_branch.clone()
+    }
 }
 
 #[cfg(test)]
@@ -243,6 +310,72 @@ mod tests {
     }
 
     #[rstest]
+    fn normalizes_assistant_enrichment_fields() {
+        let raw = serde_json::json!({
+            "type": "assistant",
+            "uuid": "aaaa",
+            "cwd": "/work/atuin",
+            "gitBranch": "main",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "done"}],
+                "model": "claude-opus-4-8",
+                "stop_reason": "end_turn",
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 20,
+                    "cache_read_input_tokens": 5,
+                    "cache_creation_input_tokens": 2,
+                },
+            },
+        })
+        .to_string();
+        let m: CcodeMessage = serde_json::from_str(&raw).unwrap();
+        assert_eq!(m.model(), Some("claude-opus-4-8".to_owned()));
+        assert_eq!(m.stop_reason(), Some(StopReason::EndTurn));
+        assert_eq!(m.cwd(), Some(PathBuf::from("/work/atuin")));
+        assert_eq!(m.git_branch(), Some("main".to_owned()));
+        assert_eq!(
+            m.usage(),
+            Some(Usage {
+                input: Some(10),
+                output: Some(20),
+                cache_read: Some(5),
+                cache_write: Some(2)
+            })
+        );
+    }
+
+    #[rstest]
+    #[case("max_tokens", StopReason::MaxTokens)]
+    #[case("tool_use", StopReason::ToolUse)]
+    #[case("stop_sequence", StopReason::StopSequence)]
+    #[case("refusal", StopReason::Refusal)]
+    #[case("weird", StopReason::Other("weird".to_owned()))]
+    fn maps_stop_reason_vocabulary(#[case] raw: &str, #[case] expected: StopReason) {
+        let m: CcodeMessage = serde_json::from_str(
+            &serde_json::json!({
+                "type": "assistant",
+                "message": {"role": "assistant", "content": [], "stop_reason": raw},
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(m.stop_reason(), Some(expected));
+    }
+
+    #[rstest]
+    fn enrichment_is_none_when_the_harness_did_not_provide_it() {
+        let raw = line("user", "user", serde_json::json!("hi there"));
+        let m: CcodeMessage = serde_json::from_str(&raw).unwrap();
+        assert_eq!(m.model(), None);
+        assert_eq!(m.usage(), None);
+        assert_eq!(m.stop_reason(), None);
+        assert_eq!(m.cwd(), None);
+        assert_eq!(m.git_branch(), None);
+    }
+
+    #[rstest]
     fn listener_reports_not_found_for_a_missing_root() {
         let sessions = CcodeSessions::builder().root(PathBuf::from("/no/such/claude")).build();
         assert!(matches!(sessions.listener(), Err(RuntimeError::NotFound(_))));
@@ -277,6 +410,34 @@ mod tests {
         let got: Vec<Role> =
             session.messages().take(2).map_ok(|m| m.role()).try_collect().await.unwrap();
         assert_eq!(got, vec![Role::User, Role::Assistant]);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn meta_reads_the_title_and_first_cwd_and_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let body = [
+            line("user", "user", serde_json::json!("first")),
+            serde_json::json!({
+                "type": "ai-title",
+                "aiTitle": "Fix the flaky test",
+                "sessionId": "11111111-1111-1111-1111-111111111111",
+            })
+            .to_string(),
+        ]
+        .join("\n")
+            + "\n";
+        std::fs::write(&path, body).unwrap();
+
+        let session = CcodeSession::open(
+            SessionId::from("11111111-1111-1111-1111-111111111111".to_owned()),
+            path,
+        );
+        let meta = session.meta().await.unwrap();
+        assert_eq!(meta.title, Some("Fix the flaky test".to_owned()));
+        assert_eq!(meta.cwd, None);
+        assert_eq!(meta.git_branch, None);
     }
 
     #[rstest]
@@ -332,14 +493,14 @@ mod tests {
         .expect("events() did not produce within 10s")
         .unwrap();
 
-        assert!(matches!(events[0].kind, SessionEventKind::Started));
+        assert!(matches!(events[0].kind, SessionEventKind::Started(_)));
         let sid = SessionId::from("33333333-3333-3333-3333-333333333333".to_owned());
         assert!(events.iter().all(|event| event.session == sid));
         let roles: Vec<Role> = events
             .iter()
             .filter_map(|event| match &event.kind {
                 SessionEventKind::Message(message) => Some(message.role()),
-                SessionEventKind::Started => None,
+                SessionEventKind::Started(_) => None,
             })
             .collect();
         assert_eq!(roles, vec![Role::User, Role::Assistant]);

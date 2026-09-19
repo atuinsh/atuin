@@ -41,6 +41,7 @@ futures = { workspace = true }
 glob-match = { workspace = true }
 imara-diff = { workspace = true }
 parking_lot = { workspace = true }
+prost-types = { workspace = true }
 pulldown-cmark = { workspace = true }
 ratatui = { workspace = true }
 ratatui-core = { workspace = true }

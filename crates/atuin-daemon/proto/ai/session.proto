@@ -5,28 +5,15 @@ import "ai/agent.proto";
 import "common.proto";
 
 message ListSessionsRequest {
-  // Return at most this many sessions. The server caps this at an internal
-  // maximum; 0 means "use the server default". This is a ceiling, not a promise:
-  // a page may come back shorter without meaning the end was reached.
-  uint32 page_size = 1;
-  // Opaque cursor from a previous response's `next_page_token`. Empty starts at
-  // the beginning.
-  string page_token = 2;
-  // Only return sessions from this harness. Absent returns every harness.
-  optional ai.agent.HarnessKind harness = 3;
+  optional ai.agent.HarnessKind harness = 1;
 }
 
 message ListSessionsResponse {
-  // A page of sessions, newest first.
   repeated ai.agent.Session sessions = 1;
-  // Cursor for the next page. Empty means the end of the collection has been
-  // reached -- this is the only end-of-collection signal.
-  string next_page_token = 2;
 }
 
 message GetSessionRequest {
-  // Atuin's stable session id (`Session.id`).
-  common.Uuid id = 1;
+  ai.agent.HarnessSession session = 1;
 }
 
 // Streamed by GetSession: the first event carries the session, and every event
@@ -39,8 +26,7 @@ message GetSessionEvent {
 }
 
 message GetTranscriptRequest {
-  // Atuin's stable session id (`Session.id`).
-  common.Uuid id = 1;
+  ai.agent.HarnessSession session = 1;
 }
 
 // One chunk of a rendered transcript. Concatenate `chunk`s in arrival order to
@@ -86,7 +72,7 @@ message TailSessionsEvent {
 }
 
 service AiSession {
-  // List session summaries, newest first, paginated.
+  // List session summaries, newest first.
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
 
   // Fetch one session and its messages, streamed: the session first, then each

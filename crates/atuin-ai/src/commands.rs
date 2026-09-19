@@ -4,6 +4,7 @@ use atuin_common::logs::{FileConfig, LogConfig, StderrConfig};
 use atuin_common::shell::Shell;
 use clap::{Args, Subcommand};
 pub(crate) mod inline;
+pub(crate) mod session;
 
 #[derive(Args, Debug)]
 pub struct AiArgs {
@@ -42,6 +43,9 @@ pub enum Command {
         #[arg(hide = true)]
         _shell: Option<std::ffi::OsString>,
     },
+
+    /// Browse AI sessions captured by the daemon
+    Session(session::Cmd),
 }
 
 impl Command {
@@ -51,7 +55,7 @@ impl Command {
                 file: FileConfig::from_settings(&settings.logs, &settings.logs.ai),
                 stderr: args.verbose.then(StderrConfig::default),
             }),
-            Self::Init { .. } => None,
+            Self::Init { .. } | Self::Session(_) => None,
         }
     }
 }
@@ -73,6 +77,7 @@ pub async fn run(command: Command, settings: &Settings) -> eyre::Result<()> {
             );
             Ok(())
         }
+        Command::Session(cmd) => session::run(cmd, settings).await,
     }
 }
 

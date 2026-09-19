@@ -6,10 +6,11 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use typed_builder::TypedBuilder;
 
+use crate::fs::tail::{Anchor, ReadMode, Tail};
 use crate::fs::tree_watcher::{NodeContext, TreeWatcher};
 use crate::harnesstools::pi::Pi;
 use crate::harnesstools::session::model::{
-    Content, MessageId, Role, ToolCallId, ToolResult, ToolUse,
+    Content, MessageId, Role, SessionMeta, StopReason, ToolCallId, ToolResult, ToolUse, Usage,
 };
 use crate::harnesstools::session::{
     Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId, Sessions,
@@ -130,6 +131,23 @@ impl Session for PiSession {
     fn messages(self) -> impl Stream<Item = Result<PiMessage, MessageError>> + Send + 'static {
         jsonl::tail::from_path::<PiMessage>(self.path).map_err(MessageError::from)
     }
+
+    fn meta(&self) -> impl std::future::Future<Output = Result<SessionMeta, MessageError>> + Send {
+        let path = self.path.clone();
+        async move {
+            let tail = Tail::builder().path(path).read(ReadMode::Once(Anchor::Beginning)).build();
+            let messages: Vec<PiMessage> =
+                jsonl::tail::from_tail(tail).map_err(MessageError::from).try_collect().await?;
+            let cwd = messages.iter().find_map(|m| m.cwd.clone());
+            let model = messages.iter().rev().find_map(|m| m.model_id.clone());
+            Ok(SessionMeta {
+                cwd,
+                git_branch: None,
+                model,
+                title: None,
+            })
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -139,6 +157,9 @@ pub struct PiMessage {
     id: Option<String>,
     timestamp: Option<String>,
     message: Option<serde_json::Value>,
+    cwd: Option<PathBuf>,
+    #[serde(rename = "modelId")]
+    model_id: Option<String>,
 }
 
 impl PiMessage {
@@ -194,6 +215,33 @@ impl Message for PiMessage {
             serde_json::Value::Array(blocks) => blocks.iter().map(Self::block).collect(),
             _ => Vec::new(),
         }
+    }
+
+    fn model(&self) -> Option<String> {
+        self.message.as_ref()?.get("model")?.as_str().map(str::to_owned)
+    }
+
+    fn usage(&self) -> Option<Usage> {
+        let usage = self.message.as_ref()?.get("usage")?;
+        if usage.is_null() {
+            return None;
+        }
+        Some(Usage {
+            input: usage.get("input").and_then(serde_json::Value::as_u64),
+            output: usage.get("output").and_then(serde_json::Value::as_u64),
+            cache_read: usage.get("cacheRead").and_then(serde_json::Value::as_u64),
+            cache_write: usage.get("cacheWrite").and_then(serde_json::Value::as_u64),
+        })
+    }
+
+    fn stop_reason(&self) -> Option<StopReason> {
+        let raw = self.message.as_ref()?.get("stopReason")?.as_str()?;
+        Some(match raw {
+            "stop" => StopReason::EndTurn,
+            "toolUse" => StopReason::ToolUse,
+            "aborted" => StopReason::Aborted,
+            other => StopReason::Other(other.to_owned()),
+        })
     }
 }
 
@@ -256,6 +304,67 @@ mod tests {
     }
 
     #[rstest]
+    fn normalizes_pi_assistant_enrichment_fields() {
+        let raw = serde_json::json!({
+            "type": "message",
+            "id": "m1",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "done"}],
+                "model": "claude-opus-4-8",
+                "stopReason": "stop",
+                "usage": {"input": 10, "output": 20, "cacheRead": 5, "cacheWrite": 2},
+            },
+        })
+        .to_string();
+        let m: PiMessage = serde_json::from_str(&raw).unwrap();
+        assert_eq!(m.model(), Some("claude-opus-4-8".to_owned()));
+        assert_eq!(m.stop_reason(), Some(StopReason::EndTurn));
+        assert_eq!(
+            m.usage(),
+            Some(Usage {
+                input: Some(10),
+                output: Some(20),
+                cache_read: Some(5),
+                cache_write: Some(2)
+            })
+        );
+    }
+
+    #[rstest]
+    #[case("toolUse", StopReason::ToolUse)]
+    #[case("aborted", StopReason::Aborted)]
+    #[case("error", StopReason::Other("error".to_owned()))]
+    fn maps_pi_stop_reason_vocabulary(#[case] raw: &str, #[case] expected: StopReason) {
+        let m: PiMessage = serde_json::from_str(
+            &serde_json::json!({
+                "type": "message",
+                "id": "m1",
+                "message": {"role": "assistant", "content": [], "stopReason": raw},
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(m.stop_reason(), Some(expected));
+    }
+
+    #[rstest]
+    fn enrichment_is_none_when_the_harness_did_not_provide_it() {
+        let raw = serde_json::json!({
+            "type": "message",
+            "id": "m1",
+            "message": {"role": "user", "content": "hi"},
+        })
+        .to_string();
+        let m: PiMessage = serde_json::from_str(&raw).unwrap();
+        assert_eq!(m.model(), None);
+        assert_eq!(m.usage(), None);
+        assert_eq!(m.stop_reason(), None);
+        assert_eq!(m.cwd(), None);
+        assert_eq!(m.git_branch(), None);
+    }
+
+    #[rstest]
     fn listener_reports_not_found_for_a_missing_root() {
         let sessions = PiSessions::builder().root(PathBuf::from("/no/such/pi")).build();
         assert!(matches!(sessions.listener(), Err(RuntimeError::NotFound(_))));
@@ -285,6 +394,39 @@ mod tests {
         let roles: Vec<Role> =
             session.messages().take(2).map_ok(|m| m.role()).try_collect().await.unwrap();
         assert_eq!(roles.last(), Some(&Role::Assistant));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn meta_reads_cwd_from_session_header_and_latest_model_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("1700000000_s1.jsonl");
+        let body = [
+            serde_json::json!({"type": "session", "id": "s1", "cwd": "/w"}).to_string(),
+            serde_json::json!({
+                "type": "model_change",
+                "id": "c1",
+                "provider": "anthropic",
+                "modelId": "claude-sonnet-4",
+            })
+            .to_string(),
+            serde_json::json!({
+                "type": "model_change",
+                "id": "c2",
+                "provider": "anthropic",
+                "modelId": "claude-opus-4-8",
+            })
+            .to_string(),
+        ]
+        .join("\n")
+            + "\n";
+        std::fs::write(&path, body).unwrap();
+
+        let session = PiSession::open(SessionId::from("s1".to_owned()), path);
+        let meta = session.meta().await.unwrap();
+        assert_eq!(meta.cwd, Some(PathBuf::from("/w")));
+        assert_eq!(meta.model, Some("claude-opus-4-8".to_owned()));
+        assert_eq!(meta.git_branch, None);
     }
 
     #[rstest]

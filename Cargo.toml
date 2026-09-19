@@ -131,6 +131,7 @@ reqwest = {
 reqwest-middleware = "0.5"
 rmcp = { version = "3", default-features = false, features = ["server", "transport-io", "schemars"] }
 rmp = "0.8"
+rmp-serde = "1"
 rpassword = "7"
 rstest = "0.27"
 runtime-format = "0.1"
