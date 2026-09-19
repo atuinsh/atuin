@@ -70,12 +70,9 @@ impl AiSessionRecord {
 
 impl AiSessionStore {
     pub async fn push(&self, msg: &Message) -> Result<RecordId, PushError> {
-        let id = RecordId(atuin_common::utils::uuid_v7());
+        let id = msg.id;
 
-        let mut msg = msg.clone();
-        msg.id = id;
-
-        let bytes = AiSessionRecord::Message(msg).serialize();
+        let bytes = AiSessionRecord::Message(msg.clone()).serialize();
         let series = RecordSeriesKey::new(self.host_id, RecordTag::AiSession);
 
         loop {
@@ -247,12 +244,15 @@ mod tests {
         let msg = sample_message();
         let id = s.push(&msg).await.unwrap();
 
+        assert_eq!(id, msg.id, "push must return the message's own id, not a re-minted one");
+
         let recs = store.all_tagged(&RecordTag::AiSession).await.unwrap();
         assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].id, msg.id, "record envelope id must match the message id");
         let decrypted = recs[0].decrypt(&key()).unwrap();
         let AiSessionRecord::Message(got) =
             AiSessionRecord::deserialize(&decrypted.data.0).unwrap();
-        assert_eq!(got.id, id);
+        assert_eq!(got.id, msg.id, "stored record body id must match the message id");
         assert_eq!(got.session, msg.session);
     }
 
