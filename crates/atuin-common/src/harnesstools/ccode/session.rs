@@ -6,7 +6,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use typed_builder::TypedBuilder;
 
-use crate::fs::tree_watcher::NodeContext;
+use crate::fs::tree_watcher::{NodeContext, TreeWatcher};
 use crate::harnesstools::ccode::Ccode;
 use crate::harnesstools::session::model::{
     Content, MessageId, Role, ToolCallId, ToolResult, ToolUse,
@@ -75,8 +75,25 @@ impl Listener for CcodeListener {
     type Session = CcodeSession;
 
     fn watch(self) -> impl Stream<Item = Result<CcodeSession, WatchError>> + Send + 'static {
-        let _ = (&self.root, CcodeListener::accept);
-        futures::stream::empty()
+        let root = self.root;
+        async_stream::stream! {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<CcodeSession>();
+            let _watcher = match TreeWatcher::builder().recursive(true).watch(&root, move |ctx| {
+                if let Some(session) = CcodeListener::accept(&ctx) {
+                    let _ = tx.send(session);
+                }
+                None::<()>
+            }) {
+                Ok(watcher) => watcher,
+                Err(err) => {
+                    yield Err(WatchError::from(err));
+                    return;
+                }
+            };
+            while let Some(session) = rx.recv().await {
+                yield Ok(session);
+            }
+        }
     }
 }
 
@@ -260,7 +277,6 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    #[ignore = "pending TreeWatcher->stream bridge; watch() is a placeholder in this draft"]
     async fn watch_emits_sessions_as_files_appear() {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("project-a");
@@ -273,8 +289,13 @@ mod tests {
 
         let listener =
             CcodeSessions::builder().root(dir.path().to_path_buf()).build().listener().unwrap();
-        let seen: Vec<SessionId> =
-            listener.watch().take(1).map_ok(|s| s.id()).try_collect().await.unwrap();
+        let seen: Vec<SessionId> = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            listener.watch().take(1).map_ok(|s| s.id()).try_collect(),
+        )
+        .await
+        .expect("watch() did not emit a session within 10s")
+        .unwrap();
         assert_eq!(seen.len(), 1);
     }
 

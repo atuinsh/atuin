@@ -6,7 +6,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use typed_builder::TypedBuilder;
 
-use crate::fs::tree_watcher::NodeContext;
+use crate::fs::tree_watcher::{NodeContext, TreeWatcher};
 use crate::harnesstools::codex::Codex;
 use crate::harnesstools::session::model::{
     Content, MessageId, Role, ToolCallId, ToolResult, ToolUse,
@@ -76,8 +76,25 @@ impl Listener for CodexListener {
     type Session = CodexSession;
 
     fn watch(self) -> impl Stream<Item = Result<CodexSession, WatchError>> + Send + 'static {
-        let _ = (&self.root, CodexListener::accept);
-        futures::stream::empty()
+        let root = self.root;
+        async_stream::stream! {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<CodexSession>();
+            let _watcher = match TreeWatcher::builder().recursive(true).watch(&root, move |ctx| {
+                if let Some(session) = CodexListener::accept(&ctx) {
+                    let _ = tx.send(session);
+                }
+                None::<()>
+            }) {
+                Ok(watcher) => watcher,
+                Err(err) => {
+                    yield Err(WatchError::from(err));
+                    return;
+                }
+            };
+            while let Some(session) = rx.recv().await {
+                yield Ok(session);
+            }
+        }
     }
 }
 
@@ -253,6 +270,30 @@ mod tests {
         let roles: Vec<Role> =
             session.messages().take(2).map_ok(|m| m.role()).try_collect().await.unwrap();
         assert_eq!(roles.last(), Some(&Role::User));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn watch_emits_sessions_as_files_appear() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("2026").join("09").join("19");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(
+            sub.join("rollout-2026-09-19T00-00-00-th1.jsonl"),
+            serde_json::json!({"type": "session_meta", "payload": {"id": "th1"}}).to_string(),
+        )
+        .unwrap();
+
+        let listener =
+            CodexSessions::builder().root(dir.path().to_path_buf()).build().listener().unwrap();
+        let seen: Vec<SessionId> = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            listener.watch().take(1).map_ok(|s| s.id()).try_collect(),
+        )
+        .await
+        .expect("watch() did not emit a session within 10s")
+        .unwrap();
+        assert_eq!(seen, vec![SessionId::from("th1".to_owned())]);
     }
 
     #[rstest]
