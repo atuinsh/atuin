@@ -228,7 +228,8 @@ impl AiSessionDatabase {
         db::query(
             "INSERT INTO sessions (
                 harness, session_id, cwd, git_branch, model, started_at, updated_at,
-                message_count, usage_input, usage_output, usage_cache_read, usage_cache_write, title
+                message_count, usage_input, usage_output, usage_cache_read, usage_cache_write, \
+             title
             ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, ?)
             ON CONFLICT(harness, session_id) DO UPDATE SET
                 cwd = COALESCE(sessions.cwd, excluded.cwd),

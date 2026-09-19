@@ -21,6 +21,14 @@ use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
 use tracing::{Level, instrument, span};
 
+use crate::grpc::ai_agent::pb::{
+    HarnessKind as AiHarnessKind, HarnessSession as AiHarnessSession, Session as AiSession,
+};
+use crate::grpc::ai_session::pb::ai_session_client::AiSessionClient as AiSessionServiceClient;
+use crate::grpc::ai_session::pb::{
+    GetSessionEvent, GetSessionRequest, GetTranscriptChunk, GetTranscriptRequest,
+    ListSessionsRequest, TailSessionsEvent, TailSessionsRequest,
+};
 use crate::grpc::history::pb::history_client::HistoryClient as HistoryServiceClient;
 use crate::grpc::history::pb::{
     AuthorKind, CancelHistoryReply, CancelHistoryRequest, CommandCapture, CommandCaptureMeta,
@@ -34,14 +42,6 @@ use crate::search::search_client::SearchClient as SearchServiceClient;
 use crate::search::{
     FilterMode as RpcFilterMode, PrepareIndexRequest, SearchCommandOutputRequest,
     SearchContext as RpcSearchContext, SearchRequest, SearchResponse,
-};
-use crate::grpc::ai_agent::pb::{
-    HarnessKind as AiHarnessKind, HarnessSession as AiHarnessSession, Session as AiSession,
-};
-use crate::grpc::ai_session::pb::ai_session_client::AiSessionClient as AiSessionServiceClient;
-use crate::grpc::ai_session::pb::{
-    GetSessionEvent, GetSessionRequest, GetTranscriptChunk, GetTranscriptRequest,
-    ListSessionsRequest, TailSessionsEvent, TailSessionsRequest,
 };
 
 pub struct HistoryClient {
