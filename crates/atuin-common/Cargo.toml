@@ -13,9 +13,9 @@ version.workspace = true
 
 [features]
 ai = []
-ansi = ["dep:atuin-vt100", "dep:memchr"]
+ansi = ["dep:atuin-vt100"]
 db = ["dep:sqlx"]
-os = ["dep:rustix", "dep:windows-sys"]
+os = ["dep:rustix"]
 proto = ["dep:prost"]
 sqlite = ["db", "sqlx/sqlite", "sqlx/regexp", "dep:libsqlite3-sys", "dep:tokio-util"]
 test-utils = ["dep:tracing-subscriber"]
@@ -26,6 +26,7 @@ atuin-vt100 = { workspace = true, optional = true }
 
 async-stream = { workspace = true }
 base64 = { workspace = true }
+bytes = { workspace = true }
 bytesize = { workspace = true }
 crypto_secretbox = { workspace = true }
 derive_more = { workspace = true }
@@ -39,7 +40,7 @@ getrandom = { workspace = true }
 humantime = { workspace = true }
 itertools = { workspace = true }
 libsqlite3-sys = { workspace = true, optional = true }
-memchr = { workspace = true, optional = true }
+memchr = { workspace = true }
 notify = { workspace = true }
 notify-debouncer-full = { workspace = true }
 num-traits = { workspace = true }
@@ -59,6 +60,7 @@ sysinfo = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true, features = ["formatting", "parsing"] }
 tiny-bip39 = { workspace = true }
+typed-builder = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true, optional = true }
 tracing = { workspace = true }
@@ -73,7 +75,7 @@ zeroize = { workspace = true }
 rustix = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true, optional = true }
+windows-sys = { workspace = true }
 
 [dev-dependencies]
 divan = { workspace = true }
