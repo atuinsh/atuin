@@ -582,7 +582,7 @@ mod tests {
     use rstest::rstest;
     use time::OffsetDateTime;
 
-    use super::{AiSessionDatabase, Appended, Page};
+    use super::{AiSessionDatabase, Appended, COMPRESS_THRESHOLD, Page};
     use crate::ai_session::{HarnessKind, HarnessSession, Message, NativeSessionId, SourceId};
 
     fn sample_message() -> Message {
@@ -689,6 +689,28 @@ mod tests {
         }
         let got: Vec<_> = db.messages(&session).try_collect().await.unwrap();
         assert!(got.windows(2).all(|w| w[0].timestamp <= w[1].timestamp));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn content_z_round_trips_compressed_message() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        let long_text: String =
+            (0..64).map(|i| format!("segment-{i:03}-distinct ")).collect::<String>();
+        assert!(long_text.len() >= COMPRESS_THRESHOLD);
+
+        let m = message_in(&session, 0, &long_text);
+        db.append(&m).await.unwrap();
+
+        let got: Vec<_> = db.messages(&session).try_collect().await.unwrap();
+        assert_eq!(got.len(), 1);
+
+        let text = match got[0].content.first() {
+            Some(Content::Text(text)) => text.clone(),
+            _ => panic!("expected Content::Text"),
+        };
+        assert_eq!(text, long_text);
     }
 
     #[rstest]
