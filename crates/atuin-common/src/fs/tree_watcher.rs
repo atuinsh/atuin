@@ -1,23 +1,60 @@
-//! Watch a directory tree, holding one factory-built handler per live node.
+//! Track a caller-chosen handler for every file, directory, and symlink under a directory, kept in
+//! sync with the filesystem.
 //!
-//! [`TreeWatcher`] offers every file, directory, and symlink under a root to a
-//! factory closure; whatever the factory returns is kept alive until the node
-//! disappears. Filesystem events drive updates in near real time, and a periodic
-//! full scan reconciles anything the event stream missed.
+//! A [`TreeWatcher`] walks a `root` directory and, for each node it finds, calls a factory closure
+//! with a [`NodeContext`]. The factory must return `Some(handler)` to track the node, or `None` to
+//! decline tracking it.
+//!
+//! A tracked node's handler is stored and kept alive for as long as the node exists; a decline is
+//! remembered, so the factory is never asked about the same path twice while it stays unchanged.
+//!
+//! The watcher runs on a background Tokio task (so it must be created from within a Tokio runtime)
+//! and keeps running until it is dropped, which stops watching and drops every handler. Use
+//! [`recursive`](TreeWatcherBuilder::recursive) to control whether subdirectories are descended.
+//!
+//! # Example
 //!
 //! ```no_run
+//! use std::path::Path;
+//! use std::sync::Arc;
+//!
 //! use atuin_common::fs::tree_watcher::{NodeContext, TreeWatcher};
 //!
+//! // One handler per watched file: building it means the file appeared, dropping
+//! // it means the file went away.
+//! struct WatchedFile(Arc<Path>);
+//!
+//! impl Drop for WatchedFile {
+//!     fn drop(&mut self) {
+//!         println!("gone:     {}", self.0.display());
+//!     }
+//! }
+//!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! // Keep one handler per regular file; here the handler is just the file's path.
 //! let watcher = TreeWatcher::watch("/var/log", |ctx: NodeContext| {
-//!     ctx.is_file().then(|| ctx.into_path())
+//!     // Runs once per file that appears — via a filesystem event or the periodic
+//!     // scan. Returning `None` ignores anything that isn't a regular file.
+//!     if !ctx.is_file() {
+//!         return None;
+//!     }
+//!     println!("appeared: {}", ctx.path().display());
+//!     Some(WatchedFile(ctx.into_path()))
 //! })?;
-//! // Dropping `watcher` stops watching and drops every handler.
+//!
+//! // What you observe as the tree changes under /var/log:
+//! //   create app.log     -> factory runs       -> "appeared: /var/log/app.log"
+//! //   append to app.log  -> nothing (already tracked, still a file)
+//! //   rm app.log         -> WatchedFile drops   -> "gone:     /var/log/app.log"
+//! //   mv a.log b.log     -> "gone: …/a.log" then "appeared: …/b.log"
+//! //   drop(watcher)      -> every WatchedFile drops
 //! # let _ = watcher;
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! TODO(markovejnovic): Instead of the arbitrary factory, it would be good perhaps for the factory
+//!                      to have to return some sort of handler, which enables us to listen to more
+//!                      fs events, such as mutations, I suppose.
 
 use std::collections::HashMap;
 use std::num::NonZeroU64;
@@ -177,14 +214,13 @@ async fn resolve_kinds(events: &[notify::Event]) -> HashMap<Arc<Path>, FileKind>
     let stat = tokio::task::spawn_blocking(move || {
         paths
             .into_iter()
-            .filter_map(|path| Some((Arc::clone(&path), file_kind_of(&path).ok()?)))
+            .filter_map(|path| {
+                let kind = FileKind::from(std::fs::symlink_metadata(&path).ok()?.file_type());
+                Some((Arc::clone(&path), kind))
+            })
             .collect()
     });
     stat.await.unwrap_or_default()
-}
-
-fn file_kind_of(path: &Path) -> std::io::Result<FileKind> {
-    Ok(FileKind::from(std::fs::symlink_metadata(path)?.file_type()))
 }
 
 enum Slot<H> {
@@ -201,8 +237,6 @@ impl<H> Slot<H> {
 }
 
 struct Engine<H, F> {
-    root: PathBuf,
-    recursive: bool,
     factory: F,
     entries: HashMap<Arc<Path>, Slot<H>>,
 }
@@ -216,7 +250,10 @@ where
         if self.entries.get(&path).is_some_and(|slot| slot.kind() == kind) {
             return;
         }
-        // Absent, or present at a stale kind: (re)build, dropping any old handler.
+        // Absent, or present at a stale kind. Drop any old handler before building its
+        // replacement, so a handler owning per-path state releases it before the new
+        // one acquires it.
+        self.entries.remove(&path);
         let ctx = NodeContext {
             path: Arc::clone(&path),
             kind,
@@ -270,6 +307,13 @@ where
                 }
             }
             EventKind::Modify(ModifyKind::Name(RenameMode::Any | RenameMode::Other)) => {
+                // TODO: on a case-insensitive filesystem (e.g. macOS APFS), a
+                // case-only rename (`a.log` -> `A.log`) leaves duplicate handlers:
+                // `symlink_metadata` on the stale-case name still succeeds, so we
+                // keep it while also observing the new name, and the two byte-distinct
+                // keys coexist until the next complete scan prunes the stale one. Fix
+                // later by reconciling the renamed parent dir, or case-folding keys on
+                // case-insensitive platforms.
                 for path in &event.paths {
                     if kinds.contains_key(path.as_path()) {
                         self.observe_path(path, kinds, Origin::Event);
@@ -283,7 +327,15 @@ where
     }
 }
 
-impl<H, F> Engine<H, F>
+/// Drives an [`Engine`] on a background task: reconciles it against a periodic
+/// full scan and applies debounced filesystem events as they arrive.
+struct TreeWatcherPoller<H, F> {
+    root: PathBuf,
+    recursive: bool,
+    engine: Engine<H, F>,
+}
+
+impl<H, F> TreeWatcherPoller<H, F>
 where
     H: Send + 'static,
     F: Fn(NodeContext) -> Option<H> + Send + 'static,
@@ -317,7 +369,7 @@ where
                             if !pending.is_empty() {
                                 let kinds = resolve_kinds(&pending).await;
                                 for event in &pending {
-                                    self.apply_event(event, &kinds);
+                                    self.engine.apply_event(event, &kinds);
                                 }
                             }
                             if force_scan {
@@ -337,19 +389,20 @@ where
         if !complete {
             tracing::warn!("tree watcher scan was incomplete; reconciling without pruning");
         }
-        self.reconcile(truth, complete);
+        self.engine.reconcile(truth, complete);
     }
 }
 
 const DEFAULT_SCAN_INTERVAL: NonZeroDuration =
     NonZeroDuration::from_secs(NonZeroU64::new(30).unwrap());
-const DEFAULT_DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(250);
+const DEFAULT_DEBOUNCE_TIMEOUT: NonZeroDuration =
+    NonZeroDuration::new(Duration::from_millis(250)).unwrap();
 
 /// Builder for a [`TreeWatcher`].
 pub struct TreeWatcherBuilder {
     recursive: bool,
     scan_interval: NonZeroDuration,
-    debounce_timeout: Duration,
+    debounce_timeout: NonZeroDuration,
 }
 
 impl Default for TreeWatcherBuilder {
@@ -379,15 +432,15 @@ impl TreeWatcherBuilder {
 
     /// Window for coalescing filesystem events (default: 250ms).
     #[must_use]
-    pub fn debounce_timeout(mut self, timeout: Duration) -> Self {
+    pub fn debounce_timeout(mut self, timeout: NonZeroDuration) -> Self {
         self.debounce_timeout = timeout;
         self
     }
 
     /// Start watching `root`, building a handler for each node the factory accepts.
     ///
-    /// A factory returning `None` declines the node; the decision is remembered.
-    /// Must be called from within a Tokio runtime.
+    /// A factory returning `None` declines the node. If your factory returns `Some(T)`, then the
+    /// value will be kept alive for as long as the filesystem node exists (or the watcher drops).
     pub fn watch<H, F>(
         self,
         root: impl AsRef<Path>,
@@ -409,19 +462,24 @@ impl TreeWatcherBuilder {
             RecursiveMode::NonRecursive
         };
 
-        let mut debouncer =
-            new_debouncer(self.debounce_timeout, None, move |result: DebounceEventResult| {
+        let mut debouncer = new_debouncer(
+            self.debounce_timeout.get(),
+            None,
+            move |result: DebounceEventResult| {
                 let _ = tx.send(result);
-            })?;
+            },
+        )?;
         debouncer.watch(&root, mode)?;
 
-        let engine = Engine {
+        let poller = TreeWatcherPoller {
             root,
             recursive: self.recursive,
-            factory,
-            entries: HashMap::new(),
+            engine: Engine {
+                factory,
+                entries: HashMap::new(),
+            },
         };
-        let task = tokio::spawn(engine.run(rx, self.scan_interval));
+        let task = tokio::spawn(poller.run(rx, self.scan_interval));
 
         Ok(TreeWatcher {
             task,
@@ -467,6 +525,7 @@ mod tests {
 
     use proptest::prelude::*;
     use rstest::rstest;
+    use tokio::sync::mpsc::error::TryRecvError;
     use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
     use super::*;
@@ -500,17 +559,8 @@ mod tests {
     fn accept_all_engine(
         counters: &Arc<Counters>,
     ) -> Engine<CountingHandler, impl Fn(NodeContext) -> Option<CountingHandler>> {
-        accept_all_engine_rooted(counters, Path::new("/r"))
-    }
-
-    fn accept_all_engine_rooted(
-        counters: &Arc<Counters>,
-        root: &Path,
-    ) -> Engine<CountingHandler, impl Fn(NodeContext) -> Option<CountingHandler>> {
         let counters = counters.clone();
         Engine {
-            root: root.to_path_buf(),
-            recursive: true,
             factory: move |_ctx| Some(CountingHandler::new(counters.clone())),
             entries: HashMap::new(),
         }
@@ -655,8 +705,6 @@ mod tests {
         let counters = Arc::new(Counters::default());
         let c = counters.clone();
         let mut engine = Engine {
-            root: PathBuf::from("/r"),
-            recursive: true,
             factory: move |ctx: NodeContext| ctx.is_file().then(|| CountingHandler::new(c.clone())),
             entries: HashMap::new(),
         };
@@ -830,8 +878,6 @@ mod tests {
             let counters = Arc::new(Counters::default());
             let c = counters.clone();
             let mut engine = Engine {
-                root: PathBuf::from("/r"),
-                recursive: true,
                 factory: move |ctx: NodeContext| {
                     ctx.is_file().then(|| CountingHandler::new(c.clone()))
                 },
@@ -875,7 +921,7 @@ mod tests {
         let (drop_tx, _drop_rx) = unbounded_channel::<PathBuf>();
         let _watcher = TreeWatcher::builder()
             .scan_interval(nz(Duration::from_millis(100)))
-            .debounce_timeout(Duration::from_millis(50))
+            .debounce_timeout(nz(Duration::from_millis(50)))
             .watch(dir.path(), move |ctx| {
                 let path = ctx.path().to_owned();
                 created_tx.send(path.clone()).ok();
@@ -903,7 +949,7 @@ mod tests {
         let (drop_tx, mut drop_rx) = unbounded_channel::<PathBuf>();
         let _watcher = TreeWatcher::builder()
             .scan_interval(nz(Duration::from_millis(100)))
-            .debounce_timeout(Duration::from_millis(50))
+            .debounce_timeout(nz(Duration::from_millis(50)))
             .watch(dir.path(), move |ctx| {
                 let path = ctx.path().to_owned();
                 created_tx.send(path.clone()).ok();
@@ -941,7 +987,7 @@ mod tests {
         let _watcher = TreeWatcher::builder()
             .recursive(recursive)
             .scan_interval(nz(Duration::from_millis(100)))
-            .debounce_timeout(Duration::from_millis(50))
+            .debounce_timeout(nz(Duration::from_millis(50)))
             .watch(dir.path(), move |ctx| {
                 if !ctx.is_file() {
                     return None;
@@ -971,7 +1017,7 @@ mod tests {
         let (drop_tx, mut drop_rx) = unbounded_channel::<PathBuf>();
         let watcher = TreeWatcher::builder()
             .scan_interval(nz(Duration::from_millis(100)))
-            .debounce_timeout(Duration::from_millis(50))
+            .debounce_timeout(nz(Duration::from_millis(50)))
             .watch(dir.path(), move |ctx| {
                 let path = ctx.path().to_owned();
                 created_tx.send(path.clone()).ok();
@@ -992,5 +1038,242 @@ mod tests {
             .expect("handler should be dropped when watcher is dropped")
             .unwrap();
         assert!(dropped.ends_with("a.log"));
+    }
+
+    // Both bad-root checks run before any Tokio task is spawned, so this needs no runtime.
+    #[rstest]
+    #[case::missing_root(false)]
+    #[case::file_root(true)]
+    fn watch_rejects_bad_root(#[case] root_is_file: bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = if root_is_file {
+            let file = dir.path().join("not-a-dir");
+            std::fs::write(&file, b"x").unwrap();
+            file
+        } else {
+            dir.path().join("does-not-exist")
+        };
+        let err = TreeWatcher::watch(root, |_ctx: NodeContext| Some(())).unwrap_err();
+        if root_is_file {
+            assert!(matches!(err, TreeWatcherError::NotADirectory(_)), "got {err:?}");
+        } else {
+            assert!(matches!(err, TreeWatcherError::Io(_)), "got {err:?}");
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum Mutation {
+        Append,
+        Overwrite,
+    }
+
+    impl Mutation {
+        fn apply(self, path: &Path, i: usize) {
+            match self {
+                Self::Append => {
+                    use std::io::Write as _;
+                    let mut f = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+                    write!(f, "-{i}").unwrap();
+                }
+                Self::Overwrite => std::fs::write(path, format!("body-{i}")).unwrap(),
+            }
+        }
+    }
+
+    // A content write is neither a create/remove nor a kind change, so the handler must
+    // survive untouched: not rebuilt by the event path, not churned by the periodic scan.
+    #[rstest]
+    #[case::append(Mutation::Append)]
+    #[case::overwrite(Mutation::Overwrite)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn benign_mutation_does_not_rebuild_handler(#[case] mutation: Mutation) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("keep.log");
+        std::fs::write(&file, b"seed").unwrap();
+
+        let (built_tx, mut built_rx) = unbounded_channel::<PathBuf>();
+        let (drop_tx, mut drop_rx) = unbounded_channel::<PathBuf>();
+        let _watcher = TreeWatcher::builder()
+            .scan_interval(nz(Duration::from_millis(50)))
+            .debounce_timeout(Duration::from_millis(20))
+            .watch(dir.path(), move |ctx| {
+                let path = ctx.path().to_owned();
+                built_tx.send(path.clone()).ok();
+                Some(Probe {
+                    path,
+                    dropped: drop_tx.clone(),
+                })
+            })
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(5), built_rx.recv())
+            .await
+            .expect("startup scan builds the handler")
+            .unwrap();
+        while built_rx.try_recv().is_ok() {}
+
+        for i in 0..3 {
+            mutation.apply(&file, i);
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+        // Several scan cycles and debounce windows: a bug that rebuilds on modify surfaces here.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        assert!(matches!(built_rx.try_recv(), Err(TryRecvError::Empty)), "handler was rebuilt");
+        assert!(matches!(drop_rx.try_recv(), Err(TryRecvError::Empty)), "handler was dropped");
+    }
+
+    // A 30s debounce means no filesystem event can be delivered inside the 5s window, so
+    // whatever reconciles the change is provably the periodic scan alone.
+    #[rstest]
+    #[case::appearance(false)]
+    #[case::disappearance(true)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn periodic_scan_reconciles_when_events_are_delayed(#[case] pre_exists: bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("s.log");
+        if pre_exists {
+            std::fs::write(&file, b"x").unwrap();
+        }
+
+        let (built_tx, mut built_rx) = unbounded_channel::<PathBuf>();
+        let (drop_tx, mut drop_rx) = unbounded_channel::<PathBuf>();
+        let _watcher = TreeWatcher::builder()
+            .scan_interval(nz(Duration::from_millis(100)))
+            .debounce_timeout(Duration::from_secs(30))
+            .watch(dir.path(), move |ctx| {
+                let path = ctx.path().to_owned();
+                built_tx.send(path.clone()).ok();
+                Some(Probe {
+                    path,
+                    dropped: drop_tx.clone(),
+                })
+            })
+            .unwrap();
+
+        if pre_exists {
+            tokio::time::timeout(Duration::from_secs(5), built_rx.recv())
+                .await
+                .expect("startup scan builds the handler")
+                .unwrap();
+            std::fs::remove_file(&file).unwrap();
+            let dropped = tokio::time::timeout(Duration::from_secs(5), drop_rx.recv())
+                .await
+                .expect("periodic scan prunes the handler without any event")
+                .unwrap();
+            assert!(dropped.ends_with("s.log"));
+        } else {
+            std::fs::write(&file, b"x").unwrap();
+            let built = tokio::time::timeout(Duration::from_secs(5), built_rx.recv())
+                .await
+                .expect("periodic scan builds the handler without any event")
+                .unwrap();
+            assert!(built.ends_with("s.log"));
+        }
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rename_moves_handler() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("from.log");
+        let to = dir.path().join("to.log");
+        std::fs::write(&from, b"x").unwrap();
+
+        let (built_tx, mut built_rx) = unbounded_channel::<PathBuf>();
+        let (drop_tx, mut drop_rx) = unbounded_channel::<PathBuf>();
+        let _watcher = TreeWatcher::builder()
+            .scan_interval(nz(Duration::from_millis(100)))
+            .debounce_timeout(Duration::from_millis(50))
+            .watch(dir.path(), move |ctx| {
+                let path = ctx.path().to_owned();
+                built_tx.send(path.clone()).ok();
+                Some(Probe {
+                    path,
+                    dropped: drop_tx.clone(),
+                })
+            })
+            .unwrap();
+
+        let first = tokio::time::timeout(Duration::from_secs(5), built_rx.recv())
+            .await
+            .expect("initial handler for the source")
+            .unwrap();
+        assert!(first.ends_with("from.log"));
+
+        std::fs::rename(&from, &to).unwrap();
+
+        let dropped = tokio::time::timeout(Duration::from_secs(5), drop_rx.recv())
+            .await
+            .expect("source handler is dropped")
+            .unwrap();
+        assert!(dropped.ends_with("from.log"));
+
+        // The destination may surface as a rename event or via the reconciling scan, and the
+        // two channels carry no ordering guarantee, so read builds until the new path shows.
+        let built = loop {
+            let p = tokio::time::timeout(Duration::from_secs(5), built_rx.recv())
+                .await
+                .expect("destination handler is built")
+                .unwrap();
+            if p.ends_with("to.log") {
+                break p;
+            }
+        };
+        assert!(built.ends_with("to.log"));
+    }
+
+    #[cfg(unix)]
+    #[derive(Clone, Copy)]
+    enum NodeSpec {
+        File,
+        Dir,
+        Symlink,
+    }
+
+    #[cfg(unix)]
+    impl NodeSpec {
+        fn create(self, at: &Path) {
+            match self {
+                Self::File => std::fs::write(at, b"x").unwrap(),
+                Self::Dir => std::fs::create_dir(at).unwrap(),
+                // Dangling on purpose: the kind is read without following the link.
+                Self::Symlink => std::os::unix::fs::symlink("missing-target", at).unwrap(),
+            }
+        }
+    }
+
+    // The kind the factory sees must match what is on disk, all the way through the scan
+    // and stat pipeline -- symlinks especially must not be followed to their target's kind.
+    #[cfg(unix)]
+    #[rstest]
+    #[case::file(NodeSpec::File, FileKind::File)]
+    #[case::dir(NodeSpec::Dir, FileKind::Dir)]
+    #[case::symlink(NodeSpec::Symlink, FileKind::Symlink)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reported_kind_matches_disk(#[case] spec: NodeSpec, #[case] want: FileKind) {
+        let dir = tempfile::tempdir().unwrap();
+        let (built_tx, mut built_rx) = unbounded_channel::<(PathBuf, FileKind)>();
+        let _watcher = TreeWatcher::builder()
+            .scan_interval(nz(Duration::from_millis(100)))
+            .debounce_timeout(Duration::from_millis(50))
+            .watch(dir.path(), move |ctx| {
+                built_tx.send((ctx.path().to_owned(), ctx.kind())).ok();
+                Some(())
+            })
+            .unwrap();
+
+        spec.create(&dir.path().join("node"));
+
+        let kind = loop {
+            let (path, kind) = tokio::time::timeout(Duration::from_secs(5), built_rx.recv())
+                .await
+                .expect("node surfaces to the factory")
+                .unwrap();
+            if path.ends_with("node") {
+                break kind;
+            }
+        };
+        assert_eq!(kind, want);
     }
 }
