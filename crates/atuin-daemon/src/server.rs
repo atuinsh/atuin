@@ -4,6 +4,7 @@ use eyre::{Context, Result};
 use crate::components::search::SearchGrpcService;
 use crate::daemon::DaemonHandle;
 use crate::grpc;
+use crate::grpc::ai_session::pb::ai_session_server::AiSessionServer;
 use crate::grpc::history::pb::history_server::HistoryServer;
 use crate::search::search_server::SearchServer;
 
@@ -22,6 +23,7 @@ pub async fn run_grpc_server(
     settings: Settings,
     history_service: HistoryServer<grpc::HistoryService>,
     search_service: SearchServer<SearchGrpcService>,
+    ai_session_service: AiSessionServer<grpc::AiSessionService>,
     handle: DaemonHandle,
 ) -> Result<()> {
     use tokio::net::UnixListener;
@@ -134,6 +136,7 @@ pub async fn run_grpc_server(
         if let Err(e) = Server::builder()
             .add_service(history_service)
             .add_service(search_service)
+            .add_service(ai_session_service)
             .serve_with_incoming_shutdown(uds_stream, shutdown_signal)
             .await
         {
@@ -150,6 +153,7 @@ pub async fn run_grpc_server(
     settings: Settings,
     history_service: HistoryServer<grpc::HistoryService>,
     search_service: SearchServer<SearchGrpcService>,
+    ai_session_service: AiSessionServer<grpc::AiSessionService>,
     handle: DaemonHandle,
 ) -> Result<()> {
     use tokio::net::TcpListener;
@@ -183,6 +187,7 @@ pub async fn run_grpc_server(
         if let Err(e) = Server::builder()
             .add_service(history_service)
             .add_service(search_service)
+            .add_service(ai_session_service)
             .serve_with_incoming_shutdown(tcp_stream, shutdown_signal)
             .await
         {

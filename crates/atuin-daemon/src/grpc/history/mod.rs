@@ -14,11 +14,13 @@ use tonic::{Request, Response, Status};
 use tracing::{Instrument, Level, instrument};
 
 use crate::DaemonHandle;
+// `Lagged` now lives in the shared `common` package (see `common.proto`).
+use crate::grpc::common::pb::Lagged;
 use crate::grpc::history::pb::history_server::History as GrpcService;
 use crate::grpc::history::pb::{
     CancelHistoryReply, CancelHistoryRequest, DeleteHistoryReply, DeleteHistoryRequest,
     DeleteHistoryStreamExt, EndHistoryReply, EndHistoryRequest, GetCommandOutputRequest,
-    GetCommandOutputResponse, Lagged, RebuildHistoryReply, RebuildHistoryRequest,
+    GetCommandOutputResponse, RebuildHistoryReply, RebuildHistoryRequest,
     RegisterCommandOutputRequest, RegisterCommandOutputResponse, ShutdownReply, ShutdownRequest,
     StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent,
     TailHistoryReply, TailHistoryRequest,
