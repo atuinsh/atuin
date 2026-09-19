@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
 
 use atuin_client::ai_session::HarnessKind;
 use atuin_common::harnesstools::session::{Appearance, Session as HSession, WatchError};
@@ -13,7 +12,6 @@ use crate::session_capture::Sink;
 pub(super) struct HarnessListener<S> {
     kind: HarnessKind,
     sink: Arc<Sink>,
-    followers: Arc<AtomicUsize>,
     watch: BoxStream<'static, Result<Appearance<S>, WatchError>>,
 }
 
@@ -24,22 +22,15 @@ where
     pub(super) fn new(
         kind: HarnessKind,
         sink: Arc<Sink>,
-        followers: Arc<AtomicUsize>,
         watch: BoxStream<'static, Result<Appearance<S>, WatchError>>,
     ) -> Self {
-        Self {
-            kind,
-            sink,
-            followers,
-            watch,
-        }
+        Self { kind, sink, watch }
     }
 
     pub(super) async fn run(self) {
         let HarnessListener {
             kind,
             sink,
-            followers,
             mut watch,
         } = self;
 
@@ -49,8 +40,7 @@ where
             tokio::select! {
                 appearance = watch.next() => match appearance {
                     Some(Ok(appearance)) => {
-                        let actor =
-                            SessionActor::new(kind, sink.clone(), followers.clone(), appearance);
+                        let actor = SessionActor::new(kind, sink.clone(), appearance);
                         actors.push(actor.run().boxed());
                     }
                     Some(Err(_)) => {}

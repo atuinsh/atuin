@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use atuin_client::ai_session::{HarnessKind, HarnessSession, Message, NativeSessionId, SourceId};
@@ -19,39 +18,17 @@ const RECENT_ACTIVITY_WINDOW: time::Duration = time::Duration::minutes(15);
 pub(super) struct SessionActor<S> {
     kind: HarnessKind,
     sink: Arc<Sink>,
-    followers: Arc<AtomicUsize>,
     appearance: Appearance<S>,
-}
-
-struct FollowerGuard(Arc<AtomicUsize>);
-
-impl FollowerGuard {
-    fn new(counter: Arc<AtomicUsize>) -> Self {
-        counter.fetch_add(1, Ordering::SeqCst);
-        Self(counter)
-    }
-}
-
-impl Drop for FollowerGuard {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
-    }
 }
 
 impl<S> SessionActor<S>
 where
     S: HSession + Send + 'static,
 {
-    pub(super) fn new(
-        kind: HarnessKind,
-        sink: Arc<Sink>,
-        followers: Arc<AtomicUsize>,
-        appearance: Appearance<S>,
-    ) -> Self {
+    pub(super) fn new(kind: HarnessKind, sink: Arc<Sink>, appearance: Appearance<S>) -> Self {
         Self {
             kind,
             sink,
-            followers,
             appearance,
         }
     }
@@ -60,7 +37,6 @@ where
         let SessionActor {
             kind,
             sink,
-            followers,
             appearance,
         } = self;
 
@@ -80,7 +56,6 @@ where
         let from = sink.sidecar.checkpoint(kind, &native).await.unwrap_or(ReadFrom::Beginning);
 
         if follow {
-            let _guard = FollowerGuard::new(followers.clone());
             let mut stream = session.messages_from(from);
             while let Ok(Some((offset, result))) = timeout(FOLLOW_IDLE_TIMEOUT, stream.next()).await
             {

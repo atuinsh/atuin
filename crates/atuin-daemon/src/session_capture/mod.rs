@@ -1,14 +1,12 @@
 mod engine;
-mod proto;
-#[cfg(test)]
-mod testkit;
+pub(crate) mod proto;
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use atuin_client::ai_session::{
     AiSessionDatabase, AiSessionStore, Appended, DbError, HarnessKind, HarnessSession, Message,
-    Page, PageToken, PushError, Session,
+    PushError, Session,
 };
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4::Key;
@@ -53,11 +51,6 @@ impl Sink {
 
     pub(crate) fn subscribe(&self) -> BroadcastStream<SessionTailEvent> {
         BroadcastStream::new(self.tail.subscribe())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn tail_subscribe(&self) -> BroadcastStream<SessionTailEvent> {
-        self.subscribe()
     }
 
     pub(crate) async fn append(&self, msg: Message) -> Result<(), AppendError> {
@@ -126,10 +119,9 @@ impl AiHarnessSessionCapture {
 
     pub async fn list_sessions(
         &self,
-        page: Page,
         harness: Option<HarnessKind>,
-    ) -> Result<(Vec<Session>, Option<PageToken>), DbError> {
-        self.sink.sidecar.list_sessions(page, harness).await
+    ) -> Result<Vec<Session>, DbError> {
+        self.sink.sidecar.list_sessions(harness).await
     }
 
     pub async fn get_session(&self, session: &HarnessSession) -> Result<Option<Session>, DbError> {
@@ -139,14 +131,14 @@ impl AiHarnessSessionCapture {
     pub fn messages(
         &self,
         session: &HarnessSession,
-    ) -> impl Stream<Item = Result<Message, DbError>> + '_ {
+    ) -> impl Stream<Item = Result<Message, DbError>> + Send + 'static {
         self.sink.sidecar.messages(session)
     }
 
     pub fn transcript(
         &self,
         session: &HarnessSession,
-    ) -> impl Stream<Item = Result<String, DbError>> + '_ {
+    ) -> impl Stream<Item = Result<String, DbError>> + Send + 'static {
         self.sink.sidecar.transcript(session)
     }
 }

@@ -4,10 +4,7 @@ use atuin_common::db::sqlite::{Sqlite, SqliteOpenOrCreateError};
 use atuin_common::db::{self};
 use atuin_common::harnesstools::session::{Content, ReadFrom, Role, Usage};
 use atuin_domain::record::RecordId;
-use base64::prelude::{BASE64_URL_SAFE_NO_PAD, Engine};
-use derive_more::{AsRef, Display, From, Into};
-use futures::Stream;
-use futures::stream::{self, StreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use time::OffsetDateTime;
 
 use super::{HarnessKind, HarnessSession, Message, NativeSessionId, Session, SourceId};
@@ -48,49 +45,6 @@ pub enum DbError {
     InvalidContentEncoding,
     #[error("stored ai-session record id is not a valid uuid")]
     InvalidRecordId,
-    #[error("invalid ai-session page token")]
-    InvalidPageToken,
-}
-
-#[derive(Debug, Clone)]
-pub struct Page {
-    pub size: u32,
-    pub token: Option<PageToken>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, From, Into, AsRef, Display)]
-#[as_ref(str)]
-pub struct PageToken(String);
-
-struct Cursor {
-    updated_at: i64,
-    harness: i64,
-    session_id: String,
-}
-
-impl Cursor {
-    fn encode(&self) -> PageToken {
-        let raw = format!("{}\u{1f}{}\u{1f}{}", self.updated_at, self.harness, self.session_id);
-        PageToken(BASE64_URL_SAFE_NO_PAD.encode(raw))
-    }
-
-    fn decode(token: &PageToken) -> Result<Self, DbError> {
-        let raw =
-            BASE64_URL_SAFE_NO_PAD.decode(token.as_ref()).map_err(|_| DbError::InvalidPageToken)?;
-        let raw = String::from_utf8(raw).map_err(|_| DbError::InvalidPageToken)?;
-
-        let mut parts = raw.splitn(3, '\u{1f}');
-        let updated_at =
-            parts.next().and_then(|s| s.parse().ok()).ok_or(DbError::InvalidPageToken)?;
-        let harness = parts.next().and_then(|s| s.parse().ok()).ok_or(DbError::InvalidPageToken)?;
-        let session_id = parts.next().ok_or(DbError::InvalidPageToken)?.to_owned();
-
-        Ok(Self {
-            updated_at,
-            harness,
-            session_id,
-        })
-    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -280,11 +234,8 @@ impl AiSessionDatabase {
 
     pub async fn list_sessions(
         &self,
-        page: Page,
         harness: Option<HarnessKind>,
-    ) -> Result<(Vec<Session>, Option<PageToken>), DbError> {
-        let cursor = page.token.as_ref().map(Cursor::decode).transpose()?;
-
+    ) -> Result<Vec<Session>, DbError> {
         let mut sql = String::from(
             "SELECT harness, session_id, parent_harness, parent_session_id, cwd, git_branch, \
              model, started_at, updated_at, message_count, usage_input, usage_output, \
@@ -294,59 +245,27 @@ impl AiSessionDatabase {
         if harness.is_some() {
             sql.push_str(" AND harness = ?");
         }
-        if cursor.is_some() {
-            sql.push_str(
-                " AND (updated_at < ? OR (updated_at = ? AND harness < ?) OR (updated_at = ? AND \
-                 harness = ? AND session_id < ?))",
-            );
-        }
-        sql.push_str(" ORDER BY updated_at DESC, harness DESC, session_id DESC LIMIT ?");
+        sql.push_str(" ORDER BY updated_at DESC");
 
         let mut query = db::query_as::<_, SessionRow>(sqlx::AssertSqlSafe(sql));
         if let Some(harness) = harness {
             query = query.bind(harness as i64);
         }
-        if let Some(cursor) = &cursor {
-            query = query
-                .bind(cursor.updated_at)
-                .bind(cursor.updated_at)
-                .bind(cursor.harness)
-                .bind(cursor.updated_at)
-                .bind(cursor.harness)
-                .bind(cursor.session_id.clone());
-        }
-        query = query.bind(i64::from(page.size));
 
         let rows: Vec<SessionRow> = query.fetch_all(self.db.pool()).await?;
-        let full_page = u32::try_from(rows.len()).unwrap_or(u32::MAX) == page.size;
-        let token = if full_page {
-            rows.last().map(|row| {
-                Cursor {
-                    updated_at: row.updated_at,
-                    harness: row.harness,
-                    session_id: row.session_id.clone(),
-                }
-                .encode()
-            })
-        } else {
-            None
-        };
-
-        let sessions =
-            rows.into_iter().map(Self::session_from_row).collect::<Result<Vec<_>, _>>()?;
-
-        Ok((sessions, token))
+        rows.into_iter().map(Self::session_from_row).collect()
     }
 
     pub fn messages(
         &self,
         session: &HarnessSession,
-    ) -> impl Stream<Item = Result<Message, DbError>> + '_ {
+    ) -> impl Stream<Item = Result<Message, DbError>> + Send + 'static {
+        let pool = self.db.pool().clone();
         let harness = session.harness as i64;
         let session_id = session.session.as_ref().to_owned();
 
-        stream::once(async move {
-            let rows: Result<Vec<MessageRow>, sqlx::Error> = db::query_as(
+        async_stream::try_stream! {
+            let mut rows = db::query_as::<_, MessageRow>(
                 "SELECT id, harness, session_id, source_id, parent_harness, parent_session_id, \
                  parent_source_id, thread, timestamp, role, content, content_z, cwd, git_branch, \
                  model, usage_input, usage_output, usage_cache_read, usage_cache_write, \
@@ -355,21 +274,18 @@ impl AiSessionDatabase {
             )
             .bind(harness)
             .bind(session_id)
-            .fetch_all(self.db.pool())
-            .await;
+            .fetch(&pool);
 
-            match rows {
-                Ok(rows) => rows.into_iter().map(Self::message_from_row).collect::<Vec<_>>(),
-                Err(err) => vec![Err(DbError::from(err))],
+            while let Some(row) = rows.try_next().await? {
+                yield Self::message_from_row(row)?;
             }
-        })
-        .flat_map(stream::iter)
+        }
     }
 
     pub fn transcript(
         &self,
         session: &HarnessSession,
-    ) -> impl Stream<Item = Result<String, DbError>> + '_ {
+    ) -> impl Stream<Item = Result<String, DbError>> + Send + 'static {
         self.messages(session).map(|result| result.map(|msg| Self::render_transcript_chunk(&msg)))
     }
 
@@ -583,7 +499,7 @@ mod tests {
     use rstest::rstest;
     use time::OffsetDateTime;
 
-    use super::{AiSessionDatabase, Appended, COMPRESS_THRESHOLD, Page};
+    use super::{AiSessionDatabase, Appended, COMPRESS_THRESHOLD};
     use crate::ai_session::{HarnessKind, HarnessSession, Message, NativeSessionId, SourceId};
 
     fn sample_message() -> Message {
@@ -648,36 +564,15 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn list_is_newest_first_and_pages() {
+    async fn list_is_newest_first() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         for m in three_sessions_oldest_first() {
             db.append(&m).await.unwrap();
         }
 
-        let (first, tok) = db
-            .list_sessions(
-                Page {
-                    size: 2,
-                    token: None,
-                },
-                None,
-            )
-            .await
-            .unwrap();
-        assert_eq!(first.len(), 2);
-        assert!(first[0].updated_at >= first[1].updated_at);
-        let (rest, end) = db
-            .list_sessions(
-                Page {
-                    size: 2,
-                    token: tok,
-                },
-                None,
-            )
-            .await
-            .unwrap();
-        assert_eq!(rest.len(), 1);
-        assert!(end.is_none());
+        let sessions = db.list_sessions(None).await.unwrap();
+        assert_eq!(sessions.len(), 3);
+        assert!(sessions.windows(2).all(|w| w[0].updated_at >= w[1].updated_at));
     }
 
     #[rstest]
