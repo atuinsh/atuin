@@ -101,14 +101,20 @@ pub(super) fn run<S: Strategy>(
             let mut conn = match pending.take() {
                 Some(conn) => conn,
                 None => {
-                    cfg.reconnect
+                    let connected = cfg
+                        .reconnect
                         .retry_forever(|| async {
                             match SqliteConnection::connect_with(&opts).await {
-                                Ok(conn) => std::ops::ControlFlow::Break(conn),
-                                Err(_) => std::ops::ControlFlow::Continue(()),
+                                Ok(conn) => std::ops::ControlFlow::Break(Ok(conn)),
+                                Err(e) if is_transient(&e) => std::ops::ControlFlow::Continue(()),
+                                Err(e) => std::ops::ControlFlow::Break(Err(e)),
                             }
                         })
-                        .await
+                        .await;
+                    match connected {
+                        Ok(conn) => conn,
+                        Err(e) => Err(ObserveError::Connect(e))?,
+                    }
                 }
             };
 
