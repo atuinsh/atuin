@@ -276,12 +276,16 @@ where
 
     fn reconcile(&mut self, truth: Vec<(Arc<Path>, FileKind)>, scanned_dirs: &HashSet<Arc<Path>>) {
         let truth: HashMap<Arc<Path>, FileKind> = truth.into_iter().collect();
-        // Prune a tracked node only when its parent directory was fully read this pass,
-        // so nodes under an unreadable subtree survive while readable directories
-        // reconcile independently.
+        // Prune a tracked node only once it is confirmed gone: some ancestor whose
+        // parent directory was fully read this pass is itself absent from the scan.
+        // This drops removed nodes and everything under a removed directory, while
+        // keeping nodes shielded by a directory that merely could not be read.
         self.entries.retain(|key, _| {
             truth.contains_key(key)
-                || key.parent().is_none_or(|parent| !scanned_dirs.contains(parent))
+                || !key.ancestors().any(|ancestor| {
+                    ancestor.parent().is_some_and(|parent| scanned_dirs.contains(parent))
+                        && !truth.contains_key(ancestor)
+                })
         });
         for (path, kind) in truth {
             self.observe(path, kind, Origin::Scan);
@@ -791,16 +795,29 @@ mod tests {
     }
 
     #[rstest]
-    fn reconcile_prunes_only_under_scanned_dirs() {
+    fn reconcile_keeps_nodes_under_unreadable_dir() {
         let counters = Arc::new(Counters::default());
         let mut engine = accept_all_engine(&counters);
         engine.observe(ap("/r/gone"), FileKind::File, Origin::Scan);
         engine.observe(ap("/r/sub/kept"), FileKind::File, Origin::Scan);
-        // The scan read /r but not /r/sub (unreadable subtree); truth is empty.
+        // The scan read /r and saw /r/sub, but could not read /r/sub itself.
+        engine.reconcile(vec![(ap("/r/sub"), FileKind::Dir)], &scanned(&["/r"]));
+        // /r/gone: parent /r read, absent from truth -> pruned.
+        // /r/sub/kept: shielded by /r/sub, which exists but was not read -> kept.
+        assert_eq!(keys(&engine), [ap("/r/sub"), ap("/r/sub/kept")].into_iter().collect());
+    }
+
+    #[rstest]
+    fn reconcile_prunes_removed_subtree_descendants() {
+        let counters = Arc::new(Counters::default());
+        let mut engine = accept_all_engine(&counters);
+        engine.observe(ap("/r/sub"), FileKind::Dir, Origin::Scan);
+        engine.observe(ap("/r/sub/child"), FileKind::File, Origin::Scan);
+        // /r/sub was removed (missed event): the scan read /r, /r/sub is absent and
+        // cannot be scanned, so both it and its descendants must be pruned.
         engine.reconcile(vec![], &scanned(&["/r"]));
-        // /r/gone: parent /r was scanned and it is absent -> pruned.
-        // /r/sub/kept: parent /r/sub was not scanned -> retained.
-        assert_eq!(keys(&engine), std::iter::once(ap("/r/sub/kept")).collect());
+        assert!(engine.entries.is_empty());
+        assert_eq!(counters.alive.load(Ordering::SeqCst), 0);
     }
 
     #[rstest]
