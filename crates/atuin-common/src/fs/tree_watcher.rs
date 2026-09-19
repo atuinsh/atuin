@@ -165,12 +165,15 @@ impl NodeContext {
     }
 }
 
+/// A best-effort tree scan: the nodes found, plus the directories fully read.
+type ScanResult = (Vec<(Arc<Path>, FileKind)>, HashSet<Arc<Path>>);
+
 /// Walk `root` best-effort, returning every readable entry plus the set of
 /// directories that were fully read without error. A node may be pruned only when its
 /// parent directory is in that set: a node missing from a directory we could not
 /// fully read may be unreadable rather than gone, so unread subtrees are left intact
 /// while readable ones reconcile independently.
-fn scan_fs(root: &Path, recursive: bool) -> (Vec<(Arc<Path>, FileKind)>, HashSet<Arc<Path>>) {
+fn scan_fs(root: &Path, recursive: bool) -> ScanResult {
     let mut out = Vec::new();
     let mut scanned: HashSet<Arc<Path>> = HashSet::new();
     let mut stack: Vec<Arc<Path>> = vec![Arc::from(root)];
@@ -202,7 +205,7 @@ fn scan_fs(root: &Path, recursive: bool) -> (Vec<(Arc<Path>, FileKind)>, HashSet
     (out, scanned)
 }
 
-async fn scan(root: &Path, recursive: bool) -> (Vec<(Arc<Path>, FileKind)>, HashSet<Arc<Path>>) {
+async fn scan(root: &Path, recursive: bool) -> ScanResult {
     let root = root.to_path_buf();
     tokio::task::spawn_blocking(move || scan_fs(&root, recursive))
         .await
