@@ -465,6 +465,7 @@ dependencies = [
  "divan",
  "easy-cast",
  "enum_dispatch",
+ "flume",
  "fs-err",
  "futures",
  "getrandom 0.4.3",

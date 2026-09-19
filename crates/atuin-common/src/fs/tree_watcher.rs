@@ -65,7 +65,6 @@ use std::time::Duration;
 use notify::event::{EventKind, ModifyKind, RenameMode};
 use notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
-use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
@@ -250,9 +249,7 @@ where
         if self.entries.get(&path).is_some_and(|slot| slot.kind() == kind) {
             return;
         }
-        // Absent, or present at a stale kind. Drop any old handler before building its
-        // replacement, so a handler owning per-path state releases it before the new
-        // one acquires it.
+
         self.entries.remove(&path);
         let ctx = NodeContext {
             path: Arc::clone(&path),
@@ -342,7 +339,7 @@ where
 {
     async fn run(
         mut self,
-        mut events: UnboundedReceiver<DebounceEventResult>,
+        events: flume::Receiver<DebounceEventResult>,
         scan_interval: NonZeroDuration,
     ) {
         self.rescan().await;
@@ -354,9 +351,9 @@ where
         loop {
             tokio::select! {
                 _ = interval.tick() => self.rescan().await,
-                received = events.recv() => {
+                received = events.recv_async() => {
                     match received {
-                        Some(Ok(batch)) => {
+                        Ok(Ok(batch)) => {
                             let mut force_scan = false;
                             let mut pending = Vec::new();
                             for debounced in batch {
@@ -376,8 +373,8 @@ where
                                 self.rescan().await;
                             }
                         }
-                        Some(Err(errors)) => tracing::warn!(?errors, "tree watcher backend error"),
-                        None => break,
+                        Ok(Err(errors)) => tracing::warn!(?errors, "tree watcher backend error"),
+                        Err(flume::RecvError::Disconnected) => break,
                     }
                 }
             }
@@ -455,7 +452,7 @@ impl TreeWatcherBuilder {
             return Err(TreeWatcherError::NotADirectory(root));
         }
 
-        let (tx, rx) = unbounded_channel();
+        let (tx, rx) = flume::unbounded();
         let mode = if self.recursive {
             RecursiveMode::Recursive
         } else {
@@ -1053,7 +1050,9 @@ mod tests {
         } else {
             dir.path().join("does-not-exist")
         };
-        let err = TreeWatcher::watch(root, |_ctx: NodeContext| Some(())).unwrap_err();
+        let err = TreeWatcher::watch(root, |_ctx: NodeContext| Some(()))
+            .err()
+            .expect("bad root must be rejected");
         if root_is_file {
             assert!(matches!(err, TreeWatcherError::NotADirectory(_)), "got {err:?}");
         } else {
@@ -1095,7 +1094,7 @@ mod tests {
         let (drop_tx, mut drop_rx) = unbounded_channel::<PathBuf>();
         let _watcher = TreeWatcher::builder()
             .scan_interval(nz(Duration::from_millis(50)))
-            .debounce_timeout(Duration::from_millis(20))
+            .debounce_timeout(nz(Duration::from_millis(20)))
             .watch(dir.path(), move |ctx| {
                 let path = ctx.path().to_owned();
                 built_tx.send(path.clone()).ok();
@@ -1140,7 +1139,7 @@ mod tests {
         let (drop_tx, mut drop_rx) = unbounded_channel::<PathBuf>();
         let _watcher = TreeWatcher::builder()
             .scan_interval(nz(Duration::from_millis(100)))
-            .debounce_timeout(Duration::from_secs(30))
+            .debounce_timeout(nz(Duration::from_secs(30)))
             .watch(dir.path(), move |ctx| {
                 let path = ctx.path().to_owned();
                 built_tx.send(path.clone()).ok();
@@ -1184,7 +1183,7 @@ mod tests {
         let (drop_tx, mut drop_rx) = unbounded_channel::<PathBuf>();
         let _watcher = TreeWatcher::builder()
             .scan_interval(nz(Duration::from_millis(100)))
-            .debounce_timeout(Duration::from_millis(50))
+            .debounce_timeout(nz(Duration::from_millis(50)))
             .watch(dir.path(), move |ctx| {
                 let path = ctx.path().to_owned();
                 built_tx.send(path.clone()).ok();
@@ -1256,7 +1255,7 @@ mod tests {
         let (built_tx, mut built_rx) = unbounded_channel::<(PathBuf, FileKind)>();
         let _watcher = TreeWatcher::builder()
             .scan_interval(nz(Duration::from_millis(100)))
-            .debounce_timeout(Duration::from_millis(50))
+            .debounce_timeout(nz(Duration::from_millis(50)))
             .watch(dir.path(), move |ctx| {
                 built_tx.send((ctx.path().to_owned(), ctx.kind())).ok();
                 Some(())

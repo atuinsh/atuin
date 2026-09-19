@@ -32,6 +32,7 @@ derive_more = { workspace = true }
 directories = { workspace = true }
 easy-cast = { workspace = true }
 enum_dispatch = { workspace = true }
+flume = { workspace = true }
 fs-err = { workspace = true }
 futures = { workspace = true }
 getrandom = { workspace = true }
