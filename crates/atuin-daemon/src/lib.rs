@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use atuin_client::ai_session::{AiSessionDatabase, AiSessionStore};
 use atuin_client::database::Sqlite as HistoryDatabase;
 use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sqlite_store::SqliteStore;
@@ -9,6 +10,7 @@ use eyre::Result;
 
 use crate::grpc::ai_session::pb::ai_session_server::AiSessionServer;
 use crate::grpc::history::pb::history_server::HistoryServer;
+use crate::session_capture::AiHarnessSessionCapture;
 
 pub mod client;
 pub mod components;
@@ -70,9 +72,35 @@ pub async fn boot(
 
     let handle = daemon.handle();
 
-    let _sync_engine = sync::SyncEngine::spawn(handle.clone(), search_index.clone());
-
     let host_id = Settings::host_id().await?;
+
+    let ai_session_db_path = Settings::effective_data_dir().join("ai_harness_sessions.db");
+    let ai_session_db = match AiSessionDatabase::open(&ai_session_db_path).await {
+        Ok(db) => Some(db),
+        Err(err) => {
+            tracing::error!(
+                ?err,
+                path = ?ai_session_db_path,
+                "failed to open the ai-session sidecar; ai-session capture is disabled"
+            );
+            None
+        }
+    };
+    let ai_session_capture = Arc::new(match &ai_session_db {
+        Some(db) => AiHarnessSessionCapture::open(
+            AiSessionStore::builder()
+                .store(handle.store().clone())
+                .host_id(host_id)
+                .key(handle.encryption_key().clone())
+                .build(),
+            db.clone(),
+        ),
+        None => AiHarnessSessionCapture::nop().await,
+    });
+
+    let _sync_engine =
+        sync::SyncEngine::spawn(handle.clone(), search_index.clone(), ai_session_db);
+
     let history_store =
         HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
     let journal = Arc::new(HistoryJournal::new(
@@ -83,7 +111,7 @@ pub async fn boot(
         output_capture,
     ));
     let history_service = HistoryServer::new(grpc::HistoryService::new(journal, handle.clone()));
-    let ai_session_service = AiSessionServer::new(grpc::AiSessionService::new());
+    let ai_session_service = AiSessionServer::new(grpc::AiSessionService::new(ai_session_capture));
 
     // Start all components first (so gRPC services can work)
     daemon.start_components().await?;
