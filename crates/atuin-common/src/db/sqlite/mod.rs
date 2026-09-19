@@ -4,6 +4,7 @@ mod builder;
 mod compactor;
 pub mod fts;
 mod info;
+pub mod observe;
 
 use std::ffi::OsStr;
 use std::path::PathBuf;
