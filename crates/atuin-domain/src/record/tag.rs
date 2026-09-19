@@ -24,6 +24,8 @@ pub enum RecordTag {
     DotfilesVar,
     #[strum(serialize = "config-shell-alias")]
     ConfigShellAlias,
+    #[strum(serialize = "ai-session")]
+    AiSession,
     #[strum(serialize = "packfile")]
     Packfile,
     /// Legacy code supported arbitrary types, so we need to support this.
@@ -51,6 +53,7 @@ impl RecordTag {
             | Self::Script
             | Self::DotfilesVar
             | Self::ConfigShellAlias
+            | Self::AiSession
             | Self::Other(_) => false,
         }
     }
@@ -62,8 +65,9 @@ impl RecordTag {
             Self::Script => 2,
             Self::DotfilesVar => 3,
             Self::ConfigShellAlias => 4,
-            Self::Packfile => 5,
-            Self::Other(_) => 6,
+            Self::AiSession => 5,
+            Self::Packfile => 6,
+            Self::Other(_) => 7,
         }
     }
 }
@@ -100,5 +104,18 @@ impl<'de> Deserialize<'de> for RecordTag {
         let s = Cow::<'de, str>::deserialize(deserializer)?;
         // TODO(markovejnovic): Figure out a better way to avoid the implicit `Clone` in here.
         Ok(Self::from(s.as_ref()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[rstest::rstest]
+    #[case(RecordTag::AiSession, "ai-session")]
+    fn ai_session_tag_roundtrips(#[case] tag: RecordTag, #[case] s: &str) {
+        assert_eq!(tag.as_ref(), s);
+        assert_eq!(s.parse::<RecordTag>().unwrap(), tag);
+        assert!(!tag.is_plaintext());
     }
 }
