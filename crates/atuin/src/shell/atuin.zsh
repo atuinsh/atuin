@@ -65,6 +65,10 @@ __atuin_osc133_prompt_start=$'%{\033]133;A;cl=line\a%}'
 __atuin_osc133_prompt_end=$'%{\033]133;B\a%}'
 
 __atuin_osc133_wrap_prompt() {
+    # Atuin only owns OSC 133 markers while its PTY proxy owns this terminal.
+    # Otherwise, leave markers from other shell integrations unchanged (#4149).
+    [[ "${__atuin_pty_proxy_owns_tty:-0}" = 1 ]] || return
+
     # RPS1 and RPROMPT share a value buffer but track "assigned" separately
     # (zsh 5.0.6+), so for a user who only ever set RPS1, RPROMPT expands as
     # unset. Fall back to RPS1 so we don't clobber the shared value (#3758).
@@ -78,15 +82,8 @@ __atuin_osc133_wrap_prompt() {
     __atuin_rprompt="${__atuin_rprompt//$__atuin_osc133_prompt_start/}"
     __atuin_rprompt="${__atuin_rprompt//$__atuin_osc133_prompt_end/}"
 
-    if [[ "${__atuin_pty_proxy_owns_tty:-0}" = 1 ]]; then
-        PROMPT="${__atuin_osc133_prompt_start}${__atuin_prompt}"
-        RPROMPT="${__atuin_rprompt}${__atuin_osc133_prompt_end}"
-    else
-        # Skip no-op writes: assigning RPROMPT marks it (and RPS1) as set,
-        # which we shouldn't do unless we have markers to strip.
-        [[ "$__atuin_orig_prompt" == "$__atuin_prompt" ]] || PROMPT="$__atuin_prompt"
-        [[ "$__atuin_orig_rprompt" == "$__atuin_rprompt" ]] || RPROMPT="$__atuin_rprompt"
-    fi
+    PROMPT="${__atuin_osc133_prompt_start}${__atuin_prompt}"
+    RPROMPT="${__atuin_rprompt}${__atuin_osc133_prompt_end}"
 }
 
 _atuin_preexec() {
