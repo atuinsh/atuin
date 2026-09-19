@@ -339,6 +339,7 @@ mod tests {
         let status = tokio::process::Command::new("sqlite3")
             .arg(path)
             .arg(format!("PRAGMA busy_timeout=10000; {sql}"))
+            .stdout(std::process::Stdio::null())
             .status()
             .await
             .expect("observe tests require the `sqlite3` CLI on PATH");
