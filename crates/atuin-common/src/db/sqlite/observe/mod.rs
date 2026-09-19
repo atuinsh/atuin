@@ -13,7 +13,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
 use tokio::sync::mpsc;
 use tokio_util::task::AbortOnDropHandle;
 
-use driver::{AppendStrategy, Strategy, run};
+use driver::{AppendStrategy, MutateStrategy, Strategy, run};
 
 pub use config::{ObserveConfig, Replay};
 pub use error::ObserveError;
@@ -50,6 +50,16 @@ impl SqliteObserver {
             .await
             .map_err(ObserveError::Connect)?;
         Ok(spawn_observer(conn, AppendStrategy::<T>::new(), cfg))
+    }
+
+    pub async fn mutate<T: Diffable>(
+        &self,
+        cfg: ObserveConfig,
+    ) -> Result<SqliteTableObserver<Change<T>>, ObserveError> {
+        let conn = SqliteConnection::connect_with(&self.opts)
+            .await
+            .map_err(ObserveError::Connect)?;
+        Ok(spawn_observer(conn, MutateStrategy::<T>::new(), cfg))
     }
 }
 

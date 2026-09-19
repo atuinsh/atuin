@@ -1,12 +1,14 @@
+use std::collections::BTreeMap;
 use std::future::Future;
 
 use futures::TryStreamExt;
+use itertools::{EitherOrBoth, Itertools};
 use sqlx::sqlite::SqliteConnection;
 use sqlx::{AssertSqlSafe, Sqlite};
 use tokio::sync::mpsc;
 
-use super::event::Appended;
-use super::schema::Tailable;
+use super::event::{Appended, Change};
+use super::schema::{Diffable, Tailable, TableSchema};
 use super::{ObserveConfig, ObserveError, Replay};
 
 pub(super) enum DeliverError {
@@ -147,6 +149,84 @@ pub(super) async fn run<S: Strategy>(
     }
 }
 
+async fn fetch_all<T: TableSchema>(conn: &mut SqliteConnection) -> Result<Vec<T>, DeliverError> {
+    let cols = T::COLUMNS.join(", ");
+    let sql = format!("SELECT {cols} FROM {}", T::TABLE);
+    crate::db::query_as::<Sqlite, T>(AssertSqlSafe(sql))
+        .fetch_all(conn)
+        .await
+        .map_err(DeliverError::Sqlx)
+}
+
+async fn deliver<E>(
+    tx: &mpsc::Sender<Result<E, ObserveError>>,
+    events: Vec<E>,
+) -> Result<(), DeliverError> {
+    use futures::StreamExt as _;
+    futures::stream::iter(events)
+        .map(Ok::<E, DeliverError>)
+        .try_for_each(|event| async move {
+            tx.send(Ok(event)).await.map_err(|_| DeliverError::ConsumerGone)
+        })
+        .await
+}
+
+pub(super) struct MutateStrategy<T: Diffable> {
+    snapshot: BTreeMap<T::Key, T>,
+}
+
+impl<T: Diffable> MutateStrategy<T> {
+    pub(super) fn new() -> Self {
+        Self { snapshot: BTreeMap::new() }
+    }
+}
+
+impl<T: Diffable> Strategy for MutateStrategy<T> {
+    type Event = Change<T>;
+
+    async fn seed(
+        &mut self,
+        conn: &mut SqliteConnection,
+        replay: Replay,
+        tx: &mpsc::Sender<Result<Self::Event, ObserveError>>,
+    ) -> Result<(), DeliverError> {
+        let snapshot: BTreeMap<T::Key, T> =
+            fetch_all::<T>(conn).await?.into_iter().map(|row| (row.key(), row)).collect();
+        if matches!(replay, Replay::All) {
+            let inserts: Vec<Change<T>> = snapshot.values().cloned().map(Change::Inserted).collect();
+            deliver(tx, inserts).await?;
+        }
+        self.snapshot = snapshot;
+        Ok(())
+    }
+
+    async fn poll(
+        &mut self,
+        conn: &mut SqliteConnection,
+        tx: &mpsc::Sender<Result<Self::Event, ObserveError>>,
+    ) -> Result<(), DeliverError> {
+        let fresh: BTreeMap<T::Key, T> =
+            fetch_all::<T>(conn).await?.into_iter().map(|row| (row.key(), row)).collect();
+
+        let changes: Vec<Change<T>> = self
+            .snapshot
+            .iter()
+            .merge_join_by(fresh.iter(), |(a, _), (b, _)| a.cmp(b))
+            .filter_map(|joined| match joined {
+                EitherOrBoth::Left((_, old)) => Some(Change::Deleted(old.clone())),
+                EitherOrBoth::Right((_, new)) => Some(Change::Inserted(new.clone())),
+                EitherOrBoth::Both((_, old), (_, new)) => {
+                    (old != new).then(|| Change::Updated { old: old.clone(), new: new.clone() })
+                }
+            })
+            .collect();
+
+        deliver(tx, changes).await?;
+        self.snapshot = fresh;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -172,6 +252,12 @@ mod tests {
         type Cursor = i64;
         const CURSOR_COLUMN: &'static str = "id";
         fn cursor(&self) -> i64 {
+            self.id
+        }
+    }
+    impl Diffable for Item {
+        type Key = i64;
+        fn key(&self) -> i64 {
             self.id
         }
     }
@@ -208,6 +294,14 @@ mod tests {
 
     async fn insert_xproc(path: &std::path::Path, id: i64, name: &str) {
         exec_sql(path, &format!("INSERT INTO items (id, name) VALUES ({id}, '{name}');")).await;
+    }
+
+    async fn update_xproc(path: &std::path::Path, id: i64, name: &str) {
+        exec_sql(path, &format!("UPDATE items SET name = '{name}' WHERE id = {id};")).await;
+    }
+
+    async fn delete_xproc(path: &std::path::Path, id: i64) {
+        exec_sql(path, &format!("DELETE FROM items WHERE id = {id};")).await;
     }
 
     fn cfg(replay: Replay) -> ObserveConfig {
@@ -318,6 +412,100 @@ mod tests {
 
                 let got: Vec<i64> = stream.take(sorted.len()).map(|r| r.unwrap().0.id).collect().await;
                 proptest::prop_assert_eq!(got, sorted);
+                Ok(())
+            })?;
+        }
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn mutate_detects_insert_update_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db.sqlite");
+        let db = writer(dir.path()).await;
+        insert(&db, 1, "a").await;
+
+        let observer = SqliteObserver::new(&path);
+        let mut stream = observer.mutate::<Item>(cfg(Replay::FromNow)).await.unwrap();
+
+        insert_xproc(&path, 2, "b").await;
+        assert_eq!(stream.next().await.unwrap().unwrap(), Change::Inserted(item(2, "b")));
+
+        update_xproc(&path, 1, "a2").await;
+        assert_eq!(
+            stream.next().await.unwrap().unwrap(),
+            Change::Updated { old: item(1, "a"), new: item(1, "a2") }
+        );
+
+        delete_xproc(&path, 2).await;
+        assert_eq!(stream.next().await.unwrap().unwrap(), Change::Deleted(item(2, "b")));
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn mutate_ignores_value_preserving_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db.sqlite");
+        let db = writer(dir.path()).await;
+        insert(&db, 1, "a").await;
+
+        let observer = SqliteObserver::new(&path);
+        let mut stream = observer.mutate::<Item>(cfg(Replay::FromNow)).await.unwrap();
+
+        update_xproc(&path, 1, "a").await;
+        insert_xproc(&path, 2, "b").await;
+
+        assert_eq!(stream.next().await.unwrap().unwrap(), Change::Inserted(item(2, "b")));
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(12))]
+        #[rstest]
+        fn mutate_stream_reconstructs_final_state(
+            ops in proptest::collection::vec((1i64..8, 0u8..3, "[a-c]"), 1..24)
+        ) {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async {
+                let dir = tempfile::tempdir().unwrap();
+                let path = dir.path().join("db.sqlite");
+                let _db = writer(dir.path()).await;
+                let observer = SqliteObserver::new(&path);
+                let mut stream = observer.mutate::<Item>(cfg(Replay::All)).await.unwrap();
+
+                let mut expected = std::collections::BTreeMap::<i64, String>::new();
+                for (id, op, name) in &ops {
+                    match op {
+                        0 | 1 => {
+                            exec_sql(&path, &format!("INSERT INTO items (id,name) VALUES ({id},'{name}') ON CONFLICT(id) DO UPDATE SET name='{name}';")).await;
+                            expected.insert(*id, name.clone());
+                        }
+                        _ => {
+                            exec_sql(&path, &format!("DELETE FROM items WHERE id={id};")).await;
+                            expected.remove(id);
+                        }
+                    }
+                }
+
+                let mut state = std::collections::BTreeMap::<i64, String>::new();
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+                while state != expected {
+                    match tokio::time::timeout_at(deadline, stream.next()).await {
+                        Ok(Some(Ok(change))) => match change {
+                            Change::Inserted(i) | Change::Updated { new: i, .. } => {
+                                state.insert(i.id, i.name);
+                            }
+                            Change::Deleted(i) => {
+                                state.remove(&i.id);
+                            }
+                        },
+                        _ => break,
+                    }
+                }
+                proptest::prop_assert_eq!(state, expected);
                 Ok(())
             })?;
         }
