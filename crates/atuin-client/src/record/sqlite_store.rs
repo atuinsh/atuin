@@ -138,6 +138,44 @@ impl SqliteStore {
         &self,
         records: impl Iterator<Item = &Record<paseto_v4::EncryptedData>> + Send + Sync,
     ) -> Result<()> {
+        let mut tx = self.sqlite.pool().begin().await?;
+        self.insert_all(&mut tx, records).await?;
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    /// Append `records` atomically: every one is stored, or none is.
+    ///
+    /// The batch version of [`Self::push_unique`]. The write lock is taken up front (a deferred
+    /// `BEGIN` would only lock at the first insert), so no other writer can claim a slot while
+    /// the batch is going in. If any row's `(host, tag, idx)` slot was already held the batch is
+    /// rolled back and `Ok(false)` is returned: the caller re-stamps its indices from the new
+    /// tail and retries. Unlike `push_unique` there is no idempotent re-push: a record whose id
+    /// is already stored counts as a conflict too, so callers must build fresh ids per attempt.
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn push_batch_unique(
+        &self,
+        records: impl Iterator<Item = &Record<paseto_v4::EncryptedData>> + Send + Sync,
+    ) -> Result<bool> {
+        let mut tx = self.sqlite.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let (attempted, inserted) = self.insert_all(&mut tx, records).await?;
+        if inserted != attempted {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        tx.commit().await?;
+
+        Ok(true)
+    }
+
+    /// Chunked `insert or ignore` of `records` on `tx`. Returns `(attempted, inserted)`; they
+    /// differ when a unique-index conflict swallowed a row.
+    async fn insert_all(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        records: impl Iterator<Item = &Record<paseto_v4::EncryptedData>> + Send + Sync,
+    ) -> Result<(u64, u64)> {
         // `store` has 8 columns, so each row binds 8 parameters; keep a full chunk
         // within the bind-parameter limit. `max(1)` keeps the chunk non-empty on any
         // (implausible) tiny limit.
@@ -145,7 +183,8 @@ impl SqliteStore {
         let rows_per_insert = (self.sqlite.info().await.variable_number_limit() / COLUMNS).max(1);
 
         let mut records = records.peekable();
-        let mut tx = self.sqlite.pool().begin().await?;
+        let mut attempted: u64 = 0;
+        let mut inserted: u64 = 0;
 
         while records.peek().is_some() {
             let mut builder = sqlx::QueryBuilder::new(
@@ -153,6 +192,7 @@ impl SqliteStore {
             );
 
             builder.push_values(records.by_ref().take(rows_per_insert), |mut b, r| {
+                attempted += 1;
                 b.push_bind(r.id.0.as_hyphenated().to_string())
                     .push_bind(i64::conv(r.idx))
                     .push_bind(r.host.id.0.as_hyphenated().to_string())
@@ -163,12 +203,10 @@ impl SqliteStore {
                     .push_bind(r.data.cek.as_str());
             });
 
-            builder.build().execute(&mut *tx).await?;
+            inserted += builder.build().execute(&mut **tx).await?.rows_affected();
         }
 
-        tx.commit().await?;
-
-        Ok(())
+        Ok((attempted, inserted))
     }
 
     /// Insert a single record, reporting whether its `(host, tag, idx)` slot is now held by
@@ -772,5 +810,61 @@ mod tests {
         assert_eq!(store.get(manifest.id).await.unwrap(), manifest, "manifest must be untouched");
         store.get(history.id).await.unwrap().decrypt(&new_key).expect("history was rekeyed");
         store.verify(&new_key).await.unwrap();
+    }
+
+    /// A record in `series` at `idx` with a fresh id.
+    fn series_record(host: &Host, tag: &RecordTag, idx: u64) -> Record<paseto_v4::EncryptedData> {
+        Record::builder()
+            .host(host.clone())
+            .version("v1".into())
+            .tag(tag.clone())
+            .data(paseto_v4::EncryptedData {
+                raw: "1234".into(),
+                cek: "1234".into(),
+            })
+            .idx(idx)
+            .build()
+    }
+
+    /// A batch whose `(host, tag, idx)` slots are partly taken is rejected whole, so the caller
+    /// can re-stamp from the new tail; a batch on free slots lands whole.
+    #[rstest]
+    #[tokio::test]
+    async fn push_batch_unique_is_all_or_nothing(#[future(awt)] store: SqliteStore) {
+        let host = Host::new(HostId(uuid_v7()));
+        let tag = RecordTag::Other(uuid_v7().simple().to_string());
+        let at = |idx| series_record(&host, &tag, idx);
+
+        let taken = at(0);
+        store.push(&taken).await.unwrap();
+
+        let (conflicting, free) = (at(0), at(1));
+        assert!(!store.push_batch_unique([&conflicting, &free].into_iter()).await.unwrap());
+        assert!(store.get(free.id).await.is_err(), "rolled back with its conflicting sibling");
+        assert_eq!(store.len_all().await.unwrap(), 1);
+
+        let (first, second) = (at(1), at(2));
+        assert!(store.push_batch_unique([&first, &second].into_iter()).await.unwrap());
+        assert_eq!(store.len_all().await.unwrap(), 3);
+        assert_eq!(store.get(second.id).await.unwrap(), second);
+    }
+
+    /// A conflict in the last chunk of a multi-chunk batch rolls back the earlier chunks too.
+    #[rstest]
+    #[tokio::test]
+    async fn push_batch_unique_rolls_back_across_chunks(#[future(awt)] store: SqliteStore) {
+        let host = Host::new(HostId(uuid_v7()));
+        let tag = RecordTag::Other(uuid_v7().simple().to_string());
+        let rows_per_insert = store.sqlite.info().await.variable_number_limit() / 8;
+
+        let taken = series_record(&host, &tag, u64::try_from(rows_per_insert).unwrap());
+        store.push(&taken).await.unwrap();
+
+        // idx 0..=rows_per_insert: the first chunk is clean, the last row of the second collides.
+        let batch: Vec<_> = (0..=rows_per_insert)
+            .map(|idx| series_record(&host, &tag, u64::try_from(idx).unwrap()))
+            .collect();
+        assert!(!store.push_batch_unique(batch.iter()).await.unwrap());
+        assert_eq!(store.len_all().await.unwrap(), 1);
     }
 }
