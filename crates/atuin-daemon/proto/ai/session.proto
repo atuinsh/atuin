@@ -25,8 +25,8 @@ message ListSessionsResponse {
 }
 
 message GetSessionRequest {
-  // Atuin's stable session id (`Session.id`).
-  common.Uuid id = 1;
+  reserved 1;
+  ai.agent.HarnessSession session = 2;
 }
 
 // Streamed by GetSession: the first event carries the session, and every event
@@ -39,8 +39,8 @@ message GetSessionEvent {
 }
 
 message GetTranscriptRequest {
-  // Atuin's stable session id (`Session.id`).
-  common.Uuid id = 1;
+  reserved 1;
+  ai.agent.HarnessSession session = 2;
 }
 
 // One chunk of a rendered transcript. Concatenate `chunk`s in arrival order to

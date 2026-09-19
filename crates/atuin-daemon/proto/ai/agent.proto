@@ -93,7 +93,7 @@ message ContentBlock {
 
 // A session this one was handed off from. Present or absent as a unit -- absence
 // means "no parent", never overloaded onto a field's zero value.
-message Parent {
+message HarnessSession {
   // Harness owning the parent session (may differ from the child's harness).
   HarnessKind harness = 1;
   // Harness-native id of the parent session.
@@ -108,7 +108,7 @@ message Message {
   // Harness-native session identifier this message belongs to.
   string session_id = 3;
   // Session this one was handed off from, if any.
-  optional Parent parent = 4;
+  optional HarnessSession parent = 4;
   // Harness-native thread identifier, if any.
   optional string thread = 5;
   // Harness-native message identifier, unique within the session.
@@ -134,15 +134,13 @@ message Message {
 }
 
 message Session {
-  // Atuin's stable identifier for this session (UUIDv7). Use this as the handle
-  // for GetSession / GetTranscript.
-  common.Uuid id = 1;
+  reserved 1;
   // The harness that produced this session.
   HarnessKind harness = 2;
   // Harness-native session identifier.
   string session_id = 3;
   // Session this one was handed off from, if any.
-  optional Parent parent = 4;
+  optional HarnessSession parent = 4;
   optional string cwd = 5;
   optional string git_branch = 6;
   optional string model = 7;
