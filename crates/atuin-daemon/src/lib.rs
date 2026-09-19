@@ -19,6 +19,7 @@ pub(crate) mod history_journal;
 mod output_capture;
 pub mod search;
 pub mod server;
+pub mod session_capture;
 mod sync;
 
 // Re-export core daemon types for convenience
