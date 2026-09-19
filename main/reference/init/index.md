@@ -16,7 +16,6 @@ Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`. See [Suppo
 
 - **Hooks** that record each command, its exit code, and its duration. See [Shell Integration](https://docs.atuin.sh/guide/shell-integration/index.md).
 - **Key bindings** for `Ctrl`+`R` and the `Up` arrow, and `?` for [Atuin AI](https://docs.atuin.sh/ai/introduction/index.md).
-- **Dotfiles**, if [enabled](https://docs.atuin.sh/configuration/config/#dotfiles) — your synced aliases and environment variables are defined here.
 
 ## Flags
 

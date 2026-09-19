@@ -23,7 +23,6 @@ usage, self-hosting, and AI features.
 - [AI Agent Hooks](https://docs.atuin.sh/guide/agent-hooks/index.md): Capture commands from AI coding agents (Claude Code, Codex, opencode, pi) and filter by author.
 - [Excluding commands](https://docs.atuin.sh/guide/excluding-commands/index.md): Keep commands out of history with ignorespace, history_filter, and cwd_filter.
 - [Deleting history](https://docs.atuin.sh/guide/delete-history/index.md): Delete single entries, bulk delete by query, remove duplicates, or wipe everything.
-- [Syncing dotfiles](https://docs.atuin.sh/guide/dotfiles/index.md): Sync shell aliases and environment variables across machines.
 - [Theming](https://docs.atuin.sh/guide/theming/index.md): Customize the TUI with color themes.
 
 ## Configuration
