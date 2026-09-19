@@ -260,11 +260,14 @@ mod tests {
     async fn messages_streams_each_turn_of_a_session_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.jsonl");
+        // Trailing newline required: messages() follows the file, and a following tail withholds
+        // an unterminated final line (a real session ends every record with a newline).
         let body = [
             line("user", "user", serde_json::json!("first")),
             line("assistant", "assistant", serde_json::json!([{"type": "text", "text": "second"}])),
         ]
-        .join("\n");
+        .join("\n")
+            + "\n";
         std::fs::write(&path, body).unwrap();
 
         let session = CcodeSession::open(
@@ -306,13 +309,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("project-a");
         std::fs::create_dir_all(&sub).unwrap();
+        // Trailing newline required: events() follows each session, and a following tail withholds
+        // an unterminated final line (a real session ends every record with a newline).
         std::fs::write(
             sub.join("33333333-3333-3333-3333-333333333333.jsonl"),
             [
                 line("user", "user", serde_json::json!("hi")),
                 line("assistant", "assistant", serde_json::json!([{"type": "text", "text": "yo"}])),
             ]
-            .join("\n"),
+            .join("\n")
+                + "\n",
         )
         .unwrap();
 

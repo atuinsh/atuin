@@ -275,7 +275,10 @@ mod tests {
             })
             .to_string(),
         ]
-        .join("\n");
+        // Trailing newline required: messages() follows the file, and a following tail withholds
+        // an unterminated final line (a real session ends every record with a newline).
+        .join("\n")
+            + "\n";
         std::fs::write(&path, body).unwrap();
 
         let session = PiSession::open(SessionId::from("s1".to_owned()), path);
