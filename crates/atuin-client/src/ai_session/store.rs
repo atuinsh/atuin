@@ -129,7 +129,12 @@ impl AiSessionStore {
         let records = self.store.all_tagged(&RecordTag::AiSession).await?;
 
         for record in records {
-            self.decode_and_append(record, db).await?;
+            let id = record.id;
+            // A single bad record must not abort the boot reprojection: propagating the error here
+            // would strand every later record out of the sidecar until a future clean boot.
+            if let Err(err) = self.decode_and_append(record, db).await {
+                warn!(?err, id = %id.0, "failed to append ai-session record to sidecar, skipping");
+            }
         }
 
         Ok(())
