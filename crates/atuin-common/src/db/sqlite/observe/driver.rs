@@ -11,6 +11,13 @@ use super::event::{Appended, Change};
 use super::schema::{Diffable, TableSchema, Tailable};
 use super::{ObserveConfig, ObserveError, Replay};
 
+const PAGE_SIZE: usize = 1024;
+
+pub(super) struct Batch<E> {
+    events: Vec<E>,
+    drained: bool,
+}
+
 pub(super) trait Strategy: Send + 'static {
     type Event: Send + 'static;
 
@@ -23,7 +30,7 @@ pub(super) trait Strategy: Send + 'static {
     fn poll(
         &mut self,
         conn: &mut SqliteConnection,
-    ) -> impl Future<Output = Result<Vec<Self::Event>, sqlx::Error>> + Send;
+    ) -> impl Future<Output = Result<Batch<Self::Event>, sqlx::Error>> + Send;
 }
 
 pub(super) struct AppendStrategy<T: Tailable> {
@@ -56,16 +63,25 @@ impl<T: Tailable> Strategy for AppendStrategy<T> {
         Ok(())
     }
 
-    async fn poll(&mut self, conn: &mut SqliteConnection) -> Result<Vec<Self::Event>, sqlx::Error> {
+    async fn poll(
+        &mut self,
+        conn: &mut SqliteConnection,
+    ) -> Result<Batch<Self::Event>, sqlx::Error> {
         let cols = T::COLUMNS.join(", ");
         let sql = match self.cursor {
             Some(_) => format!(
-                "SELECT {cols} FROM {} WHERE {} > ?1 ORDER BY {} ASC",
+                "SELECT {cols} FROM {} WHERE {} > ?1 ORDER BY {} ASC LIMIT {PAGE_SIZE}",
                 T::TABLE,
                 T::CURSOR_COLUMN,
                 T::CURSOR_COLUMN
             ),
-            None => format!("SELECT {cols} FROM {} ORDER BY {} ASC", T::TABLE, T::CURSOR_COLUMN),
+            None => {
+                format!(
+                    "SELECT {cols} FROM {} ORDER BY {} ASC LIMIT {PAGE_SIZE}",
+                    T::TABLE,
+                    T::CURSOR_COLUMN
+                )
+            }
         };
 
         let query = crate::db::query_as::<Sqlite, T>(AssertSqlSafe(sql));
@@ -75,10 +91,14 @@ impl<T: Tailable> Strategy for AppendStrategy<T> {
         };
 
         let rows: Vec<T> = query.fetch_all(conn).await?;
+        let drained = rows.len() < PAGE_SIZE;
         if let Some(row) = rows.last() {
             self.cursor = Some(row.cursor());
         }
-        Ok(rows.into_iter().map(Appended).collect())
+        Ok(Batch {
+            events: rows.into_iter().map(Appended).collect(),
+            drained,
+        })
     }
 }
 
@@ -135,15 +155,21 @@ pub(super) fn run<S: Strategy>(
                     continue;
                 }
 
-                let events = match strategy.poll(&mut conn).await {
-                    Ok(events) => events,
-                    Err(e) if is_transient(&e) => break 'gate,
-                    Err(e) => Err(ObserveError::Query(e))?,
-                };
-                last = Some(version);
-                for event in events {
-                    yield event;
+                loop {
+                    let batch = match strategy.poll(&mut conn).await {
+                        Ok(batch) => batch,
+                        Err(e) if is_transient(&e) => break 'gate,
+                        Err(e) => Err(ObserveError::Query(e))?,
+                    };
+                    let drained = batch.drained;
+                    for event in batch.events {
+                        yield event;
+                    }
+                    if drained {
+                        break;
+                    }
                 }
+                last = Some(version);
             }
 
             tokio::time::sleep(cfg.poll_interval).await;
@@ -186,11 +212,14 @@ impl<T: Diffable> Strategy for MutateStrategy<T> {
         Ok(())
     }
 
-    async fn poll(&mut self, conn: &mut SqliteConnection) -> Result<Vec<Self::Event>, sqlx::Error> {
+    async fn poll(
+        &mut self,
+        conn: &mut SqliteConnection,
+    ) -> Result<Batch<Self::Event>, sqlx::Error> {
         let fresh: BTreeMap<T::Key, T> =
             fetch_all::<T>(conn).await?.into_iter().map(|row| (row.key(), row)).collect();
 
-        let changes = self
+        let events = self
             .snapshot
             .iter()
             .merge_join_by(fresh.iter(), |(a, _), (b, _)| a.cmp(b))
@@ -205,7 +234,10 @@ impl<T: Diffable> Strategy for MutateStrategy<T> {
             .collect();
 
         self.snapshot = fresh;
-        Ok(changes)
+        Ok(Batch {
+            events,
+            drained: true,
+        })
     }
 }
 
