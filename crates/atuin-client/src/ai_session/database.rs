@@ -137,7 +137,7 @@ impl AiSessionDatabase {
             return Ok(Appended::Duplicate);
         }
 
-        let title = msg.thread.clone();
+        let title: Option<String> = None;
         let preview = Self::preview_text(msg);
 
         db::query(
@@ -147,8 +147,8 @@ impl AiSessionDatabase {
                 usage_cache_read, usage_cache_write, title, preview
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(harness, session_id) DO UPDATE SET
-                parent_harness = excluded.parent_harness,
-                parent_session_id = excluded.parent_session_id,
+                parent_harness = COALESCE(excluded.parent_harness, sessions.parent_harness),
+                parent_session_id = COALESCE(excluded.parent_session_id, sessions.parent_session_id),
                 cwd = COALESCE(excluded.cwd, sessions.cwd),
                 git_branch = COALESCE(excluded.git_branch, sessions.git_branch),
                 model = COALESCE(excluded.model, sessions.model),
