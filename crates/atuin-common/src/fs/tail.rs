@@ -1036,8 +1036,10 @@ mod tests {
         path_id: FdIdentity,
         open_id: FdIdentity,
         next: u64,
-        // A logical clock (nanos) bumped on every mutation, surfaced as the open file's mtime.
-        mtime: u64,
+        // Per-file logical mtime (nanos): a mutation stamps only the file it touches with a fresh
+        // `clock` tick, so a rotation or a write to another file leaves the open file's mtime alone.
+        mtimes: HashMap<FdIdentity, u64>,
+        clock: u64,
     }
 
     #[derive(Clone)]
@@ -1059,7 +1061,8 @@ mod tests {
                 path_id: id,
                 open_id: id,
                 next: 1,
-                mtime: 0,
+                mtimes: HashMap::from([(id, 0)]),
+                clock: 0,
             }));
             (
                 Self {
@@ -1073,14 +1076,18 @@ mod tests {
             let mut world = self.world.lock();
             let id = world.path_id;
             world.files.get_mut(&id).expect("path file exists").extend_from_slice(data);
-            world.mtime += 1;
+            world.clock += 1;
+            let tick = world.clock;
+            world.mtimes.insert(id, tick);
         }
 
         fn truncate(&self, len: usize) {
             let mut world = self.world.lock();
             let id = world.path_id;
             world.files.get_mut(&id).expect("path file exists").truncate(len);
-            world.mtime += 1;
+            world.clock += 1;
+            let tick = world.clock;
+            world.mtimes.insert(id, tick);
         }
 
         fn rotate(&self) {
@@ -1089,14 +1096,18 @@ mod tests {
             world.next += 1;
             world.files.insert(id, Vec::new());
             world.path_id = id;
-            world.mtime += 1;
+            world.clock += 1;
+            let tick = world.clock;
+            world.mtimes.insert(id, tick);
         }
 
         fn rewrite(&self, data: &[u8]) {
             let mut world = self.world.lock();
             let id = world.path_id;
             *world.files.get_mut(&id).expect("path file exists") = data.to_vec();
-            world.mtime += 1;
+            world.clock += 1;
+            let tick = world.clock;
+            world.mtimes.insert(id, tick);
         }
     }
 
@@ -1117,9 +1128,10 @@ mod tests {
         async fn stat(&mut self) -> io::Result<Stat> {
             let world = self.world.lock();
             let len = world.files.get(&world.open_id).expect("open file exists").len();
+            let mtime = world.mtimes.get(&world.open_id).copied().unwrap_or(0);
             Ok(Stat {
                 len: u64::try_from(len).expect("len fits u64"),
-                modified: Some(SystemTime::UNIX_EPOCH + Duration::from_nanos(world.mtime)),
+                modified: Some(SystemTime::UNIX_EPOCH + Duration::from_nanos(mtime)),
             })
         }
 
