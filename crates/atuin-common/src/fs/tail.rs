@@ -25,7 +25,7 @@
 use std::io::{self, SeekFrom};
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use bytes::{Buf, Bytes, BytesMut};
 use futures::{Stream, StreamExt};
@@ -241,6 +241,14 @@ enum ResetKind {
     Flush,
 }
 
+/// A followed file's metadata from a single stat: its length, and its last-modified time when the
+/// platform reports one (`None` simply disables the mtime-based rewrite check).
+#[derive(Debug, Clone, Copy)]
+struct Stat {
+    len: u64,
+    modified: Option<SystemTime>,
+}
+
 trait TailSource: Send {
     fn read_at(
         &mut self,
@@ -248,7 +256,7 @@ trait TailSource: Send {
         len: usize,
     ) -> impl std::future::Future<Output = io::Result<Bytes>> + Send;
 
-    fn size(&mut self) -> impl std::future::Future<Output = io::Result<u64>> + Send;
+    fn stat(&mut self) -> impl std::future::Future<Output = io::Result<Stat>> + Send;
 
     fn identity(&mut self) -> impl std::future::Future<Output = io::Result<FdIdentity>> + Send;
 
@@ -328,8 +336,12 @@ impl TailSource for FileSource {
         Ok(self.buf.split_to(n).freeze())
     }
 
-    async fn size(&mut self) -> io::Result<u64> {
-        Ok(self.file.metadata().await?.len())
+    async fn stat(&mut self) -> io::Result<Stat> {
+        let meta = self.file.metadata().await?;
+        Ok(Stat {
+            len: meta.len(),
+            modified: meta.modified().ok(),
+        })
     }
 
     async fn identity(&mut self) -> io::Result<FdIdentity> {
@@ -436,8 +448,8 @@ where
         let mut offset: u64 = match cfg.read {
             ReadMode::Once(Anchor::Beginning) | ReadMode::Follow(Start::Beginning) => 0,
             ReadMode::Once(Anchor::Offset(at)) | ReadMode::Follow(Start::Offset(at)) => at,
-            ReadMode::Follow(Start::End) => match src.size().await {
-                Ok(size) => size,
+            ReadMode::Follow(Start::End) => match src.stat().await {
+                Ok(stat) => stat.len,
                 Err(e) => {
                     yield Event::Error { error: e, offset: 0 };
                     return;
@@ -452,6 +464,9 @@ where
             None
         };
         let mut fingerprint = Fingerprint::new();
+        // The file's mtime as of the content we have caught up to. A later poll seeing the same
+        // size and trailing window but a newer mtime means an in-place rewrite past the window.
+        let mut content_mtime: Option<SystemTime> = None;
         let read_size = cfg.read_size.get();
 
         'follow: loop {
@@ -480,16 +495,25 @@ where
             waiter.reset();
 
             let reset = loop {
-                match src.size().await {
-                    Ok(size) if size < offset => break Some(ResetKind::Discard),
-                    Ok(size) => {
+                match src.stat().await {
+                    Ok(stat) if stat.len < offset => break Some(ResetKind::Discard),
+                    Ok(stat) => {
                         // An in-place rewrite (rather than an append) shows up as the trailing
                         // window at `offset` no longer matching what we last read there.
                         if fingerprint.diverged(&mut src, offset).await {
                             break Some(ResetKind::Discard);
                         }
-                        if size > offset {
+                        if stat.len > offset {
+                            // New data appended; read it, then re-baseline the mtime once caught up.
+                            content_mtime = None;
                             break None;
+                        }
+                        // Same size and same trailing window, yet the mtime advanced since we caught
+                        // up: an in-place rewrite past the window. Reset and reread. Best-effort --
+                        // coarse or unavailable mtimes just skip this check.
+                        match (content_mtime, stat.modified) {
+                            (Some(seen), Some(now)) if now != seen => break Some(ResetKind::Discard),
+                            _ => content_mtime = stat.modified,
                         }
                     }
                     // A transient stat failure surfaces as an error and is retried on the next
@@ -540,6 +564,7 @@ where
                 };
                 offset = 0;
                 fingerprint.clear();
+                content_mtime = None;
             }
         }
     }
@@ -592,8 +617,11 @@ impl Tail {
             let src = loop {
                 match FileSource::open(path.clone()).await {
                     Ok(src) => break src,
+                    // Only a following read waits for a not-yet-existing path; a bounded
+                    // `ReadMode::Once` must surface NotFound instead of hanging on it.
                     Err(e)
-                        if cfg.rotation == Rotation::Name
+                        if matches!(cfg.read, ReadMode::Follow(_))
+                            && cfg.rotation == Rotation::Name
                             && e.kind() == io::ErrorKind::NotFound =>
                     {
                         tokio::time::sleep(schedule.next_delay()).await;
@@ -976,6 +1004,27 @@ mod tests {
         assert!(stream.next().await.expect("one item").is_err());
     }
 
+    #[rstest]
+    #[tokio::test]
+    async fn a_bounded_read_of_a_missing_name_rotated_path_errors_rather_than_hanging() {
+        // `ReadMode::Once` combined with `Rotation::Name` must surface NotFound, not wait forever
+        // for the path to appear -- waiting is only correct for a follow.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nope");
+        let stream = Tail::builder()
+            .path(&path)
+            .read(ReadMode::Once(Anchor::Beginning))
+            .rotation(Rotation::Name)
+            .build()
+            .lines_utf8();
+        futures::pin_mut!(stream);
+        let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("a bounded read must not hang")
+            .expect("one item");
+        assert_eq!(first.unwrap_err().kind(), io::ErrorKind::NotFound);
+    }
+
     #[derive(Debug, Clone)]
     enum Op {
         Append(Vec<u8>),
@@ -987,6 +1036,8 @@ mod tests {
         path_id: FdIdentity,
         open_id: FdIdentity,
         next: u64,
+        // A logical clock (nanos) bumped on every mutation, surfaced as the open file's mtime.
+        mtime: u64,
     }
 
     #[derive(Clone)]
@@ -1008,6 +1059,7 @@ mod tests {
                 path_id: id,
                 open_id: id,
                 next: 1,
+                mtime: 0,
             }));
             (
                 Self {
@@ -1021,12 +1073,14 @@ mod tests {
             let mut world = self.world.lock();
             let id = world.path_id;
             world.files.get_mut(&id).expect("path file exists").extend_from_slice(data);
+            world.mtime += 1;
         }
 
         fn truncate(&self, len: usize) {
             let mut world = self.world.lock();
             let id = world.path_id;
             world.files.get_mut(&id).expect("path file exists").truncate(len);
+            world.mtime += 1;
         }
 
         fn rotate(&self) {
@@ -1035,12 +1089,14 @@ mod tests {
             world.next += 1;
             world.files.insert(id, Vec::new());
             world.path_id = id;
+            world.mtime += 1;
         }
 
         fn rewrite(&self, data: &[u8]) {
             let mut world = self.world.lock();
             let id = world.path_id;
             *world.files.get_mut(&id).expect("path file exists") = data.to_vec();
+            world.mtime += 1;
         }
     }
 
@@ -1058,12 +1114,13 @@ mod tests {
             Ok(chunk)
         }
 
-        async fn size(&mut self) -> io::Result<u64> {
-            let len = {
-                let world = self.world.lock();
-                world.files.get(&world.open_id).expect("open file exists").len()
-            };
-            Ok(u64::try_from(len).expect("len fits u64"))
+        async fn stat(&mut self) -> io::Result<Stat> {
+            let world = self.world.lock();
+            let len = world.files.get(&world.open_id).expect("open file exists").len();
+            Ok(Stat {
+                len: u64::try_from(len).expect("len fits u64"),
+                modified: Some(SystemTime::UNIX_EPOCH + Duration::from_nanos(world.mtime)),
+            })
         }
 
         async fn identity(&mut self) -> io::Result<FdIdentity> {
@@ -1114,11 +1171,11 @@ mod tests {
             self.inner.read_at(offset, len).await
         }
 
-        async fn size(&mut self) -> io::Result<u64> {
+        async fn stat(&mut self) -> io::Result<Stat> {
             if Faults::take(&self.faults.size) {
-                return Err(io::Error::other("injected size fault"));
+                return Err(io::Error::other("injected stat fault"));
             }
-            self.inner.size().await
+            self.inner.stat().await
         }
 
         async fn identity(&mut self) -> io::Result<FdIdentity> {
@@ -1402,6 +1459,27 @@ mod tests {
         let events = drain(&mut stream);
         assert_eq!(resets(&events), 1);
         assert_eq!(data_of(&events), b"bbbb\n");
+    }
+
+    #[rstest]
+    fn follow_detects_a_rewrite_via_mtime_when_size_and_tail_are_unchanged() {
+        // A rewrite that keeps the length *and* the whole trailing window slips past the
+        // fingerprint; the bumped mtime is what catches it. Seed longer than the window so a change
+        // outside it leaves both the size and the trailing bytes identical.
+        let seed = vec![b'z'; FINGERPRINT_LEN + 8];
+        let (tx, rx) = mpsc::unbounded();
+        let (handle, src) = MemHandle::new(&seed);
+        let mut stream = follow_mem(src, rx, Rotation::Fd);
+        assert_eq!(data_of(&drain(&mut stream)), seed);
+
+        let mut rewritten = seed.clone();
+        rewritten[0] = b'Z'; // change only outside the trailing window: same length, same tail
+        handle.rewrite(&rewritten);
+        tx.unbounded_send(()).unwrap();
+
+        let events = drain(&mut stream);
+        assert_eq!(resets(&events), 1);
+        assert_eq!(data_of(&events), rewritten);
     }
 
     #[rstest]
