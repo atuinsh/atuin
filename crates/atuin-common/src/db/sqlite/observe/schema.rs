@@ -75,7 +75,10 @@ mod tests {
 
     #[rstest]
     fn schema_exposes_cursor_and_key() {
-        let item = Item { id: 7, name: "x".into() };
+        let item = Item {
+            id: 7,
+            name: "x".into(),
+        };
         assert_eq!(<Item as Tailable>::CURSOR_COLUMN, "id");
         assert_eq!(Item::COLUMNS, &["id", "name"]);
         assert_eq!(item.cursor(), 7);

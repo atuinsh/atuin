@@ -1,15 +1,14 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 
-use futures::TryStreamExt;
+use futures::{StreamExt as _, TryStreamExt};
 use itertools::{EitherOrBoth, Itertools};
-use sqlx::Connection;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
-use sqlx::{AssertSqlSafe, Sqlite};
+use sqlx::{AssertSqlSafe, Connection, Sqlite};
 use tokio::sync::mpsc;
 
 use super::event::{Appended, Change};
-use super::schema::{Diffable, Tailable, TableSchema};
+use super::schema::{Diffable, TableSchema, Tailable};
 use super::{ObserveConfig, ObserveError, Replay};
 use crate::futures::Backoff;
 
@@ -216,9 +215,8 @@ async fn deliver<E>(
     tx: &mpsc::Sender<Result<E, ObserveError>>,
     events: Vec<E>,
 ) -> Result<(), DeliverError> {
-    use futures::StreamExt as _;
     futures::stream::iter(events)
-        .map(Ok::<E, DeliverError>)
+        .map(Ok)
         .try_for_each(|event| async move {
             tx.send(Ok(event)).await.map_err(|_| DeliverError::ConsumerGone)
         })
@@ -231,7 +229,9 @@ pub(super) struct MutateStrategy<T: Diffable> {
 
 impl<T: Diffable> MutateStrategy<T> {
     pub(super) fn new() -> Self {
-        Self { snapshot: BTreeMap::new() }
+        Self {
+            snapshot: BTreeMap::new(),
+        }
     }
 }
 
@@ -247,7 +247,8 @@ impl<T: Diffable> Strategy for MutateStrategy<T> {
         let snapshot: BTreeMap<T::Key, T> =
             fetch_all::<T>(conn).await?.into_iter().map(|row| (row.key(), row)).collect();
         if matches!(replay, Replay::All) {
-            let inserts: Vec<Change<T>> = snapshot.values().cloned().map(Change::Inserted).collect();
+            let inserts: Vec<Change<T>> =
+                snapshot.values().cloned().map(Change::Inserted).collect();
             deliver(tx, inserts).await?;
         }
         self.snapshot = snapshot;
@@ -269,9 +270,10 @@ impl<T: Diffable> Strategy for MutateStrategy<T> {
             .filter_map(|joined| match joined {
                 EitherOrBoth::Left((_, old)) => Some(Change::Deleted(old.clone())),
                 EitherOrBoth::Right((_, new)) => Some(Change::Inserted(new.clone())),
-                EitherOrBoth::Both((_, old), (_, new)) => {
-                    (old != new).then(|| Change::Updated { old: old.clone(), new: new.clone() })
-                }
+                EitherOrBoth::Both((_, old), (_, new)) => (old != new).then(|| Change::Updated {
+                    old: old.clone(),
+                    new: new.clone(),
+                }),
             })
             .collect();
 
@@ -291,7 +293,9 @@ mod tests {
     use super::*;
     use crate::db::query;
     use crate::db::sqlite::Sqlite;
-    use crate::db::sqlite::observe::{ObserveConfig, ObserveError, Replay, SqliteObserver, TableSchema};
+    use crate::db::sqlite::observe::{
+        ObserveConfig, ObserveError, Replay, SqliteObserver, TableSchema,
+    };
 
     #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
     struct Item {
@@ -359,14 +363,14 @@ mod tests {
     }
 
     fn cfg(replay: Replay) -> ObserveConfig {
-        ObserveConfig::builder()
-            .replay(replay)
-            .poll_interval(Duration::from_millis(10))
-            .build()
+        ObserveConfig::builder().replay(replay).poll_interval(Duration::from_millis(10)).build()
     }
 
     fn item(id: i64, name: &str) -> Item {
-        Item { id, name: name.into() }
+        Item {
+            id,
+            name: name.into(),
+        }
     }
 
     #[rstest]
@@ -431,13 +435,7 @@ mod tests {
         futures::future::join_all(writers).await;
 
         let got: Vec<i64> = stream.take(100).map(|r| r.unwrap().0.id).collect().await;
-        let mut sorted = got.clone();
-        sorted.sort_unstable();
-        sorted.dedup();
-        assert_eq!(sorted.len(), 100, "every committed row delivered exactly once");
-        let mut ascending = got.clone();
-        ascending.sort_unstable();
-        assert_eq!(got, ascending, "rows delivered in ascending cursor order");
+        assert_eq!(got, (1..=100).collect::<Vec<_>>());
     }
 
     proptest::proptest! {
@@ -486,10 +484,10 @@ mod tests {
         assert_eq!(stream.next().await.unwrap().unwrap(), Change::Inserted(item(2, "b")));
 
         update_xproc(&path, 1, "a2").await;
-        assert_eq!(
-            stream.next().await.unwrap().unwrap(),
-            Change::Updated { old: item(1, "a"), new: item(1, "a2") }
-        );
+        assert_eq!(stream.next().await.unwrap().unwrap(), Change::Updated {
+            old: item(1, "a"),
+            new: item(1, "a2")
+        });
 
         delete_xproc(&path, 2).await;
         assert_eq!(stream.next().await.unwrap().unwrap(), Change::Deleted(item(2, "b")));
@@ -623,7 +621,7 @@ mod tests {
             loop {
                 match stream.next().await {
                     Some(Err(e)) => return Some(e),
-                    Some(Ok(_)) => continue,
+                    Some(Ok(_)) => {}
                     None => return None,
                 }
             }

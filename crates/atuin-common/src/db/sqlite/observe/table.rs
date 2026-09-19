@@ -35,6 +35,7 @@ impl<E: Send + 'static> Stream for SqliteTableObserver<E> {
 
 #[cfg(test)]
 impl<E> SqliteTableObserver<E> {
+    #[allow(clippy::used_underscore_binding)]
     pub(crate) fn task(&self) -> &std::sync::Arc<tokio_util::task::AbortOnDropHandle<()>> {
         &self._task
     }

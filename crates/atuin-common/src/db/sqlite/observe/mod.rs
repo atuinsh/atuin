@@ -8,18 +8,16 @@ mod table;
 use std::path::Path;
 use std::time::Duration;
 
-use sqlx::Connection;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
-use tokio::sync::mpsc;
-use tokio_util::task::AbortOnDropHandle;
-
-use driver::{AppendStrategy, MutateStrategy, Strategy, run};
-
 pub use config::{ObserveConfig, Replay};
+use driver::{AppendStrategy, MutateStrategy, Strategy, run};
 pub use error::ObserveError;
 pub use event::{Appended, Change, ChangeKind};
-pub use schema::{Cursor, Diffable, Tailable, TableSchema};
+pub use schema::{Cursor, Diffable, TableSchema, Tailable};
+use sqlx::Connection;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
 pub use table::SqliteTableObserver;
+use tokio::sync::mpsc;
+use tokio_util::task::AbortOnDropHandle;
 
 #[derive(Debug, Clone)]
 pub struct SqliteObserver {
@@ -46,9 +44,8 @@ impl SqliteObserver {
         &self,
         cfg: ObserveConfig,
     ) -> Result<SqliteTableObserver<Appended<T>>, ObserveError> {
-        let conn = SqliteConnection::connect_with(&self.opts)
-            .await
-            .map_err(ObserveError::Connect)?;
+        let conn =
+            SqliteConnection::connect_with(&self.opts).await.map_err(ObserveError::Connect)?;
         Ok(spawn_observer(self.opts.clone(), conn, AppendStrategy::<T>::new(), cfg))
     }
 
@@ -56,9 +53,8 @@ impl SqliteObserver {
         &self,
         cfg: ObserveConfig,
     ) -> Result<SqliteTableObserver<Change<T>>, ObserveError> {
-        let conn = SqliteConnection::connect_with(&self.opts)
-            .await
-            .map_err(ObserveError::Connect)?;
+        let conn =
+            SqliteConnection::connect_with(&self.opts).await.map_err(ObserveError::Connect)?;
         Ok(spawn_observer(self.opts.clone(), conn, MutateStrategy::<T>::new(), cfg))
     }
 }

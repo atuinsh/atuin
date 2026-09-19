@@ -54,10 +54,10 @@ rusty_paseto = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-strum = { workspace = true, optional = true }
-strum_macros = { workspace = true, optional = true }
 serde_with = { workspace = true }
 sqlx = { workspace = true, optional = true }
+strum = { workspace = true, optional = true }
+strum_macros = { workspace = true, optional = true }
 sysinfo = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true, features = ["formatting", "parsing"] }
@@ -66,8 +66,8 @@ typed-builder = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true, optional = true }
 tracing = { workspace = true }
-typed-builder = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
+typed-builder = { workspace = true, optional = true }
 unicode-segmentation = { workspace = true, optional = true }
 unicode-width = { workspace = true, optional = true }
 url = { workspace = true }

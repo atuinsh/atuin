@@ -7,6 +7,9 @@ pub struct Appended<T>(pub T);
 #[strum_discriminants(name(ChangeKind), derive(Display, EnumIter, Hash))]
 pub enum Change<T> {
     Inserted(T),
-    Updated { old: T, new: T },
+    Updated {
+        old: T,
+        new: T,
+    },
     Deleted(T),
 }
