@@ -116,9 +116,12 @@ fn empty_history_search_can_be_cancelled(#[files("tests/shells/*.toml")] setup: 
     pty.send_ctrl_r();
     pty.wait_for(": exit");
     pty.send(&[0x03]);
-    pty.wait_for_screen("empty search dismissed", |s| {
-        !s.contains(": exit") && s.lines().any(|l| l.trim() == PROMPT)
-    });
+    // Wait for the line editor to actually resume (cursor back on the prompt, raw
+    // mode) before typing. The search UI draws inline *below* the original prompt,
+    // so a screen-only check for a prompt line can match that leftover prompt while
+    // atuin is still tearing down and swallow the next command's keystrokes.
+    pty.wait_for_prompt();
+    assert!(!pty.screen().contains(": exit"), "search UI still visible after cancel");
     run_echo_marker(pty, &marker());
 }
 
