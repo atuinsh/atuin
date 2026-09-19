@@ -171,9 +171,12 @@ impl CodexMessage {
 
 impl Message for CodexMessage {
     fn id(&self) -> Option<MessageId> {
+        // Prefer the per-record `id` (ctc_/ctco_/msg_...) over `call_id`: a tool call and its
+        // output share one `call_id`, so keying identity on it would collide the two records and
+        // the dedup gate would drop the output. `call_id` linkage lives in the content, not here.
         self.payload
             .as_ref()
-            .and_then(|p| p["call_id"].as_str().or_else(|| p["id"].as_str()))
+            .and_then(|p| p["id"].as_str().or_else(|| p["call_id"].as_str()))
             .map(|s| MessageId::from(s.to_owned()))
     }
 
@@ -369,6 +372,25 @@ mod tests {
         assert!(
             matches!(m.content().as_slice(), [Content::ToolResult(r)] if r.call.to_string() == "c1")
         );
+    }
+
+    #[rstest]
+    fn tool_call_and_output_have_distinct_ids_despite_shared_call_id() {
+        let call = serde_json::json!({
+            "type": "response_item",
+            "payload": {"type": "custom_tool_call", "id": "ctc_1", "call_id": "call_x", "name": "sh", "input": "ls"},
+        })
+        .to_string();
+        let output = serde_json::json!({
+            "type": "response_item",
+            "payload": {"type": "custom_tool_call_output", "id": "ctco_1", "call_id": "call_x", "output": "files"},
+        })
+        .to_string();
+        let call: CodexMessage = serde_json::from_str(&call).unwrap();
+        let output: CodexMessage = serde_json::from_str(&output).unwrap();
+        assert_ne!(call.id(), output.id(), "call and its output must not share a source id");
+        assert_eq!(call.id(), Some(MessageId::from("ctc_1".to_owned())));
+        assert_eq!(output.id(), Some(MessageId::from("ctco_1".to_owned())));
     }
 
     #[rstest]

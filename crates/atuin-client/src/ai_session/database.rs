@@ -89,6 +89,7 @@ struct MessageRow {
     usage_cache_read: i64,
     usage_cache_write: i64,
     stop_reason: Option<String>,
+    usage_present: i64,
 }
 
 impl AiSessionDatabase {
@@ -138,8 +139,9 @@ impl AiSessionDatabase {
             "INSERT INTO messages (
                 id, harness, session_id, source_id, parent_harness, parent_session_id,
                 parent_source_id, thread, timestamp, role, content, content_z, cwd, git_branch,
-                model, usage_input, usage_output, usage_cache_read, usage_cache_write, stop_reason
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                model, usage_input, usage_output, usage_cache_read, usage_cache_write, stop_reason,
+                usage_present
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(harness, session_id, source_id) DO NOTHING",
         )
         .bind(id)
@@ -162,6 +164,7 @@ impl AiSessionDatabase {
         .bind(usage_cache_read)
         .bind(usage_cache_write)
         .bind(stop_reason_json)
+        .bind(i64::from(msg.usage.is_some()))
         .execute(&mut *tx)
         .await?;
 
@@ -226,12 +229,15 @@ impl AiSessionDatabase {
         let now = Self::millis(OffsetDateTime::now_utc());
         let cwd = meta.cwd.as_ref().map(|p| p.to_string_lossy().into_owned());
 
+        // Seed updated_at at 0, not `now`: appended messages set updated_at via
+        // MAX(sessions.updated_at, excluded.updated_at), so a wall-clock seed would pin recency at
+        // capture time and outrank every real message timestamp when an old session is replayed.
         db::query(
             "INSERT INTO sessions (
                 harness, session_id, cwd, git_branch, model, started_at, updated_at,
                 message_count, usage_input, usage_output, usage_cache_read, usage_cache_write, \
              title
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0, ?)
             ON CONFLICT(harness, session_id) DO UPDATE SET
                 cwd = COALESCE(sessions.cwd, excluded.cwd),
                 git_branch = COALESCE(sessions.git_branch, excluded.git_branch),
@@ -243,7 +249,6 @@ impl AiSessionDatabase {
         .bind(cwd)
         .bind(meta.git_branch.as_deref())
         .bind(meta.model.as_deref())
-        .bind(now)
         .bind(now)
         .bind(meta.title.as_deref())
         .execute(self.db.pool())
@@ -321,8 +326,8 @@ impl AiSessionDatabase {
                 "SELECT id, harness, session_id, source_id, parent_harness, parent_session_id, \
                  parent_source_id, thread, timestamp, role, content, content_z, cwd, git_branch, \
                  model, usage_input, usage_output, usage_cache_read, usage_cache_write, \
-                 stop_reason FROM messages WHERE harness = ? AND session_id = ? ORDER BY \
-                 timestamp, source_id",
+                 stop_reason, usage_present FROM messages WHERE harness = ? AND session_id = ? \
+                 ORDER BY timestamp, source_id",
             )
             .bind(harness)
             .bind(session_id)
@@ -445,7 +450,7 @@ impl AiSessionDatabase {
             .cwd(row.cwd.map(PathBuf::from))
             .git_branch(row.git_branch)
             .model(row.model)
-            .usage(Some(Usage {
+            .usage((row.usage_present != 0).then(|| Usage {
                 input: Some(u64::try_from(row.usage_input).unwrap_or(0)),
                 output: Some(u64::try_from(row.usage_output).unwrap_or(0)),
                 cache_read: Some(u64::try_from(row.usage_cache_read).unwrap_or(0)),
@@ -509,7 +514,7 @@ impl AiSessionDatabase {
 
 #[cfg(test)]
 mod tests {
-    use atuin_common::harnesstools::session::{Content, Role};
+    use atuin_common::harnesstools::session::{Content, Role, SessionMeta, Usage};
     use atuin_domain::record::RecordId;
     use futures::TryStreamExt;
     use rstest::rstest;
@@ -646,6 +651,52 @@ mod tests {
 
         let s = db.get_session(&session).await.unwrap().unwrap();
         assert_eq!(s.started_at, OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(50));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn updated_at_tracks_last_message_not_capture_time() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        // Metadata is recorded first (a rediscovered old session), then historical messages replay.
+        // updated_at must reflect the newest message, not the wall-clock capture instant.
+        db.record_session_meta(&session, &SessionMeta::default()).await.unwrap();
+        db.append(&message_in(&session, 50, "old")).await.unwrap();
+
+        let s = db.get_session(&session).await.unwrap().unwrap();
+        let ts = OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(50);
+        assert_eq!(s.updated_at, ts);
+        assert_eq!(s.started_at, ts);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn usage_absence_round_trips_as_none() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+
+        // A message with no usage block must not come back as Some(zeros).
+        db.append(&message_in(&session, 0, "no usage")).await.unwrap();
+
+        let with_usage = Message::builder()
+            .id(RecordId(atuin_common::utils::uuid_v7()))
+            .session(session.clone())
+            .source_id(SourceId::from("with-usage".to_owned()))
+            .timestamp(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(1))
+            .role(Role::Assistant)
+            .content(vec![Content::Text("has usage".to_owned())])
+            .usage(Some(Usage {
+                input: Some(0),
+                output: Some(0),
+                cache_read: Some(0),
+                cache_write: Some(0),
+            }))
+            .build();
+        db.append(&with_usage).await.unwrap();
+
+        let got: Vec<_> = db.messages(&session).try_collect().await.unwrap();
+        assert_eq!(got[0].usage, None, "absent usage must not become Some(zeros)");
+        assert!(got[1].usage.is_some(), "reported usage must survive the round trip");
     }
 
     #[rstest]

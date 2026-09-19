@@ -109,7 +109,13 @@ impl From<Content> for pb::ContentBlock {
             }),
             Content::ToolResult(tr) => Block::ToolResult(pb::ToolResult {
                 tool_use_id: tr.call.into(),
-                content: serde_json::to_string(&tr.output).unwrap_or_default(),
+                // The proto documents this as the raw tool output, unlike ToolCall.input which is
+                // JSON. A string output is already the raw text, so emit it verbatim rather than
+                // re-encoding it into a quoted, escaped JSON string.
+                content: match tr.output {
+                    serde_json::Value::String(s) => s,
+                    other => serde_json::to_string(&other).unwrap_or_default(),
+                },
                 is_error: tr.error,
             }),
             Content::Other(v) => Block::Text(v.to_string()),
@@ -213,6 +219,33 @@ mod tests {
     #[case(StopReason::Other("x".into()), pb::StopReason::Unknown)]
     fn stop_reason_coalesces_at_edge(#[case] from: StopReason, #[case] want: pb::StopReason) {
         assert_eq!(pb::StopReason::from(from), want);
+    }
+
+    #[rstest]
+    fn tool_result_string_output_is_emitted_raw() {
+        use atuin_common::harnesstools::session::{ToolCallId, ToolResult};
+
+        let raw: pb::ContentBlock = Content::ToolResult(ToolResult {
+            call: ToolCallId::from("c1".to_owned()),
+            output: serde_json::Value::String("line1\nline2".to_owned()),
+            error: false,
+        })
+        .into();
+        let pb::content_block::Block::ToolResult(tr) = raw.block.unwrap() else {
+            panic!("expected a tool result block");
+        };
+        assert_eq!(tr.content, "line1\nline2");
+
+        let structured: pb::ContentBlock = Content::ToolResult(ToolResult {
+            call: ToolCallId::from("c1".to_owned()),
+            output: serde_json::json!({"exit": 0}),
+            error: false,
+        })
+        .into();
+        let pb::content_block::Block::ToolResult(tr) = structured.block.unwrap() else {
+            panic!("expected a tool result block");
+        };
+        assert_eq!(tr.content, r#"{"exit":0}"#);
     }
 
     #[rstest]
