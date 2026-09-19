@@ -91,12 +91,13 @@ message ContentBlock {
   }
 }
 
-// A session this one was handed off from. Present or absent as a unit -- absence
-// means "no parent", never overloaded onto a field's zero value.
+// A native session handle: a harness plus its harness-native session id. Used as
+// a session's own identity and as a parent link. Present or absent as a unit --
+// absence means "no parent", never overloaded onto a field's zero value.
 message HarnessSession {
-  // Harness owning the parent session (may differ from the child's harness).
+  // The harness that owns this session.
   HarnessKind harness = 1;
-  // Harness-native id of the parent session.
+  // Harness-native session id.
   string session_id = 2;
 }
 
@@ -134,20 +135,19 @@ message Message {
 }
 
 message Session {
-  reserved 1;
   // The harness that produced this session.
-  HarnessKind harness = 2;
+  HarnessKind harness = 1;
   // Harness-native session identifier.
-  string session_id = 3;
+  string session_id = 2;
   // Session this one was handed off from, if any.
-  optional HarnessSession parent = 4;
-  optional string cwd = 5;
-  optional string git_branch = 6;
-  optional string model = 7;
-  google.protobuf.Timestamp started_at = 8;
-  google.protobuf.Timestamp updated_at = 9;
-  uint64 message_count = 10;
-  Tokens tokens = 11;
-  optional string title = 12;
-  optional string preview = 13;
+  optional HarnessSession parent = 3;
+  optional string cwd = 4;
+  optional string git_branch = 5;
+  optional string model = 6;
+  google.protobuf.Timestamp started_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  uint64 message_count = 9;
+  Tokens tokens = 10;
+  optional string title = 11;
+  optional string preview = 12;
 }
