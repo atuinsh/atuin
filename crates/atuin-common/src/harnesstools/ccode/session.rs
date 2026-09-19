@@ -77,9 +77,9 @@ impl Listener for CcodeListener {
     fn watch(self) -> impl Stream<Item = Result<CcodeSession, WatchError>> + Send + 'static {
         let root = self.root;
         async_stream::stream! {
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<CcodeSession>();
+            let (tx, rx) = flume::unbounded::<CcodeSession>();
             let _watcher = match TreeWatcher::builder().recursive(true).watch(&root, move |ctx| {
-                if let Some(session) = CcodeListener::accept(&ctx) {
+                if let Some(session) = Self::accept(&ctx) {
                     let _ = tx.send(session);
                 }
                 None::<()>
@@ -90,7 +90,7 @@ impl Listener for CcodeListener {
                     return;
                 }
             };
-            while let Some(session) = rx.recv().await {
+            while let Ok(session) = rx.recv_async().await {
                 yield Ok(session);
             }
         }
@@ -186,9 +186,7 @@ impl Message for CcodeMessage {
         let raw = self.message.as_ref().map(|m| &m["content"]).or(self.content.as_ref());
         match raw {
             Some(serde_json::Value::String(text)) => vec![Content::Text(text.clone())],
-            Some(serde_json::Value::Array(blocks)) => {
-                blocks.iter().map(CcodeMessage::block).collect()
-            }
+            Some(serde_json::Value::Array(blocks)) => blocks.iter().map(Self::block).collect(),
             _ => Vec::new(),
         }
     }
@@ -203,8 +201,11 @@ mod tests {
 
     use super::*;
     use crate::harnesstools::session::model::{Content, Role};
-    use crate::harnesstools::session::{Message, Session, Sessions};
+    use crate::harnesstools::session::{
+        Message, Session, SessionEvent, SessionEventKind, Sessions,
+    };
 
+    #[allow(clippy::needless_pass_by_value)]
     fn line(kind: &str, role: &str, content: serde_json::Value) -> String {
         serde_json::json!({
             "type": kind,
@@ -300,9 +301,48 @@ mod tests {
     }
 
     #[rstest]
-    #[case(include_str!("../../../res/harnesstools/fixtures/ccode/session1.jsonl"))]
-    #[case(include_str!("../../../res/harnesstools/fixtures/ccode/session2.jsonl"))]
-    #[case(include_str!("../../../res/harnesstools/fixtures/ccode/session3.jsonl"))]
+    #[tokio::test]
+    async fn events_yields_started_then_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("project-a");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(
+            sub.join("33333333-3333-3333-3333-333333333333.jsonl"),
+            [
+                line("user", "user", serde_json::json!("hi")),
+                line("assistant", "assistant", serde_json::json!([{"type": "text", "text": "yo"}])),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let listener =
+            CcodeSessions::builder().root(dir.path().to_path_buf()).build().listener().unwrap();
+        let events: Vec<SessionEvent<CcodeMessage>> = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            listener.events().take(3).try_collect(),
+        )
+        .await
+        .expect("events() did not produce within 10s")
+        .unwrap();
+
+        assert!(matches!(events[0].kind, SessionEventKind::Started));
+        let sid = SessionId::from("33333333-3333-3333-3333-333333333333".to_owned());
+        assert!(events.iter().all(|event| event.session == sid));
+        let roles: Vec<Role> = events
+            .iter()
+            .filter_map(|event| match &event.kind {
+                SessionEventKind::Message(message) => Some(message.role()),
+                SessionEventKind::Started => None,
+            })
+            .collect();
+        assert_eq!(roles, vec![Role::User, Role::Assistant]);
+    }
+
+    #[rstest]
+    #[case(include_str!("../../../tests/fixtures/ccode/session1.jsonl"))]
+    #[case(include_str!("../../../tests/fixtures/ccode/session2.jsonl"))]
+    #[case(include_str!("../../../tests/fixtures/ccode/session3.jsonl"))]
     fn normalizes_a_real_redacted_session(#[case] jsonl: &str) {
         let msgs: Vec<CcodeMessage> = jsonl
             .lines()

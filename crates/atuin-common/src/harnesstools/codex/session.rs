@@ -67,7 +67,11 @@ impl CodexListener {
         if !ctx.is_file() || !name.starts_with("rollout-") || !name.ends_with(".jsonl") {
             return None;
         }
-        let id = path.file_stem()?.to_string_lossy().rsplit('-').next()?.to_owned();
+        let stem = path.file_stem()?.to_string_lossy();
+        let mut groups: Vec<&str> = stem.rsplitn(6, '-').collect();
+        groups.truncate(5);
+        groups.reverse();
+        let id = groups.join("-");
         Some(CodexSession::open(SessionId::from(id), path.to_path_buf()))
     }
 }
@@ -78,9 +82,9 @@ impl Listener for CodexListener {
     fn watch(self) -> impl Stream<Item = Result<CodexSession, WatchError>> + Send + 'static {
         let root = self.root;
         async_stream::stream! {
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<CodexSession>();
+            let (tx, rx) = flume::unbounded::<CodexSession>();
             let _watcher = match TreeWatcher::builder().recursive(true).watch(&root, move |ctx| {
-                if let Some(session) = CodexListener::accept(&ctx) {
+                if let Some(session) = Self::accept(&ctx) {
                     let _ = tx.send(session);
                 }
                 None::<()>
@@ -91,7 +95,7 @@ impl Listener for CodexListener {
                     return;
                 }
             };
-            while let Some(session) = rx.recv().await {
+            while let Ok(session) = rx.recv_async().await {
                 yield Ok(session);
             }
         }
@@ -158,8 +162,8 @@ impl Message for CodexMessage {
     fn role(&self) -> Role {
         let payload = self.payload.as_ref();
         match payload.and_then(|p| p["type"].as_str()) {
-            Some("function_call") => Role::Assistant,
-            Some("function_call_output") => Role::Tool,
+            Some("function_call" | "custom_tool_call") => Role::Assistant,
+            Some("function_call_output" | "custom_tool_call_output") => Role::Tool,
             _ => match payload.and_then(|p| p["role"].as_str()).unwrap_or(self.kind.as_str()) {
                 "user" => Role::User,
                 "assistant" => Role::Assistant,
@@ -184,15 +188,22 @@ impl Message for CodexMessage {
                 name: payload["name"].as_str().unwrap_or_default().to_owned(),
                 input: payload["arguments"].clone(),
             })],
-            Some("function_call_output") => vec![Content::ToolResult(ToolResult {
-                call: ToolCallId::from(payload["call_id"].as_str().unwrap_or_default().to_owned()),
-                output: payload["output"].clone(),
-                error: false,
+            Some("custom_tool_call") => vec![Content::ToolUse(ToolUse {
+                id: ToolCallId::from(payload["call_id"].as_str().unwrap_or_default().to_owned()),
+                name: payload["name"].as_str().unwrap_or_default().to_owned(),
+                input: payload["input"].clone(),
             })],
+            Some("function_call_output" | "custom_tool_call_output") => {
+                vec![Content::ToolResult(ToolResult {
+                    call: ToolCallId::from(
+                        payload["call_id"].as_str().unwrap_or_default().to_owned(),
+                    ),
+                    output: payload["output"].clone(),
+                    error: false,
+                })]
+            }
             _ => match &payload["content"] {
-                serde_json::Value::Array(blocks) => {
-                    blocks.iter().map(CodexMessage::block).collect()
-                }
+                serde_json::Value::Array(blocks) => blocks.iter().map(Self::block).collect(),
                 serde_json::Value::String(text) => vec![Content::Text(text.clone())],
                 _ => Vec::new(),
             },
@@ -245,6 +256,31 @@ mod tests {
     }
 
     #[rstest]
+    fn normalizes_a_codex_custom_tool_call() {
+        let call = serde_json::json!({
+            "type": "response_item",
+            "payload": {"type": "custom_tool_call", "name": "shell", "input": "ls", "call_id": "c1"},
+        })
+        .to_string();
+        let m: CodexMessage = serde_json::from_str(&call).unwrap();
+        assert_eq!(m.role(), Role::Assistant);
+        assert!(
+            matches!(m.content().as_slice(), [Content::ToolUse(u)] if u.id.to_string() == "c1")
+        );
+
+        let output = serde_json::json!({
+            "type": "response_item",
+            "payload": {"type": "custom_tool_call_output", "call_id": "c1", "output": "files"},
+        })
+        .to_string();
+        let m: CodexMessage = serde_json::from_str(&output).unwrap();
+        assert_eq!(m.role(), Role::Tool);
+        assert!(
+            matches!(m.content().as_slice(), [Content::ToolResult(r)] if r.call.to_string() == "c1")
+        );
+    }
+
+    #[rstest]
     fn listener_reports_not_found_for_a_missing_root() {
         let sessions = CodexSessions::builder().root(PathBuf::from("/no/such/codex")).build();
         assert!(matches!(sessions.listener(), Err(RuntimeError::NotFound(_))));
@@ -278,9 +314,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("2026").join("09").join("19");
         std::fs::create_dir_all(&sub).unwrap();
+        let sid = "0a1b2c3d-4e5f-6789-abcd-ef0123456789";
         std::fs::write(
-            sub.join("rollout-2026-09-19T00-00-00-th1.jsonl"),
-            serde_json::json!({"type": "session_meta", "payload": {"id": "th1"}}).to_string(),
+            sub.join(format!("rollout-2026-09-19T00-00-00-{sid}.jsonl")),
+            serde_json::json!({"type": "session_meta", "payload": {"id": sid}}).to_string(),
         )
         .unwrap();
 
@@ -293,11 +330,11 @@ mod tests {
         .await
         .expect("watch() did not emit a session within 10s")
         .unwrap();
-        assert_eq!(seen, vec![SessionId::from("th1".to_owned())]);
+        assert_eq!(seen, vec![SessionId::from(sid.to_owned())]);
     }
 
     #[rstest]
-    #[case(include_str!("../../../res/harnesstools/fixtures/codex/session1.jsonl"))]
+    #[case(include_str!("../../../tests/fixtures/codex/session1.jsonl"))]
     fn normalizes_a_real_redacted_session(#[case] jsonl: &str) {
         let msgs: Vec<CodexMessage> = jsonl
             .lines()
@@ -308,12 +345,29 @@ mod tests {
 
         let mut saw_user = false;
         let mut saw_assistant = false;
+        let mut tool_uses = 0usize;
+        let mut tool_results = 0usize;
         for m in &msgs {
             let _ = m.timestamp();
-            let _ = m.content();
             saw_user |= m.role() == Role::User;
             saw_assistant |= m.role() == Role::Assistant;
+            for c in m.content() {
+                match c {
+                    Content::ToolUse(u) => {
+                        assert!(!u.name.is_empty(), "custom_tool_call normalized to an empty name");
+                        assert!(!u.id.to_string().is_empty(), "tool call lost its id");
+                        tool_uses += 1;
+                    }
+                    Content::ToolResult(r) => {
+                        assert!(!r.call.to_string().is_empty(), "tool result lost its call id");
+                        tool_results += 1;
+                    }
+                    _ => {}
+                }
+            }
         }
         assert!(saw_user && saw_assistant, "expected both user and assistant turns");
+        assert!(tool_uses >= 1, "expected at least one normalized tool call");
+        assert!(tool_results >= 1, "expected at least one normalized tool result");
     }
 }

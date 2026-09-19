@@ -41,6 +41,47 @@ pub struct ToolResult {
     pub error: bool,
 }
 
+#[derive(Clone, Debug)]
+pub struct SessionEvent<M> {
+    pub session: SessionId,
+    pub kind: SessionEventKind<M>,
+}
+
+#[derive(Clone, Debug)]
+pub enum SessionEventKind<M> {
+    Started,
+    Message(M),
+}
+
+impl<M> SessionEvent<M> {
+    #[must_use]
+    pub fn started(session: SessionId) -> Self {
+        Self {
+            session,
+            kind: SessionEventKind::Started,
+        }
+    }
+
+    #[must_use]
+    pub fn message(session: SessionId, message: M) -> Self {
+        Self {
+            session,
+            kind: SessionEventKind::Message(message),
+        }
+    }
+
+    #[must_use]
+    pub fn map_message<N>(self, f: impl FnOnce(M) -> N) -> SessionEvent<N> {
+        SessionEvent {
+            session: self.session,
+            kind: match self.kind {
+                SessionEventKind::Started => SessionEventKind::Started,
+                SessionEventKind::Message(message) => SessionEventKind::Message(f(message)),
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;

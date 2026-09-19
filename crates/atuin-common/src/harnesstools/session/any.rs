@@ -6,7 +6,8 @@ use crate::harnesstools::ccode::session::{CcodeListener, CcodeSession, CcodeSess
 use crate::harnesstools::codex::session::{CodexListener, CodexSession, CodexSessions};
 use crate::harnesstools::pi::session::{PiListener, PiSession, PiSessions};
 use crate::harnesstools::session::{
-    AnyMessage, Listener, MessageError, RuntimeError, Session, SessionId, Sessions, WatchError,
+    AnyMessage, CaptureError, Listener, MessageError, RuntimeError, Session, SessionEvent,
+    SessionId, Sessions, WatchError,
 };
 
 #[derive(Debug, Clone, From)]
@@ -40,6 +41,15 @@ impl AnyListener {
             Self::Ccode(l) => l.watch().map_ok(AnySession::from).boxed(),
             Self::Codex(l) => l.watch().map_ok(AnySession::from).boxed(),
             Self::Pi(l) => l.watch().map_ok(AnySession::from).boxed(),
+        }
+    }
+
+    #[must_use]
+    pub fn events(self) -> BoxStream<'static, Result<SessionEvent<AnyMessage>, CaptureError>> {
+        match self {
+            Self::Ccode(l) => l.events().map_ok(|ev| ev.map_message(AnyMessage::from)).boxed(),
+            Self::Codex(l) => l.events().map_ok(|ev| ev.map_message(AnyMessage::from)).boxed(),
+            Self::Pi(l) => l.events().map_ok(|ev| ev.map_message(AnyMessage::from)).boxed(),
         }
     }
 }

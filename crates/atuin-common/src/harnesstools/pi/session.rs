@@ -82,9 +82,9 @@ impl Listener for PiListener {
     fn watch(self) -> impl Stream<Item = Result<PiSession, WatchError>> + Send + 'static {
         let root = self.root;
         async_stream::stream! {
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<PiSession>();
+            let (tx, rx) = flume::unbounded::<PiSession>();
             let _watcher = match TreeWatcher::builder().recursive(true).watch(&root, move |ctx| {
-                if let Some(session) = PiListener::accept(&ctx) {
+                if let Some(session) = Self::accept(&ctx) {
                     let _ = tx.send(session);
                 }
                 None::<()>
@@ -95,7 +95,7 @@ impl Listener for PiListener {
                     return;
                 }
             };
-            while let Some(session) = rx.recv().await {
+            while let Ok(session) = rx.recv_async().await {
                 yield Ok(session);
             }
         }
@@ -191,7 +191,7 @@ impl Message for PiMessage {
         }
         match &message["content"] {
             serde_json::Value::String(text) => vec![Content::Text(text.clone())],
-            serde_json::Value::Array(blocks) => blocks.iter().map(PiMessage::block).collect(),
+            serde_json::Value::Array(blocks) => blocks.iter().map(Self::block).collect(),
             _ => Vec::new(),
         }
     }
@@ -309,8 +309,8 @@ mod tests {
     }
 
     #[rstest]
-    #[case(include_str!("../../../res/harnesstools/fixtures/pi/session1.jsonl"))]
-    #[case(include_str!("../../../res/harnesstools/fixtures/pi/session2.jsonl"))]
+    #[case(include_str!("../../../tests/fixtures/pi/session1.jsonl"))]
+    #[case(include_str!("../../../tests/fixtures/pi/session2.jsonl"))]
     fn normalizes_a_real_redacted_session(#[case] jsonl: &str) {
         let msgs: Vec<PiMessage> = jsonl
             .lines()
