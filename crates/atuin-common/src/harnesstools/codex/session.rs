@@ -185,6 +185,7 @@ impl Message for CodexMessage {
         match payload.and_then(|p| p["type"].as_str()) {
             Some("function_call" | "custom_tool_call") => Role::Assistant,
             Some("function_call_output" | "custom_tool_call_output") => Role::Tool,
+            Some("reasoning") => Role::Assistant,
             _ => match payload.and_then(|p| p["role"].as_str()).unwrap_or(self.kind.as_str()) {
                 "user" => Role::User,
                 "assistant" => Role::Assistant,

@@ -115,9 +115,15 @@ pub struct AiHarnessSessionCapture {
 
 impl AiHarnessSessionCapture {
     #[must_use]
-    pub fn open(records: AiSessionStore, sidecar: AiSessionDatabase) -> Self {
+    pub fn open(records: AiSessionStore, sidecar: AiSessionDatabase, capture: bool) -> Self {
         let sink = Arc::new(Sink::new(records, sidecar));
-        let engine = SessionCaptureEngine::spawn(&sink);
+        // Capture is opt-in. When disabled we still open the sidecar and serve existing sessions,
+        // but never spawn the listeners that copy new transcripts into the synced record store.
+        let engine = if capture {
+            SessionCaptureEngine::spawn(&sink)
+        } else {
+            SessionCaptureEngine::nop()
+        };
         Self {
             sink,
             _engine: engine,

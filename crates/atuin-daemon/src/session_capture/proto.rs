@@ -127,6 +127,12 @@ impl From<Content> for pb::ContentBlock {
 
 impl From<Message> for pb::Message {
     fn from(value: Message) -> Self {
+        // The enum collapses non-standard roles to Unknown; keep the original string so clients can
+        // display the real role (e.g. codex "developer") instead of "unknown".
+        let role_label = match &value.role {
+            Role::Other(other) => Some(other.clone()),
+            _ => None,
+        };
         Self {
             id: Some(common::Uuid {
                 value: value.id.0.into_bytes().to_vec(),
@@ -151,6 +157,7 @@ impl From<Message> for pb::Message {
                 .stop_reason
                 .map(pb::StopReason::from)
                 .unwrap_or(pb::StopReason::Unknown) as i32,
+            role_label,
         }
     }
 }

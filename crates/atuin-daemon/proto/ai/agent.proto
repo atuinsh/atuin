@@ -132,6 +132,9 @@ message Message {
   Tokens tokens = 14;
   // Why an assistant turn ended.
   StopReason stop_reason = 15;
+  // The harness's own role string when it is not one of the standard roles above (e.g. codex
+  // "developer"); unset for standard roles. A display fallback for ROLE_UNKNOWN.
+  optional string role_label = 16;
 }
 
 message Session {

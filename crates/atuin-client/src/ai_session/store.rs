@@ -304,4 +304,28 @@ mod tests {
         let sess = db.get_session(&sample_handle()).await.unwrap().unwrap();
         assert_eq!(usize::try_from(sess.message_count).unwrap(), messages.len());
     }
+
+    #[rstest]
+    #[tokio::test]
+    async fn build_recovers_session_title_from_message_records() {
+        // Titles live only on the Started event, which is never synced; denormalising them onto the
+        // message record (Message::session_title) is what lets a reproject on another machine --
+        // records only, no sidecar -- recover the title.
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let s = AiSessionStore::builder().store(store).host_id(hid()).key(key()).build();
+
+        let handle = sample_handle();
+        let mut untitled = message_in(&handle, 0, "hello");
+        untitled.session_title = None;
+        let mut titled = message_in(&handle, 1, "world");
+        titled.session_title = Some("My Session".to_owned());
+        s.push(&untitled).await.unwrap();
+        s.push(&titled).await.unwrap();
+
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        s.build(&db).await.unwrap();
+
+        let sess = db.get_session(&handle).await.unwrap().unwrap();
+        assert_eq!(sess.title.as_deref(), Some("My Session"));
+    }
 }

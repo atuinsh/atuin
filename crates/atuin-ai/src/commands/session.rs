@@ -79,6 +79,14 @@ impl Style {
 }
 
 pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
+    if !settings.ai.capture_sessions {
+        // stderr so it never pollutes piped stdout (json/ndjson).
+        eprintln!(
+            "note: AI session capture is off. Enable it with `ai.capture_sessions = true` in your \
+             atuin config to record new sessions."
+        );
+    }
+
     let style = cmd.style.resolve();
     let mut client = AiClient::from_settings(settings).await?;
 
@@ -286,6 +294,7 @@ async fn tail(client: &mut AiClient, style: Style) -> Result<()> {
                 let Some(summary) = message_summary(m) else {
                     continue;
                 };
+                let (role_text, role_ansi) = display_role(m, &summary);
                 if let Style::Plain = style {
                     writeln!(
                         out,
@@ -293,7 +302,7 @@ async fn tail(client: &mut AiClient, style: Style) -> Result<()> {
                         clock(m.timestamp.as_ref()),
                         short_id(&m.session_id),
                         harness_name(m.harness),
-                        role_name(m.role),
+                        role_text,
                         summary.render(false),
                     )?;
                 } else {
@@ -314,8 +323,7 @@ async fn tail(client: &mut AiClient, style: Style) -> Result<()> {
                         active = Some(m.session_id.clone());
                     }
                     let time = paint(&clock(m.timestamp.as_ref()), Ansi::Dim, color);
-                    let role =
-                        paint(&format!("{:<9}", role_name(m.role)), role_color(m.role), color);
+                    let role = paint(&format!("{role_text:<9}"), role_ansi, color);
                     writeln!(out, "  {time}  {role}  {}", summary.render(color))?;
                 }
             }
@@ -431,8 +439,10 @@ const SUMMARY_WIDTH: usize = 80;
 /// The renderable essence of a message line, kept color-free so `message_summary` stays pure and
 /// testable; color is applied only in [`Summary::render`].
 enum Summary {
-    /// Prose: assistant/user text or thinking.
+    /// Prose: assistant/user/system text.
     Text(String),
+    /// Assistant reasoning / thinking.
+    Thinking(String),
     /// A tool invocation, by name.
     ToolCall(String),
     /// A tool result and whether it errored.
@@ -447,6 +457,7 @@ impl Summary {
     fn render(&self, color: bool) -> String {
         match self {
             Self::Text(t) => t.clone(),
+            Self::Thinking(t) => format!("{} {t}", paint("»", Ansi::Dim, color)),
             Self::ToolCall(name) => format!("{} {name}", paint("⚙", Ansi::Blue, color)),
             Self::ToolResult { is_error, body } => {
                 let mark = if *is_error {
@@ -469,12 +480,16 @@ impl Summary {
 fn message_summary(m: &agent::Message) -> Option<Summary> {
     for block in &m.content {
         match &block.block {
-            Some(
-                agent::content_block::Block::Text(t) | agent::content_block::Block::Thinking(t),
-            ) => {
+            Some(agent::content_block::Block::Text(t)) => {
                 let line = one_line(t, SUMMARY_WIDTH);
                 if !line.is_empty() {
                     return Some(Summary::Text(line));
+                }
+            }
+            Some(agent::content_block::Block::Thinking(t)) => {
+                let line = one_line(t, SUMMARY_WIDTH);
+                if !line.is_empty() {
+                    return Some(Summary::Thinking(line));
                 }
             }
             Some(agent::content_block::Block::ToolCall(tc)) => {
@@ -490,6 +505,25 @@ fn message_summary(m: &agent::Message) -> Option<Summary> {
         }
     }
     None
+}
+
+/// The role label to display: the harness's own string when the enum cannot name it (e.g. codex
+/// `developer`), otherwise the standard role name.
+fn message_role(m: &agent::Message) -> String {
+    m.role_label
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map_or_else(|| role_name(m.role).to_owned(), str::to_owned)
+}
+
+/// The role text and its color for a rendered `tail` line. A tool result is labelled `tool`
+/// whatever the envelope role, since some harnesses model tool output as a user turn.
+fn display_role(m: &agent::Message, summary: &Summary) -> (String, Ansi) {
+    if matches!(summary, Summary::ToolResult { .. }) {
+        ("tool".to_owned(), role_color(agent::Role::Tool as i32))
+    } else {
+        (message_role(m), role_color(m.role))
+    }
 }
 
 /// The session-group header line printed the first time a session appears in the pretty `tail`
@@ -813,7 +847,7 @@ fn message_json(m: &agent::Message) -> MessageJson {
         m.id.as_ref().and_then(|u| uuid::Uuid::from_slice(&u.value).ok()).map(|u| u.to_string());
     MessageJson {
         id,
-        role: role_name(m.role).to_owned(),
+        role: message_role(m),
         timestamp: rfc3339(m.timestamp.as_ref()),
         model: m.model.clone(),
         cwd: m.cwd.clone(),

@@ -103,7 +103,7 @@ pub async fn boot(
                 tracing::error!(?err, "failed to reproject ai-session sidecar from records");
             }
 
-            AiHarnessSessionCapture::open(records, db.clone())
+            AiHarnessSessionCapture::open(records, db.clone(), settings.ai.capture_sessions)
         }
         None => AiHarnessSessionCapture::nop().await,
     });

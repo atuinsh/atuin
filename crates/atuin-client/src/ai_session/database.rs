@@ -173,7 +173,9 @@ impl AiSessionDatabase {
             return Ok(Appended::Duplicate);
         }
 
-        let title: Option<String> = None;
+        // Session title denormalised onto the message so it survives a reproject from records
+        // (which carry messages only). The session upsert below applies it latest-non-null-wins.
+        let title = msg.session_title.as_deref();
         let preview = Self::preview_text(msg);
 
         db::query(

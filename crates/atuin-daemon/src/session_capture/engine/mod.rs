@@ -1,14 +1,20 @@
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use atuin_client::ai_session::{HarnessKind, HarnessSession, Message, NativeSessionId, SourceId};
 use atuin_common::harnesstools::AnyHarness;
 use atuin_common::harnesstools::session::{
-    AnyMessage, Message as HarnessMessage, SessionEvent, SessionEventKind, SessionId,
+    AnyMessage, Message as HarnessMessage, RuntimeError, SessionEvent, SessionEventKind, SessionId,
 };
 use atuin_domain::record::RecordId;
 use futures::StreamExt;
 use time::OffsetDateTime;
 use tokio::task::JoinHandle;
+
+/// Backoff bounds for retrying a harness listener whose session directory does not exist yet.
+const LISTENER_RETRY_START: Duration = Duration::from_secs(2);
+const LISTENER_RETRY_MAX: Duration = Duration::from_secs(60);
 
 use super::Sink;
 
@@ -30,20 +36,46 @@ impl SessionCaptureEngine {
             let Some(sessions) = harness.sessions() else {
                 continue;
             };
-            let Ok(listener) = sessions.listener() else {
-                continue;
-            };
             let kind = HarnessKind::from(harness);
             let sink = sink.clone();
 
             listeners.push(tokio::spawn(async move {
+                // A harness whose session directory does not exist yet (not installed, or never
+                // run) must not be dropped for the life of the daemon: retry with capped backoff
+                // until it appears, so capture starts without a restart.
+                let mut delay = LISTENER_RETRY_START;
+                let listener = loop {
+                    match sessions.listener() {
+                        Ok(listener) => break listener,
+                        Err(RuntimeError::NotFound(_)) => {
+                            tokio::time::sleep(delay).await;
+                            delay = (delay * 2).min(LISTENER_RETRY_MAX);
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                ?e,
+                                ?kind,
+                                "ai-session listener failed; capture disabled for this harness"
+                            );
+                            return;
+                        }
+                    }
+                };
+
                 let mut events = listener.events();
+                // Latest known title per native session id, stamped onto each captured message so
+                // session-level metadata rides the synced records (see `Message::session_title`).
+                let mut titles: HashMap<String, String> = HashMap::new();
+
                 while let Some(ev) = events.next().await {
                     match ev {
                         Ok(SessionEvent {
                             session,
                             kind: SessionEventKind::Started(meta),
                         }) => {
+                            if let Some(title) = &meta.title {
+                                titles.insert(session.to_string(), title.clone());
+                            }
                             let handle = HarnessSession {
                                 harness: kind,
                                 session: NativeSessionId::from(session.to_string()),
@@ -56,7 +88,8 @@ impl SessionCaptureEngine {
                             session,
                             kind: SessionEventKind::Message(m),
                         }) => {
-                            let msg = Self::enrich(kind, &session, &m);
+                            let title = titles.get(&session.to_string()).cloned();
+                            let msg = Self::enrich(kind, &session, &m, title);
                             if let Err(e) = sink.append(msg).await {
                                 tracing::warn!(?e, "failed to capture ai-session message");
                             }
@@ -70,7 +103,12 @@ impl SessionCaptureEngine {
         Self { listeners }
     }
 
-    fn enrich(kind: HarnessKind, session: &SessionId, m: &AnyMessage) -> Message {
+    fn enrich(
+        kind: HarnessKind,
+        session: &SessionId,
+        m: &AnyMessage,
+        session_title: Option<String>,
+    ) -> Message {
         Message::builder()
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .session(HarnessSession {
@@ -86,6 +124,7 @@ impl SessionCaptureEngine {
             .stop_reason(m.stop_reason())
             .cwd(m.cwd())
             .git_branch(m.git_branch())
+            .session_title(session_title)
             .build()
     }
 
