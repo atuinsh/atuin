@@ -4,6 +4,7 @@
 //! resolves a selector to a session, calls the matching RPC, and renders the raw messages either as
 //! human-readable text or as JSON/NDJSON for scripting.
 
+use std::collections::HashMap;
 use std::io::{self, IsTerminal, Write};
 
 use atuin_client::settings::Settings;
@@ -239,8 +240,13 @@ async fn transcript(client: &mut AiClient, selector: &str, style: Style) -> Resu
 async fn tail(client: &mut AiClient, style: Style) -> Result<()> {
     let mut stream = client.tail_sessions(None).await?;
 
-    // Live streams re-lock stdout per event and flush, so nothing is buffered and the terminal
-    // shows events as they arrive.
+    // The daemon streams session-state deltas (Started/Updated) alongside messages. We fold the
+    // deltas into a metadata cache used for headers but never print them: the human tail is a
+    // message log grouped by session, not an echo of every state change. Each event re-locks
+    // stdout and flushes so the terminal shows activity as it arrives.
+    let mut sessions: HashMap<String, agent::Session> = HashMap::new();
+    let mut active: Option<String> = None;
+
     while let Some(event) = stream.next().await {
         let Some(event) = event?.event else {
             continue;
@@ -263,34 +269,53 @@ async fn tail(client: &mut AiClient, style: Style) -> Result<()> {
             };
             serde_json::to_writer(&mut out, &record)?;
             writeln!(out)?;
-        } else {
-            match &event {
-                tail_sessions_event::Event::SessionStarted(s) => writeln!(
-                    out,
-                    "+ session  {} {} {}",
-                    short_id(&s.session_id),
-                    harness_name(s.harness),
-                    one_line(title_of(s), 60),
-                )?,
-                tail_sessions_event::Event::SessionUpdated(s) => writeln!(
-                    out,
-                    "~ session  {} {} {} ({} msgs)",
-                    short_id(&s.session_id),
-                    harness_name(s.harness),
-                    one_line(title_of(s), 60),
-                    s.message_count,
-                )?,
-                tail_sessions_event::Event::Message(m) => writeln!(
-                    out,
-                    "> message  {} {} [{}] {}",
-                    short_id(&m.session_id),
-                    harness_name(m.harness),
-                    role_name(m.role),
-                    preview_of(&m.content),
-                )?,
-                tail_sessions_event::Event::Lagged(l) => {
-                    writeln!(out, "! lagged   dropped {} events", l.dropped)?;
+            out.flush()?;
+            continue;
+        }
+
+        match &event {
+            tail_sessions_event::Event::SessionStarted(s)
+            | tail_sessions_event::Event::SessionUpdated(s) => {
+                sessions.insert(s.session_id.clone(), s.clone());
+            }
+            tail_sessions_event::Event::Message(m) => {
+                // Skip content-less records (meta/summary lines) so the tail stays legible.
+                let Some(summary) = message_summary(m) else {
+                    continue;
+                };
+                if let Style::Plain = style {
+                    writeln!(
+                        out,
+                        "{}  {:<12}  {:<11}  {:<9}  {}",
+                        clock(m.timestamp.as_ref()),
+                        short_id(&m.session_id),
+                        harness_name(m.harness),
+                        role_name(m.role),
+                        summary,
+                    )?;
+                } else {
+                    if active.as_deref() != Some(m.session_id.as_str()) {
+                        if active.is_some() {
+                            writeln!(out)?;
+                        }
+                        writeln!(
+                            out,
+                            "{}",
+                            tail_header(&m.session_id, m.harness, sessions.get(&m.session_id))
+                        )?;
+                        active = Some(m.session_id.clone());
+                    }
+                    writeln!(
+                        out,
+                        "  {}  {:<9}  {}",
+                        clock(m.timestamp.as_ref()),
+                        role_name(m.role),
+                        summary,
+                    )?;
                 }
+            }
+            tail_sessions_event::Event::Lagged(l) => {
+                writeln!(out, "! lagged (dropped {} events)", l.dropped)?;
             }
         }
 
@@ -396,18 +421,59 @@ fn title_of(s: &agent::Session) -> &str {
     s.title.as_deref().or(s.preview.as_deref()).unwrap_or("")
 }
 
-/// A short, single-line preview of a message's content for the `tail` view.
-fn preview_of(content: &[agent::ContentBlock]) -> String {
-    let text = content
-        .iter()
-        .find_map(|b| match &b.block {
-            Some(agent::content_block::Block::Text(t)) => Some(t.as_str()),
-            Some(agent::content_block::Block::Thinking(t)) => Some(t.as_str()),
-            Some(agent::content_block::Block::ToolCall(tc)) => Some(tc.name.as_str()),
-            _ => None,
-        })
-        .unwrap_or("");
-    one_line(text, 60)
+const SUMMARY_WIDTH: usize = 80;
+
+/// A one-line summary of a message for the `tail` log, or `None` when the message carries nothing
+/// worth a line (meta/summary records with no renderable content) so the caller can skip it.
+fn message_summary(m: &agent::Message) -> Option<String> {
+    for block in &m.content {
+        match &block.block {
+            Some(
+                agent::content_block::Block::Text(t) | agent::content_block::Block::Thinking(t),
+            ) => {
+                let line = one_line(t, SUMMARY_WIDTH);
+                if !line.is_empty() {
+                    return Some(line);
+                }
+            }
+            Some(agent::content_block::Block::ToolCall(tc)) => {
+                return Some(format!("⚙ {}", tc.name));
+            }
+            Some(agent::content_block::Block::ToolResult(tr)) => {
+                let mark = if tr.is_error {
+                    "✗"
+                } else {
+                    "✓"
+                };
+                let body = one_line(&tr.content, SUMMARY_WIDTH);
+                return Some(if body.is_empty() {
+                    mark.to_owned()
+                } else {
+                    format!("{mark} {body}")
+                });
+            }
+            None => {}
+        }
+    }
+    None
+}
+
+/// The session-group header line printed the first time a session appears in the pretty `tail`
+/// view and whenever the active session changes.
+fn tail_header(session_id: &str, harness: i32, session: Option<&agent::Session>) -> String {
+    let title = session.map(title_of).map(|t| one_line(t, SUMMARY_WIDTH)).unwrap_or_default();
+    if title.is_empty() {
+        format!("● {} · {}", short_id(session_id), harness_name(harness))
+    } else {
+        format!("● {} · {} · {}", short_id(session_id), harness_name(harness), title)
+    }
+}
+
+/// Local wall-clock `HH:MM:SS` for a protobuf timestamp, for live `tail` lines.
+fn clock(ts: Option<&prost_types::Timestamp>) -> String {
+    to_datetime(ts)
+        .map(|dt| dt.with_timezone(&chrono::Local).format("%H:%M:%S").to_string())
+        .unwrap_or_else(|| "--:--:--".to_owned())
 }
 
 /// Collapse all whitespace (including embedded newlines) to single spaces and truncate to `max`
@@ -768,5 +834,89 @@ mod tests {
     #[case(999, "unknown")]
     fn harness_name_maps_known_and_unknown(#[case] raw: i32, #[case] expected: &str) {
         assert_eq!(harness_name(raw), expected);
+    }
+
+    fn msg(role: agent::Role, blocks: Vec<agent::content_block::Block>) -> agent::Message {
+        agent::Message {
+            role: role as i32,
+            content: blocks.into_iter().map(|b| agent::ContentBlock { block: Some(b) }).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[rstest]
+    fn summary_prefers_text() {
+        let m = msg(agent::Role::Assistant, vec![agent::content_block::Block::Text(
+            "hello world".to_owned(),
+        )]);
+        assert_eq!(message_summary(&m).as_deref(), Some("hello world"));
+    }
+
+    #[rstest]
+    fn summary_labels_a_tool_call() {
+        let m = msg(agent::Role::Assistant, vec![agent::content_block::Block::ToolCall(
+            agent::ToolCall {
+                name: "Edit".to_owned(),
+                ..Default::default()
+            },
+        )]);
+        assert_eq!(message_summary(&m).as_deref(), Some("⚙ Edit"));
+    }
+
+    #[rstest]
+    #[case(false, "✓ ok")]
+    #[case(true, "✗ boom")]
+    fn summary_marks_a_tool_result(#[case] is_error: bool, #[case] expected: &str) {
+        let content = if is_error {
+            "boom"
+        } else {
+            "ok"
+        };
+        let m = msg(agent::Role::Tool, vec![agent::content_block::Block::ToolResult(
+            agent::ToolResult {
+                content: content.to_owned(),
+                is_error,
+                ..Default::default()
+            },
+        )]);
+        assert_eq!(message_summary(&m).as_deref(), Some(expected));
+    }
+
+    #[rstest]
+    fn summary_skips_content_less_messages() {
+        assert!(message_summary(&msg(agent::Role::User, vec![])).is_none());
+        let blank =
+            msg(agent::Role::User, vec![agent::content_block::Block::Text("   ".to_owned())]);
+        assert!(message_summary(&blank).is_none());
+    }
+
+    #[rstest]
+    fn summary_falls_through_empty_text_to_the_next_block() {
+        let m = msg(agent::Role::Assistant, vec![
+            agent::content_block::Block::Text(String::new()),
+            agent::content_block::Block::ToolCall(agent::ToolCall {
+                name: "Bash".to_owned(),
+                ..Default::default()
+            }),
+        ]);
+        assert_eq!(message_summary(&m).as_deref(), Some("⚙ Bash"));
+    }
+
+    #[rstest]
+    fn header_includes_title_when_present() {
+        let mut s = session(agent::HarnessKind::ClaudeCode, "abcdef0123456789");
+        s.title = Some("My Session".to_owned());
+        assert_eq!(
+            tail_header("abcdef0123456789", agent::HarnessKind::ClaudeCode as i32, Some(&s)),
+            "● abcdef012345 · claude-code · My Session"
+        );
+    }
+
+    #[rstest]
+    fn header_omits_title_when_absent() {
+        assert_eq!(
+            tail_header("abcdef0123456789", agent::HarnessKind::ClaudeCode as i32, None),
+            "● abcdef012345 · claude-code"
+        );
     }
 }
