@@ -1,5 +1,4 @@
 mod engine;
-pub(crate) mod proto;
 
 use std::sync::Arc;
 use std::time::Duration;
