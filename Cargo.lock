@@ -1771,9 +1771,9 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "easy-cast"
-version = "0.5.4"
+version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23f40539c229fc2e4674bdecdf24bfcc2cb83631ca911c78a035fa9f2381c32b"
+checksum = "59e68c9e2b6f969aa527564744c81d1ad24da08a36422a268ec6b61002a7eecd"
 
 [[package]]
 name = "ed25519"
