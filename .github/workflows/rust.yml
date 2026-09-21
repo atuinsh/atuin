@@ -252,7 +252,11 @@ jobs:
         run: cargo check --locked --workspace --all-features
 
   integration-test:
-    runs-on: depot-ubuntu-24.04-8
+    # Bumped from -8 to -16 for root-disk headroom (150 GB -> 180 GB) against the
+    # intermittent runner-crash ENOSPC (the runner worker died writing its diag
+    # log to a full root fs), plus 2x CPU (faster) and 2x RAM (larger /dev/shm
+    # safety margin).
+    runs-on: depot-ubuntu-24.04-16
 
     services:
       postgres:
@@ -284,18 +288,38 @@ jobs:
         with:
           tool: cargo-nextest
 
-      - uses: actions/cache@v6
+      # rust-cache (not raw actions/cache) because it cleans stale target/
+      # artifacts before every save, so the cache can't accrete unboundedly.
+      # A restored target/ under the old actions/cache had grown to 71 GB,
+      # filling the runner root disk and crashing the worker with ENOSPC. It
+      # also caches selectively and keys on the lockfile + rustc version.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-             ~/.cargo/git
-             target
-          key: ${{ runner.os }}-cargo-integration-test-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
-          restore-keys: ${{ runner.os }}-cargo-integration-test-
+          key: integration-test
+
+      - name: Report disk space (after cache restore)
+        # Telemetry for the intermittent "No space left on device" runner crash.
+        # The one confirmed ENOSPC (run 35642513172) killed the runner worker as
+        # it wrote its own diag log to the ROOT fs (/home/runner/*), leaving no
+        # job log -- so record free space per mount here, where it survives in
+        # the step log, plus the restored cache size (the run-to-run variable).
+        continue-on-error: true
+        run: |
+          df -h
+          df -h /dev/shm
+          timeout 30 du -sh ~/.cargo/registry ~/.cargo/git target 2>/dev/null || true
 
       - name: Run cargo test
         # E2e tests have a separate job with shell dependencies.
-        run: cargo nextest run --test '*' -E 'not binary(/e2e_.*/)'
+        run: |
+          # Background disk sampler: the confirmed crash killed the runner worker
+          # mid-test, so an after-the-fact step can't capture the fill. This
+          # streams free space to the live step log every 2 s; the last line
+          # before a crash tells us which mount hit 0 (root / vs /dev/shm).
+          ( while true; do echo "[diskwatch] $(df -P / /dev/shm | awk 'NR>1{print $6"="$4"KB-free"}' | tr '\n' ' ')"; sleep 2; done ) &
+          watcher=$!
+          trap 'kill "$watcher" 2>/dev/null || true' EXIT
+          cargo nextest run --test '*' -E 'not binary(/e2e_.*/)'
         env:
           ATUIN_DB_URI: postgres://atuin:pass@localhost:5432/atuin
           # Test databases live in tempdirs. With 8 tests writing SQLite WALs
