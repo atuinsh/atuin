@@ -288,14 +288,23 @@ jobs:
         with:
           tool: cargo-nextest
 
-      # rust-cache (not raw actions/cache) because it cleans stale target/
-      # artifacts before every save, so the cache can't accrete unboundedly.
-      # A restored target/ under the old actions/cache had grown to 71 GB,
-      # filling the runner root disk and crashing the worker with ENOSPC. It
-      # also caches selectively and keys on the lockfile + rustc version.
-      - uses: Swatinem/rust-cache@v2
+      # BENCHMARK (do not merge): sccache instead of a target/ cache. sccache
+      # stores compiled objects in Depot's managed cache over WebDAV
+      # (SCCACHE_WEBDAV_ENDPOINT is pre-injected on Depot runners), keeping the
+      # compilation cache OFF the runner root disk -- target/ is built fresh
+      # each run and never accretes. This is the alternative to PR #4208's
+      # rust-cache; the two are A/B-compared via the disk telemetry below.
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      # Only the small, bounded cargo source cache is kept locally; target/ is
+      # deliberately NOT cached -- sccache repopulates it fast from the remote.
+      - uses: actions/cache@v6
         with:
-          key: integration-test
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sccache-registry-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sccache-registry-
 
       - name: Report disk space (after cache restore)
         # Telemetry for the intermittent "No space left on device" runner crash.
@@ -326,6 +335,15 @@ jobs:
           # at once the runner disk stalls for seconds and unrelated tests miss
           # their 5 s pool-open timeout; tmpfs takes fsync out of the picture.
           TMPDIR: /dev/shm
+          # sccache: wrap rustc + disable incremental (sccache cannot cache
+          # incremental compilation). Endpoint/auth for Depot Cache come from
+          # the runner's pre-injected SCCACHE_WEBDAV_* env.
+          RUSTC_WRAPPER: sccache
+          CARGO_INCREMENTAL: "0"
+
+      - name: sccache stats (hit rate)
+        if: ${{ always() }}
+        run: sccache --show-stats
 
       - name: Show new proptest regressions
         if: ${{ failure() }}
