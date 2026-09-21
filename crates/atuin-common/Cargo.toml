@@ -60,11 +60,11 @@ sysinfo = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true, features = ["formatting", "parsing"] }
 tiny-bip39 = { workspace = true }
+typed-builder = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true, optional = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, optional = true }
-typed-builder = { workspace = true }
 unicode-segmentation = { workspace = true, optional = true }
 unicode-width = { workspace = true, optional = true }
 url = { workspace = true }
