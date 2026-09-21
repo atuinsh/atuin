@@ -7,7 +7,6 @@ use atuin_client::settings::Settings;
 use atuin_client::settings::watcher::global_settings_watcher;
 use eyre::Result;
 
-use crate::grpc::ai_session::pb::ai_session_server::AiSessionServer;
 use crate::grpc::history::pb::history_server::HistoryServer;
 
 pub mod client;
@@ -82,7 +81,6 @@ pub async fn boot(
         output_capture,
     ));
     let history_service = HistoryServer::new(grpc::HistoryService::new(journal, handle.clone()));
-    let ai_session_service = AiSessionServer::new(grpc::AiSessionService::new());
 
     // Start all components first (so gRPC services can work)
     daemon.start_components().await?;
@@ -120,7 +118,6 @@ pub async fn boot(
         settings,
         history_service,
         search_service.build(handle.clone()),
-        ai_session_service,
         handle,
     )
     .await?;

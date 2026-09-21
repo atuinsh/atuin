@@ -13,11 +13,11 @@ version.workspace = true
 
 [features]
 ai = []
-ansi = ["dep:atuin-vt100"]
+ansi = ["dep:atuin-vt100", "dep:memchr"]
 db = ["dep:sqlx"]
-os = ["dep:rustix"]
+os = ["dep:rustix", "dep:windows-sys"]
 proto = ["dep:prost"]
-sqlite = ["db", "sqlx/sqlite", "sqlx/regexp", "dep:libsqlite3-sys", "dep:tokio-util", "dep:strum", "dep:strum_macros"]
+sqlite = ["db", "sqlx/sqlite", "sqlx/regexp", "dep:libsqlite3-sys", "dep:tokio-util"]
 test-utils = ["dep:tracing-subscriber"]
 unicode = ["dep:unicode-width", "dep:unicode-segmentation"]
 
@@ -26,23 +26,19 @@ atuin-vt100 = { workspace = true, optional = true }
 
 async-stream = { workspace = true }
 base64 = { workspace = true }
-bytes = { workspace = true }
 bytesize = { workspace = true }
 crypto_secretbox = { workspace = true }
 derive_more = { workspace = true }
 directories = { workspace = true }
 easy-cast = { workspace = true }
 enum_dispatch = { workspace = true }
-flume = { workspace = true }
 fs-err = { workspace = true }
 futures = { workspace = true }
 getrandom = { workspace = true }
 humantime = { workspace = true }
 itertools = { workspace = true }
 libsqlite3-sys = { workspace = true, optional = true }
-memchr = { workspace = true }
-notify = { workspace = true }
-notify-debouncer-full = { workspace = true }
+memchr = { workspace = true, optional = true }
 num-traits = { workspace = true }
 parking_lot = { workspace = true }
 prost = { workspace = true, optional = true }
@@ -56,8 +52,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
 sqlx = { workspace = true, optional = true }
-strum = { workspace = true, optional = true }
-strum_macros = { workspace = true, optional = true }
 sysinfo = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true, features = ["formatting", "parsing"] }
@@ -66,7 +60,6 @@ tokio = { workspace = true }
 tokio-util = { workspace = true, optional = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, optional = true }
-typed-builder = { workspace = true }
 unicode-segmentation = { workspace = true, optional = true }
 unicode-width = { workspace = true, optional = true }
 url = { workspace = true }
@@ -77,7 +70,7 @@ zeroize = { workspace = true }
 rustix = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true }
+windows-sys = { workspace = true, optional = true }
 
 [dev-dependencies]
 divan = { workspace = true }

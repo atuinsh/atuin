@@ -125,6 +125,12 @@ message HistoryEntry {
   AuthorKind author_kind = 12;
 }
 
+// The consumer fell behind the daemon's stream and events were dropped.
+message Lagged {
+  // Number of events dropped before the consumer caught back up.
+  uint64 dropped = 1;
+}
+
 // The reply event returned by the TailHistoryRequest.
 message TailHistoryReply {
   oneof event {
@@ -135,7 +141,7 @@ message TailHistoryReply {
     // A command has been "cancelled", ie. no history has been recorded.
     HistoryEntry cancelled = 3;
     // An in-band notice that the consumer fell behind and lost events.
-    common.Lagged lagged = 4;
+    Lagged lagged = 4;
   }
 }
 

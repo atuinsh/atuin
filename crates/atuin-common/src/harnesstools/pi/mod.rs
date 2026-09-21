@@ -3,8 +3,6 @@ use std::path::PathBuf;
 use super::{Harness, InstallHookError};
 use crate::utils::{env_nonempty, home_dir};
 
-pub mod session;
-
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Pi;
 

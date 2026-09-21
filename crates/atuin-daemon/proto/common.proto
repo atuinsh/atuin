@@ -40,9 +40,3 @@ message HighlightedText {
   uint32 close = 2;
   string raw = 3;
 }
-
-// A consumer of a tail stream fell behind the daemon and events were dropped.
-message Lagged {
-  // Number of events dropped before the consumer caught back up.
-  uint64 dropped = 1;
-}
