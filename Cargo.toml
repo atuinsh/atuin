@@ -147,7 +147,7 @@ serde_with = "3"
 shellexpand = "3"
 shlex = "2"
 # held at 0.3: crossterm 0.29 pins signal-hook 0.3; bumping would add a 2nd copy
-signal-hook = "0.3"
+signal-hook = "0.4"
 sql-builder = "3"
 sqlx = { version = "0.9", features = ["runtime-tokio", "time", "uuid"] }
 strum = { version = "0.27", features = ["strum_macros"] }
