@@ -252,8 +252,10 @@ async fn tail(client: &mut AiClient, style: Style) -> Result<()> {
     // deltas into a metadata cache used for headers but never print them: the human tail is a
     // message log grouped by session, not an echo of every state change. Each event re-locks
     // stdout and flushes so the terminal shows activity as it arrives.
-    let mut sessions: HashMap<String, agent::Session> = HashMap::new();
-    let mut active: Option<String> = None;
+    // Keyed by the full identity (harness, session_id): a native id is only unique within a
+    // harness, so two harnesses can share one and must not collapse into the same header.
+    let mut sessions: HashMap<(i32, String), agent::Session> = HashMap::new();
+    let mut active: Option<(i32, String)> = None;
 
     // Color only in the pretty (terminal) view, and never when NO_COLOR is set.
     let color = matches!(style, Style::Pretty) && std::env::var_os("NO_COLOR").is_none();
@@ -287,7 +289,7 @@ async fn tail(client: &mut AiClient, style: Style) -> Result<()> {
         match &event {
             tail_sessions_event::Event::SessionStarted(s)
             | tail_sessions_event::Event::SessionUpdated(s) => {
-                sessions.insert(s.session_id.clone(), s.clone());
+                sessions.insert((s.harness, s.session_id.clone()), s.clone());
             }
             tail_sessions_event::Event::Message(m) => {
                 // Skip content-less records (meta/summary lines) so the tail stays legible.
@@ -306,21 +308,17 @@ async fn tail(client: &mut AiClient, style: Style) -> Result<()> {
                         summary.render(false),
                     )?;
                 } else {
-                    if active.as_deref() != Some(m.session_id.as_str()) {
+                    let key = (m.harness, m.session_id.clone());
+                    if active.as_ref() != Some(&key) {
                         if active.is_some() {
                             writeln!(out)?;
                         }
                         writeln!(
                             out,
                             "{}",
-                            tail_header(
-                                &m.session_id,
-                                m.harness,
-                                sessions.get(&m.session_id),
-                                color
-                            )
+                            tail_header(&m.session_id, m.harness, sessions.get(&key), color)
                         )?;
-                        active = Some(m.session_id.clone());
+                        active = Some(key);
                     }
                     let time = paint(&clock(m.timestamp.as_ref()), Ansi::Dim, color);
                     let role = paint(&format!("{role_text:<9}"), role_ansi, color);
