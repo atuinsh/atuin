@@ -1,0 +1,36 @@
+# Atuin
+
+Atuin replaces your shell history with a SQLite database, and records extra context for every command: the directory it ran in, how long it took, whether it succeeded, and which machine and session it came from. That context is what makes search actually useful.
+
+It can also sync your history across all of your machines, end-to-end encrypted. Use our server, [host your own](https://docs.atuin.sh/self-hosting/server-setup/index.md), or skip sync entirely and stay local.
+
+## Quickstart
+
+```
+curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
+```
+
+Restart your shell, then press `Ctrl`+`R` or the `Up` arrow to search. Type a query, press enter to run the selected command, or tab to put it on your command line for editing.
+
+To bring your existing history with you:
+
+```
+atuin import auto
+```
+
+To sync it across machines — optional, and covered in [Setting up sync](https://docs.atuin.sh/guide/sync/index.md):
+
+```
+atuin register -u <USERNAME> -e <EMAIL>
+atuin sync
+```
+
+If you'd rather take it one step at a time, [Getting Started](https://docs.atuin.sh/guide/getting-started/index.md) walks through the same thing with more explanation. From there, [Basic usage](https://docs.atuin.sh/guide/basic-usage/index.md) covers driving the TUI, and [Config](https://docs.atuin.sh/configuration/config/index.md) documents every setting.
+
+## Supported platforms
+
+Atuin supports zsh, bash, fish, nushell, xonsh, and PowerShell. See [Supported platforms](https://docs.atuin.sh/support/index.md) for the full matrix and what each tier means.
+
+## Getting help
+
+Open a topic on the [forum](https://forum.atuin.sh), join our [Discord](https://discord.gg/Fq8bJSKPHh), or file an [issue](https://github.com/atuinsh/atuin/issues). If something isn't working, [`atuin doctor`](https://docs.atuin.sh/reference/doctor/index.md) collects the details we'll ask for.
