@@ -4,6 +4,9 @@ use eyre::Result;
 use toml_edit::{Document, DocumentMut, Item, Table, TableLike, Value};
 use tracing::instrument;
 
+#[cfg(feature = "daemon")]
+use crate::command::client::daemon;
+
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
@@ -250,7 +253,22 @@ impl EnableCmd {
         let updated = self.get_updated_config(&config_str, settings.daemon.enabled)?;
         tokio::fs::write(&config_file, &updated).await?;
 
-        println!("Enabled. Restart your shell for the change to take effect.");
+        println!("Enabled.");
+
+        // The daemon reads these settings only at startup, so it needs a restart to pick them
+        // up. A running daemon with autostart off may be externally managed (systemd, launchd),
+        // so leave that one alone and tell the user instead.
+        #[cfg(feature = "daemon")]
+        if settings.daemon.enabled && !settings.daemon.autostart {
+            println!("Restart the Atuin daemon and your shell for the change to take effect.");
+            return Ok(());
+        } else if let Err(e) = daemon::restart_cmd(settings).await {
+            eprintln!(
+                "Could not restart the Atuin daemon: {e}\nRun `atuin daemon restart` manually."
+            );
+        }
+
+        println!("Restart your shell for the change to take effect.");
 
         Ok(())
     }

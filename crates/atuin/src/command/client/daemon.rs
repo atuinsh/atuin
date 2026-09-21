@@ -553,7 +553,7 @@ async fn stop_cmd(settings: &Settings) -> Result<()> {
     }
 }
 
-async fn restart_cmd(settings: &Settings) -> Result<()> {
+pub(super) async fn restart_cmd(settings: &Settings) -> Result<()> {
     // Stop if running
     match probe(settings).await {
         Probe::Ready(_) | Probe::NeedsRestart(_) => {
