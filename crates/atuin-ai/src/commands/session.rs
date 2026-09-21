@@ -15,7 +15,7 @@ use chrono::{DateTime, Utc};
 use chrono_humanize::HumanTime;
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Result, bail, eyre};
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use serde::Serialize;
 
 #[derive(Args, Debug)]
@@ -123,7 +123,7 @@ fn is_broken_pipe(err: &eyre::Report) -> bool {
 // --- subcommands --------------------------------------------------------------------------------
 
 async fn list(client: &mut AiClient, style: Style) -> Result<()> {
-    let sessions = client.list_sessions(None).await?;
+    let sessions: Vec<agent::Session> = client.list_sessions(None).await?.try_collect().await?;
 
     let stdout = io::stdout();
     let mut out = stdout.lock();
@@ -341,7 +341,7 @@ async fn tail(client: &mut AiClient, style: Style) -> Result<()> {
 /// Turn a `latest`/id selector into a full session handle by matching it against the session list
 /// (the harness is only known from the listing, so an id alone cannot address a session).
 async fn resolve(client: &mut AiClient, selector: &str) -> Result<agent::HarnessSession> {
-    select_session(client.list_sessions(None).await?, selector)
+    select_session(client.list_sessions(None).await?.try_collect().await?, selector)
 }
 
 /// Pure selector logic, split out from the RPC so it can be tested directly.

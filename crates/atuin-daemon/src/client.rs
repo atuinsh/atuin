@@ -499,23 +499,18 @@ impl AiClient {
         Self::new(settings.daemon.tcp_port).await
     }
 
-    /// All captured session summaries, newest first. `harness` filters to a single harness when set.
-    ///
-    /// The daemon streams the sessions one per message (so a long list never trips the gRPC message
-    /// size limit); they're collected here for callers that just want the whole list.
+    /// Stream captured session summaries, newest first. `harness` filters to a single harness when
+    /// set. The daemon sends one session per message (so a long list never trips the gRPC
+    /// message-size limit); callers that want the whole set collect it with `try_collect`, and ones
+    /// that only want the newest can take the first item without draining the rest.
     pub async fn list_sessions(
         &mut self,
         harness: Option<AiHarnessKind>,
-    ) -> Result<Vec<AiSession>> {
+    ) -> Result<tonic::Streaming<AiSession>> {
         let request = ListSessionsRequest {
             harness: harness.map(|h| h as i32),
         };
-        let mut stream = self.client.list_sessions(request).await?.into_inner();
-        let mut sessions = Vec::new();
-        while let Some(session) = stream.next().await {
-            sessions.push(session?);
-        }
-        Ok(sessions)
+        Ok(self.client.list_sessions(request).await?.into_inner())
     }
 
     /// Stream one session: the first event carries the [`AiSession`], each event after it a message.
