@@ -65,6 +65,16 @@ If you don't wish to use the installer, the manual installation steps are as fol
     cargo install atuin --locked
     ```
 
+=== "apt (Debian)"
+
+    Atuin is also available in [Debian](https://tracker.debian.org/atuin). It
+    might be also available in other apt-based distros that use the Debian
+    package, e.g. Ubuntu, but this is not guaranteed.
+
+    ```shell
+    sudo apt install atuin
+    ```
+
 === "Homebrew"
 
     ```shell
