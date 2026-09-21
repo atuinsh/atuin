@@ -34,12 +34,14 @@ enum SubCmd {
 
     /// Show a session and its messages. Accepts a session id or `latest`.
     Show {
+        /// Session id (a unique prefix is enough), or `latest` for the most recently active session.
         #[arg(value_name = "ID|latest")]
         session: String,
     },
 
     /// Print a session's rendered transcript. Accepts a session id or `latest`.
     Transcript {
+        /// Session id (a unique prefix is enough), or `latest` for the most recently active session.
         #[arg(value_name = "ID|latest")]
         session: String,
     },
@@ -79,12 +81,34 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
     let style = cmd.style.resolve();
     let mut client = AiClient::from_settings(settings).await?;
 
-    match cmd.cmd {
+    let result = match cmd.cmd {
         SubCmd::List => list(&mut client, style).await,
         SubCmd::Show { session } => show(&mut client, &session, style).await,
         SubCmd::Transcript { session } => transcript(&mut client, &session, style).await,
         SubCmd::Tail => tail(&mut client, style).await,
+    };
+
+    // A downstream reader that closes the pipe (e.g. `atuin ai session list | head`) makes the next
+    // write fail with BrokenPipe. That's a clean end of output, not an error, so swallow it rather
+    // than print a scary message and exit non-zero.
+    match result {
+        Err(err) if is_broken_pipe(&err) => Ok(()),
+        result => result,
     }
+}
+
+/// True when `err`'s cause chain is a broken-pipe I/O error, whether raised directly by a
+/// `write!`/`writeln!` or wrapped inside a `serde_json::to_writer` failure.
+fn is_broken_pipe(err: &eyre::Report) -> bool {
+    err.chain().any(|cause| {
+        if let Some(io) = cause.downcast_ref::<io::Error>() {
+            io.kind() == io::ErrorKind::BrokenPipe
+        } else if let Some(json) = cause.downcast_ref::<serde_json::Error>() {
+            json.io_error_kind() == Some(io::ErrorKind::BrokenPipe)
+        } else {
+            false
+        }
+    })
 }
 
 // --- subcommands --------------------------------------------------------------------------------
@@ -125,7 +149,7 @@ async fn list(client: &mut AiClient, style: Style) -> Result<()> {
                     harness_name(s.harness),
                     age(s.updated_at.as_ref()),
                     s.message_count,
-                    title_of(s),
+                    one_line(title_of(s), 80),
                 )?;
             }
         }
@@ -246,14 +270,14 @@ async fn tail(client: &mut AiClient, style: Style) -> Result<()> {
                     "+ session  {} {} {}",
                     short_id(&s.session_id),
                     harness_name(s.harness),
-                    title_of(s),
+                    one_line(title_of(s), 60),
                 )?,
                 tail_sessions_event::Event::SessionUpdated(s) => writeln!(
                     out,
                     "~ session  {} {} {} ({} msgs)",
                     short_id(&s.session_id),
                     harness_name(s.harness),
-                    title_of(s),
+                    one_line(title_of(s), 60),
                     s.message_count,
                 )?,
                 tail_sessions_event::Event::Message(m) => writeln!(
@@ -383,11 +407,18 @@ fn preview_of(content: &[agent::ContentBlock]) -> String {
             _ => None,
         })
         .unwrap_or("");
-    let one_line: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if one_line.chars().count() > 60 {
-        format!("{}…", one_line.chars().take(60).collect::<String>())
+    one_line(text, 60)
+}
+
+/// Collapse all whitespace (including embedded newlines) to single spaces and truncate to `max`
+/// characters with an ellipsis. Session titles/previews are captured from multi-line prompts, so the
+/// human table and `tail` views must flatten them or a single entry spills across many rows.
+fn one_line(text: &str, max: usize) -> String {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() > max {
+        format!("{}…", collapsed.chars().take(max).collect::<String>())
     } else {
-        one_line
+        collapsed
     }
 }
 
