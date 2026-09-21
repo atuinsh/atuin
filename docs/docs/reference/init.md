@@ -1,6 +1,6 @@
 # init
 
-## `atuin init <shell>`
+## `atuin init [shell]`
 
 Prints the shell plugin for the given shell. Evaluating its output is what
 installs Atuin's hooks and key bindings into your session, so this command
@@ -9,6 +9,15 @@ belongs in your shell's startup file rather than being run by hand.
 ```shell
 atuin init zsh
 ```
+
+If you give no shell, Atuin detects the current shell from its parent process:
+
+```shell
+atuin init
+```
+
+`atuin init auto` does the same thing. If detection fails, Atuin prints an error
+— name the shell explicitly in that case.
 
 See [installation](../guide/installation.md#installing-the-shell-plugin) for the
 exact line to add for your shell — the syntax differs between shells.

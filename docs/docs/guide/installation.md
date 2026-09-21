@@ -180,6 +180,12 @@ After installing, remember to restart your shell.
     echo 'eval "$(atuin init zsh)"' >> ~/.zshrc
     ```
 
+    Or let Atuin auto-detect your shell:
+
+    ```shell
+    echo 'eval "$(atuin init)"' >> ~/.zshrc
+    ```
+
     === "zinit"
 
         ```shell
@@ -209,6 +215,12 @@ After installing, remember to restart your shell.
 
         ```shell
         echo 'eval "$(atuin init bash)"' >> ~/.bashrc
+        ```
+
+        Or let Atuin auto-detect your shell:
+
+        ```shell
+        echo 'eval "$(atuin init)"' >> ~/.bashrc
         ```
 
     === "bash-preexec"
@@ -251,6 +263,12 @@ After installing, remember to restart your shell.
 
         ```shell
         echo 'eval "$(atuin init bash)"' >> ~/.bashrc
+        ```
+
+        Or let Atuin auto-detect your shell:
+
+        ```shell
+        echo 'eval "$(atuin init)"' >> ~/.bashrc
         ```
 
 === "fish"
