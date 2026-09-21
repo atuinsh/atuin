@@ -339,6 +339,7 @@ pub mod any;
 
 use crate::harnesstools::ccode::session::CcodeMessage;
 use crate::harnesstools::codex::session::CodexMessage;
+use crate::harnesstools::opencode::session::OpencodeMessage;
 use crate::harnesstools::pi::session::PiMessage;
 
 #[enum_dispatch(Message)]
@@ -346,5 +347,6 @@ use crate::harnesstools::pi::session::PiMessage;
 pub enum AnyMessage {
     Ccode(CcodeMessage),
     Codex(CodexMessage),
+    Opencode(OpencodeMessage),
     Pi(PiMessage),
 }

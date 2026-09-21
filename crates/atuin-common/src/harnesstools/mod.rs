@@ -102,8 +102,8 @@ impl AnyHarness {
         match self {
             Self::ClaudeCode(h) => Some(h.sessions().into()),
             Self::Codex(h) => Some(h.sessions().into()),
+            Self::Opencode(h) => Some(h.sessions().into()),
             Self::Pi(h) => Some(h.sessions().into()),
-            Self::Opencode(_) => None,
         }
     }
 }
@@ -115,11 +115,9 @@ mod tests {
     use super::*;
 
     #[rstest]
-    fn only_opencode_has_no_session_listener() {
+    fn every_harness_is_observable() {
         for harness in AnyHarness::all() {
-            let observable = harness.sessions().is_some();
-            let is_opencode = harness.name() == "opencode";
-            assert_eq!(observable, !is_opencode, "mismatch for {}", harness.name());
+            assert!(harness.sessions().is_some(), "{} is not observable", harness.name());
         }
     }
 }
