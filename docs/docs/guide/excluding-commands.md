@@ -158,7 +158,7 @@ all, guard the `atuin init` call in your shell config:
 ```shell
 # In .bashrc or .zshrc
 if [[ -z "${MY_TOOL_SESSION}" ]]; then
-    eval "$(atuin init bash)"
+    eval "$(atuin init)"
 fi
 ```
 
