@@ -29,7 +29,7 @@ atuin-vt100 = "0.19"
 ansi-to-tui = { version = "8", default-features = false }
 arboard = { version = "3", default-features = false }
 # held at 0.5: rusty_paserk 0.5.0 pins argon2 0.5; bumping would add a 2nd copy
-argon2 = "0.5"
+argon2 = "0.6"
 async-stream = "0.3"
 async-trait = "0.1"
 axoupdater = "0.10"
