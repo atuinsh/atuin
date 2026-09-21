@@ -36,7 +36,6 @@ axoupdater = "0.10"
 axum = "0.8"
 # held at 0.22: sqlx-postgres 0.9 pins base64 0.22; bumping would add a 2nd copy
 base64 = "0.22"
-bytes = "1"
 bytesize = { version = "2", features = ["serde"] }
 chrono = "0.4"
 chrono-humanize = "0.2"
