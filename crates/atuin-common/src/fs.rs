@@ -1,3 +1,6 @@
+pub mod tail;
+pub mod tree_watcher;
+
 use std::path::{Path, PathBuf};
 
 /// A path that is removed when this type is dropped.

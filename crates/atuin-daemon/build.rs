@@ -4,7 +4,13 @@ use std::{env, fs};
 use protox::prost::Message;
 
 fn main() -> std::io::Result<()> {
-    let proto_paths = ["proto/common.proto", "proto/history.proto", "proto/search.proto"];
+    let proto_paths = [
+        "proto/common.proto",
+        "proto/history.proto",
+        "proto/search.proto",
+        "proto/ai/agent.proto",
+        "proto/ai/session.proto",
+    ];
     let proto_include_dirs = ["proto"];
 
     let file_descriptors = protox::compile(proto_paths, proto_include_dirs).unwrap();
