@@ -247,6 +247,9 @@ async fn tail(client: &mut AiClient, style: Style) -> Result<()> {
     let mut sessions: HashMap<String, agent::Session> = HashMap::new();
     let mut active: Option<String> = None;
 
+    // Color only in the pretty (terminal) view, and never when NO_COLOR is set.
+    let color = matches!(style, Style::Pretty) && std::env::var_os("NO_COLOR").is_none();
+
     while let Some(event) = stream.next().await {
         let Some(event) = event?.event else {
             continue;
@@ -291,7 +294,7 @@ async fn tail(client: &mut AiClient, style: Style) -> Result<()> {
                         short_id(&m.session_id),
                         harness_name(m.harness),
                         role_name(m.role),
-                        summary,
+                        summary.render(false),
                     )?;
                 } else {
                     if active.as_deref() != Some(m.session_id.as_str()) {
@@ -301,17 +304,19 @@ async fn tail(client: &mut AiClient, style: Style) -> Result<()> {
                         writeln!(
                             out,
                             "{}",
-                            tail_header(&m.session_id, m.harness, sessions.get(&m.session_id))
+                            tail_header(
+                                &m.session_id,
+                                m.harness,
+                                sessions.get(&m.session_id),
+                                color
+                            )
                         )?;
                         active = Some(m.session_id.clone());
                     }
-                    writeln!(
-                        out,
-                        "  {}  {:<9}  {}",
-                        clock(m.timestamp.as_ref()),
-                        role_name(m.role),
-                        summary,
-                    )?;
+                    let time = paint(&clock(m.timestamp.as_ref()), Ansi::Dim, color);
+                    let role =
+                        paint(&format!("{:<9}", role_name(m.role)), role_color(m.role), color);
+                    writeln!(out, "  {time}  {role}  {}", summary.render(color))?;
                 }
             }
             tail_sessions_event::Event::Lagged(l) => {
@@ -423,9 +428,45 @@ fn title_of(s: &agent::Session) -> &str {
 
 const SUMMARY_WIDTH: usize = 80;
 
+/// The renderable essence of a message line, kept color-free so `message_summary` stays pure and
+/// testable; color is applied only in [`Summary::render`].
+enum Summary {
+    /// Prose: assistant/user text or thinking.
+    Text(String),
+    /// A tool invocation, by name.
+    ToolCall(String),
+    /// A tool result and whether it errored.
+    ToolResult {
+        is_error: bool,
+        body: String,
+    },
+}
+
+impl Summary {
+    /// The display string, with ANSI color when `color` is set.
+    fn render(&self, color: bool) -> String {
+        match self {
+            Self::Text(t) => t.clone(),
+            Self::ToolCall(name) => format!("{} {name}", paint("⚙", Ansi::Blue, color)),
+            Self::ToolResult { is_error, body } => {
+                let mark = if *is_error {
+                    paint("✗", Ansi::Red, color)
+                } else {
+                    paint("✓", Ansi::Green, color)
+                };
+                if body.is_empty() {
+                    mark
+                } else {
+                    format!("{mark} {body}")
+                }
+            }
+        }
+    }
+}
+
 /// A one-line summary of a message for the `tail` log, or `None` when the message carries nothing
 /// worth a line (meta/summary records with no renderable content) so the caller can skip it.
-fn message_summary(m: &agent::Message) -> Option<String> {
+fn message_summary(m: &agent::Message) -> Option<Summary> {
     for block in &m.content {
         match &block.block {
             Some(
@@ -433,23 +474,16 @@ fn message_summary(m: &agent::Message) -> Option<String> {
             ) => {
                 let line = one_line(t, SUMMARY_WIDTH);
                 if !line.is_empty() {
-                    return Some(line);
+                    return Some(Summary::Text(line));
                 }
             }
             Some(agent::content_block::Block::ToolCall(tc)) => {
-                return Some(format!("⚙ {}", tc.name));
+                return Some(Summary::ToolCall(tc.name.clone()));
             }
             Some(agent::content_block::Block::ToolResult(tr)) => {
-                let mark = if tr.is_error {
-                    "✗"
-                } else {
-                    "✓"
-                };
-                let body = one_line(&tr.content, SUMMARY_WIDTH);
-                return Some(if body.is_empty() {
-                    mark.to_owned()
-                } else {
-                    format!("{mark} {body}")
+                return Some(Summary::ToolResult {
+                    is_error: tr.is_error,
+                    body: one_line(&tr.content, SUMMARY_WIDTH),
                 });
             }
             None => {}
@@ -460,12 +494,20 @@ fn message_summary(m: &agent::Message) -> Option<String> {
 
 /// The session-group header line printed the first time a session appears in the pretty `tail`
 /// view and whenever the active session changes.
-fn tail_header(session_id: &str, harness: i32, session: Option<&agent::Session>) -> String {
+fn tail_header(
+    session_id: &str,
+    harness: i32,
+    session: Option<&agent::Session>,
+    color: bool,
+) -> String {
+    let bullet = paint("●", harness_color(harness), color);
+    let id = paint(short_id(session_id), Ansi::Bold, color);
+    let harness_label = paint(harness_name(harness), Ansi::Dim, color);
     let title = session.map(title_of).map(|t| one_line(t, SUMMARY_WIDTH)).unwrap_or_default();
     if title.is_empty() {
-        format!("● {} · {}", short_id(session_id), harness_name(harness))
+        format!("{bullet} {id} · {harness_label}")
     } else {
-        format!("● {} · {} · {}", short_id(session_id), harness_name(harness), title)
+        format!("{bullet} {id} · {harness_label} · {title}")
     }
 }
 
@@ -474,6 +516,67 @@ fn clock(ts: Option<&prost_types::Timestamp>) -> String {
     to_datetime(ts)
         .map(|dt| dt.with_timezone(&chrono::Local).format("%H:%M:%S").to_string())
         .unwrap_or_else(|| "--:--:--".to_owned())
+}
+
+// --- color --------------------------------------------------------------------------------------
+
+/// A minimal ANSI palette. `tail` uses raw codes rather than a dependency, applies them only in the
+/// pretty (terminal) view, and suppresses them when `NO_COLOR` is set.
+#[derive(Clone, Copy)]
+enum Ansi {
+    Dim,
+    Bold,
+    Red,
+    Green,
+    Yellow,
+    Blue,
+    Magenta,
+    Cyan,
+}
+
+impl Ansi {
+    fn code(self) -> &'static str {
+        match self {
+            Self::Dim => "2",
+            Self::Bold => "1",
+            Self::Red => "31",
+            Self::Green => "32",
+            Self::Yellow => "33",
+            Self::Blue => "34",
+            Self::Magenta => "35",
+            Self::Cyan => "36",
+        }
+    }
+}
+
+/// Wrap `text` in an ANSI style when `color` is set, otherwise return it unchanged.
+fn paint(text: &str, style: Ansi, color: bool) -> String {
+    if color {
+        format!("\x1b[{}m{text}\x1b[0m", style.code())
+    } else {
+        text.to_owned()
+    }
+}
+
+fn role_color(role: i32) -> Ansi {
+    match agent::Role::try_from(role) {
+        Ok(agent::Role::Assistant) => Ansi::Cyan,
+        Ok(agent::Role::User) => Ansi::Yellow,
+        Ok(agent::Role::System) => Ansi::Magenta,
+        Ok(agent::Role::Tool) => Ansi::Blue,
+        Ok(agent::Role::Unknown) | Err(_) => Ansi::Dim,
+    }
+}
+
+fn harness_color(harness: i32) -> Ansi {
+    match agent::HarnessKind::try_from(harness) {
+        Ok(agent::HarnessKind::ClaudeCode) => Ansi::Magenta,
+        Ok(agent::HarnessKind::Codex) => Ansi::Green,
+        Ok(agent::HarnessKind::Copilot) => Ansi::Blue,
+        Ok(agent::HarnessKind::Opencode) => Ansi::Cyan,
+        Ok(agent::HarnessKind::Pi) => Ansi::Yellow,
+        Ok(agent::HarnessKind::Unknown) | Err(_) => Ansi::Dim,
+    }
 }
 
 /// Collapse all whitespace (including embedded newlines) to single spaces and truncate to `max`
@@ -849,7 +952,7 @@ mod tests {
         let m = msg(agent::Role::Assistant, vec![agent::content_block::Block::Text(
             "hello world".to_owned(),
         )]);
-        assert_eq!(message_summary(&m).as_deref(), Some("hello world"));
+        assert_eq!(message_summary(&m).unwrap().render(false), "hello world");
     }
 
     #[rstest]
@@ -860,7 +963,7 @@ mod tests {
                 ..Default::default()
             },
         )]);
-        assert_eq!(message_summary(&m).as_deref(), Some("⚙ Edit"));
+        assert_eq!(message_summary(&m).unwrap().render(false), "⚙ Edit");
     }
 
     #[rstest]
@@ -879,7 +982,7 @@ mod tests {
                 ..Default::default()
             },
         )]);
-        assert_eq!(message_summary(&m).as_deref(), Some(expected));
+        assert_eq!(message_summary(&m).unwrap().render(false), expected);
     }
 
     #[rstest]
@@ -899,7 +1002,7 @@ mod tests {
                 ..Default::default()
             }),
         ]);
-        assert_eq!(message_summary(&m).as_deref(), Some("⚙ Bash"));
+        assert_eq!(message_summary(&m).unwrap().render(false), "⚙ Bash");
     }
 
     #[rstest]
@@ -907,7 +1010,7 @@ mod tests {
         let mut s = session(agent::HarnessKind::ClaudeCode, "abcdef0123456789");
         s.title = Some("My Session".to_owned());
         assert_eq!(
-            tail_header("abcdef0123456789", agent::HarnessKind::ClaudeCode as i32, Some(&s)),
+            tail_header("abcdef0123456789", agent::HarnessKind::ClaudeCode as i32, Some(&s), false),
             "● abcdef012345 · claude-code · My Session"
         );
     }
@@ -915,8 +1018,23 @@ mod tests {
     #[rstest]
     fn header_omits_title_when_absent() {
         assert_eq!(
-            tail_header("abcdef0123456789", agent::HarnessKind::ClaudeCode as i32, None),
+            tail_header("abcdef0123456789", agent::HarnessKind::ClaudeCode as i32, None, false),
             "● abcdef012345 · claude-code"
         );
+    }
+
+    #[rstest]
+    fn color_wraps_only_when_enabled() {
+        assert_eq!(paint("x", Ansi::Dim, false), "x");
+        assert_eq!(paint("x", Ansi::Dim, true), "\u{1b}[2mx\u{1b}[0m");
+
+        let err = Summary::ToolResult {
+            is_error: true,
+            body: "boom".to_owned(),
+        };
+        assert_eq!(err.render(false), "✗ boom");
+        let painted = err.render(true);
+        assert!(painted.contains("\u{1b}[31m"), "error mark should be red");
+        assert!(painted.ends_with("boom"), "body stays uncolored");
     }
 }
