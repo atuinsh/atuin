@@ -288,14 +288,14 @@ jobs:
         with:
           tool: cargo-nextest
 
-      - uses: actions/cache@v6
+      # rust-cache (not raw actions/cache) because it cleans stale target/
+      # artifacts before every save, so the cache can't accrete unboundedly.
+      # A restored target/ under the old actions/cache had grown to 71 GB,
+      # filling the runner root disk and crashing the worker with ENOSPC. It
+      # also caches selectively and keys on the lockfile + rustc version.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-             ~/.cargo/git
-             target
-          key: ${{ runner.os }}-cargo-integration-test-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
-          restore-keys: ${{ runner.os }}-cargo-integration-test-
+          key: integration-test
 
       - name: Report disk space (after cache restore)
         # Telemetry for the intermittent "No space left on device" runner crash.
