@@ -4,7 +4,8 @@
 //! streams typed row changes as some other process commits to it (it detects cross-process commits
 //! via `PRAGMA data_version`). Two regimes are available:
 //!
-//! - [`SqliteObserver::append`] tails newly-inserted rows via a monotonic cursor column.
+//! - [`SqliteObserver::append`] tails newly-inserted rows via a unique, strictly increasing cursor
+//!   column (see [`Tailable`]).
 //! - [`SqliteObserver::mutate`] reports inserts, updates and deletes by diffing successive
 //!   whole-table snapshots. It rescans the table on every change, so prefer it for bounded tables.
 //!

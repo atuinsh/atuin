@@ -410,6 +410,32 @@ mod tests {
     }
 
     #[rstest]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn append_replay_all_crosses_page_boundary() {
+        // Replay::All drains pre-existing rows one PAGE_SIZE page at a time; a table larger than a
+        // page must still emit every row across the boundary.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db.sqlite");
+        let db = writer(dir.path()).await;
+        let n = i64::try_from(PAGE_SIZE).unwrap() + 76;
+        query::<sqlx::Sqlite>(
+            "INSERT INTO items (id, name) WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + \
+             1 FROM seq WHERE n < ?1) SELECT n, 'x' FROM seq",
+        )
+        .bind(n)
+        .execute(&mut *db.pool().acquire().await.unwrap())
+        .await
+        .unwrap();
+
+        let observer = SqliteObserver::new(&path);
+        let stream = observer.append::<Item>(cfg(Replay::All)).await.unwrap();
+
+        let got: Vec<i64> =
+            stream.take(usize::try_from(n).unwrap()).map(|r| r.unwrap().0.id).collect().await;
+        assert_eq!(got, (1..=n).collect::<Vec<_>>());
+    }
+
+    #[rstest]
     #[case::from_now(Replay::FromNow, vec![item(3, "c")])]
     #[case::all(Replay::All, vec![item(1, "a"), item(2, "b"), item(3, "c")])]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

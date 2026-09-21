@@ -32,6 +32,13 @@ impl<C> Cursor for C where
 {
 }
 
+/// A table whose newly-inserted rows can be tailed in commit order.
+///
+/// [`CURSOR_COLUMN`](Self::CURSOR_COLUMN) must be **unique and strictly increasing** — every insert
+/// takes a larger value than any existing row (`rowid`, the default, and `AUTOINCREMENT` integer
+/// keys satisfy this). The tail resumes each page with `WHERE cursor > last_delivered`, so a
+/// repeated value is dropped at a page boundary and a non-increasing one is skipped entirely; a
+/// timestamp or other non-unique column is not a valid cursor.
 pub trait Tailable: TableSchema {
     type Cursor: Cursor;
     const CURSOR_COLUMN: &'static str = "rowid";
