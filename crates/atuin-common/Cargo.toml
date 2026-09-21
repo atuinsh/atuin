@@ -17,7 +17,7 @@ ansi = ["dep:atuin-vt100"]
 db = ["dep:sqlx"]
 os = ["dep:rustix"]
 proto = ["dep:prost"]
-sqlite = ["db", "sqlx/sqlite", "sqlx/regexp", "dep:libsqlite3-sys", "dep:tokio-util"]
+sqlite = ["db", "sqlx/sqlite", "sqlx/regexp", "dep:libsqlite3-sys", "dep:tokio-util", "dep:strum", "dep:strum_macros"]
 test-utils = ["dep:tracing-subscriber"]
 unicode = ["dep:unicode-width", "dep:unicode-segmentation"]
 
@@ -56,6 +56,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
 sqlx = { workspace = true, optional = true }
+strum = { workspace = true, optional = true }
+strum_macros = { workspace = true, optional = true }
 sysinfo = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true, features = ["formatting", "parsing"] }
