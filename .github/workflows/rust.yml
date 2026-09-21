@@ -54,19 +54,15 @@ jobs:
         with:
           toolchain: 1.98.0
 
-      # sccache stores compiled objects in Depot's managed cache over WebDAV
-      # (endpoint pre-injected on Depot runners), so target/ is built fresh each
-      # run and never accretes on the runner disk. Only the small cargo source
-      # cache is kept locally.
+      # rust-cache restores a warm, bounded target/ so cargo skips unchanged
+      # crates; sccache (RUSTC_WRAPPER, env) then serves the crates that DO
+      # compile -- cold, new-branch, or changed -- from Depot's cross-branch
+      # WebDAV cache. rust-cache also caches ~/.cargo and cleans stale target/
+      # artifacts, so the disk stays bounded.
       - uses: mozilla-actions/sccache-action@v0.0.9
-
-      - uses: actions/cache@v6
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-release-registry-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
-          restore-keys: ${{ runner.os }}-cargo-release-registry-
+          key: build
 
       - name: Run cargo build (release)
         run: cargo build --workspace --locked --release
@@ -139,15 +135,12 @@ jobs:
         with:
           tool: cargo-nextest
 
+      # rust-cache (warm target skip) + sccache (serves compiled crates from
+      # Depot's cross-branch cache); see the build job.
       - uses: mozilla-actions/sccache-action@v0.0.9
-
-      - uses: actions/cache@v6
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-unit-test-registry-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
-          restore-keys: ${{ runner.os }}-cargo-unit-test-registry-
+          key: unit-test
 
       - name: Run cargo test
         run: cargo nextest run --lib --bins
@@ -304,21 +297,14 @@ jobs:
         with:
           tool: cargo-nextest
 
-      # sccache stores compiled objects in Depot's managed cache over WebDAV
-      # (endpoint pre-injected on Depot runners), keeping the compilation cache
-      # OFF the runner root disk -- target/ is built fresh each run and never
-      # accretes (the accreted target/ is what crashed the runner with ENOSPC).
+      # rust-cache (warm target skip) + sccache (serves compiled crates from
+      # Depot's cross-branch cache); see the build job. rust-cache cleans stale
+      # target/ artifacts, so it can't re-accrete the 71 GB that once crashed
+      # the runner with ENOSPC.
       - uses: mozilla-actions/sccache-action@v0.0.9
-
-      # Only the small, bounded cargo source cache is kept locally; target/ is
-      # deliberately NOT cached -- sccache repopulates it fast from the remote.
-      - uses: actions/cache@v6
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-sccache-registry-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
-          restore-keys: ${{ runner.os }}-cargo-sccache-registry-
+          key: integration-test
 
       - name: Report disk space (after cache restore)
         # Telemetry for the intermittent "No space left on device" runner crash.
@@ -435,15 +421,12 @@ jobs:
         with:
           tool: cargo-nextest
 
+      # rust-cache (warm target skip) + sccache (serves compiled crates from
+      # Depot's cross-branch cache); see the build job.
       - uses: mozilla-actions/sccache-action@v0.0.9
-
-      - uses: actions/cache@v6
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-e2e-registry-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
-          restore-keys: ${{ runner.os }}-cargo-e2e-registry-
+          key: e2e
 
       - name: Run fresh-install and PTY e2e tests
         run: cargo nextest run -p atuin --test 'e2e_*'
