@@ -5,6 +5,7 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::Duration;
 
+use atuin_client::ai_session::{AiSessionDatabase, AiSessionStore};
 use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sync::{ClientSource, SyncError as ClientSyncError, SyncSession};
 use atuin_client::settings::Settings;
@@ -33,6 +34,8 @@ pub struct Worker {
     handle: DaemonHandle,
     index: Arc<RwLock<SearchIndex>>,
     history_store: HistoryStore,
+    ai_session_store: AiSessionStore,
+    ai_session_db: Option<AiSessionDatabase>,
 }
 
 /// Errors that prevent the sync worker from starting.
@@ -79,6 +82,7 @@ impl Worker {
     pub async fn new(
         handle: DaemonHandle,
         index: Arc<RwLock<SearchIndex>>,
+        ai_session_db: Option<AiSessionDatabase>,
     ) -> Result<Self, StartError> {
         let host_id = Settings::host_id().await.map_err(StartError::HostId)?;
 
@@ -87,11 +91,18 @@ impl Worker {
         //                      us having the concept of a "store bundle".
         let history_store =
             HistoryStore::new(handle.store().clone(), host_id, encryption_key.clone());
+        let ai_session_store = AiSessionStore::builder()
+            .store(handle.store().clone())
+            .host_id(host_id)
+            .key(encryption_key.clone())
+            .build();
 
         Ok(Self {
             handle,
             index,
             history_store,
+            ai_session_store,
+            ai_session_db,
         })
     }
 
@@ -172,7 +183,16 @@ impl Worker {
             "sync complete"
         );
 
-        self.index_downloaded_records(&downloaded_records).await;
+        let history_build = self.index_downloaded_records(&downloaded_records);
+
+        let ai_session_build = async {
+            let Some(ai_session_db) = &self.ai_session_db else {
+                return;
+            };
+            self.ai_session_store.incremental_build(ai_session_db, &downloaded_records).await;
+        };
+
+        tokio::join!(history_build, ai_session_build);
 
         // Store sync time
         if let Err(e) = Settings::save_sync_time().await {

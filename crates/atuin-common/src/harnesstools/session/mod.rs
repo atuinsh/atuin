@@ -5,8 +5,8 @@ use enum_dispatch::enum_dispatch;
 pub use error::{CaptureError, MessageError, RuntimeError, WatchError};
 use futures::{Stream, StreamExt};
 pub use model::{
-    Content, MessageId, Role, SessionEvent, SessionEventKind, SessionId, ToolCallId, ToolResult,
-    ToolUse,
+    Content, MessageId, Role, SessionEvent, SessionEventKind, SessionId, SessionMeta, StopReason,
+    ToolCallId, ToolResult, ToolUse, Usage,
 };
 use time::OffsetDateTime;
 
@@ -16,6 +16,21 @@ pub trait Message: Send + 'static {
     fn role(&self) -> Role;
     fn timestamp(&self) -> Option<OffsetDateTime>;
     fn content(&self) -> Vec<Content>;
+    fn model(&self) -> Option<String> {
+        None
+    }
+    fn usage(&self) -> Option<Usage> {
+        None
+    }
+    fn stop_reason(&self) -> Option<StopReason> {
+        None
+    }
+    fn cwd(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+    fn git_branch(&self) -> Option<String> {
+        None
+    }
 }
 
 pub trait Session: Send + 'static {
@@ -23,6 +38,9 @@ pub trait Session: Send + 'static {
 
     fn id(&self) -> SessionId;
     fn messages(self) -> impl Stream<Item = Result<Self::Message, MessageError>> + Send + 'static;
+    fn meta(&self) -> impl std::future::Future<Output = Result<SessionMeta, MessageError>> + Send {
+        async { Ok(SessionMeta::default()) }
+    }
 }
 
 pub trait Listener {
@@ -52,7 +70,8 @@ pub trait Listener {
                     appeared = sessions.next(), if !sessions_done => match appeared {
                         Some(Ok(session)) => {
                             let id = session.id();
-                            yield Ok(SessionEvent::started(id.clone()));
+                            let meta = session.meta().await.unwrap_or_default();
+                            yield Ok(SessionEvent::started(id.clone(), meta));
                             let tagged =
                                 session.messages().map(move |message| (id.clone(), message)).boxed();
                             active.push(tagged);

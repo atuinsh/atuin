@@ -233,7 +233,7 @@ use crate::history_journal::HistoryJournal;
 /// **Note that you should never change the `Shutdown` and `Status` RPCs as they do not have the
 /// protocol version guards.** They are **assumed** to be stable and if you want to modify them, you
 /// **must** use the `reserved` keyword.
-const DAEMON_PROTOCOL_VERSION: u32 = 3;
+const DAEMON_PROTOCOL_VERSION: u32 = 4;
 
 /// The History gRPC service.
 ///

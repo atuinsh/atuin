@@ -6,10 +6,11 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use typed_builder::TypedBuilder;
 
+use crate::fs::tail::{Anchor, ReadMode, Tail};
 use crate::fs::tree_watcher::{NodeContext, TreeWatcher};
 use crate::harnesstools::codex::Codex;
 use crate::harnesstools::session::model::{
-    Content, MessageId, Role, ToolCallId, ToolResult, ToolUse,
+    Content, MessageId, Role, SessionMeta, ToolCallId, ToolResult, ToolUse, Usage,
 };
 use crate::harnesstools::session::{
     Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId, Sessions,
@@ -130,6 +131,23 @@ impl Session for CodexSession {
     fn messages(self) -> impl Stream<Item = Result<CodexMessage, MessageError>> + Send + 'static {
         jsonl::tail::from_path::<CodexMessage>(self.path).map_err(MessageError::from)
     }
+
+    fn meta(&self) -> impl std::future::Future<Output = Result<SessionMeta, MessageError>> + Send {
+        let path = self.path.clone();
+        async move {
+            let tail = Tail::builder().path(path).read(ReadMode::Once(Anchor::Beginning)).build();
+            let messages: Vec<CodexMessage> =
+                jsonl::tail::from_tail(tail).map_err(MessageError::from).try_collect().await?;
+            let cwd = messages.iter().find_map(Message::cwd);
+            let model = messages.iter().find_map(Message::model);
+            Ok(SessionMeta {
+                cwd,
+                git_branch: None,
+                model,
+                title: None,
+            })
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -153,9 +171,12 @@ impl CodexMessage {
 
 impl Message for CodexMessage {
     fn id(&self) -> Option<MessageId> {
+        // Prefer the per-record `id` (ctc_/ctco_/msg_...) over `call_id`: a tool call and its
+        // output share one `call_id`, so keying identity on it would collide the two records and
+        // the dedup gate would drop the output. `call_id` linkage lives in the content, not here.
         self.payload
             .as_ref()
-            .and_then(|p| p["call_id"].as_str().or_else(|| p["id"].as_str()))
+            .and_then(|p| p["id"].as_str().or_else(|| p["call_id"].as_str()))
             .map(|s| MessageId::from(s.to_owned()))
     }
 
@@ -164,6 +185,7 @@ impl Message for CodexMessage {
         match payload.and_then(|p| p["type"].as_str()) {
             Some("function_call" | "custom_tool_call") => Role::Assistant,
             Some("function_call_output" | "custom_tool_call_output") => Role::Tool,
+            Some("reasoning") => Role::Assistant,
             _ => match payload.and_then(|p| p["role"].as_str()).unwrap_or(self.kind.as_str()) {
                 "user" => Role::User,
                 "assistant" => Role::Assistant,
@@ -209,6 +231,27 @@ impl Message for CodexMessage {
             },
         }
     }
+
+    fn model(&self) -> Option<String> {
+        self.payload.as_ref()?.get("model")?.as_str().map(str::to_owned)
+    }
+
+    fn usage(&self) -> Option<Usage> {
+        let usage = self.payload.as_ref()?.get("usage")?;
+        if usage.is_null() {
+            return None;
+        }
+        Some(Usage {
+            input: usage.get("input_tokens").and_then(serde_json::Value::as_u64),
+            output: usage.get("output_tokens").and_then(serde_json::Value::as_u64),
+            cache_read: usage.get("cached_input_tokens").and_then(serde_json::Value::as_u64),
+            cache_write: usage.get("cache_write_input_tokens").and_then(serde_json::Value::as_u64),
+        })
+    }
+
+    fn cwd(&self) -> Option<PathBuf> {
+        self.payload.as_ref()?.get("cwd")?.as_str().map(PathBuf::from)
+    }
 }
 
 #[cfg(test)]
@@ -237,6 +280,58 @@ mod tests {
         let m: CodexMessage = serde_json::from_str(&raw).unwrap();
         assert_eq!(m.role(), Role::Assistant);
         assert_eq!(m.content(), vec![Content::Text("done".into())]);
+    }
+
+    #[rstest]
+    fn turn_context_exposes_model_and_cwd() {
+        let raw = serde_json::json!({
+            "type": "turn_context",
+            "payload": {"model": "gpt-5.6-terra", "effort": "medium", "cwd": "/work/atuin"},
+        })
+        .to_string();
+        let m: CodexMessage = serde_json::from_str(&raw).unwrap();
+        assert_eq!(m.model(), Some("gpt-5.6-terra".to_owned()));
+        assert_eq!(m.cwd(), Some(PathBuf::from("/work/atuin")));
+    }
+
+    #[rstest]
+    fn token_usage_record_exposes_usage() {
+        let raw = serde_json::json!({
+            "type": "token_usage_record",
+            "payload": {
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "cached_input_tokens": 20,
+                    "cache_write_input_tokens": 0,
+                },
+            },
+        })
+        .to_string();
+        let m: CodexMessage = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            m.usage(),
+            Some(Usage {
+                input: Some(100),
+                output: Some(50),
+                cache_read: Some(20),
+                cache_write: Some(0)
+            })
+        );
+    }
+
+    #[rstest]
+    fn enrichment_is_none_when_the_harness_did_not_provide_it() {
+        let raw = serde_json::json!({
+            "type": "response_item",
+            "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "hi"}]},
+        })
+        .to_string();
+        let m: CodexMessage = serde_json::from_str(&raw).unwrap();
+        assert_eq!(m.model(), None);
+        assert_eq!(m.usage(), None);
+        assert_eq!(m.stop_reason(), None);
+        assert_eq!(m.git_branch(), None);
     }
 
     #[rstest]
@@ -281,6 +376,25 @@ mod tests {
     }
 
     #[rstest]
+    fn tool_call_and_output_have_distinct_ids_despite_shared_call_id() {
+        let call = serde_json::json!({
+            "type": "response_item",
+            "payload": {"type": "custom_tool_call", "id": "ctc_1", "call_id": "call_x", "name": "sh", "input": "ls"},
+        })
+        .to_string();
+        let output = serde_json::json!({
+            "type": "response_item",
+            "payload": {"type": "custom_tool_call_output", "id": "ctco_1", "call_id": "call_x", "output": "files"},
+        })
+        .to_string();
+        let call: CodexMessage = serde_json::from_str(&call).unwrap();
+        let output: CodexMessage = serde_json::from_str(&output).unwrap();
+        assert_ne!(call.id(), output.id(), "call and its output must not share a source id");
+        assert_eq!(call.id(), Some(MessageId::from("ctc_1".to_owned())));
+        assert_eq!(output.id(), Some(MessageId::from("ctco_1".to_owned())));
+    }
+
+    #[rstest]
     fn listener_reports_not_found_for_a_missing_root() {
         let sessions = CodexSessions::builder().root(PathBuf::from("/no/such/codex")).build();
         assert!(matches!(sessions.listener(), Err(RuntimeError::NotFound(_))));
@@ -309,6 +423,34 @@ mod tests {
         let roles: Vec<Role> =
             session.messages().take(2).map_ok(|m| m.role()).try_collect().await.unwrap();
         assert_eq!(roles.last(), Some(&Role::User));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn meta_reads_cwd_from_session_meta_and_model_from_turn_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout-2026-09-18-th1.jsonl");
+        let body = [
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": {"id": "th1", "cwd": "/work/atuin"},
+            })
+            .to_string(),
+            serde_json::json!({
+                "type": "turn_context",
+                "payload": {"model": "gpt-5.6-terra", "cwd": "/work/atuin"},
+            })
+            .to_string(),
+        ]
+        .join("\n")
+            + "\n";
+        std::fs::write(&path, body).unwrap();
+
+        let session = CodexSession::open(SessionId::from("th1".to_owned()), path);
+        let meta = session.meta().await.unwrap();
+        assert_eq!(meta.cwd, Some(PathBuf::from("/work/atuin")));
+        assert_eq!(meta.model, Some("gpt-5.6-terra".to_owned()));
+        assert_eq!(meta.git_branch, None);
     }
 
     #[rstest]
