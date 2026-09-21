@@ -10,8 +10,9 @@
 //!
 //! A row type implements [`TableSchema`] (its table name and explicit column list) plus
 //! [`Tailable`] (for `append`) or [`Diffable`] (for `mutate`). Each observer owns its own
-//! connection and background task; the returned [`SqliteTableObserver`] is a `Stream` of `Result<_,
-//! `[`ObserveError`]`>`, and dropping it stops the task.
+//! connection; the returned [`SqliteTableObserver`] is a self-driving `Stream` of `Result<_,
+//! `[`ObserveError`]`>` that polls the source only while it is consumed (so backpressure is
+//! intrinsic), and dropping it releases the connection and stops observing.
 //!
 //! # Examples
 //!

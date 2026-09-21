@@ -13,6 +13,10 @@ use super::{ObserveConfig, ObserveError, Replay};
 
 const PAGE_SIZE: usize = 1024;
 
+fn quote_ident(ident: &str) -> String {
+    format!("\"{}\"", ident.replace('"', "\"\""))
+}
+
 pub(super) struct Batch<E> {
     events: Vec<E>,
     drained: bool,
@@ -54,7 +58,11 @@ impl<T: Tailable> Strategy for AppendStrategy<T> {
         self.cursor = match replay {
             Replay::All => None,
             Replay::FromNow => {
-                let sql = format!("SELECT max({}) FROM {}", T::CURSOR_COLUMN, T::TABLE);
+                let sql = format!(
+                    "SELECT max({}) FROM {}",
+                    quote_ident(T::CURSOR_COLUMN),
+                    quote_ident(T::TABLE)
+                );
                 crate::db::query_scalar::<Sqlite, Option<T::Cursor>>(AssertSqlSafe(sql))
                     .fetch_one(conn)
                     .await?
@@ -67,20 +75,16 @@ impl<T: Tailable> Strategy for AppendStrategy<T> {
         &mut self,
         conn: &mut SqliteConnection,
     ) -> Result<Batch<Self::Event>, sqlx::Error> {
-        let cols = T::COLUMNS.join(", ");
+        let cols = T::COLUMNS.iter().map(|&c| quote_ident(c)).collect::<Vec<_>>().join(", ");
+        let table = quote_ident(T::TABLE);
+        let cursor_col = quote_ident(T::CURSOR_COLUMN);
         let sql = match self.cursor {
             Some(_) => format!(
-                "SELECT {cols} FROM {} WHERE {} > ?1 ORDER BY {} ASC LIMIT {PAGE_SIZE}",
-                T::TABLE,
-                T::CURSOR_COLUMN,
-                T::CURSOR_COLUMN
+                "SELECT {cols} FROM {table} WHERE {cursor_col} > ?1 ORDER BY {cursor_col} ASC \
+                 LIMIT {PAGE_SIZE}"
             ),
             None => {
-                format!(
-                    "SELECT {cols} FROM {} ORDER BY {} ASC LIMIT {PAGE_SIZE}",
-                    T::TABLE,
-                    T::CURSOR_COLUMN
-                )
+                format!("SELECT {cols} FROM {table} ORDER BY {cursor_col} ASC LIMIT {PAGE_SIZE}")
             }
         };
 
@@ -178,8 +182,8 @@ pub(super) fn run<S: Strategy>(
 }
 
 async fn fetch_all<T: TableSchema>(conn: &mut SqliteConnection) -> Result<Vec<T>, sqlx::Error> {
-    let cols = T::COLUMNS.join(", ");
-    let sql = format!("SELECT {cols} FROM {}", T::TABLE);
+    let cols = T::COLUMNS.iter().map(|&c| quote_ident(c)).collect::<Vec<_>>().join(", ");
+    let sql = format!("SELECT {cols} FROM {}", quote_ident(T::TABLE));
     crate::db::query_as::<Sqlite, T>(AssertSqlSafe(sql)).fetch_all(conn).await
 }
 
@@ -278,6 +282,24 @@ mod tests {
         }
     }
 
+    // A schema whose table and cursor column are SQLite keywords, exercising identifier quoting.
+    #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+    struct Reserved {
+        id: i64,
+        order: i64,
+    }
+    impl TableSchema for Reserved {
+        const TABLE: &'static str = "transaction";
+        const COLUMNS: &'static [&'static str] = &["id", "order"];
+    }
+    impl Tailable for Reserved {
+        type Cursor = i64;
+        const CURSOR_COLUMN: &'static str = "order";
+        fn cursor(&self) -> i64 {
+            self.order
+        }
+    }
+
     async fn writer(dir: &std::path::Path) -> Sqlite {
         let sqlite = Sqlite::builder(dir.join("db.sqlite").as_os_str()).open().await.unwrap();
         let mut conn = sqlite.pool().acquire().await.unwrap();
@@ -359,6 +381,32 @@ mod tests {
 
         let got: Vec<Item> = stream.take(3).map(|r| r.unwrap().0).collect().await;
         assert_eq!(got, vec![item(1, "a"), item(2, "b"), item(3, "c")]);
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn append_tails_reserved_word_identifiers() {
+        if !sqlite3_available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db.sqlite");
+        let db = Sqlite::builder(path.as_os_str()).open().await.unwrap();
+        query::<sqlx::Sqlite>(
+            r#"CREATE TABLE "transaction" ("id" INTEGER PRIMARY KEY, "order" INTEGER NOT NULL)"#,
+        )
+        .execute(&mut *db.pool().acquire().await.unwrap())
+        .await
+        .unwrap();
+
+        let observer = SqliteObserver::new(&path);
+        let stream = observer.append::<Reserved>(cfg(Replay::FromNow)).await.unwrap();
+
+        exec_sql(&path, r#"INSERT INTO "transaction" ("id", "order") VALUES (1, 10), (2, 20);"#)
+            .await;
+
+        let got: Vec<i64> = stream.take(2).map(|r| r.unwrap().0.order).collect().await;
+        assert_eq!(got, vec![10, 20]);
     }
 
     #[rstest]
