@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use futures::{Stream, StreamExt};
 use time::OffsetDateTime;
@@ -23,6 +24,8 @@ use crate::utils::{env_nonempty, home_dir};
 pub struct OpencodeSessions {
     #[builder(default, setter(strip_option, into))]
     db: Option<PathBuf>,
+    #[builder(default = Replay::All)]
+    replay: Replay,
 }
 
 impl OpencodeSessions {
@@ -33,7 +36,18 @@ impl OpencodeSessions {
             .join("opencode")
     }
 
-    fn newest_db(data: &Path) -> Option<PathBuf> {
+    fn wal_recency(path: &Path) -> Option<SystemTime> {
+        let mtime = |p: &Path| std::fs::metadata(p).ok()?.modified().ok();
+        let mut newest = mtime(path);
+        for suffix in ["-wal", "-shm"] {
+            let mut name = path.as_os_str().to_owned();
+            name.push(suffix);
+            newest = newest.max(mtime(Path::new(&name)));
+        }
+        newest
+    }
+
+    fn discover(data: &Path) -> Option<PathBuf> {
         std::fs::read_dir(data)
             .ok()?
             .filter_map(Result::ok)
@@ -42,9 +56,8 @@ impl OpencodeSessions {
                 let name = name.to_string_lossy();
                 name.starts_with("opencode") && name.ends_with(".db")
             })
-            .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
-            .max_by_key(|(mtime, _)| *mtime)
-            .map(|(_, path)| path)
+            .map(|entry| entry.path())
+            .max_by_key(|path| Self::wal_recency(path))
     }
 
     fn resolve_db(&self) -> Option<PathBuf> {
@@ -63,11 +76,12 @@ impl OpencodeSessions {
                 data.join(path)
             });
         }
-        let default = data.join("opencode.db");
-        if default.exists() {
-            return Some(default);
+        if env_nonempty("OPENCODE_DISABLE_CHANNEL_DB")
+            .is_some_and(|v| matches!(v.to_str(), Some("1" | "true")))
+        {
+            return Some(data.join("opencode.db"));
         }
-        Some(Self::newest_db(&data).unwrap_or(default))
+        Some(Self::discover(&data).unwrap_or_else(|| data.join("opencode.db")))
     }
 }
 
@@ -76,7 +90,10 @@ impl Sessions for OpencodeSessions {
 
     fn listener(&self) -> Result<OpencodeListener, RuntimeError> {
         match self.resolve_db() {
-            Some(db) if db.is_file() => Ok(OpencodeListener { db }),
+            Some(db) if db.is_file() => Ok(OpencodeListener {
+                db,
+                replay: self.replay,
+            }),
             Some(db) => Err(RuntimeError::NotFound(db)),
             None => Err(RuntimeError::NotFound(Self::data_dir())),
         }
@@ -94,37 +111,46 @@ impl Observable for Opencode {
 #[derive(Debug, Clone)]
 pub struct OpencodeListener {
     db: PathBuf,
+    replay: Replay,
 }
+
+const DEMUX_CAP: usize = 64;
 
 impl Listener for OpencodeListener {
     type Session = OpencodeSession;
 
     fn watch(self) -> impl Stream<Item = Result<OpencodeSession, WatchError>> + Send + 'static {
         let db = self.db;
+        let replay = self.replay;
         async_stream::try_stream! {
             let observer = SqliteObserver::new(&db);
             let mut events =
-                observer.append::<EventRow>(ObserveConfig::builder().replay(Replay::All).build()).await?;
-            let mut senders: HashMap<SessionId, flume::Sender<EventRow>> = HashMap::new();
+                observer.append::<EventRow>(ObserveConfig::builder().replay(replay).build()).await?;
+            let mut live: HashMap<String, flume::Sender<EventRow>> = HashMap::new();
             while let Some(next) = events.next().await {
                 let Appended(row) = next?;
-                let id = SessionId::from(row.aggregate_id.clone());
-                if let Some(tx) = senders.get(&id) {
-                    if tx.send(row).is_err() {
-                        senders.remove(&id);
+                let kind = EventRow::classify(&row.kind);
+                if let Some(tx) = live.get(row.aggregate_id.as_str()) {
+                    if kind.forwarded()
+                        && let Err(flume::SendError(row)) = tx.send_async(row).await
+                    {
+                        live.remove(row.aggregate_id.as_str());
                     }
                 } else {
-                    let (tx, rx) = flume::unbounded();
-                    let _ = tx.send(row);
-                    senders.insert(id.clone(), tx);
-                    yield OpencodeSession { id, events: rx };
+                    let id = row.aggregate_id.clone();
+                    let (tx, rx) = flume::bounded(DEMUX_CAP);
+                    if kind.forwarded() {
+                        let _ = tx.send(row);
+                    }
+                    live.insert(id.clone(), tx);
+                    yield OpencodeSession { id: SessionId::from(id), events: rx };
                 }
             }
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct OpencodeSession {
     id: SessionId,
     events: flume::Receiver<EventRow>,
@@ -144,6 +170,10 @@ impl Session for OpencodeSession {
         async_stream::stream! {
             let mut roles: HashMap<String, Role> = HashMap::new();
             while let Ok(row) = events.recv_async().await {
+                let kind = EventRow::classify(&row.kind);
+                if matches!(kind, EventKind::Ignored) {
+                    continue;
+                }
                 let mut data: serde_json::Value = match serde_json::from_str(&row.data) {
                     Ok(data) => data,
                     Err(err) => {
@@ -151,8 +181,8 @@ impl Session for OpencodeSession {
                         continue;
                     }
                 };
-                match EventRow::base_type(&row.kind) {
-                    "message.updated" => {
+                match kind {
+                    EventKind::Role => {
                         let info = &data["info"];
                         if let Some(id) = info["id"].as_str() {
                             roles.insert(
@@ -161,23 +191,41 @@ impl Session for OpencodeSession {
                             );
                         }
                     }
-                    "message.part.updated" => {
+                    EventKind::Part => {
+                        let time = data["time"].as_i64();
                         let part = data["part"].take();
                         let role = part["messageID"]
                             .as_str()
                             .and_then(|id| roles.get(id).cloned())
                             .unwrap_or(Role::Assistant);
-                        let time = data["time"].as_i64();
-                        yield Ok(OpencodeMessage { role, part, time });
+                        yield Ok(OpencodeMessage::part(role, part, time));
                     }
-                    _ => {}
+                    EventKind::Unmapped => {
+                        let time = data["time"].as_i64();
+                        yield Ok(OpencodeMessage::raw(data, time));
+                    }
+                    EventKind::Ignored => {}
                 }
             }
         }
     }
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Clone, Copy, PartialEq)]
+enum EventKind {
+    Role,
+    Part,
+    Unmapped,
+    Ignored,
+}
+
+impl EventKind {
+    const fn forwarded(self) -> bool {
+        matches!(self, Self::Role | Self::Part | Self::Unmapped)
+    }
+}
+
+#[derive(Clone, sqlx::FromRow)]
 struct EventRow {
     rowid: i64,
     aggregate_id: String,
@@ -187,10 +235,14 @@ struct EventRow {
 }
 
 impl EventRow {
-    fn base_type(kind: &str) -> &str {
-        match kind.rsplit_once('.') {
-            Some((head, tail)) if tail.parse::<i64>().is_ok() => head,
-            _ => kind,
+    fn classify(kind: &str) -> EventKind {
+        match kind {
+            "message.updated.1" => EventKind::Role,
+            "message.part.updated.1" => EventKind::Part,
+            k if k.starts_with("session.next.") => EventKind::Unmapped,
+            k if k.starts_with("message.updated.") => EventKind::Unmapped,
+            k if k.starts_with("message.part.updated.") => EventKind::Unmapped,
+            _ => EventKind::Ignored,
         }
     }
 }
@@ -215,6 +267,18 @@ pub struct OpencodeMessage {
 }
 
 impl OpencodeMessage {
+    fn part(role: Role, part: serde_json::Value, time: Option<i64>) -> Self {
+        Self { role, part, time }
+    }
+
+    fn raw(data: serde_json::Value, time: Option<i64>) -> Self {
+        Self {
+            role: Role::Assistant,
+            part: data,
+            time,
+        }
+    }
+
     fn role_of(role: &str) -> Role {
         match role {
             "user" => Role::User,
@@ -261,16 +325,12 @@ impl Message for OpencodeMessage {
                 match state["status"].as_str() {
                     Some("completed") => content.push(Content::ToolResult(ToolResult {
                         call,
-                        output: serde_json::Value::String(
-                            state["output"].as_str().unwrap_or_default().to_owned(),
-                        ),
+                        output: state["output"].clone(),
                         error: false,
                     })),
                     Some("error") => content.push(Content::ToolResult(ToolResult {
                         call,
-                        output: serde_json::Value::String(
-                            state["error"].as_str().unwrap_or_default().to_owned(),
-                        ),
+                        output: state["error"].clone(),
                         error: true,
                     })),
                     _ => {}
@@ -284,6 +344,7 @@ impl Message for OpencodeMessage {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::path::PathBuf;
     use std::time::Duration;
 
@@ -341,6 +402,25 @@ mod tests {
     }
 
     #[rstest]
+    fn preserves_a_structured_tool_output() {
+        let m = part_message(serde_json::json!({
+            "type": "tool",
+            "callID": "call_1",
+            "tool": "bash",
+            "state": {
+                "status": "completed",
+                "input": {},
+                "output": {"stdout": "files", "exit": 0},
+            },
+        }));
+        assert!(matches!(
+            m.content().as_slice(),
+            [Content::ToolUse(_), Content::ToolResult(r)]
+                if r.output == serde_json::json!({"stdout": "files", "exit": 0})
+        ));
+    }
+
+    #[rstest]
     fn normalizes_an_errored_tool_part() {
         let m = part_message(serde_json::json!({
             "type": "tool",
@@ -367,11 +447,14 @@ mod tests {
     }
 
     #[rstest]
-    #[case("message.part.updated.1", "message.part.updated")]
-    #[case("message.part.updated", "message.part.updated")]
-    #[case("session.updated", "session.updated")]
-    fn strips_only_an_integer_version_suffix(#[case] kind: &str, #[case] expected: &str) {
-        assert_eq!(EventRow::base_type(kind), expected);
+    #[case("message.updated.1", EventKind::Role)]
+    #[case("message.part.updated.1", EventKind::Part)]
+    #[case("message.part.updated.2", EventKind::Unmapped)]
+    #[case("session.next.tool.called.1", EventKind::Unmapped)]
+    #[case("session.created.1", EventKind::Ignored)]
+    #[case("message.part.delta.1", EventKind::Ignored)]
+    fn classify_routes_events(#[case] kind: &str, #[case] expected: EventKind) {
+        assert!(EventRow::classify(kind) == expected);
     }
 
     async fn event_db(path: &Path) -> Sqlite {
@@ -407,8 +490,32 @@ mod tests {
     }
 
     #[rstest]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn events_demultiplex_sessions_and_normalize_messages() {
+    fn discover_prefers_the_wal_aware_newest_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        for name in
+            ["opencode.db", "opencode2.db", "opencode-old.db", "notopencode.db", "opencode.txt"]
+        {
+            std::fs::write(base.join(name), b"").unwrap();
+        }
+        let set_mtime = |name: &str, secs: u64| {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(base.join(name))
+                .unwrap()
+                .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
+                .unwrap();
+        };
+        set_mtime("opencode.db", 3000);
+        set_mtime("opencode-old.db", 1000);
+        set_mtime("opencode2.db", 2000);
+        std::fs::write(base.join("opencode2.db-wal"), b"").unwrap();
+        set_mtime("opencode2.db-wal", 9000);
+
+        assert_eq!(OpencodeSessions::discover(base), Some(base.join("opencode2.db")));
+    }
+
+    async fn drive_demux() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("opencode.db");
         let db = event_db(&path).await;
@@ -417,15 +524,23 @@ mod tests {
             &db,
             "e1",
             "ses_1",
-            "message.updated",
+            "message.updated.1",
             &serde_json::json!({"info": {"id": "msg_1", "role": "assistant"}}).to_string(),
         )
         .await;
         insert_event(
             &db,
             "e2",
+            "ses_2",
+            "message.updated.1",
+            &serde_json::json!({"info": {"id": "msg_2", "role": "user"}}).to_string(),
+        )
+        .await;
+        insert_event(
+            &db,
+            "e3",
             "ses_1",
-            "message.part.updated",
+            "message.part.updated.1",
             &serde_json::json!({
                 "part": {"id": "prt_1", "messageID": "msg_1", "type": "text", "text": "hello"},
                 "time": 1_700_000_000_000i64,
@@ -435,19 +550,12 @@ mod tests {
         .await;
         insert_event(
             &db,
-            "e3",
-            "ses_2",
-            "message.updated",
-            &serde_json::json!({"info": {"id": "msg_2", "role": "user"}}).to_string(),
-        )
-        .await;
-        insert_event(
-            &db,
             "e4",
             "ses_2",
-            "message.part.updated",
+            "message.part.updated.1",
             &serde_json::json!({
                 "part": {"id": "prt_2", "messageID": "msg_2", "type": "text", "text": "world"},
+                "time": 1_700_000_000_000i64,
             })
             .to_string(),
         )
@@ -474,6 +582,187 @@ mod tests {
             Some(&(Role::Assistant, vec![Content::Text("hello".into())]))
         );
         assert_eq!(messages.get("ses_2"), Some(&(Role::User, vec![Content::Text("world".into())])));
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn events_demultiplex_sessions_multi_thread() {
+        drive_demux().await;
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "current_thread")]
+    async fn events_demultiplex_sessions_current_thread() {
+        tokio::time::timeout(Duration::from_secs(10), drive_demux())
+            .await
+            .expect("bounded demux deadlocked on a current-thread runtime");
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "current_thread")]
+    async fn bounded_demux_drains_past_capacity_on_one_thread() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.db");
+        let db = event_db(&path).await;
+        insert_event(
+            &db,
+            "seed",
+            "ses_1",
+            "message.updated.1",
+            &serde_json::json!({"info": {"id": "msg_1", "role": "assistant"}}).to_string(),
+        )
+        .await;
+        let parts = DEMUX_CAP + 8;
+        for i in 0..parts {
+            insert_event(
+                &db,
+                &format!("p{i}"),
+                "ses_1",
+                "message.part.updated.1",
+                &serde_json::json!({
+                    "part": {"id": format!("prt_{i}"), "messageID": "msg_1", "type": "text", "text": i.to_string()},
+                    "time": 1_700_000_000_000i64,
+                })
+                .to_string(),
+            )
+            .await;
+        }
+
+        let listener = OpencodeSessions::builder().db(path).build().listener().unwrap();
+        let messages = tokio::time::timeout(
+            Duration::from_secs(10),
+            listener
+                .events()
+                .filter_map(|event| async move {
+                    match event.unwrap().kind {
+                        SessionEventKind::Message(message) => Some(message),
+                        SessionEventKind::Started => None,
+                    }
+                })
+                .take(parts)
+                .collect::<Vec<_>>(),
+        )
+        .await
+        .expect("bounded demux stalled at capacity on a current-thread runtime");
+
+        assert_eq!(messages.len(), parts);
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn replay_from_now_skips_preexisting_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.db");
+        let db = event_db(&path).await;
+        insert_event(
+            &db,
+            "e1",
+            "ses_pre",
+            "message.updated.1",
+            &serde_json::json!({"info": {"id": "m1", "role": "user"}}).to_string(),
+        )
+        .await;
+
+        let listener = OpencodeSessions::builder()
+            .db(path)
+            .replay(Replay::FromNow)
+            .build()
+            .listener()
+            .unwrap();
+        let stream = listener.watch();
+        futures::pin_mut!(stream);
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(500), stream.next()).await.is_err(),
+            "FromNow replayed a pre-existing session"
+        );
+
+        insert_event(
+            &db,
+            "e2",
+            "ses_new",
+            "message.updated.1",
+            &serde_json::json!({"info": {"id": "m2", "role": "user"}}).to_string(),
+        )
+        .await;
+
+        let session = tokio::time::timeout(Duration::from_secs(10), stream.next())
+            .await
+            .expect("watch() did not emit within 10s")
+            .expect("stream ended")
+            .unwrap();
+        assert_eq!(session.id(), SessionId::from("ses_new".to_owned()));
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn replay_all_backfills_preexisting_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.db");
+        let db = event_db(&path).await;
+        insert_event(
+            &db,
+            "e1",
+            "ses_pre",
+            "message.updated.1",
+            &serde_json::json!({"info": {"id": "m1", "role": "user"}}).to_string(),
+        )
+        .await;
+
+        let listener = OpencodeSessions::builder().db(path).build().listener().unwrap();
+        let stream = listener.watch();
+        futures::pin_mut!(stream);
+        let session = tokio::time::timeout(Duration::from_secs(10), stream.next())
+            .await
+            .expect("watch() did not emit within 10s")
+            .expect("stream ended")
+            .unwrap();
+        assert_eq!(session.id(), SessionId::from("ses_pre".to_owned()));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn unmapped_event_surfaces_as_other() {
+        let (tx, rx) = flume::unbounded();
+        tx.send(EventRow {
+            rowid: 1,
+            aggregate_id: "ses_1".to_owned(),
+            kind: "session.next.tool.called.1".to_owned(),
+            data: serde_json::json!({"foo": "bar"}).to_string(),
+        })
+        .unwrap();
+        drop(tx);
+
+        let session = OpencodeSession {
+            id: SessionId::from("ses_1".to_owned()),
+            events: rx,
+        };
+        let results: Vec<_> = session.messages().collect().await;
+        assert!(matches!(
+            results.as_slice(),
+            [Ok(m)] if matches!(m.content().as_slice(), [Content::Other(v)] if v["foo"] == "bar")
+        ));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn ignored_event_is_never_parsed() {
+        let (tx, rx) = flume::unbounded();
+        tx.send(EventRow {
+            rowid: 1,
+            aggregate_id: "ses_1".to_owned(),
+            kind: "session.created.1".to_owned(),
+            data: "not json".to_owned(),
+        })
+        .unwrap();
+        drop(tx);
+
+        let session = OpencodeSession {
+            id: SessionId::from("ses_1".to_owned()),
+            events: rx,
+        };
+        let results: Vec<_> = session.messages().collect().await;
+        assert!(results.is_empty());
     }
 
     #[rstest]
@@ -509,14 +798,14 @@ mod tests {
         tx.send(EventRow {
             rowid: 1,
             aggregate_id: "ses_1".to_owned(),
-            kind: "message.part.updated".to_owned(),
+            kind: "message.part.updated.1".to_owned(),
             data: "not json".to_owned(),
         })
         .unwrap();
         tx.send(EventRow {
             rowid: 2,
             aggregate_id: "ses_1".to_owned(),
-            kind: "message.part.updated".to_owned(),
+            kind: "message.part.updated.1".to_owned(),
             data: serde_json::json!({
                 "part": {"id": "prt_1", "messageID": "msg_1", "type": "text", "text": "ok"},
             })
@@ -534,5 +823,94 @@ mod tests {
             results.as_slice(),
             [Err(MessageError::Json(_)), Ok(m)] if m.content() == vec![Content::Text("ok".into())]
         ));
+    }
+
+    async fn load_fixture(db: &Sqlite, jsonl: &str) {
+        for line in jsonl.lines().filter(|l| !l.trim().is_empty()) {
+            let row: serde_json::Value = serde_json::from_str(line).expect("fixture line parses");
+            insert_event(
+                db,
+                row["id"].as_str().unwrap(),
+                row["aggregate_id"].as_str().unwrap(),
+                row["type"].as_str().unwrap(),
+                &row["data"].to_string(),
+            )
+            .await;
+        }
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reconstructs_two_interleaved_sessions_from_a_fixture() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.db");
+        let db = event_db(&path).await;
+        load_fixture(&db, include_str!("../../../tests/fixtures/opencode/session1.jsonl")).await;
+
+        let listener = OpencodeSessions::builder().db(path).build().listener().unwrap();
+        let events = tokio::time::timeout(
+            Duration::from_secs(10),
+            listener.events().take(10).collect::<Vec<_>>(),
+        )
+        .await
+        .expect("events() did not emit 10 events within 10s");
+
+        let mut started: HashSet<String> = HashSet::new();
+        let mut by_session: HashMap<String, Vec<OpencodeMessage>> = HashMap::new();
+        for event in events {
+            let event = event.unwrap();
+            let sid = event.session.to_string();
+            match event.kind {
+                SessionEventKind::Started => {
+                    started.insert(sid);
+                }
+                SessionEventKind::Message(message) => {
+                    by_session.entry(sid).or_default().push(message);
+                }
+            }
+        }
+
+        assert_eq!(started, HashSet::from(["ses_A".to_owned(), "ses_B".to_owned()]));
+
+        let a = &by_session["ses_A"];
+        assert!(a.iter().all(|m| m.timestamp().is_some()), "a part is missing its timestamp");
+
+        let a1 = a
+            .iter()
+            .find(|m| m.id() == Some(MessageId::from("prtA1".to_owned())))
+            .expect("prtA1 missing");
+        assert_eq!(a1.role(), Role::User);
+        assert_eq!(a1.content(), vec![Content::Text("hello from A".into())]);
+
+        let a2_final = a
+            .iter()
+            .rfind(|m| m.id() == Some(MessageId::from("prtA2".to_owned())))
+            .expect("prtA2 missing");
+        assert_eq!(a2_final.role(), Role::Assistant);
+        assert_eq!(a2_final.content(), vec![Content::Text("final answer A".into())]);
+
+        let tool = a
+            .iter()
+            .find_map(|m| {
+                m.content().into_iter().find_map(|c| match c {
+                    Content::ToolResult(r) => Some(r),
+                    _ => None,
+                })
+            })
+            .expect("no completed tool result");
+        assert_eq!(tool.output, serde_json::json!({"stdout": "listing", "exit": 0}));
+
+        let b = &by_session["ses_B"];
+        assert_eq!(b.len(), 2, "the ignored session.created.1 row leaked a message");
+        let b1 = b
+            .iter()
+            .find(|m| m.id() == Some(MessageId::from("prtB1".to_owned())))
+            .expect("prtB1 missing");
+        assert_eq!(b1.role(), Role::User);
+        assert_eq!(b1.content(), vec![Content::Text("hi from B".into())]);
+        assert!(
+            b.iter().any(|m| matches!(m.content().as_slice(), [Content::Other(v)] if !v.is_null())),
+            "expected an Other message from the unmapped version"
+        );
     }
 }
