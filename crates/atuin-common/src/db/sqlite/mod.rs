@@ -4,7 +4,6 @@ mod builder;
 mod compactor;
 pub mod fts;
 mod info;
-pub mod observe;
 
 use std::ffi::OsStr;
 use std::path::PathBuf;
@@ -17,36 +16,6 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use thiserror::Error;
 
 use crate::sync::EagerFutureCell;
-
-/// SQLite (extended) result codes that indicate transient lock contention and
-/// are therefore worth retrying, as opposed to a terminal failure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TransientResultCode {
-    Busy,
-    Locked,
-    BusyRecovery,
-    LockedSharedCache,
-    BusySnapshot,
-    LockedVtab,
-    BusyTimeout,
-}
-
-impl TransientResultCode {
-    /// Classify a SQLite result code (as `sqlx` reports it, i.e. the decimal
-    /// extended code) into a transient variant, or `None` if it is not one.
-    pub(crate) fn from_code(code: &str) -> Option<Self> {
-        Some(match code {
-            "5" => Self::Busy,
-            "6" => Self::Locked,
-            "261" => Self::BusyRecovery,
-            "262" => Self::LockedSharedCache,
-            "517" => Self::BusySnapshot,
-            "518" => Self::LockedVtab,
-            "773" => Self::BusyTimeout,
-            _ => return None,
-        })
-    }
-}
 
 /// An atuin-specific wrapper around Sqlite.
 ///
