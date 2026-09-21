@@ -1028,6 +1028,37 @@ mod tests {
     }
 
     #[rstest]
+    fn summary_marks_thinking() {
+        let m = msg(agent::Role::Assistant, vec![agent::content_block::Block::Thinking(
+            "pondering".to_owned(),
+        )]);
+        assert_eq!(message_summary(&m).unwrap().render(false), "» pondering");
+    }
+
+    #[rstest]
+    fn role_label_overrides_the_enum() {
+        let mut m = msg(agent::Role::Unknown, vec![]);
+        m.role_label = Some("developer".to_owned());
+        assert_eq!(message_role(&m), "developer");
+        // A standard role with no label falls back to the enum name.
+        assert_eq!(message_role(&msg(agent::Role::User, vec![])), "user");
+    }
+
+    #[rstest]
+    fn tool_result_line_is_labelled_tool() {
+        // Claude models a tool result as a user-turn message; the line should still say "tool".
+        let m = msg(agent::Role::User, vec![agent::content_block::Block::ToolResult(
+            agent::ToolResult {
+                content: "ok".to_owned(),
+                is_error: false,
+                ..Default::default()
+            },
+        )]);
+        let summary = message_summary(&m).unwrap();
+        assert_eq!(display_role(&m, &summary).0, "tool");
+    }
+
+    #[rstest]
     fn summary_falls_through_empty_text_to_the_next_block() {
         let m = msg(agent::Role::Assistant, vec![
             agent::content_block::Block::Text(String::new()),

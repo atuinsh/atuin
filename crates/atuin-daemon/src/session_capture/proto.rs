@@ -256,6 +256,29 @@ mod tests {
     }
 
     #[rstest]
+    fn other_role_is_carried_as_role_label() {
+        use atuin_client::ai_session::SourceId;
+        use atuin_domain::record::RecordId;
+        use time::OffsetDateTime;
+
+        let msg = Message::builder()
+            .id(RecordId(atuin_common::utils::uuid_v7()))
+            .session(HarnessSession {
+                harness: HarnessKind::Codex,
+                session: NativeSessionId::from("s".to_owned()),
+            })
+            .source_id(SourceId::from("src".to_owned()))
+            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .role(Role::Other("developer".to_owned()))
+            .content(vec![Content::Text("hi".to_owned())])
+            .build();
+
+        let pb = pb::Message::from(msg);
+        assert_eq!(pb.role, pb::Role::Unknown as i32);
+        assert_eq!(pb.role_label.as_deref(), Some("developer"));
+    }
+
+    #[rstest]
     fn usage_none_becomes_zero() {
         let t: pb::Tokens = Usage {
             input: None,
