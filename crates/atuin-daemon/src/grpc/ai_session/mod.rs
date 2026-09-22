@@ -12,13 +12,14 @@ use crate::grpc::ai_agent::pb as agent;
 use crate::grpc::ai_session::pb::ai_session_server::AiSession as GrpcService;
 use crate::grpc::ai_session::pb::{
     GetSessionEvent, GetSessionRequest, GetTranscriptChunk, GetTranscriptRequest,
-    HarnessFilterRequest, ListSessionsRequest, SearchSessionsMatch, SearchSessionsRequest,
+    HarnessFilterRequest, ImportSessionsEvent, ImportSessionsProgress, ImportSessionsRequest,
+    ImportSessionsSummary, ListSessionsRequest, SearchSessionsMatch, SearchSessionsRequest,
     SessionRefRequest, TailSessionsEvent, TailSessionsRequest, get_session_event,
-    tail_sessions_event,
+    import_sessions_event, tail_sessions_event,
 };
 use crate::grpc::common::pb as common;
 use crate::grpc::common::pb::Lagged;
-use crate::session_capture::{AiHarnessSessionCapture, SessionTailEvent};
+use crate::session_capture::{AiHarnessSessionCapture, ImportProgress, SessionTailEvent};
 
 #[derive(Clone)]
 pub struct Service {
@@ -41,6 +42,8 @@ impl GrpcService for Service {
     type SearchSessionsStream =
         Pin<Box<dyn Stream<Item = Result<SearchSessionsMatch, Status>> + Send>>;
     type TailSessionsStream = Pin<Box<dyn Stream<Item = Result<TailSessionsEvent, Status>> + Send>>;
+    type ImportSessionsStream =
+        Pin<Box<dyn Stream<Item = Result<ImportSessionsEvent, Status>> + Send>>;
 
     async fn list_sessions(
         &self,
@@ -167,6 +170,54 @@ impl GrpcService for Service {
 
         Ok(Response::new(Box::pin(stream)))
     }
+
+    async fn import_sessions(
+        &self,
+        request: Request<ImportSessionsRequest>,
+    ) -> Result<Response<Self::ImportSessionsStream>, Status> {
+        // A degraded nop facade (the session store failed to open) would otherwise stream an
+        // all-zero "success" summary; refuse instead so the caller sees the store is unavailable.
+        if !self.capture.is_available() {
+            return Err(Status::unavailable(
+                "AI session capture is unavailable: the session store failed to open",
+            ));
+        }
+
+        let harness = HarnessFilterRequest::harness(&request.into_inner())?;
+
+        let stream = self.capture.import(harness).filter_map(|progress| {
+            let event = match progress {
+                ImportProgress::Session {
+                    harness,
+                    session,
+                    imported,
+                    skipped,
+                    failed: _,
+                } => import_sessions_event::Event::Progress(ImportSessionsProgress {
+                    harness: agent::HarnessKind::from(harness) as i32,
+                    session_id: session.into(),
+                    imported,
+                    skipped,
+                }),
+                ImportProgress::Finished {
+                    sessions,
+                    imported,
+                    skipped,
+                    failed,
+                } => import_sessions_event::Event::Summary(ImportSessionsSummary {
+                    sessions,
+                    imported,
+                    skipped,
+                    failed,
+                }),
+                // Folded into the summary's failed count by SessionImporter::run; never streamed.
+                ImportProgress::ScanFailed { .. } => return std::future::ready(None),
+            };
+            std::future::ready(Some(Ok::<_, Status>(ImportSessionsEvent { event: Some(event) })))
+        });
+
+        Ok(Response::new(Box::pin(stream)))
+    }
 }
 
 #[cfg(test)]
@@ -220,5 +271,19 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(ref e) if e.code() == tonic::Code::InvalidArgument));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn import_sessions_errors_when_capture_is_unavailable() {
+        // The nop facade stands in for a failed session store: import must report unavailable
+        // rather than stream an all-zero "success" summary.
+        let cap = Arc::new(AiHarnessSessionCapture::nop().await);
+        let svc = Service::new(cap);
+
+        let result =
+            svc.import_sessions(Request::new(ImportSessionsRequest { harness: None })).await;
+
+        assert!(matches!(result, Err(ref e) if e.code() == tonic::Code::Unavailable));
     }
 }

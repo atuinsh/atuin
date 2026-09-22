@@ -14,7 +14,7 @@ use crate::harnesstools::session::model::{
 };
 use crate::harnesstools::session::{
     Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId, Sessions,
-    WatchError,
+    WatchError, scan_sessions,
 };
 use crate::json::jsonl;
 use crate::utils::{env_nonempty, home_dir};
@@ -46,6 +46,30 @@ impl Sessions for CodexSessions {
         }
         Ok(CodexListener { root })
     }
+
+    fn existing(
+        &self,
+    ) -> Result<impl Stream<Item = Result<CodexSession, RuntimeError>> + Send + 'static, RuntimeError>
+    {
+        let root = self.resolve_root();
+        if !root.is_dir() {
+            return Err(RuntimeError::NotFound(root));
+        }
+        Ok(async_stream::stream! {
+            let scan = tokio::task::spawn_blocking(move || {
+                scan_sessions(root, CodexListener::open_session)
+            })
+            .await;
+            match scan {
+                Ok(items) => {
+                    for item in items {
+                        yield item;
+                    }
+                }
+                Err(join) => yield Err(RuntimeError::Io(std::io::Error::other(join))),
+            }
+        })
+    }
 }
 
 impl Observable for Codex {
@@ -62,12 +86,10 @@ pub struct CodexListener {
 }
 
 impl CodexListener {
-    /// The session for an accepted file, paired with the change signal the watcher keeps alive
-    /// for as long as the file exists.
-    fn accept(ctx: &NodeContext) -> Option<(CodexSession, watch::Sender<()>)> {
-        let path = ctx.path();
+    /// Build a read-once session for an accepted codex rollout file (no change signal), or `None`.
+    fn open_session(path: &Path, is_file: bool) -> Option<CodexSession> {
         let name = path.file_name()?.to_string_lossy();
-        if !ctx.is_file() || !name.starts_with("rollout-") || !name.ends_with(".jsonl") {
+        if !is_file || !name.starts_with("rollout-") || !name.ends_with(".jsonl") {
             return None;
         }
         let stem = path.file_stem()?.to_string_lossy();
@@ -75,12 +97,15 @@ impl CodexListener {
         groups.truncate(5);
         groups.reverse();
         let id = groups.join("-");
+        Some(CodexSession::open(SessionId::from(id), path.to_path_buf()))
+    }
+
+    /// The session for an accepted file, paired with the change signal the watcher keeps alive
+    /// for as long as the file exists.
+    fn accept(ctx: &NodeContext) -> Option<(CodexSession, watch::Sender<()>)> {
+        let mut session = Self::open_session(ctx.path(), ctx.is_file())?;
         let (signal, rx) = watch::channel(());
-        let session = CodexSession {
-            id: SessionId::from(id),
-            path: path.to_path_buf(),
-            changes: Some(rx),
-        };
+        session.changes = Some(rx);
         Some((session, signal))
     }
 }
@@ -144,6 +169,10 @@ impl Session for CodexSession {
 
     fn messages(self) -> impl Stream<Item = Result<CodexMessage, MessageError>> + Send + 'static {
         jsonl::follow::<CodexMessage>(self.path, self.changes).map_err(MessageError::from)
+    }
+
+    fn read(&self) -> impl Stream<Item = Result<CodexMessage, MessageError>> + Send + 'static {
+        jsonl::read_all::<CodexMessage>(self.path.clone()).map_err(MessageError::from)
     }
 
     fn meta(&self) -> impl std::future::Future<Output = Result<SessionMeta, MessageError>> + Send {

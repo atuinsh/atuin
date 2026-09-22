@@ -14,7 +14,7 @@ use crate::harnesstools::session::model::{
 };
 use crate::harnesstools::session::{
     Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId, Sessions,
-    WatchError,
+    WatchError, scan_sessions,
 };
 use crate::json::jsonl;
 use crate::utils::{env_nonempty, home_dir};
@@ -50,6 +50,30 @@ impl Sessions for PiSessions {
         }
         Ok(PiListener { root })
     }
+
+    fn existing(
+        &self,
+    ) -> Result<impl Stream<Item = Result<PiSession, RuntimeError>> + Send + 'static, RuntimeError>
+    {
+        let root = self.resolve_root();
+        if !root.is_dir() {
+            return Err(RuntimeError::NotFound(root));
+        }
+        Ok(async_stream::stream! {
+            let scan = tokio::task::spawn_blocking(move || {
+                scan_sessions(root, PiListener::open_session)
+            })
+            .await;
+            match scan {
+                Ok(items) => {
+                    for item in items {
+                        yield item;
+                    }
+                }
+                Err(join) => yield Err(RuntimeError::Io(std::io::Error::other(join))),
+            }
+        })
+    }
 }
 
 impl Observable for Pi {
@@ -66,21 +90,22 @@ pub struct PiListener {
 }
 
 impl PiListener {
-    /// The session for an accepted file, paired with the change signal the watcher keeps alive
-    /// for as long as the file exists.
-    fn accept(ctx: &NodeContext) -> Option<(PiSession, watch::Sender<()>)> {
-        let path = ctx.path();
-        if !ctx.is_file() || path.extension().is_none_or(|ext| ext != "jsonl") {
+    /// Build a read-once session for an accepted `jsonl` file (no change signal), or `None`.
+    fn open_session(path: &Path, is_file: bool) -> Option<PiSession> {
+        if !is_file || path.extension().is_none_or(|ext| ext != "jsonl") {
             return None;
         }
         let stem = path.file_stem()?.to_string_lossy();
         let id = stem.split_once('_').map_or(stem.as_ref(), |(_, id)| id).to_owned();
+        Some(PiSession::open(SessionId::from(id), path.to_path_buf()))
+    }
+
+    /// The session for an accepted file, paired with the change signal the watcher keeps alive
+    /// for as long as the file exists.
+    fn accept(ctx: &NodeContext) -> Option<(PiSession, watch::Sender<()>)> {
+        let mut session = Self::open_session(ctx.path(), ctx.is_file())?;
         let (signal, rx) = watch::channel(());
-        let session = PiSession {
-            id: SessionId::from(id),
-            path: path.to_path_buf(),
-            changes: Some(rx),
-        };
+        session.changes = Some(rx);
         Some((session, signal))
     }
 }
@@ -144,6 +169,10 @@ impl Session for PiSession {
 
     fn messages(self) -> impl Stream<Item = Result<PiMessage, MessageError>> + Send + 'static {
         jsonl::follow::<PiMessage>(self.path, self.changes).map_err(MessageError::from)
+    }
+
+    fn read(&self) -> impl Stream<Item = Result<PiMessage, MessageError>> + Send + 'static {
+        jsonl::read_all::<PiMessage>(self.path.clone()).map_err(MessageError::from)
     }
 
     fn meta(&self) -> impl std::future::Future<Output = Result<SessionMeta, MessageError>> + Send {
@@ -642,6 +671,55 @@ mod tests {
                 Some(Ok(m)) => panic!("unexpected message after removal: {m:?}"),
             }
         }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn read_yields_all_messages_and_terminates() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("1700000000_abc.jsonl");
+        // Trailing newline required: read() reads complete lines only, like live capture, so an
+        // unterminated final line is treated as still being written and left out.
+        let body = [
+            serde_json::json!({"type": "message", "id": "m1", "message": {"role": "user", "content": "hi"}})
+                .to_string(),
+            serde_json::json!({"type": "message", "id": "m2", "message": {"role": "assistant", "content": "yo"}})
+                .to_string(),
+        ]
+        .join("\n")
+            + "\n";
+        std::fs::write(&path, body).unwrap();
+        let session = PiSession::open(SessionId::from("abc".to_owned()), path);
+        let got: Vec<PiMessage> = session.read().try_collect().await.unwrap();
+        assert_eq!(got.len(), 2);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn existing_finds_every_session_file_under_root() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("1_a.jsonl"), b"{}\n").unwrap();
+        std::fs::create_dir(dir.path().join("nested")).unwrap();
+        std::fs::write(dir.path().join("nested").join("2_b.jsonl"), b"{}\n").unwrap();
+        std::fs::write(dir.path().join("ignore.txt"), b"x").unwrap();
+        let sessions = PiSessions::builder().root(dir.path().to_path_buf()).build();
+        let mut ids: Vec<String> =
+            sessions.existing().unwrap().map(|s| s.unwrap().id().into()).collect().await;
+        ids.sort();
+        assert_eq!(ids, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    #[tokio::test]
+    async fn existing_does_not_follow_symlinked_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("1_real.jsonl"), b"{}\n").unwrap();
+        std::os::unix::fs::symlink(dir.path(), dir.path().join("loop")).unwrap();
+        let sessions = PiSessions::builder().root(dir.path().to_path_buf()).build();
+        let ids: Vec<String> =
+            sessions.existing().unwrap().map(|s| s.unwrap().id().into()).collect().await;
+        assert_eq!(ids, vec!["real".to_string()]);
     }
 
     #[rstest]

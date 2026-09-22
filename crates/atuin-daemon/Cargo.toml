@@ -12,6 +12,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+async-stream = { workspace = true }
 atuin-client = { workspace = true }
 atuin-common = { workspace = true, features = ["ai", "os", "proto", "sqlite"] }
 atuin-domain = { workspace = true }

@@ -13,7 +13,7 @@ use atuin_common::string::highlighted::{HighlightedString, HighlightedTextProto}
 use atuin_daemon::AiClient;
 use atuin_daemon::grpc::ai_agent::pb as agent;
 use atuin_daemon::grpc::ai_session::pb::{
-    SearchSessionsMatch, get_session_event, tail_sessions_event,
+    SearchSessionsMatch, get_session_event, import_sessions_event, tail_sessions_event,
 };
 use chrono::{DateTime, Utc};
 use chrono_humanize::HumanTime;
@@ -71,6 +71,11 @@ enum SubCmd {
 
     /// Follow sessions and messages as they are recorded (until interrupted).
     Tail,
+
+    Import {
+        #[arg(long, value_parser = parse_harness)]
+        harness: Option<agent::HarnessKind>,
+    },
 }
 
 // Only harnesses a capture path can actually produce are offered as filters (see AnyHarness);
@@ -143,6 +148,7 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
             limit,
         } => search(&mut client, &query, harness.map(HarnessArg::to_pb), limit, style).await,
         SubCmd::Tail => tail(&mut client, style).await,
+        SubCmd::Import { harness } => import(&mut client, harness, style).await,
     };
 
     // A downstream reader that closes the pipe (e.g. `atuin ai session list | head`) makes the next
@@ -443,12 +449,109 @@ async fn tail(client: &mut AiClient, style: Style) -> Result<()> {
     Ok(())
 }
 
+async fn import(
+    client: &mut AiClient,
+    harness: Option<agent::HarnessKind>,
+    style: Style,
+) -> Result<()> {
+    let mut stream = client.import_sessions(harness).await?;
+
+    // `--style json` is one document, so its per-session progress and final summary are collected
+    // and written once at the end; `--style ndjson` and the human styles stream event by event.
+    let mut json_sessions: Vec<serde_json::Value> = Vec::new();
+    let mut json_summary: Option<serde_json::Value> = None;
+
+    while let Some(event) = stream.next().await {
+        let Some(event) = event?.event else {
+            continue;
+        };
+
+        if style.is_json() {
+            let record = match &event {
+                import_sessions_event::Event::Progress(p) => serde_json::json!({
+                    "kind": "progress",
+                    "harness": harness_name(p.harness),
+                    "session_id": p.session_id,
+                    "imported": p.imported,
+                    "skipped": p.skipped,
+                }),
+                import_sessions_event::Event::Summary(s) => serde_json::json!({
+                    "kind": "summary",
+                    "sessions": s.sessions,
+                    "imported": s.imported,
+                    "skipped": s.skipped,
+                    "failed": s.failed,
+                }),
+            };
+            match &event {
+                import_sessions_event::Event::Progress(_) if matches!(style, Style::Json) => {
+                    json_sessions.push(record);
+                }
+                import_sessions_event::Event::Summary(_) if matches!(style, Style::Json) => {
+                    json_summary = Some(record);
+                }
+                _ => {
+                    // ndjson: one value per line.
+                    let stdout = io::stdout();
+                    let mut out = stdout.lock();
+                    serde_json::to_writer(&mut out, &record)?;
+                    writeln!(out)?;
+                    out.flush()?;
+                }
+            }
+            continue;
+        }
+
+        let stdout = io::stdout();
+        let mut out = stdout.lock();
+        match &event {
+            import_sessions_event::Event::Progress(p) => {
+                writeln!(
+                    out,
+                    "{:<14} {:<12} imported {:>5}  skipped {:>5}",
+                    short_id(&p.session_id),
+                    harness_name(p.harness),
+                    p.imported,
+                    p.skipped,
+                )?;
+            }
+            import_sessions_event::Event::Summary(s) => {
+                writeln!(
+                    out,
+                    "done: {} sessions, {} imported, {} skipped, {} failed",
+                    s.sessions, s.imported, s.skipped, s.failed,
+                )?;
+            }
+        }
+        out.flush()?;
+    }
+
+    if matches!(style, Style::Json) {
+        let doc = serde_json::json!({ "sessions": json_sessions, "summary": json_summary });
+        let stdout = io::stdout();
+        let mut out = stdout.lock();
+        serde_json::to_writer(&mut out, &doc)?;
+        writeln!(out)?;
+    }
+
+    Ok(())
+}
+
 // --- selector resolution ------------------------------------------------------------------------
 
 /// Turn a `latest`/id selector into a full session handle by matching it against the session list
 /// (the harness is only known from the listing, so an id alone cannot address a session).
 async fn resolve(client: &mut AiClient, selector: &str) -> Result<agent::HarnessSession> {
-    select_session(client.list_sessions(None).await?.try_collect().await?, selector)
+    let mut stream = client.list_sessions(None).await?;
+    // `latest` only needs the newest session, which the daemon streams first, so take a single
+    // item instead of draining the whole stream. Any id/prefix selector needs the full list to
+    // match and disambiguate.
+    let sessions: Vec<agent::Session> = if selector.eq_ignore_ascii_case("latest") {
+        stream.try_next().await?.into_iter().collect()
+    } else {
+        stream.try_collect().await?
+    };
+    select_session(sessions, selector)
 }
 
 /// Pure selector logic, split out from the RPC so it can be tested directly.
@@ -781,6 +884,15 @@ fn rfc3339(ts: Option<&prost_types::Timestamp>) -> Option<String> {
     to_datetime(ts).map(|dt| dt.to_rfc3339())
 }
 
+fn parse_harness(value: &str) -> Result<agent::HarnessKind, String> {
+    match value {
+        "claude-code" => Ok(agent::HarnessKind::ClaudeCode),
+        "codex" => Ok(agent::HarnessKind::Codex),
+        "pi" => Ok(agent::HarnessKind::Pi),
+        other => Err(format!("unknown harness `{other}` (expected claude-code, codex, or pi)")),
+    }
+}
+
 /// The kebab display label for a harness discriminant. Kept exhaustive over every `HarnessKind`
 /// (including ones no capture path yet produces) so a stored value always renders. Shared with the
 /// MCP session-search renderer.
@@ -1070,6 +1182,19 @@ mod tests {
     }
 
     #[rstest]
+    #[case("claude-code", agent::HarnessKind::ClaudeCode)]
+    #[case("codex", agent::HarnessKind::Codex)]
+    #[case("pi", agent::HarnessKind::Pi)]
+    fn parse_harness_maps_names(#[case] input: &str, #[case] want: agent::HarnessKind) {
+        assert_eq!(parse_harness(input).unwrap(), want);
+    }
+
+    #[rstest]
+    fn parse_harness_rejects_unknown_harnesses() {
+        assert!(parse_harness("opencode").is_err());
+    }
+
+    #[rstest]
     fn latest_picks_the_first_listed() {
         let sessions = vec![
             session(agent::HarnessKind::Codex, "newest"),
@@ -1081,6 +1206,17 @@ mod tests {
     #[rstest]
     fn latest_on_empty_is_an_error() {
         assert!(select_session(Vec::new(), "latest").is_err());
+    }
+
+    #[rstest]
+    fn latest_resolves_from_a_single_session() {
+        // `resolve` now hands `select_session` just the newest session for `latest`, so a
+        // one-element list must still resolve.
+        let handle =
+            select_session(vec![session(agent::HarnessKind::ClaudeCode, "only")], "latest")
+                .unwrap();
+        assert_eq!(handle.session_id, "only");
+        assert_eq!(handle.harness, agent::HarnessKind::ClaudeCode as i32);
     }
 
     #[rstest]
