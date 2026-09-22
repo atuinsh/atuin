@@ -228,7 +228,21 @@ fn get_visual_editor() -> Result<String> {
     Err(eyre::eyre!("No editor found; set $VISUAL, $EDITOR, or $FCEDIT"))
 }
 
-fn visual_edit_command(original_command: &str) -> Result<String> {
+/// Proof that the TUI's [`Terminal`] has been torn down, so the tty is free for
+/// an external editor. Only [`TtyReleased::new`] can produce one, and doing so
+/// consumes the `Terminal` — so `visual_edit_command` can't be called, even
+/// after a future reshuffle of its call site, without the tty already released.
+struct TtyReleased(());
+
+impl TtyReleased {
+    fn new(terminal: Terminal<CrosstermBackend<Stdout>>) -> Self {
+        drop(terminal);
+        Self(())
+    }
+}
+
+// `_tty` is never read — the caller holding one at all is the guarantee (see `TtyReleased`).
+fn visual_edit_command(_tty: &TtyReleased, original_command: &str) -> Result<String> {
     // Write the command to a temp file, then close the write fd before the
     // editor opens it (same pattern as scripts.rs open_editor).
     let temp_file = NamedTempFile::new()?;
@@ -263,6 +277,18 @@ fn visual_edit_command(original_command: &str) -> Result<String> {
     }
 
     Ok(fs::read_to_string(&temp_path)?.trim_end().to_string())
+}
+
+/// Prefixes `command` with the shell-integration accept marker when the shell
+/// should auto-execute it. A blank `command` — e.g. the user cleared the
+/// buffer while editing — is left alone rather than auto-executing an empty
+/// line.
+fn with_accept_prefix(command: String, accept: bool) -> String {
+    if accept && !command.is_empty() {
+        format!("{ACCEPT_PREFIX}{command}")
+    } else {
+        command
+    }
 }
 
 impl State {
@@ -2316,10 +2342,11 @@ pub async fn history(
 
     let chain = is_command_chaining.then_some(original_query.as_str());
 
-    // Restore the terminal before any operation that needs a clean tty (e.g.
-    // launching an external editor). For all other arms this is a no-op — the
-    // Drop would have run on function exit anyway.
-    drop(terminal);
+    // `EditAccept` (below) launches an external editor, which needs the tty to
+    // itself. Requiring a `TtyReleased` token — obtainable only by consuming
+    // `terminal` — makes that ordering a compile error to violate, rather than
+    // an invariant that depends on this statement staying above the `match`.
+    let tty_released = TtyReleased::new(terminal);
 
     match result {
         InputAction::AcceptInspecting => Ok(inspecting
@@ -2329,11 +2356,8 @@ pub async fn history(
             Ok(selection_output(results.swap_remove(index), app.cd, accept, chain, &shell))
         }
         InputAction::EditAccept(index) if index < results.len() => {
-            let mut command = visual_edit_command(&results[index].command)?;
-            if accept && !command.is_empty() {
-                command = format!("{ACCEPT_PREFIX}{command}");
-            }
-            Ok(command)
+            let command = visual_edit_command(&tty_released, &results[index].command)?;
+            Ok(with_accept_prefix(command, accept))
         }
         InputAction::ReturnOriginal => Ok(String::new()),
         InputAction::Copy(index) => {
@@ -3230,6 +3254,20 @@ mod tests {
         let result = state.execute_action(&Action::EditAccept, &settings);
         assert!(matches!(result, super::InputAction::EditAccept(7)));
         assert!(state.accept);
+    }
+
+    #[rstest]
+    #[case("git log", true, "__atuin_accept__:git log")]
+    #[case("git log", false, "git log")]
+    #[case("", true, "")]
+    #[case("", false, "")]
+    fn with_accept_prefix_cases(
+        #[case] command: &str,
+        #[case] accept: bool,
+        #[case] expected: &str,
+    ) {
+        let result = super::with_accept_prefix(command.to_string(), accept);
+        assert_eq!(result, expected);
     }
 
     #[rstest]
