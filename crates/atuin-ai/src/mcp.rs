@@ -267,7 +267,7 @@ fn tool_definitions() -> Vec<Tool> {
             },
             "harness": {
                 "type": "string",
-                "enum": ["claude-code", "codex", "copilot", "opencode", "pi"],
+                "enum": ["claude-code", "codex", "opencode", "pi"],
                 "description": "Restrict the search to sessions from one AI harness. Omit to \
                     search every harness.",
             },
@@ -316,11 +316,11 @@ fn tool_definitions() -> Vec<Tool> {
         Tool::new(
             "atuin_ai_session_search",
             "Full-text search across the transcripts of AI coding-agent sessions Atuin has \
-             captured (Claude Code, Codex, Copilot, opencode, pi). Use it to find which past \
-             agent session discussed a topic, hit an error, touched a file, or made a decision — \
-             it searches message text, reasoning, tool calls and results, and session titles. \
-             Each result gives the session id, harness, last-active time, title, and a matching \
-             snippet. Requires the Atuin daemon with AI session capture enabled.",
+             captured (Claude Code, Codex, opencode, pi). Use it to find which past agent session \
+             discussed a topic, hit an error, touched a file, or made a decision — it searches \
+             message text, reasoning, tool calls and results, and session titles. Each result \
+             gives the session id, harness, last-active time, title, and a matching snippet. \
+             Requires the Atuin daemon with AI session capture enabled.",
             session_search_schema,
         )
         .annotate(ToolAnnotations::with_title("Search AI agent sessions").read_only(true)),
@@ -380,17 +380,51 @@ mod tests {
 
     #[rstest]
     fn ai_session_search_schema_matches_the_parser() {
+        // The hand-written schema and the AtuinAiSessionSearchToolCall parser are independent
+        // sources of truth; drive the parser at the schema's advertised bounds so the two cannot
+        // drift apart (e.g. widening the Clamped bounds without updating the model-visible schema).
         let tools = tool_definitions();
         let schema = &tools[3].input_schema;
         assert_eq!(schema["required"], json!(["query"]));
         assert_eq!(schema["properties"]["query"]["minLength"], 1);
+
         let limit = &schema["properties"]["limit"];
-        assert_eq!(limit["minimum"], 1);
-        assert_eq!(limit["maximum"], 20);
-        assert_eq!(limit["default"], 5);
+        let min = limit["minimum"].as_u64().unwrap();
+        let max = limit["maximum"].as_u64().unwrap();
+        let default = limit["default"].as_u64().unwrap();
+
+        let parse = |v: Value| serde_json::from_value::<AtuinAiSessionSearchToolCall>(v);
+        let limit_of = |v: Value| u64::from(parse(v).unwrap().limit.get());
         assert_eq!(
-            schema["properties"]["harness"]["enum"],
-            json!(["claude-code", "codex", "copilot", "opencode", "pi"])
+            limit_of(json!({"query": "x"})),
+            default,
+            "omitted limit uses the schema default"
+        );
+        assert_eq!(
+            limit_of(json!({"query": "x", "limit": max + 1})),
+            max,
+            "over-max clamps to the schema max"
+        );
+        assert_eq!(
+            limit_of(json!({"query": "x", "limit": 0})),
+            min,
+            "under-min clamps to the schema min"
+        );
+        assert!(
+            parse(json!({"query": "   "})).is_err(),
+            "the parser enforces the advertised minLength"
+        );
+
+        for harness in schema["properties"]["harness"]["enum"].as_array().unwrap() {
+            let name = harness.as_str().unwrap();
+            assert!(
+                parse(json!({"query": "x", "harness": name})).is_ok(),
+                "advertised {name:?} must parse"
+            );
+        }
+        assert!(
+            parse(json!({"query": "x", "harness": "copilot"})).is_err(),
+            "an unadvertised harness is rejected"
         );
     }
 

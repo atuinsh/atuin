@@ -73,11 +73,12 @@ enum SubCmd {
     Tail,
 }
 
+// Only harnesses a capture path can actually produce are offered as filters (see AnyHarness);
+// Copilot has no capture source yet, so advertising it would return empty for every query.
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum HarnessArg {
     ClaudeCode,
     Codex,
-    Copilot,
     Opencode,
     Pi,
 }
@@ -87,7 +88,6 @@ impl HarnessArg {
         match self {
             Self::ClaudeCode => agent::HarnessKind::ClaudeCode,
             Self::Codex => agent::HarnessKind::Codex,
-            Self::Copilot => agent::HarnessKind::Copilot,
             Self::Opencode => agent::HarnessKind::Opencode,
             Self::Pi => agent::HarnessKind::Pi,
         }
@@ -284,7 +284,7 @@ async fn transcript(client: &mut AiClient, selector: &str, style: Style) -> Resu
         serde_json::to_writer(&mut out, &record)?;
         writeln!(out)?;
     } else {
-        write!(out, "{text}")?;
+        write!(out, "{}", sanitize(&text))?;
         if !text.ends_with('\n') {
             writeln!(out)?;
         }
@@ -481,19 +481,19 @@ fn handle_of(session: &agent::Session) -> agent::HarnessSession {
 // --- human rendering ----------------------------------------------------------------------------
 
 fn write_session_header(out: &mut dyn Write, s: &agent::Session) -> io::Result<()> {
-    writeln!(out, "session   {}", s.session_id)?;
+    writeln!(out, "session   {}", sanitize(&s.session_id))?;
     writeln!(out, "harness   {}", harness_name(s.harness))?;
     if let Some(title) = &s.title {
-        writeln!(out, "title     {title}")?;
+        writeln!(out, "title     {}", sanitize(title))?;
     }
     if let Some(cwd) = &s.cwd {
-        writeln!(out, "cwd       {cwd}")?;
+        writeln!(out, "cwd       {}", sanitize(cwd))?;
     }
     if let Some(branch) = &s.git_branch {
-        writeln!(out, "branch    {branch}")?;
+        writeln!(out, "branch    {}", sanitize(branch))?;
     }
     if let Some(model) = &s.model {
-        writeln!(out, "model     {model}")?;
+        writeln!(out, "model     {}", sanitize(model))?;
     }
     writeln!(out, "started   {}", age(s.started_at.as_ref()))?;
     writeln!(out, "updated   {}", age(s.updated_at.as_ref()))?;
@@ -512,10 +512,12 @@ fn write_message_text(out: &mut dyn Write, m: &agent::Message) -> io::Result<()>
     writeln!(out, "── {} · {} ──", role_name(m.role), age(m.timestamp.as_ref()))?;
     for block in &m.content {
         match &block.block {
-            Some(agent::content_block::Block::Text(t)) => writeln!(out, "{t}")?,
-            Some(agent::content_block::Block::Thinking(t)) => writeln!(out, "[thinking] {t}")?,
+            Some(agent::content_block::Block::Text(t)) => writeln!(out, "{}", sanitize(t))?,
+            Some(agent::content_block::Block::Thinking(t)) => {
+                writeln!(out, "[thinking] {}", sanitize(t))?;
+            }
             Some(agent::content_block::Block::ToolCall(tc)) => {
-                writeln!(out, "[tool-call {}] {}", tc.name, tc.input)?;
+                writeln!(out, "[tool-call {}] {}", sanitize(&tc.name), sanitize(&tc.input))?;
             }
             Some(agent::content_block::Block::ToolResult(tr)) => {
                 let tag = if tr.is_error {
@@ -523,7 +525,7 @@ fn write_message_text(out: &mut dyn Write, m: &agent::Message) -> io::Result<()>
                 } else {
                     "tool-result"
                 };
-                writeln!(out, "[{tag}] {}", tr.content)?;
+                writeln!(out, "[{tag}] {}", sanitize(&tr.content))?;
             }
             None => {}
         }
@@ -598,7 +600,9 @@ fn message_summary(m: &agent::Message) -> Option<Summary> {
                 }
             }
             Some(agent::content_block::Block::ToolCall(tc)) => {
-                return Some(Summary::ToolCall(tc.name.clone()));
+                // Fold like the sibling arms: the tool name is captured content and must not carry
+                // control chars into the `tail` view.
+                return Some(Summary::ToolCall(one_line(&tc.name, SUMMARY_WIDTH)));
             }
             Some(agent::content_block::Block::ToolResult(tr)) => {
                 return Some(Summary::ToolResult {
@@ -615,10 +619,12 @@ fn message_summary(m: &agent::Message) -> Option<Summary> {
 /// The role label to display: the harness's own string when the enum cannot name it (e.g. codex
 /// `developer`), otherwise the standard role name.
 fn message_role(m: &agent::Message) -> String {
+    // role_label is free-form text captured from the harness, so strip any control chars before it
+    // reaches the `tail` view; the enum fallback (role_name) is already a fixed string.
     m.role_label
         .as_deref()
         .filter(|s| !s.is_empty())
-        .map_or_else(|| role_name(m.role).to_owned(), str::to_owned)
+        .map_or_else(|| role_name(m.role).to_owned(), |s| sanitize(s).into_owned())
 }
 
 /// The role text and its color for a rendered `tail` line. A tool result is labelled `tool`
@@ -722,11 +728,42 @@ fn harness_color(harness: i32) -> Ansi {
 /// characters with an ellipsis. Session titles/previews are captured from multi-line prompts, so the
 /// human table and `tail` views must flatten them or a single entry spills across many rows.
 fn one_line(text: &str, max: usize) -> String {
-    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    // Whitespace-fold, then drop any control chars left over (ESC, BEL, C1): captured session
+    // content is untrusted and must not emit terminal escape sequences into the compact views.
+    let collapsed: String = text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
     if collapsed.chars().count() > max {
         format!("{}…", collapsed.chars().take(max).collect::<String>())
     } else {
         collapsed
+    }
+}
+
+/// Replace terminal control characters in captured session content with spaces, so a recorded
+/// session can never emit escape sequences (colour, cursor moves, a window-title change) when it is
+/// printed to a TTY. `\n`/`\t` are kept so multi-line bodies still lay out; the compact
+/// `list`/`search`/`tail` views fold whitespace through [`one_line`] instead.
+fn sanitize(text: &str) -> Cow<'_, str> {
+    let is_escape = |c: char| c.is_control() && c != '\n' && c != '\t';
+    if text.contains(is_escape) {
+        Cow::Owned(
+            text.chars()
+                .map(|c| {
+                    if is_escape(c) {
+                        ' '
+                    } else {
+                        c
+                    }
+                })
+                .collect(),
+        )
+    } else {
+        Cow::Borrowed(text)
     }
 }
 
@@ -744,7 +781,10 @@ fn rfc3339(ts: Option<&prost_types::Timestamp>) -> Option<String> {
     to_datetime(ts).map(|dt| dt.to_rfc3339())
 }
 
-fn harness_name(harness: i32) -> &'static str {
+/// The kebab display label for a harness discriminant. Kept exhaustive over every `HarnessKind`
+/// (including ones no capture path yet produces) so a stored value always renders. Shared with the
+/// MCP session-search renderer.
+pub fn harness_name(harness: i32) -> &'static str {
     match agent::HarnessKind::try_from(harness) {
         Ok(agent::HarnessKind::ClaudeCode) => "claude-code",
         Ok(agent::HarnessKind::Codex) => "codex",
@@ -1149,6 +1189,28 @@ mod tests {
     }
 
     #[rstest]
+    fn tail_render_strips_control_chars_from_tool_name_and_role_label() {
+        // The tail view prints the captured tool-call name and free-form role label directly; a
+        // recorded session must not smuggle terminal escapes through either sink.
+        let mut m = msg(agent::Role::Assistant, vec![agent::content_block::Block::ToolCall(
+            agent::ToolCall {
+                name: "run\x1b]0;pwned\x07 now".to_owned(),
+                ..Default::default()
+            },
+        )]);
+        m.role_label = Some("dev\x1b[31mil".to_owned());
+
+        let summary = message_summary(&m).expect("a tool call yields a summary");
+        // render(false) omits our own colour codes, so any control char left is from the payload.
+        assert!(
+            !summary.render(false).chars().any(char::is_control),
+            "the tool-call name must be folded before the tail view prints it"
+        );
+        let (role_text, _) = display_role(&m, &summary);
+        assert!(!role_text.chars().any(char::is_control), "the role label must be sanitized");
+    }
+
+    #[rstest]
     #[case(false, "✓ ok")]
     #[case(true, "✗ boom")]
     fn summary_marks_a_tool_result(#[case] is_error: bool, #[case] expected: &str) {
@@ -1254,11 +1316,30 @@ mod tests {
     #[rstest]
     #[case(HarnessArg::ClaudeCode, agent::HarnessKind::ClaudeCode)]
     #[case(HarnessArg::Codex, agent::HarnessKind::Codex)]
-    #[case(HarnessArg::Copilot, agent::HarnessKind::Copilot)]
     #[case(HarnessArg::Opencode, agent::HarnessKind::Opencode)]
     #[case(HarnessArg::Pi, agent::HarnessKind::Pi)]
     fn harness_arg_maps_to_pb(#[case] arg: HarnessArg, #[case] expected: agent::HarnessKind) {
         assert_eq!(arg.to_pb(), expected);
+    }
+
+    #[rstest]
+    fn sanitize_neutralizes_terminal_escapes_in_captured_content() {
+        // A recorded session could carry a clear-screen + window-title-spoof sequence.
+        let hostile = "hi\x1b[2J\x1b]0;pwned\x07 there";
+        let safe = sanitize(hostile);
+        assert!(!safe.chars().any(char::is_control), "no control chars may reach the terminal");
+        assert!(safe.contains("hi") && safe.contains("there"), "printable text is preserved");
+    }
+
+    #[rstest]
+    fn sanitize_keeps_newlines_and_tabs_for_multiline_bodies() {
+        assert_eq!(sanitize("a\n\tb"), "a\n\tb");
+        assert!(matches!(sanitize("plain"), Cow::Borrowed(_)), "clean text is not reallocated");
+    }
+
+    #[rstest]
+    fn one_line_drops_control_characters() {
+        assert!(!one_line("a\x1b[31mred\x07", 80).chars().any(char::is_control));
     }
 
     #[rstest]

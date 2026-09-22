@@ -8,12 +8,12 @@ use atuin_daemon::AiClient;
 use atuin_daemon::grpc::ai_agent::pb::HarnessKind;
 use atuin_daemon::grpc::ai_session::pb::SearchSessionsMatch;
 use futures::TryStreamExt;
-use schemars::JsonSchema;
 use serde::Deserialize;
 
+use crate::commands::session::harness_name;
 use crate::tools::ToolOutcome;
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct AtuinAiSessionSearchToolCall {
     pub query: NonBlankString,
     #[serde(default)]
@@ -22,12 +22,13 @@ pub struct AtuinAiSessionSearchToolCall {
     pub harness: Option<HarnessFilter>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+// Only harnesses a capture path can actually produce are offered as filters (see AnyHarness);
+// Copilot has no capture source yet, so advertising it would return empty for every query.
+#[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum HarnessFilter {
     ClaudeCode,
     Codex,
-    Copilot,
     Opencode,
     Pi,
 }
@@ -37,7 +38,6 @@ impl From<HarnessFilter> for HarnessKind {
         match value {
             HarnessFilter::ClaudeCode => Self::ClaudeCode,
             HarnessFilter::Codex => Self::Codex,
-            HarnessFilter::Copilot => Self::Copilot,
             HarnessFilter::Opencode => Self::Opencode,
             HarnessFilter::Pi => Self::Pi,
         }
@@ -96,7 +96,7 @@ impl SessionHit<'_> {
     fn render_into(&self, out: &mut String, index: usize, offset: time::UtcOffset) {
         let session = self.0.session.as_ref();
         let id = session.map_or("", |s| s.session_id.as_str());
-        let harness = session.map_or("unknown", |s| Self::harness_label(s.harness));
+        let harness = session.map_or("unknown", |s| harness_name(s.harness));
         let when = session
             .and_then(|s| s.updated_at.as_ref())
             .map_or_else(|| "unknown time".to_owned(), |ts| Self::timestamp(ts, offset));
@@ -114,17 +114,6 @@ impl SessionHit<'_> {
             if !preview.is_empty() {
                 let _ = writeln!(out, "   match: {preview}");
             }
-        }
-    }
-
-    fn harness_label(harness: i32) -> &'static str {
-        match HarnessKind::try_from(harness) {
-            Ok(HarnessKind::ClaudeCode) => "claude-code",
-            Ok(HarnessKind::Codex) => "codex",
-            Ok(HarnessKind::Copilot) => "copilot",
-            Ok(HarnessKind::Opencode) => "opencode",
-            Ok(HarnessKind::Pi) => "pi",
-            Ok(HarnessKind::Unknown) | Err(_) => "unknown",
         }
     }
 
@@ -163,6 +152,7 @@ mod tests {
     #[case::empty(json!({"query": ""}))]
     #[case::blank(json!({"query": "   "}))]
     #[case::unknown_harness(json!({"query": "x", "harness": "emacs"}))]
+    #[case::uncapturable_harness(json!({"query": "x", "harness": "copilot"}))]
     fn rejects_invalid_input(#[case] input: serde_json::Value) {
         assert!(serde_json::from_value::<AtuinAiSessionSearchToolCall>(input).is_err());
     }
@@ -170,7 +160,6 @@ mod tests {
     #[rstest]
     #[case::claude_code("claude-code", HarnessKind::ClaudeCode)]
     #[case::codex("codex", HarnessKind::Codex)]
-    #[case::copilot("copilot", HarnessKind::Copilot)]
     #[case::opencode("opencode", HarnessKind::Opencode)]
     #[case::pi("pi", HarnessKind::Pi)]
     fn parses_each_harness(#[case] name: &str, #[case] expected: HarnessKind) {

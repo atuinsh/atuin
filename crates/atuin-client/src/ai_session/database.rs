@@ -415,6 +415,11 @@ impl AiSessionDatabase {
             let harness_clause = if harness.is_some() { " AND m.harness = ?" } else { "" };
             let limit_clause = if limit == 0 { "" } else { " LIMIT ?" };
 
+            // Snippet/highlight are correlated subqueries keyed on best.rowid, not a re-join of
+            // messages_fts in the outer query: a second top-level `messages_fts MATCH` there makes
+            // SQLite scan the whole match set again only to discard all but `best`, whereas a
+            // rowid-constrained subquery seeks just the ranked row. Each subquery still carries its
+            // own MATCH so the FTS aux function has query context.
             let sql = format!(
                 "WITH ranked AS MATERIALIZED (\
                  SELECT messages_fts.rowid AS rowid, m.harness AS h, m.session_id AS sid, \
@@ -426,13 +431,14 @@ impl AiSessionDatabase {
                  SELECT s.harness, s.session_id, s.parent_harness, s.parent_session_id, s.cwd, \
                  s.git_branch, s.model, s.started_at, s.updated_at, s.message_count, \
                  s.usage_input, s.usage_output, s.usage_cache_read, s.usage_cache_write, s.title, \
-                 s.preview, highlight(messages_fts, 0, ?, ?) AS title_hl, \
-                 snippet(messages_fts, 1, ?, ?, '…', {SNIPPET_TOKENS}) AS preview_hl, \
+                 s.preview, \
+                 (SELECT highlight(messages_fts, 0, ?, ?) FROM messages_fts \
+                 WHERE messages_fts.rowid = best.rowid AND messages_fts MATCH ?) AS title_hl, \
+                 (SELECT snippet(messages_fts, 1, ?, ?, '…', {SNIPPET_TOKENS}) FROM messages_fts \
+                 WHERE messages_fts.rowid = best.rowid AND messages_fts MATCH ?) AS preview_hl, \
                  best.score AS score FROM best \
-                 JOIN messages_fts ON messages_fts.rowid = best.rowid \
                  JOIN messages m ON m.rowid = best.rowid \
                  JOIN sessions s ON s.harness = m.harness AND s.session_id = m.session_id \
-                 WHERE messages_fts MATCH ? \
                  ORDER BY best.score DESC, s.updated_at DESC, s.session_id",
             );
 
@@ -446,6 +452,7 @@ impl AiSessionDatabase {
             stmt = stmt
                 .bind(open.to_string())
                 .bind(close.to_string())
+                .bind(expr.clone())
                 .bind(open.to_string())
                 .bind(close.to_string())
                 .bind(expr);
@@ -465,18 +472,21 @@ impl AiSessionDatabase {
 
     pub async fn reindex(&self) -> Result<(), DbError> {
         let pool = self.db.pool();
-        let messages: i64 =
-            db::query_scalar("SELECT count(*) FROM messages").fetch_one(pool).await?;
-        let indexed: i64 =
-            db::query_scalar("SELECT count(*) FROM messages_fts").fetch_one(pool).await?;
-        if indexed >= messages {
-            return Ok(());
-        }
-
+        // messages_fts rowids are always a contiguous prefix of messages rowids: append writes the
+        // message and its FTS row in one tx, and this backfill (the only other writer, running
+        // under open() before the daemon serves) walks rowids ascending. So the highest indexed
+        // rowid alone determines coverage — gate on max(rowid) (O(log N)) rather than counting both
+        // tables (count(*) on a content-bearing FTS5 is a full O(N) scan on every open()).
         let mut watermark: i64 =
             db::query_scalar("SELECT coalesce(max(rowid), 0) FROM messages_fts")
                 .fetch_one(pool)
                 .await?;
+        let last_message: i64 = db::query_scalar("SELECT coalesce(max(rowid), 0) FROM messages")
+            .fetch_one(pool)
+            .await?;
+        if watermark >= last_message {
+            return Ok(());
+        }
 
         let highlighter = TextHighlighter::default();
         loop {
