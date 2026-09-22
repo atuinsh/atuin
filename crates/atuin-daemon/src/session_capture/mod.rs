@@ -41,6 +41,7 @@ pub(crate) struct Sink {
     records: AiSessionStore,
     sidecar: AiSessionDatabase,
     tail: broadcast::Sender<SessionTailEvent>,
+    append_lock: tokio::sync::Mutex<()>,
 }
 
 impl Sink {
@@ -50,6 +51,7 @@ impl Sink {
             records,
             sidecar,
             tail,
+            append_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -58,6 +60,8 @@ impl Sink {
     }
 
     pub(crate) async fn append(&self, msg: Message) -> Result<Appended, AppendError> {
+        let _guard = self.append_lock.lock().await;
+
         // Dedup gate: if this logical message is already projected it is already in the record
         // store too, so there is nothing to do. Stable source ids (see Normalizer::source_id) make
         // this reliable across re-captures and keep the record store free of duplicates.
@@ -218,7 +222,7 @@ impl AiHarnessSessionCapture {
 mod tests {
     use atuin_client::ai_session::{NativeSessionId, SourceId};
     use atuin_common::harnesstools::session::{Content, Role};
-    use atuin_domain::record::RecordId;
+    use atuin_domain::record::{RecordId, RecordTag};
     use futures::StreamExt;
     use rstest::rstest;
     use time::OffsetDateTime;
@@ -283,5 +287,31 @@ mod tests {
 
         let session = sink.sidecar.get_session(&sample_handle()).await.unwrap().unwrap();
         assert_eq!(session.message_count, 1);
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_appends_of_one_message_write_a_single_record() {
+        let raw = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
+        let records = AiSessionStore::builder()
+            .store(raw.clone())
+            .host_id(HostId(atuin_common::utils::uuid_v7()))
+            .key(Key::generate())
+            .build();
+        let sink = Arc::new(Sink::new(records, AiSessionDatabase::in_memory().await.unwrap()));
+
+        let outcomes = futures::future::join_all((0..8).map(|_| {
+            let sink = Arc::clone(&sink);
+            let msg = sample_message();
+            async move { sink.append(msg).await.unwrap() }
+        }))
+        .await;
+
+        assert_eq!(outcomes.iter().filter(|a| matches!(a, Appended::New)).count(), 1);
+        assert_eq!(raw.all_tagged(&RecordTag::AiSession).await.unwrap().len(), 1);
+        assert_eq!(
+            sink.sidecar.get_session(&sample_handle()).await.unwrap().unwrap().message_count,
+            1
+        );
     }
 }
