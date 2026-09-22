@@ -4,6 +4,8 @@ use eyre::Result;
 #[cfg(not(windows))]
 use rustix::{fs::Mode, process::umask};
 
+use crate::i18n::fl;
+
 #[cfg(feature = "client")]
 mod client;
 
@@ -31,7 +33,7 @@ pub enum AtuinCmd {
     #[command(hide = true)]
     Uuid,
 
-    /// List the people who have contributed to Atuin
+    #[command(about = fl!("contributors-about"))]
     Contributors,
 
     /// Generate shell completions
