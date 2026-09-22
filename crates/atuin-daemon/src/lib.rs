@@ -38,7 +38,7 @@ pub use output_capture::{
 };
 
 /// How long shutdown waits for the gRPC server to drain. Long-lived streams never do.
-const SERVER_DRAIN: Duration = Duration::from_secs(1);
+const SERVER_DRAIN: Duration = Duration::from_secs(3);
 
 /// Boot the daemon using the new component-based architecture.
 ///
