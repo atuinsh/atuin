@@ -647,9 +647,8 @@ impl AiSessionDatabase {
         phrases
             .iter()
             .filter_map(|phrase| {
-                (0..tokens.len().saturating_sub(phrase.len() - 1)).find(|&i| {
-                    phrase.iter().zip(&tokens[i..]).all(|(p, (_, t))| p == t)
-                })
+                (0..tokens.len().saturating_sub(phrase.len() - 1))
+                    .find(|&i| phrase.iter().zip(&tokens[i..]).all(|(p, (_, t))| p == t))
             })
             .min()
             .map(|i| tokens[i].0)
@@ -1263,25 +1262,20 @@ mod tests {
     async fn search_matches_reasoning_tool_calls_results_and_metadata() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         let session = sample_handle();
-        let mut message = message_with(
-            &session,
-            0,
-            Role::Assistant,
-            vec![
-                Content::Reasoning("weighing the tradeoffs".to_owned()),
-                Content::ToolUse(ToolUse {
-                    id: ToolCallId::from("call-1".to_owned()),
-                    name: "execute_shell_command".to_owned(),
-                    input: serde_json::json!({ "command": "cargo nextest run" }),
-                }),
-                Content::ToolResult(ToolResult {
-                    call: ToolCallId::from("call-1".to_owned()),
-                    output: serde_json::json!({ "stderr": "ENOSPC no space left" }),
-                    error: true,
-                }),
-                Content::Other(serde_json::json!({ "note": "peculiar" })),
-            ],
-        );
+        let mut message = message_with(&session, 0, Role::Assistant, vec![
+            Content::Reasoning("weighing the tradeoffs".to_owned()),
+            Content::ToolUse(ToolUse {
+                id: ToolCallId::from("call-1".to_owned()),
+                name: "execute_shell_command".to_owned(),
+                input: serde_json::json!({ "command": "cargo nextest run" }),
+            }),
+            Content::ToolResult(ToolResult {
+                call: ToolCallId::from("call-1".to_owned()),
+                output: serde_json::json!({ "stderr": "ENOSPC no space left" }),
+                error: true,
+            }),
+            Content::Other(serde_json::json!({ "note": "peculiar" })),
+        ]);
         message.cwd = Some(std::path::PathBuf::from("/home/marko/atuin"));
         message.git_branch = Some("feat/ai-session-fts".to_owned());
         message.model = Some("claude-opus".to_owned());
@@ -1492,9 +1486,7 @@ mod tests {
         // A whitespace-free blob (minified output) is one "word"; the char budget must keep the
         // preview small and the match visible instead of returning the whole line.
         let blob = "x".repeat(5_000);
-        db.append(&message_in(&sample_handle(), 0, &format!("{blob} needle here")))
-            .await
-            .unwrap();
+        db.append(&message_in(&sample_handle(), 0, &format!("{blob} needle here"))).await.unwrap();
 
         let hits = search(&db, "needle").await;
         assert_eq!(hits.len(), 1);
@@ -1583,13 +1575,10 @@ mod tests {
         db.append(&message).await.unwrap();
         assert_eq!(search(&db, "AlphaTitle").await.len(), 1, "the original title is searchable");
 
-        db.record_session_meta(
-            &session,
-            &SessionMeta {
-                title: Some("BetaTitle".to_owned()),
-                ..Default::default()
-            },
-        )
+        db.record_session_meta(&session, &SessionMeta {
+            title: Some("BetaTitle".to_owned()),
+            ..Default::default()
+        })
         .await
         .unwrap();
 
