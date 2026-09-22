@@ -193,32 +193,76 @@ struct StyleState {
     inner_width: usize,
 }
 
-fn get_visual_editor() -> Result<String> {
+/// A resolved `$VISUAL`/`$EDITOR`/`$FCEDIT` invocation: the program to exec,
+/// plus any arguments baked into the variable itself (e.g. `EDITOR="code
+/// --wait"`).
+///
+/// `program` is *not* guaranteed to exist on disk. When resolved from an
+/// environment variable it's frequently just a bare name (`EDITOR=vim`,
+/// `EDITOR=nano`) that the OS resolves against `$PATH` when we exec it —
+/// same as today, we don't second-guess the user's explicit choice. Only the
+/// two internal fallbacks below (`/usr/bin/editor`, or `vim`/`vi` found by
+/// walking `$PATH` ourselves) are pre-verified to exist.
+struct EditorCommand {
+    program: std::path::PathBuf,
+    args: Vec<String>,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum VisualEditorError {
+    #[error("no editor found; set $VISUAL, $EDITOR, or $FCEDIT")]
+    NotFound,
+    #[error("failed to parse {0:?} as a shell command")]
+    UnparseableCommand(String),
+}
+
+/// Splits a `$VISUAL`/`$EDITOR`/`$FCEDIT` value into a program and its
+/// arguments, e.g. `"code --wait"` -> `code`, `["--wait"]`.
+fn parse_editor_var(val: String) -> std::result::Result<EditorCommand, VisualEditorError> {
+    let parts =
+        shlex::split(&val).ok_or_else(|| VisualEditorError::UnparseableCommand(val.clone()))?;
+    let (program, args) = parts.split_first().ok_or(VisualEditorError::UnparseableCommand(val))?;
+    Ok(EditorCommand {
+        program: std::path::PathBuf::from(program),
+        args: args.to_vec(),
+    })
+}
+
+fn get_visual_editor() -> std::result::Result<EditorCommand, VisualEditorError> {
     // FCEDIT is the fc-specific override; $VISUAL is for full-screen editors,
     // $EDITOR is the fallback for any editor.
     for var in ["FCEDIT", "VISUAL", "EDITOR"] {
         if let Ok(val) = std::env::var(var)
             && !val.is_empty()
         {
-            return Ok(val);
+            return parse_editor_var(val);
         }
     }
 
     // On Debian/Ubuntu, /usr/bin/editor is an update-alternatives symlink to
     // the system-preferred editor, independent of $EDITOR.
-    if std::path::Path::new("/usr/bin/editor").exists() {
-        return Ok("/usr/bin/editor".to_string());
+    let editor_alternative = std::path::PathBuf::from("/usr/bin/editor");
+    if editor_alternative.exists() {
+        return Ok(EditorCommand {
+            program: editor_alternative,
+            args: Vec::new(),
+        });
     }
 
-    // Fall back to vim or vi if present in PATH.
+    // Fall back to vim or vi, whichever is found first in PATH.
     let path_var = std::env::var_os("PATH").unwrap_or_default();
     for name in ["vim", "vi"] {
-        if std::env::split_paths(&path_var).any(|dir| dir.join(name).is_file()) {
-            return Ok(name.to_string());
+        if let Some(program) =
+            std::env::split_paths(&path_var).map(|dir| dir.join(name)).find(|path| path.is_file())
+        {
+            return Ok(EditorCommand {
+                program,
+                args: Vec::new(),
+            });
         }
     }
 
-    Err(eyre::eyre!("No editor found; set $VISUAL, $EDITOR, or $FCEDIT"))
+    Err(VisualEditorError::NotFound)
 }
 
 /// Proof that the TUI's [`Terminal`] has been torn down, so the tty is free for
@@ -243,13 +287,8 @@ fn visual_edit_command(_tty: &TtyReleased, original_command: &str) -> Result<Str
     let temp_path = temp_file.into_temp_path();
 
     let editor = get_visual_editor()?;
-    let parts = shlex::split(&editor)
-        .ok_or_else(|| eyre::eyre!("Failed to parse editor command: {editor}"))?;
-    let (program, args) =
-        parts.split_first().ok_or_else(|| eyre::eyre!("Editor command is empty"))?;
-
-    let mut cmd = Command::new(program);
-    cmd.args(args).arg(&temp_path);
+    let mut cmd = Command::new(&editor.program);
+    cmd.args(&editor.args).arg(&temp_path);
 
     // The shell integration runs atuin inside $() command substitution with an
     // fd-swap so atuin's stderr is a pipe back to the shell. Editors that use
@@ -2973,6 +3012,27 @@ mod tests {
     ) {
         let result = super::with_accept_prefix(command.to_string(), accept, "__atuin_accept__:");
         assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    #[case("vim", "vim", &[])]
+    #[case("code --wait", "code", &["--wait"])]
+    #[case("emacsclient -t -a \"\"", "emacsclient", &["-t", "-a", ""])]
+    fn parse_editor_var_splits_program_and_args(
+        #[case] val: &str,
+        #[case] expected_program: &str,
+        #[case] expected_args: &[&str],
+    ) {
+        let editor = super::parse_editor_var(val.to_string()).unwrap();
+        assert_eq!(editor.program, std::path::Path::new(expected_program));
+        assert_eq!(editor.args, expected_args);
+    }
+
+    #[rstest]
+    #[case("")]
+    #[case("   ")]
+    fn parse_editor_var_rejects_unparseable_values(#[case] val: &str) {
+        assert!(super::parse_editor_var(val.to_string()).is_err());
     }
 
     #[rstest]
