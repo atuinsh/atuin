@@ -75,12 +75,9 @@ profiling-traced = [
 [dependencies]
 atuin-ai = { workspace = true, optional = true }
 # TODO(taylordotfish): in Rust 1.99 we can change this to `workspace = true`
-atuin-client = {
-    path = "../atuin-client",
-    version = "18.23.0",
-    optional = true,
-    default-features = false,
-}
+# Keep inline tables on one line: i18n-embed-fl's `fl!` parses this manifest
+# with a TOML 1.0 parser (find-crate -> toml 0.5).
+atuin-client = { path = "../atuin-client", version = "18.23.0", optional = true, default-features = false }
 atuin-common = { workspace = true, features = ["unicode", "os", "ai"] }
 atuin-daemon = { workspace = true, optional = true }
 atuin-domain = { workspace = true }
@@ -138,6 +135,11 @@ tracing-subscriber = { workspace = true }
 unicode-width = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+
+# internationalization (Project Fluent)
+i18n-embed = { version = "0.15.3", features = ["fluent", "fluent-system", "tr", "locale_config", "walkdir", "filesystem-assets"] }
+rust-embed = "8"
+i18n-embed-fl = "0.9.3"
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 arboard = { workspace = true, optional = true }

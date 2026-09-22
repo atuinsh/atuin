@@ -83,7 +83,14 @@ fn render_not_found(subcommand: &str, bin: &str) -> StyledStr {
     let usage = atuin_cmd.render_usage();
 
     let _ = write!(output, "{error}error:{error:#} ");
-    let _ = write!(output, "unrecognized subcommand '{invalid}{subcommand}{invalid:#}' ");
+    let _ = write!(
+        output,
+        "{} ",
+        t!(
+            "unrecognized subcommand '%{subcommand}'",
+            subcommand = format!("{invalid}{subcommand}{invalid:#}")
+        )
+    );
     let _ =
         write!(output, "and no executable named '{invalid}{bin}{invalid:#}' found in your PATH");
     let _ = write!(output, "\n\n");

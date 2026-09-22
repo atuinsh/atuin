@@ -21,6 +21,7 @@ atuin-domain = { path = "crates/atuin-domain", version = "18.23.0" }
 atuin-dotfiles = { path = "crates/atuin-dotfiles", version = "18.23.0" }
 atuin-history = { path = "crates/atuin-history", version = "18.23.0" }
 atuin-kv = { path = "crates/atuin-kv", version = "18.23.0" }
+atuin-macro = { path = "crates/atuin-macro", version = "18.23.0" }
 atuin-pty-proxy = { path = "crates/atuin-pty-proxy", version = "18.23.0", default-features = false }
 atuin-scripts = { path = "crates/atuin-scripts", version = "18.23.0" }
 atuin-server = { path = "crates/atuin-server", version = "18.23.0" }
