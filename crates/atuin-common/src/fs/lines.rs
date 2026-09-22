@@ -151,6 +151,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
 
+    use proptest::prelude::*;
     use rstest::rstest;
 
     use super::*;
@@ -369,5 +370,136 @@ mod tests {
         let err = read_new_lines(&path, &mut cursor).await.unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
         assert_eq!(cursor, before);
+    }
+
+    // The reason this whole module exists: transient reads never exceed a bounded number of open
+    // handles, however many callers pile up at once. Saturate every permit with reads parked in a
+    // writer-less FIFO open, then show a further read cannot even begin until one frees. If the
+    // permit ever stopped gating the blocking open (dropped, or acquired off the blocking hop),
+    // the probe would race ahead and this fails -- the FD-exhaustion regression, caught in a test.
+    #[cfg(unix)]
+    #[rstest]
+    #[tokio::test]
+    async fn concurrent_reads_are_capped_at_max_in_flight() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifos: Vec<PathBuf> = (0..MAX_IN_FLIGHT)
+            .map(|i| {
+                let p = dir.path().join(format!("fifo{i}"));
+                assert!(std::process::Command::new("mkfifo").arg(&p).status().unwrap().success());
+                p
+            })
+            .collect();
+
+        // Each read takes a permit, then parks in `open` waiting for a writer: all permits held.
+        let reads: Vec<_> = fifos
+            .iter()
+            .cloned()
+            .map(|p| {
+                tokio::spawn(async move {
+                    let mut cursor = LineCursor::default();
+                    read_new_lines(&p, &mut cursor).await
+                })
+            })
+            .collect();
+        let saturated = tokio::time::timeout(Duration::from_secs(5), async {
+            while IN_FLIGHT.available_permits() > 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .is_ok();
+
+        // A read of an instantly-readable file cannot even start while the cap is saturated.
+        let (_probe_dir, probe_path) = temp_file(b"probe\n");
+        let probe = tokio::spawn(async move {
+            let mut cursor = LineCursor::default();
+            read_new_lines(&probe_path, &mut cursor).await
+        });
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let probe_blocked = !probe.is_finished();
+
+        // Release every parked read (a writer rendezvous with the blocked open, which then hits
+        // EOF), freeing permits *before* any assertion can panic while an open is still parked --
+        // a panic there would leave a blocking read stuck forever and hang the runtime shutdown.
+        for p in &fifos {
+            drop(OpenOptions::new().write(true).open(p).unwrap());
+        }
+        for r in reads {
+            tokio::time::timeout(Duration::from_secs(5), r)
+                .await
+                .expect("a parked read ends once a writer arrives")
+                .expect("read task did not panic")
+                .expect("reading a FIFO to EOF is not an error");
+        }
+
+        assert!(saturated, "all {MAX_IN_FLIGHT} permits were taken by concurrent reads");
+        assert!(probe_blocked, "a read past the cap could not begin until a permit freed");
+        let probe_lines = tokio::time::timeout(Duration::from_secs(5), probe)
+            .await
+            .expect("the probe completes once a permit frees")
+            .expect("probe task did not panic")
+            .expect("probe read succeeds");
+        assert_eq!(strs(&probe_lines), ["probe"]);
+        assert_eq!(
+            IN_FLIGHT.available_permits(),
+            MAX_IN_FLIGHT,
+            "every permit returned once the reads ended"
+        );
+    }
+
+    proptest! {
+        // Drive the cursor across a randomised sequence of chunked appends -- some completing a
+        // withheld fragment, some not -- and assert the invariants the follow path relies on:
+        // every complete line is yielded exactly once and in order, no fragment is emitted before
+        // its newline lands, and the cursor only ever rests at the start or just past a newline.
+        #[test]
+        fn cursor_yields_every_complete_line_once_across_chunked_appends(
+            lines in prop::collection::vec("[^\n]{0,24}", 0..8),
+            final_newline in any::<bool>(),
+            splits in prop::collection::vec(1usize..=4, 0..64),
+        ) {
+            let mut body = lines.join("\n").into_bytes();
+            if final_newline && !body.is_empty() {
+                body.push(b'\n');
+            }
+            // The complete (newline-terminated) lines; bytes past the last newline are a fragment.
+            let mut expected: Vec<&[u8]> = Vec::new();
+            let mut start = 0;
+            for nl in memchr::memchr_iter(b'\n', &body) {
+                expected.push(&body[start..nl]);
+                start = nl + 1;
+            }
+
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("f");
+            std::fs::write(&path, b"").unwrap();
+
+            let runtime =
+                tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            runtime.block_on(async {
+                let mut cursor = LineCursor::default();
+                let mut got: Vec<Bytes> = Vec::new();
+                let mut pos = 0;
+                let mut sizes = splits.into_iter();
+                while pos < body.len() {
+                    let n = sizes.next().unwrap_or(body.len()).min(body.len() - pos).max(1);
+                    append(&path, &body[pos..pos + n]);
+                    pos += n;
+                    loop {
+                        let mut chunk = read_new_lines(&path, &mut cursor).await.unwrap();
+                        got.append(&mut chunk);
+                        let off = usize::try_from(cursor.offset()).unwrap();
+                        prop_assert!(off == 0 || body[off - 1] == b'\n');
+                        if !cursor.has_more() {
+                            break;
+                        }
+                    }
+                }
+                // Fully written and drained: the withheld fragment (if any) yields nothing more.
+                prop_assert!(read_new_lines(&path, &mut cursor).await.unwrap().is_empty());
+                prop_assert_eq!(got.iter().map(|b| &b[..]).collect::<Vec<&[u8]>>(), expected);
+                Ok(())
+            })?;
+        }
     }
 }
