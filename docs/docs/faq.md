@@ -30,7 +30,7 @@ Open your shell config file, find the line containing `atuin init`.
 Add `--disable-up-arrow`, e.g.:
 
 ```shell
-eval "$(atuin init zsh --disable-up-arrow)"
+eval "$(atuin init --disable-up-arrow)"
 ```
 
 See [key binding](configuration/key-binding.md) for more
@@ -42,7 +42,7 @@ Open your shell config file, find the line containing `atuin init`.
 Add `--disable-ai`, e.g.:
 
 ```shell
-eval "$(atuin init zsh --disable-ai)"
+eval "$(atuin init --disable-ai)"
 ```
 
 ## How do I edit a command instead of running it immediately?
@@ -93,7 +93,7 @@ This compiles out the update checker, the sync commands, and AI.
 ## I didn't set up sync, and now I have to reinstall my system!
 
 If you have a backup of `~/.local/share/atuin`, you can import it by:
-1. disabling Atuin by commenting out the shell integration; for example, for bash it's `eval "$(atuin init bash)"`
+1. disabling Atuin by commenting out the shell integration; for example, `eval "$(atuin init)"`
 2. copying the backup to `~/.local/share/atuin`
 3. reenabling Atuin
 4. setting up sync!

@@ -40,13 +40,15 @@ impl Shell {
     pub fn current() -> Self {
         let sys = System::new_all();
 
-        let process = sys
-            .process(get_current_pid().expect("Failed to get current PID"))
-            .expect("Process with current pid does not exist");
+        let Some(process) = get_current_pid().ok().and_then(|pid| sys.process(pid)) else {
+            return Self::Unknown;
+        };
 
-        let parent = sys
-            .process(process.parent().expect("Atuin running with no parent!"))
-            .expect("Process with parent pid does not exist");
+        let Some(parent) = process.parent().and_then(|pid| sys.process(pid)) else {
+            // The invoking shell normally waits for Atuin, so this should only happen in unusual
+            // process environments, such as when Atuin is PID 1.
+            return Self::Unknown;
+        };
 
         let shell = parent.name().to_string_lossy().trim().to_lowercase();
         let shell = shell.strip_prefix('-').unwrap_or(&shell);
