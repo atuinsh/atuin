@@ -25,11 +25,11 @@ pub enum Cmd {
             long,
             value_enum,
             default_value_t = SortBy::Name,
-            help = fl!("arg-dotfiles-alias-list-sort-by")
+            help = fl!("arg-dotfiles-list-sort-by")
         )]
         sort_by: SortBy,
 
-        #[arg(long, short, help = fl!("arg-dotfiles-alias-list-reverse"))]
+        #[arg(long, short, help = fl!("arg-dotfiles-list-reverse"))]
         reverse: bool,
 
         #[arg(long, short, help = fl!("arg-dotfiles-alias-list-name"))]

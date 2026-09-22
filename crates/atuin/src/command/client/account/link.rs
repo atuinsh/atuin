@@ -21,7 +21,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
         println!("{}", fl!("link-hub-login-first"));
 
         let session = atuin_client::hub::HubAuthSession::start(&hub_address).await?;
-        println!("{}", fl!("link-open-url"));
+        println!("{}", fl!("account-hub-open-url"));
         println!("{}", session.auth_url);
 
         let token = session

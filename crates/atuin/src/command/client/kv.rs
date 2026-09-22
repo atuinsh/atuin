@@ -21,7 +21,7 @@ pub enum Cmd {
         #[arg(help = fl!("arg-kv-set-value"))]
         value: Option<String>,
 
-        #[arg(long, short, default_value = "default", help = fl!("arg-kv-set-namespace"))]
+        #[arg(long, short, default_value = "default", help = fl!("arg-kv-namespace"))]
         namespace: String,
     },
 
@@ -30,7 +30,7 @@ pub enum Cmd {
         #[arg(required = true, help = fl!("arg-kv-delete-keys"))]
         keys: Vec<String>,
 
-        #[arg(long, short, default_value = "default", help = fl!("arg-kv-delete-namespace"))]
+        #[arg(long, short, default_value = "default", help = fl!("arg-kv-namespace"))]
         namespace: String,
     },
 
@@ -39,7 +39,7 @@ pub enum Cmd {
         #[arg(help = fl!("arg-kv-get-key"))]
         key: String,
 
-        #[arg(long, short, default_value = "default", help = fl!("arg-kv-get-namespace"))]
+        #[arg(long, short, default_value = "default", help = fl!("arg-kv-namespace"))]
         namespace: String,
     },
 

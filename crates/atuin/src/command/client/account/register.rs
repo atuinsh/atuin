@@ -25,7 +25,7 @@ impl Cmd {
     pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         match settings.resolve_sync_auth().await {
             SyncAuth::Hub { .. } => {
-                println!("{}", fl!("register-hub-already"));
+                println!("{}", fl!("account-hub-authenticated"));
                 println!("{}", fl!("account-run-logout"));
                 return Ok(());
             }
@@ -75,7 +75,7 @@ impl Cmd {
                         } else {
                             meta.save_session(&session).await?;
                             println!("\n{}", fl!("account-not-migrated-note"));
-                            println!("{}", fl!("register-not-migrated-hint"));
+                            println!("{}", fl!("account-not-migrated-hint"));
                         }
                     }
                     AuthResponse::TwoFactorRequired => {

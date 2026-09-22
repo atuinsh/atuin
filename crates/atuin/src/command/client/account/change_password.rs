@@ -14,7 +14,7 @@ pub struct Cmd {
     #[clap(long, short)]
     pub new_password: Option<String>,
 
-    #[clap(long, short, help = fl!("arg-account-change-password-totp-code"))]
+    #[clap(long, short, help = fl!("arg-totp-code"))]
     pub totp_code: Option<String>,
 }
 

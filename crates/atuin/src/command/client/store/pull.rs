@@ -13,7 +13,7 @@ use crate::i18n::fl;
 
 #[derive(Args, Debug)]
 pub struct Pull {
-    #[arg(long, short, help = fl!("arg-store-pull-tag"))]
+    #[arg(long, short, help = fl!("arg-store-tag"))]
     pub tag: Option<RecordTag>,
 
     #[arg(

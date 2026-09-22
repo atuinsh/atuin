@@ -11,7 +11,7 @@ pub struct Cmd {
     #[clap(long, short)]
     pub password: Option<String>,
 
-    #[clap(long, short, help = fl!("arg-account-delete-totp-code"))]
+    #[clap(long, short, help = fl!("arg-totp-code"))]
     pub totp_code: Option<String>,
 }
 

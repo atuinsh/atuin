@@ -59,7 +59,7 @@ pub enum Cmd {
 
         command: Vec<String>,
 
-        #[arg(long, hide = true, help = fl!("arg-history-start-hook"))]
+        #[arg(long, hide = true, help = fl!("arg-history-hook"))]
         hook: bool,
     },
 
@@ -71,7 +71,7 @@ pub enum Cmd {
         #[arg(long, short)]
         duration: Option<u64>,
 
-        #[arg(long, hide = true, help = fl!("arg-history-end-hook"))]
+        #[arg(long, hide = true, help = fl!("arg-history-hook"))]
         hook: bool,
     },
 
@@ -89,10 +89,10 @@ pub enum Cmd {
         #[arg(long)]
         human: bool,
 
-        #[arg(long, help = fl!("arg-history-list-cmd-only"))]
+        #[arg(long, help = fl!("arg-cmd-only"))]
         cmd_only: bool,
 
-        #[arg(long, help = fl!("arg-history-list-print0"))]
+        #[arg(long, help = fl!("arg-print0"))]
         print0: bool,
 
         #[arg(long, short, default_value = "true")]
@@ -105,8 +105,8 @@ pub enum Cmd {
         #[arg(
             long,
             visible_alias = "tz",
-            help = fl!("arg-history-list-timezone"),
-            long_help = fl!("arg-history-list-timezone", "long")
+            help = fl!("arg-history-timezone"),
+            long_help = fl!("arg-history-timezone", "long")
         )]
         timezone: Option<UtcOffsetSpec>,
 
@@ -124,14 +124,14 @@ pub enum Cmd {
         #[arg(long)]
         human: bool,
 
-        #[arg(long, help = fl!("arg-history-last-cmd-only"))]
+        #[arg(long, help = fl!("arg-cmd-only"))]
         cmd_only: bool,
 
         #[arg(
             long,
             visible_alias = "tz",
-            help = fl!("arg-history-last-timezone"),
-            long_help = fl!("arg-history-last-timezone", "long")
+            help = fl!("arg-history-timezone"),
+            long_help = fl!("arg-history-timezone", "long")
         )]
         timezone: Option<UtcOffsetSpec>,
 
@@ -148,13 +148,13 @@ pub enum Cmd {
 
     #[command(about = fl!("cmd-history-prune"))]
     Prune {
-        #[arg(short = 'n', long, help = fl!("arg-history-prune-dry-run"))]
+        #[arg(short = 'n', long, help = fl!("arg-history-dry-run"))]
         dry_run: bool,
     },
 
     #[command(about = fl!("cmd-history-dedup"))]
     Dedup {
-        #[arg(short = 'n', long, help = fl!("arg-history-dedup-dry-run"))]
+        #[arg(short = 'n', long, help = fl!("arg-history-dry-run"))]
         dry_run: bool,
 
         #[arg(long, short, help = fl!("arg-history-dedup-before"))]

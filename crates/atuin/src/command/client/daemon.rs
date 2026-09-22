@@ -40,7 +40,7 @@ pub enum SubCmd {
         #[arg(long, hide = true)]
         daemonize: bool,
 
-        #[arg(long, help = fl!("arg-daemon-start-show-logs"))]
+        #[arg(long, help = fl!("arg-daemon-show-logs"))]
         show_logs: bool,
 
         #[arg(long, help = fl!("arg-daemon-start-force"))]
@@ -276,7 +276,11 @@ fn startup_timeout(settings: &Settings) -> Duration {
 #[derive(Debug, thiserror::Error)]
 #[error(
     "{}",
-    fl!("daemon-remove-socket-failed", path = .path.display().to_string(), source = .source.to_string())
+    fl!(
+        "daemon-remove-socket-failed",
+        path = .path.display().to_string(),
+        source = .source.to_string()
+    )
 )]
 struct RemoveSocketError {
     path: PathBuf,

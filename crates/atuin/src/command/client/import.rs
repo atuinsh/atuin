@@ -29,19 +29,19 @@ pub enum Cmd {
     #[command(about = fl!("cmd-import-auto"))]
     Auto,
 
-    #[command(about = fl!("cmd-import-zsh"))]
+    #[command(about = fl!("cmd-import-shell", shell = "zsh"))]
     Zsh,
     #[command(about = fl!("cmd-import-zsh-hist-db"))]
     ZshHistDb,
-    #[command(about = fl!("cmd-import-bash"))]
+    #[command(about = fl!("cmd-import-shell", shell = "bash"))]
     Bash,
-    #[command(about = fl!("cmd-import-replxx"))]
+    #[command(about = fl!("cmd-import-shell", shell = "replxx"))]
     Replxx,
-    #[command(about = fl!("cmd-import-resh"))]
+    #[command(about = fl!("cmd-import-shell", shell = "resh"))]
     Resh,
-    #[command(about = fl!("cmd-import-fish"))]
+    #[command(about = fl!("cmd-import-shell", shell = "fish"))]
     Fish,
-    #[command(about = fl!("cmd-import-nu"))]
+    #[command(about = fl!("cmd-import-shell", shell = "nu"))]
     Nu,
     #[command(about = fl!("cmd-import-nu-hist-db"))]
     NuHistDb,
@@ -49,7 +49,7 @@ pub enum Cmd {
     Xonsh,
     #[command(about = fl!("cmd-import-xonsh-sqlite"))]
     XonshSqlite,
-    #[command(about = fl!("cmd-import-powershell"))]
+    #[command(about = fl!("cmd-import-shell", shell = "powershell"))]
     Powershell,
 }
 

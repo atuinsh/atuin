@@ -14,7 +14,7 @@ use crate::i18n::fl;
 
 #[derive(Args, Debug)]
 pub struct Push {
-    #[arg(long, short, help = fl!("arg-store-push-tag"))]
+    #[arg(long, short, help = fl!("arg-store-tag"))]
     pub tag: Option<RecordTag>,
 
     #[arg(long, help = fl!("arg-store-push-host"))]

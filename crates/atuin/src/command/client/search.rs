@@ -86,10 +86,10 @@ pub struct Cmd {
     #[arg(allow_hyphen_values = true)]
     query: Vec<String>,
 
-    #[arg(long, help = fl!("arg-search-cmd-only"))]
+    #[arg(long, help = fl!("arg-cmd-only"))]
     cmd_only: bool,
 
-    #[arg(long, help = fl!("arg-search-print0"))]
+    #[arg(long, help = fl!("arg-print0"))]
     print0: bool,
 
     #[arg(long, help = fl!("arg-search-delete"))]

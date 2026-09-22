@@ -22,7 +22,7 @@ pub struct Cmd {
     #[clap(long, short, help = fl!("arg-account-login-key"))]
     pub key: Option<String>,
 
-    #[clap(long, short, help = fl!("arg-account-login-totp-code"))]
+    #[clap(long, short, help = fl!("arg-totp-code"))]
     pub totp_code: Option<String>,
 
     #[clap(long, hide = true)]
@@ -44,7 +44,7 @@ impl Cmd {
     pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         match settings.resolve_sync_auth().await {
             SyncAuth::Hub { .. } => {
-                println!("{}", fl!("login-hub-authenticated"));
+                println!("{}", fl!("account-hub-authenticated"));
                 println!("{}", fl!("account-run-logout"));
                 return Ok(());
             }
@@ -109,7 +109,7 @@ impl Cmd {
             } else {
                 meta.save_session(&session).await?;
                 println!("\n{}", fl!("account-not-migrated-note"));
-                println!("{}", fl!("login-not-migrated-hint"));
+                println!("{}", fl!("account-not-migrated-hint"));
             }
         } else {
             // Interactive login via browser OAuth flow.
@@ -163,7 +163,7 @@ impl Cmd {
         tracing::info!("Authenticating with Atuin Hub...");
 
         let session = atuin_client::hub::HubAuthSession::start(hub_address).await?;
-        println!("{}", fl!("login-open-url"));
+        println!("{}", fl!("account-hub-open-url"));
         println!("{}", session.auth_url);
 
         let token = session

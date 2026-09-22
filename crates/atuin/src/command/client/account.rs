@@ -21,13 +21,13 @@ pub struct Cmd {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    #[command(about = fl!("cmd-account-login"))]
+    #[command(about = fl!("cmd-login"))]
     Login(login::Cmd),
 
     #[command(about = fl!("cmd-account-register"))]
     Register(register::Cmd),
 
-    #[command(about = fl!("cmd-account-logout"))]
+    #[command(about = fl!("cmd-logout"))]
     Logout,
 
     #[command(about = fl!("cmd-account-delete"))]
