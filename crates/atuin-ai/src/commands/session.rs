@@ -517,7 +517,16 @@ async fn import(
 /// Turn a `latest`/id selector into a full session handle by matching it against the session list
 /// (the harness is only known from the listing, so an id alone cannot address a session).
 async fn resolve(client: &mut AiClient, selector: &str) -> Result<agent::HarnessSession> {
-    select_session(client.list_sessions(None).await?.try_collect().await?, selector)
+    let mut stream = client.list_sessions(None).await?;
+    // `latest` only needs the newest session, which the daemon streams first, so take a single
+    // item instead of draining the whole stream. Any id/prefix selector needs the full list to
+    // match and disambiguate.
+    let sessions: Vec<agent::Session> = if selector.eq_ignore_ascii_case("latest") {
+        stream.try_next().await?.into_iter().collect()
+    } else {
+        stream.try_collect().await?
+    };
+    select_session(sessions, selector)
 }
 
 /// Pure selector logic, split out from the RPC so it can be tested directly.
@@ -1172,6 +1181,17 @@ mod tests {
     #[rstest]
     fn latest_on_empty_is_an_error() {
         assert!(select_session(Vec::new(), "latest").is_err());
+    }
+
+    #[rstest]
+    fn latest_resolves_from_a_single_session() {
+        // `resolve` now hands `select_session` just the newest session for `latest`, so a
+        // one-element list must still resolve.
+        let handle =
+            select_session(vec![session(agent::HarnessKind::ClaudeCode, "only")], "latest")
+                .unwrap();
+        assert_eq!(handle.session_id, "only");
+        assert_eq!(handle.harness, agent::HarnessKind::ClaudeCode as i32);
     }
 
     #[rstest]
