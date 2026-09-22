@@ -1,6 +1,7 @@
-use i18n_embed::fluent::{fluent_language_loader, FluentLanguageLoader};
+use std::sync::LazyLock;
+
+use i18n_embed::fluent::{FluentLanguageLoader, fluent_language_loader};
 pub use i18n_embed_fl::fl;
-use lazy_static::lazy_static;
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
@@ -9,37 +10,26 @@ struct Localizations;
 
 pub use atuin_macro::tl;
 
-lazy_static! {
-    // We assume that one LOADER is sufficient. Fluent provides more
-    // flexibility, but for now, this simplifies integration.
-    pub static ref LOADER: FluentLanguageLoader = {
-        // Load languages from central internationalization folder.
-        let language_loader: FluentLanguageLoader = fluent_language_loader!();
-        let requested_languages = vec!["en-GB".parse().unwrap()];
+// We assume that one LOADER is sufficient. Fluent provides more
+// flexibility, but for now, this simplifies integration.
+pub static LOADER: LazyLock<FluentLanguageLoader> = LazyLock::new(|| {
+    // Load languages from central internationalization folder.
+    let language_loader: FluentLanguageLoader = fluent_language_loader!();
+    let requested_languages = vec!["en-GB".parse().unwrap()];
 
-        let _result = i18n_embed::select(
-            &language_loader, &Localizations, &requested_languages);
-        language_loader
-    };
-}
+    let _result = i18n_embed::select(&language_loader, &Localizations, &requested_languages);
+    language_loader
+});
 
 #[test]
 fn basic_tl_without_parameter() {
-    assert_eq!(
-        tl!(fl, LOADER, "Danger, Bill Bobinson"),
-        "Danger, William of Bobinson"
-    );
+    assert_eq!(tl!(fl, LOADER, "Danger, Bill Bobinson"), "Danger, William of Bobinson");
 }
 
 #[test]
 fn basic_tl_with_parameter() {
     assert_eq!(
-        tl!(
-            fl,
-            LOADER,
-            "unrecognized subcommand '%{subcommand}'",
-            subcommand = "SUB"
-        ),
+        tl!(fl, LOADER, "unrecognized subcommand '%{subcommand}'", subcommand = "SUB"),
         "unrecognised subcommand '\u{2068}SUB\u{2069}'"
     );
 }
@@ -65,12 +55,7 @@ fn tl_with_non_en_range_with_parameter() {
     let _result = i18n_embed::select(&language_loader, &Localizations, &requested_languages);
 
     assert_eq!(
-        tl!(
-            fl,
-            language_loader,
-            "Hello, my name is %{name}",
-            name = "रीमा"
-        ),
+        tl!(fl, language_loader, "Hello, my name is %{name}", name = "रीमा"),
         "नमस्ते, मेरा नाम \u{2068}रीमा\u{2069} है।"
     );
 }
@@ -79,11 +64,7 @@ fn tl_with_non_en_range_with_parameter() {
 fn tl_with_selector_parameter() {
     let language_loader: FluentLanguageLoader = fluent_language_loader!();
 
-    let _result = i18n_embed::select(
-        &language_loader,
-        &Localizations,
-        &["en-GB".parse().unwrap()],
-    );
+    let _result = i18n_embed::select(&language_loader, &Localizations, &["en-GB".parse().unwrap()]);
 
     assert_eq!(
         tl!(fl, language_loader, "the user that has files", gender = "f"),
@@ -100,11 +81,7 @@ fn tl_with_selector_parameter() {
         "the user that has files"
     );
 
-    let _result = i18n_embed::select(
-        &language_loader,
-        &Localizations,
-        &["ga-IE".parse().unwrap()],
-    );
+    let _result = i18n_embed::select(&language_loader, &Localizations, &["ga-IE".parse().unwrap()]);
 
     assert_eq!(
         tl!(fl, language_loader, "the user that has files", gender = "f"),

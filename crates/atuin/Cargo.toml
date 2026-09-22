@@ -75,12 +75,9 @@ profiling-traced = [
 [dependencies]
 atuin-ai = { workspace = true, optional = true }
 # TODO(taylordotfish): in Rust 1.99 we can change this to `workspace = true`
-atuin-client = {
-    path = "../atuin-client",
-    version = "18.23.0",
-    optional = true,
-    default-features = false,
-}
+# Keep inline tables on one line: i18n-embed-fl's `fl!` parses this manifest
+# with a TOML 1.0 parser (find-crate -> toml 0.5).
+atuin-client = { path = "../atuin-client", version = "18.23.0", optional = true, default-features = false }
 atuin-common = { workspace = true, features = ["unicode", "os", "ai"] }
 atuin-daemon = { workspace = true, optional = true }
 atuin-domain = { workspace = true }
