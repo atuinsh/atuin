@@ -276,7 +276,10 @@ fn startup_timeout(settings: &Settings) -> Duration {
 /// An error that occurred while trying to remove a socket.
 #[cfg(unix)]
 #[derive(Debug, thiserror::Error)]
-#[error("failed to remove daemon socket {}: {source}", .path.display())]
+#[error(
+    "{}",
+    crate::i18n::fl!("daemon-remove-socket-failed", path = .path.display().to_string(), source = .source.to_string())
+)]
 struct RemoveSocketError {
     path: PathBuf,
     source: std::io::Error,
@@ -657,6 +660,19 @@ mod tests {
     use rstest::{fixture, rstest};
 
     use super::*;
+
+    #[cfg(unix)]
+    #[rstest]
+    fn remove_socket_error_names_the_path_and_cause() {
+        let err = RemoveSocketError {
+            path: PathBuf::from("/run/atuin.sock"),
+            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        };
+        assert_eq!(
+            err.to_string(),
+            "failed to remove daemon socket /run/atuin.sock: permission denied"
+        );
+    }
 
     #[rstest]
     #[case::matches(DAEMON_VERSION, DAEMON_PROTOCOL_VERSION, true)]

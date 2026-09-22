@@ -21,13 +21,14 @@ mod writers;
 use writers::{HistoryMatch, JsonWriter, PlainWriter, PrettyWriter, RenderCtx, Writer};
 
 use crate::command::client::daemon;
+use crate::i18n::fl;
 
 #[derive(Debug, Error)]
 pub enum RunError {
-    #[error("output capture is disabled. enable [output] in your config to search command output.")]
+    #[error("{}", fl!("output-search-disabled"))]
     Disabled,
 
-    #[error("blank query provided. please run 'atuin output search --help'")]
+    #[error("{}", fl!("output-search-empty-query"))]
     EmptyQuery,
 
     #[error("could not connect to the daemon")]
