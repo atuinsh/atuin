@@ -5,48 +5,22 @@ use atuin_common::encryption::paseto_v4;
 use clap::Parser;
 use eyre::{Result, bail};
 
-use super::login::{env_secret, or_user_input, read_secret_from_stdin};
-
-const PASSWORD_ENV: &str = "ATUIN_PASSWORD";
+use super::login::{or_user_input, password_arg};
 
 #[derive(Parser, Debug)]
 pub struct Cmd {
     #[clap(long, short)]
     pub username: Option<String>,
 
-    /// Account password. Falls back to the `ATUIN_PASSWORD` environment
-    /// variable, or `--password-stdin`, before prompting interactively.
-    #[clap(long, short, conflicts_with = "password_stdin")]
+    /// Your password, or `-` to read it from stdin. Falls back to `ATUIN_PASSWORD`, then a prompt
+    #[clap(long, short)]
     pub password: Option<String>,
-
-    /// Read the account password from standard input. Mutually exclusive
-    /// with `--password`.
-    #[clap(long, conflicts_with = "password")]
-    pub password_stdin: bool,
 
     #[clap(long, short)]
     pub email: Option<String>,
 }
 
 impl Cmd {
-    /// Resolve the account password from, in order: the `--password` flag,
-    /// `--password-stdin`, or the `ATUIN_PASSWORD` environment variable.
-    /// Returns `None` if no source was provided — callers decide whether
-    /// to prompt interactively or fall through to a different flow.
-    ///
-    /// # Errors
-    /// Returns an error if `--password-stdin` was set and stdin could not be
-    /// read.
-    fn resolve_password(&self) -> Result<Option<String>> {
-        if let Some(p) = &self.password {
-            return Ok(Some(p.clone()));
-        }
-        if self.password_stdin {
-            return Ok(Some(read_secret_from_stdin()?));
-        }
-        Ok(env_secret(PASSWORD_ENV))
-    }
-
     #[allow(clippy::too_many_lines)]
     pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         match settings.resolve_sync_auth().await {
@@ -71,36 +45,16 @@ impl Cmd {
             SyncAuth::NotLoggedIn { .. } => {}
         }
 
-        // For Hub sync, only resolve the password (which may read stdin) once
-        // we know the headless path is reachable; otherwise a piped secret
-        // would be silently consumed before falling through to OAuth.
-        let resolved_password = if settings.is_hub_sync() {
-            if self.username.is_some() && self.email.is_some() {
-                self.resolve_password()?
-            } else {
-                None
-            }
-        } else {
-            // Legacy registration always needs the password.
-            self.resolve_password()?
-        };
-
         if settings.is_hub_sync() {
-            let required_for_headless = 3;
-            let provided =
-                [self.username.is_some(), self.email.is_some(), resolved_password.is_some()]
-                    .iter()
-                    .filter(|&b| *b)
-                    .count();
-            if provided < required_for_headless {
-                println!(
-                    "Username, password, and email are all required for headless registration. \
-                     Continuing with interactive registration.\n"
-                );
-            }
+            // Only resolved once headless registration is reachable, so that
+            // `--password -` does not swallow stdin before the browser flow.
+            let password = match (&self.username, &self.email) {
+                (Some(_), Some(_)) => password_arg(self.password.as_deref())?,
+                _ => None,
+            };
 
             if let (Some(username), Some(email), Some(password)) =
-                (&self.username, &self.email, &resolved_password)
+                (&self.username, &self.email, &password)
             {
                 // Headless registration via v0 API (for CI / scripting).
                 let client = auth::auth_client(settings).await;
@@ -147,13 +101,17 @@ impl Cmd {
                      if you lose it."
                 );
             } else {
+                println!(
+                    "Username, password, and email are all required for headless registration. \
+                     Continuing with interactive registration.\n"
+                );
+
                 // Interactive registration: delegate to the browser OAuth flow.
                 // Registration on Hub happens on the website; the CLI just needs
                 // to authenticate afterwards.
                 super::login::Cmd {
                     username: None,
                     password: None,
-                    password_stdin: false,
                     key: None,
                     totp_code: None,
                     from_registration: true,
@@ -167,7 +125,8 @@ impl Cmd {
 
             let username = or_user_input(self.username.clone(), "username");
             let email = or_user_input(self.email.clone(), "email");
-            let password = resolved_password.unwrap_or_else(super::login::read_user_password);
+            let password = password_arg(self.password.as_deref())?
+                .unwrap_or_else(super::login::read_user_password);
 
             if password.is_empty() {
                 bail!("please provide a password");
