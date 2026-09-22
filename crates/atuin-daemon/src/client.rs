@@ -27,7 +27,8 @@ use crate::grpc::ai_agent::pb::{
 use crate::grpc::ai_session::pb::ai_session_client::AiSessionClient as AiSessionServiceClient;
 use crate::grpc::ai_session::pb::{
     GetSessionEvent, GetSessionRequest, GetTranscriptChunk, GetTranscriptRequest,
-    ListSessionsRequest, TailSessionsEvent, TailSessionsRequest,
+    ListSessionsRequest, SearchSessionsMatch, SearchSessionsRequest, TailSessionsEvent,
+    TailSessionsRequest,
 };
 use crate::grpc::history::pb::history_client::HistoryClient as HistoryServiceClient;
 use crate::grpc::history::pb::{
@@ -544,5 +545,19 @@ impl AiClient {
             harness: harness.map(|h| h as i32),
         };
         Ok(self.client.tail_sessions(request).await?.into_inner())
+    }
+
+    pub async fn search_sessions(
+        &mut self,
+        query: &str,
+        harness: Option<AiHarnessKind>,
+        limit: u32,
+    ) -> Result<tonic::Streaming<SearchSessionsMatch>> {
+        let request = SearchSessionsRequest {
+            query: query.to_owned(),
+            limit,
+            harness: harness.map(|h| h as i32),
+        };
+        Ok(self.client.search_sessions(request).await?.into_inner())
     }
 }

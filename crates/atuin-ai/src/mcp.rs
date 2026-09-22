@@ -28,6 +28,7 @@ use serde_json::{Value, json};
 use strum::IntoEnumIterator;
 
 use crate::tools::output::search::AtuinOutputSearchToolCall;
+use crate::tools::session::search::AtuinAiSessionSearchToolCall;
 use crate::tools::{
     AtuinHistoryToolCall, AtuinOutputToolCall, DEFAULT_HISTORY_RESULTS, HistorySearchFilterMode,
     MAX_HISTORY_RESULTS, ToolOutcome,
@@ -65,7 +66,11 @@ When a question is about the user themselves — 'what do I use', 'how do I conn
 Do not use `history`, ~/.bash_history, or ~/.zsh_history: they are typically empty or stale in \
      non-interactive shells and lack exit codes and output. Atuin is the reliable source. Prefer \
      atuin_output over re-running an expensive or side-effectful command just to see its output \
-     again.";
+     again.
+
+To recall what an AI coding agent did or discussed in an earlier session — which session touched a \
+     file, hit an error, or made a decision — search atuin_ai_session_search rather than guessing \
+     or asking the user to reconstruct it.";
 
 /// The initialize result, separated from the handler so tests can assert on
 /// it without constructing a database-backed server.
@@ -110,6 +115,11 @@ impl ServerHandler for AtuinMcp {
             "atuin_output_search" => {
                 parse_json_object::<AtuinOutputSearchToolCall>(arguments)?
                     .execute(&self.db, &self.settings)
+                    .await
+            }
+            "atuin_ai_session_search" => {
+                parse_json_object::<AtuinAiSessionSearchToolCall>(arguments)?
+                    .execute(&self.settings)
                     .await
             }
             name => {
@@ -237,6 +247,36 @@ fn tool_definitions() -> Vec<Tool> {
         unreachable!()
     };
 
+    let Value::Object(session_search_schema) = json!({
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Words to look for across captured AI-agent session transcripts \
+                    (message text, reasoning, tool calls and results, and session titles). Terms \
+                    are AND-ed and matched as whole words (case-insensitive; no regex or prefix \
+                    matching), so use a few distinctive words, not a sentence.",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20,
+                "default": 5,
+                "description": "Maximum number of sessions to return, most relevant first.",
+            },
+            "harness": {
+                "type": "string",
+                "enum": ["claude-code", "codex", "copilot", "opencode", "pi"],
+                "description": "Restrict the search to sessions from one AI harness. Omit to \
+                    search every harness.",
+            },
+        },
+        "required": ["query"],
+    }) else {
+        unreachable!()
+    };
+
     vec![
         Tool::new(
             "atuin_history",
@@ -273,6 +313,17 @@ fn tool_definitions() -> Vec<Tool> {
             schema_for_type::<AtuinOutputSearchToolCall>(),
         )
         .annotate(ToolAnnotations::with_title("Search past command output").read_only(true)),
+        Tool::new(
+            "atuin_ai_session_search",
+            "Full-text search across the transcripts of AI coding-agent sessions Atuin has \
+             captured (Claude Code, Codex, Copilot, opencode, pi). Use it to find which past \
+             agent session discussed a topic, hit an error, touched a file, or made a decision — \
+             it searches message text, reasoning, tool calls and results, and session titles. \
+             Each result gives the session id, harness, last-active time, title, and a matching \
+             snippet. Requires the Atuin daemon with AI session capture enabled.",
+            session_search_schema,
+        )
+        .annotate(ToolAnnotations::with_title("Search AI agent sessions").read_only(true)),
     ]
 }
 
@@ -290,7 +341,12 @@ mod tests {
     fn tool_definitions_list_all_tools_as_read_only() {
         let tools = tool_definitions();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-        assert_eq!(names, ["atuin_history", "atuin_output", "atuin_output_search"]);
+        assert_eq!(names, [
+            "atuin_history",
+            "atuin_output",
+            "atuin_output_search",
+            "atuin_ai_session_search",
+        ]);
 
         for tool in &tools {
             assert_eq!(tool.annotations.as_ref().unwrap().read_only_hint, Some(true));
@@ -323,11 +379,28 @@ mod tests {
     }
 
     #[rstest]
+    fn ai_session_search_schema_matches_the_parser() {
+        let tools = tool_definitions();
+        let schema = &tools[3].input_schema;
+        assert_eq!(schema["required"], json!(["query"]));
+        assert_eq!(schema["properties"]["query"]["minLength"], 1);
+        let limit = &schema["properties"]["limit"];
+        assert_eq!(limit["minimum"], 1);
+        assert_eq!(limit["maximum"], 20);
+        assert_eq!(limit["default"], 5);
+        assert_eq!(
+            schema["properties"]["harness"]["enum"],
+            json!(["claude-code", "codex", "copilot", "opencode", "pi"])
+        );
+    }
+
+    #[rstest]
     fn server_info_carries_instructions() {
         let instructions = server_info().instructions.expect("initialize result has instructions");
         assert!(instructions.contains("atuin_history"));
         assert!(instructions.contains("atuin_output"));
         assert!(instructions.contains("atuin_output_search"));
+        assert!(instructions.contains("atuin_ai_session_search"));
         assert!(instructions.len() < MAX_INSTRUCTIONS_LEN, "instructions should stay concise");
     }
 }

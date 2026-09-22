@@ -1,16 +1,22 @@
 use std::path::{Path, PathBuf};
 
+use atuin_common::db::sqlite::fts::{FtsQueryExt, TextHighlighter, match_expression};
 use atuin_common::db::sqlite::{Sqlite, SqliteOpenOrCreateError};
 use atuin_common::db::{self};
 use atuin_common::harnesstools::session::{Content, Role, SessionMeta, Usage};
 use atuin_domain::record::RecordId;
 use futures::{Stream, StreamExt, TryStreamExt};
 use time::OffsetDateTime;
+use tracing::warn;
 
-use super::{HarnessKind, HarnessSession, Message, NativeSessionId, Session, SourceId};
+use super::{
+    HarnessKind, HarnessSession, Message, NativeSessionId, Session, SessionMatch, SourceId,
+};
 
 const COMPRESS_THRESHOLD: usize = 256;
 const ZSTD_LEVEL: i32 = 3;
+const REINDEX_CHUNK: i64 = 512;
+const SNIPPET_TOKENS: i32 = 32;
 
 #[derive(Debug, Clone)]
 pub struct AiSessionDatabase {
@@ -92,11 +98,29 @@ struct MessageRow {
     usage_present: i64,
 }
 
+#[derive(sqlx::FromRow)]
+struct SearchRow {
+    #[sqlx(flatten)]
+    session: SessionRow,
+    title_hl: String,
+    preview_hl: String,
+    score: f64,
+}
+
+#[derive(sqlx::FromRow)]
+struct ReindexRow {
+    rowid: i64,
+    #[sqlx(flatten)]
+    message: MessageRow,
+    session_title: Option<String>,
+}
+
 impl AiSessionDatabase {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, DbError> {
         let db = Sqlite::builder(path.as_ref().as_os_str()).restrict_permissions().open().await?;
         let db = Self { db };
         db.migrate().await?;
+        db.reindex().await?;
         Ok(db)
     }
 
@@ -114,7 +138,7 @@ impl AiSessionDatabase {
     }
 
     pub async fn append(&self, msg: &Message) -> Result<Appended, DbError> {
-        let mut tx = self.db.pool().begin().await?;
+        let mut tx = self.db.pool().begin_with("BEGIN IMMEDIATE").await?;
 
         let harness = msg.session.harness as i64;
         let session_id = msg.session.session.as_ref();
@@ -172,6 +196,16 @@ impl AiSessionDatabase {
             tx.commit().await?;
             return Ok(Appended::Duplicate);
         }
+
+        let rowid = inserted.last_insert_rowid();
+        let highlighter = TextHighlighter::default();
+        let body = Self::searchable_body(msg);
+        db::query("INSERT INTO messages_fts(rowid, title, body) VALUES (?, ?, ?)")
+            .bind(rowid)
+            .bind_highlightable(highlighter, msg.session_title.as_deref().unwrap_or(""))
+            .bind_highlightable(highlighter, &body)
+            .execute(&mut *tx)
+            .await?;
 
         // Session title denormalised onto the message so it survives a reproject from records
         // (which carry messages only). The session upsert below applies it latest-non-null-wins.
@@ -348,6 +382,137 @@ impl AiSessionDatabase {
         self.messages(session).map(|result| result.map(|msg| Self::render_transcript_chunk(&msg)))
     }
 
+    pub fn search(
+        &self,
+        query: &str,
+        harness: Option<HarnessKind>,
+        limit: u32,
+    ) -> impl Stream<Item = Result<SessionMatch, DbError>> + Send + 'static {
+        let pool = self.db.pool().clone();
+        let query = query.to_owned();
+
+        async_stream::try_stream! {
+            let Some(expr) = match_expression(&query) else {
+                return;
+            };
+
+            let [open, close] = TextHighlighter::default().markers();
+            let harness_clause = if harness.is_some() { " AND m.harness = ?" } else { "" };
+            let candidates: i64 =
+                if limit == 0 { i64::MAX } else { i64::from(limit).saturating_mul(8).max(200) };
+
+            let sql = format!(
+                "SELECT s.harness, s.session_id, s.parent_harness, s.parent_session_id, s.cwd, \
+                 s.git_branch, s.model, s.started_at, s.updated_at, s.message_count, \
+                 s.usage_input, s.usage_output, s.usage_cache_read, s.usage_cache_write, s.title, \
+                 s.preview, highlight(messages_fts, 0, ?, ?) AS title_hl, \
+                 snippet(messages_fts, 1, ?, ?, '…', {SNIPPET_TOKENS}) AS preview_hl, \
+                 ranked.score AS score FROM (\
+                 SELECT messages_fts.rowid AS rowid, -bm25(messages_fts) AS score \
+                 FROM messages_fts JOIN messages m ON m.rowid = messages_fts.rowid \
+                 WHERE messages_fts MATCH ?{harness_clause} \
+                 ORDER BY score DESC LIMIT ?) AS ranked \
+                 JOIN messages_fts ON messages_fts.rowid = ranked.rowid \
+                 JOIN messages m ON m.rowid = ranked.rowid \
+                 JOIN sessions s ON s.harness = m.harness AND s.session_id = m.session_id \
+                 WHERE messages_fts MATCH ? \
+                 ORDER BY ranked.score DESC, s.updated_at DESC, s.session_id",
+            );
+
+            let mut stmt = db::query_as::<_, SearchRow>(sqlx::AssertSqlSafe(sql))
+                .bind(open.to_string())
+                .bind(close.to_string())
+                .bind(open.to_string())
+                .bind(close.to_string())
+                .bind(expr.clone());
+            if let Some(harness) = harness {
+                stmt = stmt.bind(harness as i64);
+            }
+            stmt = stmt.bind(candidates).bind(expr);
+
+            let highlighter = TextHighlighter::default();
+            let mut seen = std::collections::HashSet::new();
+            let mut yielded = 0u32;
+            let mut rows = stmt.fetch(&pool);
+            while let Some(row) = rows.try_next().await? {
+                if !seen.insert((row.session.harness, row.session.session_id.clone())) {
+                    continue;
+                }
+                yield SessionMatch {
+                    session: Self::session_from_row(row.session)?,
+                    title: highlighter.as_highlighted(row.title_hl),
+                    preview: highlighter.as_highlighted(row.preview_hl),
+                    score: row.score,
+                };
+                yielded += 1;
+                if limit != 0 && yielded >= limit {
+                    break;
+                }
+            }
+        }
+    }
+
+    pub async fn reindex(&self) -> Result<(), DbError> {
+        let pool = self.db.pool();
+        let messages: i64 =
+            db::query_scalar("SELECT count(*) FROM messages").fetch_one(pool).await?;
+        let indexed: i64 =
+            db::query_scalar("SELECT count(*) FROM messages_fts").fetch_one(pool).await?;
+        if indexed >= messages {
+            return Ok(());
+        }
+
+        let mut watermark: i64 =
+            db::query_scalar("SELECT coalesce(max(rowid), 0) FROM messages_fts")
+                .fetch_one(pool)
+                .await?;
+
+        let highlighter = TextHighlighter::default();
+        loop {
+            let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+            let rows: Vec<ReindexRow> = db::query_as::<_, ReindexRow>(
+                "SELECT m.rowid AS rowid, m.id, m.harness, m.session_id, m.source_id, \
+                 m.parent_harness, m.parent_session_id, m.parent_source_id, m.thread, \
+                 m.timestamp, m.role, m.content, m.content_z, m.cwd, m.git_branch, m.model, \
+                 m.usage_input, m.usage_output, m.usage_cache_read, m.usage_cache_write, \
+                 m.stop_reason, m.usage_present, s.title AS session_title FROM messages m LEFT \
+                 JOIN sessions s ON s.harness = m.harness AND s.session_id = m.session_id WHERE \
+                 m.rowid > ? ORDER BY m.rowid LIMIT ?",
+            )
+            .bind(watermark)
+            .bind(REINDEX_CHUNK)
+            .fetch_all(&mut *tx)
+            .await?;
+
+            let Some(last) = rows.last() else {
+                break;
+            };
+            watermark = last.rowid;
+
+            for row in rows {
+                let rowid = row.rowid;
+                let title = row.session_title.unwrap_or_default();
+                let body = match Self::message_from_row(row.message) {
+                    Ok(msg) => Self::searchable_body(&msg),
+                    Err(err) => {
+                        warn!(?err, rowid, "failed to decode ai-session message; indexing empty");
+                        String::new()
+                    }
+                };
+                db::query(
+                    "INSERT OR REPLACE INTO messages_fts(rowid, title, body) VALUES (?, ?, ?)",
+                )
+                .bind(rowid)
+                .bind_highlightable(highlighter, &title)
+                .bind_highlightable(highlighter, &body)
+                .execute(&mut *tx)
+                .await?;
+            }
+            tx.commit().await?;
+        }
+        Ok(())
+    }
+
     fn split_content(json: String) -> Result<(String, Option<Vec<u8>>), DbError> {
         if json.len() < COMPRESS_THRESHOLD {
             return Ok((json, None));
@@ -367,6 +532,69 @@ impl AiSessionDatabase {
             Content::Text(text) => Some(text.clone()),
             _ => None,
         })
+    }
+
+    fn searchable_body(msg: &Message) -> String {
+        let mut out = String::new();
+        for content in &msg.content {
+            Self::push_content_text(&mut out, content);
+        }
+        if let Some(cwd) = &msg.cwd {
+            out.push_str(&cwd.to_string_lossy());
+            out.push('\n');
+        }
+        if let Some(branch) = &msg.git_branch {
+            out.push_str(branch);
+            out.push('\n');
+        }
+        if let Some(model) = &msg.model {
+            out.push_str(model);
+            out.push('\n');
+        }
+        out
+    }
+
+    fn push_content_text(out: &mut String, content: &Content) {
+        match content {
+            Content::Text(text) | Content::Reasoning(text) => {
+                out.push_str(text);
+                out.push('\n');
+            }
+            Content::ToolUse(tool) => {
+                out.push_str(&tool.name);
+                out.push('\n');
+                Self::push_json_text(out, &tool.input);
+            }
+            Content::ToolResult(result) => Self::push_json_text(out, &result.output),
+            Content::Other(value) => Self::push_json_text(out, value),
+        }
+    }
+
+    fn push_json_text(out: &mut String, value: &serde_json::Value) {
+        use std::fmt::Write as _;
+
+        match value {
+            serde_json::Value::String(text) => {
+                out.push_str(text);
+                out.push('\n');
+            }
+            serde_json::Value::Number(number) => {
+                let _ = writeln!(out, "{number}");
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    Self::push_json_text(out, item);
+                }
+            }
+            serde_json::Value::Object(entries) => {
+                for (key, value) in entries {
+                    out.push_str(key);
+                    out.push('\n');
+                    Self::push_json_text(out, value);
+                }
+            }
+            serde_json::Value::Bool(_) | serde_json::Value::Null => {}
+        }
     }
 
     fn fold_usage(usage: Option<&Usage>) -> (i64, i64, i64, i64) {
@@ -516,14 +744,18 @@ impl AiSessionDatabase {
 
 #[cfg(test)]
 mod tests {
-    use atuin_common::harnesstools::session::{Content, Role, SessionMeta, Usage};
+    use atuin_common::harnesstools::session::{
+        Content, Role, SessionMeta, ToolCallId, ToolResult, ToolUse, Usage,
+    };
     use atuin_domain::record::RecordId;
     use futures::TryStreamExt;
     use rstest::rstest;
     use time::OffsetDateTime;
 
     use super::{AiSessionDatabase, Appended, COMPRESS_THRESHOLD};
-    use crate::ai_session::{HarnessKind, HarnessSession, Message, NativeSessionId, SourceId};
+    use crate::ai_session::{
+        HarnessKind, HarnessSession, Message, NativeSessionId, SessionMatch, SourceId,
+    };
 
     fn sample_message() -> Message {
         Message::builder()
@@ -749,5 +981,238 @@ mod tests {
         let chunks: Vec<String> = db.transcript(&session).try_collect().await.unwrap();
         assert!(chunks.iter().all(|c| c.ends_with('\n')), "each chunk must be newline-terminated");
         assert_eq!(chunks.concat().lines().count(), 3, "messages must not run together");
+    }
+
+    fn handle(harness: HarnessKind, id: &str) -> HarnessSession {
+        HarnessSession {
+            harness,
+            session: NativeSessionId::from(id.to_owned()),
+        }
+    }
+
+    fn message_with(
+        session: &HarnessSession,
+        index: i64,
+        role: Role,
+        content: Vec<Content>,
+    ) -> Message {
+        Message::builder()
+            .id(RecordId(atuin_common::utils::uuid_v7()))
+            .session(session.clone())
+            .source_id(SourceId::from(format!("source-{index}")))
+            .timestamp(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(index))
+            .role(role)
+            .content(content)
+            .build()
+    }
+
+    async fn search(db: &AiSessionDatabase, query: &str) -> Vec<SessionMatch> {
+        db.search(query, None, 0).try_collect().await.unwrap()
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_finds_a_message_by_its_text() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        db.append(&message_in(&session, 0, "the flaky nextest race")).await.unwrap();
+
+        let hits = search(&db, "flaky race").await;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session.handle, session);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_matches_reasoning_tool_calls_results_and_metadata() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        let mut message = message_with(&session, 0, Role::Assistant, vec![
+            Content::Reasoning("weighing the tradeoffs".to_owned()),
+            Content::ToolUse(ToolUse {
+                id: ToolCallId::from("call-1".to_owned()),
+                name: "execute_shell_command".to_owned(),
+                input: serde_json::json!({ "command": "cargo nextest run" }),
+            }),
+            Content::ToolResult(ToolResult {
+                call: ToolCallId::from("call-1".to_owned()),
+                output: serde_json::json!({ "stderr": "ENOSPC no space left" }),
+                error: true,
+            }),
+            Content::Other(serde_json::json!({ "note": "peculiar" })),
+        ]);
+        message.cwd = Some(std::path::PathBuf::from("/home/marko/atuin"));
+        message.git_branch = Some("feat/ai-session-fts".to_owned());
+        message.model = Some("claude-opus".to_owned());
+        message.session_title = Some("Adding full-text search".to_owned());
+        db.append(&message).await.unwrap();
+
+        for query in [
+            "tradeoffs",             // reasoning
+            "execute_shell_command", // tool name
+            "nextest",               // tool input
+            "ENOSPC",                // tool result output
+            "peculiar",              // Content::Other
+            "atuin",                 // cwd
+            "feat",                  // git branch
+            "opus",                  // model
+            "full-text",             // session title
+        ] {
+            assert_eq!(search(&db, query).await.len(), 1, "query {query:?} should match");
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_filters_by_harness() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let claude = handle(HarnessKind::ClaudeCode, "claude");
+        let codex = handle(HarnessKind::Codex, "codex");
+        db.append(&message_in(&claude, 0, "shared keyword")).await.unwrap();
+        db.append(&message_in(&codex, 1, "shared keyword")).await.unwrap();
+
+        let all: Vec<_> = db.search("shared", None, 0).try_collect().await.unwrap();
+        assert_eq!(all.len(), 2);
+
+        let only_codex: Vec<_> =
+            db.search("shared", Some(HarnessKind::Codex), 0).try_collect().await.unwrap();
+        assert_eq!(only_codex.len(), 1);
+        assert_eq!(only_codex[0].session.handle, codex);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_limit_bounds_the_number_of_sessions() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        for i in 0..5 {
+            let session = handle(HarnessKind::ClaudeCode, &format!("session-{i}"));
+            db.append(&message_in(&session, i, "common term")).await.unwrap();
+        }
+
+        let two: Vec<_> = db.search("common", None, 2).try_collect().await.unwrap();
+        assert_eq!(two.len(), 2);
+        let all: Vec<_> = db.search("common", None, 0).try_collect().await.unwrap();
+        assert_eq!(all.len(), 5);
+    }
+
+    #[rstest]
+    #[case::empty("")]
+    #[case::whitespace("   \t\n ")]
+    #[case::punctuation_only("()")]
+    #[case::operator_soup("***")]
+    #[tokio::test]
+    async fn degenerate_queries_yield_no_results_without_error(#[case] query: &str) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        db.append(&message_in(&sample_handle(), 0, "real content here")).await.unwrap();
+        assert!(search(&db, query).await.is_empty());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn fts5_operators_in_the_query_are_matched_literally() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        db.append(&message_in(&sample_handle(), 0, "connection refused: retrying")).await.unwrap();
+        // `refused:` is an FTS5 column filter raw; it must match the literal token, not error.
+        assert_eq!(search(&db, "refused:").await.len(), 1);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn compressed_message_is_searchable() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        let long: String = (0..64).map(|i| format!("segment-{i:03}-needle ")).collect();
+        assert!(long.len() >= COMPRESS_THRESHOLD);
+        db.append(&message_in(&session, 0, &long)).await.unwrap();
+
+        assert_eq!(search(&db, "needle").await.len(), 1);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn unicode_tokens_are_searchable() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        db.append(&message_in(&sample_handle(), 0, "café エラー logs")).await.unwrap();
+        assert_eq!(search(&db, "cafe").await.len(), 1, "unicode61 folds diacritics");
+        assert_eq!(search(&db, "エラー").await.len(), 1, "a whole CJK token is matchable");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn duplicate_append_does_not_double_index() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let message = message_in(&sample_handle(), 0, "idempotent needle");
+        assert_eq!(db.append(&message).await.unwrap(), Appended::New);
+        assert_eq!(db.append(&message).await.unwrap(), Appended::Duplicate);
+
+        assert_eq!(search(&db, "needle").await.len(), 1);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn matches_collapse_to_one_hit_per_session() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        db.append(&message_in(&session, 0, "recurring topic here")).await.unwrap();
+        db.append(&message_in(&session, 1, "recurring topic again")).await.unwrap();
+
+        let hits = search(&db, "recurring").await;
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_highlights_the_matching_preview() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        db.append(&message_in(&sample_handle(), 0, "the distinctive marker word")).await.unwrap();
+
+        let hits = search(&db, "distinctive").await;
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].preview.has_match(), "preview must highlight the matched term");
+        assert!(hits[0].preview.to_plain().text.contains("distinctive"));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn reindex_backfills_messages_indexed_before_the_fts_row_existed() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        let long: String = (0..64).map(|i| format!("chunk-{i:03}-buried ")).collect();
+        assert!(long.len() >= COMPRESS_THRESHOLD);
+        db.append(&message_in(&session, 0, &long)).await.unwrap();
+        db.append(&message_in(&session, 1, "plain buried token")).await.unwrap();
+
+        // Simulate a sidecar upgraded to the FTS migration with no index rows yet.
+        atuin_common::db::query("DELETE FROM messages_fts").execute(db.db.pool()).await.unwrap();
+        assert!(search(&db, "buried").await.is_empty());
+
+        db.reindex().await.unwrap();
+        assert_eq!(search(&db, "buried").await.len(), 1);
+
+        // A second pass must not duplicate the index or change results.
+        db.reindex().await.unwrap();
+        assert_eq!(search(&db, "buried").await.len(), 1);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn reindex_resumes_from_an_interrupted_backfill() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        db.append(&message_in(&session, 0, "alpha unique-a")).await.unwrap();
+        db.append(&message_in(&session, 1, "beta unique-b")).await.unwrap();
+        db.append(&message_in(&session, 2, "gamma unique-c")).await.unwrap();
+
+        atuin_common::db::query(
+            "DELETE FROM messages_fts WHERE rowid = (SELECT max(rowid) FROM messages_fts)",
+        )
+        .execute(db.db.pool())
+        .await
+        .unwrap();
+        assert!(search(&db, "unique-c").await.is_empty(), "the highest-rowid row is unindexed");
+        assert_eq!(search(&db, "unique-a").await.len(), 1, "the prefix stays indexed");
+
+        db.reindex().await.unwrap();
+        assert_eq!(search(&db, "unique-c").await.len(), 1, "reindex fills the suffix gap");
     }
 }

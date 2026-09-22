@@ -4,13 +4,17 @@
 //! resolves a selector to a session, calls the matching RPC, and renders the raw messages either as
 //! human-readable text or as JSON/NDJSON for scripting.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{self, IsTerminal, Write};
 
 use atuin_client::settings::Settings;
+use atuin_common::string::highlighted::{HighlightedString, HighlightedTextProto};
 use atuin_daemon::AiClient;
 use atuin_daemon::grpc::ai_agent::pb as agent;
-use atuin_daemon::grpc::ai_session::pb::{get_session_event, tail_sessions_event};
+use atuin_daemon::grpc::ai_session::pb::{
+    SearchSessionsMatch, get_session_event, tail_sessions_event,
+};
 use chrono::{DateTime, Utc};
 use chrono_humanize::HumanTime;
 use clap::{Args, Subcommand, ValueEnum};
@@ -47,8 +51,47 @@ enum SubCmd {
         session: String,
     },
 
+    #[command(about = "Full-text search across captured sessions, most relevant first.")]
+    Search {
+        #[arg(
+            value_name = "QUERY",
+            help = "Words to look for in session titles, message text, reasoning, and tool calls"
+        )]
+        query: String,
+        #[arg(long, value_enum, help = "Only search sessions from this harness")]
+        harness: Option<HarnessArg>,
+        #[arg(
+            long,
+            default_value_t = 10,
+            value_name = "N",
+            help = "Maximum sessions to return; 0 for unbounded"
+        )]
+        limit: u32,
+    },
+
     /// Follow sessions and messages as they are recorded (until interrupted).
     Tail,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum HarnessArg {
+    ClaudeCode,
+    Codex,
+    Copilot,
+    Opencode,
+    Pi,
+}
+
+impl HarnessArg {
+    fn to_pb(self) -> agent::HarnessKind {
+        match self {
+            Self::ClaudeCode => agent::HarnessKind::ClaudeCode,
+            Self::Codex => agent::HarnessKind::Codex,
+            Self::Copilot => agent::HarnessKind::Copilot,
+            Self::Opencode => agent::HarnessKind::Opencode,
+            Self::Pi => agent::HarnessKind::Pi,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -94,6 +137,11 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
         SubCmd::List => list(&mut client, style).await,
         SubCmd::Show { session } => show(&mut client, &session, style).await,
         SubCmd::Transcript { session } => transcript(&mut client, &session, style).await,
+        SubCmd::Search {
+            query,
+            harness,
+            limit,
+        } => search(&mut client, &query, harness.map(HarnessArg::to_pb), limit, style).await,
         SubCmd::Tail => tail(&mut client, style).await,
     };
 
@@ -239,6 +287,65 @@ async fn transcript(client: &mut AiClient, selector: &str, style: Style) -> Resu
         write!(out, "{text}")?;
         if !text.ends_with('\n') {
             writeln!(out)?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn search(
+    client: &mut AiClient,
+    query: &str,
+    harness: Option<agent::HarnessKind>,
+    limit: u32,
+    style: Style,
+) -> Result<()> {
+    let matches: Vec<SearchSessionsMatch> =
+        client.search_sessions(query, harness, limit).await?.try_collect().await?;
+
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
+
+    match style {
+        Style::Json => {
+            let records =
+                matches.iter().map(SearchMatchJson::from_match).collect::<Result<Vec<_>>>()?;
+            serde_json::to_writer(&mut out, &records)?;
+            writeln!(out)?;
+        }
+        Style::Ndjson => {
+            for m in &matches {
+                serde_json::to_writer(&mut out, &SearchMatchJson::from_match(m)?)?;
+                writeln!(out)?;
+            }
+        }
+        _ => {
+            if matches.is_empty() {
+                writeln!(out, "No sessions matched `{query}`.")?;
+                return Ok(());
+            }
+            writeln!(out, "{:<14} {:<12} {:<16}  MATCH", "SESSION", "HARNESS", "UPDATED")?;
+            for m in &matches {
+                let session = m
+                    .session
+                    .as_ref()
+                    .ok_or_else(|| eyre!("the daemon returned a match without a session"))?;
+                let label = m
+                    .title
+                    .as_ref()
+                    .map(HighlightedTextProto::plain)
+                    .filter(|t| !t.trim().is_empty())
+                    .or_else(|| m.preview.as_ref().map(HighlightedTextProto::plain))
+                    .unwrap_or(Cow::Borrowed(""));
+                writeln!(
+                    out,
+                    "{:<14} {:<12} {:<16}  {}",
+                    short_id(&session.session_id),
+                    harness_name(session.harness),
+                    age(session.updated_at.as_ref()),
+                    one_line(label.as_ref(), 80),
+                )?;
+            }
         }
     }
 
@@ -782,6 +889,49 @@ struct TranscriptJson {
     transcript: String,
 }
 
+#[derive(Serialize)]
+struct HighlightJson {
+    text: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    matches: Vec<[usize; 2]>,
+}
+
+#[derive(Serialize)]
+struct SearchMatchJson {
+    session: SessionJson,
+    score: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<HighlightJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview: Option<HighlightJson>,
+}
+
+impl HighlightJson {
+    fn from_proto(proto: &HighlightedTextProto) -> Result<Self> {
+        let highlighted = HighlightedString::try_from(proto.clone())?;
+        let plain = highlighted.to_plain();
+        Ok(Self {
+            text: plain.text.into_owned(),
+            matches: plain.ranges.iter().map(|r| [r.start, r.end]).collect(),
+        })
+    }
+}
+
+impl SearchMatchJson {
+    fn from_match(m: &SearchSessionsMatch) -> Result<Self> {
+        let session = m
+            .session
+            .as_ref()
+            .ok_or_else(|| eyre!("the daemon returned a match without a session"))?;
+        Ok(Self {
+            session: session_json(session),
+            score: m.score,
+            title: m.title.as_ref().map(HighlightJson::from_proto).transpose()?,
+            preview: m.preview.as_ref().map(HighlightJson::from_proto).transpose()?,
+        })
+    }
+}
+
 fn tokens_json(tokens: Option<&agent::Tokens>) -> TokensJson {
     tokens.map_or(
         TokensJson {
@@ -1099,5 +1249,47 @@ mod tests {
         let painted = err.render(true);
         assert!(painted.contains("\u{1b}[31m"), "error mark should be red");
         assert!(painted.ends_with("boom"), "body stays uncolored");
+    }
+
+    #[rstest]
+    #[case(HarnessArg::ClaudeCode, agent::HarnessKind::ClaudeCode)]
+    #[case(HarnessArg::Codex, agent::HarnessKind::Codex)]
+    #[case(HarnessArg::Copilot, agent::HarnessKind::Copilot)]
+    #[case(HarnessArg::Opencode, agent::HarnessKind::Opencode)]
+    #[case(HarnessArg::Pi, agent::HarnessKind::Pi)]
+    fn harness_arg_maps_to_pb(#[case] arg: HarnessArg, #[case] expected: agent::HarnessKind) {
+        assert_eq!(arg.to_pb(), expected);
+    }
+
+    #[rstest]
+    fn search_match_json_carries_plain_text_and_match_ranges() {
+        let m = SearchSessionsMatch {
+            session: Some(session(agent::HarnessKind::ClaudeCode, "abc")),
+            title: Some(HighlightedTextProto {
+                open: 0xE000,
+                close: 0xE001,
+                raw: "the \u{E000}build\u{E001}".to_owned(),
+            }),
+            preview: None,
+            score: 2.5,
+        };
+
+        let v = serde_json::to_value(SearchMatchJson::from_match(&m).unwrap()).unwrap();
+        assert_eq!(v["session"]["session_id"], "abc");
+        assert_eq!(v["score"], 2.5);
+        assert_eq!(v["title"]["text"], "the build");
+        assert_eq!(v["title"]["matches"], serde_json::json!([[4, 9]]));
+        assert!(v.get("preview").is_none(), "an absent preview is omitted, not null");
+    }
+
+    #[rstest]
+    fn search_match_json_requires_a_session() {
+        let m = SearchSessionsMatch {
+            session: None,
+            title: None,
+            preview: None,
+            score: 0.0,
+        };
+        assert!(SearchMatchJson::from_match(&m).is_err());
     }
 }

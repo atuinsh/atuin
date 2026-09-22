@@ -109,9 +109,16 @@ impl GrpcService for Service {
 
     async fn search_sessions(
         &self,
-        _request: Request<SearchSessionsRequest>,
+        request: Request<SearchSessionsRequest>,
     ) -> Result<Response<Self::SearchSessionsStream>, Status> {
-        Err(Status::unimplemented("session search is not supported"))
+        let request = request.into_inner();
+        let harness = HarnessFilterRequest::harness(&request)?;
+
+        let stream = self.capture.search(&request.query, harness, request.limit).map(|result| {
+            result.map(SearchSessionsMatch::from).map_err(|e| Status::internal(e.to_string()))
+        });
+
+        Ok(Response::new(Box::pin(stream)))
     }
 
     async fn tail_sessions(
@@ -181,7 +188,26 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn search_sessions_is_unimplemented() {
+    async fn search_sessions_returns_a_stream() {
+        let cap = Arc::new(AiHarnessSessionCapture::nop().await);
+        let svc = Service::new(cap);
+
+        let response = svc
+            .search_sessions(Request::new(SearchSessionsRequest {
+                query: "anything".to_owned(),
+                limit: 0,
+                harness: None,
+            }))
+            .await
+            .expect("search over an empty sidecar succeeds");
+
+        let matches: Vec<_> = response.into_inner().collect().await;
+        assert!(matches.is_empty(), "an empty sidecar yields no matches");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_sessions_rejects_an_unknown_harness() {
         let cap = Arc::new(AiHarnessSessionCapture::nop().await);
         let svc = Service::new(cap);
 
@@ -189,10 +215,10 @@ mod tests {
             .search_sessions(Request::new(SearchSessionsRequest {
                 query: "x".to_owned(),
                 limit: 0,
-                harness: None,
+                harness: Some(9999),
             }))
             .await;
 
-        assert!(matches!(result, Err(ref e) if e.code() == tonic::Code::Unimplemented));
+        assert!(matches!(result, Err(ref e) if e.code() == tonic::Code::InvalidArgument));
     }
 }

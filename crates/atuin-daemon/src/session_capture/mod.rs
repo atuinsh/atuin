@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use atuin_client::ai_session::{
     AiSessionDatabase, AiSessionStore, Appended, DbError, HarnessKind, HarnessSession, Message,
-    PushError, Session,
+    PushError, Session, SessionMatch,
 };
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4::Key;
@@ -176,6 +176,15 @@ impl AiHarnessSessionCapture {
         session: &HarnessSession,
     ) -> impl Stream<Item = Result<String, DbError>> + Send + 'static {
         self.sink.sidecar.transcript(session)
+    }
+
+    pub fn search(
+        &self,
+        query: &str,
+        harness: Option<HarnessKind>,
+        limit: u32,
+    ) -> impl Stream<Item = Result<SessionMatch, DbError>> + Send + 'static {
+        self.sink.sidecar.search(query, harness, limit)
     }
 }
 
