@@ -435,54 +435,19 @@ fn make_starting_history(
     h.should_save(settings).then_some(h)
 }
 
-#[instrument(level = "trace", skip_all, err)]
-async fn handle_start(
-    db: &Sqlite,
-    settings: &Settings,
-    command: &str,
-    author: Option<&str>,
-    author_kind: Option<AuthorKind>,
-    intent: Option<&str>,
-) -> Result<Option<HistoryId>> {
-    let Some(h) = make_starting_history(settings, command, author, author_kind, intent) else {
-        return Ok(None);
-    };
-
+#[instrument(level = "trace", skip_all)]
+async fn handle_start(db: &Sqlite, h: &History) {
     // Silently ignore database errors to avoid breaking the shell
     // This is important when disk is full or database is locked
-    if let Err(e) = db.save(&h).await {
+    if let Err(e) = db.save(h).await {
         debug!("failed to save history: {e}");
     }
-
-    Ok(Some(h.id))
 }
 
 #[cfg(feature = "daemon")]
 #[instrument(level = "trace", skip_all, err)]
-async fn handle_daemon_start(
-    settings: &Settings,
-    command: &str,
-    author: Option<&str>,
-    author_kind: Option<AuthorKind>,
-    intent: Option<&str>,
-) -> Result<Option<HistoryId>> {
-    let Some(h) = make_starting_history(settings, command, author, author_kind, intent) else {
-        return Ok(None);
-    };
-
-    let local_id = h.id;
-
-    // Attempt to start history via daemon, but silently ignore errors
-    // to avoid breaking the shell when the daemon is unavailable or disk is full
-    let resp = match daemon::start_history(settings, h).await {
-        Ok(id) => id,
-        Err(e) => {
-            debug!("failed to start history via daemon: {e}");
-            local_id
-        }
-    };
-
-    Ok(Some(resp))
+async fn handle_daemon_start(settings: &Settings, h: History) -> Result<HistoryId> {
+    daemon::start_history(settings, h).await
 }
 
 #[allow(unused_variables)]
@@ -580,14 +545,27 @@ pub(super) async fn start_history_entry(
     author_kind: Option<AuthorKind>,
     intent: Option<&str>,
 ) -> Result<Option<HistoryId>> {
+    let Some(h) = make_starting_history(settings, command, author, author_kind, intent) else {
+        return Ok(None);
+    };
+
+    // If the daemon can't take the command (e.g. it isn't running and couldn't be started), save it
+    // locally rather than dropping it; `history end` falls back to the local database to match.
     #[cfg(feature = "daemon")]
     if settings.daemon.enabled {
-        return handle_daemon_start(settings, command, author, author_kind, intent).await;
+        match handle_daemon_start(settings, h.clone()).await {
+            Ok(id) => return Ok(Some(id)),
+            Err(e) => {
+                warn!("failed to start history via the daemon; saving it locally instead: {e:#}");
+            }
+        }
     }
 
     let db_path = &settings.db_path;
     let db = Sqlite::new(db_path, settings.local_timeout).await?;
-    handle_start(&db, settings, command, author, author_kind, intent).await
+    handle_start(&db, &h).await;
+
+    Ok(Some(h.id))
 }
 
 #[instrument(level = "trace", skip_all, fields(id = %id, exit, duration = ?duration), err)]
@@ -597,9 +575,16 @@ pub(super) async fn end_history_entry(
     exit: i64,
     duration: Option<u64>,
 ) -> Result<()> {
+    // If the daemon can't end the command, it may have been saved locally by `history start` falling
+    // back when the daemon wasn't running, so finish it locally too.
     #[cfg(feature = "daemon")]
     if settings.daemon.enabled {
-        return handle_daemon_end(settings, id, exit, duration).await;
+        match handle_daemon_end(settings, id, exit, duration).await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                warn!("failed to end history via the daemon; ending it locally instead: {e:#}");
+            }
+        }
     }
 
     let db_path = &settings.db_path;
@@ -1285,7 +1270,8 @@ mod tests {
             ..Settings::utc()
         };
 
-        handle_start(&db, &settings, "ls   \t", None, None, None).await.unwrap();
+        let h = make_starting_history(&settings, "ls   \t", None, None, None).unwrap();
+        handle_start(&db, &h).await;
 
         let history = db
             .before(OffsetDateTime::now_utc() + time::Duration::SECOND, 1)
@@ -1297,18 +1283,10 @@ mod tests {
     }
 
     #[rstest]
-    #[tokio::test]
-    async fn handle_start_drops_command_with_nul_byte(#[future] db: Sqlite, settings: Settings) {
-        let db = db.await;
-
+    fn make_starting_history_drops_command_with_nul_byte(settings: Settings) {
         // A command containing a NUL byte can never have been executed by a shell;
         // it should be dropped rather than committed to history.
-        let id = handle_start(&db, &settings, "hello\0world", None, None, None).await.unwrap();
-        assert!(id.is_none());
-
-        let stored =
-            db.before(OffsetDateTime::now_utc() + time::Duration::SECOND, 1).await.unwrap();
-        assert!(stored.is_empty());
+        assert!(make_starting_history(&settings, "hello\0world", None, None, None).is_none());
     }
 
     #[rstest]
