@@ -1,5 +1,6 @@
 use atuin_client::settings::Settings;
 use eyre::{Context, Result};
+use tokio::task::JoinHandle;
 
 use crate::components::search::SearchGrpcService;
 use crate::daemon::DaemonHandle;
@@ -14,8 +15,8 @@ const SOCKET_KEEPALIVE_INTERVAL: std::time::Duration = std::time::Duration::from
 
 /// Run the gRPC server with the given services.
 ///
-/// This starts the gRPC server in the background and returns immediately.
-/// The server will shut down when shutdown is requested through the handle.
+/// This starts the gRPC server in the background and returns its task, which finishes once shutdown
+/// is requested through the handle and open connections have drained.
 #[cfg(unix)]
 #[allow(clippy::unused_async, reason = "needs to match the cfg(not(unix)) version")]
 pub async fn run_grpc_server(
@@ -23,7 +24,7 @@ pub async fn run_grpc_server(
     history_service: HistoryServer<grpc::HistoryService>,
     search_service: SearchServer<SearchGrpcService>,
     handle: DaemonHandle,
-) -> Result<()> {
+) -> Result<JoinHandle<()>> {
     use tokio::net::UnixListener;
     use tokio_stream::wrappers::UnixListenerStream;
 
@@ -119,7 +120,7 @@ pub async fn run_grpc_server(
     };
 
     // Spawn the server in the background
-    tokio::spawn(async move {
+    Ok(tokio::spawn(async move {
         use tonic::transport::Server;
 
         match Server::builder()
@@ -131,9 +132,7 @@ pub async fn run_grpc_server(
             Ok(()) => tracing::info!("gRPC server stopped"),
             Err(e) => tracing::error!("gRPC server error: {e}"),
         }
-    });
-
-    Ok(())
+    }))
 }
 
 /// Run the gRPC server with the given services (Windows/TCP version).
@@ -143,7 +142,7 @@ pub async fn run_grpc_server(
     history_service: HistoryServer<grpc::HistoryService>,
     search_service: SearchServer<SearchGrpcService>,
     handle: DaemonHandle,
-) -> Result<()> {
+) -> Result<JoinHandle<()>> {
     use tokio::net::TcpListener;
     use tokio_stream::wrappers::TcpListenerStream;
     use tonic::transport::Server;
@@ -162,7 +161,7 @@ pub async fn run_grpc_server(
     };
 
     // Spawn the server in the background
-    tokio::spawn(async move {
+    Ok(tokio::spawn(async move {
         match Server::builder()
             .add_service(history_service)
             .add_service(search_service)
@@ -172,7 +171,5 @@ pub async fn run_grpc_server(
             Ok(()) => tracing::info!("gRPC server stopped"),
             Err(e) => tracing::error!("gRPC server error: {e}"),
         }
-    });
-
-    Ok(())
+    }))
 }

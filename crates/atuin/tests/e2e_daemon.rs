@@ -4,11 +4,12 @@
 
 mod common;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use atuin_daemon::client::HistoryClient;
 use common::{FreshEnv, Process, SESSION, TIMEOUT, marker, output, wait_until};
 use rstest::{fixture, rstest};
+use rustix::process::{Pid, Signal, kill_process, test_kill_process};
 
 struct Daemon {
     foreground: Option<Process>,
@@ -125,4 +126,52 @@ async fn fresh_daemon_serves_history(
         assert!(daemon.env.run(&["daemon", "stop"]).contains("Daemon stopped"));
         wait_until("daemon socket removed", || !daemon.env.socket().exists());
     }
+}
+
+#[rstest]
+#[case::foreground(false)]
+#[case::autostart(true)]
+#[tokio::test]
+async fn sigterm_stops_the_daemon_gracefully(mut daemon: Daemon, #[case] autostart: bool) {
+    daemon.env.write_config(&format!("[daemon]\nenabled = true\nautostart = {autostart}\n"));
+    if autostart {
+        let mut start = daemon.env.atuin(&["history", "start", "--", "true"]);
+        start.env("ATUIN_SESSION", SESSION);
+        output(start);
+    } else {
+        daemon.foreground = Some(Process::spawn(daemon.env.atuin(&["daemon", "start"])));
+    }
+    let pid = tokio::time::timeout(TIMEOUT, async {
+        loop {
+            if let Ok(mut client) = HistoryClient::new(daemon.env.socket()).await
+                && let Ok(status) = client.status().await
+            {
+                break status.pid;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("daemon never became healthy");
+    let pid = Pid::from_raw(i32::try_from(pid).unwrap()).unwrap();
+
+    kill_process(pid, Signal::TERM).unwrap();
+
+    // Well inside the forced-exit grace period, so only a graceful stop passes.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let stopped = match daemon.foreground.as_mut() {
+            Some(process) => process.child.try_wait().unwrap().is_some(),
+            None => test_kill_process(pid).is_err(),
+        };
+        if stopped {
+            break;
+        }
+        assert!(Instant::now() < deadline, "daemon did not stop on SIGTERM");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    if let Some(process) = daemon.foreground.as_mut() {
+        assert!(process.child.try_wait().unwrap().unwrap().success(), "{}", process.logs());
+    }
+    assert!(!daemon.env.socket().exists());
 }

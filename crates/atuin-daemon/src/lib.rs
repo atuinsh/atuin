@@ -1,11 +1,12 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use atuin_client::database::Sqlite as HistoryDatabase;
 use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::settings::watcher::global_settings_watcher;
-use eyre::Result;
+use eyre::{Result, WrapErr};
 
 use crate::grpc::history::pb::history_server::HistoryServer;
 
@@ -18,6 +19,7 @@ pub(crate) mod history_journal;
 mod output_capture;
 pub mod search;
 pub mod server;
+mod shutdown;
 mod sync;
 
 // Re-export core daemon types for convenience
@@ -34,6 +36,9 @@ pub use history_journal::{
 pub use output_capture::{
     CaptureError, DeleteOutputError, GetOutputError, OutputCaptureEngine, OutputLine, OutputMatch,
 };
+
+/// How long shutdown waits for the gRPC server to drain. Long-lived streams never do.
+const SERVER_DRAIN: Duration = Duration::from_secs(1);
 
 /// Boot the daemon using the new component-based architecture.
 ///
@@ -105,16 +110,13 @@ pub async fn boot(
         );
     }
 
-    // Spawn signal handler to emit ShutdownRequested on Ctrl+C/SIGTERM
+    // Shut down gracefully on SIGTERM/SIGINT, and forcibly if that stalls
     let signal_handle = handle.clone();
-    tokio::spawn(async move {
-        shutdown_signal().await;
-        tracing::info!("received shutdown signal");
-        signal_handle.shutdown();
-    });
+    shutdown::install(shutdown::GRACE, move || signal_handle.shutdown())
+        .wrap_err("failed to install signal handlers")?;
 
     // Start the gRPC server in the background
-    server::run_grpc_server(
+    let server = server::run_grpc_server(
         settings,
         history_service,
         search_service.build(handle.clone()),
@@ -128,26 +130,10 @@ pub async fn boot(
     // Stop all components on shutdown
     daemon.stop_components().await;
 
+    if tokio::time::timeout(SERVER_DRAIN, server).await.is_err() {
+        tracing::warn!("gRPC server did not drain within {SERVER_DRAIN:?}");
+    }
+
     tracing::info!("daemon shut down complete");
     Ok(())
-}
-
-/// Wait for a shutdown signal (Ctrl+C or SIGTERM).
-#[cfg(unix)]
-async fn shutdown_signal() {
-    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .expect("failed to register sigterm handler");
-    let mut int = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-        .expect("failed to register sigint handler");
-
-    tokio::select! {
-        _ = term.recv() => {},
-        _ = int.recv() => {},
-    }
-}
-
-/// Wait for a shutdown signal (Ctrl+C).
-#[cfg(not(unix))]
-async fn shutdown_signal() {
-    tokio::signal::ctrl_c().await.expect("failed to listen for ctrl+c");
 }

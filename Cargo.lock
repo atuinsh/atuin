@@ -535,6 +535,7 @@ dependencies = [
  "rand 0.8.7",
  "reqwest",
  "rstest",
+ "signal-hook",
  "sqlx",
  "strum 0.27.2",
  "strum_macros 0.28.0",
