@@ -453,24 +453,49 @@ pub async fn ready_client(settings: &Settings) -> Result<HistoryClient> {
 
 /// Send a request to the daemon, first ensuring (via [`ready_client`]) that it is running and
 /// speaks our version.
-async fn try_with_restart<C, F, R>(settings: &Settings, send_request: F, context: C) -> Result<R>
+async fn try_with_restart<F, R>(settings: &Settings, send_request: F) -> Result<R>
 where
-    F: AsyncFn(&mut HistoryClient, C) -> Result<R> + Sync,
+    F: AsyncFnOnce(&mut HistoryClient) -> Result<R> + Sync,
     R: atuin_daemon::grpc::VersionedReply,
 {
-    let mut client = ready_client(settings).await?;
-    let resp = send_request(&mut client, context).await?;
+    let client = ready_client(settings).await?;
+    send_checked(settings, client, send_request).await
+}
+
+/// Send a request to an already-running daemon that speaks our version.
+///
+/// This function never starts or restarts the daemon.
+async fn try_without_restart<F, R>(settings: &Settings, send_request: F) -> Result<R>
+where
+    F: AsyncFnOnce(&mut HistoryClient) -> Result<R> + Sync,
+    R: atuin_daemon::grpc::VersionedReply,
+{
+    let client = match probe(settings).await {
+        Probe::Ready(client) => client,
+        Probe::NeedsRestart(reason) => bail!(reason),
+        Probe::Unreachable(err) => return Err(err),
+    };
+    send_checked(settings, client, send_request).await
+}
+
+/// Send a message to the daemon and ensure the response is [compatible](ensure_reply_compatible).
+async fn send_checked<F, R>(
+    settings: &Settings,
+    mut client: HistoryClient,
+    send_request: F,
+) -> Result<R>
+where
+    F: AsyncFnOnce(&mut HistoryClient) -> Result<R> + Sync,
+    R: atuin_daemon::grpc::VersionedReply,
+{
+    let resp = send_request(&mut client).await?;
     ensure_reply_compatible(settings, resp.version(), resp.protocol())?;
     Ok(resp)
 }
 
 pub async fn start_history(settings: &Settings, history: History) -> Result<HistoryId> {
-    let resp = try_with_restart(
-        settings,
-        async |client, history| client.start_history(history).await,
-        history,
-    )
-    .await?;
+    let resp =
+        try_with_restart(settings, async |client| client.start_history(history).await).await?;
     let id = resp.id.ok_or_else(|| eyre::eyre!("daemon reply is missing the history id"))?;
     Ok(HistoryId::try_from(id)?)
 }
@@ -481,25 +506,23 @@ pub async fn end_history(
     duration: Option<std::time::Duration>,
     exit: i64,
 ) -> Result<()> {
-    try_with_restart(settings, async |client, id| client.end_history(id, duration, exit).await, id)
+    try_without_restart(settings, async |client| client.end_history(id, duration, exit).await)
         .await?;
     Ok(())
 }
 
 pub async fn cancel_history(settings: &Settings, id: HistoryId) -> Result<()> {
-    try_with_restart(settings, async |client, id| client.cancel_history(id).await, id).await?;
+    try_without_restart(settings, async |client| client.cancel_history(id).await).await?;
     Ok(())
 }
 
 pub async fn delete_history(settings: &Settings, ids: Vec<HistoryId>) -> Result<u64> {
-    let reply =
-        try_with_restart(settings, async |client, ids| client.delete_history(ids).await, ids)
-            .await?;
+    let reply = try_with_restart(settings, async |client| client.delete_history(ids).await).await?;
     Ok(reply.deleted)
 }
 
 pub async fn rebuild_history(settings: &Settings) -> Result<()> {
-    try_with_restart(settings, async |client, ()| client.rebuild_history().await, ()).await?;
+    try_with_restart(settings, async |client| client.rebuild_history().await).await?;
     Ok(())
 }
 
