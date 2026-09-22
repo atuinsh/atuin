@@ -72,14 +72,12 @@ impl SessionCaptureEngine {
                             session,
                             kind: SessionEventKind::Started(meta),
                         }) => {
-                            if let Some(title) = &meta.title {
-                                state.titles.insert(session.to_string(), title.clone());
+                            let tracked = state.sessions.entry(session.to_string()).or_default();
+                            if meta.title.is_some() {
+                                tracked.title.clone_from(&meta.title);
                             }
                             if let Some(parent) = &meta.parent {
-                                state.parents.insert(
-                                    session.to_string(),
-                                    NativeSessionId::from(parent.to_string()),
-                                );
+                                tracked.parent = Some(NativeSessionId::from(parent.to_string()));
                             }
                             let handle = HarnessSession {
                                 harness: kind,
@@ -203,20 +201,25 @@ impl SessionCaptureEngine {
     }
 }
 
-/// Per-session state the capture loop carries from one line to the next.
+/// What the capture loop carries from one line to the next, per native session id.
 #[derive(Default)]
 struct Bookkeeping {
-    /// Latest known title per native session id, stamped onto each captured message so
-    /// session-level metadata rides the synced records (see `Message::session_title`).
-    titles: HashMap<String, String>,
-    /// Lines without a timestamp (Claude Code `ai-title` and friends) take the previous line's,
-    /// so a replayed session is not stamped with capture time.
-    last_ts: HashMap<String, OffsetDateTime>,
-    /// Session each one was spawned from, when it has one (subagents, forks).
-    parents: HashMap<String, NativeSessionId>,
-    /// Last model call that reported usage per session: later rows of the same call repeat its
-    /// usage, so only the first keeps it.
-    last_turn: HashMap<String, String>,
+    sessions: HashMap<String, SessionState>,
+}
+
+#[derive(Default)]
+struct SessionState {
+    /// Latest known title, stamped onto each captured message so session-level metadata rides
+    /// the synced records (see `Message::session_title`).
+    title: Option<String>,
+    /// Timestamp of the last line that had one. Lines without (Claude Code `ai-title` and
+    /// friends) take it, so a replayed session is not stamped with capture time.
+    last_ts: Option<OffsetDateTime>,
+    /// Session this one was spawned from, when it has one (subagents, forks).
+    parent: Option<NativeSessionId>,
+    /// Last model call that reported usage: later rows of the same call repeat its usage, so
+    /// only the first keeps it.
+    last_turn: Option<String>,
 }
 
 /// What [`Bookkeeping::observe`] resolved for one line.
@@ -232,30 +235,32 @@ struct Observed {
 
 impl Bookkeeping {
     fn observe(&mut self, session: &SessionId, m: &AnyMessage) -> Observed {
-        let key = session.to_string();
+        let state = self.sessions.entry(session.to_string()).or_default();
         let timestamp = match m.timestamp() {
-            Some(ts) => *self.last_ts.entry(key.clone()).insert_entry(ts).get(),
-            None => self.last_ts.get(&key).copied().unwrap_or_else(OffsetDateTime::now_utc),
+            Some(ts) => {
+                state.last_ts = Some(ts);
+                ts
+            }
+            None => state.last_ts.unwrap_or_else(OffsetDateTime::now_utc),
         };
         // ponytail: newest title wins; a hand-set title is not ranked above a later generated one.
         let new_title = m.title();
-        if let Some(title) = &new_title {
-            self.titles.insert(key.clone(), title.clone());
+        if new_title.is_some() {
+            state.title.clone_from(&new_title);
         }
         if let Some(parent) = m.parent_session().filter(|p| p != session) {
-            self.parents.insert(key.clone(), NativeSessionId::from(parent.to_string()));
+            state.parent = Some(NativeSessionId::from(parent.to_string()));
         }
         // Only a line that reports usage moves the marker: bookkeeping lines can share the turn
         // id (Codex `task_started`) while carrying nothing to dedupe.
         let repeat = m.usage().is_some()
-            && m.turn_id()
-                .is_some_and(|t| self.last_turn.insert(key.clone(), t.clone()) == Some(t));
+            && m.turn_id().is_some_and(|t| state.last_turn.replace(t.clone()) == Some(t));
 
         Observed {
             timestamp,
             new_title,
-            title: self.titles.get(&key).cloned(),
-            parent: self.parents.get(&key).cloned(),
+            title: state.title.clone(),
+            parent: state.parent.clone(),
             repeat,
         }
     }
