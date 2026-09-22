@@ -85,7 +85,7 @@ glob-match = "0.2"
 http = "1"
 humantime = "2"
 hyper-util = "0.1"
-i18n-embed = { version = "0.16", features = ["fluent-system", "desktop-requester"] }
+i18n-embed = { version = "0.16", features = ["fluent-system"] }
 i18n-embed-fl = "0.10"
 imara-diff = "0.2"
 indicatif = "0.18"
