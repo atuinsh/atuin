@@ -37,6 +37,24 @@ impl RecordTag {
         self.as_ref()
     }
 
+    /// Whether records with this tag are stored as plaintext rather than encrypted.
+    ///
+    /// Packfile manifests only describe a range of records and carry no secrets, so they are
+    /// written without a cek. Everything else is encrypted with the user's key.
+    #[must_use]
+    pub fn is_plaintext(&self) -> bool {
+        // Exhaustive on purpose: a new tag must decide whether it is encrypted.
+        match self {
+            Self::Packfile => true,
+            Self::History
+            | Self::Kv
+            | Self::Script
+            | Self::DotfilesVar
+            | Self::ConfigShellAlias
+            | Self::Other(_) => false,
+        }
+    }
+
     fn variant_rank(&self) -> u8 {
         match self {
             Self::History => 0,

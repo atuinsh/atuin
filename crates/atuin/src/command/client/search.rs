@@ -38,19 +38,22 @@ pub struct Cmd {
     #[arg(long)]
     exclude_cwd: Option<String>,
 
-    /// Filter search result by exit code
+    /// Filter by exit code; repeat to include any of the given codes
     #[arg(long, short)]
-    exit: Option<i64>,
+    exit: Vec<i64>,
 
-    /// Exclude results with this exit code
+    /// Exclude results with this exit code; repeat to exclude multiple codes
     #[arg(long)]
-    exclude_exit: Option<i64>,
+    exclude_exit: Vec<i64>,
 
-    /// Only include results added before this date
+    /// Only include results added before this date.
+    ///
+    /// Read in the timezone from `--timezone` (or the configured one) unless it carries an
+    /// explicit offset; relative phrases like "yesterday 3pm" are anchored there too.
     #[arg(long, short)]
     before: Option<String>,
 
-    /// Only include results after this date
+    /// Only include results after this date; see `--before` for how it is interpreted.
     #[arg(long)]
     after: Option<String>,
 
@@ -113,7 +116,8 @@ pub struct Cmd {
     #[arg(long, short)]
     reverse: bool,
 
-    /// Display the command time in another timezone other than the configured default.
+    /// Timezone to display command times in and to interpret `--before`/`--after` in, instead
+    /// of the configured default.
     ///
     /// This option takes one of the following kinds of values:
     ///
@@ -261,10 +265,11 @@ impl Cmd {
             // An empty `--author` / `--shell` list means no filtering on that field.
             let authors = OrFilter::from_list(self.author).unwrap_or_default();
             let shells = OrFilter::from_list(self.shell).unwrap_or_default();
+            let tz = self.timezone.unwrap_or(settings.timezone);
 
             let opt_filter = OptFilters {
-                exit: self.exit,
-                exclude_exit: self.exclude_exit,
+                exit: &self.exit,
+                exclude_exit: &self.exclude_exit,
                 only_failed: false,
                 cwd: self.cwd.as_deref(),
                 exclude_cwd: self.exclude_cwd.as_deref(),
@@ -276,6 +281,8 @@ impl Cmd {
                 include_duplicates: self.include_duplicates,
                 authors: authors.as_slice_filter(),
                 shells: shells.as_slice_filter(),
+                timezone: tz,
+                dialect: settings.dialect,
             };
 
             let mut entries = run_non_interactive(settings, opt_filter, &query, &db).await?;
@@ -294,14 +301,13 @@ impl Cmd {
                         eprintln!("deleting {}", entry.id);
                     }
 
-                    let ids = history_store.delete_entries(entries).await?;
-                    history_store.build_all(&db, &ids).await?;
+                    super::history::delete_history_entries(settings, &history_store, &db, entries)
+                        .await?;
 
                     entries = run_non_interactive(settings, opt_filter, &query, &db).await?;
                 }
             } else {
                 let format = self.format.as_deref().unwrap_or(settings.history_format.as_str());
-                let tz = self.timezone.unwrap_or(settings.timezone);
 
                 super::history::print_list(
                     &entries,
@@ -355,6 +361,7 @@ async fn run_non_interactive(
     Ok(results)
 }
 
+#[instrument(level = "trace", skip_all, err)]
 pub async fn prepare_index(settings: &Settings) -> Result<()> {
     use engines::AnySearchEngine;
     #[cfg(feature = "daemon")]
@@ -370,6 +377,41 @@ mod tests {
     use rstest::rstest;
 
     use super::{AuthorPattern, Cmd};
+
+    #[rstest]
+    #[case::default(vec![], vec![], vec![])]
+    #[case::single(vec!["--exit", "0"], vec![0], vec![])]
+    #[case::single_exclusion(vec!["--exclude-exit", "0"], vec![], vec![0])]
+    #[case::repeated(vec!["--exit", "1", "--exit", "2"], vec![1, 2], vec![])]
+    #[case::short(vec!["-e", "1", "-e", "2"], vec![1, 2], vec![])]
+    #[case::excluded(vec!["--exclude-exit", "0", "--exclude-exit", "130"], vec![], vec![0, 130])]
+    #[case::combined(vec!["--exit", "1", "--exit", "2", "--exclude-exit", "2"], vec![1, 2], vec![2])]
+    #[case::duplicates(vec!["--exit", "1", "--exit", "1"], vec![1, 1], vec![])]
+    #[case::signed(vec!["--exit=-1", "--exclude-exit=-2"], vec![-1], vec![-2])]
+    fn parses_exit_filters(
+        #[case] args: Vec<&str>,
+        #[case] exit: Vec<i64>,
+        #[case] exclude_exit: Vec<i64>,
+        #[values(None, Some("--delete"), Some("--delete-it-all"))] delete: Option<&str>,
+    ) {
+        let cmd = Cmd::try_parse_from(
+            std::iter::once("search").chain(args).chain(delete).chain(["cargo"]),
+        )
+        .unwrap();
+        assert_eq!(cmd.exit, exit);
+        assert_eq!(cmd.exclude_exit, exclude_exit);
+        assert_eq!(cmd.query, ["cargo"]);
+        assert_eq!(cmd.delete, delete == Some("--delete"));
+        assert_eq!(cmd.delete_it_all, delete == Some("--delete-it-all"));
+    }
+
+    #[rstest]
+    fn rejects_invalid_exit_filters(
+        #[values("--exit", "--exclude-exit")] flag: &str,
+        #[values("invalid", "9223372036854775808")] value: &str,
+    ) {
+        assert!(Cmd::try_parse_from(["search", flag, value]).is_err());
+    }
 
     #[rstest]
     // triple_dash: Issue #3028 - searching for `---` should not be treated as a CLI flag

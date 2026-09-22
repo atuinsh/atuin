@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use atuin_common::string::ellipsis::{Indicator, Pos};
 use atuin_common::string::{EllipsizeExt as _, Measure};
+use easy_cast::Conv;
 use eye_declare::{Element, Spinner};
 use ratatui_core::buffer::Buffer;
 use ratatui_core::layout::Rect;
@@ -58,7 +59,7 @@ impl CommandSpinner {
             2
         };
         let budget =
-            (width as usize).saturating_sub(marker_cols).saturating_sub(self.prefix.width());
+            usize::conv(width).saturating_sub(marker_cols).saturating_sub(self.prefix.width());
         let label = format!("{}{}", self.prefix, fit_middle(&self.command, budget));
         super::tool_spinner(label, self.done).hide_checkmark()
     }
@@ -119,7 +120,7 @@ impl Element for TruncatedLine {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        let width = area.width as usize;
+        let width = usize::conv(area.width);
         buf.set_stringn(area.x, area.y, &self.prefix, width, self.prefix_style);
         let used = self.prefix.width().min(width);
         let budget = width - used;
@@ -127,7 +128,7 @@ impl Element for TruncatedLine {
             return;
         }
         buf.set_stringn(
-            area.x + used as u16,
+            area.x + u16::conv(used),
             area.y,
             fit_middle(&self.value, budget),
             budget,

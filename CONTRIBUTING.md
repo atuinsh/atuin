@@ -12,6 +12,16 @@ While we are very happy for you to use AI to build your contribution, it is esse
 
 We commit to supporting the latest stable version of Rust - nothing more, nothing less, no nightly.
 
+### Locked builds
+
+The workspace depends on [`locked-tripwire`](https://github.com/nextest-rs/locked-tripwire), a guard that fails the build when dependencies are resolved without `--locked`. This stops a plain `cargo install atuin` from silently swapping our audited `Cargo.lock` for newer, unreviewed dependency versions.
+
+One side effect: a bulk `cargo update` bumps `locked-tripwire` past its pinned version and breaks your build. Re-pin it to recover:
+
+```shell
+cargo update -p locked-tripwire --precise 0.1.1
+```
+
 Before working on anything, we suggest taking a copy of your Atuin data directory (`~/.local/share/atuin` on most \*nix platforms). If anything goes wrong, you can always restore it!
 
 While data directory backups are always a good idea, you can instruct Atuin to use custom path using the following environment variables:
@@ -81,6 +91,25 @@ While iterating on the server, I find it helpful to run a new user on my system,
 ## Tests
 
 Our test coverage is currently not the best, but we are working on it! Generally tests live in the file next to the functionality they are testing, and are executed just with `cargo test`.
+
+### Reproducing a proptest failure from CI
+
+Some tests use [`proptest`](https://proptest-rs.github.io/proptest/) to check a
+property across many generated inputs. When one fails, proptest shrinks to a
+minimal counterexample and records its seed as a `cc <seed>` line in a
+regression file, so re-running the test replays that exact case first.
+
+To reproduce a CI failure:
+
+1. Open the failed run on GitHub and download the artifact — `proptest-regressions-integration`, or `proptest-regressions-unit-<runner>` for the matrix job, where `<runner>` is the failing leg's full runner label (for example `proptest-regressions-unit-depot-ubuntu-24.04`).
+2. It preserves the repo layout. Copy each file over the matching file in your
+   checkout (or read the new `cc <seed>` line straight out of the failed job's
+   "Show new proptest regressions" step, which prints the diff).
+3. Re-run the test; proptest replays the saved seed and reproduces the failure:
+
+   ```shell
+   cargo nextest run -p <crate> <test-name>
+   ```
 
 ## Documentation
 

@@ -3,7 +3,6 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use base64::prelude::{BASE64_URL_SAFE_NO_PAD, Engine};
-use eyre::{Result, eyre};
 use getrandom::fill;
 use uuid::Uuid;
 
@@ -167,9 +166,17 @@ pub fn get_current_dir() -> String {
     }
 }
 
-pub fn unquote(s: &str) -> Result<String> {
+#[derive(Debug, thiserror::Error)]
+pub enum UnquoteError {
+    #[error("not enough chars")]
+    NotEnoughChars,
+    #[error("unexpected eof, quotes do not match")]
+    MismatchedQuotes,
+}
+
+pub fn unquote(s: &str) -> Result<String, UnquoteError> {
     if s.chars().count() < 2 {
-        return Err(eyre!("not enough chars"));
+        return Err(UnquoteError::NotEnoughChars);
     }
 
     let quote = s.chars().next().unwrap();
@@ -180,7 +187,7 @@ pub fn unquote(s: &str) -> Result<String> {
     }
 
     if s.chars().last().unwrap() != quote {
-        return Err(eyre!("unexpected eof, quotes do not match"));
+        return Err(UnquoteError::MismatchedQuotes);
     }
 
     // removes quote characters
@@ -220,7 +227,7 @@ mod tests {
     use super::*;
 
     #[cfg(not(windows))]
-    #[test]
+    #[rstest]
     fn test_dirs() {
         // these tests need to be run sequentially to prevent race condition
         test_config_dir_xdg();
@@ -306,7 +313,7 @@ mod tests {
     }
 
     #[cfg(not(windows))]
-    #[test]
+    #[rstest]
     fn in_git_repo_regular() {
         // regular git repo should resolve to the directory containing .git
         let tmp = std::env::temp_dir().join("atuin-test-regular-git");
@@ -322,7 +329,7 @@ mod tests {
     }
 
     #[cfg(not(windows))]
-    #[test]
+    #[rstest]
     fn in_git_repo_worktree_resolves_to_main_repo() {
         // worktree .git is a file pointing back to the main repo —
         // in_git_repo should follow it so all worktrees share a workspace

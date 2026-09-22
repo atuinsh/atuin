@@ -6,11 +6,14 @@
 
 use windows_sys::Win32::Foundation::GetLastError;
 
+pub mod disk;
 pub mod process;
 
 /// Query the system for the last set error.
 #[must_use]
 pub fn get_last_error() -> std::io::Error {
+    // Wrapping behavior of `as` is intended here -- reinterpreting `DWORD` Windows error codes as
+    // `i32` is what `std::io::Error` expects.
     std::io::Error::from_raw_os_error(unsafe { GetLastError() } as i32)
 }
 

@@ -4,6 +4,7 @@ use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{
     DecryptedData, EncryptedData, Host, HostId, Record, RecordTag, RecordVersion,
 };
+use easy_cast::Conv;
 
 use crate::_util::context::BenchCtx;
 use crate::history::BenchHistory;
@@ -62,7 +63,7 @@ fn decrypted_records(n: usize) -> Vec<Record<DecryptedData>> {
                 .version(RecordVersion::from(Version::LATEST.name()))
                 .tag(RecordTag::History)
                 .data(data)
-                .idx(idx as u64)
+                .idx(u64::conv(idx))
                 .build()
         })
         .collect()

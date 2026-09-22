@@ -2,11 +2,14 @@
 //!
 //! This module provides fuzzy search over command history using frizbee.
 
-use std::borrow::Cow;
-
 mod index;
-#[allow(clippy::manual_range_contains, reason = "this is a vendored file")]
-mod normalize;
+
+use atuin_common::string::highlighted::FromHighlightedTextProtoError;
+use thiserror::Error;
+
+use crate::grpc::common::pb::{self as common};
+use crate::grpc::history::pb::IdParseError;
+use crate::output_capture::{OutputLine, OutputMatch};
 
 // Include the generated proto code
 mod proto {
@@ -15,6 +18,42 @@ mod proto {
     tonic::include_proto!("search");
 }
 pub use proto::*;
+
+#[derive(Debug, Error)]
+pub enum OutputMatchParseError {
+    #[error("output match is missing its history id")]
+    MissingHistoryId,
+    #[error("output match line is missing its content")]
+    MissingContent,
+    #[error(transparent)]
+    BadHistoryId(#[from] IdParseError),
+    #[error(transparent)]
+    BadOutput(#[from] FromHighlightedTextProtoError),
+}
+
+impl TryFrom<OutputSearchMatch> for OutputMatch {
+    type Error = OutputMatchParseError;
+
+    fn try_from(value: OutputSearchMatch) -> Result<Self, Self::Error> {
+        let history_id =
+            value.history_id.ok_or(OutputMatchParseError::MissingHistoryId)?.try_into()?;
+        let lines = value
+            .lines
+            .into_iter()
+            .map(|l| {
+                Ok(OutputLine {
+                    line: l.line,
+                    content: l.content.ok_or(OutputMatchParseError::MissingContent)?.try_into()?,
+                })
+            })
+            .collect::<Result<_, OutputMatchParseError>>()?;
+        Ok(Self {
+            history_id,
+            lines,
+            score: value.score,
+        })
+    }
+}
 
 /// Longest query the fuzzy matcher will see. Frizbee's `u16` scores overflow (and panic) somewhere
 /// past ~2700 needle chars; no real query is anywhere near either limit, so longer input is
@@ -26,26 +65,108 @@ const MAX_QUERY_LEN: usize = 512;
 /// client-side highlighting) must apply this.
 #[must_use]
 pub fn truncate_query(query: &str) -> &str {
-    // O(1) happy path -- query cannot exceed `MAX_QUERY_LEN` chars if it doesn't even have that
-    // many bytes.
-    if query.len() <= MAX_QUERY_LEN {
-        return query;
-    }
-    match query.char_indices().nth(MAX_QUERY_LEN) {
-        Some((end, _)) => &query[..end],
-        None => query,
-    }
-}
-
-/// Normalize Latin diacritics to their ASCII equivalents (`é` → `e`) so unaccented queries match
-/// accented history entries. Maps char to char so char positions are preserved.
-pub fn normalize_diacritics(s: &str) -> Cow<'_, str> {
-    use normalize::normalize;
-    if s.is_ascii() || !s.chars().any(|c| normalize(c) != c) {
-        return Cow::Borrowed(s);
-    }
-    Cow::Owned(s.chars().map(normalize).collect())
+    use atuin_common::string::TruncateCharsExt;
+    query.truncate_chars(MAX_QUERY_LEN)
 }
 
 // Re-export the index and related types
 pub use index::{IndexFilterMode, SearchIndex};
+
+#[cfg(test)]
+mod tests {
+    use atuin_client::history::HistoryId;
+    use atuin_common::string::highlighted::HighlightedTextProto;
+    use rstest::rstest;
+
+    use super::*;
+
+    fn history_id(bytes: [u8; 16]) -> common::HistoryId {
+        common::HistoryId {
+            uuid: Some(common::Uuid {
+                value: bytes.to_vec(),
+            }),
+        }
+    }
+
+    fn output(raw: &str) -> HighlightedTextProto {
+        HighlightedTextProto {
+            open: 0xE000,
+            close: 0xE001,
+            raw: raw.to_owned(),
+        }
+    }
+
+    #[rstest]
+    fn converts_a_well_formed_match_into_domain_types() {
+        let proto = OutputSearchMatch {
+            history_id: Some(history_id([1u8; 16])),
+            lines: vec![OutputSearchLine {
+                line: -2,
+                content: Some(output("\u{E000}disk\u{E001} full")),
+            }],
+            score: 0.5,
+        };
+
+        let m = OutputMatch::try_from(proto).unwrap();
+
+        assert_eq!(m.history_id, HistoryId::from_bytes([1u8; 16]));
+        assert_eq!(m.lines[0].line, -2);
+        assert_eq!(m.lines[0].content.display_plain().to_string(), "disk full");
+    }
+
+    #[rstest]
+    fn rejects_a_match_missing_its_history_id() {
+        let proto = OutputSearchMatch {
+            history_id: None,
+            lines: vec![],
+            score: 0.0,
+        };
+        assert!(matches!(
+            OutputMatch::try_from(proto),
+            Err(OutputMatchParseError::MissingHistoryId)
+        ));
+    }
+
+    #[rstest]
+    fn rejects_a_line_missing_its_content() {
+        let proto = OutputSearchMatch {
+            history_id: Some(history_id([1u8; 16])),
+            lines: vec![OutputSearchLine {
+                line: 0,
+                content: None,
+            }],
+            score: 0.0,
+        };
+        assert!(matches!(OutputMatch::try_from(proto), Err(OutputMatchParseError::MissingContent)));
+    }
+
+    #[rstest]
+    fn surfaces_a_malformed_history_id() {
+        let proto = OutputSearchMatch {
+            history_id: Some(common::HistoryId { uuid: None }),
+            lines: vec![],
+            score: 0.0,
+        };
+        assert!(matches!(
+            OutputMatch::try_from(proto),
+            Err(OutputMatchParseError::BadHistoryId(_))
+        ));
+    }
+
+    #[rstest]
+    fn surfaces_malformed_output() {
+        let proto = OutputSearchMatch {
+            history_id: Some(history_id([1u8; 16])),
+            lines: vec![OutputSearchLine {
+                line: 0,
+                content: Some(HighlightedTextProto {
+                    open: 0xD800,
+                    close: 0xE001,
+                    raw: "x".into(),
+                }),
+            }],
+            score: 0.0,
+        };
+        assert!(matches!(OutputMatch::try_from(proto), Err(OutputMatchParseError::BadOutput(_))));
+    }
+}

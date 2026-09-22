@@ -4,6 +4,7 @@
 //! independently. Each event is stored as an `(event_type, event_data)` pair
 //! where `event_data` is a JSON string.
 
+use easy_cast::Conv;
 use eyre::{Result, eyre};
 use serde_json::Value;
 
@@ -106,7 +107,7 @@ pub fn deserialize_event(event_type: &str, event_data: &str) -> Result<Conversat
                 .and_then(Value::as_bool)
                 .ok_or_else(|| eyre!("tool_result missing 'is_error' field"))?,
             remote: data.get("remote").and_then(Value::as_bool).unwrap_or(false),
-            content_length: data.get("content_length").and_then(Value::as_u64).map(|v| v as usize),
+            content_length: data.get("content_length").and_then(Value::as_u64).map(usize::conv),
         }),
         "out_of_band_output" => Ok(ConversationEvent::OutOfBandOutput {
             name: json_string(&data, "name")?,

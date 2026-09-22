@@ -1,7 +1,4 @@
 use atuin_client::settings::Tmux;
-use atuin_dotfiles::store::AliasStore;
-use atuin_dotfiles::store::var::VarStore;
-use eyre::Result;
 
 use super::StaticInitOptions;
 
@@ -24,19 +21,12 @@ fn print_bindings(
 ) {
     if options.enable_ctrl_r {
         println!("{indent}{bind_ctrl_r}");
+        println!("{indent}{bind_ctrl_r_ins}");
     }
     if options.enable_up_arrow {
         println!("{indent}{bind_up_arrow}");
+        println!("{indent}{bind_up_arrow_ins}");
     }
-
-    println!("{indent}if bind -M insert >/dev/null 2>&1");
-    if options.enable_ctrl_r {
-        println!("{indent}{indent}{bind_ctrl_r_ins}");
-    }
-    if options.enable_up_arrow {
-        println!("{indent}{indent}{bind_up_arrow_ins}");
-    }
-    println!("{indent}end");
 }
 
 pub fn init_static(options: &StaticInitOptions<'_>) {
@@ -88,20 +78,4 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
             println!("{}", atuin_ai::shell::FISH_INIT);
         }
     }
-}
-
-pub async fn init(
-    aliases: AliasStore,
-    vars: VarStore,
-    options: &StaticInitOptions<'_>,
-) -> Result<()> {
-    init_static(options);
-
-    let aliases = atuin_dotfiles::shell::fish::alias_config(&aliases).await;
-    let vars = atuin_dotfiles::shell::fish::var_config(&vars).await;
-
-    println!("{aliases}");
-    println!("{vars}");
-
-    Ok(())
 }

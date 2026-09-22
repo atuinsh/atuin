@@ -6,7 +6,7 @@ use atuin_domain::record::{
     EncryptedData, Host, HostId, Record, RecordIdx, RecordSeriesKey, RecordTag,
 };
 use atuin_server::db::models::{NewSession, NewUser, User};
-use atuin_server::db::{ConnectableDatabase, DbError, DbSettings, MySql, Postgres, Sqlite};
+use atuin_server::db::{DbError, DbSettings, DynDatabase};
 use rstest::rstest;
 use sqlx::migrate::MigrateDatabase;
 use url::Url;
@@ -88,15 +88,11 @@ async fn test_full_db_story() -> eyre::Result<()> {
     let test_db = TestDb::new().await?;
     let settings = &test_db.settings;
 
-    match &settings.db_uri {
-        DbUrl::Postgres(url) => run_the_test::<Postgres>(url.clone()).await,
-        DbUrl::Sqlite(url) => run_the_test::<Sqlite>(url.clone()).await,
-        DbUrl::Mysql(url) => run_the_test::<MySql>(url.clone()).await,
-    }
+    let db = atuin_server::connect(settings.db_uri.clone()).await?;
+    run_the_test(&*db).await
 }
 
-async fn run_the_test<DB: ConnectableDatabase>(url: DB::Url) -> eyre::Result<()> {
-    let db = DB::connect(url).await?;
+async fn run_the_test(db: &dyn DynDatabase) -> eyre::Result<()> {
     // register a user
     let new_user = NewUser {
         username: "foo".to_owned(),
@@ -191,6 +187,37 @@ async fn run_the_test<DB: ConnectableDatabase>(url: DB::Url) -> eyre::Result<()>
 
     let missing = db.get_user("foo").await;
     assert!(matches!(missing, Err(DbError::NotFound)), "user should be gone after delete_user");
+
+    Ok(())
+}
+
+/// Registration must create the user and their session atomically: after one call, both the
+/// user row and a working session for the returned token must exist.
+#[rstest]
+#[tokio::test]
+async fn test_add_user_with_session_is_atomic() -> eyre::Result<()> {
+    let test_db = TestDb::new().await?;
+    let settings = &test_db.settings;
+
+    let db = atuin_server::connect(settings.db_uri.clone()).await?;
+
+    let new_user = NewUser {
+        username: "combined".to_owned(),
+        email: "combined@example.com".to_owned(),
+        password: "hunter2".to_owned(),
+    };
+    let token = crypto_random_string::<24>();
+
+    let user_id = db.add_user_with_session(&new_user, &token).await?;
+    assert_ne!(user_id, 0);
+
+    // The session created alongside the user must resolve back to that same user.
+    let user = db.get_session_user(&token).await?;
+    assert_eq!(user.username, "combined");
+    assert_eq!(user.id, user_id);
+
+    let session = db.get_session(&token).await?;
+    assert_eq!(session.user_id, user_id);
 
     Ok(())
 }

@@ -87,6 +87,30 @@ where
     }
 }
 
+/// The indices and elements to show around every hit in `items`.
+///
+/// A hit is an element for which `is_hit` holds. With `radius` `None`, every element is shown; with
+/// `Some(r)`, only each hit's neighbourhood of `r` elements on either side, overlapping
+/// neighbourhoods merged (see [`context_windows`](crate::range::context_windows)). The yielded
+/// indices are ascending and never repeat.
+pub fn excerpt<T>(
+    items: &[T],
+    is_hit: impl Fn(&T) -> bool,
+    radius: Option<usize>,
+) -> impl Iterator<Item = (usize, &T)> {
+    use crate::range::context_windows;
+
+    let everything = 0..items.len();
+    let windows = match radius {
+        None => vec![everything],
+        Some(radius) => {
+            let hits = items.iter().enumerate().filter(|(_, item)| is_hit(item)).map(|(i, _)| i);
+            context_windows(items.len(), hits, radius)
+        }
+    };
+    windows.into_iter().flatten().map(move |i| (i, &items[i]))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -95,6 +119,26 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    fn excerpted(items: &[u32], hit: u32, radius: Option<usize>) -> Vec<(usize, u32)> {
+        excerpt(items, |x| *x == hit, radius).map(|(i, x)| (i, *x)).collect()
+    }
+
+    #[rstest]
+    #[case::none_shows_everything(&[10, 20, 30], 99, None, vec![(0, 10), (1, 20), (2, 30)])]
+    #[case::none_on_empty(&[], 99, None, vec![])]
+    #[case::some_without_hits_is_empty(&[1, 2, 3], 9, Some(1), vec![])]
+    #[case::some_windows_the_hit(&[0, 0, 1, 0, 0], 1, Some(1), vec![(1, 0), (2, 1), (3, 0)])]
+    #[case::some_merges_adjacent(&[9, 0, 9, 0, 0], 9, Some(1), vec![(0, 9), (1, 0), (2, 9), (3, 0)])]
+    #[case::radius_zero_is_just_the_hits(&[9, 0, 9], 9, Some(0), vec![(0, 9), (2, 9)])]
+    fn excerpt_selects_context_around_hits(
+        #[case] items: &[u32],
+        #[case] hit: u32,
+        #[case] radius: Option<usize>,
+        #[case] expected: Vec<(usize, u32)>,
+    ) {
+        assert_eq!(excerpted(items, hit, radius), expected);
+    }
 
     #[rstest]
     #[case(&[], &[], &[])]
@@ -167,7 +211,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[rstest]
         fn partition_dedup_matches_vec_dedup(input in prop::collection::vec(0u8..4, 0..32)) {
             let mut actual = input.clone();
             let (dedup, _) = partition_dedup(&mut actual);
@@ -176,7 +220,7 @@ mod tests {
             prop_assert_eq!(dedup.to_vec(), expected);
         }
 
-        #[test]
+        #[rstest]
         fn partition_dedup_leaves_no_consecutive_duplicates(
             input in prop::collection::vec(0u8..4, 0..32),
         ) {
@@ -186,7 +230,7 @@ mod tests {
         }
 
         /// Nothing is added or removed: the two partitions together are a permutation of the input.
-        #[test]
+        #[rstest]
         fn partition_dedup_permutes_the_input(input in prop::collection::vec(0u8..4, 0..32)) {
             let mut actual = input.clone();
             {
@@ -199,7 +243,7 @@ mod tests {
             prop_assert_eq!(actual, expected);
         }
 
-        #[test]
+        #[rstest]
         fn comparer_matches_set_equality(
             slice in sorted_deduped_slice(),
             iter in prop::collection::vec(0u8..16, 0..16),
@@ -212,7 +256,7 @@ mod tests {
             );
         }
 
-        #[test]
+        #[rstest]
         fn comparer_ignores_the_stack_size(
             slice in sorted_deduped_slice(),
             iter in prop::collection::vec(0u8..16, 0..16),
@@ -223,7 +267,7 @@ mod tests {
             prop_assert_eq!(SortedDedupedSliceComparer::new(&slice, &iter).eq::<64>(), expected);
         }
 
-        #[test]
+        #[rstest]
         fn comparer_ignores_order_and_duplicates(
             slice in sorted_deduped_slice(),
             iter in prop::collection::vec(0u8..16, 0..16),
@@ -238,7 +282,7 @@ mod tests {
             );
         }
 
-        #[test]
+        #[rstest]
         fn comparer_is_reflexive(slice in sorted_deduped_slice()) {
             prop_assert!(SortedDedupedSliceComparer::new(&slice, &slice).eq::<8>());
 

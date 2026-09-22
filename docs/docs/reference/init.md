@@ -22,8 +22,6 @@ Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`. See
   [Shell Integration](../guide/shell-integration.md).
 - **Key bindings** for ++ctrl+r++ and the ++up++ arrow, and ++question++ for
   [Atuin AI](../ai/introduction.md).
-- **Dotfiles**, if [enabled](../configuration/config.md#dotfiles) — your synced
-  aliases and environment variables are defined here.
 
 ## Flags
 

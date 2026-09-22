@@ -34,7 +34,7 @@ pub async fn start_server(path: &str) -> (url::Url, oneshot::Sender<()>, JoinHan
         port: 0,
         path: path.to_owned(),
         open_registration: true,
-        max_record_size: 1024 * 1024 * 1024,
+        max_record_size: atuin_common::units::ByteSize::b(1024 * 1024 * 1024),
         register_webhook_url: None,
         register_webhook_username: String::new(),
         db_settings: DbSettings {
@@ -85,8 +85,8 @@ pub async fn register_inner(
     api_client::Client::new(
         address.clone(),
         &api_client::AuthToken::Token(registration_response.session),
-        5,
-        30,
+        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(30),
         &Default::default(),
         caps,
     )
@@ -108,8 +108,8 @@ pub async fn login(address: &url::Url, username: String, password: String) -> ap
     api_client::Client::new(
         address.clone(),
         &api_client::AuthToken::Token(login_response.session),
-        5,
-        30,
+        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(30),
         &Default::default(),
         caps,
     )

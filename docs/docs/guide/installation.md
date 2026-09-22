@@ -73,7 +73,7 @@ If you don't wish to use the installer, the manual installation steps are as fol
 
 === "MacPorts"
 
-    Atuin is also available in [MacPorts](https://ports.macports.org/port/atuin/)
+    Atuin is also available in [MacPorts](https://ports.macports.org/port/atuin/):
 
     ```shell
     sudo port install atuin
@@ -81,7 +81,7 @@ If you don't wish to use the installer, the manual installation steps are as fol
 
 === "mise"
 
-    Atuin is also installable using [mise](https://github.com/jdx/mise)
+    Atuin is also installable using [mise](https://github.com/jdx/mise):
 
     ```shell
     mise use -g atuin@latest
@@ -95,26 +95,12 @@ If you don't wish to use the installer, the manual installation steps are as fol
     nix profile install "github:atuinsh/atuin"
     ```
 
-    Atuin is also available in [nixpkgs](https://github.com/NixOS/nixpkgs):
-
-    ```shell
-    nix-env -f '<nixpkgs>' -iA atuin
-    ```
-
 === "Pacman"
 
     Atuin is available in the Arch Linux [extra repository](https://archlinux.org/packages/extra/x86_64/atuin/):
 
     ```shell
     pacman -S atuin
-    ```
-
-=== "XBPS"
-
-    Atuin is available in the Void Linux [repository](https://github.com/void-linux/void-packages/tree/master/srcpkgs/atuin):
-
-    ```shell
-    sudo xbps-install atuin
     ```
 
 === "Termux"

@@ -16,6 +16,7 @@ use atuin_domain::caps::{AuthHeaderProvider, CapClient, CapMismatch, Capabilitie
 use atuin_domain::record::{
     EncryptedData, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus,
 };
+use easy_cast::Conv;
 use eyre::{Result, bail};
 use futures::{Stream, StreamExt, TryStreamExt, stream};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AGENT};
@@ -350,7 +351,7 @@ impl RecordsRequest {
                     return;
                 }
 
-                let len = page.len() as u64;
+                let len = u64::conv(page.len());
                 progress += len;
                 yield page;
 
@@ -379,7 +380,7 @@ impl RecordsRequest {
                         match this.page(cursor..stop).await {
                             Ok(page) if page.is_empty() => None,
                             Ok(page) => {
-                                let next = cursor + page.len() as u64;
+                                let next = cursor + u64::conv(page.len());
                                 Some((Ok(page), (next, this)))
                             }
                             Err(e) => Some((Err(e), (chunks.end(), this))),
@@ -423,8 +424,8 @@ impl Client {
     pub fn new(
         sync_addr: impl Into<Arc<Url>>,
         auth: &AuthToken,
-        connect_timeout: u64,
-        timeout: u64,
+        connect_timeout: Duration,
+        timeout: Duration,
         extra_headers: &HashMap<String, String>,
         caps: Arc<CapClient>,
     ) -> Result<Self> {
@@ -440,8 +441,8 @@ impl Client {
         // Wrap the authenticated client in the capability-negotiation middleware.
         let client = client_builder(extra_headers)
             .default_headers(headers)
-            .connect_timeout(Duration::from_secs(connect_timeout))
-            .timeout(Duration::from_secs(timeout))
+            .connect_timeout(connect_timeout)
+            .timeout(timeout)
             .build()?
             .with_capabilities(caps.clone(), CapMismatch::Continue);
 
@@ -449,8 +450,8 @@ impl Client {
             sync_addr,
             client,
             lfs_client: reqwest::Client::builder()
-                .connect_timeout(Duration::from_secs(connect_timeout))
-                .timeout(Duration::from_secs(timeout))
+                .connect_timeout(connect_timeout)
+                .timeout(timeout)
                 .build()?,
             caps,
         })
@@ -802,9 +803,15 @@ mod tests {
 
         let addr: Url = server.uri().parse().unwrap();
         let caps = caps_client_anonymous(&addr, &HashMap::new()).unwrap();
-        let client =
-            Client::new(addr, &AuthToken::Token("t".into()), 30, 30, &HashMap::new(), caps)
-                .unwrap();
+        let client = Client::new(
+            addr,
+            &AuthToken::Token("t".into()),
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+            &HashMap::new(),
+            caps,
+        )
+        .unwrap();
 
         // The client observes the server's advertised packfile cap; a second read stays warm
         // (the mock expects a single capabilities fetch).
@@ -851,8 +858,15 @@ mod records_stream_tests {
 
     fn mock_client(addr: &Url) -> Client {
         let caps = caps_client_anonymous(addr, &HashMap::new()).unwrap();
-        Client::new(addr.clone(), &AuthToken::Token("t".into()), 30, 30, &HashMap::new(), caps)
-            .unwrap()
+        Client::new(
+            addr.clone(),
+            &AuthToken::Token("t".into()),
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+            &HashMap::new(),
+            caps,
+        )
+        .unwrap()
     }
 
     /// Serve `records` in pages of `serve_size`, keyed on the `start` query param

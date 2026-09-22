@@ -4,17 +4,24 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use atuin_client::history::AuthorPattern;
+use atuin_client::settings::FilterMode;
 use atuin_common::ansi;
 use atuin_common::filter::OrFilter;
 use atuin_common::time::UtcOffsetExt;
+use easy_cast::Conv;
 use enum_dispatch::enum_dispatch;
 use eyre::Result;
-use uuid::Uuid;
+use strum_macros::{EnumIter, EnumString, IntoStaticStr};
 
 const DEFAULT_FILE_READ_LINES: u64 = 100;
 const MAX_FILE_READ_LINES: u64 = 1000;
-
+/// Page-size bounds for `atuin_history`; mirrored in the MCP schema.
+pub const DEFAULT_HISTORY_RESULTS: i64 = 10;
+pub const MAX_HISTORY_RESULTS: i64 = 50;
 pub mod descriptor;
+pub mod output;
+
+pub use output::get::AtuinOutputToolCall;
 
 use crate::permissions::rule::Rule;
 
@@ -78,6 +85,21 @@ pub enum ToolOutcome {
 }
 
 impl ToolOutcome {
+    /// Maximum size of the `stdout` and `stderr` buffers (each) in [`Self::Structured`].
+    ///
+    /// [`ansi::to_plain_text`] used to be capped at 16384 rows to prevent OOM errors, which
+    /// provided an effective limit on the size of the stdout and stderr buffers we return. Now that
+    /// [`ansi::to_plain_text`] is more efficient, it imposes no limit of its own; to ensure we
+    /// don't return too much data, we apply the cap ourselves.
+    ///
+    /// 16384 times 120 (the width of the emulated terminal, from `PREVIEW_WIDTH`) is approximately
+    /// 2,000,000 (2MB), so we use that as our limit here.
+    ///
+    /// Note that we keep the *end* of output that exceeds the limit. This matches what
+    /// [`ansi::to_plain_text`] did previously -- it would process the full output but only keep the
+    /// last 16384 rendered lines.
+    const MAX_STRUCTURED_OUTPUT_SIZE: usize = 2_000_000;
+
     /// Format this outcome as a string for the tool result sent to the LLM.
     ///
     /// The optional `interrupt_reason` overrides the generic interrupted message
@@ -335,15 +357,15 @@ impl ReadToolCall {
 
         let raw_lines = reader
             .lines()
-            .skip(self.offset as usize)
-            .take(self.limit as usize)
+            .skip(usize::conv(self.offset))
+            .take(usize::conv(self.limit))
             .collect::<Result<Vec<_>, _>>();
 
         match raw_lines {
             Ok(lines) => {
-                let first_line_no = self.offset as usize + 1;
+                let first_line_no = usize::conv(self.offset) + 1;
                 let last_line_no = first_line_no + lines.len().saturating_sub(1);
-                let width = last_line_no.max(1).ilog10() as usize + 1;
+                let width = usize::conv(last_line_no.max(1).ilog10()) + 1;
 
                 let numbered: String = lines
                     .iter()
@@ -799,9 +821,12 @@ const PREVIEW_WIDTH: NonZeroU16 = NonZeroU16::new(120).unwrap();
 /// instead of the real output.
 fn vt100_screen_lines(screen: &vt100::Screen) -> Vec<String> {
     let (rows, cols) = screen.size();
-    let mut lines = Vec::with_capacity(rows as usize);
+    let rows = rows.get();
+    let cols = cols.get();
+
+    let mut lines = Vec::with_capacity(usize::conv(rows));
     for row in 0..rows {
-        let mut line = String::with_capacity(cols as usize);
+        let mut line = String::with_capacity(usize::conv(cols));
         for col in 0..cols {
             if let Some(cell) = screen.cell(row, col) {
                 line.push_str(cell.contents());
@@ -890,8 +915,7 @@ pub async fn execute_shell_command_streaming(
                     Ok(0) => stdout_done = true,
                     Ok(n) => {
                         full_stdout.extend_from_slice(&stdout_buf[..n]);
-                        let normalized = ansi::onlcr(&stdout_buf[..n]).collect::<Vec<u8>>();
-                        parser.process(&normalized);
+                        ansi::onlcr(&stdout_buf[..n]).for_each(|chunk| parser.process(chunk));
                     }
                     Err(_) => stdout_done = true,
                 }
@@ -904,8 +928,7 @@ pub async fn execute_shell_command_streaming(
                     Ok(n) => {
                         full_stderr.extend_from_slice(&stderr_buf[..n]);
                         // Feed stderr to the preview parser too, so it shows in the VT100 screen
-                        let normalized = ansi::onlcr(&stderr_buf[..n]).collect::<Vec<u8>>();
-                        parser.process(&normalized);
+                        ansi::onlcr(&stderr_buf[..n]).for_each(|chunk| parser.process(chunk));
                     }
                     Err(_) => stderr_done = true,
                 }
@@ -944,15 +967,22 @@ pub async fn execute_shell_command_streaming(
 
     // Strip ANSI escape sequences for clean LLM output by running
     // the raw bytes through a VT100 parser and extracting plain text.
+    let rows = PREVIEW_HEIGHT;
     let cols = PREVIEW_WIDTH;
-    let stdout_text = ansi::to_plain_text(&full_stdout, cols);
-    let stderr_text = ansi::to_plain_text(&full_stderr, cols);
+
+    let [stdout_text, stderr_text] = [full_stdout, full_stderr].map(|output| {
+        let mut text = ansi::to_plain_text(&output, rows, cols);
+        let start = text.len().saturating_sub(ToolOutcome::MAX_STRUCTURED_OUTPUT_SIZE);
+        let start = text.ceil_char_boundary(start);
+        text.drain(..start);
+        text
+    });
 
     ToolOutcome::Structured {
         stdout: stdout_text,
         stderr: stderr_text,
         exit_code,
-        duration_ms: duration.as_millis() as u64,
+        duration_ms: u64::conv(duration.as_millis()),
         interrupted,
     }
 }
@@ -966,7 +996,8 @@ pub struct AtuinHistoryToolCall {
     pub authors: OrFilter<Vec<AuthorPattern>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, EnumString, IntoStaticStr)]
+#[strum(serialize_all = "lowercase")]
 pub enum HistorySearchFilterMode {
     Global,
     Host,
@@ -975,8 +1006,15 @@ pub enum HistorySearchFilterMode {
     Workspace,
 }
 
-impl From<&HistorySearchFilterMode> for atuin_client::settings::FilterMode {
-    fn from(mode: &HistorySearchFilterMode) -> Self {
+impl HistorySearchFilterMode {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+}
+
+impl From<HistorySearchFilterMode> for FilterMode {
+    fn from(mode: HistorySearchFilterMode) -> Self {
         match mode {
             HistorySearchFilterMode::Global => Self::Global,
             HistorySearchFilterMode::Host => Self::Host,
@@ -991,42 +1029,46 @@ impl TryFrom<&serde_json::Value> for AtuinHistoryToolCall {
     type Error = eyre::Error;
 
     fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
-        let filter_modes = value
-            .get("filter_modes")
-            .and_then(|v| v.as_array())
-            .ok_or(eyre::eyre!("Missing filter_modes"))?;
+        // Optional; JSON null counts as omitted because models often send
+        // null for optional params. A missing scope means a global search —
+        // evals showed that forcing the model to pick a scope on every call
+        // made it stop calling the tool at all.
+        let filter_modes = match value.get("filter_modes") {
+            None | Some(serde_json::Value::Null) => Vec::new(),
+            Some(v) => v
+                .as_array()
+                .ok_or_else(|| eyre::eyre!("filter_modes must be an array"))?
+                .iter()
+                .map(|v| {
+                    let mode = v.as_str().ok_or_else(|| eyre::eyre!("Invalid filter mode"))?;
+                    mode.parse::<HistorySearchFilterMode>()
+                        .map_err(|_| eyre::eyre!("Invalid filter mode: {mode}"))
+                })
+                .collect::<Result<Vec<HistorySearchFilterMode>>>()?,
+        };
 
-        let filter_modes = filter_modes
-            .iter()
-            .map(|v| {
-                let mode = v.as_str().ok_or(eyre::eyre!("Invalid filter mode"))?;
-                match mode {
-                    "global" => Ok(HistorySearchFilterMode::Global),
-                    "host" => Ok(HistorySearchFilterMode::Host),
-                    "session" => Ok(HistorySearchFilterMode::Session),
-                    "directory" => Ok(HistorySearchFilterMode::Directory),
-                    "workspace" => Ok(HistorySearchFilterMode::Workspace),
-                    _ => Err(eyre::eyre!("Invalid filter mode: {mode}")),
-                }
-            })
-            .collect::<Result<Vec<HistorySearchFilterMode>>>()?;
+        let query = value
+            .get("query")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre::eyre!("Missing query"))?;
 
-        let query =
-            value.get("query").and_then(|v| v.as_str()).ok_or(eyre::eyre!("Missing query"))?;
-
-        let limit = value.get("limit").and_then(|v| v.as_i64()).unwrap_or(10).clamp(1, 50);
+        let limit = value
+            .get("limit")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(DEFAULT_HISTORY_RESULTS)
+            .clamp(1, MAX_HISTORY_RESULTS);
 
         let only_failed = value.get("only_failed").and_then(|v| v.as_bool()).unwrap_or(false);
 
         let authors = match value.get("authors") {
             Some(authors) => authors
                 .as_array()
-                .ok_or(eyre::eyre!("authors must be an array of strings"))?
+                .ok_or_else(|| eyre::eyre!("authors must be an array of strings"))?
                 .iter()
                 .map(|v| {
                     v.as_str()
                         .map(AuthorPattern::from)
-                        .ok_or(eyre::eyre!("authors entries must be strings"))
+                        .ok_or_else(|| eyre::eyre!("authors entries must be strings"))
                 })
                 .collect::<Result<Vec<AuthorPattern>>>()?,
             None => Vec::new(),
@@ -1065,18 +1107,13 @@ impl AtuinHistoryToolCall {
             Err(e) => return ToolOutcome::Error(format!("Failed to get history context: {e}")),
         };
 
-        let filter_mode = self
-            .filter_modes
-            .first()
-            .map(atuin_client::settings::FilterMode::from)
-            .unwrap_or(atuin_client::settings::FilterMode::Global);
+        let search_mode =
+            self.filter_modes.first().copied().unwrap_or(HistorySearchFilterMode::Global);
 
         // An empty session would silently match nothing; error instead so a
         // missing $ATUIN_SESSION (e.g. MCP server launched outside a hooked
         // shell) isn't mistaken for empty history.
-        if matches!(filter_mode, atuin_client::settings::FilterMode::Session)
-            && context.session.is_empty()
-        {
+        if matches!(search_mode, HistorySearchFilterMode::Session) && context.session.is_empty() {
             return ToolOutcome::Error(
                 "Session-scoped search is unavailable: $ATUIN_SESSION is not set, so there is no \
                  shell session to scope to. Use another filter mode."
@@ -1085,27 +1122,59 @@ impl AtuinHistoryToolCall {
         }
 
         let filter_options = OptFilters {
-            limit: Some(self.limit),
+            // Fetch one row beyond the requested limit so the truncation
+            // notice appended to the results below can say "more exist" as a
+            // fact rather than a guess.
+            limit: Some(self.limit + 1),
             only_failed: self.only_failed,
             authors: self.authors.as_slice_filter(),
             ..Default::default()
         };
 
-        let results = match db
-            .search(DbSearchMode::Fuzzy, filter_mode, &context, &self.query, filter_options)
+        let mut results = match db
+            .search(DbSearchMode::Fuzzy, search_mode.into(), &context, &self.query, filter_options)
             .await
         {
             Ok(results) => results,
             Err(e) => return ToolOutcome::Error(format!("History search failed: {e}")),
         };
+        // The clamp keeps this in 1..=MAX_HISTORY_RESULTS, so the conversion
+        // never fails; the fallback only exists to keep it infallible.
+        let page_size = usize::try_from(self.limit.clamp(1, MAX_HISTORY_RESULTS)).unwrap_or(1);
+        let truncated = results.len() > page_size;
+        results.truncate(page_size);
 
         if results.is_empty() {
-            return ToolOutcome::Success("No matching history entries found.".to_string());
+            // An unadorned "no results" reads to the model as "this tool is
+            // useless". List which search parameters are worth loosening so
+            // its retry has somewhere to go.
+            let mut hints = Vec::new();
+            if !self.query.is_empty() {
+                hints.push("query terms are AND-ed, so try fewer or shorter terms");
+            }
+            if !matches!(search_mode, HistorySearchFilterMode::Global) {
+                hints.push("widen the scope to 'global'");
+            }
+            if self.only_failed {
+                hints.push("drop only_failed (the command may have succeeded)");
+            }
+            if !self.authors.is_all() {
+                hints.push("drop the authors filter");
+            }
+            let mut msg = format!(
+                "No history entries matched query {query:?} (scope: {scope}).",
+                query = self.query,
+                scope = search_mode.as_str(),
+            );
+            if !hints.is_empty() {
+                msg.push_str(&format!(" To find more: {}.", hints.join("; ")));
+            }
+            return ToolOutcome::Success(msg);
         }
 
         let local_offset = time::UtcOffset::local_or_utc();
 
-        let formatted: Vec<String> = results
+        let mut formatted: Vec<String> = results
             .iter()
             .enumerate()
             .map(|(i, history)| {
@@ -1113,139 +1182,20 @@ impl AtuinHistoryToolCall {
             })
             .collect();
 
+        if truncated {
+            // The parser clamps `limit` to MAX_HISTORY_RESULTS, so a model
+            // that retries with a larger limit at the cap would just get the
+            // identical page back; only suggest raising it below the cap.
+            let advice = if self.limit < MAX_HISTORY_RESULTS {
+                "Refine the query or raise `limit` to see others."
+            } else {
+                "That is the maximum page size; refine the query to narrow them."
+            };
+            formatted
+                .push(format!("[Showing the first {page_size} matches; more exist. {advice}]"));
+        }
+
         ToolOutcome::Success(formatted.join("\n"))
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct AtuinOutputToolCall {
-    pub history_id: Uuid,
-    pub ranges: Vec<(i64, i64)>,
-    /// The command the history entry ran, resolved from the local history
-    /// db after parsing (`Effect::ResolveOutputCommand`). Display-only:
-    /// `None` until the lookup lands, or when the id isn't known locally.
-    pub command: Option<String>,
-}
-
-impl TryFrom<&serde_json::Value> for AtuinOutputToolCall {
-    type Error = eyre::Error;
-
-    fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
-        let history_id = value
-            .get("history_id")
-            .and_then(|v| v.as_str())
-            .and_then(|v| Uuid::parse_str(v).ok())
-            .ok_or(eyre::eyre!("Missing or invalid history ID"))?;
-
-        let ranges =
-            value.get("ranges").and_then(|v| v.as_array()).map(Vec::as_slice).unwrap_or(&[]);
-
-        let ranges = ranges
-            .iter()
-            .map(|r| {
-                let range = r
-                    .as_array()
-                    .filter(|a| a.len() == 2)
-                    .ok_or_else(|| eyre::eyre!("Each range must be a [start, end] array"))?;
-
-                let start = range[0]
-                    .as_i64()
-                    .ok_or_else(|| eyre::eyre!("Range start must be an integer"))?;
-                let end =
-                    range[1].as_i64().ok_or_else(|| eyre::eyre!("Range end must be an integer"))?;
-
-                Ok((start, end))
-            })
-            .collect::<Result<Vec<(i64, i64)>, eyre::Error>>()?;
-
-        Ok(Self {
-            history_id,
-            ranges,
-            command: None,
-        })
-    }
-}
-
-impl PermissibleToolCall for AtuinOutputToolCall {
-    fn target_dir(&self) -> Option<&Path> {
-        None
-    }
-
-    fn matches_rule(&self, rule: &Rule) -> bool {
-        rule.tool == "AtuinOutput"
-    }
-}
-
-fn format_output_lines_for_llm(lines: &[atuin_daemon::semantic::OutputLine]) -> String {
-    let width =
-        lines.iter().map(|line| line.line_number).max().unwrap_or(1).max(1).ilog10() as usize + 1;
-    let mut formatted = Vec::with_capacity(lines.len());
-    let mut previous_line_number = None;
-
-    for line in lines {
-        if let Some(previous) = previous_line_number {
-            let skipped = line.line_number.saturating_sub(previous + 1);
-            if skipped > 0 {
-                formatted.push(format!("[...skipped {skipped} lines...]"));
-            }
-        }
-
-        formatted.push(format!("{:>width$}\t{}", line.line_number, line.content));
-        previous_line_number = Some(line.line_number);
-    }
-
-    formatted.join("\n")
-}
-
-impl AtuinOutputToolCall {
-    pub(crate) async fn execute(&self) -> ToolOutcome {
-        let settings = match atuin_client::settings::Settings::new() {
-            Ok(settings) => settings,
-            Err(e) => return ToolOutcome::Error(format!("Failed to load Atuin settings: {e}")),
-        };
-
-        let mut client = match atuin_daemon::SemanticClient::from_settings(&settings).await {
-            Ok(client) => client,
-            Err(e) => return ToolOutcome::Error(format!("Failed to connect to Atuin daemon: {e}")),
-        };
-
-        let history_id = self.history_id.as_simple().to_string();
-        let response = match client.command_output(history_id.clone(), self.ranges.clone()).await {
-            Ok(response) => response,
-            Err(e) => return ToolOutcome::Error(format!("Failed to fetch command output: {e}")),
-        };
-
-        if !response.found {
-            return ToolOutcome::Success(format!(
-                "No captured output found for history ID {history_id}."
-            ));
-        }
-
-        if response.total_lines == 0 {
-            return ToolOutcome::Success(format!(
-                "Captured output for history ID {history_id} is empty."
-            ));
-        }
-
-        let output = format_output_lines_for_llm(&response.lines);
-        if output.is_empty() {
-            return ToolOutcome::Success(format!(
-                "No lines selected from captured output for history ID {history_id}."
-            ));
-        }
-
-        let total_output = if response.output_truncated {
-            format!(
-                "{} bytes captured, {} bytes observed before truncation, {} lines",
-                response.total_bytes, response.output_observed_bytes, response.total_lines
-            )
-        } else {
-            format!("{} bytes, {} lines", response.total_bytes, response.total_lines)
-        };
-
-        ToolOutcome::Success(format!(
-            "History ID: {history_id}\nTotal output: {total_output}\nSelected output:\n{output}"
-        ))
     }
 }
 
@@ -1316,12 +1266,31 @@ mod tests {
 
     // ── Cross-platform tests ──
 
-    #[test]
-    fn atuin_history_filters_are_optional() {
-        let input = serde_json::json!({
-            "query": "cargo",
-            "filter_modes": ["global"],
-        });
+    #[rstest]
+    #[case::omitted(serde_json::json!({ "query": "cargo" }))]
+    #[case::null(serde_json::json!({ "query": "cargo", "filter_modes": null }))]
+    fn atuin_history_filter_modes_are_optional(#[case] input: serde_json::Value) {
+        let call = AtuinHistoryToolCall::try_from(&input).unwrap();
+        assert!(call.filter_modes.is_empty());
+    }
+
+    #[rstest]
+    fn filter_mode_names_round_trip() {
+        use strum::IntoEnumIterator;
+        for mode in HistorySearchFilterMode::iter() {
+            assert_eq!(mode.as_str().parse::<HistorySearchFilterMode>(), Ok(mode));
+        }
+    }
+
+    #[rstest]
+    fn atuin_history_filter_modes_reject_non_arrays() {
+        let input = serde_json::json!({ "query": "cargo", "filter_modes": "global" });
+        assert!(AtuinHistoryToolCall::try_from(&input).is_err());
+    }
+
+    #[rstest]
+    fn atuin_history_author_and_failure_filters_parse() {
+        let input = serde_json::json!({ "query": "cargo" });
 
         let call = AtuinHistoryToolCall::try_from(&input).unwrap();
         assert!(!call.only_failed);
@@ -1329,7 +1298,6 @@ mod tests {
 
         let input = serde_json::json!({
             "query": "cargo",
-            "filter_modes": ["global"],
             "only_failed": true,
             "authors": ["$all-agent"],
         });
@@ -1337,51 +1305,6 @@ mod tests {
         let call = AtuinHistoryToolCall::try_from(&input).unwrap();
         assert!(call.only_failed);
         assert_eq!(call.authors.items(), filter::Items::Some([AuthorPattern::AllAgent].as_slice()));
-    }
-
-    #[rstest]
-    fn atuin_output_ranges_are_optional() -> eyre::Result<()> {
-        let input = serde_json::json!({
-            "history_id": "018f0000000070008000000000000000"
-        });
-
-        let call = AtuinOutputToolCall::try_from(&input)?;
-
-        assert_eq!(call.history_id.as_simple().to_string(), "018f0000000070008000000000000000");
-        assert!(call.ranges.is_empty());
-        Ok(())
-    }
-
-    #[rstest]
-    fn atuin_output_parses_line_ranges() -> eyre::Result<()> {
-        let input = serde_json::json!({
-            "history_id": "018f0000000070008000000000000000",
-            "ranges": [[0, 30], [-100, -1]]
-        });
-
-        let call = AtuinOutputToolCall::try_from(&input)?;
-
-        assert_eq!(call.ranges, vec![(0, 30), (-100, -1)]);
-        Ok(())
-    }
-
-    #[rstest]
-    fn atuin_output_formats_lines_like_read_file() {
-        let lines = vec![
-            atuin_daemon::semantic::OutputLine {
-                line_number: 98,
-                content: "near end".to_string(),
-            },
-            atuin_daemon::semantic::OutputLine {
-                line_number: 100,
-                content: "end".to_string(),
-            },
-        ];
-
-        assert_eq!(
-            format_output_lines_for_llm(&lines),
-            " 98\tnear end\n[...skipped 1 lines...]\n100\tend"
-        );
     }
 
     #[rstest]

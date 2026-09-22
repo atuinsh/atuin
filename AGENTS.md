@@ -6,10 +6,10 @@ Shell history tool. Replaces your shell's built-in history with a SQLite databas
 
 ```
 atuin                  CLI binary + TUI (clap, ratatui, crossterm)
-atuin-client           Client library: local DB, encryption, sync, settings
-atuin-common           Shared types, API models, utils
+atuin-client           Client library: local DB, encryption, sync, settings, client-facing domain types
+atuin-common           Low-level cross-crate utilities and API models (not a home for client-facing domain types)
 atuin-daemon           Background gRPC daemon (tonic) for shell hooks
-atuin-dotfiles         Alias/var sync via record store
+atuin-dotfiles         Legacy read-only alias/var listing via record store
 atuin-history          Sorting algorithms, stats
 atuin-kv               Key-value store (synced)
 atuin-scripts          Script management (minijinja)
@@ -41,6 +41,9 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 
 ## Conventions
 
+- Crate placement: anything client-facing -- domain types users' code touches and the stores over
+  them -- lives in `atuin-client`. `atuin-common` is for low-level, cross-crate utilities only; do
+  not put client-facing domain types there.
 - Rust 2024 edition, toolchain 1.98.0.
 - Errors: `eyre::Result` in binaries, `thiserror` for typed errors in libraries.
 - Derive boilerplate: `derive_more` (workspace dep) for `Display`, `From`, `Into`, `AsRef`, `Deref`, `Debug` on newtypes and simple enums. Prefer `derive_more` over manual `impl` when the formatting/conversion is a straight delegation. Use `thiserror` (not `derive_more`) for error types. Use `#[as_ref(str)]` on string newtypes for `AsRef<str>`.
@@ -65,7 +68,10 @@ atuin-server-sqlite    SQLite implementation (sqlx)
   independent parameters) instead of near-duplicate tests.
 - Reach for `proptest` when a property holds across many inputs — round-trips (encode/decode, serde,
   parse/display), invariants, idempotence; keep targeted `#[case]`s for known edge cases and regressions.
-- Integration tests in `crates/atuin/tests/` need Postgres (`ATUIN_DB_URI` env var).
+- Server integration tests in `crates/atuin-server/tests/` need Postgres (`ATUIN_DB_URI` env var).
+- E2e tests use temporary homes and private daemon sockets. Add shell setups in
+  `crates/atuin/tests/shells/*.toml`. See `crates/atuin/tests/README.md` for dependencies
+  and how to run them.
 - Use `rstest` for tests, especially when they can be made simpler using `case`s and `fixture`s.
 - Use `":memory:"` SQLite for unit tests needing a database.
 - Runner: `cargo nextest`.

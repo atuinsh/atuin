@@ -3,8 +3,16 @@
 use std::ops::Range;
 
 mod chunks;
+mod clamped;
+mod numbering;
+pub mod py_style;
+mod windows;
 
 pub use chunks::{ChunkInt, Chunks};
+pub use clamped::{ClampInt, Clamped};
+pub use numbering::KeptEnds;
+pub use py_style::PyStyleIdxRange;
+pub use windows::{context_windows, merge_ranges};
 
 /// Chunk a [`Range`] into fixed-size sub-ranges. See [`Chunks`].
 pub trait RangeExt<T: ChunkInt> {

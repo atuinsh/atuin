@@ -1,6 +1,5 @@
-use std::time::Duration;
-
 use atuin_client::database::Sqlite;
+use easy_cast::Conv;
 use eyre::{Context as _, Result, bail};
 use tracing::{debug, info};
 
@@ -58,10 +57,9 @@ pub async fn run(
     };
 
     let history_db_path = &settings.db_path;
-    let history_db =
-        Sqlite::new(history_db_path, Duration::try_from_secs_f64(settings.local_timeout)?)
-            .await
-            .context("failed to open history database for AI")?;
+    let history_db = Sqlite::new(history_db_path, settings.local_timeout)
+        .await
+        .context("failed to open history database for AI")?;
 
     // Support both legacy [ai] send_cwd and new [ai.opening] send_cwd
     let send_cwd =
@@ -165,12 +163,9 @@ async fn run_inline_tui(
     let client_ctx = ClientContext::detect();
 
     // Open the session service and check for a resumable session
-    let service = LocalSessionService::open(
-        &settings.ai.db_path,
-        Duration::try_from_secs_f64(settings.local_timeout)?,
-    )
-    .await
-    .context("failed to open AI session database")?;
+    let service = LocalSessionService::open(&settings.ai.db_path, settings.local_timeout)
+        .await
+        .context("failed to open AI session database")?;
 
     // Cached usage renders immediately; a background fetch (spawned below,
     // once the event channel exists) replaces it unless it's fresh. OSS
@@ -182,7 +177,7 @@ async fn run_inline_tui(
             Ok(Some(cached_snapshot)) => {
                 let age =
                     time::OffsetDateTime::now_utc().unix_timestamp() - cached_snapshot.written_at;
-                let fresh = age < crate::usage::REFRESH_AFTER.as_secs() as i64;
+                let fresh = age < i64::conv(crate::usage::REFRESH_AFTER.as_secs());
                 (Some(cached_snapshot.snapshot), fresh)
             }
             Ok(None) => (None, false),
@@ -198,11 +193,13 @@ async fn run_inline_tui(
     let cwd = std::env::current_dir().ok().map(|p| p.to_string_lossy().into_owned());
     let git_root_str = ctx.git_root.as_ref().map(|p| p.to_string_lossy().into_owned());
 
-    let session_window_mins = settings.ai.session_continue_minutes.max(0); // treat negative values as 0 to avoid confusion
-    let max_age_secs: i64 = session_window_mins * 60;
-
-    let resumable =
-        service.find_resumable(cwd.as_deref(), git_root_str.as_deref(), max_age_secs).await?;
+    let resumable = service
+        .find_resumable(
+            cwd.as_deref(),
+            git_root_str.as_deref(),
+            settings.ai.session_continue_minutes,
+        )
+        .await?;
 
     // ─── Build FSM ───────────────────────────────────────────────
     let (session_mgr, mut fsm, file_tracker, edit_permissions) = if let Some(stored) = resumable {
@@ -383,7 +380,7 @@ fn prompt_ai_setup() -> Result<SetupChoice> {
 
         let ev = event::read().context("failed to read key event")?;
 
-        crossterm::execute!(stdout, cursor::MoveUp(options.len() as u16))?;
+        crossterm::execute!(stdout, cursor::MoveUp(u16::conv(options.len())))?;
 
         if let Event::Key(key) = ev {
             if key.kind != KeyEventKind::Press {

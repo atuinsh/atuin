@@ -70,6 +70,10 @@ pub enum Action {
     // Inspector
     InspectPrevious,
     InspectNext,
+    InspectRuns,
+    InspectSession,
+    InspectStats,
+    InspectOutput,
 
     // Special
     Noop,
@@ -148,6 +152,10 @@ impl Action {
 
             "inspect-previous" => Ok(Action::InspectPrevious),
             "inspect-next" => Ok(Action::InspectNext),
+            "inspect-runs" => Ok(Action::InspectRuns),
+            "inspect-session" => Ok(Action::InspectSession),
+            "inspect-stats" => Ok(Action::InspectStats),
+            "inspect-output" => Ok(Action::InspectOutput),
 
             "noop" => Ok(Action::Noop),
 
@@ -215,6 +223,10 @@ impl Action {
 
             Action::InspectPrevious => "inspect-previous".to_string(),
             Action::InspectNext => "inspect-next".to_string(),
+            Action::InspectRuns => "inspect-runs".to_string(),
+            Action::InspectSession => "inspect-session".to_string(),
+            Action::InspectStats => "inspect-stats".to_string(),
+            Action::InspectOutput => "inspect-output".to_string(),
 
             Action::Noop => "noop".to_string(),
         }

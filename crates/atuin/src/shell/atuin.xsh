@@ -25,8 +25,7 @@ def _atuin_postcommand(cmd: str, rtn: int, out, ts):
         return
 
     duration = ts[1] - ts[0]
-    # Duration is float representing seconds, but atuin expects integer of nanoseconds
-    nanos = round(duration * 10 ** 9)
+    nanos = max(0, round(duration * 10 ** 9))
 
     # This causes the entire .xonshrc to be re-executed, which is incredibly slow
     # This happens when using a subshell and using output redirection at the same time

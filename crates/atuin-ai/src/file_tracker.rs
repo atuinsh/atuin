@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use easy_cast::Conv;
 use eyre::Result;
 use serde::{Deserialize, Serialize};
 
@@ -114,7 +115,7 @@ impl FileReadTracker {
 }
 
 fn system_time_to_ms(t: SystemTime) -> i64 {
-    t.duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+    t.duration_since(SystemTime::UNIX_EPOCH).map(|d| i64::conv(d.as_millis())).unwrap_or(0)
 }
 
 fn hash_content(content: &[u8]) -> u64 {

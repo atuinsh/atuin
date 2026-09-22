@@ -19,8 +19,6 @@ ignore = [
     # No upstream patch. Runs only on client, no severe concern.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
-    # daemonize (RUSTSEC-2025-0069): unmaintained, no maintained replacement.
-    "RUSTSEC-2025-0069",
 ]
 
 [licenses]
@@ -39,6 +37,9 @@ confidence-threshold = 0.8
 exceptions = [
     # CC0-1.0 waives copyright but not patents; allow it only for notify.
     { crate = "notify", allow = ["CC0-1.0"] },
+    # 0BSD is a permissive, public-domain-equivalent license; it reaches us only
+    # through varint-rs (a transitive dependency of fjall's lsm-tree).
+    { crate = "varint-rs", allow = ["0BSD"] },
 ]
 
 [bans]
@@ -48,7 +49,10 @@ highlight = "all"
 workspace-default-features = "allow"
 external-default-features = "allow"
 allow = []
-deny = []
+deny = [
+    # Unmaintained with an unfixed UB bug (RUSTSEC-2025-0069). Replaced by daemonix.
+    { crate = "daemonize", use-instead = "daemonix" },
+]
 skip = []
 skip-tree = []
 

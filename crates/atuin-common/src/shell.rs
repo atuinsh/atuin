@@ -48,7 +48,7 @@ impl Shell {
             .process(process.parent().expect("Atuin running with no parent!"))
             .expect("Process with parent pid does not exist");
 
-        let shell = parent.name().trim().to_lowercase();
+        let shell = parent.name().to_string_lossy().trim().to_lowercase();
         let shell = shell.strip_prefix('-').unwrap_or(&shell);
 
         Self::from_string(shell)
@@ -166,7 +166,7 @@ pub fn shell_name(parent: Option<&Process>) -> String {
             .expect("Process with parent pid does not exist")
     };
 
-    let shell = parent.name().trim().to_lowercase();
+    let shell = parent.name().to_string_lossy().trim().to_lowercase();
     let shell = shell.strip_prefix('-').unwrap_or(&shell);
 
     shell.to_string()

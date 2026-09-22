@@ -8,15 +8,14 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use atuin_client::database::Sqlite;
-use atuin_client::history::History;
+use atuin_client::history::{History, HistoryId};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::futures::Backoff;
-use atuin_daemon::DaemonEvent;
-use atuin_daemon::client::{ControlClient, DaemonClientErrorKind, HistoryClient, classify_error};
+use atuin_daemon::client::{DaemonClientErrorKind, HistoryClient, classify_error};
 use clap::Subcommand;
 #[cfg(unix)]
-use daemonize::Daemonize;
+use daemonix::Daemonize;
 use eyre::{Result, WrapErr, bail, eyre};
 
 #[derive(clap::Args, Debug)]
@@ -101,7 +100,7 @@ impl Cmd {
 }
 
 const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
-const DAEMON_PROTOCOL_VERSION: u32 = 1;
+const DAEMON_PROTOCOL_VERSION: u32 = 3;
 const STARTUP_POLL: Duration = Duration::from_millis(40);
 const LOCK_POLL: Duration = Duration::from_millis(20);
 const LEGACY_DAEMON_RESTART_MESSAGE: &str = "legacy daemon detected; restart daemon manually";
@@ -270,9 +269,8 @@ fn spawn_daemon_process() -> Result<()> {
     Ok(())
 }
 
-fn startup_timeout(settings: &Settings) -> Result<Duration> {
-    Duration::try_from_secs_f64(settings.local_timeout.max(0.5) + 2.0)
-        .wrap_err("invalid local_timeout setting")
+fn startup_timeout(settings: &Settings) -> Duration {
+    settings.local_timeout.max(Duration::from_millis(500)) + Duration::from_secs(2)
 }
 
 /// An error that occurred while trying to remove a socket.
@@ -379,7 +377,7 @@ fn ensure_autostart_supported(settings: &Settings) -> Result<()> {
 pub async fn ensure_daemon_running(settings: &Settings) -> Result<()> {
     ensure_autostart_supported(settings)?;
 
-    let timeout = startup_timeout(settings)?;
+    let timeout = startup_timeout(settings);
     let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
     let startup_lock_path = daemon_startup_lock_path(&pidfile_path);
     let startup_lock = wait_for_lock(&startup_lock_path, timeout).await?;
@@ -430,137 +428,13 @@ fn ensure_reply_compatible(settings: &Settings, version: &str, protocol: u32) ->
     bail!("{message}. Enable `daemon.autostart = true` or restart the daemon manually");
 }
 
-#[derive(Clone, Copy)]
-struct TryWithRestartOptions {
-    /// Whether to resend the command if the daemon isn't the expected version.
-    pub retry_on_version_mismatch: bool,
-}
-
-/// Try to send a request to the daemon, restarting it and retrying if necessary.
+/// Acquire a [`HistoryClient`] connected to a daemon we expect to understand us, probing over the
+/// wire-stable Status RPC first and restarting the daemon if it is absent or version/protocol
+/// skewed.
 ///
-/// `context` will be passed to the closure. Compared to capturing the needed context in the
-/// closure, this may reduce the number of required clones.
-async fn try_with_restart<C, F, R>(
-    settings: &Settings,
-    send_request: F,
-    context: C,
-    options: TryWithRestartOptions,
-) -> Result<R>
-where
-    C: Clone + Sync,
-    F: AsyncFn(&mut HistoryClient, C) -> Result<R> + Sync,
-    R: atuin_daemon::history::VersionedReply,
-{
-    match async { send_request(&mut connect_client(settings).await?, context.clone()).await }.await
-    {
-        Ok(resp) => {
-            if daemon_matches_expected(resp.version(), resp.protocol()) {
-                return Ok(resp);
-            }
-
-            if !settings.daemon.autostart {
-                return Err(eyre!(
-                    "{}. Enable `daemon.autostart = true` or restart the daemon manually",
-                    daemon_mismatch_message(resp.version(), resp.protocol())
-                ));
-            }
-
-            if !options.retry_on_version_mismatch {
-                // We don't need to retry the request, so only restart to make subsequent hook calls
-                // target the expected version.
-                let _ = restart_daemon(settings).await;
-                return Ok(resp);
-            }
-        }
-        Err(err) if !settings.daemon.autostart => return Err(err),
-        Err(err) if !should_retry_after_error(&err) => return Err(err),
-        Err(_) => {}
-    }
-
-    let resp = send_request(&mut restart_daemon(settings).await?, context).await?;
-    ensure_reply_compatible(settings, resp.version(), resp.protocol())?;
-    Ok(resp)
-}
-
-pub async fn start_history(settings: &Settings, history: History) -> Result<String> {
-    let resp = try_with_restart(
-        settings,
-        async |client, history| client.start_history(history).await,
-        history,
-        TryWithRestartOptions {
-            retry_on_version_mismatch: true,
-        },
-    )
-    .await?;
-    Ok(resp.id)
-}
-
-pub async fn end_history(settings: &Settings, id: String, duration: u64, exit: i64) -> Result<()> {
-    try_with_restart(
-        settings,
-        async |client, id| client.end_history(id, duration, exit).await,
-        id,
-        TryWithRestartOptions {
-            retry_on_version_mismatch: false,
-        },
-    )
-    .await?;
-    Ok(())
-}
-
-pub async fn cancel_history(settings: &Settings, id: String) -> Result<()> {
-    try_with_restart(
-        settings,
-        async |client, id| client.cancel_history(id).await,
-        id,
-        TryWithRestartOptions {
-            retry_on_version_mismatch: false,
-        },
-    )
-    .await?;
-    Ok(())
-}
-
-/// Emit a daemon event, auto-starting the daemon if it is not running.
-///
-/// If the daemon is not reachable and `daemon.autostart` is enabled, this
-/// will start the daemon and retry the event. If the daemon cannot be
-/// started or the retry fails, a warning is printed to stderr.
-pub async fn emit_event(settings: &Settings, event: DaemonEvent) {
-    // Try to connect and send
-    match ControlClient::from_settings(settings).await {
-        Ok(mut client) => {
-            if let Err(e) = client.send_event(event).await {
-                tracing::debug!(?e, "failed to send event to daemon");
-            }
-            return;
-        }
-        Err(e) if !settings.daemon.autostart || !should_retry_after_error(&e) => {
-            tracing::debug!(?e, "daemon not available, skipping event emission");
-            return;
-        }
-        Err(_) => {}
-    }
-
-    // Auto-start the daemon and retry
-    if let Err(e) = ensure_daemon_running(settings).await {
-        eprintln!("Could not start daemon: {e}");
-        return;
-    }
-
-    match ControlClient::from_settings(settings).await {
-        Ok(mut client) => {
-            if let Err(e) = client.send_event(event).await {
-                eprintln!("Daemon started but failed to send event: {e}");
-            }
-        }
-        Err(e) => {
-            eprintln!("Daemon started but failed to connect: {e}");
-        }
-    }
-}
-
-pub async fn tail_client(settings: &Settings) -> Result<HistoryClient> {
+/// TODO(markovejnovic): This is egregious slop, but not worse than the original solution. I want to
+///                      remove this in a future PR: <https://github.com/atuinsh/atuin/pull/4002>
+pub async fn ready_client(settings: &Settings) -> Result<HistoryClient> {
     match probe(settings).await {
         Probe::Ready(client) => return Ok(client),
         Probe::NeedsRestart(reason) if !settings.daemon.autostart => {
@@ -575,6 +449,81 @@ pub async fn tail_client(settings: &Settings) -> Result<HistoryClient> {
     }
 
     restart_daemon(settings).await
+}
+
+/// Send a request to the daemon, first ensuring (via [`ready_client`]) that it is running and
+/// speaks our version.
+async fn try_with_restart<F, R>(settings: &Settings, send_request: F) -> Result<R>
+where
+    F: AsyncFnOnce(&mut HistoryClient) -> Result<R> + Sync,
+    R: atuin_daemon::grpc::VersionedReply,
+{
+    let client = ready_client(settings).await?;
+    send_checked(settings, client, send_request).await
+}
+
+/// Send a request to an already-running daemon that speaks our version.
+///
+/// This function never starts or restarts the daemon.
+async fn try_without_restart<F, R>(settings: &Settings, send_request: F) -> Result<R>
+where
+    F: AsyncFnOnce(&mut HistoryClient) -> Result<R> + Sync,
+    R: atuin_daemon::grpc::VersionedReply,
+{
+    let client = match probe(settings).await {
+        Probe::Ready(client) => client,
+        Probe::NeedsRestart(reason) => bail!(reason),
+        Probe::Unreachable(err) => return Err(err),
+    };
+    send_checked(settings, client, send_request).await
+}
+
+/// Send a message to the daemon and ensure the response is [compatible](ensure_reply_compatible).
+async fn send_checked<F, R>(
+    settings: &Settings,
+    mut client: HistoryClient,
+    send_request: F,
+) -> Result<R>
+where
+    F: AsyncFnOnce(&mut HistoryClient) -> Result<R> + Sync,
+    R: atuin_daemon::grpc::VersionedReply,
+{
+    let resp = send_request(&mut client).await?;
+    ensure_reply_compatible(settings, resp.version(), resp.protocol())?;
+    Ok(resp)
+}
+
+pub async fn start_history(settings: &Settings, history: History) -> Result<HistoryId> {
+    let resp =
+        try_with_restart(settings, async |client| client.start_history(history).await).await?;
+    let id = resp.id.ok_or_else(|| eyre::eyre!("daemon reply is missing the history id"))?;
+    Ok(HistoryId::try_from(id)?)
+}
+
+pub async fn end_history(
+    settings: &Settings,
+    id: HistoryId,
+    duration: Option<std::time::Duration>,
+    exit: i64,
+) -> Result<()> {
+    try_without_restart(settings, async |client| client.end_history(id, duration, exit).await)
+        .await?;
+    Ok(())
+}
+
+pub async fn cancel_history(settings: &Settings, id: HistoryId) -> Result<()> {
+    try_without_restart(settings, async |client| client.cancel_history(id).await).await?;
+    Ok(())
+}
+
+pub async fn delete_history(settings: &Settings, ids: Vec<HistoryId>) -> Result<u64> {
+    let reply = try_with_restart(settings, async |client| client.delete_history(ids).await).await?;
+    Ok(reply.deleted)
+}
+
+pub async fn rebuild_history(settings: &Settings) -> Result<()> {
+    try_with_restart(settings, async |client| client.rebuild_history().await).await?;
+    Ok(())
 }
 
 async fn status_cmd(settings: &Settings) -> Result<()> {
@@ -627,7 +576,7 @@ async fn stop_cmd(settings: &Settings) -> Result<()> {
     }
 }
 
-async fn restart_cmd(settings: &Settings) -> Result<()> {
+pub(super) async fn restart_cmd(settings: &Settings) -> Result<()> {
     // Stop if running
     match probe(settings).await {
         Probe::Ready(_) | Probe::NeedsRestart(_) => {
@@ -651,7 +600,7 @@ async fn restart_cmd(settings: &Settings) -> Result<()> {
     spawn_daemon_process()?;
     println!("Starting daemon...");
 
-    let timeout = startup_timeout(settings)?;
+    let timeout = startup_timeout(settings);
     let status = wait_until_ready(settings, timeout).await?.status().await?;
 
     println!("Daemon restarted");
@@ -700,9 +649,13 @@ async fn force_cleanup(settings: &Settings) {
     if pidfile_path.exists() {
         if let Ok(contents) = fs::read_to_string(pidfile_path)
             && let Some(pid_str) = contents.lines().next()
-            && let Ok(pid) = pid_str.parse::<u32>()
-            && let Err(e) =
-                atuin_common::os::process::force_terminate(pid, Duration::from_secs(2)).await
+            && let Some(pid) = pid_str.trim().parse::<i32>().ok()
+            && pid > 0
+            && let Err(e) = atuin_common::os::process::force_terminate(
+                pid.unsigned_abs(),
+                Duration::from_secs(2),
+            )
+            .await
         {
             tracing::warn!("could not terminate existing daemon (pid {pid}): {e}");
         }

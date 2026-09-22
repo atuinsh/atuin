@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use atuin_common::db;
 use atuin_common::db::sqlite::{Sqlite, SqliteBuilder};
+use atuin_common::time::NonZeroDuration;
 use eyre::Result;
 use time::OffsetDateTime;
 
@@ -105,13 +106,19 @@ impl AiSessionStore {
     }
 
     /// Find the most recent non-archived session matching the given directory or git
-    /// root, updated within `max_age_secs` seconds.
+    /// root, updated within `window`. A `None` window disables auto-resume and returns `None`.
     pub async fn find_resumable_session(
         &self,
         directory: Option<&str>,
         git_root: Option<&str>,
-        max_age_secs: i64,
+        window: Option<NonZeroDuration>,
     ) -> Result<Option<StoredSession>> {
+        // A `None` window means auto-resume is disabled.
+        let Some(window) = window else {
+            return Ok(None);
+        };
+
+        let max_age_secs = i64::try_from(window.get().as_secs()).unwrap_or(i64::MAX);
         let cutoff = OffsetDateTime::now_utc().unix_timestamp() - max_age_secs;
 
         let session = db::query_as::<_, StoredSession>(
@@ -302,6 +309,11 @@ mod tests {
         store
     }
 
+    /// A resume window comfortably wider than a test's runtime.
+    fn hour() -> Option<NonZeroDuration> {
+        NonZeroDuration::new(Duration::from_secs(3600))
+    }
+
     #[rstest]
     #[tokio::test]
     async fn test_create_and_get_session(#[future] store: AiSessionStore) {
@@ -360,7 +372,7 @@ mod tests {
         store.create_session("s1", Some("/home/user/project"), None).await.unwrap();
 
         let found =
-            store.find_resumable_session(Some("/home/user/project"), None, 3600).await.unwrap();
+            store.find_resumable_session(Some("/home/user/project"), None, hour()).await.unwrap();
         assert!(found.is_some());
         assert_eq!(found.unwrap().id, "s1");
     }
@@ -375,7 +387,7 @@ mod tests {
             .unwrap();
 
         let found = store
-            .find_resumable_session(Some("/different/dir"), Some("/home/user/project"), 3600)
+            .find_resumable_session(Some("/different/dir"), Some("/home/user/project"), hour())
             .await
             .unwrap();
         assert!(found.is_some());
@@ -389,7 +401,7 @@ mod tests {
         store.create_session("s1", Some("/tmp"), None).await.unwrap();
         store.archive_session("s1").await.unwrap();
 
-        let found = store.find_resumable_session(Some("/tmp"), None, 3600).await.unwrap();
+        let found = store.find_resumable_session(Some("/tmp"), None, hour()).await.unwrap();
         assert!(found.is_none());
     }
 
@@ -399,7 +411,7 @@ mod tests {
         let store = store.await;
         store.create_session("s1", Some("/home/user/project"), None).await.unwrap();
 
-        let found = store.find_resumable_session(Some("/other/dir"), None, 3600).await.unwrap();
+        let found = store.find_resumable_session(Some("/other/dir"), None, hour()).await.unwrap();
         assert!(found.is_none());
     }
 
@@ -431,7 +443,7 @@ mod tests {
         let store = store_with_s1.await;
 
         let before = store.get_session("s1").await.unwrap().unwrap();
-        store.find_resumable_session(Some("/tmp"), None, 3600).await.unwrap().unwrap();
+        store.find_resumable_session(Some("/tmp"), None, hour()).await.unwrap().unwrap();
         let after = store.get_session("s1").await.unwrap().unwrap();
 
         assert_eq!(before.updated_at, after.updated_at);

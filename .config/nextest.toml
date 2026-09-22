@@ -1,0 +1,18 @@
+[[profile.default.overrides]]
+filter = 'binary(/^e2e_/)'
+retries = 0
+# Bound the complete test, including cleanup.
+slow-timeout = { period = "60s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+# TODO: This test is flaky due to issue #4052.
+filter = 'binary_id(=atuin-daemon::concurrency) and test(=disjoint_concurrent_deletes_leave_the_index_empty)'
+retries = 3
+
+[[profile.default.overrides]]
+# The 100k+-row cases saturate the CPU for tens of seconds; with one test per
+# core alongside them, unrelated tests can miss their 5 s sqlite pool-acquire
+# timeout ("failed to create the sqlite pool"). Reserve half the slots so at
+# most one heavy case runs at a time with a few lightweight neighbours.
+filter = 'binary_id(=atuin-daemon::scale) and test(/hundred_k/)'
+threads-required = 4

@@ -8,31 +8,55 @@ fi
 ATUIN_STTY=$(stty -g)
 ATUIN_HISTORY_ID=""
 
+if [[ -z ${__atuin_pty_proxy_owns_tty-} ]]; then
+    # The pty-proxy preamble also sets this variable, but make sure it's set here,
+    # so a manually started proxy still functions when `pty_proxy.enabled` is false.
+    __atuin_pty_proxy_owns_tty=0
+    if [[ -n ${ATUIN_PTY_PROXY_ACTIVE-} ]]; then
+        if __atuin_pty_proxy_answer=$(atuin __internal pty-proxy-active 2>/dev/null) &&
+            [[ $__atuin_pty_proxy_answer = 1 ]]
+        then
+            __atuin_pty_proxy_owns_tty=1
+        fi
+        unset __atuin_pty_proxy_answer
+    fi
+fi
+
 __atuin_osc133_command_executed() {
-    [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || return
-    [[ -n "${ATUIN_HISTORY_ID:-}" && "$ATUIN_HISTORY_ID" != "__bash_preexec_failure__" ]] || return
+    [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]] || return 0
+    [[ -n "${ATUIN_HISTORY_ID:-}" && "$ATUIN_HISTORY_ID" != "__bash_preexec_failure__" ]] || return 0
 
     printf '\033]133;C\a'
 }
 
 __atuin_osc133_command_finished() {
-    [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || return
-    [[ -n "${ATUIN_HISTORY_ID:-}" && "$ATUIN_HISTORY_ID" != "__bash_preexec_failure__" ]] || return
+    [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]] || return 0
+    [[ -n "${ATUIN_HISTORY_ID:-}" && "$ATUIN_HISTORY_ID" != "__bash_preexec_failure__" ]] || return 0
 
-    printf '\033]133;D;%s;history_id=%s;session_id=%s\a' "$1" "$ATUIN_HISTORY_ID" "${ATUIN_SESSION:-}"
+    printf '\033]133;D;%s;history_id=%s\a' "$1" "$ATUIN_HISTORY_ID"
 }
 
 __atuin_osc133_prompt_start=$'\001\033]133;A;cl=line\a\002'
 __atuin_osc133_prompt_end=$'\001\033]133;B\a\002'
 
 __atuin_osc133_wrap_prompt() {
+    if [[ -z ${ATUIN_PTY_PROXY_ACTIVE-} ]] && [[ ${__atuin_pty_proxy_owns_tty-} != 1 ]]; then
+        return
+    fi
+
     local __atuin_prompt="${PS1-}"
+    # Remove existing Atuin OSC 133 markers, if present.
     __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_start/}"
     __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_end/}"
 
-    if [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]]; then
+    if [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]]; then
         PS1="${__atuin_osc133_prompt_start}${__atuin_prompt}${__atuin_osc133_prompt_end}"
-    else
+    elif ! [[ $__atuin_prompt =~ ($'\033'|'\033'|'\e')']133;' ]]; then
+        # Only replace the prompt if there are no remaining OSC 133 markers. If
+        # there are, they likely came from another program, and we don't want
+        # to risk half-removing those markers (e.g., maybe `__atuin_osc133_prompt_end`
+        # matched an existing end marker, but `__atuin_osc133_prompt_start`
+        # didn't match the start marker due to the `cl=line` param).
         PS1="$__atuin_prompt"
     fi
 }
@@ -85,7 +109,7 @@ __atuin_precmd() {
 
     __atuin_osc133_wrap_prompt
 
-    [[ ! $ATUIN_HISTORY_ID ]] && return
+    [[ ! $ATUIN_HISTORY_ID ]] && return 0
 
     # If the previous preexec hook failed, we manually call __atuin_preexec
     local __atuin_skip_osc133=""
@@ -124,7 +148,7 @@ __atuin_precmd() {
         if ((duration >= 0)); then
             duration=${duration}000
         else
-            duration="" # clear the result on overflow
+            duration=0
         fi
     fi
 

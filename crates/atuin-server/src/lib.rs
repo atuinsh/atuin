@@ -8,7 +8,7 @@ use atuin_common::db::{DbUrl, OwnedDbUrl};
 use axum::{Router, serve};
 use eyre::{Context, Result};
 
-use crate::db::{ConnectableDatabase, Database, DbResult, MySql, Postgres, Sqlite};
+use crate::db::{Database, DbResult, DynDatabase, MySql, Postgres, Sqlite};
 
 mod handlers;
 mod metrics;
@@ -67,8 +67,7 @@ pub async fn launch_with_tcp_listener(
     Ok(())
 }
 
-/// Pick the backend from the connection URL and connect it.
-async fn connect(db_uri: OwnedDbUrl) -> DbResult<Arc<dyn Database>> {
+pub async fn connect(db_uri: OwnedDbUrl) -> DbResult<Arc<dyn DynDatabase>> {
     Ok(match db_uri {
         DbUrl::Sqlite(url) => Arc::new(Sqlite::connect(url).await?),
         DbUrl::Postgres(url) => Arc::new(Postgres::connect(url).await?),

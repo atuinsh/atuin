@@ -2,9 +2,7 @@
 //!
 //! Measures the daemon's `SearchIndex::search` end-to-end — index built from
 //! shell-history-shaped data, then queried the way the interactive UI does —
-//! using divan, so results are tracked on CodSpeed (the `divan` dependency is
-//! CodSpeed's drop-in compat crate; it behaves as plain divan outside
-//! `cargo-codspeed` builds).
+//! using divan.
 //!
 //! Benchmark names (`daemon_search[<scale>/<query>]`) are deliberately
 //! engine-agnostic: they measure whatever fuzzy matcher the daemon currently
@@ -34,6 +32,7 @@ use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
 use atuin_daemon::search::{IndexFilterMode, SearchIndex};
 use atuin_search_bench::corpus;
+use easy_cast::Conv;
 use parking_lot::Mutex;
 use time::OffsetDateTime;
 
@@ -47,7 +46,7 @@ const QUERIES: &[&str] =
     &["", "g", "git", "git p", "cargo build", "docker compose up", "zzznomatchzzz"];
 
 /// The interactive UI requests up to 200 results per query.
-const LIMIT: u32 = 200;
+const LIMIT: usize = 200;
 
 /// Working directories assigned round-robin to history entries, so the
 /// directory-filtered benchmark has a realistic candidate subset.
@@ -149,7 +148,7 @@ fn commands() -> &'static Vec<String> {
             }
             lines
         } else {
-            let seed = env_usize("BENCH_SEED", 42) as u64;
+            let seed = u64::conv(env_usize("BENCH_SEED", 42));
             eprintln!("corpus: generating {max_scale} synthetic history lines (seed {seed})...");
             corpus::generate(max_scale, seed)
         }
@@ -176,7 +175,7 @@ fn index(scale: usize) -> Arc<SearchIndex> {
     let now = OffsetDateTime::now_utc();
     for (i, command) in commands()[..scale].iter().enumerate() {
         let history: History = History::import()
-            .timestamp(now - time::Duration::seconds(((i * 37) % 31_536_000) as i64))
+            .timestamp(now - time::Duration::seconds(i64::conv((i * 37) % 31_536_000)))
             .command(command.as_str())
             .cwd(DIRS[i % DIRS.len()])
             .build()

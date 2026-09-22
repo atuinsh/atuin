@@ -4,6 +4,7 @@
 //! imara-diff's Histogram algorithm, producing structured hunks with
 //! typed lines (Context, Added, Removed) suitable for TUI rendering.
 
+use easy_cast::Conv;
 use imara_diff::{Algorithm, Diff, InternedInput};
 
 /// Number of context lines to show around each change.
@@ -134,7 +135,7 @@ fn build_hunk(group: &[&imara_diff::Hunk], input: &InternedInput<&str>) -> DiffH
     let last = group.last().unwrap();
 
     let context_start = first.before.start.saturating_sub(CONTEXT_LINES);
-    let context_end = (last.before.end + CONTEXT_LINES).min(input.before.len() as u32);
+    let context_end = (last.before.end + CONTEXT_LINES).min(u32::conv(input.before.len()));
 
     // The after-file position of context_start: same offset as before since
     // context before the first change is identical in both files.
@@ -182,7 +183,7 @@ fn token_text(input: &InternedInput<&str>, is_before: bool, idx: u32) -> String 
     } else {
         &input.after
     };
-    let text = input.interner[tokens[idx as usize]];
+    let text = input.interner[tokens[usize::conv(idx)]];
     text.strip_suffix('\n')
         .unwrap_or(text)
         .strip_suffix('\r')

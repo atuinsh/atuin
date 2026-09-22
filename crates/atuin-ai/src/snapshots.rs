@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use easy_cast::Conv;
 use eyre::{Result, eyre};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -84,7 +85,7 @@ impl SnapshotStore {
         let entry = SnapshotEntry {
             original_path: canonical_path.to_string_lossy().into_owned(),
             snapshot_at: format_iso8601(now),
-            size_bytes: content.len() as u64,
+            size_bytes: u64::conv(content.len()),
         };
 
         self.manifest.files.insert(filename, entry);

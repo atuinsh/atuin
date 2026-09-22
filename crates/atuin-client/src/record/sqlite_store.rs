@@ -13,6 +13,7 @@ use atuin_domain::record::{
     Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
     RecordVersion,
 };
+use easy_cast::Conv;
 use eyre::{Result, eyre};
 use sqlx::Row;
 use sqlx::sqlite::{SqlitePool, SqliteRow};
@@ -49,9 +50,9 @@ impl<'r> ::sqlx::FromRow<'r, SqliteRow> for DbRecord {
 
         Ok(Self(Record {
             id: RecordId(parse_uuid("id")?),
-            idx: idx as u64,
+            idx: u64::conv(idx),
             host: Host::new(HostId(parse_uuid("host")?)),
-            timestamp: timestamp as u64,
+            timestamp: u64::conv(timestamp),
             tag: RecordTag::from(row.try_get::<String, _>("tag")?),
             version: RecordVersion::from(row.try_get::<String, _>("version")?),
             data: paseto_v4::EncryptedData {
@@ -103,10 +104,10 @@ impl SqliteStore {
                 values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
         .bind(r.id.as_hyphenated().to_string())
-        .bind(r.idx as i64)
+        .bind(i64::conv(r.idx))
         .bind(r.host.id.as_hyphenated().to_string())
         .bind(r.tag.as_str())
-        .bind(r.timestamp as i64)
+        .bind(i64::conv(r.timestamp))
         .bind(r.version.as_str())
         .bind(r.data.raw.as_str())
         .bind(r.data.cek.as_str())
@@ -137,6 +138,44 @@ impl SqliteStore {
         &self,
         records: impl Iterator<Item = &Record<paseto_v4::EncryptedData>> + Send + Sync,
     ) -> Result<()> {
+        let mut tx = self.sqlite.pool().begin().await?;
+        self.insert_all(&mut tx, records).await?;
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    /// Append `records` atomically: every one is stored, or none is.
+    ///
+    /// The batch version of [`Self::push_unique`]. The write lock is taken up front (a deferred
+    /// `BEGIN` would only lock at the first insert), so no other writer can claim a slot while
+    /// the batch is going in. If any row's `(host, tag, idx)` slot was already held the batch is
+    /// rolled back and `Ok(false)` is returned: the caller re-stamps its indices from the new
+    /// tail and retries. Unlike `push_unique` there is no idempotent re-push: a record whose id
+    /// is already stored counts as a conflict too, so callers must build fresh ids per attempt.
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn push_batch_unique(
+        &self,
+        records: impl Iterator<Item = &Record<paseto_v4::EncryptedData>> + Send + Sync,
+    ) -> Result<bool> {
+        let mut tx = self.sqlite.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let (attempted, inserted) = self.insert_all(&mut tx, records).await?;
+        if inserted != attempted {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        tx.commit().await?;
+
+        Ok(true)
+    }
+
+    /// Chunked `insert or ignore` of `records` on `tx`. Returns `(attempted, inserted)`; they
+    /// differ when a unique-index conflict swallowed a row.
+    async fn insert_all(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        records: impl Iterator<Item = &Record<paseto_v4::EncryptedData>> + Send + Sync,
+    ) -> Result<(u64, u64)> {
         // `store` has 8 columns, so each row binds 8 parameters; keep a full chunk
         // within the bind-parameter limit. `max(1)` keeps the chunk non-empty on any
         // (implausible) tiny limit.
@@ -144,7 +183,8 @@ impl SqliteStore {
         let rows_per_insert = (self.sqlite.info().await.variable_number_limit() / COLUMNS).max(1);
 
         let mut records = records.peekable();
-        let mut tx = self.sqlite.pool().begin().await?;
+        let mut attempted: u64 = 0;
+        let mut inserted: u64 = 0;
 
         while records.peek().is_some() {
             let mut builder = sqlx::QueryBuilder::new(
@@ -152,22 +192,64 @@ impl SqliteStore {
             );
 
             builder.push_values(records.by_ref().take(rows_per_insert), |mut b, r| {
+                attempted += 1;
                 b.push_bind(r.id.0.as_hyphenated().to_string())
-                    .push_bind(r.idx as i64)
+                    .push_bind(i64::conv(r.idx))
                     .push_bind(r.host.id.0.as_hyphenated().to_string())
                     .push_bind(r.tag.as_str())
-                    .push_bind(r.timestamp as i64)
+                    .push_bind(i64::conv(r.timestamp))
                     .push_bind(r.version.as_str())
                     .push_bind(r.data.raw.as_str())
                     .push_bind(r.data.cek.as_str());
             });
 
-            builder.build().execute(&mut *tx).await?;
+            inserted += builder.build().execute(&mut **tx).await?.rows_affected();
         }
 
-        tx.commit().await?;
+        Ok((attempted, inserted))
+    }
 
-        Ok(())
+    /// Insert a single record, reporting whether its `(host, tag, idx)` slot is now held by
+    /// *this* record.
+    ///
+    /// Returns `Ok(true)` when the record is stored -- a fresh insert, or an idempotent re-push
+    /// of a record already present under its own id. Returns `Ok(false)` when the `record_uniq`
+    /// index rejected the insert), so the caller should retry with a fresh `idx`.
+    ///
+    /// This is how concurrent writers to the same series settle on distinct indices without a
+    /// shared lock: the DB's unique index is the arbiter, and a loser simply recomputes its idx and
+    /// tries again.
+    #[instrument(level = "trace", skip_all, fields(id = ?record.id, idx = record.idx, host = ?record.host.id, tag = ?record.tag), err)]
+    pub async fn push_unique(&self, record: &Record<paseto_v4::EncryptedData>) -> Result<bool> {
+        let res = db::query(
+            "insert or ignore into store(id, idx, host, tag, timestamp, version, data, cek)
+                values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )
+        .bind(record.id.0.as_hyphenated().to_string())
+        .bind(i64::conv(record.idx))
+        .bind(record.host.id.0.as_hyphenated().to_string())
+        .bind(record.tag.as_str())
+        .bind(i64::conv(record.timestamp))
+        .bind(record.version.as_str())
+        .bind(record.data.raw.as_str())
+        .bind(record.data.cek.as_str())
+        .execute(self.sqlite.pool())
+        .await?;
+
+        if res.rows_affected() == 1 {
+            return Ok(true);
+        }
+
+        // Zero rows inserted: `insert or ignore` swallowed a unique-index conflict. Either our
+        // own id is already stored (an idempotent re-push -> success) or the `(host, tag, idx)`
+        // slot belongs to a different record (a racing writer took this idx -> retry).
+        let ours_present = db::query("select 1 from store where id = ?1 limit 1")
+            .bind(record.id.0.as_hyphenated().to_string())
+            .fetch_optional(self.sqlite.pool())
+            .await?
+            .is_some();
+
+        Ok(ours_present)
     }
 
     #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
@@ -233,7 +315,7 @@ impl SqliteStore {
             db::query_as("select count(*) from store").fetch_one(self.sqlite.pool()).await;
         match res {
             Err(e) => Err(eyre!("failed to fetch local store len: {}", e)),
-            Ok(v) => Ok(v.0 as u64),
+            Ok(v) => Ok(u64::conv(v.0)),
         }
     }
 
@@ -246,7 +328,7 @@ impl SqliteStore {
                 .await;
         match res {
             Err(e) => Err(eyre!("failed to fetch local store len: {}", e)),
-            Ok(v) => Ok(v.0 as u64),
+            Ok(v) => Ok(u64::conv(v.0)),
         }
     }
 
@@ -278,7 +360,7 @@ impl SqliteStore {
         .fetch_one(self.sqlite.pool())
         .await?;
 
-        Ok(gap.unwrap_or(0) as u64)
+        Ok(u64::conv(gap.unwrap_or(0)))
     }
 
     #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag, idx, limit), err)]
@@ -292,10 +374,10 @@ impl SqliteStore {
             "select {STORE_COLUMNS} from store where idx >= ?1 and host = ?2 and tag = ?3 order \
              by idx asc limit ?4"
         )))
-        .bind(idx as i64)
+        .bind(i64::conv(idx))
         .bind(series.host_id.as_hyphenated().to_string())
         .bind(series.tag.as_str())
-        .bind(limit as i64)
+        .bind(i64::conv(limit))
         .fetch_all(self.sqlite.pool())
         .await?;
 
@@ -311,7 +393,7 @@ impl SqliteStore {
         let res = db::query_as::<_, DbRecord>(sqlx::AssertSqlSafe(format!(
             "select {STORE_COLUMNS} from store where idx = ?1 and host = ?2 and tag = ?3"
         )))
-        .bind(idx as i64)
+        .bind(i64::conv(idx))
         .bind(series.host_id.as_hyphenated().to_string())
         .bind(series.tag.as_str())
         .fetch_one(self.sqlite.pool())
@@ -343,7 +425,7 @@ impl SqliteStore {
                 Uuid::from_str(i.0.as_str()).expect("failed to parse uuid for local store status"),
             );
 
-            status.set_raw(RecordSeriesKey::new(host, RecordTag::from(i.1)), i.2 as u64);
+            status.set_raw(RecordSeriesKey::new(host, RecordTag::from(i.1)), u64::conv(i.2));
         }
 
         Ok(status)
@@ -384,6 +466,10 @@ impl SqliteStore {
         let re_encrypted = all
             .into_iter()
             .map(|record| {
+                if record.tag.is_plaintext() {
+                    return Ok(record);
+                }
+
                 let data = paseto_v4::reencrypt_sync(&record.data, old_key, new_key)?;
                 Ok(record.with_data(data))
             })
@@ -417,7 +503,10 @@ impl SqliteStore {
     pub async fn verify(&self, key: &paseto_v4::Key) -> Result<()> {
         let all = self.load_all().await?;
 
-        all.into_iter().map(|record| record.decrypt(key)).collect::<Result<Vec<_>>>()?;
+        all.into_iter()
+            .filter(|record| !record.tag.is_plaintext())
+            .map(|record| record.decrypt(key))
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(())
     }
@@ -429,6 +518,10 @@ impl SqliteStore {
         let all = self.load_all().await?;
 
         for record in &all {
+            if record.tag.is_plaintext() {
+                continue;
+            }
+
             match record.clone().decrypt(key) {
                 Ok(_) => {}
                 Err(_) => {
@@ -673,5 +766,105 @@ mod tests {
                 .unwrap(),
             10
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn verify_purge_and_rekey_skip_plaintext_packfile_manifests(
+        #[future(awt)] store: SqliteStore,
+    ) {
+        let key = paseto_v4::Key::new_os_random();
+        let host = HostId(uuid_v7());
+
+        let history = Record::builder()
+            .host(Host::new(host))
+            .version(RecordVersion::V1)
+            .tag(RecordTag::History)
+            .idx(0)
+            .data(DecryptedData(b"history".to_vec()))
+            .build()
+            .encrypt(&key);
+
+        // Packfile manifests are plaintext with an empty cek, as written by the packer.
+        let manifest = Record::builder()
+            .host(Host::new(host))
+            .version(RecordVersion::V1)
+            .tag(RecordTag::Packfile)
+            .idx(0)
+            .data(paseto_v4::EncryptedData {
+                raw: "001{}".into(),
+                cek: String::new(),
+            })
+            .build();
+
+        store.push(&history).await.unwrap();
+        store.push(&manifest).await.unwrap();
+
+        store.verify(&key).await.expect("verify should skip packfile manifests");
+
+        store.purge(&key).await.expect("purge should skip packfile manifests");
+        assert_eq!(store.len_all().await.unwrap(), 2, "purge must not delete the manifest");
+
+        let new_key = paseto_v4::Key::new_os_random();
+        store.re_encrypt(&key, &new_key).await.expect("rekey should skip packfile manifests");
+        assert_eq!(store.get(manifest.id).await.unwrap(), manifest, "manifest must be untouched");
+        store.get(history.id).await.unwrap().decrypt(&new_key).expect("history was rekeyed");
+        store.verify(&new_key).await.unwrap();
+    }
+
+    /// A record in `series` at `idx` with a fresh id.
+    fn series_record(host: &Host, tag: &RecordTag, idx: u64) -> Record<paseto_v4::EncryptedData> {
+        Record::builder()
+            .host(host.clone())
+            .version("v1".into())
+            .tag(tag.clone())
+            .data(paseto_v4::EncryptedData {
+                raw: "1234".into(),
+                cek: "1234".into(),
+            })
+            .idx(idx)
+            .build()
+    }
+
+    /// A batch whose `(host, tag, idx)` slots are partly taken is rejected whole, so the caller
+    /// can re-stamp from the new tail; a batch on free slots lands whole.
+    #[rstest]
+    #[tokio::test]
+    async fn push_batch_unique_is_all_or_nothing(#[future(awt)] store: SqliteStore) {
+        let host = Host::new(HostId(uuid_v7()));
+        let tag = RecordTag::Other(uuid_v7().simple().to_string());
+        let at = |idx| series_record(&host, &tag, idx);
+
+        let taken = at(0);
+        store.push(&taken).await.unwrap();
+
+        let (conflicting, free) = (at(0), at(1));
+        assert!(!store.push_batch_unique([&conflicting, &free].into_iter()).await.unwrap());
+        assert!(store.get(free.id).await.is_err(), "rolled back with its conflicting sibling");
+        assert_eq!(store.len_all().await.unwrap(), 1);
+
+        let (first, second) = (at(1), at(2));
+        assert!(store.push_batch_unique([&first, &second].into_iter()).await.unwrap());
+        assert_eq!(store.len_all().await.unwrap(), 3);
+        assert_eq!(store.get(second.id).await.unwrap(), second);
+    }
+
+    /// A conflict in the last chunk of a multi-chunk batch rolls back the earlier chunks too.
+    #[rstest]
+    #[tokio::test]
+    async fn push_batch_unique_rolls_back_across_chunks(#[future(awt)] store: SqliteStore) {
+        let host = Host::new(HostId(uuid_v7()));
+        let tag = RecordTag::Other(uuid_v7().simple().to_string());
+        let rows_per_insert = store.sqlite.info().await.variable_number_limit() / 8;
+
+        let taken = series_record(&host, &tag, u64::try_from(rows_per_insert).unwrap());
+        store.push(&taken).await.unwrap();
+
+        // idx 0..=rows_per_insert: the first chunk is clean, the last row of the second collides.
+        let batch: Vec<_> = (0..=rows_per_insert)
+            .map(|idx| series_record(&host, &tag, u64::try_from(idx).unwrap()))
+            .collect();
+        assert!(!store.push_batch_unique(batch.iter()).await.unwrap());
+        assert_eq!(store.len_all().await.unwrap(), 1);
     }
 }

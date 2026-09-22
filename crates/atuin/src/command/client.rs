@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use atuin_client::database::Sqlite;
 use atuin_client::logs::FromSettings;
 use atuin_client::record::sqlite_store::SqliteStore;
@@ -31,6 +29,8 @@ mod info;
 mod init;
 mod internal;
 mod kv;
+#[cfg(feature = "daemon")]
+mod output;
 mod scripts;
 mod search;
 mod setup;
@@ -43,26 +43,18 @@ mod wrapped;
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
-    /// Setup Atuin features
-    #[command()]
-    Setup,
+    // Variant order sets the `--help` command list order, so keep the commands users reach for
+    // most (search, sync, stats) at the top and the plumbing/config commands lower down.
+    /// Interactive history search
+    Search(search::Cmd),
 
-    /// Manipulate shell history
+    /// Work with captured command output
+    #[cfg(feature = "daemon")]
     #[command(subcommand)]
-    History(history::Cmd),
-
-    /// Manage AI-agent shell hooks
-    Hook(hook::Cmd),
-
-    /// Import shell history from file
-    #[command(subcommand)]
-    Import(import::Cmd),
+    Output(output::Cmd),
 
     /// Calculate statistics for your history
     Stats(stats::Cmd),
-
-    /// Interactive history search
-    Search(search::Cmd),
 
     #[cfg(feature = "sync")]
     #[command(flatten)]
@@ -72,29 +64,21 @@ pub enum Cmd {
     #[cfg(feature = "sync")]
     Account(account::Cmd),
 
-    /// Get or set small key-value pairs
+    /// Manipulate shell history
     #[command(subcommand)]
-    Kv(kv::Cmd),
+    History(history::Cmd),
 
-    /// Manage the atuin data store
-    #[command(subcommand)]
-    Store(store::Cmd),
-
-    /// Manage your dotfiles with Atuin
-    #[command(subcommand)]
-    Dotfiles(dotfiles::Cmd),
-
-    /// Manage your scripts with Atuin
-    #[command(subcommand)]
-    Scripts(scripts::Cmd),
+    /// Setup Atuin features
+    #[command()]
+    Setup,
 
     /// Print Atuin's shell init script
     #[command()]
     Init(init::Cmd),
 
-    /// Information about dotfiles locations and ENV vars
-    #[command()]
-    Info,
+    /// Import shell history from file
+    #[command(subcommand)]
+    Import(import::Cmd),
 
     /// Run the doctor to check for common issues
     #[command()]
@@ -105,22 +89,24 @@ pub enum Cmd {
     #[command()]
     Update(update::Cmd),
 
-    #[command()]
-    Wrapped {
-        year: Option<i32>,
-    },
-
-    /// *Experimental* Manage the background daemon
-    #[cfg(feature = "daemon")]
-    #[command()]
-    Daemon(daemon::Cmd),
-
-    /// Print the default atuin configuration (config.toml)
-    #[command()]
-    DefaultConfig,
-
+    /// Get or set small key-value pairs
     #[command(subcommand)]
-    Config(config::Cmd),
+    Kv(kv::Cmd),
+
+    /// Manage the atuin data store
+    #[command(subcommand)]
+    Store(store::Cmd),
+
+    /// List legacy synced dotfiles data
+    #[command(subcommand)]
+    Dotfiles(dotfiles::Cmd),
+
+    /// Manage your scripts with Atuin
+    #[command(subcommand)]
+    Scripts(scripts::Cmd),
+
+    /// Manage AI-agent shell hooks
+    Hook(hook::Cmd),
 
     /// Run the AI assistant
     #[cfg(feature = "ai")]
@@ -131,6 +117,30 @@ pub enum Cmd {
     #[cfg(feature = "ai")]
     #[command()]
     Mcp,
+
+    /// Show a fun, year-in-review recap of your shell history
+    #[command()]
+    Wrapped {
+        /// Year to recap (defaults to last year)
+        year: Option<i32>,
+    },
+
+    /// Print the default atuin configuration (config.toml)
+    #[command()]
+    DefaultConfig,
+
+    /// Get, set, or print values in your atuin config file
+    #[command(subcommand)]
+    Config(config::Cmd),
+
+    /// Information about Atuin data locations and ENV vars
+    #[command()]
+    Info,
+
+    /// *Experimental* Manage the background daemon
+    #[cfg(feature = "daemon")]
+    #[command()]
+    Daemon(daemon::Cmd),
 
     /// Internal subcommands, not for direct use by users.
     #[command(
@@ -169,44 +179,66 @@ impl Cmd {
         }
 
         #[cfg(feature = "ai")]
-        let mut runtime = if matches!(&self, Self::Ai(_)) {
+        let use_multi_thread_runtime = matches!(&self, Self::Ai(_));
+        #[cfg(not(feature = "ai"))]
+        let use_multi_thread_runtime = false;
+
+        let Some(future) = self.run_inner()? else {
+            // The command was handled synchronously; return.
+            return Ok(());
+        };
+
+        let runtime = if use_multi_thread_runtime {
             tokio::runtime::Builder::new_multi_thread()
         } else {
             tokio::runtime::Builder::new_current_thread()
+        }
+        .enable_all()
+        .build()
+        .unwrap();
+
+        let res = runtime.block_on(future);
+        runtime.shutdown_timeout(std::time::Duration::from_millis(50));
+        res
+    }
+
+    /// Run the command, returning a future for commands that require async.
+    ///
+    /// If the command was able to be handled synchronously, returns `Ok(None)`. Otherwise, returns
+    /// `Ok(Some(future))` where `future` will run the command when awaited. Returns `Err` on error.
+    fn run_inner(self) -> Result<Option<impl Future<Output = Result<()>>>> {
+        let run_internal = if let Self::Internal(cmd) = &self {
+            match cmd.run() {
+                Some(func) => Some(func),
+                None => return Ok(None),
+            }
+        } else {
+            None
         };
 
-        #[cfg(not(feature = "ai"))]
-        let mut runtime = tokio::runtime::Builder::new_current_thread();
-
-        let runtime = runtime.enable_all().build().unwrap();
-
-        // For non-history commands, we want to initialize logging and the theme manager before
-        // doing anything else. History commands are performance-sensitive and run before and after
-        // every shell command, so we want to skip any unnecessary initialization for them.
         let settings = Settings::new().wrap_err("could not load client settings")?;
         let _logging = self
             .log_config(&settings)
             .map(|c| LogCtx::try_enable("atuin", &c))
             .transpose()
             .wrap_err("failed to enable logging")?;
-        let theme_manager = theme::ThemeManager::new(settings.theme.debug, None);
-        let res = runtime.block_on(self.run_inner(settings, theme_manager));
 
-        runtime.shutdown_timeout(std::time::Duration::from_millis(50));
-
-        res
+        Ok(Some(async {
+            if let Some(func) = run_internal {
+                func(settings).await
+            } else {
+                Box::pin(self.run_async(settings)).await
+            }
+        }))
     }
 
     #[allow(clippy::too_many_lines)]
     // `atuin_ai::commands::run` is not `Send` because `eye_declare` holds a `StdoutLock` across
     // await points.
     #[allow(clippy::future_not_send)]
-    async fn run_inner(
-        self,
-        mut settings: Settings,
-        mut theme_manager: theme::ThemeManager,
-    ) -> Result<()> {
+    async fn run_async(self, mut settings: Settings) -> Result<()> {
         tracing::trace!(command = ?self, "client command");
+        let mut theme_manager = theme::ThemeManager::new(settings.theme.debug, None);
 
         // Skip initializing any databases for history
         // This is a pretty hot path, as it runs before and after every single command the user
@@ -219,7 +251,6 @@ impl Cmd {
             #[cfg(feature = "self-update")]
             Self::Update(update) => return update.run(&settings).await,
             Self::Config(config) => return config.run(&settings).await,
-            Self::Internal(cmd) => return cmd.run(&settings).await,
             Self::InternalDecoy => {
                 eprintln!("error: this command is not meant to be accessed directly");
                 std::process::exit(1);
@@ -230,12 +261,8 @@ impl Cmd {
         let db_path = &settings.db_path;
         let record_store_path = &settings.record_store_path;
 
-        let db = Sqlite::new(db_path, Duration::try_from_secs_f64(settings.local_timeout)?).await?;
-        let sqlite_store = SqliteStore::new(
-            record_store_path,
-            Duration::try_from_secs_f64(settings.local_timeout)?,
-        )
-        .await?;
+        let db = Sqlite::new(db_path, settings.local_timeout).await?;
+        let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
         let theme_name = settings.theme.name.clone();
         let theme = theme_manager.load_theme(theme_name.as_str(), settings.theme.max_depth);
@@ -245,6 +272,9 @@ impl Cmd {
             Self::Import(import) => import.run(&db).await,
             Self::Stats(stats) => stats.run(&db, &settings, theme).await,
             Self::Search(search) => search.run(db, &mut settings, sqlite_store, theme).await,
+
+            #[cfg(feature = "daemon")]
+            Self::Output(cmd) => cmd.run(&db, &settings, theme).await,
 
             #[cfg(feature = "sync")]
             Self::Sync(sync) => sync.run(settings, &db, sqlite_store).await,
@@ -292,7 +322,7 @@ impl Cmd {
             Self::Ai(cli) => atuin_ai::commands::run(cli, &settings).await,
 
             #[cfg(feature = "ai")]
-            Self::Mcp => atuin_ai::mcp::run(&db).await,
+            Self::Mcp => Box::pin(atuin_ai::mcp::run(&db, &settings)).await,
         }
     }
 
@@ -311,7 +341,7 @@ impl Cmd {
             }),
 
             #[cfg(feature = "ai")]
-            Self::Ai(cmd) => Some(cmd.log_config(settings)),
+            Self::Ai(cmd) => cmd.log_config(settings),
 
             Self::Internal(cmd) => cmd.log_config(),
 

@@ -1,11 +1,12 @@
 use atuin_client::database::{DbSearchMode, OptFilters, Sqlite};
-use atuin_client::history::{History, all_user_author_filter};
+use atuin_client::history::{History, HistoryId, all_user_author_filter};
 use atuin_client::settings::Settings;
+use atuin_common::string::NormalizeDiacriticsExt;
 use atuin_daemon::client::{SearchClient, SearchParams};
-use atuin_daemon::search::{normalize_diacritics, truncate_query};
+use atuin_daemon::search::truncate_query;
+use easy_cast::Conv;
 use eyre::Result;
 use tracing::{Level, debug, instrument, span};
-use uuid::Uuid;
 
 use super::{SearchEngine, SearchState};
 use crate::command::client::daemon;
@@ -124,10 +125,10 @@ impl Search {
     }
 
     #[instrument(skip_all, level = Level::TRACE, name = "hydrate_from_db", fields(count = ids.len()))]
-    async fn hydrate_from_db(&self, db: &Sqlite, ids: &[String]) -> Result<Vec<History>> {
+    async fn hydrate_from_db(&self, db: &Sqlite, ids: &[HistoryId]) -> Result<Vec<History>> {
         let placeholders: Vec<String> = ids.iter().map(|id| format!("'{id}'")).collect();
         let sql_query = format!(
-            "SELECT {} FROM history WHERE id IN ({}) ORDER BY timestamp DESC",
+            "SELECT {} FROM history WHERE id IN ({})",
             atuin_client::database::HISTORY_COLUMNS,
             placeholders.join(",")
         );
@@ -175,7 +176,7 @@ impl SearchEngine for Search {
             })
             .await?;
 
-        let mut ids = Vec::with_capacity(200);
+        let mut ids: Vec<HistoryId> = Vec::with_capacity(200);
         span!(Level::TRACE, "daemon_search.resp")
             .in_scope(async || -> Result<()> {
                 while let Some(response) = stream.message().await? {
@@ -187,15 +188,11 @@ impl SearchEngine for Search {
                     let span2_guard = span2.enter();
                     // Only process if the query_id matches (prevents stale responses)
                     if response.query_id == query_id {
-                        let uuids = response
-                            .ids
-                            .iter()
-                            .map(|id| {
-                                let bytes: [u8; 16] =
-                                    id.as_slice().try_into().expect("id should be 16 bytes");
-                                Uuid::from_bytes(bytes).as_simple().to_string()
-                            })
-                            .collect::<Vec<_>>();
+                        let uuids = response.ids.iter().map(|id| {
+                            let bytes: [u8; 16] =
+                                id.as_slice().try_into().expect("id should be 16 bytes");
+                            HistoryId::from_bytes(bytes)
+                        });
                         ids.extend(uuids);
                     }
                     drop(span2_guard);
@@ -211,23 +208,23 @@ impl SearchEngine for Search {
             return Ok(Vec::new());
         }
 
-        // // Hydrate from local database
-        let results = self.hydrate_from_db(db, &ids).await?;
+        // Hydrate from local database.
+        let mut results = self.hydrate_from_db(db, &ids).await?;
 
-        // // Reorder results to match the order from the daemon (which is ranked by relevance)
+        // Reorder to match the daemon's relevance ranking. `swap_remove` moves each hit out rather
+        // than cloning it; the scan stays O(n^2) but `ids` is capped at 200, where that beats a map.
         let ordered_results = span!(Level::TRACE, "reorder_results").in_scope(|| {
-            let mut ordered_results = Vec::with_capacity(results.len());
-            for id in &ids {
-                if let Some(history) = results.iter().find(|h| h.id.0 == *id) {
-                    ordered_results.push(history.clone());
-                }
-            }
-            ordered_results
+            ids.iter()
+                .filter_map(|id| {
+                    let pos = results.iter().position(|h| h.id == *id)?;
+                    Some(results.swap_remove(pos))
+                })
+                .collect::<Vec<History>>()
         });
 
         debug!(
             query = %query,
-            results = results.len(),
+            results = ordered_results.len(),
             "[daemon-client]"
         );
 
@@ -244,8 +241,8 @@ impl SearchEngine for Search {
         // Mirror the daemon's query handling: truncate before frizbee sees
         // the query (a long enough atom panics Matcher::from_query) and
         // normalize diacritics so highlighting agrees with matching
-        let search_input = normalize_diacritics(truncate_query(search_input));
-        let matchable = normalize_diacritics(command);
+        let search_input = truncate_query(search_input).normalize_diacritics();
+        let matchable = command.normalize_diacritics();
 
         let config = frizbee::Config::default().casing(frizbee::CaseMatching::Smart);
         let mut matcher = frizbee::Matcher::from_query(&search_input, &config);
@@ -263,7 +260,7 @@ impl SearchEngine for Search {
         indices.sort_unstable();
         indices.dedup();
         if command.is_ascii() {
-            indices.into_iter().map(|i| i as usize).collect()
+            indices.into_iter().map(usize::conv).collect()
         } else {
             let matchable_byte_to_char: std::collections::HashMap<usize, usize> = matchable
                 .char_indices()
@@ -274,7 +271,7 @@ impl SearchEngine for Search {
                 command.char_indices().map(|(byte_idx, _)| byte_idx).collect();
             let mut bytes: Vec<usize> = indices
                 .into_iter()
-                .filter_map(|i| matchable_byte_to_char.get(&(i as usize)))
+                .filter_map(|i| matchable_byte_to_char.get(&usize::conv(i)))
                 .filter_map(|&char_idx| command_char_to_byte.get(char_idx).copied())
                 .collect();
             bytes.dedup();

@@ -16,6 +16,7 @@ use atuin_client::import::zsh::Zsh;
 use atuin_client::import::zsh_histdb::ZshHistDb;
 use atuin_client::import::{Importer, Loader};
 use clap::Parser;
+use easy_cast::Conv;
 use eyre::Result;
 use indicatif::ProgressBar;
 use tracing::instrument;
@@ -144,7 +145,7 @@ pub struct HistoryImporter<'db> {
 impl<'db> HistoryImporter<'db> {
     fn new(db: &'db Sqlite, len: usize) -> Self {
         Self {
-            pb: ProgressBar::new(len as u64),
+            pb: ProgressBar::new(u64::conv(len)),
             buf: Vec::with_capacity(BATCH_SIZE),
             db,
         }

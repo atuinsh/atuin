@@ -20,6 +20,14 @@ pub struct ToolDescriptor {
     pub is_client: bool,
 }
 
+/// Sent in addition to [`ATUIN_HISTORY`]'s capability by clients whose
+/// `atuin_history` parser accepts a missing or null `filter_modes` (treated
+/// as a global search). Older releases error on the missing field, so the
+/// Hub must keep requiring `filter_modes` in the tool schema for any client
+/// that does not send this string — relaxing it for everyone who sends plain
+/// v1 would break those older clients.
+pub const ATUIN_HISTORY_V2_CAPABILITY: &str = "client_v2_atuin_history";
+
 // ── Client-side tool descriptors ──
 
 pub const READ: &ToolDescriptor = &ToolDescriptor {

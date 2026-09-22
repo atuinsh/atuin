@@ -1,6 +1,8 @@
 #[cfg(unix)]
 mod capture;
 #[cfg(unix)]
+mod cwd_updater;
+#[cfg(unix)]
 mod debug;
 #[cfg(unix)]
 mod osc133;
@@ -12,9 +14,11 @@ mod runtime;
 mod screen;
 
 #[cfg(unix)]
-pub use capture::{CommandCapture, CommandCaptureSink};
+pub use capture::{CaptureConfig, CommandCapture, CommandCaptureSink};
 #[cfg(unix)]
 pub use pty_proxy::{PtyProxy, Shell, init_script};
+#[cfg(unix)]
+pub use screen::{is_pty_proxy_child, parent_socket_path};
 
 #[cfg(not(unix))]
 #[allow(dead_code)]

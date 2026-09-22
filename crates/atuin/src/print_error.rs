@@ -3,6 +3,7 @@ use std::io::IsTerminal;
 use atuin_client::record::sync::SyncError;
 use colored::Colorize;
 use crossterm::terminal;
+use easy_cast::Conv;
 
 /// Print a prominent error to stderr. Colored and box-bordered when stderr is
 /// a TTY, plain "Error: ..." header otherwise. The description is word-wrapped
@@ -10,7 +11,7 @@ use crossterm::terminal;
 pub fn print_error(title: &str, description: &str) {
     let is_tty = std::io::stderr().is_terminal();
     let width = if is_tty {
-        terminal::size().map_or(80, |(w, _)| w as usize)
+        terminal::size().map_or(80, |(w, _)| usize::conv(w))
     } else {
         80
     }

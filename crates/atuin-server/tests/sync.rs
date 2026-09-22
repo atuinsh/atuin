@@ -3,12 +3,13 @@ use std::time::Duration;
 
 use atuin_client::api_client;
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::record::sync::{ClientSource, SyncEngine};
+use atuin_client::record::sync::{ClientSource, SyncSession};
 use atuin_common::encryption::paseto_v4;
 use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag};
 use atuin_server::db::DbSettings;
 use atuin_server::{Settings as ServerSettings, launch_with_tcp_listener};
+use easy_cast::Conv;
 use futures_util::TryFutureExt;
 use rstest::{fixture, rstest};
 use tokio::net::TcpListener;
@@ -38,8 +39,8 @@ impl TestServer {
         api_client::Client::new(
             self.address.clone(),
             &api_client::AuthToken::Token(resp.session),
-            5,
-            30,
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(30),
             &Default::default(),
             api_client::caps_client_anonymous(&self.address, &Default::default()).unwrap(),
         )
@@ -72,7 +73,7 @@ async fn server() -> TestServer {
         port: 0,
         path: String::new(),
         open_registration: true,
-        max_record_size: 1024 * 1024 * 1024,
+        max_record_size: atuin_common::units::ByteSize::b(1024 * 1024 * 1024),
         register_webhook_url: None,
         register_webhook_username: String::new(),
         db_settings: DbSettings {
@@ -146,11 +147,11 @@ async fn download(
 
     let store = SqliteStore::in_memory(Duration::from_secs(2)).await.unwrap();
     if let Some(local_max) = local_max {
-        store.push_batch(records.iter().take(local_max as usize + 1)).await.unwrap();
+        store.push_batch(records.iter().take(usize::conv(local_max) + 1)).await.unwrap();
     }
 
     let key = key();
-    let engine = SyncEngine::builder()
+    let session = SyncSession::builder()
         .store(store.clone())
         .client_source(ClientSource::FromClient(client))
         .build()
@@ -158,9 +159,9 @@ async fn download(
         .await
         .unwrap()
         .with_page_size(std::num::NonZeroU64::new(page_size).unwrap());
-    let (diff, _) = engine.diff().await.unwrap();
-    let operations = SyncEngine::operations(diff).unwrap();
-    let (_, downloaded) = engine.keyed(&key).sync_remote(operations).await.unwrap();
+    let (diff, _) = session.diff().await.unwrap();
+    let operations = SyncSession::operations(diff).unwrap();
+    let (_, downloaded) = session.keyed(&key).sync_remote(operations).await.unwrap();
 
     let status = store.status().await.unwrap();
     let local_idx = *status.hosts.get(&host).unwrap().get(&tag).unwrap();
@@ -213,11 +214,11 @@ async fn upload(
     store.push_batch(records.iter()).await.unwrap();
 
     if let Some(remote_max) = remote_max {
-        client.post_records(&records[..=remote_max as usize]).await.unwrap();
+        client.post_records(&records[..=usize::conv(remote_max)]).await.unwrap();
     }
 
     let key = key();
-    let engine = SyncEngine::builder()
+    let session = SyncSession::builder()
         .store(store)
         .client_source(ClientSource::FromClient(client))
         .build()
@@ -225,11 +226,11 @@ async fn upload(
         .await
         .unwrap()
         .with_page_size(std::num::NonZeroU64::new(page_size).unwrap());
-    let (diff, _) = engine.diff().await.unwrap();
-    let operations = SyncEngine::operations(diff).unwrap();
-    let (uploaded, _) = engine.keyed(&key).sync_remote(operations).await.unwrap();
+    let (diff, _) = session.diff().await.unwrap();
+    let operations = SyncSession::operations(diff).unwrap();
+    let (uploaded, _) = session.keyed(&key).sync_remote(operations).await.unwrap();
 
-    let status = engine.record_status().await.unwrap();
+    let status = session.record_status().await.unwrap();
     let remote_idx = *status.hosts.get(&host).unwrap().get(&tag).unwrap();
 
     // The PR that added these tests also changed the type of `uploaded` from `i64` to `u64`; the

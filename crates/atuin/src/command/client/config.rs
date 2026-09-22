@@ -4,6 +4,9 @@ use eyre::Result;
 use toml_edit::{Document, DocumentMut, Item, Table, TableLike, Value};
 use tracing::instrument;
 
+#[cfg(feature = "daemon")]
+use crate::command::client::daemon;
+
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
@@ -15,6 +18,10 @@ pub enum Cmd {
     /// Set a configuration value in your config.toml file
     #[command()]
     Set(SetCmd),
+
+    /// Enable a feature, along with everything it depends on
+    #[command()]
+    Enable(EnableCmd),
 
     /// Print all configuration values from your config.toml file
     /// in TOML format
@@ -30,6 +37,7 @@ impl Cmd {
         match self {
             Self::Get(get) => get.run(settings).await,
             Self::Set(set) => set.run(settings).await,
+            Self::Enable(enable) => enable.run(settings).await,
             Self::Print(print) => print.run(settings).await,
         }
     }
@@ -219,6 +227,75 @@ impl SetCmd {
                 Ok(Value::from(raw.as_str()))
             }
         }
+    }
+}
+
+#[derive(Args, Debug)]
+pub struct EnableCmd {
+    /// The feature to enable
+    #[arg(value_enum)]
+    pub feature: Feature,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Feature {
+    /// Run the daemon, autostart it, and use it for search
+    Daemon,
+    /// Capture command output, via the daemon and the pty proxy
+    OutputCapture,
+}
+
+impl EnableCmd {
+    pub async fn run(self, settings: &Settings) -> Result<()> {
+        let config_file = Settings::get_config_path()?;
+        let config_str = tokio::fs::read_to_string(&config_file).await?;
+
+        let updated = self.get_updated_config(&config_str, settings.daemon.enabled)?;
+        tokio::fs::write(&config_file, &updated).await?;
+
+        println!("Enabled.");
+
+        // The daemon reads these settings only at startup, so it needs a restart to pick them
+        // up. A running daemon with autostart off may be externally managed (systemd, launchd),
+        // so leave that one alone and tell the user instead.
+        #[cfg(feature = "daemon")]
+        if settings.daemon.enabled && !settings.daemon.autostart {
+            println!("Restart the Atuin daemon and your shell for the change to take effect.");
+            return Ok(());
+        } else if let Err(e) = daemon::restart_cmd(settings).await {
+            eprintln!(
+                "Could not restart the Atuin daemon: {e}\nRun `atuin daemon restart` manually."
+            );
+        }
+
+        println!("Restart your shell for the change to take effect.");
+
+        Ok(())
+    }
+
+    fn get_updated_config(&self, config_str: &str, daemon_enabled: bool) -> Result<String> {
+        let mut doc: DocumentMut = config_str.parse()?;
+
+        // An already-running daemon may be managed externally (systemd, launchd), so leave
+        // its autostart alone.
+        if !daemon_enabled {
+            set_deep_key(&mut doc, "daemon.enabled", Value::from(true))?;
+            set_deep_key(&mut doc, "daemon.autostart", Value::from(true))?;
+        }
+
+        match self.feature {
+            Feature::Daemon => set_deep_key(&mut doc, "search_mode", Value::from("daemon-fuzzy"))?,
+            Feature::OutputCapture => {
+                set_deep_key(&mut doc, "pty_proxy.enabled", Value::from(true))?;
+                set_deep_key(&mut doc, "output.enabled", Value::from(true))?;
+            }
+        }
+
+        let updated = doc.to_string();
+        Settings::validate_str(&updated)
+            .map_err(|e| eyre::eyre!("cannot update config: it would be invalid\n\n{e}"))?;
+
+        Ok(updated)
     }
 }
 
@@ -511,6 +588,46 @@ mod tests {
     ) {
         let updated =
             set_cmd(key, value).get_updated_config(input).expect("the update should be accepted");
+
+        assert_eq!(updated, expected);
+    }
+
+    #[rstest]
+    #[case::daemon(
+        Feature::Daemon,
+        "",
+        false,
+        "search_mode = \"daemon-fuzzy\"\n\n[daemon]\nenabled = true\nautostart = true\n"
+    )]
+    #[case::output_capture(
+        Feature::OutputCapture,
+        "",
+        false,
+        "[daemon]\nenabled = true\nautostart = true\n\n[pty_proxy]\nenabled = \
+         true\n\n[output]\nenabled = true\n"
+    )]
+    #[case::daemon_already_enabled(
+        Feature::Daemon,
+        "[daemon]\nenabled = true\nautostart = false\n",
+        true,
+        "search_mode = \"daemon-fuzzy\"\n[daemon]\nenabled = true\nautostart = false\n"
+    )]
+    #[case::output_capture_with_daemon_already_enabled(
+        Feature::OutputCapture,
+        "[daemon]\nenabled = true\nautostart = false\n",
+        true,
+        "[daemon]\nenabled = true\nautostart = false\n\n[pty_proxy]\nenabled = \
+         true\n\n[output]\nenabled = true\n"
+    )]
+    fn enable_writes(
+        #[case] feature: Feature,
+        #[case] input: &str,
+        #[case] daemon_enabled: bool,
+        #[case] expected: &str,
+    ) {
+        let updated = EnableCmd { feature }
+            .get_updated_config(input, daemon_enabled)
+            .expect("the update should be accepted");
 
         assert_eq!(updated, expected);
     }
