@@ -412,6 +412,19 @@ mod proto {
         pub raw: String,
     }
 
+    impl HighlightedTextProto {
+        #[must_use]
+        pub fn plain(&self) -> std::borrow::Cow<'_, str> {
+            match (char::from_u32(self.open), char::from_u32(self.close)) {
+                (Some(open), Some(close)) => match TextHighlighter::with_markers([open, close]) {
+                    Ok(highlighter) => highlighter.sanitize(&self.raw),
+                    Err(_) => std::borrow::Cow::Borrowed(&self.raw),
+                },
+                _ => std::borrow::Cow::Borrowed(&self.raw),
+            }
+        }
+    }
+
     #[derive(Debug, Error)]
     pub enum FromHighlightedTextProtoError {
         #[error("marker code point {0:#x} is not a valid char")]

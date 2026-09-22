@@ -6,7 +6,8 @@ mod codegen {
     tonic::include_proto!("ai.session");
 }
 
-use atuin_client::ai_session::{HarnessKind, HarnessSession};
+use atuin_client::ai_session::{HarnessKind, HarnessSession, SessionMatch};
+use atuin_common::string::highlighted::HighlightedTextProto;
 pub use codegen::*;
 
 use crate::grpc::ai_agent::pb as agent;
@@ -48,6 +49,23 @@ impl HarnessFilterRequest for ListSessionsRequest {
 impl HarnessFilterRequest for TailSessionsRequest {
     fn harness_filter(&self) -> Option<i32> {
         self.harness
+    }
+}
+
+impl HarnessFilterRequest for SearchSessionsRequest {
+    fn harness_filter(&self) -> Option<i32> {
+        self.harness
+    }
+}
+
+impl From<SessionMatch> for SearchSessionsMatch {
+    fn from(value: SessionMatch) -> Self {
+        Self {
+            session: Some(agent::Session::from(value.session)),
+            title: Some(HighlightedTextProto::from(&value.title)),
+            preview: Some(HighlightedTextProto::from(&value.preview)),
+            score: value.score,
+        }
     }
 }
 

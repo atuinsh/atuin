@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use atuin_common::harnesstools::AnyHarness;
 use atuin_common::harnesstools::session::{Content, Role, StopReason, Usage};
+use atuin_common::string::highlighted::HighlightedString;
 use atuin_domain::record::RecordId;
 use derive_more::{AsRef, Display, From, Into};
 use serde::{Deserialize, Serialize};
@@ -98,6 +99,14 @@ pub struct Session {
     pub title: Option<String>,
     #[builder(default)]
     pub preview: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SessionMatch {
+    pub session: Session,
+    pub title: HighlightedString,
+    pub preview: HighlightedString,
+    pub score: f64,
 }
 
 #[cfg(test)]
