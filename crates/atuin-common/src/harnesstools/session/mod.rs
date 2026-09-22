@@ -31,6 +31,22 @@ pub trait Message: Send + 'static {
     fn git_branch(&self) -> Option<String> {
         None
     }
+    fn parent_id(&self) -> Option<MessageId> {
+        None
+    }
+    /// The session this line says it belongs to, when the harness writes one per line. Differs
+    /// from the file's session for a Claude Code subagent transcript, whose lines name the parent.
+    fn parent_session(&self) -> Option<SessionId> {
+        None
+    }
+    /// One model call: groups the rows a single API response is split into.
+    fn turn_id(&self) -> Option<String> {
+        None
+    }
+    /// A title this line assigns to the session.
+    fn title(&self) -> Option<String> {
+        None
+    }
 }
 
 pub trait Session: Send + 'static {

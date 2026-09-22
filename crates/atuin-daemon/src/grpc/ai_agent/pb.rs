@@ -93,6 +93,7 @@ impl From<DomainStopReason> for StopReason {
             DomainStopReason::MaxTokens => Self::MaxTokens,
             DomainStopReason::ToolUse => Self::ToolUse,
             DomainStopReason::Aborted => Self::Aborted,
+            DomainStopReason::Error => Self::Error,
             DomainStopReason::Other(_) => Self::Unknown,
         }
     }
