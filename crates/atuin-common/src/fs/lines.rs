@@ -2,11 +2,15 @@
 //!
 //! Each [`read_new_lines`] call opens the file, reads one chunk of what lies past the
 //! [`LineCursor`], and closes it again, so following a file costs no open handle between reads
-//! and no more memory than a chunk however large the file. At most 32 blocking reads run at once
-//! process-wide (a caller that gives up waiting still counts until its read ends), which bounds
-//! the open handles a storm of callers can add. Only complete
-//! (newline-terminated) lines are returned: a trailing fragment stays in the file until a later
-//! call sees its newline, which is what makes the cursor safe to checkpoint after every call.
+//! and, however large the file, no more memory than a chunk or its longest line, whichever is
+//! bigger: a line is only ever returned whole, so one longer than a chunk is read in full (there
+//! is no line-length cap, since a caller parsing line-delimited records needs the whole line in
+//! memory anyway). At most 32 blocking reads run at once process-wide (a caller that gives up
+//! waiting still counts until its read ends), which bounds both the open handles and the buffers
+//! a storm of callers can add. Only complete (newline-terminated) lines are returned: a trailing
+//! fragment stays in the file until a later call sees its newline, which is what makes the cursor
+//! safe to checkpoint after every call, and means a single bounded pass over a file whose last
+//! line has no newline leaves that line out.
 //!
 //! Writers are assumed to append: an in-place rewrite that keeps the file's identity and does not
 //! shrink it below the cursor is not detected. A replaced or truncated file is, and re-yields
@@ -22,7 +26,8 @@ use crate::os::fs::FdIdentity;
 #[cfg(windows)]
 use crate::os::fs::FdIdentityExt;
 
-/// Bytes read per call: the memory a follower needs regardless of file size.
+/// Bytes read per call: the memory a follower needs regardless of file size, unless a single
+/// line is longer.
 const READ_CHUNK: u64 = 64 * 1024;
 
 /// Reads (and so open handles) in flight at once across every caller.

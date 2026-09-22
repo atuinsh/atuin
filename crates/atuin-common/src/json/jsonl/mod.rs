@@ -111,7 +111,10 @@ where
     }
 }
 
-/// Deserialize each non-blank line of the file at `path` as it stands now.
+/// Deserialize each non-blank complete line of the file at `path` as it stands now.
+///
+/// A final line with no newline is taken to be still being written and is left out rather than
+/// parsed half-formed; the harness writers this serves terminate every record.
 pub fn read_all<T>(path: PathBuf) -> impl Stream<Item = Result<T, JsonlError>> + Send + 'static
 where
     T: DeserializeOwned + Send + 'static,
