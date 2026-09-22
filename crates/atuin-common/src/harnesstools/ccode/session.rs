@@ -146,14 +146,14 @@ impl Session for CcodeSession {
         async move {
             let messages: Vec<CcodeMessage> =
                 jsonl::read_all(path).map_err(MessageError::from).try_collect().await?;
-            let title = messages.iter().rev().find_map(|m| m.ai_title.clone());
+            let title = messages.iter().rev().find_map(Message::title);
             let cwd = messages.iter().find_map(|m| m.cwd.clone());
             let git_branch = messages.iter().find_map(|m| m.git_branch.clone());
             Ok(SessionMeta {
                 cwd,
                 git_branch,
-                model: None,
                 title,
+                ..SessionMeta::default()
             })
         }
     }
@@ -172,6 +172,14 @@ pub struct CcodeMessage {
     git_branch: Option<String>,
     #[serde(rename = "aiTitle")]
     ai_title: Option<String>,
+    #[serde(rename = "customTitle")]
+    custom_title: Option<String>,
+    #[serde(rename = "parentUuid")]
+    parent_uuid: Option<String>,
+    #[serde(rename = "sessionId")]
+    session_id: Option<String>,
+    #[serde(rename = "isCompactSummary")]
+    is_compact_summary: Option<bool>,
 }
 
 fn ccode_stop_reason(raw: &str) -> StopReason {
@@ -215,6 +223,9 @@ impl Message for CcodeMessage {
     }
 
     fn role(&self) -> Role {
+        if self.is_compact_summary == Some(true) {
+            return Role::System;
+        }
         let role =
             self.message.as_ref().and_then(|m| m["role"].as_str()).unwrap_or(self.kind.as_str());
         match role {
@@ -259,8 +270,18 @@ impl Message for CcodeMessage {
     }
 
     fn stop_reason(&self) -> Option<StopReason> {
-        let raw = self.message.as_ref()?.get("stop_reason")?.as_str()?;
-        Some(ccode_stop_reason(raw))
+        // An interrupt is recorded as a user line; it is the turn that it ends. Peeked from the
+        // raw JSON rather than `content()`, which would clone every block to read one string.
+        let message = self.message.as_ref()?;
+        let first_text = match &message["content"] {
+            serde_json::Value::String(text) => Some(text.as_str()),
+            serde_json::Value::Array(blocks) => blocks.first().and_then(|b| b["text"].as_str()),
+            _ => None,
+        };
+        if first_text.is_some_and(|t| t.trim_start().starts_with("[Request interrupted by user")) {
+            return Some(StopReason::Aborted);
+        }
+        Some(ccode_stop_reason(message.get("stop_reason")?.as_str()?))
     }
 
     fn cwd(&self) -> Option<PathBuf> {
@@ -269,6 +290,22 @@ impl Message for CcodeMessage {
 
     fn git_branch(&self) -> Option<String> {
         self.git_branch.clone()
+    }
+
+    fn parent_id(&self) -> Option<MessageId> {
+        self.parent_uuid.clone().map(MessageId::from)
+    }
+
+    fn parent_session(&self) -> Option<SessionId> {
+        self.session_id.clone().map(SessionId::from)
+    }
+
+    fn turn_id(&self) -> Option<String> {
+        self.message.as_ref()?.get("id")?.as_str().map(str::to_owned)
+    }
+
+    fn title(&self) -> Option<String> {
+        self.custom_title.clone().or_else(|| self.ai_title.clone())
     }
 }
 
@@ -387,6 +424,57 @@ mod tests {
         assert_eq!(m.stop_reason(), None);
         assert_eq!(m.cwd(), None);
         assert_eq!(m.git_branch(), None);
+    }
+
+    #[rstest]
+    fn exposes_parent_line_parent_session_and_turn() {
+        let m: CcodeMessage = serde_json::from_str(
+            &serde_json::json!({
+                "type": "assistant",
+                "uuid": "bbbb",
+                "parentUuid": "aaaa",
+                "sessionId": "p",
+                "message": {"role": "assistant", "id": "msg_01", "content": []},
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(m.parent_id(), Some(MessageId::from("aaaa".to_owned())));
+        assert_eq!(m.parent_session(), Some(SessionId::from("p".to_owned())));
+        assert_eq!(m.turn_id().as_deref(), Some("msg_01"));
+    }
+
+    #[rstest]
+    #[case(serde_json::json!({"type": "ai-title", "aiTitle": "generated"}), "generated")]
+    #[case(serde_json::json!({"type": "custom-title", "customTitle": "by hand"}), "by hand")]
+    fn title_lines_expose_the_title(#[case] raw: serde_json::Value, #[case] expected: &str) {
+        let m: CcodeMessage = serde_json::from_str(&raw.to_string()).unwrap();
+        assert_eq!(m.title().as_deref(), Some(expected));
+        assert!(m.content().is_empty());
+    }
+
+    #[rstest]
+    #[case(
+        serde_json::json!({"type": "user", "isCompactSummary": true,
+            "message": {"role": "user", "content": "summary"}}),
+    )]
+    #[case(
+        serde_json::json!({"type": "system", "subtype": "compact_boundary",
+            "compactMetadata": {"trigger": "auto"}, "content": "boundary"}),
+    )]
+    fn compaction_lines_are_system(#[case] raw: serde_json::Value) {
+        let m: CcodeMessage = serde_json::from_str(&raw.to_string()).unwrap();
+        assert_eq!(m.role(), Role::System);
+    }
+
+    #[rstest]
+    #[case("[Request interrupted by user]", Some(StopReason::Aborted))]
+    #[case("[Request interrupted by user for tool use]", Some(StopReason::Aborted))]
+    #[case("please continue", None)]
+    fn interrupt_lines_end_the_turn(#[case] text: &str, #[case] expected: Option<StopReason>) {
+        let raw = line("user", "user", serde_json::json!([{"type": "text", "text": text}]));
+        let m: CcodeMessage = serde_json::from_str(&raw).unwrap();
+        assert_eq!(m.stop_reason(), expected);
     }
 
     #[rstest]

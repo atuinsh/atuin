@@ -10,7 +10,7 @@ use typed_builder::TypedBuilder;
 use crate::fs::tree_watcher::{NodeContext, TreeWatcher};
 use crate::harnesstools::codex::Codex;
 use crate::harnesstools::session::model::{
-    Content, MessageId, Role, SessionMeta, ToolCallId, ToolResult, ToolUse, Usage,
+    Content, MessageId, Role, SessionMeta, StopReason, ToolCallId, ToolResult, ToolUse, Usage,
 };
 use crate::harnesstools::session::{
     Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId, Sessions,
@@ -155,9 +155,8 @@ impl Session for CodexSession {
             let model = messages.iter().find_map(Message::model);
             Ok(SessionMeta {
                 cwd,
-                git_branch: None,
                 model,
-                title: None,
+                ..SessionMeta::default()
             })
         }
     }
@@ -169,6 +168,31 @@ pub struct CodexMessage {
     kind: String,
     timestamp: Option<String>,
     payload: Option<serde_json::Value>,
+}
+
+/// Whether a command output reports a non-zero exit, in either shape Codex has used: the
+/// `Process exited with code N` header, or an `"exit_code":N` field in a JSON envelope.
+fn codex_output_failed(output: &serde_json::Value) -> bool {
+    let texts: Vec<&str> = match output {
+        serde_json::Value::String(s) => vec![s],
+        serde_json::Value::Array(blocks) => {
+            blocks.iter().filter_map(|b| b["text"].as_str()).collect()
+        }
+        _ => Vec::new(),
+    };
+    // The last occurrence: the header follows the output, which may quote an earlier one.
+    texts.iter().any(|text| {
+        ["Process exited with code ", "\"exit_code\":"].iter().any(|marker| {
+            text.rfind(marker).is_some_and(|at| {
+                let code: String = text[at + marker.len()..]
+                    .trim_start()
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit() || *c == '-')
+                    .collect();
+                code.parse::<i64>().is_ok_and(|c| c != 0)
+            })
+        })
+    })
 }
 
 impl CodexMessage {
@@ -234,7 +258,7 @@ impl Message for CodexMessage {
                         payload["call_id"].as_str().unwrap_or_default().to_owned(),
                     ),
                     output: payload["output"].clone(),
-                    error: false,
+                    error: codex_output_failed(&payload["output"]),
                 })]
             }
             _ => match &payload["content"] {
@@ -262,9 +286,17 @@ impl Message for CodexMessage {
         })
     }
 
+    fn stop_reason(&self) -> Option<StopReason> {
+        (self.kind == "event_msg" && self.payload.as_ref()?["type"] == "turn_aborted")
+            .then_some(StopReason::Aborted)
+    }
+
     fn cwd(&self) -> Option<PathBuf> {
         self.payload.as_ref()?.get("cwd")?.as_str().map(PathBuf::from)
     }
+
+    // No `turn_id`: Codex items never name their model call, and its per-turn usage arrives on
+    // its own accounting line, so there is nothing to group or dedupe.
 }
 
 #[cfg(test)]
@@ -406,6 +438,41 @@ mod tests {
         assert_ne!(call.id(), output.id(), "call and its output must not share a source id");
         assert_eq!(call.id(), Some(MessageId::from("ctc_1".to_owned())));
         assert_eq!(output.id(), Some(MessageId::from("ctco_1".to_owned())));
+    }
+
+    #[rstest]
+    #[case(serde_json::json!("ok\nProcess exited with code 0"), false)]
+    #[case(serde_json::json!("boom\nProcess exited with code 2"), true)]
+    #[case(serde_json::json!([{"type": "output_text", "text": "{\"output\":\"x\",\"exit_code\":0}"}]), false)]
+    #[case(serde_json::json!([{"type": "output_text", "text": "{\"output\":\"x\",\"exit_code\":1}"}]), true)]
+    #[case(serde_json::json!("plain text"), false)]
+    #[case(serde_json::json!("killed\nProcess exited with code -9"), true)]
+    #[case(serde_json::json!("log: Process exited with code 1\nProcess exited with code 0"), false)]
+    #[case(serde_json::json!([{"type": "output_text", "text": "{\"output\": \"x\", \"exit_code\": 3}"}]), true)]
+    fn tool_output_error_is_derived_from_exit_code(
+        #[case] output: serde_json::Value,
+        #[case] error: bool,
+    ) {
+        let m: CodexMessage = serde_json::from_str(
+            &serde_json::json!({
+                "type": "response_item",
+                "payload": {"type": "function_call_output", "call_id": "c1", "output": output},
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert!(matches!(m.content().as_slice(), [Content::ToolResult(r)] if r.error == error));
+    }
+
+    #[rstest]
+    #[case("turn_aborted", Some(StopReason::Aborted))]
+    #[case("token_count", None)]
+    fn turn_aborted_events_end_the_turn(#[case] kind: &str, #[case] expected: Option<StopReason>) {
+        let m: CodexMessage = serde_json::from_str(
+            &serde_json::json!({"type": "event_msg", "payload": {"type": kind}}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(m.stop_reason(), expected);
     }
 
     #[rstest]

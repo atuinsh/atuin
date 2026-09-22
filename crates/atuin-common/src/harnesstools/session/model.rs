@@ -60,6 +60,7 @@ pub enum StopReason {
     StopSequence,
     Refusal,
     Aborted,
+    Error,
     Other(String),
 }
 
@@ -69,6 +70,8 @@ pub struct SessionMeta {
     pub git_branch: Option<String>,
     pub model: Option<String>,
     pub title: Option<String>,
+    /// The session this one was forked or spawned from.
+    pub parent: Option<SessionId>,
 }
 
 #[derive(Clone, Debug)]

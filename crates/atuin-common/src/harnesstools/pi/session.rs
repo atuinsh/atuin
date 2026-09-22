@@ -153,11 +153,16 @@ impl Session for PiSession {
                 jsonl::read_all(path).map_err(MessageError::from).try_collect().await?;
             let cwd = messages.iter().find_map(|m| m.cwd.clone());
             let model = messages.iter().rev().find_map(|m| m.model_id.clone());
+            let parent = messages
+                .iter()
+                .find(|m| m.kind == "session")
+                .and_then(|m| m.parent_session.clone())
+                .map(SessionId::from);
             Ok(SessionMeta {
                 cwd,
-                git_branch: None,
                 model,
-                title: None,
+                parent,
+                ..SessionMeta::default()
             })
         }
     }
@@ -168,11 +173,18 @@ pub struct PiMessage {
     #[serde(rename = "type")]
     kind: String,
     id: Option<String>,
+    #[serde(rename = "parentId")]
+    parent_id: Option<String>,
     timestamp: Option<String>,
     message: Option<serde_json::Value>,
     cwd: Option<PathBuf>,
     #[serde(rename = "modelId")]
     model_id: Option<String>,
+    /// On `session_info`: a name the user gave the session.
+    name: Option<String>,
+    /// On the `session` header: the session this one was forked from.
+    #[serde(rename = "parentSession")]
+    parent_session: Option<String>,
 }
 
 impl PiMessage {
@@ -202,6 +214,7 @@ impl Message for PiMessage {
             "assistant" => Role::Assistant,
             "system" => Role::System,
             "toolResult" | "tool" => Role::Tool,
+            "bashExecution" => Role::User,
             other => Role::Other(other.to_owned()),
         }
     }
@@ -222,6 +235,17 @@ impl Message for PiMessage {
                 output: message["content"].clone(),
                 error: message["isError"].as_bool().unwrap_or(false),
             })];
+        }
+        // A `!command` the user ran in pi's own shell, with what it printed.
+        if message["role"].as_str() == Some("bashExecution") {
+            return vec![
+                Content::Text(format!("!{}", message["command"].as_str().unwrap_or_default())),
+                Content::ToolResult(ToolResult {
+                    call: ToolCallId::from(self.id.clone().unwrap_or_default()),
+                    output: message["output"].clone(),
+                    error: message["exitCode"].as_i64().is_some_and(|c| c != 0),
+                }),
+            ];
         }
         match &message["content"] {
             serde_json::Value::String(text) => vec![Content::Text(text.clone())],
@@ -252,9 +276,23 @@ impl Message for PiMessage {
         Some(match raw {
             "stop" => StopReason::EndTurn,
             "toolUse" => StopReason::ToolUse,
+            "length" => StopReason::MaxTokens,
             "aborted" => StopReason::Aborted,
+            "error" => StopReason::Error,
             other => StopReason::Other(other.to_owned()),
         })
+    }
+
+    fn parent_id(&self) -> Option<MessageId> {
+        self.parent_id.clone().map(MessageId::from)
+    }
+
+    fn title(&self) -> Option<String> {
+        (self.kind == "session_info").then(|| self.name.clone()).flatten()
+    }
+
+    fn turn_id(&self) -> Option<String> {
+        self.message.as_ref()?.get("responseId")?.as_str().map(str::to_owned)
     }
 }
 
@@ -348,7 +386,9 @@ mod tests {
     #[rstest]
     #[case("toolUse", StopReason::ToolUse)]
     #[case("aborted", StopReason::Aborted)]
-    #[case("error", StopReason::Other("error".to_owned()))]
+    #[case("length", StopReason::MaxTokens)]
+    #[case("error", StopReason::Error)]
+    #[case("weird", StopReason::Other("weird".to_owned()))]
     fn maps_pi_stop_reason_vocabulary(#[case] raw: &str, #[case] expected: StopReason) {
         let m: PiMessage = serde_json::from_str(
             &serde_json::json!({
@@ -376,6 +416,77 @@ mod tests {
         assert_eq!(m.stop_reason(), None);
         assert_eq!(m.cwd(), None);
         assert_eq!(m.git_branch(), None);
+    }
+
+    #[rstest]
+    #[case(0, false)]
+    #[case(1, true)]
+    fn bash_execution_is_a_user_command_with_its_output(#[case] exit: i64, #[case] error: bool) {
+        let m: PiMessage = serde_json::from_str(
+            &serde_json::json!({
+                "type": "message",
+                "id": "m9",
+                "message": {"role": "bashExecution", "command": "ls", "output": "a\nb", "exitCode": exit},
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(m.role(), Role::User);
+        assert_eq!(m.content(), vec![
+            Content::Text("!ls".into()),
+            Content::ToolResult(ToolResult {
+                call: ToolCallId::from("m9".to_owned()),
+                output: serde_json::json!("a\nb"),
+                error,
+            }),
+        ]);
+    }
+
+    #[rstest]
+    fn exposes_parent_id_and_session_info_title() {
+        let m: PiMessage = serde_json::from_str(
+            &serde_json::json!({"type": "message", "id": "m2", "parentId": "m1",
+                "message": {"role": "user", "content": "hi"}})
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(m.parent_id(), Some(MessageId::from("m1".to_owned())));
+        assert_eq!(m.title(), None);
+
+        let info: PiMessage = serde_json::from_str(
+            &serde_json::json!({"type": "session_info", "id": "m3", "parentId": "m2", "name": "my session"})
+                .to_string(),
+        )
+        .unwrap();
+        assert_eq!(info.title().as_deref(), Some("my session"));
+    }
+
+    #[rstest]
+    fn assistant_turn_id_is_the_response_id() {
+        let m: PiMessage = serde_json::from_str(
+            &serde_json::json!({"type": "message", "id": "m2",
+                "message": {"role": "assistant", "content": [], "responseId": "r1"}})
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(m.turn_id().as_deref(), Some("r1"));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn meta_reads_parent_session_from_the_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("1700000000_s2.jsonl");
+        std::fs::write(
+            &path,
+            serde_json::json!({"type": "session", "id": "s2", "cwd": "/w", "parentSession": "s1"})
+                .to_string()
+                + "\n",
+        )
+        .unwrap();
+
+        let meta = PiSession::open(SessionId::from("s2".to_owned()), path).meta().await.unwrap();
+        assert_eq!(meta.parent, Some(SessionId::from("s1".to_owned())));
     }
 
     #[rstest]

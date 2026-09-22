@@ -96,6 +96,7 @@ struct MessageRow {
     usage_cache_write: i64,
     stop_reason: Option<String>,
     usage_present: i64,
+    turn_id: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -164,8 +165,8 @@ impl AiSessionDatabase {
                 id, harness, session_id, source_id, parent_harness, parent_session_id,
                 parent_source_id, thread, timestamp, role, content, content_z, cwd, git_branch,
                 model, usage_input, usage_output, usage_cache_read, usage_cache_write, stop_reason,
-                usage_present
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                usage_present, turn_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(harness, session_id, source_id) DO NOTHING",
         )
         .bind(id)
@@ -189,6 +190,7 @@ impl AiSessionDatabase {
         .bind(usage_cache_write)
         .bind(stop_reason_json)
         .bind(i64::from(msg.usage.is_some()))
+        .bind(msg.turn_id.as_deref())
         .execute(&mut *tx)
         .await?;
 
@@ -264,6 +266,8 @@ impl AiSessionDatabase {
     ) -> Result<(), DbError> {
         let now = Self::millis(OffsetDateTime::now_utc());
         let cwd = meta.cwd.as_ref().map(|p| p.to_string_lossy().into_owned());
+        let parent_harness = meta.parent.as_ref().map(|_| handle.harness as i64);
+        let parent_session_id = meta.parent.as_ref().map(ToString::to_string);
 
         let mut tx = self.db.pool().begin_with("BEGIN IMMEDIATE").await?;
 
@@ -272,11 +276,14 @@ impl AiSessionDatabase {
         // capture time and outrank every real message timestamp when an old session is replayed.
         db::query(
             "INSERT INTO sessions (
-                harness, session_id, cwd, git_branch, model, started_at, updated_at,
-                message_count, usage_input, usage_output, usage_cache_read, usage_cache_write, \
-             title
-            ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0, ?)
+                harness, session_id, parent_harness, parent_session_id, cwd, git_branch, model,
+                started_at, updated_at, message_count, usage_input, usage_output, \
+             usage_cache_read, usage_cache_write, title
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0, ?)
             ON CONFLICT(harness, session_id) DO UPDATE SET
+                parent_harness = COALESCE(sessions.parent_harness, excluded.parent_harness),
+                parent_session_id = COALESCE(sessions.parent_session_id, \
+             excluded.parent_session_id),
                 cwd = COALESCE(sessions.cwd, excluded.cwd),
                 git_branch = COALESCE(sessions.git_branch, excluded.git_branch),
                 model = COALESCE(sessions.model, excluded.model),
@@ -284,6 +291,8 @@ impl AiSessionDatabase {
         )
         .bind(handle.harness as i64)
         .bind(handle.session.as_ref())
+        .bind(parent_harness)
+        .bind(parent_session_id)
         .bind(cwd)
         .bind(meta.git_branch.as_deref())
         .bind(meta.model.as_deref())
@@ -377,7 +386,8 @@ impl AiSessionDatabase {
                 "SELECT id, harness, session_id, source_id, parent_harness, parent_session_id, \
                  parent_source_id, thread, timestamp, role, content, content_z, cwd, git_branch, \
                  model, usage_input, usage_output, usage_cache_read, usage_cache_write, \
-                 stop_reason, usage_present FROM messages WHERE harness = ? AND session_id = ? \
+                 stop_reason, usage_present, turn_id FROM messages WHERE harness = ? AND \
+                 session_id = ? \
                  ORDER BY timestamp, id",
             )
             .bind(harness)
@@ -496,9 +506,9 @@ impl AiSessionDatabase {
                  m.parent_harness, m.parent_session_id, m.parent_source_id, m.thread, \
                  m.timestamp, m.role, m.content, m.content_z, m.cwd, m.git_branch, m.model, \
                  m.usage_input, m.usage_output, m.usage_cache_read, m.usage_cache_write, \
-                 m.stop_reason, m.usage_present, s.title AS session_title FROM messages m LEFT \
-                 JOIN sessions s ON s.harness = m.harness AND s.session_id = m.session_id WHERE \
-                 m.rowid > ? ORDER BY m.rowid LIMIT ?",
+                 m.stop_reason, m.usage_present, m.turn_id, s.title AS session_title FROM \
+                 messages m LEFT JOIN sessions s ON s.harness = m.harness AND s.session_id = \
+                 m.session_id WHERE m.rowid > ? ORDER BY m.rowid LIMIT ?",
             )
             .bind(watermark)
             .bind(REINDEX_CHUNK)
@@ -708,6 +718,7 @@ impl AiSessionDatabase {
                 cache_write: Some(u64::try_from(row.usage_cache_write).unwrap_or(0)),
             }))
             .stop_reason(stop_reason)
+            .turn_id(row.turn_id)
             .build())
     }
 
@@ -796,12 +807,15 @@ mod tests {
     #[tokio::test]
     async fn append_is_idempotent_on_native_triple() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
-        let m = sample_message();
+        let mut m = sample_message();
+        m.turn_id = Some("msg_01".to_owned());
         assert_eq!(db.append(&m).await.unwrap(), Appended::New);
         assert_eq!(db.append(&m).await.unwrap(), Appended::Duplicate);
 
         let s = db.get_session(&m.session).await.unwrap().unwrap();
         assert_eq!(s.message_count, 1);
+        let got: Vec<_> = db.messages(&m.session).try_collect().await.unwrap();
+        assert_eq!(got[0].turn_id.as_deref(), Some("msg_01"));
     }
 
     fn message_in(session: &HarnessSession, index: i64, text: &str) -> Message {

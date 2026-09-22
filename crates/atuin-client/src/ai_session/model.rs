@@ -71,12 +71,17 @@ pub struct Message {
     pub stop_reason: Option<StopReason>,
     /// The session's title at capture time, denormalised onto the message so session-level metadata
     /// survives a reproject from the synced record store (records carry messages only, not the
-    /// separate `Started` metadata). Must stay the LAST field: records are `rmp_serde` positional
-    /// arrays, and `#[serde(default)]` keeps records written before this field existed decodable
-    /// (they deserialize with `None`).
+    /// separate `Started` metadata).
     #[builder(default)]
     #[serde(default)]
     pub session_title: Option<String>,
+    /// The model call this row came from. Claude Code splits one response across several lines,
+    /// each repeating the response's usage; rows after the first carry `usage: None`. Must stay
+    /// the LAST field: records are `rmp_serde` positional arrays, and `#[serde(default)]` keeps
+    /// records written before this field existed decodable (they deserialize with `None`).
+    #[builder(default)]
+    #[serde(default)]
+    pub turn_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TypedBuilder)]
