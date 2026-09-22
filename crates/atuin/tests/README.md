@@ -13,10 +13,10 @@ macOS, with Homebrew Bash on macOS.
 - `e2e_fresh_install`: CLI startup, keys, shell init, and doctor.
 - `e2e_pty`: shell hooks, search, selection, quoting, resize, and filters.
 - `e2e_daemon`: startup, concurrent writers, persistence, and restart.
+- `e2e_osc133_prompt`: OSC 133 prompt wrapping in the Bash and Zsh init scripts.
 
-`osc133_prompt` also needs Bash and Zsh, but runs them without a PTY: it sources
-the init scripts and drives `__atuin_osc133_wrap_prompt` directly. It skips the
-same way when a shell is missing, so it runs under a plain `cargo nextest run`.
+`e2e_osc133_prompt` drives its shells without a PTY -- it sources the init
+scripts and calls `__atuin_osc133_wrap_prompt` directly.
 
 ## Add a shell setup
 
