@@ -73,26 +73,9 @@ enum SubCmd {
     Tail,
 
     Import {
-        #[arg(long, value_enum)]
-        harness: Option<Harness>,
+        #[arg(long, value_parser = parse_harness)]
+        harness: Option<agent::HarnessKind>,
     },
-}
-
-#[derive(Copy, Clone, Debug, ValueEnum)]
-enum Harness {
-    ClaudeCode,
-    Codex,
-    Pi,
-}
-
-impl From<Harness> for agent::HarnessKind {
-    fn from(h: Harness) -> Self {
-        match h {
-            Harness::ClaudeCode => Self::ClaudeCode,
-            Harness::Codex => Self::Codex,
-            Harness::Pi => Self::Pi,
-        }
-    }
 }
 
 // Only harnesses a capture path can actually produce are offered as filters (see AnyHarness);
@@ -165,9 +148,7 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
             limit,
         } => search(&mut client, &query, harness.map(HarnessArg::to_pb), limit, style).await,
         SubCmd::Tail => tail(&mut client, style).await,
-        SubCmd::Import { harness } => {
-            import(&mut client, harness.map(agent::HarnessKind::from), style).await
-        }
+        SubCmd::Import { harness } => import(&mut client, harness, style).await,
     };
 
     // A downstream reader that closes the pipe (e.g. `atuin ai session list | head`) makes the next
@@ -484,18 +465,20 @@ async fn import(
 
         if style.is_json() {
             let record = match &event {
-                import_sessions_event::Event::Progress(p) => ImportEventJson::Progress {
-                    harness: harness_name(p.harness).to_owned(),
-                    session_id: p.session_id.clone(),
-                    imported: p.imported,
-                    skipped: p.skipped,
-                },
-                import_sessions_event::Event::Summary(s) => ImportEventJson::Summary {
-                    sessions: s.sessions,
-                    imported: s.imported,
-                    skipped: s.skipped,
-                    failed: s.failed,
-                },
+                import_sessions_event::Event::Progress(p) => serde_json::json!({
+                    "kind": "progress",
+                    "harness": harness_name(p.harness),
+                    "session_id": p.session_id,
+                    "imported": p.imported,
+                    "skipped": p.skipped,
+                }),
+                import_sessions_event::Event::Summary(s) => serde_json::json!({
+                    "kind": "summary",
+                    "sessions": s.sessions,
+                    "imported": s.imported,
+                    "skipped": s.skipped,
+                    "failed": s.failed,
+                }),
             };
             serde_json::to_writer(&mut out, &record)?;
             writeln!(out)?;
@@ -867,6 +850,15 @@ fn rfc3339(ts: Option<&prost_types::Timestamp>) -> Option<String> {
     to_datetime(ts).map(|dt| dt.to_rfc3339())
 }
 
+fn parse_harness(value: &str) -> Result<agent::HarnessKind, String> {
+    match value {
+        "claude-code" => Ok(agent::HarnessKind::ClaudeCode),
+        "codex" => Ok(agent::HarnessKind::Codex),
+        "pi" => Ok(agent::HarnessKind::Pi),
+        other => Err(format!("unknown harness `{other}` (expected claude-code, codex, or pi)")),
+    }
+}
+
 /// The kebab display label for a harness discriminant. Kept exhaustive over every `HarnessKind`
 /// (including ones no capture path yet produces) so a stored value always renders. Shared with the
 /// MCP session-search renderer.
@@ -1005,23 +997,6 @@ enum TailEventJson {
     Message(MessageJson),
     Lagged {
         dropped: u64,
-    },
-}
-
-#[derive(Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum ImportEventJson {
-    Progress {
-        harness: String,
-        session_id: String,
-        imported: u64,
-        skipped: u64,
-    },
-    Summary {
-        sessions: u64,
-        imported: u64,
-        skipped: u64,
-        failed: u64,
     },
 }
 
@@ -1173,11 +1148,16 @@ mod tests {
     }
 
     #[rstest]
-    #[case(Harness::ClaudeCode, agent::HarnessKind::ClaudeCode)]
-    #[case(Harness::Codex, agent::HarnessKind::Codex)]
-    #[case(Harness::Pi, agent::HarnessKind::Pi)]
-    fn harness_arg_maps_to_proto_kind(#[case] arg: Harness, #[case] want: agent::HarnessKind) {
-        assert_eq!(agent::HarnessKind::from(arg), want);
+    #[case("claude-code", agent::HarnessKind::ClaudeCode)]
+    #[case("codex", agent::HarnessKind::Codex)]
+    #[case("pi", agent::HarnessKind::Pi)]
+    fn parse_harness_maps_names(#[case] input: &str, #[case] want: agent::HarnessKind) {
+        assert_eq!(parse_harness(input).unwrap(), want);
+    }
+
+    #[rstest]
+    fn parse_harness_rejects_unknown_harnesses() {
+        assert!(parse_harness("opencode").is_err());
     }
 
     #[rstest]

@@ -10,7 +10,7 @@ use futures::StreamExt;
 use tokio::task::JoinHandle;
 
 use super::Sink;
-use super::normalizer::Normalizer;
+use super::message_enricher::MessageEnricher;
 
 /// Backoff bounds for retrying a harness listener whose session directory does not exist yet.
 const LISTENER_RETRY_START: Duration = Duration::from_secs(2);
@@ -61,7 +61,7 @@ impl SessionCaptureEngine {
                 };
 
                 let mut events = listener.events();
-                let mut normalizer = Normalizer::new(kind);
+                let mut enricher = MessageEnricher::new(kind);
 
                 while let Some(ev) = events.next().await {
                     match ev {
@@ -69,8 +69,8 @@ impl SessionCaptureEngine {
                             session,
                             kind: SessionEventKind::Started(meta),
                         }) => {
-                            normalizer.observe_started(&session, &meta);
-                            let handle = normalizer.handle(&session);
+                            enricher.observe_started(&session, &meta);
+                            let handle = enricher.handle(&session);
                             if let Err(e) = sink.record_session_meta(&handle, &meta).await {
                                 tracing::warn!(?e, "failed to record ai-session metadata");
                             }
@@ -79,9 +79,9 @@ impl SessionCaptureEngine {
                             session,
                             kind: SessionEventKind::Message(m),
                         }) => {
-                            let captured = normalizer.capture(&session, &m);
+                            let captured = enricher.capture(&session, &m);
                             if let Some(title) = captured.new_title {
-                                let handle = normalizer.handle(&session);
+                                let handle = enricher.handle(&session);
                                 let meta = SessionMeta {
                                     title: Some(title),
                                     ..SessionMeta::default()

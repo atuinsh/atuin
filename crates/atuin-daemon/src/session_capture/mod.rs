@@ -1,6 +1,6 @@
 mod engine;
 mod import;
-mod normalizer;
+mod message_enricher;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -63,8 +63,8 @@ impl Sink {
         let _guard = self.append_lock.lock().await;
 
         // Dedup gate: if this logical message is already projected it is already in the record
-        // store too, so there is nothing to do. Stable source ids (see Normalizer::source_id) make
-        // this reliable across re-captures and keep the record store free of duplicates.
+        // store too, so there is nothing to do. Stable source ids (see MessageEnricher::source_id)
+        // make this reliable across re-captures and keep the record store free of duplicates.
         if self.sidecar.contains_message(&msg.session, &msg.source_id).await? {
             return Ok(Appended::Duplicate);
         }

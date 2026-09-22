@@ -10,13 +10,13 @@ use time::OffsetDateTime;
 /// Builds the canonical [`Message`] rows for one harness's lines, carrying the per-session
 /// bookkeeping (title, timestamps, parent, usage dedupe) that a single line cannot resolve on its
 /// own. The live capture loop and the backfill importer both drive it, so a line re-read later
-/// resolves to the same row (see [`Normalizer::source_id`]).
-pub struct Normalizer {
+/// resolves to the same row (see [`MessageEnricher::source_id`]).
+pub struct MessageEnricher {
     harness: HarnessKind,
     state: Bookkeeping,
 }
 
-/// What [`Normalizer::capture`] produced for one line.
+/// What [`MessageEnricher::capture`] produced for one line.
 pub struct Captured {
     /// A title this line newly set, for the caller to persist as session metadata.
     pub new_title: Option<String>,
@@ -24,7 +24,7 @@ pub struct Captured {
     pub row: Option<Message>,
 }
 
-impl Normalizer {
+impl MessageEnricher {
     pub fn new(harness: HarnessKind) -> Self {
         Self {
             harness,
@@ -184,7 +184,7 @@ struct SessionState {
     last_turn: Option<String>,
 }
 
-/// What [`Normalizer::observe`] resolved for one line.
+/// What [`MessageEnricher::observe`] resolved for one line.
 struct Observed {
     timestamp: OffsetDateTime,
     /// The title this line set, if it set one.
@@ -239,21 +239,21 @@ mod tests {
     #[rstest]
     fn source_id_prefers_native_message_id() {
         let m = scripted_message_with_id("msg-1");
-        assert_eq!(String::from(Normalizer::source_id(&session(), &m)), "msg-1".to_string());
+        assert_eq!(String::from(MessageEnricher::source_id(&session(), &m)), "msg-1".to_string());
     }
 
     #[rstest]
     fn synthetic_source_id_is_stable_and_prefixed() {
         let m = scripted_message_without_id();
-        let a = Normalizer::source_id(&session(), &m);
-        let b = Normalizer::source_id(&session(), &m);
+        let a = MessageEnricher::source_id(&session(), &m);
+        let b = MessageEnricher::source_id(&session(), &m);
         assert_eq!(a, b);
         assert!(String::from(a).starts_with("syn-"));
     }
 
     #[rstest]
     fn enrich_stamps_handle_from_harness_kind() {
-        let mut n = Normalizer::new(HarnessKind::Pi);
+        let mut n = MessageEnricher::new(HarnessKind::Pi);
         let msg = n.enrich(&session(), &scripted_message_without_id()).unwrap();
         assert_eq!(msg.session, n.handle(&session()));
         assert_eq!(msg.session.harness, HarnessKind::Pi);
@@ -265,7 +265,7 @@ mod tests {
             "type": "attachment", "uuid": "a1", "parentUuid": "u0", "cwd": "/x",
             "attachment": {"type": "hook_success", "stdout": "secret"},
         }));
-        let msg = Normalizer::new(HarnessKind::ClaudeCode).enrich(&session(), &m).unwrap();
+        let msg = MessageEnricher::new(HarnessKind::ClaudeCode).enrich(&session(), &m).unwrap();
         assert_eq!(msg.source_id, SourceId::from("a1".to_owned()));
         assert_eq!(msg.parent_source_id, Some(SourceId::from("u0".to_owned())));
         assert_eq!(msg.role, Role::Other("attachment".to_owned()));
@@ -278,7 +278,7 @@ mod tests {
     #[case(serde_json::json!({"type": "file-history-snapshot", "messageId": "m1", "snapshot": {}}))]
     fn bookkeeping_lines_produce_no_row(#[case] raw: serde_json::Value) {
         let m = ccode(&raw);
-        assert!(Normalizer::new(HarnessKind::ClaudeCode).enrich(&session(), &m).is_none());
+        assert!(MessageEnricher::new(HarnessKind::ClaudeCode).enrich(&session(), &m).is_none());
     }
 
     #[rstest]
@@ -287,7 +287,7 @@ mod tests {
         let m = ccode(&serde_json::json!({
             "type": "ai-title", "aiTitle": "Fix it", "timestamp": "2023-11-14T22:13:20Z",
         }));
-        let captured = Normalizer::new(HarnessKind::ClaudeCode).capture(&session(), &m);
+        let captured = MessageEnricher::new(HarnessKind::ClaudeCode).capture(&session(), &m);
         let msg = captured.row.unwrap();
         assert_eq!(msg.timestamp, ts);
         assert_eq!(msg.session_title.as_deref(), Some("Fix it"));
@@ -299,7 +299,10 @@ mod tests {
     fn distinct_titles_get_distinct_source_ids() {
         let a = ccode(&serde_json::json!({"type": "ai-title", "aiTitle": "one"}));
         let b = ccode(&serde_json::json!({"type": "ai-title", "aiTitle": "two"}));
-        assert_ne!(Normalizer::source_id(&session(), &a), Normalizer::source_id(&session(), &b));
+        assert_ne!(
+            MessageEnricher::source_id(&session(), &a),
+            MessageEnricher::source_id(&session(), &b)
+        );
     }
 
     /// A subagent line names the parent session; a main-session line names its own and gets
@@ -312,7 +315,7 @@ mod tests {
             "type": "assistant", "uuid": "u2", "parentUuid": "u1", "sessionId": line_session,
             "message": {"role": "assistant", "id": "msg_01", "content": [{"type": "text", "text": "hi"}]},
         }));
-        let msg = Normalizer::new(HarnessKind::ClaudeCode).enrich(&session(), &m).unwrap();
+        let msg = MessageEnricher::new(HarnessKind::ClaudeCode).enrich(&session(), &m).unwrap();
         assert_eq!(msg.parent_source_id, Some(SourceId::from("u1".to_owned())));
         assert_eq!(
             msg.parent.map(|p| p.session),
@@ -339,7 +342,7 @@ mod tests {
             serde_json::json!({"type": "tool_use", "id": "t", "name": "Bash", "input": {}}),
         );
 
-        let mut n = Normalizer::new(HarnessKind::ClaudeCode);
+        let mut n = MessageEnricher::new(HarnessKind::ClaudeCode);
         let rows: Vec<Message> =
             [first, second].iter().filter_map(|m| n.enrich(&session(), m)).collect();
         assert!(rows[0].usage.is_some());
@@ -362,7 +365,7 @@ mod tests {
             }))
         };
 
-        let mut n = Normalizer::new(HarnessKind::Codex);
+        let mut n = MessageEnricher::new(HarnessKind::Codex);
         assert!(n.enrich(&session(), &started).is_none());
         let first = n.enrich(&session(), &usage("r1", 5)).unwrap();
         let second = n.enrich(&session(), &usage("r2", 7)).unwrap();

@@ -6,7 +6,7 @@ use atuin_common::harnesstools::session::any::AnySessions;
 use futures::{Stream, StreamExt};
 
 use super::Sink;
-use super::normalizer::Normalizer;
+use super::message_enricher::MessageEnricher;
 
 #[derive(Debug, Clone)]
 pub enum ImportProgress {
@@ -91,7 +91,7 @@ impl SessionImporter {
                         // One enricher per session: it carries that session's bookkeeping (title,
                         // timestamps, parent, usage dedupe) across its lines, exactly as live
                         // capture does, so a backfilled row matches the captured one.
-                        let mut normalizer = Normalizer::new(kind);
+                        let mut enricher = MessageEnricher::new(kind);
                         let sid = session.id();
                         let mut imported = 0u64;
                         let mut skipped = 0u64;
@@ -104,7 +104,7 @@ impl SessionImporter {
                             };
                             // A bookkeeping line worth no row (matches live capture) is not
                             // counted: it is neither a new record nor a dedupe skip.
-                            let Some(msg) = normalizer.enrich(&sid, &message) else {
+                            let Some(msg) = enricher.enrich(&sid, &message) else {
                                 continue;
                             };
                             match sink.append(msg).await {
@@ -115,7 +115,7 @@ impl SessionImporter {
                         }
                         ImportProgress::Session {
                             harness: kind,
-                            session: normalizer.handle(&sid).session,
+                            session: enricher.handle(&sid).session,
                             imported,
                             skipped,
                             failed,
