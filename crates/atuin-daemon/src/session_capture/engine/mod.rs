@@ -428,8 +428,8 @@ mod tests {
         assert_eq!(rows[1].content.len(), 1);
     }
 
-    /// Codex names the turn on bookkeeping lines that carry no usage; they must not make the
-    /// accounting line that follows look like a repeat, and each response keeps its own usage.
+    /// Codex has no turn id: a bookkeeping line must not make the accounting line that follows
+    /// look like a repeat, and every accounting line keeps its own usage.
     #[rstest]
     fn codex_accounting_lines_keep_their_usage() {
         let started = codex(&serde_json::json!({

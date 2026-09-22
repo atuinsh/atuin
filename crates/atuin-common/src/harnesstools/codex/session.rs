@@ -295,14 +295,8 @@ impl Message for CodexMessage {
         self.payload.as_ref()?.get("cwd")?.as_str().map(PathBuf::from)
     }
 
-    /// Codex names the model call only on the accounting line it writes after each response;
-    /// items carry no response id, and `turn_id` there is the whole agent turn, so `None`.
-    fn turn_id(&self) -> Option<String> {
-        if self.kind != "token_usage_record" {
-            return None;
-        }
-        self.payload.as_ref()?.get("response_id")?.as_str().map(str::to_owned)
-    }
+    // No `turn_id`: Codex items never name their model call, and its per-turn usage arrives on
+    // its own accounting line, so there is nothing to group or dedupe.
 }
 
 #[cfg(test)]
@@ -344,19 +338,6 @@ mod tests {
         let m: CodexMessage = serde_json::from_str(&raw).unwrap();
         assert_eq!(m.model(), Some("gpt-5.6-terra".to_owned()));
         assert_eq!(m.cwd(), Some(PathBuf::from("/work/atuin")));
-    }
-
-    #[rstest]
-    #[case(serde_json::json!({"type": "token_usage_record", "payload": {"turn_id": "t1", "response_id": "r1"}}), Some("r1"))]
-    #[case(serde_json::json!({"type": "turn_context", "payload": {"turn_id": "t1"}}), None)]
-    #[case(serde_json::json!({"type": "event_msg", "payload": {"type": "task_started", "turn_id": "t1"}}), None)]
-    #[case(serde_json::json!({"type": "response_item", "payload": {"type": "message", "id": "m1"}}), None)]
-    fn turn_id_is_the_response_id_on_accounting_lines(
-        #[case] raw: serde_json::Value,
-        #[case] expected: Option<&str>,
-    ) {
-        let m: CodexMessage = serde_json::from_str(&raw.to_string()).unwrap();
-        assert_eq!(m.turn_id().as_deref(), expected);
     }
 
     #[rstest]
