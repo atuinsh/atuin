@@ -4,6 +4,7 @@ use clap::Parser;
 use eyre::{Result, bail};
 
 use super::login::{or_user_input, read_user_password};
+use crate::i18n::fl;
 
 #[derive(Parser, Debug)]
 pub struct Cmd {
@@ -18,7 +19,7 @@ pub struct Cmd {
 impl Cmd {
     pub async fn run(&self, settings: &Settings) -> Result<()> {
         if !settings.logged_in().await? {
-            bail!("You are not logged in");
+            bail!(fl!("account-not-logged-in"));
         }
 
         let client = auth::auth_client(settings).await;
@@ -26,7 +27,7 @@ impl Cmd {
         let password = self.password.clone().unwrap_or_else(read_user_password);
 
         if password.is_empty() {
-            bail!("please provide your password");
+            bail!(fl!("delete-provide-password"));
         }
 
         let mut totp_code = self.totp_code.clone();
@@ -37,7 +38,7 @@ impl Cmd {
             match response {
                 MutateResponse::Success => break,
                 MutateResponse::TwoFactorRequired => {
-                    totp_code = Some(or_user_input(None, "two-factor code"));
+                    totp_code = Some(or_user_input(None, &fl!("prompt-two-factor-code")));
                 }
             }
         }
@@ -47,7 +48,7 @@ impl Cmd {
         meta.delete_session().await?;
         meta.delete_hub_session().await?;
 
-        println!("Your account is deleted");
+        println!("{}", fl!("delete-success"));
 
         Ok(())
     }
