@@ -265,6 +265,8 @@ impl AiSessionDatabase {
         let now = Self::millis(OffsetDateTime::now_utc());
         let cwd = meta.cwd.as_ref().map(|p| p.to_string_lossy().into_owned());
 
+        let mut tx = self.db.pool().begin_with("BEGIN IMMEDIATE").await?;
+
         // Seed updated_at at 0, not `now`: appended messages set updated_at via
         // MAX(sessions.updated_at, excluded.updated_at), so a wall-clock seed would pin recency at
         // capture time and outrank every real message timestamp when an old session is replayed.
@@ -287,9 +289,22 @@ impl AiSessionDatabase {
         .bind(meta.model.as_deref())
         .bind(now)
         .bind(meta.title.as_deref())
-        .execute(self.db.pool())
+        .execute(&mut *tx)
         .await?;
 
+        if let Some(title) = meta.title.as_deref() {
+            db::query(
+                "UPDATE messages_fts SET title = ? WHERE rowid IN (SELECT rowid FROM messages \
+                 WHERE harness = ? AND session_id = ?)",
+            )
+            .bind_highlightable(TextHighlighter::default(), title)
+            .bind(handle.harness as i64)
+            .bind(handle.session.as_ref())
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
         Ok(())
     }
 
@@ -398,56 +413,52 @@ impl AiSessionDatabase {
 
             let [open, close] = TextHighlighter::default().markers();
             let harness_clause = if harness.is_some() { " AND m.harness = ?" } else { "" };
-            let candidates: i64 =
-                if limit == 0 { i64::MAX } else { i64::from(limit).saturating_mul(8).max(200) };
+            let limit_clause = if limit == 0 { "" } else { " LIMIT ?" };
 
             let sql = format!(
-                "SELECT s.harness, s.session_id, s.parent_harness, s.parent_session_id, s.cwd, \
+                "WITH ranked AS MATERIALIZED (\
+                 SELECT messages_fts.rowid AS rowid, m.harness AS h, m.session_id AS sid, \
+                 -bm25(messages_fts) AS score \
+                 FROM messages_fts JOIN messages m ON m.rowid = messages_fts.rowid \
+                 WHERE messages_fts MATCH ?{harness_clause}), \
+                 best AS (SELECT rowid, max(score) AS score FROM ranked \
+                 GROUP BY h, sid ORDER BY score DESC{limit_clause}) \
+                 SELECT s.harness, s.session_id, s.parent_harness, s.parent_session_id, s.cwd, \
                  s.git_branch, s.model, s.started_at, s.updated_at, s.message_count, \
                  s.usage_input, s.usage_output, s.usage_cache_read, s.usage_cache_write, s.title, \
                  s.preview, highlight(messages_fts, 0, ?, ?) AS title_hl, \
                  snippet(messages_fts, 1, ?, ?, '…', {SNIPPET_TOKENS}) AS preview_hl, \
-                 ranked.score AS score FROM (\
-                 SELECT messages_fts.rowid AS rowid, -bm25(messages_fts) AS score \
-                 FROM messages_fts JOIN messages m ON m.rowid = messages_fts.rowid \
-                 WHERE messages_fts MATCH ?{harness_clause} \
-                 ORDER BY score DESC LIMIT ?) AS ranked \
-                 JOIN messages_fts ON messages_fts.rowid = ranked.rowid \
-                 JOIN messages m ON m.rowid = ranked.rowid \
+                 best.score AS score FROM best \
+                 JOIN messages_fts ON messages_fts.rowid = best.rowid \
+                 JOIN messages m ON m.rowid = best.rowid \
                  JOIN sessions s ON s.harness = m.harness AND s.session_id = m.session_id \
                  WHERE messages_fts MATCH ? \
-                 ORDER BY ranked.score DESC, s.updated_at DESC, s.session_id",
+                 ORDER BY best.score DESC, s.updated_at DESC, s.session_id",
             );
 
-            let mut stmt = db::query_as::<_, SearchRow>(sqlx::AssertSqlSafe(sql))
-                .bind(open.to_string())
-                .bind(close.to_string())
-                .bind(open.to_string())
-                .bind(close.to_string())
-                .bind(expr.clone());
+            let mut stmt = db::query_as::<_, SearchRow>(sqlx::AssertSqlSafe(sql)).bind(expr.clone());
             if let Some(harness) = harness {
                 stmt = stmt.bind(harness as i64);
             }
-            stmt = stmt.bind(candidates).bind(expr);
+            if limit != 0 {
+                stmt = stmt.bind(i64::from(limit));
+            }
+            stmt = stmt
+                .bind(open.to_string())
+                .bind(close.to_string())
+                .bind(open.to_string())
+                .bind(close.to_string())
+                .bind(expr);
 
             let highlighter = TextHighlighter::default();
-            let mut seen = std::collections::HashSet::new();
-            let mut yielded = 0u32;
             let mut rows = stmt.fetch(&pool);
             while let Some(row) = rows.try_next().await? {
-                if !seen.insert((row.session.harness, row.session.session_id.clone())) {
-                    continue;
-                }
                 yield SessionMatch {
                     session: Self::session_from_row(row.session)?,
                     title: highlighter.as_highlighted(row.title_hl),
                     preview: highlighter.as_highlighted(row.preview_hl),
                     score: row.score,
                 };
-                yielded += 1;
-                if limit != 0 && yielded >= limit {
-                    break;
-                }
             }
         }
     }
@@ -1162,6 +1173,25 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn a_chatty_session_never_crowds_out_others() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let chatty = handle(HarnessKind::ClaudeCode, "chatty");
+        for i in 0..40 {
+            db.append(&message_in(&chatty, i, "shared keyword")).await.unwrap();
+        }
+        let quiet = handle(HarnessKind::ClaudeCode, "quiet");
+        db.append(&message_in(&quiet, 100, "shared keyword")).await.unwrap();
+
+        let two: Vec<_> = db.search("keyword", None, 2).try_collect().await.unwrap();
+        assert_eq!(two.len(), 2, "ranking is per session: one chatty session takes one slot");
+        assert!(
+            two.iter().any(|m| m.session.handle == quiet),
+            "the single-message session must not be dropped"
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn search_highlights_the_matching_preview() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         db.append(&message_in(&sample_handle(), 0, "the distinctive marker word")).await.unwrap();
@@ -1214,5 +1244,26 @@ mod tests {
 
         db.reindex().await.unwrap();
         assert_eq!(search(&db, "unique-c").await.len(), 1, "reindex fills the suffix gap");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_renamed_session_is_searchable_by_its_new_title() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        let mut message = message_in(&session, 0, "unrelated body text");
+        message.session_title = Some("AlphaTitle".to_owned());
+        db.append(&message).await.unwrap();
+        assert_eq!(search(&db, "AlphaTitle").await.len(), 1, "the original title is searchable");
+
+        db.record_session_meta(&session, &SessionMeta {
+            title: Some("BetaTitle".to_owned()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(search(&db, "BetaTitle").await.len(), 1, "the new title becomes searchable");
+        assert!(search(&db, "AlphaTitle").await.is_empty(), "the retired title no longer matches");
     }
 }
