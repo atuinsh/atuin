@@ -67,7 +67,7 @@ impl Sink {
         sanitize_message(&mut msg);
         let mut pending = self.pending_projection.lock().await;
         if let Some(previous) = pending.as_ref() {
-            self.sidecar.append(previous).await?;
+            self.project_and_broadcast(previous).await?;
             *pending = None;
         }
         // Dedup gate: if this logical message is already projected it is already in the record
@@ -100,8 +100,6 @@ impl Sink {
             }
         }
 
-        let started = self.sidecar.get_session(&msg.session).await?.is_none();
-
         // Write the record store first: it is the synced source of truth and the sidecar is a
         // pure projection of it. If the sidecar write fails afterwards a later rebuild repairs it;
         // the reverse ordering could strand a message in the sidecar only -- lost on rebuild and
@@ -109,12 +107,15 @@ impl Sink {
         self.records.push(&msg).await?;
 
         *pending = Some(msg.clone());
-        let appended = self.sidecar.append(&msg).await?;
+        let appended = self.project_and_broadcast(&msg).await?;
         *pending = None;
-        if appended != Appended::New {
-            return Ok(Appended::Duplicate);
-        }
+        drop(pending);
+        Ok(appended)
+    }
 
+    async fn project_and_broadcast(&self, msg: &Message) -> Result<Appended, AppendError> {
+        let started = self.sidecar.get_session(&msg.session).await?.is_none();
+        let appended = self.sidecar.append(msg).await?;
         if self.tail.receiver_count() > 0 {
             if let Some(session) = self.sidecar.get_session(&msg.session).await? {
                 let event = if started {
@@ -124,10 +125,10 @@ impl Sink {
                 };
                 let _ = self.tail.send(event);
             }
-            let _ = self.tail.send(SessionTailEvent::Message(msg));
+            let _ = self.tail.send(SessionTailEvent::Message(msg.clone()));
         }
 
-        Ok(Appended::New)
+        Ok(appended)
     }
 
     pub(crate) async fn record_session_meta(
@@ -189,18 +190,26 @@ pub struct AiHarnessSessionCapture {
 
 impl AiHarnessSessionCapture {
     #[must_use]
-    pub fn open(records: AiSessionStore, sidecar: AiSessionDatabase, capture: bool) -> Self {
+    /// `recovered` must only be true after the record store has successfully rebuilt the sidecar.
+    /// Failed recovery leaves existing sessions readable, but disables capture and import until
+    /// restart so missing projections cannot cause duplicate records or reasoning counts.
+    pub fn open(
+        records: AiSessionStore,
+        sidecar: AiSessionDatabase,
+        capture: bool,
+        recovered: bool,
+    ) -> Self {
         let sink = Arc::new(Sink::new(records, sidecar));
         // Capture is opt-in. When disabled we still open the sidecar and serve existing sessions,
         // but never spawn the listeners that copy new transcripts into the synced record store.
-        let engine = if capture {
+        let engine = if capture && recovered {
             SessionCaptureEngine::spawn(&sink)
         } else {
             SessionCaptureEngine::nop()
         };
         Self {
             sink,
-            persistent: true,
+            persistent: recovered,
             _engine: engine,
         }
     }
@@ -225,8 +234,8 @@ impl AiHarnessSessionCapture {
         }
     }
 
-    /// Whether a persistent session store backs this facade. `false` is the degraded nop mode
-    /// installed when the store failed to open, where capture and import do nothing.
+    /// Whether the persistent session store is ready for capture and import. `false` means
+    /// opening or recovering the store failed; any available projected sessions remain readable.
     #[must_use]
     pub fn is_available(&self) -> bool {
         self.persistent
@@ -462,6 +471,7 @@ mod tests {
             .build();
         let sidecar = AiSessionDatabase::open(&sidecar_path).await.unwrap();
         let sink = Sink::new(records.clone(), sidecar.clone());
+        let mut tail = sink.tail.subscribe();
         let path = if fail_projection {
             &sidecar_path
         } else {
@@ -491,6 +501,18 @@ mod tests {
         assert!(sink.append(message("first")).await.is_err());
         atuin_common::db::query("DROP TRIGGER fail_write").execute(fault.pool()).await.unwrap();
         sink.append(message("second")).await.unwrap();
+        let mut delivered = Vec::new();
+        while let Ok(event) = tail.try_recv() {
+            if let SessionTailEvent::Message(msg) = event {
+                delivered.push(msg.source_id.to_string());
+            }
+        }
+        let expected = if fail_projection {
+            vec!["first", "second"]
+        } else {
+            vec!["second"]
+        };
+        assert_eq!(delivered, expected);
         drop(sink);
         // No in-memory dedup state survives this restart.
         let sink = Sink::new(records.clone(), sidecar);
@@ -509,6 +531,57 @@ mod tests {
             }
         }
         assert_eq!(counts, vec![185]);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn incomplete_startup_recovery_disables_writers_until_repaired() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.db");
+        let records = mem_store().await;
+        let sidecar = AiSessionDatabase::open(&path).await.unwrap();
+        let mut msg = sample_message();
+        msg.turn_id = Some("call".to_owned());
+        msg.content = vec![Content::ReasoningSummary { tokens: Some(42) }];
+        // Simulate a crash after the record commit but before sidecar projection.
+        records.push(&msg).await.unwrap();
+        let fault =
+            atuin_common::db::sqlite::Sqlite::builder(path.as_os_str()).open().await.unwrap();
+        atuin_common::db::query(
+            "CREATE TRIGGER fail_write BEFORE INSERT ON messages BEGIN SELECT RAISE(FAIL, \
+             'injected failure'); END",
+        )
+        .execute(fault.pool())
+        .await
+        .unwrap();
+        let recovered = records.build(&sidecar).await.is_ok();
+        assert!(!recovered);
+        let capture =
+            AiHarnessSessionCapture::open(records.clone(), sidecar.clone(), false, recovered);
+        assert!(!capture.persistent);
+        let mut import = Box::pin(capture.import(None));
+        assert!(matches!(import.next().await.unwrap(), ImportProgress::Finished {
+            imported: 0,
+            ..
+        }));
+        assert!(import.next().await.is_none());
+        drop(capture);
+        atuin_common::db::query("DROP TRIGGER fail_write").execute(fault.pool()).await.unwrap();
+        records.build(&sidecar).await.unwrap();
+        let capture = AiHarnessSessionCapture::open(records, sidecar, false, true);
+        msg.id = RecordId(atuin_common::utils::uuid_v7());
+        msg.source_id = "later".to_owned().into();
+        capture.sink.append(msg.clone()).await.unwrap();
+        let mut rows = Box::pin(capture.messages(&msg.session));
+        let mut counts = Vec::new();
+        while let Some(row) = rows.next().await {
+            for block in row.unwrap().content {
+                if let Content::ReasoningSummary { tokens: Some(n) } = block {
+                    counts.push(n);
+                }
+            }
+        }
+        assert_eq!(counts, vec![42]);
     }
 
     #[rstest]

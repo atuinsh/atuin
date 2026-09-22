@@ -128,16 +128,18 @@ impl AiSessionStore {
     pub async fn build(&self, db: &AiSessionDatabase) -> Result<(), BuildError> {
         let records = self.store.all_tagged(&RecordTag::AiSession).await?;
 
+        let mut failure = None;
         for record in records {
             let id = record.id;
-            // A single bad record must not abort the boot reprojection: propagating the error here
-            // would strand every later record out of the sidecar until a future clean boot.
+            // Continue repairing later rows, but report incomplete recovery so callers do not
+            // enable capture against a projection missing already-persisted messages/counts.
             if let Err(err) = self.decode_and_append(record, db).await {
                 warn!(?err, id = %id.0, "failed to append ai-session record to sidecar, skipping");
+                failure = Some(err);
             }
         }
 
-        Ok(())
+        failure.map_or(Ok(()), Err)
     }
 
     pub async fn incremental_build(&self, db: &AiSessionDatabase, ids: &[RecordId]) {
