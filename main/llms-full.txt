@@ -210,13 +210,13 @@ cargo install atuin --locked
 brew install atuin
 ```
 
-Atuin is also available in [MacPorts](https://ports.macports.org/port/atuin/)
+Atuin is also available in [MacPorts](https://ports.macports.org/port/atuin/):
 
 ```
 sudo port install atuin
 ```
 
-Atuin is also installable using [mise](https://github.com/jdx/mise)
+Atuin is also installable using [mise](https://github.com/jdx/mise):
 
 ```
 mise use -g atuin@latest
@@ -228,22 +228,10 @@ This repository is a flake, and can be installed using `nix profile`:
 nix profile install "github:atuinsh/atuin"
 ```
 
-Atuin is also available in [nixpkgs](https://github.com/NixOS/nixpkgs):
-
-```
-nix-env -f '<nixpkgs>' -iA atuin
-```
-
 Atuin is available in the Arch Linux [extra repository](https://archlinux.org/packages/extra/x86_64/atuin/):
 
 ```
 pacman -S atuin
-```
-
-Atuin is available in the Void Linux [repository](https://github.com/void-linux/void-packages/tree/master/srcpkgs/atuin):
-
-```
-sudo xbps-install atuin
 ```
 
 Atuin is available in the Termux package repository:
