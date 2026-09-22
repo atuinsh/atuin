@@ -4,9 +4,9 @@ use futures::{Stream, TryStreamExt};
 use serde::Deserialize;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use tokio::sync::watch;
 use typed_builder::TypedBuilder;
 
-use crate::fs::tail::{Anchor, ReadMode, Tail};
 use crate::fs::tree_watcher::{NodeContext, TreeWatcher};
 use crate::harnesstools::codex::Codex;
 use crate::harnesstools::session::model::{
@@ -62,7 +62,9 @@ pub struct CodexListener {
 }
 
 impl CodexListener {
-    fn accept(ctx: &NodeContext) -> Option<CodexSession> {
+    /// The session for an accepted file, paired with the change signal the watcher keeps alive
+    /// for as long as the file exists.
+    fn accept(ctx: &NodeContext) -> Option<(CodexSession, watch::Sender<()>)> {
         let path = ctx.path();
         let name = path.file_name()?.to_string_lossy();
         if !ctx.is_file() || !name.starts_with("rollout-") || !name.ends_with(".jsonl") {
@@ -73,7 +75,13 @@ impl CodexListener {
         groups.truncate(5);
         groups.reverse();
         let id = groups.join("-");
-        Some(CodexSession::open(SessionId::from(id), path.to_path_buf()))
+        let (signal, rx) = watch::channel(());
+        let session = CodexSession {
+            id: SessionId::from(id),
+            path: path.to_path_buf(),
+            changes: Some(rx),
+        };
+        Some((session, signal))
     }
 }
 
@@ -85,10 +93,9 @@ impl Listener for CodexListener {
         async_stream::stream! {
             let (tx, rx) = flume::unbounded::<CodexSession>();
             let _watcher = match TreeWatcher::builder().recursive(true).watch(&root, move |ctx| {
-                if let Some(session) = Self::accept(&ctx) {
-                    let _ = tx.send(session);
-                }
-                None::<()>
+                let (session, signal) = Self::accept(&ctx)?;
+                let _ = tx.send(session);
+                Some(signal)
             }) {
                 Ok(watcher) => watcher,
                 Err(err) => {
@@ -107,12 +114,19 @@ impl Listener for CodexListener {
 pub struct CodexSession {
     id: SessionId,
     path: PathBuf,
+    /// Wakes [`messages`](Session::messages) on each change to the file; `None` reads it once.
+    changes: Option<watch::Receiver<()>>,
 }
 
 impl CodexSession {
+    /// A session over the file as it stands: [`messages`](Session::messages) ends at its end.
     #[must_use]
     pub fn open(id: SessionId, path: PathBuf) -> Self {
-        Self { id, path }
+        Self {
+            id,
+            path,
+            changes: None,
+        }
     }
 
     #[must_use]
@@ -129,15 +143,14 @@ impl Session for CodexSession {
     }
 
     fn messages(self) -> impl Stream<Item = Result<CodexMessage, MessageError>> + Send + 'static {
-        jsonl::tail::from_path::<CodexMessage>(self.path).map_err(MessageError::from)
+        jsonl::follow::<CodexMessage>(self.path, self.changes).map_err(MessageError::from)
     }
 
     fn meta(&self) -> impl std::future::Future<Output = Result<SessionMeta, MessageError>> + Send {
         let path = self.path.clone();
         async move {
-            let tail = Tail::builder().path(path).read(ReadMode::Once(Anchor::Beginning)).build();
             let messages: Vec<CodexMessage> =
-                jsonl::tail::from_tail(tail).map_err(MessageError::from).try_collect().await?;
+                jsonl::read_all(path).map_err(MessageError::from).try_collect().await?;
             let cwd = messages.iter().find_map(Message::cwd);
             let model = messages.iter().find_map(Message::model);
             Ok(SessionMeta {
@@ -262,6 +275,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::futures::stream::timed_next;
     use crate::harnesstools::session::model::{Content, Role};
     use crate::harnesstools::session::{Message, Session, Sessions};
 
@@ -413,8 +427,8 @@ mod tests {
             })
             .to_string(),
         ]
-        // Trailing newline required: messages() follows the file, and a following tail withholds
-        // an unterminated final line (a real session ends every record with a newline).
+        // Trailing newline required: messages() withholds an unterminated final line until a
+        // later write completes it (a real session ends every record with a newline).
         .join("\n")
             + "\n";
         std::fs::write(&path, body).unwrap();
@@ -476,6 +490,73 @@ mod tests {
         .expect("watch() did not emit a session within 10s")
         .unwrap();
         assert_eq!(seen, vec![SessionId::from(sid.to_owned())]);
+    }
+
+    fn rollout(dir: &Path) -> PathBuf {
+        let path =
+            dir.join("rollout-2026-09-19T00-00-00-0a1b2c3d-4e5f-6789-abcd-ef0123456789.jsonl");
+        std::fs::write(
+            &path,
+            serde_json::json!({"type": "session_meta", "payload": {"id": "th1"}}).to_string()
+                + "\n",
+        )
+        .unwrap();
+        path
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn messages_yields_lines_appended_after_discovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = rollout(dir.path());
+
+        let listener =
+            CodexSessions::builder().root(dir.path().to_path_buf()).build().listener().unwrap();
+        // The watch stream owns the watcher: it must outlive the message stream.
+        let mut sessions = std::pin::pin!(listener.watch());
+        let session = timed_next(&mut sessions, 10).await.unwrap().unwrap();
+        let mut messages = std::pin::pin!(session.messages());
+        assert!(timed_next(&mut messages, 10).await.unwrap().is_ok());
+
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        std::io::Write::write_all(
+            &mut file,
+            (serde_json::json!({
+                "type": "message",
+                "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+            })
+            .to_string()
+                + "\n")
+                .as_bytes(),
+        )
+        .unwrap();
+        drop(file);
+        assert_eq!(timed_next(&mut messages, 10).await.unwrap().unwrap().role(), Role::User);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn messages_ends_when_the_session_file_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = rollout(dir.path());
+
+        let listener =
+            CodexSessions::builder().root(dir.path().to_path_buf()).build().listener().unwrap();
+        let mut sessions = std::pin::pin!(listener.watch());
+        let session = timed_next(&mut sessions, 10).await.unwrap().unwrap();
+        let mut messages = std::pin::pin!(session.messages());
+        assert!(timed_next(&mut messages, 10).await.unwrap().is_ok());
+
+        std::fs::remove_file(&path).unwrap();
+        // A change signalled for the vanished path may surface as an I/O error first; the
+        // stream must still end once the watcher drops the file's handler.
+        loop {
+            match timed_next(&mut messages, 10).await {
+                None => break,
+                Some(Err(_)) => {}
+                Some(Ok(m)) => panic!("unexpected message after removal: {m:?}"),
+            }
+        }
     }
 
     #[rstest]

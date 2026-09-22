@@ -193,46 +193,6 @@ impl Backoff {
             }
         }
     }
-
-    /// A resettable sequence of jittered delays following this backoff schedule.
-    #[must_use]
-    pub fn schedule(self) -> Schedule {
-        Schedule::new(self)
-    }
-}
-
-/// A stateful, jittered delay sequence produced by [`Backoff::schedule`].
-#[derive(Debug, Clone, Copy)]
-pub struct Schedule {
-    backoff: Backoff,
-    current: Duration,
-}
-
-impl Schedule {
-    fn new(backoff: Backoff) -> Self {
-        let current = match backoff {
-            Backoff::Linear(period) => period,
-            Backoff::Exponential { initial, max, .. } => initial.min(max),
-        };
-        Self { backoff, current }
-    }
-
-    /// The next delay to wait, advancing the schedule.
-    pub fn next_delay(&mut self) -> Duration {
-        let delay = match self.backoff {
-            Backoff::Linear(_) => jittered(self.current),
-            Backoff::Exponential { max, .. } => jittered(self.current).min(max),
-        };
-        if let Backoff::Exponential { max, factor, .. } = self.backoff {
-            self.current = self.current.saturating_mul(factor.get()).min(max);
-        }
-        delay
-    }
-
-    /// Reset the schedule to its initial delay.
-    pub fn reset(&mut self) {
-        *self = Self::new(self.backoff);
-    }
 }
 
 #[cfg(test)]
@@ -307,36 +267,5 @@ mod tests {
         let result: Result<(), u32> =
             backoff.retry_blocking(|| ControlFlow::Continue(7), Duration::from_millis(20));
         assert_eq!(result, Err(7));
-    }
-
-    fn millis(delay: Duration) -> u64 {
-        u64::try_from(delay.as_millis()).expect("test delay fits u64")
-    }
-
-    #[rstest]
-    fn schedule_grows_then_saturates_within_jitter() {
-        let backoff = Backoff::Exponential {
-            initial: Duration::from_millis(100),
-            max: Duration::from_millis(400),
-            factor: NonZeroU32::new(2).expect("2 is nonzero"),
-        };
-        let mut schedule = backoff.schedule();
-        for expected in [100u64, 200, 400, 400] {
-            let got = millis(schedule.next_delay());
-            let (lo, hi) = (expected * 9 / 10, (expected * 11 / 10).min(400));
-            assert!(got >= lo && got <= hi, "delay {got}ms not within [{lo},{hi}]ms");
-        }
-        schedule.reset();
-        let got = millis(schedule.next_delay());
-        assert!((90..=110).contains(&got), "reset delay {got}ms not near initial");
-    }
-
-    #[rstest]
-    fn linear_schedule_is_constant_within_jitter() {
-        let mut schedule = Backoff::Linear(Duration::from_millis(100)).schedule();
-        for _ in 0..4 {
-            let got = millis(schedule.next_delay());
-            assert!((90..=110).contains(&got), "delay {got}ms not within jitter of 100ms");
-        }
     }
 }
