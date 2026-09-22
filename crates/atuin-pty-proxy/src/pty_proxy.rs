@@ -201,7 +201,8 @@ fi
 /// Preamble for fish.
 // Unlike other shells, we only test whether stdout is a tty rather than also checking stdin,
 // because we instruct users to pipe `atuin init fish` to `source`, which puts the script itself
-// on stdin, making it necessarily not a tty.
+// on stdin, making it necessarily not a tty. This is also why we do `</dev/tty` when invoking
+// `atuin pty-proxy` if stdin is not a terminal.
 const FISH_INIT: &str = r#"if status is-interactive; and test -t 1
     and not set -q __atuin_pty_proxy_owns_tty
 
@@ -213,7 +214,11 @@ const FISH_INIT: &str = r#"if status is-interactive; and test -t 1
     else if test "$__atuin_pty_proxy_answer" = 1
         set -g __atuin_pty_proxy_owns_tty 1
     else if not set -q ATUIN_PTY_PROXY_FAILED
-        exec atuin pty-proxy --shell (status fish-path)
+        if test -t 0
+            exec atuin pty-proxy --shell (status fish-path)
+        else
+            exec atuin pty-proxy --shell (status fish-path) </dev/tty
+        end
     end
 end
 "#;
@@ -240,6 +245,7 @@ const NU_INIT: &str = r#"if (is-terminal --stdin) and (is-terminal --stdout) and
 
 #[cfg(test)]
 mod tests {
+    use regex::Regex;
     use rstest::rstest;
 
     use super::{Shell, init_script, shell_from_name};
@@ -307,5 +313,20 @@ mod tests {
 
         let nu = init_script(Shell::Nu);
         assert!(nu.contains("exec atuin pty-proxy --shell $nu.current-exe"));
+    }
+
+    #[rstest]
+    fn fish_init_execs_the_proxy_with_the_terminal_on_stdin() {
+        // When a script is piped into `source` in fish, stdin is not a terminal. `atuin pty-proxy`
+        // expects stdin to be a terminal, so we need to make sure we explicitly connect it to one.
+        let exec = r"exec atuin pty-proxy --shell \(status fish-path\)";
+        let branch =
+            Regex::new(&format!(r"if test -t 0\s+{exec}\s+else\s+{exec} </dev/tty\s+end")).unwrap();
+
+        assert!(
+            branch.is_match(init_script(Shell::Fish)),
+            "fish init: {}",
+            init_script(Shell::Fish)
+        );
     }
 }
