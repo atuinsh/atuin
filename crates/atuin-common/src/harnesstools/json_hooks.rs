@@ -120,17 +120,24 @@ fn add_hook_entries(
 
 /// Build the shell command that runs `atuin hook <harness>` through `executable`.
 fn hook_command(executable: &Path, harness: &str) -> Result<String, InstallHookError> {
-    let executable = executable
+    let executable_str = executable
         .to_str()
         .ok_or_else(|| InstallHookError::NonUtf8Executable(executable.to_owned()))?;
 
+    // shlex quotes for POSIX shells, but a Windows harness may run the hook through cmd.exe, which
+    // only understands double quotes.
     #[cfg(windows)]
-    let executable = format!(r#""{executable}""#);
+    let command = format!(r#""{executable_str}" hook {harness}"#);
 
     #[cfg(not(windows))]
-    let executable = format!("'{}'", executable.replace('\'', "'\"'\"'"));
+    let command = shlex::try_join([executable_str, "hook", harness]).map_err(|source| {
+        InstallHookError::UnquotableExecutable {
+            path: executable.to_owned(),
+            source,
+        }
+    })?;
 
-    Ok(format!("{executable} hook {harness}"))
+    Ok(command)
 }
 
 /// Whether `command` runs `atuin hook <harness>`, through any path to the atuin executable.
@@ -155,7 +162,7 @@ mod tests {
 
     #[rstest]
     fn add_hook_entries_updates_legacy_commands_without_duplicates() {
-        let command = "'/opt/atuin/bin/atuin' hook claude-code";
+        let command = "/opt/atuin/bin/atuin hook claude-code";
         let mut hooks = json!({
             "PreToolUse": [{
                 "matcher": "Bash",
@@ -201,10 +208,16 @@ mod tests {
 
     #[cfg(not(windows))]
     #[rstest]
-    fn hook_command_quotes_posix_executable_paths() {
-        let command = hook_command(Path::new("/opt/Atuin's bin/atuin"), "codex").unwrap();
+    #[case::plain("/opt/atuin/bin/atuin", "/opt/atuin/bin/atuin hook codex")]
+    #[case::apostrophe("/opt/Atuin's bin/atuin", r#""/opt/Atuin's bin/atuin" hook codex"#)]
+    #[case::metacharacters(r#"/opt/"q"/$HOME/atuin"#, r#"'/opt/"q"/$HOME/atuin' hook codex"#)]
+    fn hook_command_quotes_posix_executable_paths(
+        #[case] executable: &str,
+        #[case] expected: &str,
+    ) {
+        let command = hook_command(Path::new(executable), "codex").unwrap();
 
-        assert_eq!(command, "'/opt/Atuin'\"'\"'s bin/atuin' hook codex");
+        assert_eq!(command, expected);
         assert!(invokes_atuin_hook(&command, "codex"));
     }
 
