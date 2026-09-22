@@ -166,8 +166,6 @@ impl Component for SearchComponent {
                     Self::rebuild_frecency(handle, &self.index).await;
                 }
             }
-            // Events we don't care about
-            DaemonEvent::ShutdownRequested => {}
         }
         Ok(())
     }

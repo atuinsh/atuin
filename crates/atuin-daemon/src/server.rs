@@ -15,7 +15,7 @@ const SOCKET_KEEPALIVE_INTERVAL: std::time::Duration = std::time::Duration::from
 /// Run the gRPC server with the given services.
 ///
 /// This starts the gRPC server in the background and returns immediately.
-/// The server will shut down when a ShutdownRequested event is received.
+/// The server will shut down when shutdown is requested through the handle.
 #[cfg(unix)]
 #[allow(clippy::unused_async, reason = "needs to match the cfg(not(unix)) version")]
 pub async fn run_grpc_server(
@@ -103,41 +103,33 @@ pub async fn run_grpc_server(
 
     // Create shutdown signal from daemon handle
     let shutdown_signal = async move {
-        let mut rx = handle.subscribe();
-        loop {
-            use crate::DaemonEvent;
-
-            match rx.recv().await {
-                Ok(DaemonEvent::ShutdownRequested) => break,
-                Ok(_) => {}
-                Err(_) => break, // Channel closed
-            }
-        }
+        handle.shutdown_requested().await;
         if let Some(handle) = socket_updater {
             handle.abort();
         }
         if let Some(path) = cleanup_path {
-            eprintln!("Removing socket...");
+            tracing::info!("removing socket {}", path.display());
             if let Err(e) = std::fs::remove_file(path)
                 && e.kind() != std::io::ErrorKind::NotFound
             {
-                eprintln!("failed to remove socket: {e}");
+                tracing::warn!("failed to remove socket: {e}");
             }
         }
-        eprintln!("Shutting down gRPC server...");
+        tracing::info!("shutting down gRPC server");
     };
 
     // Spawn the server in the background
     tokio::spawn(async move {
         use tonic::transport::Server;
 
-        if let Err(e) = Server::builder()
+        match Server::builder()
             .add_service(history_service)
             .add_service(search_service)
             .serve_with_incoming_shutdown(uds_stream, shutdown_signal)
             .await
         {
-            tracing::error!("gRPC server error: {e}");
+            Ok(()) => tracing::info!("gRPC server stopped"),
+            Err(e) => tracing::error!("gRPC server error: {e}"),
         }
     });
 
@@ -165,28 +157,20 @@ pub async fn run_grpc_server(
 
     // Create shutdown signal from daemon handle
     let shutdown_signal = async move {
-        use crate::DaemonEvent;
-
-        let mut rx = handle.subscribe();
-        loop {
-            match rx.recv().await {
-                Ok(DaemonEvent::ShutdownRequested) => break,
-                Ok(_) => {}
-                Err(_) => break, // Channel closed
-            }
-        }
-        eprintln!("Shutting down gRPC server...");
+        handle.shutdown_requested().await;
+        tracing::info!("shutting down gRPC server");
     };
 
     // Spawn the server in the background
     tokio::spawn(async move {
-        if let Err(e) = Server::builder()
+        match Server::builder()
             .add_service(history_service)
             .add_service(search_service)
             .serve_with_incoming_shutdown(tcp_stream, shutdown_signal)
             .await
         {
-            tracing::error!("gRPC server error: {e}");
+            Ok(()) => tracing::info!("gRPC server stopped"),
+            Err(e) => tracing::error!("gRPC server error: {e}"),
         }
     });
 

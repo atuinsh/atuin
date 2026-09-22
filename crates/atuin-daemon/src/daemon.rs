@@ -20,6 +20,7 @@ use atuin_domain::caps::CapClient;
 use enum_dispatch::enum_dispatch;
 use eyre::{Context, Result};
 use tokio::sync::{RwLock, broadcast};
+use tokio_util::sync::CancellationToken;
 
 use crate::components::SearchComponent;
 use crate::events::DaemonEvent;
@@ -35,6 +36,9 @@ use crate::events::DaemonEvent;
 pub struct DaemonState {
     // Event bus
     event_tx: broadcast::Sender<DaemonEvent>,
+
+    // Cancelled once shutdown is requested
+    shutdown: CancellationToken,
 
     // Configuration (mutable - can be reloaded)
     settings: RwLock<Settings>,
@@ -109,7 +113,12 @@ impl DaemonHandle {
 
     /// Request graceful shutdown of the daemon.
     pub fn shutdown(&self) {
-        self.emit(DaemonEvent::ShutdownRequested);
+        self.state.shutdown.cancel();
+    }
+
+    /// Resolves once shutdown has been requested.
+    pub async fn shutdown_requested(&self) {
+        self.state.shutdown.cancelled().await;
     }
 
     // ---- Configuration ----
@@ -269,7 +278,7 @@ pub enum AnyComponent {
 /// 1. Wait for an event on the bus
 /// 2. Dispatch the event to all components (in registration order)
 /// 3. Components may emit new events in response
-/// 4. Repeat until `ShutdownRequested` is received
+/// 4. Repeat until shutdown is requested
 ///
 /// Events emitted during handling are queued and processed in subsequent
 /// iterations, ensuring the loop eventually drains.
@@ -310,28 +319,14 @@ impl Daemon {
 
     /// Run the daemon event loop.
     ///
-    /// This processes events until a ShutdownRequested event is received.
+    /// This processes events until shutdown is requested, abandoning any event still being handled.
     /// Components must be started first via `start_components()`.
     pub async fn run_event_loop(&mut self) -> Result<()> {
-        let mut event_rx = self.handle.subscribe();
-        loop {
-            match event_rx.recv().await {
-                Ok(DaemonEvent::ShutdownRequested) => {
-                    tracing::info!("shutdown requested, stopping daemon");
-                    break;
-                }
-                Ok(event) => {
-                    tracing::debug!(?event, "processing event");
-                    self.dispatch_event(&event).await;
-                }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(skipped = n, "event receiver lagged, some events were dropped");
-                }
-                Err(broadcast::error::RecvError::Closed) => {
-                    tracing::info!("event bus closed, stopping daemon");
-                    break;
-                }
-            }
+        let handle = self.handle.clone();
+        tokio::select! {
+            biased;
+            () = handle.shutdown_requested() => tracing::info!("shutdown requested, stopping daemon"),
+            () = self.dispatch_events() => tracing::info!("event bus closed, stopping daemon"),
         }
         Ok(())
     }
@@ -363,6 +358,22 @@ impl Daemon {
         self.stop_components().await;
         tracing::info!("daemon stopped");
         Ok(())
+    }
+
+    async fn dispatch_events(&mut self) {
+        let mut event_rx = self.handle.subscribe();
+        loop {
+            match event_rx.recv().await {
+                Ok(event) => {
+                    tracing::debug!(?event, "processing event");
+                    self.dispatch_event(&event).await;
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(skipped = n, "event receiver lagged, some events were dropped");
+                }
+                Err(broadcast::error::RecvError::Closed) => return,
+            }
+        }
     }
 
     async fn dispatch_event(&mut self, event: &DaemonEvent) {
@@ -460,6 +471,7 @@ impl DaemonBuilder {
         // Create the shared state
         let state = Arc::new(DaemonState {
             event_tx,
+            shutdown: CancellationToken::new(),
             settings: RwLock::new(self.settings),
             encryption_key,
             history_db,
@@ -474,5 +486,89 @@ impl DaemonBuilder {
             components: self.components,
             handle,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use rstest::{fixture, rstest};
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::search::SearchIndex;
+
+    const STOP_TIMEOUT: Duration = Duration::from_secs(5);
+
+    #[fixture]
+    async fn daemon() -> (Daemon, Arc<RwLock<SearchIndex>>, TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let settings: Settings = Settings::builder()
+            .unwrap()
+            .set_override("key_path", tmp.path().join("key").to_str().unwrap())
+            .unwrap()
+            .set_override("sync_address", "http://127.0.0.1:1")
+            .unwrap()
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        let history_db =
+            HistoryDatabase::new(tmp.path().join("history.db"), Duration::from_secs(5))
+                .await
+                .unwrap();
+        let store =
+            SqliteStore::new(tmp.path().join("records.db"), Duration::from_secs(5)).await.unwrap();
+        let search = SearchComponent::new();
+        let index = search.index();
+        let daemon =
+            Daemon::builder(settings).store(store).history_db(history_db).component(search).build();
+        (daemon.unwrap(), index, tmp)
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn event_loop_stops_when_shutdown_is_followed_by_an_event_burst(
+        #[future(awt)] daemon: (Daemon, Arc<RwLock<SearchIndex>>, TempDir),
+    ) {
+        let (mut daemon, _, _tmp) = daemon;
+        let handle = daemon.handle();
+        let event_loop = tokio::spawn(async move { daemon.run_event_loop().await });
+        tokio::task::yield_now().await;
+
+        handle.shutdown();
+        for _ in 0..256 {
+            handle.emit(DaemonEvent::SettingsReloaded);
+        }
+
+        tokio::time::timeout(STOP_TIMEOUT, event_loop)
+            .await
+            .expect("event loop ignored shutdown")
+            .unwrap()
+            .unwrap();
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn event_loop_stops_while_a_component_is_stuck(
+        #[future(awt)] daemon: (Daemon, Arc<RwLock<SearchIndex>>, TempDir),
+    ) {
+        let (mut daemon, index, _tmp) = daemon;
+        let handle = daemon.handle();
+        daemon.start_components().await.unwrap();
+        let _stuck = index.write().await;
+        let event_loop = tokio::spawn(async move { daemon.run_event_loop().await });
+        tokio::task::yield_now().await;
+
+        handle.emit(DaemonEvent::SettingsReloaded);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        handle.shutdown();
+
+        tokio::time::timeout(STOP_TIMEOUT, event_loop)
+            .await
+            .expect("event loop ignored shutdown")
+            .unwrap()
+            .unwrap();
     }
 }

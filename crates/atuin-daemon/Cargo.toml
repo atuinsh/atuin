@@ -38,6 +38,7 @@ sqlx = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tokio-stream = { workspace = true, features = ["sync"] }
 tonic = { workspace = true }
 tonic-prost = { workspace = true }

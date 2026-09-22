@@ -105,17 +105,10 @@ mod unix {
         let server_handle = handle.clone();
         let search_service = search_service.build(handle.clone());
         tokio::spawn(async move {
-            let mut rx = server_handle.subscribe();
             Server::builder()
                 .add_service(search_service)
                 .serve_with_incoming_shutdown(stream, async move {
-                    loop {
-                        match rx.recv().await {
-                            Ok(atuin_daemon::DaemonEvent::ShutdownRequested) => break,
-                            Ok(_) => {}
-                            Err(_) => break,
-                        }
-                    }
+                    server_handle.shutdown_requested().await;
                 })
                 .await
                 .unwrap();

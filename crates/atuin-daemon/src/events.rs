@@ -13,8 +13,4 @@ pub enum DaemonEvent {
     // ---- Settings ----
     /// Settings have changed, components should reload if needed.
     SettingsReloaded,
-
-    // ---- Lifecycle ----
-    /// Request graceful shutdown of the daemon.
-    ShutdownRequested,
 }

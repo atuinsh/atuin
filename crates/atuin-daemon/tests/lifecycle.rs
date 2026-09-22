@@ -9,6 +9,7 @@ use std::time::Duration;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::Search;
 use atuin_common::range::PyStyleIdxRange;
+use atuin_daemon::DaemonEvent;
 use atuin_daemon::grpc::history::pb::tail_history_reply::Event;
 use atuin_daemon::search::IndexFilterMode;
 use common::{TestEnv, history};
@@ -277,6 +278,19 @@ async fn test_shutdown(#[future(awt)] env: TestEnv) {
     assert!(client.shutdown().await.unwrap());
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(client.status().await.is_err());
+}
+
+#[rstest]
+#[tokio::test]
+async fn server_keeps_serving_through_an_event_burst(#[future(awt)] env: TestEnv) {
+    env.history_client().await;
+    for _ in 0..256 {
+        env.handle.emit(DaemonEvent::SettingsReloaded);
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let mut client = env.history_client().await;
+    assert!(client.status().await.unwrap().healthy);
 }
 
 #[rstest]

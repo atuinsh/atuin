@@ -29,18 +29,16 @@ use atuin_daemon::grpc::HistoryService;
 use atuin_daemon::grpc::history::pb;
 use atuin_daemon::grpc::history::pb::history_server::HistoryServer;
 use atuin_daemon::search::{IndexFilterMode, SearchIndex};
-use atuin_daemon::{
-    Daemon, DaemonEvent, DaemonHandle, HistoryJournal, OutputCaptureEngine, SearchComponent,
-};
+use atuin_daemon::server::run_grpc_server;
+use atuin_daemon::{Daemon, DaemonHandle, HistoryJournal, OutputCaptureEngine, SearchComponent};
 use atuin_domain::record::{CmdOrigin, HostId, RecordTag};
 use corpus::{HistoryGen, Seeded};
 use easy_cast::Conv;
 use hyper_util::rt::TokioIo;
 use tempfile::TempDir;
-use tokio::net::{UnixListener, UnixStream};
+use tokio::net::UnixStream;
 use tokio::sync::{RwLock, oneshot};
-use tokio_stream::wrappers::UnixListenerStream;
-use tonic::transport::{Channel, Endpoint, Server, Uri};
+use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
 use uuid::Uuid;
 
@@ -192,25 +190,9 @@ impl TestEnvBuilder {
 
         daemon.start_components().await.unwrap();
 
-        let uds = UnixListener::bind(&socket_path).unwrap();
-        let incoming = UnixListenerStream::new(uds);
-        let server_handle = handle.clone();
-        tokio::spawn(async move {
-            let mut rx = server_handle.subscribe();
-            Server::builder()
-                .add_service(history_service)
-                .add_service(search_service)
-                .serve_with_incoming_shutdown(incoming, async move {
-                    loop {
-                        match rx.recv().await {
-                            Ok(DaemonEvent::ShutdownRequested) | Err(_) => break,
-                            Ok(_) => {}
-                        }
-                    }
-                })
-                .await
-                .unwrap();
-        });
+        run_grpc_server(settings.clone(), history_service, search_service, handle.clone())
+            .await
+            .unwrap();
         tokio::spawn(async move {
             daemon.run_event_loop().await.unwrap();
         });
