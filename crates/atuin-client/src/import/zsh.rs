@@ -68,39 +68,42 @@ impl Importer for Zsh {
                 _ => continue, // we can skip past things like invalid utf8
             };
 
-            if s.ends_with("\\\\") {
-                if let Some(s) = s.strip_suffix("\\\\") {
-                    line.push_str(s);
-                    line.push_str("\\\n");
-                }
-            } else if s.ends_with('\\') {
-                if let Some(s) = s.strip_suffix('\\') {
-                    line.push_str(s);
-                    line.push_str("\\\n");
-                }
-            } else {
+            if continues_next_line(&s) {
                 line.push_str(&s);
-                let command = std::mem::take(&mut line);
+                line.push('\n');
+                continue;
+            }
 
-                if let Some(command) = command.strip_prefix(": ") {
-                    counter += 1;
-                    h.push(parse_extended(command, counter)).await?;
-                } else {
-                    let offset = time::Duration::seconds(counter);
-                    counter += 1;
+            line.push_str(&s);
+            let command = std::mem::take(&mut line);
 
-                    let imported = History::import()
-                        // preserve ordering
-                        .timestamp(now - offset)
-                        .command(command.trim_end().to_string());
+            if let Some(command) = command.strip_prefix(": ") {
+                counter += 1;
+                h.push(parse_extended(command, counter)).await?;
+            } else {
+                let offset = time::Duration::seconds(counter);
+                counter += 1;
 
-                    h.push(imported.build().into()).await?;
-                }
+                let imported = History::import()
+                    // preserve ordering
+                    .timestamp(now - offset)
+                    .command(command.trim_end().to_string());
+
+                h.push(imported.build().into()).await?;
             }
         }
 
         Ok(())
     }
+}
+
+/// Reports whether a zsh history line continues onto the next: its final backslash escapes the
+/// newline.
+///
+/// zsh writes a literal trailing backslash doubled, so an even count is not a continuation -- `echo
+/// \\` is a complete command that prints a single `\`.
+fn continues_next_line(line: &str) -> bool {
+    line.bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 1
 }
 
 fn parse_extended(line: &str, counter: i64) -> History {
@@ -194,11 +197,13 @@ mod test {
 
     #[tokio::test]
     async fn test_parse_file() {
+        // `echo \\` ends in an even number of backslashes: a complete command
+        // that must not swallow the line after it (atuinsh/atuin#100).
         let bytes = r": 1613322469:0;cargo install atuin
 : 1613322469:10;cargo install atuin; \
 cargo update
-: 1613322469:10;cargo install atuin; \\
-cargo update
+: 1613322469:0;echo \\
+: 1613322469:0;echo hi
 : 1613322469:10;cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷
 "
         .as_bytes()
@@ -215,7 +220,8 @@ cargo update
             [
                 "cargo install atuin",
                 "cargo install atuin; \\\ncargo update",
-                "cargo install atuin; \\\ncargo update",
+                "echo \\\\",
+                "echo hi",
                 "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷",
             ],
         );
