@@ -78,6 +78,7 @@ impl FromStr for UtcOffsetSpec {
         Ok(UtcOffset::resolve_spec(s)?.into())
     }
 }
+
 impl Default for UtcOffsetSpec {
     fn default() -> Self {
         Self(UtcOffset::UTC)

@@ -46,11 +46,14 @@ pub struct Cmd {
     #[arg(long)]
     exclude_exit: Vec<i64>,
 
-    /// Only include results added before this date
+    /// Only include results added before this date.
+    ///
+    /// Read in the timezone from `--timezone` (or the configured one) unless it carries an
+    /// explicit offset; relative phrases like "yesterday 3pm" are anchored there too.
     #[arg(long, short)]
     before: Option<String>,
 
-    /// Only include results after this date
+    /// Only include results after this date; see `--before` for how it is interpreted.
     #[arg(long)]
     after: Option<String>,
 
@@ -113,7 +116,8 @@ pub struct Cmd {
     #[arg(long, short)]
     reverse: bool,
 
-    /// Display the command time in another timezone other than the configured default.
+    /// Timezone to display command times in and to interpret `--before`/`--after` in, instead
+    /// of the configured default.
     ///
     /// This option takes one of the following kinds of values:
     ///
@@ -261,6 +265,7 @@ impl Cmd {
             // An empty `--author` / `--shell` list means no filtering on that field.
             let authors = OrFilter::from_list(self.author).unwrap_or_default();
             let shells = OrFilter::from_list(self.shell).unwrap_or_default();
+            let tz = self.timezone.unwrap_or(settings.timezone);
 
             let opt_filter = OptFilters {
                 exit: &self.exit,
@@ -276,7 +281,8 @@ impl Cmd {
                 include_duplicates: self.include_duplicates,
                 authors: authors.as_slice_filter(),
                 shells: shells.as_slice_filter(),
-                timezone: settings.timezone,
+                timezone: tz,
+                dialect: settings.dialect,
             };
 
             let mut entries = run_non_interactive(settings, opt_filter, &query, &db).await?;
@@ -302,7 +308,6 @@ impl Cmd {
                 }
             } else {
                 let format = self.format.as_deref().unwrap_or(settings.history_format.as_str());
-                let tz = self.timezone.unwrap_or(settings.timezone);
 
                 super::history::print_list(
                     &entries,

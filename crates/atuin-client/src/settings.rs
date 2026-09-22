@@ -171,8 +171,9 @@ pub enum ExitMode {
 
 // FIXME: Can use upstream Dialect enum if https://github.com/stevedonovan/chrono-english/pull/16 is merged
 // FIXME: Above PR was merged, but dependency was changed to interim (fork of chrono-english) in the ... interim
-#[derive(Clone, Debug, Deserialize, Copy, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Copy, Serialize)]
 pub enum Dialect {
+    #[default]
     #[serde(rename = "us")]
     Us,
 
