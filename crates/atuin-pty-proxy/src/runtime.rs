@@ -66,11 +66,6 @@ enum Error {
 }
 
 /// Query the active terminal size, including pixel dimensions.
-///
-/// Uses `window_size()` (rather than `size()`) so the child pty inherits the
-/// controlling terminal's pixel width/height; programs inside (e.g. image.nvim)
-/// derive the cell size in pixels via TIOCGWINSZ from those, and inline images
-/// render too small on HiDPI terminals when they're left at 0.
 fn query_size() -> std::io::Result<PtySize> {
     let ws = terminal::window_size()?;
 
@@ -115,11 +110,15 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
         .ok();
 
     let (msg_tx, msg_rx) = mpsc::sync_channel::<Msg>(64);
-    let _parser_handle =
-        screen::spawn_parser_thread(pty_size.rows, pty_size.cols, msg_rx, screen::ParserOptions {
+    let _parser_handle = screen::spawn_parser_thread(
+        pty_size.rows,
+        pty_size.cols,
+        msg_rx,
+        screen::ParserOptions {
             command_capture: options.command_capture,
             debug_osc133: options.debug_osc133,
-        });
+        },
+    );
 
     let socket_path = if let Some((server, path)) = server_and_path {
         server.spawn(msg_tx.clone());
