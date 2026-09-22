@@ -767,6 +767,8 @@ impl AiSessionDatabase {
             }
             Content::ToolResult(result) => Self::push_json_text(out, &result.output),
             Content::Other(value) => Self::push_json_text(out, value),
+            // Activity metadata is not conversational text and adds no useful search terms.
+            Content::ReasoningSummary { .. } => {}
         }
     }
 
@@ -904,7 +906,10 @@ impl AiSessionDatabase {
             .content
             .iter()
             .filter_map(|content| match content {
-                Content::Text(text) | Content::Reasoning(text) => Some(text.as_str()),
+                Content::Text(text) | Content::Reasoning(text) => Some(text.clone()),
+                Content::ReasoningSummary { tokens } => {
+                    Some(atuin_common::harnesstools::session::model::reasoning_label(*tokens))
+                }
                 _ => None,
             })
             .collect::<Vec<_>>()

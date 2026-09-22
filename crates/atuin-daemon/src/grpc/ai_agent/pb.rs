@@ -117,6 +117,9 @@ impl From<Content> for ContentBlock {
         let block = match value {
             Content::Text(text) => Block::Text(text),
             Content::Reasoning(text) => Block::Thinking(text),
+            Content::ReasoningSummary { tokens } => {
+                Block::Thinking(atuin_common::harnesstools::session::model::reasoning_label(tokens))
+            }
             Content::ToolUse(tu) => Block::ToolCall(ToolCall {
                 id: tu.id.into(),
                 name: tu.name,

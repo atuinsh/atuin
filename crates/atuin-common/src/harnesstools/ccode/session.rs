@@ -226,9 +226,7 @@ impl CcodeMessage {
     fn block(value: &serde_json::Value) -> Content {
         match value["type"].as_str() {
             Some("text") => Content::Text(value["text"].as_str().unwrap_or_default().to_owned()),
-            Some("thinking") => {
-                Content::Reasoning(value["thinking"].as_str().unwrap_or_default().to_owned())
-            }
+            Some("thinking" | "redacted_thinking") => Content::ReasoningSummary { tokens: None },
             Some("tool_use") => Content::ToolUse(ToolUse {
                 id: ToolCallId::from(value["id"].as_str().unwrap_or_default().to_owned()),
                 name: value["name"].as_str().unwrap_or_default().to_owned(),
@@ -272,11 +270,25 @@ impl Message for CcodeMessage {
 
     fn content(&self) -> Vec<Content> {
         let raw = self.message.as_ref().map(|m| &m["content"]).or(self.content.as_ref());
-        match raw {
+        let mut content: Vec<_> = match raw {
             Some(serde_json::Value::String(text)) => vec![Content::Text(text.clone())],
             Some(serde_json::Value::Array(blocks)) => blocks.iter().map(Self::block).collect(),
             _ => Vec::new(),
+        };
+        // Usage may arrive on a later text/tool row, independently of the thinking block.
+        // The capture engine deduplicates these model-call totals across split rows.
+        let reported = self
+            .message
+            .as_ref()
+            .and_then(|m| m["usage"]["output_tokens_details"]["thinking_tokens"].as_u64());
+        if let Some(Content::ReasoningSummary { tokens }) =
+            content.iter_mut().find(|block| matches!(block, Content::ReasoningSummary { .. }))
+        {
+            *tokens = reported;
+        } else if reported.is_some_and(|n| n > 0) {
+            content.push(Content::ReasoningSummary { tokens: reported });
         }
+        content
     }
 
     fn model(&self) -> Option<String> {

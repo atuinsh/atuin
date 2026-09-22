@@ -220,6 +220,7 @@ impl PiMessage {
     fn block(value: &serde_json::Value) -> Content {
         match value["type"].as_str() {
             Some("text") => Content::Text(value["text"].as_str().unwrap_or_default().to_owned()),
+            Some("thinking") => Content::ReasoningSummary { tokens: None },
             Some("toolCall") => Content::ToolUse(ToolUse {
                 id: ToolCallId::from(value["id"].as_str().unwrap_or_default().to_owned()),
                 name: value["name"].as_str().unwrap_or_default().to_owned(),

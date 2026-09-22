@@ -28,6 +28,19 @@ pub enum Content {
     ToolUse(ToolUse),
     ToolResult(ToolResult),
     Other(serde_json::Value),
+    /// Payload-free reasoning activity. Tokens are harness-reported model-call totals,
+    /// never estimates or additional usage to add to output tokens.
+    /// Older readers that do not know this variant skip records containing it; sync peers
+    /// need a compatible version to display these newly captured messages.
+    ReasoningSummary {
+        tokens: Option<u64>,
+    },
+}
+
+/// Human-readable breadcrumb shared by transcript and RPC rendering.
+#[must_use]
+pub fn reasoning_label(tokens: Option<u64>) -> String {
+    tokens.map_or_else(|| "Reasoned".to_owned(), |n| format!("Reasoning · {n} tokens"))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -11,7 +11,7 @@ use atuin_client::ai_session::{
 };
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4::Key;
-use atuin_common::harnesstools::session::SessionMeta;
+use atuin_common::harnesstools::session::{Content, Role, SessionMeta};
 use atuin_domain::record::HostId;
 use engine::SessionCaptureEngine;
 use futures::{Stream, StreamExt};
@@ -59,9 +59,11 @@ impl Sink {
         BroadcastStream::new(self.tail.subscribe())
     }
 
-    pub(crate) async fn append(&self, msg: Message) -> Result<Appended, AppendError> {
+    pub(crate) async fn append(&self, mut msg: Message) -> Result<Appended, AppendError> {
         let _guard = self.append_lock.lock().await;
-
+        // Apply capture policy before either persistence path or the live tail. Keep structural
+        // rows (even with no content) so parent links and usage accounting remain intact.
+        sanitize_message(&mut msg);
         // Dedup gate: if this logical message is already projected it is already in the record
         // store too, so there is nothing to do. Stable source ids (see MessageEnricher::source_id)
         // make this reliable across re-captures and keep the record store free of duplicates.
@@ -102,7 +104,9 @@ impl Sink {
         meta: &SessionMeta,
     ) -> Result<(), AppendError> {
         let created = self.sidecar.get_session(handle).await?.is_none();
-        self.sidecar.record_session_meta(handle, meta).await?;
+        let mut meta = meta.clone();
+        meta.title = meta.title.map(|title| atuin_common::secrets::redact(&title).into_owned());
+        self.sidecar.record_session_meta(handle, &meta).await?;
 
         if created
             && self.tail.receiver_count() > 0
@@ -112,6 +116,36 @@ impl Sink {
         }
 
         Ok(())
+    }
+}
+
+/// Retain conversation text and payload-free tool breadcrumbs, never execution payloads.
+/// Null payloads preserve the existing wire format without storing arguments or results.
+/// This only affects new captures; existing synced records are not rewritten.
+fn sanitize_message(msg: &mut Message) {
+    let conversation = matches!(msg.role, Role::User | Role::Assistant);
+    msg.content.retain_mut(|block| match block {
+        Content::Text(text) if conversation => {
+            *text = atuin_common::secrets::redact(text).into_owned();
+            true
+        }
+        Content::ToolUse(tool) => {
+            tool.input = serde_json::Value::Null;
+            true
+        }
+        Content::ToolResult(result) => {
+            result.output = serde_json::Value::Null;
+            true
+        }
+        Content::Reasoning(_) => {
+            *block = Content::ReasoningSummary { tokens: None };
+            true
+        }
+        Content::ReasoningSummary { .. } => true,
+        Content::Text(_) | Content::Other(_) => false,
+    });
+    if let Some(title) = &mut msg.session_title {
+        *title = atuin_common::secrets::redact(title).into_owned();
     }
 }
 
@@ -228,7 +262,7 @@ impl AiHarnessSessionCapture {
 #[cfg(test)]
 mod tests {
     use atuin_client::ai_session::{NativeSessionId, SourceId};
-    use atuin_common::harnesstools::session::{Content, Role};
+    use atuin_common::harnesstools::session::{ToolCallId, ToolResult, ToolUse, Usage};
     use atuin_domain::record::{RecordId, RecordTag};
     use futures::StreamExt;
     use rstest::rstest;
@@ -273,6 +307,122 @@ mod tests {
 
         assert!(matches!(sub.next().await.unwrap().unwrap(), SessionTailEvent::SessionStarted(_)));
         assert!(matches!(sub.next().await.unwrap().unwrap(), SessionTailEvent::Message(_)));
+    }
+
+    #[rstest]
+    #[case(Role::User)]
+    #[case(Role::Assistant)]
+    #[tokio::test]
+    async fn capture_sanitizes_records_sidecar_and_tail(#[case] role: Role) {
+        let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let mut sub = sink.subscribe();
+        let mut msg = sample_message();
+        msg.role = role;
+        msg.parent_source_id = Some("parent".to_owned().into());
+        msg.turn_id = Some("turn".to_owned());
+        msg.usage = Some(Usage {
+            input: Some(42),
+            output: Some(0),
+            cache_read: Some(0),
+            cache_write: Some(0),
+        });
+        msg.session_title = Some("AWS_SECRET_ACCESS_KEY=TITLESECRET".to_owned());
+        msg.content = vec![
+            Content::Text("AWS_SECRET_ACCESS_KEY=TEXTSECRET".to_owned()),
+            Content::ToolUse(ToolUse {
+                id: ToolCallId::from("call".to_owned()),
+                name: "Bash".to_owned(),
+                input: serde_json::json!({"command": "PRIVATE_INPUT"}),
+            }),
+            Content::ToolResult(ToolResult {
+                call: ToolCallId::from("call".to_owned()),
+                output: serde_json::json!({"text": "PRIVATE_OUTPUT"}),
+                error: true,
+            }),
+            Content::Reasoning("PRIVATE_REASONING".to_owned()),
+            Content::Other(serde_json::json!({"attachment": "PRIVATE_ATTACHMENT"})),
+        ];
+        sink.append(msg.clone()).await.unwrap();
+        sanitize_message(&mut msg);
+        assert_eq!(msg.content.len(), 4);
+        assert_eq!(msg.content[3], Content::ReasoningSummary { tokens: None });
+        assert_eq!(msg.content[0], Content::Text("AWS_SECRET_ACCESS_KEY=****".to_owned()));
+        assert!(matches!(&msg.content[1], Content::ToolUse(t)
+            if t.name == "Bash" && t.id.as_ref() == "call" && t.input.is_null()));
+        assert!(matches!(&msg.content[2], Content::ToolResult(t)
+            if t.call.as_ref() == "call" && t.error && t.output.is_null()));
+        assert_eq!(msg.session_title.as_deref(), Some("AWS_SECRET_ACCESS_KEY=****"));
+
+        let event = sub.next().await.unwrap().unwrap();
+        assert!(matches!(event, SessionTailEvent::SessionStarted(_)));
+        let SessionTailEvent::Message(tail) = sub.next().await.unwrap().unwrap() else {
+            panic!("expected message");
+        };
+        assert_eq!(tail, msg);
+        assert_eq!(
+            sink.sidecar.get_session(&msg.session).await.unwrap().unwrap().title,
+            msg.session_title,
+        );
+        // The projection keeps titles on sessions rather than individual messages.
+        let title = msg.session_title.take();
+        let mut messages = Box::pin(sink.sidecar.messages(&msg.session));
+        assert_eq!(messages.next().await.unwrap().unwrap(), msg);
+
+        // Rebuilding from encrypted records must not restore discarded payloads.
+        let rebuilt = AiSessionDatabase::in_memory().await.unwrap();
+        sink.records.build(&rebuilt).await.unwrap();
+        assert_eq!(rebuilt.get_session(&msg.session).await.unwrap().unwrap().title, title);
+        let mut messages = Box::pin(rebuilt.messages(&msg.session));
+        assert_eq!(messages.next().await.unwrap().unwrap(), msg);
+        for query in [
+            "PRIVATE_INPUT",
+            "PRIVATE_OUTPUT",
+            "PRIVATE_REASONING",
+            "PRIVATE_ATTACHMENT",
+            "TEXTSECRET",
+        ] {
+            let mut matches = Box::pin(sink.sidecar.search(query, None, 10));
+            assert!(matches.next().await.is_none(), "sensitive content indexed: {query}");
+        }
+    }
+
+    #[rstest]
+    #[case(None, "Reasoned")]
+    #[case(Some(185), "Reasoning · 185 tokens")]
+    #[case(Some(0), "Reasoning · 0 tokens")]
+    #[tokio::test]
+    async fn reasoning_metadata_survives_storage_and_rendering(
+        #[case] tokens: Option<u64>,
+        #[case] label: &str,
+    ) {
+        let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let mut msg = sample_message();
+        msg.role = Role::Assistant;
+        msg.content = vec![Content::ReasoningSummary { tokens }];
+        sink.append(msg.clone()).await.unwrap();
+        let rebuilt = AiSessionDatabase::in_memory().await.unwrap();
+        sink.records.build(&rebuilt).await.unwrap();
+        let mut messages = Box::pin(rebuilt.messages(&msg.session));
+        let stored = messages.next().await.unwrap().unwrap();
+        assert_eq!(stored.content, msg.content);
+        let block = crate::grpc::ai_agent::pb::ContentBlock::from(stored.content[0].clone());
+        assert_eq!(
+            block.block,
+            Some(crate::grpc::ai_agent::pb::content_block::Block::Thinking(label.to_owned()))
+        );
+        let mut transcript = Box::pin(rebuilt.transcript(&msg.session));
+        assert_eq!(transcript.next().await.unwrap().unwrap(), format!("assistant: {label}\n"));
+    }
+
+    #[rstest]
+    #[case(Role::System)]
+    #[case(Role::Tool)]
+    #[case(Role::Other("custom".to_owned()))]
+    fn non_conversation_text_is_omitted(#[case] role: Role) {
+        let mut msg = sample_message();
+        msg.role = role;
+        sanitize_message(&mut msg);
+        assert!(msg.content.is_empty());
     }
 
     #[rstest]

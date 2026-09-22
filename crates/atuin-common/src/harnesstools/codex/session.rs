@@ -271,6 +271,8 @@ impl Message for CodexMessage {
             return Vec::new();
         };
         match payload["type"].as_str() {
+            // Do not retain summaries, encrypted reasoning, or other reasoning payloads.
+            Some("reasoning") => vec![Content::ReasoningSummary { tokens: None }],
             Some("function_call") => vec![Content::ToolUse(ToolUse {
                 id: ToolCallId::from(payload["call_id"].as_str().unwrap_or_default().to_owned()),
                 name: payload["name"].as_str().unwrap_or_default().to_owned(),
