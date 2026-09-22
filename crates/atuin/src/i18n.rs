@@ -23,6 +23,26 @@ use embed::Localizations;
 
 /// The message catalogue for the user's language, negotiated on first use.
 pub static LOADER: LazyLock<FluentLanguageLoader> = LazyLock::new(|| {
+    /// The language named by the first non-empty of `LC_ALL`, `LC_MESSAGES` and `LANG`, if any.
+    ///
+    /// Do **not** swap this for `DesktopLanguageRequester`: on macOS it goes through CoreFoundation,
+    /// and a daemon that forks after CoreFoundation is initialized crashes on its next use of it.
+    fn requested_language() -> Option<LanguageIdentifier> {
+        let locale = ["LC_ALL", "LC_MESSAGES", "LANG"]
+            .into_iter()
+            .find_map(|var| std::env::var(var).ok().filter(|locale| !locale.is_empty()))?;
+        language_from_locale(&locale)
+    }
+
+    /// Parse a POSIX locale such as `en_US.UTF-8` into a language, if it names one (`C` does not).
+    fn language_from_locale(locale: &str) -> Option<LanguageIdentifier> {
+        let name = locale.split(['.', '@']).next()?;
+        if matches!(name, "C" | "POSIX") {
+            return None;
+        }
+        name.replace('_', "-").parse().ok()
+    }
+
     let loader: FluentLanguageLoader = fluent_language_loader!();
 
     let requested: Vec<_> = requested_language().into_iter().collect();
@@ -39,26 +59,6 @@ pub static LOADER: LazyLock<FluentLanguageLoader> = LazyLock::new(|| {
     loader.set_use_isolating(false);
     loader
 });
-
-/// The language named by the first non-empty of `LC_ALL`, `LC_MESSAGES` and `LANG`, if any.
-///
-/// Do **not** swap this for `DesktopLanguageRequester`: on macOS it goes through CoreFoundation,
-/// and a daemon that forks after CoreFoundation is initialized crashes on its next use of it.
-fn requested_language() -> Option<LanguageIdentifier> {
-    let locale = ["LC_ALL", "LC_MESSAGES", "LANG"]
-        .into_iter()
-        .find_map(|var| std::env::var(var).ok().filter(|locale| !locale.is_empty()))?;
-    language_from_locale(&locale)
-}
-
-/// Parse a POSIX locale such as `en_US.UTF-8` into a language, if it names one (`C` does not).
-fn language_from_locale(locale: &str) -> Option<LanguageIdentifier> {
-    let name = locale.split(['.', '@']).next()?;
-    if matches!(name, "C" | "POSIX") {
-        return None;
-    }
-    name.replace('_', "-").parse().ok()
-}
 
 /// Look up a message in the user's language: `fl!("message-id", name = value)`.
 macro_rules! fl {
