@@ -99,11 +99,24 @@ pub async fn boot(
             // crash between the two writes, or a lost db file) is repaired here instead of being
             // stranded until — or re-pushed as duplicate records by — file re-capture. append's
             // ON CONFLICT keying makes the replay idempotent.
-            if let Err(err) = records.build(db).await {
-                tracing::error!(?err, "failed to reproject ai-session sidecar from records");
-            }
+            let recovered = match records.build(db).await {
+                Ok(()) => true,
+                Err(err) => {
+                    tracing::error!(
+                        ?err,
+                        "failed to reproject ai-session sidecar; capture and import disabled \
+                         until restart"
+                    );
+                    false
+                }
+            };
 
-            AiHarnessSessionCapture::open(records, db.clone(), settings.ai.capture_sessions)
+            AiHarnessSessionCapture::open(
+                records,
+                db.clone(),
+                settings.ai.capture_sessions,
+                recovered,
+            )
         }
         None => AiHarnessSessionCapture::nop().await,
     });
