@@ -14,7 +14,7 @@ use crate::harnesstools::session::model::{
 };
 use crate::harnesstools::session::{
     Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId, Sessions,
-    WatchError,
+    WatchError, scan_sessions,
 };
 use crate::json::jsonl;
 use crate::utils::{env_nonempty, home_dir};
@@ -47,35 +47,26 @@ impl Sessions for CodexSessions {
         Ok(CodexListener { root })
     }
 
-    fn existing(&self) -> Result<impl Stream<Item = CodexSession> + Send + 'static, RuntimeError> {
+    fn existing(
+        &self,
+    ) -> Result<impl Stream<Item = Result<CodexSession, RuntimeError>> + Send + 'static, RuntimeError>
+    {
         let root = self.resolve_root();
         if !root.is_dir() {
             return Err(RuntimeError::NotFound(root));
         }
         Ok(async_stream::stream! {
-            let sessions = tokio::task::spawn_blocking(move || {
-                let mut out = Vec::new();
-                let mut stack = vec![root];
-                while let Some(dir) = stack.pop() {
-                    let Ok(entries) = std::fs::read_dir(&dir) else { continue };
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        let file_type = entry.file_type();
-                        let is_dir = file_type.as_ref().map(|t| t.is_dir()).unwrap_or(false);
-                        let is_file = file_type.map(|t| t.is_file()).unwrap_or(false);
-                        if is_dir {
-                            stack.push(path);
-                        } else if let Some(session) = CodexListener::open_session(&path, is_file) {
-                            out.push(session);
-                        }
+            let scan = tokio::task::spawn_blocking(move || {
+                scan_sessions(root, CodexListener::open_session)
+            })
+            .await;
+            match scan {
+                Ok(items) => {
+                    for item in items {
+                        yield item;
                     }
                 }
-                out
-            })
-            .await
-            .unwrap_or_default();
-            for session in sessions {
-                yield session;
+                Err(join) => yield Err(RuntimeError::Io(std::io::Error::other(join))),
             }
         })
     }

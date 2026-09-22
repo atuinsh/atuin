@@ -26,11 +26,13 @@ impl AnySessions {
         })
     }
 
-    pub fn existing(&self) -> Result<BoxStream<'static, AnySession>, RuntimeError> {
+    pub fn existing(
+        &self,
+    ) -> Result<BoxStream<'static, Result<AnySession, RuntimeError>>, RuntimeError> {
         Ok(match self {
-            Self::Ccode(s) => s.existing()?.map(AnySession::from).boxed(),
-            Self::Codex(s) => s.existing()?.map(AnySession::from).boxed(),
-            Self::Pi(s) => s.existing()?.map(AnySession::from).boxed(),
+            Self::Ccode(s) => s.existing()?.map_ok(AnySession::from).boxed(),
+            Self::Codex(s) => s.existing()?.map_ok(AnySession::from).boxed(),
+            Self::Pi(s) => s.existing()?.map_ok(AnySession::from).boxed(),
         })
     }
 }

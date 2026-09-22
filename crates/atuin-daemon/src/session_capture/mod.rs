@@ -159,6 +159,13 @@ impl AiHarnessSessionCapture {
         }
     }
 
+    /// Whether a persistent session store backs this facade. `false` is the degraded nop mode
+    /// installed when the store failed to open, where capture and import do nothing.
+    #[must_use]
+    pub fn is_available(&self) -> bool {
+        self.persistent
+    }
+
     pub fn import(
         &self,
         harness: Option<HarnessKind>,

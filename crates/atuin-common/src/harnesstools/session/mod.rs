@@ -1,6 +1,8 @@
 pub mod error;
 pub mod model;
 
+use std::path::{Path, PathBuf};
+
 use enum_dispatch::enum_dispatch;
 pub use error::{CaptureError, MessageError, RuntimeError, WatchError};
 use futures::{Stream, StreamExt};
@@ -9,6 +11,51 @@ pub use model::{
     ToolCallId, ToolResult, ToolUse, Usage,
 };
 use time::OffsetDateTime;
+
+/// Recursively scan `root` for session files, calling `accept(path, is_file)` on each non-directory
+/// entry to build a session. Directory, entry, and file-type read failures are surfaced as `Err`
+/// (never silently dropped) so a one-shot [`Sessions::existing`] scan can report a partial result.
+/// Symlinks are not followed (a symlinked directory is neither pushed nor accepted), matching the
+/// live watcher.
+pub(crate) fn scan_sessions<S>(
+    root: PathBuf,
+    accept: impl Fn(&Path, bool) -> Option<S>,
+) -> Vec<Result<S, RuntimeError>> {
+    let mut out = Vec::new();
+    let mut stack = vec![root];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                out.push(Err(RuntimeError::Io(e)));
+                continue;
+            }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(e) => {
+                    out.push(Err(RuntimeError::Io(e)));
+                    continue;
+                }
+            };
+            let path = entry.path();
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(e) => {
+                    out.push(Err(RuntimeError::Io(e)));
+                    continue;
+                }
+            };
+            if file_type.is_dir() {
+                stack.push(path);
+            } else if let Some(session) = accept(&path, file_type.is_file()) {
+                out.push(Ok(session));
+            }
+        }
+    }
+    out
+}
 
 #[enum_dispatch]
 pub trait Message: Send + 'static {
@@ -115,10 +162,14 @@ pub trait Sessions {
 
     fn listener(&self) -> Result<Self::Listener, RuntimeError>;
 
+    /// One-shot scan of every session under the root. Yields `Err` for a directory, entry, or
+    /// file-type read that fails mid-scan, so a caller (e.g. import) can report a partial scan
+    /// rather than silently treating it as complete. The outer `Err` is only the root itself
+    /// being unreadable.
     fn existing(
         &self,
     ) -> Result<
-        impl Stream<Item = <Self::Listener as Listener>::Session> + Send + 'static,
+        impl Stream<Item = Result<<Self::Listener as Listener>::Session, RuntimeError>> + Send + 'static,
         RuntimeError,
     >;
 }

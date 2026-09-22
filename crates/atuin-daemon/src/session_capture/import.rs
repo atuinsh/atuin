@@ -23,6 +23,11 @@ pub enum ImportProgress {
         skipped: u64,
         failed: u64,
     },
+    /// A directory, entry, or file-type read failed mid-scan, so the backfill is partial. Folded
+    /// into the summary's `failed` by `SessionImporter::run`; never surfaced as its own event.
+    ScanFailed {
+        failed: u64,
+    },
 }
 
 pub struct SessionImporter {
@@ -58,15 +63,25 @@ impl SessionImporter {
                 let progress = self.harness(kind, observed);
                 futures::pin_mut!(progress);
                 while let Some(event) = progress.next().await {
-                    if let ImportProgress::Session { imported: i, skipped: s, failed: f, .. } =
-                        &event
-                    {
-                        sessions += 1;
-                        imported += i;
-                        skipped += s;
-                        failed += f;
+                    let mut passthrough = true;
+                    match &event {
+                        ImportProgress::Session { imported: i, skipped: s, failed: f, .. } => {
+                            sessions += 1;
+                            imported += i;
+                            skipped += s;
+                            failed += f;
+                        }
+                        // A scan failure is not a session: it lifts the summary's `failed` but is
+                        // not streamed as its own progress event.
+                        ImportProgress::ScanFailed { failed: f } => {
+                            failed += f;
+                            passthrough = false;
+                        }
+                        ImportProgress::Finished { .. } => {}
                     }
-                    yield event;
+                    if passthrough {
+                        yield event;
+                    }
                 }
             }
             yield ImportProgress::Finished { sessions, imported, skipped, failed };
@@ -85,9 +100,14 @@ impl SessionImporter {
                 return;
             };
             let mut imports = existing
-                .map(|session| {
+                .map(|item| {
                     let sink = sink.clone();
                     async move {
+                        // A scan failure (unreadable directory/entry) is not a session; surface it
+                        // so the summary reflects a partial backfill instead of a silent one.
+                        let Ok(session) = item else {
+                            return ImportProgress::ScanFailed { failed: 1 };
+                        };
                         // One enricher per session: it carries that session's bookkeeping (title,
                         // timestamps, parent, usage dedupe) across its lines, exactly as live
                         // capture does, so a backfilled row matches the captured one.
@@ -186,7 +206,7 @@ mod tests {
             .iter()
             .map(|event| match event {
                 ImportProgress::Session { imported, .. } => *imported,
-                ImportProgress::Finished { .. } => 0,
+                ImportProgress::Finished { .. } | ImportProgress::ScanFailed { .. } => 0,
             })
             .sum()
     }
@@ -196,7 +216,7 @@ mod tests {
             .iter()
             .map(|event| match event {
                 ImportProgress::Session { skipped, .. } => *skipped,
-                ImportProgress::Finished { .. } => 0,
+                ImportProgress::Finished { .. } | ImportProgress::ScanFailed { .. } => 0,
             })
             .sum()
     }
@@ -231,6 +251,73 @@ mod tests {
         assert_eq!(sum_skipped(&second), 2);
         let after_second = sink.sidecar.get_session(&handle).await.unwrap().unwrap().message_count;
         assert_eq!(after_second, 2);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn import_stamps_the_session_title() {
+        let root = tempfile::tempdir().unwrap();
+        // A pi `session_info` line is where the title lives; import must carry it onto the session
+        // through the message stream, not drop it.
+        let body = [
+            serde_json::json!({"type": "session_info", "id": "s2-info", "name": "Fix the parser"})
+                .to_string(),
+            serde_json::json!({"type": "message", "id": "s2-m0",
+                "message": {"role": "user", "content": "hi"}})
+            .to_string(),
+        ]
+        .join("\n")
+            + "\n";
+        std::fs::write(root.path().join("1700000000_s2.jsonl"), body).unwrap();
+
+        let sink =
+            Arc::new(Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap()));
+        let _: Vec<_> = SessionImporter::new(sink.clone())
+            .harness(HarnessKind::Pi, pi_sessions(root.path()))
+            .collect()
+            .await;
+
+        let handle = HarnessSession {
+            harness: HarnessKind::Pi,
+            session: NativeSessionId::from("s2".to_owned()),
+        };
+        let session = sink.sidecar.get_session(&handle).await.unwrap().unwrap();
+        assert_eq!(session.title.as_deref(), Some("Fix the parser"));
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    #[tokio::test]
+    async fn import_reports_unreadable_directories_as_scan_failures() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let blocked = root.path().join("blocked");
+        std::fs::create_dir(&blocked).unwrap();
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Root ignores the mode, so the failure path is unreachable there; skip rather than assert.
+        if std::fs::read_dir(&blocked).is_ok() {
+            std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o755)).unwrap();
+            return;
+        }
+
+        let sink =
+            Arc::new(Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap()));
+        let events: Vec<_> = SessionImporter::new(sink)
+            .harness(HarnessKind::Pi, pi_sessions(root.path()))
+            .collect()
+            .await;
+        // Restore before asserting so the tempdir can be cleaned up regardless of the outcome.
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let scan_failures: u64 = events
+            .iter()
+            .map(|event| match event {
+                ImportProgress::ScanFailed { failed } => *failed,
+                ImportProgress::Session { .. } | ImportProgress::Finished { .. } => 0,
+            })
+            .sum();
+        assert!(scan_failures >= 1, "an unreadable directory must surface as a scan failure");
     }
 
     #[rstest]

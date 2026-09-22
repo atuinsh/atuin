@@ -456,12 +456,15 @@ async fn import(
 ) -> Result<()> {
     let mut stream = client.import_sessions(harness).await?;
 
+    // `--style json` is one document, so its per-session progress and final summary are collected
+    // and written once at the end; `--style ndjson` and the human styles stream event by event.
+    let mut json_sessions: Vec<serde_json::Value> = Vec::new();
+    let mut json_summary: Option<serde_json::Value> = None;
+
     while let Some(event) = stream.next().await {
         let Some(event) = event?.event else {
             continue;
         };
-        let stdout = io::stdout();
-        let mut out = stdout.lock();
 
         if style.is_json() {
             let record = match &event {
@@ -480,12 +483,27 @@ async fn import(
                     "failed": s.failed,
                 }),
             };
-            serde_json::to_writer(&mut out, &record)?;
-            writeln!(out)?;
-            out.flush()?;
+            match &event {
+                import_sessions_event::Event::Progress(_) if matches!(style, Style::Json) => {
+                    json_sessions.push(record);
+                }
+                import_sessions_event::Event::Summary(_) if matches!(style, Style::Json) => {
+                    json_summary = Some(record);
+                }
+                _ => {
+                    // ndjson: one value per line.
+                    let stdout = io::stdout();
+                    let mut out = stdout.lock();
+                    serde_json::to_writer(&mut out, &record)?;
+                    writeln!(out)?;
+                    out.flush()?;
+                }
+            }
             continue;
         }
 
+        let stdout = io::stdout();
+        let mut out = stdout.lock();
         match &event {
             import_sessions_event::Event::Progress(p) => {
                 writeln!(
@@ -505,8 +523,15 @@ async fn import(
                 )?;
             }
         }
-
         out.flush()?;
+    }
+
+    if matches!(style, Style::Json) {
+        let doc = serde_json::json!({ "sessions": json_sessions, "summary": json_summary });
+        let stdout = io::stdout();
+        let mut out = stdout.lock();
+        serde_json::to_writer(&mut out, &doc)?;
+        writeln!(out)?;
     }
 
     Ok(())

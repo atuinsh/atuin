@@ -175,36 +175,45 @@ impl GrpcService for Service {
         &self,
         request: Request<ImportSessionsRequest>,
     ) -> Result<Response<Self::ImportSessionsStream>, Status> {
+        // A degraded nop facade (the session store failed to open) would otherwise stream an
+        // all-zero "success" summary; refuse instead so the caller sees the store is unavailable.
+        if !self.capture.is_available() {
+            return Err(Status::unavailable(
+                "AI session capture is unavailable: the session store failed to open",
+            ));
+        }
+
         let harness = HarnessFilterRequest::harness(&request.into_inner())?;
 
-        let stream = self.capture.import(harness).map(|progress| {
-            Ok::<_, Status>(ImportSessionsEvent {
-                event: Some(match progress {
-                    ImportProgress::Session {
-                        harness,
-                        session,
-                        imported,
-                        skipped,
-                        failed: _,
-                    } => import_sessions_event::Event::Progress(ImportSessionsProgress {
-                        harness: agent::HarnessKind::from(harness) as i32,
-                        session_id: session.into(),
-                        imported,
-                        skipped,
-                    }),
-                    ImportProgress::Finished {
-                        sessions,
-                        imported,
-                        skipped,
-                        failed,
-                    } => import_sessions_event::Event::Summary(ImportSessionsSummary {
-                        sessions,
-                        imported,
-                        skipped,
-                        failed,
-                    }),
+        let stream = self.capture.import(harness).filter_map(|progress| {
+            let event = match progress {
+                ImportProgress::Session {
+                    harness,
+                    session,
+                    imported,
+                    skipped,
+                    failed: _,
+                } => import_sessions_event::Event::Progress(ImportSessionsProgress {
+                    harness: agent::HarnessKind::from(harness) as i32,
+                    session_id: session.into(),
+                    imported,
+                    skipped,
                 }),
-            })
+                ImportProgress::Finished {
+                    sessions,
+                    imported,
+                    skipped,
+                    failed,
+                } => import_sessions_event::Event::Summary(ImportSessionsSummary {
+                    sessions,
+                    imported,
+                    skipped,
+                    failed,
+                }),
+                // Folded into the summary's failed count by SessionImporter::run; never streamed.
+                ImportProgress::ScanFailed { .. } => return std::future::ready(None),
+            };
+            std::future::ready(Some(Ok::<_, Status>(ImportSessionsEvent { event: Some(event) })))
         });
 
         Ok(Response::new(Box::pin(stream)))
@@ -266,18 +275,15 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn import_sessions_streams_a_summary_when_capture_is_nop() {
+    async fn import_sessions_errors_when_capture_is_unavailable() {
+        // The nop facade stands in for a failed session store: import must report unavailable
+        // rather than stream an all-zero "success" summary.
         let cap = Arc::new(AiHarnessSessionCapture::nop().await);
         let svc = Service::new(cap);
 
-        let mut stream = svc
-            .import_sessions(Request::new(ImportSessionsRequest { harness: None }))
-            .await
-            .unwrap()
-            .into_inner();
+        let result =
+            svc.import_sessions(Request::new(ImportSessionsRequest { harness: None })).await;
 
-        let ev = stream.next().await.unwrap().unwrap();
-        assert!(matches!(ev.event, Some(import_sessions_event::Event::Summary(_))));
-        assert!(stream.next().await.is_none());
+        assert!(matches!(result, Err(ref e) if e.code() == tonic::Code::Unavailable));
     }
 }
