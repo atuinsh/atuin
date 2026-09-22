@@ -23,15 +23,15 @@ if [[ -z ${__atuin_pty_proxy_owns_tty-} ]]; then
 fi
 
 __atuin_osc133_command_executed() {
-    [[ "${__atuin_pty_proxy_owns_tty:-0}" = 1 ]] || return
-    [[ -n "${ATUIN_HISTORY_ID:-}" && "$ATUIN_HISTORY_ID" != "__bash_preexec_failure__" ]] || return
+    [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]] || return 0
+    [[ -n "${ATUIN_HISTORY_ID:-}" && "$ATUIN_HISTORY_ID" != "__bash_preexec_failure__" ]] || return 0
 
     printf '\033]133;C\a'
 }
 
 __atuin_osc133_command_finished() {
-    [[ "${__atuin_pty_proxy_owns_tty:-0}" = 1 ]] || return
-    [[ -n "${ATUIN_HISTORY_ID:-}" && "$ATUIN_HISTORY_ID" != "__bash_preexec_failure__" ]] || return
+    [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]] || return 0
+    [[ -n "${ATUIN_HISTORY_ID:-}" && "$ATUIN_HISTORY_ID" != "__bash_preexec_failure__" ]] || return 0
 
     printf '\033]133;D;%s;history_id=%s\a' "$1" "$ATUIN_HISTORY_ID"
 }
@@ -40,13 +40,23 @@ __atuin_osc133_prompt_start=$'\001\033]133;A;cl=line\a\002'
 __atuin_osc133_prompt_end=$'\001\033]133;B\a\002'
 
 __atuin_osc133_wrap_prompt() {
+    if [[ -z ${ATUIN_PTY_PROXY_ACTIVE-} ]] && [[ ${__atuin_pty_proxy_owns_tty-} != 1 ]]; then
+        return
+    fi
+
     local __atuin_prompt="${PS1-}"
+    # Remove existing Atuin OSC 133 markers, if present.
     __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_start/}"
     __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_end/}"
 
-    if [[ "${__atuin_pty_proxy_owns_tty:-0}" = 1 ]]; then
+    if [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]]; then
         PS1="${__atuin_osc133_prompt_start}${__atuin_prompt}${__atuin_osc133_prompt_end}"
-    else
+    elif ! [[ $__atuin_prompt =~ ($'\033'|'\033'|'\e')']133;' ]]; then
+        # Only replace the prompt if there are no remaining OSC 133 markers. If
+        # there are, they likely came from another program, and we don't want
+        # to risk half-removing those markers (e.g., maybe `__atuin_osc133_prompt_end`
+        # matched an existing end marker, but `__atuin_osc133_prompt_start`
+        # didn't match the start marker due to the `cl=line` param).
         PS1="$__atuin_prompt"
     fi
 }
@@ -99,7 +109,7 @@ __atuin_precmd() {
 
     __atuin_osc133_wrap_prompt
 
-    [[ ! $ATUIN_HISTORY_ID ]] && return
+    [[ ! $ATUIN_HISTORY_ID ]] && return 0
 
     # If the previous preexec hook failed, we manually call __atuin_preexec
     local __atuin_skip_osc133=""

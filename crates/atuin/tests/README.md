@@ -14,6 +14,10 @@ macOS, with Homebrew Bash on macOS.
 - `e2e_pty`: shell hooks, search, selection, quoting, resize, and filters.
 - `e2e_daemon`: startup, concurrent writers, persistence, and restart.
 
+`osc133_prompt` also needs Bash and Zsh, but runs them without a PTY: it sources
+the init scripts and drives `__atuin_osc133_wrap_prompt` directly. It skips the
+same way when a shell is missing, so it runs under a plain `cargo nextest run`.
+
 ## Add a shell setup
 
 Copy a file in [shells/](shells/). `rstest` runs every PTY test against each
