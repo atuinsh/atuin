@@ -586,34 +586,107 @@ impl AiSessionDatabase {
         text.nfd().filter(|c| !is_combining_mark(*c)).flat_map(char::to_lowercase).collect()
     }
 
+    /// The folded `unicode61`-style tokens (alphanumeric runs) of `text`.
+    fn fts_tokens(text: &str) -> impl Iterator<Item = String> + '_ {
+        Self::fts_fold(text)
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|t| !t.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    /// The index of the first whitespace word where a query term matches the way the FTS index
+    /// matched it: each term is a phrase of folded tokens that must appear consecutively in the
+    /// body's token stream (so `app` matches the token `app`, not the word `apple`, and `foo-bar`
+    /// matches `foo bar` across words).
+    fn preview_hit(words: &[&str], query: &str) -> Option<usize> {
+        let phrases: Vec<Vec<String>> = query
+            .split_whitespace()
+            .map(|term| Self::fts_tokens(term).collect())
+            .filter(|p: &Vec<String>| !p.is_empty())
+            .collect();
+        if phrases.is_empty() {
+            return None;
+        }
+
+        // (word index, folded token) stream over the whole body.
+        let tokens: Vec<(usize, String)> = words
+            .iter()
+            .enumerate()
+            .flat_map(|(i, w)| Self::fts_tokens(w).map(move |t| (i, t)))
+            .collect();
+
+        phrases
+            .iter()
+            .filter_map(|phrase| {
+                (0..tokens.len().saturating_sub(phrase.len() - 1)).find(|&i| {
+                    phrase.iter().zip(&tokens[i..]).all(|(p, (_, t))| p == t)
+                })
+            })
+            .min()
+            .map(|i| tokens[i].0)
+    }
+
+    /// `s` cut to at most `max` bytes on a char boundary.
+    fn truncate_chars(s: &str, max: usize) -> &str {
+        if s.len() <= max {
+            return s;
+        }
+        let end = s.char_indices().take_while(|(i, _)| *i <= max).last().map_or(0, |(i, _)| i);
+        &s[..end]
+    }
+
     /// A plain preview of the matched message: up to `max_tokens` whitespace-separated words,
-    /// windowed around the first word containing a query term (folded, substring) so the match is
-    /// visible, with `…` marking truncation. The replacement for FTS5's `snippet()`, which the
-    /// contentless index cannot render.
+    /// windowed around the first FTS-style term match so it is visible, with `…` marking
+    /// truncation. Bounded by a char budget so whitespace-free blobs (minified output) cannot
+    /// blow up the preview. The replacement for FTS5's `snippet()`, which the contentless index
+    /// cannot render.
     fn preview_snippet(body: &str, query: &str, max_tokens: usize) -> String {
+        const MAX_CHARS: usize = 400;
+        const LEAD_CHARS: usize = 80;
+
         let words: Vec<&str> = body.split_whitespace().collect();
         if words.is_empty() || max_tokens == 0 {
             return String::new();
         }
 
-        let terms: Vec<String> = query.split_whitespace().map(Self::fts_fold).collect();
-        let hit = words
-            .iter()
-            .position(|w| {
-                let w = Self::fts_fold(w);
-                terms.iter().any(|t| w.contains(t))
-            })
-            .unwrap_or(0);
+        let hit = Self::preview_hit(&words, query).unwrap_or(0);
 
-        let start = hit.saturating_sub(max_tokens / 8).min(words.len().saturating_sub(max_tokens));
-        let end = (start + max_tokens).min(words.len());
+        // Lead-in: a little context before the match, capped in words and chars so a giant
+        // preceding blob cannot push the match itself out of the char budget.
+        let mut start = hit;
+        let mut lead = 0;
+        while start > 0
+            && hit - start < max_tokens / 8
+            && lead + words[start - 1].len() < LEAD_CHARS
+        {
+            start -= 1;
+            lead += words[start].len() + 1;
+        }
 
         let mut out = String::new();
         if start > 0 {
             out.push('…');
         }
-        out.push_str(&words[start..end].join(" "));
-        if end < words.len() {
+        let mut end = start;
+        let mut clipped = false;
+        for (i, word) in words.iter().enumerate().skip(start).take(max_tokens) {
+            if i > start {
+                if out.len() + 1 + word.len() > MAX_CHARS {
+                    clipped = true;
+                    break;
+                }
+                out.push(' ');
+            }
+            // The first (match-bearing) word always appears, truncated if it alone overflows.
+            let room = MAX_CHARS.saturating_sub(out.len());
+            let cut = Self::truncate_chars(word, room);
+            clipped |= cut.len() < word.len();
+            out.push_str(cut);
+            end = i + 1;
+        }
+        if clipped || end < words.len() {
             out.push('…');
         }
         out
@@ -1342,6 +1415,69 @@ mod tests {
         let preview = hits[0].preview.to_plain().text.into_owned();
         assert!(preview.contains("café"), "the folded match must be in the window: {preview:?}");
         assert!(!preview.contains("filler-000"), "must not fall back to the leading window");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_preview_matches_whole_tokens_not_substrings() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let filler: String = (0..200).map(|i| format!("filler-{i:03} ")).collect();
+        // `apple` contains `app` as a substring but is a different FTS token; the window must
+        // land on the real token match at the end, not the substring false-positive up front.
+        db.append(&message_in(&sample_handle(), 0, &format!("apple {filler}app end")))
+            .await
+            .unwrap();
+
+        let hits = search(&db, "app").await;
+        assert_eq!(hits.len(), 1);
+        let preview = hits[0].preview.to_plain().text.into_owned();
+        assert!(preview.contains("app end"), "the token match must be visible: {preview:?}");
+        assert!(!preview.contains("apple"), "substring look-alikes must not anchor the window");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_preview_finds_phrases_across_words() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let filler: String = (0..200).map(|i| format!("filler-{i:03} ")).collect();
+        // FTS tokenizes `foo-bar` as the phrase [foo, bar], which matches `foo bar` across a
+        // space; the preview's matcher must agree.
+        db.append(&message_in(&sample_handle(), 0, &format!("{filler}foo bar tail")))
+            .await
+            .unwrap();
+
+        let hits = search(&db, "foo-bar").await;
+        assert_eq!(hits.len(), 1);
+        let preview = hits[0].preview.to_plain().text.into_owned();
+        assert!(preview.contains("foo bar"), "the phrase match must be visible: {preview:?}");
+        assert!(!preview.contains("filler-000"), "must not fall back to the leading window");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_preview_is_char_bounded() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        // A whitespace-free blob (minified output) is one "word"; the char budget must keep the
+        // preview small and the match visible instead of returning the whole line.
+        let blob = "x".repeat(5_000);
+        db.append(&message_in(&sample_handle(), 0, &format!("{blob} needle here")))
+            .await
+            .unwrap();
+
+        let hits = search(&db, "needle").await;
+        assert_eq!(hits.len(), 1);
+        let preview = hits[0].preview.to_plain().text.into_owned();
+        assert!(preview.contains("needle"), "the match must survive the char cap: {preview:?}");
+        assert!(preview.chars().count() < 450, "preview must be bounded: {} chars", preview.len());
+
+        // Wide windows of normal words are char-capped too.
+        let wide: String = (0..32).map(|i| format!("wordy-{i:02}-{} ", "y".repeat(40))).collect();
+        db.append(&message_in(&sample_handle(), 1, &format!("target {wide}"))).await.unwrap();
+        let hits = search(&db, "target").await;
+        let preview = hits[0].preview.to_plain().text.into_owned();
+        assert!(preview.starts_with("target"), "the match must lead the window: {preview:?}");
+        assert!(preview.chars().count() < 450, "preview must be bounded: {} chars", preview.len());
+        assert!(preview.ends_with('…'), "char-cap truncation must be marked: {preview:?}");
     }
 
     #[rstest]
