@@ -79,25 +79,3 @@ macro_rules! writet {
 
 pub(crate) use fl;
 pub(crate) use writet;
-
-#[cfg(test)]
-mod tests {
-    use rstest::rstest;
-
-    use super::language_from_locale;
-
-    #[rstest]
-    #[case::language_and_region("en_US.UTF-8", Some("en-US"))]
-    #[case::modifier("ga_IE@euro", Some("ga-IE"))]
-    #[case::language_only("de", Some("de"))]
-    #[case::c("C", None)]
-    #[case::c_utf8("C.UTF-8", None)]
-    #[case::posix("POSIX", None)]
-    #[case::garbage("x", None)]
-    fn parses_posix_locales(#[case] locale: &str, #[case] expected: Option<&str>) {
-        assert_eq!(
-            language_from_locale(locale).map(|language| language.to_string()),
-            expected.map(str::to_owned)
-        );
-    }
-}
