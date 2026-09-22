@@ -17,7 +17,7 @@ use engine::SessionCaptureEngine;
 use futures::{Stream, StreamExt};
 pub use import::ImportProgress;
 use import::SessionImporter;
-use tokio::sync::broadcast;
+use tokio::sync::{Mutex, broadcast};
 use tokio_stream::wrappers::BroadcastStream;
 
 const NOP_STORE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -41,7 +41,9 @@ pub(crate) struct Sink {
     records: AiSessionStore,
     sidecar: AiSessionDatabase,
     tail: broadcast::Sender<SessionTailEvent>,
-    append_lock: tokio::sync::Mutex<()>,
+    // Serialize count lookup + persistence across live capture and import. At most one record
+    // can be waiting for projection; repair it before admitting another capture.
+    pending_projection: Mutex<Option<Message>>,
 }
 
 impl Sink {
@@ -51,7 +53,7 @@ impl Sink {
             records,
             sidecar,
             tail,
-            append_lock: tokio::sync::Mutex::new(()),
+            pending_projection: Mutex::new(None),
         }
     }
 
@@ -60,15 +62,42 @@ impl Sink {
     }
 
     pub(crate) async fn append(&self, mut msg: Message) -> Result<Appended, AppendError> {
-        let _guard = self.append_lock.lock().await;
         // Apply capture policy before either persistence path or the live tail. Keep structural
         // rows (even with no content) so parent links and usage accounting remain intact.
         sanitize_message(&mut msg);
+        let mut pending = self.pending_projection.lock().await;
+        if let Some(previous) = pending.as_ref() {
+            self.sidecar.append(previous).await?;
+            *pending = None;
+        }
         // Dedup gate: if this logical message is already projected it is already in the record
         // store too, so there is nothing to do. Stable source ids (see MessageEnricher::source_id)
         // make this reliable across re-captures and keep the record store free of duplicates.
         if self.sidecar.contains_message(&msg.session, &msg.source_id).await? {
             return Ok(Appended::Duplicate);
+        }
+
+        // Only persisted counts suppress later rows. This works for interleaved calls,
+        // replays and restarts, without keeping every observed call ID in memory.
+        let has_tokens = msg
+            .content
+            .iter()
+            .any(|block| matches!(block, Content::ReasoningSummary { tokens: Some(_) }));
+        let mut counted = if has_tokens && let Some(turn) = &msg.turn_id {
+            self.sidecar.has_reasoning_tokens(&msg.session, turn).await?
+        } else {
+            false
+        };
+        for block in &mut msg.content {
+            if let Content::ReasoningSummary {
+                tokens: Some(_), ..
+            } = block
+            {
+                if counted {
+                    *block = Content::ReasoningSummary { tokens: None };
+                }
+                counted = true;
+            }
         }
 
         let started = self.sidecar.get_session(&msg.session).await?.is_none();
@@ -79,7 +108,10 @@ impl Sink {
         // never synced.
         self.records.push(&msg).await?;
 
-        if self.sidecar.append(&msg).await? != Appended::New {
+        *pending = Some(msg.clone());
+        let appended = self.sidecar.append(&msg).await?;
+        *pending = None;
+        if appended != Appended::New {
             return Ok(Appended::Duplicate);
         }
 
@@ -412,6 +444,175 @@ mod tests {
         );
         let mut transcript = Box::pin(rebuilt.transcript(&msg.session));
         assert_eq!(transcript.next().await.unwrap().unwrap(), format!("assistant: {label}\n"));
+    }
+
+    #[rstest]
+    #[case(false)]
+    #[case(true)]
+    #[tokio::test]
+    async fn reasoning_counts_survive_failed_writes_and_restart(#[case] fail_projection: bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let records_path = dir.path().join("records.db");
+        let sidecar_path = dir.path().join("sessions.db");
+        let store = SqliteStore::new(records_path.as_os_str(), NOP_STORE_TIMEOUT).await.unwrap();
+        let records = AiSessionStore::builder()
+            .store(store)
+            .host_id(HostId(atuin_common::utils::uuid_v7()))
+            .key(Key::generate())
+            .build();
+        let sidecar = AiSessionDatabase::open(&sidecar_path).await.unwrap();
+        let sink = Sink::new(records.clone(), sidecar.clone());
+        let path = if fail_projection {
+            &sidecar_path
+        } else {
+            &records_path
+        };
+        let fault =
+            atuin_common::db::sqlite::Sqlite::builder(path.as_os_str()).open().await.unwrap();
+        let sql = if fail_projection {
+            "CREATE TRIGGER fail_write BEFORE INSERT ON messages BEGIN SELECT RAISE(FAIL, \
+             'injected failure'); END"
+        } else {
+            "CREATE TRIGGER fail_write BEFORE INSERT ON store BEGIN SELECT RAISE(FAIL, 'injected \
+             failure'); END"
+        };
+        atuin_common::db::query(sql).execute(fault.pool()).await.unwrap();
+        let message = |source: &str| {
+            let mut msg = sample_message();
+            msg.id = atuin_domain::record::RecordId(atuin_common::utils::uuid_v7());
+            msg.source_id = source.to_owned().into();
+            msg.turn_id = Some("call".to_owned());
+            // Exercise the compressed-content lookup too.
+            msg.content = vec![Content::Text("hello ".repeat(100)), Content::ReasoningSummary {
+                tokens: Some(185),
+            }];
+            msg
+        };
+        assert!(sink.append(message("first")).await.is_err());
+        atuin_common::db::query("DROP TRIGGER fail_write").execute(fault.pool()).await.unwrap();
+        sink.append(message("second")).await.unwrap();
+        drop(sink);
+        // No in-memory dedup state survives this restart.
+        let sink = Sink::new(records.clone(), sidecar);
+        sink.append(message("third")).await.unwrap();
+        // A replay is also harmless.
+        sink.append(message("second")).await.unwrap();
+        let rebuilt = AiSessionDatabase::in_memory().await.unwrap();
+        records.build(&rebuilt).await.unwrap();
+        let mut rows = Box::pin(rebuilt.messages(&sample_handle()));
+        let mut counts = Vec::new();
+        while let Some(row) = rows.next().await {
+            for block in row.unwrap().content {
+                if let Content::ReasoningSummary { tokens: Some(n) } = block {
+                    counts.push(n);
+                }
+            }
+        }
+        assert_eq!(counts, vec![185]);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn concurrent_rows_do_not_duplicate_reasoning_counts() {
+        let records = mem_store().await;
+        let sink = Sink::new(records.clone(), AiSessionDatabase::in_memory().await.unwrap());
+        let mut first = sample_message();
+        first.turn_id = Some("call".to_owned());
+        first.content = vec![Content::ReasoningSummary { tokens: Some(42) }; 2];
+        let mut second = first.clone();
+        second.id = atuin_domain::record::RecordId(atuin_common::utils::uuid_v7());
+        second.source_id = "second".to_owned().into();
+        let (a, b) = tokio::join!(sink.append(first), sink.append(second));
+        a.unwrap();
+        b.unwrap();
+        let rebuilt = AiSessionDatabase::in_memory().await.unwrap();
+        records.build(&rebuilt).await.unwrap();
+        let mut rows = Box::pin(rebuilt.messages(&sample_handle()));
+        let mut counts = Vec::new();
+        while let Some(row) = rows.next().await {
+            for block in row.unwrap().content {
+                if let Content::ReasoningSummary { tokens: Some(n) } = block {
+                    counts.push(n);
+                }
+            }
+        }
+        assert_eq!(counts, vec![42]);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn split_and_interleaved_adapter_rows_report_counts_once() {
+        use atuin_common::harnesstools::session::{AnyMessage, SessionId};
+        let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let mut enricher = super::message_enricher::MessageEnricher::new(HarnessKind::ClaudeCode);
+        let session = SessionId::from("native-session".to_owned());
+        for (index, (turn, thinking, reported, expected)) in [
+            ("a", true, None, None),
+            ("a", false, Some(185), Some(185)),
+            ("b", true, Some(42), Some(42)),
+            ("a", false, Some(185), None),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let block = if thinking {
+                serde_json::json!({"type": "redacted_thinking", "data": "PRIVATE"})
+            } else {
+                serde_json::json!({"type": "text", "text": "hello"})
+            };
+            let m = AnyMessage::Ccode(
+                serde_json::from_value(serde_json::json!({
+                    "type": "assistant", "uuid": format!("u{index}"),
+                    "message": {"role": "assistant", "id": turn, "content": [block],
+                        "usage": {"output_tokens": 999,
+                            "output_tokens_details": {"thinking_tokens": reported}}}
+                }))
+                .unwrap(),
+            );
+            let msg = enricher.capture(&session, &m).row.unwrap();
+            sink.append(msg.clone()).await.unwrap();
+            let mut rows = Box::pin(sink.sidecar.messages(&msg.session));
+            let mut found = false;
+            while let Some(row) = rows.next().await {
+                let row = row.unwrap();
+                if row.source_id == msg.source_id {
+                    assert!(row.content.contains(&Content::ReasoningSummary { tokens: expected }));
+                    found = true;
+                }
+            }
+            assert!(found);
+        }
+    }
+
+    #[rstest]
+    fn adapters_keep_reasoning_presence_without_payloads() {
+        use atuin_common::harnesstools::session::{AnyMessage, Message as _};
+        let claude = AnyMessage::Ccode(
+            serde_json::from_value(serde_json::json!({
+                "type": "assistant", "message": {"role": "assistant",
+                    "content": [{"type": "thinking", "thinking": "PRIVATE_REASONING"}],
+                    "usage": {"output_tokens": 999}}
+            }))
+            .unwrap(),
+        );
+        let pi = AnyMessage::Pi(
+            serde_json::from_value(serde_json::json!({
+                "type": "message", "id": "p1", "message": {"role": "assistant",
+                    "content": [{"type": "thinking", "thinking": "PRIVATE_REASONING"}]}
+            }))
+            .unwrap(),
+        );
+        let codex = AnyMessage::Codex(
+            serde_json::from_value(serde_json::json!({
+                "type": "response_item", "payload": {"type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "PRIVATE_REASONING"}],
+                    "encrypted_content": "PRIVATE_ENCRYPTED"}
+            }))
+            .unwrap(),
+        );
+        for m in [claude, pi, codex] {
+            assert_eq!(m.content(), vec![Content::ReasoningSummary { tokens: None }]);
+        }
     }
 
     #[rstest]

@@ -344,6 +344,33 @@ impl AiSessionDatabase {
         Ok(())
     }
 
+    /// Whether a persisted row already carries the reported reasoning count for this call.
+    /// Read existing content (including compressed rows), so this also works after upgrades
+    /// and record-store rebuilds without a separate deduplication cache or backfill.
+    pub async fn has_reasoning_tokens(
+        &self,
+        session: &HarnessSession,
+        turn: &str,
+    ) -> Result<bool, DbError> {
+        let mut rows = db::query_as::<_, (String, Option<Vec<u8>>)>(
+            "SELECT content, content_z FROM messages WHERE harness = ? AND session_id = ? AND \
+             turn_id = ?",
+        )
+        .bind(session.harness as i64)
+        .bind(session.session.as_ref())
+        .bind(turn)
+        .fetch(self.db.pool());
+        while let Some((content, compressed)) = rows.try_next().await? {
+            if Self::read_content(content, compressed)?
+                .iter()
+                .any(|block| matches!(block, Content::ReasoningSummary { tokens: Some(_) }))
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub async fn contains_message(
         &self,
         session: &HarnessSession,
