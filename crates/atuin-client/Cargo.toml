@@ -61,6 +61,7 @@ time = { workspace = true, features = ["macros", "formatting", "parsing"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-futures = { workspace = true }
+unicode-normalization = { workspace = true }
 typed-builder = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }

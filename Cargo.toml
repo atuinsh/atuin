@@ -184,6 +184,7 @@ tree-sitter-fish = "3"
 tree-sitter-powershell = "0.26"
 tui-textarea-2 = "0.13"
 typed-builder = "0.23"
+unicode-normalization = "0.1"
 unicode-segmentation = "1"
 unicode-width = "0.2"
 url = { version = "2", features = ["serde"] }
