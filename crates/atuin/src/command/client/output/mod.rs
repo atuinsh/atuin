@@ -4,11 +4,13 @@ use atuin_client::theme::Theme;
 use clap::Subcommand;
 use eyre::Result;
 
+use crate::i18n::fl;
+
 mod search;
 
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
-    /// Full-text search over captured command output
+    #[command(about = fl!("cmd-output-search"))]
     Search(search::Cmd),
 }
 

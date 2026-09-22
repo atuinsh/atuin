@@ -11,8 +11,7 @@ pub struct Cmd {
     #[clap(long, short)]
     pub password: Option<String>,
 
-    /// The two-factor authentication code for your account, if any
-    #[clap(long, short)]
+    #[clap(long, short, help = fl!("arg-account-delete-totp-code"))]
     pub totp_code: Option<String>,
 }
 

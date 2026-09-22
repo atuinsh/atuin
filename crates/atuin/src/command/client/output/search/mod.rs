@@ -49,30 +49,25 @@ enum Style {
     Auto,
     Plain,
     Pretty,
-    /// A single JSON array of match objects.
+    #[value(help = fl!("value-output-search-style-json"))]
     Json,
-    /// Newline-delimited JSON: one match object per line.
+    #[value(help = fl!("value-output-search-style-ndjson"))]
     Ndjson,
 }
 
 /// Full-text search over captured command output.
 #[derive(Parser, Debug)]
 pub struct Cmd {
-    /// Words to search for; all must appear. Use `--` before a query that starts with `-`.
-    #[arg(required = true)]
+    #[arg(required = true, help = fl!("arg-output-search-query"))]
     query: Vec<String>,
 
-    /// Maximum number of matches to return.
-    #[arg(long, default_value_t = 5)]
+    #[arg(long, default_value_t = 5, help = fl!("arg-output-search-limit"))]
     limit: u32,
 
-    /// Show only the matching lines, with this many lines of context on either side; without it,
-    /// each match's whole output.
-    #[arg(short = 'C', long)]
+    #[arg(short = 'C', long, help = fl!("arg-output-search-context"))]
     context: Option<u32>,
 
-    /// How matches are rendered.
-    #[arg(long, value_enum, default_value_t = Style::Auto)]
+    #[arg(long, value_enum, default_value_t = Style::Auto, help = fl!("arg-output-search-style"))]
     style: Style,
 }
 

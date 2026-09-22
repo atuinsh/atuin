@@ -4,9 +4,11 @@ use atuin_common::encryption::paseto_v4;
 use clap::Args;
 use eyre::{Context as _, Result};
 
+use crate::i18n::fl;
+
 #[derive(Args, Debug)]
 pub struct Rekey {
-    /// The new key to use for encryption. Omit for a randomly-generated key
+    #[arg(help = fl!("arg-store-rekey-key"))]
     key: Option<String>,
 }
 

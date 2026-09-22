@@ -19,12 +19,10 @@ pub struct Cmd {
     #[clap(long, short)]
     pub password: Option<String>,
 
-    /// The encryption key for your account
-    #[clap(long, short)]
+    #[clap(long, short, help = fl!("arg-account-login-key"))]
     pub key: Option<String>,
 
-    /// The two-factor authentication code for your account, if any
-    #[clap(long, short)]
+    #[clap(long, short, help = fl!("arg-account-login-totp-code"))]
     pub totp_code: Option<String>,
 
     #[clap(long, hide = true)]

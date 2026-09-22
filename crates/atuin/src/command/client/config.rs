@@ -6,28 +6,21 @@ use tracing::instrument;
 
 #[cfg(feature = "daemon")]
 use crate::command::client::daemon;
+use crate::i18n::fl;
 
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
-    /// Get a configuration value from your config.toml file
-    /// or after defaults and overrides are applied
-    #[command()]
+    #[command(about = fl!("cmd-config-get"))]
     Get(GetCmd),
 
-    /// Set a configuration value in your config.toml file
-    #[command()]
+    #[command(about = fl!("cmd-config-set"))]
     Set(SetCmd),
 
-    /// Enable a feature, along with everything it depends on
-    #[command()]
+    #[command(about = fl!("cmd-config-enable"))]
     Enable(EnableCmd),
 
-    /// Print all configuration values from your config.toml file
-    /// in TOML format
-    ///
-    /// If a key is provided, only print the value of that key and all its children
-    #[command()]
+    #[command(about = fl!("cmd-config-print"), long_about = fl!("cmd-config-print", "long"))]
     Print(PrintCmd),
 }
 
@@ -47,15 +40,13 @@ impl Cmd {
 /// or optionally the effective value after defaults and overrides are applied.
 #[derive(Args, Debug)]
 pub struct GetCmd {
-    /// The configuration key to get
+    #[arg(help = fl!("arg-config-get-key"))]
     pub key: String,
 
-    /// Print the value after defaults and overrides are applied
-    #[arg(long, short)]
+    #[arg(long, short, help = fl!("arg-config-get-resolved"))]
     pub resolved: bool,
 
-    /// Print both the config file value and the resolved value
-    #[arg(long, short)]
+    #[arg(long, short, help = fl!("arg-config-get-verbose"))]
     pub verbose: bool,
 }
 
@@ -126,28 +117,34 @@ impl GetCmd {
 
 #[derive(Args, Debug)]
 pub struct SetCmd {
-    /// The configuration key to set
+    #[arg(help = fl!("arg-config-set-key"))]
     pub key: String,
 
-    /// The value to set
+    #[arg(help = fl!("arg-config-set-value"))]
     pub value: String,
 
-    /// Store value as an explicit type
-    #[arg(long = "type", short, value_enum, default_value_t = ValueType::Auto, value_name = "TYPE")]
+    #[arg(
+        long = "type",
+        short,
+        value_enum,
+        default_value_t = ValueType::Auto,
+        value_name = "TYPE",
+        help = fl!("arg-config-set-the-type")
+    )]
     pub the_type: ValueType,
 }
 
 #[derive(ValueEnum, Debug, Clone, PartialEq, Eq)]
 pub enum ValueType {
-    /// Automatically determine the type of the value
+    #[value(help = fl!("value-config-set-the-type-auto"))]
     Auto,
-    /// Store value as a string
+    #[value(help = fl!("value-config-set-the-type-string"))]
     String,
-    /// Store value as a boolean
+    #[value(help = fl!("value-config-set-the-type-boolean"))]
     Boolean,
-    /// Store value as an integer
+    #[value(help = fl!("value-config-set-the-type-integer"))]
     Integer,
-    /// Store the value as a float
+    #[value(help = fl!("value-config-set-the-type-float"))]
     Float,
 }
 
@@ -232,16 +229,15 @@ impl SetCmd {
 
 #[derive(Args, Debug)]
 pub struct EnableCmd {
-    /// The feature to enable
-    #[arg(value_enum)]
+    #[arg(value_enum, help = fl!("arg-config-enable-feature"))]
     pub feature: Feature,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Feature {
-    /// Run the daemon, autostart it, and use it for search
+    #[value(help = fl!("value-config-enable-feature-daemon"))]
     Daemon,
-    /// Capture command output, via the daemon and the pty proxy
+    #[value(help = fl!("value-config-enable-feature-output-capture"))]
     OutputCapture,
 }
 
@@ -301,7 +297,7 @@ impl EnableCmd {
 
 #[derive(Args, Debug)]
 pub struct PrintCmd {
-    /// Print the value of a specific key and all its children
+    #[arg(help = fl!("arg-config-print-key"))]
     pub key: Option<String>,
 }
 

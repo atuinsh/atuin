@@ -4,6 +4,8 @@ use clap::{Args, Subcommand};
 use eyre::Result;
 use tracing::instrument;
 
+use crate::i18n::fl;
+
 pub mod change_password;
 pub mod delete;
 pub mod link;
@@ -19,22 +21,22 @@ pub struct Cmd {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Login to the configured server
+    #[command(about = fl!("cmd-account-login"))]
     Login(login::Cmd),
 
-    /// Register a new account
+    #[command(about = fl!("cmd-account-register"))]
     Register(register::Cmd),
 
-    /// Log out
+    #[command(about = fl!("cmd-account-logout"))]
     Logout,
 
-    /// Delete your account, and all synced data
+    #[command(about = fl!("cmd-account-delete"))]
     Delete(delete::Cmd),
 
-    /// Change your password
+    #[command(about = fl!("cmd-account-change-password"))]
     ChangePassword(change_password::Cmd),
 
-    /// Link your CLI sync account to your Hub account
+    #[command(about = fl!("cmd-account-link"))]
     Link,
 }
 

@@ -52,10 +52,10 @@ impl Generator for GenShell {
 
 #[derive(Debug, Parser)]
 pub struct Cmd {
-    #[arg(long, short, help = fl!("gen-completions-shell"))]
+    #[arg(long, short, help = fl!("arg-gen-completions-shell"))]
     shell: GenShell,
 
-    #[arg(long, short, help = fl!("gen-completions-out-dir"))]
+    #[arg(long, short, help = fl!("arg-gen-completions-out-dir"))]
     out_dir: Option<String>,
 }
 

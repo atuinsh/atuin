@@ -16,12 +16,13 @@ mod wire;
 
 use event::HookEvent;
 
+use crate::i18n::fl;
+
 #[derive(Subcommand, Debug)]
 enum Action {
-    /// Install hooks for an AI agent to capture commands in atuin history
+    #[command(about = fl!("cmd-hook-install"))]
     Install {
-        /// Agent to install hooks for (e.g., "claude-code")
-        #[arg(value_name = "AGENT")]
+        #[arg(value_name = "AGENT", help = fl!("arg-hook-install-agent"))]
         agent: String,
     },
 }
@@ -32,8 +33,7 @@ pub struct Cmd {
     #[command(subcommand)]
     action: Option<Action>,
 
-    /// Which agent's hook format to parse (e.g., "claude-code")
-    #[arg(value_name = "AGENT", hide = true)]
+    #[arg(value_name = "AGENT", hide = true, help = fl!("arg-hook-agent"))]
     agent: Option<String>,
 }
 

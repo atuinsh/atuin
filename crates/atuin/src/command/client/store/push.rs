@@ -10,27 +10,30 @@ use clap::Args;
 use eyre::{Context as _, Result};
 use uuid::Uuid;
 
+use crate::i18n::fl;
+
 #[derive(Args, Debug)]
 pub struct Push {
-    /// The tag to push (eg, 'history'). Defaults to all tags
-    #[arg(long, short)]
+    #[arg(long, short, help = fl!("arg-store-push-tag"))]
     pub tag: Option<RecordTag>,
 
-    /// The host to push, in the form of a UUID host ID. Defaults to the current host.
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-store-push-host"))]
     pub host: Option<Uuid>,
 
-    /// Force push records
-    ///
-    /// This will override both host and tag, to be all hosts and all tags. First clear the remote store, then upload all of the
-    /// local store
-    #[arg(long, default_value = "false")]
+    #[arg(
+        long,
+        default_value = "false",
+        help = fl!("arg-store-push-force"),
+        long_help = fl!("arg-store-push-force", "long")
+    )]
     pub force: bool,
 
-    /// Page Size
-    ///
-    /// How many records to upload at once. Defaults to 100
-    #[arg(long, default_value = "100")]
+    #[arg(
+        long,
+        default_value = "100",
+        help = fl!("arg-store-push-page"),
+        long_help = fl!("arg-store-push-page", "long")
+    )]
     pub page: NonZeroU64,
 }
 

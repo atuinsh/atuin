@@ -5,42 +5,51 @@ use atuin_dotfiles::store::var::VarStore;
 use clap::{Subcommand, ValueEnum};
 use eyre::{Context, Result};
 
+use crate::i18n::fl;
+
 #[derive(Clone, Copy, Debug, Default, ValueEnum)]
 pub enum SortBy {
-    /// Sort by variable name
+    #[value(help = fl!("value-dotfiles-var-list-sort-by-name"))]
     #[default]
     Name,
-    /// Sort by variable value
+    #[value(help = fl!("value-dotfiles-var-list-sort-by-value"))]
     Value,
 }
 
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
-    /// List all variables
+    #[command(about = fl!("cmd-dotfiles-var-list"))]
     List {
-        /// Sort results by field
-        #[arg(long, value_enum, default_value_t = SortBy::Name)]
+        #[arg(
+            long,
+            value_enum,
+            default_value_t = SortBy::Name,
+            help = fl!("arg-dotfiles-var-list-sort-by")
+        )]
         sort_by: SortBy,
 
-        /// Sort in reverse (descending) order
-        #[arg(long, short)]
+        #[arg(long, short, help = fl!("arg-dotfiles-var-list-reverse"))]
         reverse: bool,
 
-        /// Filter variables by name (substring match)
-        #[arg(long, short)]
+        #[arg(long, short, help = fl!("arg-dotfiles-var-list-name"))]
         name: Option<String>,
 
-        /// Filter variables by value (substring match)
-        #[arg(long, short)]
+        #[arg(long, short, help = fl!("arg-dotfiles-var-list-value"))]
         value: Option<String>,
 
-        /// Show only exported variables
-        #[arg(long, conflicts_with = "shell_only")]
+        #[arg(
+            long,
+            conflicts_with = "shell_only",
+            help = fl!("arg-dotfiles-var-list-exports-only")
+        )]
         exports_only: bool,
 
-        /// Show only non-exported (shell) variables
-        #[arg(long, conflicts_with = "exports_only")]
+        #[arg(
+            long,
+            conflicts_with = "exports_only",
+            help = fl!("arg-dotfiles-var-list-shell-only")
+        )]
         shell_only: bool,
     },
 }

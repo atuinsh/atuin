@@ -18,30 +18,28 @@ use crate::i18n::fl;
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
-    /// Sync with the configured server
+    #[command(about = fl!("cmd-sync"))]
     Sync {
-        /// Force re-download everything
-        #[arg(long, short)]
+        #[arg(long, short, help = fl!("arg-sync-force"))]
         force: bool,
     },
 
-    /// Login to the configured server
+    #[command(about = fl!("cmd-login"))]
     Login(account::login::Cmd),
 
-    /// Log out
+    #[command(about = fl!("cmd-logout"))]
     Logout,
 
-    /// Register with the configured server
+    #[command(about = fl!("cmd-register"))]
     Register(account::register::Cmd),
 
-    /// Print the encryption key for transfer to another machine
+    #[command(about = fl!("cmd-key"))]
     Key {
-        /// Switch to base64 output of the key
-        #[arg(long)]
+        #[arg(long, help = fl!("arg-key-base64"))]
         base64: bool,
     },
 
-    /// Display the sync status
+    #[command(about = fl!("cmd-status"))]
     Status,
 }
 

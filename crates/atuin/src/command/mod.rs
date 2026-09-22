@@ -23,20 +23,18 @@ pub enum AtuinCmd {
     #[command(flatten)]
     Client(client::Cmd),
 
-    /// PTY proxy for atuin
     #[cfg(feature = "pty-proxy")]
-    #[command(alias = "hex")]
+    #[command(alias = "hex", about = fl!("cmd-pty-proxy"))]
     PtyProxy(atuin_pty_proxy::PtyProxy),
 
-    /// Generate a UUID
     // Plumbing: every shell init calls `atuin uuid` to seed ATUIN_SESSION; not for interactive use.
-    #[command(hide = true)]
+    #[command(hide = true, about = fl!("cmd-uuid"))]
     Uuid,
 
-    #[command(about = fl!("contributors-about"))]
+    #[command(about = fl!("cmd-contributors"))]
     Contributors,
 
-    /// Generate shell completions
+    #[command(about = fl!("cmd-gen-completions"))]
     GenCompletions(gen_completions::Cmd),
 
     #[command(external_subcommand)]
