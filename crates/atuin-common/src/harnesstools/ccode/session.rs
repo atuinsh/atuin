@@ -270,15 +270,18 @@ impl Message for CcodeMessage {
     }
 
     fn stop_reason(&self) -> Option<StopReason> {
-        // An interrupt is recorded as a user line; it is the turn that it ends.
-        let interrupted = self.content().first().is_some_and(|c| {
-            matches!(c, Content::Text(t) if t.trim_start().starts_with("[Request interrupted by user"))
-        });
-        if interrupted {
+        // An interrupt is recorded as a user line; it is the turn that it ends. Peeked from the
+        // raw JSON rather than `content()`, which would clone every block to read one string.
+        let message = self.message.as_ref()?;
+        let first_text = match &message["content"] {
+            serde_json::Value::String(text) => Some(text.as_str()),
+            serde_json::Value::Array(blocks) => blocks.first().and_then(|b| b["text"].as_str()),
+            _ => None,
+        };
+        if first_text.is_some_and(|t| t.trim_start().starts_with("[Request interrupted by user")) {
             return Some(StopReason::Aborted);
         }
-        let raw = self.message.as_ref()?.get("stop_reason")?.as_str()?;
-        Some(ccode_stop_reason(raw))
+        Some(ccode_stop_reason(message.get("stop_reason")?.as_str()?))
     }
 
     fn cwd(&self) -> Option<PathBuf> {

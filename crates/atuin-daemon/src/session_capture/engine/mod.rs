@@ -64,17 +64,7 @@ impl SessionCaptureEngine {
                 };
 
                 let mut events = listener.events();
-                // Latest known title per native session id, stamped onto each captured message so
-                // session-level metadata rides the synced records (see `Message::session_title`).
-                let mut titles: HashMap<String, String> = HashMap::new();
-                // Lines without a timestamp (Claude Code `ai-title` and friends) take the
-                // previous line's, so a replayed session is not stamped with capture time.
-                let mut last_ts: HashMap<String, OffsetDateTime> = HashMap::new();
-                // Session each one was spawned from, when it has one (subagents, forks).
-                let mut parents: HashMap<String, NativeSessionId> = HashMap::new();
-                // Last model call seen per session: later rows of the same call repeat its usage,
-                // so only the first keeps it.
-                let mut last_turn: HashMap<String, String> = HashMap::new();
+                let mut state = Bookkeeping::default();
 
                 while let Some(ev) = events.next().await {
                     match ev {
@@ -83,10 +73,10 @@ impl SessionCaptureEngine {
                             kind: SessionEventKind::Started(meta),
                         }) => {
                             if let Some(title) = &meta.title {
-                                titles.insert(session.to_string(), title.clone());
+                                state.titles.insert(session.to_string(), title.clone());
                             }
                             if let Some(parent) = &meta.parent {
-                                parents.insert(
+                                state.parents.insert(
                                     session.to_string(),
                                     NativeSessionId::from(parent.to_string()),
                                 );
@@ -103,21 +93,11 @@ impl SessionCaptureEngine {
                             session,
                             kind: SessionEventKind::Message(m),
                         }) => {
-                            let key = session.to_string();
-                            let timestamp = match m.timestamp() {
-                                Some(ts) => *last_ts.entry(key.clone()).insert_entry(ts).get(),
-                                None => last_ts
-                                    .get(&key)
-                                    .copied()
-                                    .unwrap_or_else(OffsetDateTime::now_utc),
-                            };
-                            // ponytail: newest title wins; a hand-set title is not ranked above a
-                            // later generated one.
-                            if let Some(title) = m.title() {
-                                titles.insert(key.clone(), title.clone());
+                            let seen = state.observe(&session, &m);
+                            if let Some(title) = seen.new_title {
                                 let handle = HarnessSession {
                                     harness: kind,
-                                    session: NativeSessionId::from(key.clone()),
+                                    session: NativeSessionId::from(session.to_string()),
                                 };
                                 let meta = SessionMeta {
                                     title: Some(title),
@@ -127,21 +107,17 @@ impl SessionCaptureEngine {
                                     tracing::warn!(?e, "failed to record ai-session title");
                                 }
                             }
-                            if let Some(parent) = m.parent_session().filter(|p| *p != session) {
-                                parents
-                                    .insert(key.clone(), NativeSessionId::from(parent.to_string()));
-                            }
-                            let repeat = m.turn_id().is_some_and(|t| {
-                                last_turn.insert(key.clone(), t.clone()).as_ref() == Some(&t)
-                            });
-                            let title = titles.get(&key).cloned();
-                            let parent = parents.get(&key).cloned();
-                            let Some(mut msg) =
-                                Self::enrich(kind, &session, &m, title, timestamp, parent)
-                            else {
+                            let Some(mut msg) = Self::enrich(
+                                kind,
+                                &session,
+                                &m,
+                                seen.title,
+                                seen.timestamp,
+                                seen.parent,
+                            ) else {
                                 continue;
                             };
-                            if repeat {
+                            if seen.repeat {
                                 msg.usage = None;
                             }
                             if let Err(e) = sink.append(msg).await {
@@ -157,9 +133,10 @@ impl SessionCaptureEngine {
         Self { listeners }
     }
 
-    /// `None` for a line that carries nothing worth a row: harness bookkeeping (Claude Code
-    /// attachments and mode switches, Codex `item_completed` twins) with no content, usage,
-    /// stop reason, model or title.
+    /// `None` for a line that carries nothing worth a row: harness bookkeeping (Claude Code mode
+    /// switches, Codex `item_completed` twins) with no content, usage, stop reason, model or
+    /// title. A line with its own id is a node of the transcript tree and keeps an empty row
+    /// (Claude Code attachments), so no kept line's parent link dangles.
     fn enrich(
         kind: HarnessKind,
         session: &SessionId,
@@ -172,7 +149,8 @@ impl SessionCaptureEngine {
         let usage = m.usage();
         let stop_reason = m.stop_reason();
         let model = m.model();
-        if content.is_empty()
+        if m.id().is_none()
+            && content.is_empty()
             && usage.is_none()
             && stop_reason.is_none()
             && model.is_none()
@@ -225,6 +203,64 @@ impl SessionCaptureEngine {
     }
 }
 
+/// Per-session state the capture loop carries from one line to the next.
+#[derive(Default)]
+struct Bookkeeping {
+    /// Latest known title per native session id, stamped onto each captured message so
+    /// session-level metadata rides the synced records (see `Message::session_title`).
+    titles: HashMap<String, String>,
+    /// Lines without a timestamp (Claude Code `ai-title` and friends) take the previous line's,
+    /// so a replayed session is not stamped with capture time.
+    last_ts: HashMap<String, OffsetDateTime>,
+    /// Session each one was spawned from, when it has one (subagents, forks).
+    parents: HashMap<String, NativeSessionId>,
+    /// Last model call that reported usage per session: later rows of the same call repeat its
+    /// usage, so only the first keeps it.
+    last_turn: HashMap<String, String>,
+}
+
+/// What [`Bookkeeping::observe`] resolved for one line.
+struct Observed {
+    timestamp: OffsetDateTime,
+    /// The title this line set, if it set one.
+    new_title: Option<String>,
+    title: Option<String>,
+    parent: Option<NativeSessionId>,
+    /// This row repeats the usage an earlier row of the same model call already carried.
+    repeat: bool,
+}
+
+impl Bookkeeping {
+    fn observe(&mut self, session: &SessionId, m: &AnyMessage) -> Observed {
+        let key = session.to_string();
+        let timestamp = match m.timestamp() {
+            Some(ts) => *self.last_ts.entry(key.clone()).insert_entry(ts).get(),
+            None => self.last_ts.get(&key).copied().unwrap_or_else(OffsetDateTime::now_utc),
+        };
+        // ponytail: newest title wins; a hand-set title is not ranked above a later generated one.
+        let new_title = m.title();
+        if let Some(title) = &new_title {
+            self.titles.insert(key.clone(), title.clone());
+        }
+        if let Some(parent) = m.parent_session().filter(|p| p != session) {
+            self.parents.insert(key.clone(), NativeSessionId::from(parent.to_string()));
+        }
+        // Only a line that reports usage moves the marker: bookkeeping lines can share the turn
+        // id (Codex `task_started`) while carrying nothing to dedupe.
+        let repeat = m.usage().is_some()
+            && m.turn_id()
+                .is_some_and(|t| self.last_turn.insert(key.clone(), t.clone()) == Some(t));
+
+        Observed {
+            timestamp,
+            new_title,
+            title: self.titles.get(&key).cloned(),
+            parent: self.parents.get(&key).cloned(),
+            repeat,
+        }
+    }
+}
+
 impl Drop for SessionCaptureEngine {
     fn drop(&mut self) {
         for listener in &self.listeners {
@@ -236,6 +272,7 @@ impl Drop for SessionCaptureEngine {
 #[cfg(test)]
 mod tests {
     use atuin_common::harnesstools::ccode::session::CcodeMessage;
+    use atuin_common::harnesstools::codex::session::CodexMessage;
     use atuin_common::harnesstools::session::{Content, Role};
     use rstest::rstest;
 
@@ -249,10 +286,53 @@ mod tests {
         SessionId::from("s1".to_owned())
     }
 
+    fn codex(raw: &serde_json::Value) -> AnyMessage {
+        AnyMessage::Codex(serde_json::from_str::<CodexMessage>(&raw.to_string()).unwrap())
+    }
+
+    /// One line through the spawn loop's message arm: bookkeeping, then enrich, then the usage
+    /// dedupe.
+    fn capture(state: &mut Bookkeeping, kind: HarnessKind, m: &AnyMessage) -> Option<Message> {
+        let seen = state.observe(&session(), m);
+        let mut msg = SessionCaptureEngine::enrich(
+            kind,
+            &session(),
+            m,
+            seen.title,
+            seen.timestamp,
+            seen.parent,
+        )?;
+        if seen.repeat {
+            msg.usage = None;
+        }
+        Some(msg)
+    }
+
     #[rstest]
-    #[case(serde_json::json!({"type": "attachment", "uuid": "a1", "cwd": "/x", "attachment": {"type": "date"}}))]
+    fn attachment_lines_keep_an_empty_row_so_the_tree_stays_linked() {
+        let m = ccode(&serde_json::json!({
+            "type": "attachment", "uuid": "a1", "parentUuid": "u0", "cwd": "/x",
+            "attachment": {"type": "hook_success", "stdout": "secret"},
+        }));
+        let msg = SessionCaptureEngine::enrich(
+            HarnessKind::ClaudeCode,
+            &session(),
+            &m,
+            None,
+            OffsetDateTime::UNIX_EPOCH,
+            None,
+        )
+        .unwrap();
+        assert_eq!(msg.source_id, SourceId::from("a1".to_owned()));
+        assert_eq!(msg.parent_source_id, Some(SourceId::from("u0".to_owned())));
+        assert_eq!(msg.role, Role::Other("attachment".to_owned()));
+        assert!(msg.content.is_empty());
+    }
+
+    #[rstest]
     #[case(serde_json::json!({"type": "mode", "mode": "default"}))]
     #[case(serde_json::json!({"type": "last-prompt", "leafUuid": "a1"}))]
+    #[case(serde_json::json!({"type": "file-history-snapshot", "messageId": "m1", "snapshot": {}}))]
     fn bookkeeping_lines_produce_no_row(#[case] raw: serde_json::Value) {
         let m = ccode(&raw);
         assert!(
@@ -296,35 +376,28 @@ mod tests {
         );
     }
 
+    /// A subagent line names the parent session; a main-session line names its own and gets
+    /// no parent.
     #[rstest]
-    #[case(None, None)]
-    #[case(Some("p"), Some("p"))]
-    fn tree_fields_ride_the_message(#[case] parent: Option<&str>, #[case] expected: Option<&str>) {
+    #[case("s1", None)]
+    #[case("p", Some("p"))]
+    fn tree_fields_ride_the_message(#[case] line_session: &str, #[case] parent: Option<&str>) {
         let m = ccode(&serde_json::json!({
-            "type": "assistant", "uuid": "u2", "parentUuid": "u1", "sessionId": "p",
+            "type": "assistant", "uuid": "u2", "parentUuid": "u1", "sessionId": line_session,
             "message": {"role": "assistant", "id": "msg_01", "content": [{"type": "text", "text": "hi"}]},
         }));
-        let msg = SessionCaptureEngine::enrich(
-            HarnessKind::ClaudeCode,
-            &session(),
-            &m,
-            None,
-            OffsetDateTime::UNIX_EPOCH,
-            parent.map(|p| NativeSessionId::from(p.to_owned())),
-        )
-        .unwrap();
+        let msg = capture(&mut Bookkeeping::default(), HarnessKind::ClaudeCode, &m).unwrap();
         assert_eq!(msg.parent_source_id, Some(SourceId::from("u1".to_owned())));
         assert_eq!(
             msg.parent.map(|p| p.session),
-            expected.map(|p| NativeSessionId::from(p.to_owned()))
+            parent.map(|p| NativeSessionId::from(p.to_owned()))
         );
         assert_eq!(msg.turn_id.as_deref(), Some("msg_01"));
         assert_eq!(msg.role, Role::Assistant);
         assert_eq!(msg.content, vec![Content::Text("hi".into())]);
     }
 
-    /// The spawn loop's per-session bookkeeping, driven directly: the second row of one model
-    /// call drops its repeated usage but is still a row.
+    /// The second row of one model call drops its repeated usage but is still a row.
     #[rstest]
     fn repeated_turn_keeps_the_row_and_drops_the_usage() {
         let line = |uuid: &str, block: serde_json::Value| {
@@ -340,28 +413,36 @@ mod tests {
             serde_json::json!({"type": "tool_use", "id": "t", "name": "Bash", "input": {}}),
         );
 
-        let mut last_turn: HashMap<String, String> = HashMap::new();
-        let mut rows = Vec::new();
-        for m in [first, second] {
-            let repeat = m
-                .turn_id()
-                .is_some_and(|t| last_turn.insert("s1".to_owned(), t.clone()).as_ref() == Some(&t));
-            let mut msg = SessionCaptureEngine::enrich(
-                HarnessKind::ClaudeCode,
-                &session(),
-                &m,
-                None,
-                OffsetDateTime::UNIX_EPOCH,
-                None,
-            )
-            .unwrap();
-            if repeat {
-                msg.usage = None;
-            }
-            rows.push(msg);
-        }
+        let mut state = Bookkeeping::default();
+        let rows: Vec<Message> = [first, second]
+            .iter()
+            .filter_map(|m| capture(&mut state, HarnessKind::ClaudeCode, m))
+            .collect();
         assert!(rows[0].usage.is_some());
         assert!(rows[1].usage.is_none());
         assert_eq!(rows[1].content.len(), 1);
+    }
+
+    /// Codex names the turn on bookkeeping lines that carry no usage; they must not make the
+    /// accounting line that follows look like a repeat, and each response keeps its own usage.
+    #[rstest]
+    fn codex_accounting_lines_keep_their_usage() {
+        let started = codex(&serde_json::json!({
+            "type": "event_msg", "payload": {"type": "task_started", "turn_id": "t1"},
+        }));
+        let usage = |response: &str, output: u64| {
+            codex(&serde_json::json!({
+                "type": "token_usage_record", "timestamp": "2026-09-18T10:00:00Z",
+                "payload": {"turn_id": "t1", "response_id": response,
+                    "usage": {"input_tokens": 1, "output_tokens": output}},
+            }))
+        };
+
+        let mut state = Bookkeeping::default();
+        assert!(capture(&mut state, HarnessKind::Codex, &started).is_none());
+        let first = capture(&mut state, HarnessKind::Codex, &usage("r1", 5)).unwrap();
+        let second = capture(&mut state, HarnessKind::Codex, &usage("r2", 7)).unwrap();
+        assert_eq!(first.usage.and_then(|u| u.output), Some(5));
+        assert_eq!(second.usage.and_then(|u| u.output), Some(7));
     }
 }

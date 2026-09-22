@@ -180,11 +180,15 @@ fn codex_output_failed(output: &serde_json::Value) -> bool {
         }
         _ => Vec::new(),
     };
+    // The last occurrence: the header follows the output, which may quote an earlier one.
     texts.iter().any(|text| {
         ["Process exited with code ", "\"exit_code\":"].iter().any(|marker| {
-            text.find(marker).is_some_and(|at| {
-                let code: String =
-                    text[at + marker.len()..].chars().take_while(char::is_ascii_digit).collect();
+            text.rfind(marker).is_some_and(|at| {
+                let code: String = text[at + marker.len()..]
+                    .trim_start()
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit() || *c == '-')
+                    .collect();
                 code.parse::<i64>().is_ok_and(|c| c != 0)
             })
         })
@@ -291,10 +295,13 @@ impl Message for CodexMessage {
         self.payload.as_ref()?.get("cwd")?.as_str().map(PathBuf::from)
     }
 
-    /// Codex only names the turn on context and accounting lines, never on items: one level
-    /// coarser than a model call, and `None` for the messages themselves.
+    /// Codex names the model call only on the accounting line it writes after each response;
+    /// items carry no response id, and `turn_id` there is the whole agent turn, so `None`.
     fn turn_id(&self) -> Option<String> {
-        self.payload.as_ref()?.get("turn_id")?.as_str().map(str::to_owned)
+        if self.kind != "token_usage_record" {
+            return None;
+        }
+        self.payload.as_ref()?.get("response_id")?.as_str().map(str::to_owned)
     }
 }
 
@@ -340,9 +347,11 @@ mod tests {
     }
 
     #[rstest]
-    #[case(serde_json::json!({"type": "turn_context", "payload": {"turn_id": "t1"}}), Some("t1"))]
+    #[case(serde_json::json!({"type": "token_usage_record", "payload": {"turn_id": "t1", "response_id": "r1"}}), Some("r1"))]
+    #[case(serde_json::json!({"type": "turn_context", "payload": {"turn_id": "t1"}}), None)]
+    #[case(serde_json::json!({"type": "event_msg", "payload": {"type": "task_started", "turn_id": "t1"}}), None)]
     #[case(serde_json::json!({"type": "response_item", "payload": {"type": "message", "id": "m1"}}), None)]
-    fn turn_id_is_only_on_context_lines(
+    fn turn_id_is_the_response_id_on_accounting_lines(
         #[case] raw: serde_json::Value,
         #[case] expected: Option<&str>,
     ) {
@@ -456,6 +465,9 @@ mod tests {
     #[case(serde_json::json!([{"type": "output_text", "text": "{\"output\":\"x\",\"exit_code\":0}"}]), false)]
     #[case(serde_json::json!([{"type": "output_text", "text": "{\"output\":\"x\",\"exit_code\":1}"}]), true)]
     #[case(serde_json::json!("plain text"), false)]
+    #[case(serde_json::json!("killed\nProcess exited with code -9"), true)]
+    #[case(serde_json::json!("log: Process exited with code 1\nProcess exited with code 0"), false)]
+    #[case(serde_json::json!([{"type": "output_text", "text": "{\"output\": \"x\", \"exit_code\": 3}"}]), true)]
     fn tool_output_error_is_derived_from_exit_code(
         #[case] output: serde_json::Value,
         #[case] error: bool,
