@@ -5,6 +5,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync::{ClientSource, SyncError, SyncSession};
 use atuin_client::settings::{Settings, SyncAuth};
 use atuin_common::encryption::paseto_v4;
+use atuin_common::utils::env_nonempty;
 use clap::Parser;
 use eyre::{Context, Result, bail};
 use rpassword::prompt_password;
@@ -79,17 +80,12 @@ impl Cmd {
     }
 
     /// Whether a rejected key can be corrected by asking for another one.
-    ///
-    /// A key from `--key` or `ATUIN_ENCRYPTION_KEY` is a scripted input: the
-    /// caller committed to a value up front, so a wrong one is an error to
-    /// report rather than a prompt to raise. Only a human typing at a terminal
-    /// gets to try again.
     fn interactive(&self) -> bool {
         self.scripted_key().is_none() && io::stdin().is_terminal()
     }
 
     fn scripted_key(&self) -> Option<String> {
-        self.key.clone().or_else(|| env_secret(KEY_ENV))
+        self.key.clone().or_else(|| env_nonempty(KEY_ENV)?.into_string().ok())
     }
 
     /// Hub login: use the browser flow unless the username was provided for headless use.
@@ -100,8 +96,6 @@ impl Cmd {
             // Headless login via v0 API (for CI / scripting).
             let client = auth::auth_client(settings).await;
 
-            // Before the key prompt, so `--password -` gets stdin rather than
-            // the prompt taking its first line as the key.
             let password =
                 password_arg(self.password.as_deref())?.unwrap_or_else(read_user_password);
 
@@ -115,7 +109,6 @@ impl Cmd {
                 match response {
                     AuthResponse::Success { session, auth_type } => break (session, auth_type),
                     AuthResponse::TwoFactorRequired => {
-                        // Re-sending an empty code would loop against the server forever.
                         let Some(code) = read_user_input("two-factor code") else {
                             bail!("A two-factor code is required. Pass it with --totp-code");
                         };
@@ -378,14 +371,10 @@ fn read_user_input(name: &'static str) -> Option<String> {
     get_input().expect("Failed to read from input")
 }
 
-fn env_secret(var: &str) -> Option<String> {
-    std::env::var(var).ok().filter(|s| !s.is_empty())
-}
-
 /// Resolve `--password`, reading stdin for `-` and falling back to `ATUIN_PASSWORD`, if set.
 pub(super) fn password_arg(flag: Option<&str>) -> Result<Option<String>> {
-    resolve_password(flag, env_secret(PASSWORD_ENV), io::stdin().lock())
-        .context("failed to read password from stdin")
+    let env = env_nonempty(PASSWORD_ENV).and_then(|password| password.into_string().ok());
+    resolve_password(flag, env, io::stdin().lock()).context("failed to read password from stdin")
 }
 
 fn resolve_password(
