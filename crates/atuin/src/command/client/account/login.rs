@@ -96,8 +96,8 @@ impl Cmd {
             // Headless login via v0 API (for CI / scripting).
             let client = auth::auth_client(settings).await;
 
-            let password =
-                password_arg(self.password.as_deref())?.unwrap_or_else(read_user_password);
+            let password = password_arg(self.password.as_deref(), io::stdin().lock())?
+                .unwrap_or_else(read_user_password);
 
             self.prompt_and_store_key(settings, store).await?;
 
@@ -157,7 +157,8 @@ impl Cmd {
     /// (or accept them via flags).
     async fn run_legacy_login(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         let username = or_user_input(self.username.clone(), "username");
-        let password = password_arg(self.password.as_deref())?.unwrap_or_else(read_user_password);
+        let password = password_arg(self.password.as_deref(), io::stdin().lock())?
+            .unwrap_or_else(read_user_password);
 
         self.prompt_and_store_key(settings, store).await?;
 
@@ -371,25 +372,16 @@ fn read_user_input(name: &'static str) -> Option<String> {
     get_input().expect("Failed to read from input")
 }
 
-/// Resolve `--password`, reading stdin for `-` and falling back to `ATUIN_PASSWORD`, if set.
-pub(super) fn password_arg(flag: Option<&str>) -> Result<Option<String>> {
-    let env = env_nonempty(PASSWORD_ENV).and_then(|password| password.into_string().ok());
-    resolve_password(flag, env, io::stdin().lock()).context("failed to read password from stdin")
-}
-
-fn resolve_password(
-    flag: Option<&str>,
-    env: Option<String>,
-    mut stdin: impl Read,
-) -> io::Result<Option<String>> {
+/// Resolve `--password`, reading `stdin` for `-` and falling back to `ATUIN_PASSWORD`, if set.
+pub(super) fn password_arg(flag: Option<&str>, mut stdin: impl Read) -> Result<Option<String>> {
     match flag {
         Some(STDIN_ARG) => {
             let mut buf = String::new();
-            stdin.read_to_string(&mut buf)?;
+            stdin.read_to_string(&mut buf).context("failed to read password from stdin")?;
             Ok(Some(buf.trim_end_matches(['\r', '\n']).to_owned()))
         }
         Some(password) => Ok(Some(password.to_owned())),
-        None => Ok(env),
+        None => Ok(env_nonempty(PASSWORD_ENV).and_then(|password| password.into_string().ok())),
     }
 }
 
@@ -401,20 +393,17 @@ mod tests {
     use super::*;
 
     #[rstest]
-    #[case::flag(Some("hunter2"), Some("env"), "stdin", Some("hunter2"))]
-    #[case::stdin(Some("-"), Some("env"), "hunter2\n", Some("hunter2"))]
-    #[case::stdin_crlf(Some("-"), None, "hunter2\r\n", Some("hunter2"))]
-    #[case::stdin_keeps_inner_whitespace(Some("-"), None, " hunter 2\n", Some(" hunter 2"))]
-    #[case::env(None, Some("env"), "stdin", Some("env"))]
-    #[case::none(None, None, "stdin", None)]
-    fn password_precedence(
-        #[case] flag: Option<&str>,
-        #[case] env: Option<&str>,
+    #[case::flag("hunter2", "stdin", "hunter2")]
+    #[case::stdin("-", "hunter2\n", "hunter2")]
+    #[case::stdin_crlf("-", "hunter2\r\n", "hunter2")]
+    #[case::stdin_keeps_inner_whitespace("-", " hunter 2\n", " hunter 2")]
+    fn password_arg_reads_flag_or_stdin(
+        #[case] flag: &str,
         #[case] stdin: &str,
-        #[case] expected: Option<&str>,
+        #[case] expected: &str,
     ) {
-        let password = resolve_password(flag, env.map(str::to_owned), stdin.as_bytes()).unwrap();
-        assert_eq!(password.as_deref(), expected);
+        let password = password_arg(Some(flag), stdin.as_bytes()).unwrap();
+        assert_eq!(password.as_deref(), Some(expected));
     }
 
     #[rstest]

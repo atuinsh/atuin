@@ -49,7 +49,9 @@ impl Cmd {
             // Only resolved once headless registration is reachable, so that
             // `--password -` does not swallow stdin before the browser flow.
             let password = match (&self.username, &self.email) {
-                (Some(_), Some(_)) => password_arg(self.password.as_deref())?,
+                (Some(_), Some(_)) => {
+                    password_arg(self.password.as_deref(), std::io::stdin().lock())?
+                }
                 _ => None,
             };
 
@@ -125,7 +127,7 @@ impl Cmd {
 
             let username = or_user_input(self.username.clone(), "username");
             let email = or_user_input(self.email.clone(), "email");
-            let password = password_arg(self.password.as_deref())?
+            let password = password_arg(self.password.as_deref(), std::io::stdin().lock())?
                 .unwrap_or_else(super::login::read_user_password);
 
             if password.is_empty() {
