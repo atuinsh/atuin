@@ -4,20 +4,30 @@
 //! streams typed row changes as some other process commits to it (it detects cross-process commits
 //! via `PRAGMA data_version`). Two regimes are available:
 //!
-//! - [`SqliteObserver::append`] tails newly-inserted rows via a unique, strictly increasing cursor
-//!   column (see [`Tailable`]).
+//! - [`SqliteObserver::append`] tails newly-inserted rows via a unique, increasing cursor column
+//!   (see [`Tailable`]). Delivery is at-least-once: when the writer deletes rows and recycles
+//!   their cursor values, a type that provides [`Tailable::identity`] makes the tail rewind and
+//!   re-emit the table from the start rather than skip the recycled rows.
 //! - [`SqliteObserver::mutate`] reports inserts, updates and deletes by diffing successive
 //!   whole-table snapshots. It rescans the table on every change, so prefer it for bounded tables.
 //!
 //! A row type implements [`TableSchema`] (its table name and explicit column list) plus
 //! [`Tailable`] (for `append`) or [`Diffable`] (for `mutate`). Each observer owns its own
-//! connection; the returned [`SqliteTableObserver`] is a self-driving `Stream` of `Result<_,
-//! `[`ObserveError`]`>` that polls the source only while it is consumed (so backpressure is
-//! intrinsic), and dropping it releases the connection and stops observing.
+//! connection; the returned [`SqliteTableObserver`] is a self-driving `Stream` of
+//! `Result<_, ObserveError>` items (see [`ObserveError`]) that polls the source only while it is
+//! consumed (so backpressure is intrinsic), and dropping it releases the connection and stops
+//! observing.
+//!
+//! The observer follows the database *path*: when the file is removed or replaced (a writer
+//! resetting its database), it reconnects with the configured backoff once a file is there again
+//! and, for a different file, starts over from the beginning of the table.
 //!
 //! # Examples
 //!
 //! ## Tailing new rows
+//!
+//! A `rowid` table without `AUTOINCREMENT` recycles the rowids of deleted rows, so the row type
+//! exposes its never-reused primary key as the [`identity`](Tailable::identity):
 //!
 //! ```no_run
 //! use atuin_common::db::sqlite::observe::{
@@ -25,22 +35,26 @@
 //! };
 //! use futures::StreamExt;
 //!
+//! // CREATE TABLE messages (id TEXT PRIMARY KEY, body TEXT NOT NULL)
 //! #[derive(Clone, sqlx::FromRow)]
 //! struct Message {
-//!     id: i64,
+//!     rowid: i64,
+//!     id: String,
 //!     body: String,
 //! }
 //!
 //! impl TableSchema for Message {
 //!     const TABLE: &'static str = "messages";
-//!     const COLUMNS: &'static [&'static str] = &["id", "body"];
+//!     const COLUMNS: &'static [&'static str] = &["rowid", "id", "body"];
 //! }
 //!
 //! impl Tailable for Message {
 //!     type Cursor = i64;
-//!     const CURSOR_COLUMN: &'static str = "id";
 //!     fn cursor(&self) -> i64 {
-//!         self.id
+//!         self.rowid
+//!     }
+//!     fn identity(&self) -> Option<String> {
+//!         Some(self.id.clone())
 //!     }
 //! }
 //!
@@ -107,12 +121,11 @@ use std::path::Path;
 use std::time::Duration;
 
 pub use config::{ObserveConfig, Replay};
-use driver::{AppendStrategy, MutateStrategy, Strategy, run};
+use driver::{AppendStrategy, MutateStrategy, Strategy, open, run};
 pub use error::ObserveError;
 pub use event::{Appended, Change, ChangeKind};
 pub use schema::{Cursor, Diffable, TableSchema, Tailable};
-use sqlx::Connection;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
+use sqlx::sqlite::SqliteConnectOptions;
 pub use table::SqliteTableObserver;
 
 #[derive(Debug, Clone)]
@@ -132,29 +145,39 @@ impl SqliteObserver {
     }
 
     #[must_use]
-    pub fn from_options(opts: SqliteConnectOptions) -> Self {
+    pub const fn from_options(opts: SqliteConnectOptions) -> Self {
         Self { opts }
     }
 
+    /// Tails newly-inserted rows of `T`'s table (see [`Tailable`]).
+    ///
+    /// # Errors
+    ///
+    /// [`ObserveError::Connect`] when the database cannot be opened and [`ObserveError::Seed`]
+    /// when the initial replay scan fails; later failures are yielded by the stream.
     pub async fn append<T: Tailable>(
         &self,
         cfg: ObserveConfig,
     ) -> Result<SqliteTableObserver<Appended<T>>, ObserveError> {
-        let mut conn =
-            SqliteConnection::connect_with(&self.opts).await.map_err(ObserveError::Connect)?;
+        let mut source = open(&self.opts).await.map_err(ObserveError::Connect)?;
         let mut strategy = AppendStrategy::<T>::new();
-        strategy.seed(&mut conn, cfg.replay).await.map_err(ObserveError::Seed)?;
-        Ok(SqliteTableObserver::new(run(self.opts.clone(), conn, strategy, cfg)))
+        strategy.seed(&mut source.conn, cfg.replay).await.map_err(ObserveError::Seed)?;
+        Ok(SqliteTableObserver::new(run(self.opts.clone(), source, strategy, cfg)))
     }
 
+    /// Reports inserts, updates and deletes to `T`'s table (see [`Diffable`]).
+    ///
+    /// # Errors
+    ///
+    /// [`ObserveError::Connect`] when the database cannot be opened and [`ObserveError::Seed`]
+    /// when the initial snapshot fails; later failures are yielded by the stream.
     pub async fn mutate<T: Diffable>(
         &self,
         cfg: ObserveConfig,
     ) -> Result<SqliteTableObserver<Change<T>>, ObserveError> {
-        let mut conn =
-            SqliteConnection::connect_with(&self.opts).await.map_err(ObserveError::Connect)?;
+        let mut source = open(&self.opts).await.map_err(ObserveError::Connect)?;
         let mut strategy = MutateStrategy::<T>::new();
-        strategy.seed(&mut conn, cfg.replay).await.map_err(ObserveError::Seed)?;
-        Ok(SqliteTableObserver::new(run(self.opts.clone(), conn, strategy, cfg)))
+        strategy.seed(&mut source.conn, cfg.replay).await.map_err(ObserveError::Seed)?;
+        Ok(SqliteTableObserver::new(run(self.opts.clone(), source, strategy, cfg)))
     }
 }
