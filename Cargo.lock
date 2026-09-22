@@ -653,6 +653,7 @@ dependencies = [
  "memchr",
  "parking_lot",
  "portable-pty",
+ "regex",
  "rstest",
  "rustix",
  "signal-hook",
