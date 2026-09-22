@@ -142,11 +142,11 @@ atuin history dedup --dry-run --before "2025-01-01" --dupkeep 1
 atuin history dedup --before "2025-01-01" --dupkeep 1
 ```
 
-| Flag             | Description                                             |
-| ---------------- | ------------------------------------------------------- |
-| `--dry-run`/`-n` | List duplicates without deleting                        |
-| `--before`/`-b`  | Only consider entries added before this date (required) |
-| `--dupkeep`      | Number of recent duplicates to keep                     |
+| Flag             | Description                                                                                                                     |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `--dry-run`/`-n` | List duplicates without deleting                                                                                                |
+| `--before`/`-b`  | Only consider entries added before this date, read in the configured `timezone` unless it carries an explicit offset (required) |
+| `--dupkeep`      | Number of recent duplicates to keep                                                                                             |
 
 ## Deleting your sync account
 

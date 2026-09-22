@@ -1145,11 +1145,11 @@ atuin history dedup --dry-run --before "2025-01-01" --dupkeep 1
 atuin history dedup --before "2025-01-01" --dupkeep 1
 ```
 
-| Flag             | Description                                             |
-| ---------------- | ------------------------------------------------------- |
-| `--dry-run`/`-n` | List duplicates without deleting                        |
-| `--before`/`-b`  | Only consider entries added before this date (required) |
-| `--dupkeep`      | Number of recent duplicates to keep                     |
+| Flag             | Description                                                                                                                     |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `--dry-run`/`-n` | List duplicates without deleting                                                                                                |
+| `--before`/`-b`  | Only consider entries added before this date, read in the configured `timezone` unless it carries an explicit offset (required) |
+| `--dupkeep`      | Number of recent duplicates to keep                                                                                             |
 
 ## Deleting your sync account
 
@@ -3786,6 +3786,7 @@ Atuin search supports wildcards, with either the `*` or `%` character. By defaul
 | `--exclude-exit`     | Exclude an exit code; repeat to exclude all listed codes (default: none)                                                                                                         |
 | `--before`           | Only include commands run before this time (default: none)                                                                                                                       |
 | `--after`            | Only include commands run after this time (default: none)                                                                                                                        |
+| `--timezone`/`--tz`  | Timezone to display times in and to read `--before`/`--after` in (default: configured `timezone`)                                                                                |
 | `--interactive`/`-i` | Open the interactive search UI (default: false)                                                                                                                                  |
 | `--human`            | Use human-readable formatting for the timestamp and duration (default: false)                                                                                                    |
 | `--limit`            | Limit the number of results (default: none)                                                                                                                                      |
