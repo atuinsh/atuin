@@ -18,8 +18,12 @@ pub enum WatchError {
     Tree(#[from] TreeWatcherError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error(transparent)]
-    Observe(#[from] crate::db::sqlite::observe::ObserveError),
+    #[error("observing {}: {source}", db.display())]
+    Observe {
+        db: PathBuf,
+        #[source]
+        source: crate::db::sqlite::observe::ObserveError,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
