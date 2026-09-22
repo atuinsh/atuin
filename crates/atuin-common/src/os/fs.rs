@@ -10,11 +10,6 @@ pub struct FdIdentity {
 }
 
 impl FdIdentity {
-    #[cfg(test)]
-    pub(crate) fn from_raw(device: u64, inode: u64) -> Self {
-        Self { device, inode }
-    }
-
     /// The identity recorded in path-based [`std::fs::Metadata`], without opening a handle.
     ///
     /// Matches [`FdIdentityExt::identity`] for the same file, but lets a caller that already has

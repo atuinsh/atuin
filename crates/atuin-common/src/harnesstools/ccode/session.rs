@@ -4,9 +4,9 @@ use futures::{Stream, TryStreamExt};
 use serde::Deserialize;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use tokio::sync::watch;
 use typed_builder::TypedBuilder;
 
-use crate::fs::tail::{Anchor, ReadMode, Tail};
 use crate::fs::tree_watcher::{NodeContext, TreeWatcher};
 use crate::harnesstools::ccode::Ccode;
 use crate::harnesstools::session::model::{
@@ -62,13 +62,21 @@ pub struct CcodeListener {
 }
 
 impl CcodeListener {
-    fn accept(ctx: &NodeContext) -> Option<CcodeSession> {
+    /// The session for an accepted file, paired with the change signal the watcher keeps alive
+    /// for as long as the file exists.
+    fn accept(ctx: &NodeContext) -> Option<(CcodeSession, watch::Sender<()>)> {
         let path = ctx.path();
         if !ctx.is_file() || path.extension().is_none_or(|ext| ext != "jsonl") {
             return None;
         }
         let id = path.file_stem()?.to_string_lossy().into_owned();
-        Some(CcodeSession::open(SessionId::from(id), path.to_path_buf()))
+        let (signal, rx) = watch::channel(());
+        let session = CcodeSession {
+            id: SessionId::from(id),
+            path: path.to_path_buf(),
+            changes: Some(rx),
+        };
+        Some((session, signal))
     }
 }
 
@@ -80,10 +88,9 @@ impl Listener for CcodeListener {
         async_stream::stream! {
             let (tx, rx) = flume::unbounded::<CcodeSession>();
             let _watcher = match TreeWatcher::builder().recursive(true).watch(&root, move |ctx| {
-                if let Some(session) = Self::accept(&ctx) {
-                    let _ = tx.send(session);
-                }
-                None::<()>
+                let (session, signal) = Self::accept(&ctx)?;
+                let _ = tx.send(session);
+                Some(signal)
             }) {
                 Ok(watcher) => watcher,
                 Err(err) => {
@@ -102,12 +109,19 @@ impl Listener for CcodeListener {
 pub struct CcodeSession {
     id: SessionId,
     path: PathBuf,
+    /// Wakes [`messages`](Session::messages) on each change to the file; `None` reads it once.
+    changes: Option<watch::Receiver<()>>,
 }
 
 impl CcodeSession {
+    /// A session over the file as it stands: [`messages`](Session::messages) ends at its end.
     #[must_use]
     pub fn open(id: SessionId, path: PathBuf) -> Self {
-        Self { id, path }
+        Self {
+            id,
+            path,
+            changes: None,
+        }
     }
 
     #[must_use]
@@ -124,15 +138,14 @@ impl Session for CcodeSession {
     }
 
     fn messages(self) -> impl Stream<Item = Result<CcodeMessage, MessageError>> + Send + 'static {
-        jsonl::tail::from_path::<CcodeMessage>(self.path).map_err(MessageError::from)
+        jsonl::follow::<CcodeMessage>(self.path, self.changes).map_err(MessageError::from)
     }
 
     fn meta(&self) -> impl std::future::Future<Output = Result<SessionMeta, MessageError>> + Send {
         let path = self.path.clone();
         async move {
-            let tail = Tail::builder().path(path).read(ReadMode::Once(Anchor::Beginning)).build();
             let messages: Vec<CcodeMessage> =
-                jsonl::tail::from_tail(tail).map_err(MessageError::from).try_collect().await?;
+                jsonl::read_all(path).map_err(MessageError::from).try_collect().await?;
             let title = messages.iter().rev().find_map(|m| m.ai_title.clone());
             let cwd = messages.iter().find_map(|m| m.cwd.clone());
             let git_branch = messages.iter().find_map(|m| m.git_branch.clone());
@@ -267,6 +280,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::futures::stream::timed_next;
     use crate::harnesstools::session::model::{Content, Role};
     use crate::harnesstools::session::{
         Message, Session, SessionEvent, SessionEventKind, Sessions,
@@ -393,8 +407,8 @@ mod tests {
     async fn messages_streams_each_turn_of_a_session_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.jsonl");
-        // Trailing newline required: messages() follows the file, and a following tail withholds
-        // an unterminated final line (a real session ends every record with a newline).
+        // Trailing newline required: messages() withholds an unterminated final line until a
+        // later write completes it (a real session ends every record with a newline).
         let body = [
             line("user", "user", serde_json::json!("first")),
             line("assistant", "assistant", serde_json::json!([{"type": "text", "text": "second"}])),
@@ -470,8 +484,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("project-a");
         std::fs::create_dir_all(&sub).unwrap();
-        // Trailing newline required: events() follows each session, and a following tail withholds
-        // an unterminated final line (a real session ends every record with a newline).
+        // Trailing newline required: each session's messages() withholds an unterminated final
+        // line until a later write completes it (a real session ends every record with a newline).
         std::fs::write(
             sub.join("33333333-3333-3333-3333-333333333333.jsonl"),
             [
@@ -504,6 +518,59 @@ mod tests {
             })
             .collect();
         assert_eq!(roles, vec![Role::User, Role::Assistant]);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn messages_yields_lines_appended_after_discovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("44444444-4444-4444-4444-444444444444.jsonl");
+        std::fs::write(&path, line("user", "user", serde_json::json!("hi")) + "\n").unwrap();
+
+        let listener =
+            CcodeSessions::builder().root(dir.path().to_path_buf()).build().listener().unwrap();
+        // The watch stream owns the watcher: it must outlive the message stream.
+        let mut sessions = std::pin::pin!(listener.watch());
+        let session = timed_next(&mut sessions, 10).await.unwrap().unwrap();
+        let mut messages = std::pin::pin!(session.messages());
+        assert_eq!(timed_next(&mut messages, 10).await.unwrap().unwrap().role(), Role::User);
+
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        std::io::Write::write_all(
+            &mut file,
+            (line("assistant", "assistant", serde_json::json!([{"type": "text", "text": "yo"}]))
+                + "\n")
+                .as_bytes(),
+        )
+        .unwrap();
+        drop(file);
+        assert_eq!(timed_next(&mut messages, 10).await.unwrap().unwrap().role(), Role::Assistant);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn messages_ends_when_the_session_file_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("55555555-5555-5555-5555-555555555555.jsonl");
+        std::fs::write(&path, line("user", "user", serde_json::json!("hi")) + "\n").unwrap();
+
+        let listener =
+            CcodeSessions::builder().root(dir.path().to_path_buf()).build().listener().unwrap();
+        let mut sessions = std::pin::pin!(listener.watch());
+        let session = timed_next(&mut sessions, 10).await.unwrap().unwrap();
+        let mut messages = std::pin::pin!(session.messages());
+        assert!(timed_next(&mut messages, 10).await.unwrap().is_ok());
+
+        std::fs::remove_file(&path).unwrap();
+        // A change signalled for the vanished path may surface as an I/O error first; the
+        // stream must still end once the watcher drops the file's handler.
+        loop {
+            match timed_next(&mut messages, 10).await {
+                None => break,
+                Some(Err(_)) => {}
+                Some(Ok(m)) => panic!("unexpected message after removal: {m:?}"),
+            }
+        }
     }
 
     #[rstest]

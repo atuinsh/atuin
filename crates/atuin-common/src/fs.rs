@@ -1,4 +1,4 @@
-pub mod tail;
+pub mod lines;
 pub mod tree_watcher;
 
 use std::path::{Path, PathBuf};
