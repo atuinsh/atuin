@@ -31,16 +31,16 @@ pub enum RunError {
     #[error("{}", fl!("output-search-empty-query"))]
     EmptyQuery,
 
-    #[error("could not connect to the daemon")]
+    #[error("{}", fl!("output-search-connect-failed"))]
     Connect(#[source] eyre::Report),
 
-    #[error("the daemon failed to search command output")]
+    #[error("{}", fl!("output-search-daemon-failed"))]
     Search(#[source] eyre::Report),
 
-    #[error("could not load history from the local database")]
+    #[error("{}", fl!("output-search-load-history-failed"))]
     LoadHistory(#[source] eyre::Report),
 
-    #[error("could not write search results")]
+    #[error("{}", fl!("output-search-write-failed"))]
     Write(#[from] io::Error),
 }
 

@@ -8,6 +8,7 @@ use atuin_common::string::NonNulStr;
 use serde_json::error::Category;
 
 use super::wire::{HookEventName, WireHookEvent, WireToolName};
+use crate::i18n::fl;
 
 /// Why a hook payload could not be parsed.
 ///
@@ -19,7 +20,7 @@ pub enum ParseError {
     /// The payload on stdin was not valid JSON — a syntax error or truncated
     /// input. Agents always emit syntactically valid JSON, so this signals a
     /// real fault rather than an event to skip.
-    #[error("hook payload is not valid JSON at line {line}, column {column}")]
+    #[error("{}", fl!("hook-malformed-json", line = *.line, column = *.column))]
     MalformedJson {
         line: usize,
         column: usize,
@@ -330,10 +331,14 @@ mod tests {
     #[case::not_json("not json")]
     #[case::truncated(r#"{"tool_name":"#)]
     fn malformed_json_is_an_error(#[case] input: &str) {
-        let ParseError::MalformedJson { line, column, .. } =
-            HookEvent::from_json_str(input).unwrap_err();
+        let err = HookEvent::from_json_str(input).unwrap_err();
+        let ParseError::MalformedJson { line, column, .. } = err;
 
         assert!(line >= 1 && column >= 1, "position should be 1-based, got {line}:{column}");
+        assert_eq!(
+            err.to_string(),
+            format!("hook payload is not valid JSON at line {line}, column {column}")
+        );
     }
 
     proptest! {
