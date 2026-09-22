@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use atuin_common::db::sqlite::fts::{FtsQueryExt, TextHighlighter, match_expression};
+use atuin_common::db::sqlite::fts::{TextHighlighter, match_expression};
 use atuin_common::db::sqlite::{Sqlite, SqliteOpenOrCreateError};
 use atuin_common::db::{self};
 use atuin_common::harnesstools::session::{Content, Role, SessionMeta, Usage};
@@ -16,7 +16,7 @@ use super::{
 const COMPRESS_THRESHOLD: usize = 256;
 const ZSTD_LEVEL: i32 = 3;
 const REINDEX_CHUNK: i64 = 512;
-const SNIPPET_TOKENS: i32 = 32;
+const SNIPPET_TOKENS: usize = 32;
 
 #[derive(Debug, Clone)]
 pub struct AiSessionDatabase {
@@ -103,8 +103,11 @@ struct MessageRow {
 struct SearchRow {
     #[sqlx(flatten)]
     session: SessionRow,
-    title_hl: String,
-    preview_hl: String,
+    match_content: String,
+    match_content_z: Option<Vec<u8>>,
+    match_cwd: Option<String>,
+    match_git_branch: Option<String>,
+    match_model: Option<String>,
     score: f64,
 }
 
@@ -200,12 +203,11 @@ impl AiSessionDatabase {
         }
 
         let rowid = inserted.last_insert_rowid();
-        let highlighter = TextHighlighter::default();
         let body = Self::searchable_body(msg);
         db::query("INSERT INTO messages_fts(rowid, title, body) VALUES (?, ?, ?)")
             .bind(rowid)
-            .bind_highlightable(highlighter, msg.session_title.as_deref().unwrap_or(""))
-            .bind_highlightable(highlighter, &body)
+            .bind(msg.session_title.as_deref().unwrap_or(""))
+            .bind(&body)
             .execute(&mut *tx)
             .await?;
 
@@ -302,15 +304,40 @@ impl AiSessionDatabase {
         .await?;
 
         if let Some(title) = meta.title.as_deref() {
-            db::query(
-                "UPDATE messages_fts SET title = ? WHERE rowid IN (SELECT rowid FROM messages \
-                 WHERE harness = ? AND session_id = ?)",
+            // messages_fts is contentless, so a single-column UPDATE is not supported: rewrite
+            // each of the session's index rows, re-deriving the body from the stored content.
+            type BodyRow =
+                (i64, String, Option<Vec<u8>>, Option<String>, Option<String>, Option<String>);
+            let rows: Vec<BodyRow> = db::query_as(
+                "SELECT rowid, content, content_z, cwd, git_branch, model FROM messages WHERE \
+                 harness = ? AND session_id = ?",
             )
-            .bind_highlightable(TextHighlighter::default(), title)
             .bind(handle.harness as i64)
             .bind(handle.session.as_ref())
-            .execute(&mut *tx)
+            .fetch_all(&mut *tx)
             .await?;
+
+            for (rowid, content, content_z, cwd, git_branch, model) in rows {
+                let body = Self::body_from_parts(
+                    content,
+                    content_z,
+                    cwd.as_deref(),
+                    git_branch.as_deref(),
+                    model.as_deref(),
+                )
+                .unwrap_or_else(|err| {
+                    warn!(?err, rowid, "failed to decode ai-session message; indexing empty");
+                    String::new()
+                });
+                db::query(
+                    "INSERT OR REPLACE INTO messages_fts(rowid, title, body) VALUES (?, ?, ?)",
+                )
+                .bind(rowid)
+                .bind(title)
+                .bind(&body)
+                .execute(&mut *tx)
+                .await?;
+            }
         }
 
         tx.commit().await?;
@@ -421,15 +448,12 @@ impl AiSessionDatabase {
                 return;
             };
 
-            let [open, close] = TextHighlighter::default().markers();
             let harness_clause = if harness.is_some() { " AND m.harness = ?" } else { "" };
             let limit_clause = if limit == 0 { "" } else { " LIMIT ?" };
 
-            // Snippet/highlight are correlated subqueries keyed on best.rowid, not a re-join of
-            // messages_fts in the outer query: a second top-level `messages_fts MATCH` there makes
-            // SQLite scan the whole match set again only to discard all but `best`, whereas a
-            // rowid-constrained subquery seeks just the ranked row. Each subquery still carries its
-            // own MATCH so the FTS aux function has query context.
+            // messages_fts is contentless: it can rank (bm25) but cannot render highlight() or
+            // snippet(), so the query returns the best message's stored content and the marking
+            // happens in Rust below.
             let sql = format!(
                 "WITH ranked AS MATERIALIZED (\
                  SELECT messages_fts.rowid AS rowid, m.harness AS h, m.session_id AS sid, \
@@ -442,38 +466,47 @@ impl AiSessionDatabase {
                  s.git_branch, s.model, s.started_at, s.updated_at, s.message_count, \
                  s.usage_input, s.usage_output, s.usage_cache_read, s.usage_cache_write, s.title, \
                  s.preview, \
-                 (SELECT highlight(messages_fts, 0, ?, ?) FROM messages_fts \
-                 WHERE messages_fts.rowid = best.rowid AND messages_fts MATCH ?) AS title_hl, \
-                 (SELECT snippet(messages_fts, 1, ?, ?, '…', {SNIPPET_TOKENS}) FROM messages_fts \
-                 WHERE messages_fts.rowid = best.rowid AND messages_fts MATCH ?) AS preview_hl, \
+                 m.content AS match_content, m.content_z AS match_content_z, m.cwd AS match_cwd, \
+                 m.git_branch AS match_git_branch, m.model AS match_model, \
                  best.score AS score FROM best \
                  JOIN messages m ON m.rowid = best.rowid \
                  JOIN sessions s ON s.harness = m.harness AND s.session_id = m.session_id \
                  ORDER BY best.score DESC, s.updated_at DESC, s.session_id",
             );
 
-            let mut stmt = db::query_as::<_, SearchRow>(sqlx::AssertSqlSafe(sql)).bind(expr.clone());
+            let mut stmt = db::query_as::<_, SearchRow>(sqlx::AssertSqlSafe(sql)).bind(expr);
             if let Some(harness) = harness {
                 stmt = stmt.bind(harness as i64);
             }
             if limit != 0 {
                 stmt = stmt.bind(i64::from(limit));
             }
-            stmt = stmt
-                .bind(open.to_string())
-                .bind(close.to_string())
-                .bind(expr.clone())
-                .bind(open.to_string())
-                .bind(close.to_string())
-                .bind(expr);
 
             let highlighter = TextHighlighter::default();
             let mut rows = stmt.fetch(&pool);
             while let Some(row) = rows.try_next().await? {
+                let title = row.session.title.clone().unwrap_or_default();
+                let body = Self::body_from_parts(
+                    row.match_content,
+                    row.match_content_z,
+                    row.match_cwd.as_deref(),
+                    row.match_git_branch.as_deref(),
+                    row.match_model.as_deref(),
+                )
+                .unwrap_or_else(|err| {
+                    warn!(?err, "failed to decode matched ai-session message; empty preview");
+                    String::new()
+                });
+                let preview = Self::preview_snippet(&body, &query, SNIPPET_TOKENS);
+
+                // No highlight spans are produced: consumers only render the plain text, so the
+                // marker machinery isn't worth its keep. sanitize() strips any stray marker
+                // codepoints in stored data so they can't masquerade as spans downstream.
                 yield SessionMatch {
                     session: Self::session_from_row(row.session)?,
-                    title: highlighter.as_highlighted(row.title_hl),
-                    preview: highlighter.as_highlighted(row.preview_hl),
+                    title: highlighter.as_highlighted(highlighter.sanitize(&title).into_owned()),
+                    preview: highlighter
+                        .as_highlighted(highlighter.sanitize(&preview).into_owned()),
                     score: row.score,
                 };
             }
@@ -485,8 +518,9 @@ impl AiSessionDatabase {
         // messages_fts rowids are always a contiguous prefix of messages rowids: append writes the
         // message and its FTS row in one tx, and this backfill (the only other writer, running
         // under open() before the daemon serves) walks rowids ascending. So the highest indexed
-        // rowid alone determines coverage — gate on max(rowid) (O(log N)) rather than counting both
-        // tables (count(*) on a content-bearing FTS5 is a full O(N) scan on every open()).
+        // rowid alone determines coverage — gate on max(rowid) (O(log N)) rather than counting
+        // both tables. This also repopulates the index from scratch after a migration rebuilds
+        // messages_fts.
         let mut watermark: i64 =
             db::query_scalar("SELECT coalesce(max(rowid), 0) FROM messages_fts")
                 .fetch_one(pool)
@@ -498,7 +532,6 @@ impl AiSessionDatabase {
             return Ok(());
         }
 
-        let highlighter = TextHighlighter::default();
         loop {
             let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
             let rows: Vec<ReindexRow> = db::query_as::<_, ReindexRow>(
@@ -534,14 +567,150 @@ impl AiSessionDatabase {
                     "INSERT OR REPLACE INTO messages_fts(rowid, title, body) VALUES (?, ?, ?)",
                 )
                 .bind(rowid)
-                .bind_highlightable(highlighter, &title)
-                .bind_highlightable(highlighter, &body)
+                .bind(&title)
+                .bind(&body)
                 .execute(&mut *tx)
                 .await?;
             }
             tx.commit().await?;
         }
         Ok(())
+    }
+
+    /// Fold text the way the index's `unicode61` tokenizer does — lowercase with combining marks
+    /// stripped — so preview placement agrees with what FTS5 actually matched (e.g. a query for
+    /// `cafe` matches a stored `café`).
+    fn fts_fold(text: &str) -> String {
+        use unicode_normalization::UnicodeNormalization as _;
+        use unicode_normalization::char::is_combining_mark;
+        text.nfd().filter(|c| !is_combining_mark(*c)).flat_map(char::to_lowercase).collect()
+    }
+
+    /// The folded `unicode61`-style tokens (alphanumeric runs) of `text`.
+    fn fts_tokens(text: &str) -> impl Iterator<Item = String> + '_ {
+        Self::fts_fold(text)
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|t| !t.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    /// The index of the first whitespace word where a query term matches the way the FTS index
+    /// matched it: each term is a phrase of folded tokens that must appear consecutively in the
+    /// body's token stream (so `app` matches the token `app`, not the word `apple`, and `foo-bar`
+    /// matches `foo bar` across words).
+    fn preview_hit(words: &[&str], query: &str) -> Option<usize> {
+        let phrases: Vec<Vec<String>> = query
+            .split_whitespace()
+            .map(|term| Self::fts_tokens(term).collect())
+            .filter(|p: &Vec<String>| !p.is_empty())
+            .collect();
+        if phrases.is_empty() {
+            return None;
+        }
+
+        // (word index, folded token) stream over the whole body.
+        let tokens: Vec<(usize, String)> = words
+            .iter()
+            .enumerate()
+            .flat_map(|(i, w)| Self::fts_tokens(w).map(move |t| (i, t)))
+            .collect();
+
+        phrases
+            .iter()
+            .filter_map(|phrase| {
+                (0..tokens.len().saturating_sub(phrase.len() - 1)).find(|&i| {
+                    phrase.iter().zip(&tokens[i..]).all(|(p, (_, t))| p == t)
+                })
+            })
+            .min()
+            .map(|i| tokens[i].0)
+    }
+
+    /// `s` cut to at most `max` bytes on a char boundary.
+    fn truncate_chars(s: &str, max: usize) -> &str {
+        if s.len() <= max {
+            return s;
+        }
+        let end = s.char_indices().take_while(|(i, _)| *i <= max).last().map_or(0, |(i, _)| i);
+        &s[..end]
+    }
+
+    /// A plain preview of the matched message: up to `max_tokens` whitespace-separated words,
+    /// windowed around the first FTS-style term match so it is visible, with `…` marking
+    /// truncation. Bounded by a char budget so whitespace-free blobs (minified output) cannot
+    /// blow up the preview. The replacement for FTS5's `snippet()`, which the contentless index
+    /// cannot render.
+    fn preview_snippet(body: &str, query: &str, max_tokens: usize) -> String {
+        const MAX_CHARS: usize = 400;
+        const LEAD_CHARS: usize = 80;
+
+        let words: Vec<&str> = body.split_whitespace().collect();
+        if words.is_empty() || max_tokens == 0 {
+            return String::new();
+        }
+
+        let hit = Self::preview_hit(&words, query).unwrap_or(0);
+
+        // Lead-in: a little context before the match, capped in words and chars so a giant
+        // preceding blob cannot push the match itself out of the char budget.
+        let mut start = hit;
+        let mut lead = 0;
+        while start > 0
+            && hit - start < max_tokens / 8
+            && lead + words[start - 1].len() < LEAD_CHARS
+        {
+            start -= 1;
+            lead += words[start].len() + 1;
+        }
+
+        let mut out = String::new();
+        if start > 0 {
+            out.push('…');
+        }
+        let mut end = start;
+        let mut clipped = false;
+        for (i, word) in words.iter().enumerate().skip(start).take(max_tokens) {
+            if i > start {
+                if out.len() + 1 + word.len() > MAX_CHARS {
+                    clipped = true;
+                    break;
+                }
+                out.push(' ');
+            }
+            // The first (match-bearing) word always appears, truncated if it alone overflows.
+            let room = MAX_CHARS.saturating_sub(out.len());
+            let cut = Self::truncate_chars(word, room);
+            clipped |= cut.len() < word.len();
+            out.push_str(cut);
+            end = i + 1;
+        }
+        if clipped || end < words.len() {
+            out.push('…');
+        }
+        out
+    }
+
+    /// The searchable body for a message stored as raw columns: decode the (possibly compressed)
+    /// content and append the metadata terms, mirroring [`Self::searchable_body`].
+    fn body_from_parts(
+        content: String,
+        content_z: Option<Vec<u8>>,
+        cwd: Option<&str>,
+        git_branch: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<String, DbError> {
+        let contents = Self::read_content(content, content_z)?;
+        let mut out = String::new();
+        for content in &contents {
+            Self::push_content_text(&mut out, content);
+        }
+        for extra in [cwd, git_branch, model].into_iter().flatten() {
+            out.push_str(extra);
+            out.push('\n');
+        }
+        Ok(out)
     }
 
     fn split_content(json: String) -> Result<(String, Option<Vec<u8>>), DbError> {
@@ -1062,20 +1231,25 @@ mod tests {
     async fn search_matches_reasoning_tool_calls_results_and_metadata() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         let session = sample_handle();
-        let mut message = message_with(&session, 0, Role::Assistant, vec![
-            Content::Reasoning("weighing the tradeoffs".to_owned()),
-            Content::ToolUse(ToolUse {
-                id: ToolCallId::from("call-1".to_owned()),
-                name: "execute_shell_command".to_owned(),
-                input: serde_json::json!({ "command": "cargo nextest run" }),
-            }),
-            Content::ToolResult(ToolResult {
-                call: ToolCallId::from("call-1".to_owned()),
-                output: serde_json::json!({ "stderr": "ENOSPC no space left" }),
-                error: true,
-            }),
-            Content::Other(serde_json::json!({ "note": "peculiar" })),
-        ]);
+        let mut message = message_with(
+            &session,
+            0,
+            Role::Assistant,
+            vec![
+                Content::Reasoning("weighing the tradeoffs".to_owned()),
+                Content::ToolUse(ToolUse {
+                    id: ToolCallId::from("call-1".to_owned()),
+                    name: "execute_shell_command".to_owned(),
+                    input: serde_json::json!({ "command": "cargo nextest run" }),
+                }),
+                Content::ToolResult(ToolResult {
+                    call: ToolCallId::from("call-1".to_owned()),
+                    output: serde_json::json!({ "stderr": "ENOSPC no space left" }),
+                    error: true,
+                }),
+                Content::Other(serde_json::json!({ "note": "peculiar" })),
+            ],
+        );
         message.cwd = Some(std::path::PathBuf::from("/home/marko/atuin"));
         message.git_branch = Some("feat/ai-session-fts".to_owned());
         message.model = Some("claude-opus".to_owned());
@@ -1216,14 +1390,111 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn search_highlights_the_matching_preview() {
+    async fn search_preview_contains_the_matched_term() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         db.append(&message_in(&sample_handle(), 0, "the distinctive marker word")).await.unwrap();
 
         let hits = search(&db, "distinctive").await;
         assert_eq!(hits.len(), 1);
-        assert!(hits[0].preview.has_match(), "preview must highlight the matched term");
         assert!(hits[0].preview.to_plain().text.contains("distinctive"));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_preview_folds_diacritics_like_the_index() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let long: String = (0..200).map(|i| format!("filler-{i:03} ")).collect();
+        db.append(&message_in(&sample_handle(), 0, &format!("{long}the café burned")))
+            .await
+            .unwrap();
+
+        // unicode61 folds diacritics, so `cafe` matches the stored `café`; the preview window
+        // must agree with the index and land on the match, not fall back to the leading words.
+        let hits = search(&db, "cafe").await;
+        assert_eq!(hits.len(), 1);
+        let preview = hits[0].preview.to_plain().text.into_owned();
+        assert!(preview.contains("café"), "the folded match must be in the window: {preview:?}");
+        assert!(!preview.contains("filler-000"), "must not fall back to the leading window");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_preview_matches_whole_tokens_not_substrings() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let filler: String = (0..200).map(|i| format!("filler-{i:03} ")).collect();
+        // `apple` contains `app` as a substring but is a different FTS token; the window must
+        // land on the real token match at the end, not the substring false-positive up front.
+        db.append(&message_in(&sample_handle(), 0, &format!("apple {filler}app end")))
+            .await
+            .unwrap();
+
+        let hits = search(&db, "app").await;
+        assert_eq!(hits.len(), 1);
+        let preview = hits[0].preview.to_plain().text.into_owned();
+        assert!(preview.contains("app end"), "the token match must be visible: {preview:?}");
+        assert!(!preview.contains("apple"), "substring look-alikes must not anchor the window");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_preview_finds_phrases_across_words() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let filler: String = (0..200).map(|i| format!("filler-{i:03} ")).collect();
+        // FTS tokenizes `foo-bar` as the phrase [foo, bar], which matches `foo bar` across a
+        // space; the preview's matcher must agree.
+        db.append(&message_in(&sample_handle(), 0, &format!("{filler}foo bar tail")))
+            .await
+            .unwrap();
+
+        let hits = search(&db, "foo-bar").await;
+        assert_eq!(hits.len(), 1);
+        let preview = hits[0].preview.to_plain().text.into_owned();
+        assert!(preview.contains("foo bar"), "the phrase match must be visible: {preview:?}");
+        assert!(!preview.contains("filler-000"), "must not fall back to the leading window");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_preview_is_char_bounded() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        // A whitespace-free blob (minified output) is one "word"; the char budget must keep the
+        // preview small and the match visible instead of returning the whole line.
+        let blob = "x".repeat(5_000);
+        db.append(&message_in(&sample_handle(), 0, &format!("{blob} needle here")))
+            .await
+            .unwrap();
+
+        let hits = search(&db, "needle").await;
+        assert_eq!(hits.len(), 1);
+        let preview = hits[0].preview.to_plain().text.into_owned();
+        assert!(preview.contains("needle"), "the match must survive the char cap: {preview:?}");
+        assert!(preview.chars().count() < 450, "preview must be bounded: {} chars", preview.len());
+
+        // Wide windows of normal words are char-capped too.
+        let wide: String = (0..32).map(|i| format!("wordy-{i:02}-{} ", "y".repeat(40))).collect();
+        db.append(&message_in(&sample_handle(), 1, &format!("target {wide}"))).await.unwrap();
+        let hits = search(&db, "target").await;
+        let preview = hits[0].preview.to_plain().text.into_owned();
+        assert!(preview.starts_with("target"), "the match must lead the window: {preview:?}");
+        assert!(preview.chars().count() < 450, "preview must be bounded: {} chars", preview.len());
+        assert!(preview.ends_with('…'), "char-cap truncation must be marked: {preview:?}");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_preview_windows_around_a_late_match() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let long: String = (0..200).map(|i| format!("filler-{i:03} ")).collect();
+        db.append(&message_in(&sample_handle(), 0, &format!("{long}buried-needle here")))
+            .await
+            .unwrap();
+
+        let hits = search(&db, "buried-needle").await;
+        assert_eq!(hits.len(), 1);
+        let preview = hits[0].preview.to_plain().text.into_owned();
+        assert!(preview.contains("buried-needle"), "the match must be in the window: {preview:?}");
+        assert!(preview.starts_with('…'), "leading truncation must be marked: {preview:?}");
+        assert!(!preview.contains("filler-000"), "the window must not span the whole body");
     }
 
     #[rstest]
@@ -1280,10 +1551,13 @@ mod tests {
         db.append(&message).await.unwrap();
         assert_eq!(search(&db, "AlphaTitle").await.len(), 1, "the original title is searchable");
 
-        db.record_session_meta(&session, &SessionMeta {
-            title: Some("BetaTitle".to_owned()),
-            ..Default::default()
-        })
+        db.record_session_meta(
+            &session,
+            &SessionMeta {
+                title: Some("BetaTitle".to_owned()),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
 

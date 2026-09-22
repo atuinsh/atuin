@@ -447,6 +447,7 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "typed-builder",
+ "unicode-normalization",
  "url",
  "uuid",
  "wiremock",
