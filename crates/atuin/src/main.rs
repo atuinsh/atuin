@@ -8,6 +8,7 @@ use command::AtuinCmd;
 use eyre::Result;
 
 mod command;
+mod i18n;
 pub(crate) mod logs;
 #[cfg(feature = "client")]
 pub(crate) mod shell;
