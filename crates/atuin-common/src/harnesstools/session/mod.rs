@@ -54,6 +54,7 @@ pub trait Session: Send + 'static {
 
     fn id(&self) -> SessionId;
     fn messages(self) -> impl Stream<Item = Result<Self::Message, MessageError>> + Send + 'static;
+    fn read(&self) -> impl Stream<Item = Result<Self::Message, MessageError>> + Send + 'static;
     fn meta(&self) -> impl std::future::Future<Output = Result<SessionMeta, MessageError>> + Send {
         async { Ok(SessionMeta::default()) }
     }
@@ -113,6 +114,13 @@ pub trait Sessions {
     type Listener: Listener;
 
     fn listener(&self) -> Result<Self::Listener, RuntimeError>;
+
+    fn existing(
+        &self,
+    ) -> Result<
+        impl Stream<Item = <Self::Listener as Listener>::Session> + Send + 'static,
+        RuntimeError,
+    >;
 }
 
 pub trait Observable {

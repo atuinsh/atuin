@@ -1,4 +1,6 @@
 mod engine;
+mod import;
+mod normalizer;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,7 +14,9 @@ use atuin_common::encryption::paseto_v4::Key;
 use atuin_common::harnesstools::session::SessionMeta;
 use atuin_domain::record::HostId;
 use engine::SessionCaptureEngine;
-use futures::Stream;
+use futures::{Stream, StreamExt};
+pub use import::ImportProgress;
+use import::SessionImporter;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 
@@ -53,12 +57,12 @@ impl Sink {
         BroadcastStream::new(self.tail.subscribe())
     }
 
-    pub(crate) async fn append(&self, msg: Message) -> Result<(), AppendError> {
+    pub(crate) async fn append(&self, msg: Message) -> Result<Appended, AppendError> {
         // Dedup gate: if this logical message is already projected it is already in the record
-        // store too, so there is nothing to do. Stable source ids (see engine::source_id) make
+        // store too, so there is nothing to do. Stable source ids (see Normalizer::source_id) make
         // this reliable across re-captures and keep the record store free of duplicates.
         if self.sidecar.contains_message(&msg.session, &msg.source_id).await? {
-            return Ok(());
+            return Ok(Appended::Duplicate);
         }
 
         let started = self.sidecar.get_session(&msg.session).await?.is_none();
@@ -70,7 +74,7 @@ impl Sink {
         self.records.push(&msg).await?;
 
         if self.sidecar.append(&msg).await? != Appended::New {
-            return Ok(());
+            return Ok(Appended::Duplicate);
         }
 
         if self.tail.receiver_count() > 0 {
@@ -85,7 +89,7 @@ impl Sink {
             let _ = self.tail.send(SessionTailEvent::Message(msg));
         }
 
-        Ok(())
+        Ok(Appended::New)
     }
 
     pub(crate) async fn record_session_meta(
@@ -109,6 +113,7 @@ impl Sink {
 
 pub struct AiHarnessSessionCapture {
     sink: Arc<Sink>,
+    persistent: bool,
     _engine: SessionCaptureEngine,
 }
 
@@ -125,6 +130,7 @@ impl AiHarnessSessionCapture {
         };
         Self {
             sink,
+            persistent: true,
             _engine: engine,
         }
     }
@@ -144,7 +150,27 @@ impl AiHarnessSessionCapture {
 
         Self {
             sink: Arc::new(Sink::new(records, sidecar)),
+            persistent: false,
             _engine: SessionCaptureEngine::nop(),
+        }
+    }
+
+    pub fn import(
+        &self,
+        harness: Option<HarnessKind>,
+    ) -> impl Stream<Item = ImportProgress> + Send + 'static {
+        if self.persistent {
+            SessionImporter::new(self.sink.clone()).run(harness).right_stream()
+        } else {
+            futures::stream::once(async {
+                ImportProgress::Finished {
+                    sessions: 0,
+                    imported: 0,
+                    skipped: 0,
+                    failed: 0,
+                }
+            })
+            .left_stream()
         }
     }
 
@@ -236,6 +262,16 @@ mod tests {
 
         assert!(matches!(sub.next().await.unwrap().unwrap(), SessionTailEvent::SessionStarted(_)));
         assert!(matches!(sub.next().await.unwrap().unwrap(), SessionTailEvent::Message(_)));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn append_returns_new_then_duplicate() {
+        let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let msg = sample_message();
+
+        assert_eq!(sink.append(msg.clone()).await.unwrap(), Appended::New);
+        assert_eq!(sink.append(msg).await.unwrap(), Appended::Duplicate);
     }
 
     #[rstest]

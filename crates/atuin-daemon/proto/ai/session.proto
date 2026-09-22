@@ -68,6 +68,36 @@ message TailSessionsEvent {
   }
 }
 
+// Which existing on-disk sessions to import. An absent field is not a filter.
+message ImportSessionsRequest {
+  // Only import sessions from this harness. Absent imports every file-based
+  // harness.
+  optional ai.agent.HarnessKind harness = 1;
+}
+
+// Per-session progress: one session finished importing.
+message ImportSessionsProgress {
+  ai.agent.HarnessKind harness = 1;
+  string session_id = 2;
+  uint64 imported = 3;
+  uint64 skipped = 4;
+}
+
+// The final tally, emitted once after every session drains.
+message ImportSessionsSummary {
+  uint64 sessions = 1;
+  uint64 imported = 2;
+  uint64 skipped = 3;
+  uint64 failed = 4;
+}
+
+message ImportSessionsEvent {
+  oneof event {
+    ImportSessionsProgress progress = 1;
+    ImportSessionsSummary summary = 2;
+  }
+}
+
 service AiSession {
   // List session summaries, newest first, streamed one per message so a machine with a long
   // harness history never has to fit every session into a single response.
@@ -86,4 +116,8 @@ service AiSession {
 
   // Follow sessions and messages as they are recorded.
   rpc TailSessions(TailSessionsRequest) returns (stream TailSessionsEvent);
+
+  // Import every already-existing on-disk session, streaming per-session
+  // progress and a final summary.
+  rpc ImportSessions(ImportSessionsRequest) returns (stream ImportSessionsEvent);
 }

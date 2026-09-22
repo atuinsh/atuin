@@ -13,7 +13,7 @@ use atuin_common::string::highlighted::{HighlightedString, HighlightedTextProto}
 use atuin_daemon::AiClient;
 use atuin_daemon::grpc::ai_agent::pb as agent;
 use atuin_daemon::grpc::ai_session::pb::{
-    SearchSessionsMatch, get_session_event, tail_sessions_event,
+    SearchSessionsMatch, get_session_event, import_sessions_event, tail_sessions_event,
 };
 use chrono::{DateTime, Utc};
 use chrono_humanize::HumanTime;
@@ -71,6 +71,28 @@ enum SubCmd {
 
     /// Follow sessions and messages as they are recorded (until interrupted).
     Tail,
+
+    Import {
+        #[arg(long, value_enum)]
+        harness: Option<Harness>,
+    },
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum Harness {
+    ClaudeCode,
+    Codex,
+    Pi,
+}
+
+impl From<Harness> for agent::HarnessKind {
+    fn from(h: Harness) -> Self {
+        match h {
+            Harness::ClaudeCode => Self::ClaudeCode,
+            Harness::Codex => Self::Codex,
+            Harness::Pi => Self::Pi,
+        }
+    }
 }
 
 // Only harnesses a capture path can actually produce are offered as filters (see AnyHarness);
@@ -143,6 +165,9 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
             limit,
         } => search(&mut client, &query, harness.map(HarnessArg::to_pb), limit, style).await,
         SubCmd::Tail => tail(&mut client, style).await,
+        SubCmd::Import { harness } => {
+            import(&mut client, harness.map(agent::HarnessKind::from), style).await
+        }
     };
 
     // A downstream reader that closes the pipe (e.g. `atuin ai session list | head`) makes the next
@@ -434,6 +459,67 @@ async fn tail(client: &mut AiClient, style: Style) -> Result<()> {
             }
             tail_sessions_event::Event::Lagged(l) => {
                 writeln!(out, "! lagged (dropped {} events)", l.dropped)?;
+            }
+        }
+
+        out.flush()?;
+    }
+
+    Ok(())
+}
+
+async fn import(
+    client: &mut AiClient,
+    harness: Option<agent::HarnessKind>,
+    style: Style,
+) -> Result<()> {
+    let mut stream = client.import_sessions(harness).await?;
+
+    while let Some(event) = stream.next().await {
+        let Some(event) = event?.event else {
+            continue;
+        };
+        let stdout = io::stdout();
+        let mut out = stdout.lock();
+
+        if style.is_json() {
+            let record = match &event {
+                import_sessions_event::Event::Progress(p) => ImportEventJson::Progress {
+                    harness: harness_name(p.harness).to_owned(),
+                    session_id: p.session_id.clone(),
+                    imported: p.imported,
+                    skipped: p.skipped,
+                },
+                import_sessions_event::Event::Summary(s) => ImportEventJson::Summary {
+                    sessions: s.sessions,
+                    imported: s.imported,
+                    skipped: s.skipped,
+                    failed: s.failed,
+                },
+            };
+            serde_json::to_writer(&mut out, &record)?;
+            writeln!(out)?;
+            out.flush()?;
+            continue;
+        }
+
+        match &event {
+            import_sessions_event::Event::Progress(p) => {
+                writeln!(
+                    out,
+                    "{:<14} {:<12} imported {:>5}  skipped {:>5}",
+                    short_id(&p.session_id),
+                    harness_name(p.harness),
+                    p.imported,
+                    p.skipped,
+                )?;
+            }
+            import_sessions_event::Event::Summary(s) => {
+                writeln!(
+                    out,
+                    "done: {} sessions, {} imported, {} skipped, {} failed",
+                    s.sessions, s.imported, s.skipped, s.failed,
+                )?;
             }
         }
 
@@ -923,6 +1009,23 @@ enum TailEventJson {
 }
 
 #[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ImportEventJson {
+    Progress {
+        harness: String,
+        session_id: String,
+        imported: u64,
+        skipped: u64,
+    },
+    Summary {
+        sessions: u64,
+        imported: u64,
+        skipped: u64,
+        failed: u64,
+    },
+}
+
+#[derive(Serialize)]
 struct TranscriptJson {
     harness: String,
     session_id: String,
@@ -1067,6 +1170,14 @@ mod tests {
             title: None,
             preview: None,
         }
+    }
+
+    #[rstest]
+    #[case(Harness::ClaudeCode, agent::HarnessKind::ClaudeCode)]
+    #[case(Harness::Codex, agent::HarnessKind::Codex)]
+    #[case(Harness::Pi, agent::HarnessKind::Pi)]
+    fn harness_arg_maps_to_proto_kind(#[case] arg: Harness, #[case] want: agent::HarnessKind) {
+        assert_eq!(agent::HarnessKind::from(arg), want);
     }
 
     #[rstest]

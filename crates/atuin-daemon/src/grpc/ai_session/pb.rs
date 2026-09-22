@@ -69,6 +69,12 @@ impl From<SessionMatch> for SearchSessionsMatch {
     }
 }
 
+impl HarnessFilterRequest for ImportSessionsRequest {
+    fn harness_filter(&self) -> Option<i32> {
+        self.harness
+    }
+}
+
 pub(crate) trait SessionRefRequest {
     fn session_ref(self) -> Option<agent::HarnessSession>;
 

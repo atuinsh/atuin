@@ -519,6 +519,7 @@ dependencies = [
 name = "atuin-daemon"
 version = "18.22.0"
 dependencies = [
+ "async-stream",
  "atuin-client",
  "atuin-common",
  "atuin-domain",

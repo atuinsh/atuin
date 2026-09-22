@@ -12,13 +12,14 @@ use crate::grpc::ai_agent::pb as agent;
 use crate::grpc::ai_session::pb::ai_session_server::AiSession as GrpcService;
 use crate::grpc::ai_session::pb::{
     GetSessionEvent, GetSessionRequest, GetTranscriptChunk, GetTranscriptRequest,
-    HarnessFilterRequest, ListSessionsRequest, SearchSessionsMatch, SearchSessionsRequest,
+    HarnessFilterRequest, ImportSessionsEvent, ImportSessionsProgress, ImportSessionsRequest,
+    ImportSessionsSummary, ListSessionsRequest, SearchSessionsMatch, SearchSessionsRequest,
     SessionRefRequest, TailSessionsEvent, TailSessionsRequest, get_session_event,
-    tail_sessions_event,
+    import_sessions_event, tail_sessions_event,
 };
 use crate::grpc::common::pb as common;
 use crate::grpc::common::pb::Lagged;
-use crate::session_capture::{AiHarnessSessionCapture, SessionTailEvent};
+use crate::session_capture::{AiHarnessSessionCapture, ImportProgress, SessionTailEvent};
 
 #[derive(Clone)]
 pub struct Service {
@@ -41,6 +42,8 @@ impl GrpcService for Service {
     type SearchSessionsStream =
         Pin<Box<dyn Stream<Item = Result<SearchSessionsMatch, Status>> + Send>>;
     type TailSessionsStream = Pin<Box<dyn Stream<Item = Result<TailSessionsEvent, Status>> + Send>>;
+    type ImportSessionsStream =
+        Pin<Box<dyn Stream<Item = Result<ImportSessionsEvent, Status>> + Send>>;
 
     async fn list_sessions(
         &self,
@@ -167,6 +170,45 @@ impl GrpcService for Service {
 
         Ok(Response::new(Box::pin(stream)))
     }
+
+    async fn import_sessions(
+        &self,
+        request: Request<ImportSessionsRequest>,
+    ) -> Result<Response<Self::ImportSessionsStream>, Status> {
+        let harness = HarnessFilterRequest::harness(&request.into_inner())?;
+
+        let stream = self.capture.import(harness).map(|progress| {
+            Ok::<_, Status>(ImportSessionsEvent {
+                event: Some(match progress {
+                    ImportProgress::Session {
+                        harness,
+                        session,
+                        imported,
+                        skipped,
+                        failed: _,
+                    } => import_sessions_event::Event::Progress(ImportSessionsProgress {
+                        harness: agent::HarnessKind::from(harness) as i32,
+                        session_id: session.into(),
+                        imported,
+                        skipped,
+                    }),
+                    ImportProgress::Finished {
+                        sessions,
+                        imported,
+                        skipped,
+                        failed,
+                    } => import_sessions_event::Event::Summary(ImportSessionsSummary {
+                        sessions,
+                        imported,
+                        skipped,
+                        failed,
+                    }),
+                }),
+            })
+        });
+
+        Ok(Response::new(Box::pin(stream)))
+    }
 }
 
 #[cfg(test)]
@@ -220,5 +262,22 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(ref e) if e.code() == tonic::Code::InvalidArgument));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn import_sessions_streams_a_summary_when_capture_is_nop() {
+        let cap = Arc::new(AiHarnessSessionCapture::nop().await);
+        let svc = Service::new(cap);
+
+        let mut stream = svc
+            .import_sessions(Request::new(ImportSessionsRequest { harness: None }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        let ev = stream.next().await.unwrap().unwrap();
+        assert!(matches!(ev.event, Some(import_sessions_event::Event::Summary(_))));
+        assert!(stream.next().await.is_none());
     }
 }

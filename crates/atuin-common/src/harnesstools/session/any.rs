@@ -25,6 +25,14 @@ impl AnySessions {
             Self::Pi(s) => AnyListener::Pi(s.listener()?),
         })
     }
+
+    pub fn existing(&self) -> Result<BoxStream<'static, AnySession>, RuntimeError> {
+        Ok(match self {
+            Self::Ccode(s) => s.existing()?.map(AnySession::from).boxed(),
+            Self::Codex(s) => s.existing()?.map(AnySession::from).boxed(),
+            Self::Pi(s) => s.existing()?.map(AnySession::from).boxed(),
+        })
+    }
 }
 
 #[derive(Debug, From)]
@@ -77,6 +85,15 @@ impl AnySession {
             Self::Ccode(s) => s.messages().map_ok(AnyMessage::from).boxed(),
             Self::Codex(s) => s.messages().map_ok(AnyMessage::from).boxed(),
             Self::Pi(s) => s.messages().map_ok(AnyMessage::from).boxed(),
+        }
+    }
+
+    #[must_use]
+    pub fn read(&self) -> BoxStream<'static, Result<AnyMessage, MessageError>> {
+        match self {
+            Self::Ccode(s) => s.read().map_ok(AnyMessage::from).boxed(),
+            Self::Codex(s) => s.read().map_ok(AnyMessage::from).boxed(),
+            Self::Pi(s) => s.read().map_ok(AnyMessage::from).boxed(),
         }
     }
 }

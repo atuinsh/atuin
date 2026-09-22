@@ -46,6 +46,39 @@ impl Sessions for CcodeSessions {
         }
         Ok(CcodeListener { root })
     }
+
+    fn existing(&self) -> Result<impl Stream<Item = CcodeSession> + Send + 'static, RuntimeError> {
+        let root = self.resolve_root();
+        if !root.is_dir() {
+            return Err(RuntimeError::NotFound(root));
+        }
+        Ok(async_stream::stream! {
+            let sessions = tokio::task::spawn_blocking(move || {
+                let mut out = Vec::new();
+                let mut stack = vec![root];
+                while let Some(dir) = stack.pop() {
+                    let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        let file_type = entry.file_type();
+                        let is_dir = file_type.as_ref().map(|t| t.is_dir()).unwrap_or(false);
+                        let is_file = file_type.map(|t| t.is_file()).unwrap_or(false);
+                        if is_dir {
+                            stack.push(path);
+                        } else if let Some(session) = CcodeListener::open_session(&path, is_file) {
+                            out.push(session);
+                        }
+                    }
+                }
+                out
+            })
+            .await
+            .unwrap_or_default();
+            for session in sessions {
+                yield session;
+            }
+        })
+    }
 }
 
 impl Observable for Ccode {
@@ -62,20 +95,21 @@ pub struct CcodeListener {
 }
 
 impl CcodeListener {
-    /// The session for an accepted file, paired with the change signal the watcher keeps alive
-    /// for as long as the file exists.
-    fn accept(ctx: &NodeContext) -> Option<(CcodeSession, watch::Sender<()>)> {
-        let path = ctx.path();
-        if !ctx.is_file() || path.extension().is_none_or(|ext| ext != "jsonl") {
+    /// Build a read-once session for an accepted `jsonl` file (no change signal), or `None`.
+    fn open_session(path: &Path, is_file: bool) -> Option<CcodeSession> {
+        if !is_file || path.extension().is_none_or(|ext| ext != "jsonl") {
             return None;
         }
         let id = path.file_stem()?.to_string_lossy().into_owned();
+        Some(CcodeSession::open(SessionId::from(id), path.to_path_buf()))
+    }
+
+    /// The session for an accepted file, paired with the change signal the watcher keeps alive
+    /// for as long as the file exists.
+    fn accept(ctx: &NodeContext) -> Option<(CcodeSession, watch::Sender<()>)> {
+        let mut session = Self::open_session(ctx.path(), ctx.is_file())?;
         let (signal, rx) = watch::channel(());
-        let session = CcodeSession {
-            id: SessionId::from(id),
-            path: path.to_path_buf(),
-            changes: Some(rx),
-        };
+        session.changes = Some(rx);
         Some((session, signal))
     }
 }
@@ -139,6 +173,10 @@ impl Session for CcodeSession {
 
     fn messages(self) -> impl Stream<Item = Result<CcodeMessage, MessageError>> + Send + 'static {
         jsonl::follow::<CcodeMessage>(self.path, self.changes).map_err(MessageError::from)
+    }
+
+    fn read(&self) -> impl Stream<Item = Result<CcodeMessage, MessageError>> + Send + 'static {
+        jsonl::read_all::<CcodeMessage>(self.path.clone()).map_err(MessageError::from)
     }
 
     fn meta(&self) -> impl std::future::Future<Output = Result<SessionMeta, MessageError>> + Send {
