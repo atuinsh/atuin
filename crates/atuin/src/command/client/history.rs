@@ -165,7 +165,8 @@ pub enum Cmd {
         #[arg(short = 'n', long)]
         dry_run: bool,
 
-        /// Only delete results added before this date
+        /// Only delete results added before this date, read in the configured timezone unless it
+        /// carries an explicit offset
         #[arg(long, short)]
         before: String,
 
@@ -1210,8 +1211,8 @@ impl Cmd {
                         let before = i64::try_from(
                             interim::parse_date_string(
                                 before.as_str(),
-                                OffsetDateTime::now_utc(),
-                                interim::Dialect::Uk,
+                                OffsetDateTime::now_utc().to_offset(settings.timezone.0),
+                                settings.dialect.into(),
                             )?
                             .unix_timestamp_nanos(),
                         )?;
