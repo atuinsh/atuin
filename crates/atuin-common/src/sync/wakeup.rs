@@ -1,10 +1,14 @@
 //! A wakeup for tasks waiting on a condition, free to signal when nobody waits.
 //!
 //! This utility is designed to use fewer cycles than plain [`tokio::sync::Notify`].
+//!
+//! Tasks wait on a [`Notify`]; threads outside the runtime park on a [`Condvar`] instead, each
+//! side with its own waiter count so [`Wakeup::wake_all`] only pays for the side that has waiters.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use parking_lot::{Condvar, Mutex};
 use tokio::sync::Notify;
 
 /// Wakes tasks waiting on a condition that other tasks change; see the module docs.
@@ -13,6 +17,12 @@ pub struct Wakeup {
     notify: Notify,
     /// Tasks inside [`Wakeup::until`] or [`Wakeup::until_or_every`] whose first check failed.
     waiting: AtomicUsize,
+    /// Bumped by every [`Wakeup::wake_all`] that sees a parked thread, so a thread can tell a wake
+    /// landed between its check and its park.
+    generation: Mutex<u64>,
+    parked: Condvar,
+    /// Threads inside [`Wakeup::until_blocking`] whose first check failed.
+    blocking_waiting: AtomicUsize,
 }
 
 impl Wakeup {
@@ -21,10 +31,13 @@ impl Wakeup {
         Self {
             notify: Notify::const_new(),
             waiting: AtomicUsize::new(0),
+            generation: Mutex::new(0),
+            parked: Condvar::new(),
+            blocking_waiting: AtomicUsize::new(0),
         }
     }
 
-    /// Wake every task waiting, so each re-checks its condition.
+    /// Wake every task and thread waiting, so each re-checks its condition.
     pub fn wake_all(&self) {
         // This feels really strange, but it is correct. The reason we do the fetch_add here is
         // because we want a fence.
@@ -57,8 +70,15 @@ impl Wakeup {
         //
         // Super counter-intuitive, but it is possible. The other option is to stick a seq-cst fence
         // but that's objectively worse.
+        //
+        // Parked threads get the same read-modify-write on their own counter, paired with
+        // `Registered::sync` in `until_blocking`.
         if self.waiting.fetch_add(0, Ordering::AcqRel) > 0 {
             self.notify.notify_waiters();
+        }
+        if self.blocking_waiting.fetch_add(0, Ordering::AcqRel) > 0 {
+            *self.generation.lock() += 1;
+            self.parked.notify_all();
         }
     }
 
@@ -75,6 +95,33 @@ impl Wakeup {
         ready: impl FnMut() -> Option<T>,
     ) -> T {
         self.wait(Some(interval), ready).await
+    }
+
+    /// Equivalent to [`Wakeup::until_or_every`], except it parks the calling thread; never call it
+    /// on a runtime thread.
+    pub fn until_blocking<T>(&self, interval: Duration, mut ready: impl FnMut() -> Option<T>) -> T {
+        if let Some(value) = ready() {
+            return value;
+        }
+
+        let registered = Registered::new(&self.blocking_waiting);
+        loop {
+            // No wake is lost between the check and the park. A `wake_all` whose read-modify-write
+            // came before `sync` is acquired by it, so the check sees its condition. One that came
+            // after sees this thread counted and bumps `generation` under the lock: before `seen`
+            // is read, and the lock hands its condition to the check; between the read and the
+            // re-lock, and the generation has moved so we skip the park; or after, and `wait_for`
+            // released the lock atomically with parking, so its `notify_all` reaches us.
+            let seen = *self.generation.lock();
+            registered.sync();
+            if let Some(value) = ready() {
+                return value;
+            }
+            let mut generation = self.generation.lock();
+            if *generation == seen {
+                self.parked.wait_for(&mut generation, interval);
+            }
+        }
     }
 
     async fn wait<T>(&self, interval: Option<Duration>, mut ready: impl FnMut() -> Option<T>) -> T {
@@ -102,8 +149,8 @@ impl Wakeup {
     }
 }
 
-/// One task counted in [`Wakeup::waiting`], uncounted on drop, including when the wait is
-/// cancelled.
+/// One waiter counted in [`Wakeup::waiting`] or [`Wakeup::blocking_waiting`], uncounted on drop,
+/// including when the wait is cancelled.
 struct Registered<'a>(&'a AtomicUsize);
 
 impl<'a> Registered<'a> {
@@ -127,8 +174,9 @@ impl Drop for Registered<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, mpsc};
+    use std::thread;
 
     use rstest::rstest;
 
@@ -212,6 +260,71 @@ mod tests {
                 .await
                 .expect("every waiter saw every round")
                 .unwrap();
+        }
+    }
+
+    #[rstest]
+    fn a_parked_thread_wakes_once_its_condition_holds() {
+        let wakeup = Arc::new(Wakeup::new());
+        let flag = Arc::new(AtomicBool::new(false));
+        let (done, woke) = mpsc::channel();
+        thread::spawn({
+            let (wakeup, flag) = (Arc::clone(&wakeup), Arc::clone(&flag));
+            move || {
+                // Long enough that only a wake can end the wait within the test's deadline.
+                wakeup.until_blocking(Duration::from_secs(3600), || {
+                    flag.load(Ordering::Relaxed).then_some(())
+                });
+                done.send(()).unwrap();
+            }
+        });
+        while wakeup.blocking_waiting.load(Ordering::Relaxed) == 0 {
+            thread::yield_now();
+        }
+
+        flag.store(true, Ordering::Relaxed);
+        wakeup.wake_all();
+        woke.recv_timeout(Duration::from_secs(5)).expect("wake_all wakes the parked thread");
+        assert_eq!(wakeup.blocking_waiting.load(Ordering::Relaxed), 0);
+    }
+
+    #[rstest]
+    fn until_blocking_rechecks_without_a_wake() {
+        let wakeup = Wakeup::new();
+        let mut checks = 0;
+        wakeup.until_blocking(Duration::from_millis(10), || {
+            checks += 1;
+            (checks == 3).then_some(())
+        });
+        assert_eq!(checks, 3);
+    }
+
+    /// The blocking twin of `no_wakeup_is_lost_under_contention`, on OS threads.
+    #[rstest]
+    fn no_blocking_wakeup_is_lost_under_contention() {
+        const ROUNDS: usize = 2_000;
+        let wakeup = Arc::new(Wakeup::new());
+        let turn = Arc::new(AtomicUsize::new(0));
+        let (done, finished) = mpsc::channel();
+        for _ in 0..4 {
+            let (wakeup, turn, done) = (Arc::clone(&wakeup), Arc::clone(&turn), done.clone());
+            thread::spawn(move || {
+                for round in 1..=ROUNDS {
+                    // Long enough that a lost wake hangs the waiter past the test's deadline.
+                    wakeup.until_blocking(Duration::from_secs(3600), || {
+                        (turn.load(Ordering::Relaxed) >= round).then_some(())
+                    });
+                }
+                done.send(()).unwrap();
+            });
+        }
+        for _ in 0..ROUNDS {
+            turn.fetch_add(1, Ordering::Relaxed);
+            wakeup.wake_all();
+            thread::yield_now();
+        }
+        for _ in 0..4 {
+            finished.recv_timeout(Duration::from_secs(10)).expect("every waiter saw every round");
         }
     }
 }

@@ -157,13 +157,26 @@ impl FdPool {
         //
         // The reason the limit can grow is because some unmanaged file descriptor can be retained,
         // meaning that we no longer hit EMFILE.
-        self.returned()
-            .until_or_every(POLL_INTERVAL, || {
-                self.try_take().then(|| Lease {
-                    pool: Arc::clone(self),
-                })
-            })
-            .await
+        self.returned().until_or_every(POLL_INTERVAL, || self.try_acquire()).await
+    }
+
+    /// Equivalent to [`Self::acquire`], except it parks the calling thread.
+    ///
+    /// Never call it on a runtime thread: the lease it waits for may need that thread to return.
+    pub fn acquire_blocking(self: &Arc<Self>) -> Lease {
+        debug_assert!(
+            tokio::runtime::Handle::try_current().is_err(),
+            "acquire_blocking on a tokio runtime thread can deadlock; use acquire, or \
+             block_in_place on a multi-thread runtime"
+        );
+        self.returned().until_blocking(POLL_INTERVAL, || self.try_acquire())
+    }
+
+    /// Take a lease if one is free now, without waiting.
+    pub fn try_acquire(self: &Arc<Self>) -> Option<Lease> {
+        self.try_take().then(|| Lease {
+            pool: Arc::clone(self),
+        })
     }
 
     /// Run `f` on the blocking pool under a lease, for descriptors `f` opens and closes itself.
@@ -179,11 +192,31 @@ impl FdPool {
         })
         .await
         .expect("given closure panicked");
+        self.report_exhausted(&result);
+        result
+    }
 
+    /// Equivalent to [`Self::blocking`], except it waits and runs `f` on the calling thread.
+    pub fn blocking_run<T>(self: &Arc<Self>, f: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+        let result = {
+            let _lease = self.acquire_blocking();
+            f()
+        };
+        self.report_exhausted(&result);
+        result
+    }
+
+    /// Leases held by this pool and its descendants.
+    pub fn held(&self) -> usize {
+        self.counts.lock().held
+    }
+
+    /// Tell this pool and its ancestors if `result` ran out of descriptors.
+    fn report_exhausted<T>(&self, result: &io::Result<T>) {
         // Only Unix reports running out of descriptors, as `EMFILE`.
         #[cfg(unix)]
         let exhausted = matches!(
-            &result,
+            result,
             Err(err) if err.raw_os_error() == Some(rustix::io::Errno::MFILE.raw_os_error())
         );
         #[cfg(not(unix))]
@@ -191,13 +224,6 @@ impl FdPool {
         if exhausted {
             self.path().for_each(|pool| pool.limit.on_exhausted());
         }
-
-        result
-    }
-
-    /// Leases held by this pool and its descendants.
-    pub fn held(&self) -> usize {
-        self.counts.lock().held
     }
 
     /// This pool and its ancestors, from this pool up to the root.
@@ -317,6 +343,17 @@ pub struct Leased<T> {
     #[deref_mut]
     fd: T,
     _lease: Lease,
+}
+
+impl<T> Leased<T> {
+    /// Convert the held descriptor, keeping its lease.
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Leased<U> {
+        let Self { fd, _lease: lease } = self;
+        Leased {
+            fd: f(fd),
+            _lease: lease,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -449,5 +486,42 @@ mod tests {
         assert!(!started_early, "a call past the limit started before a lease returned");
         assert!(started.load(Ordering::SeqCst));
         assert_eq!(pool.held(), 0);
+    }
+
+    #[rstest]
+    fn acquire_blocking_waits_for_a_lease_returned_by_another_thread() {
+        let pool = pool(1);
+        let lease = pool.try_acquire().unwrap();
+        let (done, acquired) = mpsc::channel();
+        std::thread::spawn({
+            let pool = pool.clone();
+            move || done.send(pool.acquire_blocking()).unwrap()
+        });
+        assert!(acquired.recv_timeout(Duration::from_millis(50)).is_err());
+
+        drop(lease);
+        drop(
+            acquired
+                .recv_timeout(Duration::from_secs(5))
+                .expect("a returned lease wakes the thread"),
+        );
+        assert_eq!(pool.held(), 0);
+    }
+
+    #[rstest]
+    fn try_acquire_does_not_wait_at_the_limit() {
+        let pool = pool(1);
+        let lease = pool.try_acquire().expect("a lease is free");
+        assert!(pool.try_acquire().is_none());
+        drop(lease);
+        assert!(pool.try_acquire().is_some());
+    }
+
+    #[cfg(debug_assertions)]
+    #[rstest]
+    #[tokio::test]
+    #[should_panic(expected = "acquire_blocking on a tokio runtime thread")]
+    async fn acquire_blocking_on_a_runtime_thread_panics() {
+        drop(pool(1).acquire_blocking());
     }
 }
