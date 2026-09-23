@@ -1,9 +1,12 @@
+use std::future::Future;
+
 use derive_more::From;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 
 use crate::harnesstools::ccode::session::{CcodeListener, CcodeSession, CcodeSessions};
 use crate::harnesstools::codex::session::{CodexListener, CodexSession, CodexSessions};
+use crate::harnesstools::opencode::session::{OpencodeListener, OpencodeSession, OpencodeSessions};
 use crate::harnesstools::pi::session::{PiListener, PiSession, PiSessions};
 use crate::harnesstools::session::{
     AnyMessage, CaptureError, Listener, MessageError, RuntimeError, Session, SessionEvent,
@@ -14,6 +17,7 @@ use crate::harnesstools::session::{
 pub enum AnySessions {
     Ccode(CcodeSessions),
     Codex(CodexSessions),
+    Opencode(OpencodeSessions),
     Pi(PiSessions),
 }
 
@@ -22,6 +26,7 @@ impl AnySessions {
         Ok(match self {
             Self::Ccode(s) => AnyListener::Ccode(s.listener()?),
             Self::Codex(s) => AnyListener::Codex(s.listener()?),
+            Self::Opencode(s) => AnyListener::Opencode(s.listener()?),
             Self::Pi(s) => AnyListener::Pi(s.listener()?),
         })
     }
@@ -32,6 +37,7 @@ impl AnySessions {
         Ok(match self {
             Self::Ccode(s) => s.existing()?.map_ok(AnySession::from).boxed(),
             Self::Codex(s) => s.existing()?.map_ok(AnySession::from).boxed(),
+            Self::Opencode(s) => s.existing()?.map_ok(AnySession::from).boxed(),
             Self::Pi(s) => s.existing()?.map_ok(AnySession::from).boxed(),
         })
     }
@@ -41,6 +47,7 @@ impl AnySessions {
 pub enum AnyListener {
     Ccode(CcodeListener),
     Codex(CodexListener),
+    Opencode(OpencodeListener),
     Pi(PiListener),
 }
 
@@ -50,16 +57,39 @@ impl AnyListener {
         match self {
             Self::Ccode(l) => l.watch().map_ok(AnySession::from).boxed(),
             Self::Codex(l) => l.watch().map_ok(AnySession::from).boxed(),
+            Self::Opencode(l) => l.watch().map_ok(AnySession::from).boxed(),
             Self::Pi(l) => l.watch().map_ok(AnySession::from).boxed(),
         }
     }
 
+    /// See [`Listener::events`].
     #[must_use]
-    pub fn events(self) -> BoxStream<'static, Result<SessionEvent<AnyMessage>, CaptureError>> {
+    pub fn events<F, G>(
+        self,
+        checkpoint: impl Fn(&SessionId) -> F + Send + 'static,
+        knows: impl Fn(SessionId, AnyMessage) -> G + Send + 'static,
+    ) -> BoxStream<'static, Result<SessionEvent<AnyMessage>, CaptureError>>
+    where
+        F: Future<Output = u64> + Send + 'static,
+        G: Future<Output = bool> + Send + 'static,
+    {
         match self {
-            Self::Ccode(l) => l.events().map_ok(|ev| ev.map_message(AnyMessage::from)).boxed(),
-            Self::Codex(l) => l.events().map_ok(|ev| ev.map_message(AnyMessage::from)).boxed(),
-            Self::Pi(l) => l.events().map_ok(|ev| ev.map_message(AnyMessage::from)).boxed(),
+            Self::Ccode(l) => l
+                .events(checkpoint, move |id, m| knows(id, AnyMessage::from(m)))
+                .map_ok(|ev| ev.map_message(AnyMessage::from))
+                .boxed(),
+            Self::Codex(l) => l
+                .events(checkpoint, move |id, m| knows(id, AnyMessage::from(m)))
+                .map_ok(|ev| ev.map_message(AnyMessage::from))
+                .boxed(),
+            Self::Opencode(l) => l
+                .events(checkpoint, move |id, m| knows(id, AnyMessage::from(m)))
+                .map_ok(|ev| ev.map_message(AnyMessage::from))
+                .boxed(),
+            Self::Pi(l) => l
+                .events(checkpoint, move |id, m| knows(id, AnyMessage::from(m)))
+                .map_ok(|ev| ev.map_message(AnyMessage::from))
+                .boxed(),
         }
     }
 }
@@ -68,6 +98,7 @@ impl AnyListener {
 pub enum AnySession {
     Ccode(CcodeSession),
     Codex(CodexSession),
+    Opencode(OpencodeSession),
     Pi(PiSession),
 }
 
@@ -77,6 +108,7 @@ impl AnySession {
         match self {
             Self::Ccode(s) => s.id(),
             Self::Codex(s) => s.id(),
+            Self::Opencode(s) => s.id(),
             Self::Pi(s) => s.id(),
         }
     }
@@ -86,15 +118,26 @@ impl AnySession {
         match self {
             Self::Ccode(s) => s.messages().map_ok(AnyMessage::from).boxed(),
             Self::Codex(s) => s.messages().map_ok(AnyMessage::from).boxed(),
+            Self::Opencode(s) => s.messages().map_ok(AnyMessage::from).boxed(),
             Self::Pi(s) => s.messages().map_ok(AnyMessage::from).boxed(),
         }
     }
 
     #[must_use]
+    pub async fn message_at(&self, at: u64) -> Option<AnyMessage> {
+        match self {
+            Self::Ccode(s) => s.message_at(at).await.map(AnyMessage::from),
+            Self::Codex(s) => s.message_at(at).await.map(AnyMessage::from),
+            Self::Opencode(s) => s.message_at(at).await.map(AnyMessage::from),
+            Self::Pi(s) => s.message_at(at).await.map(AnyMessage::from),
+        }
+    }
+
     pub fn read(&self) -> BoxStream<'static, Result<AnyMessage, MessageError>> {
         match self {
             Self::Ccode(s) => s.read().map_ok(AnyMessage::from).boxed(),
             Self::Codex(s) => s.read().map_ok(AnyMessage::from).boxed(),
+            Self::Opencode(s) => s.read().map_ok(AnyMessage::from).boxed(),
             Self::Pi(s) => s.read().map_ok(AnyMessage::from).boxed(),
         }
     }

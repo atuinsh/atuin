@@ -10,7 +10,7 @@ use typed_builder::TypedBuilder;
 use crate::fs::tree_watcher::{NodeContext, TreeWatcher};
 use crate::harnesstools::ccode::Ccode;
 use crate::harnesstools::session::model::{
-    Content, MessageId, Role, SessionMeta, StopReason, ToolCallId, ToolResult, ToolUse, Usage,
+    Content, MessageId, Role, StopReason, ToolCallId, ToolResult, ToolUse, Usage,
 };
 use crate::harnesstools::session::{
     Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId, Sessions,
@@ -163,11 +163,6 @@ impl CcodeSession {
             pool,
         }
     }
-
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
 }
 
 impl Session for CcodeSession {
@@ -177,32 +172,21 @@ impl Session for CcodeSession {
         self.id.clone()
     }
 
-    fn messages(self) -> impl Stream<Item = Result<CcodeMessage, MessageError>> + Send + 'static {
-        jsonl::follow::<CcodeMessage>(self.path, self.changes, self.pool)
+    async fn message_at(&self, at: u64) -> Option<CcodeMessage> {
+        jsonl::value_at(&self.path, at, &self.pool).await
+    }
+
+    fn messages_from(
+        self,
+        from: u64,
+    ) -> impl Stream<Item = Result<(u64, CcodeMessage), MessageError>> + Send + 'static {
+        jsonl::follow_from::<CcodeMessage>(self.path, from, self.changes, self.pool)
             .map_err(MessageError::from)
     }
 
     fn read(&self) -> impl Stream<Item = Result<CcodeMessage, MessageError>> + Send + 'static {
         jsonl::read_all::<CcodeMessage>(self.path.clone(), self.pool.clone())
             .map_err(MessageError::from)
-    }
-
-    fn meta(&self) -> impl std::future::Future<Output = Result<SessionMeta, MessageError>> + Send {
-        let path = self.path.clone();
-        let pool = self.pool.clone();
-        async move {
-            let messages: Vec<CcodeMessage> =
-                jsonl::read_all(path, pool).map_err(MessageError::from).try_collect().await?;
-            let title = messages.iter().rev().find_map(Message::title);
-            let cwd = messages.iter().find_map(|m| m.cwd.clone());
-            let git_branch = messages.iter().find_map(|m| m.git_branch.clone());
-            Ok(SessionMeta {
-                cwd,
-                git_branch,
-                title,
-                ..SessionMeta::default()
-            })
-        }
     }
 }
 
@@ -383,9 +367,7 @@ mod tests {
     }
     use crate::futures::stream::timed_next;
     use crate::harnesstools::session::model::{Content, Role};
-    use crate::harnesstools::session::{
-        Message, Session, SessionEvent, SessionEventKind, Sessions,
-    };
+    use crate::harnesstools::session::{Message, Session, SessionEvent, Sessions};
 
     #[allow(clippy::needless_pass_by_value)]
     fn line(kind: &str, role: &str, content: serde_json::Value) -> String {
@@ -582,35 +564,6 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn meta_reads_the_title_and_first_cwd_and_branch() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("session.jsonl");
-        let body = [
-            line("user", "user", serde_json::json!("first")),
-            serde_json::json!({
-                "type": "ai-title",
-                "aiTitle": "Fix the flaky test",
-                "sessionId": "11111111-1111-1111-1111-111111111111",
-            })
-            .to_string(),
-        ]
-        .join("\n")
-            + "\n";
-        std::fs::write(&path, body).unwrap();
-
-        let session = CcodeSession::open(
-            SessionId::from("11111111-1111-1111-1111-111111111111".to_owned()),
-            path,
-            pool(),
-        );
-        let meta = session.meta().await.unwrap();
-        assert_eq!(meta.title, Some("Fix the flaky test".to_owned()));
-        assert_eq!(meta.cwd, None);
-        assert_eq!(meta.git_branch, None);
-    }
-
-    #[rstest]
-    #[tokio::test]
     async fn watch_emits_sessions_as_files_appear() {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("project-a");
@@ -639,22 +592,19 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn events_yields_started_then_messages() {
+    async fn events_yields_messages_tagged_with_their_session() {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("project-a");
         std::fs::create_dir_all(&sub).unwrap();
         // Trailing newline required: each session's messages() withholds an unterminated final
         // line until a later write completes it (a real session ends every record with a newline).
-        std::fs::write(
-            sub.join("33333333-3333-3333-3333-333333333333.jsonl"),
-            [
-                line("user", "user", serde_json::json!("hi")),
-                line("assistant", "assistant", serde_json::json!([{"type": "text", "text": "yo"}])),
-            ]
-            .join("\n")
-                + "\n",
-        )
-        .unwrap();
+        let body = [
+            line("user", "user", serde_json::json!("hi")),
+            line("assistant", "assistant", serde_json::json!([{"type": "text", "text": "yo"}])),
+        ]
+        .join("\n")
+            + "\n";
+        std::fs::write(sub.join("33333333-3333-3333-3333-333333333333.jsonl"), &body).unwrap();
 
         let listener = CcodeSessions::builder()
             .root(dir.path().to_path_buf())
@@ -664,23 +614,55 @@ mod tests {
             .unwrap();
         let events: Vec<SessionEvent<CcodeMessage>> = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            listener.events().take(3).try_collect(),
+            listener
+                .events(|_| std::future::ready(0), |_, _| std::future::ready(true))
+                .take(2)
+                .try_collect(),
         )
         .await
         .expect("events() did not produce within 10s")
         .unwrap();
 
-        assert!(matches!(events[0].kind, SessionEventKind::Started(_)));
         let sid = SessionId::from("33333333-3333-3333-3333-333333333333".to_owned());
         assert!(events.iter().all(|event| event.session == sid));
-        let roles: Vec<Role> = events
-            .iter()
-            .filter_map(|event| match &event.kind {
-                SessionEventKind::Message(message) => Some(message.role()),
-                SessionEventKind::Started(_) => None,
-            })
-            .collect();
+        let roles: Vec<Role> = events.iter().map(|event| event.message.role()).collect();
         assert_eq!(roles, vec![Role::User, Role::Assistant]);
+        // Each event carries the offset past its line; the last one is the file's length.
+        assert!(events[0].offset < events[1].offset);
+        assert_eq!(events[1].offset, u64::try_from(body.len()).unwrap());
+    }
+
+    /// The offset a caller resumes from is honoured: only lines past it are yielded.
+    #[rstest]
+    #[tokio::test]
+    async fn events_resume_each_session_from_the_given_offset() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = line("user", "user", serde_json::json!("hi")) + "\n";
+        let body = first.clone()
+            + &line("assistant", "assistant", serde_json::json!([{"type": "text", "text": "yo"}]))
+            + "\n";
+        std::fs::write(dir.path().join("66666666-6666-6666-6666-666666666666.jsonl"), &body)
+            .unwrap();
+
+        let listener = CcodeSessions::builder()
+            .root(dir.path().to_path_buf())
+            .pool(pool())
+            .build()
+            .listener()
+            .unwrap();
+        let start = u64::try_from(first.len()).unwrap();
+        let events: Vec<SessionEvent<CcodeMessage>> = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            listener
+                .events(move |_| std::future::ready(start), |_, _| std::future::ready(true))
+                .take(1)
+                .try_collect(),
+        )
+        .await
+        .expect("events() did not produce within 10s")
+        .unwrap();
+        assert_eq!(events[0].message.role(), Role::Assistant);
+        assert_eq!(events[0].offset, u64::try_from(body.len()).unwrap());
     }
 
     #[rstest]

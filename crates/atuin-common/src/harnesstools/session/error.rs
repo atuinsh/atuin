@@ -18,12 +18,20 @@ pub enum WatchError {
     Tree(#[from] TreeWatcherError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error("observing {}: {source}", db.display())]
+    Observe {
+        db: PathBuf,
+        #[source]
+        source: crate::db::sqlite::observe::ObserveError,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum MessageError {
     #[error(transparent)]
     Jsonl(#[from] JsonlError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
     #[error("unrecognized record on line {line}")]
     Unrecognized {
         line: u64,

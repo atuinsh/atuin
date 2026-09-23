@@ -48,6 +48,17 @@ impl AppendFile {
         Self::default()
     }
 
+    /// A reader resuming at `offset`, which an earlier reader of the same file reported from
+    /// [`Self::offset`]. The file's identity is not known until the first fill, so only a file
+    /// shorter than `offset` resets.
+    #[must_use]
+    pub fn at(offset: u64) -> Self {
+        Self {
+            consumed: offset,
+            ..Self::default()
+        }
+    }
+
     /// Read up to `max` bytes appended to `file` since the last fill.
     ///
     /// `file` is any handle to the file being followed; it is seeked, not held. A reset reads
@@ -177,6 +188,21 @@ mod tests {
         assert_eq!((reader.offset(), reader.pending()), (0, &b""[..]));
         fill(&mut reader, &file.path, 64);
         assert_eq!(reader.pending(), b"xyz");
+    }
+
+    #[rstest]
+    #[case::at_a_boundary(2, Fill::Read { more: false }, b"b\n")]
+    #[case::at_the_end(4, Fill::Read { more: false }, b"")]
+    #[case::past_the_end(5, Fill::Reset, b"")]
+    fn a_resumed_reader_continues_at_its_offset(
+        #[with(b"a\nb\n")] file: TempFile,
+        #[case] offset: u64,
+        #[case] first: Fill,
+        #[case] pending: &[u8],
+    ) {
+        let mut reader = AppendFile::at(offset);
+        assert_eq!(fill(&mut reader, &file.path, 64), first);
+        assert_eq!(reader.pending(), pending);
     }
 
     #[cfg(unix)]

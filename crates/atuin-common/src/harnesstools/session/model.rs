@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use derive_more::{AsRef, Display, From, Into};
 use serde::{Deserialize, Serialize};
 
@@ -77,53 +75,23 @@ pub enum StopReason {
     Other(String),
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SessionMeta {
-    pub cwd: Option<PathBuf>,
-    pub git_branch: Option<String>,
-    pub model: Option<String>,
-    pub title: Option<String>,
-    /// The session this one was forked or spawned from.
-    pub parent: Option<SessionId>,
-}
-
+/// One transcript line, tagged with the session it belongs to.
 #[derive(Clone, Debug)]
 pub struct SessionEvent<M> {
     pub session: SessionId,
-    pub kind: SessionEventKind<M>,
-}
-
-#[derive(Clone, Debug)]
-pub enum SessionEventKind<M> {
-    Started(SessionMeta),
-    Message(M),
+    /// Byte offset just past this line in its transcript: checkpoint it, and resume from it
+    /// with `Session::messages_from`.
+    pub offset: u64,
+    pub message: M,
 }
 
 impl<M> SessionEvent<M> {
     #[must_use]
-    pub fn started(session: SessionId, meta: SessionMeta) -> Self {
-        Self {
-            session,
-            kind: SessionEventKind::Started(meta),
-        }
-    }
-
-    #[must_use]
-    pub fn message(session: SessionId, message: M) -> Self {
-        Self {
-            session,
-            kind: SessionEventKind::Message(message),
-        }
-    }
-
-    #[must_use]
     pub fn map_message<N>(self, f: impl FnOnce(M) -> N) -> SessionEvent<N> {
         SessionEvent {
             session: self.session,
-            kind: match self.kind {
-                SessionEventKind::Started(meta) => SessionEventKind::Started(meta),
-                SessionEventKind::Message(message) => SessionEventKind::Message(f(message)),
-            },
+            offset: self.offset,
+            message: f(self.message),
         }
     }
 }

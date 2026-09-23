@@ -10,7 +10,7 @@ use typed_builder::TypedBuilder;
 use crate::fs::tree_watcher::{NodeContext, TreeWatcher};
 use crate::harnesstools::pi::Pi;
 use crate::harnesstools::session::model::{
-    Content, MessageId, Role, SessionMeta, StopReason, ToolCallId, ToolResult, ToolUse, Usage,
+    Content, MessageId, Role, StopReason, ToolCallId, ToolResult, ToolUse, Usage,
 };
 use crate::harnesstools::session::{
     Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId, Sessions,
@@ -168,11 +168,6 @@ impl PiSession {
             pool,
         }
     }
-
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
 }
 
 impl Session for PiSession {
@@ -182,35 +177,21 @@ impl Session for PiSession {
         self.id.clone()
     }
 
-    fn messages(self) -> impl Stream<Item = Result<PiMessage, MessageError>> + Send + 'static {
-        jsonl::follow::<PiMessage>(self.path, self.changes, self.pool).map_err(MessageError::from)
+    async fn message_at(&self, at: u64) -> Option<PiMessage> {
+        jsonl::value_at(&self.path, at, &self.pool).await
+    }
+
+    fn messages_from(
+        self,
+        from: u64,
+    ) -> impl Stream<Item = Result<(u64, PiMessage), MessageError>> + Send + 'static {
+        jsonl::follow_from::<PiMessage>(self.path, from, self.changes, self.pool)
+            .map_err(MessageError::from)
     }
 
     fn read(&self) -> impl Stream<Item = Result<PiMessage, MessageError>> + Send + 'static {
         jsonl::read_all::<PiMessage>(self.path.clone(), self.pool.clone())
             .map_err(MessageError::from)
-    }
-
-    fn meta(&self) -> impl std::future::Future<Output = Result<SessionMeta, MessageError>> + Send {
-        let path = self.path.clone();
-        let pool = self.pool.clone();
-        async move {
-            let messages: Vec<PiMessage> =
-                jsonl::read_all(path, pool).map_err(MessageError::from).try_collect().await?;
-            let cwd = messages.iter().find_map(|m| m.cwd.clone());
-            let model = messages.iter().rev().find_map(|m| m.model_id.clone());
-            let parent = messages
-                .iter()
-                .find(|m| m.kind == "session")
-                .and_then(|m| m.parent_session.clone())
-                .map(SessionId::from);
-            Ok(SessionMeta {
-                cwd,
-                model,
-                parent,
-                ..SessionMeta::default()
-            })
-        }
     }
 }
 
@@ -302,7 +283,11 @@ impl Message for PiMessage {
     }
 
     fn model(&self) -> Option<String> {
-        self.message.as_ref()?.get("model")?.as_str().map(str::to_owned)
+        // Assistant turns name their model; a `model_change` line names the new one at the top.
+        self.message
+            .as_ref()
+            .and_then(|m| m.get("model")?.as_str().map(str::to_owned))
+            .or_else(|| self.model_id.clone())
     }
 
     fn usage(&self) -> Option<Usage> {
@@ -332,6 +317,18 @@ impl Message for PiMessage {
 
     fn parent_id(&self) -> Option<MessageId> {
         self.parent_id.clone().map(MessageId::from)
+    }
+
+    /// Only the `session` header carries the directory; it is the first line, so the session row
+    /// gets it before any turn.
+    fn cwd(&self) -> Option<PathBuf> {
+        self.cwd.clone()
+    }
+
+    /// Only the `session` header names a parent; it is the first line, so the enricher sees it
+    /// before any turn.
+    fn parent_session(&self) -> Option<SessionId> {
+        self.parent_session.clone().map(SessionId::from)
     }
 
     fn title(&self) -> Option<String> {
@@ -525,21 +522,15 @@ mod tests {
     }
 
     #[rstest]
-    #[tokio::test]
-    async fn meta_reads_parent_session_from_the_header() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("1700000000_s2.jsonl");
-        std::fs::write(
-            &path,
-            serde_json::json!({"type": "session", "id": "s2", "cwd": "/w", "parentSession": "s1"})
-                .to_string()
-                + "\n",
-        )
-        .unwrap();
-
-        let meta =
-            PiSession::open(SessionId::from("s2".to_owned()), path, pool()).meta().await.unwrap();
-        assert_eq!(meta.parent, Some(SessionId::from("s1".to_owned())));
+    #[case(serde_json::json!({"type": "session", "id": "s2", "cwd": "/w", "parentSession": "s1"}), Some("s1"))]
+    #[case(serde_json::json!({"type": "session", "id": "s2", "cwd": "/w"}), None)]
+    #[case(serde_json::json!({"type": "message", "id": "m1", "message": {"role": "user", "content": "hi"}}), None)]
+    fn the_header_names_the_parent_session(
+        #[case] raw: serde_json::Value,
+        #[case] parent: Option<&str>,
+    ) {
+        let m: PiMessage = serde_json::from_str(&raw.to_string()).unwrap();
+        assert_eq!(m.parent_session(), parent.map(|p| SessionId::from(p.to_owned())));
     }
 
     #[rstest]
@@ -573,39 +564,6 @@ mod tests {
         let roles: Vec<Role> =
             session.messages().take(2).map_ok(|m| m.role()).try_collect().await.unwrap();
         assert_eq!(roles.last(), Some(&Role::Assistant));
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn meta_reads_cwd_from_session_header_and_latest_model_change() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("1700000000_s1.jsonl");
-        let body = [
-            serde_json::json!({"type": "session", "id": "s1", "cwd": "/w"}).to_string(),
-            serde_json::json!({
-                "type": "model_change",
-                "id": "c1",
-                "provider": "anthropic",
-                "modelId": "claude-sonnet-4",
-            })
-            .to_string(),
-            serde_json::json!({
-                "type": "model_change",
-                "id": "c2",
-                "provider": "anthropic",
-                "modelId": "claude-opus-4-8",
-            })
-            .to_string(),
-        ]
-        .join("\n")
-            + "\n";
-        std::fs::write(&path, body).unwrap();
-
-        let session = PiSession::open(SessionId::from("s1".to_owned()), path, pool());
-        let meta = session.meta().await.unwrap();
-        assert_eq!(meta.cwd, Some(PathBuf::from("/w")));
-        assert_eq!(meta.model, Some("claude-opus-4-8".to_owned()));
-        assert_eq!(meta.git_branch, None);
     }
 
     #[rstest]

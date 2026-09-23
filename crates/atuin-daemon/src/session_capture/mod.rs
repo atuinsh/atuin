@@ -12,7 +12,7 @@ use atuin_client::ai_session::{
 };
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4::Key;
-use atuin_common::harnesstools::session::{Content, Role, SessionMeta};
+use atuin_common::harnesstools::session::{Content, Role};
 use atuin_common::sync::BlockingPool;
 use atuin_domain::record::HostId;
 use engine::SessionCaptureEngine;
@@ -131,26 +131,6 @@ impl Sink {
         }
 
         Ok(appended)
-    }
-
-    pub(crate) async fn record_session_meta(
-        &self,
-        handle: &HarnessSession,
-        meta: &SessionMeta,
-    ) -> Result<(), AppendError> {
-        let created = self.sidecar.get_session(handle).await?.is_none();
-        let mut meta = meta.clone();
-        meta.title = meta.title.map(|title| atuin_common::secrets::redact(&title).into_owned());
-        self.sidecar.record_session_meta(handle, &meta).await?;
-
-        if created
-            && self.tail.receiver_count() > 0
-            && let Some(session) = self.sidecar.get_session(handle).await?
-        {
-            let _ = self.tail.send(SessionTailEvent::SessionStarted(session));
-        }
-
-        Ok(())
     }
 }
 
@@ -661,7 +641,7 @@ mod tests {
                 }))
                 .unwrap(),
             );
-            let msg = enricher.capture(&session, &m).row.unwrap();
+            let msg = enricher.capture(&session, &m).unwrap();
             sink.append(msg.clone()).await.unwrap();
             let mut rows = Box::pin(sink.sidecar.messages(&msg.session));
             let mut found = false;

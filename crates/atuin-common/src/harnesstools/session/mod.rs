@@ -1,14 +1,15 @@
 pub mod error;
 pub mod model;
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use enum_dispatch::enum_dispatch;
 pub use error::{CaptureError, MessageError, RuntimeError, WatchError};
-use futures::{Stream, StreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 pub use model::{
-    Content, MessageId, Role, SessionEvent, SessionEventKind, SessionId, SessionMeta, StopReason,
-    ToolCallId, ToolResult, ToolUse, Usage,
+    Content, MessageId, Role, SessionEvent, SessionId, StopReason, ToolCallId, ToolResult, ToolUse,
+    Usage,
 };
 use time::OffsetDateTime;
 
@@ -102,11 +103,34 @@ pub trait Session: Send + 'static {
     type Message: Message;
 
     fn id(&self) -> SessionId;
-    fn messages(self) -> impl Stream<Item = Result<Self::Message, MessageError>> + Send + 'static;
-    fn read(&self) -> impl Stream<Item = Result<Self::Message, MessageError>> + Send + 'static;
-    fn meta(&self) -> impl std::future::Future<Output = Result<SessionMeta, MessageError>> + Send {
-        async { Ok(SessionMeta::default()) }
+
+    /// The message the resume token `at` names, so a consumer can decide whether the token is
+    /// still one it may resume from -- typically by asking whether it already has that message.
+    ///
+    /// `None` when the token names nothing this session can read: a transcript shorter than the
+    /// byte offset it came from, a row a log has since dropped. The consumer then resumes from 0.
+    fn message_at(&self, at: u64) -> impl Future<Output = Option<Self::Message>> + Send;
+
+    /// Follow the session from the resume token `from`, `0` being its beginning, yielding with
+    /// each message the token that resumes just past it.
+    ///
+    /// **Be warned**: a token means whatever the harness reading the session makes it mean -- a
+    /// byte offset into a transcript, a row's sequence in a log -- and belongs to that harness
+    /// alone. A consumer stores one and hands it back; it never does arithmetic on one, and a
+    /// token from one harness names nothing in another.
+    fn messages_from(
+        self,
+        from: u64,
+    ) -> impl Stream<Item = Result<(u64, Self::Message), MessageError>> + Send + 'static;
+
+    fn messages(self) -> impl Stream<Item = Result<Self::Message, MessageError>> + Send + 'static
+    where
+        Self: Sized,
+    {
+        self.messages_from(0).map_ok(|(_, message)| message)
     }
+
+    fn read(&self) -> impl Stream<Item = Result<Self::Message, MessageError>> + Send + 'static;
 }
 
 pub trait Listener {
@@ -114,17 +138,38 @@ pub trait Listener {
 
     fn watch(self) -> impl Stream<Item = Result<Self::Session, WatchError>> + Send + 'static;
 
-    fn events(
+    /// Every line of every session the watcher reports, tagged with its session and the byte
+    /// offset past it. `resume_from` is awaited once per session, with its id and transcript
+    /// path, before the transcript is opened, and gives the offset to start at; 0 reads the
+    /// whole file.
+    /// Follow every session this listener reports, each from where the consumer last left it.
+    ///
+    /// `checkpoint` gives the resume token stored for a session, `0` for none. A token is only
+    /// as good as the message it names, which is the harness's to answer ([`Session::message_at`])
+    /// and the consumer's to vouch for: `knows` is asked whether that message is one it already
+    /// has, and a token it will not vouch for reads the session from its beginning instead.
+    fn events<F, G>(
         self,
+        checkpoint: impl Fn(&SessionId) -> F + Send + 'static,
+        knows: impl Fn(SessionId, <Self::Session as Session>::Message) -> G + Send + 'static,
     ) -> impl Stream<Item = Result<SessionEvent<<Self::Session as Session>::Message>, CaptureError>>
     + Send
     + 'static
     where
         Self: Sized,
+        F: Future<Output = u64> + Send + 'static,
+        G: Future<Output = bool> + Send + 'static,
     {
         let sessions = self.watch();
         async_stream::stream! {
             let mut active = futures::stream::SelectAll::new();
+            // One live stream per transcript. A session the watcher reports again (the file
+            // removed and recreated, or renamed back) replaces the old stream: its buffered
+            // lines would otherwise interleave with the new one and could move the checkpoint
+            // backwards. ponytail: handles are kept for every session ever seen; prune on end
+            // if the map ever matters.
+            let mut handles: std::collections::HashMap<SessionId, futures::stream::AbortHandle> =
+                std::collections::HashMap::new();
             futures::pin_mut!(sessions);
             let mut sessions_done = false;
             loop {
@@ -136,11 +181,24 @@ pub trait Listener {
                     appeared = sessions.next(), if !sessions_done => match appeared {
                         Some(Ok(session)) => {
                             let id = session.id();
-                            let meta = session.meta().await.unwrap_or_default();
-                            yield Ok(SessionEvent::started(id.clone(), meta));
-                            let tagged =
-                                session.messages().map(move |message| (id.clone(), message)).boxed();
-                            active.push(tagged);
+                            let at = checkpoint(&id).await;
+                            let vouched = if at == 0 {
+                                false
+                            } else {
+                                match session.message_at(at).await {
+                                    Some(message) => knows(id.clone(), message).await,
+                                    None => false,
+                                }
+                            };
+                            let start = if vouched { at } else { 0 };
+                            let tag = id.clone();
+                            let (tagged, handle) = futures::stream::abortable(
+                                session.messages_from(start).map(move |item| (tag.clone(), item)),
+                            );
+                            if let Some(old) = handles.insert(id, handle) {
+                                old.abort();
+                            }
+                            active.push(tagged.boxed());
                         }
                         Some(Err(err)) => yield Err(CaptureError::from(err)),
                         None => sessions_done = true,
@@ -148,7 +206,9 @@ pub trait Listener {
                     tagged = active.next(), if !active.is_empty() => {
                         if let Some((session, result)) = tagged {
                             match result {
-                                Ok(message) => yield Ok(SessionEvent::message(session, message)),
+                                Ok((offset, message)) => {
+                                    yield Ok(SessionEvent { session, offset, message });
+                                }
                                 Err(source) => yield Err(CaptureError::Message { session, source }),
                             }
                         }
@@ -220,12 +280,95 @@ mod tests {
         assert_eq!(m.content(), vec![Content::Text("hello".into())]);
         assert_eq!(m.id(), Some(MessageId::from("m1".to_owned())));
     }
+
+    /// A transcript that yields the given offsets, then either ends or hangs like a live file
+    /// waiting for more.
+    struct StubSession {
+        id: &'static str,
+        offsets: Vec<u64>,
+        hang: bool,
+    }
+
+    impl Session for StubSession {
+        type Message = StubMsg;
+
+        fn id(&self) -> SessionId {
+            SessionId::from(self.id.to_owned())
+        }
+
+        async fn message_at(&self, _at: u64) -> Option<StubMsg> {
+            None
+        }
+
+        fn messages_from(
+            self,
+            _from: u64,
+        ) -> impl Stream<Item = Result<(u64, StubMsg), MessageError>> + Send + 'static {
+            let items = futures::stream::iter(self.offsets.into_iter().map(|o| Ok((o, StubMsg))));
+            if self.hang {
+                items.chain(futures::stream::pending()).left_stream()
+            } else {
+                items.right_stream()
+            }
+        }
+
+        fn read(&self) -> impl Stream<Item = Result<StubMsg, MessageError>> + Send + 'static {
+            futures::stream::empty()
+        }
+    }
+
+    /// Reports `first` at once and `second` shortly after, as a watcher does for a transcript
+    /// that is removed and recreated.
+    struct StubListener {
+        first: StubSession,
+        second: StubSession,
+    }
+
+    impl Listener for StubListener {
+        type Session = StubSession;
+
+        fn watch(self) -> impl Stream<Item = Result<StubSession, WatchError>> + Send + 'static {
+            let second = self.second;
+            futures::stream::iter([Ok(self.first)]).chain(futures::stream::once(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                Ok(second)
+            }))
+        }
+    }
+
+    /// A session reported twice keeps only its newest stream: the first stream hangs like a
+    /// live transcript, and without replacement `events()` would never end.
+    #[rstest]
+    #[tokio::test]
+    async fn a_reported_again_session_replaces_its_earlier_stream() {
+        let listener = StubListener {
+            first: StubSession {
+                id: "s",
+                offsets: vec![1],
+                hang: true,
+            },
+            second: StubSession {
+                id: "s",
+                offsets: vec![2],
+                hang: false,
+            },
+        };
+        let events = listener.events(|_| async { 0 }, |_, _| async { true });
+        let offsets: Vec<u64> = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            events.map(|ev| ev.unwrap().offset).collect(),
+        )
+        .await
+        .expect("the replaced stream must not keep events() alive");
+        assert_eq!(offsets, vec![1, 2]);
+    }
 }
 
 pub mod any;
 
 use crate::harnesstools::ccode::session::CcodeMessage;
 use crate::harnesstools::codex::session::CodexMessage;
+use crate::harnesstools::opencode::session::OpencodeMessage;
 use crate::harnesstools::pi::session::PiMessage;
 
 #[enum_dispatch(Message)]
@@ -233,5 +376,6 @@ use crate::harnesstools::pi::session::PiMessage;
 pub enum AnyMessage {
     Ccode(CcodeMessage),
     Codex(CodexMessage),
+    Opencode(OpencodeMessage),
     Pi(PiMessage),
 }

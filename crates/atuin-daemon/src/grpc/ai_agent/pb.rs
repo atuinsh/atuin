@@ -120,10 +120,15 @@ impl From<Content> for ContentBlock {
             Content::ReasoningSummary { tokens } => {
                 Block::Thinking(atuin_common::harnesstools::session::model::reasoning_label(tokens))
             }
+            // Capture stores a JSON null in place of arguments and results it does not keep; on
+            // the wire that is "not captured", an empty string, not the text `null`.
             Content::ToolUse(tu) => Block::ToolCall(ToolCall {
                 id: tu.id.into(),
                 name: tu.name,
-                input: serde_json::to_string(&tu.input).unwrap_or_default(),
+                input: match tu.input {
+                    serde_json::Value::Null => String::new(),
+                    other => serde_json::to_string(&other).unwrap_or_default(),
+                },
             }),
             Content::ToolResult(tr) => Block::ToolResult(ToolResult {
                 tool_use_id: tr.call.into(),
@@ -131,6 +136,7 @@ impl From<Content> for ContentBlock {
                 // JSON. A string output is already the raw text, so emit it verbatim rather than
                 // re-encoding it into a quoted, escaped JSON string.
                 content: match tr.output {
+                    serde_json::Value::Null => String::new(),
                     serde_json::Value::String(s) => s,
                     other => serde_json::to_string(&other).unwrap_or_default(),
                 },
@@ -242,6 +248,35 @@ mod tests {
     #[case(DomainStopReason::Other("x".into()), StopReason::Unknown)]
     fn stop_reason_coalesces_at_edge(#[case] from: DomainStopReason, #[case] want: StopReason) {
         assert_eq!(StopReason::from(from), want);
+    }
+
+    /// Capture nulls arguments and results it does not keep; the wire carries "not captured" as
+    /// an empty string, never the text `null`.
+    #[rstest]
+    fn uncaptured_tool_payloads_are_empty_on_the_wire() {
+        use atuin_common::harnesstools::session::{ToolCallId, ToolResult, ToolUse};
+
+        let call: ContentBlock = Content::ToolUse(ToolUse {
+            id: ToolCallId::from("c1".to_owned()),
+            name: "Bash".to_owned(),
+            input: serde_json::Value::Null,
+        })
+        .into();
+        let content_block::Block::ToolCall(tc) = call.block.unwrap() else {
+            panic!("expected a tool call block");
+        };
+        assert_eq!((tc.name.as_str(), tc.input.as_str()), ("Bash", ""));
+
+        let result: ContentBlock = Content::ToolResult(ToolResult {
+            call: ToolCallId::from("c1".to_owned()),
+            output: serde_json::Value::Null,
+            error: true,
+        })
+        .into();
+        let content_block::Block::ToolResult(tr) = result.block.unwrap() else {
+            panic!("expected a tool result block");
+        };
+        assert_eq!((tr.content.as_str(), tr.is_error), ("", true));
     }
 
     #[rstest]

@@ -10,7 +10,7 @@ use typed_builder::TypedBuilder;
 use crate::fs::tree_watcher::{NodeContext, TreeWatcher};
 use crate::harnesstools::codex::Codex;
 use crate::harnesstools::session::model::{
-    Content, MessageId, Role, SessionMeta, StopReason, ToolCallId, ToolResult, ToolUse, Usage,
+    Content, MessageId, Role, StopReason, ToolCallId, ToolResult, ToolUse, Usage,
 };
 use crate::harnesstools::session::{
     Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId, Sessions,
@@ -168,11 +168,6 @@ impl CodexSession {
             pool,
         }
     }
-
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
 }
 
 impl Session for CodexSession {
@@ -182,30 +177,21 @@ impl Session for CodexSession {
         self.id.clone()
     }
 
-    fn messages(self) -> impl Stream<Item = Result<CodexMessage, MessageError>> + Send + 'static {
-        jsonl::follow::<CodexMessage>(self.path, self.changes, self.pool)
+    async fn message_at(&self, at: u64) -> Option<CodexMessage> {
+        jsonl::value_at(&self.path, at, &self.pool).await
+    }
+
+    fn messages_from(
+        self,
+        from: u64,
+    ) -> impl Stream<Item = Result<(u64, CodexMessage), MessageError>> + Send + 'static {
+        jsonl::follow_from::<CodexMessage>(self.path, from, self.changes, self.pool)
             .map_err(MessageError::from)
     }
 
     fn read(&self) -> impl Stream<Item = Result<CodexMessage, MessageError>> + Send + 'static {
         jsonl::read_all::<CodexMessage>(self.path.clone(), self.pool.clone())
             .map_err(MessageError::from)
-    }
-
-    fn meta(&self) -> impl std::future::Future<Output = Result<SessionMeta, MessageError>> + Send {
-        let path = self.path.clone();
-        let pool = self.pool.clone();
-        async move {
-            let messages: Vec<CodexMessage> =
-                jsonl::read_all(path, pool).map_err(MessageError::from).try_collect().await?;
-            let cwd = messages.iter().find_map(Message::cwd);
-            let model = messages.iter().find_map(Message::model);
-            Ok(SessionMeta {
-                cwd,
-                model,
-                ..SessionMeta::default()
-            })
-        }
     }
 }
 
@@ -257,11 +243,20 @@ impl Message for CodexMessage {
     fn id(&self) -> Option<MessageId> {
         // Prefer the per-record `id` (ctc_/ctco_/msg_...) over `call_id`: a tool call and its
         // output share one `call_id`, so keying identity on it would collide the two records and
-        // the dedup gate would drop the output. `call_id` linkage lives in the content, not here.
-        self.payload
-            .as_ref()
-            .and_then(|p| p["id"].as_str().or_else(|| p["call_id"].as_str()))
-            .map(|s| MessageId::from(s.to_owned()))
+        // the dedup gate would drop the output. Older rollouts have no per-record id at all, so
+        // an output falling back to `call_id` is suffixed to keep it distinct from its call.
+        // `call_id` linkage lives in the content, not here.
+        let p = self.payload.as_ref()?;
+        if let Some(id) = p["id"].as_str() {
+            return Some(MessageId::from(id.to_owned()));
+        }
+        let call_id = p["call_id"].as_str()?;
+        let is_output = p["type"].as_str().is_some_and(|t| t.ends_with("_output"));
+        Some(MessageId::from(if is_output {
+            format!("{call_id}#out")
+        } else {
+            call_id.to_owned()
+        }))
     }
 
     fn role(&self) -> Role {
@@ -494,6 +489,35 @@ mod tests {
         assert_eq!(output.id(), Some(MessageId::from("ctco_1".to_owned())));
     }
 
+    /// Older rollouts carry no per-record id: the call keys on `call_id` and its output must
+    /// still get a distinct id, or the dedup gate drops every tool result.
+    #[rstest]
+    #[case("function_call", "function_call_output")]
+    #[case("custom_tool_call", "custom_tool_call_output")]
+    fn id_less_tool_output_does_not_collide_with_its_call(
+        #[case] call_kind: &str,
+        #[case] output_kind: &str,
+    ) {
+        let call: CodexMessage = serde_json::from_str(
+            &serde_json::json!({
+                "type": "response_item",
+                "payload": {"type": call_kind, "call_id": "call_x", "name": "sh", "arguments": "ls"},
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let output: CodexMessage = serde_json::from_str(
+            &serde_json::json!({
+                "type": "response_item",
+                "payload": {"type": output_kind, "call_id": "call_x", "output": "files"},
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(call.id(), Some(MessageId::from("call_x".to_owned())));
+        assert_eq!(output.id(), Some(MessageId::from("call_x#out".to_owned())));
+    }
+
     #[rstest]
     #[case(serde_json::json!("ok\nProcess exited with code 0"), false)]
     #[case(serde_json::json!("boom\nProcess exited with code 2"), true)]
@@ -559,34 +583,6 @@ mod tests {
         let roles: Vec<Role> =
             session.messages().take(2).map_ok(|m| m.role()).try_collect().await.unwrap();
         assert_eq!(roles.last(), Some(&Role::User));
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn meta_reads_cwd_from_session_meta_and_model_from_turn_context() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("rollout-2026-09-18-th1.jsonl");
-        let body = [
-            serde_json::json!({
-                "type": "session_meta",
-                "payload": {"id": "th1", "cwd": "/work/atuin"},
-            })
-            .to_string(),
-            serde_json::json!({
-                "type": "turn_context",
-                "payload": {"model": "gpt-5.6-terra", "cwd": "/work/atuin"},
-            })
-            .to_string(),
-        ]
-        .join("\n")
-            + "\n";
-        std::fs::write(&path, body).unwrap();
-
-        let session = CodexSession::open(SessionId::from("th1".to_owned()), path, pool());
-        let meta = session.meta().await.unwrap();
-        assert_eq!(meta.cwd, Some(PathBuf::from("/work/atuin")));
-        assert_eq!(meta.model, Some("gpt-5.6-terra".to_owned()));
-        assert_eq!(meta.git_branch, None);
     }
 
     #[rstest]

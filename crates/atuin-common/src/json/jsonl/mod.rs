@@ -8,12 +8,12 @@
 //! not see a line twice dedups on its side.
 
 use std::fs::File;
-use std::io;
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use bytes::Bytes;
-use futures::Stream;
+use futures::{Stream, TryStreamExt};
 use serde::de::DeserializeOwned;
 use tokio::sync::watch;
 
@@ -34,6 +34,15 @@ const READ_CHUNK_BYTES: u64 = 64 * 1024;
 struct Cursor {
     file: AppendFile,
     line: u64,
+}
+
+impl Cursor {
+    fn at(offset: u64) -> Self {
+        Self {
+            file: AppendFile::at(offset),
+            line: 0,
+        }
+    }
 }
 
 /// The complete lines of one bounded read.
@@ -57,28 +66,40 @@ pub enum JsonlError {
 }
 
 /// Read the complete lines in the next chunk past `cursor`, advancing it past them, and
-/// deserialize each as it is pulled from the returned iterator; the flag is [`Lines::more`].
+/// deserialize each with the byte offset just past its line; the flag is [`Lines::more`].
 ///
 /// Blank lines are skipped but still counted, so `line` in a [`JsonlError::Parse`] is the 1-based
-/// physical line in the file as it stands now; it restarts at 1 when the file is truncated or
-/// replaced.
+/// physical line counted from where the cursor started; it restarts at 1 when the file is
+/// truncated or replaced.
 async fn read_new<T>(
     path: &Path,
     cursor: &mut Cursor,
     pool: &BlockingPool,
-) -> io::Result<(impl Iterator<Item = Result<T, JsonlError>> + Send + use<T>, bool)>
+) -> io::Result<(impl Iterator<Item = Result<(u64, T), JsonlError>> + Send + use<T>, bool)>
 where
     T: DeserializeOwned,
 {
     let Lines { lines, more } = read_blocking(path, cursor, pool).await?;
     let count = u64::try_from(lines.len()).expect("line count fits u64");
     let first = cursor.line - count + 1;
+    let ends: Vec<u64> = lines
+        .iter()
+        .rev()
+        .scan(cursor.file.offset(), |end, line| {
+            let this = *end;
+            *end -= u64::try_from(line.len()).expect("line length fits u64") + 1;
+            Some(this)
+        })
+        .collect();
     let items = lines
         .into_iter()
+        .zip(ends.into_iter().rev())
         .zip(first..)
-        .filter(|(bytes, _)| !bytes.iter().all(u8::is_ascii_whitespace))
-        .map(|(bytes, line)| {
-            serde_json::from_slice(&bytes).map_err(|source| JsonlError::Parse { source, line })
+        .filter(|((bytes, _), _)| !bytes.iter().all(u8::is_ascii_whitespace))
+        .map(|((bytes, at), line)| {
+            serde_json::from_slice(&bytes)
+                .map(|value| (at, value))
+                .map_err(|source| JsonlError::Parse { source, line })
         });
     Ok((items, more))
 }
@@ -154,10 +175,29 @@ pub fn follow<T>(
 where
     T: DeserializeOwned + Send + 'static,
 {
+    follow_from(path, 0, changes, pool).map_ok(|(_, value)| value)
+}
+
+/// [`follow`], resumed at byte `start` and yielding with each value the byte offset just past
+/// its line, so a caller can checkpoint that offset and resume from it later.
+///
+/// `start` must be an offset this stream reported, so it sits on a line boundary. One past the
+/// file's current end means the file was replaced or truncated: the read restarts from zero.
+/// Line numbers in a [`JsonlError::Parse`] count from `start`, not from the file's first line.
+pub fn follow_from<T>(
+    path: PathBuf,
+    start: u64,
+    changes: Option<watch::Receiver<()>>,
+    pool: BlockingPool,
+) -> impl Stream<Item = Result<(u64, T), JsonlError>> + Send + 'static
+where
+    T: DeserializeOwned + Send + 'static,
+{
     async_stream::stream! {
         let mut changes = changes;
-        let mut cursor = Cursor::default();
+        let mut cursor = Cursor::at(start);
         let mut retry: Option<Duration> = None;
+        let mut first = true;
         loop {
             // Mark the signal seen before reading, so a change that lands during the read is
             // still pending when we wait: an extra read at worst, never a missed one.
@@ -167,6 +207,15 @@ where
             match read_new::<T>(&path, &mut cursor, &pool).await {
                 Ok((items, more)) => {
                     retry = None;
+                    // The offset only ever falls below `start` by the cursor resetting.
+                    if first && cursor.file.offset() < start {
+                        tracing::debug!(
+                            path = %path.display(),
+                            start,
+                            "resume offset is past the end of the file; reading from the start"
+                        );
+                    }
+                    first = false;
                     for item in items {
                         yield item;
                     }
@@ -192,6 +241,49 @@ where
                 () = tokio::time::sleep(retry.unwrap_or_default()), if retry.is_some() => {}
             }
         }
+    }
+}
+
+/// The value the line ending at byte `at` carries, or `None` when the file has no line there or
+/// the line does not parse as a `T`. Reads run in `pool`.
+///
+/// The counterpart of the offsets [`follow_from`] reports: a reader hands one back to ask what it
+/// named, and decides from that whether it may resume there.
+pub async fn value_at<T: DeserializeOwned>(path: &Path, at: u64, pool: &BlockingPool) -> Option<T> {
+    let path = path.to_path_buf();
+    let line = pool
+        .run(move || File::open(path).and_then(|file| line_ending_at(&file, at)))
+        .await
+        .ok()?
+        .ok()
+        .flatten()?;
+    serde_json::from_slice(&line).ok()
+}
+
+/// The complete line that ends exactly at byte `offset` of `file`, without its newline, or `None`
+/// when no line does: `offset` is zero, past the end, or the byte before it is not a newline.
+fn line_ending_at(mut file: &File, offset: u64) -> io::Result<Option<Bytes>> {
+    if offset == 0 || file.metadata()?.len() < offset {
+        return Ok(None);
+    }
+    // Read backwards in growing windows until the previous newline (or the file start).
+    let mut window = READ_CHUNK_BYTES;
+    loop {
+        let start = offset.saturating_sub(window);
+        file.seek(SeekFrom::Start(start))?;
+        let mut buf = vec![0; usize::try_from(offset - start).expect("window fits usize")];
+        file.read_exact(&mut buf)?;
+        if buf.last() != Some(&b'\n') {
+            return Ok(None);
+        }
+        let body = &buf[..buf.len() - 1];
+        if let Some(newline) = memchr::memrchr(b'\n', body) {
+            return Ok(Some(Bytes::copy_from_slice(&body[newline + 1..])));
+        }
+        if start == 0 {
+            return Ok(Some(Bytes::copy_from_slice(body)));
+        }
+        window *= 2;
     }
 }
 
@@ -273,7 +365,8 @@ mod tests {
     }
 
     async fn read_values(path: &Path, cursor: &mut Cursor) -> Vec<Result<i64, JsonlError>> {
-        read_new::<i64>(path, cursor, &pool()).await.unwrap().0.collect()
+        let (items, _) = read_new::<i64>(path, cursor, &pool()).await.unwrap();
+        items.map(|item| item.map(|(_, value)| value)).collect()
     }
 
     #[rstest]
@@ -305,6 +398,61 @@ mod tests {
         let results = read_values(&path, &mut cursor).await;
         assert_eq!(results.len(), 2);
         assert!(matches!(results[1], Err(JsonlError::Parse { line: 2, .. })));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn follow_from_reports_the_offset_past_each_line() {
+        // "1\n" ends at 2, the blank line at 3, "bad\n" at 7, "22\n" at 10.
+        let (_dir, path) = write_jsonl(&["1", "", "bad", "22", ""]);
+        let results: Vec<Result<(u64, i64), JsonlError>> =
+            follow_from::<i64>(path, 0, None, pool()).collect().await;
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].as_ref().unwrap(), &(2, 1));
+        assert!(matches!(results[1], Err(JsonlError::Parse { line: 3, .. })));
+        assert_eq!(results[2].as_ref().unwrap(), &(10, 22));
+    }
+
+    /// "1\n22\n333\n" is 9 bytes: a boundary resumes after it, the end yields nothing, and past
+    /// the end restarts from the first line.
+    #[rstest]
+    #[case(2, vec![(5, 22), (9, 333)])]
+    #[case(9, vec![])]
+    #[case(100, vec![(2, 1), (5, 22), (9, 333)])]
+    #[tokio::test]
+    async fn follow_from_resumes_at_a_boundary_and_restarts_past_the_end(
+        #[case] start: u64,
+        #[case] expected: Vec<(u64, i64)>,
+    ) {
+        let (_dir, path) = write_jsonl(&["1", "22", "333", ""]);
+        let got: Vec<(u64, i64)> =
+            follow_from::<i64>(path, start, None, pool()).try_collect().await.unwrap();
+        assert_eq!(got, expected);
+    }
+
+    /// "1\n22\n333\n" is 9 bytes, with lines ending at 2, 5 and 9.
+    #[rstest]
+    #[case::first_line(2, Some(1))]
+    #[case::last_line(9, Some(333))]
+    #[case::start_of_file(0, None)]
+    #[case::mid_line(4, None)]
+    #[case::past_the_end(10, None)]
+    #[tokio::test]
+    async fn value_at_reads_the_line_ending_at_an_offset(
+        #[case] at: u64,
+        #[case] expected: Option<i64>,
+    ) {
+        let (_dir, path) = write_jsonl(&["1", "22", "333", ""]);
+        assert_eq!(value_at::<i64>(&path, at, &pool()).await, expected);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn value_at_finds_a_line_longer_than_a_read_window() {
+        let long = "9".repeat(3 * usize::try_from(READ_CHUNK_BYTES).unwrap());
+        let (_dir, path) = write_jsonl(&["1", &format!("\"{long}\""), ""]);
+        let at = 2 + u64::try_from(long.len()).unwrap() + 3;
+        assert_eq!(value_at::<String>(&path, at, &pool()).await, Some(long));
     }
 
     #[rstest]

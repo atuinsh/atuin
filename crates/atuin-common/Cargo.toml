@@ -12,7 +12,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
-ai = []
+ai = ["sqlite"]
 ansi = ["dep:atuin-vt100"]
 db = ["dep:sqlx"]
 os = ["dep:rustix"]

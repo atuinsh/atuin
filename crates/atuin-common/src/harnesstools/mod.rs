@@ -99,15 +99,14 @@ impl AnyHarness {
         &[Self::ClaudeCode(Ccode), Self::Codex(Codex), Self::Opencode(Opencode), Self::Pi(Pi)]
     }
 
-    /// The harness's sessions, whose file reads all run in `pool`, or `None` when it has none to
-    /// observe.
+    /// The harness's sessions, whose file reads all run in `pool`.
     #[must_use]
     pub fn sessions(&self, pool: &BlockingPool) -> Option<AnySessions> {
         match self {
             Self::ClaudeCode(h) => Some(h.sessions(pool.clone()).into()),
             Self::Codex(h) => Some(h.sessions(pool.clone()).into()),
+            Self::Opencode(h) => Some(h.sessions(pool.clone()).into()),
             Self::Pi(h) => Some(h.sessions(pool.clone()).into()),
-            Self::Opencode(_) => None,
         }
     }
 }
@@ -121,12 +120,10 @@ mod tests {
     use super::*;
 
     #[rstest]
-    fn only_opencode_has_no_session_listener() {
+    fn every_harness_is_observable() {
         let pool = BlockingPool::new(NonZeroUsize::MIN);
         for harness in AnyHarness::all() {
-            let observable = harness.sessions(&pool).is_some();
-            let is_opencode = harness.name() == "opencode";
-            assert_eq!(observable, !is_opencode, "mismatch for {}", harness.name());
+            assert!(harness.sessions(&pool).is_some(), "{} is not observable", harness.name());
         }
     }
 }
