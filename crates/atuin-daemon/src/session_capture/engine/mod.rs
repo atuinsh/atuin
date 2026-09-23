@@ -3,9 +3,7 @@ use std::time::Duration;
 
 use atuin_client::ai_session::HarnessKind;
 use atuin_common::harnesstools::AnyHarness;
-use atuin_common::harnesstools::session::{
-    RuntimeError, SessionEvent, SessionEventKind, SessionMeta,
-};
+use atuin_common::harnesstools::session::{RuntimeError, SessionEvent};
 use futures::StreamExt;
 use tokio::task::JoinHandle;
 
@@ -65,32 +63,8 @@ impl SessionCaptureEngine {
 
                 while let Some(ev) = events.next().await {
                     match ev {
-                        Ok(SessionEvent {
-                            session,
-                            kind: SessionEventKind::Started(meta),
-                        }) => {
-                            enricher.observe_started(&session, &meta);
-                            let handle = enricher.handle(&session);
-                            if let Err(e) = sink.record_session_meta(&handle, &meta).await {
-                                tracing::warn!(?e, "failed to record ai-session metadata");
-                            }
-                        }
-                        Ok(SessionEvent {
-                            session,
-                            kind: SessionEventKind::Message(m),
-                        }) => {
-                            let captured = enricher.capture(&session, &m);
-                            if let Some(title) = captured.new_title {
-                                let handle = enricher.handle(&session);
-                                let meta = SessionMeta {
-                                    title: Some(title),
-                                    ..SessionMeta::default()
-                                };
-                                if let Err(e) = sink.record_session_meta(&handle, &meta).await {
-                                    tracing::warn!(?e, "failed to record ai-session title");
-                                }
-                            }
-                            let Some(msg) = captured.row else {
+                        Ok(SessionEvent { session, message }) => {
+                            let Some(msg) = enricher.capture(&session, &message) else {
                                 continue;
                             };
                             if let Err(e) = sink.append(msg).await {

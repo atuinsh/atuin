@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use atuin_common::db::sqlite::fts::{TextHighlighter, match_expression};
 use atuin_common::db::sqlite::{Sqlite, SqliteOpenOrCreateError};
 use atuin_common::db::{self};
-use atuin_common::harnesstools::session::{Content, Role, SessionMeta, Usage};
+use atuin_common::harnesstools::session::{Content, Role, Usage};
 use atuin_domain::record::RecordId;
 use futures::{Stream, StreamExt, TryStreamExt};
 use time::OffsetDateTime;
@@ -215,6 +215,13 @@ impl AiSessionDatabase {
         // (which carry messages only). The session upsert below applies it latest-non-null-wins.
         let title = msg.session_title.as_deref();
         let preview = Self::preview_text(msg);
+        let previous_title: Option<String> =
+            db::query_scalar("SELECT title FROM sessions WHERE harness = ? AND session_id = ?")
+                .bind(harness)
+                .bind(session_id)
+                .fetch_optional(&mut *tx)
+                .await?
+                .flatten();
 
         db::query(
             "INSERT INTO sessions (
@@ -257,63 +264,21 @@ impl AiSessionDatabase {
         .execute(&mut *tx)
         .await?;
 
-        tx.commit().await?;
-        Ok(Appended::New)
-    }
-
-    pub async fn record_session_meta(
-        &self,
-        handle: &HarnessSession,
-        meta: &SessionMeta,
-    ) -> Result<(), DbError> {
-        let now = Self::millis(OffsetDateTime::now_utc());
-        let cwd = meta.cwd.as_ref().map(|p| p.to_string_lossy().into_owned());
-        let parent_harness = meta.parent.as_ref().map(|_| handle.harness as i64);
-        let parent_session_id = meta.parent.as_ref().map(ToString::to_string);
-
-        let mut tx = self.db.pool().begin_with("BEGIN IMMEDIATE").await?;
-
-        // Seed updated_at at 0, not `now`: appended messages set updated_at via
-        // MAX(sessions.updated_at, excluded.updated_at), so a wall-clock seed would pin recency at
-        // capture time and outrank every real message timestamp when an old session is replayed.
-        db::query(
-            "INSERT INTO sessions (
-                harness, session_id, parent_harness, parent_session_id, cwd, git_branch, model,
-                started_at, updated_at, message_count, usage_input, usage_output, \
-             usage_cache_read, usage_cache_write, title
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0, ?)
-            ON CONFLICT(harness, session_id) DO UPDATE SET
-                parent_harness = COALESCE(sessions.parent_harness, excluded.parent_harness),
-                parent_session_id = COALESCE(sessions.parent_session_id, \
-             excluded.parent_session_id),
-                cwd = COALESCE(sessions.cwd, excluded.cwd),
-                git_branch = COALESCE(sessions.git_branch, excluded.git_branch),
-                model = COALESCE(sessions.model, excluded.model),
-                title = COALESCE(excluded.title, sessions.title)",
-        )
-        .bind(handle.harness as i64)
-        .bind(handle.session.as_ref())
-        .bind(parent_harness)
-        .bind(parent_session_id)
-        .bind(cwd)
-        .bind(meta.git_branch.as_deref())
-        .bind(meta.model.as_deref())
-        .bind(now)
-        .bind(meta.title.as_deref())
-        .execute(&mut *tx)
-        .await?;
-
-        if let Some(title) = meta.title.as_deref() {
-            // messages_fts is contentless, so a single-column UPDATE is not supported: rewrite
-            // each of the session's index rows, re-deriving the body from the stored content.
+        // A changed title has to reach the rows indexed before it arrived. messages_fts is
+        // contentless, so a single-column UPDATE is not supported: rewrite each of the session's
+        // index rows, re-deriving the body from the stored content. Gated on the title actually
+        // changing, since every replayed line of a titled session carries it.
+        if let Some(title) = title
+            && previous_title.as_deref() != Some(title)
+        {
             type BodyRow =
                 (i64, String, Option<Vec<u8>>, Option<String>, Option<String>, Option<String>);
             let rows: Vec<BodyRow> = db::query_as(
                 "SELECT rowid, content, content_z, cwd, git_branch, model FROM messages WHERE \
                  harness = ? AND session_id = ?",
             )
-            .bind(handle.harness as i64)
-            .bind(handle.session.as_ref())
+            .bind(harness)
+            .bind(session_id)
             .fetch_all(&mut *tx)
             .await?;
 
@@ -341,7 +306,7 @@ impl AiSessionDatabase {
         }
 
         tx.commit().await?;
-        Ok(())
+        Ok(Appended::New)
     }
 
     /// Whether a persisted row already carries the reported reasoning count for this call.
@@ -977,7 +942,7 @@ impl AiSessionDatabase {
 #[cfg(test)]
 mod tests {
     use atuin_common::harnesstools::session::{
-        Content, Role, SessionMeta, ToolCallId, ToolResult, ToolUse, Usage,
+        Content, Role, ToolCallId, ToolResult, ToolUse, Usage,
     };
     use atuin_domain::record::RecordId;
     use futures::TryStreamExt;
@@ -1163,9 +1128,8 @@ mod tests {
     async fn updated_at_tracks_last_message_not_capture_time() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         let session = sample_handle();
-        // Metadata is recorded first (a rediscovered old session), then historical messages replay.
-        // updated_at must reflect the newest message, not the wall-clock capture instant.
-        db.record_session_meta(&session, &SessionMeta::default()).await.unwrap();
+        // A rediscovered old session replays its historical messages; updated_at must reflect
+        // the newest message, not the wall-clock capture instant.
         db.append(&message_in(&session, 50, "old")).await.unwrap();
 
         let s = db.get_session(&session).await.unwrap().unwrap();
@@ -1575,14 +1539,46 @@ mod tests {
         db.append(&message).await.unwrap();
         assert_eq!(search(&db, "AlphaTitle").await.len(), 1, "the original title is searchable");
 
-        db.record_session_meta(&session, &SessionMeta {
-            title: Some("BetaTitle".to_owned()),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
+        let mut renamed = message_in(&session, 1, "more body text");
+        renamed.session_title = Some("BetaTitle".to_owned());
+        db.append(&renamed).await.unwrap();
 
         assert_eq!(search(&db, "BetaTitle").await.len(), 1, "the new title becomes searchable");
         assert!(search(&db, "AlphaTitle").await.is_empty(), "the retired title no longer matches");
+    }
+
+    /// A title reaches the rows indexed before it arrived, and an unchanged title on later rows
+    /// leaves the index as it is.
+    #[rstest]
+    #[tokio::test]
+    async fn a_title_propagates_to_earlier_rows_only_when_it_changes() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        let indexed_with_title = |title: &'static str| {
+            let pool = db.db.pool().clone();
+            async move {
+                atuin_common::db::query_scalar::<_, i64>(
+                    "SELECT count(*) FROM messages_fts WHERE messages_fts MATCH ?",
+                )
+                .bind(format!("title:{title}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+
+        db.append(&message_in(&session, 0, "untitled opener")).await.unwrap();
+        assert_eq!(indexed_with_title("GammaTitle").await, 0);
+
+        let mut titled = message_in(&session, 1, "first titled row");
+        titled.session_title = Some("GammaTitle".to_owned());
+        db.append(&titled).await.unwrap();
+        assert_eq!(indexed_with_title("GammaTitle").await, 2, "the opener is re-indexed");
+
+        let mut again = message_in(&session, 2, "same title again");
+        again.session_title = Some("GammaTitle".to_owned());
+        db.append(&again).await.unwrap();
+        assert_eq!(indexed_with_title("GammaTitle").await, 3);
+        assert_eq!(search(&db, "GammaTitle").await.len(), 1);
     }
 }

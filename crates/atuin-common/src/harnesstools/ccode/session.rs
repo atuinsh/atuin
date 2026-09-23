@@ -10,7 +10,7 @@ use typed_builder::TypedBuilder;
 use crate::fs::tree_watcher::{NodeContext, TreeWatcher};
 use crate::harnesstools::ccode::Ccode;
 use crate::harnesstools::session::model::{
-    Content, MessageId, Role, SessionMeta, StopReason, ToolCallId, ToolResult, ToolUse, Usage,
+    Content, MessageId, Role, StopReason, ToolCallId, ToolResult, ToolUse, Usage,
 };
 use crate::harnesstools::session::{
     Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId, Sessions,
@@ -168,23 +168,6 @@ impl Session for CcodeSession {
 
     fn read(&self) -> impl Stream<Item = Result<CcodeMessage, MessageError>> + Send + 'static {
         jsonl::read_all::<CcodeMessage>(self.path.clone()).map_err(MessageError::from)
-    }
-
-    fn meta(&self) -> impl std::future::Future<Output = Result<SessionMeta, MessageError>> + Send {
-        let path = self.path.clone();
-        async move {
-            let messages: Vec<CcodeMessage> =
-                jsonl::read_all(path).map_err(MessageError::from).try_collect().await?;
-            let title = messages.iter().rev().find_map(Message::title);
-            let cwd = messages.iter().find_map(|m| m.cwd.clone());
-            let git_branch = messages.iter().find_map(|m| m.git_branch.clone());
-            Ok(SessionMeta {
-                cwd,
-                git_branch,
-                title,
-                ..SessionMeta::default()
-            })
-        }
     }
 }
 
@@ -360,9 +343,7 @@ mod tests {
     use super::*;
     use crate::futures::stream::timed_next;
     use crate::harnesstools::session::model::{Content, Role};
-    use crate::harnesstools::session::{
-        Message, Session, SessionEvent, SessionEventKind, Sessions,
-    };
+    use crate::harnesstools::session::{Message, Session, SessionEvent, Sessions};
 
     #[allow(clippy::needless_pass_by_value)]
     fn line(kind: &str, role: &str, content: serde_json::Value) -> String {
@@ -557,34 +538,6 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn meta_reads_the_title_and_first_cwd_and_branch() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("session.jsonl");
-        let body = [
-            line("user", "user", serde_json::json!("first")),
-            serde_json::json!({
-                "type": "ai-title",
-                "aiTitle": "Fix the flaky test",
-                "sessionId": "11111111-1111-1111-1111-111111111111",
-            })
-            .to_string(),
-        ]
-        .join("\n")
-            + "\n";
-        std::fs::write(&path, body).unwrap();
-
-        let session = CcodeSession::open(
-            SessionId::from("11111111-1111-1111-1111-111111111111".to_owned()),
-            path,
-        );
-        let meta = session.meta().await.unwrap();
-        assert_eq!(meta.title, Some("Fix the flaky test".to_owned()));
-        assert_eq!(meta.cwd, None);
-        assert_eq!(meta.git_branch, None);
-    }
-
-    #[rstest]
-    #[tokio::test]
     async fn watch_emits_sessions_as_files_appear() {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("project-a");
@@ -609,7 +562,7 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn events_yields_started_then_messages() {
+    async fn events_yields_messages_tagged_with_their_session() {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("project-a");
         std::fs::create_dir_all(&sub).unwrap();
@@ -630,22 +583,15 @@ mod tests {
             CcodeSessions::builder().root(dir.path().to_path_buf()).build().listener().unwrap();
         let events: Vec<SessionEvent<CcodeMessage>> = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            listener.events().take(3).try_collect(),
+            listener.events().take(2).try_collect(),
         )
         .await
         .expect("events() did not produce within 10s")
         .unwrap();
 
-        assert!(matches!(events[0].kind, SessionEventKind::Started(_)));
         let sid = SessionId::from("33333333-3333-3333-3333-333333333333".to_owned());
         assert!(events.iter().all(|event| event.session == sid));
-        let roles: Vec<Role> = events
-            .iter()
-            .filter_map(|event| match &event.kind {
-                SessionEventKind::Message(message) => Some(message.role()),
-                SessionEventKind::Started(_) => None,
-            })
-            .collect();
+        let roles: Vec<Role> = events.iter().map(|event| event.message.role()).collect();
         assert_eq!(roles, vec![Role::User, Role::Assistant]);
     }
 

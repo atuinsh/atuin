@@ -7,8 +7,8 @@ use enum_dispatch::enum_dispatch;
 pub use error::{CaptureError, MessageError, RuntimeError, WatchError};
 use futures::{Stream, StreamExt};
 pub use model::{
-    Content, MessageId, Role, SessionEvent, SessionEventKind, SessionId, SessionMeta, StopReason,
-    ToolCallId, ToolResult, ToolUse, Usage,
+    Content, MessageId, Role, SessionEvent, SessionId, StopReason, ToolCallId, ToolResult, ToolUse,
+    Usage,
 };
 use time::OffsetDateTime;
 
@@ -102,9 +102,6 @@ pub trait Session: Send + 'static {
     fn id(&self) -> SessionId;
     fn messages(self) -> impl Stream<Item = Result<Self::Message, MessageError>> + Send + 'static;
     fn read(&self) -> impl Stream<Item = Result<Self::Message, MessageError>> + Send + 'static;
-    fn meta(&self) -> impl std::future::Future<Output = Result<SessionMeta, MessageError>> + Send {
-        async { Ok(SessionMeta::default()) }
-    }
 }
 
 pub trait Listener {
@@ -134,8 +131,6 @@ pub trait Listener {
                     appeared = sessions.next(), if !sessions_done => match appeared {
                         Some(Ok(session)) => {
                             let id = session.id();
-                            let meta = session.meta().await.unwrap_or_default();
-                            yield Ok(SessionEvent::started(id.clone(), meta));
                             let tagged =
                                 session.messages().map(move |message| (id.clone(), message)).boxed();
                             active.push(tagged);
@@ -146,7 +141,7 @@ pub trait Listener {
                     tagged = active.next(), if !active.is_empty() => {
                         if let Some((session, result)) = tagged {
                             match result {
-                                Ok(message) => yield Ok(SessionEvent::message(session, message)),
+                                Ok(message) => yield Ok(SessionEvent { session, message }),
                                 Err(source) => yield Err(CaptureError::Message { session, source }),
                             }
                         }
