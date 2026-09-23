@@ -62,12 +62,12 @@
 # filter_mode_shell_up_key_binding = "global"
 
 ## With workspace filtering enabled, Atuin will filter for commands executed
-## in any directory within a git repository tree (default: false).
+## in any directory within a git repository tree (default: true).
 ##
-## To use workspace mode by default when available, set this to true and
-## set filter_mode to "workspace" or leave it unspecified and
-## set search.filters to include "workspace" before other filter modes.
-# workspaces = false
+## To use workspace mode by default when available, set filter_mode to
+## "workspace" or leave it unspecified and set search.filters to include
+## "workspace" before other filter modes.
+# workspaces = true
 
 ## which display style to use
 ## possible values: auto, full, compact
