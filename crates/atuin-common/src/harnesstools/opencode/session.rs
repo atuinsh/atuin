@@ -60,6 +60,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use futures::future::BoxFuture;
 use futures::{Stream, StreamExt};
 use serde::de::Error as _;
 use serde_json::Value;
@@ -655,18 +656,37 @@ impl Reads {
 
     /// Runs one statement against the shared connection, dropping the connection on failure so
     /// that the next read reconnects.
-    async fn read<T>(
-        &self,
-        what: &'static str,
-        run: impl AsyncFnOnce(&mut SqliteConnection) -> Result<T, sqlx::Error>,
-    ) -> Option<T> {
-        let mut guard = self.open().await?;
-        let open = guard.as_mut().expect("open() hands back an open connection");
-        match run(&mut open.conn).await {
-            Ok(value) => Some(value),
+    ///
+    /// **Be warned**: the statement runs in a task of its own, and it must. Every session reads
+    /// through this one connection, and a caller awaiting a statement holds it: a consumer that
+    /// stops polling a session -- a timeout it keeps the stream past, a `select!` branch it does
+    /// not come back to -- would suspend the read where it stands and lock every other session
+    /// out of the database for as long as it holds the stream. A task of its own runs the
+    /// statement to its end whatever the caller does with the handle.
+    async fn read<T, F>(self: &Arc<Self>, what: &'static str, run: F) -> Option<T>
+    where
+        T: Send + 'static,
+        F: for<'c> FnOnce(&'c mut SqliteConnection) -> BoxFuture<'c, Result<T, sqlx::Error>>
+            + Send
+            + 'static,
+    {
+        let reads = Arc::clone(self);
+        let read = tokio::spawn(async move {
+            let mut guard = reads.open().await?;
+            let open = guard.as_mut().expect("open() hands back an open connection");
+            match run(&mut open.conn).await {
+                Ok(value) => Some(value),
+                Err(err) => {
+                    tracing::warn!(db = %reads.db.display(), %err, "opencode's {what} failed");
+                    *guard = None;
+                    None
+                }
+            }
+        });
+        match read.await {
+            Ok(value) => value,
             Err(err) => {
-                tracing::warn!(db = %self.db.display(), %err, "opencode's {what} failed");
-                *guard = None;
+                tracing::warn!(%err, "opencode's {what} did not finish");
                 None
             }
         }
@@ -674,14 +694,16 @@ impl Reads {
 
     /// Fails fast when the `event` table does not exist yet (an opencode older than its event
     /// log, or a database caught mid-migration); the consumer decides when to retry.
-    async fn require_event_table(&self) -> Result<(), WatchError> {
+    async fn require_event_table(self: &Arc<Self>) -> Result<(), WatchError> {
         let probe = self
-            .read("event table probe", async |conn| {
-                query_scalar::<Sqlite, i64>(
-                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'event'",
-                )
-                .fetch_optional(conn)
-                .await
+            .read("event table probe", |conn| {
+                Box::pin(async move {
+                    query_scalar::<Sqlite, i64>(
+                        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'event'",
+                    )
+                    .fetch_optional(conn)
+                    .await
+                })
             })
             .await;
         // a probe that could not run is inconclusive: whatever is wrong with the database, the
@@ -703,22 +725,24 @@ impl Reads {
     ///
     /// opencode indexes `(aggregate_id, seq)` uniquely, so this is a seek rather than a scan: the
     /// cast that rebuilds a text id sits on the bound value, which leaves the index usable.
-    async fn page(&self, aggregate: &Aggregate, from: i64) -> Option<Vec<PageRow>> {
+    async fn page(self: &Arc<Self>, aggregate: &Aggregate, from: i64) -> Option<Vec<PageRow>> {
         const TEXT: &str = "SELECT id, seq, type, data FROM event WHERE aggregate_id = CAST(?1 AS \
                             TEXT) AND seq >= ?2 ORDER BY seq ASC LIMIT ?3";
         const BLOB: &str = "SELECT id, seq, type, data FROM event WHERE aggregate_id = ?1 AND seq \
                             >= ?2 ORDER BY seq ASC LIMIT ?3";
         let (sql, bytes) = match aggregate {
-            Aggregate::Text(bytes) => (TEXT, bytes.as_slice()),
-            Aggregate::Blob(bytes) => (BLOB, bytes.as_slice()),
+            Aggregate::Text(bytes) => (TEXT, bytes.clone()),
+            Aggregate::Blob(bytes) => (BLOB, bytes.clone()),
         };
-        self.read("session page read", async |conn| {
-            query_as::<Sqlite, PageRow>(sql)
-                .bind(bytes)
-                .bind(from)
-                .bind(i64::try_from(PAGE).expect("PAGE fits an i64"))
-                .fetch_all(conn)
-                .await
+        self.read("session page read", move |conn| {
+            Box::pin(async move {
+                query_as::<Sqlite, PageRow>(sql)
+                    .bind(bytes)
+                    .bind(from)
+                    .bind(i64::try_from(PAGE).expect("PAGE fits an i64"))
+                    .fetch_all(conn)
+                    .await
+            })
         })
         .await
     }
@@ -726,13 +750,18 @@ impl Reads {
     /// The role opencode's `message` projection records for `message_id` (its `data` is the
     /// message info minus `id` and `sessionID`), for parts whose `message.updated.1` row predates
     /// the session's start.
-    async fn role(&self, message_id: &str) -> Option<Role> {
+    async fn role(self: &Arc<Self>, message_id: &str) -> Option<Role> {
+        let message_id = message_id.to_owned();
         let data = self
-            .read("message role lookup", async |conn| {
-                query_scalar::<Sqlite, Option<Vec<u8>>>("SELECT data FROM message WHERE id = ?1")
+            .read("message role lookup", move |conn| {
+                Box::pin(async move {
+                    query_scalar::<Sqlite, Option<Vec<u8>>>(
+                        "SELECT data FROM message WHERE id = ?1",
+                    )
                     .bind(message_id)
                     .fetch_optional(conn)
                     .await
+                })
             })
             .await?
             .flatten()?;
@@ -2189,6 +2218,30 @@ mod tests {
         let parts = next_n(&mut messages, PARTS).await;
         assert_eq!(parts.len(), PARTS);
         assert!(parts.iter().all(|m| m.as_ref().unwrap().role() == Role::User));
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_session_left_mid_read_stalls_no_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.db");
+        let db = event_db(&path).await;
+        for session in ["ses_a", "ses_b"] {
+            role_row(&db, &format!("{session}1"), session, "msg_1", "user").await;
+            text_row(&db, &format!("{session}2"), session, "prt_1", "msg_1", "hello").await;
+        }
+
+        let mut stream = watch(&path);
+        let a = offered(&mut stream).await;
+        let b = offered(&mut stream).await;
+
+        // one poll suspends A inside its page read; the stream is then kept, never polled again
+        let mut a_messages = a.messages().boxed();
+        assert!(futures::poll!(a_messages.next()).is_pending(), "A read its page in one poll");
+
+        assert_eq!(delivered(stream, b, 1).await, vec![(Role::User, vec![Content::Text(
+            "hello".into()
+        )])]);
     }
 
     /// What [`Message::id`] prescribes of a consumer: one entry per message id, holding the
