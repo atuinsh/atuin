@@ -5,19 +5,25 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync::{ClientSource, SyncError, SyncSession};
 use atuin_client::settings::{Settings, SyncAuth};
 use atuin_common::encryption::paseto_v4;
+use atuin_common::utils::env_nonempty;
 use clap::Parser;
 use eyre::{Context, Result, bail};
 use rpassword::prompt_password;
+
+use super::PasswordArg;
+
+const KEY_ENV: &str = "ATUIN_ENCRYPTION_KEY";
 
 #[derive(Parser, Debug)]
 pub struct Cmd {
     #[clap(long, short)]
     pub username: Option<String>,
 
+    /// Your password, or `-` to read it from stdin. Falls back to `ATUIN_PASSWORD`, then a prompt
     #[clap(long, short)]
-    pub password: Option<String>,
+    pub password: Option<PasswordArg>,
 
-    /// The encryption key for your account
+    /// The encryption key for your account. Falls back to `ATUIN_ENCRYPTION_KEY`, then a prompt
     #[clap(long, short)]
     pub key: Option<String>,
 
@@ -72,12 +78,12 @@ impl Cmd {
     }
 
     /// Whether a rejected key can be corrected by asking for another one.
-    ///
-    /// A key from `--key` is a scripted input: the caller committed to a value
-    /// up front, so a wrong one is an error to report rather than a prompt to
-    /// raise. Only a human typing at a terminal gets to try again.
     fn interactive(&self) -> bool {
-        self.key.is_none() && io::stdin().is_terminal()
+        self.scripted_key().is_none() && io::stdin().is_terminal()
+    }
+
+    fn scripted_key(&self) -> Option<String> {
+        self.key.clone().or_else(|| env_nonempty(KEY_ENV)?.into_string().ok())
     }
 
     /// Hub login: use the browser flow unless the username was provided for headless use.
@@ -88,9 +94,11 @@ impl Cmd {
             // Headless login via v0 API (for CI / scripting).
             let client = auth::auth_client(settings).await;
 
+            let password = PasswordArg::resolve(self.password.as_ref(), io::stdin().lock())?
+                .unwrap_or_else(read_user_password);
+
             self.prompt_and_store_key(settings, store).await?;
 
-            let password = self.password.clone().unwrap_or_else(read_user_password);
             let mut totp_code = self.totp_code.clone();
 
             let (session, auth_type) = loop {
@@ -99,7 +107,10 @@ impl Cmd {
                 match response {
                     AuthResponse::Success { session, auth_type } => break (session, auth_type),
                     AuthResponse::TwoFactorRequired => {
-                        totp_code = Some(or_user_input(None, "two-factor code"));
+                        let Some(code) = read_user_input("two-factor code") else {
+                            bail!("A two-factor code is required. Pass it with --totp-code");
+                        };
+                        totp_code = Some(code);
                     }
                 }
             };
@@ -144,7 +155,8 @@ impl Cmd {
     /// (or accept them via flags).
     async fn run_legacy_login(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         let username = or_user_input(self.username.clone(), "username");
-        let password = self.password.clone().unwrap_or_else(read_user_password);
+        let password = PasswordArg::resolve(self.password.as_ref(), io::stdin().lock())?
+            .unwrap_or_else(read_user_password);
 
         self.prompt_and_store_key(settings, store).await?;
 
@@ -199,7 +211,7 @@ impl Cmd {
         println!("\nRead more here: {} \n", atuin_common::docs::url("guide/sync/#login"));
 
         let interactive = self.interactive();
-        let mut flag_key = self.key.clone();
+        let mut flag_key = self.scripted_key();
 
         loop {
             let key = match flag_key.take() {
