@@ -12,7 +12,6 @@ pub mod futures;
 #[cfg(feature = "ai")]
 pub mod harnesstools;
 pub mod logs;
-#[cfg(feature = "os")]
 pub mod os;
 pub mod path;
 pub mod range;

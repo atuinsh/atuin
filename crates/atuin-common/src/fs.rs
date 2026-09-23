@@ -1,4 +1,3 @@
-#[cfg(feature = "os")]
 pub mod pool;
 
 use std::path::{Path, PathBuf};
