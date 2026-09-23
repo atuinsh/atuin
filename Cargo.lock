@@ -482,6 +482,7 @@ dependencies = [
  "getrandom 0.4.3",
  "humantime",
  "itertools 0.15.0",
+ "libc",
  "libsqlite3-sys",
  "memchr",
  "num-traits",

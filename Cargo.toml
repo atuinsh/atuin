@@ -55,6 +55,7 @@ derive_more = {
         "add_assign",
         "as_ref",
         "deref",
+        "deref_mut",
         "display",
         "error",
         "from",

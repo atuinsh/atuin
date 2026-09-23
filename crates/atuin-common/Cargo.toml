@@ -15,7 +15,7 @@ version.workspace = true
 ai = ["dep:shlex"]
 ansi = ["dep:atuin-vt100", "dep:memchr"]
 db = ["dep:sqlx"]
-os = ["dep:rustix", "dep:windows-sys"]
+os = ["dep:rustix", "dep:windows-sys", "dep:libc"]
 proto = ["dep:prost"]
 sqlite = ["db", "sqlx/sqlite", "sqlx/regexp", "dep:libsqlite3-sys", "dep:tokio-util"]
 test-utils = ["dep:tracing-subscriber"]
@@ -69,6 +69,10 @@ zeroize = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# proc_pidinfo and sysctlbyname for os::fd, which rustix does not wrap.
+libc = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, optional = true }
