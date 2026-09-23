@@ -162,15 +162,15 @@ impl Session for CodexSession {
         self.id.clone()
     }
 
-    fn path(&self) -> &Path {
-        &self.path
+    async fn message_at(&self, at: u64) -> Option<CodexMessage> {
+        jsonl::value_at(&self.path, at).await
     }
 
     fn messages_from(
         self,
-        offset: u64,
+        from: u64,
     ) -> impl Stream<Item = Result<(u64, CodexMessage), MessageError>> + Send + 'static {
-        jsonl::follow_from::<CodexMessage>(self.path, offset, self.changes)
+        jsonl::follow_from::<CodexMessage>(self.path, from, self.changes)
             .map_err(MessageError::from)
     }
 

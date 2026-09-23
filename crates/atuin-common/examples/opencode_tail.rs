@@ -48,7 +48,6 @@ fn elide(text: &str) -> String {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt().with_env_filter("warn,atuin_common=debug").init();
     let all = std::env::args().any(|arg| arg == "--all");
 
     let sessions = OpencodeSessions::builder()
@@ -75,10 +74,12 @@ async fn main() {
     );
 
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
-    let mut events = Box::pin(listener.events());
+    let mut events = Box::pin(listener.events(|_| async { 0 }, |_, _| async { true }));
     while let Some(event) = events.next().await {
         match event {
-            Ok(SessionEvent { session, message }) => {
+            Ok(SessionEvent {
+                session, message, ..
+            }) => {
                 let n = seen.entry(session.to_string()).or_default();
                 *n += 1;
                 if *n == 1 {

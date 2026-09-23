@@ -157,15 +157,15 @@ impl Session for CcodeSession {
         self.id.clone()
     }
 
-    fn path(&self) -> &Path {
-        &self.path
+    async fn message_at(&self, at: u64) -> Option<CcodeMessage> {
+        jsonl::value_at(&self.path, at).await
     }
 
     fn messages_from(
         self,
-        offset: u64,
+        from: u64,
     ) -> impl Stream<Item = Result<(u64, CcodeMessage), MessageError>> + Send + 'static {
-        jsonl::follow_from::<CcodeMessage>(self.path, offset, self.changes)
+        jsonl::follow_from::<CcodeMessage>(self.path, from, self.changes)
             .map_err(MessageError::from)
     }
 
@@ -583,7 +583,10 @@ mod tests {
             CcodeSessions::builder().root(dir.path().to_path_buf()).build().listener().unwrap();
         let events: Vec<SessionEvent<CcodeMessage>> = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            listener.events(|_, _| std::future::ready(0)).take(2).try_collect(),
+            listener
+                .events(|_| std::future::ready(0), |_, _| std::future::ready(true))
+                .take(2)
+                .try_collect(),
         )
         .await
         .expect("events() did not produce within 10s")
@@ -615,7 +618,10 @@ mod tests {
         let start = u64::try_from(first.len()).unwrap();
         let events: Vec<SessionEvent<CcodeMessage>> = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            listener.events(move |_, _| std::future::ready(start)).take(1).try_collect(),
+            listener
+                .events(move |_| std::future::ready(start), |_, _| std::future::ready(true))
+                .take(1)
+                .try_collect(),
         )
         .await
         .expect("events() did not produce within 10s")

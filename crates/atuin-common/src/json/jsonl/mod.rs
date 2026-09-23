@@ -156,6 +156,16 @@ where
 ///
 /// A final line with no newline is taken to be still being written and is left out rather than
 /// parsed half-formed; the harness writers this serves terminate every record.
+/// The value the line ending at byte `at` carries, or `None` when the file has no line there or
+/// the line does not parse as a `T`.
+///
+/// The counterpart of the offsets [`follow_from`] reports: a reader hands one back to ask what it
+/// named, and decides from that whether it may resume there.
+pub async fn value_at<T: DeserializeOwned>(path: &Path, at: u64) -> Option<T> {
+    let line = crate::fs::lines::line_ending_at(path, at).await.ok().flatten()?;
+    serde_json::from_slice(&line).ok()
+}
+
 pub fn read_all<T>(path: PathBuf) -> impl Stream<Item = Result<T, JsonlError>> + Send + 'static
 where
     T: DeserializeOwned + Send + 'static,

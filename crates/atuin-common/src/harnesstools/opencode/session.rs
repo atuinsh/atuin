@@ -440,6 +440,25 @@ impl Reader {
         self.base.saturating_add(seq)
     }
 
+    /// Read on past the row at `seq`, where a resume token puts this session. The row is read
+    /// for its id, which anchors the session: without it the next page could not tell the
+    /// incarnation the token came from apart from one written over it.
+    async fn seek(&mut self, seq: i64) {
+        self.ready = true;
+        let head = self
+            .reads
+            .page(&self.aggregate, seq)
+            .await
+            .and_then(|rows| rows.into_iter().next())
+            .filter(|row| row.seq == seq);
+        // a token naming a row that is gone resumes nothing: the aggregate is read again whole
+        self.anchor = head.map(|row| Anchor {
+            seq,
+            id: row.identity().to_owned(),
+            delivered: true,
+        });
+    }
+
     /// The aggregate has a row this session has not read.
     const fn wake(&mut self) {
         self.ready = true;
@@ -609,7 +628,7 @@ impl Drain<'_> {
     /// The session's next message, or `None` when its aggregate has nothing more to read right
     /// now -- a failed read included, since the rows stay in the table and are read again when
     /// the session is woken or retried.
-    async fn next(&mut self) -> Option<Result<OpencodeMessage, MessageError>> {
+    async fn next(&mut self) -> Option<(i64, Result<OpencodeMessage, MessageError>)> {
         loop {
             for row in self.page.by_ref() {
                 // the anchor only moves on once the message of the row is in hand: building one
@@ -622,7 +641,7 @@ impl Drain<'_> {
                     delivered: true,
                 });
                 if let Some(message) = message {
-                    return Some(message);
+                    return Some((row.seq, message));
                 }
             }
             self.page = self.reader.fill().await?;
@@ -881,23 +900,47 @@ impl Session for OpencodeSession {
         let mut reader = Reader::from_start(self.aggregate.clone(), Arc::clone(&self.reads));
         async_stream::stream! {
             let mut drain = reader.drain();
-            while let Some(message) = drain.next().await {
+            while let Some((_, message)) = drain.next().await {
                 yield message;
             }
         }
     }
 
-    fn messages(
+    /// The message the row at `at` carries. A session's resume token is its row's `seq`, which
+    /// opencode assigns contiguously from 0 within one incarnation of an aggregate and never
+    /// reuses within it.
+    async fn message_at(&self, at: u64) -> Option<OpencodeMessage> {
+        let seq = i64::try_from(at).ok()?;
+        let row = self
+            .reads
+            .page(&self.aggregate, seq)
+            .await?
+            .into_iter()
+            .next()
+            .filter(|row| row.seq == seq)?;
+        Reader::from_start(self.aggregate.clone(), Arc::clone(&self.reads))
+            .message(&row)
+            .await?
+            .ok()
+    }
+
+    fn messages_from(
         self,
-    ) -> impl Stream<Item = Result<OpencodeMessage, MessageError>> + Send + 'static {
+        from: u64,
+    ) -> impl Stream<Item = Result<(u64, OpencodeMessage), MessageError>> + Send + 'static {
         let Self {
             mut wake, reader, ..
         } = self;
+        let seek = i64::try_from(from).ok().filter(|&seq| seq > 0);
         async_stream::stream! {
             // whether the drain at the top of the loop is this session's last: the tail has gone
             // and nothing can wake the session again, so it reads out the rows already in the
             // table -- those a failed read did not reach among them -- rather than abandon them
             let mut last = false;
+            // a token resumes the session at the row it names, past the one it names
+            if let Some(seq) = seek {
+                reader.lock().await.seek(seq).await;
+            }
             loop {
                 let failed = {
                     // the reader is locked for as long as this stream drains it; the only other
@@ -908,8 +951,8 @@ impl Session for OpencodeSession {
                     // table, and its wake was subscribed to after the tail sent it
                     reader.wake();
                     let mut drain = reader.drain();
-                    while let Some(message) = drain.next().await {
-                        yield message;
+                    while let Some((seq, message)) = drain.next().await {
+                        yield message.map(|message| (u64::try_from(seq).unwrap_or(0), message));
                     }
                     reader.failed()
                 };
@@ -1546,7 +1589,7 @@ mod tests {
             .build()
             .listener()
             .unwrap()
-            .events()
+            .events(|_| async { 0 }, |_, _| async { true })
             .boxed()
     }
 
@@ -1561,7 +1604,9 @@ mod tests {
     /// `<session> <error kind>`.
     fn describe(event: &Result<SessionEvent<OpencodeMessage>, CaptureError>) -> String {
         match event {
-            Ok(SessionEvent { session, message }) => {
+            Ok(SessionEvent {
+                session, message, ..
+            }) => {
                 let content = message
                     .content()
                     .into_iter()
