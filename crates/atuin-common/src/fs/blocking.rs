@@ -34,26 +34,6 @@ pub fn read_dir(path: impl AsRef<Path>) -> io::Result<Leased<ReadDir>> {
     FdPool::system().blocking_run_hold(|| std::fs::read_dir(path))
 }
 
-/// The target of the symbolic link at `path`.
-pub fn read_link(path: impl AsRef<Path>) -> io::Result<PathBuf> {
-    FdPool::system().blocking_run(|| std::fs::read_link(path))
-}
-
-/// Remove the file at `path`.
-pub fn remove_file(path: impl AsRef<Path>) -> io::Result<()> {
-    FdPool::system().blocking_run(|| std::fs::remove_file(path))
-}
-
-/// Remove the directory at `path` and everything under it.
-pub fn remove_dir_all(path: impl AsRef<Path>) -> io::Result<()> {
-    FdPool::system().blocking_run(|| std::fs::remove_dir_all(path))
-}
-
-/// Create the directory at `path`, whose parent must exist.
-pub fn create_dir(path: impl AsRef<Path>) -> io::Result<()> {
-    FdPool::system().blocking_run(|| std::fs::create_dir(path))
-}
-
 /// Create the directory at `path` and any missing ancestors.
 pub fn create_dir_all(path: impl AsRef<Path>) -> io::Result<()> {
     FdPool::system().blocking_run(|| std::fs::create_dir_all(path))
@@ -70,11 +50,6 @@ pub fn create_secure_dir(path: impl AsRef<Path>, mode: u32) -> io::Result<()> {
 /// Rename `from` to `to`, replacing `to` if it exists.
 pub fn rename(from: impl AsRef<Path>, to: impl AsRef<Path>) -> io::Result<()> {
     FdPool::system().blocking_run(|| std::fs::rename(from, to))
-}
-
-/// Create `link` as a hard link to `original`.
-pub fn hard_link(original: impl AsRef<Path>, link: impl AsRef<Path>) -> io::Result<()> {
-    FdPool::system().blocking_run(|| std::fs::hard_link(original, link))
 }
 
 /// Set the permissions of the file at `path`.
@@ -110,11 +85,6 @@ impl File {
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         FdPool::system().blocking_run_hold(|| std::fs::File::open(path))
     }
-
-    /// Open the file at `path` write-only, creating or truncating it.
-    pub fn create(path: impl AsRef<Path>) -> io::Result<Self> {
-        FdPool::system().blocking_run_hold(|| std::fs::File::create(path))
-    }
 }
 
 #[cfg(test)]
@@ -143,16 +113,13 @@ mod tests {
         rename(&a, &b).unwrap();
         assert!(!exists(&a).unwrap());
         assert!(exists(&b).unwrap());
-
-        remove_file(&b).unwrap();
-        assert!(!exists(&b).unwrap());
     }
 
     #[rstest]
     fn a_directory_round_trips(dir: TempDir) {
         let nested = dir.path().join("a/b");
         create_dir_all(&nested).unwrap();
-        create_dir(nested.join("c")).unwrap();
+        create_dir_all(nested.join("c")).unwrap();
         write(nested.join("f"), "").unwrap();
 
         // The system pool is process-wide, so this count relies on nextest's process per test.
@@ -166,9 +133,6 @@ mod tests {
         let mut names: Vec<_> = entries.iter().map(std::fs::DirEntry::file_name).collect();
         names.sort();
         assert_eq!(names, ["c", "f"]);
-
-        remove_dir_all(dir.path().join("a")).unwrap();
-        assert!(!exists(&nested).unwrap());
     }
 
     #[rstest]
@@ -177,7 +141,7 @@ mod tests {
         // The system pool is process-wide, so this count relies on nextest's process per test.
         let held = FdPool::system().held();
 
-        let mut file = File::create(&path).unwrap();
+        let mut file = OpenOptions::new().write(true).create(true).blocking_open(&path).unwrap();
         assert_eq!(FdPool::system().held(), held + 1);
         file.write_all(b"hello").unwrap();
         drop(file);

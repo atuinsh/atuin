@@ -45,28 +45,10 @@ pub async fn read_dir(path: impl AsRef<Path>) -> io::Result<Leased<Vec<DirEntry>
     FdPool::system().blocking_hold(move || std::fs::read_dir(path)?.collect()).await
 }
 
-/// The target of the symbolic link at `path`.
-pub async fn read_link(path: impl AsRef<Path>) -> io::Result<PathBuf> {
-    let path = path.as_ref().to_owned();
-    FdPool::system().blocking(move || std::fs::read_link(path)).await
-}
-
 /// Remove the file at `path`.
 pub async fn remove_file(path: impl AsRef<Path>) -> io::Result<()> {
     let path = path.as_ref().to_owned();
     FdPool::system().blocking(move || std::fs::remove_file(path)).await
-}
-
-/// Remove the directory at `path` and everything under it.
-pub async fn remove_dir_all(path: impl AsRef<Path>) -> io::Result<()> {
-    let path = path.as_ref().to_owned();
-    FdPool::system().blocking(move || std::fs::remove_dir_all(path)).await
-}
-
-/// Create the directory at `path`, whose parent must exist.
-pub async fn create_dir(path: impl AsRef<Path>) -> io::Result<()> {
-    let path = path.as_ref().to_owned();
-    FdPool::system().blocking(move || std::fs::create_dir(path)).await
 }
 
 /// Create the directory at `path` and any missing ancestors.
@@ -82,12 +64,6 @@ pub async fn create_secure_dir(path: impl AsRef<Path>, mode: u32) -> io::Result<
 
     let path = path.as_ref().to_owned();
     FdPool::system().blocking(move || std::fs::DirBuilder::new().mode(mode).create(path)).await
-}
-
-/// Rename `from` to `to`, replacing `to` if it exists.
-pub async fn rename(from: impl AsRef<Path>, to: impl AsRef<Path>) -> io::Result<()> {
-    let (from, to) = (from.as_ref().to_owned(), to.as_ref().to_owned());
-    FdPool::system().blocking(move || std::fs::rename(from, to)).await
 }
 
 /// Create `link` as a hard link to `original`.
@@ -280,18 +256,14 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn a_file_round_trips(dir: TempDir) {
-        let (a, b) = (dir.path().join("a"), dir.path().join("b"));
+        let a = dir.path().join("a");
         write(&a, "hello").await.unwrap();
         assert_eq!(read(&a).await.unwrap(), b"hello");
         assert_eq!(read_to_string(&a).await.unwrap(), "hello");
         assert_eq!(metadata(&a).await.unwrap().len(), 5);
 
-        rename(&a, &b).await.unwrap();
+        remove_file(&a).await.unwrap();
         assert!(!exists(&a).await.unwrap());
-        assert!(exists(&b).await.unwrap());
-
-        remove_file(&b).await.unwrap();
-        assert!(!exists(&b).await.unwrap());
     }
 
     #[rstest]
@@ -299,7 +271,7 @@ mod tests {
     async fn a_directory_round_trips(dir: TempDir) {
         let nested = dir.path().join("a/b");
         create_dir_all(&nested).await.unwrap();
-        create_dir(nested.join("c")).await.unwrap();
+        create_dir_all(nested.join("c")).await.unwrap();
         write(nested.join("f"), "").await.unwrap();
 
         // The system pool is process-wide, so this count relies on nextest's process per test.
@@ -311,9 +283,6 @@ mod tests {
         assert_eq!(names, ["c", "f"]);
         drop(entries);
         assert_eq!(FdPool::system().held(), held);
-
-        remove_dir_all(dir.path().join("a")).await.unwrap();
-        assert!(!exists(&nested).await.unwrap());
     }
 
     #[rstest]
