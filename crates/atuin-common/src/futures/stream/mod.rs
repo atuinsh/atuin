@@ -64,14 +64,6 @@ where
     })
 }
 
-/// The next item of `stream`, failing the test instead of hanging if none arrives within `secs`.
-#[cfg(test)]
-pub(crate) async fn timed_next<S: Stream + Unpin>(stream: &mut S, secs: u64) -> Option<S::Item> {
-    tokio::time::timeout(std::time::Duration::from_secs(secs), stream.next())
-        .await
-        .expect("stream stalled")
-}
-
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroUsize;

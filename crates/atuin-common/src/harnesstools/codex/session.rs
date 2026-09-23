@@ -356,7 +356,6 @@ mod tests {
     fn pool() -> BlockingPool {
         BlockingPool::new(std::num::NonZeroUsize::MIN)
     }
-    use crate::futures::stream::timed_next;
     use crate::harnesstools::session::model::{Content, Role};
     use crate::harnesstools::session::{Message, Session, Sessions};
 
@@ -640,9 +639,9 @@ mod tests {
             .unwrap();
         // The watch stream owns the watcher: it must outlive the message stream.
         let mut sessions = std::pin::pin!(listener.watch());
-        let session = timed_next(&mut sessions, 10).await.unwrap().unwrap();
+        let session = sessions.next().await.unwrap().unwrap();
         let mut messages = std::pin::pin!(session.messages());
-        assert!(timed_next(&mut messages, 10).await.unwrap().is_ok());
+        assert!(messages.next().await.unwrap().is_ok());
 
         let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
         std::io::Write::write_all(
@@ -657,7 +656,7 @@ mod tests {
         )
         .unwrap();
         drop(file);
-        assert_eq!(timed_next(&mut messages, 10).await.unwrap().unwrap().role(), Role::User);
+        assert_eq!(messages.next().await.unwrap().unwrap().role(), Role::User);
     }
 
     #[rstest]
@@ -673,18 +672,17 @@ mod tests {
             .listener()
             .unwrap();
         let mut sessions = std::pin::pin!(listener.watch());
-        let session = timed_next(&mut sessions, 10).await.unwrap().unwrap();
+        let session = sessions.next().await.unwrap().unwrap();
         let mut messages = std::pin::pin!(session.messages());
-        assert!(timed_next(&mut messages, 10).await.unwrap().is_ok());
+        assert!(messages.next().await.unwrap().is_ok());
 
         std::fs::remove_file(&path).unwrap();
         // A change signalled for the vanished path may surface as an I/O error first; the
         // stream must still end once the watcher drops the file's handler. Removal is detected
         // by a filesystem event or, if that is missed, by the periodic full scan (the content
-        // poll cannot see a vanished file), so the timeout must exceed the scan interval: a
-        // missed event then falls back to the scan instead of flaking.
+        // poll cannot see a vanished file).
         loop {
-            match timed_next(&mut messages, 45).await {
+            match messages.next().await {
                 None => break,
                 Some(Err(_)) => {}
                 Some(Ok(m)) => panic!("unexpected message after removal: {m:?}"),

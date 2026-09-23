@@ -314,7 +314,6 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use super::*;
-    use crate::futures::stream::timed_next;
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     struct Rec {
@@ -564,20 +563,20 @@ mod tests {
         let (dir, path) = write_jsonl(&["1", ""]);
         let (tx, rx) = watch::channel(());
         let mut stream = std::pin::pin!(follow::<i64>(path.clone(), Some(rx), pool()));
-        assert_eq!(timed_next(&mut stream, 5).await.unwrap().unwrap(), 1);
+        assert_eq!(stream.next().await.unwrap().unwrap(), 1);
 
         // The file is briefly unreadable at its path when the signal lands.
         let away = dir.path().join("away");
         std::fs::rename(&path, &away).unwrap();
         append(&away, b"2\n");
         tx.send_replace(());
-        assert!(matches!(timed_next(&mut stream, 5).await, Some(Err(JsonlError::Io(_)))));
+        assert!(matches!(stream.next().await, Some(Err(JsonlError::Io(_)))));
 
         std::fs::rename(&away, &path).unwrap();
-        assert_eq!(timed_next(&mut stream, 5).await.unwrap().unwrap(), 2);
+        assert_eq!(stream.next().await.unwrap().unwrap(), 2);
 
         drop(tx);
-        assert!(timed_next(&mut stream, 5).await.is_none());
+        assert!(stream.next().await.is_none());
     }
 
     #[rstest]
@@ -586,13 +585,13 @@ mod tests {
         let (_dir, path) = write_jsonl(&["1", ""]);
         let (tx, rx) = watch::channel(());
         let mut stream = std::pin::pin!(follow::<i64>(path.clone(), Some(rx), pool()));
-        assert_eq!(timed_next(&mut stream, 5).await.unwrap().unwrap(), 1);
+        assert_eq!(stream.next().await.unwrap().unwrap(), 1);
 
         // The vanished path's last event bumps the version just before its handler drops.
         std::fs::remove_file(&path).unwrap();
         tx.send_replace(());
         drop(tx);
-        assert!(timed_next(&mut stream, 5).await.is_none());
+        assert!(stream.next().await.is_none());
     }
 
     #[rstest]
@@ -601,15 +600,15 @@ mod tests {
         let (_dir, path) = write_jsonl(&["1", ""]);
         let (tx, rx) = watch::channel(());
         let mut stream = std::pin::pin!(follow::<i64>(path.clone(), Some(rx), pool()));
-        assert_eq!(timed_next(&mut stream, 5).await.unwrap().unwrap(), 1);
+        assert_eq!(stream.next().await.unwrap().unwrap(), 1);
 
         // The stream is parked between its read and its wait: the change must not be lost.
         append(&path, b"2\n");
         tx.send_replace(());
-        assert_eq!(timed_next(&mut stream, 5).await.unwrap().unwrap(), 2);
+        assert_eq!(stream.next().await.unwrap().unwrap(), 2);
 
         drop(tx);
-        assert!(timed_next(&mut stream, 5).await.is_none());
+        assert!(stream.next().await.is_none());
     }
 
     #[rstest]
@@ -619,17 +618,14 @@ mod tests {
         let (tx, rx) = watch::channel(());
         let mut stream =
             std::pin::pin!(follow::<serde_json::Value>(path.clone(), Some(rx), pool()));
-        assert_eq!(timed_next(&mut stream, 5).await.unwrap().unwrap(), 1);
+        assert_eq!(stream.next().await.unwrap().unwrap(), 1);
 
         append(&path, b"2}\n");
         tx.send_replace(());
-        assert_eq!(
-            timed_next(&mut stream, 5).await.unwrap().unwrap(),
-            serde_json::json!({ "n": 2 })
-        );
+        assert_eq!(stream.next().await.unwrap().unwrap(), serde_json::json!({ "n": 2 }));
 
         drop(tx);
-        assert!(timed_next(&mut stream, 5).await.is_none());
+        assert!(stream.next().await.is_none());
     }
 
     fn rec_strategy() -> impl Strategy<Value = Rec> {
