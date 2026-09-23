@@ -211,9 +211,15 @@ impl FdPool {
     {
         let lease = self.acquire().await;
         // The lease moves into the task, so a caller that stops awaiting leaves it with the work.
-        let result = tokio::task::spawn_blocking(move || open().map(|fd| lease.hold(fd)))
-            .await
-            .expect("given closure panicked");
+        let result =
+            match tokio::task::spawn_blocking(move || open().map(|fd| lease.hold(fd))).await {
+                Ok(result) => result,
+                Err(err) if err.is_panic() => std::panic::resume_unwind(err.into_panic()),
+                Err(_) => Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "the blocking filesystem call was cancelled by its runtime shutting down",
+                )),
+            };
         self.report_exhausted(&result);
         result
     }
@@ -466,6 +472,13 @@ mod tests {
                 .await
                 .expect("the lease returns once the blocking call ends"),
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    #[should_panic(expected = "the closure's own panic")]
+    async fn a_panicking_blocking_call_resumes_its_panic() {
+        let _: io::Result<()> = pool(1).blocking(|| panic!("the closure's own panic")).await;
     }
 
     #[rstest]
