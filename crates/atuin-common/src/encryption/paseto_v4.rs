@@ -161,8 +161,8 @@ impl Key {
 
         // Legacy code used to naively encode the base64 string into the string. New code does this
         // rmp dance.
-        match <[u8; 32]>::try_from(buf.as_slice()) {
-            Ok(key) => Ok(key.into()),
+        match <[u8; 32]>::try_from(buf.as_slice()).map(Zeroizing::new) {
+            Ok(key) => Ok((*key).into()),
             Err(_) => {
                 if buf.is_empty() {
                     return Err(KeyDecodingError::EmptyKey);
