@@ -239,11 +239,20 @@ impl Message for CodexMessage {
     fn id(&self) -> Option<MessageId> {
         // Prefer the per-record `id` (ctc_/ctco_/msg_...) over `call_id`: a tool call and its
         // output share one `call_id`, so keying identity on it would collide the two records and
-        // the dedup gate would drop the output. `call_id` linkage lives in the content, not here.
-        self.payload
-            .as_ref()
-            .and_then(|p| p["id"].as_str().or_else(|| p["call_id"].as_str()))
-            .map(|s| MessageId::from(s.to_owned()))
+        // the dedup gate would drop the output. Older rollouts have no per-record id at all, so
+        // an output falling back to `call_id` is suffixed to keep it distinct from its call.
+        // `call_id` linkage lives in the content, not here.
+        let p = self.payload.as_ref()?;
+        if let Some(id) = p["id"].as_str() {
+            return Some(MessageId::from(id.to_owned()));
+        }
+        let call_id = p["call_id"].as_str()?;
+        let is_output = p["type"].as_str().is_some_and(|t| t.ends_with("_output"));
+        Some(MessageId::from(if is_output {
+            format!("{call_id}#out")
+        } else {
+            call_id.to_owned()
+        }))
     }
 
     fn role(&self) -> Role {
@@ -469,6 +478,35 @@ mod tests {
         assert_ne!(call.id(), output.id(), "call and its output must not share a source id");
         assert_eq!(call.id(), Some(MessageId::from("ctc_1".to_owned())));
         assert_eq!(output.id(), Some(MessageId::from("ctco_1".to_owned())));
+    }
+
+    /// Older rollouts carry no per-record id: the call keys on `call_id` and its output must
+    /// still get a distinct id, or the dedup gate drops every tool result.
+    #[rstest]
+    #[case("function_call", "function_call_output")]
+    #[case("custom_tool_call", "custom_tool_call_output")]
+    fn id_less_tool_output_does_not_collide_with_its_call(
+        #[case] call_kind: &str,
+        #[case] output_kind: &str,
+    ) {
+        let call: CodexMessage = serde_json::from_str(
+            &serde_json::json!({
+                "type": "response_item",
+                "payload": {"type": call_kind, "call_id": "call_x", "name": "sh", "arguments": "ls"},
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let output: CodexMessage = serde_json::from_str(
+            &serde_json::json!({
+                "type": "response_item",
+                "payload": {"type": output_kind, "call_id": "call_x", "output": "files"},
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(call.id(), Some(MessageId::from("call_x".to_owned())));
+        assert_eq!(output.id(), Some(MessageId::from("call_x#out".to_owned())));
     }
 
     #[rstest]
