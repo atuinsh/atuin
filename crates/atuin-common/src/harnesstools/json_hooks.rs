@@ -51,7 +51,8 @@ pub async fn install(
     Ok(())
 }
 
-/// Replace every event's atuin hooks with one `hook_command` entry, returning whether `hooks`
+/// Update the first matching Atuin hook in each event, preserving its matcher and settings.
+/// Remove duplicate Atuin hooks while leaving unrelated entries alone. Returns whether `hooks`
 /// changed.
 ///
 /// Atuin hooks are removed wherever they sit, so reinstalling after an upgrade or a moved binary
@@ -70,13 +71,26 @@ fn add_hook_entries(
             .as_array_mut()
             .ok_or(InstallHookError::Malformed("a hook event is not an array"))?;
 
+        let mut found_hook = false;
         for entry in entries.iter_mut() {
             if let Some(entry_hooks) = entry.get_mut("hooks").and_then(Value::as_array_mut) {
-                entry_hooks.retain(|hook| {
-                    !hook
-                        .get("command")
-                        .and_then(Value::as_str)
-                        .is_some_and(|command| invokes_atuin_hook(command, harness))
+                entry_hooks.retain_mut(|hook| {
+                    let Some(command) = hook.get("command").and_then(Value::as_str) else {
+                        return true;
+                    };
+                    if !invokes_atuin_hook(command, harness) {
+                        return true;
+                    }
+                    if found_hook {
+                        return false;
+                    }
+
+                    found_hook = true;
+                    if let Some(hook) = hook.as_object_mut() {
+                        hook.insert("command".to_owned(), Value::String(hook_command.to_owned()));
+                        hook.remove("args");
+                    }
+                    true
                 });
             }
         }
@@ -84,10 +98,12 @@ fn add_hook_entries(
             entry.get("hooks").and_then(Value::as_array).is_none_or(|hooks| !hooks.is_empty())
         });
 
-        entries.push(json!({
-            "matcher": matcher,
-            "hooks": [{"type": "command", "command": hook_command}],
-        }));
+        if !found_hook {
+            entries.push(json!({
+                "matcher": matcher,
+                "hooks": [{"type": "command", "command": hook_command}],
+            }));
+        }
     }
 
     Ok(*hooks != before)
@@ -136,13 +152,18 @@ mod tests {
     use super::*;
 
     #[rstest]
-    fn add_hook_entries_replaces_legacy_commands_without_duplicates() {
+    fn add_hook_entries_preserves_settings_and_removes_duplicate_atuin_hooks() {
         let command = "/opt/atuin/bin/atuin hook claude-code";
         let mut hooks = json!({
             "PreToolUse": [{
                 "matcher": "Bash",
                 "hooks": [
-                    {"type": "command", "command": "\"$HOME/.atuin/bin/atuin\" hook claude-code"},
+                    {
+                        "type": "command",
+                        "command": "\"$HOME/.atuin/bin/atuin\" hook claude-code",
+                        "timeout": 5_000,
+                        "shell": "bash",
+                    },
                     {"type": "command", "command": "printf keep-me"},
                 ],
             }, {
@@ -167,11 +188,19 @@ mod tests {
             json!({
                 "PreToolUse": [{
                     "matcher": "Bash",
-                    "hooks": [{"type": "command", "command": "printf keep-me"}],
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": command,
+                            "timeout": 5_000,
+                            "shell": "bash",
+                        },
+                        {"type": "command", "command": "printf keep-me"},
+                    ],
                 }, {
                     "matcher": "^Bash$",
                     "hooks": [{"type": "command", "command": "atuin hook codex"}],
-                }, installed],
+                }],
                 "PostToolUse": [installed],
                 "PostToolUseFailure": [installed],
             })
