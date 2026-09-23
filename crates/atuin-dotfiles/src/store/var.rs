@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4;
+use atuin_common::fs;
 use atuin_domain::record::{
     DecryptedData, Host, HostId, RecordSeriesKey, RecordTag, RecordVersion,
 };
@@ -232,7 +233,7 @@ impl VarStore {
 
     pub async fn build(&self) -> Result<()> {
         let dir = atuin_common::utils::dotfiles_cache_dir();
-        tokio::fs::create_dir_all(dir.clone()).await?;
+        fs::create_dir_all(dir.clone()).await?;
 
         let env = self.vars().await?;
 
@@ -251,11 +252,11 @@ impl VarStore {
         let xsh = dir.join("vars.xsh");
         let ps1 = dir.join("vars.ps1");
 
-        tokio::fs::write(zsh, &posix).await?;
-        tokio::fs::write(bash, &posix).await?;
-        tokio::fs::write(fish, &fsh).await?;
-        tokio::fs::write(xsh, &xonsh).await?;
-        tokio::fs::write(ps1, &powershell).await?;
+        fs::write(zsh, &posix).await?;
+        fs::write(bash, &posix).await?;
+        fs::write(fish, &fsh).await?;
+        fs::write(xsh, &xonsh).await?;
+        fs::write(ps1, &powershell).await?;
 
         Ok(())
     }

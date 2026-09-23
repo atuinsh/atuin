@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4;
+use atuin_common::fs;
 // Sync aliases
 // This will be noticeable similar to the kv store, though I expect the two shall diverge
 // While we will support a range of shell config, I'd rather have a larger number of small records
@@ -184,7 +185,7 @@ impl AliasStore {
 
     pub async fn build(&self) -> Result<()> {
         let dir = atuin_common::utils::dotfiles_cache_dir();
-        tokio::fs::create_dir_all(dir.clone()).await?;
+        fs::create_dir_all(dir.clone()).await?;
 
         let aliases = self.aliases().await?;
 
@@ -202,11 +203,11 @@ impl AliasStore {
         let xsh = dir.join("aliases.xsh");
         let ps1 = dir.join("aliases.ps1");
 
-        tokio::fs::write(zsh, &posix).await?;
-        tokio::fs::write(bash, &posix).await?;
-        tokio::fs::write(fish, &posix).await?;
-        tokio::fs::write(xsh, &xonsh).await?;
-        tokio::fs::write(ps1, &powershell).await?;
+        fs::write(zsh, &posix).await?;
+        fs::write(bash, &posix).await?;
+        fs::write(fish, &posix).await?;
+        fs::write(xsh, &xonsh).await?;
+        fs::write(ps1, &powershell).await?;
 
         Ok(())
     }

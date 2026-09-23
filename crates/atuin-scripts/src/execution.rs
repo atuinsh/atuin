@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
 
+use atuin_common::fs;
 use eyre::Result;
 use tempfile::NamedTempFile;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
@@ -93,16 +94,16 @@ pub async fn execute_script_interactive(
     let full_script_content = build_executable_script(&script, &shebang);
 
     debug!("writing script content to temp file");
-    tokio::fs::write(&temp_path, &full_script_content).await?;
+    fs::write(&temp_path, &full_script_content).await?;
 
     // Make it executable on Unix systems
     #[cfg(unix)]
     {
         debug!("making script executable");
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&temp_path)?.permissions();
+        let mut perms = fs::metadata(&temp_path).await?.permissions();
         perms.set_mode(0o755);
-        std::fs::set_permissions(&temp_path, perms)?;
+        fs::set_permissions(&temp_path, perms).await?;
     }
 
     // Store the temp_file to prevent it from being dropped
@@ -123,7 +124,7 @@ pub async fn execute_script_interactive(
         // When falling back to interpreter, remove the shebang from the file
         // Some interpreters don't handle scripts with shebangs well
         debug!("writing script content without shebang for interpreter execution");
-        tokio::fs::write(&temp_path, &script).await?;
+        fs::write(&temp_path, &script).await?;
 
         // Parse the interpreter command
         let parts: Vec<&str> = interpreter.split_whitespace().collect();

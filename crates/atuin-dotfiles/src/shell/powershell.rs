@@ -1,11 +1,13 @@
 use std::path::PathBuf;
 
+use atuin_common::fs;
+
 use crate::shell::{Alias, Var};
 use crate::store::AliasStore;
 use crate::store::var::VarStore;
 
 async fn cached_aliases(path: PathBuf, store: &AliasStore) -> String {
-    match tokio::fs::read_to_string(path).await {
+    match fs::read_to_string(path).await {
         Ok(aliases) => aliases,
         Err(r) => {
             // we failed to read the file for some reason, but the file does exist
@@ -19,7 +21,7 @@ async fn cached_aliases(path: PathBuf, store: &AliasStore) -> String {
 }
 
 async fn cached_vars(path: PathBuf, store: &VarStore) -> String {
-    match tokio::fs::read_to_string(path).await {
+    match fs::read_to_string(path).await {
         Ok(vars) => vars,
         Err(r) => {
             // we failed to read the file for some reason, but the file does exist
@@ -44,7 +46,7 @@ pub async fn alias_config(store: &AliasStore) -> String {
     // First try to read the cached config
     let aliases = atuin_common::utils::dotfiles_cache_dir().join("aliases.ps1");
 
-    if aliases.exists() {
+    if fs::exists(&aliases).await.unwrap_or(false) {
         return cached_aliases(aliases, store).await;
     }
 
@@ -60,7 +62,7 @@ pub async fn var_config(store: &VarStore) -> String {
     // First try to read the cached config
     let vars = atuin_common::utils::dotfiles_cache_dir().join("vars.ps1");
 
-    if vars.exists() {
+    if fs::exists(&vars).await.unwrap_or(false) {
         return cached_vars(vars, store).await;
     }
 
@@ -154,7 +156,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn invoke_expression() {
         assert_eq!(
             secure_command("echo 'foo'"),
