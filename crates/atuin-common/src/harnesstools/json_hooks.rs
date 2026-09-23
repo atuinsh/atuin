@@ -51,17 +51,18 @@ pub async fn install(
     Ok(())
 }
 
-/// Point every event's atuin hook at `hook_command`, returning whether `hooks` changed.
+/// Replace every event's atuin hooks with one `hook_command` entry, returning whether `hooks`
+/// changed.
 ///
-/// An existing atuin hook is rewritten in place under whatever matcher it was installed with, and
-/// any duplicates are dropped, so reinstalling from a moved binary never double-records commands.
+/// Atuin hooks are removed wherever they sit, so reinstalling after an upgrade or a moved binary
+/// never leaves a stale or duplicate hook behind.
 fn add_hook_entries(
     hooks: &mut Map<String, Value>,
     matcher: &str,
     harness: &str,
     hook_command: &str,
 ) -> Result<bool, InstallHookError> {
-    let mut changed = false;
+    let before = hooks.clone();
     for event_type in HOOK_EVENT_TYPES {
         let entries = hooks
             .entry(*event_type)
@@ -69,53 +70,27 @@ fn add_hook_entries(
             .as_array_mut()
             .ok_or(InstallHookError::Malformed("a hook event is not an array"))?;
 
-        let mut already_installed = false;
-        entries.retain_mut(|entry| {
-            let Some(installed_hooks) = entry.get_mut("hooks").and_then(Value::as_array_mut) else {
-                return true;
-            };
-            let had_hooks = !installed_hooks.is_empty();
-
-            installed_hooks.retain_mut(|installed_hook| {
-                let Some(command) = installed_hook.get_mut("command") else {
-                    return true;
-                };
-                let Some(command_str) = command.as_str() else {
-                    return true;
-                };
-
-                if !invokes_atuin_hook(command_str, harness) {
-                    return true;
-                }
-
-                if already_installed {
-                    changed = true;
-                    return false;
-                }
-
-                already_installed = true;
-                if command_str != hook_command {
-                    *command = Value::String(hook_command.to_owned());
-                    changed = true;
-                }
-                true
-            });
-
-            !had_hooks || !installed_hooks.is_empty()
-        });
-
-        if already_installed {
-            continue;
+        for entry in entries.iter_mut() {
+            if let Some(entry_hooks) = entry.get_mut("hooks").and_then(Value::as_array_mut) {
+                entry_hooks.retain(|hook| {
+                    !hook
+                        .get("command")
+                        .and_then(Value::as_str)
+                        .is_some_and(|command| invokes_atuin_hook(command, harness))
+                });
+            }
         }
+        entries.retain(|entry| {
+            entry.get("hooks").and_then(Value::as_array).is_none_or(|hooks| !hooks.is_empty())
+        });
 
         entries.push(json!({
             "matcher": matcher,
             "hooks": [{"type": "command", "command": hook_command}],
         }));
-        changed = true;
     }
 
-    Ok(changed)
+    Ok(*hooks != before)
 }
 
 /// Build the shell command that runs `atuin hook <harness>` through `executable`.
@@ -161,7 +136,7 @@ mod tests {
     use super::*;
 
     #[rstest]
-    fn add_hook_entries_updates_legacy_commands_without_duplicates() {
+    fn add_hook_entries_replaces_legacy_commands_without_duplicates() {
         let command = "/opt/atuin/bin/atuin hook claude-code";
         let mut hooks = json!({
             "PreToolUse": [{
@@ -183,25 +158,22 @@ mod tests {
         assert!(add_hook_entries(hooks_map, "^Bash$", "claude-code", command).unwrap());
         assert!(!add_hook_entries(hooks_map, "^Bash$", "claude-code", command).unwrap());
 
-        let installed = json!([{
+        let installed = json!({
             "matcher": "^Bash$",
             "hooks": [{"type": "command", "command": command}],
-        }]);
+        });
         assert_eq!(
             hooks,
             json!({
                 "PreToolUse": [{
                     "matcher": "Bash",
-                    "hooks": [
-                        {"type": "command", "command": command},
-                        {"type": "command", "command": "printf keep-me"},
-                    ],
+                    "hooks": [{"type": "command", "command": "printf keep-me"}],
                 }, {
                     "matcher": "^Bash$",
                     "hooks": [{"type": "command", "command": "atuin hook codex"}],
-                }],
-                "PostToolUse": installed,
-                "PostToolUseFailure": installed,
+                }, installed],
+                "PostToolUse": [installed],
+                "PostToolUseFailure": [installed],
             })
         );
     }
