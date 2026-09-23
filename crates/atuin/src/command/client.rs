@@ -337,3 +337,42 @@ impl Cmd {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+    use rstest::rstest;
+
+    use super::Cmd;
+
+    const SECRET: &str = "hunter2-s3cr3t";
+
+    #[derive(Parser, Debug)]
+    struct Cli {
+        #[command(subcommand)]
+        cmd: Cmd,
+    }
+
+    #[rstest]
+    #[cfg_attr(feature = "sync", case::login(&["login", "-u", "u", "--password", SECRET]))]
+    #[cfg_attr(feature = "sync", case::login_key(&["login", "-u", "u", "--key", SECRET]))]
+    #[cfg_attr(feature = "sync", case::login_totp(&["login", "-u", "u", "--totp-code", SECRET]))]
+    #[cfg_attr(feature = "sync", case::register(&["register", "-u", "u", "--password", SECRET]))]
+    #[cfg_attr(feature = "sync", case::account_login(&["account", "login", "--password", SECRET]))]
+    #[cfg_attr(feature = "sync", case::delete(&["account", "delete", "--password", SECRET]))]
+    #[cfg_attr(
+        feature = "sync",
+        case::change_current(&["account", "change-password", "--current-password", SECRET])
+    )]
+    #[cfg_attr(
+        feature = "sync",
+        case::change_new(&["account", "change-password", "--new-password", SECRET])
+    )]
+    #[case::rekey(&["store", "rekey", SECRET])]
+    #[cfg_attr(feature = "ai", case::ai_token(&["ai", "inline", "--api-token", SECRET]))]
+    fn debug_redacts_argv_secrets(#[case] args: &[&str]) {
+        let cli = Cli::try_parse_from(std::iter::once("atuin").chain(args.iter().copied()))
+            .expect("the argv parses");
+        assert!(!format!("{:?}", cli.cmd).contains(SECRET));
+    }
+}

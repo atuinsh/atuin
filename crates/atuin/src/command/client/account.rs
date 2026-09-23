@@ -7,6 +7,8 @@ use atuin_client::settings::Settings;
 use atuin_common::utils::env_nonempty;
 use clap::{Args, Subcommand};
 use eyre::{Context, Result};
+use secrecy::SecretString;
+use secrecy::zeroize::Zeroizing;
 use tracing::instrument;
 
 use crate::i18n::fl;
@@ -24,7 +26,7 @@ const PASSWORD_ENV: &str = "ATUIN_PASSWORD";
 #[derive(Clone, Debug)]
 pub enum PasswordArg {
     Stdin,
-    Value(String),
+    Value(SecretString),
 }
 
 impl FromStr for PasswordArg {
@@ -33,7 +35,7 @@ impl FromStr for PasswordArg {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s {
             "-" => Self::Stdin,
-            password => Self::Value(password.to_owned()),
+            password => Self::Value(password.into()),
         })
     }
 }
@@ -42,17 +44,19 @@ impl PasswordArg {
     /// Resolve `arg`, falling back to `ATUIN_PASSWORD`, if set.
     ///
     /// [`Self::Stdin`] reads `stdin` to its end and drops the trailing newline.
-    pub fn resolve(arg: Option<&Self>, mut stdin: impl Read) -> Result<Option<String>> {
+    pub fn resolve(arg: Option<&Self>, mut stdin: impl Read) -> Result<Option<SecretString>> {
         let Some(arg) = arg else {
-            return Ok(env_nonempty(PASSWORD_ENV).and_then(|password| password.into_string().ok()));
+            return Ok(env_nonempty(PASSWORD_ENV)
+                .and_then(|password| password.into_string().ok())
+                .map(SecretString::from));
         };
 
         match arg {
             Self::Value(password) => Ok(Some(password.clone())),
             Self::Stdin => {
-                let mut buf = String::new();
+                let mut buf = Zeroizing::new(String::new());
                 stdin.read_to_string(&mut buf).context(fl!("account-password-stdin-failed"))?;
-                Ok(Some(buf.trim_end_matches(['\r', '\n']).to_owned()))
+                Ok(Some(buf.trim_end_matches(['\r', '\n']).into()))
             }
         }
     }
@@ -102,6 +106,7 @@ impl Cmd {
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
+    use secrecy::ExposeSecret;
 
     use super::*;
 
@@ -117,6 +122,6 @@ mod tests {
     ) {
         let arg: PasswordArg = arg.parse().unwrap();
         let password = PasswordArg::resolve(Some(&arg), stdin.as_bytes()).unwrap();
-        assert_eq!(password.as_deref(), Some(expected));
+        assert_eq!(password.as_ref().map(ExposeSecret::expose_secret), Some(expected));
     }
 }

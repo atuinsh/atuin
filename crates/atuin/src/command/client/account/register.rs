@@ -4,7 +4,7 @@ use atuin_client::settings::{Settings, SyncAuth};
 use atuin_common::encryption::paseto_v4;
 use clap::Parser;
 use eyre::{Result, bail};
-use secrecy::SecretString;
+use secrecy::ExposeSecret;
 
 use super::PasswordArg;
 use super::login::or_user_input;
@@ -60,13 +60,11 @@ impl Cmd {
                 // Headless registration via v0 API (for CI / scripting).
                 let client = auth::auth_client(settings).await;
 
-                if password.is_empty() {
+                if password.expose_secret().is_empty() {
                     bail!(fl!("account-provide-password"));
                 }
 
-                let response = client
-                    .register(username, email, &SecretString::from(password.as_str()))
-                    .await?;
+                let response = client.register(username, email, password).await?;
 
                 match response {
                     AuthResponse::Success { session, auth_type } => {
@@ -116,7 +114,7 @@ impl Cmd {
             let password = PasswordArg::resolve(self.password.as_ref(), std::io::stdin().lock())?
                 .unwrap_or_else(super::login::read_user_password);
 
-            if password.is_empty() {
+            if password.expose_secret().is_empty() {
                 bail!(fl!("account-provide-password"));
             }
 
@@ -124,7 +122,7 @@ impl Cmd {
                 &settings.sync_address,
                 &username,
                 &email,
-                &SecretString::from(password),
+                &password,
                 &settings.extra_headers,
             )
             .await?;

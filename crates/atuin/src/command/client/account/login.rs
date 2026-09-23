@@ -9,7 +9,8 @@ use atuin_common::utils::env_nonempty;
 use clap::Parser;
 use eyre::{Context, Result, bail};
 use rpassword::prompt_password;
-use secrecy::SecretString;
+use secrecy::zeroize::Zeroizing;
+use secrecy::{ExposeSecret, SecretString};
 
 use super::PasswordArg;
 use crate::i18n::fl;
@@ -25,10 +26,10 @@ pub struct Cmd {
     pub password: Option<PasswordArg>,
 
     #[clap(long, short, help = fl!("arg-account-login-key"))]
-    pub key: Option<String>,
+    pub key: Option<SecretString>,
 
     #[clap(long, short, help = fl!("arg-totp-code"))]
-    pub totp_code: Option<String>,
+    pub totp_code: Option<SecretString>,
 
     #[clap(long, hide = true)]
     pub from_registration: bool,
@@ -37,12 +38,12 @@ pub struct Cmd {
 /// Read a line from stdin, returning `None` at end of input. The distinction
 /// matters for the key prompts, which re-prompt on a blank line but must not
 /// spin forever once stdin is exhausted.
-fn get_input() -> Result<Option<String>> {
-    let mut input = String::new();
+fn get_input<T: for<'a> From<&'a str>>() -> Result<Option<T>> {
+    let mut input = Zeroizing::new(String::new());
     if io::stdin().read_line(&mut input)? == 0 {
         return Ok(None);
     }
-    Ok(Some(input.trim_end_matches(&['\r', '\n'][..]).to_string()))
+    Ok(Some(input.trim_end_matches(&['\r', '\n'][..]).into()))
 }
 
 impl Cmd {
@@ -78,8 +79,10 @@ impl Cmd {
         self.scripted_key().is_none() && io::stdin().is_terminal()
     }
 
-    fn scripted_key(&self) -> Option<String> {
-        self.key.clone().or_else(|| env_nonempty(KEY_ENV)?.into_string().ok())
+    fn scripted_key(&self) -> Option<SecretString> {
+        self.key
+            .clone()
+            .or_else(|| env_nonempty(KEY_ENV)?.into_string().ok().map(SecretString::from))
     }
 
     /// Hub login: use the browser flow unless the username was provided for headless use.
@@ -92,11 +95,10 @@ impl Cmd {
 
             let password = PasswordArg::resolve(self.password.as_ref(), io::stdin().lock())?
                 .unwrap_or_else(read_user_password);
-            let password = SecretString::from(password);
 
             self.prompt_and_store_key(settings, store).await?;
 
-            let mut totp_code = self.totp_code.clone().map(SecretString::from);
+            let mut totp_code = self.totp_code.clone();
 
             let (session, auth_type) = loop {
                 let response = client.login(username, &password, totp_code.as_ref()).await?;
@@ -107,7 +109,7 @@ impl Cmd {
                         let Some(code) = read_user_input(&fl!("prompt-two-factor-code")) else {
                             bail!(fl!("login-totp-required"));
                         };
-                        totp_code = Some(code.into());
+                        totp_code = Some(code);
                     }
                 }
             };
@@ -156,7 +158,7 @@ impl Cmd {
         self.prompt_and_store_key(settings, store).await?;
 
         let client = auth::auth_client(settings).await;
-        let response = client.login(&username, &password.into(), None).await?;
+        let response = client.login(&username, &password, None).await?;
 
         match response {
             AuthResponse::Success { session, .. } => {
@@ -211,14 +213,14 @@ impl Cmd {
         loop {
             let key = match flag_key.take() {
                 Some(key) => key,
-                None => match read_user_input(&fl!("prompt-key-or-existing")) {
+                None => match read_user_input::<SecretString>(&fl!("prompt-key-or-existing")) {
                     Some(key) => key,
                     // Stdin is exhausted, so re-prompting would spin forever.
                     None => bail!(fl!("login-no-key-provided")),
                 },
             };
 
-            if key.is_empty() {
+            if key.expose_secret().is_empty() {
                 if !key_path.exists() {
                     let msg = fl!("login-no-key-found");
                     if !interactive {
@@ -237,7 +239,7 @@ impl Cmd {
             }
 
             // The key may be EITHER base64 or a bip39 mnemonic.
-            match paseto_v4::Key::try_from_mnemonic(&key) {
+            match paseto_v4::Key::try_from_mnemonic(key.expose_secret()) {
                 Ok(key) => return store_key(settings, store, &key).await,
                 Err(err) if interactive => {
                     println!("\n{}\n", fl!("login-key-try-again", error = err.to_string()));
@@ -305,10 +307,10 @@ async fn verify_key_against_remote(
                 println!("\n{}", fl!("login-key-mismatch"));
                 println!("{}", fl!("login-key-find-correct"));
 
-                let input = read_user_input(&fl!("prompt-key-or-logout"));
+                let input = read_user_input::<SecretString>(&fl!("prompt-key-or-logout"));
                 match input {
-                    Some(input) if !input.is_empty() => {
-                        match paseto_v4::Key::try_from_mnemonic(&input) {
+                    Some(input) if !input.expose_secret().is_empty() => {
+                        match paseto_v4::Key::try_from_mnemonic(input.expose_secret()) {
                             Ok(candidate) => key = candidate,
                             Err(err) => {
                                 println!(
@@ -350,13 +352,13 @@ pub(super) fn or_user_input(value: Option<String>, prompt: &str) -> String {
 }
 
 #[must_use]
-pub(super) fn read_user_password() -> String {
+pub(super) fn read_user_password() -> SecretString {
     let password = prompt_password(format!("{}: ", fl!("prompt-password")));
-    password.expect("Failed to read from input")
+    password.expect("Failed to read from input").into()
 }
 
 /// Returns `None` if stdin reached end of input before a line was read.
-fn read_user_input(prompt: &str) -> Option<String> {
+pub(super) fn read_user_input<T: for<'a> From<&'a str>>(prompt: &str) -> Option<T> {
     eprint!("{prompt}: ");
     get_input().expect("Failed to read from input")
 }

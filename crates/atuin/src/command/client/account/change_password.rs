@@ -3,20 +3,20 @@ use atuin_client::settings::Settings;
 use clap::Parser;
 use eyre::{Result, bail};
 use rpassword::prompt_password;
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 
 use crate::i18n::fl;
 
 #[derive(Parser, Debug)]
 pub struct Cmd {
     #[clap(long, short)]
-    pub current_password: Option<String>,
+    pub current_password: Option<SecretString>,
 
     #[clap(long, short)]
-    pub new_password: Option<String>,
+    pub new_password: Option<SecretString>,
 
     #[clap(long, short, help = fl!("arg-totp-code"))]
-    pub totp_code: Option<String>,
+    pub totp_code: Option<SecretString>,
 }
 
 impl Cmd {
@@ -30,24 +30,24 @@ impl Cmd {
         let current_password = self.current_password.clone().unwrap_or_else(|| {
             prompt_password(format!("{}: ", fl!("prompt-current-password")))
                 .expect("Failed to read from input")
+                .into()
         });
 
-        if current_password.is_empty() {
+        if current_password.expose_secret().is_empty() {
             bail!(fl!("change-password-provide-current"));
         }
 
         let new_password = self.new_password.clone().unwrap_or_else(|| {
             prompt_password(format!("{}: ", fl!("prompt-new-password")))
                 .expect("Failed to read from input")
+                .into()
         });
 
-        if new_password.is_empty() {
+        if new_password.expose_secret().is_empty() {
             bail!(fl!("change-password-provide-new"));
         }
 
-        let current_password = SecretString::from(current_password);
-        let new_password = SecretString::from(new_password);
-        let mut totp_code = self.totp_code.clone().map(SecretString::from);
+        let mut totp_code = self.totp_code.clone();
 
         loop {
             let response = client
@@ -58,7 +58,8 @@ impl Cmd {
                 MutateResponse::Success => break,
                 MutateResponse::TwoFactorRequired => {
                     totp_code = Some(
-                        super::login::or_user_input(None, &fl!("prompt-two-factor-code")).into(),
+                        super::login::read_user_input(&fl!("prompt-two-factor-code"))
+                            .unwrap_or_default(),
                     );
                 }
             }
