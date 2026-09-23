@@ -238,18 +238,18 @@ impl Key {
     ///
     /// Mostly serves as a convenience function.
     pub async fn try_load_from_path(path: &Path) -> Result<Self, KeyFileLoadingError> {
-        let text = match crate::fs::read_to_string(path).await {
-            Ok(text) => text,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return Err(KeyFileLoadingError::NoEntry);
-            }
-            Err(source) => {
-                return Err(KeyFileLoadingError::Io {
-                    path: path.to_owned(),
-                    source,
-                });
-            }
-        };
+        // Gate on `exists` rather than matching `read_to_string`'s error kind: any stat failure
+        // (e.g. EACCES walking a parent directory) must read as "absent" so the caller falls
+        // back to generating a key, not as a hard error.
+        if !crate::fs::exists(path).await.unwrap_or(false) {
+            return Err(KeyFileLoadingError::NoEntry);
+        }
+
+        let text =
+            crate::fs::read_to_string(path).await.map_err(|source| KeyFileLoadingError::Io {
+                path: path.to_owned(),
+                source,
+            })?;
         Ok(Self::decode(&text)?)
     }
 
@@ -884,6 +884,49 @@ mod test {
             panic!("a directory is not a readable key file");
         };
         assert_eq!(path, dir.path());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn load_or_generate_generates_when_the_path_is_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("key");
+
+        let generated = Key::try_load_or_generate(&path).await.expect("generates a fresh key");
+
+        assert_eq!(Key::try_load_from_path(&path).await.unwrap(), generated);
+    }
+
+    /// `std::fs::metadata` (what [`crate::fs::exists`] is built on) fails with `EACCES` rather
+    /// than `NotFound` when a parent directory can't be searched. Root bypasses unix permission
+    /// checks entirely, so the stat would succeed and the case wouldn't exercise anything.
+    #[cfg(unix)]
+    fn running_as_root() -> bool {
+        rustix::process::geteuid().is_root()
+    }
+
+    #[rstest]
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_denied_stat_reads_as_no_entry() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if running_as_root() {
+            eprintln!("skipping: running as root, permission checks are bypassed");
+            return;
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        let path = locked.join("key");
+
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let loaded = Key::try_load_from_path(&path).await;
+        // Restore permissions so the tempdir can clean itself up.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(matches!(&loaded, Err(KeyFileLoadingError::NoEntry)), "{loaded:?}");
     }
 
     #[rstest]
