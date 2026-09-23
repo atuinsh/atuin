@@ -1,14 +1,9 @@
 use std::collections::HashSet;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use atuin_client::ai_session::{HarnessKind, HarnessSession, NativeSessionId};
-use atuin_common::fs::lines::line_ending_at;
 use atuin_common::harnesstools::AnyHarness;
-use atuin_common::harnesstools::ccode::session::CcodeMessage;
-use atuin_common::harnesstools::codex::session::CodexMessage;
-use atuin_common::harnesstools::pi::session::PiMessage;
 use atuin_common::harnesstools::session::{AnyMessage, RuntimeError, SessionEvent, SessionId};
 use futures::StreamExt;
 use tokio::task::JoinHandle;
@@ -64,15 +59,21 @@ impl SessionCaptureEngine {
                     }
                 };
 
-                let resume_from = {
+                let checkpoint = {
                     let sink = sink.clone();
-                    move |id: &SessionId, path: &Path| {
-                        let sink = sink.clone();
-                        let (id, path) = (id.clone(), path.to_path_buf());
-                        async move { resume_point(&sink, kind, &id, &path).await }
+                    move |id: &SessionId| {
+                        let (sink, id) = (sink.clone(), id.clone());
+                        async move { checkpoint_of(&sink, kind, &id).await }
                     }
                 };
-                let mut events = listener.events(resume_from);
+                let knows = {
+                    let sink = sink.clone();
+                    move |id: SessionId, message: AnyMessage| {
+                        let sink = sink.clone();
+                        async move { is_stored(&sink, kind, &id, &message).await }
+                    }
+                };
+                let mut events = listener.events(checkpoint, knows);
                 let mut enricher = MessageEnricher::new(kind);
                 // Sessions with a failed append: their checkpoint must not move past the line
                 // that was lost, or a restart would never re-read it.
@@ -140,54 +141,41 @@ impl SessionCaptureEngine {
 /// mid-content and silently skip the changed lines, which the dedup gate cannot notice. Anything
 /// else (no checkpoint, a shorter file, an unparseable or unknown line) reads from the start,
 /// which only costs work.
-async fn resume_point(sink: &Sink, kind: HarnessKind, session: &SessionId, path: &Path) -> u64 {
-    let handle = HarnessSession {
-        harness: kind,
-        session: NativeSessionId::from(session.to_string()),
-    };
-    let offset = match sink.sidecar.checkpoint(&handle).await {
-        Ok(Some(offset)) if offset > 0 => offset,
-        Ok(_) => return 0,
+/// The resume token stored for a session, `0` for none.
+async fn checkpoint_of(sink: &Sink, kind: HarnessKind, session: &SessionId) -> u64 {
+    match sink.sidecar.checkpoint(&handle_of(kind, session)).await {
+        Ok(Some(at)) => at,
+        Ok(None) => 0,
         Err(e) => {
             tracing::warn!(?e, %session, "failed to read ai-session checkpoint; reading from the start");
-            return 0;
+            0
         }
-    };
-
-    let line = match line_ending_at(path, offset).await {
-        Ok(line) => line,
-        Err(e) => {
-            tracing::debug!(?e, %session, "could not read the transcript at its checkpoint");
-            None
-        }
-    };
-    let parsed: Option<AnyMessage> = line.and_then(|line| match kind {
-        HarnessKind::ClaudeCode => {
-            serde_json::from_slice::<CcodeMessage>(&line).ok().map(AnyMessage::from)
-        }
-        HarnessKind::Codex => {
-            serde_json::from_slice::<CodexMessage>(&line).ok().map(AnyMessage::from)
-        }
-        HarnessKind::Pi => serde_json::from_slice::<PiMessage>(&line).ok().map(AnyMessage::from),
-        _ => None,
-    });
-    let known = match parsed {
-        Some(m) => sink
-            .sidecar
-            .contains_message(&handle, &MessageEnricher::source_id(session, &m))
-            .await
-            .unwrap_or(false),
-        None => false,
-    };
-    if !known {
-        tracing::debug!(
-            %session,
-            offset,
-            "checkpoint does not end on a stored message; reading from the start"
-        );
-        return 0;
     }
-    offset
+}
+
+/// Whether the message a resume token names is one already captured, which is what makes the
+/// token safe to resume from: anything else (a transcript rewritten under its offset, a row a
+/// reset log dropped) leaves the session to be read from its beginning.
+async fn is_stored(
+    sink: &Sink,
+    kind: HarnessKind,
+    session: &SessionId,
+    message: &AnyMessage,
+) -> bool {
+    let handle = handle_of(kind, session);
+    let source_id = MessageEnricher::source_id(session, message);
+    let stored = sink.sidecar.contains_message(&handle, &source_id).await.unwrap_or(false);
+    if !stored {
+        tracing::debug!(%session, "checkpoint does not name a stored message; reading from the start");
+    }
+    stored
+}
+
+fn handle_of(kind: HarnessKind, session: &SessionId) -> HarnessSession {
+    HarnessSession {
+        harness: kind,
+        session: NativeSessionId::from(session.to_string()),
+    }
 }
 
 impl Drop for SessionCaptureEngine {
@@ -203,6 +191,7 @@ mod tests {
     use atuin_client::ai_session::{AiSessionDatabase, AiSessionStore, SourceId};
     use atuin_client::record::sqlite_store::SqliteStore;
     use atuin_common::encryption::paseto_v4::Key;
+    use atuin_common::harnesstools::ccode::session::CcodeMessage;
     use atuin_domain::record::HostId;
     use rstest::rstest;
 
@@ -226,6 +215,28 @@ mod tests {
         })
         .to_string()
             + "\n"
+    }
+
+    /// What [`Listener::events`] composes of a session's checkpoint and the message it names,
+    /// for the ccode transcripts these tests are written against.
+    async fn resume_point(
+        sink: &Sink,
+        kind: HarnessKind,
+        session: &SessionId,
+        path: &std::path::Path,
+    ) -> u64 {
+        let at = checkpoint_of(sink, kind, session).await;
+        if at == 0 {
+            return 0;
+        }
+        let Some(m) = atuin_common::json::jsonl::value_at::<CcodeMessage>(path, at).await else {
+            return 0;
+        };
+        if is_stored(sink, kind, session, &AnyMessage::from(m)).await {
+            at
+        } else {
+            0
+        }
     }
 
     /// A checkpoint is honoured only while the line it follows is still a stored message: a

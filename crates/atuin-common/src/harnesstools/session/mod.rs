@@ -102,14 +102,23 @@ pub trait Session: Send + 'static {
 
     fn id(&self) -> SessionId;
 
-    /// The transcript file this session is read from.
-    fn path(&self) -> &Path;
+    /// The message the resume token `at` names, so a consumer can decide whether the token is
+    /// still one it may resume from -- typically by asking whether it already has that message.
+    ///
+    /// `None` when the token names nothing this session can read: a transcript shorter than the
+    /// byte offset it came from, a row a log has since dropped. The consumer then resumes from 0.
+    fn message_at(&self, at: u64) -> impl Future<Output = Option<Self::Message>> + Send;
 
-    /// Follow the transcript from byte `offset`, a boundary an earlier stream reported (past the
-    /// end restarts from zero), yielding with each message the offset just past its line.
+    /// Follow the session from the resume token `from`, `0` being its beginning, yielding with
+    /// each message the token that resumes just past it.
+    ///
+    /// **Be warned**: a token means whatever the harness reading the session makes it mean -- a
+    /// byte offset into a transcript, a row's sequence in a log -- and belongs to that harness
+    /// alone. A consumer stores one and hands it back; it never does arithmetic on one, and a
+    /// token from one harness names nothing in another.
     fn messages_from(
         self,
-        offset: u64,
+        from: u64,
     ) -> impl Stream<Item = Result<(u64, Self::Message), MessageError>> + Send + 'static;
 
     fn messages(self) -> impl Stream<Item = Result<Self::Message, MessageError>> + Send + 'static
@@ -131,15 +140,23 @@ pub trait Listener {
     /// offset past it. `resume_from` is awaited once per session, with its id and transcript
     /// path, before the transcript is opened, and gives the offset to start at; 0 reads the
     /// whole file.
-    fn events<F>(
+    /// Follow every session this listener reports, each from where the consumer last left it.
+    ///
+    /// `checkpoint` gives the resume token stored for a session, `0` for none. A token is only
+    /// as good as the message it names, which is the harness's to answer ([`Session::message_at`])
+    /// and the consumer's to vouch for: `knows` is asked whether that message is one it already
+    /// has, and a token it will not vouch for reads the session from its beginning instead.
+    fn events<F, G>(
         self,
-        resume_from: impl Fn(&SessionId, &Path) -> F + Send + 'static,
+        checkpoint: impl Fn(&SessionId) -> F + Send + 'static,
+        knows: impl Fn(SessionId, <Self::Session as Session>::Message) -> G + Send + 'static,
     ) -> impl Stream<Item = Result<SessionEvent<<Self::Session as Session>::Message>, CaptureError>>
     + Send
     + 'static
     where
         Self: Sized,
         F: Future<Output = u64> + Send + 'static,
+        G: Future<Output = bool> + Send + 'static,
     {
         let sessions = self.watch();
         async_stream::stream! {
@@ -162,7 +179,16 @@ pub trait Listener {
                     appeared = sessions.next(), if !sessions_done => match appeared {
                         Some(Ok(session)) => {
                             let id = session.id();
-                            let start = resume_from(&id, session.path()).await;
+                            let at = checkpoint(&id).await;
+                            let vouched = if at == 0 {
+                                false
+                            } else {
+                                match session.message_at(at).await {
+                                    Some(message) => knows(id.clone(), message).await,
+                                    None => false,
+                                }
+                            };
+                            let start = if vouched { at } else { 0 };
                             let tag = id.clone();
                             let (tagged, handle) = futures::stream::abortable(
                                 session.messages_from(start).map(move |item| (tag.clone(), item)),
@@ -267,13 +293,13 @@ mod tests {
             SessionId::from(self.id.to_owned())
         }
 
-        fn path(&self) -> &Path {
-            Path::new("/stub")
+        async fn message_at(&self, _at: u64) -> Option<StubMsg> {
+            None
         }
 
         fn messages_from(
             self,
-            _offset: u64,
+            _from: u64,
         ) -> impl Stream<Item = Result<(u64, StubMsg), MessageError>> + Send + 'static {
             let items = futures::stream::iter(self.offsets.into_iter().map(|o| Ok((o, StubMsg))));
             if self.hang {
@@ -324,7 +350,7 @@ mod tests {
                 hang: false,
             },
         };
-        let events = listener.events(|_, _| async { 0 });
+        let events = listener.events(|_| async { 0 }, |_, _| async { true });
         let offsets: Vec<u64> = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             events.map(|ev| ev.unwrap().offset).collect(),
@@ -339,6 +365,7 @@ pub mod any;
 
 use crate::harnesstools::ccode::session::CcodeMessage;
 use crate::harnesstools::codex::session::CodexMessage;
+use crate::harnesstools::opencode::session::OpencodeMessage;
 use crate::harnesstools::pi::session::PiMessage;
 
 #[enum_dispatch(Message)]
@@ -346,5 +373,6 @@ use crate::harnesstools::pi::session::PiMessage;
 pub enum AnyMessage {
     Ccode(CcodeMessage),
     Codex(CodexMessage),
+    Opencode(OpencodeMessage),
     Pi(PiMessage),
 }

@@ -162,15 +162,15 @@ impl Session for PiSession {
         self.id.clone()
     }
 
-    fn path(&self) -> &Path {
-        &self.path
+    async fn message_at(&self, at: u64) -> Option<PiMessage> {
+        jsonl::value_at(&self.path, at).await
     }
 
     fn messages_from(
         self,
-        offset: u64,
+        from: u64,
     ) -> impl Stream<Item = Result<(u64, PiMessage), MessageError>> + Send + 'static {
-        jsonl::follow_from::<PiMessage>(self.path, offset, self.changes).map_err(MessageError::from)
+        jsonl::follow_from::<PiMessage>(self.path, from, self.changes).map_err(MessageError::from)
     }
 
     fn read(&self) -> impl Stream<Item = Result<PiMessage, MessageError>> + Send + 'static {
