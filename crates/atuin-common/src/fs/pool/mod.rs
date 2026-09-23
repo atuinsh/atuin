@@ -215,8 +215,7 @@ impl FdPool {
             match tokio::task::spawn_blocking(move || open().map(|fd| lease.hold(fd))).await {
                 Ok(result) => result,
                 Err(err) if err.is_panic() => std::panic::resume_unwind(err.into_panic()),
-                Err(_) => Err(io::Error::new(
-                    io::ErrorKind::Interrupted,
+                Err(_) => Err(io::Error::other(
                     "the blocking filesystem call was cancelled by its runtime shutting down",
                 )),
             };
