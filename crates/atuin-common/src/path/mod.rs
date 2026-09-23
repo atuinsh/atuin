@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 pub use display_rich::{DisplayRichExt, RichDisplay};
 
 /// Utility extensions for paths in atuin.
-#[allow(async_fn_in_trait, reason = "only used within our code and we don't need it to be Send")]
+#[expect(
+    async_fn_in_trait,
+    reason = "callers await it inline and never need the future to be `Send`"
+)]
 pub trait PathExt {
     /// Check whether the given path is a symlink, and a dangling one at that.
     async fn is_dangling_symlink(&self) -> bool;

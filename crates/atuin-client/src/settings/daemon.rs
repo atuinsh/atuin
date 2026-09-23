@@ -223,12 +223,12 @@ impl<'a> SocketPath<'a> {
     ///
     /// This only applies to the default socket path: the directory holding a user-specified path
     /// from config.toml is the user's to create, and `$XDG_RUNTIME_DIR` is created for us.
-    pub fn create_default_dir_if_needed(&self) -> Result<(), SecureTempDirError> {
+    pub async fn create_default_dir_if_needed(&self) -> Result<(), SecureTempDirError> {
         let Self::Default(path) = self else {
             return Ok(());
         };
         let dir = path.parent().expect("default socket path always has a parent");
-        create_secure_temp_dir(dir)?;
+        create_secure_temp_dir(dir).await?;
         Ok(())
     }
 
@@ -459,38 +459,41 @@ mod unix_tests {
     }
 
     #[rstest]
-    fn no_directory_is_created_for_a_user_defined_socket(tmp: TempDir) {
+    #[tokio::test]
+    async fn no_directory_is_created_for_a_user_defined_socket(tmp: TempDir) {
         let dir = tmp.path().join("custom");
         let daemon = daemon(Some(dir.join("atuin.sock")), false);
 
-        daemon.socket_path().create_default_dir_if_needed().unwrap();
+        daemon.socket_path().create_default_dir_if_needed().await.unwrap();
 
         assert!(!dir.exists(), "created a directory for a user-defined path");
         assert_eq!(daemon.existing_socket_path(), dir.join("atuin.sock"));
     }
 
     #[rstest]
-    fn default_socket_dir_is_created_privately_then_reused(default_socket: DefaultSocket) {
-        default_socket.path().create_default_dir_if_needed().unwrap();
+    #[tokio::test]
+    async fn default_socket_dir_is_created_privately_then_reused(default_socket: DefaultSocket) {
+        default_socket.path().create_default_dir_if_needed().await.unwrap();
         let mode = fs_err::metadata(&default_socket.dir).unwrap().mode();
         assert_eq!(mode & 0o777, 0o700);
 
-        default_socket.path().create_default_dir_if_needed().unwrap();
+        default_socket.path().create_default_dir_if_needed().await.unwrap();
     }
 
     #[rstest]
     #[case::group_readable(0o740)]
     #[case::other_readable(0o704)]
     #[case::world_writable(0o777)]
-    fn a_socket_dir_reachable_by_others_is_rejected(
+    #[tokio::test]
+    async fn a_socket_dir_reachable_by_others_is_rejected(
         default_socket: DefaultSocket,
         #[case] mode: u32,
     ) {
-        default_socket.path().create_default_dir_if_needed().unwrap();
+        default_socket.path().create_default_dir_if_needed().await.unwrap();
         fs_err::set_permissions(&default_socket.dir, Permissions::from_mode(mode)).unwrap();
 
         let Err(SecureTempDirError::WrongPermissions { permissions, .. }) =
-            default_socket.path().create_default_dir_if_needed()
+            default_socket.path().create_default_dir_if_needed().await
         else {
             panic!("a socket directory with mode {mode:03o} must be rejected");
         };
@@ -498,11 +501,12 @@ mod unix_tests {
     }
 
     #[rstest]
-    fn a_symlinked_socket_dir_is_rejected(default_socket: DefaultSocket) {
+    #[tokio::test]
+    async fn a_symlinked_socket_dir_is_rejected(default_socket: DefaultSocket) {
         symlink("/tmp", &default_socket.dir).unwrap();
 
         assert!(matches!(
-            default_socket.path().create_default_dir_if_needed(),
+            default_socket.path().create_default_dir_if_needed().await,
             Err(SecureTempDirError::NotADirectory(_))
         ));
     }

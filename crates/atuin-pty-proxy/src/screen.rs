@@ -6,7 +6,9 @@ use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread::JoinHandle;
 
 use atuin_common::os::unix::tty::TtyId;
-use atuin_common::os::unix::{SecureTempDirError, create_secure_temp_dir};
+use atuin_common::os::unix::{
+    SecureTempDirError, create_secure_temp_dir, create_secure_temp_dir_blocking,
+};
 use easy_cast::Conv;
 
 use crate::capture::{CaptureConfig, CommandCaptureTracker};
@@ -23,7 +25,7 @@ pub enum Msg {
 
 /// The path to the PTY proxy socket for the given terminal.
 pub fn socket_path(tty_id: TtyId) -> Result<PathBuf, SecureTempDirError> {
-    Ok(socket_dir()?.join(socket_name(tty_id)))
+    Ok(socket_dir_blocking()?.join(socket_name(tty_id)))
 }
 
 /// The name of the PTY proxy socket for the given terminal.
@@ -32,29 +34,41 @@ fn socket_name(tty_id: TtyId) -> String {
     format!("pty-proxy-{}-{}.sock", tty_id.dev, tty_id.rdev)
 }
 
-/// The directory in which PTY proxy sockets are stored.
-fn socket_dir() -> Result<PathBuf, SecureTempDirError> {
+/// The directory in which PTY proxy sockets are stored, which may not exist yet.
+fn socket_dir_path() -> PathBuf {
     let uid = atuin_common::os::unix::uid();
-    let dir = atuin_common::os::unix::tmp_dir().join(format!("atuin-{uid}"));
-    create_secure_temp_dir(dir)
+    atuin_common::os::unix::tmp_dir().join(format!("atuin-{uid}"))
+}
+
+/// The directory in which PTY proxy sockets are stored.
+async fn socket_dir() -> Result<PathBuf, SecureTempDirError> {
+    create_secure_temp_dir(socket_dir_path()).await
+}
+
+/// Equivalent to [`socket_dir`], except it blocks the calling thread.
+fn socket_dir_blocking() -> Result<PathBuf, SecureTempDirError> {
+    create_secure_temp_dir_blocking(socket_dir_path())
 }
 
 /// The socket path of the PTY proxy that this process is running in.
 ///
 /// This process must be directly running inside an Atuin PTY proxy -- that is, its terminal must be
 /// the child PTY created by the PTY proxy. Otherwise, this function will return [`None`].
-#[must_use]
-pub fn parent_socket_path() -> Option<PathBuf> {
-    live_socket(socket_dir().ok()?, TtyId::current()?)
+pub async fn parent_socket_path() -> Option<PathBuf> {
+    live_socket(socket_dir().await.ok()?, TtyId::current()?)
 }
 
 /// Whether this process is running directly inside an Atuin PTY proxy.
 ///
 /// To qualify, this process's terminal must be the child PTY created by the PTY proxy. If there is
-/// another PTY in between (e.g., from tmux or screen), this will return false.
+/// another PTY in between (e.g., from tmux or screen), this will return false. Blocks the calling
+/// thread, so only call it where there is no tokio runtime.
 #[must_use]
 pub fn is_pty_proxy_child() -> bool {
-    parent_socket_path().is_some()
+    let (Ok(dir), Some(tty)) = (socket_dir_blocking(), TtyId::current()) else {
+        return false;
+    };
+    live_socket(dir, tty).is_some()
 }
 
 /// Check whether `socket_dir` contains a live socket corresponding to `tty_id`.

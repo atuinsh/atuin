@@ -74,7 +74,7 @@ pub async fn run_grpc_server(
     } else {
         use atuin_common::path::DisplayRichExt;
 
-        socket_path.create_default_dir_if_needed()?;
+        socket_path.create_default_dir_if_needed().await?;
         tracing::info!("listening on unix socket {:?}", socket_path.as_path());
         (
             UnixListener::bind(&socket_path).context(format!(

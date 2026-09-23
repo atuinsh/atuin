@@ -65,6 +65,43 @@ pub enum SecureTempDirError {
     Io(#[from] std::io::Error),
 }
 
+impl SecureTempDirError {
+    /// Check that the existing directory at `path`, described by `meta`, is private to this user.
+    ///
+    /// `meta` must come from `symlink_metadata` so that a symlink is rejected rather than followed.
+    fn ensure_private<P: Into<PathBuf>>(path: P, meta: &std::fs::Metadata) -> Result<P, Self> {
+        use std::os::unix::fs::MetadataExt;
+
+        if !meta.is_dir() {
+            // This importantly rejects symlinks; a symlink could point to a directory owned by
+            // another user, who could then access our files.
+            return Err(Self::NotADirectory(path.into()));
+        }
+
+        let expected_uid = uid();
+        let actual_uid = meta.uid();
+        if !std::ffi::c_uint::try_from(actual_uid).is_ok_and(|actual| actual == expected_uid) {
+            return Err(Self::WrongOwner {
+                path: path.into(),
+                expected_uid,
+                actual_uid,
+            });
+        }
+
+        let permissions = meta.mode() & 0o777;
+        if permissions & 0o077 != 0 {
+            // On some systems, if a socket gets created in the directory, even read permission on
+            // the directory could allow another user to connect to the socket, who could then
+            // interfere with our connection.
+            return Err(Self::WrongPermissions {
+                path: path.into(),
+                permissions,
+            });
+        }
+        Ok(path)
+    }
+}
+
 /// Create a secure temporary directory with the given path.
 ///
 /// Generally, `path` will be a subdirectory of `/tmp`.
@@ -77,52 +114,33 @@ pub enum SecureTempDirError {
 /// socket file to connect to it.
 ///
 /// On success, returns `path`. This may allow resources to be reused if `P` is an owned type.
-pub fn create_secure_temp_dir<P>(path: P) -> Result<P, SecureTempDirError>
+pub async fn create_secure_temp_dir<P>(path: P) -> Result<P, SecureTempDirError>
 where
     P: AsRef<Path> + Into<PathBuf>,
 {
-    use std::io::ErrorKind;
-    use std::os::unix::fs::MetadataExt;
-
-    // No `.await`: this also runs from `atuin-pty-proxy`, which has no tokio runtime.
-    match crate::fs::blocking::create_secure_dir(path.as_ref(), 0o700) {
+    match crate::fs::create_secure_dir(path.as_ref(), 0o700).await {
         Ok(()) => return Ok(path),
-        Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(e.into()),
     }
+    let meta = crate::fs::symlink_metadata(path.as_ref()).await?;
+    SecureTempDirError::ensure_private(path, &meta)
+}
 
-    // Make sure we own the directory with the appropriate permissions. Otherwise, another user
-    // on the system could access the files we store in the directory.
-
+/// Equivalent to [`create_secure_temp_dir`], except it blocks the calling thread.
+///
+/// Only for threads with no tokio runtime, such as the PTY proxy's.
+pub fn create_secure_temp_dir_blocking<P>(path: P) -> Result<P, SecureTempDirError>
+where
+    P: AsRef<Path> + Into<PathBuf>,
+{
+    match crate::fs::blocking::create_secure_dir(path.as_ref(), 0o700) {
+        Ok(()) => return Ok(path),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e.into()),
+    }
     let meta = crate::fs::blocking::symlink_metadata(path.as_ref())?;
-    if !meta.is_dir() {
-        // This importantly rejects symlinks; a symlink could point to a directory owned by
-        // another user, who could then access our files.
-        return Err(SecureTempDirError::NotADirectory(path.into()));
-    }
-
-    let expected_uid = uid();
-    let actual_uid = meta.uid();
-    if !std::ffi::c_uint::try_from(actual_uid).is_ok_and(|actual| actual == expected_uid) {
-        // Reject the directory if it's owned by another user.
-        return Err(SecureTempDirError::WrongOwner {
-            path: path.into(),
-            expected_uid,
-            actual_uid,
-        });
-    }
-
-    let permissions = meta.mode() & 0o777;
-    if permissions & 0o077 != 0 {
-        // Reject the directory if it is accessible by others. On some systems, if a socket gets
-        // created in the directory, even read permission on the directory could allow another user
-        // to connect to the socket, who could then interfere with our connection.
-        return Err(SecureTempDirError::WrongPermissions {
-            path: path.into(),
-            permissions,
-        });
-    }
-    Ok(path)
+    SecureTempDirError::ensure_private(path, &meta)
 }
 
 #[cfg(test)]

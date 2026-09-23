@@ -301,7 +301,10 @@ impl Key {
                 Err(e) => return Err(e.into()),
             };
 
+            // `flush` before `sync_all`: tokio's `sync_all` waits for the in-flight write but
+            // drops its error, so without it a failed write would still get linked into place.
             tmp_file.write_all(self.encode().dangerously_leak_secret().as_bytes()).await?;
+            tmp_file.flush().await?;
             tmp_file.sync_all().await?;
             drop(tmp_file);
             break crate::fs::hard_link(&tmp_path, path).await;
@@ -328,6 +331,8 @@ impl Key {
                 Err(e) => return Err(e.into()),
             };
         file.write_all(self.encode().dangerously_leak_secret().as_bytes()).await?;
+        file.flush().await?;
+        file.sync_all().await?;
         Ok(())
     }
 
@@ -343,7 +348,8 @@ impl Key {
         // because we do want it to overwrite an existing key).
         let mut file = crate::fs::File::create(path).await?;
         file.write_all(self.encode().dangerously_leak_secret().as_bytes()).await?;
-
+        file.flush().await?;
+        file.sync_all().await?;
         Ok(())
     }
 
@@ -820,10 +826,8 @@ mod test {
     #[rstest]
     #[tokio::test]
     async fn overwrite_path_replaces_an_existing_key() {
-        let dir = std::env::temp_dir().join(format!("atuin-key-overwrite-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("create temp dir");
-        let path = dir.join("key");
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("key");
 
         let old = Key::from([0x11u8; 32]);
         let new = Key::from([0x22u8; 32]);
@@ -834,11 +838,10 @@ mod test {
         assert!(matches!(new.try_write_path(&path).await, Err(KeyFileStoringError::AlreadyExists)));
         assert_eq!(Key::try_load_from_path(&path).await.unwrap(), old);
 
-        // ...but overwrite_path deliberately replaces it, as key rotation requires.
+        // ...but overwrite_path deliberately replaces it, as key rotation requires. Read back with
+        // `std::fs` so the check cannot queue behind a write still running on the blocking pool.
         new.overwrite_path(&path).await.expect("overwrite replaces the key");
-        assert_eq!(Key::try_load_from_path(&path).await.unwrap(), new);
-
-        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(fs::read_to_string(&path).unwrap(), new.encode().dangerously_leak_secret());
     }
 
     #[rstest]

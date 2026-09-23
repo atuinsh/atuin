@@ -1828,7 +1828,7 @@ pub async fn history(
     #[cfg(unix)]
     let (saved_screen, popup_rect, popup_scroll_offset) = {
         #[cfg(feature = "pty-proxy")]
-        let socket_path = atuin_pty_proxy::parent_socket_path();
+        let socket_path = atuin_pty_proxy::parent_socket_path().await;
         #[cfg(not(feature = "pty-proxy"))]
         let socket_path = None::<std::path::PathBuf>;
 
