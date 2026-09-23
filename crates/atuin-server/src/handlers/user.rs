@@ -111,7 +111,7 @@ pub async fn register(
     };
 
     // 24 bytes encoded as base64
-    let token = SecretString::from(crypto_random_string::<24>());
+    let token = crypto_random_string::<24>();
 
     // Create the user and their initial session atomically, so a failure can't leave an
     // account that exists but can never be logged into (or a dangling session).
