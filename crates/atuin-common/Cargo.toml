@@ -32,7 +32,6 @@ derive_more = { workspace = true }
 directories = { workspace = true }
 easy-cast = { workspace = true }
 enum_dispatch = { workspace = true }
-fs-err = { workspace = true }
 futures = { workspace = true }
 getrandom = { workspace = true }
 humantime = { workspace = true }
@@ -81,6 +80,7 @@ windows-sys = { workspace = true, optional = true }
 
 [dev-dependencies]
 divan = { workspace = true }
+fs-err = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }

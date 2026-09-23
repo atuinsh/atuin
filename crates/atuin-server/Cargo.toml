@@ -36,7 +36,6 @@ config = { workspace = true }
 derive_more = { workspace = true }
 easy-cast = { workspace = true }
 eyre = { workspace = true }
-fs-err = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 rand = { workspace = true }
