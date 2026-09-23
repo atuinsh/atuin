@@ -62,9 +62,16 @@ pub enum HubError {
         reason: Option<String>,
     },
     #[error("hub request failed: {0}")]
-    Request(#[from] reqwest::Error),
+    Request(reqwest::Error),
     #[error("invalid hub URL: {0}")]
     Url(#[from] atuin_common::url::UrlAppendError),
+}
+
+impl From<reqwest::Error> for HubError {
+    fn from(err: reqwest::Error) -> Self {
+        // The verify endpoint carries the auth code in its query string.
+        Self::Request(err.without_url())
+    }
 }
 
 fn status_message(status: StatusCode, reason: Option<&str>) -> impl std::fmt::Display {
