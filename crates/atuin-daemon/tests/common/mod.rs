@@ -173,7 +173,7 @@ impl TestEnvBuilder {
         if self.with_search_component {
             builder = builder.component(search_component);
         }
-        let mut daemon = builder.build().unwrap();
+        let mut daemon = builder.build().await.unwrap();
         let handle = daemon.handle();
 
         let host_id = HostId(uuid_v7());

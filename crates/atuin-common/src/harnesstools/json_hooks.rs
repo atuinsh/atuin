@@ -25,10 +25,10 @@ pub async fn install(
     let hook_command = hook_command(&std::env::current_exe()?, harness)?;
 
     if let Some(parent) = config_path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+        crate::fs::create_dir_all(parent).await?;
     }
 
-    let mut root: Value = match tokio::fs::read_to_string(config_path).await {
+    let mut root: Value = match crate::fs::read_to_string(config_path).await {
         Ok(content) => serde_json::from_str(&content)?,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Value::Object(Map::new()),
         Err(err) => return Err(err.into()),
@@ -46,7 +46,7 @@ pub async fn install(
         return Err(InstallHookError::AlreadyInstalled);
     }
 
-    tokio::fs::write(config_path, serde_json::to_string_pretty(&root)?).await?;
+    crate::fs::write(config_path, serde_json::to_string_pretty(&root)?).await?;
 
     Ok(())
 }

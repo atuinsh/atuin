@@ -12,6 +12,7 @@ impl Purge {
         println!("Purging local records that cannot be decrypted");
 
         let key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+            .await
             .context("could not load encryption key")?;
 
         match store.purge(&key).await {

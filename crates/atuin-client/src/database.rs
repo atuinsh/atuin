@@ -74,7 +74,7 @@ pub async fn query_context() -> eyre::Result<Context> {
     let cmd_origin = CmdOrigin::probe_current();
     let cwd = utils::get_current_dir();
     let host_id = Settings::host_id().await?;
-    let git_root = utils::in_git_repo(cwd.as_str());
+    let git_root = utils::in_git_repo(cwd.as_str()).await;
 
     Ok(Context {
         session,
@@ -99,13 +99,13 @@ pub async fn current_context() -> eyre::Result<Context> {
 
 impl Context {
     #[must_use]
-    pub fn from_history(entry: &History) -> Self {
+    pub async fn from_history(entry: &History) -> Self {
         Self {
             session: entry.session.clone(),
             cwd: entry.cwd.clone(),
             cmd_origin: entry.cmd_origin.clone(),
             host_id: String::new(),
-            git_root: utils::in_git_repo(entry.cwd.as_str()),
+            git_root: utils::in_git_repo(entry.cwd.as_str()).await,
         }
     }
 }

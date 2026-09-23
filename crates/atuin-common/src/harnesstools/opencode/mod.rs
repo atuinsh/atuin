@@ -31,11 +31,11 @@ impl Harness for Opencode {
             .join("opencode")
             .join("plugins");
 
-        tokio::fs::create_dir_all(&plugins_dir).await?;
+        crate::fs::create_dir_all(&plugins_dir).await?;
 
         let extension_path = plugins_dir.join(PLUGIN_NAME);
 
-        let already_installed = tokio::fs::read_to_string(&extension_path)
+        let already_installed = crate::fs::read_to_string(&extension_path)
             .await
             .is_ok_and(|existing| existing == PLUGIN_SOURCE);
 
@@ -43,7 +43,7 @@ impl Harness for Opencode {
             return Err(InstallHookError::AlreadyInstalled);
         }
 
-        tokio::fs::write(&extension_path, PLUGIN_SOURCE).await?;
+        crate::fs::write(&extension_path, PLUGIN_SOURCE).await?;
 
         Ok(extension_path)
     }

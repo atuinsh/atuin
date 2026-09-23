@@ -24,7 +24,7 @@ pub async fn login(
 
         // 1. check if the saved key and the provided key match. if so, nothing to do.
         // 2. if not, re-encrypt the local history and overwrite the key
-        let current_key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
+        let current_key = paseto_v4::Key::try_load_from_path(&settings.key_path).await?;
 
         if key != current_key {
             println!("\nRe-encrypting local store with new key");
@@ -32,10 +32,10 @@ pub async fn login(
             store.re_encrypt(&current_key, &key).await?;
 
             println!("Writing new key");
-            key.overwrite_path(key_path)?;
+            key.overwrite_path(key_path).await?;
         }
     } else {
-        key.try_write_path(key_path)?;
+        key.try_write_path(key_path).await?;
     }
 
     let session = api_client::login(

@@ -441,12 +441,13 @@ impl DaemonBuilder {
     /// Build the daemon.
     ///
     /// This loads the encryption key and creates the daemon state.
-    pub fn build(self) -> Result<Daemon> {
+    pub async fn build(self) -> Result<Daemon> {
         let store = self.store.ok_or_else(|| eyre::eyre!("store is required"))?;
         let history_db = self.history_db.ok_or_else(|| eyre::eyre!("history_db is required"))?;
 
         // Load encryption key
         let encryption_key = paseto_v4::Key::try_load_or_generate(&self.settings.key_path)
+            .await
             .context("could not load encryption key")?;
 
         // Create the event bus

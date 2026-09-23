@@ -304,7 +304,7 @@ impl SettingPaths {
         }
     }
 
-    pub fn verify(&self) {
+    pub async fn verify(&self) {
         let paths = vec![
             ("ATUIN_DB_PATH", &self.db),
             ("ATUIN_RECORD_STORE", &self.record_store),
@@ -312,7 +312,7 @@ impl SettingPaths {
         ];
 
         for (path_env_var, path) in paths {
-            if path.as_path().is_dangling_symlink() {
+            if path.as_path().is_dangling_symlink().await {
                 eprintln!(
                     "{} (${path_env_var}) is a broken symlink. This may cause issues with Atuin.",
                     path.display()
@@ -384,7 +384,7 @@ impl DoctorDump {
     }
 }
 
-fn checks(info: &DoctorDump) {
+async fn checks(info: &DoctorDump) {
     println!(); // spacing
     //
     let zfs_error = "[Filesystem] ZFS is known to have some issues with SQLite. Atuin uses SQLite heavily. If you are having poor performance, there are some workarounds here: https://github.com/atuinsh/atuin/issues/952".bold().red();
@@ -412,7 +412,7 @@ fn checks(info: &DoctorDump) {
         println!("{zfs_error}");
     }
 
-    info.atuin.setting_paths.verify();
+    info.atuin.setting_paths.verify().await;
 
     // Shell
     if info.shell.name == "bash" {
@@ -435,7 +435,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
     println!("Checking for diagnostics");
     let dump = DoctorDump::new(settings).await;
 
-    checks(&dump);
+    checks(&dump).await;
 
     let dump = serde_json::to_string_pretty(&dump)?;
 

@@ -2100,7 +2100,7 @@ pub async fn history(
                                 });
                                 if let Some(entry) = entry {
                                     app.search.custom_context = Some(entry.id);
-                                    app.search.context = Context::from_history(entry);
+                                    app.search.context = Context::from_history(entry).await;
                                     app.search.filter_mode = FilterMode::Session;
                                     app.search.input = Cursor::from(String::new());
                                     app.results_state = ListState::default();
@@ -2983,7 +2983,7 @@ mod tests {
         state.inspecting_state.current = Some(entries[0].id);
         state.inspecting_state.browser.select_view(super::InspectorView::Session);
         state.search.custom_context = Some(entries[0].id);
-        state.search.context = Context::from_history(&entries[0]);
+        state.search.context = Context::from_history(&entries[0]).await;
         state.search.filter_mode = FilterMode::Session;
         let results = state.query_results(&mut db, &settings).await.unwrap();
         assert!(

@@ -54,6 +54,7 @@ impl Cmd {
             Self::Status => status::run(&settings).await,
             Self::Key { base64 } => {
                 let key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+                    .await
                     .wrap_err(fl!("sync-key-load-failed"))?;
 
                 if base64 {
@@ -70,6 +71,7 @@ impl Cmd {
 #[instrument(level = "trace", skip_all, fields(force), err)]
 async fn run(settings: &Settings, force: bool, db: &Sqlite, store: SqliteStore) -> Result<()> {
     let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+        .await
         .context("could not load encryption key")?;
 
     let host_id = Settings::host_id().await?;

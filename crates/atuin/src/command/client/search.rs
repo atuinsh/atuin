@@ -213,6 +213,7 @@ impl Cmd {
         settings.keymap_mode_shell = self.keymap_mode;
 
         let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+            .await
             .context("could not load or generate encryption key")?;
 
         let host_id = Settings::host_id().await?;

@@ -124,6 +124,7 @@ impl Cmd {
             // Interactive login via browser OAuth flow.
             if self.from_registration {
                 paseto_v4::Key::try_load_or_generate(&settings.key_path)
+                    .await
                     .context(fl!("login-key-generate-failed"))?;
             } else {
                 self.prompt_and_store_key(settings, store).await?;
@@ -225,7 +226,7 @@ impl Cmd {
                     continue;
                 }
 
-                paseto_v4::Key::try_load_from_path(key_path).context(fl!(
+                paseto_v4::Key::try_load_from_path(key_path).await.context(fl!(
                     "login-key-file-invalid",
                     path = key_path.to_string_lossy().into_owned()
                 ))?;
@@ -251,11 +252,11 @@ async fn store_key(settings: &Settings, store: &SqliteStore, key: &paseto_v4::Ke
     let key_path = &settings.key_path;
 
     if !key_path.exists() {
-        key.try_write_path(key_path)?;
+        key.try_write_path(key_path).await?;
         return Ok(());
     }
 
-    let current_key = paseto_v4::Key::try_load_from_path(key_path)?;
+    let current_key = paseto_v4::Key::try_load_from_path(key_path).await?;
     if *key == current_key {
         return Ok(());
     }
@@ -264,7 +265,7 @@ async fn store_key(settings: &Settings, store: &SqliteStore, key: &paseto_v4::Ke
     store.re_encrypt(&current_key, key).await?;
 
     println!("{}", fl!("login-writing-key"));
-    key.overwrite_path(key_path)?;
+    key.overwrite_path(key_path).await?;
 
     Ok(())
 }
@@ -275,6 +276,7 @@ async fn verify_key_against_remote(
     interactive: bool,
 ) -> Result<()> {
     let mut key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+        .await
         .context(fl!("login-key-load-failed"))?;
 
     // Build the session once (this hits the network). The key can change between retries below, so

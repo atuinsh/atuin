@@ -39,24 +39,24 @@ pub fn uuid_v4() -> String {
 }
 
 #[must_use]
-pub fn has_git_dir(path: &str) -> bool {
+pub async fn has_git_dir(path: &str) -> bool {
     let mut gitdir = PathBuf::from(path);
     gitdir.push(".git");
 
-    gitdir.exists()
+    crate::fs::exists(&gitdir).await.unwrap_or(false)
 }
 
 // in a git worktree, .git is a file containing "gitdir: <path>" pointing
 // to the main repo's .git/worktrees/<name> directory. follow the pointer
 // back to the main repo root so all worktrees share a workspace.
-fn resolve_git_worktree(path: &Path) -> Option<PathBuf> {
+async fn resolve_git_worktree(path: &Path) -> Option<PathBuf> {
     let git_path = path.join(".git");
 
-    if !git_path.is_file() {
+    if !crate::fs::metadata(&git_path).await.is_ok_and(|m| m.is_file()) {
         return None;
     }
 
-    let contents = std::fs::read_to_string(&git_path).ok()?;
+    let contents = crate::fs::read_to_string(&git_path).await.ok()?;
     let gitdir_str = contents.strip_prefix("gitdir: ")?.trim();
 
     let gitdir = PathBuf::from(gitdir_str);
@@ -69,7 +69,7 @@ fn resolve_git_worktree(path: &Path) -> Option<PathBuf> {
     // walk up from e.g. /repo/.git/worktrees/feature to find /repo
     let mut candidate = gitdir.as_path();
     while let Some(parent) = candidate.parent() {
-        if parent.join(".git").is_dir() {
+        if crate::fs::metadata(parent.join(".git")).await.is_ok_and(|m| m.is_dir()) {
             return Some(parent.to_path_buf());
         }
         candidate = parent;
@@ -82,17 +82,17 @@ fn resolve_git_worktree(path: &Path) -> Option<PathBuf> {
 // I really don't want to bring in libgit for something simple like this
 // If we start to do anything more advanced, then perhaps
 #[must_use]
-pub fn in_git_repo(path: &str) -> Option<PathBuf> {
+pub async fn in_git_repo(path: &str) -> Option<PathBuf> {
     let mut gitdir = PathBuf::from(path);
 
-    while gitdir.parent().is_some() && !has_git_dir(gitdir.to_str().unwrap()) {
+    while gitdir.parent().is_some() && !has_git_dir(gitdir.to_str().unwrap()).await {
         gitdir.pop();
     }
 
     // No parent? then we hit root, finding no git
     if gitdir.parent().is_some() {
         // if .git is a file (worktree), resolve to the main repo root
-        if let Some(main_repo) = resolve_git_worktree(&gitdir) {
+        if let Some(main_repo) = resolve_git_worktree(&gitdir).await {
             return Some(main_repo);
         }
         return Some(gitdir);
@@ -314,7 +314,8 @@ mod tests {
 
     #[cfg(not(windows))]
     #[rstest]
-    fn in_git_repo_regular() {
+    #[tokio::test]
+    async fn in_git_repo_regular() {
         // regular git repo should resolve to the directory containing .git
         let tmp = std::env::temp_dir().join("atuin-test-regular-git");
         let _ = std::fs::remove_dir_all(&tmp);
@@ -322,7 +323,7 @@ mod tests {
         std::fs::create_dir_all(&subdir).unwrap();
         std::fs::create_dir_all(tmp.join(".git")).unwrap();
 
-        let result = in_git_repo(subdir.to_str().unwrap());
+        let result = in_git_repo(subdir.to_str().unwrap()).await;
         assert_eq!(result, Some(tmp.clone()));
 
         std::fs::remove_dir_all(&tmp).unwrap();
@@ -330,7 +331,8 @@ mod tests {
 
     #[cfg(not(windows))]
     #[rstest]
-    fn in_git_repo_worktree_resolves_to_main_repo() {
+    #[tokio::test]
+    async fn in_git_repo_worktree_resolves_to_main_repo() {
         // worktree .git is a file pointing back to the main repo —
         // in_git_repo should follow it so all worktrees share a workspace
         let tmp = std::env::temp_dir().join("atuin-test-worktree-git");
@@ -352,7 +354,7 @@ mod tests {
         .unwrap();
 
         // should resolve to the main repo root, not the worktree root
-        let result = in_git_repo(worktree_subdir.to_str().unwrap());
+        let result = in_git_repo(worktree_subdir.to_str().unwrap()).await;
         assert_eq!(result, Some(main_repo));
 
         std::fs::remove_dir_all(&tmp).unwrap();

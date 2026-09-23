@@ -60,6 +60,7 @@ impl Cmd {
     #[instrument(level = "trace", skip_all, err)]
     pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+            .await
             .context("could not load or generate encryption key")?;
 
         let host_id = Settings::host_id().await?;

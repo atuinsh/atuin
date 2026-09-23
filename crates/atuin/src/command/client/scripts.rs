@@ -554,6 +554,7 @@ impl Cmd {
     ) -> Result<()> {
         let host_id = Settings::host_id().await?;
         let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+            .await
             .context("could not load or generate encryption key")?;
 
         let script_store = ScriptStore::new(store, host_id, encryption_key);

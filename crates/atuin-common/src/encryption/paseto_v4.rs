@@ -2,8 +2,6 @@
 //!
 //! See [`encrypt_sync`] for the encryption description.
 use std::array::TryFromSliceError;
-use std::fs;
-use std::io::Write;
 use std::path::Path;
 
 use base64::Engine;
@@ -228,23 +226,23 @@ impl Key {
     /// Try to load the [`Self::encode`]d file from the given path.
     ///
     /// Mostly serves as a convenience function.
-    pub fn try_load_from_path(path: &Path) -> Result<Self, KeyFileLoadingError> {
-        if !path.exists() {
+    pub async fn try_load_from_path(path: &Path) -> Result<Self, KeyFileLoadingError> {
+        if !crate::fs::exists(path).await.unwrap_or(false) {
             return Err(KeyFileLoadingError::NoEntry);
         }
 
-        // TODO(markovejnovic): Whether we should use fs_err or not is up for debate, but it was
-        // used here historically, so we'll use it.
-        let text = fs_err::read_to_string(path)?;
+        let text = crate::fs::read_to_string(path).await?;
         Ok(Self::decode(&text)?)
     }
 
     /// Attempt to write this [`Self::encode`]d key into the given path.
     ///
     /// Refuses to overwrite a file that already exists.
-    pub fn try_write_path(&self, path: &Path) -> Result<(), KeyFileStoringError> {
+    pub async fn try_write_path(&self, path: &Path) -> Result<(), KeyFileStoringError> {
         use std::io::{Error, ErrorKind};
         use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use tokio::io::AsyncWriteExt;
 
         // To avoid race conditions, this function:
         //
@@ -286,23 +284,27 @@ impl Key {
             // `tmp_path` is first so it gets dropped after `tmp_file`. `tmp_path` is a
             // `RemoveOnDropPath` so it will remove the file when dropped, but this will fail on
             // Windows if the file is still open.
-            let (tmp_path, mut tmp_file) =
-                match fs::OpenOptions::new().write(true).create_new(true).open(&tmp_path) {
-                    Ok(file) => (crate::fs::RemoveOnDropPath(tmp_path), file),
-                    Err(e) if e.kind() == ErrorKind::AlreadyExists => {
-                        // This error will essentially never happen in practice. It requires
-                        // `/path/to/.key.atuin-tmp.{i}` to exist for *every* `i` up to
-                        // `usize::MAX`.
-                        i = i.checked_add(1).ok_or(KeyFileStoringError::TempFilesExhausted)?;
-                        continue;
-                    }
-                    Err(e) => return Err(e.into()),
-                };
+            let (tmp_path, mut tmp_file) = match crate::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp_path)
+                .await
+            {
+                Ok(file) => (crate::fs::RemoveOnDropPath(tmp_path), file),
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                    // This error will essentially never happen in practice. It requires
+                    // `/path/to/.key.atuin-tmp.{i}` to exist for *every* `i` up to
+                    // `usize::MAX`.
+                    i = i.checked_add(1).ok_or(KeyFileStoringError::TempFilesExhausted)?;
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
 
-            tmp_file.write_all(self.encode().dangerously_leak_secret().as_bytes())?;
-            tmp_file.sync_all()?;
+            tmp_file.write_all(self.encode().dangerously_leak_secret().as_bytes()).await?;
+            tmp_file.sync_all().await?;
             drop(tmp_file);
-            break std::fs::hard_link(&tmp_path, path);
+            break crate::fs::hard_link(&tmp_path, path).await;
         } {
             Ok(()) => return Ok(()),
             Err(e) if e.kind() == ErrorKind::AlreadyExists => {
@@ -317,45 +319,48 @@ impl Key {
         // condition where another process could observe a partially written key file, but it is
         // better than unconditionally failing to create the key file. In any case we are careful
         // not to overwrite an existing key file.
-        let mut file = match std::fs::OpenOptions::new().write(true).create_new(true).open(path) {
-            Ok(file) => file,
-            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
-                return Err(KeyFileStoringError::AlreadyExists);
-            }
-            Err(e) => return Err(e.into()),
-        };
-        file.write_all(self.encode().dangerously_leak_secret().as_bytes())?;
+        let mut file =
+            match crate::fs::OpenOptions::new().write(true).create_new(true).open(path).await {
+                Ok(file) => file,
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                    return Err(KeyFileStoringError::AlreadyExists);
+                }
+                Err(e) => return Err(e.into()),
+            };
+        file.write_all(self.encode().dangerously_leak_secret().as_bytes()).await?;
         Ok(())
     }
 
     /// Write this [`Self::encode`]d key to `path`, replacing any existing file.
     ///
     /// Unlike [`Self::try_write_path`], this deliberately overwrites an existing key.
-    pub fn overwrite_path(&self, path: &Path) -> std::io::Result<()> {
+    pub async fn overwrite_path(&self, path: &Path) -> std::io::Result<()> {
+        use tokio::io::AsyncWriteExt;
+
         // TODO(taylordotfish): This has a race condition where another process can observe a
         // partially written key file. We should write to a temp file, similar to
         // `Self::try_write_path`, and then use `rename` to move it to the key path (not `hardlink`
         // because we do want it to overwrite an existing key).
-        let mut file = fs::File::create(path)?;
-        file.write_all(self.encode().dangerously_leak_secret().as_bytes())?;
+        let mut file = crate::fs::File::create(path).await?;
+        file.write_all(self.encode().dangerously_leak_secret().as_bytes()).await?;
 
         Ok(())
     }
 
     /// [`Self::try_load_from_path`], except if the file doesn't exist, creates a key through
     /// [`Self::generate`], stores it and returns it.
-    pub fn try_load_or_generate(path: &Path) -> Result<Self, KeyFileLoadOrGenerateError> {
-        match Self::try_load_from_path(path) {
+    pub async fn try_load_or_generate(path: &Path) -> Result<Self, KeyFileLoadOrGenerateError> {
+        match Self::try_load_from_path(path).await {
             Ok(s) => Ok(s),
             Err(KeyFileLoadingError::NoEntry) => {
                 let key = Self::generate();
-                match key.try_write_path(path) {
+                match key.try_write_path(path).await {
                     Ok(()) => Ok(key),
                     // We lost a race: another process wrote a key between our existence check and
                     // our write. Adopt whatever landed on disk rather than clobbering it or
                     // panicking.
-                    Err(KeyFileStoringError::AlreadyExists) => Self::try_load_from_path(path)
-                        .map_err(|e| match e {
+                    Err(KeyFileStoringError::AlreadyExists) => {
+                        Self::try_load_from_path(path).await.map_err(|e| match e {
                             KeyFileLoadingError::Io(io) => KeyFileLoadOrGenerateError::Io(io),
                             KeyFileLoadingError::Decoding(d) => {
                                 KeyFileLoadOrGenerateError::Decoding(d)
@@ -366,7 +371,8 @@ impl Key {
                                     "key file vanished immediately after a concurrent write",
                                 ))
                             }
-                        }),
+                        })
+                    }
                     Err(KeyFileStoringError::Io(io)) => Err(io.into()),
                     Err(KeyFileStoringError::TempFilesExhausted) => {
                         Err(KeyFileLoadOrGenerateError::TempFilesExhausted)
@@ -737,6 +743,8 @@ pub fn reencrypt_sync(
 
 #[cfg(test)]
 mod test {
+    use std::fs;
+
     use rstest::{fixture, rstest};
 
     use super::*;
@@ -810,7 +818,8 @@ mod test {
     }
 
     #[rstest]
-    fn overwrite_path_replaces_an_existing_key() {
+    #[tokio::test]
+    async fn overwrite_path_replaces_an_existing_key() {
         let dir = std::env::temp_dir().join(format!("atuin-key-overwrite-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create temp dir");
@@ -819,21 +828,22 @@ mod test {
         let old = Key::from([0x11u8; 32]);
         let new = Key::from([0x22u8; 32]);
 
-        old.try_write_path(&path).expect("first write creates the file");
+        old.try_write_path(&path).await.expect("first write creates the file");
 
         // try_write_path refuses to replace a *different* key (correct for create-if-missing)...
-        assert!(matches!(new.try_write_path(&path), Err(KeyFileStoringError::AlreadyExists)));
-        assert_eq!(Key::try_load_from_path(&path).unwrap(), old);
+        assert!(matches!(new.try_write_path(&path).await, Err(KeyFileStoringError::AlreadyExists)));
+        assert_eq!(Key::try_load_from_path(&path).await.unwrap(), old);
 
         // ...but overwrite_path deliberately replaces it, as key rotation requires.
-        new.overwrite_path(&path).expect("overwrite replaces the key");
-        assert_eq!(Key::try_load_from_path(&path).unwrap(), new);
+        new.overwrite_path(&path).await.expect("overwrite replaces the key");
+        assert_eq!(Key::try_load_from_path(&path).await.unwrap(), new);
 
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[rstest]
-    fn concurrent_generation_yields_one_complete_key() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn concurrent_generation_yields_one_complete_key() {
         // `try_write_path` used to create the key file and only then write the key into it, so a
         // concurrent reader could observe a zero-length file and fail with
         // `KeyDecodingError::EmptyKey`. Nothing in shell startup creates the key, so the first
@@ -845,24 +855,28 @@ mod test {
         for round in 0..ROUNDS {
             let dir = tempfile::tempdir().expect("create temp dir");
             let path = dir.path().join("key");
-            let barrier = std::sync::Barrier::new(THREADS);
+            let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(THREADS));
 
-            let keys: Vec<Key> = std::thread::scope(|scope| {
-                let threads: Vec<_> = (0..THREADS)
-                    .map(|_| {
-                        scope.spawn(|| {
-                            barrier.wait();
-                            Key::try_load_or_generate(&path)
-                                .unwrap_or_else(|e| panic!("round {round}: {e}"))
-                        })
+            let tasks: Vec<_> = (0..THREADS)
+                .map(|_| {
+                    let (path, barrier) = (path.clone(), std::sync::Arc::clone(&barrier));
+                    tokio::spawn(async move {
+                        barrier.wait().await;
+                        Key::try_load_or_generate(&path)
+                            .await
+                            .unwrap_or_else(|e| panic!("round {round}: {e}"))
                     })
-                    .collect();
-                threads.into_iter().map(|t| t.join().expect("thread panicked")).collect()
-            });
+                })
+                .collect();
+
+            let mut keys = Vec::with_capacity(THREADS);
+            for task in tasks {
+                keys.push(task.await.expect("task panicked"));
+            }
 
             // Every racer must end up holding the one key that actually landed on disk; a racer
             // that kept a key the file does not have would encrypt records nothing can decrypt.
-            let stored = Key::try_load_from_path(&path).expect("key file is readable");
+            let stored = Key::try_load_from_path(&path).await.expect("key file is readable");
             for (i, key) in keys.iter().enumerate() {
                 assert_eq!(
                     *key, stored,
@@ -873,11 +887,12 @@ mod test {
     }
 
     #[rstest]
-    fn try_write_path_leaves_no_temporary_files() {
+    #[tokio::test]
+    async fn try_write_path_leaves_no_temporary_files() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let path = dir.path().join("key");
 
-        Key::from([0x33u8; 32]).try_write_path(&path).expect("write creates the key");
+        Key::from([0x33u8; 32]).try_write_path(&path).await.expect("write creates the key");
 
         let mut names: Vec<String> = fs::read_dir(dir.path())
             .expect("read temp dir")

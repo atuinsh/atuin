@@ -583,6 +583,7 @@ pub(super) async fn end_history_entry(
     let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
     let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+        .await
         .context("could not load or generate encryption key")?;
     let host_id = Settings::host_id().await?;
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
@@ -1003,6 +1004,7 @@ impl Cmd {
             );
         } else {
             let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+                .await
                 .context("could not load or generate encryption key")?;
             let host_id = Settings::host_id().await?;
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
@@ -1055,6 +1057,7 @@ impl Cmd {
             );
         } else {
             let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+                .await
                 .context("could not load or generate encryption key")?;
             let host_id = Settings::host_id().await?;
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
@@ -1122,6 +1125,7 @@ impl Cmd {
                 let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
                 let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+                    .await
                     .context("could not load or generate encryption key")?;
 
                 let host_id = Settings::host_id().await?;

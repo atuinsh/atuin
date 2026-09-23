@@ -68,7 +68,8 @@ pub async fn boot(
         .store(store)
         .history_db(history_db)
         .component(search_component)
-        .build()?;
+        .build()
+        .await?;
 
     let handle = daemon.handle();
 

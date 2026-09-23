@@ -82,9 +82,10 @@ where
     P: AsRef<Path> + Into<PathBuf>,
 {
     use std::io::ErrorKind;
-    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    use std::os::unix::fs::MetadataExt;
 
-    match std::fs::DirBuilder::new().mode(0o700).create(path.as_ref()) {
+    // No `.await`: this also runs from `atuin-pty-proxy`, which has no tokio runtime.
+    match crate::fs::blocking::create_secure_dir(path.as_ref(), 0o700) {
         Ok(()) => return Ok(path),
         Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
         Err(e) => return Err(e.into()),
@@ -93,7 +94,7 @@ where
     // Make sure we own the directory with the appropriate permissions. Otherwise, another user
     // on the system could access the files we store in the directory.
 
-    let meta = fs_err::symlink_metadata(path.as_ref())?;
+    let meta = crate::fs::blocking::symlink_metadata(path.as_ref())?;
     if !meta.is_dir() {
         // This importantly rejects symlinks; a symlink could point to a directory owned by
         // another user, who could then access our files.

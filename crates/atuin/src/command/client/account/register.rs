@@ -84,7 +84,7 @@ impl Cmd {
                     }
                 }
 
-                let _key = paseto_v4::Key::try_load_or_generate(&settings.key_path)?;
+                let _key = paseto_v4::Key::try_load_or_generate(&settings.key_path).await?;
 
                 println!("{}", fl!("register-success-key"));
                 println!("{}", fl!("register-key-warning"));
@@ -129,7 +129,7 @@ impl Cmd {
             let meta = Settings::meta_store().await?;
             meta.save_session(&session.session).await?;
 
-            let _key = paseto_v4::Key::try_load_or_generate(&settings.key_path)?;
+            let _key = paseto_v4::Key::try_load_or_generate(&settings.key_path).await?;
 
             println!("{}", fl!("register-success-key"));
             println!("{}", fl!("register-key-warning"));

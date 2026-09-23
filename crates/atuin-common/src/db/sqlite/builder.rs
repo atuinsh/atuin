@@ -158,14 +158,16 @@ impl<'a> SqliteBuilder<'a> {
         let on_disk = (!is_memory).then(|| opts.get_filename().to_path_buf());
 
         if let Some(fs_path) = &on_disk {
-            if fs_path.is_dangling_symlink() {
+            if fs_path.is_dangling_symlink().await {
                 return Err(SqliteOpenOrCreateError::BadSymlink(fs_path.clone()));
             }
 
-            if !fs_path.exists()
+            if !crate::fs::exists(fs_path).await.unwrap_or(false)
                 && let Some(dir) = fs_path.parent()
             {
-                std::fs::create_dir_all(dir).map_err(SqliteOpenOrCreateError::FailedToCreateDir)?;
+                crate::fs::create_dir_all(dir)
+                    .await
+                    .map_err(SqliteOpenOrCreateError::FailedToCreateDir)?;
             }
         }
 
@@ -178,10 +180,11 @@ impl<'a> SqliteBuilder<'a> {
         #[cfg(unix)]
         if self.restrict_permissions
             && let Some(fs_path) = &on_disk
-            && fs_path.exists()
+            && crate::fs::exists(fs_path).await.unwrap_or(false)
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(fs_path, std::fs::Permissions::from_mode(0o600))
+            crate::fs::set_permissions(fs_path, std::fs::Permissions::from_mode(0o600))
+                .await
                 .map_err(SqliteOpenOrCreateError::FailedToSetPermissions)?;
         }
 

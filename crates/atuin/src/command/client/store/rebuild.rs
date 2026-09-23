@@ -57,6 +57,7 @@ impl Rebuild {
         }
 
         let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+            .await
             .context("could not load encryption key")?;
 
         let host_id = Settings::host_id().await?;
@@ -69,6 +70,7 @@ impl Rebuild {
 
     async fn rebuild_scripts(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
         let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+            .await
             .context("could not load encryption key")?;
         let host_id = Settings::host_id().await?;
         let script_store = ScriptStore::new(store, host_id, encryption_key);

@@ -7,15 +7,16 @@ use std::path::{Path, PathBuf};
 pub use display_rich::{DisplayRichExt, RichDisplay};
 
 /// Utility extensions for paths in atuin.
+#[allow(async_fn_in_trait, reason = "only used within our code and we don't need it to be Send")]
 pub trait PathExt {
     /// Check whether the given path is a symlink, and a dangling one at that.
-    fn is_dangling_symlink(&self) -> bool;
+    async fn is_dangling_symlink(&self) -> bool;
 }
 
 impl<P: AsRef<Path>> PathExt for P {
-    fn is_dangling_symlink(&self) -> bool {
+    async fn is_dangling_symlink(&self) -> bool {
         let path: &Path = self.as_ref();
-        path.is_symlink() && !path.exists()
+        path.is_symlink() && !crate::fs::exists(path).await.unwrap_or(false)
     }
 }
 

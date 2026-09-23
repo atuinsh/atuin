@@ -67,6 +67,7 @@ impl Push {
         //  a) are they an upload op?
         //  b) are they for the host/tag we are pushing here?
         let key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+            .await
             .context("could not load encryption key")?;
         let session = SyncSession::builder()
             .store(store)

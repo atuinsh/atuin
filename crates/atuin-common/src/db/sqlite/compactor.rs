@@ -58,7 +58,7 @@ impl ActiveCompactor {
             }
         };
 
-        let wal = match tokio::fs::File::open(&wal_path).await {
+        let wal = match crate::fs::File::open(&wal_path).await {
             Ok(wal) => wal,
             Err(error) => {
                 warn!(%error, "could not open the WAL file; WAL compactor disabled");
@@ -85,7 +85,7 @@ impl ActiveCompactor {
     /// pause all readers, and proceed with WAL compaction.
     async fn compact_wal(
         conn: &mut SqliteConnection,
-        wal: &tokio::fs::File,
+        wal: &crate::fs::File,
     ) -> Result<(), WalCompactionError> {
         let meta = wal.metadata().await?;
         if meta.len() < Self::THRESHOLD_BYTES {

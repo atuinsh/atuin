@@ -29,11 +29,11 @@ impl Harness for Pi {
             .unwrap_or_else(|| home_dir().join(".pi").join("agent"))
             .join("extensions");
 
-        tokio::fs::create_dir_all(&extensions_dir).await?;
+        crate::fs::create_dir_all(&extensions_dir).await?;
 
         let extension_path = extensions_dir.join(PLUGIN_NAME);
 
-        let already_installed = tokio::fs::read_to_string(&extension_path)
+        let already_installed = crate::fs::read_to_string(&extension_path)
             .await
             .is_ok_and(|existing| existing == PLUGIN_SOURCE);
 
@@ -41,7 +41,7 @@ impl Harness for Pi {
             return Err(InstallHookError::AlreadyInstalled);
         }
 
-        tokio::fs::write(&extension_path, PLUGIN_SOURCE).await?;
+        crate::fs::write(&extension_path, PLUGIN_SOURCE).await?;
 
         Ok(extension_path)
     }

@@ -1830,14 +1830,19 @@ impl Settings {
     }
 
     #[must_use]
-    pub fn paths_ok(&self) -> bool {
+    pub async fn paths_ok(&self) -> bool {
         let paths: [&Path; 4] = [
             self.db_path.as_path(),
             self.record_store_path.as_path(),
             self.key_path.as_path(),
             Path::new(&self.meta.db_path),
         ];
-        paths.iter().all(|p| !p.is_dangling_symlink())
+        for p in paths {
+            if p.is_dangling_symlink().await {
+                return false;
+            }
+        }
+        true
     }
 
     /// Check that a TOML string can be successfully deserialized into a [`Settings`] object.

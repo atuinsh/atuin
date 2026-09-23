@@ -12,6 +12,7 @@ impl Verify {
         println!("Verifying local store can be decrypted with the current key");
 
         let key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+            .await
             .context("could not load encryption key")?;
 
         match store.verify(&key).await {
