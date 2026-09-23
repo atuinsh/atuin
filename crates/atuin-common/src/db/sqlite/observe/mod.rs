@@ -22,6 +22,13 @@
 //! resetting its database), it reconnects with the configured backoff once a file is there again
 //! and, for a different file, starts over from the beginning of the table.
 //!
+//! A failure is an item rather than the end of the stream. The rows are in the table whatever a
+//! query fails at -- a table a migration has dropped and will put back, a file caught
+//! half-written -- so the observer reports it, drops the connection and takes the table up again
+//! on a backoff, resuming at the last row it delivered. A locked database and a replaced file are
+//! recovered from the same way, without an item. Only the consumer ends the observation, by
+//! dropping the stream.
+//!
 //! # Examples
 //!
 //! ## Tailing new rows
@@ -154,7 +161,8 @@ impl SqliteObserver {
     /// # Errors
     ///
     /// [`ObserveError::Connect`] when the database cannot be opened and [`ObserveError::Seed`]
-    /// when the initial replay scan fails; later failures are yielded by the stream.
+    /// when the initial replay scan fails; later failures are yielded as items the stream carries
+    /// on after.
     pub async fn append<T: Tailable>(
         &self,
         cfg: ObserveConfig,
@@ -170,7 +178,8 @@ impl SqliteObserver {
     /// # Errors
     ///
     /// [`ObserveError::Connect`] when the database cannot be opened and [`ObserveError::Seed`]
-    /// when the initial snapshot fails; later failures are yielded by the stream.
+    /// when the initial snapshot fails; later failures are yielded as items the stream carries
+    /// on after.
     pub async fn mutate<T: Diffable>(
         &self,
         cfg: ObserveConfig,

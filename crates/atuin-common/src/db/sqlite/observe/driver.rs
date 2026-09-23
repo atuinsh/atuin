@@ -4,7 +4,7 @@ use std::io;
 use std::ops::ControlFlow;
 use std::path::Path;
 
-use async_stream::try_stream;
+use async_stream::stream;
 use futures::Stream;
 use itertools::{EitherOrBoth, Itertools};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
@@ -234,16 +234,27 @@ pub(super) async fn open(opts: &SqliteConnectOptions) -> Result<Source, sqlx::Er
     Ok(Source { conn, identity })
 }
 
+/// Tails the source, yielding what `strategy` reports.
+///
+/// The stream does not end of its own accord: a query or a connection that fails for its own
+/// reason is yielded as an item and then recovered from, on a fresh connection and a backoff (a
+/// locked database and a replaced file are recovered from without an item). The rows are in the
+/// table, so a read that failed is read again -- the strategy resumes at the row it last
+/// delivered, or from the start of the table when that row is no longer there.
 pub(super) fn run<S: Strategy>(
     opts: SqliteConnectOptions,
     first: Source,
     mut strategy: S,
     cfg: ObserveConfig,
 ) -> impl Stream<Item = Result<S::Event, ObserveError>> + Send {
-    try_stream! {
+    stream! {
         let path = opts.get_filename().to_path_buf();
         let Source { conn, mut identity } = first;
         let mut pending = Some(conn);
+        // How long to wait before taking the source up again. It escalates while failures follow
+        // one another, so that an outage is probed rather than spun on, and the first poll that
+        // gets through puts it back to its initial delay.
+        let mut backoff = cfg.reconnect.schedule();
         loop {
             let mut conn = if let Some(conn) = pending.take() {
                 conn
@@ -266,20 +277,27 @@ pub(super) fn run<S: Strategy>(
                         }
                     })
                     .await;
-                let source = match reopened {
-                    Ok(source) => source,
-                    Err(e) => Err(ObserveError::Connect(e))?,
-                };
-                if source.identity != identity {
-                    tracing::warn!(
-                        path = %path.display(),
-                        "the observed database file was replaced; restarting from the beginning \
-                         of the table"
-                    );
-                    strategy.reset();
+                match reopened {
+                    Ok(source) => {
+                        if source.identity != identity {
+                            tracing::warn!(
+                                path = %path.display(),
+                                "the observed database file was replaced; restarting from the \
+                                 beginning of the table"
+                            );
+                            strategy.reset();
+                        }
+                        identity = source.identity;
+                        source.conn
+                    }
+                    // A file that is there and will not open: a half-written replacement, a
+                    // header a writer has yet to finish. Report it and try again.
+                    Err(e) => {
+                        yield Err(ObserveError::Connect(e));
+                        tokio::time::sleep(backoff.next_delay()).await;
+                        continue;
+                    }
                 }
-                identity = source.identity;
-                source.conn
             };
 
             let mut ticker = tokio::time::interval(cfg.poll_interval);
@@ -296,10 +314,10 @@ pub(super) fn run<S: Strategy>(
                 {
                     Ok(version) => version,
                     Err(e) => {
-                        if is_transient(&e) || replaced(&path, identity).await {
-                            break 'gate;
+                        if !(is_transient(&e) || replaced(&path, identity).await) {
+                            yield Err(ObserveError::Query(e));
                         }
-                        Err(ObserveError::Query(e))?
+                        break 'gate;
                     }
                 };
                 if last == Some(version) {
@@ -309,16 +327,21 @@ pub(super) fn run<S: Strategy>(
                 loop {
                     let batch = match strategy.poll(&mut conn).await {
                         Ok(batch) => batch,
+                        // A query that failed for its own reason -- a table a migration has
+                        // dropped and will put back, a corrupt page -- is as recoverable as a
+                        // locked database: the rows stay where they are, and the tail reads them
+                        // again once it has a connection that works.
                         Err(e) => {
-                            if is_transient(&e) || replaced(&path, identity).await {
-                                break 'gate;
+                            if !(is_transient(&e) || replaced(&path, identity).await) {
+                                yield Err(ObserveError::Query(e));
                             }
-                            Err(ObserveError::Query(e))?
+                            break 'gate;
                         }
                     };
+                    backoff.reset();
                     let drained = batch.drained;
                     for event in batch.events {
-                        yield event;
+                        yield Ok(event);
                     }
                     if drained {
                         break;
@@ -327,7 +350,7 @@ pub(super) fn run<S: Strategy>(
                 last = Some(version);
             }
 
-            tokio::time::sleep(cfg.poll_interval).await;
+            tokio::time::sleep(backoff.next_delay()).await;
         }
     }
 }
@@ -544,6 +567,17 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), stream.take(n).map(|r| r.unwrap().0).collect())
             .await
             .expect("rows were not delivered")
+    }
+
+    /// The tail's next item, row or failure, insisting that the tail is still there.
+    async fn next_item<T: Tailable>(
+        stream: &mut SqliteTableObserver<Appended<T>>,
+    ) -> Result<T, ObserveError> {
+        tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("the tail yielded nothing")
+            .expect("the tail ended")
+            .map(|Appended(row)| row)
     }
 
     fn sqlite3_available() -> bool {
@@ -1042,9 +1076,12 @@ mod tests {
         assert_eq!(got, (1..=20).collect::<Vec<_>>());
     }
 
+    /// A query that fails for its own reason is an item, not the end of the tail: the table is
+    /// dropped for longer than a poll (a reset migration between two of its statements) and the
+    /// rows written once it is back are delivered all the same.
     #[rstest]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn terminal_query_error_surfaces() {
+    async fn a_query_error_surfaces_and_the_tail_takes_the_table_up_again() {
         if !sqlite3_available() {
             return;
         }
@@ -1054,19 +1091,29 @@ mod tests {
         let observer = SqliteObserver::new(&path);
         let mut stream = observer.append::<Item>(cfg(Replay::FromNow)).await.unwrap();
 
-        exec_sql(&path, "DROP TABLE items;").await;
+        insert_xproc(&path, 1, "a").await;
+        assert_eq!(next_n(&mut stream, 1).await, vec![item(1, "a")]);
 
-        let surfaced = tokio::time::timeout(Duration::from_secs(5), async {
+        exec_sql(&path, "DROP TABLE items;").await;
+        let surfaced = next_item(&mut stream).await.expect_err("the dropped table must surface");
+        assert!(matches!(surfaced, ObserveError::Query(_)));
+
+        exec_sql(
+            &path,
+            "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+             INSERT INTO items (id, name) VALUES (2, 'b');",
+        )
+        .await;
+        let delivered = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
-                match stream.next().await {
-                    Some(Err(e)) => return Some(e),
-                    Some(Ok(_)) => {}
-                    None => return None,
+                // the polls that still met no table report it; the tail reconnects after each
+                if let Ok(row) = next_item(&mut stream).await {
+                    return row;
                 }
             }
         })
         .await
-        .expect("observer must surface a terminal error rather than hang");
-        assert!(matches!(surfaced, Some(ObserveError::Query(_))));
+        .expect("the tail never took the table up again");
+        assert_eq!(delivered, item(2, "b"));
     }
 }
