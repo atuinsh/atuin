@@ -288,43 +288,59 @@ mod tests {
         assert_eq!(wakeup.blocking_waiting.load(Ordering::Relaxed), 0);
     }
 
+    /// Run on a spawned thread and checked through `recv_timeout`, so a regression that stops
+    /// re-checking fails the test instead of hanging the run forever.
     #[rstest]
     fn until_blocking_rechecks_without_a_wake() {
-        let wakeup = Wakeup::new();
-        let mut checks = 0;
-        wakeup.until_blocking(Duration::from_millis(10), || {
-            checks += 1;
-            (checks == 3).then_some(())
+        let (done, checks) = mpsc::channel();
+        thread::spawn(move || {
+            let wakeup = Wakeup::new();
+            let mut checks = 0;
+            wakeup.until_blocking(Duration::from_millis(10), || {
+                checks += 1;
+                (checks == 3).then_some(())
+            });
+            done.send(checks).unwrap();
         });
-        assert_eq!(checks, 3);
+        assert_eq!(
+            checks
+                .recv_timeout(Duration::from_secs(5))
+                .expect("the interval re-checks without a wake"),
+            3
+        );
     }
 
     /// The blocking twin of `no_wakeup_is_lost_under_contention`, on OS threads.
+    ///
+    /// Lockstep: the driver only moves to round `r + 1` once every thread has acknowledged round
+    /// `r`. A free-running driver could bump `turn` past a round a thread lost its wakeup on, and
+    /// that thread's next check would see the later value and pass anyway, masking the loss. Each
+    /// round's `recv_timeout` bounds how long a lost wakeup can hang the test.
     #[rstest]
     fn no_blocking_wakeup_is_lost_under_contention() {
         const ROUNDS: usize = 2_000;
+        const THREADS: usize = 4;
         let wakeup = Arc::new(Wakeup::new());
         let turn = Arc::new(AtomicUsize::new(0));
-        let (done, finished) = mpsc::channel();
-        for _ in 0..4 {
-            let (wakeup, turn, done) = (Arc::clone(&wakeup), Arc::clone(&turn), done.clone());
+        let (acked, acks) = mpsc::channel();
+        for _ in 0..THREADS {
+            let (wakeup, turn, acked) = (Arc::clone(&wakeup), Arc::clone(&turn), acked.clone());
             thread::spawn(move || {
                 for round in 1..=ROUNDS {
-                    // Long enough that a lost wake hangs the waiter past the test's deadline.
+                    // Long enough that a lost wake hangs this round's `recv_timeout` below.
                     wakeup.until_blocking(Duration::from_secs(3600), || {
                         (turn.load(Ordering::Relaxed) >= round).then_some(())
                     });
+                    acked.send(()).unwrap();
                 }
-                done.send(()).unwrap();
             });
         }
-        for _ in 0..ROUNDS {
-            turn.fetch_add(1, Ordering::Relaxed);
+        for round in 1..=ROUNDS {
+            turn.store(round, Ordering::Relaxed);
             wakeup.wake_all();
-            thread::yield_now();
-        }
-        for _ in 0..4 {
-            finished.recv_timeout(Duration::from_secs(10)).expect("every waiter saw every round");
+            for _ in 0..THREADS {
+                acks.recv_timeout(Duration::from_secs(10)).expect("every thread saw this round");
+            }
         }
     }
 }

@@ -162,12 +162,22 @@ impl FdPool {
 
     /// Equivalent to [`Self::acquire`], except it parks the calling thread.
     ///
-    /// Never call it on a runtime thread: the lease it waits for may need that thread to return.
+    /// Never call it from an async task on a current-thread runtime: the lease it waits for may
+    /// need that runtime's only thread to return, so waiting here can deadlock it. It is safe
+    /// inside [`tokio::task::block_in_place`] on a multi-thread runtime.
+    ///
+    /// The debug assertion cannot tell a current-thread runtime's own `spawn_blocking` threads
+    /// from its async tasks, so it also fires there; that caller should use [`Self::acquire`]
+    /// instead.
     pub fn acquire_blocking(self: &Arc<Self>) -> Lease {
+        let on_current_thread_runtime = tokio::runtime::Handle::try_current().is_ok_and(|handle| {
+            handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::CurrentThread
+        });
         debug_assert!(
-            tokio::runtime::Handle::try_current().is_err(),
-            "acquire_blocking on a tokio runtime thread can deadlock; use acquire, or \
-             block_in_place on a multi-thread runtime"
+            !on_current_thread_runtime,
+            "acquire_blocking on a current-thread tokio runtime can deadlock (including that \
+             runtime's own spawn_blocking threads, which tokio does not distinguish); use acquire \
+             instead"
         );
         self.returned().until_blocking(POLL_INTERVAL, || self.try_acquire())
     }
@@ -520,8 +530,17 @@ mod tests {
     #[cfg(debug_assertions)]
     #[rstest]
     #[tokio::test]
-    #[should_panic(expected = "acquire_blocking on a tokio runtime thread")]
-    async fn acquire_blocking_on_a_runtime_thread_panics() {
+    #[should_panic(expected = "acquire_blocking on a current-thread tokio runtime")]
+    async fn acquire_blocking_on_a_current_thread_runtime_panics() {
         drop(pool(1).acquire_blocking());
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn acquire_blocking_inside_block_in_place_does_not_panic() {
+        let pool = pool(1);
+        let lease = tokio::task::block_in_place(|| pool.acquire_blocking());
+        assert_eq!(pool.held(), 1);
+        drop(lease);
     }
 }
