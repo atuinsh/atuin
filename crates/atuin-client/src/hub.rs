@@ -28,11 +28,12 @@ use crate::settings::Settings;
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"));
 
 /// The result of starting a hub authentication flow
-#[derive(Debug, Clone)]
+#[derive(derive_more::Debug, Clone)]
 pub struct HubAuthSession {
     /// The code to be verified
     pub code: SecretString,
-    /// The URL the user should visit to authenticate
+    /// The URL the user should visit to authenticate. Carries `code` in its query.
+    #[debug(skip)]
     pub auth_url: Url,
     /// The hub address being used
     pub hub_address: Url,
@@ -319,4 +320,25 @@ async fn verify_code(address: &Url, code: &SecretString) -> Result<CliVerifyResp
 
     let verify_response = resp.json::<CliVerifyResponse>().await?;
     Ok(verify_response)
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    fn debug_omits_the_auth_code() {
+        let hub = Url::parse("https://hub.example").unwrap();
+        let mut auth_url = hub.clone();
+        auth_url.query_pairs_mut().append_pair("code", "s3cret-code");
+        let session = HubAuthSession {
+            code: SecretString::from("s3cret-code"),
+            auth_url,
+            hub_address: hub,
+        };
+
+        assert!(!format!("{session:?}").contains("s3cret-code"));
+    }
 }
