@@ -37,7 +37,6 @@ directories = { workspace = true }
 easy-cast = { workspace = true }
 enum_dispatch = { workspace = true }
 eyre = { workspace = true }
-fs-err = { workspace = true }
 futures = { workspace = true }
 interim = { workspace = true }
 itertools = { workspace = true }
@@ -86,6 +85,7 @@ zstd = { workspace = true }
 # This crate's tests require the `test-utils` feature in atuin-common.
 atuin-common = { workspace = true, features = ["test-utils"] }
 divan = { workspace = true }
+fs-err = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }

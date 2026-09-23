@@ -1,8 +1,9 @@
 use std::env;
-use std::fs::{self, File};
+use std::fs::DirEntry;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
+use atuin_common::fs;
 use atuin_domain::record::CmdOrigin;
 use directories::BaseDirs;
 use easy_cast::CastFloat;
@@ -45,7 +46,7 @@ pub struct Xonsh {
     cmd_origin: CmdOrigin,
 }
 
-fn xonsh_hist_dir(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
+async fn xonsh_hist_dir(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
     // if running within xonsh, this will be available
     if let Some(d) = xonsh_data_dir {
         let mut path = PathBuf::from(d);
@@ -57,21 +58,21 @@ fn xonsh_hist_dir(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
     let base = BaseDirs::new().ok_or_else(|| eyre!("Could not determine home directory"))?;
 
     let hist_dir = base.data_dir().join("xonsh/history_json");
-    if hist_dir.exists() || cfg!(test) {
+    if fs::exists(&hist_dir).await.unwrap_or(false) || cfg!(test) {
         Ok(hist_dir)
     } else {
         Err(eyre!("Could not find xonsh history files"))
     }
 }
 
-fn load_sessions(hist_dir: &Path) -> Result<Vec<HistoryData>> {
+async fn load_sessions(hist_dir: &Path) -> Result<Vec<HistoryData>> {
+    let paths: Vec<PathBuf> = fs::read_dir(hist_dir).await?.iter().map(DirEntry::path).collect();
     let mut sessions = vec![];
-    for entry in fs::read_dir(hist_dir)? {
-        let p = entry?.path();
+    for p in paths {
         let ext = p.extension().and_then(|e| e.to_str());
-        if p.is_file()
-            && ext == Some("json")
-            && let Some(data) = load_session(&p)?
+        if ext == Some("json")
+            && fs::metadata(&p).await.is_ok_and(|m| m.is_file())
+            && let Some(data) = load_session(&p).await?
         {
             sessions.push(data);
         }
@@ -79,14 +80,14 @@ fn load_sessions(hist_dir: &Path) -> Result<Vec<HistoryData>> {
     Ok(sessions)
 }
 
-fn load_session(path: &Path) -> Result<Option<HistoryData>> {
-    let file = File::open(path)?;
+async fn load_session(path: &Path) -> Result<Option<HistoryData>> {
+    let bytes = fs::read(path).await?;
     // empty files are not valid json, so we can't deserialize them
-    if file.metadata()?.len() == 0 {
+    if bytes.is_empty() {
         return Ok(None);
     }
 
-    let mut hist_file: HistoryFile = serde_json::from_reader(file)?;
+    let mut hist_file: HistoryFile = serde_json::from_slice(&bytes)?;
 
     // if there are commands in this session, replace the existing UUIDv4
     // with a UUIDv7 generated from the timestamp of the first command
@@ -111,8 +112,8 @@ impl Importer for Xonsh {
     async fn new() -> Result<Self> {
         // wrap xonsh-specific path resolver in general one so that it respects $HISTPATH
         let xonsh_data_dir = env::var("XONSH_DATA_DIR").ok();
-        let hist_dir = get_histdir_path(|| xonsh_hist_dir(xonsh_data_dir))?;
-        let sessions = load_sessions(&hist_dir)?;
+        let hist_dir = get_histdir_path(xonsh_hist_dir(xonsh_data_dir)).await?;
+        let sessions = load_sessions(&hist_dir).await?;
         let cmd_origin = CmdOrigin::probe_current();
         Ok(Self {
             sessions,
@@ -157,18 +158,21 @@ impl Importer for Xonsh {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use time::macros::datetime;
 
     use super::*;
     use crate::history::History;
     use crate::import::tests::TestLoader;
 
-    #[test]
-    fn test_hist_dir_xonsh() {
-        let hist_dir = xonsh_hist_dir(Some("/home/user/xonsh_data".to_string())).unwrap();
+    #[rstest]
+    #[tokio::test]
+    async fn test_hist_dir_xonsh() {
+        let hist_dir = xonsh_hist_dir(Some("/home/user/xonsh_data".to_string())).await.unwrap();
         assert_eq!(hist_dir, PathBuf::from("/home/user/xonsh_data/history_json"));
     }
 
+    #[rstest]
     #[tokio::test]
     async fn out_of_range_timestamp_falls_back_to_epoch() {
         let xonsh = Xonsh {
@@ -192,10 +196,11 @@ mod tests {
         assert_eq!(loader.buf[0].command, "echo hello");
     }
 
+    #[rstest]
     #[tokio::test]
     async fn test_import() {
         let dir = PathBuf::from("tests/data/xonsh");
-        let sessions = load_sessions(&dir).unwrap();
+        let sessions = load_sessions(&dir).await.unwrap();
         let cmd_origin = CmdOrigin::try_from("box:user").unwrap();
         let xonsh = Xonsh {
             sessions,

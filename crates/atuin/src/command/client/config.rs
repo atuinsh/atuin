@@ -61,12 +61,12 @@ impl GetCmd {
             println!("Config file:");
             self.print_current_value(key, "  ").await?;
             println!("\nResolved:");
-            Self::print_effective_value(key, "  ");
+            Self::print_effective_value(key, "  ").await;
             return Ok(());
         }
 
         if self.resolved {
-            Self::print_effective_value(key, "");
+            Self::print_effective_value(key, "").await;
         } else {
             self.print_current_value(key, "").await?;
         }
@@ -75,7 +75,7 @@ impl GetCmd {
     }
 
     async fn print_current_value(&self, key: &str, prefix: &str) -> Result<()> {
-        let config_file = Settings::get_config_path()?;
+        let config_file = Settings::get_config_path().await?;
         let config_str = tokio::fs::read_to_string(&config_file).await?;
         let doc = config_str.parse::<Document<_>>()?;
 
@@ -101,8 +101,8 @@ impl GetCmd {
         Ok(())
     }
 
-    fn print_effective_value(key: &str, prefix: &str) {
-        match Settings::get_config_value(key) {
+    async fn print_effective_value(key: &str, prefix: &str) {
+        match Settings::get_config_value(key).await {
             Ok(value) => {
                 for line in value.lines() {
                     println!("{prefix}{line}");
@@ -150,7 +150,7 @@ pub enum ValueType {
 
 impl SetCmd {
     pub async fn run(self, _settings: &Settings) -> Result<()> {
-        let config_file = Settings::get_config_path()?;
+        let config_file = Settings::get_config_path().await?;
         let config_str = tokio::fs::read_to_string(&config_file).await?;
 
         let updated = self.get_updated_config(&config_str)?;
@@ -243,7 +243,7 @@ pub enum Feature {
 
 impl EnableCmd {
     pub async fn run(self, settings: &Settings) -> Result<()> {
-        let config_file = Settings::get_config_path()?;
+        let config_file = Settings::get_config_path().await?;
         let config_str = tokio::fs::read_to_string(&config_file).await?;
 
         let updated = self.get_updated_config(&config_str, settings.daemon.enabled)?;
@@ -303,7 +303,7 @@ pub struct PrintCmd {
 
 impl PrintCmd {
     pub async fn run(&self, _settings: &Settings) -> Result<()> {
-        let config_file = Settings::get_config_path()?;
+        let config_file = Settings::get_config_path().await?;
         let config_str = tokio::fs::read_to_string(&config_file).await?;
         let doc = config_str.parse::<Document<_>>()?;
 
@@ -537,7 +537,7 @@ mod tests {
         assert_eq!(set(input, key, value), expected);
     }
 
-    #[test]
+    #[rstest]
     fn setting_the_same_key_twice_keeps_its_comment() {
         let once = set(
             "[sync]\n# how often to sync\nfrequency = \"5m\" # unit is flexible\n",

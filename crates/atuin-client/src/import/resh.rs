@@ -88,7 +88,7 @@ impl Importer for Resh {
     const NAME: &'static str = "resh";
 
     async fn new() -> Result<Self> {
-        let bytes = read_to_end(get_histfile_path(default_histpath)?)?;
+        let bytes = read_to_end(get_histfile_path(async { default_histpath() }).await?).await?;
         Ok(Self { bytes })
     }
 
@@ -275,6 +275,7 @@ mod test {
         1_639_162_833,
         HistoryImported::DEFAULT_DURATION
     )]
+    #[rstest]
     #[tokio::test]
     async fn single_entry_timestamp_and_duration(
         #[case] cmd: &str,

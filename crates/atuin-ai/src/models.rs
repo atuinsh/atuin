@@ -51,7 +51,7 @@ pub async fn fetch_models(endpoint: &reqwest::Url, token: &str) -> Result<ModelL
 /// default for future sessions. Already-running sessions keep the model they
 /// read at startup.
 pub async fn save_model_selection(alias: &str) -> Result<()> {
-    let config_file = atuin_client::settings::Settings::get_config_path()?;
+    let config_file = atuin_client::settings::Settings::get_config_path().await?;
     let config_str = tokio::fs::read_to_string(&config_file).await.unwrap_or_default();
     let mut doc = config_str.parse::<toml_edit::DocumentMut>()?;
 

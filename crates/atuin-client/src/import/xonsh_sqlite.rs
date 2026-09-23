@@ -2,7 +2,7 @@ use std::env;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use atuin_common::db;
+use atuin_common::{db, fs};
 use atuin_domain::record::CmdOrigin;
 use directories::BaseDirs;
 use easy_cast::{CastFloat, Conv};
@@ -66,7 +66,7 @@ impl HistDbEntry {
     }
 }
 
-fn xonsh_db_path(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
+async fn xonsh_db_path(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
     // if running within xonsh, this will be available
     if let Some(d) = xonsh_data_dir {
         let mut path = PathBuf::from(d);
@@ -78,7 +78,7 @@ fn xonsh_db_path(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
     let base = BaseDirs::new().ok_or_else(|| eyre!("Could not determine home directory"))?;
 
     let hist_file = base.data_dir().join("xonsh/xonsh-history.sqlite");
-    if hist_file.exists() || cfg!(test) {
+    if fs::exists(&hist_file).await.unwrap_or(false) || cfg!(test) {
         Ok(hist_file)
     } else {
         Err(eyre!("Could not find xonsh history db at: {}", hist_file.to_string_lossy()))
@@ -98,7 +98,7 @@ impl Importer for XonshSqlite {
     async fn new() -> Result<Self> {
         // wrap xonsh-specific path resolver in general one so that it respects $HISTPATH
         let xonsh_data_dir = env::var("XONSH_DATA_DIR").ok();
-        let db_path = get_histfile_path(|| xonsh_db_path(xonsh_data_dir))?;
+        let db_path = get_histfile_path(xonsh_db_path(xonsh_data_dir)).await?;
         let connection_str = db_path.to_str().ok_or_else(|| {
             eyre!("Invalid path for SQLite database: {}", db_path.to_string_lossy())
         })?;
@@ -139,19 +139,21 @@ impl Importer for XonshSqlite {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use time::macros::datetime;
 
     use super::*;
     use crate::history::History;
     use crate::import::tests::TestLoader;
 
-    #[test]
-    fn test_db_path_xonsh() {
-        let db_path = xonsh_db_path(Some("/home/user/xonsh_data".to_string())).unwrap();
+    #[rstest]
+    #[tokio::test]
+    async fn test_db_path_xonsh() {
+        let db_path = xonsh_db_path(Some("/home/user/xonsh_data".to_string())).await.unwrap();
         assert_eq!(db_path, PathBuf::from("/home/user/xonsh_data/xonsh-history.sqlite"));
     }
 
-    #[test]
+    #[rstest]
     fn out_of_range_timestamp_falls_back_to_epoch() {
         let entry = HistDbEntry {
             inp: "echo hello".to_string(),
@@ -167,6 +169,7 @@ mod tests {
         assert_eq!(hist.command, "echo hello");
     }
 
+    #[rstest]
     #[tokio::test]
     async fn test_import() {
         let connection_str = "tests/data/xonsh-history.sqlite";

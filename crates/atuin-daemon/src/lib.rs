@@ -91,7 +91,7 @@ pub async fn boot(
     daemon.start_components().await?;
 
     // Spawn config file watcher to reload settings on changes
-    if let Ok(watcher) = global_settings_watcher() {
+    if let Ok(watcher) = global_settings_watcher().await {
         let mut settings_rx = watcher.subscribe();
         let watcher_handle = handle.clone();
         tokio::spawn(async move {

@@ -162,7 +162,7 @@ async fn run_inline_tui(
     initial_prompt: Option<String>,
     settings: &atuin_client::settings::Settings,
 ) -> Result<ExitOutcome> {
-    let client_ctx = ClientContext::detect();
+    let client_ctx = ClientContext::detect().await;
 
     // Open the session service and check for a resumable session
     let service = LocalSessionService::open(&settings.ai.db_path, settings.local_timeout)
@@ -438,7 +438,7 @@ fn render_setup_options(
 }
 
 async fn set_ai_enabled(enabled: bool) -> Result<()> {
-    let config_file = atuin_client::settings::Settings::get_config_path()?;
+    let config_file = atuin_client::settings::Settings::get_config_path().await?;
     let config_str = tokio::fs::read_to_string(&config_file).await?;
     let mut doc = config_str.parse::<toml_edit::DocumentMut>()?;
 

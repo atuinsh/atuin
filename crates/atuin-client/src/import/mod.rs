@@ -1,8 +1,7 @@
-use std::fs::File;
-use std::io::Read;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use atuin_common::fs;
 use eyre::{Result, bail};
 use memchr::Memchr;
 
@@ -69,46 +68,34 @@ fn count_lines(input: &[u8]) -> usize {
     unix_byte_lines(input).count()
 }
 
-fn get_histpath<D>(def: D) -> Result<PathBuf>
-where
-    D: FnOnce() -> Result<PathBuf>,
-{
+async fn get_histpath(def: impl Future<Output = Result<PathBuf>>) -> Result<PathBuf> {
     if let Ok(p) = std::env::var("HISTFILE") {
         Ok(PathBuf::from(p))
     } else {
-        def()
+        def.await
     }
 }
 
-fn get_histfile_path<D>(def: D) -> Result<PathBuf>
-where
-    D: FnOnce() -> Result<PathBuf>,
-{
-    get_histpath(def).and_then(is_file)
+async fn get_histfile_path(def: impl Future<Output = Result<PathBuf>>) -> Result<PathBuf> {
+    is_file(get_histpath(def).await?).await
 }
 
-fn get_histdir_path<D>(def: D) -> Result<PathBuf>
-where
-    D: FnOnce() -> Result<PathBuf>,
-{
-    get_histpath(def).and_then(is_dir)
+async fn get_histdir_path(def: impl Future<Output = Result<PathBuf>>) -> Result<PathBuf> {
+    is_dir(get_histpath(def).await?).await
 }
 
-fn read_to_end(path: PathBuf) -> Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    let mut f = File::open(path)?;
-    f.read_to_end(&mut bytes)?;
-    Ok(bytes)
+async fn read_to_end(path: PathBuf) -> Result<Vec<u8>> {
+    Ok(fs::read(path).await?)
 }
-fn is_file(p: PathBuf) -> Result<PathBuf> {
-    if p.is_file() {
+async fn is_file(p: PathBuf) -> Result<PathBuf> {
+    if fs::metadata(&p).await.is_ok_and(|m| m.is_file()) {
         Ok(p)
     } else {
         bail!("Could not find history file {:?}. Try setting and exporting $HISTFILE", p);
     }
 }
-fn is_dir(p: PathBuf) -> Result<PathBuf> {
-    if p.is_dir() {
+async fn is_dir(p: PathBuf) -> Result<PathBuf> {
+    if fs::metadata(&p).await.is_ok_and(|m| m.is_dir()) {
         Ok(p)
     } else {
         bail!("Could not find history directory {:?}. Try setting and exporting $HISTFILE", p);

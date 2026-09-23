@@ -36,8 +36,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use atuin_common::db;
 use atuin_common::utils::uuid_v7;
+use atuin_common::{db, fs};
 use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
 use directories::UserDirs;
 use eyre::{Result, eyre};
@@ -111,9 +111,9 @@ impl ZshHistDb {
         Ok(user_dirs.home_dir().join(".histdb/zsh-history.db"))
     }
 
-    pub fn histpath() -> Result<PathBuf> {
+    pub async fn histpath() -> Result<PathBuf> {
         let histdb_path = Self::histpath_candidate()?;
-        if histdb_path.exists() {
+        if fs::exists(&histdb_path).await.unwrap_or(false) {
             Ok(histdb_path)
         } else {
             Err(eyre!("Could not find history file. Try setting $HISTDB_FILE"))
@@ -129,7 +129,7 @@ impl Importer for ZshHistDb {
     /// Creates a new ZshHistDb and populates the history based on the pre-populated data
     /// structure.
     async fn new() -> Result<Self> {
-        let dbpath = Self::histpath()?;
+        let dbpath = Self::histpath().await?;
         let histdb_entry_vec = hist_from_db(dbpath).await?;
         Ok(Self {
             histdb: histdb_entry_vec,
@@ -176,12 +176,13 @@ impl Importer for ZshHistDb {
 
 #[cfg(test)]
 mod test {
-
     use std::env;
 
+    use rstest::rstest;
     use sqlx::sqlite::SqlitePoolOptions;
 
     use super::*;
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
     #[allow(unsafe_code)]
     async fn test_env_vars() {
@@ -198,6 +199,7 @@ mod test {
         assert_eq!(histdb_path.to_str().unwrap(), test_env_db);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn duration_saturates_instead_of_overflowing() {
         use time::macros::datetime;
@@ -227,6 +229,7 @@ mod test {
         assert_eq!(loader.buf[0].duration, i64::MAX);
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_import() {
         let pool: SqlitePool =

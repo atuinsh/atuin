@@ -93,7 +93,7 @@ impl Cmd {
                     println!("Detected Xonsh (SQLite backend)");
                     import::<XonshSqlite>(db).await
                 } else if shell.ends_with("/zsh") {
-                    if let Ok(path) = ZshHistDb::histpath() {
+                    if let Ok(path) = ZshHistDb::histpath().await {
                         println!("Detected Zsh-HistDb, using :{}", path.to_string_lossy());
                         import::<ZshHistDb>(db).await
                     } else {
@@ -107,7 +107,7 @@ impl Cmd {
                     println!("Detected Bash");
                     import::<Bash>(db).await
                 } else if shell.ends_with("/nu") {
-                    if let Ok(path) = NuHistDb::histpath() {
+                    if let Ok(path) = NuHistDb::histpath().await {
                         println!("Detected Nu-HistDb, using :{}", path.to_string_lossy());
                         import::<NuHistDb>(db).await
                     } else {

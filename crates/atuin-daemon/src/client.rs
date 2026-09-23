@@ -121,7 +121,7 @@ impl HistoryClient {
 
     #[cfg(unix)]
     pub async fn from_settings(settings: &Settings) -> Result<Self> {
-        Self::new(settings.daemon.existing_socket_path().into_owned()).await
+        Self::new(settings.daemon.existing_socket_path().await.into_owned()).await
     }
 
     #[cfg(not(unix))]
@@ -338,7 +338,7 @@ impl SearchClient {
 
     #[cfg(unix)]
     pub async fn from_settings(settings: &Settings) -> Result<Self> {
-        Self::new(settings.daemon.existing_socket_path().into_owned()).await
+        Self::new(settings.daemon.existing_socket_path().await.into_owned()).await
     }
 
     #[cfg(not(unix))]

@@ -224,7 +224,7 @@ async fn connect_client(settings: &Settings) -> Result<HistoryClient> {
         #[cfg(not(unix))]
         settings.daemon.tcp_port,
         #[cfg(unix)]
-        settings.daemon.existing_socket_path().into_owned(),
+        settings.daemon.existing_socket_path().await.into_owned(),
     )
     .await
 }
@@ -541,7 +541,7 @@ async fn status_cmd(settings: &Settings) -> Result<()> {
             println!("  Protocol: {}", status.protocol);
             println!("  Healthy:  {}", status.healthy);
             #[cfg(unix)]
-            println!("  Socket:   {}", settings.daemon.existing_socket_path().display());
+            println!("  Socket:   {}", settings.daemon.existing_socket_path().await.display());
             #[cfg(not(unix))]
             println!("  Port:     {}", settings.daemon.tcp_port);
         }
@@ -734,7 +734,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn test_startup_lock_path() {
         let pidfile = Path::new("/tmp/atuin-daemon.pid");
         let lock = daemon_startup_lock_path(pidfile);

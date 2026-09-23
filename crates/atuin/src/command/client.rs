@@ -171,9 +171,14 @@ impl Cmd {
         #[cfg(not(feature = "ai"))]
         let use_multi_thread_runtime = false;
 
-        let Some(future) = self.run_inner()? else {
-            // The command was handled synchronously; return.
-            return Ok(());
+        let run_internal = if let Self::Internal(cmd) = &self {
+            match cmd.run() {
+                Some(func) => Some(func),
+                // The command was handled synchronously; return.
+                None => return Ok(()),
+            }
+        } else {
+            None
         };
 
         let runtime = if use_multi_thread_runtime {
@@ -185,39 +190,25 @@ impl Cmd {
         .build()
         .unwrap();
 
-        let res = runtime.block_on(future);
-        runtime.shutdown_timeout(std::time::Duration::from_millis(50));
-        res
-    }
+        let res = runtime.block_on(async {
+            let settings = Settings::new().await.wrap_err("could not load client settings")?;
+            let _logging = match self.log_config(&settings) {
+                Some(config) => Some(
+                    LogCtx::try_enable("atuin", &config)
+                        .await
+                        .wrap_err("failed to enable logging")?,
+                ),
+                None => None,
+            };
 
-    /// Run the command, returning a future for commands that require async.
-    ///
-    /// If the command was able to be handled synchronously, returns `Ok(None)`. Otherwise, returns
-    /// `Ok(Some(future))` where `future` will run the command when awaited. Returns `Err` on error.
-    fn run_inner(self) -> Result<Option<impl Future<Output = Result<()>>>> {
-        let run_internal = if let Self::Internal(cmd) = &self {
-            match cmd.run() {
-                Some(func) => Some(func),
-                None => return Ok(None),
-            }
-        } else {
-            None
-        };
-
-        let settings = Settings::new().wrap_err("could not load client settings")?;
-        let _logging = self
-            .log_config(&settings)
-            .map(|c| LogCtx::try_enable("atuin", &c))
-            .transpose()
-            .wrap_err("failed to enable logging")?;
-
-        Ok(Some(async {
             if let Some(func) = run_internal {
                 func(settings).await
             } else {
                 Box::pin(self.run_async(settings)).await
             }
-        }))
+        });
+        runtime.shutdown_timeout(std::time::Duration::from_millis(50));
+        res
     }
 
     #[allow(clippy::too_many_lines)]

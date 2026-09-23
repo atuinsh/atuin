@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use atuin_common::fs;
 use directories::BaseDirs;
 use eyre::{Result, eyre};
 use time::OffsetDateTime;
@@ -18,7 +19,7 @@ pub struct Fish {
 }
 
 /// see <https://fishshell.com/docs/current/interactive.html#searchable-command-history>
-fn default_histpath() -> Result<PathBuf> {
+async fn default_histpath() -> Result<PathBuf> {
     let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
     let data = std::env::var("XDG_DATA_HOME")
         .map_or_else(|_| base.home_dir().join(".local").join("share"), PathBuf::from);
@@ -35,7 +36,7 @@ fn default_histpath() -> Result<PathBuf> {
     let mut histpath = data.join("fish");
     histpath.push(format!("{session}_history"));
 
-    if histpath.exists() {
+    if fs::exists(&histpath).await.unwrap_or(false) {
         Ok(histpath)
     } else {
         Err(eyre!("Could not find history file."))
@@ -47,7 +48,7 @@ impl Importer for Fish {
     const NAME: &'static str = "fish";
 
     async fn new() -> Result<Self> {
-        let bytes = read_to_end(default_histpath()?)?;
+        let bytes = read_to_end(default_histpath().await?).await?;
         Ok(Self { bytes })
     }
 
@@ -111,11 +112,13 @@ impl Importer for Fish {
 
 #[cfg(test)]
 mod test {
+    use rstest::rstest;
 
     use super::Fish;
     use crate::import::Importer;
     use crate::import::tests::TestLoader;
 
+    #[rstest]
     #[tokio::test]
     async fn parse_out_of_range_timestamp() {
         // A corrupt `when:` must degrade that one entry, not abort the import.
@@ -143,6 +146,7 @@ mod test {
         assert_eq!(loader.buf[2].timestamp.unix_timestamp(), 1_639_162_851);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn parse_complex() {
         // complicated input with varying contents and escaped strings.

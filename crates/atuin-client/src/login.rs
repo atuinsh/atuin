@@ -1,4 +1,5 @@
 use atuin_common::encryption::paseto_v4;
+use atuin_common::fs;
 use atuin_domain::api::LoginRequest;
 use eyre::Result;
 
@@ -18,7 +19,7 @@ pub async fn login(
 
     let key_path = &settings.key_path;
 
-    if key_path.exists() {
+    if fs::exists(key_path).await.unwrap_or(false) {
         // we now know that the user has logged in specifying a key, AND that the key path
         // exists
 

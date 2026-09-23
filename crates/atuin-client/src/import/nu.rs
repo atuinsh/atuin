@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use atuin_common::fs;
 use directories::BaseDirs;
 use eyre::{Result, eyre};
 use time::{Duration, OffsetDateTime};
@@ -23,12 +24,12 @@ impl Nu {
     }
 }
 
-fn get_histpath() -> Result<PathBuf> {
+async fn get_histpath() -> Result<PathBuf> {
     let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
     let config_dir = base.config_dir().join("nushell");
 
     let histpath = config_dir.join("history.txt");
-    if histpath.exists() {
+    if fs::exists(&histpath).await.unwrap_or(false) {
         Ok(histpath)
     } else {
         Err(eyre!("Could not find history file."))
@@ -40,7 +41,7 @@ impl Importer for Nu {
     const NAME: &'static str = "nu";
 
     async fn new() -> Result<Self> {
-        let bytes = read_to_end(get_histpath()?)?;
+        let bytes = read_to_end(get_histpath().await?).await?;
         Ok(Self { bytes })
     }
 

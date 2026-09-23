@@ -4,8 +4,8 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use atuin_common::db;
 use atuin_common::time::OffsetDateTimeExt;
+use atuin_common::{db, fs};
 use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
 use directories::BaseDirs;
 use eyre::{Result, eyre};
@@ -85,12 +85,12 @@ async fn hist_from_db_conn(pool: Pool<sqlx::Sqlite>) -> Result<Vec<HistDbEntry>>
 }
 
 impl NuHistDb {
-    pub fn histpath() -> Result<PathBuf> {
+    pub async fn histpath() -> Result<PathBuf> {
         let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
         let config_dir = base.config_dir().join("nushell");
 
         let histdb_path = config_dir.join("history.sqlite3");
-        if histdb_path.exists() {
+        if fs::exists(&histdb_path).await.unwrap_or(false) {
             Ok(histdb_path)
         } else {
             Err(eyre!("Could not find history file."))
@@ -106,7 +106,7 @@ impl Importer for NuHistDb {
     /// Creates a new NuHistDb and populates the history based on the pre-populated data
     /// structure.
     async fn new() -> Result<Self> {
-        let dbpath = Self::histpath()?;
+        let dbpath = Self::histpath().await?;
         let histdb_entry_vec = hist_from_db(dbpath).await?;
         Ok(Self {
             histdb: histdb_entry_vec,

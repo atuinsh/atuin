@@ -23,7 +23,7 @@ pub async fn run(_settings: &Settings) -> Result<()> {
         None,
     )?;
 
-    let config_file = Settings::get_config_path()?;
+    let config_file = Settings::get_config_path().await?;
     let config_str = tokio::fs::read_to_string(&config_file).await?;
     let mut doc = config_str.parse::<DocumentMut>()?;
 

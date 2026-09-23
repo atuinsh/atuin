@@ -94,11 +94,11 @@ pub struct ClientContext {
 }
 
 impl ClientContext {
-    pub(crate) fn detect() -> Self {
+    pub(crate) async fn detect() -> Self {
         let os = detect_os();
         let shell = Some(crate::commands::detect_shell());
         let distro = if os == "linux" {
-            Some(detect_linux_distribution())
+            Some(detect_linux_distribution().await)
         } else {
             None
         };

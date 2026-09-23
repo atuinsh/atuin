@@ -2,8 +2,8 @@ use std::ffi::OsStr;
 use std::str::FromStr;
 use std::time::Duration;
 
-use atuin_common::db;
 use atuin_common::db::sqlite::{Journaling, Sqlite, SqliteBuilder};
+use atuin_common::{db, fs};
 use atuin_domain::record::HostId;
 use eyre::{Result, eyre};
 use time::OffsetDateTime;
@@ -195,8 +195,8 @@ impl MetaStore {
 
         // host_id — validate as UUID
         let host_id_path = data_dir.join(LEGACY_HOST_ID_FILENAME);
-        if host_id_path.exists()
-            && let Ok(value) = fs_err::read_to_string(&host_id_path)
+        if fs::exists(&host_id_path).await.unwrap_or(false)
+            && let Ok(value) = fs::read_to_string(&host_id_path).await
         {
             let value = value.trim();
             if !value.is_empty() {
@@ -210,8 +210,8 @@ impl MetaStore {
 
         // last_sync_time — validate as RFC3339
         let sync_path = data_dir.join(LEGACY_LAST_SYNC_FILENAME);
-        if sync_path.exists()
-            && let Ok(value) = fs_err::read_to_string(&sync_path)
+        if fs::exists(&sync_path).await.unwrap_or(false)
+            && let Ok(value) = fs::read_to_string(&sync_path).await
         {
             let value = value.trim();
             if !value.is_empty() {
@@ -225,8 +225,8 @@ impl MetaStore {
 
         // last_version_check_time — validate as RFC3339
         let version_check_path = data_dir.join(LEGACY_LAST_VERSION_CHECK_FILENAME);
-        if version_check_path.exists()
-            && let Ok(value) = fs_err::read_to_string(&version_check_path)
+        if fs::exists(&version_check_path).await.unwrap_or(false)
+            && let Ok(value) = fs::read_to_string(&version_check_path).await
         {
             let value = value.trim();
             if !value.is_empty() {
@@ -242,8 +242,8 @@ impl MetaStore {
 
         // latest_version — no strict validation, just non-empty
         let latest_version_path = data_dir.join(LEGACY_LATEST_VERSION_FILENAME);
-        if latest_version_path.exists()
-            && let Ok(value) = fs_err::read_to_string(&latest_version_path)
+        if fs::exists(&latest_version_path).await.unwrap_or(false)
+            && let Ok(value) = fs::read_to_string(&latest_version_path).await
         {
             let value = value.trim();
             if !value.is_empty() {
@@ -253,8 +253,8 @@ impl MetaStore {
 
         // session token — no strict validation, just non-empty
         let session_path = data_dir.join(LEGACY_SESSION_FILENAME);
-        if session_path.exists()
-            && let Ok(value) = fs_err::read_to_string(&session_path)
+        if fs::exists(&session_path).await.unwrap_or(false)
+            && let Ok(value) = fs::read_to_string(&session_path).await
         {
             let value = value.trim();
             if !value.is_empty() {
@@ -348,6 +348,7 @@ mod tests {
         assert_eq!(store.latest_version().await.unwrap(), Some("1.2.3".to_string()));
     }
 
+    #[rstest]
     #[tokio::test]
     async fn memory_store_skips_file_migration() {
         let store = MetaStore::new(":memory:", Duration::from_secs(2)).await.unwrap();

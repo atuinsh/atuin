@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use std::{borrow::Cow, path::Path};
 
 #[cfg(unix)]
+use atuin_common::fs;
+#[cfg(unix)]
 use atuin_common::os::unix::{SecureTempDirError, create_secure_temp_dir};
 #[cfg(unix)]
 use atuin_common::path::EnvDependentPathBuf;
@@ -76,9 +78,8 @@ impl Daemon {
     ///
     /// This is the first path in [`Self::potential_socket_paths`] that exists, or if none exist,
     /// the first path.
-    #[must_use]
-    pub fn existing_socket_path(&self) -> Cow<'_, Path> {
-        self.existing_socket_path_ctx(DefaultSocketCtx)
+    pub async fn existing_socket_path(&self) -> Cow<'_, Path> {
+        self.existing_socket_path_ctx(DefaultSocketCtx).await
     }
 
     /// The list of paths at which an existing daemon socket might live.
@@ -113,15 +114,20 @@ impl Daemon {
         SocketPath::Default(ctx.default_socket_path().primary)
     }
 
-    fn existing_socket_path_ctx(&self, ctx: impl SocketCtx) -> Cow<'_, Path> {
+    async fn existing_socket_path_ctx(&self, ctx: impl SocketCtx) -> Cow<'_, Path> {
         let mut candidates = self.potential_socket_paths_ctx(ctx);
         let primary =
             candidates.next().expect("there is always at least one potential socket path");
 
-        if primary.exists() {
+        if fs::exists(&primary).await.unwrap_or(false) {
             return primary;
         }
-        candidates.find(|path| path.exists()).unwrap_or(primary)
+        for path in candidates {
+            if fs::exists(&path).await.unwrap_or(false) {
+                return path;
+            }
+        }
+        primary
     }
 
     fn potential_socket_paths_ctx(
@@ -434,7 +440,8 @@ mod unix_tests {
     #[case::only_the_envless_fallback_exists(&[DEFAULT], DEFAULT)]
     #[case::runtime_fallback_beats_envless(&[RUNTIME, DEFAULT], RUNTIME)]
     #[case::all_exist(&[TMPDIR_DEFAULT, RUNTIME, DEFAULT], TMPDIR_DEFAULT)]
-    fn the_existing_socket_is_the_first_one_present(
+    #[tokio::test]
+    async fn the_existing_socket_is_the_first_one_present(
         tmp: TempDir,
         #[case] present: &[&str],
         #[case] expected: &str,
@@ -455,7 +462,7 @@ mod unix_tests {
             fs_err::File::create(path).unwrap();
         }
 
-        assert_eq!(daemon(None, false).existing_socket_path_ctx(ctx), scoped(expected));
+        assert_eq!(daemon(None, false).existing_socket_path_ctx(ctx).await, scoped(expected));
     }
 
     #[rstest]
@@ -467,7 +474,7 @@ mod unix_tests {
         daemon.socket_path().create_default_dir_if_needed().await.unwrap();
 
         assert!(!dir.exists(), "created a directory for a user-defined path");
-        assert_eq!(daemon.existing_socket_path(), dir.join("atuin.sock"));
+        assert_eq!(daemon.existing_socket_path().await, dir.join("atuin.sock"));
     }
 
     #[rstest]

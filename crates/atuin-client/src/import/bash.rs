@@ -28,7 +28,7 @@ impl Importer for Bash {
     const NAME: &'static str = "bash";
 
     async fn new() -> Result<Self> {
-        let bytes = read_to_end(get_histfile_path(default_histpath)?)?;
+        let bytes = read_to_end(get_histfile_path(async { default_histpath() }).await?).await?;
         Ok(Self { bytes })
     }
 
@@ -159,6 +159,7 @@ mod test {
         3,
         vec!["git reset", "git clean -dxf", "cd ../"]
     )]
+    #[rstest]
     #[tokio::test]
     async fn parse_strictly_sorted(
         #[case] bytes: Vec<u8>,

@@ -102,8 +102,10 @@ impl UpdateOnWindowsContext {
     pub fn new() -> Self {
         // Windows doesn't let you overwrite a running exe, but it lets you rename it,
         // so make some room for atuin-update to install the new version.
+        // Blocking is fine: plugins run from the synchronous passthrough, outside any runtime.
         let initial_exe = std::env::current_exe().ok().and_then(|exe| {
-            std::fs::rename(&exe, exe.with_file_name(Self::OLD_FILE_NAME)).ok()?;
+            atuin_common::fs::blocking::rename(&exe, exe.with_file_name(Self::OLD_FILE_NAME))
+                .ok()?;
             Some(exe)
         });
 
@@ -113,7 +115,14 @@ impl UpdateOnWindowsContext {
 
 #[cfg(windows)]
 impl Drop for UpdateOnWindowsContext {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the rollback must happen even when the pool is exhausted, and a drop must not \
+                  park waiting for a lease, so it takes one only if free and otherwise runs \
+                  unleased"
+    )]
     fn drop(&mut self) {
+        let _lease = atuin_common::fs::pool::FdPool::system().try_acquire();
         if let Some(exe) = &self.initial_exe
             && !exe.exists()
         {

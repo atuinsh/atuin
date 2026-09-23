@@ -1,63 +1,38 @@
 use std::process::Command;
 
+use atuin_common::fs;
+
+/// Parses a release file's contents into a distribution name, if it names one.
+type ReleaseParser = fn(&str) -> Option<String>;
+
 /// Detect the Linux distribution from the system,
 /// using system-specific release files and falling
 /// back to lsb_release.
-#[must_use]
-pub fn detect_linux_distribution() -> String {
-    detect_from_os_release()
-        .or_else(detect_from_debian_version)
-        .or_else(detect_from_centos_release)
-        .or_else(detect_from_redhat_release)
-        .or_else(detect_from_fedora_release)
-        .or_else(detect_from_arch_release)
-        .or_else(detect_from_alpine_release)
-        .or_else(detect_from_suse_release)
-        .or_else(detect_from_lsb_release)
-        .unwrap_or_else(|| "Unknown".to_string())
+pub async fn detect_linux_distribution() -> String {
+    let release_files: [(&str, ReleaseParser); 8] = [
+        ("/etc/os-release", detect_from_os_release),
+        ("/etc/debian_version", |v| Some(format!("Debian {}", v.trim()))),
+        ("/etc/centos-release", |v| Some(v.trim().to_string())),
+        ("/etc/redhat-release", |v| Some(v.trim().to_string())),
+        ("/etc/fedora-release", |v| Some(v.trim().to_string())),
+        ("/etc/arch-release", |v| (!v.trim().is_empty()).then(|| "Arch Linux".to_string())),
+        ("/etc/alpine-release", |v| Some(format!("Alpine {}", v.trim()))),
+        ("/etc/SuSE-release", |content| content.lines().next().map(|l| l.trim().to_string())),
+    ];
+    for (path, parse) in release_files {
+        if let Some(distro) = fs::read_to_string(path).await.ok().and_then(|v| parse(&v)) {
+            return distro;
+        }
+    }
+    detect_from_lsb_release().unwrap_or_else(|| "Unknown".to_string())
 }
 
-fn detect_from_os_release() -> Option<String> {
-    let content = std::fs::read_to_string("/etc/os-release").ok()?;
-
+fn detect_from_os_release(content: &str) -> Option<String> {
     content
         .lines()
         .find(|l| l.starts_with("PRETTY_NAME="))
         .and_then(|l| l.split_once('=').map(|s| s.1))
         .map(|s| s.trim_matches('"').to_string())
-}
-
-fn detect_from_debian_version() -> Option<String> {
-    std::fs::read_to_string("/etc/debian_version").ok().map(|v| format!("Debian {}", v.trim()))
-}
-
-fn detect_from_centos_release() -> Option<String> {
-    std::fs::read_to_string("/etc/centos-release").ok().map(|v| v.trim().to_string())
-}
-
-fn detect_from_redhat_release() -> Option<String> {
-    std::fs::read_to_string("/etc/redhat-release").ok().map(|v| v.trim().to_string())
-}
-
-fn detect_from_fedora_release() -> Option<String> {
-    std::fs::read_to_string("/etc/fedora-release").ok().map(|v| v.trim().to_string())
-}
-
-fn detect_from_arch_release() -> Option<String> {
-    std::fs::read_to_string("/etc/arch-release")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .map(|_| "Arch Linux".to_string())
-}
-
-fn detect_from_alpine_release() -> Option<String> {
-    std::fs::read_to_string("/etc/alpine-release").ok().map(|v| format!("Alpine {}", v.trim()))
-}
-
-fn detect_from_suse_release() -> Option<String> {
-    std::fs::read_to_string("/etc/SuSE-release")
-        .ok()
-        .and_then(|content| content.lines().next().map(|l| l.trim().to_string()))
 }
 
 fn detect_from_lsb_release() -> Option<String> {

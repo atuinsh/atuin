@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::str;
 
 use async_trait::async_trait;
+use atuin_common::fs;
 use directories::UserDirs;
 use eyre::{Result, eyre};
 use time::macros::format_description;
@@ -16,7 +17,7 @@ pub struct Replxx {
     bytes: Vec<u8>,
 }
 
-fn default_histpath() -> Result<PathBuf> {
+async fn default_histpath() -> Result<PathBuf> {
     let user_dirs = UserDirs::new().ok_or_else(|| eyre!("could not find user directories"))?;
     let home_dir = user_dirs.home_dir();
 
@@ -27,7 +28,7 @@ fn default_histpath() -> Result<PathBuf> {
         match candidates.next() {
             Some(candidate) => {
                 let histpath = home_dir.join(candidate);
-                if histpath.exists() {
+                if fs::exists(&histpath).await.unwrap_or(false) {
                     break Ok(histpath);
                 }
             }
@@ -45,7 +46,7 @@ impl Importer for Replxx {
     const NAME: &'static str = "replxx";
 
     async fn new() -> Result<Self> {
-        let bytes = read_to_end(get_histfile_path(default_histpath)?)?;
+        let bytes = read_to_end(get_histfile_path(default_histpath()).await?).await?;
         Ok(Self { bytes })
     }
 
@@ -91,11 +92,13 @@ fn try_parse_line_as_timestamp(line: &str) -> Option<OffsetDateTime> {
 
 #[cfg(test)]
 mod test {
+    use rstest::rstest;
 
     use super::Replxx;
     use crate::import::Importer;
     use crate::import::tests::TestLoader;
 
+    #[rstest]
     #[tokio::test]
     async fn parse_complex() {
         let bytes = r"### 2024-02-10 22:16:28.302
@@ -139,6 +142,7 @@ CREATE TABLE test( stamp DateTime('UTC'))ENGINE = MergeTreePARTITION BY toDat
         );
     }
 
+    #[rstest]
     #[tokio::test]
     async fn skips_invalid_utf8_line() {
         let mut bytes = b"### 2024-02-10 22:16:28.302\nselect 1\n".to_vec();

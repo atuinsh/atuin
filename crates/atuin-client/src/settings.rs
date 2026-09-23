@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, OnceLock};
 use std::time::Duration;
 
+use atuin_common::fs;
 use atuin_common::logs::LogLevel;
 use atuin_common::path::PathExt;
 // `AsDuration`/`AsDisableableDuration` are deprecated.
@@ -14,9 +14,11 @@ use atuin_common::time::{
 use atuin_domain::record::HostId;
 use clap::ValueEnum;
 use config::builder::DefaultState;
-use config::{Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat};
+use config::{
+    Config, ConfigBuilder, ConfigError, Environment, File as ConfigFile, FileFormat, Format, Map,
+    Source, Value,
+};
 use eyre::{Context, Result, eyre};
-use fs_err::{File, create_dir_all};
 use regex::RegexSet;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -1608,23 +1610,19 @@ impl Settings {
             .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__")))
     }
 
-    pub fn get_config_path() -> Result<PathBuf> {
+    pub async fn get_config_path() -> Result<PathBuf> {
         let config_dir = atuin_common::utils::config_dir();
-
-        create_dir_all(&config_dir)
+        fs::create_dir_all(&config_dir)
+            .await
             .wrap_err_with(|| format!("could not create dir {config_dir:?}"))?;
+        Ok(Self::config_file_path(config_dir))
+    }
 
-        let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
-            PathBuf::from(p)
-        } else {
-            let mut config_file = PathBuf::new();
-            config_file.push(config_dir);
-            config_file
-        };
-
+    /// The config file inside `config_dir`, unless `ATUIN_CONFIG_DIR` names another directory.
+    fn config_file_path(config_dir: PathBuf) -> PathBuf {
+        let mut config_file = std::env::var("ATUIN_CONFIG_DIR").map_or(config_dir, PathBuf::from);
         config_file.push("config.toml");
-
-        Ok(config_file)
+        config_file
     }
 
     /// Build a merged `Config` from defaults, config file, and environment.
@@ -1632,59 +1630,96 @@ impl Settings {
     /// This resolves `data_dir`, initializes the data directory on disk,
     /// and layers defaults → config file → env overrides. Both `new()` and
     /// `get_config_value()` use this so the resolution logic lives in one place.
-    fn build_config() -> Result<Config> {
-        let config_file = Self::get_config_path()?;
-
-        // extract data_dir first so we can use it as the base for other path defaults
-        let effective_data_dir = if config_file.exists() {
-            #[derive(Deserialize, Default)]
-            struct DataDirOnly {
-                data_dir: Option<String>,
-            }
-
-            let config_file_str =
-                config_file.to_str().ok_or_else(|| eyre!("config file path is not valid UTF-8"))?;
-
-            let partial_config = Config::builder()
-                .add_source(ConfigFile::new(config_file_str, FileFormat::Toml))
-                .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__"))
-                .build()
-                .ok();
-
-            let custom_data_dir = partial_config
-                .and_then(|c| c.try_deserialize::<DataDirOnly>().ok())
-                .and_then(|d| d.data_dir);
-
-            match custom_data_dir {
-                Some(dir) => {
-                    let expanded = shellexpand::full(&dir)
-                        .map_err(|e| eyre!("failed to expand data_dir path: {}", e))?;
-                    PathBuf::from(expanded.as_ref())
-                }
-                None => atuin_common::utils::data_dir(),
-            }
+    async fn build_config() -> Result<Config> {
+        let config_file = Self::get_config_path().await?;
+        let text = if fs::exists(&config_file).await.unwrap_or(false) {
+            let bytes = fs::read(&config_file)
+                .await
+                .wrap_err_with(|| format!("could not read config file {config_file:?}"))?;
+            Some(ConfigFileText::new(&config_file, &bytes))
         } else {
-            atuin_common::utils::data_dir()
+            None
         };
 
-        DATA_DIR.set(effective_data_dir.clone()).ok();
+        let data_dir = Self::data_dir_from(text.as_ref())?;
+        fs::create_dir_all(&data_dir)
+            .await
+            .wrap_err_with(|| format!("could not create dir {data_dir:?}"))?;
+        if text.is_none() {
+            fs::write(&config_file, EXAMPLE_CONFIG)
+                .await
+                .wrap_err("could not create config file")?;
+        }
 
-        create_dir_all(&effective_data_dir)
-            .wrap_err_with(|| format!("could not create dir {effective_data_dir:?}"))?;
+        Self::config_from(&data_dir, text)
+    }
 
-        let mut config_builder = Self::builder_with_data_dir(&effective_data_dir)?;
-
-        config_builder = if config_file.exists() {
-            let config_file_str =
-                config_file.to_str().ok_or_else(|| eyre!("config file path is not valid UTF-8"))?;
-            config_builder.add_source(ConfigFile::new(config_file_str, FileFormat::Toml))
+    /// Equivalent to [`Self::build_config`], except it blocks, so it must not run on a tokio
+    /// runtime thread.
+    fn build_config_blocking() -> Result<Config> {
+        let config_dir = atuin_common::utils::config_dir();
+        fs::blocking::create_dir_all(&config_dir)
+            .wrap_err_with(|| format!("could not create dir {config_dir:?}"))?;
+        let config_file = Self::config_file_path(config_dir);
+        let text = if fs::blocking::exists(&config_file).unwrap_or(false) {
+            let bytes = fs::blocking::read(&config_file)
+                .wrap_err_with(|| format!("could not read config file {config_file:?}"))?;
+            Some(ConfigFileText::new(&config_file, &bytes))
         } else {
-            let mut file = File::create(config_file).wrap_err("could not create config file")?;
-            file.write_all(EXAMPLE_CONFIG.as_bytes())
-                .wrap_err("could not write default config file")?;
-
-            config_builder
+            None
         };
+
+        let data_dir = Self::data_dir_from(text.as_ref())?;
+        fs::blocking::create_dir_all(&data_dir)
+            .wrap_err_with(|| format!("could not create dir {data_dir:?}"))?;
+        if text.is_none() {
+            fs::blocking::write(&config_file, EXAMPLE_CONFIG)
+                .wrap_err("could not create config file")?;
+        }
+
+        Self::config_from(&data_dir, text)
+    }
+
+    /// The `data_dir` set in the config file `text` or the environment, else the default.
+    fn data_dir_from(text: Option<&ConfigFileText>) -> Result<PathBuf> {
+        #[derive(Deserialize, Default)]
+        struct DataDirOnly {
+            data_dir: Option<String>,
+        }
+
+        let Some(text) = text else {
+            return Ok(atuin_common::utils::data_dir());
+        };
+
+        let partial_config = Config::builder()
+            .add_source(text.clone())
+            .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__"))
+            .build()
+            .ok();
+
+        let custom_data_dir = partial_config
+            .and_then(|c| c.try_deserialize::<DataDirOnly>().ok())
+            .and_then(|d| d.data_dir);
+
+        match custom_data_dir {
+            Some(dir) => {
+                let expanded = shellexpand::full(&dir)
+                    .map_err(|e| eyre!("failed to expand data_dir path: {}", e))?;
+                Ok(PathBuf::from(expanded.as_ref()))
+            }
+            None => Ok(atuin_common::utils::data_dir()),
+        }
+    }
+
+    /// Layer defaults for `data_dir`, the config file `text`, and the environment into a `Config`
+    /// with every path expanded.
+    fn config_from(data_dir: &Path, text: Option<ConfigFileText>) -> Result<Config> {
+        DATA_DIR.set(data_dir.to_owned()).ok();
+
+        let mut config_builder = Self::builder_with_data_dir(data_dir)?;
+        if let Some(text) = text {
+            config_builder = config_builder.add_source(text);
+        }
 
         // all paths should be expanded
         let built = config_builder.build_cloned()?;
@@ -1725,11 +1760,11 @@ impl Settings {
     /// Returns the effective value after merging defaults, config file, and
     /// environment — without the side-effects of full `Settings` construction
     /// (meta store init, path expansion, etc.).
-    pub fn get_config_value(key: &str) -> Result<String> {
+    pub async fn get_config_value(key: &str) -> Result<String> {
         use config::Value;
 
         #[cfg_attr(not(unix), allow(unused_mut))]
-        let mut config = Self::build_config()?;
+        let mut config = Self::build_config().await?;
 
         // When unset, `daemon.socket_path` is calculated dynamically by [`Daemon::socket_path`] and
         // wouldn't show up in `atuin config get --resolved daemon.socket_path`. However, it may be
@@ -1804,8 +1839,17 @@ impl Settings {
         }
     }
 
-    pub fn new() -> Result<Self> {
-        let config = Self::build_config()?;
+    pub async fn new() -> Result<Self> {
+        Self::from_config(Self::build_config().await?)
+    }
+
+    /// Equivalent to [`Self::new`], except it blocks, so it must not run on a tokio runtime
+    /// thread.
+    pub fn new_blocking() -> Result<Self> {
+        Self::from_config(Self::build_config_blocking()?)
+    }
+
+    fn from_config(config: Config) -> Result<Self> {
         let settings: Self =
             config.try_deserialize().map_err(|e| eyre!("failed to deserialize: {}", e))?;
 
@@ -1887,6 +1931,39 @@ pub enum ValidationError {
     DataDir(shellexpand::LookupError<std::env::VarError>),
 }
 
+/// The config file's text, read through [`fs`] so that `config` never opens the file itself.
+#[derive(Clone, Debug)]
+struct ConfigFileText {
+    /// The file's path, which parse errors and value origins name.
+    uri: String,
+    text: String,
+}
+
+impl ConfigFileText {
+    /// Decode `bytes` as lossy UTF-8, as `config`'s own file source does.
+    fn new(path: &Path, bytes: &[u8]) -> Self {
+        Self {
+            uri: path.to_string_lossy().into_owned(),
+            text: String::from_utf8_lossy(bytes).into_owned(),
+        }
+    }
+}
+
+impl Source for ConfigFileText {
+    fn clone_into_box(&self) -> Box<dyn Source + Send + Sync> {
+        Box::new(self.clone())
+    }
+
+    fn collect(&self) -> Result<Map<String, Value>, ConfigError> {
+        FileFormat::Toml.parse(Some(&self.uri), &self.text).map_err(|cause| {
+            ConfigError::FileParse {
+                uri: Some(self.uri.clone()),
+                cause,
+            }
+        })
+    }
+}
+
 /// Initialize the meta store configuration for testing.
 ///
 /// This should only be used in tests. It allows tests to bypass the normal
@@ -1914,15 +1991,17 @@ pub(crate) fn test_local_timeout() -> Duration {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use std::str::FromStr;
 
+    use config::Config;
     use eyre::Result;
     use rstest::rstest;
     use url::Url;
 
     use super::{
-        AiEndpointProtocol, ConfigFile, FileFormat, FilterMode, RequestedSearchMode, SearchMode,
-        Settings, UtcOffsetSpec,
+        AiEndpointProtocol, ConfigFile, ConfigFileText, FileFormat, FilterMode,
+        RequestedSearchMode, SearchMode, Settings, UtcOffsetSpec,
     };
 
     #[rstest]
@@ -1981,7 +2060,7 @@ mod tests {
 
     /// Forces both `LazyLock`s, so a typo in either constant fails here rather
     /// than panicking at runtime.
-    #[test]
+    #[rstest]
     fn default_addresses_parse() {
         assert_eq!(super::DEFAULT_SYNC_URL.host_str(), Some("api.atuin.sh"));
         assert_eq!(super::DEFAULT_HUB_URL.host_str(), Some("hub.atuin.sh"));
@@ -2009,7 +2088,7 @@ mod tests {
         assert_eq!(settings.default_filter_mode(git_root), expected);
     }
 
-    #[test]
+    #[rstest]
     fn builder_with_data_dir_uses_custom_paths() -> Result<()> {
         use std::path::PathBuf;
 
@@ -2068,7 +2147,7 @@ mod tests {
         assert!(err.contains(expected_err), "error should mention `{expected_err}`, got: {err}");
     }
 
-    #[test]
+    #[rstest]
     fn effective_data_dir_returns_default_when_not_set() {
         let effective = super::Settings::effective_data_dir();
         let default = atuin_common::utils::data_dir();
@@ -2077,7 +2156,7 @@ mod tests {
         assert!(effective.ends_with("atuin") || effective == default);
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_deserializes_simple_binding() {
         let json = r#"{"emacs": {"ctrl-c": "exit"}}"#;
         let config: super::KeymapConfig = serde_json::from_str(json).unwrap();
@@ -2087,7 +2166,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_deserializes_conditional_binding() {
         let json = r#"{
             "emacs": {
@@ -2109,7 +2188,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_deserializes_vim_normal() {
         let json = r#"{"vim-normal": {"j": "select-next", "k": "select-previous"}}"#;
         let config: super::KeymapConfig = serde_json::from_str(json).unwrap();
@@ -2117,13 +2196,13 @@ mod tests {
         assert!(config.emacs.is_empty());
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_is_empty_when_default() {
         let config = super::KeymapConfig::default();
         assert!(config.is_empty());
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_mixed_modes() {
         let json = r#"{
             "emacs": {"ctrl-c": "exit"},
@@ -2191,7 +2270,7 @@ mod tests {
         assert!(Settings::validate_str("sync_frequency = -5\n").is_err());
     }
 
-    #[test]
+    #[rstest]
     fn skim_is_requested_but_resolves_to_fuzzy() {
         let settings = parse_settings("search_mode = \"skim\"\n");
 
@@ -2199,7 +2278,7 @@ mod tests {
         assert_eq!(settings.search_mode(), SearchMode::Fuzzy);
     }
 
-    #[test]
+    #[rstest]
     fn skim_shell_up_key_binding_resolves_to_fuzzy() {
         let settings = parse_settings("search_mode_shell_up_key_binding = \"skim\"\n");
 
@@ -2237,5 +2316,21 @@ mod tests {
     ) {
         assert_eq!(requested.effective_mode(), expected);
         assert_eq!(SearchMode::from(requested), expected);
+    }
+
+    #[rstest]
+    #[case::plain(b"search_mode = \"prefix\"\n")]
+    #[case::leading_bom(b"\xef\xbb\xbfsearch_mode = \"prefix\"\n")]
+    fn config_file_text_parses(#[case] bytes: &[u8]) {
+        let text = ConfigFileText::new(Path::new("/cfg/config.toml"), bytes);
+        let config = Config::builder().add_source(text).build().unwrap();
+        assert_eq!(config.get_string("search_mode").unwrap(), "prefix");
+    }
+
+    #[rstest]
+    fn config_file_text_parse_errors_name_the_file() {
+        let text = ConfigFileText::new(Path::new("/cfg/config.toml"), b"search_mode = [\n");
+        let err = Config::builder().add_source(text).build().unwrap_err().to_string();
+        assert!(err.contains("/cfg/config.toml"), "error should name the file, got: {err}");
     }
 }

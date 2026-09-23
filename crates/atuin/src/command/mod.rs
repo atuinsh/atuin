@@ -53,7 +53,10 @@ impl AtuinCmd {
         let _log_guard = match &self {
             #[cfg(feature = "client")]
             Self::Client(_) => None,
-            _ => Some(crate::logs::LogCtx::try_enable("atuin", &LogConfig::stderr_only())?),
+            _ => Some(crate::logs::LogCtx::try_enable_keeping_old_logs(
+                "atuin",
+                &LogConfig::stderr_only(),
+            )?),
         };
 
         match self {
@@ -109,7 +112,7 @@ fn semantic_command_capture_config() -> Option<atuin_pty_proxy::CaptureConfig> {
         return None;
     }
 
-    let settings = atuin_client::settings::Settings::new().ok()?;
+    let settings = atuin_client::settings::Settings::new_blocking().ok()?;
     let max_output_bytes =
         usize::try_from(settings.output.limits()?.max_output_size.as_u64()).unwrap_or(usize::MAX);
     let (tx, rx) = mpsc::sync_channel::<(

@@ -1,5 +1,6 @@
 use std::io::IsTerminal;
 
+use atuin_common::fs;
 use atuin_common::logs::{FileConfig, LogConfig, StderrConfig};
 use tracing::Level;
 use tracing_appender::rolling::{self, RollingFileAppender, Rotation};
@@ -46,12 +47,25 @@ pub struct LogCtx {
 }
 
 impl LogCtx {
-    /// Try to enable the logging for atuin.
+    /// Try to enable the logging for atuin, first deleting log files past their retention.
     ///
     /// TODO(markovejnovic): Clean up this [`LogConfig`] structure. It feels very out-of-place where
     /// it is.
     #[must_use = "returns an RAII guard which is required for tracing support"]
-    pub fn try_enable(
+    pub async fn try_enable(
+        service_name: &'static str,
+        config: &LogConfig,
+    ) -> Result<Self, LogCtxEnableError> {
+        if let Some(file_config) = &config.file {
+            clean_up_old_logs(file_config).await;
+        }
+        Self::try_enable_keeping_old_logs(service_name, config)
+    }
+
+    /// Equivalent to [`Self::try_enable`], except it leaves old log files in place, so it needs no
+    /// runtime.
+    #[must_use = "returns an RAII guard which is required for tracing support"]
+    pub fn try_enable_keeping_old_logs(
         service_name: &'static str,
         config: &LogConfig,
     ) -> Result<Self, LogCtxEnableError> {
@@ -59,10 +73,6 @@ impl LogCtx {
         let filter: EnvFilter = std::env::var("ATUIN_LOG")
             .map_or_else(|_| get_base_filter(config), |s| filter::Builder::default().parse_lossy(s))
             .add_directive("sqlx_sqlite::regexp=off".parse().unwrap());
-
-        if let Some(file_config) = &config.file {
-            clean_up_old_logs(file_config);
-        }
 
         // A misconfigured log file is non-fatal: drop the file layer and warn once
         // the subscriber is up, so logging still works via stderr / otel.
@@ -132,21 +142,23 @@ fn get_base_filter(config: &LogConfig) -> EnvFilter {
     EnvFilter::default().add_directive(level.into())
 }
 
-fn clean_up_old_logs(config: &FileConfig) {
+async fn clean_up_old_logs(config: &FileConfig) {
     let Some(cutoff) = std::time::SystemTime::now().checked_sub(config.retention) else {
         return;
     };
 
-    let Ok(entries) = std::fs::read_dir(config.directory()) else {
+    // Best effort: a listing that fails partway cleans nothing this run.
+    let Ok(entries) = fs::read_dir(config.directory()).await else {
         return;
     };
+    let paths: Vec<_> = entries.iter().map(std::fs::DirEntry::path).collect();
+    drop(entries);
 
     let Some(prefix) = config.name().to_str() else {
         return;
     };
 
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for path in paths {
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
@@ -156,11 +168,12 @@ fn clean_up_old_logs(config: &FileConfig) {
             continue;
         }
 
-        if let Ok(metadata) = entry.metadata()
+        // `symlink_metadata`, like `DirEntry::metadata`, does not follow a symlink.
+        if let Ok(metadata) = fs::symlink_metadata(&path).await
             && let Ok(modified) = metadata.modified()
             && modified < cutoff
         {
-            let _ = std::fs::remove_file(&path);
+            let _ = fs::remove_file(&path).await;
         }
     }
 }

@@ -163,7 +163,8 @@ impl Cmd {
         let open = async || {
             #[cfg(unix)]
             let mut client =
-                SearchClient::new(settings.daemon.existing_socket_path().into_owned()).await?;
+                SearchClient::new(settings.daemon.existing_socket_path().await.into_owned())
+                    .await?;
             #[cfg(not(unix))]
             let mut client = SearchClient::new(settings.daemon.tcp_port).await?;
             client.search_command_output(query.clone(), None, self.context).await

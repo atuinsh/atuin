@@ -75,7 +75,7 @@ impl PermissibleToolCall for AtuinOutputToolCall {
 
 impl AtuinOutputToolCall {
     pub(crate) async fn execute(&self) -> ToolOutcome {
-        let settings = match atuin_client::settings::Settings::new() {
+        let settings = match atuin_client::settings::Settings::new().await {
             Ok(settings) => settings,
             Err(e) => return ToolOutcome::Error(format!("Failed to load Atuin settings: {e}")),
         };

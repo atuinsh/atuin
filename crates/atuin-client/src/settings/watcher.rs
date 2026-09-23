@@ -9,7 +9,7 @@
 //! use atuin_client::settings::watcher::global_settings_watcher;
 //!
 //! async fn example() -> eyre::Result<()> {
-//!     let watcher = global_settings_watcher()?;
+//!     let watcher = global_settings_watcher().await?;
 //!     let mut rx = watcher.subscribe();
 //!
 //!     // React to settings changes
@@ -22,26 +22,29 @@
 //! ```
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
+use atuin_common::fs;
 use eyre::{Result, WrapErr};
 use notify::event::{EventKind, ModifyKind};
 use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
-use tokio::sync::watch;
+use tokio::sync::{OnceCell, watch};
 use tracing::{debug, error, info, warn};
 
 use super::Settings;
 
 /// Global singleton for the settings watcher.
-static SETTINGS_WATCHER: OnceLock<Result<SettingsWatcher, String>> = OnceLock::new();
+static SETTINGS_WATCHER: OnceCell<Result<SettingsWatcher, String>> = OnceCell::const_new();
 
 /// Get the global settings watcher singleton.
 ///
 /// Initializes the watcher on first call. Subsequent calls return the same instance.
 /// The watcher monitors the config file for changes and broadcasts updates.
-pub fn global_settings_watcher() -> Result<&'static SettingsWatcher> {
-    let result = SETTINGS_WATCHER.get_or_init(|| SettingsWatcher::new().map_err(|e| e.to_string()));
+pub async fn global_settings_watcher() -> Result<&'static SettingsWatcher> {
+    let result = SETTINGS_WATCHER
+        .get_or_init(async || SettingsWatcher::new().await.map_err(|e| e.to_string()))
+        .await;
 
     match result {
         Ok(watcher) => Ok(watcher),
@@ -65,14 +68,14 @@ impl SettingsWatcher {
     ///
     /// Loads initial settings and starts watching the config file for changes.
     /// Changes are debounced (500ms) to avoid multiple reloads during saves.
-    pub fn new() -> Result<Self> {
-        let initial_settings = Arc::new(Settings::new()?);
+    pub async fn new() -> Result<Self> {
+        let initial_settings = Arc::new(Settings::new().await?);
         let (tx, rx) = watch::channel(initial_settings);
 
         let config_path = Self::config_path();
         info!("starting config file watcher: {:?}", config_path);
 
-        let watcher = Self::create_watcher(tx, &config_path)?;
+        let watcher = Self::create_watcher(tx, &config_path).await?;
 
         Ok(Self {
             rx,
@@ -107,7 +110,7 @@ impl SettingsWatcher {
     }
 
     /// Create the file watcher with debouncing.
-    fn create_watcher(
+    async fn create_watcher(
         tx: watch::Sender<Arc<Settings>>,
         config_path: &Path,
     ) -> Result<RecommendedWatcher> {
@@ -125,8 +128,8 @@ impl SettingsWatcher {
 
         // Canonicalize config path for reliable comparison on macOS
         // (handles symlinks like /var -> /private/var)
-        let canonical_config_path = config_path_for_watcher
-            .canonicalize()
+        let canonical_config_path = fs::canonicalize(&config_path_for_watcher)
+            .await
             .unwrap_or_else(|_| config_path_for_watcher.clone());
 
         // Create file watcher
@@ -147,9 +150,10 @@ impl SettingsWatcher {
                         // Only react to events for our specific config file
                         // (filter out editor temp files, backups, etc.)
                         let is_config_file = event.paths.iter().any(|path| {
-                            // Canonicalize for reliable comparison (handles macOS symlinks)
+                            // Canonicalize for reliable comparison (handles macOS symlinks). This
+                            // runs on notify's own thread, outside any runtime, so it blocks.
                             let canonical_event_path =
-                                path.canonicalize().unwrap_or_else(|_| path.clone());
+                                fs::blocking::canonicalize(path).unwrap_or_else(|_| path.clone());
 
                             // Check if this event is for our config file
                             // (either exact match or the file was renamed to our config)
@@ -185,9 +189,10 @@ impl SettingsWatcher {
         let watch_path = config_path.parent().unwrap_or(config_path);
 
         // Defensive: ensure watch path exists before trying to watch
-        if !watch_path.exists() {
+        if !fs::exists(watch_path).await.unwrap_or(false) {
             warn!("config directory does not exist, creating it: {:?}", watch_path);
-            std::fs::create_dir_all(watch_path)
+            fs::create_dir_all(watch_path)
+                .await
                 .wrap_err_with(|| format!("failed to create config directory: {watch_path:?}"))?;
         }
 
@@ -200,6 +205,8 @@ impl SettingsWatcher {
     }
 
     /// Debounce loop that batches file events and reloads settings.
+    ///
+    /// Runs on its own thread, outside any runtime, so its filesystem access blocks.
     fn debounce_loop(
         rx: &std::sync::mpsc::Receiver<()>,
         tx: &watch::Sender<Arc<Settings>>,
@@ -222,14 +229,14 @@ impl SettingsWatcher {
 
             // Defensive: check if config file exists before reloading
             // (handles case where file was deleted - we'll get notified when it's recreated)
-            if !config_path.exists() {
+            if !fs::blocking::exists(config_path).unwrap_or(false) {
                 debug!("config file does not exist, skipping reload: {:?}", config_path);
                 continue;
             }
 
             // Now reload settings
             info!("config file changed, reloading settings: {:?}", config_path);
-            match Settings::new() {
+            match Settings::new_blocking() {
                 Ok(settings) => {
                     if tx.send(Arc::new(settings)).is_err() {
                         // All receivers dropped

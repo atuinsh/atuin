@@ -5,6 +5,7 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use atuin_common::fs;
 use directories::UserDirs;
 use eyre::{Result, eyre};
 use time::{Duration, OffsetDateTime};
@@ -25,7 +26,7 @@ impl Zsh {
     }
 }
 
-fn default_histpath() -> Result<PathBuf> {
+async fn default_histpath() -> Result<PathBuf> {
     // oh-my-zsh sets HISTFILE=~/.zhistory
     // zsh has no default value for this var, but uses ~/.zhistory.
     // zsh-newuser-install propose as default .histfile https://github.com/zsh-users/zsh/blob/master/Functions/Newuser/zsh-newuser-install#L794
@@ -38,7 +39,7 @@ fn default_histpath() -> Result<PathBuf> {
         match candidates.next() {
             Some(candidate) => {
                 let histpath = home_dir.join(candidate);
-                if histpath.exists() {
+                if fs::exists(&histpath).await.unwrap_or(false) {
                     break Ok(histpath);
                 }
             }
@@ -96,7 +97,7 @@ impl Importer for Zsh {
     const NAME: &'static str = "zsh";
 
     async fn new() -> Result<Self> {
-        let bytes = read_to_end(get_histfile_path(default_histpath)?)?;
+        let bytes = read_to_end(get_histfile_path(default_histpath()).await?).await?;
         Ok(Self { bytes })
     }
 
@@ -249,6 +250,7 @@ mod test {
         assert_eq!(parsed.duration, duration);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn test_parse_file() {
         let bytes = r": 1613322469:0;cargo install atuin
@@ -272,6 +274,7 @@ cargo update
         ]);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn timestamp_near_range_start_does_not_panic_on_backfill() {
         // first timestamp is near the minimum representable instant, preceded by an
@@ -290,6 +293,7 @@ cargo update
         ]);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn timestamp_near_range_end_does_not_panic_on_increment() {
         // first timestamp is the maximum representable instant (253402300799 is the
@@ -321,6 +325,7 @@ cargo update
         assert_eq!(loader.buf.last().unwrap().timestamp.unix_timestamp(), 253_402_300_799);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn test_parse_metafied() {
         let bytes =

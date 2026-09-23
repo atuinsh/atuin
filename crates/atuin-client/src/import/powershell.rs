@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use atuin_common::fs;
 use directories::BaseDirs;
 use easy_cast::Conv;
 use eyre::{Result, eyre};
@@ -16,7 +17,7 @@ pub struct PowerShell {
     line_count: Option<usize>,
 }
 
-fn get_history_path() -> Result<PathBuf> {
+async fn get_history_path() -> Result<PathBuf> {
     let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
 
     // The command line history in PowerShell is maintained by the PSReadLine module:
@@ -43,7 +44,7 @@ fn get_history_path() -> Result<PathBuf> {
 
     let file = dir.join("ConsoleHost_history.txt");
 
-    if file.is_file() {
+    if fs::metadata(&file).await.is_ok_and(|m| m.is_file()) {
         Ok(file)
     } else {
         Err(eyre!("Could not find history file: {}", file.display()))
@@ -55,7 +56,7 @@ impl Importer for PowerShell {
     const NAME: &'static str = "PowerShell";
 
     async fn new() -> Result<Self> {
-        let bytes = read_to_end(get_history_path()?)?;
+        let bytes = read_to_end(get_history_path().await?).await?;
         Ok(Self {
             bytes,
             line_count: None,
