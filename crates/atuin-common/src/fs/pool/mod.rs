@@ -216,6 +216,32 @@ impl FdPool {
         result
     }
 
+    /// Equivalent to [`Self::blocking`], except the lease stays with the descriptor `open` returns.
+    pub async fn blocking_hold<T, F>(self: &Arc<Self>, open: F) -> io::Result<Leased<T>>
+    where
+        F: FnOnce() -> io::Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let lease = self.acquire().await;
+        let result = tokio::task::spawn_blocking(move || open().map(|fd| lease.hold(fd)))
+            .await
+            .expect("given closure panicked");
+        self.report_exhausted(&result);
+        result
+    }
+
+    /// Equivalent to [`Self::blocking_run`], except the lease stays with the descriptor `open`
+    /// returns.
+    pub fn blocking_run_hold<T>(
+        self: &Arc<Self>,
+        open: impl FnOnce() -> io::Result<T>,
+    ) -> io::Result<Leased<T>> {
+        let lease = self.acquire_blocking();
+        let result = open().map(|fd| lease.hold(fd));
+        self.report_exhausted(&result);
+        result
+    }
+
     /// Leases held by this pool and its descendants.
     pub fn held(&self) -> usize {
         self.counts.lock().held
