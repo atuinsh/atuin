@@ -76,7 +76,7 @@ impl Settings {
             .set_default("metrics.port", 9001)?
             .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__"));
 
-        config_builder = if fs::exists(&config_file).await? {
+        config_builder = if fs::exists(&config_file).await.unwrap_or(false) {
             config_builder
                 .add_source(ConfigFile::new(config_file.to_str().unwrap(), FileFormat::Toml))
         } else {
