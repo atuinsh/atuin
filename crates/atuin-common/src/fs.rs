@@ -1,3 +1,6 @@
+#[cfg(feature = "os")]
+pub mod pool;
+
 use std::path::{Path, PathBuf};
 
 /// A path that is removed when this type is dropped.
