@@ -124,7 +124,7 @@ impl SessionImporter {
                             };
                             // A bookkeeping line worth no row (matches live capture) is not
                             // counted: it is neither a new record nor a dedupe skip.
-                            let Some(msg) = enricher.enrich(&sid, &message) else {
+                            let Some(msg) = enricher.capture(&sid, &message) else {
                                 continue;
                             };
                             match sink.append(msg).await {

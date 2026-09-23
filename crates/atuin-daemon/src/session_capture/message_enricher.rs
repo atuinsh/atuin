@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 
 use atuin_client::ai_session::{HarnessKind, HarnessSession, Message, NativeSessionId, SourceId};
-use atuin_common::harnesstools::session::{
-    AnyMessage, Message as HarnessMessage, SessionId, SessionMeta,
-};
+use atuin_common::harnesstools::session::{AnyMessage, Message as HarnessMessage, SessionId};
 use atuin_domain::record::RecordId;
 use time::OffsetDateTime;
 
@@ -14,14 +12,6 @@ use time::OffsetDateTime;
 pub struct MessageEnricher {
     harness: HarnessKind,
     state: Bookkeeping,
-}
-
-/// What [`MessageEnricher::capture`] produced for one line.
-pub struct Captured {
-    /// A title this line newly set, for the caller to persist as session metadata.
-    pub new_title: Option<String>,
-    /// The row for this line, or `None` for a bookkeeping line worth no row.
-    pub row: Option<Message>,
 }
 
 impl MessageEnricher {
@@ -39,36 +29,17 @@ impl MessageEnricher {
         }
     }
 
-    /// Fold a session's opening metadata into the bookkeeping, so lines seen before their own
-    /// title or parent line still carry them.
-    pub fn observe_started(&mut self, session: &SessionId, meta: &SessionMeta) {
-        let tracked = self.state.sessions.entry(session.to_string()).or_default();
-        if meta.title.is_some() {
-            tracked.title.clone_from(&meta.title);
-        }
-        if let Some(parent) = &meta.parent {
-            tracked.parent = Some(NativeSessionId::from(parent.to_string()));
-        }
-    }
-
-    /// Observe a line, build its row, and drop repeated usage in one step. Reports any title the
-    /// line set alongside the row (`None` row for a bookkeeping line worth no row).
-    pub fn capture(&mut self, session: &SessionId, m: &AnyMessage) -> Captured {
+    /// Observe a line, build its row, and drop repeated usage in one step. `None` for a
+    /// bookkeeping line worth no row.
+    pub fn capture(&mut self, session: &SessionId, m: &AnyMessage) -> Option<Message> {
         let seen = self.observe(session, m);
-        let new_title = seen.new_title.clone();
         let mut row = self.build(session, m, &seen);
         if seen.repeat
             && let Some(msg) = &mut row
         {
             msg.usage = None;
         }
-        Captured { new_title, row }
-    }
-
-    /// [`capture`](Self::capture) for callers that do not record session titles separately (the
-    /// backfill importer). `None` for a bookkeeping line worth no row.
-    pub fn enrich(&mut self, session: &SessionId, m: &AnyMessage) -> Option<Message> {
-        self.capture(session, m).row
+        row
     }
 
     /// Advance the bookkeeping for one line and report what it resolved (see [`Observed`]).
@@ -82,9 +53,8 @@ impl MessageEnricher {
             None => state.last_ts.unwrap_or_else(OffsetDateTime::now_utc),
         };
         // ponytail: newest title wins; a hand-set title is not ranked above a later generated one.
-        let new_title = m.title();
-        if new_title.is_some() {
-            state.title.clone_from(&new_title);
+        if let Some(title) = m.title() {
+            state.title = Some(title);
         }
         if let Some(parent) = m.parent_session().filter(|p| p != session) {
             state.parent = Some(NativeSessionId::from(parent.to_string()));
@@ -96,7 +66,6 @@ impl MessageEnricher {
 
         Observed {
             timestamp,
-            new_title,
             title: state.title.clone(),
             parent: state.parent.clone(),
             repeat,
@@ -104,19 +73,25 @@ impl MessageEnricher {
     }
 
     /// `None` for a line that carries nothing worth a row: harness bookkeeping (Claude Code mode
-    /// switches, Codex `item_completed` twins) with no content, usage, stop reason, model or
-    /// title. A line with its own id is a node of the transcript tree and keeps an empty row
-    /// (Claude Code attachments), so no kept line's parent link dangles.
+    /// switches, Codex `item_completed` twins) with no content, usage, stop reason, title or
+    /// session context (cwd, branch, model). Session context is kept because the session row is
+    /// projected from rows alone (Codex `session_meta`, the Pi header). A line with its own id is
+    /// a node of the transcript tree and keeps an empty row (Claude Code attachments), so no kept
+    /// line's parent link dangles.
     fn build(&self, session: &SessionId, m: &AnyMessage, seen: &Observed) -> Option<Message> {
         let content = m.content();
         let usage = m.usage();
         let stop_reason = m.stop_reason();
         let model = m.model();
+        let cwd = m.cwd();
+        let git_branch = m.git_branch();
         if m.id().is_none()
             && content.is_empty()
             && usage.is_none()
             && stop_reason.is_none()
             && model.is_none()
+            && cwd.is_none()
+            && git_branch.is_none()
             && m.title().is_none()
         {
             return None;
@@ -139,8 +114,8 @@ impl MessageEnricher {
                 .model(model)
                 .usage(usage)
                 .stop_reason(stop_reason)
-                .cwd(m.cwd())
-                .git_branch(m.git_branch())
+                .cwd(cwd)
+                .git_branch(git_branch)
                 .session_title(seen.title.clone())
                 .build(),
         )
@@ -164,6 +139,11 @@ impl MessageEnricher {
 }
 
 /// What the capture pipeline carries from one line to the next, per native session id.
+///
+/// Rebuilt by replay today: boot re-reads every transcript from byte zero, so the state is
+/// always warm before a new line arrives. Once boot resumes from a saved offset instead, a
+/// session mid-flight must be seeded from the sidecar (title, parent from its session row; last
+/// turn id from its last message) or titles and usage dedupe silently break after a restart.
 #[derive(Default)]
 struct Bookkeeping {
     sessions: HashMap<String, SessionState>,
@@ -187,8 +167,6 @@ struct SessionState {
 /// What [`MessageEnricher::observe`] resolved for one line.
 struct Observed {
     timestamp: OffsetDateTime,
-    /// The title this line set, if it set one.
-    new_title: Option<String>,
     title: Option<String>,
     parent: Option<NativeSessionId>,
     /// This row repeats the usage an earlier row of the same model call already carried.
@@ -254,7 +232,7 @@ mod tests {
     #[rstest]
     fn enrich_stamps_handle_from_harness_kind() {
         let mut n = MessageEnricher::new(HarnessKind::Pi);
-        let msg = n.enrich(&session(), &scripted_message_without_id()).unwrap();
+        let msg = n.capture(&session(), &scripted_message_without_id()).unwrap();
         assert_eq!(msg.session, n.handle(&session()));
         assert_eq!(msg.session.harness, HarnessKind::Pi);
     }
@@ -265,7 +243,7 @@ mod tests {
             "type": "attachment", "uuid": "a1", "parentUuid": "u0", "cwd": "/x",
             "attachment": {"type": "hook_success", "stdout": "secret"},
         }));
-        let msg = MessageEnricher::new(HarnessKind::ClaudeCode).enrich(&session(), &m).unwrap();
+        let msg = MessageEnricher::new(HarnessKind::ClaudeCode).capture(&session(), &m).unwrap();
         assert_eq!(msg.source_id, SourceId::from("a1".to_owned()));
         assert_eq!(msg.parent_source_id, Some(SourceId::from("u0".to_owned())));
         assert_eq!(msg.role, Role::Other("attachment".to_owned()));
@@ -278,7 +256,7 @@ mod tests {
     #[case(serde_json::json!({"type": "file-history-snapshot", "messageId": "m1", "snapshot": {}}))]
     fn bookkeeping_lines_produce_no_row(#[case] raw: serde_json::Value) {
         let m = ccode(&raw);
-        assert!(MessageEnricher::new(HarnessKind::ClaudeCode).enrich(&session(), &m).is_none());
+        assert!(MessageEnricher::new(HarnessKind::ClaudeCode).capture(&session(), &m).is_none());
     }
 
     #[rstest]
@@ -287,12 +265,95 @@ mod tests {
         let m = ccode(&serde_json::json!({
             "type": "ai-title", "aiTitle": "Fix it", "timestamp": "2023-11-14T22:13:20Z",
         }));
-        let captured = MessageEnricher::new(HarnessKind::ClaudeCode).capture(&session(), &m);
-        let msg = captured.row.unwrap();
+        let msg = MessageEnricher::new(HarnessKind::ClaudeCode).capture(&session(), &m).unwrap();
         assert_eq!(msg.timestamp, ts);
         assert_eq!(msg.session_title.as_deref(), Some("Fix it"));
-        assert_eq!(captured.new_title.as_deref(), Some("Fix it"));
         assert!(msg.content.is_empty());
+    }
+
+    /// A line carrying only session context (Codex `session_meta`, the Pi header) is a row by
+    /// rule: the session row is projected from rows alone.
+    #[rstest]
+    fn session_context_lines_keep_a_row() {
+        let m = codex(&serde_json::json!({
+            "type": "session_meta", "payload": {"cwd": "/work/atuin"},
+        }));
+        let msg = MessageEnricher::new(HarnessKind::Codex).capture(&session(), &m).unwrap();
+        assert_eq!(msg.cwd.as_deref(), Some(std::path::Path::new("/work/atuin")));
+        assert!(msg.content.is_empty());
+    }
+
+    /// The session row is a projection of rows: for every fixture, folding the captured rows the
+    /// way the sessions upsert does yields what the (since deleted) per-file `meta()` read
+    /// returned. Values are what `meta()` produced on these redacted fixtures before deletion.
+    ///
+    /// Known difference: `meta()` never set a model for Claude Code (rows carry it from each
+    /// assistant line), and Pi's model came from the header's `modelId` where rows carry the
+    /// assistant line's `message.model`; on these fixtures both redact to the same string.
+    #[rstest]
+    #[case::ccode1(
+        include_str!("../../../atuin-common/tests/fixtures/ccode/session1.jsonl"),
+        HarnessKind::ClaudeCode, "fe23275d-ec6d-fbd0-dff0-69a857f5a8a4",
+        Some("<path>"), Some("<redacted>"), Some("<redacted>"), Some("<redacted>")
+    )]
+    #[case::ccode2(
+        include_str!("../../../atuin-common/tests/fixtures/ccode/session2.jsonl"),
+        HarnessKind::ClaudeCode, "b6edc00c-95da-8ccc-5d2f-a8202b668926",
+        Some("<path>"), Some("<redacted>"), Some("<redacted>"), Some("<redacted>")
+    )]
+    #[case::ccode3(
+        include_str!("../../../atuin-common/tests/fixtures/ccode/session3.jsonl"),
+        HarnessKind::ClaudeCode, "ad2b77ac-8b01-ecc3-a4fb-608c770200bf",
+        Some("<path>"), Some("<redacted>"), Some("<redacted>"), Some("<redacted>")
+    )]
+    #[case::codex1(
+        include_str!("../../../atuin-common/tests/fixtures/codex/session1.jsonl"),
+        HarnessKind::Codex, "fbf768ea-a58c-ab8f-a29f-6a640df5ba7b",
+        Some("<path>"), None, Some("<redacted>"), None
+    )]
+    #[case::pi1(
+        include_str!("../../../atuin-common/tests/fixtures/pi/session1.jsonl"),
+        HarnessKind::Pi, "372bddb6-5d16-1553-fe79-3ffc84a47b20",
+        Some("<path>"), None, Some("<redacted>"), None
+    )]
+    #[case::pi2(
+        include_str!("../../../atuin-common/tests/fixtures/pi/session2.jsonl"),
+        HarnessKind::Pi, "7b496138-2a3f-3cb1-279a-4cdb9915fa98",
+        Some("<path>"), None, Some("<redacted>"), None
+    )]
+    fn rows_project_the_session_that_meta_used_to_read(
+        #[case] jsonl: &str,
+        #[case] harness: HarnessKind,
+        #[case] session_id: &str,
+        #[case] cwd: Option<&str>,
+        #[case] git_branch: Option<&str>,
+        #[case] model: Option<&str>,
+        #[case] title: Option<&str>,
+    ) {
+        let sid = SessionId::from(session_id.to_owned());
+        let mut n = MessageEnricher::new(harness);
+        let lines = jsonl.lines().filter(|l| !l.trim().is_empty());
+        let rows: Vec<Message> = lines
+            .map(|l| match harness {
+                HarnessKind::ClaudeCode => ccode(&serde_json::from_str(l).unwrap()),
+                HarnessKind::Codex => codex(&serde_json::from_str(l).unwrap()),
+                HarnessKind::Pi => AnyMessage::from(serde_json::from_str::<PiMessage>(l).unwrap()),
+                _ => unreachable!(),
+            })
+            .filter_map(|m| n.capture(&sid, &m))
+            .collect();
+        assert!(!rows.is_empty());
+
+        // Latest non-null wins, as the sessions upsert's COALESCE(excluded.x, sessions.x) does.
+        let last = |pick: fn(&Message) -> Option<String>| rows.iter().rev().find_map(pick);
+        assert_eq!(
+            last(|m| m.cwd.as_ref().map(|p| p.to_string_lossy().into_owned())).as_deref(),
+            cwd
+        );
+        assert_eq!(last(|m| m.git_branch.clone()).as_deref(), git_branch);
+        assert_eq!(last(|m| m.model.clone()).as_deref(), model);
+        assert_eq!(last(|m| m.session_title.clone()).as_deref(), title);
+        assert!(rows.iter().all(|m| m.parent.is_none()), "no fixture is a fork or subagent");
     }
 
     #[rstest]
@@ -315,7 +376,7 @@ mod tests {
             "type": "assistant", "uuid": "u2", "parentUuid": "u1", "sessionId": line_session,
             "message": {"role": "assistant", "id": "msg_01", "content": [{"type": "text", "text": "hi"}]},
         }));
-        let msg = MessageEnricher::new(HarnessKind::ClaudeCode).enrich(&session(), &m).unwrap();
+        let msg = MessageEnricher::new(HarnessKind::ClaudeCode).capture(&session(), &m).unwrap();
         assert_eq!(msg.parent_source_id, Some(SourceId::from("u1".to_owned())));
         assert_eq!(
             msg.parent.map(|p| p.session),
@@ -344,7 +405,7 @@ mod tests {
 
         let mut n = MessageEnricher::new(HarnessKind::ClaudeCode);
         let rows: Vec<Message> =
-            [first, second].iter().filter_map(|m| n.enrich(&session(), m)).collect();
+            [first, second].iter().filter_map(|m| n.capture(&session(), m)).collect();
         assert!(rows[0].usage.is_some());
         assert!(rows[1].usage.is_none());
         assert_eq!(rows[1].content.len(), 1);
@@ -366,9 +427,9 @@ mod tests {
         };
 
         let mut n = MessageEnricher::new(HarnessKind::Codex);
-        assert!(n.enrich(&session(), &started).is_none());
-        let first = n.enrich(&session(), &usage("r1", 5)).unwrap();
-        let second = n.enrich(&session(), &usage("r2", 7)).unwrap();
+        assert!(n.capture(&session(), &started).is_none());
+        let first = n.capture(&session(), &usage("r1", 5)).unwrap();
+        let second = n.capture(&session(), &usage("r2", 7)).unwrap();
         assert_eq!(first.usage.and_then(|u| u.output), Some(5));
         assert_eq!(second.usage.and_then(|u| u.output), Some(7));
     }

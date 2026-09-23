@@ -10,7 +10,7 @@ use typed_builder::TypedBuilder;
 use crate::fs::tree_watcher::{NodeContext, TreeWatcher};
 use crate::harnesstools::codex::Codex;
 use crate::harnesstools::session::model::{
-    Content, MessageId, Role, SessionMeta, StopReason, ToolCallId, ToolResult, ToolUse, Usage,
+    Content, MessageId, Role, StopReason, ToolCallId, ToolResult, ToolUse, Usage,
 };
 use crate::harnesstools::session::{
     Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId, Sessions,
@@ -173,21 +173,6 @@ impl Session for CodexSession {
 
     fn read(&self) -> impl Stream<Item = Result<CodexMessage, MessageError>> + Send + 'static {
         jsonl::read_all::<CodexMessage>(self.path.clone()).map_err(MessageError::from)
-    }
-
-    fn meta(&self) -> impl std::future::Future<Output = Result<SessionMeta, MessageError>> + Send {
-        let path = self.path.clone();
-        async move {
-            let messages: Vec<CodexMessage> =
-                jsonl::read_all(path).map_err(MessageError::from).try_collect().await?;
-            let cwd = messages.iter().find_map(Message::cwd);
-            let model = messages.iter().find_map(Message::model);
-            Ok(SessionMeta {
-                cwd,
-                model,
-                ..SessionMeta::default()
-            })
-        }
     }
 }
 
@@ -535,34 +520,6 @@ mod tests {
         let roles: Vec<Role> =
             session.messages().take(2).map_ok(|m| m.role()).try_collect().await.unwrap();
         assert_eq!(roles.last(), Some(&Role::User));
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn meta_reads_cwd_from_session_meta_and_model_from_turn_context() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("rollout-2026-09-18-th1.jsonl");
-        let body = [
-            serde_json::json!({
-                "type": "session_meta",
-                "payload": {"id": "th1", "cwd": "/work/atuin"},
-            })
-            .to_string(),
-            serde_json::json!({
-                "type": "turn_context",
-                "payload": {"model": "gpt-5.6-terra", "cwd": "/work/atuin"},
-            })
-            .to_string(),
-        ]
-        .join("\n")
-            + "\n";
-        std::fs::write(&path, body).unwrap();
-
-        let session = CodexSession::open(SessionId::from("th1".to_owned()), path);
-        let meta = session.meta().await.unwrap();
-        assert_eq!(meta.cwd, Some(PathBuf::from("/work/atuin")));
-        assert_eq!(meta.model, Some("gpt-5.6-terra".to_owned()));
-        assert_eq!(meta.git_branch, None);
     }
 
     #[rstest]
