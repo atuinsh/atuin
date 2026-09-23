@@ -136,16 +136,18 @@ impl Drop for UpdateOnWindowsContext {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
+    #[rstest]
     fn test_registry_creation() {
         let registry = OfficialPluginRegistry::new();
         assert!(registry.is_official_plugin("update"));
         assert!(!registry.is_official_plugin("nonexistent"));
     }
 
-    #[test]
+    #[rstest]
     fn test_get_plugin() {
         let registry = OfficialPluginRegistry::new();
         let plugin = registry.get_plugin("update");
@@ -153,7 +155,7 @@ mod tests {
         assert_eq!(plugin.unwrap().name, "update");
     }
 
-    #[test]
+    #[rstest]
     fn test_get_install_message() {
         let registry = OfficialPluginRegistry::new();
         let message = registry.get_install_message("update");
