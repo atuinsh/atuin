@@ -61,11 +61,23 @@ pub enum SecureTempDirError {
         path: PathBuf,
         permissions: u32,
     },
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
+    #[error("could not set up {}: {source}", .path.display())]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 impl SecureTempDirError {
+    /// An [`Self::Io`] for `path`, for `map_err`.
+    fn io(path: &Path) -> impl FnOnce(std::io::Error) -> Self {
+        move |source| Self::Io {
+            path: path.to_owned(),
+            source,
+        }
+    }
+
     /// Check that the existing directory at `path`, described by `meta`, is private to this user.
     ///
     /// `meta` must come from `symlink_metadata` so that a symlink is rejected rather than followed.
@@ -121,9 +133,11 @@ where
     match crate::fs::create_secure_dir(path.as_ref(), 0o700).await {
         Ok(()) => return Ok(path),
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(e) => return Err(e.into()),
+        Err(e) => return Err(SecureTempDirError::io(path.as_ref())(e)),
     }
-    let meta = crate::fs::symlink_metadata(path.as_ref()).await?;
+    let meta = crate::fs::symlink_metadata(path.as_ref())
+        .await
+        .map_err(SecureTempDirError::io(path.as_ref()))?;
     SecureTempDirError::ensure_private(path, &meta)
 }
 
@@ -137,9 +151,10 @@ where
     match crate::fs::blocking::create_secure_dir(path.as_ref(), 0o700) {
         Ok(()) => return Ok(path),
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(e) => return Err(e.into()),
+        Err(e) => return Err(SecureTempDirError::io(path.as_ref())(e)),
     }
-    let meta = crate::fs::blocking::symlink_metadata(path.as_ref())?;
+    let meta = crate::fs::blocking::symlink_metadata(path.as_ref())
+        .map_err(SecureTempDirError::io(path.as_ref()))?;
     SecureTempDirError::ensure_private(path, &meta)
 }
 
@@ -192,5 +207,17 @@ mod tests {
         touch_file(&link).unwrap();
         assert!(fs_err::symlink_metadata(&link).unwrap().mtime() > 0);
         assert_eq!(fs_err::symlink_metadata(&target).unwrap().mtime(), 0);
+    }
+
+    #[rstest]
+    fn a_secure_temp_dir_io_error_names_its_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let orphan = tmp.path().join("missing/dir");
+        let Err(SecureTempDirError::Io { path, source }) =
+            create_secure_temp_dir_blocking(orphan.clone())
+        else {
+            panic!("a directory under a missing parent cannot be created");
+        };
+        assert_eq!((path, source.kind()), (orphan, std::io::ErrorKind::NotFound));
     }
 }
