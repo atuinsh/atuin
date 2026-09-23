@@ -237,7 +237,8 @@ impl FdPool {
     }
 
     /// Leases held by this pool and its descendants.
-    pub fn held(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn held(&self) -> usize {
         self.counts.lock().held
     }
 
