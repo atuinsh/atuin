@@ -128,8 +128,9 @@ impl Listener for PiListener {
         let root = self.root;
         let pool = self.pool;
         async_stream::stream! {
-            let files = TreeWatcher::builder(pool.clone())
-                .watch(&root, |path| Self::session_id(path).is_some());
+            let files = TreeWatcher::builder()
+                .filter(|path| Self::session_id(path).is_some())
+                .watch(&root);
             let files = match files {
                 Ok(files) => files,
                 Err(err) => {
