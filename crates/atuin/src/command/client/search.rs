@@ -1,5 +1,4 @@
-use std::fs::File;
-use std::io::{IsTerminal as _, Write, stderr, stdout};
+use std::io::{IsTerminal as _, stderr, stdout};
 
 use atuin_client::database::{OptFilters, Sqlite, current_context};
 use atuin_client::history::store::HistoryStore;
@@ -10,7 +9,7 @@ use atuin_client::theme::Theme;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::filter::OrFilter;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
-use atuin_common::utils;
+use atuin_common::{fs, utils};
 use clap::Parser;
 use eyre::{Context as _, Result};
 use tracing::instrument;
@@ -223,8 +222,7 @@ impl Cmd {
             let item = interactive::history(&query, settings, db, &history_store, theme).await?;
 
             if let Some(result_file) = self.result_file {
-                let mut file = File::create(result_file)?;
-                write!(file, "{item}")?;
+                fs::write(result_file, &item).await?;
             } else if !stdout().is_terminal() {
                 // stdout is not a terminal - likely command substitution like VAR=$(atuin search -i)
                 // Write to stdout so it gets captured. This requires some care on Windows, as the current

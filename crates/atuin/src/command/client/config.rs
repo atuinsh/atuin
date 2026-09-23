@@ -1,4 +1,5 @@
 use atuin_client::settings::Settings;
+use atuin_common::fs;
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::Result;
 use toml_edit::{Document, DocumentMut, Item, Table, TableLike, Value};
@@ -76,7 +77,7 @@ impl GetCmd {
 
     async fn print_current_value(&self, key: &str, prefix: &str) -> Result<()> {
         let config_file = Settings::get_config_path().await?;
-        let config_str = tokio::fs::read_to_string(&config_file).await?;
+        let config_str = fs::read_to_string(&config_file).await?;
         let doc = config_str.parse::<Document<_>>()?;
 
         let current = get_deep_key(&doc, key);
@@ -151,10 +152,10 @@ pub enum ValueType {
 impl SetCmd {
     pub async fn run(self, _settings: &Settings) -> Result<()> {
         let config_file = Settings::get_config_path().await?;
-        let config_str = tokio::fs::read_to_string(&config_file).await?;
+        let config_str = fs::read_to_string(&config_file).await?;
 
         let updated = self.get_updated_config(&config_str)?;
-        tokio::fs::write(&config_file, &updated).await?;
+        fs::write(&config_file, &updated).await?;
         Ok(())
     }
 
@@ -244,10 +245,10 @@ pub enum Feature {
 impl EnableCmd {
     pub async fn run(self, settings: &Settings) -> Result<()> {
         let config_file = Settings::get_config_path().await?;
-        let config_str = tokio::fs::read_to_string(&config_file).await?;
+        let config_str = fs::read_to_string(&config_file).await?;
 
         let updated = self.get_updated_config(&config_str, settings.daemon.enabled)?;
-        tokio::fs::write(&config_file, &updated).await?;
+        fs::write(&config_file, &updated).await?;
 
         println!("Enabled.");
 
@@ -304,7 +305,7 @@ pub struct PrintCmd {
 impl PrintCmd {
     pub async fn run(&self, _settings: &Settings) -> Result<()> {
         let config_file = Settings::get_config_path().await?;
-        let config_str = tokio::fs::read_to_string(&config_file).await?;
+        let config_str = fs::read_to_string(&config_file).await?;
         let doc = config_str.parse::<Document<_>>()?;
 
         if let Some(key) = &self.key {

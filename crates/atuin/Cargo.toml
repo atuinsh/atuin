@@ -117,7 +117,9 @@ ratatui = { workspace = true }
 regex = { workspace = true }
 rpassword = { workspace = true }
 runtime-format = { workspace = true }
-rust-embed = { workspace = true }
+# debug-embed: a debug build would otherwise read the catalogue from the source tree at runtime,
+# with filesystem calls that bypass FdPool.
+rust-embed = { workspace = true, features = ["debug-embed"] }
 rustix = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }

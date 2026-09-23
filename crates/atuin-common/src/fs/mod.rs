@@ -212,9 +212,15 @@ impl OpenOptions {
 
     /// Open the file at `path` with these options.
     pub async fn open(&self, path: impl AsRef<Path>) -> io::Result<File> {
-        let (options, path) = (self.0.clone(), path.as_ref().to_owned());
-        let file = FdPool::system().blocking_hold(move || options.open(path)).await?;
+        let file = self.open_std(path).await?;
         Ok(Leased::map(file, tokio::fs::File::from_std))
+    }
+
+    /// Equivalent to [`Self::open`], except it yields a [`std::fs::File`], for what tokio's lacks
+    /// (such as locking).
+    pub async fn open_std(&self, path: impl AsRef<Path>) -> io::Result<blocking::File> {
+        let (options, path) = (self.0.clone(), path.as_ref().to_owned());
+        FdPool::system().blocking_hold(move || options.open(path)).await
     }
 
     /// Equivalent to [`Self::open`], except it waits and opens on the calling thread.
@@ -347,6 +353,22 @@ mod tests {
             file.flush().await.unwrap();
         }
         assert_eq!(read_to_string(&path).await.unwrap(), "ab");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn open_std_yields_a_leased_std_file(dir: TempDir) {
+        let path = dir.path().join("f");
+        // The system pool is process-wide, so this count relies on nextest's process per test.
+        let held = FdPool::system().held();
+
+        let mut file = OpenOptions::new().write(true).create(true).open_std(&path).await.unwrap();
+        assert_eq!(FdPool::system().held(), held + 1);
+        file.try_lock().unwrap();
+        std::io::Write::write_all(&mut *file, b"hello").unwrap();
+        drop(file);
+        assert_eq!(FdPool::system().held(), held);
+        assert_eq!(read_to_string(&path).await.unwrap(), "hello");
     }
 
     #[rstest]

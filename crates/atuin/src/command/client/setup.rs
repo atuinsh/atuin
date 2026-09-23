@@ -1,6 +1,7 @@
 use std::io::{self, Write};
 
 use atuin_client::settings::Settings;
+use atuin_common::fs;
 use colored::Colorize;
 use eyre::Result;
 use toml_edit::{DocumentMut, value};
@@ -24,7 +25,7 @@ pub async fn run(_settings: &Settings) -> Result<()> {
     )?;
 
     let config_file = Settings::get_config_path().await?;
-    let config_str = tokio::fs::read_to_string(&config_file).await?;
+    let config_str = fs::read_to_string(&config_file).await?;
     let mut doc = config_str.parse::<DocumentMut>()?;
 
     let mut changed = false;
@@ -47,7 +48,7 @@ pub async fn run(_settings: &Settings) -> Result<()> {
     }
 
     if changed {
-        tokio::fs::write(config_file, doc.to_string()).await?;
+        fs::write(config_file, doc.to_string()).await?;
 
         println!("{check} Settings updated successfully", check = "✓".bold().bright_green());
     } else {

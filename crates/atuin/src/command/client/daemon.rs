@@ -1,4 +1,4 @@
-use std::fs::{self, File, OpenOptions, TryLockError};
+use std::fs::TryLockError;
 use std::io::{ErrorKind, Write};
 use std::ops::ControlFlow;
 #[cfg(unix)]
@@ -11,6 +11,7 @@ use atuin_client::database::Sqlite;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
+use atuin_common::fs::{self, OpenOptions};
 use atuin_common::futures::Backoff;
 use atuin_daemon::client::{DaemonClientErrorKind, HistoryClient, classify_error};
 use clap::Subcommand;
@@ -104,12 +105,12 @@ const LOCK_POLL: Duration = Duration::from_millis(20);
 const LEGACY_DAEMON_RESTART_MESSAGE: &str = "legacy daemon detected; restart daemon manually";
 
 struct PidfileGuard {
-    file: File,
+    file: fs::blocking::File,
 }
 
 impl PidfileGuard {
-    fn acquire(path: &Path) -> Result<Self> {
-        let mut file = open_lock_file(path)?;
+    async fn acquire(path: &Path) -> Result<Self> {
+        let mut file = open_lock_file(path).await?;
 
         match file.try_lock() {
             Ok(()) => {}
@@ -175,9 +176,10 @@ fn daemon_startup_lock_path(pidfile_path: &Path) -> PathBuf {
     PathBuf::from(os)
 }
 
-fn open_lock_file(path: &Path) -> Result<File> {
+async fn open_lock_file(path: &Path) -> Result<fs::blocking::File> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
+            .await
             .wrap_err_with(|| format!("could not create lock directory {}", parent.display()))?;
     }
 
@@ -186,12 +188,13 @@ fn open_lock_file(path: &Path) -> Result<File> {
         .write(true)
         .create(true)
         .truncate(false)
-        .open(path)
+        .open_std(path)
+        .await
         .wrap_err_with(|| format!("could not open lock file {}", path.display()))
 }
 
-async fn wait_for_lock(path: &Path, timeout: Duration) -> Result<File> {
-    let file = open_lock_file(path)?;
+async fn wait_for_lock(path: &Path, timeout: Duration) -> Result<fs::blocking::File> {
+    let file = open_lock_file(path).await?;
 
     let outcome = Backoff::Constant(LOCK_POLL)
         .retry_sync(
@@ -289,7 +292,7 @@ struct RemoveSocketError {
 
 /// Remove the daemon's socket from every path it may be at, subject to `should_remove`.
 #[cfg(unix)]
-fn remove_sockets(
+async fn remove_sockets(
     settings: &Settings,
     should_remove: impl Fn(&Path) -> bool,
 ) -> Result<(), RemoveSocketError> {
@@ -299,11 +302,11 @@ fn remove_sockets(
 
     let mut error = None;
     for socket_path in settings.daemon.potential_socket_paths() {
-        if !socket_path.exists() || !should_remove(&socket_path) {
+        if !fs::exists(&socket_path).await.unwrap_or(false) || !should_remove(&socket_path) {
             continue;
         }
 
-        if let Err(e) = fs::remove_file(&socket_path)
+        if let Err(e) = fs::remove_file(&socket_path).await
             && e.kind() != ErrorKind::NotFound
         {
             // Log the error because we only return the first error when multiple occur.
@@ -320,7 +323,7 @@ fn remove_sockets(
 
 /// Remove any socket left behind by a daemon that is no longer listening.
 #[cfg(unix)]
-fn remove_stale_socket_if_present(settings: &Settings) -> Result<(), RemoveSocketError> {
+async fn remove_stale_socket_if_present(settings: &Settings) -> Result<(), RemoveSocketError> {
     remove_sockets(settings, |socket_path| {
         // A refused connection means the socket is left over from a daemon that is gone.
         matches!(
@@ -328,6 +331,7 @@ fn remove_stale_socket_if_present(settings: &Settings) -> Result<(), RemoveSocke
             Err(e) if e.kind() == ErrorKind::ConnectionRefused
         )
     })
+    .await
 }
 
 async fn wait_until_ready(settings: &Settings, timeout: Duration) -> Result<HistoryClient> {
@@ -406,7 +410,7 @@ pub async fn ensure_daemon_running(settings: &Settings) -> Result<()> {
     wait_for_pidfile_available(&pidfile_path, timeout).await?;
 
     #[cfg(unix)]
-    remove_stale_socket_if_present(settings)?;
+    remove_stale_socket_if_present(settings).await?;
 
     spawn_daemon_process()?;
     let _ = wait_until_ready(settings, timeout).await?;
@@ -600,7 +604,7 @@ pub(super) async fn restart_cmd(settings: &Settings) -> Result<()> {
     }
 
     #[cfg(unix)]
-    remove_stale_socket_if_present(settings)?;
+    remove_stale_socket_if_present(settings).await?;
 
     spawn_daemon_process()?;
     println!("Starting daemon...");
@@ -647,7 +651,7 @@ async fn run(
     }
 
     let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
-    let _pidfile_guard = PidfileGuard::acquire(&pidfile_path)?;
+    let _pidfile_guard = PidfileGuard::acquire(&pidfile_path).await?;
 
     atuin_daemon::boot(settings, store, history_db).await?;
 
@@ -659,8 +663,8 @@ async fn force_cleanup(settings: &Settings) {
     let pidfile_path = Path::new(&settings.daemon.pidfile_path);
 
     // Read and kill the existing process if pidfile exists
-    if pidfile_path.exists() {
-        if let Ok(contents) = fs::read_to_string(pidfile_path)
+    if fs::exists(pidfile_path).await.unwrap_or(false) {
+        if let Ok(contents) = fs::read_to_string(pidfile_path).await
             && let Some(pid_str) = contents.lines().next()
             && let Some(pid) = pid_str.trim().parse::<i32>().ok()
             && pid > 0
@@ -674,7 +678,7 @@ async fn force_cleanup(settings: &Settings) {
         }
 
         // Remove the pidfile
-        if let Err(e) = fs::remove_file(pidfile_path)
+        if let Err(e) = fs::remove_file(pidfile_path).await
             && e.kind() != ErrorKind::NotFound
         {
             tracing::warn!("failed to remove pidfile: {e}");
@@ -683,7 +687,7 @@ async fn force_cleanup(settings: &Settings) {
 
     // Remove the socket files
     #[cfg(unix)]
-    if let Err(e) = remove_sockets(settings, |_| true) {
+    if let Err(e) = remove_sockets(settings, |_| true).await {
         tracing::warn!("{e}");
     }
 }
@@ -749,11 +753,12 @@ mod tests {
     }
 
     #[rstest]
-    fn test_pidfile_guard_acquire_and_drop(
+    #[tokio::test]
+    async fn test_pidfile_guard_acquire_and_drop(
         #[from(pidfile)] (_tmp, pidfile): (tempfile::TempDir, PathBuf),
     ) {
         {
-            let _guard = PidfileGuard::acquire(&pidfile).unwrap();
+            let _guard = PidfileGuard::acquire(&pidfile).await.unwrap();
             // Guard holds an exclusive lock — on Windows other handles cannot
             // read the file, so we verify contents after the guard is dropped.
         }
@@ -765,15 +770,16 @@ mod tests {
         assert_eq!(lines[1], DAEMON_VERSION);
 
         // After guard is dropped, lock should be released — acquiring again must succeed.
-        let _guard2 = PidfileGuard::acquire(&pidfile).unwrap();
+        let _guard2 = PidfileGuard::acquire(&pidfile).await.unwrap();
     }
 
     #[rstest]
-    fn test_pidfile_guard_prevents_double_acquire(
+    #[tokio::test]
+    async fn test_pidfile_guard_prevents_double_acquire(
         #[from(pidfile)] (_tmp, pidfile): (tempfile::TempDir, PathBuf),
     ) {
-        let _guard = PidfileGuard::acquire(&pidfile).unwrap();
-        let result = PidfileGuard::acquire(&pidfile);
+        let _guard = PidfileGuard::acquire(&pidfile).await.unwrap();
+        let result = PidfileGuard::acquire(&pidfile).await;
         assert!(result.is_err());
     }
 }

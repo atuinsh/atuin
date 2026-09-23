@@ -4,6 +4,7 @@ use std::str::FromStr;
 
 use atuin_client::history::{AuthorKind, HistoryId};
 use atuin_client::settings::Settings;
+use atuin_common::fs;
 use atuin_common::harnesstools::{AnyHarness, Harness, InstallHookError};
 use clap::{Parser, Subcommand};
 use eyre::{Result, bail};
@@ -111,17 +112,17 @@ async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
             )
             .await?
             {
-                std::fs::write(id_file_path(&tool_use_id), history_id.to_string())?;
+                fs::write(id_file_path(&tool_use_id), history_id.to_string()).await?;
             }
         }
         Some(HookEvent::End { tool_use_id, exit }) => {
             let id_path = id_file_path(&tool_use_id);
 
-            if let Ok(history_id) = std::fs::read_to_string(&id_path) {
+            if let Ok(history_id) = fs::read_to_string(&id_path).await {
                 if let Ok(history_id) = HistoryId::from_str(history_id.trim()) {
                     let _ = history::end_history_entry(settings, history_id, exit, None).await;
                 }
-                let _ = std::fs::remove_file(&id_path);
+                let _ = fs::remove_file(&id_path).await;
             }
         }
         None => {}

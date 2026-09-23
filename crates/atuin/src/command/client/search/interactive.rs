@@ -10,6 +10,9 @@ use atuin_client::settings::{
     CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewStrategy, RequestedSearchMode,
     SearchMode, Settings, UiColumn,
 };
+use atuin_common::fs;
+#[cfg(windows)]
+use atuin_common::fs::pool::Leased;
 use atuin_common::shell::Shell;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
 use easy_cast::Conv;
@@ -1482,16 +1485,16 @@ impl State {
 enum TerminalWriter {
     Stdout(std::io::Stdout),
     #[cfg(unix)]
-    Tty(std::fs::File),
+    Tty(fs::blocking::File),
     #[cfg(windows)]
-    ConOut(std::io::LineWriter<std::fs::File>, u32),
+    ConOut(Leased<std::io::LineWriter<std::fs::File>>, u32),
 }
 
 impl TerminalWriter {
     #[cfg(windows)]
     const CP_UTF8: u32 = 65001;
 
-    fn new() -> std::io::Result<Self> {
+    async fn new() -> std::io::Result<Self> {
         let stdout = stdout();
         if stdout.is_terminal() {
             return Ok(TerminalWriter::Stdout(stdout));
@@ -1503,7 +1506,7 @@ impl TerminalWriter {
         #[cfg(unix)]
         {
             Ok(TerminalWriter::Tty(
-                std::fs::File::options().read(true).write(true).open("/dev/tty")?,
+                fs::OpenOptions::new().read(true).write(true).open_std("/dev/tty").await?,
             ))
         }
 
@@ -1512,7 +1515,7 @@ impl TerminalWriter {
         // TUI to render properly. We'll set it back to its previous value upon exit.
         #[cfg(windows)]
         {
-            let file = std::fs::File::options().read(true).write(true).open("CONOUT$")?;
+            let file = fs::OpenOptions::new().read(true).write(true).open_std("CONOUT$").await?;
 
             let initial_console_output_cp = unsafe { GetConsoleOutputCP() };
             if initial_console_output_cp != Self::CP_UTF8 {
@@ -1521,7 +1524,10 @@ impl TerminalWriter {
                 }
             }
 
-            Ok(TerminalWriter::ConOut(std::io::LineWriter::new(file), initial_console_output_cp))
+            Ok(TerminalWriter::ConOut(
+                Leased::map(file, std::io::LineWriter::new),
+                initial_console_output_cp,
+            ))
         }
 
         #[cfg(not(any(unix, windows)))]
@@ -1684,10 +1690,10 @@ struct Stdout {
 }
 
 impl Stdout {
-    pub fn new(inline_mode: bool, no_mouse: bool) -> std::io::Result<Self> {
+    pub async fn new(inline_mode: bool, no_mouse: bool) -> std::io::Result<Self> {
         terminal::enable_raw_mode()?;
 
-        let mut writer = TerminalWriter::new()?;
+        let mut writer = TerminalWriter::new().await?;
 
         if !inline_mode {
             execute!(writer, terminal::EnterAlternateScreen)?;
@@ -1867,7 +1873,7 @@ pub async fn history(
 
     let popup_mode = saved_screen.is_some();
 
-    let stdout = Stdout::new(inline_height > 0, settings.no_mouse)?;
+    let stdout = Stdout::new(inline_height > 0, settings.no_mouse).await?;
 
     // In popup mode, clear the popup region on the physical terminal before
     // ratatui takes over. Ratatui's diff-based rendering compares against an

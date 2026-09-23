@@ -5,6 +5,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync::{ClientSource, SyncError, SyncSession};
 use atuin_client::settings::{Settings, SyncAuth};
 use atuin_common::encryption::paseto_v4;
+use atuin_common::fs;
 use atuin_common::utils::env_nonempty;
 use clap::Parser;
 use eyre::{Context, Result, bail};
@@ -217,7 +218,7 @@ impl Cmd {
             };
 
             if key.is_empty() {
-                if !key_path.exists() {
+                if !fs::exists(key_path).await.unwrap_or(false) {
                     let msg = fl!("login-no-key-found");
                     if !interactive {
                         bail!(msg);
@@ -251,7 +252,7 @@ impl Cmd {
 async fn store_key(settings: &Settings, store: &SqliteStore, key: &paseto_v4::Key) -> Result<()> {
     let key_path = &settings.key_path;
 
-    if !key_path.exists() {
+    if !fs::exists(key_path).await.unwrap_or(false) {
         key.try_write_path(key_path).await?;
         return Ok(());
     }

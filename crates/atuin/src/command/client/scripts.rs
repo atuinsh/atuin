@@ -6,6 +6,7 @@ use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
+use atuin_common::fs;
 use atuin_scripts::execution::{
     build_executable_script, execute_script_interactive, template_script, template_variables,
 };
@@ -120,14 +121,14 @@ pub enum Cmd {
 
 impl Cmd {
     // Helper function to open an editor with optional initial content
-    fn open_editor(initial_content: Option<&str>) -> Result<String> {
+    async fn open_editor(initial_content: Option<&str>) -> Result<String> {
         // Create a temporary file
         let temp_file = NamedTempFile::new()?;
         let path = temp_file.into_temp_path();
 
         // Write initial content to the temp file if provided
         if let Some(content) = initial_content {
-            std::fs::write(&path, content)?;
+            fs::write(&path, content).await?;
         }
 
         // Open the file in the user's preferred editor
@@ -143,7 +144,7 @@ impl Cmd {
         }
 
         // Read back the edited content
-        let content = std::fs::read_to_string(&path)?;
+        let content = fs::read_to_string(&path).await?;
         path.close()?;
 
         Ok(content)
@@ -253,10 +254,10 @@ impl Cmd {
                 Some(script_text)
             } else {
                 // Open the editor with the commands pre-loaded
-                Some(Self::open_editor(Some(&script_text))?)
+                Some(Self::open_editor(Some(&script_text)).await?)
             }
         } else if let Some(script_path) = new_script.script {
-            let script_content = std::fs::read_to_string(script_path)?;
+            let script_content = fs::read_to_string(script_path).await?;
             Some(script_content)
         } else if !stdin.is_terminal() {
             let mut buffer = String::new();
@@ -264,7 +265,7 @@ impl Cmd {
             Some(buffer)
         } else {
             // Open editor with empty file
-            Some(Self::open_editor(None)?)
+            Some(Self::open_editor(None).await?)
         };
 
         let script = Script::builder()
@@ -483,10 +484,10 @@ impl Cmd {
             // Handle script content update
             let script_content = if let Some(script_path) = edit.script {
                 // Load script from provided file
-                std::fs::read_to_string(script_path)?
+                fs::read_to_string(script_path).await?
             } else if !edit.no_edit {
                 // Open the script in editor for interactive editing if --no-edit is not specified
-                Self::open_editor(Some(&script.script))?
+                Self::open_editor(Some(&script.script)).await?
             } else {
                 // If --no-edit is specified, keep the existing script content
                 script.script.clone()
