@@ -1,4 +1,4 @@
-use std::io::{self, IsTerminal, Read};
+use std::io::{self, IsTerminal};
 
 use atuin_client::auth::{self, AuthClient, AuthResponse};
 use atuin_client::record::sqlite_store::SqliteStore;
@@ -10,11 +10,9 @@ use clap::Parser;
 use eyre::{Context, Result, bail};
 use rpassword::prompt_password;
 
-const PASSWORD_ENV: &str = "ATUIN_PASSWORD";
-const KEY_ENV: &str = "ATUIN_ENCRYPTION_KEY";
+use super::PasswordArg;
 
-/// The `--password` value that reads the password from stdin.
-const STDIN_ARG: &str = "-";
+const KEY_ENV: &str = "ATUIN_ENCRYPTION_KEY";
 
 #[derive(Parser, Debug)]
 pub struct Cmd {
@@ -23,7 +21,7 @@ pub struct Cmd {
 
     /// Your password, or `-` to read it from stdin. Falls back to `ATUIN_PASSWORD`, then a prompt
     #[clap(long, short)]
-    pub password: Option<String>,
+    pub password: Option<PasswordArg>,
 
     /// The encryption key for your account. Falls back to `ATUIN_ENCRYPTION_KEY`, then a prompt
     #[clap(long, short)]
@@ -96,7 +94,7 @@ impl Cmd {
             // Headless login via v0 API (for CI / scripting).
             let client = auth::auth_client(settings).await;
 
-            let password = password_arg(self.password.as_deref(), io::stdin().lock())?
+            let password = PasswordArg::resolve(self.password.as_ref(), io::stdin().lock())?
                 .unwrap_or_else(read_user_password);
 
             self.prompt_and_store_key(settings, store).await?;
@@ -157,7 +155,7 @@ impl Cmd {
     /// (or accept them via flags).
     async fn run_legacy_login(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         let username = or_user_input(self.username.clone(), "username");
-        let password = password_arg(self.password.as_deref(), io::stdin().lock())?
+        let password = PasswordArg::resolve(self.password.as_ref(), io::stdin().lock())?
             .unwrap_or_else(read_user_password);
 
         self.prompt_and_store_key(settings, store).await?;
@@ -372,39 +370,10 @@ fn read_user_input(name: &'static str) -> Option<String> {
     get_input().expect("Failed to read from input")
 }
 
-/// Resolve `--password`, reading `stdin` for `-` and falling back to `ATUIN_PASSWORD`, if set.
-pub(super) fn password_arg(flag: Option<&str>, mut stdin: impl Read) -> Result<Option<String>> {
-    match flag {
-        Some(STDIN_ARG) => {
-            let mut buf = String::new();
-            stdin.read_to_string(&mut buf).context("failed to read password from stdin")?;
-            Ok(Some(buf.trim_end_matches(['\r', '\n']).to_owned()))
-        }
-        Some(password) => Ok(Some(password.to_owned())),
-        None => Ok(env_nonempty(PASSWORD_ENV).and_then(|password| password.into_string().ok())),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use atuin_common::encryption::paseto_v4;
     use rstest::rstest;
-
-    use super::*;
-
-    #[rstest]
-    #[case::flag("hunter2", "stdin", "hunter2")]
-    #[case::stdin("-", "hunter2\n", "hunter2")]
-    #[case::stdin_crlf("-", "hunter2\r\n", "hunter2")]
-    #[case::stdin_keeps_inner_whitespace("-", " hunter 2\n", " hunter 2")]
-    fn password_arg_reads_flag_or_stdin(
-        #[case] flag: &str,
-        #[case] stdin: &str,
-        #[case] expected: &str,
-    ) {
-        let password = password_arg(Some(flag), stdin.as_bytes()).unwrap();
-        assert_eq!(password.as_deref(), Some(expected));
-    }
 
     #[rstest]
     fn mnemonic_round_trip() {

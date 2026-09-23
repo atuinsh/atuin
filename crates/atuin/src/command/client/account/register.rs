@@ -5,7 +5,8 @@ use atuin_common::encryption::paseto_v4;
 use clap::Parser;
 use eyre::{Result, bail};
 
-use super::login::{or_user_input, password_arg};
+use super::PasswordArg;
+use super::login::or_user_input;
 
 #[derive(Parser, Debug)]
 pub struct Cmd {
@@ -14,7 +15,7 @@ pub struct Cmd {
 
     /// Your password, or `-` to read it from stdin. Falls back to `ATUIN_PASSWORD`, then a prompt
     #[clap(long, short)]
-    pub password: Option<String>,
+    pub password: Option<PasswordArg>,
 
     #[clap(long, short)]
     pub email: Option<String>,
@@ -50,7 +51,7 @@ impl Cmd {
             // `--password -` does not swallow stdin before the browser flow.
             let password = match (&self.username, &self.email) {
                 (Some(_), Some(_)) => {
-                    password_arg(self.password.as_deref(), std::io::stdin().lock())?
+                    PasswordArg::resolve(self.password.as_ref(), std::io::stdin().lock())?
                 }
                 _ => None,
             };
@@ -127,7 +128,7 @@ impl Cmd {
 
             let username = or_user_input(self.username.clone(), "username");
             let email = or_user_input(self.email.clone(), "email");
-            let password = password_arg(self.password.as_deref(), std::io::stdin().lock())?
+            let password = PasswordArg::resolve(self.password.as_ref(), std::io::stdin().lock())?
                 .unwrap_or_else(super::login::read_user_password);
 
             if password.is_empty() {
