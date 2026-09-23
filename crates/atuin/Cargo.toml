@@ -119,6 +119,7 @@ rpassword = { workspace = true }
 runtime-format = { workspace = true }
 rust-embed = { workspace = true }
 rustix = { workspace = true }
+secrecy = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

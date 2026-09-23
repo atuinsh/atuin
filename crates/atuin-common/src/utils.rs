@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use base64::prelude::{BASE64_URL_SAFE_NO_PAD, Engine};
 use getrandom::fill;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 /// Generate N random bytes, using a cryptographically secure source
 #[must_use]
@@ -21,11 +22,11 @@ pub fn crypto_random_bytes<const N: usize>() -> [u8; N] {
 /// Generate N random bytes using a cryptographically secure source, return encoded as a string
 #[must_use]
 pub fn crypto_random_string<const N: usize>() -> String {
-    let bytes = crypto_random_bytes::<N>();
+    let bytes = Zeroizing::new(crypto_random_bytes::<N>());
 
     // We only use this to create a random string, and won't be reversing it to find the original
     // data - no padding is OK there. It may be in URLs.
-    BASE64_URL_SAFE_NO_PAD.encode(bytes)
+    BASE64_URL_SAFE_NO_PAD.encode(bytes.as_slice())
 }
 
 #[must_use]

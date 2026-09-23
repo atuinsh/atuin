@@ -8,6 +8,7 @@ use atuin_domain::record::RecordTag;
 use clap::Subcommand;
 use easy_cast::Conv;
 use eyre::{Result, WrapErr};
+use secrecy::ExposeSecret;
 use tracing::instrument;
 
 mod status;
@@ -57,7 +58,7 @@ impl Cmd {
                     .wrap_err(fl!("sync-key-load-failed"))?;
 
                 if base64 {
-                    println!("{}", key.encode().dangerously_leak_secret());
+                    println!("{}", key.encode().expose_secret());
                 } else {
                     println!("{}", key.try_mnemonic().context(fl!("sync-key-invalid"))?);
                 }
