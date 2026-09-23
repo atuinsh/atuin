@@ -3,6 +3,7 @@ use atuin_client::settings::Settings;
 use clap::Parser;
 use eyre::{Result, bail};
 use rpassword::prompt_password;
+use secrecy::SecretString;
 
 use crate::i18n::fl;
 
@@ -44,18 +45,21 @@ impl Cmd {
             bail!(fl!("change-password-provide-new"));
         }
 
-        let mut totp_code = self.totp_code.clone();
+        let current_password = SecretString::from(current_password);
+        let new_password = SecretString::from(new_password);
+        let mut totp_code = self.totp_code.clone().map(SecretString::from);
 
         loop {
             let response = client
-                .change_password(&current_password, &new_password, totp_code.as_deref())
+                .change_password(&current_password, &new_password, totp_code.as_ref())
                 .await?;
 
             match response {
                 MutateResponse::Success => break,
                 MutateResponse::TwoFactorRequired => {
-                    totp_code =
-                        Some(super::login::or_user_input(None, &fl!("prompt-two-factor-code")));
+                    totp_code = Some(
+                        super::login::or_user_input(None, &fl!("prompt-two-factor-code")).into(),
+                    );
                 }
             }
         }

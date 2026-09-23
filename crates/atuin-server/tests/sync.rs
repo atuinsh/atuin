@@ -12,7 +12,6 @@ use atuin_server::{Settings as ServerSettings, launch_with_tcp_listener};
 use easy_cast::Conv;
 use futures_util::TryFutureExt;
 use rstest::{fixture, rstest};
-use secrecy::ExposeSecret;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -32,14 +31,19 @@ impl TestServer {
         let password = uuid_v7().as_simple().to_string();
         let email = format!("{}@example.com", uuid_v7().as_simple());
 
-        let resp =
-            api_client::register(&self.address, &username, &email, &password, &Default::default())
-                .await
-                .unwrap();
+        let resp = api_client::register(
+            &self.address,
+            &username,
+            &email,
+            &password.into(),
+            &Default::default(),
+        )
+        .await
+        .unwrap();
 
         api_client::Client::new(
             self.address.clone(),
-            &api_client::AuthToken::Token(resp.session.expose_secret().to_owned()),
+            &api_client::AuthToken::Token(resp.session),
             std::time::Duration::from_secs(5),
             std::time::Duration::from_secs(30),
             &Default::default(),

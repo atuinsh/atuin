@@ -18,6 +18,7 @@ use config::{Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat}
 use eyre::{Context, Result, eyre};
 use fs_err::{File, create_dir_all};
 use regex::RegexSet;
+use secrecy::SecretString;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -387,19 +388,19 @@ pub enum SyncAuth {
     /// Self-hosted Rust server. Uses `Authorization: Token <session>` and
     /// legacy endpoints.
     Legacy {
-        token: String,
+        token: SecretString,
     },
     /// Hub with a valid Hub API token (`atapi_*`). Uses
     /// `Authorization: Bearer <token>` and v0 endpoints.
     Hub {
-        token: String,
+        token: SecretString,
     },
     /// Targeting Hub but only has a CLI session token. Uses
     /// `Authorization: Token <session>` against compat/record endpoints.
     /// Sync, password change, and account deletion still work, but the user
     /// should be nudged to run `atuin login` for full Hub auth.
     HubViaCli {
-        token: String,
+        token: SecretString,
     },
     /// Not authenticated at all. Contains an actionable user-facing message.
     NotLoggedIn {
@@ -671,7 +672,8 @@ pub struct Ai {
 
     /// The API token for the Atuin AI endpoint. Used for AI features like command generation.
     /// Only necessary for custom AI endpoints.
-    pub api_token: Option<String>,
+    #[serde(skip_serializing)]
+    pub api_token: Option<SecretString>,
 
     /// Path to the AI sessions database.
     pub db_path: String,
@@ -1092,8 +1094,8 @@ pub struct Settings {
     /// for services like Cloudflare Access that sit in front of a self-hosted
     /// server. Headers that Atuin sets itself (e.g. Authorization) win over
     /// values configured here.
-    #[serde(default)]
-    pub extra_headers: HashMap<String, String>,
+    #[serde(default, skip_serializing)]
+    pub extra_headers: HashMap<String, SecretString>,
 
     pub enter_accept: bool,
     pub smart_sort: bool,
@@ -1251,14 +1253,14 @@ impl Settings {
         Self::meta_store().await?.logged_in().await
     }
 
-    pub async fn session_token(&self) -> Result<String> {
+    pub async fn session_token(&self) -> Result<SecretString> {
         match Self::meta_store().await?.session_token().await? {
             Some(token) => Ok(token),
             None => Err(eyre!("Tried to load session; not logged in")),
         }
     }
 
-    pub async fn hub_session_token(&self) -> Result<String> {
+    pub async fn hub_session_token(&self) -> Result<SecretString> {
         match Self::meta_store().await?.hub_session_token().await? {
             Some(token) => Ok(token),
             None => Err(eyre!("Tried to load hub session; not logged in")),
@@ -1344,7 +1346,7 @@ impl Settings {
 
         // Targeting Hub — check for a valid Hub API token first
         if let Ok(Some(hub_token)) = meta.hub_session_token().await {
-            if hub_token.starts_with("atapi_") {
+            if crate::meta::is_hub_token(&hub_token) {
                 return SyncAuth::Hub { token: hub_token };
             }
 

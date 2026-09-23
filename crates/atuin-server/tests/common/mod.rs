@@ -6,7 +6,6 @@ use atuin_common::utils::uuid_v7;
 use atuin_server::db::DbSettings;
 use atuin_server::{Settings as ServerSettings, launch_with_tcp_listener};
 use futures_util::TryFutureExt;
-use secrecy::ExposeSecret;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -78,14 +77,14 @@ pub async fn register_inner(
 
     // registration works
     let registration_response =
-        api_client::register(address, username, &email, password, &Default::default())
+        api_client::register(address, username, &email, &password.into(), &Default::default())
             .await
             .unwrap();
 
     let caps = api_client::caps_client_anonymous(address, &Default::default()).unwrap();
     api_client::Client::new(
         address.clone(),
-        &api_client::AuthToken::Token(registration_response.session.expose_secret().to_owned()),
+        &api_client::AuthToken::Token(registration_response.session),
         std::time::Duration::from_secs(5),
         std::time::Duration::from_secs(30),
         &Default::default(),
@@ -112,7 +111,7 @@ pub async fn login(address: &url::Url, username: String, password: String) -> ap
     let caps = api_client::caps_client_anonymous(address, &Default::default()).unwrap();
     api_client::Client::new(
         address.clone(),
-        &api_client::AuthToken::Token(login_response.session.expose_secret().to_owned()),
+        &api_client::AuthToken::Token(login_response.session),
         std::time::Duration::from_secs(5),
         std::time::Duration::from_secs(30),
         &Default::default(),

@@ -4,7 +4,7 @@ use atuin_client::settings::{Settings, SyncAuth};
 use atuin_common::encryption::paseto_v4;
 use clap::Parser;
 use eyre::{Result, bail};
-use secrecy::ExposeSecret;
+use secrecy::SecretString;
 
 use super::PasswordArg;
 use super::login::or_user_input;
@@ -64,13 +64,15 @@ impl Cmd {
                     bail!(fl!("account-provide-password"));
                 }
 
-                let response = client.register(username, email, password).await?;
+                let response = client
+                    .register(username, email, &SecretString::from(password.as_str()))
+                    .await?;
 
                 match response {
                     AuthResponse::Success { session, auth_type } => {
                         let meta = Settings::meta_store().await?;
-                        let is_hub_token =
-                            auth_type.as_deref() == Some("hub") || session.starts_with("atapi_");
+                        let is_hub_token = auth_type.as_deref() == Some("hub")
+                            || atuin_client::meta::is_hub_token(&session);
 
                         if is_hub_token {
                             meta.save_hub_session(&session).await?;
@@ -122,13 +124,13 @@ impl Cmd {
                 &settings.sync_address,
                 &username,
                 &email,
-                &password,
+                &SecretString::from(password),
                 &settings.extra_headers,
             )
             .await?;
 
             let meta = Settings::meta_store().await?;
-            meta.save_session(session.session.expose_secret()).await?;
+            meta.save_session(&session.session).await?;
 
             let _key = paseto_v4::Key::try_load_or_generate(&settings.key_path)?;
 

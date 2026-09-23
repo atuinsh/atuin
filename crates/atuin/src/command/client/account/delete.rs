@@ -2,6 +2,7 @@ use atuin_client::auth::{self, AuthClient, MutateResponse};
 use atuin_client::settings::Settings;
 use clap::Parser;
 use eyre::{Result, bail};
+use secrecy::SecretString;
 
 use super::login::{or_user_input, read_user_password};
 use crate::i18n::fl;
@@ -29,15 +30,16 @@ impl Cmd {
             bail!(fl!("delete-provide-password"));
         }
 
-        let mut totp_code = self.totp_code.clone();
+        let password = SecretString::from(password);
+        let mut totp_code = self.totp_code.clone().map(SecretString::from);
 
         loop {
-            let response = client.delete_account(&password, totp_code.as_deref()).await?;
+            let response = client.delete_account(&password, totp_code.as_ref()).await?;
 
             match response {
                 MutateResponse::Success => break,
                 MutateResponse::TwoFactorRequired => {
-                    totp_code = Some(or_user_input(None, &fl!("prompt-two-factor-code")));
+                    totp_code = Some(or_user_input(None, &fl!("prompt-two-factor-code")).into());
                 }
             }
         }

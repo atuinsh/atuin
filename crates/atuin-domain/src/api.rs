@@ -38,6 +38,18 @@ pub struct RegisterResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct DeleteUserRequest {
+    #[serde(serialize_with = "crate::secret::serialize")]
+    pub password: SecretString,
+    #[serde(
+        default,
+        serialize_with = "crate::secret::serialize_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub totp_code: Option<SecretString>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DeleteUserResponse {}
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -137,4 +149,12 @@ pub struct CliVerifyResponse {
     pub token: Option<SecretString>,
     pub success: Option<bool>,
     pub error: Option<String>,
+}
+
+/// Request to `POST /api/v0/account/link` - links a CLI sync account to the Hub user
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LinkAccountRequest {
+    /// The CLI session token of the account to link
+    #[serde(serialize_with = "crate::secret::serialize")]
+    pub token: SecretString,
 }

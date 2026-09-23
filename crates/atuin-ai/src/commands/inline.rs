@@ -1,6 +1,7 @@
 use atuin_client::database::Sqlite;
 use easy_cast::Conv;
 use eyre::{Context as _, Result, bail};
+use secrecy::{ExposeSecret, SecretString};
 use tracing::{debug, info};
 
 use crate::context::{AppContext, ClientContext};
@@ -46,11 +47,13 @@ pub async fn run(
             .unwrap_or_else(|| atuin_client::settings::DEFAULT_HUB_URL.clone()),
     };
     let endpoint_is_hub = settings.is_hub_ai_endpoint(&endpoint);
-    let api_token = api_token.as_deref().or(settings.ai.api_token.as_deref());
+    let api_token = api_token.map(SecretString::from).or_else(|| settings.ai.api_token.clone());
 
     let (token, token_from_hub_session) = match api_token {
-        Some(token) => (token.to_string(), false),
-        None if endpoint_is_hub => (ensure_hub_session(settings).await?, true),
+        Some(token) => (token.expose_secret().to_owned(), false),
+        None if endpoint_is_hub => {
+            (ensure_hub_session(settings).await?.expose_secret().to_owned(), true)
+        }
         // An OSS server may not require auth; hit it without a token rather
         // than forcing a login flow that doesn't apply.
         None => (String::new(), false),
@@ -95,7 +98,7 @@ pub async fn run(
     Ok(())
 }
 
-async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Result<String> {
+async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Result<SecretString> {
     if let Some(token) = atuin_client::hub::get_session_token().await? {
         debug!("Found Hub session, using existing token");
         return Ok(token);

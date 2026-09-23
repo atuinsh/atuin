@@ -9,6 +9,7 @@ use atuin_common::utils::env_nonempty;
 use clap::Parser;
 use eyre::{Context, Result, bail};
 use rpassword::prompt_password;
+use secrecy::SecretString;
 
 use super::PasswordArg;
 use crate::i18n::fl;
@@ -91,13 +92,14 @@ impl Cmd {
 
             let password = PasswordArg::resolve(self.password.as_ref(), io::stdin().lock())?
                 .unwrap_or_else(read_user_password);
+            let password = SecretString::from(password);
 
             self.prompt_and_store_key(settings, store).await?;
 
-            let mut totp_code = self.totp_code.clone();
+            let mut totp_code = self.totp_code.clone().map(SecretString::from);
 
             let (session, auth_type) = loop {
-                let response = client.login(username, &password, totp_code.as_deref()).await?;
+                let response = client.login(username, &password, totp_code.as_ref()).await?;
 
                 match response {
                     AuthResponse::Success { session, auth_type } => break (session, auth_type),
@@ -105,13 +107,14 @@ impl Cmd {
                         let Some(code) = read_user_input(&fl!("prompt-two-factor-code")) else {
                             bail!(fl!("login-totp-required"));
                         };
-                        totp_code = Some(code);
+                        totp_code = Some(code.into());
                     }
                 }
             };
 
             let meta = Settings::meta_store().await?;
-            let is_hub_token = auth_type.as_deref() == Some("hub") || session.starts_with("atapi_");
+            let is_hub_token =
+                auth_type.as_deref() == Some("hub") || atuin_client::meta::is_hub_token(&session);
 
             if is_hub_token {
                 meta.save_hub_session(&session).await?;
@@ -153,7 +156,7 @@ impl Cmd {
         self.prompt_and_store_key(settings, store).await?;
 
         let client = auth::auth_client(settings).await;
-        let response = client.login(&username, &password, None).await?;
+        let response = client.login(&username, &password.into(), None).await?;
 
         match response {
             AuthResponse::Success { session, .. } => {

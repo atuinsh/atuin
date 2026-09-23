@@ -377,6 +377,7 @@ dependencies = [
  "rmcp",
  "rstest",
  "schemars 1.2.1",
+ "secrecy",
  "serde",
  "serde_json",
  "shellexpand",
