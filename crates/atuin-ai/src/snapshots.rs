@@ -70,6 +70,8 @@ impl SnapshotStore {
     /// Returns `true` if a new snapshot was created, `false` if one already
     /// existed. The `canonical_path` should be absolute (already tilde-expanded
     /// and resolved).
+    ///
+    /// Parks the thread: call under `tokio::task::block_in_place` on a multi-thread runtime.
     pub fn ensure_snapshot(&mut self, canonical_path: &Path, content: &[u8]) -> Result<bool> {
         let filename = sanitize_path(canonical_path);
 
@@ -139,6 +141,8 @@ pub fn sanitize_path(path: &Path) -> String {
 /// Creates a temporary file in the same directory as `target`, writes
 /// content, fsyncs, then renames into place. Preserves permissions from
 /// the original file if it exists.
+///
+/// Parks the thread: call under `tokio::task::block_in_place` on a multi-thread runtime.
 pub fn atomic_write_file(target: &Path, content: &[u8]) -> Result<()> {
     let dir = target.parent().ok_or_else(|| eyre!("target path has no parent directory"))?;
     fs::blocking::create_dir_all(dir)?;

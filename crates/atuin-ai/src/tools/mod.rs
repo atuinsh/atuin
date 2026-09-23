@@ -324,6 +324,9 @@ impl ReadToolCall {
         }
     }
 
+    /// Execute the read against the filesystem.
+    ///
+    /// Parks the thread: call under `tokio::task::block_in_place` on a multi-thread runtime.
     #[must_use]
     pub fn execute(&self) -> ToolOutcome {
         let path = self.resolved_path();
@@ -467,6 +470,8 @@ impl EditToolCall {
     ///
     /// Callers should snapshot the file before calling this method and
     /// update the file tracker after a successful return.
+    ///
+    /// Parks the thread: call under `tokio::task::block_in_place` on a multi-thread runtime.
     #[must_use]
     pub fn execute(
         &self,
@@ -653,6 +658,8 @@ impl WriteToolCall {
     ///
     /// Creates a new file or overwrites an existing one (if `overwrite` is set).
     /// Returns the outcome and the written bytes (for tracker updates).
+    ///
+    /// Parks the thread: call under `tokio::task::block_in_place` on a multi-thread runtime.
     #[must_use]
     pub fn execute(&self, resolved_path: &Path) -> (ToolOutcome, Option<Vec<u8>>) {
         if fs::blocking::metadata(resolved_path).is_ok_and(|m| m.is_dir()) {

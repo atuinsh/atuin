@@ -63,6 +63,8 @@ impl FileReadTracker {
     /// Check whether a file is fresh (unchanged since last read).
     ///
     /// Uses mtime as a fast path — only re-hashes if mtime differs.
+    ///
+    /// Parks the thread: call under `tokio::task::block_in_place` on a multi-thread runtime.
     pub fn check_freshness(&self, path: &Path) -> Result<FreshnessCheck> {
         let Some(state) = self.reads.get(path) else {
             return Ok(FreshnessCheck::NotRead);
