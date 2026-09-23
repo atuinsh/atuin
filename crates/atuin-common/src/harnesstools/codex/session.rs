@@ -153,11 +153,6 @@ impl CodexSession {
             changes: None,
         }
     }
-
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
 }
 
 impl Session for CodexSession {
@@ -167,8 +162,16 @@ impl Session for CodexSession {
         self.id.clone()
     }
 
-    fn messages(self) -> impl Stream<Item = Result<CodexMessage, MessageError>> + Send + 'static {
-        jsonl::follow::<CodexMessage>(self.path, self.changes).map_err(MessageError::from)
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn messages_from(
+        self,
+        offset: u64,
+    ) -> impl Stream<Item = Result<(u64, CodexMessage), MessageError>> + Send + 'static {
+        jsonl::follow_from::<CodexMessage>(self.path, offset, self.changes)
+            .map_err(MessageError::from)
     }
 
     fn read(&self) -> impl Stream<Item = Result<CodexMessage, MessageError>> + Send + 'static {

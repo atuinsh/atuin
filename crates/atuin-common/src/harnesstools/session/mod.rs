@@ -1,11 +1,12 @@
 pub mod error;
 pub mod model;
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use enum_dispatch::enum_dispatch;
 pub use error::{CaptureError, MessageError, RuntimeError, WatchError};
-use futures::{Stream, StreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 pub use model::{
     Content, MessageId, Role, SessionEvent, SessionId, StopReason, ToolCallId, ToolResult, ToolUse,
     Usage,
@@ -100,7 +101,24 @@ pub trait Session: Send + 'static {
     type Message: Message;
 
     fn id(&self) -> SessionId;
-    fn messages(self) -> impl Stream<Item = Result<Self::Message, MessageError>> + Send + 'static;
+
+    /// The transcript file this session is read from.
+    fn path(&self) -> &Path;
+
+    /// Follow the transcript from byte `offset`, a boundary an earlier stream reported (past the
+    /// end restarts from zero), yielding with each message the offset just past its line.
+    fn messages_from(
+        self,
+        offset: u64,
+    ) -> impl Stream<Item = Result<(u64, Self::Message), MessageError>> + Send + 'static;
+
+    fn messages(self) -> impl Stream<Item = Result<Self::Message, MessageError>> + Send + 'static
+    where
+        Self: Sized,
+    {
+        self.messages_from(0).map_ok(|(_, message)| message)
+    }
+
     fn read(&self) -> impl Stream<Item = Result<Self::Message, MessageError>> + Send + 'static;
 }
 
@@ -109,13 +127,19 @@ pub trait Listener {
 
     fn watch(self) -> impl Stream<Item = Result<Self::Session, WatchError>> + Send + 'static;
 
-    fn events(
+    /// Every line of every session the watcher reports, tagged with its session and the byte
+    /// offset past it. `resume_from` is awaited once per session, with its id and transcript
+    /// path, before the transcript is opened, and gives the offset to start at; 0 reads the
+    /// whole file.
+    fn events<F>(
         self,
+        resume_from: impl Fn(&SessionId, &Path) -> F + Send + 'static,
     ) -> impl Stream<Item = Result<SessionEvent<<Self::Session as Session>::Message>, CaptureError>>
     + Send
     + 'static
     where
         Self: Sized,
+        F: Future<Output = u64> + Send + 'static,
     {
         let sessions = self.watch();
         async_stream::stream! {
@@ -131,8 +155,11 @@ pub trait Listener {
                     appeared = sessions.next(), if !sessions_done => match appeared {
                         Some(Ok(session)) => {
                             let id = session.id();
-                            let tagged =
-                                session.messages().map(move |message| (id.clone(), message)).boxed();
+                            let start = resume_from(&id, session.path()).await;
+                            let tagged = session
+                                .messages_from(start)
+                                .map(move |item| (id.clone(), item))
+                                .boxed();
                             active.push(tagged);
                         }
                         Some(Err(err)) => yield Err(CaptureError::from(err)),
@@ -141,7 +168,9 @@ pub trait Listener {
                     tagged = active.next(), if !active.is_empty() => {
                         if let Some((session, result)) = tagged {
                             match result {
-                                Ok(message) => yield Ok(SessionEvent { session, message }),
+                                Ok((offset, message)) => {
+                                    yield Ok(SessionEvent { session, offset, message });
+                                }
                                 Err(source) => yield Err(CaptureError::Message { session, source }),
                             }
                         }
