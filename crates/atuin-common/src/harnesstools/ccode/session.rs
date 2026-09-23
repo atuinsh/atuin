@@ -7,7 +7,7 @@ use time::format_description::well_known::Rfc3339;
 use tokio::sync::watch;
 use typed_builder::TypedBuilder;
 
-use crate::fs::tree_watcher::{NodeContext, TreeWatcher};
+use crate::fs::tree_watcher::{FileStat, TreeWatcher};
 use crate::harnesstools::ccode::Ccode;
 use crate::harnesstools::session::model::{
     Content, MessageId, Role, StopReason, ToolCallId, ToolResult, ToolUse, Usage,
@@ -98,22 +98,20 @@ pub struct CcodeListener {
 }
 
 impl CcodeListener {
-    /// Build a read-once session for an accepted `jsonl` file (no change signal), or `None`.
-    fn open_session(path: &Path, is_file: bool, pool: &BlockingPool) -> Option<CcodeSession> {
-        if !is_file || path.extension().is_none_or(|ext| ext != "jsonl") {
+    /// The session id a claude code `jsonl` file's name carries, or `None` if `path` is not one.
+    fn session_id(path: &Path) -> Option<SessionId> {
+        if path.extension().is_none_or(|ext| ext != "jsonl") {
             return None;
         }
-        let id = path.file_stem()?.to_string_lossy().into_owned();
-        Some(CcodeSession::open(SessionId::from(id), path.to_path_buf(), pool.clone()))
+        Some(SessionId::from(path.file_stem()?.to_string_lossy().into_owned()))
     }
 
-    /// The session for an accepted file, paired with the change signal the watcher keeps alive
-    /// for as long as the file exists.
-    fn accept(ctx: &NodeContext, pool: &BlockingPool) -> Option<(CcodeSession, watch::Sender<()>)> {
-        let mut session = Self::open_session(ctx.path(), ctx.is_file(), pool)?;
-        let (signal, rx) = watch::channel(());
-        session.changes = Some(rx);
-        Some((session, signal))
+    /// Build a read-once session for an accepted `jsonl` file (no change signal), or `None`.
+    fn open_session(path: &Path, is_file: bool, pool: &BlockingPool) -> Option<CcodeSession> {
+        if !is_file {
+            return None;
+        }
+        Some(CcodeSession::open(Self::session_id(path)?, path.to_path_buf(), pool.clone()))
     }
 }
 
@@ -124,20 +122,25 @@ impl Listener for CcodeListener {
         let root = self.root;
         let pool = self.pool;
         async_stream::stream! {
-            let (tx, rx) = flume::unbounded::<CcodeSession>();
-            let _watcher = match TreeWatcher::builder().recursive(true).watch(&root, move |ctx| {
-                let (session, signal) = Self::accept(&ctx, &pool)?;
-                let _ = tx.send(session);
-                Some(signal)
-            }) {
-                Ok(watcher) => watcher,
+            let files = TreeWatcher::builder()
+                .filter(|path| Self::session_id(path).is_some())
+                .watch(&root);
+            let files = match files {
+                Ok(files) => files,
                 Err(err) => {
                     yield Err(WatchError::from(err));
                     return;
                 }
             };
-            while let Ok(session) = rx.recv_async().await {
-                yield Ok(session);
+            for await file in files {
+                let (path, stat) = file.into_parts();
+                let Some(id) = Self::session_id(&path) else { continue };
+                yield Ok(CcodeSession {
+                    id,
+                    path: path.to_path_buf(),
+                    changes: Some(stat),
+                    pool: pool.clone(),
+                });
             }
         }
     }
@@ -148,7 +151,7 @@ pub struct CcodeSession {
     id: SessionId,
     path: PathBuf,
     /// Wakes [`messages`](Session::messages) on each change to the file; `None` reads it once.
-    changes: Option<watch::Receiver<()>>,
+    changes: Option<watch::Receiver<FileStat>>,
     pool: BlockingPool,
 }
 
