@@ -19,7 +19,8 @@ pub trait PathExt {
 impl<P: AsRef<Path>> PathExt for P {
     async fn is_dangling_symlink(&self) -> bool {
         let path: &Path = self.as_ref();
-        path.is_symlink() && !crate::fs::exists(path).await.unwrap_or(false)
+        crate::fs::symlink_metadata(path).await.is_ok_and(|m| m.is_symlink())
+            && !crate::fs::exists(path).await.unwrap_or(false)
     }
 }
 

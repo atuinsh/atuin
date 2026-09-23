@@ -64,147 +64,162 @@ reason = """use atuin_common::db::migrate!, which runs the migrator and then cle
     metadata"""
 
 # Raw filesystem access opens a descriptor outside FdPool's accounting. atuin_common::fs (async)
-# and atuin_common::fs::blocking (off-runtime) lease one from FdPool::system() first.
-
-[[disallowed-methods]]
-path = "std::fs::read"
-reason = "use atuin_common::fs::read (or fs::blocking::read off-runtime), which leases a descriptor from FdPool::system()"
-
-[[disallowed-methods]]
-path = "std::fs::read_to_string"
-reason = "use atuin_common::fs::read_to_string (or fs::blocking::read_to_string off-runtime), which leases a descriptor from FdPool::system()"
-
-[[disallowed-methods]]
-path = "std::fs::write"
-reason = "use atuin_common::fs::write (or fs::blocking::write off-runtime), which leases a descriptor from FdPool::system()"
-
-[[disallowed-methods]]
-path = "std::fs::read_dir"
-reason = "use atuin_common::fs::read_dir (or fs::blocking::read_dir off-runtime), which leases a descriptor from FdPool::system()"
-
-[[disallowed-methods]]
-path = "std::fs::read_link"
-reason = "use atuin_common::fs::read_link (or fs::blocking::read_link off-runtime), which leases a descriptor from FdPool::system()"
-
-[[disallowed-methods]]
-path = "std::fs::remove_file"
-reason = "use atuin_common::fs::remove_file (or fs::blocking::remove_file off-runtime), which leases a descriptor from FdPool::system()"
-
-[[disallowed-methods]]
-path = "std::fs::remove_dir_all"
-reason = "use atuin_common::fs::remove_dir_all (or fs::blocking::remove_dir_all off-runtime), which leases a descriptor from FdPool::system()"
-
-[[disallowed-methods]]
-path = "std::fs::create_dir"
-reason = "use atuin_common::fs::create_dir (or fs::blocking::create_dir off-runtime), which leases a descriptor from FdPool::system()"
-
-[[disallowed-methods]]
-path = "std::fs::create_dir_all"
-reason = "use atuin_common::fs::create_dir_all (or fs::blocking::create_dir_all off-runtime), which leases a descriptor from FdPool::system()"
-
-[[disallowed-methods]]
-path = "std::fs::rename"
-reason = "use atuin_common::fs::rename (or fs::blocking::rename off-runtime), which leases a descriptor from FdPool::system()"
-
-[[disallowed-methods]]
-path = "std::fs::hard_link"
-reason = "use atuin_common::fs::hard_link (or fs::blocking::hard_link off-runtime), which leases a descriptor from FdPool::system()"
-
-[[disallowed-methods]]
-path = "std::fs::set_permissions"
-reason = "use atuin_common::fs::set_permissions (or fs::blocking::set_permissions off-runtime), which leases a descriptor from FdPool::system()"
-
-[[disallowed-methods]]
-path = "std::fs::metadata"
-reason = "use atuin_common::fs::metadata (or fs::blocking::metadata off-runtime), which leases a descriptor from FdPool::system()"
-
-[[disallowed-methods]]
-path = "std::fs::symlink_metadata"
-reason = "use atuin_common::fs::symlink_metadata (or fs::blocking::symlink_metadata off-runtime), which leases a descriptor from FdPool::system()"
+# and atuin_common::fs::blocking (off-runtime) lease one from FdPool::system() first. Entries
+# with allow-invalid name platform-specific items that do not resolve on every target.
 
 [[disallowed-methods]]
 path = "std::fs::canonicalize"
-reason = "use atuin_common::fs::canonicalize (or fs::blocking::canonicalize off-runtime), which leases a descriptor from FdPool::system()"
+reason = """use atuin_common::fs::canonicalize (or fs::blocking::canonicalize off-runtime), which \
+    leases a descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "std::fs::copy"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "std::fs::create_dir"
+reason = """use atuin_common::fs::create_dir_all or fs::create_secure_dir (or their fs::blocking twins \
+    off-runtime), which leases a descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "std::fs::create_dir_all"
+reason = """use atuin_common::fs::create_dir_all (or fs::blocking::create_dir_all off-runtime), which \
+    leases a descriptor from FdPool::system()"""
 
 [[disallowed-methods]]
 path = "std::fs::exists"
-reason = "use atuin_common::fs::exists (or fs::blocking::exists off-runtime), which leases a descriptor from FdPool::system()"
+reason = """use atuin_common::fs::exists (or fs::blocking::exists off-runtime), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "std::fs::hard_link"
+reason = """use atuin_common::fs::hard_link, which leases a descriptor from FdPool::system(); \
+    off-runtime, add a twin to atuin_common::fs::blocking"""
+
+[[disallowed-methods]]
+path = "std::fs::metadata"
+reason = """use atuin_common::fs::metadata (or fs::blocking::metadata off-runtime), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "std::fs::read"
+reason = """use atuin_common::fs::read (or fs::blocking::read off-runtime), which leases a descriptor \
+    from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "std::fs::read_dir"
+reason = """use atuin_common::fs::read_dir (or fs::blocking::read_dir off-runtime), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "std::fs::read_link"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "std::fs::read_to_string"
+reason = """use atuin_common::fs::read_to_string (or fs::blocking::read_to_string off-runtime), which \
+    leases a descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "std::fs::remove_dir"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "std::fs::remove_dir_all"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "std::fs::remove_file"
+reason = """use atuin_common::fs::remove_file, which leases a descriptor from FdPool::system(); \
+    off-runtime, add a twin to atuin_common::fs::blocking"""
+
+[[disallowed-methods]]
+path = "std::fs::rename"
+reason = """use atuin_common::fs::blocking::rename off-runtime, which leases a descriptor from \
+    FdPool::system(); on a runtime, add an async twin to atuin_common::fs"""
+
+[[disallowed-methods]]
+path = "std::fs::set_permissions"
+reason = """use atuin_common::fs::set_permissions (or fs::blocking::set_permissions off-runtime), \
+    which leases a descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "std::fs::soft_link"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "std::fs::symlink_metadata"
+reason = """use atuin_common::fs::symlink_metadata (or fs::blocking::symlink_metadata off-runtime), \
+    which leases a descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "std::fs::write"
+reason = """use atuin_common::fs::write (or fs::blocking::write off-runtime), which leases a \
+    descriptor from FdPool::system()"""
 
 [[disallowed-methods]]
 path = "std::fs::File::open"
-reason = "use atuin_common::fs::File::open (or fs::blocking::File::open off-runtime), which leases a descriptor from FdPool::system()"
+reason = """use atuin_common::fs::File::open (or fs::blocking::File::open off-runtime), which leases a \
+    descriptor from FdPool::system()"""
 
 [[disallowed-methods]]
 path = "std::fs::File::create"
-reason = "use atuin_common::fs::File::create (or fs::blocking::File::create off-runtime), which leases a descriptor from FdPool::system()"
+reason = """use atuin_common::fs::File::create (or \
+    fs::OpenOptions::new().write(true).create(true).truncate(true).blocking_open \
+    off-runtime), which leases a descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "std::fs::File::create_new"
+reason = """use atuin_common::fs::OpenOptions::new().write(true).create_new(true).open (or \
+    .blocking_open off-runtime), which leases a descriptor from FdPool::system()"""
 
 [[disallowed-methods]]
 path = "std::fs::File::options"
-reason = "use atuin_common::fs::OpenOptions::new (or its .blocking_open() off-runtime), which leases a descriptor from FdPool::system()"
+reason = """use atuin_common::fs::OpenOptions::new (or its .blocking_open() off-runtime), which leases \
+    a descriptor from FdPool::system()"""
 
 [[disallowed-methods]]
 path = "std::fs::OpenOptions::open"
-reason = "use atuin_common::fs::OpenOptions::open (or its .blocking_open() off-runtime), which leases a descriptor from FdPool::system()"
+reason = """use atuin_common::fs::OpenOptions::open (or its .blocking_open() off-runtime), which \
+    leases a descriptor from FdPool::system()"""
 
 [[disallowed-methods]]
 path = "std::fs::DirBuilder::create"
-reason = "use atuin_common::fs::create_secure_dir (or fs::blocking::create_secure_dir off-runtime), which leases a descriptor from FdPool::system()"
+reason = """use atuin_common::fs::create_secure_dir (or fs::blocking::create_secure_dir off-runtime), \
+    which leases a descriptor from FdPool::system()"""
 
 [[disallowed-methods]]
-path = "tokio::fs::read_to_string"
-reason = "use atuin_common::fs::read_to_string, which leases a descriptor from FdPool::system()"
+path = "std::os::unix::fs::symlink"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+allow-invalid = true
 
 [[disallowed-methods]]
-path = "tokio::fs::write"
-reason = "use atuin_common::fs::write, which leases a descriptor from FdPool::system()"
+path = "std::os::windows::fs::symlink_file"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+allow-invalid = true
 
 [[disallowed-methods]]
-path = "tokio::fs::create_dir_all"
-reason = "use atuin_common::fs::create_dir_all, which leases a descriptor from FdPool::system()"
-
-[[disallowed-methods]]
-path = "tokio::fs::read_dir"
-reason = "use atuin_common::fs::read_dir, which leases a descriptor from FdPool::system()"
-
-[[disallowed-methods]]
-path = "tokio::fs::try_exists"
-reason = "use atuin_common::fs::exists, which leases a descriptor from FdPool::system()"
-
-[[disallowed-methods]]
-path = "tokio::fs::File::open"
-reason = "use atuin_common::fs::File::open, which leases a descriptor from FdPool::system()"
-
-[[disallowed-methods]]
-path = "fs_err::read_to_string"
-reason = "use atuin_common::fs::read_to_string (or fs::blocking::read_to_string off-runtime), which leases a descriptor from FdPool::system()"
-
-[[disallowed-methods]]
-path = "fs_err::create_dir_all"
-reason = "use atuin_common::fs::create_dir_all (or fs::blocking::create_dir_all off-runtime), which leases a descriptor from FdPool::system()"
-
-[[disallowed-methods]]
-path = "fs_err::set_permissions"
-reason = "use atuin_common::fs::set_permissions (or fs::blocking::set_permissions off-runtime), which leases a descriptor from FdPool::system()"
-
-[[disallowed-methods]]
-path = "fs_err::metadata"
-reason = "use atuin_common::fs::metadata (or fs::blocking::metadata off-runtime), which leases a descriptor from FdPool::system()"
-
-[[disallowed-methods]]
-path = "fs_err::symlink_metadata"
-reason = "use atuin_common::fs::symlink_metadata (or fs::blocking::symlink_metadata off-runtime), which leases a descriptor from FdPool::system()"
-
-[[disallowed-methods]]
-path = "fs_err::remove_dir_all"
-reason = "use atuin_common::fs::remove_dir_all (or fs::blocking::remove_dir_all off-runtime), which leases a descriptor from FdPool::system()"
-
-[[disallowed-methods]]
-path = "fs_err::File::create"
-reason = "use atuin_common::fs::File::create (or fs::blocking::File::create off-runtime), which leases a descriptor from FdPool::system()"
+path = "std::os::windows::fs::symlink_dir"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+allow-invalid = true
 
 [[disallowed-methods]]
 path = "std::path::Path::exists"
-reason = "use atuin_common::fs::exists (or fs::blocking::exists off-runtime), which leases a descriptor from FdPool::system()"
+reason = """use atuin_common::fs::exists (or fs::blocking::exists off-runtime), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "std::path::Path::try_exists"
+reason = """use atuin_common::fs::exists (or fs::blocking::exists off-runtime), which leases a \
+    descriptor from FdPool::system()"""
 
 [[disallowed-methods]]
 path = "std::path::Path::is_file"
@@ -217,21 +232,339 @@ reason = """replace with fs::metadata(path).await.is_ok_and(|m| m.is_dir()) (or 
     fs::blocking::metadata off-runtime), which leases a descriptor from FdPool::system()"""
 
 [[disallowed-methods]]
+path = "std::path::Path::is_symlink"
+reason = """replace with fs::symlink_metadata(path).await.is_ok_and(|m| m.is_symlink()) \
+    (or fs::blocking::symlink_metadata off-runtime), which leases a descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
 path = "std::path::Path::metadata"
-reason = "use atuin_common::fs::metadata (or fs::blocking::metadata off-runtime), which leases a descriptor from FdPool::system()"
+reason = """use atuin_common::fs::metadata (or fs::blocking::metadata off-runtime), which leases a \
+    descriptor from FdPool::system()"""
 
 [[disallowed-methods]]
 path = "std::path::Path::symlink_metadata"
-reason = "use atuin_common::fs::symlink_metadata (or fs::blocking::symlink_metadata off-runtime), which leases a descriptor from FdPool::system()"
+reason = """use atuin_common::fs::symlink_metadata (or fs::blocking::symlink_metadata off-runtime), \
+    which leases a descriptor from FdPool::system()"""
 
 [[disallowed-methods]]
 path = "std::path::Path::canonicalize"
-reason = "use atuin_common::fs::canonicalize (or fs::blocking::canonicalize off-runtime), which leases a descriptor from FdPool::system()"
+reason = """use atuin_common::fs::canonicalize (or fs::blocking::canonicalize off-runtime), which \
+    leases a descriptor from FdPool::system()"""
 
 [[disallowed-methods]]
 path = "std::path::Path::read_dir"
-reason = "use atuin_common::fs::read_dir (or fs::blocking::read_dir off-runtime), which leases a descriptor from FdPool::system()"
+reason = """use atuin_common::fs::read_dir (or fs::blocking::read_dir off-runtime), which leases a \
+    descriptor from FdPool::system()"""
 
 [[disallowed-methods]]
-path = "std::path::Path::try_exists"
-reason = "use atuin_common::fs::exists (or fs::blocking::exists off-runtime), which leases a descriptor from FdPool::system()"
+path = "std::path::Path::read_link"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "tokio::fs::canonicalize"
+reason = "use atuin_common::fs::canonicalize, which leases a descriptor from FdPool::system()"
+
+[[disallowed-methods]]
+path = "tokio::fs::copy"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "tokio::fs::create_dir"
+reason = """use atuin_common::fs::create_dir_all or fs::create_secure_dir, which leases a descriptor \
+    from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "tokio::fs::create_dir_all"
+reason = "use atuin_common::fs::create_dir_all, which leases a descriptor from FdPool::system()"
+
+[[disallowed-methods]]
+path = "tokio::fs::hard_link"
+reason = "use atuin_common::fs::hard_link, which leases a descriptor from FdPool::system()"
+
+[[disallowed-methods]]
+path = "tokio::fs::metadata"
+reason = "use atuin_common::fs::metadata, which leases a descriptor from FdPool::system()"
+
+[[disallowed-methods]]
+path = "tokio::fs::read"
+reason = "use atuin_common::fs::read, which leases a descriptor from FdPool::system()"
+
+[[disallowed-methods]]
+path = "tokio::fs::read_dir"
+reason = "use atuin_common::fs::read_dir, which leases a descriptor from FdPool::system()"
+
+[[disallowed-methods]]
+path = "tokio::fs::read_link"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "tokio::fs::read_to_string"
+reason = "use atuin_common::fs::read_to_string, which leases a descriptor from FdPool::system()"
+
+[[disallowed-methods]]
+path = "tokio::fs::remove_dir"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "tokio::fs::remove_dir_all"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "tokio::fs::remove_file"
+reason = "use atuin_common::fs::remove_file, which leases a descriptor from FdPool::system()"
+
+[[disallowed-methods]]
+path = "tokio::fs::rename"
+reason = """no async wrapper yet: add one to atuin_common::fs (fs::blocking::rename covers off-runtime \
+    callers), which leases a descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "tokio::fs::set_permissions"
+reason = "use atuin_common::fs::set_permissions, which leases a descriptor from FdPool::system()"
+
+[[disallowed-methods]]
+path = "tokio::fs::symlink_metadata"
+reason = "use atuin_common::fs::symlink_metadata, which leases a descriptor from FdPool::system()"
+
+[[disallowed-methods]]
+path = "tokio::fs::try_exists"
+reason = "use atuin_common::fs::exists, which leases a descriptor from FdPool::system()"
+
+[[disallowed-methods]]
+path = "tokio::fs::write"
+reason = "use atuin_common::fs::write, which leases a descriptor from FdPool::system()"
+
+[[disallowed-methods]]
+path = "tokio::fs::symlink"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+allow-invalid = true
+
+[[disallowed-methods]]
+path = "tokio::fs::symlink_file"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+allow-invalid = true
+
+[[disallowed-methods]]
+path = "tokio::fs::symlink_dir"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+allow-invalid = true
+
+[[disallowed-methods]]
+path = "tokio::fs::File::open"
+reason = "use atuin_common::fs::File::open, which leases a descriptor from FdPool::system()"
+
+[[disallowed-methods]]
+path = "tokio::fs::File::create"
+reason = "use atuin_common::fs::File::create, which leases a descriptor from FdPool::system()"
+
+[[disallowed-methods]]
+path = "tokio::fs::File::create_new"
+reason = """use atuin_common::fs::OpenOptions::new().write(true).create_new(true).open, which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "tokio::fs::File::options"
+reason = "use atuin_common::fs::OpenOptions::new, which leases a descriptor from FdPool::system()"
+
+[[disallowed-methods]]
+path = "tokio::fs::OpenOptions::open"
+reason = "use atuin_common::fs::OpenOptions::open, which leases a descriptor from FdPool::system()"
+
+[[disallowed-methods]]
+path = "tokio::fs::DirBuilder::create"
+reason = "use atuin_common::fs::create_secure_dir, which leases a descriptor from FdPool::system()"
+
+[[disallowed-methods]]
+path = "fs_err::canonicalize"
+reason = """use atuin_common::fs::canonicalize (or fs::blocking::canonicalize off-runtime), which \
+    leases a descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::copy"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::create_dir"
+reason = """use atuin_common::fs::create_dir_all or fs::create_secure_dir (or their fs::blocking twins \
+    off-runtime), which leases a descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::create_dir_all"
+reason = """use atuin_common::fs::create_dir_all (or fs::blocking::create_dir_all off-runtime), which \
+    leases a descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::exists"
+reason = """use atuin_common::fs::exists (or fs::blocking::exists off-runtime), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::hard_link"
+reason = """use atuin_common::fs::hard_link, which leases a descriptor from FdPool::system(); \
+    off-runtime, add a twin to atuin_common::fs::blocking"""
+
+[[disallowed-methods]]
+path = "fs_err::metadata"
+reason = """use atuin_common::fs::metadata (or fs::blocking::metadata off-runtime), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::read"
+reason = """use atuin_common::fs::read (or fs::blocking::read off-runtime), which leases a descriptor \
+    from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::read_dir"
+reason = """use atuin_common::fs::read_dir (or fs::blocking::read_dir off-runtime), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::read_link"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::read_to_string"
+reason = """use atuin_common::fs::read_to_string (or fs::blocking::read_to_string off-runtime), which \
+    leases a descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::remove_dir"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::remove_dir_all"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::remove_file"
+reason = """use atuin_common::fs::remove_file, which leases a descriptor from FdPool::system(); \
+    off-runtime, add a twin to atuin_common::fs::blocking"""
+
+[[disallowed-methods]]
+path = "fs_err::rename"
+reason = """use atuin_common::fs::blocking::rename off-runtime, which leases a descriptor from \
+    FdPool::system(); on a runtime, add an async twin to atuin_common::fs"""
+
+[[disallowed-methods]]
+path = "fs_err::set_permissions"
+reason = """use atuin_common::fs::set_permissions (or fs::blocking::set_permissions off-runtime), \
+    which leases a descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::soft_link"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::symlink_metadata"
+reason = """use atuin_common::fs::symlink_metadata (or fs::blocking::symlink_metadata off-runtime), \
+    which leases a descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::write"
+reason = """use atuin_common::fs::write (or fs::blocking::write off-runtime), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::File::open"
+reason = """use atuin_common::fs::File::open (or fs::blocking::File::open off-runtime), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::File::create"
+reason = """use atuin_common::fs::File::create (or \
+    fs::OpenOptions::new().write(true).create(true).truncate(true).blocking_open \
+    off-runtime), which leases a descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::File::create_new"
+reason = """use atuin_common::fs::OpenOptions::new().write(true).create_new(true).open (or \
+    .blocking_open off-runtime), which leases a descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::File::options"
+reason = """use atuin_common::fs::OpenOptions::new (or its .blocking_open() off-runtime), which leases \
+    a descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::OpenOptions::open"
+reason = """use atuin_common::fs::OpenOptions::open (or its .blocking_open() off-runtime), which \
+    leases a descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::os::unix::fs::symlink"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+allow-invalid = true
+
+[[disallowed-methods]]
+path = "fs_err::os::unix::fs::chown"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+allow-invalid = true
+
+[[disallowed-methods]]
+path = "fs_err::os::unix::fs::lchown"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+allow-invalid = true
+
+[[disallowed-methods]]
+path = "fs_err::os::unix::fs::chroot"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+allow-invalid = true
+
+[[disallowed-methods]]
+path = "fs_err::os::windows::fs::symlink_file"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+allow-invalid = true
+
+[[disallowed-methods]]
+path = "fs_err::os::windows::fs::symlink_dir"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+allow-invalid = true
+
+[[disallowed-methods]]
+path = "fs_err::PathExt::fs_err_try_exists"
+reason = """use atuin_common::fs::exists (or fs::blocking::exists off-runtime), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::PathExt::fs_err_metadata"
+reason = """use atuin_common::fs::metadata (or fs::blocking::metadata off-runtime), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::PathExt::fs_err_symlink_metadata"
+reason = """use atuin_common::fs::symlink_metadata (or fs::blocking::symlink_metadata off-runtime), \
+    which leases a descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::PathExt::fs_err_canonicalize"
+reason = """use atuin_common::fs::canonicalize (or fs::blocking::canonicalize off-runtime), which \
+    leases a descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::PathExt::fs_err_read_link"
+reason = """no pool-backed wrapper yet: add one to atuin_common::fs (and fs::blocking), which leases a \
+    descriptor from FdPool::system()"""
+
+[[disallowed-methods]]
+path = "fs_err::PathExt::fs_err_read_dir"
+reason = """use atuin_common::fs::read_dir (or fs::blocking::read_dir off-runtime), which leases a \
+    descriptor from FdPool::system()"""
