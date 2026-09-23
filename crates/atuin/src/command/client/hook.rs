@@ -140,7 +140,7 @@ mod tests {
     use crate::Atuin;
     use crate::command::{AtuinCmd, client};
 
-    #[test]
+    #[rstest]
     fn parse_hook_agent_command() {
         let cmd = Cmd::try_parse_from(["hook", "codex"]).unwrap();
 
@@ -162,7 +162,7 @@ mod tests {
 
     /// A harness whose author is missing from `KNOWN_AGENTS` would be installable
     /// but invisible to `$all-agent`, and would pollute `$all-user` with its commands.
-    #[test]
+    #[rstest]
     fn every_harness_author_is_a_known_agent() {
         for harness in AnyHarness::all() {
             assert!(
@@ -173,7 +173,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn parse_top_level_hook_command() {
         let cmd = Atuin::try_parse_from(["atuin", "hook", "codex"]).unwrap();
 
