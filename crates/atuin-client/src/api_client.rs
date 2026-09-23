@@ -230,7 +230,9 @@ pub fn ensure_version(response: &Response) -> Result<bool> {
 #[instrument(level = "trace", skip_all, err)]
 async fn handle_resp_error(resp: Response) -> Result<Response> {
     let status = resp.status();
-    let url = resp.url().to_string();
+    // Presigned packfile URLs carry their signature in the query string.
+    let mut url = resp.url().clone();
+    url.set_query(None);
 
     if status == StatusCode::SERVICE_UNAVAILABLE {
         bail!(
@@ -568,7 +570,13 @@ impl Client {
         packfile: impl Into<reqwest::Body>,
     ) -> Result<()> {
         // Not self.client: S3 rejects presigned requests that also carry an Authorization header.
-        let resp = self.lfs_client.put(upload_url.clone()).body(packfile).send().await?;
+        let resp = self
+            .lfs_client
+            .put(upload_url)
+            .body(packfile)
+            .send()
+            .await
+            .map_err(reqwest::Error::without_url)?;
         handle_resp_error(resp).await?;
         Ok(())
     }
@@ -594,9 +602,10 @@ impl Client {
             .get(download_url)
             .send()
             .instrument(tracing::trace_span!("lfs_download"))
-            .await?;
+            .await
+            .map_err(reqwest::Error::without_url)?;
         let resp = handle_resp_error(resp).await?;
-        Ok(resp.bytes().await?.to_vec())
+        Ok(resp.bytes().await.map_err(reqwest::Error::without_url)?.to_vec())
     }
 
     /// Build a records request for `series`.
@@ -775,6 +784,22 @@ mod tests {
 
         assert_eq!(resp.status(), 200);
         assert_eq!(resp.url().path(), "/ok");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn resp_error_omits_the_query_string() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).respond_with(ResponseTemplate::new(403)).mount(&server).await;
+
+        let resp =
+            reqwest::get(format!("{}/blob?X-Amz-Signature=sekrit", server.uri())).await.unwrap();
+        let err = handle_resp_error(resp).await.unwrap_err();
+
+        assert!(!format!("{err:#}").contains("sekrit"), "{err:#}");
     }
 
     #[rstest]
