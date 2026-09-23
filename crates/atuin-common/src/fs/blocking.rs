@@ -23,6 +23,8 @@ pub fn write(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) -> io::Result<(
 }
 
 /// Iterate the entries of the directory at `path`, holding its descriptor's lease until dropped.
+///
+/// Entries collected out of it keep the directory open after the lease returns.
 pub fn read_dir(path: impl AsRef<Path>) -> io::Result<Leased<ReadDir>> {
     FdPool::system().blocking_run_hold(|| std::fs::read_dir(path))
 }
@@ -95,18 +97,17 @@ pub fn exists(path: impl AsRef<Path>) -> io::Result<bool> {
     FdPool::system().blocking_run(|| std::fs::exists(path))
 }
 
-/// Opens files under a lease, mirroring [`std::fs::File`]'s constructors.
-#[derive(Debug)]
-pub enum File {}
+/// An open file and the lease that pays for its descriptor.
+pub type File = Leased<std::fs::File>;
 
 impl File {
     /// Open the file at `path` read-only.
-    pub fn open(path: impl AsRef<Path>) -> io::Result<Leased<std::fs::File>> {
+    pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         FdPool::system().blocking_run_hold(|| std::fs::File::open(path))
     }
 
     /// Open the file at `path` write-only, creating or truncating it.
-    pub fn create(path: impl AsRef<Path>) -> io::Result<Leased<std::fs::File>> {
+    pub fn create(path: impl AsRef<Path>) -> io::Result<Self> {
         FdPool::system().blocking_run_hold(|| std::fs::File::create(path))
     }
 }
@@ -149,14 +150,17 @@ mod tests {
         create_dir(nested.join("c")).unwrap();
         write(nested.join("f"), "").unwrap();
 
+        // The system pool is process-wide, so this count relies on nextest's process per test.
         let held = FdPool::system().held();
-        let mut entries = read_dir(&nested).unwrap();
+        let mut dir_entries = read_dir(&nested).unwrap();
         assert_eq!(FdPool::system().held(), held + 1);
-        let mut names: Vec<_> = entries.by_ref().map(|entry| entry.unwrap().file_name()).collect();
+        let entries: Vec<_> = dir_entries.by_ref().collect::<io::Result<_>>().unwrap();
+        drop(dir_entries);
+        assert_eq!(FdPool::system().held(), held, "the lease outlived its ReadDir");
+
+        let mut names: Vec<_> = entries.iter().map(std::fs::DirEntry::file_name).collect();
         names.sort();
         assert_eq!(names, ["c", "f"]);
-        drop(entries);
-        assert_eq!(FdPool::system().held(), held);
 
         remove_dir_all(dir.path().join("a")).unwrap();
         assert!(!exists(&nested).unwrap());
@@ -165,6 +169,7 @@ mod tests {
     #[rstest]
     fn an_open_file_holds_a_lease(dir: TempDir) {
         let path = dir.path().join("f");
+        // The system pool is process-wide, so this count relies on nextest's process per test.
         let held = FdPool::system().held();
 
         let mut file = File::create(&path).unwrap();

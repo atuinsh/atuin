@@ -195,25 +195,12 @@ impl FdPool {
         F: FnOnce() -> io::Result<T> + Send + 'static,
         T: Send + 'static,
     {
-        let lease = self.acquire().await;
-        let result = tokio::task::spawn_blocking(move || {
-            let _lease = lease;
-            f()
-        })
-        .await
-        .expect("given closure panicked");
-        self.report_exhausted(&result);
-        result
+        self.blocking_hold(f).await.map(|Leased { fd, .. }| fd)
     }
 
     /// Equivalent to [`Self::blocking`], except it waits and runs `f` on the calling thread.
     pub fn blocking_run<T>(self: &Arc<Self>, f: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
-        let result = {
-            let _lease = self.acquire_blocking();
-            f()
-        };
-        self.report_exhausted(&result);
-        result
+        self.blocking_run_hold(f).map(|Leased { fd, .. }| fd)
     }
 
     /// Equivalent to [`Self::blocking`], except the lease stays with the descriptor `open` returns.
@@ -223,6 +210,7 @@ impl FdPool {
         T: Send + 'static,
     {
         let lease = self.acquire().await;
+        // The lease moves into the task, so a caller that stops awaiting leaves it with the work.
         let result = tokio::task::spawn_blocking(move || open().map(|fd| lease.hold(fd)))
             .await
             .expect("given closure panicked");
@@ -383,8 +371,10 @@ pub struct Leased<T> {
 
 impl<T> Leased<T> {
     /// Convert the held descriptor, keeping its lease.
-    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Leased<U> {
-        let Self { fd, _lease: lease } = self;
+    ///
+    /// An associated function, like [`std::cell::Ref::map`], so it cannot shadow a method of `T`.
+    pub fn map<U>(this: Self, f: impl FnOnce(T) -> U) -> Leased<U> {
+        let Self { fd, _lease: lease } = this;
         Leased {
             fd: f(fd),
             _lease: lease,

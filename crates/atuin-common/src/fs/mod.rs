@@ -33,10 +33,11 @@ pub async fn write(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) -> io::Re
 
 /// List the entries of the directory at `path`.
 ///
-/// Listed in one go, so the directory's descriptor never outlives its lease.
-pub async fn read_dir(path: impl AsRef<Path>) -> io::Result<Vec<DirEntry>> {
+/// The lease lives with the entries, since each keeps the directory's descriptor open until the
+/// last of them drops.
+pub async fn read_dir(path: impl AsRef<Path>) -> io::Result<Leased<Vec<DirEntry>>> {
     let path = path.as_ref().to_owned();
-    FdPool::system().blocking(move || std::fs::read_dir(path)?.collect()).await
+    FdPool::system().blocking_hold(move || std::fs::read_dir(path)?.collect()).await
 }
 
 /// The target of the symbolic link at `path`.
@@ -120,23 +121,25 @@ pub async fn exists(path: impl AsRef<Path>) -> io::Result<bool> {
     FdPool::system().blocking(move || std::fs::exists(path)).await
 }
 
-/// Opens files under a lease, mirroring [`std::fs::File`]'s constructors.
-#[derive(Debug)]
-pub enum File {}
+/// An open file and the lease that pays for its descriptor.
+///
+/// Dropping it with a tokio operation still in flight or unflushed can return the lease a moment
+/// before tokio closes the file inside.
+pub type File = Leased<tokio::fs::File>;
 
 impl File {
     /// Open the file at `path` read-only.
-    pub async fn open(path: impl AsRef<Path>) -> io::Result<Leased<tokio::fs::File>> {
+    pub async fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref().to_owned();
         let file = FdPool::system().blocking_hold(move || std::fs::File::open(path)).await?;
-        Ok(file.map(tokio::fs::File::from_std))
+        Ok(Leased::map(file, tokio::fs::File::from_std))
     }
 
     /// Open the file at `path` write-only, creating or truncating it.
-    pub async fn create(path: impl AsRef<Path>) -> io::Result<Leased<tokio::fs::File>> {
+    pub async fn create(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref().to_owned();
         let file = FdPool::system().blocking_hold(move || std::fs::File::create(path)).await?;
-        Ok(file.map(tokio::fs::File::from_std))
+        Ok(Leased::map(file, tokio::fs::File::from_std))
     }
 }
 
@@ -203,14 +206,14 @@ impl OpenOptions {
     }
 
     /// Open the file at `path` with these options.
-    pub async fn open(&self, path: impl AsRef<Path>) -> io::Result<Leased<tokio::fs::File>> {
+    pub async fn open(&self, path: impl AsRef<Path>) -> io::Result<File> {
         let (options, path) = (self.0.clone(), path.as_ref().to_owned());
         let file = FdPool::system().blocking_hold(move || options.open(path)).await?;
-        Ok(file.map(tokio::fs::File::from_std))
+        Ok(Leased::map(file, tokio::fs::File::from_std))
     }
 
     /// Equivalent to [`Self::open`], except it waits and opens on the calling thread.
-    pub fn blocking_open(&self, path: impl AsRef<Path>) -> io::Result<Leased<std::fs::File>> {
+    pub fn blocking_open(&self, path: impl AsRef<Path>) -> io::Result<blocking::File> {
         FdPool::system().blocking_run_hold(|| self.0.open(path))
     }
 }
@@ -223,8 +226,8 @@ pub struct RemoveOnDropPath<P: AsRef<Path> = PathBuf>(
 
 impl<P: AsRef<Path>> Drop for RemoveOnDropPath<P> {
     fn drop(&mut self) {
-        // Drop cannot wait for a lease, and skipping the removal would leak the file, so a full pool
-        // only costs going one descriptor over it for a moment.
+        // Drop cannot wait for a lease, and skipping the removal would leak the file. Removing opens
+        // no descriptor, so going ahead unleased on a full pool costs nothing.
         let _lease = FdPool::system().try_acquire();
         let _ = std::fs::remove_file(&self.0);
     }
@@ -288,10 +291,15 @@ mod tests {
         create_dir(nested.join("c")).await.unwrap();
         write(nested.join("f"), "").await.unwrap();
 
-        let mut names: Vec<_> =
-            read_dir(&nested).await.unwrap().into_iter().map(|entry| entry.file_name()).collect();
+        // The system pool is process-wide, so this count relies on nextest's process per test.
+        let held = FdPool::system().held();
+        let entries = read_dir(&nested).await.unwrap();
+        assert_eq!(FdPool::system().held(), held + 1);
+        let mut names: Vec<_> = entries.iter().map(DirEntry::file_name).collect();
         names.sort();
         assert_eq!(names, ["c", "f"]);
+        drop(entries);
+        assert_eq!(FdPool::system().held(), held);
 
         remove_dir_all(dir.path().join("a")).await.unwrap();
         assert!(!exists(&nested).await.unwrap());
@@ -301,6 +309,7 @@ mod tests {
     #[tokio::test]
     async fn an_open_file_holds_a_lease(dir: TempDir) {
         let path = dir.path().join("f");
+        // The system pool is process-wide, so this count relies on nextest's process per test.
         let held = FdPool::system().held();
 
         let mut file = File::create(&path).await.unwrap();
