@@ -152,7 +152,7 @@ impl HubAuthSession {
     ) -> Result<String> {
         debug!("Polling for Hub authentication completion...");
 
-        Backoff::Linear(poll_interval)
+        Backoff::Constant(poll_interval)
             .retry(
                 || async move {
                     match self.poll().await {

@@ -193,7 +193,7 @@ fn open_lock_file(path: &Path) -> Result<File> {
 async fn wait_for_lock(path: &Path, timeout: Duration) -> Result<File> {
     let file = open_lock_file(path)?;
 
-    let outcome = Backoff::Linear(LOCK_POLL)
+    let outcome = Backoff::Constant(LOCK_POLL)
         .retry_sync(
             || match file.try_lock() {
                 Ok(()) => ControlFlow::Break(Ok(())),
@@ -331,7 +331,7 @@ fn remove_stale_socket_if_present(settings: &Settings) -> Result<(), RemoveSocke
 }
 
 async fn wait_until_ready(settings: &Settings, timeout: Duration) -> Result<HistoryClient> {
-    Backoff::Linear(STARTUP_POLL)
+    Backoff::Constant(STARTUP_POLL)
         .retry(
             || async move {
                 match probe(settings).await {
