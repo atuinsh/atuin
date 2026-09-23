@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use atuin_client::settings::Settings;
+use atuin_common::fs;
 use crossterm::event::{KeyCode, KeyEventKind};
 use eye_declare::{
     App, Ctx, Element, ElementExt, Fluent, Focus, FocusHandle, InputEvent, Keymap, Task, col, key,
@@ -590,7 +591,8 @@ impl AiApp {
 
     /// Execute an approved tool. Shell commands stream previews from a
     /// detached task (interrupt ≠ cancel: the outcome must still arrive);
-    /// file tools are fast and run inline, as in v1; the rest are one-shot
+    /// file tools are fast and run inline, as in v1, under `block_in_place`
+    /// since their filesystem calls wait on the fd pool; the rest are one-shot
     /// futures.
     fn execute_tool(&mut self, tool_id: String, tool: ClientToolCall, ctx: &mut Ctx<'_, Self>) {
         match tool {
@@ -603,36 +605,40 @@ impl AiApp {
             ClientToolCall::Edit(edit_call) => {
                 let resolved = edit_call.resolved_path();
 
-                let old_content = std::fs::read(&resolved).ok();
-                if let Some(content) = &old_content
-                    && let Some(io) = &mut self.io
-                    && let Some(store) = &mut io.snapshot_store
-                    && let Err(e) = store.ensure_snapshot(&resolved, content)
-                {
-                    tracing::warn!("Failed to snapshot before edit: {e}");
-                }
-
-                let (outcome, new_content) = match &self.io {
-                    Some(io) => edit_call.execute(&resolved, &io.file_tracker),
-                    None => edit_call.execute(&resolved, &Default::default()),
-                };
-
-                if let Some(new_bytes) = &new_content
-                    && let Some(io) = &mut self.io
-                    && let Ok(mtime) = std::fs::metadata(&resolved).and_then(|m| m.modified())
-                {
-                    io.file_tracker.update_after_edit(&resolved, new_bytes, mtime);
-                }
-
-                let preview = match (&old_content, &new_content) {
-                    (Some(old_bytes), Some(new_bytes)) => {
-                        let old_str = String::from_utf8_lossy(old_bytes);
-                        let new_str = String::from_utf8_lossy(new_bytes);
-                        let diff = crate::diff::EditPreview::compute(&old_str, &new_str);
-                        (!diff.hunks.is_empty()).then_some(ToolPreviewData::Edit(diff))
+                let (outcome, preview) = tokio::task::block_in_place(|| {
+                    let old_content = fs::blocking::read(&resolved).ok();
+                    if let Some(content) = &old_content
+                        && let Some(io) = &mut self.io
+                        && let Some(store) = &mut io.snapshot_store
+                        && let Err(e) = store.ensure_snapshot(&resolved, content)
+                    {
+                        tracing::warn!("Failed to snapshot before edit: {e}");
                     }
-                    _ => None,
-                };
+
+                    let (outcome, new_content) = match &self.io {
+                        Some(io) => edit_call.execute(&resolved, &io.file_tracker),
+                        None => edit_call.execute(&resolved, &Default::default()),
+                    };
+
+                    if let Some(new_bytes) = &new_content
+                        && let Some(io) = &mut self.io
+                        && let Ok(mtime) =
+                            fs::blocking::metadata(&resolved).and_then(|m| m.modified())
+                    {
+                        io.file_tracker.update_after_edit(&resolved, new_bytes, mtime);
+                    }
+
+                    let preview = match (&old_content, &new_content) {
+                        (Some(old_bytes), Some(new_bytes)) => {
+                            let old_str = String::from_utf8_lossy(old_bytes);
+                            let new_str = String::from_utf8_lossy(new_bytes);
+                            let diff = crate::diff::EditPreview::compute(&old_str, &new_str);
+                            (!diff.hunks.is_empty()).then_some(ToolPreviewData::Edit(diff))
+                        }
+                        _ => None,
+                    };
+                    (outcome, preview)
+                });
 
                 self.handle_fsm(
                     Event::ToolExecutionDone {
@@ -646,22 +652,26 @@ impl AiApp {
             ClientToolCall::Write(write_call) => {
                 let resolved = write_call.resolved_path();
 
-                if let Ok(content) = std::fs::read(&resolved)
-                    && let Some(io) = &mut self.io
-                    && let Some(store) = &mut io.snapshot_store
-                    && let Err(e) = store.ensure_snapshot(&resolved, &content)
-                {
-                    tracing::warn!("Failed to snapshot before write: {e}");
-                }
+                let outcome = tokio::task::block_in_place(|| {
+                    if let Ok(content) = fs::blocking::read(&resolved)
+                        && let Some(io) = &mut self.io
+                        && let Some(store) = &mut io.snapshot_store
+                        && let Err(e) = store.ensure_snapshot(&resolved, &content)
+                    {
+                        tracing::warn!("Failed to snapshot before write: {e}");
+                    }
 
-                let (outcome, written_bytes) = write_call.execute(&resolved);
+                    let (outcome, written_bytes) = write_call.execute(&resolved);
 
-                if let Some(new_bytes) = &written_bytes
-                    && let Some(io) = &mut self.io
-                    && let Ok(mtime) = std::fs::metadata(&resolved).and_then(|m| m.modified())
-                {
-                    io.file_tracker.update_after_edit(&resolved, new_bytes, mtime);
-                }
+                    if let Some(new_bytes) = &written_bytes
+                        && let Some(io) = &mut self.io
+                        && let Ok(mtime) =
+                            fs::blocking::metadata(&resolved).and_then(|m| m.modified())
+                    {
+                        io.file_tracker.update_after_edit(&resolved, new_bytes, mtime);
+                    }
+                    outcome
+                });
 
                 let preview = (!outcome.is_error()).then(|| {
                     ToolPreviewData::Write(crate::diff::WritePreview::from_content(
@@ -679,18 +689,22 @@ impl AiApp {
                 );
             }
             ClientToolCall::Read(read_call) => {
-                let outcome = read_call.execute();
+                let outcome = tokio::task::block_in_place(|| {
+                    let outcome = read_call.execute();
 
-                if !outcome.is_error() {
-                    let resolved = read_call.resolved_path();
-                    if resolved.is_file()
-                        && let Some(io) = &mut self.io
-                        && let Ok(content) = std::fs::read(&resolved)
-                        && let Ok(mtime) = std::fs::metadata(&resolved).and_then(|m| m.modified())
-                    {
-                        io.file_tracker.record_read(resolved, &content, mtime);
+                    if !outcome.is_error() {
+                        let resolved = read_call.resolved_path();
+                        if fs::blocking::metadata(&resolved).is_ok_and(|m| m.is_file())
+                            && let Some(io) = &mut self.io
+                            && let Ok(content) = fs::blocking::read(&resolved)
+                            && let Ok(mtime) =
+                                fs::blocking::metadata(&resolved).and_then(|m| m.modified())
+                        {
+                            io.file_tracker.record_read(resolved, &content, mtime);
+                        }
                     }
-                }
+                    outcome
+                });
 
                 self.handle_fsm(
                     Event::ToolExecutionDone {

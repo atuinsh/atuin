@@ -8,6 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
+use atuin_common::fs;
 use eyre::Result;
 use tokio::task::JoinSet;
 
@@ -76,7 +77,7 @@ pub fn global_context_path() -> PathBuf {
 }
 
 async fn load_context_file(path: &Path, depth: usize) -> Result<Option<FoundFile>> {
-    match tokio::fs::read_to_string(path).await {
+    match fs::read_to_string(path).await {
         Ok(content) => Ok(Some(FoundFile {
             depth,
             file: RawContextFile {

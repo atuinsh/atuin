@@ -1,4 +1,5 @@
 use atuin_client::database::Sqlite;
+use atuin_common::fs;
 use easy_cast::Conv;
 use eyre::{Context as _, Result, bail};
 use tracing::{debug, info};
@@ -273,7 +274,7 @@ async fn run_inline_tui(
     // ─── Snapshot store ─────────────────────────────────────────
     let snapshot_dir =
         atuin_common::utils::data_dir().join("ai").join("snapshots").join(session_mgr.session_id());
-    let snapshot_store = crate::snapshots::SnapshotStore::open(snapshot_dir).ok();
+    let snapshot_store = crate::snapshots::SnapshotStore::open(snapshot_dir).await.ok();
 
     // ─── Discover skills ───────────────────────────────────────
     let project_root = ctx.git_root.clone().or_else(|| std::env::current_dir().ok());
@@ -439,7 +440,7 @@ fn render_setup_options(
 
 async fn set_ai_enabled(enabled: bool) -> Result<()> {
     let config_file = atuin_client::settings::Settings::get_config_path().await?;
-    let config_str = tokio::fs::read_to_string(&config_file).await?;
+    let config_str = fs::read_to_string(&config_file).await?;
     let mut doc = config_str.parse::<toml_edit::DocumentMut>()?;
 
     if !doc.contains_key("ai") {
@@ -447,7 +448,7 @@ async fn set_ai_enabled(enabled: bool) -> Result<()> {
     }
     doc["ai"]["enabled"] = toml_edit::value(enabled);
 
-    tokio::fs::write(&config_file, doc.to_string()).await?;
+    fs::write(&config_file, doc.to_string()).await?;
 
     if !enabled {
         println!(

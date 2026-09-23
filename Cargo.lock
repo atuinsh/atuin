@@ -363,7 +363,6 @@ dependencies = [
  "eye_declare",
  "eye_declare_engine",
  "eyre",
- "fs-err",
  "futures",
  "glob-match",
  "imara-diff",

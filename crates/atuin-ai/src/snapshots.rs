@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use atuin_common::fs;
 use easy_cast::Conv;
 use eyre::{Result, eyre};
 use serde::{Deserialize, Serialize};
@@ -49,10 +50,10 @@ impl SnapshotStore {
     /// If a manifest already exists (from a prior CLI invocation in the same
     /// session), it's loaded so we don't re-snapshot files that were already
     /// backed up.
-    pub fn open(session_dir: PathBuf) -> Result<Self> {
+    pub async fn open(session_dir: PathBuf) -> Result<Self> {
         let manifest_path = session_dir.join("manifest.json");
-        let manifest = if manifest_path.exists() {
-            let data = fs_err::read_to_string(&manifest_path)?;
+        let manifest = if fs::exists(&manifest_path).await.unwrap_or(false) {
+            let data = fs::read_to_string(&manifest_path).await?;
             serde_json::from_str(&data)?
         } else {
             SnapshotManifest::default()
@@ -76,7 +77,7 @@ impl SnapshotStore {
             return Ok(false);
         }
 
-        fs_err::create_dir_all(&self.session_dir)?;
+        fs::blocking::create_dir_all(&self.session_dir)?;
 
         let snapshot_path = self.session_dir.join(&filename);
         atomic_write_file(&snapshot_path, content)?;
@@ -140,15 +141,15 @@ pub fn sanitize_path(path: &Path) -> String {
 /// the original file if it exists.
 pub fn atomic_write_file(target: &Path, content: &[u8]) -> Result<()> {
     let dir = target.parent().ok_or_else(|| eyre!("target path has no parent directory"))?;
-    fs_err::create_dir_all(dir)?;
+    fs::blocking::create_dir_all(dir)?;
 
     let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
     tmp.write_all(content)?;
     tmp.as_file().sync_all()?;
 
     // Preserve permissions from original if it exists
-    if let Ok(meta) = std::fs::metadata(target) {
-        std::fs::set_permissions(tmp.path(), meta.permissions())?;
+    if let Ok(meta) = fs::blocking::metadata(target) {
+        fs::blocking::set_permissions(tmp.path(), meta.permissions())?;
     }
 
     tmp.persist(target)
@@ -187,14 +188,14 @@ mod tests {
         assert_eq!(sanitize_path(&input), expected);
     }
 
-    #[test]
+    #[rstest]
     fn sanitize_no_collision_between_similar_paths() {
         let a = sanitize_path(Path::new("/foo/bar-baz"));
         let b = sanitize_path(Path::new("/foo/bar/baz"));
         assert_ne!(a, b);
     }
 
-    #[test]
+    #[rstest]
     fn sanitize_backslash_encoded() {
         // Windows-style path: backslashes become %5C, drive prefix stripped
         let s = sanitize_path(Path::new("C:\\Users\\me\\config.toml"));
@@ -204,7 +205,7 @@ mod tests {
         assert!(s.contains("config.toml"));
     }
 
-    #[test]
+    #[rstest]
     fn sanitize_result_is_flat_filename() {
         // The result must not be interpreted as a path with separators
         // when passed to Path::join — no raw / or \ allowed.
@@ -276,21 +277,21 @@ mod tests {
     // ── SnapshotStore ──────────────────────────────────────────
 
     #[fixture]
-    fn store() -> (tempfile::TempDir, std::path::PathBuf, SnapshotStore) {
+    async fn store() -> (tempfile::TempDir, std::path::PathBuf, SnapshotStore) {
         let dir = tempfile::tempdir().unwrap();
         let session_dir = dir.path().join("session-abc");
-        let store = SnapshotStore::open(session_dir.clone()).unwrap();
+        let store = SnapshotStore::open(session_dir.clone()).await.unwrap();
         (dir, session_dir, store)
     }
 
     #[rstest]
-    fn snapshot_creates_file_and_manifest(
-        #[from(store)] (_dir, session_dir, mut store): (
-            tempfile::TempDir,
-            std::path::PathBuf,
-            SnapshotStore,
-        ),
+    #[tokio::test(flavor = "multi_thread")]
+    async fn snapshot_creates_file_and_manifest(
+        #[future(awt)]
+        #[from(store)]
+        fixture: (tempfile::TempDir, std::path::PathBuf, SnapshotStore),
     ) {
+        let (_dir, session_dir, mut store) = fixture;
         let file_path = Path::new("/Users/me/.config/foo.toml");
         let created = store.ensure_snapshot(file_path, b"[key]\nval = 1\n").unwrap();
 
@@ -315,13 +316,13 @@ mod tests {
     }
 
     #[rstest]
-    fn snapshot_is_idempotent(
-        #[from(store)] (_dir, session_dir, mut store): (
-            tempfile::TempDir,
-            std::path::PathBuf,
-            SnapshotStore,
-        ),
+    #[tokio::test(flavor = "multi_thread")]
+    async fn snapshot_is_idempotent(
+        #[future(awt)]
+        #[from(store)]
+        fixture: (tempfile::TempDir, std::path::PathBuf, SnapshotStore),
     ) {
+        let (_dir, session_dir, mut store) = fixture;
         let path = Path::new("/etc/hosts");
         let first = store.ensure_snapshot(path, b"first content").unwrap();
         let second = store.ensure_snapshot(path, b"different content").unwrap();
@@ -334,20 +335,21 @@ mod tests {
         assert_eq!(std::fs::read_to_string(snapshot_file).unwrap(), "first content");
     }
 
-    #[test]
-    fn snapshot_store_loads_existing_manifest() {
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn snapshot_store_loads_existing_manifest() {
         let dir = tempfile::tempdir().unwrap();
         let session_dir = dir.path().join("session-abc");
 
         // First store: create a snapshot
         {
-            let mut store = SnapshotStore::open(session_dir.clone()).unwrap();
+            let mut store = SnapshotStore::open(session_dir.clone()).await.unwrap();
             store.ensure_snapshot(Path::new("/etc/hosts"), b"127.0.0.1").unwrap();
         }
 
         // Second store (simulates new CLI invocation): should see existing snapshot
         {
-            let mut store = SnapshotStore::open(session_dir).unwrap();
+            let mut store = SnapshotStore::open(session_dir).await.unwrap();
             assert!(store.has_snapshot(Path::new("/etc/hosts")));
 
             let created = store.ensure_snapshot(Path::new("/etc/hosts"), b"new content").unwrap();
@@ -356,13 +358,13 @@ mod tests {
     }
 
     #[rstest]
-    fn snapshot_multiple_files(
-        #[from(store)] (_dir, session_dir, mut store): (
-            tempfile::TempDir,
-            std::path::PathBuf,
-            SnapshotStore,
-        ),
+    #[tokio::test(flavor = "multi_thread")]
+    async fn snapshot_multiple_files(
+        #[future(awt)]
+        #[from(store)]
+        fixture: (tempfile::TempDir, std::path::PathBuf, SnapshotStore),
     ) {
+        let (_dir, session_dir, mut store) = fixture;
         store.ensure_snapshot(Path::new("/etc/hosts"), b"hosts content").unwrap();
         store.ensure_snapshot(Path::new("/Users/me/.bashrc"), b"bashrc content").unwrap();
 
@@ -382,7 +384,7 @@ mod tests {
         assert_eq!(manifest["files"].as_object().unwrap().len(), 2);
     }
 
-    #[test]
+    #[rstest]
     fn format_iso8601_produces_valid_format() {
         let dt = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
         let formatted = format_iso8601(dt);

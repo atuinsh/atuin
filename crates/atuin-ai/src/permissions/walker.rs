@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use atuin_common::fs;
 use eyre::Result;
 use tokio::task::JoinSet;
 
@@ -101,11 +102,11 @@ async fn check_dir_for_permissions(path: &Path) -> Result<Option<RuleFile>> {
 
 /// Load a permissions file from an exact path. Returns None if the file doesn't exist.
 async fn load_permissions_file(file_path: &Path) -> Result<Option<RuleFile>> {
-    if !tokio::fs::try_exists(file_path).await? {
+    if !fs::exists(file_path).await? {
         return Ok(None);
     }
 
-    let raw = tokio::fs::read_to_string(file_path).await?;
+    let raw = fs::read_to_string(file_path).await?;
     let content: RuleFileContent = toml::from_str(&raw)?;
 
     // Use the file's parent as the rule file path (for logging/debugging)

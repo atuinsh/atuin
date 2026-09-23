@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use atuin_common::fs;
 use eyre::Result;
 
 use crate::permissions::rule::Rule;
@@ -22,8 +23,8 @@ pub enum RuleDisposition {
 /// current UI this is fine — the Select widget serializes permission decisions —
 /// but callers should not invoke this concurrently for the same file.
 pub async fn write_rule(file_path: &Path, rule: &Rule, disposition: RuleDisposition) -> Result<()> {
-    let content = if tokio::fs::try_exists(file_path).await.unwrap_or(false) {
-        tokio::fs::read_to_string(file_path).await?
+    let content = if fs::exists(file_path).await.unwrap_or(false) {
+        fs::read_to_string(file_path).await?
     } else {
         String::new()
     };
@@ -65,9 +66,9 @@ pub async fn write_rule(file_path: &Path, rule: &Rule, disposition: RuleDisposit
 
     // Write back, creating parent directories as needed
     if let Some(parent) = file_path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+        fs::create_dir_all(parent).await?;
     }
-    tokio::fs::write(file_path, doc.to_string()).await?;
+    fs::write(file_path, doc.to_string()).await?;
 
     Ok(())
 }

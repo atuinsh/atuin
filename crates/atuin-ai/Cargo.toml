@@ -36,7 +36,6 @@ enum_dispatch = { workspace = true }
 eventsource-stream = { workspace = true }
 eye_declare = { workspace = true }
 eyre = { workspace = true }
-fs-err = { workspace = true }
 futures = { workspace = true }
 glob-match = { workspace = true }
 imara-diff = { workspace = true }

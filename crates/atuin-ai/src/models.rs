@@ -6,6 +6,7 @@
 
 use std::time::Duration;
 
+use atuin_common::fs;
 use atuin_common::url::UrlAppendExt;
 use eyre::{Context, Result};
 use reqwest::header::USER_AGENT;
@@ -52,7 +53,7 @@ pub async fn fetch_models(endpoint: &reqwest::Url, token: &str) -> Result<ModelL
 /// read at startup.
 pub async fn save_model_selection(alias: &str) -> Result<()> {
     let config_file = atuin_client::settings::Settings::get_config_path().await?;
-    let config_str = tokio::fs::read_to_string(&config_file).await.unwrap_or_default();
+    let config_str = fs::read_to_string(&config_file).await.unwrap_or_default();
     let mut doc = config_str.parse::<toml_edit::DocumentMut>()?;
 
     if !doc.contains_key("ai") {
@@ -60,6 +61,6 @@ pub async fn save_model_selection(alias: &str) -> Result<()> {
     }
     doc["ai"]["model"] = toml_edit::value(alias);
 
-    tokio::fs::write(&config_file, doc.to_string()).await?;
+    fs::write(&config_file, doc.to_string()).await?;
     Ok(())
 }

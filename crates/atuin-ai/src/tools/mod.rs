@@ -5,9 +5,9 @@ use std::time::Duration;
 
 use atuin_client::history::AuthorPattern;
 use atuin_client::settings::FilterMode;
-use atuin_common::ansi;
 use atuin_common::filter::OrFilter;
 use atuin_common::time::UtcOffsetExt;
+use atuin_common::{ansi, fs};
 use easy_cast::Conv;
 use enum_dispatch::enum_dispatch;
 use eyre::Result;
@@ -328,13 +328,14 @@ impl ReadToolCall {
     pub fn execute(&self) -> ToolOutcome {
         let path = self.resolved_path();
 
-        if !path.exists() {
+        if !fs::blocking::exists(&path).unwrap_or(false) {
             return ToolOutcome::Error(format!("Error: file does not exist: {}", path.display()));
         }
 
-        if path.is_dir() {
-            let Some(files) = std::fs::read_dir(&path).ok().and_then(|entries| {
+        if fs::blocking::metadata(&path).is_ok_and(|m| m.is_dir()) {
+            let Some(files) = fs::blocking::read_dir(&path).ok().and_then(|mut entries| {
                 entries
+                    .by_ref()
                     .filter_map(|entry| entry.ok())
                     .map(|entry| entry.file_name().to_string_lossy().to_string())
                     .collect::<Vec<_>>()
@@ -349,11 +350,11 @@ impl ReadToolCall {
             return ToolOutcome::Success(format!("Directory contents:\n{}", files.join("\n")));
         }
 
-        let file = match std::fs::File::open(&path) {
+        let mut file = match fs::blocking::File::open(&path) {
             Ok(file) => file,
             Err(e) => return ToolOutcome::Error(format!("Error opening file: {e}")),
         };
-        let reader = std::io::BufReader::new(file);
+        let reader = std::io::BufReader::new(&mut *file);
 
         let raw_lines = reader
             .lines()
@@ -475,7 +476,7 @@ impl EditToolCall {
         use crate::file_tracker::FreshnessCheck;
 
         // 1. Basic validation
-        if !resolved_path.exists() {
+        if !fs::blocking::exists(resolved_path).unwrap_or(false) {
             return (
                 ToolOutcome::Error(format!(
                     "Error: file does not exist: {}",
@@ -484,7 +485,7 @@ impl EditToolCall {
                 None,
             );
         }
-        if resolved_path.is_dir() {
+        if fs::blocking::metadata(resolved_path).is_ok_and(|m| m.is_dir()) {
             return (
                 ToolOutcome::Error(format!(
                     "Error: path is a directory, not a file: {}",
@@ -530,7 +531,7 @@ impl EditToolCall {
         }
 
         // 3. Read current contents
-        let content = match std::fs::read_to_string(resolved_path) {
+        let content = match fs::blocking::read_to_string(resolved_path) {
             Ok(c) => c,
             Err(e) => return (ToolOutcome::Error(format!("Error reading file: {e}")), None),
         };
@@ -654,7 +655,7 @@ impl WriteToolCall {
     /// Returns the outcome and the written bytes (for tracker updates).
     #[must_use]
     pub fn execute(&self, resolved_path: &Path) -> (ToolOutcome, Option<Vec<u8>>) {
-        if resolved_path.is_dir() {
+        if fs::blocking::metadata(resolved_path).is_ok_and(|m| m.is_dir()) {
             return (
                 ToolOutcome::Error(format!(
                     "Error: path is a directory, not a file: {}",
@@ -663,7 +664,7 @@ impl WriteToolCall {
                 None,
             );
         }
-        if resolved_path.exists() && !self.overwrite {
+        if fs::blocking::exists(resolved_path).unwrap_or(false) && !self.overwrite {
             return (
                 ToolOutcome::Error(format!(
                     "File already exists: {}. Set overwrite to true to replace it, or use \
@@ -675,7 +676,7 @@ impl WriteToolCall {
         }
 
         // Capture before the write — after atomic_write the file always exists.
-        let existed = resolved_path.exists();
+        let existed = fs::blocking::exists(resolved_path).unwrap_or(false);
 
         // Write atomically
         let content_bytes = self.content.as_bytes().to_vec();
@@ -1695,14 +1696,15 @@ mod tests {
         }
 
         #[rstest]
-        fn full_read_snapshot_edit_cycle() {
+        #[tokio::test(flavor = "multi_thread")]
+        async fn full_read_snapshot_edit_cycle() {
             let dir = tempfile::tempdir().unwrap();
             let file_path = dir.path().join("config.toml");
             std::fs::write(&file_path, "[db]\nhost = localhost\nport = 5432\n").unwrap();
 
             let snapshot_dir = dir.path().join("snapshots").join("session-1");
             let mut tracker = FileReadTracker::default();
-            let mut store = SnapshotStore::open(snapshot_dir.clone()).unwrap();
+            let mut store = SnapshotStore::open(snapshot_dir.clone()).await.unwrap();
 
             // 1. Simulate reading the file
             simulate_read(&mut tracker, &file_path);
@@ -1817,14 +1819,15 @@ mod tests {
         }
 
         #[rstest]
-        fn snapshot_only_created_once_per_file() {
+        #[tokio::test(flavor = "multi_thread")]
+        async fn snapshot_only_created_once_per_file() {
             let dir = tempfile::tempdir().unwrap();
             let file_path = dir.path().join("config.toml");
             std::fs::write(&file_path, "a = 1\nb = 2\n").unwrap();
 
             let snapshot_dir = dir.path().join("snapshots").join("session-1");
             let mut tracker = FileReadTracker::default();
-            let mut store = SnapshotStore::open(snapshot_dir).unwrap();
+            let mut store = SnapshotStore::open(snapshot_dir).await.unwrap();
 
             simulate_read(&mut tracker, &file_path);
 

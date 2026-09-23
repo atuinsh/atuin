@@ -9,6 +9,7 @@ pub mod walker;
 
 use std::path::Path;
 
+use atuin_common::fs;
 use atuin_common::string::ellipsis::{Indicator, Pos};
 use atuin_common::string::{EllipsizeExt as _, Measure};
 use eyre::{Result, eyre};
@@ -171,7 +172,7 @@ impl SkillRegistry {
     pub async fn load(&self, name: &str, shell: &str, arguments: Option<&str>) -> Result<String> {
         let skill = self.get(name).ok_or_else(|| eyre!("Unknown skill: {name}"))?;
 
-        let content = tokio::fs::read_to_string(&skill.source_path).await?;
+        let content = fs::read_to_string(&skill.source_path).await?;
         let parsed = frontmatter::parse(&content);
         let body = parsed.body;
 
@@ -300,7 +301,7 @@ mod tests {
         assert_eq!(substitute_arguments(body, args), expected);
     }
 
-    #[test]
+    #[rstest]
     fn budget_packing() {
         let registry = SkillRegistry {
             skills: vec![
@@ -314,7 +315,7 @@ mod tests {
         assert!(overflow.is_none());
     }
 
-    #[test]
+    #[rstest]
     fn budget_overflow() {
         let registry = SkillRegistry {
             skills: vec![
@@ -332,7 +333,7 @@ mod tests {
         assert!(overflow.contains("1 additional"));
     }
 
-    #[test]
+    #[rstest]
     fn disabled_skills_excluded_from_server() {
         let registry = SkillRegistry {
             skills: vec![
@@ -349,7 +350,7 @@ mod tests {
         assert_eq!(registry.all().len(), 2);
     }
 
-    #[test]
+    #[rstest]
     fn has_server_visible_skills() {
         let empty = SkillRegistry::empty();
         assert!(!empty.has_server_visible_skills());
@@ -365,6 +366,7 @@ mod tests {
         assert!(some_visible.has_server_visible_skills());
     }
 
+    #[rstest]
     #[tokio::test]
     async fn end_to_end_discover() {
         let dir = tempfile::tempdir().unwrap();

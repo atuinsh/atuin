@@ -4,7 +4,10 @@
 //! levels. Supports nested directories for organization (e.g.
 //! `.atuin/skills/ops/deploy/SKILL.md`).
 
+use std::fs::DirEntry;
 use std::path::{Path, PathBuf};
+
+use atuin_common::fs;
 
 const SKILL_FILENAME: &str = "SKILL.md";
 
@@ -33,12 +36,14 @@ pub async fn discover(
     let mut files = Vec::new();
 
     // Project skills first (higher priority)
-    if let Some(dir) = project_skills_dir.filter(|d| d.is_dir()) {
+    if let Some(dir) = project_skills_dir
+        && fs::metadata(dir).await.is_ok_and(|m| m.is_dir())
+    {
         scan_dir(dir, true, &mut files).await;
     }
 
     // Global skills second
-    if global_skills_dir.is_dir() {
+    if fs::metadata(global_skills_dir).await.is_ok_and(|m| m.is_dir()) {
         scan_dir(global_skills_dir, false, &mut files).await;
     }
 
@@ -57,8 +62,8 @@ pub fn project_skills_dir(project_root: &Path) -> PathBuf {
 
 /// Recursively scan a directory for `SKILL.md` files.
 async fn scan_dir(dir: &Path, is_project: bool, out: &mut Vec<RawSkillFile>) {
-    let mut entries = match tokio::fs::read_dir(dir).await {
-        Ok(entries) => entries,
+    let paths: Vec<PathBuf> = match fs::read_dir(dir).await {
+        Ok(entries) => entries.iter().map(DirEntry::path).collect(),
         Err(e) => {
             tracing::debug!("Could not read skills directory {}: {e}", dir.display());
             return;
@@ -67,17 +72,15 @@ async fn scan_dir(dir: &Path, is_project: bool, out: &mut Vec<RawSkillFile>) {
 
     let mut subdirs = Vec::new();
 
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let path = entry.path();
-
-        if path.is_dir() {
+    for path in paths {
+        if fs::metadata(&path).await.is_ok_and(|m| m.is_dir()) {
             // Check for SKILL.md directly in this directory
             let skill_path = path.join(SKILL_FILENAME);
-            if skill_path.is_file() {
+            if fs::metadata(&skill_path).await.is_ok_and(|m| m.is_file()) {
                 let dir_name =
                     path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown").to_string();
 
-                match tokio::fs::read_to_string(&skill_path).await {
+                match fs::read_to_string(&skill_path).await {
                     Ok(content) => {
                         out.push(RawSkillFile {
                             path: skill_path,
@@ -104,6 +107,8 @@ async fn scan_dir(dir: &Path, is_project: bool, out: &mut Vec<RawSkillFile>) {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     fn setup_skill(dir: &Path, rel_path: &str, content: &str) {
@@ -112,6 +117,7 @@ mod tests {
         std::fs::write(skill_dir.join(SKILL_FILENAME), content).unwrap();
     }
 
+    #[rstest]
     #[tokio::test]
     async fn discovers_project_skills() {
         let dir = tempfile::tempdir().unwrap();
@@ -124,6 +130,7 @@ mod tests {
         assert!(files[0].is_project);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn discovers_global_skills() {
         let dir = tempfile::tempdir().unwrap();
@@ -136,6 +143,7 @@ mod tests {
         assert!(!files[0].is_project);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn discovers_nested_skills() {
         let dir = tempfile::tempdir().unwrap();
@@ -147,6 +155,7 @@ mod tests {
         assert_eq!(files.len(), 2);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn project_comes_before_global() {
         let project = tempfile::tempdir().unwrap();
@@ -163,6 +172,7 @@ mod tests {
         assert!(!files[1].is_project);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn missing_directories_handled() {
         let files = discover(Some(Path::new("/does/not/exist")), Path::new("/also/missing")).await;

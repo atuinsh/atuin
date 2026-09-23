@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use atuin_common::fs;
 use easy_cast::Conv;
 use eyre::Result;
 use serde::{Deserialize, Serialize};
@@ -69,7 +70,7 @@ impl FileReadTracker {
 
         // Stat the file
         // file deleted or inaccessible
-        let Ok(metadata) = std::fs::metadata(path) else {
+        let Ok(metadata) = fs::blocking::metadata(path) else {
             return Ok(FreshnessCheck::Stale);
         };
 
@@ -82,7 +83,7 @@ impl FileReadTracker {
         }
 
         // Mtime changed — re-hash to confirm
-        let content = std::fs::read(path)?;
+        let content = fs::blocking::read(path)?;
         let current_hash = hash_content(&content);
 
         if current_hash == state.content_hash {
@@ -151,7 +152,7 @@ mod tests {
         assert!(matches!(tracker.check_freshness(tmp.path()).unwrap(), FreshnessCheck::Fresh));
     }
 
-    #[test]
+    #[rstest]
     fn check_not_read() {
         let tracker = FileReadTracker::default();
         let path = PathBuf::from("/nonexistent/file.txt");
@@ -184,7 +185,7 @@ mod tests {
         assert!(matches!(tracker.check_freshness(tmp.path()).unwrap(), FreshnessCheck::Fresh));
     }
 
-    #[test]
+    #[rstest]
     fn roundtrip_json() {
         let mut tracker = FileReadTracker::default();
         tracker.reads.insert(PathBuf::from("/some/file.toml"), FileReadState {
