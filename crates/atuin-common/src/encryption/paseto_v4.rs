@@ -16,7 +16,7 @@ use rusty_paseto::{Paseto, core as rusty_paseto};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 pub type PaserkV4KeyId = rusty_paserk::KeyId<rusty_paserk::V4, rusty_paserk::Local>;
 pub type PaserkV4PieWrappedKey = rusty_paserk::PieWrappedKey<rusty_paserk::V4, rusty_paserk::Local>;
@@ -159,25 +159,25 @@ impl Key {
     pub fn encode(&self) -> PlainTextEncodedKey {
         let key_bytes = self.as_bytes();
         // A msgpack array16 header (3 bytes) followed by each byte as at most a 2-byte uint.
-        let mut buf = Vec::with_capacity(3 + 2 * key_bytes.len());
+        let mut buf = Zeroizing::new(Vec::with_capacity(3 + 2 * key_bytes.len()));
         // Writing to a `Vec` is infallible, so neither of these can actually error.
-        rmp::encode::write_array_len(&mut buf, u32::conv(key_bytes.len()))
+        rmp::encode::write_array_len(&mut *buf, u32::conv(key_bytes.len()))
             .expect("writing to a Vec is infallible");
         for b in key_bytes {
-            rmp::encode::write_uint(&mut buf, u64::from(*b))
+            rmp::encode::write_uint(&mut *buf, u64::from(*b))
                 .expect("writing to a Vec is infallible");
         }
 
-        PlainTextEncodedKey(KEY_ENCODER.encode(buf).into())
+        PlainTextEncodedKey(KEY_ENCODER.encode(&*buf).into())
     }
 
     pub fn decode(key: &str) -> Result<Self, KeyDecodingError> {
-        let buf = KEY_ENCODER.decode(key.trim_end())?;
+        let buf = Zeroizing::new(KEY_ENCODER.decode(key.trim_end())?);
 
         // Legacy code used to naively encode the base64 string into the string. New code does this
         // rmp dance.
-        match <[u8; 32]>::try_from(&*buf) {
-            Ok(key) => Ok(key.into()),
+        match <[u8; 32]>::try_from(buf.as_slice()).map(Zeroizing::new) {
+            Ok(key) => Ok((*key).into()),
             Err(_) => {
                 if buf.is_empty() {
                     return Err(KeyDecodingError::EmptyKey);
@@ -193,9 +193,9 @@ impl Key {
                             return Err(KeyDecodingError::InvalidSize);
                         }
 
-                        let key = <[u8; 32]>::try_from(bytes.remaining_slice())?;
+                        let key = Zeroizing::new(<[u8; 32]>::try_from(bytes.remaining_slice())?);
 
-                        Ok(key.into())
+                        Ok((*key).into())
                     }
                     rmp::Marker::Array16 => {
                         let len = rmp::decode::read_array_len(&mut bytes)
@@ -204,12 +204,12 @@ impl Key {
                             return Err(KeyDecodingError::InvalidSize);
                         }
 
-                        let mut key = [0u8; 32];
-                        for i in &mut key {
+                        let mut key = Zeroizing::new([0u8; 32]);
+                        for i in key.iter_mut() {
                             *i = rmp::decode::read_int(&mut bytes)
                                 .map_err(|e| KeyDecodingError::DecodingError(e.into()))?;
                         }
-                        Ok(key.into())
+                        Ok((*key).into())
                     }
                     _ => Err(KeyDecodingError::InvalidToken),
                 }
@@ -227,8 +227,8 @@ impl Key {
 
         // TODO(markovejnovic): Whether we should use fs_err or not is up for debate, but it was
         // used here historically, so we'll use it.
-        let text = fs_err::read_to_string(path)?;
-        Ok(Self::decode(&text)?)
+        let text = SecretString::from(fs_err::read_to_string(path)?);
+        Ok(Self::decode(text.expose_secret())?)
     }
 
     /// Attempt to write this [`Self::encode`]d key into the given path.
