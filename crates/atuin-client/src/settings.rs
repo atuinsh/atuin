@@ -1978,7 +1978,7 @@ mod tests {
 
     /// Forces both `LazyLock`s, so a typo in either constant fails here rather
     /// than panicking at runtime.
-    #[test]
+    #[rstest]
     fn default_addresses_parse() {
         assert_eq!(super::DEFAULT_SYNC_URL.host_str(), Some("api.atuin.sh"));
         assert_eq!(super::DEFAULT_HUB_URL.host_str(), Some("hub.atuin.sh"));
@@ -2006,7 +2006,7 @@ mod tests {
         assert_eq!(settings.default_filter_mode(git_root), expected);
     }
 
-    #[test]
+    #[rstest]
     fn builder_with_data_dir_uses_custom_paths() -> Result<()> {
         use std::path::PathBuf;
 
@@ -2065,7 +2065,7 @@ mod tests {
         assert!(err.contains(expected_err), "error should mention `{expected_err}`, got: {err}");
     }
 
-    #[test]
+    #[rstest]
     fn effective_data_dir_returns_default_when_not_set() {
         let effective = super::Settings::effective_data_dir();
         let default = atuin_common::utils::data_dir();
@@ -2074,7 +2074,7 @@ mod tests {
         assert!(effective.ends_with("atuin") || effective == default);
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_deserializes_simple_binding() {
         let json = r#"{"emacs": {"ctrl-c": "exit"}}"#;
         let config: super::KeymapConfig = serde_json::from_str(json).unwrap();
@@ -2084,7 +2084,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_deserializes_conditional_binding() {
         let json = r#"{
             "emacs": {
@@ -2106,7 +2106,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_deserializes_vim_normal() {
         let json = r#"{"vim-normal": {"j": "select-next", "k": "select-previous"}}"#;
         let config: super::KeymapConfig = serde_json::from_str(json).unwrap();
@@ -2114,13 +2114,13 @@ mod tests {
         assert!(config.emacs.is_empty());
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_is_empty_when_default() {
         let config = super::KeymapConfig::default();
         assert!(config.is_empty());
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_mixed_modes() {
         let json = r#"{
             "emacs": {"ctrl-c": "exit"},
@@ -2188,7 +2188,7 @@ mod tests {
         assert!(Settings::validate_str("sync_frequency = -5\n").is_err());
     }
 
-    #[test]
+    #[rstest]
     fn skim_is_requested_but_resolves_to_fuzzy() {
         let settings = parse_settings("search_mode = \"skim\"\n");
 
@@ -2196,7 +2196,7 @@ mod tests {
         assert_eq!(settings.search_mode(), SearchMode::Fuzzy);
     }
 
-    #[test]
+    #[rstest]
     fn skim_shell_up_key_binding_resolves_to_fuzzy() {
         let settings = parse_settings("search_mode_shell_up_key_binding = \"skim\"\n");
 

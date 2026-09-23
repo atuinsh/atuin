@@ -893,6 +893,7 @@ mod records_stream_tests {
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordSeriesKey, RecordTag};
     use futures::TryStreamExt;
+    use rstest::rstest;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -961,6 +962,7 @@ mod records_stream_tests {
 
     /// The fast path predicts offsets (`start + i * page_size`) and pipelines the fetches; every
     /// page must still be reassembled in idx order.
+    #[rstest]
     #[tokio::test]
     async fn records_reassembles_pages_in_order() {
         let host = HostId(uuid_v7());
@@ -985,6 +987,7 @@ mod records_stream_tests {
     /// GUARD: a server that clamps `count` below the client's `page_size` returns a short page
     /// *mid-stream*. The predicted offsets past it would skip records, so the stream must detect the
     /// short page and finish serially from the real progress -- losing nothing.
+    #[rstest]
     #[tokio::test]
     async fn records_recovers_from_a_short_midstream_page() {
         let host = HostId(uuid_v7());
@@ -1007,6 +1010,7 @@ mod records_stream_tests {
         assert_eq!(idxs, vec![0, 1, 2, 3, 4, 5], "a short mid-stream page must not skip records");
     }
 
+    #[rstest]
     #[tokio::test]
     async fn records_yields_nothing_when_server_is_empty() {
         let host = HostId(uuid_v7());
