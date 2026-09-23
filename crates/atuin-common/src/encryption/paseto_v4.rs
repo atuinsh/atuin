@@ -341,10 +341,13 @@ impl Key {
         // `Self::try_write_path`, and then use `rename` to move it to the key path (not `hardlink`
         // because we do want it to overwrite an existing key).
         let mut file = key_file_options().create(true).truncate(true).open(path)?;
+        file.write_all(self.encode().dangerously_leak_secret().as_bytes())?;
+        file.sync_all()?;
         // The mode only applies on creation, so tighten a key file written before it was set.
+        // This goes after the write: callers re-encrypt the store first, so a failed chmod must
+        // not leave the file truncated without the new key.
         #[cfg(unix)]
         file.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(KEY_FILE_MODE))?;
-        file.write_all(self.encode().dangerously_leak_secret().as_bytes())?;
 
         Ok(())
     }
