@@ -2,7 +2,7 @@
 //!
 //! See [`encrypt_sync`] for the encryption description.
 use std::array::TryFromSliceError;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use base64::engine::general_purpose::{
@@ -53,8 +53,12 @@ pub enum MnemonicLoadingError {
 pub enum KeyFileLoadingError {
     #[error("the given key path does not exist")]
     NoEntry,
-    #[error("unexpected io error: {_0}")]
-    Io(#[from] std::io::Error),
+    #[error("unexpected io error reading {}: {source}", path.display())]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("failed to decode the loaded key: {_0}")]
     Decoding(#[from] KeyDecodingError),
 }
@@ -80,6 +84,13 @@ pub enum KeyFileLoadOrGenerateError {
 
     #[error("unexpected io error: {_0}")]
     Io(#[from] std::io::Error),
+
+    #[error("unexpected io error reading {}: {source}", path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 
     /// See comment on [`KeyFileStoringError::TempFilesExhausted`] -- this error will essentially
     /// never happen.
@@ -227,11 +238,18 @@ impl Key {
     ///
     /// Mostly serves as a convenience function.
     pub async fn try_load_from_path(path: &Path) -> Result<Self, KeyFileLoadingError> {
-        if !crate::fs::exists(path).await.unwrap_or(false) {
-            return Err(KeyFileLoadingError::NoEntry);
-        }
-
-        let text = crate::fs::read_to_string(path).await?;
+        let text = match crate::fs::read_to_string(path).await {
+            Ok(text) => text,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Err(KeyFileLoadingError::NoEntry);
+            }
+            Err(source) => {
+                return Err(KeyFileLoadingError::Io {
+                    path: path.to_owned(),
+                    source,
+                });
+            }
+        };
         Ok(Self::decode(&text)?)
     }
 
@@ -367,16 +385,19 @@ impl Key {
                     // panicking.
                     Err(KeyFileStoringError::AlreadyExists) => {
                         Self::try_load_from_path(path).await.map_err(|e| match e {
-                            KeyFileLoadingError::Io(io) => KeyFileLoadOrGenerateError::Io(io),
+                            KeyFileLoadingError::Io { path, source } => {
+                                KeyFileLoadOrGenerateError::Read { path, source }
+                            }
                             KeyFileLoadingError::Decoding(d) => {
                                 KeyFileLoadOrGenerateError::Decoding(d)
                             }
-                            KeyFileLoadingError::NoEntry => {
-                                KeyFileLoadOrGenerateError::Io(std::io::Error::new(
+                            KeyFileLoadingError::NoEntry => KeyFileLoadOrGenerateError::Read {
+                                path: path.to_owned(),
+                                source: std::io::Error::new(
                                     std::io::ErrorKind::NotFound,
                                     "key file vanished immediately after a concurrent write",
-                                ))
-                            }
+                                ),
+                            },
                         })
                     }
                     Err(KeyFileStoringError::Io(io)) => Err(io.into()),
@@ -385,7 +406,9 @@ impl Key {
                     }
                 }
             }
-            Err(KeyFileLoadingError::Io(io)) => Err(io.into()),
+            Err(KeyFileLoadingError::Io { path, source }) => {
+                Err(KeyFileLoadOrGenerateError::Read { path, source })
+            }
             Err(KeyFileLoadingError::Decoding(d)) => Err(d.into()),
         }
     }
@@ -842,6 +865,25 @@ mod test {
         // `std::fs` so the check cannot queue behind a write still running on the blocking pool.
         new.overwrite_path(&path).await.expect("overwrite replaces the key");
         assert_eq!(fs::read_to_string(&path).unwrap(), new.encode().dangerously_leak_secret());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn loading_a_missing_key_is_no_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let loaded = Key::try_load_from_path(&dir.path().join("key")).await;
+        assert!(matches!(loaded, Err(KeyFileLoadingError::NoEntry)));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn an_unreadable_key_names_its_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let Err(KeyFileLoadingError::Io { path, .. }) = Key::try_load_from_path(dir.path()).await
+        else {
+            panic!("a directory is not a readable key file");
+        };
+        assert_eq!(path, dir.path());
     }
 
     #[rstest]
