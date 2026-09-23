@@ -60,24 +60,78 @@
 //!
 //! We **recommend** you use this rather than drop events on the stream consumer, as it is cheaper.
 //!
+//! ## Listening for file updates
+//!
+//! The stream only tells you a file exists. To hear about writes to it, wait on its
+//! [`stat`](WatchedFile::stat), a [`tokio::sync::watch::Receiver`] of the file's latest
+//! [`FileStat`]:
+//!
+//! - [`changed`](tokio::sync::watch::Receiver::changed) resolves to `Ok` once the file's size,
+//!   modification time or (on unix) [`identity`](FileStat::identity) differs from the last value
+//!   you marked seen with [`borrow_and_update`](tokio::sync::watch::Receiver::borrow_and_update).
+//! - It resolves to `Err` once the file is removed or renamed away, or the [`TreeWatcher`] is
+//!   dropped. Nothing more will arrive on that receiver.
+//!
+//! The stat a file is yielded with counts as seen, so `changed` waits for the first write after
+//! discovery; read the file once when it arrives, then again after each wakeup.
+//!
+//! ```
+//! # use atuin_common::fs::tree_watcher::TreeWatcher;
+//! # use futures::StreamExt;
+//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+//! let mut files = TreeWatcher::builder().watch("/var/log")?;
+//!
+//! while let Some(file) = files.next().await {
+//!     let (path, mut stat) = file.into_parts();
+//!     tokio::spawn(async move {
+//!         while stat.changed().await.is_ok() {
+//!             let latest = *stat.borrow_and_update();
+//!             println!("{} is now {} bytes", path.display(), latest.size());
+//!         }
+//!         println!("{} is gone", path.display());
+//!     });
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! # Example
 //!
-//! ```no_run
+//! This example listens to file creation events, as well as file changes, without spawning
+//! background tokio tasks:
+//!
+//! ```
 //! use std::sync::Arc;
+//! use std::time::Duration;
 //!
 //! use atuin_common::fs::tree_watcher::TreeWatcher;
 //! use futures::StreamExt;
+//! use tokio::io::AsyncWriteExt;
 //!
-//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-//! // Yields each `.log` file once, as it appears -- via a filesystem event or the periodic scan.
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let dir = tempfile::tempdir()?;
+//! let log = dir.path().join("app.log");
+//! std::fs::write(&log, "started\n")?;
+//!
+//! // Yields each `.log` file once.
 //! let files = TreeWatcher::builder()
 //!     .filter(|path| path.extension().is_some_and(|ext| ext == "log"))
-//!     .watch("/var/log")?;
+//!     .watch(dir.path())?;
 //!
-//! // Merge every file's changes into one stream rather than spawning a task per file: a quiet
-//! // file then costs nothing until it is written, however many the tree holds.
+//! // Stands in for the process writing the log.
+//! let writer = tokio::spawn(async move {
+//!     let mut file = tokio::fs::OpenOptions::new().append(true).open(&log).await.unwrap();
+//!     loop {
+//!         file.write_all(b"line\n").await.unwrap();
+//!         tokio::time::sleep(Duration::from_millis(100)).await;
+//!     }
+//! });
+//!
+//! // Merge every file's changes into one stream.
 //! let mut changes = files.flat_map_unordered(None, |file| {
 //!     let (path, stat) = file.into_parts();
+//!
 //!     futures::stream::unfold(stat, |mut stat| async move {
 //!         // Wakes once per burst of writes, and ends once the file is removed or renamed away.
 //!         stat.changed().await.ok()?;
@@ -88,9 +142,12 @@
 //!     .boxed()
 //! });
 //!
-//! while let Some((path, size)) = changes.next().await {
-//!     println!("changed: {} ({size} bytes)", path.display());
-//! }
+//! // A real consumer loops on `changes.next()`; this one stops at the first append.
+//! let (path, size) = changes.next().await.expect("the watcher runs until dropped");
+//! println!("changed: {} ({size} bytes)", path.display());
+//! assert!(size > "started\n".len() as u64);
+//!
+//! writer.abort();
 //! # Ok(())
 //! # }
 //! ```
