@@ -244,7 +244,10 @@ impl FdPool {
             Err(err) if err.raw_os_error() == Some(rustix::io::Errno::MFILE.raw_os_error())
         );
         #[cfg(not(unix))]
-        let exhausted = false;
+        let exhausted = {
+            let _ = result;
+            false
+        };
         if exhausted {
             self.path().for_each(|pool| pool.limit.on_exhausted());
         }
