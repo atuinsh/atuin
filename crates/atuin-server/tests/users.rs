@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
+
 use atuin_common::utils::uuid_v7;
 use rstest::{fixture, rstest};
 

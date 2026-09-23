@@ -1,4 +1,7 @@
 #![forbid(unsafe_code)]
+#![cfg_attr(test, allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures"))]
+// TODO(markovejnovic): remove once atuin-server is migrated (fd-pool migration)
+#![cfg_attr(not(test), allow(clippy::disallowed_methods))]
 
 use std::future::Future;
 use std::net::SocketAddr;

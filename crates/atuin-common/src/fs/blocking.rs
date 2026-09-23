@@ -1,5 +1,10 @@
 //! Blocking twins of the [`crate::fs`] functions, for code outside a runtime: each waits for its
 //! lease on the calling thread.
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "the pool-backed wrappers are the only sanctioned std::fs callers"
+)]
 
 use std::fs::{Metadata, Permissions, ReadDir};
 use std::io;

@@ -4,6 +4,7 @@
 //! record store, and which commands have captured output -- and must emit exactly the events a
 //! shell watching `atuin history tail` expects.
 #![cfg(unix)]
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
 
 mod common;
 

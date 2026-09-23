@@ -2,6 +2,7 @@
 //! shell does, then find it through `SearchCommandOutput` the way `atuin search-output` does.
 
 #![cfg(unix)]
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
 
 mod common;
 

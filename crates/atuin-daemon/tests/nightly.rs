@@ -8,6 +8,7 @@
 //! `#[ignore]`d next to their siblings (`scale.rs`, `concurrency.rs`) so they never turn this job
 //! red; move a tier here once its defect is fixed.
 #![cfg(unix)]
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
 
 mod common;
 

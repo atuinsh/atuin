@@ -2,6 +2,7 @@
 //! byte-for-byte into the history db, or is rejected with `InvalidArgument`. The daemon never
 //! panics, never half-applies a batch, and never loses a command it accepted.
 #![cfg(unix)]
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
 
 mod common;
 

@@ -1,4 +1,7 @@
 #![deny(unsafe_code)]
+#![cfg_attr(test, allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures"))]
+// TODO(markovejnovic): remove once atuin-client is migrated (fd-pool migration)
+#![cfg_attr(not(test), allow(clippy::disallowed_methods))]
 
 #[macro_use]
 extern crate tracing;

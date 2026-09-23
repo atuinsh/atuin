@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
+
 use std::env::{self, temp_dir};
 
 use atuin_common::db::DbUrl;

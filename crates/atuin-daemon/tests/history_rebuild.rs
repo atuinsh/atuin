@@ -1,6 +1,7 @@
 //! `atuin store rebuild history` now asks the daemon to rebuild: the history db is re-derived from
 //! the record store and the search index reloaded, without disturbing commands still running.
 #![cfg(unix)]
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
 
 mod common;
 

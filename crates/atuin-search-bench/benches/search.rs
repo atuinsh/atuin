@@ -21,6 +21,7 @@
 //!
 //! Sampling is divan's own; tune with `DIVAN_MAX_TIME`, `DIVAN_SAMPLE_COUNT`,
 //! etc. if needed.
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
 
 use std::collections::HashMap;
 use std::fmt;

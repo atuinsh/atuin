@@ -4,6 +4,7 @@
 //! specification and CI stays green. Run them with `cargo nextest run --run-ignored all` (or
 //! `cargo test -- --ignored`) to watch the defects reproduce.
 #![cfg(unix)]
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
 
 mod common;
 

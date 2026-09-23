@@ -3,6 +3,11 @@
 //!
 //! The functions here are async and run on tokio's blocking pool; [`blocking`] has their twins for
 //! code outside a runtime.
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "the pool-backed wrappers are the only sanctioned std::fs callers"
+)]
 
 pub mod blocking;
 pub mod pool;

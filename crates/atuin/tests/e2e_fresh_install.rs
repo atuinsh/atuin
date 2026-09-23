@@ -1,6 +1,7 @@
 //! CLI fresh-install tests with an empty home and data directory.
 
 #![cfg(unix)]
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
 
 mod common;
 

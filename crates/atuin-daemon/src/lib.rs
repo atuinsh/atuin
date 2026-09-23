@@ -1,3 +1,7 @@
+#![cfg_attr(test, allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures"))]
+// TODO(markovejnovic): remove once atuin-daemon is migrated (fd-pool migration)
+#![cfg_attr(not(test), allow(clippy::disallowed_methods))]
+
 use std::sync::Arc;
 
 use atuin_client::database::Sqlite as HistoryDatabase;

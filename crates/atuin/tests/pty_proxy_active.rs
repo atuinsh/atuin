@@ -1,4 +1,5 @@
 //! Tests for `atuin __internal pty-proxy-active`.
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
 
 use std::process::{Command, Output, Stdio};
 

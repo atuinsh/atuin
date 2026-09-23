@@ -1,4 +1,5 @@
 #![deny(unsafe_code)]
+#![cfg_attr(test, allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures"))]
 
 //! Atuin's core domain model.
 //!

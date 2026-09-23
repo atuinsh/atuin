@@ -4,6 +4,10 @@
 //! size the kernel reports as the open count, one `proc_pidinfo` call on macOS, and a listing of
 //! `/proc/self/fd` on older Linux and other Unixes. Windows has neither a count nor a
 //! per-process limit worth enforcing.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "the pool's own descriptor count; leasing from itself would be circular"
+)]
 
 use std::io;
 

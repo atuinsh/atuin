@@ -1,3 +1,7 @@
+#![cfg_attr(test, allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures"))]
+// TODO(markovejnovic): remove once atuin-ai is migrated (fd-pool migration)
+#![cfg_attr(not(test), allow(clippy::disallowed_methods))]
+
 pub mod commands;
 pub(crate) mod context;
 pub(crate) mod context_window;

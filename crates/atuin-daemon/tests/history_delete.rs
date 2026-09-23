@@ -3,6 +3,7 @@
 //! immediately, tombstones that reach other machines, rows that survive a failed attempt, and
 //! captured output that goes with its entry and is never accepted for an entry that is gone.
 #![cfg(unix)]
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
 
 mod common;
 

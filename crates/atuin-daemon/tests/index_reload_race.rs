@@ -19,6 +19,7 @@
 //! delete-vs-add case; here the adds are continuous across the whole reload, cover the rebuild
 //! trigger too, and separate the durable db layer from the live index.
 #![cfg(unix)]
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
 
 mod common;
 

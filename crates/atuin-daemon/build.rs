@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "build scripts run at compile time, outside any runtime or pool"
+)]
 use std::path::PathBuf;
 use std::{env, fs};
 

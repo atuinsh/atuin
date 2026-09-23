@@ -1,5 +1,8 @@
 #![warn(clippy::pedantic, clippy::nursery)]
 #![allow(clippy::use_self, clippy::missing_const_for_fn)] // not 100% reliable
+#![cfg_attr(test, allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures"))]
+// TODO(markovejnovic): remove once atuin is migrated (fd-pool migration)
+#![cfg_attr(not(test), allow(clippy::disallowed_methods))]
 
 use clap::Parser;
 use clap::builder::Styles;

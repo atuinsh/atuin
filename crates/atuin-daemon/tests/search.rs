@@ -4,6 +4,7 @@
 //! component wired up, seeds history spanning directories, hosts, sessions,
 //! and shells, then verifies every filter mode and the shell-switch index
 //! rebuild through the actual client.
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
 
 #[cfg(unix)]
 mod unix {

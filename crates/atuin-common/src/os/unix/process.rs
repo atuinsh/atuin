@@ -73,6 +73,10 @@ pub fn process_start_time(pid: Pid) -> Option<u64> {
 
 /// Get a process's current working directory.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "atuin-pty-proxy polls this from a latency-bound thread with no tokio runtime"
+)]
 pub fn cwd(pid: Pid) -> Option<PathBuf> {
     let pid = u32::try_from(pid.as_raw_pid()).ok()?;
 

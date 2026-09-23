@@ -1,6 +1,7 @@
 //! Integration tests for the daemon server lifecycle: every RPC round-trips through a real gRPC
 //! server on a temporary unix socket.
 #![cfg(unix)]
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
 
 mod common;
 

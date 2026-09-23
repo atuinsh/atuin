@@ -1,3 +1,9 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "runs without a tokio runtime, on latency-bound threads; exempt from FdPool by \
+              decision"
+)]
+
 #[cfg(unix)]
 mod capture;
 #[cfg(unix)]

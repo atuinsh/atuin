@@ -7,6 +7,7 @@
 //! so this drives all four and checks the property they exist to provide.
 
 #![cfg(all(unix, feature = "daemon", feature = "pty-proxy"))]
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
 
 mod common;
 

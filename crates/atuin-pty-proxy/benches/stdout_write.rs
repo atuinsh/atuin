@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
+
 fn main() {
     divan::main();
 }

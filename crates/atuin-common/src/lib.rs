@@ -1,4 +1,8 @@
 #![deny(unsafe_code)]
+#![cfg_attr(test, allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures"))]
+// TODO(markovejnovic): remove once atuin-common's non-wrapper modules are migrated (fd-pool
+// migration)
+#![cfg_attr(not(test), allow(clippy::disallowed_methods))]
 
 #[cfg(feature = "ansi")]
 pub mod ansi;

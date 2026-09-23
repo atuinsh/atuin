@@ -1,6 +1,7 @@
 //! Interactive shell tests against a rendered PTY screen.
 
 #![cfg(unix)]
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
 
 mod common;
 

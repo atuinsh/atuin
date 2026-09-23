@@ -7,6 +7,7 @@
 //! command leak into interactive search. Every test states the user-facing invariant it defends;
 //! none reaches into the private sync worker, only the reachable feeding surface it is built on.
 #![cfg(unix)]
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
 
 mod common;
 

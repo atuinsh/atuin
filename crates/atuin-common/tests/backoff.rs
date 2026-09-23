@@ -9,6 +9,7 @@
 //! the guard rail that keeps them so. The one counterintuitive behavior -- the eager first call
 //! running OUTSIDE the timeout -- is documented ("Be warned") and pinned as a passing guard, not a
 //! defect.
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
 
 use std::future::ready;
 use std::num::NonZeroU32;

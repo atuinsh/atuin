@@ -10,6 +10,7 @@
 //! it out of the PTY suite makes the marker assertions exact instead of screen-scraped.
 
 #![cfg(unix)]
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
 
 use std::path::PathBuf;
 use std::process::Command;

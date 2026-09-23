@@ -11,6 +11,7 @@
 //! file that must not take it.
 
 #![cfg(all(unix, feature = "pty-proxy"))]
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
 
 mod common;
 

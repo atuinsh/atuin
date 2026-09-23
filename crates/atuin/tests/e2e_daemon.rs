@@ -1,6 +1,7 @@
 //! Daemon startup, persistence, and restart tests.
 
 #![cfg(all(unix, feature = "daemon"))]
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
 
 mod common;
 

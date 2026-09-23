@@ -1,6 +1,7 @@
 //! The daemon at the sizes real histories reach: the tiers fast enough for per-push CI. The
 //! 100k-write and 1M-row tiers of the same bodies live in `tests/nightly.rs`.
 #![cfg(unix)]
+#![allow(clippy::disallowed_methods, reason = "tests may use std::fs for fixtures")]
 
 mod common;
 
