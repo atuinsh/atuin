@@ -17,7 +17,7 @@ const RECOUNT_INTERVAL: Duration = Duration::from_millis(100);
 /// Descriptors the system pool leaves to code outside the pools.
 ///
 /// Unfortunately, we cannot account for all the file descriptors that a process may use, so we
-/// leave some floating headroom to assume that there are file desciptors not managed by this pool.
+/// leave some floating headroom to assume that there are file descriptors not managed by this pool.
 const HEADROOM: usize = 64;
 
 impl FdPool {
