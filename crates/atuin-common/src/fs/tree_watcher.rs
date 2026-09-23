@@ -5,33 +5,72 @@
 //! file is never offered to the filter again while it stays in place.
 //!
 //! A [`WatchedFile`]'s [`stat`](WatchedFile::stat) is a [`tokio::sync::watch::Receiver`] holding
-//! the file's latest [`FileStat`]: it changes whenever the file's content does (size,
-//! modification time or identity), and closes once the file is gone. A consumer that re-reads
-//! the file needs nothing but that wakeup.
+//! the file's latest [`FileStat`]: it changes whenever the file's content does (size, modification
+//! time or identity), and closes once the file is gone.
 //!
-//! Content changes are detected by three paths, all applied on the watcher's own task:
-//! filesystem events (fastest, but backends coalesce and drop them), the periodic full scan
-//! ([`scan_interval`](TreeWatcherBuilder::scan_interval), which also discovers and prunes nodes)
-//! and a cheaper content poll ([`content_poll_interval`](TreeWatcherBuilder::content_poll_interval))
-//! that re-stats only files written within the [`hot_window`](TreeWatcherBuilder::hot_window).
-//! Changes are coalesced by comparing stat facts, and the watch channel keeps only the latest,
-//! so a burst of writes yields one or a few wakeups, never one per write.
+//! # Usage Guide
 //!
-//! The watcher runs on a background Tokio task (so it must be created from within a Tokio runtime)
-//! and does its blocking filesystem work in a [`BlockingPool`]. It keeps running until it is
-//! dropped, which stops watching and closes every [`WatchedFile`]'s stat. Use
-//! [`recursive`](TreeWatcherBuilder::recursive) to control whether subdirectories are descended.
+//! The intended [`TreeWatcher`] interface is its [`Stream`] implementation. You create a new
+//! [`TreeWatcher`] via [`TreeWatcherBuilder::watch`] which will start watching a directory. Since
+//! [`TreeWatcher`] implements [`Stream`], you can listen to the stream and receive [`WatchedFile`]s.
 //!
-//! Platform notes: on Windows a content change is detected from size and modification time alone,
-//! as file identity is unix-only. On Linux, a subtree whose inotify watches could not be added
-//! (the per-user limit is exhausted) gets no events and degrades to the periodic scan plus the
-//! hot-set poll. BSD/kqueue backends hold one descriptor per watched node and are not a supported
-//! target for the daemon.
+//! When a new file is discoevered for the first time, or created, the stream will return a new
+//! [`WatchedFile`] for you:
+//!
+//! ```
+//! # use std::num::NonZeroUsize;
+//! # use atuin_common::fs::tree_watcher::TreeWatcher;
+//! # use atuin_common::sync::BlockingPool;
+//! # use futures::StreamExt;
+//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+//! let pool = BlockingPool::new(NonZeroUsize::new(4).unwrap());
+//! let mut files = TreeWatcher::builder(pool)
+//!     .watch("/var/log", |path| path.extension().is_some_and(|ext| ext == "log"))?;
+//!
+//! while let Some(watched_file) = files.next().await {
+//!     eprintln!("Discovered a new file: {}", watched_file.path().display());
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! The stream will terminate if:
+//!
+//!   - The file is deleted.
+//!   - The tree watcher is dropped.
+//!
+//! ## Filtering
+//!
+//! The [`TreeWatcher`] allows you to pass a custom filter which specifies whether you want to track
+//! a file or not. When a file event is observed by the [`TreeWatcher`], it can immediately forget
+//! about it and avoid notifying you via the [`TreeWatcherBuilder::watch`]'s second parameter.
+//!
+//! In the following example, we only listen for files which have the "log" file extension.
+//!
+//! ```
+//! # use std::num::NonZeroUsize;
+//! # use atuin_common::fs::tree_watcher::TreeWatcher;
+//! # use atuin_common::sync::BlockingPool;
+//! # use futures::StreamExt;
+//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+//! let pool = BlockingPool::new(NonZeroUsize::new(4).unwrap());
+//! let mut files = TreeWatcher::builder(pool)
+//!     .watch("/var/log", |path| path.extension().is_some_and(|ext| ext == "log"))?;
+//!
+//! while let Some(watched_file) = files.next().await {
+//!     eprintln!("Discovered a new file: {}", watched_file.path().display());
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! We **recommend** you use this rather than drop events on the stream consumer, as it is cheaper.
 //!
 //! # Example
 //!
 //! ```no_run
 //! use std::num::NonZeroUsize;
+//! use std::sync::Arc;
 //!
 //! use atuin_common::fs::tree_watcher::TreeWatcher;
 //! use atuin_common::sync::BlockingPool;
@@ -39,23 +78,50 @@
 //!
 //! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 //! let pool = BlockingPool::new(NonZeroUsize::new(4).unwrap());
-//! let mut files = TreeWatcher::builder(pool)
+//! // Yields each `.log` file once, as it appears -- via a filesystem event or the periodic scan.
+//! let files = TreeWatcher::builder(pool)
 //!     .watch("/var/log", |path| path.extension().is_some_and(|ext| ext == "log"))?;
 //!
-//! // Yields each `.log` file once, as it appears -- via a filesystem event or the periodic scan.
-//! while let Some(file) = files.next().await {
-//!     let (path, mut stat) = file.into_parts();
-//!     tokio::spawn(async move {
-//!         // Wakes once per burst of writes, and fails once the file is removed or renamed away.
-//!         while stat.changed().await.is_ok() {
-//!             println!("changed: {} ({} bytes)", path.display(), stat.borrow_and_update().size());
-//!         }
-//!         println!("gone:    {}", path.display());
-//!     });
+//! // Merge every file's changes into one stream rather than spawning a task per file: a quiet
+//! // file then costs nothing until it is written, however many the tree holds.
+//! let mut changes = files.flat_map_unordered(None, |file| {
+//!     let (path, stat) = file.into_parts();
+//!     futures::stream::unfold(stat, |mut stat| async move {
+//!         // Wakes once per burst of writes, and ends once the file is removed or renamed away.
+//!         stat.changed().await.ok()?;
+//!         let size = stat.borrow_and_update().size();
+//!         Some((size, stat))
+//!     })
+//!     .map(move |size| (Arc::clone(&path), size))
+//!     .boxed()
+//! });
+//!
+//! while let Some((path, size)) = changes.next().await {
+//!     println!("changed: {} ({size} bytes)", path.display());
 //! }
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Implementation Details
+//!
+//! The [`TreeWatcher`] utility is backed by [`notify`] which is backed by either
+//! [`inotify`](https://man7.org/linux/man-pages/man7/inotify.7.html),
+//! [`FSEvents`](https://developer.apple.com/documentation/coreservices/file_system_events) or
+//! [`ReadDirectoryChangesW`](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-readdirectorychangesw).
+//! This means that, for most uses, [`TreeWatcher`] will be relatively low latency.
+//!
+//! Unfortunately, support for these systems is flaky at best, and, consequently, we have a fallback
+//! path ([`TreeWatcherBuilder::scan_interval`]) that performs a scan over the given directory,
+//! reconciling anything observed between the scan and the real-time notification system.
+//! Additionally, for any actively managed file, there is a
+//! [`TreeWatcherBuilder::content_poll_interval`]-controlled background poll on the file contents.
+//!
+//! To summarize:
+//!
+//!   - The system uses `inotify` if possible, falling back to:
+//!   - Periodic polling of actively watched files.
+//!   - Periodic polling of the whole directory tree.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::Metadata;
@@ -1062,10 +1128,10 @@ mod tests {
         let (mut engine, _found) = accept_all_engine();
         engine.observe(ap("/r/from"), FileKind::File, Some(mark(1)), Origin::Event);
         let kinds = kinds_map([("/r/to", FileKind::File)]);
-        let ev = event(EventKind::Modify(ModifyKind::Name(RenameMode::Both)), vec![
-            PathBuf::from("/r/from"),
-            PathBuf::from("/r/to"),
-        ]);
+        let ev = event(
+            EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
+            vec![PathBuf::from("/r/from"), PathBuf::from("/r/to")],
+        );
         engine.apply_event(&ev, &kinds);
         assert!(!engine.entries.contains_key(Path::new("/r/from")));
         assert!(engine.entries.contains_key(Path::new("/r/to")));
@@ -1075,9 +1141,10 @@ mod tests {
     fn apply_rename_any_observes_moved_in_file() {
         let (mut engine, found) = accept_all_engine();
         let kinds = kinds_map([("/r/a", FileKind::File)]);
-        let ev = event(EventKind::Modify(ModifyKind::Name(RenameMode::Any)), vec![PathBuf::from(
-            "/r/a",
-        )]);
+        let ev = event(
+            EventKind::Modify(ModifyKind::Name(RenameMode::Any)),
+            vec![PathBuf::from("/r/a")],
+        );
         engine.apply_event(&ev, &kinds);
         assert!(engine.entries.contains_key(Path::new("/r/a")));
         assert_eq!(found.len(), 1);
@@ -1087,9 +1154,10 @@ mod tests {
     fn apply_rename_any_forgets_moved_out_file() {
         let (mut engine, found) = accept_all_engine();
         engine.observe(ap("/r/a"), FileKind::File, Some(mark(1)), Origin::Event);
-        let ev = event(EventKind::Modify(ModifyKind::Name(RenameMode::Any)), vec![PathBuf::from(
-            "/r/a",
-        )]);
+        let ev = event(
+            EventKind::Modify(ModifyKind::Name(RenameMode::Any)),
+            vec![PathBuf::from("/r/a")],
+        );
         engine.apply_event(&ev, &HashMap::new());
         assert!(engine.entries.is_empty());
         let files: Vec<WatchedFile> = found.drain().collect();
@@ -1135,9 +1203,10 @@ mod tests {
     #[rstest]
     fn apply_content_event_ignores_the_root() {
         let (mut engine, found) = accept_all_engine();
-        let ev = event(EventKind::Modify(ModifyKind::Metadata(MetadataKind::Permissions)), vec![
-            PathBuf::from("/r"),
-        ]);
+        let ev = event(
+            EventKind::Modify(ModifyKind::Metadata(MetadataKind::Permissions)),
+            vec![PathBuf::from("/r")],
+        );
         engine.apply_event(&ev, &kinds_map([("/r", FileKind::Dir)]));
         assert!(engine.entries.is_empty());
         assert!(found.is_empty());
