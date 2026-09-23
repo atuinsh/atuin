@@ -196,7 +196,7 @@ inline_height_shell_up_key_binding = 10
 
 ### `workspaces`
 
-Default: `false`
+Default: `true`
 
 This flag enables a pseudo filter-mode named "workspace": the filter is automatically activated when you're in a git repository.
 
