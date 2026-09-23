@@ -52,7 +52,7 @@ async fn send_register_hook(url: &url::Url, username: String, registered: String
 
     match resp {
         Ok(_) => info!("register webhook sent ok!"),
-        Err(e) => error!("failed to send register webhook: {}", e),
+        Err(e) => error!("failed to send register webhook: {}", e.without_url()),
     }
 }
 
