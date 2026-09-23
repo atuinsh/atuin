@@ -729,7 +729,6 @@ dependencies = [
  "derive_more",
  "easy-cast",
  "eyre",
- "fs-err",
  "futures-util",
  "metrics",
  "metrics-exporter-prometheus",
