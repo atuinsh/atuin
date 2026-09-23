@@ -619,8 +619,13 @@ fn write_message_text(out: &mut dyn Write, m: &agent::Message) -> io::Result<()>
             Some(agent::content_block::Block::Thinking(t)) => {
                 writeln!(out, "[thinking] {}", sanitize(t))?;
             }
+            // An empty input or content means capture did not keep it; print the tag alone.
             Some(agent::content_block::Block::ToolCall(tc)) => {
-                writeln!(out, "[tool-call {}] {}", sanitize(&tc.name), sanitize(&tc.input))?;
+                write!(out, "[tool-call {}]", sanitize(&tc.name))?;
+                if !tc.input.is_empty() {
+                    write!(out, " {}", sanitize(&tc.input))?;
+                }
+                writeln!(out)?;
             }
             Some(agent::content_block::Block::ToolResult(tr)) => {
                 let tag = if tr.is_error {
@@ -628,7 +633,11 @@ fn write_message_text(out: &mut dyn Write, m: &agent::Message) -> io::Result<()>
                 } else {
                     "tool-result"
                 };
-                writeln!(out, "[{tag}] {}", sanitize(&tr.content))?;
+                write!(out, "[{tag}]")?;
+                if !tr.content.is_empty() {
+                    write!(out, " {}", sanitize(&tr.content))?;
+                }
+                writeln!(out)?;
             }
             None => {}
         }
