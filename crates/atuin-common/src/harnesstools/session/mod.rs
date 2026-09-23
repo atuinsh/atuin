@@ -144,6 +144,13 @@ pub trait Listener {
         let sessions = self.watch();
         async_stream::stream! {
             let mut active = futures::stream::SelectAll::new();
+            // One live stream per transcript. A session the watcher reports again (the file
+            // removed and recreated, or renamed back) replaces the old stream: its buffered
+            // lines would otherwise interleave with the new one and could move the checkpoint
+            // backwards. ponytail: handles are kept for every session ever seen; prune on end
+            // if the map ever matters.
+            let mut handles: std::collections::HashMap<SessionId, futures::stream::AbortHandle> =
+                std::collections::HashMap::new();
             futures::pin_mut!(sessions);
             let mut sessions_done = false;
             loop {
@@ -156,11 +163,14 @@ pub trait Listener {
                         Some(Ok(session)) => {
                             let id = session.id();
                             let start = resume_from(&id, session.path()).await;
-                            let tagged = session
-                                .messages_from(start)
-                                .map(move |item| (id.clone(), item))
-                                .boxed();
-                            active.push(tagged);
+                            let tag = id.clone();
+                            let (tagged, handle) = futures::stream::abortable(
+                                session.messages_from(start).map(move |item| (tag.clone(), item)),
+                            );
+                            if let Some(old) = handles.insert(id, handle) {
+                                old.abort();
+                            }
+                            active.push(tagged.boxed());
                         }
                         Some(Err(err)) => yield Err(CaptureError::from(err)),
                         None => sessions_done = true,
@@ -240,6 +250,88 @@ mod tests {
         assert_eq!(m.role(), Role::Assistant);
         assert_eq!(m.content(), vec![Content::Text("hello".into())]);
         assert_eq!(m.id(), Some(MessageId::from("m1".to_owned())));
+    }
+
+    /// A transcript that yields the given offsets, then either ends or hangs like a live file
+    /// waiting for more.
+    struct StubSession {
+        id: &'static str,
+        offsets: Vec<u64>,
+        hang: bool,
+    }
+
+    impl Session for StubSession {
+        type Message = StubMsg;
+
+        fn id(&self) -> SessionId {
+            SessionId::from(self.id.to_owned())
+        }
+
+        fn path(&self) -> &Path {
+            Path::new("/stub")
+        }
+
+        fn messages_from(
+            self,
+            _offset: u64,
+        ) -> impl Stream<Item = Result<(u64, StubMsg), MessageError>> + Send + 'static {
+            let items = futures::stream::iter(self.offsets.into_iter().map(|o| Ok((o, StubMsg))));
+            if self.hang {
+                items.chain(futures::stream::pending()).left_stream()
+            } else {
+                items.right_stream()
+            }
+        }
+
+        fn read(&self) -> impl Stream<Item = Result<StubMsg, MessageError>> + Send + 'static {
+            futures::stream::empty()
+        }
+    }
+
+    /// Reports `first` at once and `second` shortly after, as a watcher does for a transcript
+    /// that is removed and recreated.
+    struct StubListener {
+        first: StubSession,
+        second: StubSession,
+    }
+
+    impl Listener for StubListener {
+        type Session = StubSession;
+
+        fn watch(self) -> impl Stream<Item = Result<StubSession, WatchError>> + Send + 'static {
+            let second = self.second;
+            futures::stream::iter([Ok(self.first)]).chain(futures::stream::once(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                Ok(second)
+            }))
+        }
+    }
+
+    /// A session reported twice keeps only its newest stream: the first stream hangs like a
+    /// live transcript, and without replacement `events()` would never end.
+    #[rstest]
+    #[tokio::test]
+    async fn a_reported_again_session_replaces_its_earlier_stream() {
+        let listener = StubListener {
+            first: StubSession {
+                id: "s",
+                offsets: vec![1],
+                hang: true,
+            },
+            second: StubSession {
+                id: "s",
+                offsets: vec![2],
+                hang: false,
+            },
+        };
+        let events = listener.events(|_, _| async { 0 });
+        let offsets: Vec<u64> = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            events.map(|ev| ev.unwrap().offset).collect(),
+        )
+        .await
+        .expect("the replaced stream must not keep events() alive");
+        assert_eq!(offsets, vec![1, 2]);
     }
 }
 
