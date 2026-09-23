@@ -60,7 +60,32 @@ pub(crate) fn scan_sessions<S>(
 
 #[enum_dispatch]
 pub trait Message: Send + 'static {
+    /// What the harness calls this message within its session: a stable identity, not a key
+    /// unique to one message.
+    ///
+    /// A message supersedes an earlier one of the same id only where it carries the higher
+    /// [`revision`](Message::revision), which is how a harness re-emitting a message as it is
+    /// written marks the draft it replaces. **Be warned**: two messages of one id that carry no
+    /// revision are two messages, and a consumer upserting by id alone loses one of them (codex
+    /// names a tool call and its output after one `call_id`).
     fn id(&self) -> Option<MessageId>;
+
+    /// Which revision of [`id`](Message::id)'s message this is, where the harness re-emits one:
+    /// of two messages of a session under the same id, the one with the higher revision
+    /// supersedes the other.
+    ///
+    /// **Be warned**: revisions belong to the capture that issued them, since a harness numbers
+    /// its messages within a log it is free to wipe. A session taken up again comes under
+    /// revisions an earlier capture already used, so a consumer outliving one keeps the message
+    /// delivered last rather than the one of the higher revision.
+    ///
+    /// `None`, the default, says the message is not a revision of anything: the harness writes
+    /// each message once and two messages that share an id are still two messages. Revisions
+    /// order messages of one session under one id and say nothing across either.
+    fn revision(&self) -> Option<i64> {
+        None
+    }
+
     fn role(&self) -> Role;
     fn timestamp(&self) -> Option<OffsetDateTime>;
     fn content(&self) -> Vec<Content>;
@@ -227,11 +252,17 @@ mod tests {
     use crate::harnesstools::session::model::{Content, MessageId, Role};
 
     #[derive(Debug, Clone)]
-    struct StubMsg;
+    struct StubMsg {
+        id: &'static str,
+        revision: Option<i64>,
+    }
 
     impl Message for StubMsg {
         fn id(&self) -> Option<MessageId> {
-            Some(MessageId::from("m1".to_owned()))
+            Some(MessageId::from(self.id.to_owned()))
+        }
+        fn revision(&self) -> Option<i64> {
+            self.revision
         }
         fn role(&self) -> Role {
             Role::Assistant
@@ -244,9 +275,39 @@ mod tests {
         }
     }
 
+    fn stub(id: &'static str, revision: Option<i64>) -> StubMsg {
+        StubMsg { id, revision }
+    }
+
+    fn codex(payload: &serde_json::Value) -> CodexMessage {
+        serde_json::from_value(serde_json::json!({"type": "response_item", "payload": payload}))
+            .unwrap()
+    }
+
+    /// What [`Message::id`] prescribes of a consumer: among the messages of one id, one
+    /// supersedes another only by a higher revision, and an unrevised message supersedes
+    /// nothing and is superseded by nothing.
+    fn upsert<M: Message>(messages: Vec<M>) -> Vec<M> {
+        let mut kept: Vec<M> = Vec::new();
+        for message in messages {
+            let Some(revision) = message.revision() else {
+                kept.push(message);
+                continue;
+            };
+            let superseded =
+                kept.iter().position(|kept| kept.id() == message.id() && kept.revision().is_some());
+            match superseded {
+                Some(i) if kept[i].revision() < Some(revision) => kept[i] = message,
+                Some(_) => {}
+                None => kept.push(message),
+            }
+        }
+        kept
+    }
+
     #[rstest]
     fn message_trait_exposes_a_normalized_view() {
-        let m = StubMsg;
+        let m = stub("m1", None);
         assert_eq!(m.role(), Role::Assistant);
         assert_eq!(m.content(), vec![Content::Text("hello".into())]);
         assert_eq!(m.id(), Some(MessageId::from("m1".to_owned())));
@@ -332,6 +393,42 @@ mod tests {
         .await
         .expect("the replaced stream must not keep events() alive");
         assert_eq!(offsets, vec![1, 2]);
+    }
+
+    #[rstest]
+    #[case(&[("prt_1", Some(1)), ("prt_1", Some(2)), ("prt_2", Some(3))], &[Some(2), Some(3)])]
+    #[case(&[("prt_1", Some(1)), ("prt_1", None), ("prt_1", Some(2))], &[Some(2), None])]
+    fn a_message_supersedes_one_of_its_id_only_at_a_higher_revision(
+        #[case] delivered: &[(&'static str, Option<i64>)],
+        #[case] expected: &[Option<i64>],
+    ) {
+        let delivered = delivered.iter().map(|&(id, revision)| stub(id, revision)).collect();
+        let kept: Vec<Option<i64>> = upsert(delivered).iter().map(Message::revision).collect();
+        assert_eq!(kept, expected);
+    }
+
+    /// codex numbers neither half of a tool call, so the pair is indistinguishable by
+    /// `(id, revision)` and an upsert keyed on that alone would drop one of them.
+    #[rstest]
+    fn a_codex_call_and_its_output_share_an_id_and_both_survive() {
+        let call = codex(&serde_json::json!({
+            "type": "function_call",
+            "name": "shell",
+            "arguments": "{\"cmd\":\"ls\"}",
+            "call_id": "call_1",
+        }));
+        let output = codex(&serde_json::json!({
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": "files",
+        }));
+        assert_eq!((call.id(), call.revision()), (output.id(), output.revision()));
+
+        let kept = upsert(vec![call, output]);
+        let roles: Vec<Role> = kept.iter().map(Message::role).collect();
+        assert_eq!(roles, [Role::Assistant, Role::Tool]);
+        assert!(matches!(kept[0].content().as_slice(), [Content::ToolUse(_)]));
+        assert!(matches!(kept[1].content().as_slice(), [Content::ToolResult(_)]));
     }
 }
 
