@@ -1,7 +1,7 @@
 use atuin_client::database::Sqlite;
 use easy_cast::Conv;
 use eyre::{Context as _, Result, bail};
-use secrecy::SecretString;
+use secrecy::{ExposeSecret as _, SecretString};
 use tracing::{debug, info};
 
 use crate::context::{AppContext, ClientContext};
@@ -50,7 +50,8 @@ pub async fn run(
     let api_token = api_token.or_else(|| settings.ai.api_token.clone());
 
     let (token, token_from_hub_session) = match api_token {
-        Some(token) => (Some(token), false),
+        // An empty token means unauthenticated, not a login prompt.
+        Some(token) => (Some(token).filter(|t| !t.expose_secret().is_empty()), false),
         None if endpoint_is_hub => (Some(ensure_hub_session(settings).await?), true),
         // An OSS server may not require auth; hit it without a token rather
         // than forcing a login flow that doesn't apply.
