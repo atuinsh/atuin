@@ -1,27 +1,25 @@
-//! Track a caller-chosen handler for every file, directory, and symlink under a directory, kept in
-//! sync with the filesystem.
+//! Find the regular files under a directory, and follow each one's content until it goes away.
 //!
-//! A [`TreeWatcher`] walks a `root` directory and, for each node it finds, calls a factory closure
-//! with a [`NodeContext`]. The factory must return `Some(handler)` to track the node, or `None` to
-//! decline tracking it.
+//! A [`TreeWatcher`] walks a `root` directory and yields a [`WatchedFile`] for each regular file
+//! whose path its filter accepts. Directories and symlinks are never yielded, and a rejected
+//! file is never offered to the filter again while it stays in place.
 //!
-//! A tracked node's handler is a [`NodeHandler`]: it is stored and kept alive for as long as the
-//! node exists, and its [`on_change`](NodeHandler::on_change) is called whenever a regular file's
-//! content changes (size, modification time or identity). A decline is remembered, so the factory
-//! is never asked about the same path twice while it stays unchanged; a declined file whose content
-//! changes is offered again. A [`tokio::sync::watch::Sender<()>`] is the ready-made handler for
-//! consumers that only need a wakeup to re-read the file.
+//! A [`WatchedFile`]'s [`stat`](WatchedFile::stat) is a [`tokio::sync::watch::Receiver`] holding
+//! the file's latest [`FileStat`]: it changes whenever the file's content does (size,
+//! modification time or identity), and closes once the file is gone. A consumer that re-reads
+//! the file needs nothing but that wakeup.
 //!
-//! Content changes reach a handler by three paths, all applied on the watcher's own task:
+//! Content changes are detected by three paths, all applied on the watcher's own task:
 //! filesystem events (fastest, but backends coalesce and drop them), the periodic full scan
 //! ([`scan_interval`](TreeWatcherBuilder::scan_interval), which also discovers and prunes nodes)
 //! and a cheaper content poll ([`content_poll_interval`](TreeWatcherBuilder::content_poll_interval))
 //! that re-stats only files written within the [`hot_window`](TreeWatcherBuilder::hot_window).
-//! Changes are coalesced by comparing stat facts, so a burst of writes yields one or a few calls,
-//! never one per write.
+//! Changes are coalesced by comparing stat facts, and the watch channel keeps only the latest,
+//! so a burst of writes yields one or a few wakeups, never one per write.
 //!
 //! The watcher runs on a background Tokio task (so it must be created from within a Tokio runtime)
-//! and keeps running until it is dropped, which stops watching and drops every handler. Use
+//! and does its blocking filesystem work in a [`BlockingPool`]. It keeps running until it is
+//! dropped, which stops watching and closes every [`WatchedFile`]'s stat. Use
 //! [`recursive`](TreeWatcherBuilder::recursive) to control whether subdirectories are descended.
 //!
 //! Platform notes: on Windows a content change is detected from size and modification time alone,
@@ -33,45 +31,28 @@
 //! # Example
 //!
 //! ```no_run
-//! use std::path::Path;
-//! use std::sync::Arc;
+//! use std::num::NonZeroUsize;
 //!
-//! use atuin_common::fs::tree_watcher::{ChangeEvent, NodeContext, NodeHandler, TreeWatcher};
+//! use atuin_common::fs::tree_watcher::TreeWatcher;
+//! use atuin_common::sync::BlockingPool;
+//! use futures::StreamExt;
 //!
-//! // One handler per watched file: building it means the file appeared, a change
-//! // means its content moved, dropping it means the file went away.
-//! struct WatchedFile(Arc<Path>);
+//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+//! let pool = BlockingPool::new(NonZeroUsize::new(4).unwrap());
+//! let mut files = TreeWatcher::builder(pool)
+//!     .watch("/var/log", |path| path.extension().is_some_and(|ext| ext == "log"))?;
 //!
-//! impl NodeHandler for WatchedFile {
-//!     fn on_change(&mut self, change: &ChangeEvent) {
-//!         println!("changed:  {} ({} bytes)", self.0.display(), change.size());
-//!     }
+//! // Yields each `.log` file once, as it appears -- via a filesystem event or the periodic scan.
+//! while let Some(file) = files.next().await {
+//!     let (path, mut stat) = file.into_parts();
+//!     tokio::spawn(async move {
+//!         // Wakes once per burst of writes, and fails once the file is removed or renamed away.
+//!         while stat.changed().await.is_ok() {
+//!             println!("changed: {} ({} bytes)", path.display(), stat.borrow_and_update().size());
+//!         }
+//!         println!("gone:    {}", path.display());
+//!     });
 //! }
-//!
-//! impl Drop for WatchedFile {
-//!     fn drop(&mut self) {
-//!         println!("gone:     {}", self.0.display());
-//!     }
-//! }
-//!
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let watcher = TreeWatcher::watch("/var/log", |ctx: NodeContext| {
-//!     // Runs once per file that appears — via a filesystem event or the periodic
-//!     // scan. Returning `None` ignores anything that isn't a regular file.
-//!     if !ctx.is_file() {
-//!         return None;
-//!     }
-//!     println!("appeared: {}", ctx.path().display());
-//!     Some(WatchedFile(ctx.into_path()))
-//! })?;
-//!
-//! // What you observe as the tree changes under /var/log:
-//! //   create app.log     -> factory runs       -> "appeared: /var/log/app.log"
-//! //   append to app.log  -> on_change runs     -> "changed:  /var/log/app.log (N bytes)"
-//! //   rm app.log         -> WatchedFile drops   -> "gone:     /var/log/app.log"
-//! //   mv a.log b.log     -> "gone: …/a.log" then "appeared: …/b.log"
-//! //   drop(watcher)      -> every WatchedFile drops
-//! # let _ = watcher;
 //! # Ok(())
 //! # }
 //! ```
@@ -80,16 +61,21 @@ use std::collections::{HashMap, HashSet};
 use std::fs::Metadata;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime};
 
+use futures::{Stream, StreamExt};
 use notify::event::{AccessKind, AccessMode, EventKind, ModifyKind, RenameMode};
 use notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
 use crate::os::fs::FdIdentity;
+use crate::sync::BlockingPool;
 use crate::time::NonZeroDuration;
 
 /// Reason a [`TreeWatcher`] could not be started.
@@ -105,7 +91,7 @@ pub enum TreeWatcherError {
 
 /// The kind of filesystem node at a path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FileKind {
+enum FileKind {
     File,
     Dir,
     Symlink,
@@ -126,7 +112,7 @@ impl From<std::fs::FileType> for FileKind {
     }
 }
 
-/// How a node, or a change to it, came to the watcher's attention.
+/// How a change to a file came to the watcher's attention.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Origin {
     /// Surfaced by a filesystem event.
@@ -174,38 +160,17 @@ impl ContentMark {
 /// A node's kind plus, for regular files, its content mark.
 type Observed = (FileKind, Option<ContentMark>);
 
-/// A content change to a tracked regular file, delivered to its [`NodeHandler`].
+/// The facts a watched file was last seen with.
 ///
-/// The size, modification time and identity are the facts the change was detected from; they
-/// are informational, and a consumer that re-reads the file needs none of them to be correct.
-#[derive(Debug, Clone)]
-pub struct ChangeEvent {
-    path: Arc<Path>,
-    kind: FileKind,
-    origin: Origin,
+/// They are informational: a consumer that re-reads the file needs none of them to be correct.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileStat {
     mark: ContentMark,
+    origin: Origin,
 }
 
-impl ChangeEvent {
-    /// The changed node's path.
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    /// The changed node's [`FileKind`].
-    #[must_use]
-    pub fn kind(&self) -> FileKind {
-        self.kind
-    }
-
-    /// Whether an event, or the scan or content poll, surfaced this change.
-    #[must_use]
-    pub fn origin(&self) -> Origin {
-        self.origin
-    }
-
-    /// The file's size in bytes when the change was detected.
+impl FileStat {
+    /// The file's size in bytes.
     #[must_use]
     pub fn size(&self) -> u64 {
         self.mark.size
@@ -223,79 +188,39 @@ impl ChangeEvent {
     pub fn identity(&self) -> Option<FdIdentity> {
         self.mark.identity
     }
-}
 
-/// A handler the factory builds per tracked node: kept alive while the node exists, and told
-/// about content changes to regular files.
-pub trait NodeHandler: Send + 'static {
-    /// The file's content changed (size, modification time or identity). Runs on the watcher's
-    /// task, so it must not block: forward a wakeup and return.
-    fn on_change(&mut self, change: &ChangeEvent);
-}
-
-/// A liveness-only handler: tracks existence, ignores content changes.
-impl NodeHandler for () {
-    fn on_change(&mut self, _change: &ChangeEvent) {}
-}
-
-/// A coalescing wakeup: every change bumps the channel version, so a receiver's
-/// [`changed`](tokio::sync::watch::Receiver::changed) wakes once per burst, and fails once the
-/// node is gone and the sender dropped.
-impl NodeHandler for tokio::sync::watch::Sender<()> {
-    fn on_change(&mut self, _change: &ChangeEvent) {
-        self.send_replace(());
+    /// Whether an event, or the scan or content poll, surfaced these facts.
+    #[must_use]
+    pub fn origin(&self) -> Origin {
+        self.origin
     }
 }
 
-/// A node offered to the factory, with how it was found.
+/// A regular file a [`TreeWatcher`] found, followed for as long as it exists.
 #[derive(Debug, Clone)]
-pub struct NodeContext {
+pub struct WatchedFile {
     path: Arc<Path>,
-    kind: FileKind,
-    origin: Origin,
+    stat: watch::Receiver<FileStat>,
 }
 
-impl NodeContext {
-    /// The node's path.
+impl WatchedFile {
+    /// The file's path.
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    /// The node's [`FileKind`].
+    /// The file's latest [`FileStat`]: marked changed on each content change, and closed once the
+    /// file is gone or the watcher drops.
     #[must_use]
-    pub fn kind(&self) -> FileKind {
-        self.kind
+    pub fn stat(&self) -> &watch::Receiver<FileStat> {
+        &self.stat
     }
 
-    /// Whether an event or the scan surfaced this node.
+    /// Split into the shared path handle and the stat receiver.
     #[must_use]
-    pub fn origin(&self) -> Origin {
-        self.origin
-    }
-
-    /// Whether this node is a regular file.
-    #[must_use]
-    pub fn is_file(&self) -> bool {
-        matches!(self.kind, FileKind::File)
-    }
-
-    /// Whether this node is a directory.
-    #[must_use]
-    pub fn is_dir(&self) -> bool {
-        matches!(self.kind, FileKind::Dir)
-    }
-
-    /// Whether this node is a symlink.
-    #[must_use]
-    pub fn is_symlink(&self) -> bool {
-        matches!(self.kind, FileKind::Symlink)
-    }
-
-    /// Consume the context into its shared path handle.
-    #[must_use]
-    pub fn into_path(self) -> Arc<Path> {
-        self.path
+    pub fn into_parts(self) -> (Arc<Path>, watch::Receiver<FileStat>) {
+        (self.path, self.stat)
     }
 }
 
@@ -349,16 +274,15 @@ fn scan_fs(root: &Path, recursive: bool) -> ScanResult {
     (out, scanned)
 }
 
-async fn scan(root: &Path, recursive: bool) -> ScanResult {
+/// [`scan_fs`] in `pool`. A cancelled scan read nothing, so it prunes nothing.
+async fn scan(pool: &BlockingPool, root: &Path, recursive: bool) -> ScanResult {
     let root = root.to_path_buf();
-    tokio::task::spawn_blocking(move || scan_fs(&root, recursive))
-        .await
-        .unwrap_or_else(|_| (Vec::new(), HashSet::new()))
+    pool.run(move || scan_fs(&root, recursive)).await.unwrap_or_default()
 }
 
-/// Stat `paths` off the async executor, keeping only the ones that still exist.
-async fn stat_paths(paths: Vec<Arc<Path>>) -> HashMap<Arc<Path>, Observed> {
-    let stat = tokio::task::spawn_blocking(move || {
+/// Stat `paths` in `pool`, keeping only the ones that still exist.
+async fn stat_paths(pool: &BlockingPool, paths: Vec<Arc<Path>>) -> HashMap<Arc<Path>, Observed> {
+    let stat = pool.run(move || {
         paths
             .into_iter()
             .filter_map(|path| {
@@ -373,47 +297,53 @@ async fn stat_paths(paths: Vec<Arc<Path>>) -> HashMap<Arc<Path>, Observed> {
 }
 
 /// Stat every path referenced by `events`, keeping only the ones that still exist.
-async fn resolve_kinds(events: &[notify::Event]) -> HashMap<Arc<Path>, Observed> {
+async fn resolve_kinds(
+    pool: &BlockingPool,
+    events: &[notify::Event],
+) -> HashMap<Arc<Path>, Observed> {
     let paths = events
         .iter()
         .flat_map(|event| event.paths.iter().map(|p| Arc::from(p.as_path())))
         .collect();
-    stat_paths(paths).await
+    stat_paths(pool, paths).await
 }
 
-enum Slot<H> {
-    Active(FileKind, Option<ContentMark>, H),
-    Declined(FileKind, Option<ContentMark>),
+enum Slot {
+    /// A regular file the filter accepted, and the sender its [`WatchedFile`] listens on.
+    Tracked(ContentMark, watch::Sender<FileStat>),
+    /// Any other node: a directory, a symlink, or a file the filter rejected.
+    Untracked(FileKind),
 }
 
-impl<H> Slot<H> {
+impl Slot {
     fn kind(&self) -> FileKind {
         match self {
-            Self::Active(kind, ..) | Self::Declined(kind, _) => *kind,
+            Self::Tracked(..) => FileKind::File,
+            Self::Untracked(kind) => *kind,
         }
     }
 
     fn mark(&self) -> Option<ContentMark> {
         match self {
-            Self::Active(_, mark, _) | Self::Declined(_, mark) => *mark,
+            Self::Tracked(mark, _) => Some(*mark),
+            Self::Untracked(_) => None,
         }
     }
 }
 
-struct Engine<H, F> {
-    factory: F,
+struct Engine<F> {
+    filter: F,
     root: Arc<Path>,
-    entries: HashMap<Arc<Path>, Slot<H>>,
+    entries: HashMap<Arc<Path>, Slot>,
+    found: flume::Sender<WatchedFile>,
 }
 
-impl<H, F> Engine<H, F>
+impl<F> Engine<F>
 where
-    H: NodeHandler,
-    F: Fn(NodeContext) -> Option<H>,
+    F: Fn(&Path) -> bool,
 {
-    /// Bring the slot for `path` in line with what was just observed on disk: build a handler
-    /// for a new or kind-changed node, signal a tracked file whose content mark moved, and
-    /// re-offer a declined file whose content changed.
+    /// Bring the slot for `path` in line with what was just observed on disk: offer a new or
+    /// kind-changed regular file to the filter, and publish a tracked file's moved content mark.
     fn observe(
         &mut self,
         path: Arc<Path>,
@@ -424,26 +354,16 @@ where
         if let Some(slot) = self.entries.get_mut(&path)
             && slot.kind() == kind
         {
-            match slot {
-                Slot::Active(_, known, handler) => {
-                    if *known != mark {
-                        *known = mark;
-                        // The handler is signalled in place: rebuilding it would
-                        // reset whatever read position its owner keeps.
-                        if let Some(mark) = mark {
-                            handler.on_change(&ChangeEvent {
-                                path,
-                                kind,
-                                origin,
-                                mark,
-                            });
-                        }
-                    }
-                    return;
-                }
-                Slot::Declined(_, known) if *known == mark => return,
-                Slot::Declined(..) => {}
+            // The stat is updated in place: yielding a new file would reset whatever read
+            // position its consumer keeps.
+            if let Slot::Tracked(known, stat) = slot
+                && let Some(mark) = mark
+                && *known != mark
+            {
+                *known = mark;
+                stat.send_replace(FileStat { mark, origin });
             }
+            return;
         }
 
         // A directory that became something else takes its tracked descendants with it.
@@ -452,13 +372,18 @@ where
         } else {
             self.entries.remove(&path);
         }
-        let ctx = NodeContext {
-            path: Arc::clone(&path),
-            kind,
-            origin,
+        let slot = match (kind, mark) {
+            (FileKind::File, Some(mark)) if (self.filter)(&path) => {
+                let (stat, rx) = watch::channel(FileStat { mark, origin });
+                // A dropped receiver means the watcher itself is going away.
+                let _ = self.found.send(WatchedFile {
+                    path: Arc::clone(&path),
+                    stat: rx,
+                });
+                Slot::Tracked(mark, stat)
+            }
+            _ => Slot::Untracked(kind),
         };
-        let slot = (self.factory)(ctx)
-            .map_or(Slot::Declined(kind, mark), |handler| Slot::Active(kind, mark, handler));
         self.entries.insert(path, slot);
     }
 
@@ -477,8 +402,8 @@ where
     /// re-statting between full scans.
     fn hot_files(&self, now: SystemTime, window: Duration) -> impl Iterator<Item = Arc<Path>> + '_ {
         self.entries.iter().filter_map(move |(path, slot)| match slot {
-            Slot::Active(_, Some(mark), _) if mark.is_hot(now, window) => Some(Arc::clone(path)),
-            _ => None,
+            Slot::Tracked(mark, _) if mark.is_hot(now, window) => Some(Arc::clone(path)),
+            Slot::Tracked(..) | Slot::Untracked(_) => None,
         })
     }
 
@@ -547,7 +472,7 @@ where
             }
             EventKind::Modify(ModifyKind::Name(RenameMode::Any | RenameMode::Other)) => {
                 // TODO: on a case-insensitive filesystem (e.g. macOS APFS), a
-                // case-only rename (`a.log` -> `A.log`) leaves duplicate handlers:
+                // case-only rename (`a.log` -> `A.log`) leaves duplicate entries:
                 // `symlink_metadata` on the stale-case name still succeeds, so we
                 // keep it while also observing the new name, and the two byte-distinct
                 // keys coexist until the next complete scan prunes the stale one. Fix
@@ -569,17 +494,17 @@ where
 /// Drives an [`Engine`] on a background task: reconciles it against a periodic
 /// full scan, re-stats recently written files on a shorter poll, and applies
 /// debounced filesystem events as they arrive.
-struct TreeWatcherPoller<H, F> {
+struct TreeWatcherPoller<F> {
     root: PathBuf,
     recursive: bool,
     hot_window: Duration,
-    engine: Engine<H, F>,
+    pool: BlockingPool,
+    engine: Engine<F>,
 }
 
-impl<H, F> TreeWatcherPoller<H, F>
+impl<F> TreeWatcherPoller<F>
 where
-    H: NodeHandler,
-    F: Fn(NodeContext) -> Option<H> + Send + 'static,
+    F: Fn(&Path) -> bool + Send + 'static,
 {
     async fn run(
         mut self,
@@ -613,7 +538,7 @@ where
                                 }
                             }
                             if !pending.is_empty() {
-                                let kinds = resolve_kinds(&pending).await;
+                                let kinds = resolve_kinds(&self.pool, &pending).await;
                                 for event in &pending {
                                     self.engine.apply_event(event, &kinds);
                                 }
@@ -631,7 +556,7 @@ where
     }
 
     async fn rescan(&mut self) {
-        let (truth, scanned_dirs) = scan(&self.root, self.recursive).await;
+        let (truth, scanned_dirs) = scan(&self.pool, &self.root, self.recursive).await;
         if scanned_dirs.is_empty() {
             tracing::warn!("tree watcher scan read no directories; skipping prune this pass");
         }
@@ -646,7 +571,7 @@ where
         if hot.is_empty() {
             return;
         }
-        for (path, (kind, mark)) in stat_paths(hot).await {
+        for (path, (kind, mark)) in stat_paths(&self.pool, hot).await {
             self.engine.observe(path, kind, mark, Origin::Scan);
         }
     }
@@ -662,23 +587,12 @@ const DEFAULT_DEBOUNCE_TIMEOUT: NonZeroDuration =
 
 /// Builder for a [`TreeWatcher`].
 pub struct TreeWatcherBuilder {
+    pool: BlockingPool,
     recursive: bool,
     scan_interval: NonZeroDuration,
     content_poll_interval: NonZeroDuration,
     hot_window: Duration,
     debounce_timeout: NonZeroDuration,
-}
-
-impl Default for TreeWatcherBuilder {
-    fn default() -> Self {
-        Self {
-            recursive: true,
-            scan_interval: DEFAULT_SCAN_INTERVAL,
-            content_poll_interval: DEFAULT_CONTENT_POLL_INTERVAL,
-            hot_window: DEFAULT_HOT_WINDOW,
-            debounce_timeout: DEFAULT_DEBOUNCE_TIMEOUT,
-        }
-    }
 }
 
 impl TreeWatcherBuilder {
@@ -719,18 +633,16 @@ impl TreeWatcherBuilder {
         self
     }
 
-    /// Start watching `root`, building a handler for each node the factory accepts.
+    /// Start watching `root`, yielding each regular file whose path `filter` accepts.
     ///
-    /// A factory returning `None` declines the node. If your factory returns `Some(T)`, then the
-    /// value will be kept alive for as long as the filesystem node exists (or the watcher drops).
-    pub fn watch<H, F>(
+    /// `filter` runs on the watcher's task, once per file path that appears, so it must not block.
+    pub fn watch<F>(
         self,
         root: impl AsRef<Path>,
-        factory: F,
+        filter: F,
     ) -> Result<TreeWatcher, TreeWatcherError>
     where
-        H: NodeHandler,
-        F: Fn(NodeContext) -> Option<H> + Send + 'static,
+        F: Fn(&Path) -> bool + Send + 'static,
     {
         let root = std::fs::canonicalize(root.as_ref())?;
         if !root.is_dir() {
@@ -753,47 +665,61 @@ impl TreeWatcherBuilder {
         )?;
         debouncer.watch(&root, mode)?;
 
+        // Unbounded so a slow consumer never stalls the engine; it holds one item per file.
+        let (found, files) = flume::unbounded();
         let engine = Engine {
-            factory,
+            filter,
             root: Arc::from(root.as_path()),
             entries: HashMap::new(),
+            found,
         };
         let poller = TreeWatcherPoller {
             root,
             recursive: self.recursive,
             hot_window: self.hot_window,
+            pool: self.pool,
             engine,
         };
         let task = tokio::spawn(poller.run(rx, self.scan_interval, self.content_poll_interval));
 
         Ok(TreeWatcher {
+            files: files.into_stream(),
             task,
             _debouncer: debouncer,
         })
     }
 }
 
-/// Watches a directory tree, holding one factory-built handler per live node.
+/// A stream of the regular files under a directory tree, each yielded once as it is found.
+///
+/// Dropping it stops watching and closes the stat of every [`WatchedFile`] it yielded.
 #[must_use = "dropping the TreeWatcher stops watching"]
 pub struct TreeWatcher {
+    files: flume::r#async::RecvStream<'static, WatchedFile>,
     task: JoinHandle<()>,
     _debouncer: Debouncer<RecommendedWatcher, RecommendedCache>,
 }
 
 impl TreeWatcher {
-    /// Begin configuring a watcher.
+    /// Begin configuring a watcher whose filesystem work runs in `pool`.
     #[must_use]
-    pub fn builder() -> TreeWatcherBuilder {
-        TreeWatcherBuilder::default()
+    pub fn builder(pool: BlockingPool) -> TreeWatcherBuilder {
+        TreeWatcherBuilder {
+            pool,
+            recursive: true,
+            scan_interval: DEFAULT_SCAN_INTERVAL,
+            content_poll_interval: DEFAULT_CONTENT_POLL_INTERVAL,
+            hot_window: DEFAULT_HOT_WINDOW,
+            debounce_timeout: DEFAULT_DEBOUNCE_TIMEOUT,
+        }
     }
+}
 
-    /// Watch `root` with default settings, building a handler for each accepted node.
-    pub fn watch<H, F>(root: impl AsRef<Path>, factory: F) -> Result<Self, TreeWatcherError>
-    where
-        H: NodeHandler,
-        F: Fn(NodeContext) -> Option<H> + Send + 'static,
-    {
-        Self::builder().watch(root, factory)
+impl Stream for TreeWatcher {
+    type Item = WatchedFile;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<WatchedFile>> {
+        self.files.poll_next_unpin(cx)
     }
 }
 
@@ -806,61 +732,34 @@ impl Drop for TreeWatcher {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicU64, Ordering};
 
+    use futures::FutureExt;
     use notify::event::{DataChange, MetadataKind};
-    use parking_lot::Mutex;
     use proptest::prelude::*;
     use rstest::rstest;
-    use tokio::sync::mpsc::error::TryRecvError;
-    use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
     use super::*;
 
-    #[derive(Default)]
-    struct Counters {
-        alive: AtomicI64,
-        created: AtomicU64,
-        dropped: AtomicU64,
-        changed: AtomicU64,
-        last_change: Mutex<Option<ChangeEvent>>,
+    fn pool() -> BlockingPool {
+        BlockingPool::new(std::num::NonZeroUsize::MIN)
     }
 
-    struct CountingHandler {
-        counters: Arc<Counters>,
-    }
-
-    impl CountingHandler {
-        fn new(counters: Arc<Counters>) -> Self {
-            counters.alive.fetch_add(1, Ordering::SeqCst);
-            counters.created.fetch_add(1, Ordering::SeqCst);
-            Self { counters }
-        }
-    }
-
-    impl NodeHandler for CountingHandler {
-        fn on_change(&mut self, change: &ChangeEvent) {
-            self.counters.changed.fetch_add(1, Ordering::SeqCst);
-            *self.counters.last_change.lock() = Some(change.clone());
-        }
-    }
-
-    impl Drop for CountingHandler {
-        fn drop(&mut self) {
-            self.counters.alive.fetch_sub(1, Ordering::SeqCst);
-            self.counters.dropped.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-
-    fn accept_all_engine(
-        counters: &Arc<Counters>,
-    ) -> Engine<CountingHandler, impl Fn(NodeContext) -> Option<CountingHandler>> {
-        let counters = counters.clone();
-        Engine {
-            factory: move |_ctx| Some(CountingHandler::new(counters.clone())),
+    fn engine(
+        filter: impl Fn(&Path) -> bool,
+    ) -> (Engine<impl Fn(&Path) -> bool>, flume::Receiver<WatchedFile>) {
+        let (found, files) = flume::unbounded();
+        let engine = Engine {
+            filter,
             root: ap("/r"),
             entries: HashMap::new(),
-        }
+            found,
+        };
+        (engine, files)
+    }
+
+    fn accept_all_engine() -> (Engine<impl Fn(&Path) -> bool>, flume::Receiver<WatchedFile>) {
+        engine(|_| true)
     }
 
     fn ap(path: &str) -> Arc<Path> {
@@ -883,10 +782,6 @@ mod tests {
         }
     }
 
-    fn kinds_map<const N: usize>(entries: [(&str, FileKind); N]) -> HashMap<Arc<Path>, Observed> {
-        entries.into_iter().map(|(p, k)| (ap(p), (k, None))).collect()
-    }
-
     /// A regular-file mark distinguished by size alone.
     fn mark(size: u64) -> ContentMark {
         ContentMark {
@@ -896,18 +791,38 @@ mod tests {
         }
     }
 
+    /// What a stat of a node of `kind` reports: regular files always carry a mark.
+    fn observed(kind: FileKind) -> Observed {
+        (kind, (kind == FileKind::File).then(|| mark(0)))
+    }
+
+    fn kinds_map<const N: usize>(entries: [(&str, FileKind); N]) -> HashMap<Arc<Path>, Observed> {
+        entries.into_iter().map(|(p, k)| (ap(p), observed(k))).collect()
+    }
+
     fn marked_map<const N: usize>(entries: [(&str, u64); N]) -> HashMap<Arc<Path>, Observed> {
         entries.into_iter().map(|(p, size)| (ap(p), (FileKind::File, Some(mark(size))))).collect()
     }
 
     fn truth(ids: &[&str]) -> Vec<(Arc<Path>, Observed)> {
-        ids.iter().map(|id| (ap(&format!("/r/{id}")), (FileKind::File, None))).collect()
+        ids.iter().map(|id| (ap(&format!("/r/{id}")), observed(FileKind::File))).collect()
     }
 
-    fn keys(
-        engine: &Engine<CountingHandler, impl Fn(NodeContext) -> Option<CountingHandler>>,
-    ) -> std::collections::HashSet<Arc<Path>> {
+    fn keys(engine: &Engine<impl Fn(&Path) -> bool>) -> HashSet<Arc<Path>> {
         engine.entries.keys().cloned().collect()
+    }
+
+    /// The paths of `files` whose stat has closed: the watcher stopped tracking them.
+    fn gone(files: &[WatchedFile]) -> HashSet<Arc<Path>> {
+        files
+            .iter()
+            .filter(|file| file.stat.has_changed().is_err())
+            .map(|file| Arc::clone(&file.path))
+            .collect()
+    }
+
+    fn live(files: &[WatchedFile]) -> usize {
+        files.iter().filter(|file| file.stat.has_changed().is_ok()).count()
     }
 
     fn scanned_kinds(
@@ -920,29 +835,6 @@ mod tests {
                 (p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/"), *k)
             })
             .collect()
-    }
-
-    #[rstest]
-    #[case(FileKind::File, true, false, false)]
-    #[case(FileKind::Dir, false, true, false)]
-    #[case(FileKind::Symlink, false, false, true)]
-    #[case(FileKind::Other, false, false, false)]
-    fn node_context_kind_predicates(
-        #[case] kind: FileKind,
-        #[case] is_file: bool,
-        #[case] is_dir: bool,
-        #[case] is_symlink: bool,
-    ) {
-        let ctx = NodeContext {
-            path: ap("/root/x"),
-            kind,
-            origin: Origin::Scan,
-        };
-        assert_eq!(ctx.is_file(), is_file);
-        assert_eq!(ctx.is_dir(), is_dir);
-        assert_eq!(ctx.is_symlink(), is_symlink);
-        assert_eq!(ctx.path(), Path::new("/root/x"));
-        assert_eq!(ctx.origin(), Origin::Scan);
     }
 
     #[rstest]
@@ -978,10 +870,11 @@ mod tests {
         assert_eq!(map.get("real/inner"), Some(&FileKind::File));
     }
 
+    #[rstest]
     #[tokio::test]
     async fn scan_reports_incomplete_for_missing_root() {
         let missing = Path::new("/this/does/not/exist/anywhere");
-        let (found, dirs) = scan(missing, true).await;
+        let (found, dirs) = scan(&pool(), missing, true).await;
         assert!(found.is_empty());
         assert!(dirs.is_empty());
     }
@@ -994,76 +887,72 @@ mod tests {
     }
 
     #[rstest]
-    fn observe_creates_one_handler_and_dedupes() {
-        let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine(&counters);
-        engine.observe(ap("/r/a"), FileKind::File, None, Origin::Event);
-        engine.observe(ap("/r/a"), FileKind::File, None, Origin::Scan);
+    fn observe_yields_a_file_once() {
+        let (mut engine, found) = accept_all_engine();
+        engine.observe(ap("/r/a"), FileKind::File, Some(mark(1)), Origin::Event);
+        engine.observe(ap("/r/a"), FileKind::File, Some(mark(1)), Origin::Scan);
         assert_eq!(engine.entries.len(), 1);
-        assert_eq!(counters.created.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.alive.load(Ordering::SeqCst), 1);
+        assert_eq!(found.len(), 1);
     }
 
     #[rstest]
-    fn observe_rebuilds_on_kind_change() {
-        let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine(&counters);
+    fn observe_re_yields_a_file_after_a_kind_change() {
+        let (mut engine, found) = accept_all_engine();
+        engine.observe(ap("/r/x"), FileKind::File, Some(mark(1)), Origin::Scan);
         engine.observe(ap("/r/x"), FileKind::Dir, None, Origin::Scan);
-        engine.observe(ap("/r/x"), FileKind::File, None, Origin::Scan);
-        assert_eq!(engine.entries.len(), 1);
-        assert_eq!(counters.created.load(Ordering::SeqCst), 2);
-        assert_eq!(counters.dropped.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.alive.load(Ordering::SeqCst), 1);
+        engine.observe(ap("/r/x"), FileKind::File, Some(mark(1)), Origin::Scan);
+        let files: Vec<WatchedFile> = found.drain().collect();
+        assert_eq!(files.len(), 2);
+        assert!(files[0].stat.has_changed().is_err(), "the replaced file's stat stayed open");
+        assert!(files[1].stat.has_changed().is_ok());
     }
 
     // A directory that turns into a file takes its tracked children with it; otherwise their
-    // handlers outlive the file's own removal until the next full scan.
+    // stats outlive the file's own removal until the next full scan.
     #[rstest]
     fn observe_kind_change_from_dir_drops_descendants() {
-        let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine(&counters);
+        let (mut engine, found) = accept_all_engine();
         engine.observe(ap("/r/x"), FileKind::Dir, None, Origin::Scan);
-        engine.observe(ap("/r/x/c"), FileKind::File, None, Origin::Scan);
-        engine.observe(ap("/r/x"), FileKind::File, None, Origin::Scan);
+        engine.observe(ap("/r/x/c"), FileKind::File, Some(mark(1)), Origin::Scan);
+        engine.observe(ap("/r/x"), FileKind::File, Some(mark(1)), Origin::Scan);
         assert_eq!(keys(&engine), std::iter::once(ap("/r/x")).collect());
-        assert_eq!(counters.dropped.load(Ordering::SeqCst), 2);
-        assert_eq!(counters.alive.load(Ordering::SeqCst), 1);
+        let files: Vec<WatchedFile> = found.drain().collect();
+        assert_eq!(gone(&files), std::iter::once(ap("/r/x/c")).collect());
+    }
+
+    // The filter sees each file path once, never directories, and a rejected file stays
+    // rejected across content changes.
+    #[rstest]
+    fn rejected_files_are_recorded_and_not_re_offered() {
+        let offers = Arc::new(AtomicU64::new(0));
+        let o = Arc::clone(&offers);
+        let (mut engine, found) = engine(move |_| {
+            o.fetch_add(1, Ordering::SeqCst);
+            false
+        });
+        engine.observe(ap("/r/d"), FileKind::Dir, None, Origin::Scan);
+        engine.observe(ap("/r/f"), FileKind::File, Some(mark(1)), Origin::Scan);
+        engine.observe(ap("/r/f"), FileKind::File, Some(mark(2)), Origin::Scan);
+        assert_eq!(offers.load(Ordering::SeqCst), 1);
+        assert!(found.is_empty());
+        assert!(matches!(engine.entries.get(Path::new("/r/f")), Some(Slot::Untracked(_))));
     }
 
     #[rstest]
-    fn declined_paths_are_recorded_and_not_re_offered() {
-        let counters = Arc::new(Counters::default());
-        let c = counters.clone();
-        let mut engine = Engine {
-            factory: move |ctx: NodeContext| ctx.is_file().then(|| CountingHandler::new(c.clone())),
-            root: ap("/r"),
-            entries: HashMap::new(),
-        };
-        engine.observe(ap("/r/d"), FileKind::Dir, None, Origin::Scan);
-        engine.observe(ap("/r/d"), FileKind::Dir, None, Origin::Scan);
-        assert_eq!(engine.entries.len(), 1);
-        assert_eq!(counters.created.load(Ordering::SeqCst), 0);
-        assert!(matches!(engine.entries.get(Path::new("/r/d")), Some(Slot::Declined(..))));
-    }
-
-    #[rstest]
-    fn forget_drops_handler() {
-        let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine(&counters);
-        engine.observe(ap("/r/a"), FileKind::File, None, Origin::Event);
+    fn forget_closes_the_stat() {
+        let (mut engine, found) = accept_all_engine();
+        engine.observe(ap("/r/a"), FileKind::File, Some(mark(1)), Origin::Event);
         engine.entries.remove(Path::new("/r/a"));
-        assert!(engine.entries.is_empty());
-        assert_eq!(counters.alive.load(Ordering::SeqCst), 0);
-        assert_eq!(counters.dropped.load(Ordering::SeqCst), 1);
+        let files: Vec<WatchedFile> = found.drain().collect();
+        assert_eq!(gone(&files), std::iter::once(ap("/r/a")).collect());
     }
 
     #[rstest]
     fn forget_tree_drops_subtree() {
-        let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine(&counters);
+        let (mut engine, _found) = accept_all_engine();
         engine.observe(ap("/r/sub"), FileKind::Dir, None, Origin::Scan);
-        engine.observe(ap("/r/sub/a"), FileKind::File, None, Origin::Scan);
-        engine.observe(ap("/r/sub2/b"), FileKind::File, None, Origin::Scan);
+        engine.observe(ap("/r/sub/a"), FileKind::File, Some(mark(1)), Origin::Scan);
+        engine.observe(ap("/r/sub2/b"), FileKind::File, Some(mark(1)), Origin::Scan);
         engine.forget_tree(Path::new("/r/sub"));
         assert_eq!(keys(&engine), std::iter::once(ap("/r/sub2/b")).collect());
     }
@@ -1072,63 +961,55 @@ mod tests {
     // a sweep: a (stale) entry under its path is the witness that no prefix scan ran.
     #[rstest]
     fn forget_tree_of_a_file_removes_only_that_entry() {
-        let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine(&counters);
-        engine.observe(ap("/r/a"), FileKind::File, None, Origin::Scan);
-        engine.observe(ap("/r/a/stale"), FileKind::File, None, Origin::Scan);
-        engine.observe(ap("/r/b"), FileKind::File, None, Origin::Scan);
+        let (mut engine, found) = accept_all_engine();
+        engine.observe(ap("/r/a"), FileKind::File, Some(mark(1)), Origin::Scan);
+        engine.observe(ap("/r/a/stale"), FileKind::File, Some(mark(1)), Origin::Scan);
+        engine.observe(ap("/r/b"), FileKind::File, Some(mark(1)), Origin::Scan);
         engine.forget_tree(Path::new("/r/a"));
         assert_eq!(keys(&engine), [ap("/r/a/stale"), ap("/r/b")].into_iter().collect());
-        assert_eq!(counters.dropped.load(Ordering::SeqCst), 1);
+        let files: Vec<WatchedFile> = found.drain().collect();
+        assert_eq!(gone(&files), std::iter::once(ap("/r/a")).collect());
     }
 
     #[rstest]
     fn reconcile_adds_and_removes() {
-        let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine(&counters);
+        let (mut engine, found) = accept_all_engine();
         engine.reconcile(truth(&["a", "b"]), &scanned(&["/r"]));
-        assert_eq!(counters.alive.load(Ordering::SeqCst), 2);
+        assert_eq!(found.len(), 2);
         engine.reconcile(truth(&["b", "c"]), &scanned(&["/r"]));
         assert_eq!(keys(&engine), [ap("/r/b"), ap("/r/c")].into_iter().collect());
-        assert_eq!(counters.alive.load(Ordering::SeqCst), 2);
-        assert_eq!(counters.created.load(Ordering::SeqCst), 3);
-        assert_eq!(counters.dropped.load(Ordering::SeqCst), 1);
+        let files: Vec<WatchedFile> = found.drain().collect();
+        assert_eq!(files.len(), 3);
+        assert_eq!(gone(&files), std::iter::once(ap("/r/a")).collect());
     }
 
     #[rstest]
     fn reconcile_repairs_kind_swap() {
-        let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine(&counters);
-        engine.reconcile(vec![(ap("/r/x"), (FileKind::Dir, None))], &scanned(&["/r"]));
-        engine.reconcile(vec![(ap("/r/x"), (FileKind::File, None))], &scanned(&["/r"]));
-        assert_eq!(
-            engine.entries.get(Path::new("/r/x")).map(|slot| slot.kind()),
-            Some(FileKind::File)
-        );
-        assert_eq!(counters.created.load(Ordering::SeqCst), 2);
-        assert_eq!(counters.dropped.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.alive.load(Ordering::SeqCst), 1);
+        let (mut engine, found) = accept_all_engine();
+        engine.reconcile(vec![(ap("/r/x"), observed(FileKind::Dir))], &scanned(&["/r"]));
+        engine.reconcile(vec![(ap("/r/x"), observed(FileKind::File))], &scanned(&["/r"]));
+        assert_eq!(engine.entries.get(Path::new("/r/x")).map(Slot::kind), Some(FileKind::File));
+        assert_eq!(found.len(), 1);
     }
 
     #[rstest]
     fn reconcile_without_prune_keeps_missing() {
-        let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine(&counters);
+        let (mut engine, found) = accept_all_engine();
         engine.reconcile(truth(&["a", "b"]), &scanned(&["/r"]));
         // A scan that read no directories prunes nothing, so "b" must survive.
         engine.reconcile(truth(&["a"]), &HashSet::new());
         assert_eq!(keys(&engine), [ap("/r/a"), ap("/r/b")].into_iter().collect());
-        assert_eq!(counters.alive.load(Ordering::SeqCst), 2);
+        let files: Vec<WatchedFile> = found.drain().collect();
+        assert_eq!(live(&files), 2);
     }
 
     #[rstest]
     fn reconcile_keeps_nodes_under_unreadable_dir() {
-        let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine(&counters);
-        engine.observe(ap("/r/gone"), FileKind::File, None, Origin::Scan);
-        engine.observe(ap("/r/sub/kept"), FileKind::File, None, Origin::Scan);
+        let (mut engine, _found) = accept_all_engine();
+        engine.observe(ap("/r/gone"), FileKind::File, Some(mark(1)), Origin::Scan);
+        engine.observe(ap("/r/sub/kept"), FileKind::File, Some(mark(1)), Origin::Scan);
         // The scan read /r and saw /r/sub, but could not read /r/sub itself.
-        engine.reconcile(vec![(ap("/r/sub"), (FileKind::Dir, None))], &scanned(&["/r"]));
+        engine.reconcile(vec![(ap("/r/sub"), observed(FileKind::Dir))], &scanned(&["/r"]));
         // /r/gone: parent /r read, absent from truth -> pruned.
         // /r/sub/kept: shielded by /r/sub, which exists but was not read -> kept.
         assert_eq!(keys(&engine), [ap("/r/sub"), ap("/r/sub/kept")].into_iter().collect());
@@ -1136,23 +1017,22 @@ mod tests {
 
     #[rstest]
     fn reconcile_prunes_removed_subtree_descendants() {
-        let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine(&counters);
+        let (mut engine, found) = accept_all_engine();
         engine.observe(ap("/r/sub"), FileKind::Dir, None, Origin::Scan);
-        engine.observe(ap("/r/sub/child"), FileKind::File, None, Origin::Scan);
+        engine.observe(ap("/r/sub/child"), FileKind::File, Some(mark(1)), Origin::Scan);
         // /r/sub was removed (missed event): the scan read /r, /r/sub is absent and
         // cannot be scanned, so both it and its descendants must be pruned.
         engine.reconcile(vec![], &scanned(&["/r"]));
         assert!(engine.entries.is_empty());
-        assert_eq!(counters.alive.load(Ordering::SeqCst), 0);
+        let files: Vec<WatchedFile> = found.drain().collect();
+        assert_eq!(live(&files), 0);
     }
 
     #[rstest]
     #[case(true, 1)]
     #[case(false, 0)]
-    fn apply_create_event_observes_only_existing(#[case] exists: bool, #[case] alive: i64) {
-        let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine(&counters);
+    fn apply_create_event_observes_only_existing(#[case] exists: bool, #[case] yielded: usize) {
+        let (mut engine, found) = accept_all_engine();
         let kinds = if exists {
             kinds_map([("/r/a", FileKind::File)])
         } else {
@@ -1162,26 +1042,25 @@ mod tests {
             event(EventKind::Create(notify::event::CreateKind::Any), vec![PathBuf::from("/r/a")]);
         engine.apply_event(&ev, &kinds);
         assert_eq!(engine.entries.contains_key(Path::new("/r/a")), exists);
-        assert_eq!(counters.alive.load(Ordering::SeqCst), alive);
+        assert_eq!(found.len(), yielded);
     }
 
     #[rstest]
     fn apply_remove_event_forgets() {
-        let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine(&counters);
-        engine.observe(ap("/r/a"), FileKind::File, None, Origin::Event);
+        let (mut engine, found) = accept_all_engine();
+        engine.observe(ap("/r/a"), FileKind::File, Some(mark(1)), Origin::Event);
         let ev =
             event(EventKind::Remove(notify::event::RemoveKind::Any), vec![PathBuf::from("/r/a")]);
         engine.apply_event(&ev, &HashMap::new());
         assert!(engine.entries.is_empty());
-        assert_eq!(counters.dropped.load(Ordering::SeqCst), 1);
+        let files: Vec<WatchedFile> = found.drain().collect();
+        assert_eq!(gone(&files), std::iter::once(ap("/r/a")).collect());
     }
 
     #[rstest]
-    fn apply_rename_both_moves_handler() {
-        let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine(&counters);
-        engine.observe(ap("/r/from"), FileKind::File, None, Origin::Event);
+    fn apply_rename_both_moves_the_file() {
+        let (mut engine, _found) = accept_all_engine();
+        engine.observe(ap("/r/from"), FileKind::File, Some(mark(1)), Origin::Event);
         let kinds = kinds_map([("/r/to", FileKind::File)]);
         let ev = event(EventKind::Modify(ModifyKind::Name(RenameMode::Both)), vec![
             PathBuf::from("/r/from"),
@@ -1194,86 +1073,44 @@ mod tests {
 
     #[rstest]
     fn apply_rename_any_observes_moved_in_file() {
-        let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine(&counters);
+        let (mut engine, found) = accept_all_engine();
         let kinds = kinds_map([("/r/a", FileKind::File)]);
         let ev = event(EventKind::Modify(ModifyKind::Name(RenameMode::Any)), vec![PathBuf::from(
             "/r/a",
         )]);
         engine.apply_event(&ev, &kinds);
         assert!(engine.entries.contains_key(Path::new("/r/a")));
-        assert_eq!(counters.alive.load(Ordering::SeqCst), 1);
+        assert_eq!(found.len(), 1);
     }
 
     #[rstest]
     fn apply_rename_any_forgets_moved_out_file() {
-        let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine(&counters);
-        engine.observe(ap("/r/a"), FileKind::File, None, Origin::Event);
+        let (mut engine, found) = accept_all_engine();
+        engine.observe(ap("/r/a"), FileKind::File, Some(mark(1)), Origin::Event);
         let ev = event(EventKind::Modify(ModifyKind::Name(RenameMode::Any)), vec![PathBuf::from(
             "/r/a",
         )]);
         engine.apply_event(&ev, &HashMap::new());
         assert!(engine.entries.is_empty());
-        assert_eq!(counters.dropped.load(Ordering::SeqCst), 1);
+        let files: Vec<WatchedFile> = found.drain().collect();
+        assert_eq!(gone(&files), std::iter::once(ap("/r/a")).collect());
     }
 
     #[rstest]
-    fn mark_change_signals_active_handler_in_place() {
-        let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine(&counters);
+    fn mark_change_updates_the_stat_in_place() {
+        let (mut engine, found) = accept_all_engine();
         engine.observe(ap("/r/a"), FileKind::File, Some(mark(1)), Origin::Scan);
         engine.observe(ap("/r/a"), FileKind::File, Some(mark(2)), Origin::Event);
-        assert_eq!(counters.changed.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.created.load(Ordering::SeqCst), 1, "handler was rebuilt");
-        assert_eq!(counters.dropped.load(Ordering::SeqCst), 0, "handler was dropped");
-        let change = counters.last_change.lock().take().unwrap();
-        assert_eq!(change.path(), Path::new("/r/a"));
-        assert_eq!(change.kind(), FileKind::File);
-        assert_eq!(change.size(), 2);
-        assert_eq!(change.origin(), Origin::Event);
+        let mut files: Vec<WatchedFile> = found.drain().collect();
+        assert_eq!(files.len(), 1, "file was re-yielded");
+        let mut stat = files.pop().unwrap().stat;
+        assert!(stat.has_changed().unwrap());
+        let seen = *stat.borrow_and_update();
+        assert_eq!((seen.size(), seen.origin()), (2, Origin::Event));
         assert_eq!(engine.entries.get(Path::new("/r/a")).and_then(Slot::mark), Some(mark(2)));
 
         engine.observe(ap("/r/a"), FileKind::File, Some(mark(2)), Origin::Scan);
-        assert_eq!(counters.changed.load(Ordering::SeqCst), 1, "same mark must be a no-op");
-    }
-
-    #[rstest]
-    fn declined_mark_change_re_offers_factory() {
-        let counters = Arc::new(Counters::default());
-        let offers = Arc::new(AtomicU64::new(0));
-        let (c, o) = (counters.clone(), offers.clone());
-        // Declines the first two offers, accepts from the third on.
-        let mut engine = Engine {
-            factory: move |_ctx: NodeContext| {
-                (o.fetch_add(1, Ordering::SeqCst) >= 2).then(|| CountingHandler::new(c.clone()))
-            },
-            root: ap("/r"),
-            entries: HashMap::new(),
-        };
-        let slot_mark =
-            |engine: &Engine<_, _>| engine.entries.get(Path::new("/r/a")).and_then(Slot::mark);
-
-        engine.observe(ap("/r/a"), FileKind::File, Some(mark(1)), Origin::Scan);
-        engine.observe(ap("/r/a"), FileKind::File, Some(mark(1)), Origin::Scan);
-        assert_eq!(offers.load(Ordering::SeqCst), 1, "unchanged decline was re-offered");
-
-        engine.observe(ap("/r/a"), FileKind::File, Some(mark(2)), Origin::Scan);
-        assert_eq!(offers.load(Ordering::SeqCst), 2);
-        assert!(matches!(engine.entries.get(Path::new("/r/a")), Some(Slot::Declined(..))));
-        assert_eq!(
-            slot_mark(&engine),
-            Some(mark(2)),
-            "a repeated decline must still update the mark"
-        );
-        engine.observe(ap("/r/a"), FileKind::File, Some(mark(2)), Origin::Scan);
-        assert_eq!(offers.load(Ordering::SeqCst), 2);
-
-        engine.observe(ap("/r/a"), FileKind::File, Some(mark(3)), Origin::Scan);
-        assert_eq!(offers.load(Ordering::SeqCst), 3);
-        assert_eq!(counters.created.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.changed.load(Ordering::SeqCst), 0, "a re-offer is not a change");
-        assert_eq!(slot_mark(&engine), Some(mark(3)));
+        assert!(!stat.has_changed().unwrap(), "same mark must be a no-op");
     }
 
     #[rstest]
@@ -1282,28 +1119,28 @@ mod tests {
     #[case::any(EventKind::Modify(ModifyKind::Any))]
     #[case::close_write(EventKind::Access(AccessKind::Close(AccessMode::Write)))]
     fn apply_content_event_signals_change(#[case] kind: EventKind) {
-        let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine(&counters);
+        let (mut engine, found) = accept_all_engine();
         engine.observe(ap("/r/a"), FileKind::File, Some(mark(1)), Origin::Scan);
         let ev = event(kind, vec![PathBuf::from("/r/a")]);
         engine.apply_event(&ev, &marked_map([("/r/a", 2)]));
-        assert_eq!(counters.changed.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.created.load(Ordering::SeqCst), 1);
-        let change = counters.last_change.lock().take().unwrap();
-        assert_eq!((change.origin(), change.size()), (Origin::Event, 2));
+        let mut files: Vec<WatchedFile> = found.drain().collect();
+        assert_eq!(files.len(), 1);
+        let mut stat = files.pop().unwrap().stat;
+        assert!(stat.has_changed().unwrap());
+        let seen = *stat.borrow_and_update();
+        assert_eq!((seen.origin(), seen.size()), (Origin::Event, 2));
     }
 
     // The root is watched, not tracked: its own metadata changes must not offer it as a node.
     #[rstest]
     fn apply_content_event_ignores_the_root() {
-        let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine(&counters);
+        let (mut engine, found) = accept_all_engine();
         let ev = event(EventKind::Modify(ModifyKind::Metadata(MetadataKind::Permissions)), vec![
             PathBuf::from("/r"),
         ]);
         engine.apply_event(&ev, &kinds_map([("/r", FileKind::Dir)]));
         assert!(engine.entries.is_empty());
-        assert_eq!(counters.created.load(Ordering::SeqCst), 0);
+        assert!(found.is_empty());
     }
 
     // FSEvents reports a young file's removal as `Create`+`Remove` (sticky flags), which the
@@ -1312,28 +1149,29 @@ mod tests {
     #[case::data(EventKind::Modify(ModifyKind::Data(DataChange::Any)))]
     #[case::metadata(EventKind::Modify(ModifyKind::Metadata(MetadataKind::Extended)))]
     fn apply_content_event_forgets_vanished_file(#[case] kind: EventKind) {
-        let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine(&counters);
+        let (mut engine, found) = accept_all_engine();
         engine.observe(ap("/r/a"), FileKind::File, Some(mark(1)), Origin::Scan);
         let ev = event(kind, vec![PathBuf::from("/r/a")]);
         engine.apply_event(&ev, &HashMap::new());
         assert!(engine.entries.is_empty());
-        assert_eq!(counters.dropped.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.changed.load(Ordering::SeqCst), 0);
+        let files: Vec<WatchedFile> = found.drain().collect();
+        assert_eq!(gone(&files), std::iter::once(ap("/r/a")).collect());
+        assert_eq!(files[0].stat.borrow().size(), 1, "a vanished file is not a change");
     }
 
     #[rstest]
     fn reconcile_signals_mark_change() {
-        let counters = Arc::new(Counters::default());
-        let mut engine = accept_all_engine(&counters);
-        engine.reconcile(vec![(ap("/r/a"), (FileKind::File, Some(mark(1))))], &scanned(&["/r"]));
-        engine.reconcile(vec![(ap("/r/a"), (FileKind::File, Some(mark(1))))], &scanned(&["/r"]));
-        assert_eq!(counters.changed.load(Ordering::SeqCst), 0);
-        engine.reconcile(vec![(ap("/r/a"), (FileKind::File, Some(mark(2))))], &scanned(&["/r"]));
-        assert_eq!(counters.changed.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.created.load(Ordering::SeqCst), 1);
-        let change = counters.last_change.lock().take().unwrap();
-        assert_eq!((change.origin(), change.size()), (Origin::Scan, 2));
+        let (mut engine, found) = accept_all_engine();
+        let at = |size| vec![(ap("/r/a"), (FileKind::File, Some(mark(size))))];
+        engine.reconcile(at(1), &scanned(&["/r"]));
+        let mut stat = found.recv().unwrap().stat;
+        engine.reconcile(at(1), &scanned(&["/r"]));
+        assert!(!stat.has_changed().unwrap());
+        engine.reconcile(at(2), &scanned(&["/r"]));
+        assert!(stat.has_changed().unwrap());
+        assert!(found.is_empty(), "file was re-yielded");
+        let seen = *stat.borrow_and_update();
+        assert_eq!((seen.origin(), seen.size()), (Origin::Scan, 2));
     }
 
     #[rstest]
@@ -1361,7 +1199,7 @@ mod tests {
     }
 
     #[rstest]
-    fn hot_files_selects_recently_written_active_files() {
+    fn hot_files_selects_recently_written_tracked_files() {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
         let written = |age_secs: u64| {
             Some(ContentMark {
@@ -1370,17 +1208,10 @@ mod tests {
                 identity: None,
             })
         };
-        let counters = Arc::new(Counters::default());
-        let mut engine = Engine {
-            factory: move |ctx: NodeContext| {
-                (!ctx.path().ends_with("declined")).then(|| CountingHandler::new(counters.clone()))
-            },
-            root: ap("/r"),
-            entries: HashMap::new(),
-        };
+        let (mut engine, _found) = engine(|path| !path.ends_with("rejected"));
         engine.observe(ap("/r/hot"), FileKind::File, written(30), Origin::Scan);
         engine.observe(ap("/r/cold"), FileKind::File, written(120), Origin::Scan);
-        engine.observe(ap("/r/declined"), FileKind::File, written(0), Origin::Scan);
+        engine.observe(ap("/r/rejected"), FileKind::File, written(0), Origin::Scan);
         engine.observe(ap("/r/dir"), FileKind::Dir, None, Origin::Scan);
 
         let hot: HashSet<Arc<Path>> = engine.hot_files(now, Duration::from_secs(60)).collect();
@@ -1392,140 +1223,118 @@ mod tests {
         fn reconcile_entries_always_equal_truth(
             states in prop::collection::vec(prop::collection::hash_set(0u16..24, 0..24), 1..24)
         ) {
-            let counters = Arc::new(Counters::default());
-            let mut engine = accept_all_engine(&counters);
+            let (mut engine, found) = accept_all_engine();
+            let mut files = Vec::new();
             for state in &states {
-                let want: std::collections::HashSet<Arc<Path>> = state
+                let want: HashSet<Arc<Path>> = state
                     .iter()
                     .map(|id| ap(&format!("/r/{id}")))
                     .collect();
                 let truth: Vec<(Arc<Path>, Observed)> =
-                    want.iter().cloned().map(|p| (p, (FileKind::File, None))).collect();
+                    want.iter().cloned().map(|p| (p, observed(FileKind::File))).collect();
                 engine.reconcile(truth, &scanned(&["/r"]));
                 prop_assert_eq!(keys(&engine), want);
+                files.extend(found.drain());
             }
-            let created = counters.created.load(Ordering::SeqCst);
-            let dropped = counters.dropped.load(Ordering::SeqCst);
-            let alive = counters.alive.load(Ordering::SeqCst);
-            prop_assert_eq!(created - dropped, alive.cast_unsigned());
-            prop_assert_eq!(usize::try_from(alive).unwrap(), engine.entries.len());
+            prop_assert_eq!(live(&files), engine.entries.len());
         }
 
         #[test]
-        fn reconcile_with_declines_conserves_handlers(
+        fn reconcile_with_rejections_keeps_one_stat_per_tracked_file(
             states in prop::collection::vec(prop::collection::hash_set(0u16..24, 0..24), 1..16)
         ) {
-            let counters = Arc::new(Counters::default());
-            let c = counters.clone();
-            let mut engine = Engine {
-                factory: move |ctx: NodeContext| {
-                    ctx.is_file().then(|| CountingHandler::new(c.clone()))
-                },
-                root: ap("/r"),
-                entries: HashMap::new(),
-            };
+            let (mut engine, found) = engine(|path| {
+                path.file_name().is_some_and(|name| name.to_string_lossy().parse::<u16>().unwrap() % 3 != 0)
+            });
+            let mut files = Vec::new();
             for state in &states {
                 let truth: Vec<(Arc<Path>, Observed)> = state
                     .iter()
                     .map(|id| {
                         let kind = if id % 2 == 0 { FileKind::File } else { FileKind::Dir };
-                        (ap(&format!("/r/{id}")), (kind, None))
+                        (ap(&format!("/r/{id}")), observed(kind))
                     })
                     .collect();
                 engine.reconcile(truth, &scanned(&["/r"]));
+                files.extend(found.drain());
             }
-            let alive = usize::try_from(counters.alive.load(Ordering::SeqCst)).unwrap();
-            let active = engine
+            let tracked = engine
                 .entries
                 .values()
-                .filter(|slot| matches!(slot, Slot::Active(..)))
+                .filter(|slot| matches!(slot, Slot::Tracked(..)))
                 .count();
-            prop_assert_eq!(alive, active);
+            prop_assert_eq!(live(&files), tracked);
         }
     }
 
-    struct Probe {
-        path: PathBuf,
-        dropped: UnboundedSender<PathBuf>,
+    /// A watcher over `root` that yields every file, with the scan and debounce tightened to
+    /// `scan_ms` and `debounce_ms`.
+    fn watcher(root: &Path, scan_ms: u64, debounce_ms: u64) -> TreeWatcher {
+        TreeWatcher::builder(pool())
+            .scan_interval(nz(Duration::from_millis(scan_ms)))
+            .debounce_timeout(nz(Duration::from_millis(debounce_ms)))
+            .watch(root, |_| true)
+            .unwrap()
     }
 
-    impl NodeHandler for Probe {
-        fn on_change(&mut self, _change: &ChangeEvent) {}
+    /// The next file the watcher yields named `name`, skipping any others.
+    async fn found(watcher: &mut TreeWatcher, name: &str) -> WatchedFile {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let file = watcher.next().await.expect("the watcher never ends");
+                if file.path().ends_with(name) {
+                    break file;
+                }
+            }
+        })
+        .await
+        .expect("file is yielded")
     }
 
-    impl Drop for Probe {
-        fn drop(&mut self) {
-            let _ = self.dropped.send(self.path.clone());
-        }
+    async fn closes(mut stat: watch::Receiver<FileStat>) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while stat.changed().await.is_ok() {}
+        })
+        .await
+        .expect("stat closes");
     }
 
-    struct ChangeProbe {
-        _probe: Probe,
-        changed: UnboundedSender<ChangeEvent>,
+    /// Wait until the stat reports `size`. Bursts may deliver several changes and intermediate
+    /// sizes, so only the final state is asserted on.
+    async fn changed_to(stat: &mut watch::Receiver<FileStat>, size: u64) -> FileStat {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                stat.changed().await.expect("file still exists");
+                let seen = *stat.borrow_and_update();
+                if seen.size() == size {
+                    break seen;
+                }
+            }
+        })
+        .await
+        .expect("change is delivered")
     }
 
-    impl NodeHandler for ChangeProbe {
-        fn on_change(&mut self, change: &ChangeEvent) {
-            let _ = self.changed.send(change.clone());
-        }
-    }
-
+    #[rstest]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn created_file_builds_handler() {
+    async fn created_file_is_yielded() {
         let dir = tempfile::tempdir().unwrap();
-        let (created_tx, mut created_rx) = unbounded_channel();
-        let (drop_tx, _drop_rx) = unbounded_channel::<PathBuf>();
-        let _watcher = TreeWatcher::builder()
-            .scan_interval(nz(Duration::from_millis(100)))
-            .debounce_timeout(nz(Duration::from_millis(50)))
-            .watch(dir.path(), move |ctx| {
-                let path = ctx.path().to_owned();
-                created_tx.send(path.clone()).ok();
-                Some(Probe {
-                    path,
-                    dropped: drop_tx.clone(),
-                })
-            })
-            .unwrap();
-
+        let mut watcher = watcher(dir.path(), 100, 50);
         std::fs::write(dir.path().join("a.log"), b"x").unwrap();
-        let got = tokio::time::timeout(Duration::from_secs(5), created_rx.recv())
-            .await
-            .expect("handler should be built")
-            .unwrap();
-        assert!(got.ends_with("a.log"));
+        found(&mut watcher, "a.log").await;
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn deleted_file_drops_handler() {
+    async fn deleted_file_closes_its_stat() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("b.log");
         std::fs::write(&file, b"x").unwrap();
-        let (created_tx, mut created_rx) = unbounded_channel::<PathBuf>();
-        let (drop_tx, mut drop_rx) = unbounded_channel::<PathBuf>();
-        let _watcher = TreeWatcher::builder()
-            .scan_interval(nz(Duration::from_millis(100)))
-            .debounce_timeout(nz(Duration::from_millis(50)))
-            .watch(dir.path(), move |ctx| {
-                let path = ctx.path().to_owned();
-                created_tx.send(path.clone()).ok();
-                Some(Probe {
-                    path,
-                    dropped: drop_tx.clone(),
-                })
-            })
-            .unwrap();
+        let mut watcher = watcher(dir.path(), 100, 50);
 
-        tokio::time::timeout(Duration::from_secs(5), created_rx.recv())
-            .await
-            .expect("initial handler should be built")
-            .unwrap();
+        let stat = found(&mut watcher, "b.log").await.stat;
         std::fs::remove_file(&file).unwrap();
-        let dropped = tokio::time::timeout(Duration::from_secs(5), drop_rx.recv())
-            .await
-            .expect("handler should be dropped")
-            .unwrap();
-        assert!(dropped.ends_with("b.log"));
+        closes(stat).await;
     }
 
     #[rstest]
@@ -1538,62 +1347,31 @@ mod tests {
         #[case] wait_ms: u64,
     ) {
         let dir = tempfile::tempdir().unwrap();
-        let (created_tx, mut created_rx) = unbounded_channel::<PathBuf>();
-        let (drop_tx, _drop_rx) = unbounded_channel::<PathBuf>();
-        let _watcher = TreeWatcher::builder()
+        let mut watcher = TreeWatcher::builder(pool())
             .recursive(recursive)
             .scan_interval(nz(Duration::from_millis(100)))
             .debounce_timeout(nz(Duration::from_millis(50)))
-            .watch(dir.path(), move |ctx| {
-                if !ctx.is_file() {
-                    return None;
-                }
-                let path = ctx.path().to_owned();
-                created_tx.send(path.clone()).ok();
-                Some(Probe {
-                    path,
-                    dropped: drop_tx.clone(),
-                })
-            })
+            .watch(dir.path(), |_| true)
             .unwrap();
 
         std::fs::create_dir(dir.path().join("sub")).unwrap();
         std::fs::write(dir.path().join("sub/c.log"), b"x").unwrap();
 
         let fired =
-            tokio::time::timeout(Duration::from_millis(wait_ms), created_rx.recv()).await.is_ok();
+            tokio::time::timeout(Duration::from_millis(wait_ms), watcher.next()).await.is_ok();
         assert_eq!(fired, expect_fire);
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn dropping_watcher_drops_handlers() {
+    async fn dropping_the_watcher_closes_every_stat() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.log"), b"x").unwrap();
-        let (created_tx, mut created_rx) = unbounded_channel::<PathBuf>();
-        let (drop_tx, mut drop_rx) = unbounded_channel::<PathBuf>();
-        let watcher = TreeWatcher::builder()
-            .scan_interval(nz(Duration::from_millis(100)))
-            .debounce_timeout(nz(Duration::from_millis(50)))
-            .watch(dir.path(), move |ctx| {
-                let path = ctx.path().to_owned();
-                created_tx.send(path.clone()).ok();
-                Some(Probe {
-                    path,
-                    dropped: drop_tx.clone(),
-                })
-            })
-            .unwrap();
+        let mut watcher = watcher(dir.path(), 100, 50);
 
-        tokio::time::timeout(Duration::from_secs(5), created_rx.recv())
-            .await
-            .expect("initial handler should be built")
-            .unwrap();
+        let stat = found(&mut watcher, "a.log").await.stat;
         drop(watcher);
-        let dropped = tokio::time::timeout(Duration::from_secs(5), drop_rx.recv())
-            .await
-            .expect("handler should be dropped when watcher is dropped")
-            .unwrap();
-        assert!(dropped.ends_with("a.log"));
+        closes(stat).await;
     }
 
     // Both bad-root checks run before any Tokio task is spawned, so this needs no runtime.
@@ -1609,7 +1387,8 @@ mod tests {
         } else {
             dir.path().join("does-not-exist")
         };
-        let err = TreeWatcher::watch(root, |_ctx: NodeContext| Some(()))
+        let err = TreeWatcher::builder(pool())
+            .watch(root, |_| true)
             .err()
             .expect("bad root must be rejected");
         if root_is_file {
@@ -1638,94 +1417,32 @@ mod tests {
         }
     }
 
-    struct ChangeRig {
-        _watcher: TreeWatcher,
-        built: UnboundedReceiver<PathBuf>,
-        changed: UnboundedReceiver<ChangeEvent>,
-        dropped: UnboundedReceiver<PathBuf>,
-    }
-
-    fn watch_changes(builder: TreeWatcherBuilder, root: &Path) -> ChangeRig {
-        let (built_tx, built) = unbounded_channel();
-        let (changed_tx, changed) = unbounded_channel();
-        let (drop_tx, dropped) = unbounded_channel();
-        let watcher = builder
-            .watch(root, move |ctx| {
-                let path = ctx.path().to_owned();
-                built_tx.send(path.clone()).ok();
-                Some(ChangeProbe {
-                    _probe: Probe {
-                        path,
-                        dropped: drop_tx.clone(),
-                    },
-                    changed: changed_tx.clone(),
-                })
-            })
-            .unwrap();
-        ChangeRig {
-            _watcher: watcher,
-            built,
-            changed,
-            dropped,
-        }
-    }
-
-    impl ChangeRig {
-        async fn built(&mut self, name: &str) {
-            tokio::time::timeout(Duration::from_secs(5), async {
-                while !self.built.recv().await.unwrap().ends_with(name) {}
-            })
-            .await
-            .expect("handler is built");
-        }
-
-        /// Drain changes until one for `name` reports `size`. Bursts may deliver several
-        /// changes and intermediate sizes, so only the final state is asserted on.
-        async fn changed_to(&mut self, name: &str, size: u64) -> ChangeEvent {
-            tokio::time::timeout(Duration::from_secs(5), async {
-                loop {
-                    let change = self.changed.recv().await.unwrap();
-                    if change.path().ends_with(name) && change.size() == size {
-                        break change;
-                    }
-                }
-            })
-            .await
-            .expect("change is delivered")
-        }
-    }
-
-    // A content write is neither a create/remove nor a kind change, so the handler must
-    // survive untouched (not rebuilt by the event path, not churned by the periodic scan)
-    // and instead be told about the change in place.
+    // A content write is neither a create/remove nor a kind change, so the file must not be
+    // yielded again (not by the event path, not by the periodic scan) and its stat must stay
+    // open, updated in place.
     #[rstest]
     #[case::append(Mutation::Append)]
     #[case::overwrite(Mutation::Overwrite)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn benign_mutation_does_not_rebuild_handler(#[case] mutation: Mutation) {
+    async fn benign_mutation_does_not_re_yield_the_file(#[case] mutation: Mutation) {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("keep.log");
         std::fs::write(&file, b"seed").unwrap();
 
-        let builder = TreeWatcher::builder()
-            .scan_interval(nz(Duration::from_millis(50)))
-            .debounce_timeout(nz(Duration::from_millis(20)));
-        let mut rig = watch_changes(builder, dir.path());
-        rig.built("keep.log").await;
-        while rig.built.try_recv().is_ok() {}
+        let mut watcher = watcher(dir.path(), 50, 20);
+        let mut stat = found(&mut watcher, "keep.log").await.stat;
 
         for i in 0..3 {
             mutation.apply(&file, i);
             tokio::time::sleep(Duration::from_millis(40)).await;
         }
-        // Several scan cycles and debounce windows: a bug that rebuilds on modify surfaces here.
+        // Several scan cycles and debounce windows: a bug that re-yields on modify surfaces here.
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        assert!(matches!(rig.built.try_recv(), Err(TryRecvError::Empty)), "handler was rebuilt");
-        assert!(matches!(rig.dropped.try_recv(), Err(TryRecvError::Empty)), "handler was dropped");
+        assert!(watcher.next().now_or_never().is_none(), "file was re-yielded");
+        assert!(stat.has_changed().is_ok(), "stat was closed");
         let final_size = std::fs::metadata(&file).unwrap().len();
-        let change = rig.changed_to("keep.log", final_size).await;
-        assert_eq!(change.kind(), FileKind::File);
+        changed_to(&mut stat, final_size).await;
     }
 
     // Scan and poll intervals of 30s leave only the event fast path able to deliver in time.
@@ -1736,16 +1453,17 @@ mod tests {
         let file = dir.path().join("grow.log");
         std::fs::write(&file, b"seed").unwrap();
 
-        let builder = TreeWatcher::builder()
+        let mut watcher = TreeWatcher::builder(pool())
             .scan_interval(nz(Duration::from_secs(30)))
             .content_poll_interval(nz(Duration::from_secs(30)))
-            .debounce_timeout(nz(Duration::from_millis(20)));
-        let mut rig = watch_changes(builder, dir.path());
-        rig.built("grow.log").await;
+            .debounce_timeout(nz(Duration::from_millis(20)))
+            .watch(dir.path(), |_| true)
+            .unwrap();
+        let mut stat = found(&mut watcher, "grow.log").await.stat;
 
         Mutation::Append.apply(&file, 7);
-        let change = rig.changed_to("grow.log", 6).await;
-        assert_eq!(change.origin(), Origin::Event);
+        let seen = changed_to(&mut stat, 6).await;
+        assert_eq!(seen.origin(), Origin::Event);
     }
 
     #[rstest]
@@ -1755,14 +1473,11 @@ mod tests {
         let file = dir.path().join("shrink.log");
         std::fs::write(&file, b"long seed").unwrap();
 
-        let builder = TreeWatcher::builder()
-            .scan_interval(nz(Duration::from_millis(100)))
-            .debounce_timeout(nz(Duration::from_millis(20)));
-        let mut rig = watch_changes(builder, dir.path());
-        rig.built("shrink.log").await;
+        let mut watcher = watcher(dir.path(), 100, 20);
+        let mut stat = found(&mut watcher, "shrink.log").await.stat;
 
         std::fs::write(&file, b"s").unwrap();
-        rig.changed_to("shrink.log", 1).await;
+        changed_to(&mut stat, 1).await;
     }
 
     // A 30s debounce means no filesystem event can be delivered inside the 5s window, and
@@ -1779,16 +1494,17 @@ mod tests {
         let file = dir.path().join("late.log");
         std::fs::write(&file, b"seed").unwrap();
 
-        let builder = TreeWatcher::builder()
+        let mut watcher = TreeWatcher::builder(pool())
             .scan_interval(nz(Duration::from_millis(scan_ms)))
             .content_poll_interval(nz(Duration::from_millis(poll_ms)))
-            .debounce_timeout(nz(Duration::from_secs(30)));
-        let mut rig = watch_changes(builder, dir.path());
-        rig.built("late.log").await;
+            .debounce_timeout(nz(Duration::from_secs(30)))
+            .watch(dir.path(), |_| true)
+            .unwrap();
+        let mut stat = found(&mut watcher, "late.log").await.stat;
 
         Mutation::Append.apply(&file, 7);
-        let change = rig.changed_to("late.log", 6).await;
-        assert_eq!(change.origin(), Origin::Scan);
+        let seen = changed_to(&mut stat, 6).await;
+        assert_eq!(seen.origin(), Origin::Scan);
     }
 
     // A 30s debounce means no filesystem event can be delivered inside the 5s window, so
@@ -1803,145 +1519,52 @@ mod tests {
         if pre_exists {
             std::fs::write(&file, b"x").unwrap();
         }
-
-        let (built_tx, mut built_rx) = unbounded_channel::<PathBuf>();
-        let (drop_tx, mut drop_rx) = unbounded_channel::<PathBuf>();
-        let _watcher = TreeWatcher::builder()
-            .scan_interval(nz(Duration::from_millis(100)))
-            .debounce_timeout(nz(Duration::from_secs(30)))
-            .watch(dir.path(), move |ctx| {
-                let path = ctx.path().to_owned();
-                built_tx.send(path.clone()).ok();
-                Some(Probe {
-                    path,
-                    dropped: drop_tx.clone(),
-                })
-            })
-            .unwrap();
+        let mut watcher = watcher(dir.path(), 100, 30_000);
 
         if pre_exists {
-            tokio::time::timeout(Duration::from_secs(5), built_rx.recv())
-                .await
-                .expect("startup scan builds the handler")
-                .unwrap();
+            let stat = found(&mut watcher, "s.log").await.stat;
             std::fs::remove_file(&file).unwrap();
-            let dropped = tokio::time::timeout(Duration::from_secs(5), drop_rx.recv())
-                .await
-                .expect("periodic scan prunes the handler without any event")
-                .unwrap();
-            assert!(dropped.ends_with("s.log"));
+            closes(stat).await;
         } else {
             std::fs::write(&file, b"x").unwrap();
-            let built = tokio::time::timeout(Duration::from_secs(5), built_rx.recv())
-                .await
-                .expect("periodic scan builds the handler without any event")
-                .unwrap();
-            assert!(built.ends_with("s.log"));
+            found(&mut watcher, "s.log").await;
         }
     }
 
     #[rstest]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn rename_moves_handler() {
+    async fn rename_moves_the_file() {
         let dir = tempfile::tempdir().unwrap();
         let from = dir.path().join("from.log");
         let to = dir.path().join("to.log");
         std::fs::write(&from, b"x").unwrap();
+        let mut watcher = watcher(dir.path(), 100, 50);
 
-        let (built_tx, mut built_rx) = unbounded_channel::<PathBuf>();
-        let (drop_tx, mut drop_rx) = unbounded_channel::<PathBuf>();
-        let _watcher = TreeWatcher::builder()
-            .scan_interval(nz(Duration::from_millis(100)))
-            .debounce_timeout(nz(Duration::from_millis(50)))
-            .watch(dir.path(), move |ctx| {
-                let path = ctx.path().to_owned();
-                built_tx.send(path.clone()).ok();
-                Some(Probe {
-                    path,
-                    dropped: drop_tx.clone(),
-                })
-            })
-            .unwrap();
-
-        let first = tokio::time::timeout(Duration::from_secs(5), built_rx.recv())
-            .await
-            .expect("initial handler for the source")
-            .unwrap();
-        assert!(first.ends_with("from.log"));
-
+        let stat = found(&mut watcher, "from.log").await.stat;
         std::fs::rename(&from, &to).unwrap();
-
-        let dropped = tokio::time::timeout(Duration::from_secs(5), drop_rx.recv())
-            .await
-            .expect("source handler is dropped")
-            .unwrap();
-        assert!(dropped.ends_with("from.log"));
-
-        // The destination may surface as a rename event or via the reconciling scan, and the
-        // two channels carry no ordering guarantee, so read builds until the new path shows.
-        let built = loop {
-            let p = tokio::time::timeout(Duration::from_secs(5), built_rx.recv())
-                .await
-                .expect("destination handler is built")
-                .unwrap();
-            if p.ends_with("to.log") {
-                break p;
-            }
-        };
-        assert!(built.ends_with("to.log"));
+        closes(stat).await;
+        // The destination may surface as a rename event or via the reconciling scan.
+        found(&mut watcher, "to.log").await;
     }
 
-    #[cfg(unix)]
-    #[derive(Clone, Copy)]
-    enum NodeSpec {
-        File,
-        Dir,
-        Symlink,
-    }
-
-    #[cfg(unix)]
-    impl NodeSpec {
-        fn create(self, at: &Path) {
-            match self {
-                Self::File => std::fs::write(at, b"x").unwrap(),
-                Self::Dir => std::fs::create_dir(at).unwrap(),
-                // Dangling on purpose: the kind is read without following the link.
-                Self::Symlink => std::os::unix::fs::symlink("missing-target", at).unwrap(),
-            }
-        }
-    }
-
-    // The kind the factory sees must match what is on disk, all the way through the scan
-    // and stat pipeline -- symlinks especially must not be followed to their target's kind.
+    // Directories and symlinks are tracked but never yielded -- symlinks especially must not be
+    // followed to their target's kind. The file is created last, so it must be the first yield.
     #[cfg(unix)]
     #[rstest]
-    #[case::file(NodeSpec::File, FileKind::File)]
-    #[case::dir(NodeSpec::Dir, FileKind::Dir)]
-    #[case::symlink(NodeSpec::Symlink, FileKind::Symlink)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn reported_kind_matches_disk(#[case] spec: NodeSpec, #[case] want: FileKind) {
+    async fn only_regular_files_are_yielded() {
         let dir = tempfile::tempdir().unwrap();
-        let (built_tx, mut built_rx) = unbounded_channel::<(PathBuf, FileKind)>();
-        let _watcher = TreeWatcher::builder()
-            .scan_interval(nz(Duration::from_millis(100)))
-            .debounce_timeout(nz(Duration::from_millis(50)))
-            .watch(dir.path(), move |ctx| {
-                built_tx.send((ctx.path().to_owned(), ctx.kind())).ok();
-                Some(())
-            })
+        let mut watcher = watcher(dir.path(), 100, 50);
+
+        std::fs::create_dir(dir.path().join("dir")).unwrap();
+        // Dangling on purpose: the kind is read without following the link.
+        std::os::unix::fs::symlink("missing-target", dir.path().join("link")).unwrap();
+        std::fs::write(dir.path().join("file"), b"x").unwrap();
+
+        let first = tokio::time::timeout(Duration::from_secs(5), watcher.next())
+            .await
+            .expect("file is yielded")
             .unwrap();
-
-        spec.create(&dir.path().join("node"));
-
-        let kind = loop {
-            let (path, kind) = tokio::time::timeout(Duration::from_secs(5), built_rx.recv())
-                .await
-                .expect("node surfaces to the factory")
-                .unwrap();
-            if path.ends_with("node") {
-                break kind;
-            }
-        };
-        assert_eq!(kind, want);
+        assert!(first.path().ends_with("file"), "yielded {}", first.path().display());
     }
 }

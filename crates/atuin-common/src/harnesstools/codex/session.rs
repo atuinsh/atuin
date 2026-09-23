@@ -7,7 +7,7 @@ use time::format_description::well_known::Rfc3339;
 use tokio::sync::watch;
 use typed_builder::TypedBuilder;
 
-use crate::fs::tree_watcher::{NodeContext, TreeWatcher};
+use crate::fs::tree_watcher::{FileStat, TreeWatcher};
 use crate::harnesstools::codex::Codex;
 use crate::harnesstools::session::model::{
     Content, MessageId, Role, StopReason, ToolCallId, ToolResult, ToolUse, Usage,
@@ -98,27 +98,25 @@ pub struct CodexListener {
 }
 
 impl CodexListener {
-    /// Build a read-once session for an accepted codex rollout file (no change signal), or `None`.
-    fn open_session(path: &Path, is_file: bool, pool: &BlockingPool) -> Option<CodexSession> {
+    /// The session id a codex rollout file's name carries, or `None` if `path` is not one.
+    fn session_id(path: &Path) -> Option<SessionId> {
         let name = path.file_name()?.to_string_lossy();
-        if !is_file || !name.starts_with("rollout-") || !name.ends_with(".jsonl") {
+        if !name.starts_with("rollout-") || !name.ends_with(".jsonl") {
             return None;
         }
         let stem = path.file_stem()?.to_string_lossy();
         let mut groups: Vec<&str> = stem.rsplitn(6, '-').collect();
         groups.truncate(5);
         groups.reverse();
-        let id = groups.join("-");
-        Some(CodexSession::open(SessionId::from(id), path.to_path_buf(), pool.clone()))
+        Some(SessionId::from(groups.join("-")))
     }
 
-    /// The session for an accepted file, paired with the change signal the watcher keeps alive
-    /// for as long as the file exists.
-    fn accept(ctx: &NodeContext, pool: &BlockingPool) -> Option<(CodexSession, watch::Sender<()>)> {
-        let mut session = Self::open_session(ctx.path(), ctx.is_file(), pool)?;
-        let (signal, rx) = watch::channel(());
-        session.changes = Some(rx);
-        Some((session, signal))
+    /// Build a read-once session for an accepted codex rollout file (no change signal), or `None`.
+    fn open_session(path: &Path, is_file: bool, pool: &BlockingPool) -> Option<CodexSession> {
+        if !is_file {
+            return None;
+        }
+        Some(CodexSession::open(Self::session_id(path)?, path.to_path_buf(), pool.clone()))
     }
 }
 
@@ -129,20 +127,24 @@ impl Listener for CodexListener {
         let root = self.root;
         let pool = self.pool;
         async_stream::stream! {
-            let (tx, rx) = flume::unbounded::<CodexSession>();
-            let _watcher = match TreeWatcher::builder().recursive(true).watch(&root, move |ctx| {
-                let (session, signal) = Self::accept(&ctx, &pool)?;
-                let _ = tx.send(session);
-                Some(signal)
-            }) {
-                Ok(watcher) => watcher,
+            let files = TreeWatcher::builder(pool.clone())
+                .watch(&root, |path| Self::session_id(path).is_some());
+            let files = match files {
+                Ok(files) => files,
                 Err(err) => {
                     yield Err(WatchError::from(err));
                     return;
                 }
             };
-            while let Ok(session) = rx.recv_async().await {
-                yield Ok(session);
+            for await file in files {
+                let (path, stat) = file.into_parts();
+                let Some(id) = Self::session_id(&path) else { continue };
+                yield Ok(CodexSession {
+                    id,
+                    path: path.to_path_buf(),
+                    changes: Some(stat),
+                    pool: pool.clone(),
+                });
             }
         }
     }
@@ -153,7 +155,7 @@ pub struct CodexSession {
     id: SessionId,
     path: PathBuf,
     /// Wakes [`messages`](Session::messages) on each change to the file; `None` reads it once.
-    changes: Option<watch::Receiver<()>>,
+    changes: Option<watch::Receiver<FileStat>>,
     pool: BlockingPool,
 }
 

@@ -162,14 +162,15 @@ fn split_lines(bytes: &Bytes) -> Vec<Bytes> {
 
 /// Deserialize each non-blank line of the file at `path`, re-reading on every change signal.
 ///
-/// With `changes`, the stream reads whatever is new each time the receiver reports a change and
-/// ends once its sender is dropped; a change that lands while a read is in progress triggers one
-/// more read, never a missed one. A read that fails is retried with a growing delay until it
-/// succeeds or the sender is dropped, and only the first failure of such a streak is yielded.
-/// Without `changes`, the stream ends after a single pass, like [`read_all`]. Reads run in `pool`.
+/// With `changes`, the stream reads whatever is new each time the receiver reports a change (its
+/// value is ignored) and ends once its sender is dropped; a change that lands while a read is in
+/// progress triggers one more read, never a missed one. A read that fails is retried with a
+/// growing delay until it succeeds or the sender is dropped, and only the first failure of such a
+/// streak is yielded. Without `changes`, the stream ends after a single pass, like [`read_all`].
+/// Reads run in `pool`.
 pub fn follow<T>(
     path: PathBuf,
-    changes: Option<watch::Receiver<()>>,
+    changes: Option<watch::Receiver<impl Send + Sync + 'static>>,
     pool: BlockingPool,
 ) -> impl Stream<Item = Result<T, JsonlError>> + Send + 'static
 where
@@ -187,7 +188,7 @@ where
 pub fn follow_from<T>(
     path: PathBuf,
     start: u64,
-    changes: Option<watch::Receiver<()>>,
+    changes: Option<watch::Receiver<impl Send + Sync + 'static>>,
     pool: BlockingPool,
 ) -> impl Stream<Item = Result<(u64, T), JsonlError>> + Send + 'static
 where
@@ -299,7 +300,7 @@ pub fn read_all<T>(
 where
     T: DeserializeOwned + Send + 'static,
 {
-    follow(path, None, pool)
+    follow(path, None::<watch::Receiver<()>>, pool)
 }
 
 #[cfg(test)]
@@ -405,7 +406,7 @@ mod tests {
         // "1\n" ends at 2, the blank line at 3, "bad\n" at 7, "22\n" at 10.
         let (_dir, path) = write_jsonl(&["1", "", "bad", "22", ""]);
         let results: Vec<Result<(u64, i64), JsonlError>> =
-            follow_from::<i64>(path, 0, None, pool()).collect().await;
+            follow_from::<i64>(path, 0, None::<watch::Receiver<()>>, pool()).collect().await;
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].as_ref().unwrap(), &(2, 1));
         assert!(matches!(results[1], Err(JsonlError::Parse { line: 3, .. })));
@@ -425,7 +426,10 @@ mod tests {
     ) {
         let (_dir, path) = write_jsonl(&["1", "22", "333", ""]);
         let got: Vec<(u64, i64)> =
-            follow_from::<i64>(path, start, None, pool()).try_collect().await.unwrap();
+            follow_from::<i64>(path, start, None::<watch::Receiver<()>>, pool())
+                .try_collect()
+                .await
+                .unwrap();
         assert_eq!(got, expected);
     }
 
@@ -542,7 +546,8 @@ mod tests {
     #[tokio::test]
     async fn without_a_change_signal_the_stream_ends_after_one_pass() {
         let (_dir, path) = write_jsonl(&["1", "2", "{\"partial\":"]);
-        let got: Vec<i64> = follow::<i64>(path, None, pool()).try_collect().await.unwrap();
+        let got: Vec<i64> =
+            follow::<i64>(path, None::<watch::Receiver<()>>, pool()).try_collect().await.unwrap();
         assert_eq!(got, vec![1, 2]);
     }
 
