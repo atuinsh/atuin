@@ -1,3 +1,6 @@
+use std::future::Future;
+use std::path::Path;
+
 use derive_more::From;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
@@ -54,12 +57,25 @@ impl AnyListener {
         }
     }
 
+    /// See [`Listener::events`].
     #[must_use]
-    pub fn events(self) -> BoxStream<'static, Result<SessionEvent<AnyMessage>, CaptureError>> {
+    pub fn events<F>(
+        self,
+        resume_from: impl Fn(&SessionId, &Path) -> F + Send + 'static,
+    ) -> BoxStream<'static, Result<SessionEvent<AnyMessage>, CaptureError>>
+    where
+        F: Future<Output = u64> + Send + 'static,
+    {
         match self {
-            Self::Ccode(l) => l.events().map_ok(|ev| ev.map_message(AnyMessage::from)).boxed(),
-            Self::Codex(l) => l.events().map_ok(|ev| ev.map_message(AnyMessage::from)).boxed(),
-            Self::Pi(l) => l.events().map_ok(|ev| ev.map_message(AnyMessage::from)).boxed(),
+            Self::Ccode(l) => {
+                l.events(resume_from).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
+            }
+            Self::Codex(l) => {
+                l.events(resume_from).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
+            }
+            Self::Pi(l) => {
+                l.events(resume_from).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
+            }
         }
     }
 }

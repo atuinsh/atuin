@@ -148,11 +148,6 @@ impl CcodeSession {
             changes: None,
         }
     }
-
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
 }
 
 impl Session for CcodeSession {
@@ -162,8 +157,16 @@ impl Session for CcodeSession {
         self.id.clone()
     }
 
-    fn messages(self) -> impl Stream<Item = Result<CcodeMessage, MessageError>> + Send + 'static {
-        jsonl::follow::<CcodeMessage>(self.path, self.changes).map_err(MessageError::from)
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn messages_from(
+        self,
+        offset: u64,
+    ) -> impl Stream<Item = Result<(u64, CcodeMessage), MessageError>> + Send + 'static {
+        jsonl::follow_from::<CcodeMessage>(self.path, offset, self.changes)
+            .map_err(MessageError::from)
     }
 
     fn read(&self) -> impl Stream<Item = Result<CcodeMessage, MessageError>> + Send + 'static {
@@ -568,22 +571,19 @@ mod tests {
         std::fs::create_dir_all(&sub).unwrap();
         // Trailing newline required: each session's messages() withholds an unterminated final
         // line until a later write completes it (a real session ends every record with a newline).
-        std::fs::write(
-            sub.join("33333333-3333-3333-3333-333333333333.jsonl"),
-            [
-                line("user", "user", serde_json::json!("hi")),
-                line("assistant", "assistant", serde_json::json!([{"type": "text", "text": "yo"}])),
-            ]
-            .join("\n")
-                + "\n",
-        )
-        .unwrap();
+        let body = [
+            line("user", "user", serde_json::json!("hi")),
+            line("assistant", "assistant", serde_json::json!([{"type": "text", "text": "yo"}])),
+        ]
+        .join("\n")
+            + "\n";
+        std::fs::write(sub.join("33333333-3333-3333-3333-333333333333.jsonl"), &body).unwrap();
 
         let listener =
             CcodeSessions::builder().root(dir.path().to_path_buf()).build().listener().unwrap();
         let events: Vec<SessionEvent<CcodeMessage>> = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            listener.events().take(2).try_collect(),
+            listener.events(|_, _| std::future::ready(0)).take(2).try_collect(),
         )
         .await
         .expect("events() did not produce within 10s")
@@ -593,6 +593,35 @@ mod tests {
         assert!(events.iter().all(|event| event.session == sid));
         let roles: Vec<Role> = events.iter().map(|event| event.message.role()).collect();
         assert_eq!(roles, vec![Role::User, Role::Assistant]);
+        // Each event carries the offset past its line; the last one is the file's length.
+        assert!(events[0].offset < events[1].offset);
+        assert_eq!(events[1].offset, u64::try_from(body.len()).unwrap());
+    }
+
+    /// The offset a caller resumes from is honoured: only lines past it are yielded.
+    #[rstest]
+    #[tokio::test]
+    async fn events_resume_each_session_from_the_given_offset() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = line("user", "user", serde_json::json!("hi")) + "\n";
+        let body = first.clone()
+            + &line("assistant", "assistant", serde_json::json!([{"type": "text", "text": "yo"}]))
+            + "\n";
+        std::fs::write(dir.path().join("66666666-6666-6666-6666-666666666666.jsonl"), &body)
+            .unwrap();
+
+        let listener =
+            CcodeSessions::builder().root(dir.path().to_path_buf()).build().listener().unwrap();
+        let start = u64::try_from(first.len()).unwrap();
+        let events: Vec<SessionEvent<CcodeMessage>> = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            listener.events(move |_, _| std::future::ready(start)).take(1).try_collect(),
+        )
+        .await
+        .expect("events() did not produce within 10s")
+        .unwrap();
+        assert_eq!(events[0].message.role(), Role::Assistant);
+        assert_eq!(events[0].offset, u64::try_from(body.len()).unwrap());
     }
 
     #[rstest]

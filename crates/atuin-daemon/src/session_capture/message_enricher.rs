@@ -1,6 +1,9 @@
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 
-use atuin_client::ai_session::{HarnessKind, HarnessSession, Message, NativeSessionId, SourceId};
+use atuin_client::ai_session::{
+    HarnessKind, HarnessSession, Message, NativeSessionId, Session, SourceId,
+};
 use atuin_common::harnesstools::session::{AnyMessage, Message as HarnessMessage, SessionId};
 use atuin_domain::record::RecordId;
 use time::OffsetDateTime;
@@ -27,6 +30,25 @@ impl MessageEnricher {
             harness: self.harness,
             session: NativeSessionId::from(session.to_string()),
         }
+    }
+
+    /// Whether no line of `session` has been observed this run.
+    pub fn is_new(&self, session: &SessionId) -> bool {
+        !self.state.sessions.contains_key(session.as_ref())
+    }
+
+    /// Warm a session's bookkeeping from what the sidecar holds, for a transcript resumed past
+    /// its start. A session already observed this run is left as it is.
+    pub fn seed(&mut self, session: &SessionId, row: Option<&Session>, last: Option<&Message>) {
+        let Entry::Vacant(slot) = self.state.sessions.entry(session.to_string()) else {
+            return;
+        };
+        slot.insert(SessionState {
+            title: row.and_then(|r| r.title.clone()),
+            last_ts: last.map(|m| m.timestamp),
+            parent: row.and_then(|r| r.parent.as_ref().map(|p| p.session.clone())),
+            last_turn: last.and_then(|m| m.turn_id.clone()),
+        });
     }
 
     /// Observe a line, build its row, and drop repeated usage in one step. `None` for a
@@ -140,10 +162,9 @@ impl MessageEnricher {
 
 /// What the capture pipeline carries from one line to the next, per native session id.
 ///
-/// Rebuilt by replay today: boot re-reads every transcript from byte zero, so the state is
-/// always warm before a new line arrives. Once boot resumes from a saved offset instead, a
-/// session mid-flight must be seeded from the sidecar (title, parent from its session row; last
-/// turn id from its last message) or titles and usage dedupe silently break after a restart.
+/// Warm for any session whose lines have all streamed past this run. A session resumed past its
+/// start (the engine's checkpoints) is seeded from the sidecar first, via
+/// [`MessageEnricher::seed`], or titles and usage dedupe would silently break after a restart.
 #[derive(Default)]
 struct Bookkeeping {
     sessions: HashMap<String, SessionState>,
@@ -409,6 +430,59 @@ mod tests {
         assert!(rows[0].usage.is_some());
         assert!(rows[1].usage.is_none());
         assert_eq!(rows[1].content.len(), 1);
+    }
+
+    /// Seeded state stands in for the lines a resumed session did not replay: the next row of
+    /// the same model call is a repeat, an id-less line takes the last stored timestamp, and
+    /// rows carry the stored title and parent.
+    #[rstest]
+    fn seeded_state_carries_over_a_restart() {
+        use atuin_common::harnesstools::session::Usage;
+
+        let mut n = MessageEnricher::new(HarnessKind::ClaudeCode);
+        let ts = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let parent = HarnessSession {
+            harness: HarnessKind::ClaudeCode,
+            session: NativeSessionId::from("p".to_owned()),
+        };
+        let row = Session::builder()
+            .handle(n.handle(&session()))
+            .parent(Some(parent.clone()))
+            .title(Some("Seeded".to_owned()))
+            .started_at(ts)
+            .updated_at(ts)
+            .usage(Usage::default())
+            .build();
+        let last = Message::builder()
+            .id(RecordId(atuin_common::utils::uuid_v7()))
+            .session(n.handle(&session()))
+            .source_id(SourceId::from("u0".to_owned()))
+            .timestamp(ts)
+            .role(Role::Assistant)
+            .content(vec![])
+            .turn_id(Some("msg_01".to_owned()))
+            .build();
+        n.seed(&session(), Some(&row), Some(&last));
+
+        let untimed = ccode(&serde_json::json!({"type": "ai-title", "aiTitle": "Renamed"}));
+        let msg = n.capture(&session(), &untimed).unwrap();
+        assert_eq!(msg.timestamp, ts);
+
+        let next = ccode(&serde_json::json!({
+            "type": "assistant", "uuid": "u1", "sessionId": "s1",
+            "message": {"role": "assistant", "id": "msg_01",
+                "content": [{"type": "text", "text": "more"}],
+                "usage": {"input_tokens": 1, "output_tokens": 2}},
+        }));
+        let msg = n.capture(&session(), &next).unwrap();
+        assert!(msg.usage.is_none(), "same model call as the last stored row");
+        assert_eq!(msg.session_title.as_deref(), Some("Renamed"));
+        assert_eq!(msg.parent, Some(parent));
+
+        // Seeding never clobbers a session already observed this run.
+        n.seed(&session(), None, None);
+        let again = n.capture(&session(), &untimed).unwrap();
+        assert_eq!(again.session_title.as_deref(), Some("Renamed"));
     }
 
     /// Codex has no turn id: a bookkeeping line must not make the accounting line that follows

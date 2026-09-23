@@ -1,11 +1,12 @@
 pub mod error;
 pub mod model;
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use enum_dispatch::enum_dispatch;
 pub use error::{CaptureError, MessageError, RuntimeError, WatchError};
-use futures::{Stream, StreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 pub use model::{
     Content, MessageId, Role, SessionEvent, SessionId, StopReason, ToolCallId, ToolResult, ToolUse,
     Usage,
@@ -100,7 +101,24 @@ pub trait Session: Send + 'static {
     type Message: Message;
 
     fn id(&self) -> SessionId;
-    fn messages(self) -> impl Stream<Item = Result<Self::Message, MessageError>> + Send + 'static;
+
+    /// The transcript file this session is read from.
+    fn path(&self) -> &Path;
+
+    /// Follow the transcript from byte `offset`, a boundary an earlier stream reported (past the
+    /// end restarts from zero), yielding with each message the offset just past its line.
+    fn messages_from(
+        self,
+        offset: u64,
+    ) -> impl Stream<Item = Result<(u64, Self::Message), MessageError>> + Send + 'static;
+
+    fn messages(self) -> impl Stream<Item = Result<Self::Message, MessageError>> + Send + 'static
+    where
+        Self: Sized,
+    {
+        self.messages_from(0).map_ok(|(_, message)| message)
+    }
+
     fn read(&self) -> impl Stream<Item = Result<Self::Message, MessageError>> + Send + 'static;
 }
 
@@ -109,17 +127,30 @@ pub trait Listener {
 
     fn watch(self) -> impl Stream<Item = Result<Self::Session, WatchError>> + Send + 'static;
 
-    fn events(
+    /// Every line of every session the watcher reports, tagged with its session and the byte
+    /// offset past it. `resume_from` is awaited once per session, with its id and transcript
+    /// path, before the transcript is opened, and gives the offset to start at; 0 reads the
+    /// whole file.
+    fn events<F>(
         self,
+        resume_from: impl Fn(&SessionId, &Path) -> F + Send + 'static,
     ) -> impl Stream<Item = Result<SessionEvent<<Self::Session as Session>::Message>, CaptureError>>
     + Send
     + 'static
     where
         Self: Sized,
+        F: Future<Output = u64> + Send + 'static,
     {
         let sessions = self.watch();
         async_stream::stream! {
             let mut active = futures::stream::SelectAll::new();
+            // One live stream per transcript. A session the watcher reports again (the file
+            // removed and recreated, or renamed back) replaces the old stream: its buffered
+            // lines would otherwise interleave with the new one and could move the checkpoint
+            // backwards. ponytail: handles are kept for every session ever seen; prune on end
+            // if the map ever matters.
+            let mut handles: std::collections::HashMap<SessionId, futures::stream::AbortHandle> =
+                std::collections::HashMap::new();
             futures::pin_mut!(sessions);
             let mut sessions_done = false;
             loop {
@@ -131,9 +162,15 @@ pub trait Listener {
                     appeared = sessions.next(), if !sessions_done => match appeared {
                         Some(Ok(session)) => {
                             let id = session.id();
-                            let tagged =
-                                session.messages().map(move |message| (id.clone(), message)).boxed();
-                            active.push(tagged);
+                            let start = resume_from(&id, session.path()).await;
+                            let tag = id.clone();
+                            let (tagged, handle) = futures::stream::abortable(
+                                session.messages_from(start).map(move |item| (tag.clone(), item)),
+                            );
+                            if let Some(old) = handles.insert(id, handle) {
+                                old.abort();
+                            }
+                            active.push(tagged.boxed());
                         }
                         Some(Err(err)) => yield Err(CaptureError::from(err)),
                         None => sessions_done = true,
@@ -141,7 +178,9 @@ pub trait Listener {
                     tagged = active.next(), if !active.is_empty() => {
                         if let Some((session, result)) = tagged {
                             match result {
-                                Ok(message) => yield Ok(SessionEvent { session, message }),
+                                Ok((offset, message)) => {
+                                    yield Ok(SessionEvent { session, offset, message });
+                                }
                                 Err(source) => yield Err(CaptureError::Message { session, source }),
                             }
                         }
@@ -211,6 +250,88 @@ mod tests {
         assert_eq!(m.role(), Role::Assistant);
         assert_eq!(m.content(), vec![Content::Text("hello".into())]);
         assert_eq!(m.id(), Some(MessageId::from("m1".to_owned())));
+    }
+
+    /// A transcript that yields the given offsets, then either ends or hangs like a live file
+    /// waiting for more.
+    struct StubSession {
+        id: &'static str,
+        offsets: Vec<u64>,
+        hang: bool,
+    }
+
+    impl Session for StubSession {
+        type Message = StubMsg;
+
+        fn id(&self) -> SessionId {
+            SessionId::from(self.id.to_owned())
+        }
+
+        fn path(&self) -> &Path {
+            Path::new("/stub")
+        }
+
+        fn messages_from(
+            self,
+            _offset: u64,
+        ) -> impl Stream<Item = Result<(u64, StubMsg), MessageError>> + Send + 'static {
+            let items = futures::stream::iter(self.offsets.into_iter().map(|o| Ok((o, StubMsg))));
+            if self.hang {
+                items.chain(futures::stream::pending()).left_stream()
+            } else {
+                items.right_stream()
+            }
+        }
+
+        fn read(&self) -> impl Stream<Item = Result<StubMsg, MessageError>> + Send + 'static {
+            futures::stream::empty()
+        }
+    }
+
+    /// Reports `first` at once and `second` shortly after, as a watcher does for a transcript
+    /// that is removed and recreated.
+    struct StubListener {
+        first: StubSession,
+        second: StubSession,
+    }
+
+    impl Listener for StubListener {
+        type Session = StubSession;
+
+        fn watch(self) -> impl Stream<Item = Result<StubSession, WatchError>> + Send + 'static {
+            let second = self.second;
+            futures::stream::iter([Ok(self.first)]).chain(futures::stream::once(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                Ok(second)
+            }))
+        }
+    }
+
+    /// A session reported twice keeps only its newest stream: the first stream hangs like a
+    /// live transcript, and without replacement `events()` would never end.
+    #[rstest]
+    #[tokio::test]
+    async fn a_reported_again_session_replaces_its_earlier_stream() {
+        let listener = StubListener {
+            first: StubSession {
+                id: "s",
+                offsets: vec![1],
+                hang: true,
+            },
+            second: StubSession {
+                id: "s",
+                offsets: vec![2],
+                hang: false,
+            },
+        };
+        let events = listener.events(|_, _| async { 0 });
+        let offsets: Vec<u64> = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            events.map(|ev| ev.unwrap().offset).collect(),
+        )
+        .await
+        .expect("the replaced stream must not keep events() alive");
+        assert_eq!(offsets, vec![1, 2]);
     }
 }
 

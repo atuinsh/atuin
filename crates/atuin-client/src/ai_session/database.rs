@@ -353,6 +353,53 @@ impl AiSessionDatabase {
         Ok(found.is_some())
     }
 
+    /// How far into a session's transcript capture has read: the byte offset to resume from.
+    pub async fn checkpoint(&self, session: &HarnessSession) -> Result<Option<u64>, DbError> {
+        let offset: Option<i64> = db::query_scalar(
+            "SELECT \"offset\" FROM checkpoints WHERE harness = ? AND session_id = ?",
+        )
+        .bind(session.harness as i64)
+        .bind(session.session.as_ref())
+        .fetch_optional(self.db.pool())
+        .await?;
+
+        Ok(offset.map(|offset| u64::try_from(offset).unwrap_or(0)))
+    }
+
+    pub async fn set_checkpoint(
+        &self,
+        session: &HarnessSession,
+        offset: u64,
+    ) -> Result<(), DbError> {
+        db::query(
+            "INSERT OR REPLACE INTO checkpoints (harness, session_id, \"offset\") VALUES (?, ?, ?)",
+        )
+        .bind(session.harness as i64)
+        .bind(session.session.as_ref())
+        .bind(i64::try_from(offset).unwrap_or(i64::MAX))
+        .execute(self.db.pool())
+        .await?;
+
+        Ok(())
+    }
+
+    /// The newest stored message of a session, by timestamp then record id.
+    pub async fn last_message(&self, session: &HarnessSession) -> Result<Option<Message>, DbError> {
+        let row: Option<MessageRow> = db::query_as(
+            "SELECT id, harness, session_id, source_id, parent_harness, parent_session_id, \
+             parent_source_id, thread, timestamp, role, content, content_z, cwd, git_branch, \
+             model, usage_input, usage_output, usage_cache_read, usage_cache_write, stop_reason, \
+             usage_present, turn_id FROM messages WHERE harness = ? AND session_id = ? ORDER BY \
+             timestamp DESC, id DESC LIMIT 1",
+        )
+        .bind(session.harness as i64)
+        .bind(session.session.as_ref())
+        .fetch_optional(self.db.pool())
+        .await?;
+
+        row.map(Self::message_from_row).transpose()
+    }
+
     pub async fn get_session(&self, session: &HarnessSession) -> Result<Option<Session>, DbError> {
         let row: Option<SessionRow> = db::query_as(
             "SELECT harness, session_id, parent_harness, parent_session_id, cwd, git_branch, \
@@ -981,6 +1028,30 @@ mod tests {
         assert_eq!(s.message_count, 1);
         let got: Vec<_> = db.messages(&m.session).try_collect().await.unwrap();
         assert_eq!(got[0].turn_id.as_deref(), Some("msg_01"));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn checkpoint_round_trips_and_the_latest_write_wins() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        assert_eq!(db.checkpoint(&session).await.unwrap(), None);
+        db.set_checkpoint(&session, 42).await.unwrap();
+        db.set_checkpoint(&session, 4096).await.unwrap();
+        assert_eq!(db.checkpoint(&session).await.unwrap(), Some(4096));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn last_message_is_the_newest_by_timestamp() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        assert!(db.last_message(&session).await.unwrap().is_none());
+        for index in [2, 0, 1] {
+            db.append(&message_in(&session, index, "x")).await.unwrap();
+        }
+        let last = db.last_message(&session).await.unwrap().unwrap();
+        assert_eq!(last.source_id, SourceId::from("source-2".to_owned()));
     }
 
     fn message_in(session: &HarnessSession, index: i64, text: &str) -> Message {

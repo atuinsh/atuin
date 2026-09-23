@@ -79,6 +79,9 @@ pub enum StopReason {
 #[derive(Clone, Debug)]
 pub struct SessionEvent<M> {
     pub session: SessionId,
+    /// Byte offset just past this line in its transcript: checkpoint it, and resume from it
+    /// with `Session::messages_from`.
+    pub offset: u64,
     pub message: M,
 }
 
@@ -87,6 +90,7 @@ impl<M> SessionEvent<M> {
     pub fn map_message<N>(self, f: impl FnOnce(M) -> N) -> SessionEvent<N> {
         SessionEvent {
             session: self.session,
+            offset: self.offset,
             message: f(self.message),
         }
     }

@@ -45,6 +45,17 @@ pub struct LineCursor {
 }
 
 impl LineCursor {
+    /// A cursor resuming at `offset`: a value an earlier cursor over the same file reported from
+    /// [`offset`](Self::offset), so it sits just past a complete line. The file's identity is not
+    /// known until the first read, so only a file shorter than `offset` restarts from the start.
+    #[must_use]
+    pub fn at(offset: u64) -> Self {
+        Self {
+            offset,
+            ..Self::default()
+        }
+    }
+
     /// Byte offset of the first byte not yet returned as part of a complete line.
     #[must_use]
     pub fn offset(&self) -> u64 {
@@ -97,6 +108,47 @@ pub async fn read_new_lines(path: &Path, cursor: &mut LineCursor) -> io::Result<
     lines
 }
 
+/// The complete line that ends exactly at byte `offset` of the file at `path`, without its
+/// newline, or `None` when no line does: `offset` is zero, past the end, or the byte before it
+/// is not a newline. Lets a caller check that an offset it saved still sits after the line it
+/// remembers, which a file rewritten in place to the same or a greater length would not.
+///
+/// # Errors
+///
+/// Any I/O failure of the open, stat, seek or read.
+pub async fn line_ending_at(path: &Path, offset: u64) -> io::Result<Option<Bytes>> {
+    let permit = IN_FLIGHT.acquire().await.expect("semaphore is never closed");
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let mut file = std::fs::File::open(path)?;
+        if offset == 0 || file.metadata()?.len() < offset {
+            return Ok(None);
+        }
+        // Read backwards in growing windows until the previous newline (or the file start).
+        let mut window = READ_CHUNK;
+        loop {
+            let start = offset.saturating_sub(window);
+            file.seek(SeekFrom::Start(start))?;
+            let mut buf = vec![0; usize::try_from(offset - start).expect("window fits usize")];
+            file.read_exact(&mut buf)?;
+            if buf.last() != Some(&b'\n') {
+                return Ok(None);
+            }
+            let body = &buf[..buf.len() - 1];
+            if let Some(newline) = memchr::memrchr(b'\n', body) {
+                return Ok(Some(Bytes::copy_from_slice(&body[newline + 1..])));
+            }
+            if start == 0 {
+                return Ok(Some(Bytes::copy_from_slice(body)));
+            }
+            window *= 2;
+        }
+    })
+    .await
+    .map_err(io::Error::other)?
+}
+
 fn read_blocking(path: &Path, cursor: &mut LineCursor) -> io::Result<Vec<Bytes>> {
     let mut file = std::fs::File::open(path)?;
     let meta = file.metadata()?;
@@ -106,7 +158,7 @@ fn read_blocking(path: &Path, cursor: &mut LineCursor) -> io::Result<Vec<Bytes>>
     let identity = Some(file.identity()?);
     #[cfg(not(any(unix, windows)))]
     let identity = None;
-    if identity != cursor.identity || meta.len() < cursor.offset {
+    if cursor.identity.is_some_and(|known| Some(known) != identity) || meta.len() < cursor.offset {
         cursor.offset = 0;
         cursor.line = 0;
     }
