@@ -73,7 +73,7 @@ impl Sink {
         // Dedup gate: if this logical message is already projected it is already in the record
         // store too, so there is nothing to do. Stable source ids (see MessageEnricher::source_id)
         // make this reliable across re-captures and keep the record store free of duplicates.
-        if self.sidecar.contains_message(&msg.session, &msg.source_id).await? {
+        if self.sidecar.contains_message(&msg.session, &msg.source_id, msg.revision).await? {
             return Ok(Appended::Duplicate);
         }
 

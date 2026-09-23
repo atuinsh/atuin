@@ -166,6 +166,33 @@ impl OpencodeSessions {
 impl Sessions for OpencodeSessions {
     type Listener = OpencodeListener;
 
+    fn existing(
+        &self,
+    ) -> Result<
+        impl Stream<Item = Result<OpencodeSession, RuntimeError>> + Send + 'static,
+        RuntimeError,
+    > {
+        let db = self.resolve_db()?;
+        if !db.is_file() {
+            return Err(RuntimeError::NotFound(db));
+        }
+        Ok(async_stream::stream! {
+            let reads = Arc::new(Reads::new(db.clone()));
+            match reads.aggregates().await {
+                Some(aggregates) => {
+                    for aggregate in aggregates {
+                        yield Ok(OpencodeSession::detached(aggregate, Arc::clone(&reads)));
+                    }
+                }
+                // one scan, one answer: a log that cannot be read is not an empty one
+                None => yield Err(RuntimeError::Io(io::Error::other(format!(
+                    "{}: cannot read opencode's event log",
+                    db.display()
+                )))),
+            }
+        })
+    }
+
     fn listener(&self) -> Result<OpencodeListener, RuntimeError> {
         let db = self.resolve_db()?;
         if !db.is_file() {
@@ -276,6 +303,9 @@ struct Live {
     /// Where the session has read up to. It lives here rather than in the handle so that a
     /// consumer which drops a session and takes it up again resumes where it stopped.
     reader: Arc<Mutex<Reader>>,
+    /// Handed to the sessions this one is offered as, so that [`Session::read`] can page the
+    /// aggregate from the start without disturbing the tail's own place in it.
+    reads: Arc<Reads>,
 }
 
 impl Live {
@@ -287,13 +317,20 @@ impl Live {
         };
         Self {
             wake: watch::Sender::new(event.seq),
-            reader: Arc::new(Mutex::new(Reader::new(event.aggregate.clone(), reads, anchor))),
+            reader: Arc::new(Mutex::new(Reader::new(
+                event.aggregate.clone(),
+                Arc::clone(&reads),
+                anchor,
+            ))),
+            reads,
         }
     }
 
     fn offer(&self, id: &Aggregate) -> OpencodeSession {
         OpencodeSession {
             id: id.to_string(),
+            aggregate: id.clone(),
+            reads: Arc::clone(&self.reads),
             wake: self.wake.subscribe(),
             reader: Arc::clone(&self.reader),
         }
@@ -372,6 +409,19 @@ struct Reader {
 }
 
 impl Reader {
+    /// A reader of the whole aggregate, from its first row.
+    fn from_start(aggregate: Aggregate, reads: Arc<Reads>) -> Self {
+        Self {
+            aggregate,
+            reads,
+            anchor: None,
+            base: 0,
+            roles: Roles::default(),
+            ready: true,
+            failed: false,
+        }
+    }
+
     fn new(aggregate: Aggregate, reads: Arc<Reads>, anchor: Anchor) -> Self {
         Self {
             aggregate,
@@ -747,6 +797,21 @@ impl Reads {
         .await
     }
 
+    /// Every aggregate the event log holds a row this module reads for, in the order the rows
+    /// were written. The kinds mirror [`EventRow::classify`]: an aggregate whose every row is
+    /// one this module ignores is no session to a consumer.
+    async fn aggregates(self: &Arc<Self>) -> Option<Vec<Aggregate>> {
+        const SQL: &str = "SELECT aggregate_id, min(rowid) AS first FROM event WHERE type LIKE \
+                           'message.updated.%' OR type LIKE 'message.part.updated.%' OR type LIKE \
+                           'session.next.%' GROUP BY aggregate_id ORDER BY first ASC";
+        let rows: Vec<AggregateRow> = self
+            .read("aggregate scan", |conn| {
+                Box::pin(async move { query_as::<Sqlite, AggregateRow>(SQL).fetch_all(conn).await })
+            })
+            .await?;
+        Some(rows.into_iter().filter_map(|row| row.aggregate).collect())
+    }
+
     /// The role opencode's `message` projection records for `message_id` (its `data` is the
     /// message info minus `id` and `sessionID`), for parts whose `message.updated.1` row predates
     /// the session's start.
@@ -772,10 +837,28 @@ impl Reads {
 
 pub struct OpencodeSession {
     id: String,
+    aggregate: Aggregate,
+    reads: Arc<Reads>,
     /// The tail's wake for this session; dropping it tells the tail that no consumer holds the
     /// session any more.
     wake: watch::Receiver<i64>,
     reader: Arc<Mutex<Reader>>,
+}
+
+impl OpencodeSession {
+    /// A session of the event log as it stands, with no tail behind it: its wake is closed, so
+    /// [`messages`](Session::messages) reads the aggregate out and ends.
+    fn detached(aggregate: Aggregate, reads: Arc<Reads>) -> Self {
+        let (closed, wake) = watch::channel(0);
+        drop(closed);
+        Self {
+            id: aggregate.to_string(),
+            reader: Arc::new(Mutex::new(Reader::from_start(aggregate.clone(), Arc::clone(&reads)))),
+            aggregate,
+            reads,
+            wake,
+        }
+    }
 }
 
 impl std::fmt::Debug for OpencodeSession {
@@ -789,6 +872,19 @@ impl Session for OpencodeSession {
 
     fn id(&self) -> SessionId {
         SessionId::from(self.id.clone())
+    }
+
+    /// The aggregate's rows as they stand, from the start, ending when it runs out of them.
+    /// Independent of [`messages`](Self::messages): it reads a place in the log of its own, so a
+    /// session being tailed is undisturbed by it.
+    fn read(&self) -> impl Stream<Item = Result<OpencodeMessage, MessageError>> + Send + 'static {
+        let mut reader = Reader::from_start(self.aggregate.clone(), Arc::clone(&self.reads));
+        async_stream::stream! {
+            let mut drain = reader.drain();
+            while let Some(message) = drain.next().await {
+                yield message;
+            }
+        }
     }
 
     fn messages(
@@ -834,6 +930,19 @@ impl Session for OpencodeSession {
                 last = woken.is_err();
             }
         }
+    }
+}
+
+/// One row of the aggregate scan: the ids the event log holds rows for.
+struct AggregateRow {
+    aggregate: Option<Aggregate>,
+}
+
+impl<'r> sqlx::FromRow<'r, SqliteRow> for AggregateRow {
+    fn from_row(row: &'r SqliteRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            aggregate: aggregate(row, "aggregate_id")?,
+        })
     }
 }
 
@@ -1163,9 +1272,7 @@ mod tests {
     use crate::db::sqlite::Sqlite;
     use crate::db::{query, query_as};
     use crate::harnesstools::session::model::{Content, Role};
-    use crate::harnesstools::session::{
-        AnyMessage, CaptureError, Message, SessionEvent, SessionEventKind, Sessions,
-    };
+    use crate::harnesstools::session::{AnyMessage, CaptureError, Message, SessionEvent, Sessions};
 
     fn part_message(part: Value) -> OpencodeMessage {
         OpencodeMessage {
@@ -1450,18 +1557,11 @@ mod tests {
             .unwrap_or_else(|_| panic!("the stream did not deliver {n} items within 10s"))
     }
 
-    /// One line per event, the way a consumer would log it: `started <session>`,
-    /// `<session> <role> <text>` or `<session> <error kind>`.
+    /// One line per event, the way a consumer would log it: `<session> <role> <text>` or
+    /// `<session> <error kind>`.
     fn describe(event: &Result<SessionEvent<OpencodeMessage>, CaptureError>) -> String {
         match event {
-            Ok(SessionEvent {
-                session,
-                kind: SessionEventKind::Started,
-            }) => format!("started {session}"),
-            Ok(SessionEvent {
-                session,
-                kind: SessionEventKind::Message(message),
-            }) => {
+            Ok(SessionEvent { session, message }) => {
                 let content = message
                     .content()
                     .into_iter()
@@ -1488,14 +1588,7 @@ mod tests {
 
     /// The messages among the next `n` events of a capture.
     async fn captured(stream: &mut Events, n: usize) -> Vec<OpencodeMessage> {
-        next_n(stream, n)
-            .await
-            .into_iter()
-            .filter_map(|event| match event.unwrap().kind {
-                SessionEventKind::Message(message) => Some(message),
-                SessionEventKind::Started => None,
-            })
-            .collect()
+        next_n(stream, n).await.into_iter().map(|event| event.unwrap().message).collect()
     }
 
     /// `Replay::FromNow` anchors where the table ends when the stream is *first polled*, so a row
@@ -1597,14 +1690,9 @@ mod tests {
         text_row(&db, "e3", "ses_1", "p1", "msg_1", "hello").await;
         text_row(&db, "e4", "ses_2", "p2", "msg_2", "world").await;
 
-        let mut got = described(&mut events(&path, Replay::All), 4).await;
+        let mut got = described(&mut events(&path, Replay::All), 2).await;
         got.sort();
-        assert_eq!(got, [
-            "ses_1 Assistant hello",
-            "ses_2 User world",
-            "started ses_1",
-            "started ses_2"
-        ]);
+        assert_eq!(got, ["ses_1 Assistant hello", "ses_2 User world"]);
     }
 
     #[rstest]
@@ -1627,10 +1715,8 @@ mod tests {
             .await;
         }
 
-        let got = described(&mut events(&path, Replay::All), parts + 1).await;
-        let expected: Vec<String> = std::iter::once("started ses_1".to_owned())
-            .chain((0..parts).map(|i| format!("ses_1 Assistant {i}")))
-            .collect();
+        let got = described(&mut events(&path, Replay::All), parts).await;
+        let expected: Vec<String> = (0..parts).map(|i| format!("ses_1 Assistant {i}")).collect();
         assert_eq!(got, expected);
     }
 
@@ -1643,11 +1729,12 @@ mod tests {
         role_row(&db, "e1", "ses_pre", "m1", "user").await;
 
         let mut stream = events(&path, Replay::FromNow);
-        let first = first_while_appending(&mut stream, &db, "ses_new", "message.updated.1", |i| {
-            role_event(&format!("m{i}"), "user")
-        })
-        .await;
-        assert_eq!(describe(&first), "started ses_new");
+        let first =
+            first_while_appending(&mut stream, &db, "ses_new", "message.part.updated.1", |i| {
+                text_event(&format!("prt_{i}"), "m2", "after")
+            })
+            .await;
+        assert_eq!(first.unwrap().session, SessionId::from("ses_new".to_owned()));
     }
 
     #[rstest]
@@ -1657,8 +1744,9 @@ mod tests {
         let path = dir.path().join("opencode.db");
         let db = event_db(&path).await;
         role_row(&db, "e1", "ses_pre", "m1", "user").await;
+        text_row(&db, "e2", "ses_pre", "prt_1", "m1", "before").await;
 
-        assert_eq!(described(&mut events(&path, Replay::All), 1).await, ["started ses_pre"]);
+        assert_eq!(described(&mut events(&path, Replay::All), 1).await, ["ses_pre User before"]);
     }
 
     #[rstest]
@@ -1675,15 +1763,9 @@ mod tests {
         text_row(&db, &post_wrap(5), "ses_X", "prt_x1", "msg_x1", "gone").await;
 
         let mut stream = events(&path, Replay::All);
-        let mut before = described(&mut stream, 5).await;
+        let mut before = described(&mut stream, 3).await;
         before.sort();
-        assert_eq!(before, [
-            "ses_X User gone",
-            "ses_Y User one",
-            "ses_Y User two",
-            "started ses_X",
-            "started ses_Y"
-        ]);
+        assert_eq!(before, ["ses_X User gone", "ses_Y User one", "ses_Y User two"]);
 
         // deleting the newest session frees the highest rowids, which ses_Y's next rows take
         execute(&db, "DELETE FROM event WHERE aggregate_id = 'ses_X'").await;
@@ -1712,15 +1794,9 @@ mod tests {
         text_row(&db, &post_wrap(9), "ses_Z", "prt_z", "msg_z", "gone").await;
 
         let mut stream = events(&path, Replay::All);
-        let mut before = described(&mut stream, 5).await;
+        let mut before = described(&mut stream, 3).await;
         before.sort();
-        assert_eq!(before, [
-            "ses_X User one",
-            "ses_X User two",
-            "ses_Z User gone",
-            "started ses_X",
-            "started ses_Z"
-        ]);
+        assert_eq!(before, ["ses_X User one", "ses_X User two", "ses_Z User gone"]);
 
         // deleting the newest session takes the tail's anchor row with it: the tail rewinds and
         // ses_X's rows come by again, but a session reads by its own watermark and nothing it
@@ -1742,7 +1818,7 @@ mod tests {
         text_row(&db, &pre_wrap(2), "ses_A", "prt_a1", "msg_a1", "one").await;
 
         let mut stream = events(&path, Replay::All);
-        assert_eq!(described(&mut stream, 2).await, ["started ses_A", "ses_A User one"]);
+        assert_eq!(described(&mut stream, 1).await, ["ses_A User one"]);
 
         // opencode's reset migrations: rowids and the aggregate's seq both start over, and the
         // session resumed afterwards writes ids that sort below its old ones
@@ -1768,7 +1844,7 @@ mod tests {
         text_row(&db, "e2", "ses_A", "prt_a", "msg_a", "before").await;
 
         let mut stream = events(&path, Replay::All);
-        assert_eq!(described(&mut stream, 2).await, ["started ses_A", "ses_A User before"]);
+        assert_eq!(described(&mut stream, 1).await, ["ses_A User before"]);
 
         // one connection for the whole migration, as opencode's own runs: a pooled connection
         // that has not read the schema since the `DROP` resolves `CREATE` against the table it
@@ -1786,14 +1862,14 @@ mod tests {
         text_row(&db, "e4", "ses_B", "prt_b", "msg_b", "after").await;
 
         let mut captured = Vec::new();
-        while captured.len() < 2 {
+        while captured.is_empty() {
             let line = described(&mut stream, 1).await.pop().expect("the capture ended");
             // the polls that still met no table report it too, and the tail reconnects after each
             if !line.starts_with("watch error") {
                 captured.push(line);
             }
         }
-        assert_eq!(captured, ["started ses_B", "ses_B Assistant after"]);
+        assert_eq!(captured, ["ses_B Assistant after"]);
     }
 
     // Windows refuses to unlink or replace a file SQLite holds open (it opens without
@@ -1809,7 +1885,7 @@ mod tests {
         text_row(&old, "o2", "ses_old", "prt_o", "msg_o", "before").await;
 
         let mut stream = events(&path, Replay::All);
-        assert_eq!(described(&mut stream, 2).await, ["started ses_old", "ses_old User before"]);
+        assert_eq!(described(&mut stream, 1).await, ["ses_old User before"]);
 
         // `rm opencode.db*` and a fresh opencode: a new file at the same path, rowids from 1
         old.pool().close().await;
@@ -1832,7 +1908,7 @@ mod tests {
         db.pool().close().await;
         std::fs::rename(&fresh, &path).unwrap();
 
-        assert_eq!(described(&mut stream, 2).await, ["started ses_new", "ses_new User after"]);
+        assert_eq!(described(&mut stream, 1).await, ["ses_new User after"]);
     }
 
     #[cfg(unix)]
@@ -1848,8 +1924,7 @@ mod tests {
         }
 
         let mut stream = events(&path, Replay::All);
-        assert_eq!(described(&mut stream, 4).await, [
-            "started ses_A",
+        assert_eq!(described(&mut stream, 3).await, [
             "ses_A User one",
             "ses_A User two",
             "ses_A User three"
@@ -1903,10 +1978,8 @@ mod tests {
         role_row(&db, "e3", "ses_1", "msg_1", "user").await;
         text_row(&db, "e4", "ses_1", "prt_1", "msg_1", "hi").await;
 
-        assert_eq!(described(&mut events(&path, Replay::All), 2).await, [
-            "started ses_1",
-            "ses_1 User hi"
-        ]);
+        let mut stream = watch(&path);
+        assert_eq!(offered(&mut stream).await.id(), SessionId::from("ses_1".to_owned()));
     }
 
     type Offers = BoxStream<'static, Result<OpencodeSession, WatchError>>;
@@ -2287,7 +2360,7 @@ mod tests {
             tool_row(&db, id, "ses_1", "prt_2", "msg_1", state).await;
         }
 
-        let messages = captured(&mut events(&path, Replay::All), 7).await;
+        let messages = captured(&mut events(&path, Replay::All), 6).await;
 
         // every re-emission comes under the part's own id, at an ascending revision
         let revisions = |part: &str| -> Vec<Option<i64>> {
@@ -2338,7 +2411,7 @@ mod tests {
         }
 
         let mut stream = events(&path, Replay::All);
-        let drafts = captured(&mut stream, 5).await;
+        let drafts = captured(&mut stream, 4).await;
 
         execute(&db, "DELETE FROM event").await;
         if role_row_again {
@@ -2389,8 +2462,7 @@ mod tests {
                 text_event(&format!("prt_{i}"), "msg_1", "hi")
             })
             .await;
-        assert_eq!(describe(&first), "started ses_1");
-        assert_eq!(described(&mut stream, 1).await, [format!("ses_1 {role:?} hi")]);
+        assert_eq!(describe(&first), format!("ses_1 {role:?} hi"));
     }
 
     /// A session's roles do not pile up with the messages it reads: it keeps the newest few, and
@@ -2481,8 +2553,7 @@ mod tests {
         .unwrap();
         text_row(&db, "e5", "ses_1", "prt_1", "msg_1", "ok").await;
 
-        assert_eq!(described(&mut events(&path, Replay::All), 6).await, [
-            "started ses_1",
+        assert_eq!(described(&mut events(&path, Replay::All), 5).await, [
             "ses_1 json error",
             "ses_1 json error",
             "ses_1 json error",
@@ -2525,14 +2596,12 @@ mod tests {
         }
         text_row(&db, "e2", "ses_ok", "prt_ok", "msg_1", "fine").await;
 
-        let mut got = described(&mut events(&path, Replay::All), 5).await;
+        let mut got = described(&mut events(&path, Replay::All), 3).await;
         got.sort();
         let lossy = String::from_utf8_lossy(NOT_UTF8);
         let mut expected = vec![
-            format!("started {lossy}"),
             format!("{lossy} Assistant one"),
             format!("{lossy} Assistant two"),
-            "started ses_ok".to_owned(),
             "ses_ok User fine".to_owned(),
         ];
         expected.sort();
@@ -2550,18 +2619,18 @@ mod tests {
         seed_sessions(&db, SESSIONS, PARTS).await;
 
         let mut stream = events(&path, Replay::All);
-        let (mut started, mut delivered) = (0, 0);
-        while started < SESSIONS || delivered < SESSIONS * PARTS {
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut delivered = 0;
+        while delivered < SESSIONS * PARTS {
             let event = tokio::time::timeout(Duration::from_secs(30), stream.next())
                 .await
                 .expect("the backfill stalled")
                 .expect("the stream ended")
                 .unwrap();
-            match event.kind {
-                SessionEventKind::Started => started += 1,
-                SessionEventKind::Message(_) => delivered += 1,
-            }
+            seen.insert(event.session.to_string());
+            delivered += 1;
         }
+        assert_eq!(seen.len(), SESSIONS);
     }
 
     async fn load_fixture(db: &Sqlite, jsonl: &str) {
@@ -2586,22 +2655,16 @@ mod tests {
         let db = event_db(&path).await;
         load_fixture(&db, include_str!("../../../tests/fixtures/opencode/session1.jsonl")).await;
 
-        let mut started: HashSet<String> = HashSet::new();
         let mut by_session: HashMap<String, Vec<OpencodeMessage>> = HashMap::new();
-        for event in next_n(&mut events(&path, Replay::All), 11).await {
+        for event in next_n(&mut events(&path, Replay::All), 9).await {
             let event = event.unwrap();
-            let sid = event.session.to_string();
-            match event.kind {
-                SessionEventKind::Started => {
-                    started.insert(sid);
-                }
-                SessionEventKind::Message(message) => {
-                    by_session.entry(sid).or_default().push(message);
-                }
-            }
+            by_session.entry(event.session.to_string()).or_default().push(event.message);
         }
 
-        assert_eq!(started, HashSet::from(["ses_A".to_owned(), "ses_B".to_owned()]));
+        assert_eq!(
+            by_session.keys().cloned().collect::<HashSet<_>>(),
+            HashSet::from(["ses_A".to_owned(), "ses_B".to_owned()])
+        );
 
         let a = &by_session["ses_A"];
         assert!(a.iter().all(|m| m.timestamp().is_some()), "a part is missing its timestamp");

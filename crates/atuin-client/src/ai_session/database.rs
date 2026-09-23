@@ -26,7 +26,22 @@ pub struct AiSessionDatabase {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Appended {
     New,
+    /// A later revision of a message already stored: its row was rewritten in place.
+    Superseded,
     Duplicate,
+}
+
+/// Whether a message of `revision` replaces the one stored under its source id at `stored`.
+///
+/// Only a revision supersedes: `None` is a harness that writes each message once, so a second
+/// write of one source id is the same message seen again. A stored row carrying no revision is
+/// one a build before revisions wrote, and a revision of it is the content it was missing.
+const fn supersedes(revision: Option<i64>, stored: Option<i64>) -> bool {
+    match (revision, stored) {
+        (Some(revision), Some(stored)) => revision > stored,
+        (Some(_), None) => true,
+        (None, _) => false,
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -163,14 +178,55 @@ impl AiSessionDatabase {
             Self::fold_usage(msg.usage.as_ref());
         let cwd = msg.cwd.as_ref().map(|p| p.to_string_lossy().into_owned());
 
+        // What is stored under this source id already, if anything: a message is written once
+        // and then, for a harness that re-emits one, rewritten by each higher revision of it.
+        // Read in the same `BEGIN IMMEDIATE` transaction as the write it decides.
+        type Stored = (i64, Option<i64>, i64, i64, i64, i64);
+        let stored: Option<Stored> = db::query_as(
+            "SELECT rowid, revision, usage_input, usage_output, usage_cache_read, \
+             usage_cache_write FROM messages WHERE harness = ? AND session_id = ? AND source_id = \
+             ?",
+        )
+        .bind(harness)
+        .bind(session_id)
+        .bind(source_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some((_, stored_revision, ..)) = stored
+            && !supersedes(msg.revision, stored_revision)
+        {
+            tx.commit().await?;
+            return Ok(Appended::Duplicate);
+        }
+
         let inserted = db::query(
             "INSERT INTO messages (
                 id, harness, session_id, source_id, parent_harness, parent_session_id,
                 parent_source_id, thread, timestamp, role, content, content_z, cwd, git_branch,
                 model, usage_input, usage_output, usage_cache_read, usage_cache_write, stop_reason,
-                usage_present, turn_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(harness, session_id, source_id) DO NOTHING",
+                usage_present, turn_id, revision
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(harness, session_id, source_id) DO UPDATE SET
+                id = excluded.id,
+                parent_harness = excluded.parent_harness,
+                parent_session_id = excluded.parent_session_id,
+                parent_source_id = excluded.parent_source_id,
+                thread = excluded.thread,
+                timestamp = excluded.timestamp,
+                role = excluded.role,
+                content = excluded.content,
+                content_z = excluded.content_z,
+                cwd = excluded.cwd,
+                git_branch = excluded.git_branch,
+                model = excluded.model,
+                usage_input = excluded.usage_input,
+                usage_output = excluded.usage_output,
+                usage_cache_read = excluded.usage_cache_read,
+                usage_cache_write = excluded.usage_cache_write,
+                stop_reason = excluded.stop_reason,
+                usage_present = excluded.usage_present,
+                turn_id = excluded.turn_id,
+                revision = excluded.revision",
         )
         .bind(id)
         .bind(harness)
@@ -194,17 +250,34 @@ impl AiSessionDatabase {
         .bind(stop_reason_json)
         .bind(i64::from(msg.usage.is_some()))
         .bind(msg.turn_id.as_deref())
+        .bind(msg.revision)
         .execute(&mut *tx)
         .await?;
 
-        if inserted.rows_affected() == 0 {
-            tx.commit().await?;
-            return Ok(Appended::Duplicate);
-        }
+        // A superseded row keeps its rowid, and the session keeps its count and its usage: one
+        // message revised is still one message, and its earlier revision already told.
+        let (outcome, rowid, usage_delta) = match stored {
+            None => (
+                Appended::New,
+                inserted.last_insert_rowid(),
+                (usage_input, usage_output, usage_cache_read, usage_cache_write),
+            ),
+            Some((rowid, _, input, output, cache_read, cache_write)) => (
+                Appended::Superseded,
+                rowid,
+                (
+                    usage_input - input,
+                    usage_output - output,
+                    usage_cache_read - cache_read,
+                    usage_cache_write - cache_write,
+                ),
+            ),
+        };
+        let counted = i64::from(outcome == Appended::New);
+        let (usage_input, usage_output, usage_cache_read, usage_cache_write) = usage_delta;
 
-        let rowid = inserted.last_insert_rowid();
         let body = Self::searchable_body(msg);
-        db::query("INSERT INTO messages_fts(rowid, title, body) VALUES (?, ?, ?)")
+        db::query("INSERT OR REPLACE INTO messages_fts(rowid, title, body) VALUES (?, ?, ?)")
             .bind(rowid)
             .bind(msg.session_title.as_deref().unwrap_or(""))
             .bind(&body)
@@ -228,7 +301,7 @@ impl AiSessionDatabase {
                 harness, session_id, parent_harness, parent_session_id, cwd, git_branch, model,
                 started_at, updated_at, message_count, usage_input, usage_output,
                 usage_cache_read, usage_cache_write, title, preview
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(harness, session_id) DO UPDATE SET
                 parent_harness = COALESCE(excluded.parent_harness, sessions.parent_harness),
                 parent_session_id = COALESCE(excluded.parent_session_id, \
@@ -238,7 +311,7 @@ impl AiSessionDatabase {
                 model = COALESCE(excluded.model, sessions.model),
                 started_at = MIN(sessions.started_at, excluded.started_at),
                 updated_at = MAX(sessions.updated_at, excluded.updated_at),
-                message_count = sessions.message_count + 1,
+                message_count = sessions.message_count + excluded.message_count,
                 usage_input = sessions.usage_input + excluded.usage_input,
                 usage_output = sessions.usage_output + excluded.usage_output,
                 usage_cache_read = sessions.usage_cache_read + excluded.usage_cache_read,
@@ -255,6 +328,7 @@ impl AiSessionDatabase {
         .bind(msg.model.as_deref())
         .bind(timestamp)
         .bind(timestamp)
+        .bind(counted)
         .bind(usage_input)
         .bind(usage_output)
         .bind(usage_cache_read)
@@ -306,7 +380,7 @@ impl AiSessionDatabase {
         }
 
         tx.commit().await?;
-        Ok(Appended::New)
+        Ok(outcome)
     }
 
     /// Whether a persisted row already carries the reported reasoning count for this call.
@@ -336,13 +410,17 @@ impl AiSessionDatabase {
         Ok(false)
     }
 
+    /// Whether this message is already stored, `revision` included: a later revision of a stored
+    /// message is not, since it has content the stored one does not (see [`supersedes`]).
     pub async fn contains_message(
         &self,
         session: &HarnessSession,
         source_id: &SourceId,
+        revision: Option<i64>,
     ) -> Result<bool, DbError> {
-        let found: Option<(i64,)> = db::query_as(
-            "SELECT 1 FROM messages WHERE harness = ? AND session_id = ? AND source_id = ? LIMIT 1",
+        let found: Option<(Option<i64>,)> = db::query_as(
+            "SELECT revision FROM messages WHERE harness = ? AND session_id = ? AND source_id = ? \
+             LIMIT 1",
         )
         .bind(session.harness as i64)
         .bind(session.session.as_ref())
@@ -350,7 +428,7 @@ impl AiSessionDatabase {
         .fetch_optional(self.db.pool())
         .await?;
 
-        Ok(found.is_some())
+        Ok(found.is_some_and(|(stored,)| !supersedes(revision, stored)))
     }
 
     /// How far into a session's transcript capture has read: the byte offset to resume from.
@@ -1176,9 +1254,63 @@ mod tests {
     async fn contains_message_reflects_presence() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         let m = sample_message();
-        assert!(!db.contains_message(&m.session, &m.source_id).await.unwrap());
+        assert!(!db.contains_message(&m.session, &m.source_id, m.revision).await.unwrap());
         db.append(&m).await.unwrap();
-        assert!(db.contains_message(&m.session, &m.source_id).await.unwrap());
+        assert!(db.contains_message(&m.session, &m.source_id, m.revision).await.unwrap());
+    }
+
+    /// opencode persists a streamed part empty and then whole, both under its part id: the reply
+    /// the user saw is the last revision, and first-wins would keep the draft.
+    #[rstest]
+    #[tokio::test]
+    async fn a_later_revision_replaces_the_message_it_revises() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let mut draft = sample_message();
+        draft.revision = Some(1);
+        draft.content = vec![Content::Text(String::new())];
+        let mut whole = draft.clone();
+        whole.id = RecordId(atuin_common::utils::uuid_v7());
+        whole.revision = Some(2);
+        whole.content = vec![Content::Text("Yes, working.".to_owned())];
+
+        assert_eq!(db.append(&draft).await.unwrap(), Appended::New);
+        assert!(
+            !db.contains_message(&whole.session, &whole.source_id, whole.revision).await.unwrap(),
+            "a later revision is not yet captured"
+        );
+        assert_eq!(db.append(&whole).await.unwrap(), Appended::Superseded);
+        // and once it is, it neither arrives again nor lets its own draft back in
+        assert_eq!(db.append(&whole).await.unwrap(), Appended::Duplicate);
+        assert_eq!(db.append(&draft).await.unwrap(), Appended::Duplicate);
+
+        let session = db.get_session(&whole.session).await.unwrap().expect("the session is stored");
+        assert_eq!(session.message_count, 1, "one message revised is one message");
+        let stored: Vec<_> = db.messages(&whole.session).try_collect().await.unwrap();
+        assert_eq!(stored.iter().map(|m| m.content.clone()).collect::<Vec<_>>(), vec![
+            whole.content.clone()
+        ]);
+    }
+
+    /// A row a build before revisions wrote carries none, and the revision that reaches it is the
+    /// content it was captured without.
+    #[rstest]
+    #[tokio::test]
+    async fn a_revision_repairs_a_row_written_before_revisions() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let mut stored = sample_message();
+        stored.content = vec![Content::Text(String::new())];
+        assert_eq!(db.append(&stored).await.unwrap(), Appended::New);
+
+        let mut revised = stored.clone();
+        revised.id = RecordId(atuin_common::utils::uuid_v7());
+        revised.revision = Some(2);
+        revised.content = vec![Content::Text("Yes, working.".to_owned())];
+        assert_eq!(db.append(&revised).await.unwrap(), Appended::Superseded);
+
+        let got: Vec<_> = db.messages(&revised.session).try_collect().await.unwrap();
+        assert_eq!(got.iter().map(|m| m.content.clone()).collect::<Vec<_>>(), vec![
+            revised.content
+        ]);
     }
 
     #[rstest]

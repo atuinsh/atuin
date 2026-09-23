@@ -38,6 +38,7 @@ impl AnySessions {
         Ok(match self {
             Self::Ccode(s) => s.existing()?.map_ok(AnySession::from).boxed(),
             Self::Codex(s) => s.existing()?.map_ok(AnySession::from).boxed(),
+            Self::Opencode(s) => s.existing()?.map_ok(AnySession::from).boxed(),
             Self::Pi(s) => s.existing()?.map_ok(AnySession::from).boxed(),
         })
     }
@@ -122,6 +123,7 @@ impl AnySession {
         match self {
             Self::Ccode(s) => s.read().map_ok(AnyMessage::from).boxed(),
             Self::Codex(s) => s.read().map_ok(AnyMessage::from).boxed(),
+            Self::Opencode(s) => s.read().map_ok(AnyMessage::from).boxed(),
             Self::Pi(s) => s.read().map_ok(AnyMessage::from).boxed(),
         }
     }

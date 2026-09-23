@@ -3,6 +3,7 @@ use std::future::Future;
 use std::io;
 use std::ops::ControlFlow;
 use std::path::Path;
+use std::time::Duration;
 
 use async_stream::stream;
 use futures::Stream;
@@ -13,6 +14,7 @@ use sqlx::{AssertSqlSafe, Connection, Sqlite};
 use super::event::{Appended, Change};
 use super::schema::{Diffable, TableSchema, Tailable};
 use super::{ObserveConfig, ObserveError, Replay};
+use crate::futures::Backoff;
 use crate::os::fs::FdIdentity;
 
 const PAGE_SIZE: usize = 1024;
@@ -234,6 +236,37 @@ pub(super) async fn open(opts: &SqliteConnectOptions) -> Result<Source, sqlx::Er
     Ok(Source { conn, identity })
 }
 
+/// The delay before the source is taken up again, stepped along the reconnect backoff while
+/// failures follow one another. Unjittered: this paces one observer against one file, where the
+/// thundering herd the jitter in [`Backoff`] is there for cannot arise.
+struct Wait {
+    backoff: Backoff,
+    step: u32,
+}
+
+impl Wait {
+    const fn new(backoff: Backoff) -> Self {
+        Self { backoff, step: 0 }
+    }
+
+    fn next_delay(&mut self) -> Duration {
+        let delay = match self.backoff {
+            Backoff::Linear(delay) => delay,
+            Backoff::Exponential {
+                initial,
+                max,
+                factor,
+            } => initial.saturating_mul(factor.get().saturating_pow(self.step)).min(max),
+        };
+        self.step = self.step.saturating_add(1);
+        delay
+    }
+
+    const fn reset(&mut self) {
+        self.step = 0;
+    }
+}
+
 /// Tails the source, yielding what `strategy` reports.
 ///
 /// The stream does not end of its own accord: a query or a connection that fails for its own
@@ -254,7 +287,7 @@ pub(super) fn run<S: Strategy>(
         // How long to wait before taking the source up again. It escalates while failures follow
         // one another, so that an outage is probed rather than spun on, and the first poll that
         // gets through puts it back to its initial delay.
-        let mut backoff = cfg.reconnect.schedule();
+        let mut backoff = Wait::new(cfg.reconnect);
         loop {
             let mut conn = if let Some(conn) = pending.take() {
                 conn
