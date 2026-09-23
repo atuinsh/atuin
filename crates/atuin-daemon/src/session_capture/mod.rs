@@ -2,6 +2,7 @@ mod engine;
 mod import;
 mod message_enricher;
 
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,6 +13,7 @@ use atuin_client::ai_session::{
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4::Key;
 use atuin_common::harnesstools::session::{Content, Role, SessionMeta};
+use atuin_common::sync::BlockingPool;
 use atuin_domain::record::HostId;
 use engine::SessionCaptureEngine;
 use futures::{Stream, StreamExt};
@@ -184,6 +186,8 @@ fn sanitize_message(msg: &mut Message) {
 
 pub struct AiHarnessSessionCapture {
     sink: Arc<Sink>,
+    /// Runs the harness session file reads of capture and import.
+    pool: BlockingPool,
     persistent: bool,
     _engine: SessionCaptureEngine,
 }
@@ -198,17 +202,19 @@ impl AiHarnessSessionCapture {
         sidecar: AiSessionDatabase,
         capture: bool,
         recovered: bool,
+        pool: BlockingPool,
     ) -> Self {
         let sink = Arc::new(Sink::new(records, sidecar));
         // Capture is opt-in. When disabled we still open the sidecar and serve existing sessions,
         // but never spawn the listeners that copy new transcripts into the synced record store.
         let engine = if capture && recovered {
-            SessionCaptureEngine::spawn(&sink)
+            SessionCaptureEngine::spawn(&sink, &pool)
         } else {
             SessionCaptureEngine::nop()
         };
         Self {
             sink,
+            pool,
             persistent: recovered,
             _engine: engine,
         }
@@ -229,6 +235,8 @@ impl AiHarnessSessionCapture {
 
         Self {
             sink: Arc::new(Sink::new(records, sidecar)),
+            // Never runs anything: without a persistent store there is no capture or import.
+            pool: BlockingPool::new(NonZeroUsize::MIN),
             persistent: false,
             _engine: SessionCaptureEngine::nop(),
         }
@@ -246,7 +254,7 @@ impl AiHarnessSessionCapture {
         harness: Option<HarnessKind>,
     ) -> impl Stream<Item = ImportProgress> + Send + 'static {
         if self.persistent {
-            SessionImporter::new(self.sink.clone()).run(harness).right_stream()
+            SessionImporter::new(self.sink.clone(), self.pool.clone()).run(harness).right_stream()
         } else {
             futures::stream::once(async {
                 ImportProgress::Finished {
@@ -556,8 +564,13 @@ mod tests {
         .unwrap();
         let recovered = records.build(&sidecar).await.is_ok();
         assert!(!recovered);
-        let capture =
-            AiHarnessSessionCapture::open(records.clone(), sidecar.clone(), false, recovered);
+        let capture = AiHarnessSessionCapture::open(
+            records.clone(),
+            sidecar.clone(),
+            false,
+            recovered,
+            BlockingPool::new(NonZeroUsize::MIN),
+        );
         assert!(!capture.persistent);
         let mut import = Box::pin(capture.import(None));
         assert!(matches!(import.next().await.unwrap(), ImportProgress::Finished {
@@ -568,7 +581,13 @@ mod tests {
         drop(capture);
         atuin_common::db::query("DROP TRIGGER fail_write").execute(fault.pool()).await.unwrap();
         records.build(&sidecar).await.unwrap();
-        let capture = AiHarnessSessionCapture::open(records, sidecar, false, true);
+        let capture = AiHarnessSessionCapture::open(
+            records,
+            sidecar,
+            false,
+            true,
+            BlockingPool::new(NonZeroUsize::MIN),
+        );
         msg.id = RecordId(atuin_common::utils::uuid_v7());
         msg.source_id = "later".to_owned().into();
         capture.sink.append(msg.clone()).await.unwrap();

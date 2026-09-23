@@ -17,12 +17,15 @@ use crate::harnesstools::session::{
     WatchError, scan_sessions,
 };
 use crate::json::jsonl;
+use crate::sync::BlockingPool;
 use crate::utils::{env_nonempty, home_dir};
 
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct CcodeSessions {
     #[builder(default, setter(strip_option, into))]
     root: Option<PathBuf>,
+    /// Runs every file read of the sessions this finds.
+    pool: BlockingPool,
 }
 
 impl CcodeSessions {
@@ -44,7 +47,10 @@ impl Sessions for CcodeSessions {
         if !root.is_dir() {
             return Err(RuntimeError::NotFound(root));
         }
-        Ok(CcodeListener { root })
+        Ok(CcodeListener {
+            root,
+            pool: self.pool.clone(),
+        })
     }
 
     fn existing(
@@ -55,18 +61,23 @@ impl Sessions for CcodeSessions {
         if !root.is_dir() {
             return Err(RuntimeError::NotFound(root));
         }
+        let pool = self.pool.clone();
         Ok(async_stream::stream! {
-            let scan = tokio::task::spawn_blocking(move || {
-                scan_sessions(root, CcodeListener::open_session)
-            })
-            .await;
+            let sessions_pool = pool.clone();
+            let scan = pool
+                .run(move || {
+                    scan_sessions(root, |path, is_file| {
+                        CcodeListener::open_session(path, is_file, &sessions_pool)
+                    })
+                })
+                .await;
             match scan {
                 Ok(items) => {
                     for item in items {
                         yield item;
                     }
                 }
-                Err(join) => yield Err(RuntimeError::Io(std::io::Error::other(join))),
+                Err(cancelled) => yield Err(RuntimeError::Io(std::io::Error::other(cancelled))),
             }
         })
     }
@@ -75,30 +86,31 @@ impl Sessions for CcodeSessions {
 impl Observable for Ccode {
     type Sessions = CcodeSessions;
 
-    fn sessions(&self) -> CcodeSessions {
-        CcodeSessions::builder().build()
+    fn sessions(&self, pool: BlockingPool) -> CcodeSessions {
+        CcodeSessions::builder().pool(pool).build()
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct CcodeListener {
     root: PathBuf,
+    pool: BlockingPool,
 }
 
 impl CcodeListener {
     /// Build a read-once session for an accepted `jsonl` file (no change signal), or `None`.
-    fn open_session(path: &Path, is_file: bool) -> Option<CcodeSession> {
+    fn open_session(path: &Path, is_file: bool, pool: &BlockingPool) -> Option<CcodeSession> {
         if !is_file || path.extension().is_none_or(|ext| ext != "jsonl") {
             return None;
         }
         let id = path.file_stem()?.to_string_lossy().into_owned();
-        Some(CcodeSession::open(SessionId::from(id), path.to_path_buf()))
+        Some(CcodeSession::open(SessionId::from(id), path.to_path_buf(), pool.clone()))
     }
 
     /// The session for an accepted file, paired with the change signal the watcher keeps alive
     /// for as long as the file exists.
-    fn accept(ctx: &NodeContext) -> Option<(CcodeSession, watch::Sender<()>)> {
-        let mut session = Self::open_session(ctx.path(), ctx.is_file())?;
+    fn accept(ctx: &NodeContext, pool: &BlockingPool) -> Option<(CcodeSession, watch::Sender<()>)> {
+        let mut session = Self::open_session(ctx.path(), ctx.is_file(), pool)?;
         let (signal, rx) = watch::channel(());
         session.changes = Some(rx);
         Some((session, signal))
@@ -110,10 +122,11 @@ impl Listener for CcodeListener {
 
     fn watch(self) -> impl Stream<Item = Result<CcodeSession, WatchError>> + Send + 'static {
         let root = self.root;
+        let pool = self.pool;
         async_stream::stream! {
             let (tx, rx) = flume::unbounded::<CcodeSession>();
             let _watcher = match TreeWatcher::builder().recursive(true).watch(&root, move |ctx| {
-                let (session, signal) = Self::accept(&ctx)?;
+                let (session, signal) = Self::accept(&ctx, &pool)?;
                 let _ = tx.send(session);
                 Some(signal)
             }) {
@@ -136,16 +149,18 @@ pub struct CcodeSession {
     path: PathBuf,
     /// Wakes [`messages`](Session::messages) on each change to the file; `None` reads it once.
     changes: Option<watch::Receiver<()>>,
+    pool: BlockingPool,
 }
 
 impl CcodeSession {
     /// A session over the file as it stands: [`messages`](Session::messages) ends at its end.
     #[must_use]
-    pub fn open(id: SessionId, path: PathBuf) -> Self {
+    pub fn open(id: SessionId, path: PathBuf, pool: BlockingPool) -> Self {
         Self {
             id,
             path,
             changes: None,
+            pool,
         }
     }
 
@@ -163,18 +178,21 @@ impl Session for CcodeSession {
     }
 
     fn messages(self) -> impl Stream<Item = Result<CcodeMessage, MessageError>> + Send + 'static {
-        jsonl::follow::<CcodeMessage>(self.path, self.changes).map_err(MessageError::from)
+        jsonl::follow::<CcodeMessage>(self.path, self.changes, self.pool)
+            .map_err(MessageError::from)
     }
 
     fn read(&self) -> impl Stream<Item = Result<CcodeMessage, MessageError>> + Send + 'static {
-        jsonl::read_all::<CcodeMessage>(self.path.clone()).map_err(MessageError::from)
+        jsonl::read_all::<CcodeMessage>(self.path.clone(), self.pool.clone())
+            .map_err(MessageError::from)
     }
 
     fn meta(&self) -> impl std::future::Future<Output = Result<SessionMeta, MessageError>> + Send {
         let path = self.path.clone();
+        let pool = self.pool.clone();
         async move {
             let messages: Vec<CcodeMessage> =
-                jsonl::read_all(path).map_err(MessageError::from).try_collect().await?;
+                jsonl::read_all(path, pool).map_err(MessageError::from).try_collect().await?;
             let title = messages.iter().rev().find_map(Message::title);
             let cwd = messages.iter().find_map(|m| m.cwd.clone());
             let git_branch = messages.iter().find_map(|m| m.git_branch.clone());
@@ -358,6 +376,11 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::sync::BlockingPool;
+
+    fn pool() -> BlockingPool {
+        BlockingPool::new(std::num::NonZeroUsize::MIN)
+    }
     use crate::futures::stream::timed_next;
     use crate::harnesstools::session::model::{Content, Role};
     use crate::harnesstools::session::{
@@ -520,14 +543,15 @@ mod tests {
 
     #[rstest]
     fn listener_reports_not_found_for_a_missing_root() {
-        let sessions = CcodeSessions::builder().root(PathBuf::from("/no/such/claude")).build();
+        let sessions =
+            CcodeSessions::builder().root(PathBuf::from("/no/such/claude")).pool(pool()).build();
         assert!(matches!(sessions.listener(), Err(RuntimeError::NotFound(_))));
     }
 
     #[rstest]
     fn listener_opens_an_existing_root() {
         let dir = tempfile::tempdir().unwrap();
-        let sessions = CcodeSessions::builder().root(dir.path().to_path_buf()).build();
+        let sessions = CcodeSessions::builder().root(dir.path().to_path_buf()).pool(pool()).build();
         assert!(sessions.listener().is_ok());
     }
 
@@ -549,6 +573,7 @@ mod tests {
         let session = CcodeSession::open(
             SessionId::from("11111111-1111-1111-1111-111111111111".to_owned()),
             path,
+            pool(),
         );
         let got: Vec<Role> =
             session.messages().take(2).map_ok(|m| m.role()).try_collect().await.unwrap();
@@ -576,6 +601,7 @@ mod tests {
         let session = CcodeSession::open(
             SessionId::from("11111111-1111-1111-1111-111111111111".to_owned()),
             path,
+            pool(),
         );
         let meta = session.meta().await.unwrap();
         assert_eq!(meta.title, Some("Fix the flaky test".to_owned()));
@@ -595,8 +621,12 @@ mod tests {
         )
         .unwrap();
 
-        let listener =
-            CcodeSessions::builder().root(dir.path().to_path_buf()).build().listener().unwrap();
+        let listener = CcodeSessions::builder()
+            .root(dir.path().to_path_buf())
+            .pool(pool())
+            .build()
+            .listener()
+            .unwrap();
         let seen: Vec<SessionId> = tokio::time::timeout(
             std::time::Duration::from_secs(10),
             listener.watch().take(1).map_ok(|s| s.id()).try_collect(),
@@ -626,8 +656,12 @@ mod tests {
         )
         .unwrap();
 
-        let listener =
-            CcodeSessions::builder().root(dir.path().to_path_buf()).build().listener().unwrap();
+        let listener = CcodeSessions::builder()
+            .root(dir.path().to_path_buf())
+            .pool(pool())
+            .build()
+            .listener()
+            .unwrap();
         let events: Vec<SessionEvent<CcodeMessage>> = tokio::time::timeout(
             std::time::Duration::from_secs(10),
             listener.events().take(3).try_collect(),
@@ -656,8 +690,12 @@ mod tests {
         let path = dir.path().join("44444444-4444-4444-4444-444444444444.jsonl");
         std::fs::write(&path, line("user", "user", serde_json::json!("hi")) + "\n").unwrap();
 
-        let listener =
-            CcodeSessions::builder().root(dir.path().to_path_buf()).build().listener().unwrap();
+        let listener = CcodeSessions::builder()
+            .root(dir.path().to_path_buf())
+            .pool(pool())
+            .build()
+            .listener()
+            .unwrap();
         // The watch stream owns the watcher: it must outlive the message stream.
         let mut sessions = std::pin::pin!(listener.watch());
         let session = timed_next(&mut sessions, 10).await.unwrap().unwrap();
@@ -683,8 +721,12 @@ mod tests {
         let path = dir.path().join("55555555-5555-5555-5555-555555555555.jsonl");
         std::fs::write(&path, line("user", "user", serde_json::json!("hi")) + "\n").unwrap();
 
-        let listener =
-            CcodeSessions::builder().root(dir.path().to_path_buf()).build().listener().unwrap();
+        let listener = CcodeSessions::builder()
+            .root(dir.path().to_path_buf())
+            .pool(pool())
+            .build()
+            .listener()
+            .unwrap();
         let mut sessions = std::pin::pin!(listener.watch());
         let session = timed_next(&mut sessions, 10).await.unwrap().unwrap();
         let mut messages = std::pin::pin!(session.messages());

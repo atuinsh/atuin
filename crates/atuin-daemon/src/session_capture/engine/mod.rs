@@ -6,6 +6,7 @@ use atuin_common::harnesstools::AnyHarness;
 use atuin_common::harnesstools::session::{
     RuntimeError, SessionEvent, SessionEventKind, SessionMeta,
 };
+use atuin_common::sync::BlockingPool;
 use futures::StreamExt;
 use tokio::task::JoinHandle;
 
@@ -27,11 +28,11 @@ impl SessionCaptureEngine {
         }
     }
 
-    pub fn spawn(sink: &Arc<Sink>) -> Self {
+    pub fn spawn(sink: &Arc<Sink>, pool: &BlockingPool) -> Self {
         let mut listeners = Vec::new();
 
         for harness in AnyHarness::all() {
-            let Some(sessions) = harness.sessions() else {
+            let Some(sessions) = harness.sessions(pool) else {
                 continue;
             };
             let kind = HarnessKind::from(harness);

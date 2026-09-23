@@ -18,6 +18,8 @@ use pi::Pi;
 use session::Observable;
 use session::any::AnySessions;
 
+use crate::sync::BlockingPool;
+
 /// Defines a generic harness trait that all implementations need to implement.
 #[enum_dispatch]
 pub trait Harness: std::fmt::Debug {
@@ -97,12 +99,14 @@ impl AnyHarness {
         &[Self::ClaudeCode(Ccode), Self::Codex(Codex), Self::Opencode(Opencode), Self::Pi(Pi)]
     }
 
+    /// The harness's sessions, whose file reads all run in `pool`, or `None` when it has none to
+    /// observe.
     #[must_use]
-    pub fn sessions(&self) -> Option<AnySessions> {
+    pub fn sessions(&self, pool: &BlockingPool) -> Option<AnySessions> {
         match self {
-            Self::ClaudeCode(h) => Some(h.sessions().into()),
-            Self::Codex(h) => Some(h.sessions().into()),
-            Self::Pi(h) => Some(h.sessions().into()),
+            Self::ClaudeCode(h) => Some(h.sessions(pool.clone()).into()),
+            Self::Codex(h) => Some(h.sessions(pool.clone()).into()),
+            Self::Pi(h) => Some(h.sessions(pool.clone()).into()),
             Self::Opencode(_) => None,
         }
     }
@@ -110,14 +114,17 @@ impl AnyHarness {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
     use rstest::rstest;
 
     use super::*;
 
     #[rstest]
     fn only_opencode_has_no_session_listener() {
+        let pool = BlockingPool::new(NonZeroUsize::MIN);
         for harness in AnyHarness::all() {
-            let observable = harness.sessions().is_some();
+            let observable = harness.sessions(&pool).is_some();
             let is_opencode = harness.name() == "opencode";
             assert_eq!(observable, !is_opencode, "mismatch for {}", harness.name());
         }
