@@ -5,6 +5,7 @@ use atuin_common::encryption::paseto_v4;
 use clap::Parser;
 use eyre::{Result, bail};
 
+use super::PasswordArg;
 use super::login::or_user_input;
 use crate::i18n::fl;
 
@@ -13,8 +14,8 @@ pub struct Cmd {
     #[clap(long, short)]
     pub username: Option<String>,
 
-    #[clap(long, short)]
-    pub password: Option<String>,
+    #[clap(long, short, help = fl!("arg-password"))]
+    pub password: Option<PasswordArg>,
 
     #[clap(long, short)]
     pub email: Option<String>,
@@ -43,17 +44,17 @@ impl Cmd {
         }
 
         if settings.is_hub_sync() {
-            let required_for_headless = 3;
-            let provided = [self.username.is_some(), self.email.is_some(), self.password.is_some()]
-                .iter()
-                .filter(|&b| *b)
-                .count();
-            if provided < required_for_headless {
-                println!("{}\n", fl!("register-headless-incomplete"));
-            }
+            // Only resolved once headless registration is reachable, so that
+            // `--password -` does not swallow stdin before the browser flow.
+            let password = match (&self.username, &self.email) {
+                (Some(_), Some(_)) => {
+                    PasswordArg::resolve(self.password.as_ref(), std::io::stdin().lock())?
+                }
+                _ => None,
+            };
 
             if let (Some(username), Some(email), Some(password)) =
-                (&self.username, &self.email, &self.password)
+                (&self.username, &self.email, &password)
             {
                 // Headless registration via v0 API (for CI / scripting).
                 let client = auth::auth_client(settings).await;
@@ -88,6 +89,8 @@ impl Cmd {
                 println!("{}", fl!("register-success-key"));
                 println!("{}", fl!("register-key-warning"));
             } else {
+                println!("{}\n", fl!("register-headless-incomplete"));
+
                 // Interactive registration: delegate to the browser OAuth flow.
                 // Registration on Hub happens on the website; the CLI just needs
                 // to authenticate afterwards.
@@ -107,7 +110,8 @@ impl Cmd {
 
             let username = or_user_input(self.username.clone(), &fl!("prompt-username"));
             let email = or_user_input(self.email.clone(), &fl!("prompt-email"));
-            let password = self.password.clone().unwrap_or_else(super::login::read_user_password);
+            let password = PasswordArg::resolve(self.password.as_ref(), std::io::stdin().lock())?
+                .unwrap_or_else(super::login::read_user_password);
 
             if password.is_empty() {
                 bail!(fl!("account-provide-password"));
