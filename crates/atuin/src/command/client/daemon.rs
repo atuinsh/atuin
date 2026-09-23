@@ -634,6 +634,14 @@ async fn run(
     history_db: Sqlite,
     force: bool,
 ) -> Result<()> {
+    // A launchd-started daemon inherits a soft limit of 256; the hard limit is far higher.
+    match atuin_common::os::fd::raise_limit() {
+        Ok(limit) => tracing::debug!(?limit, "raised the descriptor limit"),
+        Err(err) => {
+            tracing::warn!(%err, "could not raise the descriptor limit; keeping the inherited one");
+        }
+    }
+
     if force {
         force_cleanup(&settings).await;
     }
