@@ -1,6 +1,7 @@
 //! The process-wide pool, sized to the descriptors the process can still open.
 
 use std::io;
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
@@ -79,11 +80,15 @@ impl LeaseCapacity {
 
     /// Leases the system pool may hold: `limit` less [`HEADROOM`], less `outside` descriptors
     /// held outside the pools.
-    fn size(limit: FdLimit, outside: usize) -> usize {
+    ///
+    /// Never below one: a pool that admits nothing parks every caller forever, while one lease
+    /// under a tiny limit at worst fails with `EMFILE`.
+    fn size(limit: FdLimit, outside: usize) -> NonZeroUsize {
         let FdLimit::Bounded(limit) = limit else {
-            return usize::MAX;
+            return NonZeroUsize::MAX;
         };
-        limit.saturating_sub(HEADROOM).saturating_sub(outside)
+        NonZeroUsize::new(limit.saturating_sub(HEADROOM).saturating_sub(outside))
+            .unwrap_or(NonZeroUsize::MIN)
     }
 
     const fn leases(self) -> usize {
@@ -126,11 +131,11 @@ impl SystemLimit {
         // `RECOUNT_INTERVAL`. Leases taken but not yet opened make `open - held` undercount the
         // outside descriptors by at most the leases in flight, which the headroom absorbs.
         let next = match (fd::count_open(), previous) {
-            (Ok(open), _) => {
-                LeaseCapacity::Counted(LeaseCapacity::size(fd::limit(), open.saturating_sub(held)))
-            }
+            (Ok(open), _) => LeaseCapacity::Counted(
+                LeaseCapacity::size(fd::limit(), open.saturating_sub(held)).get(),
+            ),
             (Err(err), _) if err.kind() == io::ErrorKind::Unsupported => {
-                LeaseCapacity::Counted(LeaseCapacity::size(fd::limit(), 0))
+                LeaseCapacity::Counted(LeaseCapacity::size(fd::limit(), 0).get())
             }
             (Err(_), failing @ LeaseCapacity::Failing(_)) => failing,
             (Err(err), LeaseCapacity::Counted(leases)) => {
@@ -139,7 +144,7 @@ impl SystemLimit {
             }
             (Err(err), LeaseCapacity::Unknown) => {
                 tracing::warn!(%err, "could not count open descriptors; starting the pool sized by headroom alone");
-                LeaseCapacity::Failing(LeaseCapacity::size(fd::limit(), 0))
+                LeaseCapacity::Failing(LeaseCapacity::size(fd::limit(), 0).get())
             }
         };
         self.capacity.store(next.pack(), Ordering::Relaxed);
@@ -168,13 +173,14 @@ mod tests {
     #[rstest]
     #[case::outside_comes_off_the_top(FdLimit::Bounded(100), 20, 16)]
     #[case::zero_outside_leaves_the_headroom(FdLimit::Bounded(100), 0, 36)]
-    #[case::overcommitted_is_zero(FdLimit::Bounded(100), 500, 0)]
+    #[case::overcommitted_still_admits_one(FdLimit::Bounded(100), 500, 1)]
+    #[case::tiny_limit_still_admits_one(FdLimit::Bounded(32), 10, 1)]
     #[case::unbounded(FdLimit::Unbounded, 30, usize::MAX)]
     fn system_capacity_is_the_limit_less_headroom_and_outside(
         #[case] limit: FdLimit,
         #[case] outside: usize,
         #[case] expected: usize,
     ) {
-        assert_eq!(LeaseCapacity::size(limit, outside), expected);
+        assert_eq!(LeaseCapacity::size(limit, outside).get(), expected);
     }
 }
