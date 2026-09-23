@@ -72,9 +72,11 @@ enum SubCmd {
     /// Follow sessions and messages as they are recorded (until interrupted).
     Tail,
 
+    /// Backfill sessions already on disk that the daemon had not captured (older transcripts,
+    /// or ones written while it was not running). Safe to re-run: captured lines are skipped.
     Import {
-        #[arg(long, value_parser = parse_harness)]
-        harness: Option<agent::HarnessKind>,
+        #[arg(long, value_enum, help = "Only import sessions from this harness")]
+        harness: Option<HarnessArg>,
     },
 }
 
@@ -148,7 +150,9 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
             limit,
         } => search(&mut client, &query, harness.map(HarnessArg::to_pb), limit, style).await,
         SubCmd::Tail => tail(&mut client, style).await,
-        SubCmd::Import { harness } => import(&mut client, harness, style).await,
+        SubCmd::Import { harness } => {
+            import(&mut client, harness.map(HarnessArg::to_pb), style).await
+        }
     };
 
     // A downstream reader that closes the pipe (e.g. `atuin ai session list | head`) makes the next
@@ -474,6 +478,7 @@ async fn import(
                     "session_id": p.session_id,
                     "imported": p.imported,
                     "skipped": p.skipped,
+                    "failed": p.failed,
                 }),
                 import_sessions_event::Event::Summary(s) => serde_json::json!({
                     "kind": "summary",
@@ -508,11 +513,12 @@ async fn import(
             import_sessions_event::Event::Progress(p) => {
                 writeln!(
                     out,
-                    "{:<14} {:<12} imported {:>5}  skipped {:>5}",
+                    "{:<14} {:<12} imported {:>5}  skipped {:>5}  failed {:>5}",
                     short_id(&p.session_id),
                     harness_name(p.harness),
                     p.imported,
                     p.skipped,
+                    p.failed,
                 )?;
             }
             import_sessions_event::Event::Summary(s) => {
@@ -893,15 +899,6 @@ fn rfc3339(ts: Option<&prost_types::Timestamp>) -> Option<String> {
     to_datetime(ts).map(|dt| dt.to_rfc3339())
 }
 
-fn parse_harness(value: &str) -> Result<agent::HarnessKind, String> {
-    match value {
-        "claude-code" => Ok(agent::HarnessKind::ClaudeCode),
-        "codex" => Ok(agent::HarnessKind::Codex),
-        "pi" => Ok(agent::HarnessKind::Pi),
-        other => Err(format!("unknown harness `{other}` (expected claude-code, codex, or pi)")),
-    }
-}
-
 /// The kebab display label for a harness discriminant. Kept exhaustive over every `HarnessKind`
 /// (including ones no capture path yet produces) so a stored value always renders. Shared with the
 /// MCP session-search renderer.
@@ -1188,19 +1185,6 @@ mod tests {
             title: None,
             preview: None,
         }
-    }
-
-    #[rstest]
-    #[case("claude-code", agent::HarnessKind::ClaudeCode)]
-    #[case("codex", agent::HarnessKind::Codex)]
-    #[case("pi", agent::HarnessKind::Pi)]
-    fn parse_harness_maps_names(#[case] input: &str, #[case] want: agent::HarnessKind) {
-        assert_eq!(parse_harness(input).unwrap(), want);
-    }
-
-    #[rstest]
-    fn parse_harness_rejects_unknown_harnesses() {
-        assert!(parse_harness("opencode").is_err());
     }
 
     #[rstest]

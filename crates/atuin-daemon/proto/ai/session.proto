@@ -81,6 +81,8 @@ message ImportSessionsProgress {
   string session_id = 2;
   uint64 imported = 3;
   uint64 skipped = 4;
+  // Lines of this session that could not be read or stored.
+  uint64 failed = 5;
 }
 
 // The final tally, emitted once after every session drains.

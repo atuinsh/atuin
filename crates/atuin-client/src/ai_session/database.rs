@@ -602,21 +602,42 @@ impl AiSessionDatabase {
             return None;
         }
 
-        // (word index, folded token) stream over the whole body.
-        let tokens: Vec<(usize, String)> = words
-            .iter()
-            .enumerate()
-            .flat_map(|(i, w)| Self::fts_tokens(w).map(move |t| (i, t)))
-            .collect();
-
-        phrases
-            .iter()
-            .filter_map(|phrase| {
-                (0..tokens.len().saturating_sub(phrase.len() - 1))
-                    .find(|&i| phrase.iter().zip(&tokens[i..]).all(|(p, (_, t))| p == t))
-            })
-            .min()
-            .map(|i| tokens[i].0)
+        // One forward pass over a window of the last `longest` (word index, folded token) pairs:
+        // a phrase matching the window's tail is a hit starting at `pos + 1 - len`. The earliest
+        // start wins, and once no later match could start before it, stop. The body is never
+        // tokenised as a whole, which matters when the matched message is a large blob.
+        let longest = phrases.iter().map(Vec::len).max()?;
+        let mut window: std::collections::VecDeque<(usize, String)> =
+            std::collections::VecDeque::with_capacity(longest);
+        let mut best: Option<(usize, usize)> = None;
+        let mut pos = 0usize;
+        for (word, text) in words.iter().enumerate() {
+            for token in Self::fts_tokens(text) {
+                if window.len() == longest {
+                    window.pop_front();
+                }
+                window.push_back((word, token));
+                for phrase in &phrases {
+                    if phrase.len() > window.len() {
+                        continue;
+                    }
+                    let tail = window.len() - phrase.len();
+                    if phrase.iter().zip(window.range(tail..)).all(|(p, (_, t))| p == t) {
+                        let start = pos + 1 - phrase.len();
+                        if best.is_none_or(|(s, _)| start < s) {
+                            best = Some((start, window[tail].0));
+                        }
+                    }
+                }
+                if let Some((start, _)) = best
+                    && pos + 1 >= start + longest
+                {
+                    return Some(best?.1);
+                }
+                pos += 1;
+            }
+        }
+        best.map(|(_, word)| word)
     }
 
     /// `s` cut to at most `max` bytes on a char boundary.
@@ -1387,6 +1408,26 @@ mod tests {
         let hits = search(&db, "distinctive").await;
         assert_eq!(hits.len(), 1);
         assert!(hits[0].preview.to_plain().text.contains("distinctive"));
+    }
+
+    /// `preview_hit` walks the body once and reports the word where the earliest-starting term
+    /// match begins, matching whole folded tokens the way the index does.
+    #[rstest]
+    #[case::single("alpha beta gamma", "gamma", Some(2))]
+    #[case::phrase_across_words("alpha beta gamma", "beta gamma", Some(1))]
+    #[case::hyphenated_term("foo-bar baz", "foo-bar", Some(0))]
+    #[case::whole_token_only("apple app", "app", Some(1))]
+    #[case::earliest_start_wins("a b c", "c a b c", Some(0))]
+    #[case::folded("Café au lait", "cafe", Some(0))]
+    #[case::miss("alpha beta", "delta", None)]
+    #[case::empty_query("alpha beta", "", None)]
+    fn preview_hit_finds_the_first_word_of_the_earliest_match(
+        #[case] body: &str,
+        #[case] query: &str,
+        #[case] expected: Option<usize>,
+    ) {
+        let words: Vec<&str> = body.split_whitespace().collect();
+        assert_eq!(AiSessionDatabase::preview_hit(&words, query), expected);
     }
 
     #[rstest]

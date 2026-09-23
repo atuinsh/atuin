@@ -192,12 +192,13 @@ impl GrpcService for Service {
                     session,
                     imported,
                     skipped,
-                    failed: _,
+                    failed,
                 } => import_sessions_event::Event::Progress(ImportSessionsProgress {
                     harness: agent::HarnessKind::from(harness) as i32,
                     session_id: session.into(),
                     imported,
                     skipped,
+                    failed,
                 }),
                 ImportProgress::Finished {
                     sessions,
