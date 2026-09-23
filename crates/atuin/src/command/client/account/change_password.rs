@@ -2,9 +2,9 @@ use atuin_client::auth::{self, AuthClient, MutateResponse};
 use atuin_client::settings::Settings;
 use clap::Parser;
 use eyre::{Result, bail};
-use rpassword::prompt_password;
 use secrecy::{ExposeSecret, SecretString};
 
+use super::login::read_secret;
 use crate::i18n::fl;
 
 #[derive(Parser, Debug)]
@@ -27,21 +27,17 @@ impl Cmd {
 
         let client = auth::auth_client(settings).await;
 
-        let current_password = self.current_password.clone().unwrap_or_else(|| {
-            prompt_password(format!("{}: ", fl!("prompt-current-password")))
-                .expect("Failed to read from input")
-                .into()
-        });
+        let current_password = self
+            .current_password
+            .clone()
+            .unwrap_or_else(|| read_secret(&fl!("prompt-current-password")));
 
         if current_password.expose_secret().is_empty() {
             bail!(fl!("change-password-provide-current"));
         }
 
-        let new_password = self.new_password.clone().unwrap_or_else(|| {
-            prompt_password(format!("{}: ", fl!("prompt-new-password")))
-                .expect("Failed to read from input")
-                .into()
-        });
+        let new_password =
+            self.new_password.clone().unwrap_or_else(|| read_secret(&fl!("prompt-new-password")));
 
         if new_password.expose_secret().is_empty() {
             bail!(fl!("change-password-provide-new"));

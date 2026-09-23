@@ -353,8 +353,16 @@ pub(super) fn or_user_input(value: Option<String>, prompt: &str) -> String {
 
 #[must_use]
 pub(super) fn read_user_password() -> SecretString {
-    let password = prompt_password(format!("{}: ", fl!("prompt-password")));
-    password.expect("Failed to read from input").into()
+    read_secret(&fl!("prompt-password"))
+}
+
+/// Prompt on the tty without echo.
+#[must_use]
+pub(super) fn read_secret(prompt: &str) -> SecretString {
+    let secret =
+        Zeroizing::new(prompt_password(format!("{prompt}: ")).expect("Failed to read from input"));
+    // `From<&str>` copies; `From<String>` would shrink the buffer and free the old one unwiped.
+    SecretString::from(secret.as_str())
 }
 
 /// Returns `None` if stdin reached end of input before a line was read.
