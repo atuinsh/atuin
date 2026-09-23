@@ -3,6 +3,7 @@ use atuin_client::settings::Settings;
 use atuin_common::logs::{FileConfig, LogConfig, StderrConfig};
 use atuin_common::shell::Shell;
 use clap::{Args, Subcommand};
+use secrecy::SecretString;
 pub(crate) mod inline;
 
 #[derive(Args, Debug)]
@@ -17,7 +18,7 @@ pub struct AiArgs {
 
     /// Custom API token; defaults to reading from the `ai.api_token` setting.
     #[arg(long, global = true)]
-    api_token: Option<String>,
+    api_token: Option<SecretString>,
 }
 
 #[derive(Subcommand, Debug)]

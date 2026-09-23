@@ -11,6 +11,7 @@ use eyre::Result;
 use futures::StreamExt;
 use reqwest::Url;
 use reqwest::header::USER_AGENT;
+use secrecy::{ExposeSecret, SecretString};
 
 use crate::context::{ClientContext, capability_strings};
 
@@ -89,7 +90,7 @@ impl ChatRequest {
 #[allow(clippy::too_many_arguments)]
 pub fn create_chat_stream(
     hub_address: Url,
-    token: String,
+    token: Option<SecretString>,
     token_from_hub_session: bool,
     request: ChatRequest,
     client_ctx: ClientContext,
@@ -149,8 +150,8 @@ pub fn create_chat_stream(
             .header("Accept", "text/event-stream")
             .header(USER_AGENT, APP_USER_AGENT)
             .json(&request_body);
-        if !token.is_empty() {
-            request_builder = request_builder.bearer_auth(&token);
+        if let Some(token) = &token {
+            request_builder = request_builder.bearer_auth(token.expose_secret());
         }
         let response = match request_builder.send().await {
             Ok(resp) => resp,
@@ -166,7 +167,7 @@ pub fn create_chat_stream(
                 tracing::error!("SSE request failed with status: {status}, clearing session");
                 let _ = atuin_client::hub::delete_session().await;
                 yield Err(eyre::eyre!("Hub session expired. Re-run to authenticate again."));
-            } else if token.is_empty() {
+            } else if token.is_none() {
                 tracing::error!("SSE request failed with status: {status}");
                 yield Err(eyre::eyre!("The endpoint requires authentication. Set ai.api_token in your config."));
             } else {

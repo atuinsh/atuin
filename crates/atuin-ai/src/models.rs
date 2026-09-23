@@ -9,6 +9,7 @@ use std::time::Duration;
 use atuin_common::url::UrlAppendExt;
 use eyre::{Context, Result};
 use reqwest::header::USER_AGENT;
+use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -27,15 +28,18 @@ pub struct ModelList {
 
 /// Fetch the models available to this user. Sent authenticated because the
 /// server includes feature-flag-gated models only for entitled users.
-pub async fn fetch_models(endpoint: &reqwest::Url, token: &str) -> Result<ModelList> {
+pub async fn fetch_models(
+    endpoint: &reqwest::Url,
+    token: Option<&SecretString>,
+) -> Result<ModelList> {
     let url = endpoint.append_path("api/cli/models")?;
 
     let mut request = reqwest::Client::new()
         .get(url)
         .header(USER_AGENT, crate::stream::APP_USER_AGENT)
         .timeout(Duration::from_secs(10));
-    if !token.is_empty() {
-        request = request.bearer_auth(token);
+    if let Some(token) = token {
+        request = request.bearer_auth(token.expose_secret());
     }
     let response = request.send().await.context("failed to fetch model list")?;
 
