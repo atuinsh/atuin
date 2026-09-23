@@ -1630,6 +1630,9 @@ impl Settings {
     /// This resolves `data_dir`, initializes the data directory on disk,
     /// and layers defaults → config file → env overrides. Both `new()` and
     /// `get_config_value()` use this so the resolution logic lives in one place.
+    ///
+    /// Keep in step with [`Self::build_config_blocking`], its twin for runtime-less threads such as
+    /// the config watcher's.
     async fn build_config() -> Result<Config> {
         let config_file = Self::get_config_path().await?;
         let text = if fs::exists(&config_file).await.unwrap_or(false) {
@@ -1656,6 +1659,9 @@ impl Settings {
 
     /// Equivalent to [`Self::build_config`], except it blocks, so it must not run on a tokio
     /// runtime thread.
+    ///
+    /// It exists for threads with no runtime to await `build_config` on, such as the config
+    /// watcher's; any change to one must land in the other.
     fn build_config_blocking() -> Result<Config> {
         let config_dir = atuin_common::utils::config_dir();
         fs::blocking::create_dir_all(&config_dir)
