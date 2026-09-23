@@ -26,7 +26,7 @@ pub enum Backoff {
     ///
     /// A value of [`Duration::ZERO`] spins: the function is polled as fast as possible with no
     /// delay between polls.
-    Linear(Duration),
+    Constant(Duration),
 
     /// Poll the future as required with exponential backoff.
     ///
@@ -72,7 +72,7 @@ impl Backoff {
 
         tokio::time::timeout(timeout, async {
             match self {
-                Self::Linear(period) => loop {
+                Self::Constant(period) => loop {
                     tokio::time::sleep(jittered(period)).await;
                     match fxn().await {
                         ControlFlow::Break(value) => return value,
@@ -122,7 +122,7 @@ impl Backoff {
 
         let deadline = Instant::now().checked_add(timeout);
         let (mut backoff, max) = match self {
-            Self::Linear(period) => (period, Duration::MAX),
+            Self::Constant(period) => (period, Duration::MAX),
             Self::Exponential { initial, max, .. } => (initial.min(max), max),
         };
 
@@ -171,7 +171,7 @@ impl Backoff {
         }
 
         match self {
-            Self::Linear(period) => loop {
+            Self::Constant(period) => loop {
                 tokio::time::sleep(jittered(period)).await;
                 if let ControlFlow::Break(value) = fxn().await {
                     return value;
@@ -244,7 +244,7 @@ mod tests {
     #[case::first_attempt(1)]
     #[case::after_retries(4)]
     fn retry_blocking_breaks_after(#[case] attempts: u32) {
-        let backoff = Backoff::Linear(Duration::from_millis(1));
+        let backoff = Backoff::Constant(Duration::from_millis(1));
         let mut calls = 0;
         let result: Result<u32, ()> = backoff.retry_blocking(
             || {
@@ -263,7 +263,7 @@ mod tests {
     #[rstest]
     fn retry_blocking_gives_up_after_timeout() {
         // Never breaks: returns the last Continue reason once the timeout elapses.
-        let backoff = Backoff::Linear(Duration::from_millis(1));
+        let backoff = Backoff::Constant(Duration::from_millis(1));
         let result: Result<(), u32> =
             backoff.retry_blocking(|| ControlFlow::Continue(7), Duration::from_millis(20));
         assert_eq!(result, Err(7));
