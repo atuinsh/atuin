@@ -90,6 +90,18 @@ pub enum KeyFileLoadOrGenerateError {
     TempFilesExhausted,
 }
 
+/// Owner read/write only, since the key file decrypts all synced data.
+#[cfg(unix)]
+const KEY_FILE_MODE: u32 = 0o600;
+
+fn key_file_options() -> fs::OpenOptions {
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, KEY_FILE_MODE);
+    opts
+}
+
 /// A type which contains a [`Key`] encoded as a B64 string. See [`Key::encode`] for more details.
 #[derive(Clone, Debug)]
 pub struct PlainTextEncodedKey(SecretString);
@@ -278,18 +290,18 @@ impl Key {
             // `tmp_path` is first so it gets dropped after `tmp_file`. `tmp_path` is a
             // `RemoveOnDropPath` so it will remove the file when dropped, but this will fail on
             // Windows if the file is still open.
-            let (tmp_path, mut tmp_file) =
-                match fs::OpenOptions::new().write(true).create_new(true).open(&tmp_path) {
-                    Ok(file) => (crate::fs::RemoveOnDropPath(tmp_path), file),
-                    Err(e) if e.kind() == ErrorKind::AlreadyExists => {
-                        // This error will essentially never happen in practice. It requires
-                        // `/path/to/.key.atuin-tmp.{i}` to exist for *every* `i` up to
-                        // `usize::MAX`.
-                        i = i.checked_add(1).ok_or(KeyFileStoringError::TempFilesExhausted)?;
-                        continue;
-                    }
-                    Err(e) => return Err(e.into()),
-                };
+            let (tmp_path, mut tmp_file) = match key_file_options().create_new(true).open(&tmp_path)
+            {
+                Ok(file) => (crate::fs::RemoveOnDropPath(tmp_path), file),
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                    // This error will essentially never happen in practice. It requires
+                    // `/path/to/.key.atuin-tmp.{i}` to exist for *every* `i` up to
+                    // `usize::MAX`.
+                    i = i.checked_add(1).ok_or(KeyFileStoringError::TempFilesExhausted)?;
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
 
             tmp_file.write_all(self.encode().dangerously_leak_secret().as_bytes())?;
             tmp_file.sync_all()?;
@@ -309,7 +321,7 @@ impl Key {
         // condition where another process could observe a partially written key file, but it is
         // better than unconditionally failing to create the key file. In any case we are careful
         // not to overwrite an existing key file.
-        let mut file = match std::fs::OpenOptions::new().write(true).create_new(true).open(path) {
+        let mut file = match key_file_options().create_new(true).open(path) {
             Ok(file) => file,
             Err(e) if e.kind() == ErrorKind::AlreadyExists => {
                 return Err(KeyFileStoringError::AlreadyExists);
@@ -328,7 +340,10 @@ impl Key {
         // partially written key file. We should write to a temp file, similar to
         // `Self::try_write_path`, and then use `rename` to move it to the key path (not `hardlink`
         // because we do want it to overwrite an existing key).
-        let mut file = fs::File::create(path)?;
+        let mut file = key_file_options().create(true).truncate(true).open(path)?;
+        // The mode only applies on creation, so tighten a key file written before it was set.
+        #[cfg(unix)]
+        file.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(KEY_FILE_MODE))?;
         file.write_all(self.encode().dangerously_leak_secret().as_bytes())?;
 
         Ok(())
@@ -877,5 +892,26 @@ mod test {
             .collect();
         names.sort();
         assert_eq!(names, ["key"], "the temporary file was left behind");
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    fn key_file_is_owner_only(#[values(false, true)] preexisting: bool) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("key");
+        let key = Key::from([0x44u8; 32]);
+
+        if preexisting {
+            fs::write(&path, "stale").expect("write stale key");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("chmod");
+            key.overwrite_path(&path).expect("overwrite the key");
+        } else {
+            key.try_write_path(&path).expect("write the key");
+        }
+
+        let mode = fs::metadata(&path).expect("stat key").permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 }
