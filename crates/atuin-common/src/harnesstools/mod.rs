@@ -18,6 +18,8 @@ use pi::Pi;
 use session::Observable;
 use session::any::AnySessions;
 
+use crate::sync::BlockingPool;
+
 /// Defines a generic harness trait that all implementations need to implement.
 #[enum_dispatch]
 pub trait Harness: std::fmt::Debug {
@@ -97,27 +99,31 @@ impl AnyHarness {
         &[Self::ClaudeCode(Ccode), Self::Codex(Codex), Self::Opencode(Opencode), Self::Pi(Pi)]
     }
 
+    /// The harness's sessions, whose file reads all run in `pool`.
     #[must_use]
-    pub fn sessions(&self) -> Option<AnySessions> {
+    pub fn sessions(&self, pool: &BlockingPool) -> Option<AnySessions> {
         match self {
-            Self::ClaudeCode(h) => Some(h.sessions().into()),
-            Self::Codex(h) => Some(h.sessions().into()),
-            Self::Opencode(h) => Some(h.sessions().into()),
-            Self::Pi(h) => Some(h.sessions().into()),
+            Self::ClaudeCode(h) => Some(h.sessions(pool.clone()).into()),
+            Self::Codex(h) => Some(h.sessions(pool.clone()).into()),
+            Self::Opencode(h) => Some(h.sessions(pool.clone()).into()),
+            Self::Pi(h) => Some(h.sessions(pool.clone()).into()),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
     use rstest::rstest;
 
     use super::*;
 
     #[rstest]
     fn every_harness_is_observable() {
+        let pool = BlockingPool::new(NonZeroUsize::MIN);
         for harness in AnyHarness::all() {
-            assert!(harness.sessions().is_some(), "{} is not observable", harness.name());
+            assert!(harness.sessions(&pool).is_some(), "{} is not observable", harness.name());
         }
     }
 }

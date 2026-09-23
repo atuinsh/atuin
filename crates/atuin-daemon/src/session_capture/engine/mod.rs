@@ -5,6 +5,7 @@ use std::time::Duration;
 use atuin_client::ai_session::{HarnessKind, HarnessSession, NativeSessionId};
 use atuin_common::harnesstools::AnyHarness;
 use atuin_common::harnesstools::session::{AnyMessage, RuntimeError, SessionEvent, SessionId};
+use atuin_common::sync::BlockingPool;
 use futures::StreamExt;
 use tokio::task::JoinHandle;
 
@@ -26,11 +27,11 @@ impl SessionCaptureEngine {
         }
     }
 
-    pub fn spawn(sink: &Arc<Sink>) -> Self {
+    pub fn spawn(sink: &Arc<Sink>, pool: &BlockingPool) -> Self {
         let mut listeners = Vec::new();
 
         for harness in AnyHarness::all() {
-            let Some(sessions) = harness.sessions() else {
+            let Some(sessions) = harness.sessions(pool) else {
                 continue;
             };
             let kind = HarnessKind::from(harness);
@@ -229,7 +230,13 @@ mod tests {
         if at == 0 {
             return 0;
         }
-        let Some(m) = atuin_common::json::jsonl::value_at::<CcodeMessage>(path, at).await else {
+        let Some(m) = atuin_common::json::jsonl::value_at::<CcodeMessage>(
+            path,
+            at,
+            &BlockingPool::new(std::num::NonZeroUsize::MIN),
+        )
+        .await
+        else {
             return 0;
         };
         if is_stored(sink, kind, session, &AnyMessage::from(m)).await {

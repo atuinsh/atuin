@@ -13,6 +13,8 @@ pub use model::{
 };
 use time::OffsetDateTime;
 
+use crate::sync::BlockingPool;
+
 /// Recursively scan `root` for session files, calling `accept(path, is_file)` on each non-directory
 /// entry to build a session. Directory, entry, and file-type read failures are surfaced as `Err`
 /// (never silently dropped) so a one-shot [`Sessions::existing`] scan can report a partial result.
@@ -237,7 +239,8 @@ pub trait Sessions {
 pub trait Observable {
     type Sessions: Sessions;
 
-    fn sessions(&self) -> Self::Sessions;
+    /// The harness's sessions, whose file reads all run in `pool`.
+    fn sessions(&self, pool: BlockingPool) -> Self::Sessions;
 }
 
 pub mod prelude {

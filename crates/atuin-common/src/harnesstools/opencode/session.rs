@@ -81,6 +81,7 @@ use crate::harnesstools::session::{
     WatchError,
 };
 use crate::os::fs::FdIdentity;
+use crate::sync::BlockingPool;
 use crate::utils::{env_nonempty, home_dir};
 
 #[derive(Debug, Clone, TypedBuilder)]
@@ -206,7 +207,9 @@ impl Sessions for OpencodeSessions {
 impl Observable for Opencode {
     type Sessions = OpencodeSessions;
 
-    fn sessions(&self) -> OpencodeSessions {
+    /// Opencode's sessions live in one SQLite database read through async connections, so nothing
+    /// runs in `_pool`.
+    fn sessions(&self, _pool: BlockingPool) -> OpencodeSessions {
         OpencodeSessions::builder().build()
     }
 }

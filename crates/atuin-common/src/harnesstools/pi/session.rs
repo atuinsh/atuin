@@ -17,12 +17,15 @@ use crate::harnesstools::session::{
     WatchError, scan_sessions,
 };
 use crate::json::jsonl;
+use crate::sync::BlockingPool;
 use crate::utils::{env_nonempty, home_dir};
 
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct PiSessions {
     #[builder(default, setter(strip_option, into))]
     root: Option<PathBuf>,
+    /// Runs every file read of the sessions this finds.
+    pool: BlockingPool,
 }
 
 impl PiSessions {
@@ -48,7 +51,10 @@ impl Sessions for PiSessions {
         if !root.is_dir() {
             return Err(RuntimeError::NotFound(root));
         }
-        Ok(PiListener { root })
+        Ok(PiListener {
+            root,
+            pool: self.pool.clone(),
+        })
     }
 
     fn existing(
@@ -59,18 +65,23 @@ impl Sessions for PiSessions {
         if !root.is_dir() {
             return Err(RuntimeError::NotFound(root));
         }
+        let pool = self.pool.clone();
         Ok(async_stream::stream! {
-            let scan = tokio::task::spawn_blocking(move || {
-                scan_sessions(root, PiListener::open_session)
-            })
-            .await;
+            let sessions_pool = pool.clone();
+            let scan = pool
+                .run(move || {
+                    scan_sessions(root, |path, is_file| {
+                        PiListener::open_session(path, is_file, &sessions_pool)
+                    })
+                })
+                .await;
             match scan {
                 Ok(items) => {
                     for item in items {
                         yield item;
                     }
                 }
-                Err(join) => yield Err(RuntimeError::Io(std::io::Error::other(join))),
+                Err(cancelled) => yield Err(RuntimeError::Io(std::io::Error::other(cancelled))),
             }
         })
     }
@@ -79,31 +90,32 @@ impl Sessions for PiSessions {
 impl Observable for Pi {
     type Sessions = PiSessions;
 
-    fn sessions(&self) -> PiSessions {
-        PiSessions::builder().build()
+    fn sessions(&self, pool: BlockingPool) -> PiSessions {
+        PiSessions::builder().pool(pool).build()
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct PiListener {
     root: PathBuf,
+    pool: BlockingPool,
 }
 
 impl PiListener {
     /// Build a read-once session for an accepted `jsonl` file (no change signal), or `None`.
-    fn open_session(path: &Path, is_file: bool) -> Option<PiSession> {
+    fn open_session(path: &Path, is_file: bool, pool: &BlockingPool) -> Option<PiSession> {
         if !is_file || path.extension().is_none_or(|ext| ext != "jsonl") {
             return None;
         }
         let stem = path.file_stem()?.to_string_lossy();
         let id = stem.split_once('_').map_or(stem.as_ref(), |(_, id)| id).to_owned();
-        Some(PiSession::open(SessionId::from(id), path.to_path_buf()))
+        Some(PiSession::open(SessionId::from(id), path.to_path_buf(), pool.clone()))
     }
 
     /// The session for an accepted file, paired with the change signal the watcher keeps alive
     /// for as long as the file exists.
-    fn accept(ctx: &NodeContext) -> Option<(PiSession, watch::Sender<()>)> {
-        let mut session = Self::open_session(ctx.path(), ctx.is_file())?;
+    fn accept(ctx: &NodeContext, pool: &BlockingPool) -> Option<(PiSession, watch::Sender<()>)> {
+        let mut session = Self::open_session(ctx.path(), ctx.is_file(), pool)?;
         let (signal, rx) = watch::channel(());
         session.changes = Some(rx);
         Some((session, signal))
@@ -115,10 +127,11 @@ impl Listener for PiListener {
 
     fn watch(self) -> impl Stream<Item = Result<PiSession, WatchError>> + Send + 'static {
         let root = self.root;
+        let pool = self.pool;
         async_stream::stream! {
             let (tx, rx) = flume::unbounded::<PiSession>();
             let _watcher = match TreeWatcher::builder().recursive(true).watch(&root, move |ctx| {
-                let (session, signal) = Self::accept(&ctx)?;
+                let (session, signal) = Self::accept(&ctx, &pool)?;
                 let _ = tx.send(session);
                 Some(signal)
             }) {
@@ -141,16 +154,18 @@ pub struct PiSession {
     path: PathBuf,
     /// Wakes [`messages`](Session::messages) on each change to the file; `None` reads it once.
     changes: Option<watch::Receiver<()>>,
+    pool: BlockingPool,
 }
 
 impl PiSession {
     /// A session over the file as it stands: [`messages`](Session::messages) ends at its end.
     #[must_use]
-    pub fn open(id: SessionId, path: PathBuf) -> Self {
+    pub fn open(id: SessionId, path: PathBuf, pool: BlockingPool) -> Self {
         Self {
             id,
             path,
             changes: None,
+            pool,
         }
     }
 }
@@ -163,18 +178,20 @@ impl Session for PiSession {
     }
 
     async fn message_at(&self, at: u64) -> Option<PiMessage> {
-        jsonl::value_at(&self.path, at).await
+        jsonl::value_at(&self.path, at, &self.pool).await
     }
 
     fn messages_from(
         self,
         from: u64,
     ) -> impl Stream<Item = Result<(u64, PiMessage), MessageError>> + Send + 'static {
-        jsonl::follow_from::<PiMessage>(self.path, from, self.changes).map_err(MessageError::from)
+        jsonl::follow_from::<PiMessage>(self.path, from, self.changes, self.pool)
+            .map_err(MessageError::from)
     }
 
     fn read(&self) -> impl Stream<Item = Result<PiMessage, MessageError>> + Send + 'static {
-        jsonl::read_all::<PiMessage>(self.path.clone()).map_err(MessageError::from)
+        jsonl::read_all::<PiMessage>(self.path.clone(), self.pool.clone())
+            .map_err(MessageError::from)
     }
 }
 
@@ -331,6 +348,11 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::sync::BlockingPool;
+
+    fn pool() -> BlockingPool {
+        BlockingPool::new(std::num::NonZeroUsize::MIN)
+    }
     use crate::futures::stream::timed_next;
     use crate::harnesstools::session::model::{Content, Role};
     use crate::harnesstools::session::{Message, Session, Sessions};
@@ -513,7 +535,8 @@ mod tests {
 
     #[rstest]
     fn listener_reports_not_found_for_a_missing_root() {
-        let sessions = PiSessions::builder().root(PathBuf::from("/no/such/pi")).build();
+        let sessions =
+            PiSessions::builder().root(PathBuf::from("/no/such/pi")).pool(pool()).build();
         assert!(matches!(sessions.listener(), Err(RuntimeError::NotFound(_))));
     }
 
@@ -537,7 +560,7 @@ mod tests {
             + "\n";
         std::fs::write(&path, body).unwrap();
 
-        let session = PiSession::open(SessionId::from("s1".to_owned()), path);
+        let session = PiSession::open(SessionId::from("s1".to_owned()), path, pool());
         let roles: Vec<Role> =
             session.messages().take(2).map_ok(|m| m.role()).try_collect().await.unwrap();
         assert_eq!(roles.last(), Some(&Role::Assistant));
@@ -555,8 +578,12 @@ mod tests {
         )
         .unwrap();
 
-        let listener =
-            PiSessions::builder().root(dir.path().to_path_buf()).build().listener().unwrap();
+        let listener = PiSessions::builder()
+            .root(dir.path().to_path_buf())
+            .pool(pool())
+            .build()
+            .listener()
+            .unwrap();
         let seen: Vec<SessionId> = tokio::time::timeout(
             std::time::Duration::from_secs(10),
             listener.watch().take(1).map_ok(|s| s.id()).try_collect(),
@@ -583,8 +610,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = session_file(dir.path());
 
-        let listener =
-            PiSessions::builder().root(dir.path().to_path_buf()).build().listener().unwrap();
+        let listener = PiSessions::builder()
+            .root(dir.path().to_path_buf())
+            .pool(pool())
+            .build()
+            .listener()
+            .unwrap();
         // The watch stream owns the watcher: it must outlive the message stream.
         let mut sessions = std::pin::pin!(listener.watch());
         let session = timed_next(&mut sessions, 10).await.unwrap().unwrap();
@@ -614,8 +645,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = session_file(dir.path());
 
-        let listener =
-            PiSessions::builder().root(dir.path().to_path_buf()).build().listener().unwrap();
+        let listener = PiSessions::builder()
+            .root(dir.path().to_path_buf())
+            .pool(pool())
+            .build()
+            .listener()
+            .unwrap();
         let mut sessions = std::pin::pin!(listener.watch());
         let session = timed_next(&mut sessions, 10).await.unwrap().unwrap();
         let mut messages = std::pin::pin!(session.messages());
@@ -652,7 +687,7 @@ mod tests {
         .join("\n")
             + "\n";
         std::fs::write(&path, body).unwrap();
-        let session = PiSession::open(SessionId::from("abc".to_owned()), path);
+        let session = PiSession::open(SessionId::from("abc".to_owned()), path, pool());
         let got: Vec<PiMessage> = session.read().try_collect().await.unwrap();
         assert_eq!(got.len(), 2);
     }
@@ -665,7 +700,7 @@ mod tests {
         std::fs::create_dir(dir.path().join("nested")).unwrap();
         std::fs::write(dir.path().join("nested").join("2_b.jsonl"), b"{}\n").unwrap();
         std::fs::write(dir.path().join("ignore.txt"), b"x").unwrap();
-        let sessions = PiSessions::builder().root(dir.path().to_path_buf()).build();
+        let sessions = PiSessions::builder().root(dir.path().to_path_buf()).pool(pool()).build();
         let mut ids: Vec<String> =
             sessions.existing().unwrap().map(|s| s.unwrap().id().into()).collect().await;
         ids.sort();
@@ -679,7 +714,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("1_real.jsonl"), b"{}\n").unwrap();
         std::os::unix::fs::symlink(dir.path(), dir.path().join("loop")).unwrap();
-        let sessions = PiSessions::builder().root(dir.path().to_path_buf()).build();
+        let sessions = PiSessions::builder().root(dir.path().to_path_buf()).pool(pool()).build();
         let ids: Vec<String> =
             sessions.existing().unwrap().map(|s| s.unwrap().id().into()).collect().await;
         assert_eq!(ids, vec!["real".to_string()]);

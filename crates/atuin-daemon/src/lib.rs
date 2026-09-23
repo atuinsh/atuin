@@ -1,3 +1,4 @@
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use atuin_client::ai_session::{AiSessionDatabase, AiSessionStore};
@@ -6,6 +7,7 @@ use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::settings::watcher::global_settings_watcher;
+use atuin_common::sync::BlockingPool;
 use eyre::Result;
 
 use crate::grpc::ai_session::pb::ai_session_server::AiSessionServer;
@@ -39,6 +41,10 @@ pub use output_capture::{
     CaptureError, DeleteOutputError, GetOutputError, OutputCaptureEngine, OutputLine, OutputMatch,
 };
 
+/// Blocking work running at once in the daemon's [`BlockingPool`]. Tokio's own blocking pool
+/// allows 512 threads, past macOS's default soft limit of 256 open files.
+const MAX_BLOCKING_WORKERS: NonZeroUsize = NonZeroUsize::new(32).expect("32 is non-zero");
+
 /// Boot the daemon using the new component-based architecture.
 ///
 /// This creates a daemon with the search component, spawns the background sync
@@ -50,6 +56,7 @@ pub async fn boot(
 ) -> Result<()> {
     // Create the components
     let search_component = SearchComponent::new();
+    let blocking_pool = BlockingPool::new(MAX_BLOCKING_WORKERS);
 
     let output_capture = match settings.output.limits() {
         Some(limits) => {
@@ -116,6 +123,7 @@ pub async fn boot(
                 db.clone(),
                 settings.ai.capture_sessions,
                 recovered,
+                blocking_pool.clone(),
             )
         }
         None => AiHarnessSessionCapture::nop().await,

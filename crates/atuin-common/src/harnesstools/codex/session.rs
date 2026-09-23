@@ -17,12 +17,15 @@ use crate::harnesstools::session::{
     WatchError, scan_sessions,
 };
 use crate::json::jsonl;
+use crate::sync::BlockingPool;
 use crate::utils::{env_nonempty, home_dir};
 
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct CodexSessions {
     #[builder(default, setter(strip_option, into))]
     root: Option<PathBuf>,
+    /// Runs every file read of the sessions this finds.
+    pool: BlockingPool,
 }
 
 impl CodexSessions {
@@ -44,7 +47,10 @@ impl Sessions for CodexSessions {
         if !root.is_dir() {
             return Err(RuntimeError::NotFound(root));
         }
-        Ok(CodexListener { root })
+        Ok(CodexListener {
+            root,
+            pool: self.pool.clone(),
+        })
     }
 
     fn existing(
@@ -55,18 +61,23 @@ impl Sessions for CodexSessions {
         if !root.is_dir() {
             return Err(RuntimeError::NotFound(root));
         }
+        let pool = self.pool.clone();
         Ok(async_stream::stream! {
-            let scan = tokio::task::spawn_blocking(move || {
-                scan_sessions(root, CodexListener::open_session)
-            })
-            .await;
+            let sessions_pool = pool.clone();
+            let scan = pool
+                .run(move || {
+                    scan_sessions(root, |path, is_file| {
+                        CodexListener::open_session(path, is_file, &sessions_pool)
+                    })
+                })
+                .await;
             match scan {
                 Ok(items) => {
                     for item in items {
                         yield item;
                     }
                 }
-                Err(join) => yield Err(RuntimeError::Io(std::io::Error::other(join))),
+                Err(cancelled) => yield Err(RuntimeError::Io(std::io::Error::other(cancelled))),
             }
         })
     }
@@ -75,19 +86,20 @@ impl Sessions for CodexSessions {
 impl Observable for Codex {
     type Sessions = CodexSessions;
 
-    fn sessions(&self) -> CodexSessions {
-        CodexSessions::builder().build()
+    fn sessions(&self, pool: BlockingPool) -> CodexSessions {
+        CodexSessions::builder().pool(pool).build()
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct CodexListener {
     root: PathBuf,
+    pool: BlockingPool,
 }
 
 impl CodexListener {
     /// Build a read-once session for an accepted codex rollout file (no change signal), or `None`.
-    fn open_session(path: &Path, is_file: bool) -> Option<CodexSession> {
+    fn open_session(path: &Path, is_file: bool, pool: &BlockingPool) -> Option<CodexSession> {
         let name = path.file_name()?.to_string_lossy();
         if !is_file || !name.starts_with("rollout-") || !name.ends_with(".jsonl") {
             return None;
@@ -97,13 +109,13 @@ impl CodexListener {
         groups.truncate(5);
         groups.reverse();
         let id = groups.join("-");
-        Some(CodexSession::open(SessionId::from(id), path.to_path_buf()))
+        Some(CodexSession::open(SessionId::from(id), path.to_path_buf(), pool.clone()))
     }
 
     /// The session for an accepted file, paired with the change signal the watcher keeps alive
     /// for as long as the file exists.
-    fn accept(ctx: &NodeContext) -> Option<(CodexSession, watch::Sender<()>)> {
-        let mut session = Self::open_session(ctx.path(), ctx.is_file())?;
+    fn accept(ctx: &NodeContext, pool: &BlockingPool) -> Option<(CodexSession, watch::Sender<()>)> {
+        let mut session = Self::open_session(ctx.path(), ctx.is_file(), pool)?;
         let (signal, rx) = watch::channel(());
         session.changes = Some(rx);
         Some((session, signal))
@@ -115,10 +127,11 @@ impl Listener for CodexListener {
 
     fn watch(self) -> impl Stream<Item = Result<CodexSession, WatchError>> + Send + 'static {
         let root = self.root;
+        let pool = self.pool;
         async_stream::stream! {
             let (tx, rx) = flume::unbounded::<CodexSession>();
             let _watcher = match TreeWatcher::builder().recursive(true).watch(&root, move |ctx| {
-                let (session, signal) = Self::accept(&ctx)?;
+                let (session, signal) = Self::accept(&ctx, &pool)?;
                 let _ = tx.send(session);
                 Some(signal)
             }) {
@@ -141,16 +154,18 @@ pub struct CodexSession {
     path: PathBuf,
     /// Wakes [`messages`](Session::messages) on each change to the file; `None` reads it once.
     changes: Option<watch::Receiver<()>>,
+    pool: BlockingPool,
 }
 
 impl CodexSession {
     /// A session over the file as it stands: [`messages`](Session::messages) ends at its end.
     #[must_use]
-    pub fn open(id: SessionId, path: PathBuf) -> Self {
+    pub fn open(id: SessionId, path: PathBuf, pool: BlockingPool) -> Self {
         Self {
             id,
             path,
             changes: None,
+            pool,
         }
     }
 }
@@ -163,19 +178,20 @@ impl Session for CodexSession {
     }
 
     async fn message_at(&self, at: u64) -> Option<CodexMessage> {
-        jsonl::value_at(&self.path, at).await
+        jsonl::value_at(&self.path, at, &self.pool).await
     }
 
     fn messages_from(
         self,
         from: u64,
     ) -> impl Stream<Item = Result<(u64, CodexMessage), MessageError>> + Send + 'static {
-        jsonl::follow_from::<CodexMessage>(self.path, from, self.changes)
+        jsonl::follow_from::<CodexMessage>(self.path, from, self.changes, self.pool)
             .map_err(MessageError::from)
     }
 
     fn read(&self) -> impl Stream<Item = Result<CodexMessage, MessageError>> + Send + 'static {
-        jsonl::read_all::<CodexMessage>(self.path.clone()).map_err(MessageError::from)
+        jsonl::read_all::<CodexMessage>(self.path.clone(), self.pool.clone())
+            .map_err(MessageError::from)
     }
 }
 
@@ -335,6 +351,11 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::sync::BlockingPool;
+
+    fn pool() -> BlockingPool {
+        BlockingPool::new(std::num::NonZeroUsize::MIN)
+    }
     use crate::futures::stream::timed_next;
     use crate::harnesstools::session::model::{Content, Role};
     use crate::harnesstools::session::{Message, Session, Sessions};
@@ -534,7 +555,8 @@ mod tests {
 
     #[rstest]
     fn listener_reports_not_found_for_a_missing_root() {
-        let sessions = CodexSessions::builder().root(PathBuf::from("/no/such/codex")).build();
+        let sessions =
+            CodexSessions::builder().root(PathBuf::from("/no/such/codex")).pool(pool()).build();
         assert!(matches!(sessions.listener(), Err(RuntimeError::NotFound(_))));
     }
 
@@ -557,7 +579,7 @@ mod tests {
             + "\n";
         std::fs::write(&path, body).unwrap();
 
-        let session = CodexSession::open(SessionId::from("th1".to_owned()), path);
+        let session = CodexSession::open(SessionId::from("th1".to_owned()), path, pool());
         let roles: Vec<Role> =
             session.messages().take(2).map_ok(|m| m.role()).try_collect().await.unwrap();
         assert_eq!(roles.last(), Some(&Role::User));
@@ -576,8 +598,12 @@ mod tests {
         )
         .unwrap();
 
-        let listener =
-            CodexSessions::builder().root(dir.path().to_path_buf()).build().listener().unwrap();
+        let listener = CodexSessions::builder()
+            .root(dir.path().to_path_buf())
+            .pool(pool())
+            .build()
+            .listener()
+            .unwrap();
         let seen: Vec<SessionId> = tokio::time::timeout(
             std::time::Duration::from_secs(10),
             listener.watch().take(1).map_ok(|s| s.id()).try_collect(),
@@ -606,8 +632,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = rollout(dir.path());
 
-        let listener =
-            CodexSessions::builder().root(dir.path().to_path_buf()).build().listener().unwrap();
+        let listener = CodexSessions::builder()
+            .root(dir.path().to_path_buf())
+            .pool(pool())
+            .build()
+            .listener()
+            .unwrap();
         // The watch stream owns the watcher: it must outlive the message stream.
         let mut sessions = std::pin::pin!(listener.watch());
         let session = timed_next(&mut sessions, 10).await.unwrap().unwrap();
@@ -636,8 +666,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = rollout(dir.path());
 
-        let listener =
-            CodexSessions::builder().root(dir.path().to_path_buf()).build().listener().unwrap();
+        let listener = CodexSessions::builder()
+            .root(dir.path().to_path_buf())
+            .pool(pool())
+            .build()
+            .listener()
+            .unwrap();
         let mut sessions = std::pin::pin!(listener.watch());
         let session = timed_next(&mut sessions, 10).await.unwrap().unwrap();
         let mut messages = std::pin::pin!(session.messages());

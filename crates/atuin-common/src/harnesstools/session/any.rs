@@ -150,14 +150,20 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::sync::BlockingPool;
+
+    fn pool() -> BlockingPool {
+        BlockingPool::new(std::num::NonZeroUsize::MIN)
+    }
     use crate::harnesstools::ccode::session::CcodeMessage;
     use crate::harnesstools::session::Message;
     use crate::harnesstools::session::model::Role;
 
     #[rstest]
     fn any_sessions_listener_reports_not_found() {
-        let sessions =
-            AnySessions::from(CcodeSessions::builder().root(PathBuf::from("/no/such")).build());
+        let sessions = AnySessions::from(
+            CcodeSessions::builder().root(PathBuf::from("/no/such")).pool(pool()).build(),
+        );
         assert!(matches!(sessions.listener(), Err(RuntimeError::NotFound(_))));
     }
 
