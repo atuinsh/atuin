@@ -118,7 +118,7 @@ pub async fn run_grpc_server(
         }
         if let Some(path) = cleanup_path {
             eprintln!("Removing socket...");
-            if let Err(e) = std::fs::remove_file(path)
+            if let Err(e) = atuin_common::fs::remove_file(path).await
                 && e.kind() != std::io::ErrorKind::NotFound
             {
                 eprintln!("failed to remove socket: {e}");

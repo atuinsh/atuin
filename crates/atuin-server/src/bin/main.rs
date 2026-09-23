@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
 
     match cmd {
         Cmd::Start { host, port } => {
-            let settings = Settings::new().wrap_err("could not load server settings")?;
+            let settings = Settings::new().await.wrap_err("could not load server settings")?;
             let host = host.as_ref().unwrap_or(&settings.host).clone();
             let port = port.unwrap_or(settings.port);
             let addr = SocketAddr::new(host.parse()?, port);

@@ -1,10 +1,9 @@
-use std::io::prelude::*;
 use std::path::PathBuf;
 
+use atuin_common::fs;
 use atuin_common::units::ByteSize;
 use config::{Config, Environment, File as ConfigFile, FileFormat};
 use eyre::{Result, eyre};
-use fs_err::{File, create_dir_all};
 use serde::{Deserialize, Serialize};
 
 use crate::db::DbSettings;
@@ -52,7 +51,7 @@ pub struct Settings {
 }
 
 impl Settings {
-    pub fn new() -> Result<Self> {
+    pub async fn new() -> Result<Self> {
         let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
             PathBuf::from(p)
         } else {
@@ -77,13 +76,12 @@ impl Settings {
             .set_default("metrics.port", 9001)?
             .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__"));
 
-        config_builder = if config_file.exists() {
+        config_builder = if fs::exists(&config_file).await? {
             config_builder
                 .add_source(ConfigFile::new(config_file.to_str().unwrap(), FileFormat::Toml))
         } else {
-            create_dir_all(config_file.parent().unwrap())?;
-            let mut file = File::create(config_file)?;
-            file.write_all(EXAMPLE_CONFIG.as_bytes())?;
+            fs::create_dir_all(config_file.parent().unwrap()).await?;
+            fs::write(&config_file, EXAMPLE_CONFIG).await?;
 
             config_builder
         };
@@ -103,6 +101,7 @@ pub fn example_config() -> &'static str {
 mod tests {
     use atuin_common::units::ByteSize;
     use config::{Config, File as ConfigFile, FileFormat};
+    use rstest::rstest;
 
     use super::Settings;
 
@@ -121,13 +120,13 @@ mod tests {
             .unwrap()
     }
 
-    #[test]
+    #[rstest]
     fn max_record_size_accepts_a_human_string() {
         let settings = settings_with_max_record_size("\"500MB\"");
         assert_eq!(settings.max_record_size, ByteSize::mb(500));
     }
 
-    #[test]
+    #[rstest]
     fn max_record_size_accepts_a_bare_integer() {
         let settings = settings_with_max_record_size("1048576");
         assert_eq!(settings.max_record_size, ByteSize::mib(1));
