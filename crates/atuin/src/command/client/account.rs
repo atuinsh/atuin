@@ -9,6 +9,8 @@ use clap::{Args, Subcommand};
 use eyre::{Context, Result};
 use tracing::instrument;
 
+use crate::i18n::fl;
+
 pub mod change_password;
 pub mod delete;
 pub mod link;
@@ -49,7 +51,7 @@ impl PasswordArg {
             Self::Value(password) => Ok(Some(password.clone())),
             Self::Stdin => {
                 let mut buf = String::new();
-                stdin.read_to_string(&mut buf).context("failed to read password from stdin")?;
+                stdin.read_to_string(&mut buf).context(fl!("account-password-stdin-failed"))?;
                 Ok(Some(buf.trim_end_matches(['\r', '\n']).to_owned()))
             }
         }
@@ -64,22 +66,22 @@ pub struct Cmd {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Login to the configured server
+    #[command(about = fl!("cmd-login"))]
     Login(login::Cmd),
 
-    /// Register a new account
+    #[command(about = fl!("cmd-account-register"))]
     Register(register::Cmd),
 
-    /// Log out
+    #[command(about = fl!("cmd-logout"))]
     Logout,
 
-    /// Delete your account, and all synced data
+    #[command(about = fl!("cmd-account-delete"))]
     Delete(delete::Cmd),
 
-    /// Change your password
+    #[command(about = fl!("cmd-account-change-password"))]
     ChangePassword(change_password::Cmd),
 
-    /// Link your CLI sync account to your Hub account
+    #[command(about = fl!("cmd-account-link"))]
     Link,
 }
 

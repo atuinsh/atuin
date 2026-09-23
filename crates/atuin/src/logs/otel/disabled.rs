@@ -5,10 +5,7 @@ use tracing_subscriber::registry::LookupSpan;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OtelCtxEnableError {
-    #[error(
-        "this build of atuin has no OpenTelemetry support: rebuild with the `profiling-traced` \
-         feature (e.g. `cargo build-traced`) to export `ATUIN_OTEL` traces"
-    )]
+    #[error("{}", crate::i18n::fl!("otel-not-compiled"))]
     NotCompiled,
 }
 

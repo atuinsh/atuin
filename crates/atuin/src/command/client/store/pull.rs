@@ -9,22 +9,27 @@ use atuin_domain::record::RecordTag;
 use clap::Args;
 use eyre::{Context as _, Result};
 
+use crate::i18n::fl;
+
 #[derive(Args, Debug)]
 pub struct Pull {
-    /// The tag to push (eg, 'history'). Defaults to all tags
-    #[arg(long, short)]
+    #[arg(long, short, help = fl!("arg-store-tag"))]
     pub tag: Option<RecordTag>,
 
-    /// Force push records
-    ///
-    /// This will first wipe the local store, and then download all records from the remote
-    #[arg(long, default_value = "false")]
+    #[arg(
+        long,
+        default_value = "false",
+        help = fl!("arg-store-pull-force"),
+        long_help = fl!("arg-store-pull-force", "long")
+    )]
     pub force: bool,
 
-    /// Page Size
-    ///
-    /// How many records to download at once. Defaults to 100
-    #[arg(long, default_value = "100")]
+    #[arg(
+        long,
+        default_value = "100",
+        help = fl!("arg-store-pull-page"),
+        long_help = fl!("arg-store-pull-page", "long")
+    )]
     pub page: NonZeroU64,
 }
 

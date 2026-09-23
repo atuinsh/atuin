@@ -27,103 +27,86 @@ mod syntax;
 
 use atuin_common::time::UtcOffsetSpec;
 
+use crate::i18n::fl;
+
 #[allow(clippy::struct_excessive_bools, clippy::struct_field_names)]
 #[derive(Parser, Debug)]
 pub struct Cmd {
-    /// Filter search result by directory
-    #[arg(long, short)]
+    #[arg(long, short, help = fl!("arg-search-cwd"))]
     cwd: Option<String>,
 
-    /// Exclude directory from results
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-search-exclude-cwd"))]
     exclude_cwd: Option<String>,
 
-    /// Filter by exit code; repeat to include any of the given codes
-    #[arg(long, short)]
+    #[arg(long, short, help = fl!("arg-search-exit"))]
     exit: Vec<i64>,
 
-    /// Exclude results with this exit code; repeat to exclude multiple codes
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-search-exclude-exit"))]
     exclude_exit: Vec<i64>,
 
-    /// Only include results added before this date.
-    ///
-    /// Read in the timezone from `--timezone` (or the configured one) unless it carries an
-    /// explicit offset; relative phrases like "yesterday 3pm" are anchored there too.
-    #[arg(long, short)]
+    #[arg(
+        long,
+        short,
+        help = fl!("arg-search-before"),
+        long_help = fl!("arg-search-before", "long")
+    )]
     before: Option<String>,
 
-    /// Only include results after this date; see `--before` for how it is interpreted.
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-search-after"))]
     after: Option<String>,
 
-    /// How many entries to return at most
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-search-limit"))]
     limit: Option<i64>,
 
-    /// Offset from the start of the results
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-search-offset"))]
     offset: Option<i64>,
 
-    /// Open interactive search UI
-    #[arg(long, short)]
+    #[arg(long, short, help = fl!("arg-search-interactive"))]
     interactive: bool,
 
-    /// Allow overriding filter mode over config
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-search-filter-mode"))]
     filter_mode: Option<FilterMode>,
 
-    /// Allow overriding search mode over config
-    ///
-    /// Note: for non-interactive searches, "daemon-fuzzy" behaves like "fuzzy". "skim" used to
-    /// behave like "fuzzy" in non-interactive searches too; it has since been removed but is still
-    /// accepted here as an alias of "fuzzy".
-    #[arg(long)]
+    #[arg(
+        long,
+        help = fl!("arg-search-search-mode"),
+        long_help = fl!("arg-search-search-mode", "long")
+    )]
     search_mode: Option<RequestedSearchMode>,
 
-    /// Marker argument used to inform atuin that it was invoked from a shell up-key binding (hidden from help to avoid confusion)
-    #[arg(long, hide = true)]
+    #[arg(long, hide = true, help = fl!("arg-search-shell-up-key-binding"))]
     shell_up_key_binding: bool,
 
-    /// Notify the keymap at the shell's side
-    #[arg(long, default_value = "auto")]
+    #[arg(long, default_value = "auto", help = fl!("arg-search-keymap-mode"))]
     keymap_mode: KeymapMode,
 
-    /// Use human-readable formatting for time
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-search-human"))]
     human: bool,
 
     #[arg(allow_hyphen_values = true)]
     query: Vec<String>,
 
-    /// Show only the text of the command
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-cmd-only"))]
     cmd_only: bool,
 
-    /// Terminate the output with a null, for better multiline handling
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-print0"))]
     print0: bool,
 
-    /// Delete anything matching this query. Will not print out the match
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-search-delete"))]
     delete: bool,
 
-    /// Delete EVERYTHING!
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-search-delete-it-all"))]
     delete_it_all: bool,
 
-    /// Reverse the order of results, oldest first
-    #[arg(long, short)]
+    #[arg(long, short, help = fl!("arg-search-reverse"))]
     reverse: bool,
 
-    /// Timezone to display command times in and to interpret `--before`/`--after` in, instead
-    /// of the configured default.
-    ///
-    /// This option takes one of the following kinds of values:
-    ///
-    /// - the special value "local" (or "l") which refers to the system time zone
-    /// - an offset from UTC (e.g. "+9", "-2:30")
-    #[arg(long, visible_alias = "tz", verbatim_doc_comment)]
+    #[arg(
+        long,
+        visible_alias = "tz",
+        help = fl!("arg-search-timezone"),
+        long_help = fl!("arg-search-timezone", "long")
+    )]
     // `num_args = 0..=1` allows a user to run `atuin search --tz` with no argument to `--tz`. This
     // does the same thing as not providing the flag, but we previously allowed it (via an
     // `Option<Option<T>>` field type), so let's keep supporting it to avoid breaking existing
@@ -131,37 +114,27 @@ pub struct Cmd {
     #[arg(allow_hyphen_values = true, num_args = 0..=1)]
     timezone: Option<UtcOffsetSpec>,
 
-    /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {time}, {exit} and
-    /// {relativetime}.
-    ///
-    /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
-    #[arg(long, short)]
+    #[arg(
+        long,
+        short,
+        help = fl!("arg-search-format"),
+        long_help = fl!("arg-search-format", "long")
+    )]
     format: Option<String>,
 
-    /// Set the maximum number of lines Atuin's interface should take up.
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-search-inline-height"))]
     inline_height: Option<u16>,
 
-    /// Filter by author. Supports $all-user (non-agents), $all-agent, or literal names.
-    ///
-    /// Can be specified multiple times.
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-search-author"), long_help = fl!("arg-search-author", "long"))]
     author: Vec<AuthorPattern>,
 
-    /// Include duplicate commands in the output (non-interactive only)
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-search-include-duplicates"))]
     include_duplicates: bool,
 
-    /// File name to write the result to (hidden from help as this is meant to be used from a script)
-    #[arg(long, hide = true)]
+    #[arg(long, hide = true, help = fl!("arg-search-result-file"))]
     result_file: Option<String>,
 
-    /// Filter by the shell that was used to run the command
-    ///
-    /// If passed multiple times, commands from any of the shells will be shown.
-    ///
-    /// `--shell ""` will include commands for which the shell is unknown.
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-search-shell"), long_help = fl!("arg-search-shell", "long"))]
     shell: Vec<String>,
 }
 

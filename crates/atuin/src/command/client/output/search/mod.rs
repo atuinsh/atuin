@@ -21,25 +21,26 @@ mod writers;
 use writers::{HistoryMatch, JsonWriter, PlainWriter, PrettyWriter, RenderCtx, Writer};
 
 use crate::command::client::daemon;
+use crate::i18n::fl;
 
 #[derive(Debug, Error)]
 pub enum RunError {
-    #[error("output capture is disabled. enable [output] in your config to search command output.")]
+    #[error("{}", fl!("output-search-disabled"))]
     Disabled,
 
-    #[error("blank query provided. please run 'atuin output search --help'")]
+    #[error("{}", fl!("output-search-empty-query"))]
     EmptyQuery,
 
-    #[error("could not connect to the daemon")]
+    #[error("{}", fl!("output-search-connect-failed"))]
     Connect(#[source] eyre::Report),
 
-    #[error("the daemon failed to search command output")]
+    #[error("{}", fl!("output-search-daemon-failed"))]
     Search(#[source] eyre::Report),
 
-    #[error("could not load history from the local database")]
+    #[error("{}", fl!("output-search-load-history-failed"))]
     LoadHistory(#[source] eyre::Report),
 
-    #[error("could not write search results")]
+    #[error("{}", fl!("output-search-write-failed"))]
     Write(#[from] io::Error),
 }
 
@@ -48,30 +49,25 @@ enum Style {
     Auto,
     Plain,
     Pretty,
-    /// A single JSON array of match objects.
+    #[value(help = fl!("value-output-search-style-json"))]
     Json,
-    /// Newline-delimited JSON: one match object per line.
+    #[value(help = fl!("value-output-search-style-ndjson"))]
     Ndjson,
 }
 
 /// Full-text search over captured command output.
 #[derive(Parser, Debug)]
 pub struct Cmd {
-    /// Words to search for; all must appear. Use `--` before a query that starts with `-`.
-    #[arg(required = true)]
+    #[arg(required = true, help = fl!("arg-output-search-query"))]
     query: Vec<String>,
 
-    /// Maximum number of matches to return.
-    #[arg(long, default_value_t = 5)]
+    #[arg(long, default_value_t = 5, help = fl!("arg-output-search-limit"))]
     limit: u32,
 
-    /// Show only the matching lines, with this many lines of context on either side; without it,
-    /// each match's whole output.
-    #[arg(short = 'C', long)]
+    #[arg(short = 'C', long, help = fl!("arg-output-search-context"))]
     context: Option<u32>,
 
-    /// How matches are rendered.
-    #[arg(long, value_enum, default_value_t = Style::Auto)]
+    #[arg(long, value_enum, default_value_t = Style::Auto, help = fl!("arg-output-search-style"))]
     style: Style,
 }
 

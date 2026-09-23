@@ -18,14 +18,14 @@ use clap::Subcommand;
 use daemonix::Daemonize;
 use eyre::{Result, WrapErr, bail, eyre};
 
+use crate::i18n::fl;
+
 #[derive(clap::Args, Debug)]
 pub struct Cmd {
-    /// Internal flag for daemonization
-    #[arg(long, hide = true)]
+    #[arg(long, hide = true, help = fl!("arg-daemon-daemonize"))]
     daemonize: bool,
 
-    /// Also write daemon logs to the console (useful for debugging)
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-daemon-show-logs"))]
     show_logs: bool,
 
     #[command(subcommand)]
@@ -35,27 +35,25 @@ pub struct Cmd {
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum SubCmd {
-    /// Start the daemon server
+    #[command(about = fl!("cmd-daemon-start"))]
     Start {
         #[arg(long, hide = true)]
         daemonize: bool,
 
-        /// Also write daemon logs to the console (useful for debugging)
-        #[arg(long)]
+        #[arg(long, help = fl!("arg-daemon-show-logs"))]
         show_logs: bool,
 
-        /// Force start: kill existing daemon process and reset the socket
-        #[arg(long)]
+        #[arg(long, help = fl!("arg-daemon-start-force"))]
         force: bool,
     },
 
-    /// Show the daemon's current status
+    #[command(about = fl!("cmd-daemon-status"))]
     Status,
 
-    /// Stop the daemon gracefully
+    #[command(about = fl!("cmd-daemon-stop"))]
     Stop,
 
-    /// Restart the daemon (stop, then start in background)
+    #[command(about = fl!("cmd-daemon-restart"))]
     Restart,
 }
 
@@ -276,7 +274,14 @@ fn startup_timeout(settings: &Settings) -> Duration {
 /// An error that occurred while trying to remove a socket.
 #[cfg(unix)]
 #[derive(Debug, thiserror::Error)]
-#[error("failed to remove daemon socket {}: {source}", .path.display())]
+#[error(
+    "{}",
+    fl!(
+        "daemon-remove-socket-failed",
+        path = .path.display().to_string(),
+        source = .source.to_string()
+    )
+)]
 struct RemoveSocketError {
     path: PathBuf,
     source: std::io::Error,
@@ -680,6 +685,19 @@ mod tests {
     use rstest::{fixture, rstest};
 
     use super::*;
+
+    #[cfg(unix)]
+    #[rstest]
+    fn remove_socket_error_names_the_path_and_cause() {
+        let err = RemoveSocketError {
+            path: PathBuf::from("/run/atuin.sock"),
+            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        };
+        assert_eq!(
+            err.to_string(),
+            "failed to remove daemon socket /run/atuin.sock: permission denied"
+        );
+    }
 
     #[rstest]
     #[case::matches(DAEMON_VERSION, DAEMON_PROTOCOL_VERSION, true)]

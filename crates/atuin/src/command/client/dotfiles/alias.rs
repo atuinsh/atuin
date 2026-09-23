@@ -5,34 +5,37 @@ use atuin_dotfiles::store::AliasStore;
 use clap::{Subcommand, ValueEnum};
 use eyre::{Context, Result};
 
+use crate::i18n::fl;
+
 #[derive(Clone, Copy, Debug, Default, ValueEnum)]
 pub enum SortBy {
-    /// Sort by alias name
+    #[value(help = fl!("value-dotfiles-alias-list-sort-by-name"))]
     #[default]
     Name,
-    /// Sort by alias value
+    #[value(help = fl!("value-dotfiles-alias-list-sort-by-value"))]
     Value,
 }
 
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
-    /// List all aliases
+    #[command(about = fl!("cmd-dotfiles-alias-list"))]
     List {
-        /// Sort results by field
-        #[arg(long, value_enum, default_value_t = SortBy::Name)]
+        #[arg(
+            long,
+            value_enum,
+            default_value_t = SortBy::Name,
+            help = fl!("arg-dotfiles-list-sort-by")
+        )]
         sort_by: SortBy,
 
-        /// Sort in reverse (descending) order
-        #[arg(long, short)]
+        #[arg(long, short, help = fl!("arg-dotfiles-list-reverse"))]
         reverse: bool,
 
-        /// Filter aliases by name (substring match)
-        #[arg(long, short)]
+        #[arg(long, short, help = fl!("arg-dotfiles-alias-list-name"))]
         name: Option<String>,
 
-        /// Filter aliases by value (substring match)
-        #[arg(long, short)]
+        #[arg(long, short, help = fl!("arg-dotfiles-alias-list-value"))]
         value: Option<String>,
     },
 }

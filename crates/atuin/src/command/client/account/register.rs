@@ -7,14 +7,14 @@ use eyre::{Result, bail};
 
 use super::PasswordArg;
 use super::login::or_user_input;
+use crate::i18n::fl;
 
 #[derive(Parser, Debug)]
 pub struct Cmd {
     #[clap(long, short)]
     pub username: Option<String>,
 
-    /// Your password, or `-` to read it from stdin. Falls back to `ATUIN_PASSWORD`, then a prompt
-    #[clap(long, short)]
+    #[clap(long, short, help = fl!("arg-password"))]
     pub password: Option<PasswordArg>,
 
     #[clap(long, short)]
@@ -26,21 +26,18 @@ impl Cmd {
     pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         match settings.resolve_sync_auth().await {
             SyncAuth::Hub { .. } => {
-                println!("You are already authenticated with Atuin Hub.");
-                println!("Run 'atuin logout' to log out.");
+                println!("{}", fl!("account-hub-authenticated"));
+                println!("{}", fl!("account-run-logout"));
                 return Ok(());
             }
             SyncAuth::Legacy { .. } => {
-                println!("You are already logged in.");
-                println!("Run 'atuin logout' to log out.");
+                println!("{}", fl!("register-legacy-already"));
+                println!("{}", fl!("account-run-logout"));
                 return Ok(());
             }
             SyncAuth::HubViaCli { .. } => {
-                println!(
-                    "You already have a sync session. Run 'atuin login' to upgrade to full Hub \
-                     authentication."
-                );
-                println!("Run 'atuin logout' first if you want to register a new account.");
+                println!("{}", fl!("register-has-legacy-session"));
+                println!("{}", fl!("register-logout-first"));
                 return Ok(());
             }
             SyncAuth::NotLoggedIn { .. } => {}
@@ -63,7 +60,7 @@ impl Cmd {
                 let client = auth::auth_client(settings).await;
 
                 if password.is_empty() {
-                    bail!("please provide a password");
+                    bail!(fl!("account-provide-password"));
                 }
 
                 let response = client.register(username, email, password).await?;
@@ -78,36 +75,21 @@ impl Cmd {
                             meta.save_hub_session(&session).await?;
                         } else {
                             meta.save_session(&session).await?;
-                            println!(
-                                "\nNote: Your account has not been fully migrated to Atuin Hub."
-                            );
-                            println!(
-                                "Sync will continue to work, but you can visit hub.atuin.sh to \
-                                 create a new Hub account and link it to your existing CLI \
-                                 account."
-                            );
+                            println!("\n{}", fl!("account-not-migrated-note"));
+                            println!("{}", fl!("account-not-migrated-hint"));
                         }
                     }
                     AuthResponse::TwoFactorRequired => {
-                        bail!("unexpected two-factor requirement during registration");
+                        bail!(fl!("register-unexpected-2fa"));
                     }
                 }
 
                 let _key = paseto_v4::Key::try_load_or_generate(&settings.key_path)?;
 
-                println!(
-                    "Registration successful! Please make a note of your key (run 'atuin key') \
-                     and keep it safe."
-                );
-                println!(
-                    "You will need it to log in on other devices, and we cannot help recover it \
-                     if you lose it."
-                );
+                println!("{}", fl!("register-success-key"));
+                println!("{}", fl!("register-key-warning"));
             } else {
-                println!(
-                    "Username, password, and email are all required for headless registration. \
-                     Continuing with interactive registration.\n"
-                );
+                println!("{}\n", fl!("register-headless-incomplete"));
 
                 // Interactive registration: delegate to the browser OAuth flow.
                 // Registration on Hub happens on the website; the CLI just needs
@@ -124,15 +106,15 @@ impl Cmd {
             }
         } else {
             // Legacy registration flow
-            println!("Registering for an Atuin Sync account");
+            println!("{}", fl!("register-legacy-start"));
 
-            let username = or_user_input(self.username.clone(), "username");
-            let email = or_user_input(self.email.clone(), "email");
+            let username = or_user_input(self.username.clone(), &fl!("prompt-username"));
+            let email = or_user_input(self.email.clone(), &fl!("prompt-email"));
             let password = PasswordArg::resolve(self.password.as_ref(), std::io::stdin().lock())?
                 .unwrap_or_else(super::login::read_user_password);
 
             if password.is_empty() {
-                bail!("please provide a password");
+                bail!(fl!("account-provide-password"));
             }
 
             let session = atuin_client::api_client::register(
@@ -149,14 +131,8 @@ impl Cmd {
 
             let _key = paseto_v4::Key::try_load_or_generate(&settings.key_path)?;
 
-            println!(
-                "Registration successful! Please make a note of your key (run 'atuin key') and \
-                 keep it safe."
-            );
-            println!(
-                "You will need it to log in on other devices, and we cannot help recover it if \
-                 you lose it."
-            );
+            println!("{}", fl!("register-success-key"));
+            println!("{}", fl!("register-key-warning"));
         }
 
         Ok(())

@@ -9,6 +9,8 @@ use itertools::Itertools;
 use time::OffsetDateTime;
 use tracing::instrument;
 
+use crate::i18n::fl;
+
 #[cfg(feature = "sync")]
 mod push;
 
@@ -23,26 +25,26 @@ mod verify;
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
-    /// Print the current status of the record store
+    #[command(about = fl!("cmd-store-status"))]
     Status,
 
-    /// Rebuild a store (eg atuin store rebuild history)
+    #[command(about = fl!("cmd-store-rebuild"))]
     Rebuild(rebuild::Rebuild),
 
-    /// Re-encrypt the store with a new key (potential for data loss!)
+    #[command(about = fl!("cmd-store-rekey"))]
     Rekey(rekey::Rekey),
 
-    /// Delete all records in the store that cannot be decrypted with the current key
+    #[command(about = fl!("cmd-store-purge"))]
     Purge(purge::Purge),
 
-    /// Verify that all records in the store can be decrypted with the current key
+    #[command(about = fl!("cmd-store-verify"))]
     Verify(verify::Verify),
 
-    /// Push all records to the remote sync server (one way sync)
+    #[command(about = fl!("cmd-store-push"))]
     #[cfg(feature = "sync")]
     Push(push::Push),
 
-    /// Pull records from the remote sync server (one way sync)
+    #[command(about = fl!("cmd-store-pull"))]
     #[cfg(feature = "sync")]
     Pull(pull::Pull),
 }

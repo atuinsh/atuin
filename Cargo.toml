@@ -85,6 +85,8 @@ glob-match = "0.2"
 http = "1"
 humantime = "2"
 hyper-util = "0.1"
+i18n-embed = { version = "0.16", features = ["fluent-system"] }
+i18n-embed-fl = "0.10"
 imara-diff = "0.2"
 indicatif = "0.18"
 interim = { version = "0.2", features = ["time_0_3"] }
@@ -131,6 +133,7 @@ rmp = "0.8"
 rpassword = "7"
 rstest = "0.27"
 runtime-format = "0.1"
+rust-embed = "8"
 rustix = { version = "1", features = ["process", "fs", "pty", "termios", "stdio", "event"] }
 schemars = "1"
 rusty_paserk = { version = "0.5", default-features = false, features = ["v4", "serde"] }
