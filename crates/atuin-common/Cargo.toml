@@ -47,6 +47,7 @@ rmp = { workspace = true }
 schemars = { workspace = true }
 rusty_paserk = { workspace = true }
 rusty_paseto = { workspace = true }
+secrecy = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

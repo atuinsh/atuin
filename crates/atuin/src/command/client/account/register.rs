@@ -4,6 +4,7 @@ use atuin_client::settings::{Settings, SyncAuth};
 use atuin_common::encryption::paseto_v4;
 use clap::Parser;
 use eyre::{Result, bail};
+use secrecy::ExposeSecret;
 
 use super::PasswordArg;
 use super::login::or_user_input;
@@ -59,7 +60,7 @@ impl Cmd {
                 // Headless registration via v0 API (for CI / scripting).
                 let client = auth::auth_client(settings).await;
 
-                if password.is_empty() {
+                if password.expose_secret().is_empty() {
                     bail!(fl!("account-provide-password"));
                 }
 
@@ -68,8 +69,8 @@ impl Cmd {
                 match response {
                     AuthResponse::Success { session, auth_type } => {
                         let meta = Settings::meta_store().await?;
-                        let is_hub_token =
-                            auth_type.as_deref() == Some("hub") || session.starts_with("atapi_");
+                        let is_hub_token = auth_type.as_deref() == Some("hub")
+                            || atuin_client::meta::is_hub_token(&session);
 
                         if is_hub_token {
                             meta.save_hub_session(&session).await?;
@@ -113,7 +114,7 @@ impl Cmd {
             let password = PasswordArg::resolve(self.password.as_ref(), std::io::stdin().lock())?
                 .unwrap_or_else(super::login::read_user_password);
 
-            if password.is_empty() {
+            if password.expose_secret().is_empty() {
                 bail!(fl!("account-provide-password"));
             }
 

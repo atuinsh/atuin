@@ -2,6 +2,7 @@ use atuin_domain::record::{
     EncryptedData, Host, HostId, Record, RecordIdx, RecordSeriesKey, RecordTag, RecordVersion,
 };
 use easy_cast::Conv;
+use secrecy::SecretString;
 use sqlx::Row;
 
 #[derive(sqlx::FromRow)]
@@ -16,7 +17,8 @@ pub struct User {
 pub struct Session {
     pub id: i64,
     pub user_id: i64,
-    pub token: String,
+    #[sqlx(try_from = "String")]
+    pub token: SecretString,
 }
 
 pub struct NewUser {
@@ -27,7 +29,7 @@ pub struct NewUser {
 
 pub struct NewSession {
     pub user_id: i64,
-    pub token: String,
+    pub token: SecretString,
 }
 
 #[derive(derive_more::Into)]
