@@ -34,13 +34,11 @@
 //!   the row an ignored one, with a warning), a session id no `String` holds still reads its own
 //!   rows under a lossy name, and malformed JSON surfaces as a [`MessageError`] item on the
 //!   session's stream while the reader moves on.
-//! - **A re-emitted part supersedes itself.** opencode upserts a part for every token of a
-//!   streamed reply and for every state a tool call passes through, all under the part's own id.
-//!   Each of those carries a [`revision`](Message::revision) that counts up for as long as this
-//!   capture reads the session, an incarnation it starts over in included, so a consumer that
-//!   upserts by id keeps the last of them rather than every draft. Another capture's revisions
-//!   are its own: one taken up again delivers a session under revisions it has used before, and
-//!   the later delivery is the newer part.
+//! - **A part is delivered once it is finished.** opencode upserts a part under its own id as it
+//!   is written: a streamed text or reasoning part empty and then whole, a tool call at every
+//!   state it passes through. The drafts are skipped like a row that only records a role, so a
+//!   consumer keeping the first message of an id keeps the part rather than its draft. A part
+//!   opencode stops writing mid-way (killed during a tool call) is never delivered.
 //! - **Roles are never guessed.** A session reads every row of its aggregate in `seq` order, so a
 //!   message's `message.updated.1` row arrives ahead of the parts it describes. Only the newest
 //!   few of those roles are kept, which is all a part ever asks for; one that predates the
@@ -393,11 +391,6 @@ struct Reader {
     aggregate: Aggregate,
     reads: Arc<Reads>,
     anchor: Option<Anchor>,
-    /// What the revisions this session delivers count from. A row's `seq` names its revision
-    /// within one incarnation only: the `seq` of an aggregate read again from the start would
-    /// repeat the revisions a part's earlier drafts went out under, and a consumer upserting by
-    /// revision would keep a draft over the part that replaced it.
-    base: i64,
     /// The roles of the messages this session has lately read a `message.updated.1` row for.
     roles: Roles,
     /// Whether the aggregate may have a row to read right now: set by a wake, kept while pages
@@ -415,7 +408,6 @@ impl Reader {
             aggregate,
             reads,
             anchor: None,
-            base: 0,
             roles: Roles::default(),
             ready: true,
             failed: false,
@@ -427,17 +419,10 @@ impl Reader {
             aggregate,
             reads,
             anchor: Some(anchor),
-            base: 0,
             roles: Roles::default(),
             ready: true,
             failed: false,
         }
-    }
-
-    /// The revision a row of this session is delivered under: its `seq`, past the revisions of
-    /// the incarnations read before it.
-    const fn revision(&self, seq: i64) -> i64 {
-        self.base.saturating_add(seq)
     }
 
     /// Read on past the row at `seq`, where a resume token puts this session. The row is read
@@ -502,9 +487,6 @@ impl Reader {
                         "the row this session resumes at is gone; reading its aggregate again \
                          from the start"
                     );
-                    // every revision this session has delivered is at or below the row it
-                    // resumed at, so the incarnation starting over picks up one past that one
-                    self.base = self.revision(from).saturating_add(1);
                     self.anchor = None;
                     self.ready = true;
                 }
@@ -513,8 +495,9 @@ impl Reader {
         None
     }
 
-    /// The message a row carries, if any: a `message.updated.1` row only records a role, and an
-    /// unmodelled kind of row is skipped.
+    /// The message a row carries, if any: a `message.updated.1` row only records a role, a draft
+    /// of a part opencode is still writing is superseded by a later row, and an unmodelled kind
+    /// of row is skipped.
     ///
     /// The row's `id` is not read here. It anchors the session, and a NULL one anchors as the
     /// empty string (see [`PageRow::identity`]), so a row whose payload is whole is decoded and
@@ -533,21 +516,21 @@ impl Reader {
             Ok(data) => data,
             Err(err) => return Some(Err(MessageError::from(err))),
         };
-        let revision = self.revision(row.seq);
         match classified {
             EventKind::Role => {
                 self.learn(&data);
                 None
             }
-            EventKind::Part => Some(match OpencodeMessage::split_part(data) {
+            EventKind::Part => match OpencodeMessage::split_part(data) {
+                Ok((part, _)) if OpencodeMessage::is_draft(&part) => None,
                 Ok((part, time)) => {
                     let message_id = part.get("messageID").and_then(Value::as_str);
                     let role = self.role(message_id).await;
-                    Ok(OpencodeMessage::part(role, part, time, revision))
+                    Some(Ok(OpencodeMessage::part(role, part, time)))
                 }
-                Err(err) => Err(MessageError::from(err)),
-            }),
-            EventKind::Unmapped => Some(Ok(OpencodeMessage::raw(kind, data, revision))),
+                Err(err) => Some(Err(MessageError::from(err))),
+            },
+            EventKind::Unmapped => Some(Ok(OpencodeMessage::raw(kind, data))),
         }
     }
 
@@ -1180,25 +1163,17 @@ pub struct OpencodeMessage {
     role: Role,
     part: Value,
     time: Option<i64>,
-    /// Where the row this came from sits in everything its session's reader has read: the
-    /// message's [`revision`](Message::revision).
-    revision: i64,
 }
 
 impl OpencodeMessage {
-    const fn part(role: Role, part: Value, time: Option<i64>, revision: i64) -> Self {
-        Self {
-            role,
-            part,
-            time,
-            revision,
-        }
+    const fn part(role: Role, part: Value, time: Option<i64>) -> Self {
+        Self { role, part, time }
     }
 
     /// A durable event this module does not model (`session.next.*`, or a newer version of a
     /// modelled type), surfaced whole as [`Content::Other`] under `Role::Other(<unversioned
     /// type>)`: these payloads carry no role, and `session.next.prompted` for one is the user's.
-    fn raw(kind: &str, data: Value, revision: i64) -> Self {
+    fn raw(kind: &str, data: Value) -> Self {
         let time = data
             .get("time")
             .or_else(|| data.get("timestamp"))
@@ -1208,7 +1183,6 @@ impl OpencodeMessage {
             role: Role::Other(unversioned(kind).to_owned()),
             part: data,
             time,
-            revision,
         }
     }
 
@@ -1230,6 +1204,22 @@ impl OpencodeMessage {
         Ok((part, time))
     }
 
+    /// Whether `part` is one opencode is still writing and will upsert again: a text or reasoning
+    /// part streaming in (`time.start` without `time.end`), or a tool call `pending` or `running`.
+    ///
+    /// A status this module does not know counts as finished, since a draft delivered costs the
+    /// part that replaces it and a finished part skipped is never delivered at all.
+    fn is_draft(part: &Value) -> bool {
+        match part["type"].as_str() {
+            Some("text" | "reasoning") => {
+                !part["time"]["start"].is_null() && part["time"]["end"].is_null()
+            }
+            Some("tool") => matches!(part["state"]["status"].as_str(), Some("pending" | "running")),
+            // every other kind of part is written once
+            _ => false,
+        }
+    }
+
     fn role_of(role: &str) -> Role {
         match role {
             "user" => Role::User,
@@ -1244,13 +1234,6 @@ impl OpencodeMessage {
 impl Message for OpencodeMessage {
     fn id(&self) -> Option<MessageId> {
         self.part["id"].as_str().map(|id| MessageId::from(id.to_owned()))
-    }
-
-    /// Where the row that upserted the part sits in everything this capture has read of the
-    /// session: its `seq`, past the incarnations read before it, so that a part re-emitted after
-    /// the event log was wiped supersedes the drafts of it delivered before the wipe.
-    fn revision(&self) -> Option<i64> {
-        Some(self.revision)
     }
 
     fn role(&self) -> Role {
@@ -1302,7 +1285,7 @@ impl Message for OpencodeMessage {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, HashSet};
+    use std::collections::HashSet;
     use std::task::Poll;
 
     use futures::StreamExt;
@@ -1315,14 +1298,13 @@ mod tests {
     use crate::db::sqlite::Sqlite;
     use crate::db::{query, query_as};
     use crate::harnesstools::session::model::{Content, Role};
-    use crate::harnesstools::session::{AnyMessage, CaptureError, Message, SessionEvent, Sessions};
+    use crate::harnesstools::session::{CaptureError, Message, SessionEvent, Sessions};
 
     fn part_message(part: Value) -> OpencodeMessage {
         OpencodeMessage {
             role: Role::Assistant,
             part,
             time: Some(1_700_000_000_000),
-            revision: 0,
         }
     }
 
@@ -1394,6 +1376,31 @@ mod tests {
     fn falls_back_to_other_for_an_unknown_part_type() {
         let raw = serde_json::json!({"id": "prt_1", "type": "step-start", "step": 1});
         assert_eq!(part_message(raw.clone()).content(), vec![Content::Other(raw)]);
+    }
+
+    #[rstest]
+    #[case::streaming_text(serde_json::json!({"type": "text", "time": {"start": 1}}), true)]
+    #[case::finished_text(serde_json::json!({"type": "text", "time": {"start": 1, "end": 2}}), false)]
+    #[case::a_prompt_written_once(serde_json::json!({"type": "text", "text": "hi"}), false)]
+    #[case::streaming_reasoning(serde_json::json!({"type": "reasoning", "time": {"start": 1}}), true)]
+    #[case::finished_reasoning(
+        serde_json::json!({"type": "reasoning", "time": {"start": 1, "end": 2}}),
+        false
+    )]
+    #[case::a_pending_call(serde_json::json!({"type": "tool", "state": {"status": "pending"}}), true)]
+    #[case::a_running_call(serde_json::json!({"type": "tool", "state": {"status": "running"}}), true)]
+    #[case::a_completed_call(
+        serde_json::json!({"type": "tool", "state": {"status": "completed"}}),
+        false
+    )]
+    #[case::a_failed_call(serde_json::json!({"type": "tool", "state": {"status": "error"}}), false)]
+    #[case::a_status_this_module_does_not_know(
+        serde_json::json!({"type": "tool", "state": {"status": "cancelled"}}),
+        false
+    )]
+    #[case::a_step_written_once(serde_json::json!({"type": "step-finish"}), false)]
+    fn only_a_part_opencode_is_still_writing_is_a_draft(#[case] part: Value, #[case] draft: bool) {
+        assert_eq!(OpencodeMessage::is_draft(&part), draft);
     }
 
     #[rstest]
@@ -2362,39 +2369,35 @@ mod tests {
         )])]);
     }
 
-    /// What [`Message::id`] prescribes of a consumer: one entry per message id, holding the
-    /// message of the highest revision that came under it.
-    fn upsert(messages: Vec<OpencodeMessage>) -> BTreeMap<String, OpencodeMessage> {
-        let mut latest: BTreeMap<String, OpencodeMessage> = BTreeMap::new();
-        for message in messages {
-            let id = message.id().expect("every part carries its id").to_string();
-            match latest.get(&id) {
-                Some(kept) if kept.revision() >= message.revision() => {}
-                _ => {
-                    latest.insert(id, message);
-                }
-            }
-        }
-        latest
-    }
-
+    /// opencode upserts a part under its own id as it is written: a streamed text part empty and
+    /// then whole, a tool call at every state it passes through. A consumer keeps the first
+    /// message of an id, so a draft delivered ahead of its part would stand in for it.
     #[rstest]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_part_re_emitted_as_it_is_written_supersedes_itself() {
+    async fn a_part_is_delivered_only_once_it_is_finished() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("opencode.db");
         let db = event_db(&path).await;
         role_row(&db, "e1", "ses_1", "msg_1", "assistant").await;
-        // opencode upserts the same part as its text streams in
-        for (id, text) in [("e2", ""), ("e3", "hel"), ("e4", "hello")] {
-            text_row(&db, id, "ses_1", "prt_1", "msg_1", text).await;
+        for (id, time, text) in [
+            ("e2", serde_json::json!({"start": 1}), ""),
+            ("e3", serde_json::json!({"start": 1, "end": 2}), "hello"),
+        ] {
+            let part = serde_json::json!({
+                "id": "prt_1",
+                "messageID": "msg_1",
+                "type": "text",
+                "text": text,
+                "time": time,
+            });
+            let data = serde_json::json!({"part": part}).to_string();
+            insert_event(&db, id, "ses_1", "message.part.updated.1", &data).await;
         }
-        // and again for every state its tool call passes through
         for (id, state) in [
-            ("e5", serde_json::json!({"status": "pending"})),
-            ("e6", serde_json::json!({"status": "running", "input": {"command": "ls"}})),
+            ("e4", serde_json::json!({"status": "pending"})),
+            ("e5", serde_json::json!({"status": "running", "input": {"command": "ls"}})),
             (
-                "e7",
+                "e6",
                 serde_json::json!({
                     "status": "completed",
                     "input": {"command": "ls"},
@@ -2405,24 +2408,9 @@ mod tests {
             tool_row(&db, id, "ses_1", "prt_2", "msg_1", state).await;
         }
 
-        let messages = captured(&mut events(&path, Replay::All), 6).await;
+        let messages = captured(&mut events(&path, Replay::All), 2).await;
 
-        // every re-emission comes under the part's own id, at an ascending revision
-        let revisions = |part: &str| -> Vec<Option<i64>> {
-            messages
-                .iter()
-                .filter(|message| message.id() == Some(MessageId::from(part.to_owned())))
-                .map(Message::revision)
-                .collect()
-        };
-        assert_eq!(revisions("prt_1"), [Some(1), Some(2), Some(3)]);
-        assert_eq!(revisions("prt_2"), [Some(4), Some(5), Some(6)]);
-        // the dispatch forwards the revision rather than falling back to the trait's default
-        assert_eq!(AnyMessage::from(messages[0].clone()).revision(), Some(1));
-
-        // so a consumer that upserts by id keeps one entry per part, at its last revision
-        let content: Vec<Content> =
-            upsert(messages).into_values().flat_map(|message| message.content()).collect();
+        let content: Vec<Content> = messages.iter().flat_map(Message::content).collect();
         assert_eq!(content, vec![
             Content::Text("hello".into()),
             Content::ToolUse(ToolUse {
@@ -2436,52 +2424,6 @@ mod tests {
                 error: false,
             }),
         ]);
-    }
-
-    /// The same, across the wipe the module is built to survive: opencode's reset migration
-    /// restarts the aggregate's `seq` at 0, so the part a resumed session re-upserts comes under
-    /// a `seq` its own drafts went out under -- the first row of the new incarnation under the
-    /// very one the session last delivered.
-    #[rstest]
-    #[case::the_part_first(false)]
-    #[case::its_message_row_first(true)]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_part_re_emitted_after_a_wipe_supersedes_its_drafts(#[case] role_row_again: bool) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("opencode.db");
-        let db = event_db(&path).await;
-        role_row(&db, &pre_wrap(1), "ses_1", "msg_1", "assistant").await;
-        for (id, text) in [(2, ""), (3, "he"), (4, "hell"), (5, "hello")] {
-            text_row(&db, &pre_wrap(id), "ses_1", "prt_1", "msg_1", text).await;
-        }
-
-        let mut stream = events(&path, Replay::All);
-        let drafts = captured(&mut stream, 4).await;
-
-        execute(&db, "DELETE FROM event").await;
-        if role_row_again {
-            role_row(&db, &post_wrap(6), "ses_1", "msg_1", "assistant").await;
-        }
-        text_row(&db, &post_wrap(7), "ses_1", "prt_1", "msg_1", "hello, world").await;
-        assert_eq!(
-            position(&db, &post_wrap(7)).await.1,
-            i64::from(role_row_again),
-            "the wipe restarted the aggregate's seq"
-        );
-
-        let resumed = captured(&mut stream, 1).await;
-        let drafted = drafts.iter().filter_map(Message::revision).max();
-        assert!(
-            resumed[0].revision() > drafted,
-            "the re-emitted part carries {:?}, at or below its drafts' {drafted:?}",
-            resumed[0].revision()
-        );
-
-        let content: Vec<Content> = upsert(drafts.into_iter().chain(resumed).collect())
-            .into_values()
-            .flat_map(|message| message.content())
-            .collect();
-        assert_eq!(content, vec![Content::Text("hello, world".into())]);
     }
 
     #[rstest]
@@ -2701,7 +2643,7 @@ mod tests {
         load_fixture(&db, include_str!("../../../tests/fixtures/opencode/session1.jsonl")).await;
 
         let mut by_session: HashMap<String, Vec<OpencodeMessage>> = HashMap::new();
-        for event in next_n(&mut events(&path, Replay::All), 9).await {
+        for event in next_n(&mut events(&path, Replay::All), 6).await {
             let event = event.unwrap();
             by_session.entry(event.session.to_string()).or_default().push(event.message);
         }
@@ -2711,7 +2653,9 @@ mod tests {
             HashSet::from(["ses_A".to_owned(), "ses_B".to_owned()])
         );
 
+        // prtA2's streaming draft and prtA3's pending and running calls are skipped
         let a = &by_session["ses_A"];
+        assert_eq!(a.len(), 3, "expected prtA1, prtA2 and prtA3 once each");
         assert!(a.iter().all(|m| m.timestamp().is_some()), "a part is missing its timestamp");
 
         let a1 = a
@@ -2721,12 +2665,12 @@ mod tests {
         assert_eq!(a1.role(), Role::User);
         assert_eq!(a1.content(), vec![Content::Text("hello from A".into())]);
 
-        let a2_final = a
+        let a2 = a
             .iter()
-            .rfind(|m| m.id() == Some(MessageId::from("prtA2".to_owned())))
+            .find(|m| m.id() == Some(MessageId::from("prtA2".to_owned())))
             .expect("prtA2 missing");
-        assert_eq!(a2_final.role(), Role::Assistant);
-        assert_eq!(a2_final.content(), vec![Content::Text("final answer A".into())]);
+        assert_eq!(a2.role(), Role::Assistant);
+        assert_eq!(a2.content(), vec![Content::Text("final answer A".into())]);
 
         let tool = a
             .iter()

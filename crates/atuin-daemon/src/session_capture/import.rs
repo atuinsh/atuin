@@ -128,9 +128,7 @@ impl SessionImporter {
                                 continue;
                             };
                             match sink.append(msg).await {
-                                // a revision that replaced what an earlier import stored is
-                                // imported content, not a skipped duplicate
-                                Ok(Appended::New | Appended::Superseded) => imported += 1,
+                                Ok(Appended::New) => imported += 1,
                                 Ok(Appended::Duplicate) => skipped += 1,
                                 Err(_) => failed += 1,
                             }

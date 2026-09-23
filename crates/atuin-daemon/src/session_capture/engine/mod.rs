@@ -4,9 +4,7 @@ use std::time::Duration;
 
 use atuin_client::ai_session::{HarnessKind, HarnessSession, NativeSessionId};
 use atuin_common::harnesstools::AnyHarness;
-use atuin_common::harnesstools::session::{
-    AnyMessage, Message, RuntimeError, SessionEvent, SessionId,
-};
+use atuin_common::harnesstools::session::{AnyMessage, RuntimeError, SessionEvent, SessionId};
 use futures::StreamExt;
 use tokio::task::JoinHandle;
 
@@ -166,11 +164,7 @@ async fn is_stored(
 ) -> bool {
     let handle = handle_of(kind, session);
     let source_id = MessageEnricher::source_id(session, message);
-    let stored = sink
-        .sidecar
-        .contains_message(&handle, &source_id, message.revision())
-        .await
-        .unwrap_or(false);
+    let stored = sink.sidecar.contains_message(&handle, &source_id).await.unwrap_or(false);
     if !stored {
         tracing::debug!(%session, "checkpoint does not name a stored message; reading from the start");
     }

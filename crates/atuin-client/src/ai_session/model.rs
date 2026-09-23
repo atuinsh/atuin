@@ -69,13 +69,6 @@ pub struct Message {
     pub usage: Option<Usage>,
     #[builder(default)]
     pub stop_reason: Option<StopReason>,
-    /// Which revision of [`source_id`](Self::source_id) this is, for a harness that re-emits a
-    /// message as it is written. Of two messages under one source id the higher revision
-    /// supersedes the other; `None` is a harness that writes each message once, and never
-    /// supersedes anything.
-    #[builder(default)]
-    #[serde(default)]
-    pub revision: Option<i64>,
     /// The session's title at capture time, denormalised onto the message so session-level metadata
     /// survives a reproject from the synced record store (records carry messages only, not the
     /// separate `Started` metadata).

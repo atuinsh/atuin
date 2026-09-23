@@ -86,9 +86,8 @@ async fn main() {
                     println!("\n== session {session}");
                 }
                 println!(
-                    "{session} #{n} id={} rev={} role={:?} at={} :: {}",
+                    "{session} #{n} id={} role={:?} at={} :: {}",
                     message.id().map_or_else(|| "-".to_owned(), |id| id.to_string()),
-                    message.revision().map_or_else(|| "-".to_owned(), |r| r.to_string()),
                     message.role(),
                     message.timestamp().map_or_else(|| "-".to_owned(), |t| t.time().to_string()),
                     summarize(&message.content()),

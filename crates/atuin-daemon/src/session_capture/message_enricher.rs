@@ -130,7 +130,6 @@ impl MessageEnricher {
                 }))
                 .parent_source_id(m.parent_id().map(|id| SourceId::from(String::from(id))))
                 .turn_id(m.turn_id())
-                .revision(m.revision())
                 .timestamp(seen.timestamp)
                 .role(m.role())
                 .content(content)
