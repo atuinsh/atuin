@@ -1,6 +1,7 @@
 use atuin_common::encryption::paseto_v4;
 use atuin_domain::api::LoginRequest;
 use eyre::Result;
+use secrecy::ExposeSecret;
 
 use crate::api_client;
 use crate::record::sqlite_store::SqliteStore;
@@ -40,12 +41,16 @@ pub async fn login(
 
     let session = api_client::login(
         &settings.sync_address,
-        LoginRequest { username, password },
+        LoginRequest {
+            username,
+            password: password.into(),
+            totp_code: None,
+        },
         &settings.extra_headers,
     )
     .await?;
 
-    Settings::meta_store().await?.save_session(&session.session).await?;
+    Settings::meta_store().await?.save_session(session.session.expose_secret()).await?;
 
-    Ok(session.session)
+    Ok(session.session.expose_secret().to_owned())
 }

@@ -4,6 +4,7 @@ use atuin_client::settings::{Settings, SyncAuth};
 use atuin_common::encryption::paseto_v4;
 use clap::Parser;
 use eyre::{Result, bail};
+use secrecy::ExposeSecret;
 
 use super::PasswordArg;
 use super::login::or_user_input;
@@ -127,7 +128,7 @@ impl Cmd {
             .await?;
 
             let meta = Settings::meta_store().await?;
-            meta.save_session(&session.session).await?;
+            meta.save_session(session.session.expose_secret()).await?;
 
             let _key = paseto_v4::Key::try_load_or_generate(&settings.key_path)?;
 

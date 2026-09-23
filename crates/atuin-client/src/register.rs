@@ -1,5 +1,6 @@
 use atuin_common::encryption::paseto_v4;
 use eyre::Result;
+use secrecy::ExposeSecret;
 
 use crate::api_client;
 use crate::settings::Settings;
@@ -20,9 +21,9 @@ pub async fn register_classic(
     .await?;
 
     let meta = Settings::meta_store().await?;
-    meta.save_session(&session.session).await?;
+    meta.save_session(session.session.expose_secret()).await?;
 
     let _key = paseto_v4::Key::try_load_or_generate(&settings.key_path)?;
 
-    Ok(session.session)
+    Ok(session.session.expose_secret().to_owned())
 }

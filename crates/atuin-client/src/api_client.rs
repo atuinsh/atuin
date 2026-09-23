@@ -652,8 +652,9 @@ impl Client {
             .client
             .patch(url)
             .json(&ChangePasswordRequest {
-                current_password,
-                new_password,
+                current_password: current_password.into(),
+                new_password: new_password.into(),
+                totp_code: None,
             })
             .send()
             .await?;

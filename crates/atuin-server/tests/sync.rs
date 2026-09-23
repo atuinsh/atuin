@@ -12,6 +12,7 @@ use atuin_server::{Settings as ServerSettings, launch_with_tcp_listener};
 use easy_cast::Conv;
 use futures_util::TryFutureExt;
 use rstest::{fixture, rstest};
+use secrecy::ExposeSecret;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -38,7 +39,7 @@ impl TestServer {
 
         api_client::Client::new(
             self.address.clone(),
-            &api_client::AuthToken::Token(resp.session),
+            &api_client::AuthToken::Token(resp.session.expose_secret().to_owned()),
             std::time::Duration::from_secs(5),
             std::time::Duration::from_secs(30),
             &Default::default(),

@@ -19,6 +19,7 @@ use atuin_domain::api::{
 use eyre::{Context, Result};
 use reqwest::header::USER_AGENT;
 use reqwest::{StatusCode, Url};
+use secrecy::ExposeSecret;
 use thiserror::Error;
 
 use crate::settings::Settings;
@@ -100,7 +101,7 @@ impl HubAuthSession {
 
         debug!("Received code from Hub");
 
-        let code = code_response.code;
+        let code = code_response.code.expose_secret().to_owned();
         let mut auth_url = hub_address.append_path("auth/cli")?;
         auth_url.query_pairs_mut().append_pair("code", &code);
 
@@ -119,7 +120,7 @@ impl HubAuthSession {
             Ok(response) => {
                 if let Some(token) = response.token {
                     debug!("Authentication complete, received token");
-                    Ok(HubAuthStatus::Complete(token))
+                    Ok(HubAuthStatus::Complete(token.expose_secret().to_owned()))
                 } else if let Some(error) = response.error {
                     debug!("Authentication failed: {}", error);
                     Ok(HubAuthStatus::Failed(error))

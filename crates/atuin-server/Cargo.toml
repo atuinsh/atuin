@@ -41,6 +41,7 @@ metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
+secrecy = { workspace = true }
 serde = { workspace = true }
 sqlx = { workspace = true, features = ["postgres", "sqlite", "mysql", "regexp", "tls-native-tls"] }
 time = { workspace = true }

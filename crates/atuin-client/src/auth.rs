@@ -9,6 +9,7 @@ use enum_dispatch::enum_dispatch;
 use eyre::{Context, Result, bail};
 use reqwest::header::USER_AGENT;
 use reqwest::{StatusCode, Url};
+use secrecy::ExposeSecret;
 use serde::Deserialize;
 
 use crate::settings::Settings;
@@ -154,14 +155,15 @@ impl AuthClient for LegacyAuthClient {
             &self.address,
             LoginRequest {
                 username: username.to_string(),
-                password: password.to_string(),
+                password: password.into(),
+                totp_code: None,
             },
             &self.extra_headers,
         )
         .await?;
 
         Ok(AuthResponse::Success {
-            session: resp.session,
+            session: resp.session.expose_secret().to_owned(),
             auth_type: resp.auth.or(Some("cli".into())),
         })
     }
@@ -176,7 +178,7 @@ impl AuthClient for LegacyAuthClient {
         )
         .await?;
         Ok(AuthResponse::Success {
-            session: resp.session,
+            session: resp.session.expose_secret().to_owned(),
             auth_type: resp.auth.or(Some("cli".into())),
         })
     }
@@ -193,8 +195,9 @@ impl AuthClient for LegacyAuthClient {
         let resp = client
             .patch(url)
             .json(&ChangePasswordRequest {
-                current_password: current_password.to_string(),
-                new_password: new_password.to_string(),
+                current_password: current_password.into(),
+                new_password: new_password.into(),
+                totp_code: None,
             })
             .send()
             .await?;
@@ -298,7 +301,7 @@ impl AuthClient for HubAuthClient {
         if status.is_success() {
             let login: LoginResponse = resp.json().await?;
             return Ok(AuthResponse::Success {
-                session: login.session,
+                session: login.session.expose_secret().to_owned(),
                 auth_type: login.auth,
             });
         }
@@ -341,7 +344,7 @@ impl AuthClient for HubAuthClient {
         if status.is_success() {
             let reg: RegisterResponse = resp.json().await?;
             return Ok(AuthResponse::Success {
-                session: reg.session,
+                session: reg.session.expose_secret().to_owned(),
                 auth_type: reg.auth,
             });
         }

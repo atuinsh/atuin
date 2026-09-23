@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use secrecy::SecretString;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -22,12 +23,14 @@ pub struct UserResponse {
 pub struct RegisterRequest {
     pub email: String,
     pub username: String,
-    pub password: String,
+    #[serde(serialize_with = "crate::secret::serialize")]
+    pub password: SecretString,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RegisterResponse {
-    pub session: String,
+    #[serde(serialize_with = "crate::secret::serialize")]
+    pub session: SecretString,
     /// Auth type: "hub" for Hub API tokens, "cli" for legacy CLI session tokens.
     /// Old servers that don't return this field will deserialize as None.
     #[serde(default)]
@@ -39,8 +42,16 @@ pub struct DeleteUserResponse {}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ChangePasswordRequest {
-    pub current_password: String,
-    pub new_password: String,
+    #[serde(serialize_with = "crate::secret::serialize")]
+    pub current_password: SecretString,
+    #[serde(serialize_with = "crate::secret::serialize")]
+    pub new_password: SecretString,
+    #[serde(
+        default,
+        serialize_with = "crate::secret::serialize_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub totp_code: Option<SecretString>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -49,12 +60,20 @@ pub struct ChangePasswordResponse {}
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LoginRequest {
     pub username: String,
-    pub password: String,
+    #[serde(serialize_with = "crate::secret::serialize")]
+    pub password: SecretString,
+    #[serde(
+        default,
+        serialize_with = "crate::secret::serialize_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub totp_code: Option<SecretString>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LoginResponse {
-    pub session: String,
+    #[serde(serialize_with = "crate::secret::serialize")]
+    pub session: SecretString,
     /// Auth type: "hub" for Hub API tokens, "cli" for legacy CLI session tokens.
     /// Old servers that don't return this field will deserialize as None.
     #[serde(default)]
@@ -106,14 +125,16 @@ pub struct PackfileDownloadResponse {
 /// Response from `POST /auth/cli/code` - generates a code for CLI auth
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CliCodeResponse {
-    pub code: String,
+    #[serde(serialize_with = "crate::secret::serialize")]
+    pub code: SecretString,
 }
 
 /// Response from `GET /auth/cli/verify?code=<code>` - polls for authorization
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CliVerifyResponse {
     /// Session token, present only when authorization is complete
-    pub token: Option<String>,
+    #[serde(serialize_with = "crate::secret::serialize_option")]
+    pub token: Option<SecretString>,
     pub success: Option<bool>,
     pub error: Option<String>,
 }
