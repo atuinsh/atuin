@@ -116,7 +116,7 @@ pub async fn register(
     // Create the user and their initial session atomically, so a failure can't leave an
     // account that exists but can never be logged into (or a dangling session).
     let db = &state.0.database;
-    let user_id = match db.add_user_with_session(&new_user, token.expose_secret()).await {
+    let user_id = match db.add_user_with_session(&new_user, &token).await {
         Ok(id) => id,
         Err(e) => {
             error!("failed to register user: {}", e);
@@ -242,7 +242,7 @@ pub async fn login(
     info!(user.id = user.id, "login succeeded");
 
     Ok(Json(LoginResponse {
-        session: session.token.into(),
+        session: session.token,
         auth: Some("cli".into()),
     }))
 }

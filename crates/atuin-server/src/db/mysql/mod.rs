@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use atuin_common::db;
 use atuin_common::db::MysqlDbUrl;
 use easy_cast::Conv;
+use secrecy::{ExposeSecret, SecretString};
 use sqlx::mysql::MySqlPoolOptions;
 use tracing::instrument;
 
@@ -50,7 +51,7 @@ impl Database for MySql {
     // MySQL has no `RETURNING`, so unlike the default it reads the new id from `last_insert_id()`
     // off the insert result, all within one transaction.
     #[instrument(skip_all)]
-    async fn add_user_with_session(&self, user: &NewUser, token: &str) -> DbResult<i64> {
+    async fn add_user_with_session(&self, user: &NewUser, token: &SecretString) -> DbResult<i64> {
         let mut tx = self.pool().begin().await?;
 
         let res = db::query(<Self::Dialect as Dialect>::ADD_USER)
@@ -64,7 +65,7 @@ impl Database for MySql {
 
         db::query(<Self::Dialect as Dialect>::ADD_SESSION)
             .bind(user_id)
-            .bind(token)
+            .bind(token.expose_secret())
             .execute(&mut *tx)
             .await?;
 

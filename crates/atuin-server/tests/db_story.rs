@@ -8,6 +8,7 @@ use atuin_domain::record::{
 use atuin_server::db::models::{NewSession, NewUser, User};
 use atuin_server::db::{DbError, DbSettings, DynDatabase};
 use rstest::rstest;
+use secrecy::SecretString;
 use sqlx::migrate::MigrateDatabase;
 use url::Url;
 
@@ -102,7 +103,7 @@ async fn run_the_test(db: &dyn DynDatabase) -> eyre::Result<()> {
     let user_id = db.add_user(&new_user).await?;
     assert_ne!(user_id, 0);
 
-    let token = crypto_random_string::<24>();
+    let token = SecretString::from(crypto_random_string::<24>());
     let new_session = NewSession {
         user_id,
         token: token.clone(),
@@ -206,7 +207,7 @@ async fn test_add_user_with_session_is_atomic() -> eyre::Result<()> {
         email: "combined@example.com".to_owned(),
         password: "hunter2".to_owned(),
     };
-    let token = crypto_random_string::<24>();
+    let token = SecretString::from(crypto_random_string::<24>());
 
     let user_id = db.add_user_with_session(&new_user, &token).await?;
     assert_ne!(user_id, 0);
