@@ -376,6 +376,7 @@ impl Message for CodexMessage {
             return None;
         }
         Some(Usage {
+            reasoning: None,
             input: usage.get("input_tokens").and_then(serde_json::Value::as_u64),
             output: usage.get("output_tokens").and_then(serde_json::Value::as_u64),
             cache_read: usage.get("cached_input_tokens").and_then(serde_json::Value::as_u64),
@@ -459,6 +460,7 @@ mod tests {
         assert_eq!(
             m.usage(),
             Some(Usage {
+                reasoning: None,
                 input: Some(100),
                 output: Some(50),
                 cache_read: Some(20),

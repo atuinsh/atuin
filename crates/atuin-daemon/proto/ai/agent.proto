@@ -52,6 +52,8 @@ message Tokens {
   uint64 cache_read = 3;
   // Tokens saved so a later prompt can reuse them.
   uint64 cache_write = 4;
+  // Of `output`, how much the model spent reasoning (thinking), when the harness reports it.
+  uint64 reasoning = 5;
 }
 
 // The AI's request to run a tool.
@@ -88,6 +90,11 @@ message ContentBlock {
     ToolResult tool_result = 3;
     // The model's private reasoning, when the harness records it.
     string thinking = 4;
+    // A model-written summary standing in for earlier conversation (compaction,
+    // an abandoned branch).
+    string summary = 5;
+    // Why a model call failed or was aborted, as the harness reported it.
+    string error = 6;
   }
 }
 

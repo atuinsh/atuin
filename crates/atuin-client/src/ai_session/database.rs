@@ -805,7 +805,10 @@ impl AiSessionDatabase {
 
     fn push_content_text(out: &mut String, content: &Content) {
         match content {
-            Content::Text(text) | Content::Reasoning(text) => {
+            Content::Text(text)
+            | Content::Reasoning(text)
+            | Content::Summary(text)
+            | Content::Error(text) => {
                 out.push_str(text);
                 out.push('\n');
             }
@@ -932,6 +935,7 @@ impl AiSessionDatabase {
             .git_branch(row.git_branch)
             .model(row.model)
             .usage((row.usage_present != 0).then(|| Usage {
+                reasoning: None,
                 input: Some(u64::try_from(row.usage_input).unwrap_or(0)),
                 output: Some(u64::try_from(row.usage_output).unwrap_or(0)),
                 cache_read: Some(u64::try_from(row.usage_cache_read).unwrap_or(0)),
@@ -986,6 +990,7 @@ impl AiSessionDatabase {
             .updated_at(Self::time_from_millis(row.updated_at)?)
             .message_count(u64::try_from(row.message_count).unwrap_or(0))
             .usage(Usage {
+                reasoning: None,
                 input: Some(u64::try_from(row.usage_input).unwrap_or(0)),
                 output: Some(u64::try_from(row.usage_output).unwrap_or(0)),
                 cache_read: Some(u64::try_from(row.usage_cache_read).unwrap_or(0)),
@@ -1257,6 +1262,7 @@ mod tests {
             .role(Role::Assistant)
             .content(vec![Content::Text("has usage".to_owned())])
             .usage(Some(Usage {
+                reasoning: None,
                 input: Some(0),
                 output: Some(0),
                 cache_read: Some(0),

@@ -350,6 +350,7 @@ impl Message for PiMessage {
             return None;
         }
         Some(Usage {
+            reasoning: None,
             input: usage.get("input").and_then(serde_json::Value::as_u64),
             output: usage.get("output").and_then(serde_json::Value::as_u64),
             cache_read: usage.get("cacheRead").and_then(serde_json::Value::as_u64),
@@ -477,6 +478,7 @@ mod tests {
         assert_eq!(
             m.usage(),
             Some(Usage {
+                reasoning: None,
                 input: Some(10),
                 output: Some(20),
                 cache_read: Some(5),

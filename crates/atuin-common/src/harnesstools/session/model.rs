@@ -28,13 +28,33 @@ pub enum Content {
     ToolUse(ToolUse),
     ToolResult(ToolResult),
     Other(serde_json::Value),
-    /// Payload-free reasoning activity. Tokens are harness-reported model-call totals,
-    /// never estimates or additional usage to add to output tokens.
+    /// Payload-free reasoning activity: a presence marker. How many tokens the call spent
+    /// reasoning is usage ([`Usage::reasoning`]), counted once per call like the rest; `tokens`
+    /// is only for display, never estimates or usage to add up.
     /// Older readers that do not know this variant skip records containing it; sync peers
     /// need a compatible version to display these newly captured messages.
     ReasoningSummary {
         tokens: Option<u64>,
     },
+    /// A model-written summary standing in for earlier conversation (compaction, an abandoned
+    /// branch). Conversation text whatever the line's role.
+    Summary(String),
+    /// Why a model call failed or was aborted, as the harness reported it.
+    Error(String),
+}
+
+impl Content {
+    /// A reasoning marker that names no count takes the one its row's usage reports, for
+    /// display; every other block is returned as it is.
+    #[must_use]
+    pub fn with_reasoning_of(self, usage: Option<&Usage>) -> Self {
+        match self {
+            Self::ReasoningSummary { tokens: None } => Self::ReasoningSummary {
+                tokens: usage.and_then(|u| u.reasoning),
+            },
+            other => other,
+        }
+    }
 }
 
 /// Human-readable breadcrumb shared by transcript and RPC rendering.
@@ -63,6 +83,10 @@ pub struct Usage {
     pub output: Option<u64>,
     pub cache_read: Option<u64>,
     pub cache_write: Option<u64>,
+    /// Reasoning (thinking) tokens of the model call, already included in `output`: a
+    /// breakdown, never extra usage to add to it.
+    #[serde(default)]
+    pub reasoning: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

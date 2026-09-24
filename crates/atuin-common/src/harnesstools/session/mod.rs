@@ -91,7 +91,10 @@ pub trait Message: Send + 'static {
     fn parent_session(&self) -> Option<SessionId> {
         None
     }
-    /// One model call: groups the rows a single API response is split into.
+    /// One model call: groups the rows a single API response is split into. Unique within the
+    /// harness and unchanged when the harness copies the line into another session (forks,
+    /// subagent replays), since capture counts a call's usage once across every session holding
+    /// it, at the field-wise max of its rows. `Some` on every line that carries usage.
     fn turn_id(&self) -> Option<String> {
         None
     }

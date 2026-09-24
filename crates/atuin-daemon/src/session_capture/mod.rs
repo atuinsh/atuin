@@ -156,6 +156,11 @@ fn sanitize_message(msg: &mut Message) {
             *block = Content::ReasoningSummary { tokens: None };
             true
         }
+        // Model-written summaries and failure reasons are conversation, whatever the role.
+        Content::Summary(text) | Content::Error(text) => {
+            *text = atuin_common::secrets::redact(text).into_owned();
+            true
+        }
         Content::ReasoningSummary { .. } => true,
         Content::Text(_) | Content::Other(_) => false,
     });
@@ -350,6 +355,7 @@ mod tests {
         msg.parent_source_id = Some("parent".to_owned().into());
         msg.turn_id = Some("turn".to_owned());
         msg.usage = Some(Usage {
+            reasoning: None,
             input: Some(42),
             output: Some(0),
             cache_read: Some(0),
