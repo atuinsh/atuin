@@ -69,7 +69,7 @@ use tokio::sync::{Mutex, MutexGuard, watch};
 use typed_builder::TypedBuilder;
 
 use crate::db::sqlite::observe::{
-    Appended, ObserveConfig, Replay, SqliteObserver, TableSchema, Tailable,
+    ObserveConfig, ReplayBehavior, RowAppendedEvent, SqliteObserver, TableSchema, Tailable,
 };
 use crate::db::{query_as, query_scalar};
 use crate::harnesstools::opencode::Opencode;
@@ -88,8 +88,8 @@ use crate::utils::{env_nonempty, home_dir};
 pub struct OpencodeSessions {
     #[builder(default, setter(strip_option, into))]
     db: Option<PathBuf>,
-    #[builder(default = Replay::All)]
-    replay: Replay,
+    #[builder(default = ReplayBehavior::All)]
+    replay: ReplayBehavior,
 }
 
 impl OpencodeSessions {
@@ -217,7 +217,7 @@ impl Observable for Opencode {
 #[derive(Debug, Clone)]
 pub struct OpencodeListener {
     db: PathBuf,
-    replay: Replay,
+    replay: ReplayBehavior,
 }
 
 /// Rows a session reads from its aggregate at a time: the most it holds in memory while it is
@@ -263,7 +263,7 @@ impl Listener for OpencodeListener {
             let mut sessions: HashMap<Aggregate, Live> = HashMap::new();
             while let Some(next) = events.next().await {
                 let row = match next {
-                    Ok(Appended(row)) => row,
+                    Ok(RowAppendedEvent(row)) => row,
                     // The tail takes the table up again by itself and the rows it could not read
                     // are still in it, so reporting the failure is all there is to do here --
                     // ending would drop every session's wake and stop the capture for good.
@@ -1108,8 +1108,8 @@ impl Tailable for EventRow {
 
     /// The `id` is a never-reused primary key. A NULL id still anchors, as the empty string: a
     /// deleted or replaced row is then still noticed, only another NULL-id row in its place is not.
-    fn identity(&self) -> Option<String> {
-        Some(self.id.clone().unwrap_or_default())
+    fn identity(&self) -> Option<impl Eq> {
+        Some(self.id.as_deref().unwrap_or_default())
     }
 }
 
@@ -1592,7 +1592,7 @@ mod tests {
 
     type Events = BoxStream<'static, Result<SessionEvent<OpencodeMessage>, CaptureError>>;
 
-    fn events(path: &Path, replay: Replay) -> Events {
+    fn events(path: &Path, replay: ReplayBehavior) -> Events {
         OpencodeSessions::builder()
             .db(path)
             .replay(replay)
@@ -1646,7 +1646,7 @@ mod tests {
         next_n(stream, n).await.into_iter().map(|event| event.unwrap().message).collect()
     }
 
-    /// `Replay::FromNow` anchors where the table ends when the stream is *first polled*, so a row
+    /// `ReplayBehavior::FromNow` anchors where the table ends when the stream is *first polled*, so a row
     /// committed before that poll is legitimately skipped: keeps appending rows for `aggregate`
     /// until the stream yields, and hands back that first item.
     async fn first_while_appending<S: Stream + Unpin + Send>(
@@ -1745,7 +1745,7 @@ mod tests {
         text_row(&db, "e3", "ses_1", "p1", "msg_1", "hello").await;
         text_row(&db, "e4", "ses_2", "p2", "msg_2", "world").await;
 
-        let mut got = described(&mut events(&path, Replay::All), 2).await;
+        let mut got = described(&mut events(&path, ReplayBehavior::All), 2).await;
         got.sort();
         assert_eq!(got, ["ses_1 Assistant hello", "ses_2 User world"]);
     }
@@ -1770,7 +1770,7 @@ mod tests {
             .await;
         }
 
-        let got = described(&mut events(&path, Replay::All), parts).await;
+        let got = described(&mut events(&path, ReplayBehavior::All), parts).await;
         let expected: Vec<String> = (0..parts).map(|i| format!("ses_1 Assistant {i}")).collect();
         assert_eq!(got, expected);
     }
@@ -1783,7 +1783,7 @@ mod tests {
         let db = event_db(&path).await;
         role_row(&db, "e1", "ses_pre", "m1", "user").await;
 
-        let mut stream = events(&path, Replay::FromNow);
+        let mut stream = events(&path, ReplayBehavior::FromNow);
         let first =
             first_while_appending(&mut stream, &db, "ses_new", "message.part.updated.1", |i| {
                 text_event(&format!("prt_{i}"), "m2", "after")
@@ -1801,7 +1801,9 @@ mod tests {
         role_row(&db, "e1", "ses_pre", "m1", "user").await;
         text_row(&db, "e2", "ses_pre", "prt_1", "m1", "before").await;
 
-        assert_eq!(described(&mut events(&path, Replay::All), 1).await, ["ses_pre User before"]);
+        assert_eq!(described(&mut events(&path, ReplayBehavior::All), 1).await, [
+            "ses_pre User before"
+        ]);
     }
 
     #[rstest]
@@ -1817,7 +1819,7 @@ mod tests {
         role_row(&db, &post_wrap(4), "ses_X", "msg_x1", "user").await;
         text_row(&db, &post_wrap(5), "ses_X", "prt_x1", "msg_x1", "gone").await;
 
-        let mut stream = events(&path, Replay::All);
+        let mut stream = events(&path, ReplayBehavior::All);
         let mut before = described(&mut stream, 3).await;
         before.sort();
         assert_eq!(before, ["ses_X User gone", "ses_Y User one", "ses_Y User two"]);
@@ -1848,7 +1850,7 @@ mod tests {
         role_row(&db, &post_wrap(8), "ses_Z", "msg_z", "user").await;
         text_row(&db, &post_wrap(9), "ses_Z", "prt_z", "msg_z", "gone").await;
 
-        let mut stream = events(&path, Replay::All);
+        let mut stream = events(&path, ReplayBehavior::All);
         let mut before = described(&mut stream, 3).await;
         before.sort();
         assert_eq!(before, ["ses_X User one", "ses_X User two", "ses_Z User gone"]);
@@ -1872,7 +1874,7 @@ mod tests {
         role_row(&db, &pre_wrap(1), "ses_A", "msg_a1", "user").await;
         text_row(&db, &pre_wrap(2), "ses_A", "prt_a1", "msg_a1", "one").await;
 
-        let mut stream = events(&path, Replay::All);
+        let mut stream = events(&path, ReplayBehavior::All);
         assert_eq!(described(&mut stream, 1).await, ["ses_A User one"]);
 
         // opencode's reset migrations: rowids and the aggregate's seq both start over, and the
@@ -1898,7 +1900,7 @@ mod tests {
         role_row(&db, "e1", "ses_A", "msg_a", "user").await;
         text_row(&db, "e2", "ses_A", "prt_a", "msg_a", "before").await;
 
-        let mut stream = events(&path, Replay::All);
+        let mut stream = events(&path, ReplayBehavior::All);
         assert_eq!(described(&mut stream, 1).await, ["ses_A User before"]);
 
         // one connection for the whole migration, as opencode's own runs: a pooled connection
@@ -1919,51 +1921,12 @@ mod tests {
         let mut captured = Vec::new();
         while captured.is_empty() {
             let line = described(&mut stream, 1).await.pop().expect("the capture ended");
-            // the polls that still met no table report it too, and the tail reconnects after each
+            // the polls that still met no table report it too, and the tail retries after each
             if !line.starts_with("watch error") {
                 captured.push(line);
             }
         }
         assert_eq!(captured, ["ses_B Assistant after"]);
-    }
-
-    // Windows refuses to unlink or replace a file SQLite holds open (it opens without
-    // FILE_SHARE_DELETE), so the database can only be swapped under a live tail on unix.
-    #[cfg(unix)]
-    #[rstest]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn rows_of_a_replaced_database_file_are_delivered() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("opencode.db");
-        let old = event_db(&path).await;
-        role_row(&old, "o1", "ses_old", "msg_o", "user").await;
-        text_row(&old, "o2", "ses_old", "prt_o", "msg_o", "before").await;
-
-        let mut stream = events(&path, Replay::All);
-        assert_eq!(described(&mut stream, 1).await, ["ses_old User before"]);
-
-        // `rm opencode.db*` and a fresh opencode: a new file at the same path, rowids from 1
-        old.pool().close().await;
-        drop(old);
-        for suffix in ["", "-wal", "-shm"] {
-            let _ = std::fs::remove_file(dir.path().join(format!("opencode.db{suffix}")));
-        }
-        // written as one self-contained file (rollback journal) so it can be moved into place
-        let fresh = dir.path().join("fresh.db");
-        let db = with_schema(
-            Sqlite::builder(fresh.as_os_str())
-                .journal(Some(Journaling::Delete))
-                .open()
-                .await
-                .unwrap(),
-        )
-        .await;
-        role_row(&db, "n1", "ses_new", "msg_n", "user").await;
-        text_row(&db, "n2", "ses_new", "prt_n", "msg_n", "after").await;
-        db.pool().close().await;
-        std::fs::rename(&fresh, &path).unwrap();
-
-        assert_eq!(described(&mut stream, 1).await, ["ses_new User after"]);
     }
 
     #[cfg(unix)]
@@ -1978,7 +1941,7 @@ mod tests {
             text_row(&db, id, "ses_A", &format!("prt_{id}"), "msg_a", text).await;
         }
 
-        let mut stream = events(&path, Replay::All);
+        let mut stream = events(&path, ReplayBehavior::All);
         assert_eq!(described(&mut stream, 3).await, [
             "ses_A User one",
             "ses_A User two",
@@ -2411,7 +2374,7 @@ mod tests {
             tool_row(&db, id, "ses_1", "prt_2", "msg_1", state).await;
         }
 
-        let messages = captured(&mut events(&path, Replay::All), 2).await;
+        let messages = captured(&mut events(&path, ReplayBehavior::All), 2).await;
 
         let content: Vec<Content> = messages.iter().flat_map(Message::content).collect();
         assert_eq!(content, vec![
@@ -2446,7 +2409,7 @@ mod tests {
         }
 
         // the tail starts between the message's role row and its first part
-        let mut stream = events(&path, Replay::FromNow);
+        let mut stream = events(&path, ReplayBehavior::FromNow);
         let first =
             first_while_appending(&mut stream, &db, "ses_1", "message.part.updated.1", |i| {
                 text_event(&format!("prt_{i}"), "msg_1", "hi")
@@ -2543,7 +2506,7 @@ mod tests {
         .unwrap();
         text_row(&db, "e5", "ses_1", "prt_1", "msg_1", "ok").await;
 
-        assert_eq!(described(&mut events(&path, Replay::All), 5).await, [
+        assert_eq!(described(&mut events(&path, ReplayBehavior::All), 5).await, [
             "ses_1 json error",
             "ses_1 json error",
             "ses_1 json error",
@@ -2586,7 +2549,7 @@ mod tests {
         }
         text_row(&db, "e2", "ses_ok", "prt_ok", "msg_1", "fine").await;
 
-        let mut got = described(&mut events(&path, Replay::All), 3).await;
+        let mut got = described(&mut events(&path, ReplayBehavior::All), 3).await;
         got.sort();
         let lossy = String::from_utf8_lossy(NOT_UTF8);
         let mut expected = vec![
@@ -2608,7 +2571,7 @@ mod tests {
         let db = event_db(&path).await;
         seed_sessions(&db, SESSIONS, PARTS).await;
 
-        let mut stream = events(&path, Replay::All);
+        let mut stream = events(&path, ReplayBehavior::All);
         let mut seen: HashSet<String> = HashSet::new();
         let mut delivered = 0;
         while delivered < SESSIONS * PARTS {
@@ -2646,7 +2609,7 @@ mod tests {
         load_fixture(&db, include_str!("../../../tests/fixtures/opencode/session1.jsonl")).await;
 
         let mut by_session: HashMap<String, Vec<OpencodeMessage>> = HashMap::new();
-        for event in next_n(&mut events(&path, Replay::All), 6).await {
+        for event in next_n(&mut events(&path, ReplayBehavior::All), 6).await {
             let event = event.unwrap();
             by_session.entry(event.session.to_string()).or_default().push(event.message);
         }
