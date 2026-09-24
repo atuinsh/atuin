@@ -83,6 +83,15 @@ message RebuildHistoryReply {
   uint32 protocol = 2;
 }
 
+// The daemon rewrites record store rows into the compact on-disk encoding and vacuums.
+message CompactStoreRequest {}
+
+message CompactStoreReply {
+  uint64 rewritten = 1;
+  string version = 2;
+  uint32 protocol = 3;
+}
+
 // Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
 message StatusRequest {}
 
@@ -251,6 +260,8 @@ service History {
   rpc DeleteHistory(stream DeleteHistoryRequest) returns (DeleteHistoryReply);
 
   rpc RebuildHistory(RebuildHistoryRequest) returns (RebuildHistoryReply);
+
+  rpc CompactStore(CompactStoreRequest) returns (CompactStoreReply);
 
   rpc TailHistory(TailHistoryRequest) returns (stream TailHistoryReply);
 

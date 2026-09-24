@@ -16,12 +16,13 @@ use tracing::{Instrument, Level, instrument};
 use crate::DaemonHandle;
 use crate::grpc::history::pb::history_server::History as GrpcService;
 use crate::grpc::history::pb::{
-    CancelHistoryReply, CancelHistoryRequest, DeleteHistoryReply, DeleteHistoryRequest,
-    DeleteHistoryStreamExt, EndHistoryReply, EndHistoryRequest, GetCommandOutputRequest,
-    GetCommandOutputResponse, Lagged, RebuildHistoryReply, RebuildHistoryRequest,
-    RegisterCommandOutputRequest, RegisterCommandOutputResponse, ShutdownReply, ShutdownRequest,
-    StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent,
-    TailHistoryReply, TailHistoryRequest,
+    CancelHistoryReply, CancelHistoryRequest, CompactStoreReply, CompactStoreRequest,
+    DeleteHistoryReply, DeleteHistoryRequest, DeleteHistoryStreamExt, EndHistoryReply,
+    EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse, Lagged,
+    RebuildHistoryReply, RebuildHistoryRequest, RegisterCommandOutputRequest,
+    RegisterCommandOutputResponse, ShutdownReply, ShutdownRequest, StartHistoryReply,
+    StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent, TailHistoryReply,
+    TailHistoryRequest,
 };
 use crate::history_journal::HistoryJournal;
 
@@ -354,6 +355,25 @@ impl GrpcService for Service {
         self.journal.rebuild(&search_settings).await?;
 
         Ok(Response::new(RebuildHistoryReply {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            protocol: DAEMON_PROTOCOL_VERSION,
+        }))
+    }
+
+    #[instrument(skip_all, level = Level::TRACE)]
+    async fn compact_store(
+        &self,
+        _request: Request<CompactStoreRequest>,
+    ) -> Result<Response<CompactStoreReply>, Status> {
+        let rewritten = self
+            .daemon_handle
+            .store()
+            .compact()
+            .await
+            .map_err(|e| Status::internal(format!("compact did not complete: {e}")))?;
+
+        Ok(Response::new(CompactStoreReply {
+            rewritten,
             version: env!("CARGO_PKG_VERSION").to_string(),
             protocol: DAEMON_PROTOCOL_VERSION,
         }))

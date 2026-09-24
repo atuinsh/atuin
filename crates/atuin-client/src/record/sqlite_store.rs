@@ -14,9 +14,9 @@ use atuin_domain::record::{
     RecordVersion,
 };
 use easy_cast::Conv;
-use eyre::{Result, ensure, eyre};
+use eyre::{Result, eyre};
 use sqlx::sqlite::{SqlitePool, SqliteRow};
-use sqlx::{Row, Type, ValueRef};
+use sqlx::{FromRow, Row, Type, ValueRef};
 use tracing::instrument;
 use uuid::Uuid;
 
@@ -162,13 +162,11 @@ impl SqliteStore {
     }
 
     #[instrument(level = "trace", skip_all, err)]
-    async fn load_all<'e>(
-        executor: impl sqlx::Executor<'e, Database = sqlx::Sqlite>,
-    ) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
+    async fn load_all(&self) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
         let res = db::query_as::<_, DbRecord>(sqlx::AssertSqlSafe(format!(
             "select {STORE_COLUMNS} from store"
         )))
-        .fetch_all(executor)
+        .fetch_all(self.sqlite.pool())
         .await?;
 
         Ok(res.into_iter().map(Into::into).collect())
@@ -499,25 +497,58 @@ impl SqliteStore {
         Ok(res.into_iter().map(Into::into).collect())
     }
 
-    /// Rewrite every row in the current column encoding, then vacuum to give the space back.
-    /// Returns the number of records rewritten.
+    /// Rewrite rows still holding the wire form as TEXT into the blob encoding, then vacuum to
+    /// give the space back. Returns the number of rows rewritten.
+    ///
+    /// Works in chunks, each its own short transaction, so the store's write lock is never held
+    /// long enough for a concurrent writer to hit its busy timeout. Rows written meanwhile are
+    /// already blobs and never match.
     #[instrument(level = "trace", skip_all, err)]
     pub async fn compact(&self) -> Result<u64> {
-        // Read under the write lock: a record pushed between the read and the delete would be lost.
-        let mut tx = self.sqlite.pool().begin_with("BEGIN IMMEDIATE").await?;
-        let all = Self::load_all(&mut *tx).await?;
+        const CHUNK: i64 = 1000;
 
-        db::query("delete from store").execute(&mut *tx).await?;
-        let (attempted, inserted) = self.insert_all(&mut tx, all.iter()).await?;
-        ensure!(inserted == attempted, "rewrote {inserted} of {attempted} records; rolled back");
+        let mut rewritten = 0;
+        let mut cursor = 0i64;
 
-        tx.commit().await?;
+        loop {
+            let rows = db::query(sqlx::AssertSqlSafe(format!(
+                "select rowid, {STORE_COLUMNS} from store
+                    where rowid > ?1 and typeof(data) = 'text' order by rowid limit ?2"
+            )))
+            .bind(cursor)
+            .bind(CHUNK)
+            .fetch_all(self.sqlite.pool())
+            .await?;
+
+            let Some(last) = rows.last() else {
+                break;
+            };
+            cursor = last.try_get("rowid")?;
+
+            let mut tx = self.sqlite.pool().begin().await?;
+
+            for row in &rows {
+                let record: Record<paseto_v4::EncryptedData> = DbRecord::from_row(row)?.into();
+                let (data, cek) = stored_columns(&record)?;
+
+                db::query("update store set data = ?1, cek = ?2 where rowid = ?3")
+                    .bind(data)
+                    .bind(cek)
+                    .bind(row.try_get::<i64, _>("rowid")?)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+
+            tx.commit().await?;
+            rewritten += u64::conv(rows.len());
+        }
+
         // Vacuum writes the whole file through the WAL; checkpoint so the space is freed now,
         // not whenever the next checkpoint happens to run.
         db::query("vacuum").execute(self.sqlite.pool()).await?;
         db::query("pragma wal_checkpoint(truncate)").execute(self.sqlite.pool()).await?;
 
-        Ok(inserted)
+        Ok(rewritten)
     }
 
     /// Reencrypt every single item in this store with a new key
@@ -535,7 +566,7 @@ impl SqliteStore {
         //    lot of data
         // 2. The user has encountered some sort of issue, and runs a maintenance command that
         //    invokes this
-        let all = Self::load_all(self.sqlite.pool()).await?;
+        let all = self.load_all().await?;
 
         let re_encrypted = all
             .into_iter()
@@ -575,7 +606,7 @@ impl SqliteStore {
     /// Someday maybe also check each tag/record can be deserialized, but not for now.
     #[instrument(level = "trace", skip_all, err)]
     pub async fn verify(&self, key: &paseto_v4::Key) -> Result<()> {
-        let all = Self::load_all(self.sqlite.pool()).await?;
+        let all = self.load_all().await?;
 
         all.into_iter()
             .filter(|record| !record.tag.is_plaintext())
@@ -589,7 +620,7 @@ impl SqliteStore {
     /// Someday maybe also check each tag/record can be deserialized, but not for now.
     #[instrument(level = "trace", skip_all, err)]
     pub async fn purge(&self, key: &paseto_v4::Key) -> Result<()> {
-        let all = Self::load_all(self.sqlite.pool()).await?;
+        let all = self.load_all().await?;
 
         for record in &all {
             if record.tag.is_plaintext() {
@@ -992,7 +1023,7 @@ mod tests {
             "blobblob"
         );
 
-        assert_eq!(store.compact().await.unwrap(), 3);
+        assert_eq!(store.compact().await.unwrap(), 1);
         assert_eq!(storage_class(legacy_id).await.unwrap(), "blobblob");
         assert_eq!(store.get(legacy.id).await.unwrap(), legacy);
     }
