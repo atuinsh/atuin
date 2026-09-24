@@ -369,7 +369,6 @@ dependencies = [
  "glob-match",
  "imara-diff",
  "parking_lot",
- "prost-types",
  "pulldown-cmark",
  "ratatui",
  "ratatui-core",

@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 #[cfg(unix)]
 use std::path::PathBuf;
 
-use atuin_client::ai_session::HarnessKind;
+use atuin_client::ai_session::{HarnessKind, HarnessSession};
 use atuin_client::database::Context;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::{FilterMode, Settings};
@@ -22,7 +22,7 @@ use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
 use tracing::{Level, instrument, span};
 
-use crate::grpc::ai::agent::pb::{HarnessSession as AiHarnessSession, Session as AiSession};
+use crate::grpc::ai::agent::pb::Session as AiSession;
 use crate::grpc::ai::session::pb::ai_session_client::AiSessionClient as AiSessionServiceClient;
 use crate::grpc::ai::session::pb::{
     GetSessionEvent, GetSessionRequest, GetTranscriptChunk, GetTranscriptRequest,
@@ -516,10 +516,10 @@ impl AiClient {
     /// Stream one session: the first event carries the [`AiSession`], each event after it a message.
     pub async fn get_session(
         &mut self,
-        session: AiHarnessSession,
+        session: HarnessSession,
     ) -> Result<tonic::Streaming<GetSessionEvent>> {
         let request = GetSessionRequest {
-            session: Some(session),
+            session: Some(session.into()),
         };
         Ok(self.client.get_session(request).await?.into_inner())
     }
@@ -527,10 +527,10 @@ impl AiClient {
     /// Stream a rendered plain-text transcript in chunks; concatenate them in arrival order.
     pub async fn get_transcript(
         &mut self,
-        session: AiHarnessSession,
+        session: HarnessSession,
     ) -> Result<tonic::Streaming<GetTranscriptChunk>> {
         let request = GetTranscriptRequest {
-            session: Some(session),
+            session: Some(session.into()),
         };
         Ok(self.client.get_transcript(request).await?.into_inner())
     }

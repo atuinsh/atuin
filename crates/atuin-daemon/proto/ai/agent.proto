@@ -48,7 +48,8 @@ enum StopReason {
 }
 
 // Token counts as the harness reported them. A count the harness did not report is
-// absent, never 0.
+// absent, never 0. Extern-pathed to `atuin_common::harnesstools::session::Usage`, whose prost
+// tags are these field numbers.
 message Tokens {
   // How much text was fed into the model, in tokens.
   optional uint64 input = 1;
@@ -127,10 +128,8 @@ message HarnessSession {
 message Message {
   // Atuin's stable identifier for this message (UUIDv7).
   common.Uuid id = 1;
-  // The harness that produced this message.
-  HarnessKind harness = 2;
-  // Harness-native session identifier this message belongs to.
-  string session_id = 3;
+  // The session this message belongs to.
+  HarnessSession session = 2;
   // Session this one was handed off from, if any.
   optional HarnessSession parent = 4;
   // Was a harness-native thread identifier that no harness supplied.
@@ -164,10 +163,8 @@ message Message {
 }
 
 message Session {
-  // The harness that produced this session.
-  HarnessKind harness = 1;
-  // Harness-native session identifier.
-  string session_id = 2;
+  // This session's own identity.
+  HarnessSession handle = 1;
   // Session this one was handed off from, if any.
   optional HarnessSession parent = 3;
   optional string cwd = 4;

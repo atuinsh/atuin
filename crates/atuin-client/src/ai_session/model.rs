@@ -12,7 +12,7 @@ use time::OffsetDateTime;
 use typed_builder::TypedBuilder;
 
 #[repr(u8)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "proto", derive(prost::Enumeration))]
 pub enum HarnessKind {
     Unknown = 0,
@@ -42,7 +42,7 @@ pub struct NativeSessionId(String);
 #[as_ref(str)]
 pub struct SourceId(String);
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct HarnessSession {
     pub harness: HarnessKind,
     pub session: NativeSessionId,
