@@ -58,6 +58,8 @@ message Tokens {
   optional uint64 cache_read = 3;
   // Tokens saved so a later prompt can reuse them.
   optional uint64 cache_write = 4;
+  // Of `output`, how much the model spent reasoning (thinking).
+  optional uint64 reasoning = 5;
 }
 
 // The AI's request to run a tool.
@@ -104,6 +106,11 @@ message ContentBlock {
     ReasoningSummary reasoning_summary = 5;
     // A block Atuin does not model, as JSON.
     string other = 6;
+    // A model-written summary standing in for earlier conversation (compaction,
+    // an abandoned branch).
+    string summary = 7;
+    // Why a model call failed or was aborted, as the harness reported it.
+    string error = 8;
   }
 }
 
@@ -126,8 +133,9 @@ message Message {
   string session_id = 3;
   // Session this one was handed off from, if any.
   optional HarnessSession parent = 4;
-  // Harness-native thread identifier, if any.
-  optional string thread = 5;
+  // Was a harness-native thread identifier that no harness supplied.
+  reserved 5;
+  reserved "thread";
   // Harness-native message identifier, unique within the session.
   string source_id = 6;
   // Harness-native identifier of the message this one replies to.

@@ -633,7 +633,14 @@ fn write_message_text(out: &mut dyn Write, m: &agent::Message) -> io::Result<()>
                 writeln!(out, "[thinking] {}", sanitize(t))?;
             }
             Some(agent::content_block::Block::ReasoningSummary(summary)) => {
-                writeln!(out, "[thinking] {}", reasoning_label(summary.tokens))?;
+                let tokens = summary.tokens.or(m.tokens.as_ref().and_then(|t| t.reasoning));
+                writeln!(out, "[thinking] {}", reasoning_label(tokens))?;
+            }
+            Some(agent::content_block::Block::Summary(t)) => {
+                writeln!(out, "[summary] {}", sanitize(t))?;
+            }
+            Some(agent::content_block::Block::Error(t)) => {
+                writeln!(out, "[error] {}", sanitize(t))?;
             }
             // An absent or empty input or output means capture did not keep it; print the tag alone.
             Some(agent::content_block::Block::ToolCall(tc)) => {
@@ -680,6 +687,8 @@ enum Summary {
     Thinking(String),
     /// A tool invocation, by name.
     ToolCall(String),
+    /// A failed or aborted model call.
+    Error(String),
     /// A tool result and whether it errored.
     ToolResult {
         is_error: bool,
@@ -694,6 +703,7 @@ impl Summary {
             Self::Text(t) => t.clone(),
             Self::Thinking(t) => format!("{} {t}", paint("»", Ansi::Dim, color)),
             Self::ToolCall(name) => format!("{} {name}", paint("⚙", Ansi::Blue, color)),
+            Self::Error(body) => format!("{} {body}", paint("✗", Ansi::Red, color)),
             Self::ToolResult { is_error, body } => {
                 let mark = if *is_error {
                     paint("✗", Ansi::Red, color)
@@ -728,7 +738,17 @@ fn message_summary(m: &agent::Message) -> Option<Summary> {
                 }
             }
             Some(agent::content_block::Block::ReasoningSummary(summary)) => {
-                return Some(Summary::Thinking(reasoning_label(summary.tokens)));
+                let tokens = summary.tokens.or(m.tokens.as_ref().and_then(|t| t.reasoning));
+                return Some(Summary::Thinking(reasoning_label(tokens)));
+            }
+            Some(agent::content_block::Block::Summary(t)) => {
+                let line = one_line(t, SUMMARY_WIDTH);
+                if !line.is_empty() {
+                    return Some(Summary::Text(line));
+                }
+            }
+            Some(agent::content_block::Block::Error(t)) => {
+                return Some(Summary::Error(one_line(t, SUMMARY_WIDTH)));
             }
             Some(agent::content_block::Block::ToolCall(tc)) => {
                 // Fold like the sibling arms: the tool name is captured content and must not carry
@@ -1016,6 +1036,12 @@ enum ContentJson {
     Thinking {
         text: String,
     },
+    Summary {
+        text: String,
+    },
+    Error {
+        text: String,
+    },
     ToolCall {
         id: String,
         name: String,
@@ -1161,15 +1187,18 @@ fn session_json(s: &agent::Session) -> SessionJson {
     }
 }
 
-fn content_json(block: &agent::ContentBlock) -> Option<ContentJson> {
+/// `reasoning` is the message's reasoning token count, for a summary block that lacks its own.
+fn content_json(block: &agent::ContentBlock, reasoning: Option<u64>) -> Option<ContentJson> {
     Some(match block.block.as_ref()? {
         agent::content_block::Block::Text(t) | agent::content_block::Block::Other(t) => {
             ContentJson::Text { text: t.clone() }
         }
         agent::content_block::Block::Thinking(t) => ContentJson::Thinking { text: t.clone() },
         agent::content_block::Block::ReasoningSummary(summary) => ContentJson::Thinking {
-            text: reasoning_label(summary.tokens),
+            text: reasoning_label(summary.tokens.or(reasoning)),
         },
+        agent::content_block::Block::Summary(t) => ContentJson::Summary { text: t.clone() },
+        agent::content_block::Block::Error(t) => ContentJson::Error { text: t.clone() },
         agent::content_block::Block::ToolCall(tc) => ContentJson::ToolCall {
             id: tc.id.clone(),
             name: tc.name.clone(),
@@ -1193,7 +1222,11 @@ fn message_json(m: &agent::Message) -> MessageJson {
         model: m.model.clone(),
         cwd: m.cwd.clone(),
         git_branch: m.git_branch.clone(),
-        content: m.content.iter().filter_map(content_json).collect(),
+        content: m
+            .content
+            .iter()
+            .filter_map(|block| content_json(block, m.tokens.as_ref().and_then(|t| t.reasoning)))
+            .collect(),
         tokens: tokens_json(m.tokens.as_ref()),
         stop_reason: m
             .stop_reason_label
@@ -1309,6 +1342,7 @@ mod tests {
             output: Some(20),
             cache_read: Some(1),
             cache_write: Some(2),
+            reasoning: None,
         });
         s.title = Some("hello".to_owned());
 

@@ -1,11 +1,15 @@
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use atuin_common::db::sqlite::fts::{TextHighlighter, match_expression};
 use atuin_common::db::sqlite::{Sqlite, SqliteOpenOrCreateError};
 use atuin_common::db::{self};
-use atuin_common::harnesstools::session::{Checkpoint, Content, Role, Usage};
+use atuin_common::harnesstools::session::{
+    Checkpoint, Content, Role, TitleChange, TitleSource, Usage,
+};
 use atuin_domain::record::RecordId;
 use futures::{Stream, StreamExt, TryStreamExt};
+use sqlx::SqliteConnection;
 use time::OffsetDateTime;
 use tracing::warn;
 
@@ -69,7 +73,9 @@ struct SessionRow {
     usage_output: i64,
     usage_cache_read: i64,
     usage_cache_write: i64,
+    usage_reasoning: i64,
     title: Option<String>,
+    title_source: Option<i64>,
     preview: Option<String>,
 }
 
@@ -82,7 +88,6 @@ struct MessageRow {
     parent_harness: Option<i64>,
     parent_session_id: Option<String>,
     parent_source_id: Option<String>,
-    thread: Option<String>,
     timestamp: i64,
     role: String,
     content: String,
@@ -94,9 +99,81 @@ struct MessageRow {
     usage_output: i64,
     usage_cache_read: i64,
     usage_cache_write: i64,
+    usage_reasoning: Option<i64>,
     stop_reason: Option<String>,
     usage_present: i64,
     turn_id: Option<String>,
+    title_change: Option<String>,
+}
+
+/// Input, output, cache read, cache write, reasoning: the `usage_*` columns in order.
+type Tokens = [i64; 5];
+
+#[derive(sqlx::FromRow)]
+struct SessionKey {
+    started_at: i64,
+    parent_harness: Option<i64>,
+    parent_session_id: Option<String>,
+    title: Option<String>,
+}
+
+impl SessionKey {
+    /// What ranks the session's claim on a shared model call.
+    fn rank(&self) -> (i64, Option<i64>, Option<&str>) {
+        (self.started_at, self.parent_harness, self.parent_session_id.as_deref())
+    }
+}
+
+/// A session holding rows of one model call, with the most usage any of them reported.
+#[derive(sqlx::FromRow)]
+struct Claimant {
+    session_id: String,
+    started_at: i64,
+    parent_harness: Option<i64>,
+    parent_session_id: Option<String>,
+    usage_input: i64,
+    usage_output: i64,
+    usage_cache_read: i64,
+    usage_cache_write: i64,
+    usage_reasoning: i64,
+}
+
+impl Claimant {
+    fn tokens(&self) -> Tokens {
+        [
+            self.usage_input,
+            self.usage_output,
+            self.usage_cache_read,
+            self.usage_cache_write,
+            self.usage_reasoning,
+        ]
+    }
+
+    fn parent_of(&self, harness: i64) -> Option<String> {
+        self.parent_session_id.clone().filter(|_| self.parent_harness == Some(harness))
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct CallRow {
+    session_id: String,
+    usage_input: i64,
+    usage_output: i64,
+    usage_cache_read: i64,
+    usage_cache_write: i64,
+    usage_reasoning: i64,
+}
+
+impl CallRow {
+    fn tokens(&self) -> Tokens {
+        [
+            self.usage_input,
+            self.usage_output,
+            self.usage_cache_read,
+            self.usage_cache_write,
+            self.usage_reasoning,
+        ]
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -159,17 +236,22 @@ impl AiSessionDatabase {
         let content_json = serde_json::to_string(&msg.content)?;
         let (content, content_z) = Self::split_content(content_json)?;
         let stop_reason_json = msg.stop_reason.as_ref().map(serde_json::to_string).transpose()?;
-        let (usage_input, usage_output, usage_cache_read, usage_cache_write) =
+        let title_change = msg.title_change.as_ref().map(serde_json::to_string).transpose()?;
+        let [usage_input, usage_output, usage_cache_read, usage_cache_write, _] =
             Self::fold_usage(msg.usage.as_ref());
+        // Unlike the others, a row's reasoning stays NULL when unreported: most harnesses never
+        // break it out, and zero would claim the call did not reason.
+        let usage_reasoning =
+            msg.usage.and_then(|u| u.reasoning).map(|n| i64::try_from(n).unwrap_or(i64::MAX));
         let cwd = msg.cwd.as_ref().map(|p| p.to_string_lossy().into_owned());
 
         let inserted = db::query(
             "INSERT INTO messages (
                 id, harness, session_id, source_id, parent_harness, parent_session_id,
-                parent_source_id, thread, timestamp, role, content, content_z, cwd, git_branch,
-                model, usage_input, usage_output, usage_cache_read, usage_cache_write, stop_reason,
-                usage_present, turn_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                parent_source_id, timestamp, role, content, content_z, cwd, git_branch, model,
+                usage_input, usage_output, usage_cache_read, usage_cache_write,
+                usage_reasoning, stop_reason, usage_present, turn_id, title_change
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(harness, session_id, source_id) DO NOTHING",
         )
         .bind(id)
@@ -179,7 +261,6 @@ impl AiSessionDatabase {
         .bind(parent_harness)
         .bind(parent_session_id.clone())
         .bind(msg.parent_source_id.as_ref().map(|s| s.as_ref()))
-        .bind(msg.thread.as_deref())
         .bind(timestamp)
         .bind(role_json)
         .bind(content)
@@ -191,9 +272,11 @@ impl AiSessionDatabase {
         .bind(usage_output)
         .bind(usage_cache_read)
         .bind(usage_cache_write)
+        .bind(usage_reasoning)
         .bind(stop_reason_json)
         .bind(i64::from(msg.usage.is_some()))
         .bind(msg.turn_id.as_deref())
+        .bind(title_change)
         .execute(&mut *tx)
         .await?;
 
@@ -212,23 +295,20 @@ impl AiSessionDatabase {
             .await?;
 
         // Session title denormalised onto the message so it survives a reproject from records
-        // (which carry messages only). The session upsert below applies it latest-non-null-wins.
+        // (which carry messages only). The session upsert below takes the newest row's, so a
+        // cleared title clears; the capture pipeline stamps every row with the ranked title.
         let title = msg.session_title.as_deref();
         let preview = Self::preview_text(msg);
-        let previous_title: Option<String> =
-            db::query_scalar("SELECT title FROM sessions WHERE harness = ? AND session_id = ?")
-                .bind(harness)
-                .bind(session_id)
-                .fetch_optional(&mut *tx)
-                .await?
-                .flatten();
+        let before = Self::session_key(&mut tx, harness, session_id).await?;
 
+        // Usage is not folded in here: it is attributed per model call below. A structural row
+        // (usage, title, session context, a tree node with nothing to show) is no message.
+        let counted = i64::from(!msg.content.is_empty());
         db::query(
             "INSERT INTO sessions (
                 harness, session_id, parent_harness, parent_session_id, cwd, git_branch, model,
-                started_at, updated_at, message_count, usage_input, usage_output,
-                usage_cache_read, usage_cache_write, title, preview
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+                started_at, updated_at, message_count, title, title_source, preview
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(harness, session_id) DO UPDATE SET
                 parent_harness = COALESCE(excluded.parent_harness, sessions.parent_harness),
                 parent_session_id = COALESCE(excluded.parent_session_id, \
@@ -238,12 +318,11 @@ impl AiSessionDatabase {
                 model = COALESCE(excluded.model, sessions.model),
                 started_at = MIN(sessions.started_at, excluded.started_at),
                 updated_at = MAX(sessions.updated_at, excluded.updated_at),
-                message_count = sessions.message_count + 1,
-                usage_input = sessions.usage_input + excluded.usage_input,
-                usage_output = sessions.usage_output + excluded.usage_output,
-                usage_cache_read = sessions.usage_cache_read + excluded.usage_cache_read,
-                usage_cache_write = sessions.usage_cache_write + excluded.usage_cache_write,
-                title = COALESCE(excluded.title, sessions.title),
+                message_count = sessions.message_count + excluded.message_count,
+                title = CASE WHEN excluded.updated_at >= sessions.updated_at THEN excluded.title \
+             ELSE sessions.title END,
+                title_source = CASE WHEN excluded.updated_at >= sessions.updated_at THEN \
+             excluded.title_source ELSE sessions.title_source END,
                 preview = COALESCE(sessions.preview, excluded.preview)",
         )
         .bind(harness)
@@ -255,22 +334,63 @@ impl AiSessionDatabase {
         .bind(msg.model.as_deref())
         .bind(timestamp)
         .bind(timestamp)
-        .bind(usage_input)
-        .bind(usage_output)
-        .bind(usage_cache_read)
-        .bind(usage_cache_write)
+        .bind(counted)
         .bind(title)
+        .bind(msg.session_title_source.map(Self::title_source_repr))
         .bind(preview)
         .execute(&mut *tx)
         .await?;
 
-        // A changed title has to reach the rows indexed before it arrived. messages_fts is
+        let mut recount = BTreeSet::new();
+        if let Some(usage) = &msg.usage {
+            match &msg.turn_id {
+                Some(turn) => {
+                    recount.insert(turn.clone());
+                }
+                // A row outside any model call counts on its own.
+                None => {
+                    let tokens = Self::fold_usage(Some(usage));
+                    Self::add_usage(&mut tx, harness, session_id, tokens, 1).await?;
+                }
+            }
+        }
+        // Which session owns a call shared with others depends on each claimant's start and
+        // ancestry: when either moves, every call this session claims is attributed afresh.
+        let existed = before.is_some();
+        let previous_title = match before {
+            Some(before) => {
+                let after = Self::session_key(&mut tx, harness, session_id).await?;
+                if after.as_ref().map(SessionKey::rank) != Some(before.rank()) {
+                    let turns: Vec<String> = db::query_scalar(
+                        "SELECT DISTINCT turn_id FROM messages WHERE harness = ? AND session_id = \
+                         ? AND usage_present = 1 AND turn_id IS NOT NULL",
+                    )
+                    .bind(harness)
+                    .bind(session_id)
+                    .fetch_all(&mut *tx)
+                    .await?;
+                    recount.extend(turns);
+                }
+                before.title
+            }
+            None => None,
+        };
+        for turn in &recount {
+            Self::attribute_call(&mut tx, harness, turn).await?;
+        }
+
+        // A changed (or cleared) title has to reach the rows indexed before it. messages_fts is
         // contentless, so a single-column UPDATE is not supported: rewrite each of the session's
-        // index rows, re-deriving the body from the stored content. Gated on the title actually
-        // changing, since every replayed line of a titled session carries it.
-        if let Some(title) = title
-            && previous_title.as_deref() != Some(title)
-        {
+        // index rows, re-deriving the body from the stored content. Gated on the session's title
+        // actually changing, since every replayed line of a titled session carries it.
+        let current_title: Option<String> =
+            db::query_scalar("SELECT title FROM sessions WHERE harness = ? AND session_id = ?")
+                .bind(harness)
+                .bind(session_id)
+                .fetch_one(&mut *tx)
+                .await?;
+        if existed && current_title != previous_title {
+            let title = current_title.as_deref().unwrap_or("");
             type BodyRow =
                 (i64, String, Option<Vec<u8>>, Option<String>, Option<String>, Option<String>);
             let rows: Vec<BodyRow> = db::query_as(
@@ -309,33 +429,6 @@ impl AiSessionDatabase {
         Ok(Appended::New)
     }
 
-    /// Whether a persisted row already carries the reported reasoning count for this call.
-    /// Read existing content (including compressed rows), so this also works after upgrades
-    /// and record-store rebuilds without a separate deduplication cache or backfill.
-    pub async fn has_reasoning_tokens(
-        &self,
-        session: &HarnessSession,
-        turn: &str,
-    ) -> Result<bool, DbError> {
-        let mut rows = db::query_as::<_, (String, Option<Vec<u8>>)>(
-            "SELECT content, content_z FROM messages WHERE harness = ? AND session_id = ? AND \
-             turn_id = ?",
-        )
-        .bind(session.harness as i64)
-        .bind(session.session.as_ref())
-        .bind(turn)
-        .fetch(self.db.pool());
-        while let Some((content, compressed)) = rows.try_next().await? {
-            if Self::read_content(content, compressed)?
-                .iter()
-                .any(|block| matches!(block, Content::ReasoningSummary { tokens: Some(_) }))
-            {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
     pub async fn contains_message(
         &self,
         session: &HarnessSession,
@@ -353,8 +446,44 @@ impl AiSessionDatabase {
         Ok(found.is_some())
     }
 
-    /// Where capture resumes a session, if it checkpointed one with a digest; one stored before
-    /// digests reads as `None`, so the session is read again from its start.
+    /// The source ids of a session's rows that start with `prefix`.
+    /// Every title the session's lines set or cleared, oldest first: replayed, they give each
+    /// source's current title again.
+    pub async fn title_changes(
+        &self,
+        session: &HarnessSession,
+    ) -> Result<Vec<TitleChange>, DbError> {
+        let rows: Vec<String> = db::query_scalar(
+            "SELECT title_change FROM messages WHERE harness = ? AND session_id = ? AND \
+             title_change IS NOT NULL ORDER BY timestamp, rowid",
+        )
+        .bind(session.harness as i64)
+        .bind(session.session.as_ref())
+        .fetch_all(self.db.pool())
+        .await?;
+        Ok(rows.iter().filter_map(|json| serde_json::from_str(json).ok()).collect())
+    }
+
+    pub async fn source_ids_with_prefix(
+        &self,
+        session: &HarnessSession,
+        prefix: &str,
+    ) -> Result<Vec<SourceId>, DbError> {
+        let ids: Vec<String> = db::query_scalar(
+            "SELECT source_id FROM messages WHERE harness = ? AND session_id = ? AND \
+             substr(source_id, 1, length(?)) = ?",
+        )
+        .bind(session.harness as i64)
+        .bind(session.session.as_ref())
+        .bind(prefix)
+        .bind(prefix)
+        .fetch_all(self.db.pool())
+        .await?;
+        Ok(ids.into_iter().map(SourceId::from).collect())
+    }
+
+    /// Where capture resumes a session, if it checkpointed one with a digest; one without a
+    /// digest reads as `None`, so the session is read again from its start.
     pub async fn checkpoint(
         &self,
         session: &HarnessSession,
@@ -398,10 +527,10 @@ impl AiSessionDatabase {
     pub async fn last_message(&self, session: &HarnessSession) -> Result<Option<Message>, DbError> {
         let row: Option<MessageRow> = db::query_as(
             "SELECT id, harness, session_id, source_id, parent_harness, parent_session_id, \
-             parent_source_id, thread, timestamp, role, content, content_z, cwd, git_branch, \
-             model, usage_input, usage_output, usage_cache_read, usage_cache_write, stop_reason, \
-             usage_present, turn_id FROM messages WHERE harness = ? AND session_id = ? ORDER BY \
-             timestamp DESC, id DESC LIMIT 1",
+             parent_source_id, timestamp, role, content, content_z, cwd, git_branch, model, \
+             usage_input, usage_output, usage_cache_read, usage_cache_write, usage_reasoning, \
+             stop_reason, usage_present, turn_id, title_change FROM messages WHERE harness = ? \
+             AND session_id = ? ORDER BY timestamp DESC, id DESC LIMIT 1",
         )
         .bind(session.harness as i64)
         .bind(session.session.as_ref())
@@ -415,8 +544,8 @@ impl AiSessionDatabase {
         let row: Option<SessionRow> = db::query_as(
             "SELECT harness, session_id, parent_harness, parent_session_id, cwd, git_branch, \
              model, started_at, updated_at, message_count, usage_input, usage_output, \
-             usage_cache_read, usage_cache_write, title, preview FROM sessions WHERE harness = ? \
-             AND session_id = ?",
+             usage_cache_read, usage_cache_write, usage_reasoning, title, title_source, preview \
+             FROM sessions WHERE harness = ? AND session_id = ?",
         )
         .bind(session.harness as i64)
         .bind(session.session.as_ref())
@@ -433,7 +562,8 @@ impl AiSessionDatabase {
         let mut sql = String::from(
             "SELECT harness, session_id, parent_harness, parent_session_id, cwd, git_branch, \
              model, started_at, updated_at, message_count, usage_input, usage_output, \
-             usage_cache_read, usage_cache_write, title, preview FROM sessions WHERE 1 = 1",
+             usage_cache_read, usage_cache_write, usage_reasoning, title, title_source, preview \
+             FROM sessions WHERE 1 = 1",
         );
 
         if harness.is_some() {
@@ -461,9 +591,9 @@ impl AiSessionDatabase {
         async_stream::try_stream! {
             let mut rows = db::query_as::<_, MessageRow>(
                 "SELECT id, harness, session_id, source_id, parent_harness, parent_session_id, \
-                 parent_source_id, thread, timestamp, role, content, content_z, cwd, git_branch, \
+                 parent_source_id, timestamp, role, content, content_z, cwd, git_branch, \
                  model, usage_input, usage_output, usage_cache_read, usage_cache_write, \
-                 stop_reason, usage_present, turn_id FROM messages WHERE harness = ? AND \
+                 usage_reasoning, stop_reason, usage_present, turn_id, title_change FROM messages WHERE harness = ? AND \
                  session_id = ? \
                  ORDER BY timestamp, id",
             )
@@ -514,7 +644,8 @@ impl AiSessionDatabase {
                  GROUP BY h, sid ORDER BY score DESC{limit_clause}) \
                  SELECT s.harness, s.session_id, s.parent_harness, s.parent_session_id, s.cwd, \
                  s.git_branch, s.model, s.started_at, s.updated_at, s.message_count, \
-                 s.usage_input, s.usage_output, s.usage_cache_read, s.usage_cache_write, s.title, \
+                 s.usage_input, s.usage_output, s.usage_cache_read, s.usage_cache_write, \
+                 s.usage_reasoning, s.title, s.title_source, \
                  s.preview, \
                  m.content AS match_content, m.content_z AS match_content_z, m.cwd AS match_cwd, \
                  m.git_branch AS match_git_branch, m.model AS match_model, \
@@ -586,12 +717,12 @@ impl AiSessionDatabase {
             let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
             let rows: Vec<ReindexRow> = db::query_as::<_, ReindexRow>(
                 "SELECT m.rowid AS rowid, m.id, m.harness, m.session_id, m.source_id, \
-                 m.parent_harness, m.parent_session_id, m.parent_source_id, m.thread, \
-                 m.timestamp, m.role, m.content, m.content_z, m.cwd, m.git_branch, m.model, \
-                 m.usage_input, m.usage_output, m.usage_cache_read, m.usage_cache_write, \
-                 m.stop_reason, m.usage_present, m.turn_id, s.title AS session_title FROM \
-                 messages m LEFT JOIN sessions s ON s.harness = m.harness AND s.session_id = \
-                 m.session_id WHERE m.rowid > ? ORDER BY m.rowid LIMIT ?",
+                 m.parent_harness, m.parent_session_id, m.parent_source_id, m.timestamp, m.role, \
+                 m.content, m.content_z, m.cwd, m.git_branch, m.model, m.usage_input, \
+                 m.usage_output, m.usage_cache_read, m.usage_cache_write, m.usage_reasoning, \
+                 m.stop_reason, m.usage_present, m.turn_id, m.title_change, s.title AS \
+                 session_title FROM messages m LEFT JOIN sessions s ON s.harness = m.harness AND \
+                 s.session_id = m.session_id WHERE m.rowid > ? ORDER BY m.rowid LIMIT ?",
             )
             .bind(watermark)
             .bind(REINDEX_CHUNK)
@@ -805,7 +936,10 @@ impl AiSessionDatabase {
 
     fn push_content_text(out: &mut String, content: &Content) {
         match content {
-            Content::Text(text) | Content::Reasoning(text) => {
+            Content::Text(text)
+            | Content::Reasoning(text)
+            | Content::Summary(text)
+            | Content::Error(text) => {
                 out.push_str(text);
                 out.push('\n');
             }
@@ -848,17 +982,169 @@ impl AiSessionDatabase {
         }
     }
 
-    fn fold_usage(usage: Option<&Usage>) -> (i64, i64, i64, i64) {
+    fn fold_usage(usage: Option<&Usage>) -> Tokens {
         let Some(usage) = usage else {
-            return (0, 0, 0, 0);
+            return [0; 5];
         };
 
-        (
-            i64::try_from(usage.input.unwrap_or(0)).unwrap_or(i64::MAX),
-            i64::try_from(usage.output.unwrap_or(0)).unwrap_or(i64::MAX),
-            i64::try_from(usage.cache_read.unwrap_or(0)).unwrap_or(i64::MAX),
-            i64::try_from(usage.cache_write.unwrap_or(0)).unwrap_or(i64::MAX),
+        [usage.input, usage.output, usage.cache_read, usage.cache_write, usage.reasoning]
+            .map(|n| i64::try_from(n.unwrap_or(0)).unwrap_or(i64::MAX))
+    }
+
+    /// What decides a session's claim on a shared model call (see [`Self::attribute_call`]),
+    /// plus its title, read before and after an append.
+    async fn session_key(
+        conn: &mut SqliteConnection,
+        harness: i64,
+        session_id: &str,
+    ) -> Result<Option<SessionKey>, DbError> {
+        Ok(db::query_as(
+            "SELECT started_at, parent_harness, parent_session_id, title FROM sessions WHERE \
+             harness = ? AND session_id = ?",
         )
+        .bind(harness)
+        .bind(session_id)
+        .fetch_optional(conn)
+        .await?)
+    }
+
+    /// Add `sign * tokens` to a session's usage totals.
+    async fn add_usage(
+        conn: &mut SqliteConnection,
+        harness: i64,
+        session_id: &str,
+        tokens: Tokens,
+        sign: i64,
+    ) -> Result<(), DbError> {
+        let [input, output, cache_read, cache_write, reasoning] =
+            tokens.map(|n| n.saturating_mul(sign));
+        db::query(
+            "UPDATE sessions SET usage_input = usage_input + ?, usage_output = usage_output + ?, \
+             usage_cache_read = usage_cache_read + ?, usage_cache_write = usage_cache_write + ?, \
+             usage_reasoning = usage_reasoning + ? WHERE harness = ? AND session_id = ?",
+        )
+        .bind(input)
+        .bind(output)
+        .bind(cache_read)
+        .bind(cache_write)
+        .bind(reasoning)
+        .bind(harness)
+        .bind(session_id)
+        .execute(conn)
+        .await?;
+        Ok(())
+    }
+
+    /// Count model call `turn` once, whichever sessions its rows were copied into (forks,
+    /// subagent replays): its usage is the field-wise max over every row reporting it (streamed
+    /// rows grow), and it belongs to one session, the owner.
+    ///
+    /// The owner is the earliest-started claimant (ties broken by session id), ignoring any
+    /// claimant descended from another -- a fork's copies can carry the parent's own timestamps,
+    /// so start times alone may tie. That depends only on the rows and sessions stored, never on
+    /// the order they arrived in, so capture, import and a rebuild from records on any host all
+    /// agree; [`Self::append`] calls this again whenever a claimant's start or parent moves.
+    async fn attribute_call(
+        conn: &mut SqliteConnection,
+        harness: i64,
+        turn: &str,
+    ) -> Result<(), DbError> {
+        let claimants: Vec<Claimant> = db::query_as(
+            "SELECT m.session_id AS session_id, s.started_at AS started_at, s.parent_harness AS \
+             parent_harness, s.parent_session_id AS parent_session_id, MAX(m.usage_input) AS \
+             usage_input, MAX(m.usage_output) AS usage_output, MAX(m.usage_cache_read) AS \
+             usage_cache_read, MAX(m.usage_cache_write) AS usage_cache_write, \
+             COALESCE(MAX(m.usage_reasoning), 0) AS usage_reasoning FROM messages m JOIN sessions \
+             s ON s.harness = m.harness AND s.session_id = m.session_id WHERE m.harness = ? AND \
+             m.turn_id = ? AND m.usage_present = 1 GROUP BY m.session_id",
+        )
+        .bind(harness)
+        .bind(turn)
+        .fetch_all(&mut *conn)
+        .await?;
+
+        let tokens = claimants.iter().fold([0; 5], |acc: Tokens, c| {
+            let row = c.tokens();
+            std::array::from_fn(|i| acc[i].max(row[i]))
+        });
+        let ids: HashSet<&str> = claimants.iter().map(|c| c.session_id.as_str()).collect();
+        let mut eligible = Vec::with_capacity(claimants.len());
+        for claimant in &claimants {
+            if claimants.len() == 1
+                || !Self::descends_from(&mut *conn, harness, claimant, &ids).await?
+            {
+                eligible.push(claimant);
+            }
+        }
+        // Only a parent cycle leaves nobody; fall back to the plain ranking.
+        if eligible.is_empty() {
+            eligible.extend(&claimants);
+        }
+        let Some(owner) = eligible
+            .into_iter()
+            .min_by(|a, b| (a.started_at, &a.session_id).cmp(&(b.started_at, &b.session_id)))
+        else {
+            return Ok(());
+        };
+
+        let previous: Option<CallRow> = db::query_as(
+            "SELECT session_id, usage_input, usage_output, usage_cache_read, usage_cache_write, \
+             usage_reasoning FROM calls WHERE harness = ? AND turn_id = ?",
+        )
+        .bind(harness)
+        .bind(turn)
+        .fetch_optional(&mut *conn)
+        .await?;
+        if let Some(previous) = &previous {
+            if previous.session_id == owner.session_id && previous.tokens() == tokens {
+                return Ok(());
+            }
+            Self::add_usage(&mut *conn, harness, &previous.session_id, previous.tokens(), -1)
+                .await?;
+        }
+        Self::add_usage(&mut *conn, harness, &owner.session_id, tokens, 1).await?;
+
+        let [input, output, cache_read, cache_write, reasoning] = tokens;
+        db::query(
+            "INSERT OR REPLACE INTO calls (harness, turn_id, session_id, usage_input, \
+             usage_output, usage_cache_read, usage_cache_write, usage_reasoning) VALUES (?, ?, ?, \
+             ?, ?, ?, ?, ?)",
+        )
+        .bind(harness)
+        .bind(turn)
+        .bind(&owner.session_id)
+        .bind(input)
+        .bind(output)
+        .bind(cache_read)
+        .bind(cache_write)
+        .bind(reasoning)
+        .execute(conn)
+        .await?;
+        Ok(())
+    }
+
+    /// Whether another of `claimants` is an ancestor of `claimant`, following stored parent
+    /// links within the harness.
+    async fn descends_from(
+        conn: &mut SqliteConnection,
+        harness: i64,
+        claimant: &Claimant,
+        claimants: &HashSet<&str>,
+    ) -> Result<bool, DbError> {
+        let mut seen = HashSet::from([claimant.session_id.clone()]);
+        let mut next = claimant.parent_of(harness);
+        while let Some(parent) = next {
+            if claimants.contains(parent.as_str()) {
+                return Ok(true);
+            }
+            if !seen.insert(parent.clone()) {
+                return Ok(false);
+            }
+            next = Self::session_key(&mut *conn, harness, &parent).await?.and_then(|key| {
+                key.parent_session_id.filter(|_| key.parent_harness == Some(harness))
+            });
+        }
+        Ok(false)
     }
 
     fn millis(ts: OffsetDateTime) -> i64 {
@@ -924,7 +1210,6 @@ impl AiSessionDatabase {
             .source_id(SourceId::from(row.source_id))
             .parent(parent)
             .parent_source_id(row.parent_source_id.map(SourceId::from))
-            .thread(row.thread)
             .timestamp(Self::time_from_millis(row.timestamp)?)
             .role(role)
             .content(content)
@@ -936,9 +1221,13 @@ impl AiSessionDatabase {
                 output: Some(u64::try_from(row.usage_output).unwrap_or(0)),
                 cache_read: Some(u64::try_from(row.usage_cache_read).unwrap_or(0)),
                 cache_write: Some(u64::try_from(row.usage_cache_write).unwrap_or(0)),
+                reasoning: row.usage_reasoning.map(|n| u64::try_from(n).unwrap_or(0)),
             }))
             .stop_reason(stop_reason)
             .turn_id(row.turn_id)
+            .title_change(
+                row.title_change.as_deref().and_then(|json| serde_json::from_str(json).ok()),
+            )
             .build())
     }
 
@@ -957,7 +1246,9 @@ impl AiSessionDatabase {
             .filter_map(|content| match content {
                 Content::Text(text) | Content::Reasoning(text) => Some(text.clone()),
                 Content::ReasoningSummary { tokens } => {
-                    Some(atuin_common::harnesstools::session::model::reasoning_label(*tokens))
+                    Some(atuin_common::harnesstools::session::model::reasoning_label(
+                        tokens.or(message.usage.and_then(|u| u.reasoning)),
+                    ))
                 }
                 _ => None,
             })
@@ -967,6 +1258,25 @@ impl AiSessionDatabase {
         // Trailing newline: chunks are concatenated verbatim by consumers, so the separator has
         // to live in the chunk or every message would run together on one line.
         format!("{role}: {body}\n")
+    }
+
+    const fn title_source_repr(source: TitleSource) -> i64 {
+        match source {
+            TitleSource::Summary => 0,
+            TitleSource::Generated => 1,
+            TitleSource::Named => 2,
+            TitleSource::Agent => 3,
+        }
+    }
+
+    const fn title_source_from_repr(n: i64) -> Option<TitleSource> {
+        Some(match n {
+            0 => TitleSource::Summary,
+            1 => TitleSource::Generated,
+            2 => TitleSource::Named,
+            3 => TitleSource::Agent,
+            _ => return None,
+        })
     }
 
     fn session_from_row(row: SessionRow) -> Result<Session, DbError> {
@@ -990,8 +1300,10 @@ impl AiSessionDatabase {
                 output: Some(u64::try_from(row.usage_output).unwrap_or(0)),
                 cache_read: Some(u64::try_from(row.usage_cache_read).unwrap_or(0)),
                 cache_write: Some(u64::try_from(row.usage_cache_write).unwrap_or(0)),
+                reasoning: Some(u64::try_from(row.usage_reasoning).unwrap_or(0)),
             })
             .title(row.title)
+            .title_source(row.title_source.and_then(Self::title_source_from_repr))
             .preview(row.preview)
             .build())
     }
@@ -1008,7 +1320,7 @@ mod tests {
     use rstest::rstest;
     use time::OffsetDateTime;
 
-    use super::{AiSessionDatabase, Appended, COMPRESS_THRESHOLD};
+    use super::{AiSessionDatabase, Appended, COMPRESS_THRESHOLD, TitleSource};
     use crate::ai_session::{
         HarnessKind, HarnessSession, Message, NativeSessionId, SessionMatch, SourceId,
     };
@@ -1042,6 +1354,33 @@ mod tests {
         assert_eq!(got[0].turn_id.as_deref(), Some("msg_01"));
     }
 
+    /// Rows that carry only usage, a title or session context are stored, but are no messages.
+    #[rstest]
+    #[tokio::test]
+    async fn structural_rows_are_not_counted_as_messages() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let spoken = sample_message();
+        let mut usage_only = sample_message();
+        usage_only.source_id = SourceId::from("usage".to_owned());
+        usage_only.content = Vec::new();
+        usage_only.usage = Some(Usage {
+            input: Some(1),
+            ..Usage::default()
+        });
+        let mut titled = sample_message();
+        titled.source_id = SourceId::from("title".to_owned());
+        titled.content = Vec::new();
+        titled.session_title = Some("a title".to_owned());
+        for m in [&spoken, &usage_only, &titled] {
+            assert_eq!(db.append(m).await.unwrap(), Appended::New);
+        }
+
+        let s = db.get_session(&spoken.session).await.unwrap().unwrap();
+        assert_eq!(s.message_count, 1);
+        assert_eq!(s.usage.input, Some(1));
+        assert_eq!(s.title.as_deref(), Some("a title"));
+    }
+
     #[rstest]
     #[tokio::test]
     async fn checkpoint_round_trips_and_the_latest_write_wins() {
@@ -1060,7 +1399,7 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn a_checkpoint_stored_before_digests_reads_as_none() {
+    async fn a_checkpoint_without_a_digest_reads_as_none() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         let session = sample_handle();
         db::query("INSERT INTO checkpoints (harness, session_id, \"offset\") VALUES (?, ?, 42)")
@@ -1261,6 +1600,7 @@ mod tests {
                 output: Some(0),
                 cache_read: Some(0),
                 cache_write: Some(0),
+                reasoning: None,
             }))
             .build();
         db.append(&with_usage).await.unwrap();
@@ -1268,6 +1608,136 @@ mod tests {
         let got: Vec<_> = db.messages(&session).try_collect().await.unwrap();
         assert_eq!(got[0].usage, None, "absent usage must not become Some(zeros)");
         assert!(got[1].usage.is_some(), "reported usage must survive the round trip");
+    }
+
+    /// A row of model call `turn` (or none) in `session`, reporting `output` tokens.
+    fn call_row(
+        session: &str,
+        parent: Option<&str>,
+        source: &str,
+        seconds: i64,
+        turn: Option<&str>,
+        output: u64,
+    ) -> Message {
+        let mut m = message_in(&handle(HarnessKind::Pi, session), seconds, "x");
+        m.source_id = SourceId::from(source.to_owned());
+        m.parent = parent.map(|p| handle(HarnessKind::Pi, p));
+        m.turn_id = turn.map(str::to_owned);
+        m.usage = Some(Usage {
+            input: Some(1),
+            output: Some(output),
+            cache_read: Some(0),
+            cache_write: Some(0),
+            reasoning: None,
+        });
+        m
+    }
+
+    async fn output_of(db: &AiSessionDatabase, session: &str) -> u64 {
+        let row = db.get_session(&handle(HarnessKind::Pi, session)).await.unwrap().unwrap();
+        row.usage.output.unwrap()
+    }
+
+    /// Rows of one call count once, at the most any of them reported; rows outside any call
+    /// count individually. Stored rows keep what they reported.
+    #[rstest]
+    #[tokio::test]
+    async fn a_call_counts_once_at_its_largest_usage() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        for m in [
+            call_row("s", None, "a1", 0, Some("A"), 25),
+            call_row("s", None, "b1", 1, Some("B"), 5),
+            call_row("s", None, "a2", 2, Some("A"), 250),
+            call_row("s", None, "a3", 3, Some("A"), 250),
+            call_row("s", None, "x1", 4, None, 7),
+            call_row("s", None, "x2", 5, None, 7),
+        ] {
+            db.append(&m).await.unwrap();
+        }
+        assert_eq!(output_of(&db, "s").await, 250 + 5 + 7 + 7);
+        let rows: Vec<_> = db.messages(&handle(HarnessKind::Pi, "s")).try_collect().await.unwrap();
+        let reported: Vec<_> = rows.iter().map(|m| m.usage.unwrap().output.unwrap()).collect();
+        assert_eq!(reported, vec![25, 5, 250, 250, 7, 7]);
+    }
+
+    /// The rows of a parent, a fork copying its call (with the parent's own timestamps, so
+    /// start times tie), a fork of the fork, and an unrelated session that happens to share the
+    /// call -- in every append order, as sync or import may deliver them.
+    fn shared_call_rows() -> Vec<Message> {
+        vec![
+            call_row("parent", None, "p1", 10, Some("A"), 10),
+            call_row("parent", None, "p2", 11, Some("A"), 40),
+            call_row("fork", Some("parent"), "p1", 10, Some("A"), 10),
+            call_row("fork", Some("parent"), "f1", 20, Some("B"), 3),
+            call_row("forkfork", Some("fork"), "p2", 11, Some("A"), 40),
+            call_row("forkfork", Some("fork"), "f1", 20, Some("B"), 3),
+            call_row("forkfork", Some("fork"), "g1", 30, Some("C"), 1),
+        ]
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn shared_calls_are_attributed_the_same_in_any_order(
+            rows in proptest::strategy::Strategy::prop_shuffle(proptest::strategy::Just(shared_call_rows()))
+        ) {
+            let totals = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let db = AiSessionDatabase::in_memory().await.unwrap();
+                    for m in &rows {
+                        db.append(m).await.unwrap();
+                    }
+                    [
+                        output_of(&db, "parent").await,
+                        output_of(&db, "fork").await,
+                        output_of(&db, "forkfork").await,
+                    ]
+                });
+            // The fork starts at the parent's copied timestamp and "fork" < "parent", so only
+            // ancestry keeps call A with the parent.
+            proptest::prop_assert_eq!(totals, [40, 3, 1]);
+        }
+    }
+
+    /// Without ancestry, the earliest-started claimant owns the call, then the smallest id.
+    #[rstest]
+    #[case::earlier_start_wins(0, 10, 0)]
+    #[case::tie_goes_to_the_smaller_id(9, 0, 10)]
+    #[tokio::test]
+    async fn unrelated_claimants_rank_by_start_then_id(
+        #[case] a_start: i64,
+        #[case] a_expected: u64,
+        #[case] b_expected: u64,
+    ) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        db.append(&call_row("c", None, "c", 5, Some("A"), 10)).await.unwrap();
+        db.append(&call_row("b", None, "b", 5, Some("A"), 10)).await.unwrap();
+        db.append(&call_row("a", None, "a", a_start + 10, Some("A"), 10)).await.unwrap();
+        // A row outside the call moves "a"'s start earlier, which re-ranks its claim.
+        db.append(&call_row("a", None, "a0", a_start, None, 0)).await.unwrap();
+        assert_eq!(output_of(&db, "a").await, a_expected);
+        assert_eq!(output_of(&db, "b").await, b_expected);
+        assert_eq!(output_of(&db, "c").await, 0);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn source_ids_with_prefix_lists_only_matching_rows() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        for (i, source) in ["syn-1", "syn-1-1", "native"].into_iter().enumerate() {
+            let mut m = message_in(&session, i64::try_from(i).unwrap(), "x");
+            m.source_id = SourceId::from(source.to_owned());
+            db.append(&m).await.unwrap();
+        }
+        let mut ids = db.source_ids_with_prefix(&session, "syn-").await.unwrap();
+        ids.sort_by(|a, b| a.as_ref().cmp(b.as_ref()));
+        assert_eq!(ids, vec![
+            SourceId::from("syn-1".to_owned()),
+            SourceId::from("syn-1-1".to_owned())
+        ]);
     }
 
     #[rstest]
@@ -1647,6 +2117,34 @@ mod tests {
 
         assert_eq!(search(&db, "BetaTitle").await.len(), 1, "the new title becomes searchable");
         assert!(search(&db, "AlphaTitle").await.is_empty(), "the retired title no longer matches");
+    }
+
+    /// The newest row decides the title: a cleared title clears it (and its index), while a
+    /// row older than the newest one, arriving late, changes nothing.
+    #[rstest]
+    #[tokio::test]
+    async fn the_newest_row_decides_the_title() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        let title_of = async |db: &AiSessionDatabase| {
+            let s = db.get_session(&session).await.unwrap().unwrap();
+            (s.title, s.title_source)
+        };
+
+        let mut named = message_in(&session, 1, "body");
+        named.session_title = Some("GammaTitle".to_owned());
+        named.session_title_source = Some(TitleSource::Named);
+        db.append(&named).await.unwrap();
+        assert_eq!(title_of(&db).await, (Some("GammaTitle".to_owned()), Some(TitleSource::Named)));
+
+        let late = message_in(&session, 0, "an older row, captured late");
+        db.append(&late).await.unwrap();
+        assert_eq!(title_of(&db).await.0.as_deref(), Some("GammaTitle"), "an older row is ignored");
+
+        let cleared = message_in(&session, 2, "after the name was cleared");
+        db.append(&cleared).await.unwrap();
+        assert_eq!(title_of(&db).await, (None, None));
+        assert!(search(&db, "GammaTitle").await.is_empty(), "the cleared title no longer matches");
     }
 
     /// A title reaches the rows indexed before it arrived, and an unchanged title on later rows

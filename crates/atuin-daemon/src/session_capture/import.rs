@@ -112,7 +112,7 @@ impl SessionImporter {
                             return ImportProgress::ScanFailed { failed: 1 };
                         };
                         // One enricher per session: it carries that session's bookkeeping (title,
-                        // timestamps, parent, usage dedupe) across its lines, exactly as live
+                        // timestamps, parent, synthetic ids) across its lines, exactly as live
                         // capture does, so a backfilled row matches the captured one.
                         let mut enricher = MessageEnricher::new(kind);
                         let sid = session.id();
@@ -120,20 +120,27 @@ impl SessionImporter {
                         let mut skipped = 0u64;
                         let mut failed = 0u64;
                         let mut messages = session.read();
-                        while let Some(next) = messages.next().await {
-                            let Ok(message) = next else {
-                                failed += 1;
-                                continue;
+                        let mut done = false;
+                        while !done {
+                            let rows = match messages.next().await {
+                                Some(Ok(message)) => enricher.capture(&sid, &message),
+                                Some(Err(_)) => {
+                                    failed += 1;
+                                    continue;
+                                }
+                                None => {
+                                    done = true;
+                                    enricher.finish(&sid)
+                                }
                             };
                             // A bookkeeping line worth no row (matches live capture) is not
                             // counted: it is neither a new record nor a dedupe skip.
-                            let Some(msg) = enricher.capture(&sid, &message) else {
-                                continue;
-                            };
-                            match sink.append(msg).await {
-                                Ok(Appended::New) => imported += 1,
-                                Ok(Appended::Duplicate) => skipped += 1,
-                                Err(_) => failed += 1,
+                            for msg in rows {
+                                match sink.append(msg).await {
+                                    Ok(Appended::New) => imported += 1,
+                                    Ok(Appended::Duplicate) => skipped += 1,
+                                    Err(_) => failed += 1,
+                                }
                             }
                         }
                         ImportProgress::Session {
@@ -179,11 +186,11 @@ mod tests {
             .build()
     }
 
+    /// A pi session file: the `session` header pi starts every session with, then `turns`.
     fn write_pi_session(root: &Path, id: &str, turns: &[&str]) {
-        let body = turns
-            .iter()
-            .enumerate()
-            .map(|(i, turn)| {
+        let header = serde_json::json!({"type": "session", "version": 3, "id": id}).to_string();
+        let body = std::iter::once(header)
+            .chain(turns.iter().enumerate().map(|(i, turn)| {
                 let (role, text) = turn.split_once(':').unwrap();
                 serde_json::json!({
                     "type": "message",
@@ -191,7 +198,7 @@ mod tests {
                     "message": {"role": role, "content": text},
                 })
                 .to_string()
-            })
+            }))
             .collect::<Vec<_>>()
             .join("\n")
             // Trailing newline: read() reads complete lines only (like live capture), so a real
@@ -245,7 +252,8 @@ mod tests {
             .harness(HarnessKind::Pi, pi_sessions(root.path()))
             .collect()
             .await;
-        assert_eq!(sum_new(&first), 2);
+        // The header and the two turns; the session counts the turns.
+        assert_eq!(sum_new(&first), 3);
         assert_eq!(sum_skipped(&first), 0);
         let after_first = sink.sidecar.get_session(&handle).await.unwrap().unwrap().message_count;
         assert_eq!(after_first, 2);
@@ -255,9 +263,9 @@ mod tests {
             .collect()
             .await;
         assert_eq!(sum_new(&second), 0);
-        assert_eq!(sum_skipped(&second), 2);
+        assert_eq!(sum_skipped(&second), 3);
         let after_second = sink.sidecar.get_session(&handle).await.unwrap().unwrap().message_count;
-        assert_eq!(after_second, 2);
+        assert_eq!(after_second, after_first);
     }
 
     #[rstest]
@@ -267,6 +275,7 @@ mod tests {
         // A pi `session_info` line is where the title lives; import must carry it onto the session
         // through the message stream, not drop it.
         let body = [
+            serde_json::json!({"type": "session", "version": 3, "id": "s2"}).to_string(),
             serde_json::json!({"type": "session_info", "id": "s2-info", "name": "Fix the parser"})
                 .to_string(),
             serde_json::json!({"type": "message", "id": "s2-m0",

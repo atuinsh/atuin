@@ -1,9 +1,10 @@
 //! Model conversion utilities for the `ai.agent` gRPC protobuf.
 //!
 //! The wire is lossless: a domain value survives `domain -> wire -> domain` unchanged, so how to
-//! render it is the client's call. The exceptions are `Message::session_title` and
-//! `Message::turn_id`, storage bookkeeping the wire never carries, and a non-UTF-8 `cwd`, which is
-//! sent lossily.
+//! render it is the client's call. The exceptions are `Message::session_title`,
+//! `Message::session_title_source`, `Message::title_change`, `Message::turn_id` and
+//! `Session::title_source`, storage bookkeeping the wire never carries, and a non-UTF-8 `cwd`,
+//! which is sent lossily.
 mod codegen {
     #![allow(clippy::must_use_candidate)]
     #![allow(clippy::derive_partial_eq_without_eq)]
@@ -104,6 +105,7 @@ impl From<Usage> for Tokens {
             output: value.output,
             cache_read: value.cache_read,
             cache_write: value.cache_write,
+            reasoning: value.reasoning,
         }
     }
 }
@@ -115,6 +117,7 @@ impl From<Tokens> for Usage {
             output: value.output,
             cache_read: value.cache_read,
             cache_write: value.cache_write,
+            reasoning: value.reasoning,
         }
     }
 }
@@ -141,6 +144,8 @@ impl From<Content> for ContentBlock {
                 output: (!tr.output.is_null()).then(|| tr.output.to_string()),
                 is_error: tr.error,
             }),
+            Content::Summary(text) => Block::Summary(text),
+            Content::Error(text) => Block::Error(text),
             Content::Other(v) => Block::Other(v.to_string()),
         };
 
@@ -151,7 +156,7 @@ impl From<Content> for ContentBlock {
 impl TryFrom<ContentBlock> for Content {
     type Error = ParseError;
 
-    fn try_from(value: ContentBlock) -> Result<Self, Self::Error> {
+    fn try_from(value: ContentBlock) -> Result<Self, ParseError> {
         use content_block::Block;
 
         let captured = |json: Option<String>| {
@@ -174,6 +179,8 @@ impl TryFrom<ContentBlock> for Content {
                 output: captured(tr.output)?,
                 error: tr.is_error,
             }),
+            Block::Summary(text) => Self::Summary(text),
+            Block::Error(text) => Self::Error(text),
             Block::Other(json) => Self::Other(serde_json::from_str(&json)?),
         })
     }
@@ -206,7 +213,6 @@ impl From<DomainMessage> for Message {
             harness: value.session.harness as i32,
             session_id: value.session.session.into(),
             parent: value.parent.map(Into::into),
-            thread: value.thread,
             source_id: value.source_id.into(),
             parent_source_id: value.parent_source_id.map(Into::into),
             timestamp: Some(prost_types::Timestamp {
@@ -278,7 +284,6 @@ impl TryFrom<Message> for DomainMessage {
             source_id: SourceId::from(value.source_id),
             parent: value.parent.map(TryInto::try_into).transpose()?,
             parent_source_id: value.parent_source_id.map(SourceId::from),
-            thread: value.thread,
             timestamp: OffsetDateTime::from_timespec(
                 timestamp.seconds.into(),
                 timestamp.nanos.into(),
@@ -291,6 +296,8 @@ impl TryFrom<Message> for DomainMessage {
             usage: value.tokens.map(Usage::from),
             stop_reason,
             session_title: None,
+            session_title_source: None,
+            title_change: None,
             turn_id: None,
         })
     }
@@ -347,6 +354,7 @@ impl TryFrom<Session> for DomainSession {
             message_count: value.message_count,
             usage: value.tokens.ok_or(ParseError::Missing("tokens"))?.into(),
             title: value.title,
+            title_source: None,
             preview: value.preview,
         })
     }
@@ -386,11 +394,14 @@ mod tests {
     }
 
     fn arb_usage() -> impl Strategy<Value = Usage> {
-        any::<[Option<u64>; 4]>().prop_map(|[input, output, cache_read, cache_write]| Usage {
-            input,
-            output,
-            cache_read,
-            cache_write,
+        any::<[Option<u64>; 5]>().prop_map(|[input, output, cache_read, cache_write, reasoning]| {
+            Usage {
+                input,
+                output,
+                cache_read,
+                cache_write,
+                reasoning,
+            }
         })
     }
 
@@ -453,6 +464,8 @@ mod tests {
                     error,
                 })
             }),
+            ".{0,8}".prop_map(Content::Summary),
+            ".{0,8}".prop_map(Content::Error),
             arb_json().prop_map(Content::Other),
         ]
     }
@@ -463,7 +476,6 @@ mod tests {
             arb_harness_session(),
             "[a-z0-9]{1,8}",
             prop::option::of(arb_harness_session()),
-            prop::option::of("[a-z0-9]{1,8}"),
             prop::option::of("[a-z0-9]{1,8}"),
         );
         let body = (
@@ -477,7 +489,7 @@ mod tests {
         let outcome = (prop::option::of(arb_usage()), prop::option::of(arb_stop_reason()));
         (handles, body, outcome).prop_map(
             |(
-                (id, session, source_id, parent, parent_source_id, thread),
+                (id, session, source_id, parent, parent_source_id),
                 (timestamp, role, content, cwd, git_branch, model),
                 (usage, stop_reason),
             )| DomainMessage {
@@ -486,7 +498,6 @@ mod tests {
                 source_id: SourceId::from(source_id),
                 parent,
                 parent_source_id: parent_source_id.map(SourceId::from),
-                thread,
                 timestamp,
                 role,
                 content,
@@ -496,6 +507,8 @@ mod tests {
                 usage,
                 stop_reason,
                 session_title: None,
+                session_title_source: None,
+                title_change: None,
                 turn_id: None,
             },
         )
@@ -532,6 +545,7 @@ mod tests {
                 message_count,
                 usage,
                 title,
+                title_source: None,
                 preview,
             },
         )
