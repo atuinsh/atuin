@@ -10,8 +10,8 @@ use enum_dispatch::enum_dispatch;
 pub use error::{CaptureError, MessageError, RuntimeError, WatchError};
 use futures::{Stream, StreamExt, TryStreamExt};
 pub use model::{
-    Content, MessageId, Role, SessionEvent, SessionId, StopReason, ToolCallId, ToolResult, ToolUse,
-    Usage,
+    Content, MessageId, Role, SessionEvent, SessionId, StopReason, TitleChange, TitleSource,
+    ToolCallId, ToolResult, ToolUse, Usage,
 };
 use time::OffsetDateTime;
 
@@ -98,8 +98,8 @@ pub trait Message: Send + 'static {
     fn turn_id(&self) -> Option<String> {
         None
     }
-    /// A title this line assigns to the session.
-    fn title(&self) -> Option<String> {
+    /// A title this line assigns to the session, or clears.
+    fn title(&self) -> Option<TitleChange> {
         None
     }
 }

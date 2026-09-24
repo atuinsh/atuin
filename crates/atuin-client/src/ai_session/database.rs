@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use atuin_common::db::sqlite::fts::{TextHighlighter, match_expression};
 use atuin_common::db::sqlite::{Sqlite, SqliteOpenOrCreateError};
 use atuin_common::db::{self};
-use atuin_common::harnesstools::session::{Checkpoint, Content, Role, Usage};
+use atuin_common::harnesstools::session::{Checkpoint, Content, Role, TitleSource, Usage};
 use atuin_domain::record::RecordId;
 use futures::{Stream, StreamExt, TryStreamExt};
 use sqlx::SqliteConnection;
@@ -73,6 +73,7 @@ struct SessionRow {
     usage_cache_write: i64,
     usage_reasoning: i64,
     title: Option<String>,
+    title_source: Option<i64>,
     preview: Option<String>,
 }
 
@@ -291,7 +292,8 @@ impl AiSessionDatabase {
             .await?;
 
         // Session title denormalised onto the message so it survives a reproject from records
-        // (which carry messages only). The session upsert below applies it latest-non-null-wins.
+        // (which carry messages only). The session upsert below takes the newest row's, so a
+        // cleared title clears; the capture pipeline stamps every row with the ranked title.
         let title = msg.session_title.as_deref();
         let preview = Self::preview_text(msg);
         let before = Self::session_key(&mut tx, harness, session_id).await?;
@@ -302,8 +304,8 @@ impl AiSessionDatabase {
         db::query(
             "INSERT INTO sessions (
                 harness, session_id, parent_harness, parent_session_id, cwd, git_branch, model,
-                started_at, updated_at, message_count, title, preview
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                started_at, updated_at, message_count, title, title_source, preview
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(harness, session_id) DO UPDATE SET
                 parent_harness = COALESCE(excluded.parent_harness, sessions.parent_harness),
                 parent_session_id = COALESCE(excluded.parent_session_id, \
@@ -314,7 +316,10 @@ impl AiSessionDatabase {
                 started_at = MIN(sessions.started_at, excluded.started_at),
                 updated_at = MAX(sessions.updated_at, excluded.updated_at),
                 message_count = sessions.message_count + excluded.message_count,
-                title = COALESCE(excluded.title, sessions.title),
+                title = CASE WHEN excluded.updated_at >= sessions.updated_at THEN excluded.title \
+             ELSE sessions.title END,
+                title_source = CASE WHEN excluded.updated_at >= sessions.updated_at THEN \
+             excluded.title_source ELSE sessions.title_source END,
                 preview = COALESCE(sessions.preview, excluded.preview)",
         )
         .bind(harness)
@@ -328,6 +333,7 @@ impl AiSessionDatabase {
         .bind(timestamp)
         .bind(counted)
         .bind(title)
+        .bind(msg.session_title_source.map(Self::title_source_repr))
         .bind(preview)
         .execute(&mut *tx)
         .await?;
@@ -347,6 +353,7 @@ impl AiSessionDatabase {
         }
         // Which session owns a call shared with others depends on each claimant's start and
         // ancestry: when either moves, every call this session claims is attributed afresh.
+        let existed = before.is_some();
         let previous_title = match before {
             Some(before) => {
                 let after = Self::session_key(&mut tx, harness, session_id).await?;
@@ -369,13 +376,18 @@ impl AiSessionDatabase {
             Self::attribute_call(&mut tx, harness, turn).await?;
         }
 
-        // A changed title has to reach the rows indexed before it arrived. messages_fts is
+        // A changed (or cleared) title has to reach the rows indexed before it. messages_fts is
         // contentless, so a single-column UPDATE is not supported: rewrite each of the session's
-        // index rows, re-deriving the body from the stored content. Gated on the title actually
-        // changing, since every replayed line of a titled session carries it.
-        if let Some(title) = title
-            && previous_title.as_deref() != Some(title)
-        {
+        // index rows, re-deriving the body from the stored content. Gated on the session's title
+        // actually changing, since every replayed line of a titled session carries it.
+        let current_title: Option<String> =
+            db::query_scalar("SELECT title FROM sessions WHERE harness = ? AND session_id = ?")
+                .bind(harness)
+                .bind(session_id)
+                .fetch_one(&mut *tx)
+                .await?;
+        if existed && current_title != previous_title {
+            let title = current_title.as_deref().unwrap_or("");
             type BodyRow =
                 (i64, String, Option<Vec<u8>>, Option<String>, Option<String>, Option<String>);
             let rows: Vec<BodyRow> = db::query_as(
@@ -512,8 +524,8 @@ impl AiSessionDatabase {
         let row: Option<SessionRow> = db::query_as(
             "SELECT harness, session_id, parent_harness, parent_session_id, cwd, git_branch, \
              model, started_at, updated_at, message_count, usage_input, usage_output, \
-             usage_cache_read, usage_cache_write, usage_reasoning, title, preview FROM sessions \
-             WHERE harness = ? AND session_id = ?",
+             usage_cache_read, usage_cache_write, usage_reasoning, title, title_source, preview \
+             FROM sessions WHERE harness = ? AND session_id = ?",
         )
         .bind(session.harness as i64)
         .bind(session.session.as_ref())
@@ -530,8 +542,8 @@ impl AiSessionDatabase {
         let mut sql = String::from(
             "SELECT harness, session_id, parent_harness, parent_session_id, cwd, git_branch, \
              model, started_at, updated_at, message_count, usage_input, usage_output, \
-             usage_cache_read, usage_cache_write, usage_reasoning, title, preview FROM sessions \
-             WHERE 1 = 1",
+             usage_cache_read, usage_cache_write, usage_reasoning, title, title_source, preview \
+             FROM sessions WHERE 1 = 1",
         );
 
         if harness.is_some() {
@@ -613,7 +625,7 @@ impl AiSessionDatabase {
                  SELECT s.harness, s.session_id, s.parent_harness, s.parent_session_id, s.cwd, \
                  s.git_branch, s.model, s.started_at, s.updated_at, s.message_count, \
                  s.usage_input, s.usage_output, s.usage_cache_read, s.usage_cache_write, \
-                 s.usage_reasoning, s.title, \
+                 s.usage_reasoning, s.title, s.title_source, \
                  s.preview, \
                  m.content AS match_content, m.content_z AS match_content_z, m.cwd AS match_cwd, \
                  m.git_branch AS match_git_branch, m.model AS match_model, \
@@ -1226,6 +1238,25 @@ impl AiSessionDatabase {
         format!("{role}: {body}\n")
     }
 
+    const fn title_source_repr(source: TitleSource) -> i64 {
+        match source {
+            TitleSource::Summary => 0,
+            TitleSource::Generated => 1,
+            TitleSource::Named => 2,
+            TitleSource::Agent => 3,
+        }
+    }
+
+    const fn title_source_from_repr(n: i64) -> Option<TitleSource> {
+        Some(match n {
+            0 => TitleSource::Summary,
+            1 => TitleSource::Generated,
+            2 => TitleSource::Named,
+            3 => TitleSource::Agent,
+            _ => return None,
+        })
+    }
+
     fn session_from_row(row: SessionRow) -> Result<Session, DbError> {
         let harness = Self::harness_from_repr(row.harness)?;
         let parent = Self::optional_session(row.parent_harness, row.parent_session_id)?;
@@ -1250,6 +1281,7 @@ impl AiSessionDatabase {
                 reasoning: Some(u64::try_from(row.usage_reasoning).unwrap_or(0)),
             })
             .title(row.title)
+            .title_source(row.title_source.and_then(Self::title_source_from_repr))
             .preview(row.preview)
             .build())
     }
@@ -1266,7 +1298,7 @@ mod tests {
     use rstest::rstest;
     use time::OffsetDateTime;
 
-    use super::{AiSessionDatabase, Appended, COMPRESS_THRESHOLD};
+    use super::{AiSessionDatabase, Appended, COMPRESS_THRESHOLD, TitleSource};
     use crate::ai_session::{
         HarnessKind, HarnessSession, Message, NativeSessionId, SessionMatch, SourceId,
     };
@@ -2063,6 +2095,34 @@ mod tests {
 
         assert_eq!(search(&db, "BetaTitle").await.len(), 1, "the new title becomes searchable");
         assert!(search(&db, "AlphaTitle").await.is_empty(), "the retired title no longer matches");
+    }
+
+    /// The newest row decides the title: a cleared title clears it (and its index), while a
+    /// row older than the newest one, arriving late, changes nothing.
+    #[rstest]
+    #[tokio::test]
+    async fn the_newest_row_decides_the_title() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        let title_of = async |db: &AiSessionDatabase| {
+            let s = db.get_session(&session).await.unwrap().unwrap();
+            (s.title, s.title_source)
+        };
+
+        let mut named = message_in(&session, 1, "body");
+        named.session_title = Some("GammaTitle".to_owned());
+        named.session_title_source = Some(TitleSource::Named);
+        db.append(&named).await.unwrap();
+        assert_eq!(title_of(&db).await, (Some("GammaTitle".to_owned()), Some(TitleSource::Named)));
+
+        let late = message_in(&session, 0, "an older row, captured late");
+        db.append(&late).await.unwrap();
+        assert_eq!(title_of(&db).await.0.as_deref(), Some("GammaTitle"), "an older row is ignored");
+
+        let cleared = message_in(&session, 2, "after the name was cleared");
+        db.append(&cleared).await.unwrap();
+        assert_eq!(title_of(&db).await, (None, None));
+        assert!(search(&db, "GammaTitle").await.is_empty(), "the cleared title no longer matches");
     }
 
     /// A title reaches the rows indexed before it arrived, and an unchanged title on later rows

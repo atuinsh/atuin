@@ -13,7 +13,8 @@ use typed_builder::TypedBuilder;
 use crate::fs::tree_watcher::{FileStat, TreeWatcher};
 use crate::harnesstools::codex::Codex;
 use crate::harnesstools::session::model::{
-    Content, MessageId, Role, StopReason, ToolCallId, ToolResult, ToolUse, Usage,
+    Content, MessageId, Role, StopReason, TitleChange, TitleSource, ToolCallId, ToolResult,
+    ToolUse, Usage,
 };
 use crate::harnesstools::session::{
     Checkpoint, Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId,
@@ -1123,7 +1124,9 @@ impl Message for CodexMessage {
     /// `session_index.jsonl` (codex-rs `EventMsg::ThreadNameUpdated`, retired in 2c1a361a2e and
     /// since skipped by the rollout migration's `should_skip_retired_record`). A subagent's events
     /// can land in its parent's rollout, so only a name for this rollout's own thread counts.
-    fn title(&self) -> Option<String> {
+    /// A thread name the user set; one without a name clears it (codex-rs `ThreadNameUpdatedEvent`,
+    /// `thread_name: Option<String>`).
+    fn title(&self) -> Option<TitleChange> {
         if !self.is_event("thread_name_updated") {
             return None;
         }
@@ -1134,11 +1137,10 @@ impl Message for CodexMessage {
         {
             return None;
         }
-        payload["thread_name"]
-            .as_str()
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .map(str::to_owned)
+        Some(TitleChange::new(
+            TitleSource::Named,
+            payload["thread_name"].as_str().unwrap_or_default(),
+        ))
     }
 }
 
@@ -2462,6 +2464,23 @@ mod tests {
                 "thread_name": "Fix the flaky test"},
         }));
         m.context.session = Some(SessionId::from("th1".to_owned()));
-        assert_eq!(m.title().as_deref(), expected);
+        assert_eq!(m.title().and_then(|t| t.text).as_deref(), expected);
+    }
+
+    /// A thread name is the user's, and an update without one clears it.
+    #[rstest]
+    #[case::named(serde_json::json!("Fix the flaky test"), Some("Fix the flaky test"))]
+    #[case::cleared(serde_json::Value::Null, None)]
+    fn a_thread_name_is_named_by_the_user(
+        #[case] name: serde_json::Value,
+        #[case] expected: Option<&str>,
+    ) {
+        let m = line(&serde_json::json!({
+            "timestamp": "2026-02-01T10:00:00.000Z", "type": "event_msg",
+            "payload": {"type": "thread_name_updated", "thread_id": "th1", "thread_name": name},
+        }));
+        let change = m.title().unwrap();
+        assert_eq!(change.source, TitleSource::Named);
+        assert_eq!(change.text.as_deref(), expected);
     }
 }

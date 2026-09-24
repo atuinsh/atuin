@@ -104,7 +104,8 @@ use crate::db::sqlite::observe::{
 use crate::db::{query_as, query_scalar};
 use crate::harnesstools::opencode::Opencode;
 use crate::harnesstools::session::model::{
-    Content, MessageId, Role, StopReason, ToolCallId, ToolResult, ToolUse, Usage,
+    Content, MessageId, Role, StopReason, TitleChange, TitleSource, ToolCallId, ToolResult,
+    ToolUse, Usage,
 };
 use crate::harnesstools::session::{
     Checkpoint, Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId,
@@ -448,7 +449,7 @@ struct Reader {
     infos: Infos,
     /// The title this session last delivered, so that the `session.updated.1` rows opencode
     /// writes on every prompt deliver a title only when it changes.
-    title: Option<String>,
+    title: Option<TitleChange>,
     /// Whether the aggregate may have a row to read right now: set by a wake, kept while pages
     /// come back full.
     ready: bool,
@@ -2192,9 +2193,13 @@ impl Message for OpencodeMessage {
         ))
     }
 
-    fn title(&self) -> Option<String> {
+    /// opencode records no difference between a title it generated and one the user set, so
+    /// every title is ranked as generated and the newest wins.
+    fn title(&self) -> Option<TitleChange> {
         match &self.body {
-            Body::Session(info) => info["title"].as_str().map(str::to_owned),
+            Body::Session(info) => {
+                info["title"].as_str().map(|text| TitleChange::new(TitleSource::Generated, text))
+            }
             _ => None,
         }
     }
@@ -4044,7 +4049,7 @@ mod tests {
 
             let messages = backfill(&path).await;
             let titles: Vec<(Option<MessageId>, String)> =
-                messages.iter().filter_map(|m| Some((m.id(), m.title()?))).collect();
+                messages.iter().filter_map(|m| Some((m.id(), m.title()?.text?))).collect();
             assert_eq!(titles, [
                 (Some(MessageId::from("ses_R:title:New session".to_owned())), "New session".into()),
                 (
@@ -4390,7 +4395,7 @@ mod tests {
                 .await;
 
             let titles: Vec<String> =
-                read_all(&path).await.iter().filter_map(|(_, m)| m.title()).collect();
+                read_all(&path).await.iter().filter_map(|(_, m)| m.title()?.text).collect();
             assert_eq!(titles, ["Mock title number 1", "Renamed"]);
         }
 
@@ -4424,7 +4429,10 @@ mod tests {
             );
             let (_, child) = messages.last().unwrap();
             assert_eq!(child.parent_session(), Some(SessionId::from("ses_W".to_owned())));
-            assert_eq!(child.title().as_deref(), Some("mock subtask (@general subagent)"));
+            assert_eq!(
+                child.title().and_then(|t| t.text).as_deref(),
+                Some("mock subtask (@general subagent)")
+            );
         }
 
         /// A session whose log holds its `session.created` row is read from the log alone, even

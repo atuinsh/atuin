@@ -89,6 +89,41 @@ pub struct Usage {
     pub reasoning: Option<u64>,
 }
 
+/// Where a session title came from. A higher source outranks a lower one whatever order they
+/// arrive in, the way Claude Code shows an agent name over a custom title over a generated one
+/// over a legacy summary; titles from one source replace each other, newest first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum TitleSource {
+    /// A summary line standing in for a title (Claude Code's legacy `summary`).
+    Summary,
+    /// Written by the harness or a model (Claude Code `ai-title`, opencode's titles).
+    Generated,
+    /// Set by the user (Claude Code `/rename`, Codex thread names, Pi `/name`).
+    Named,
+    /// The name of the agent the session runs as (Claude Code `agent-name`).
+    Agent,
+}
+
+/// A title a line assigns to its session, or takes away: `text` of `None` clears whatever
+/// title `source` gave, letting a lower-ranked one show again.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TitleChange {
+    pub source: TitleSource,
+    pub text: Option<String>,
+}
+
+impl TitleChange {
+    /// `text` from `source`, trimmed; blank text clears.
+    #[must_use]
+    pub fn new(source: TitleSource, text: &str) -> Self {
+        let text = text.trim();
+        Self {
+            source,
+            text: (!text.is_empty()).then(|| text.to_owned()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StopReason {
     EndTurn,

@@ -1,9 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use atuin_client::ai_session::{
     HarnessKind, HarnessSession, Message, NativeSessionId, Session, SourceId,
 };
-use atuin_common::harnesstools::session::{AnyMessage, Message as HarnessMessage, SessionId};
+use atuin_common::harnesstools::session::{
+    AnyMessage, Message as HarnessMessage, SessionId, TitleSource,
+};
 use atuin_domain::record::RecordId;
 use time::OffsetDateTime;
 
@@ -61,7 +63,10 @@ impl MessageEnricher {
             }
         }
         self.sessions.insert(session.to_string(), SessionState {
-            title: row.and_then(|r| r.title.clone()),
+            titles: row
+                .and_then(|r| Some((r.title_source?, r.title.clone()?)))
+                .into_iter()
+                .collect(),
             last_ts: last.map(|m| m.timestamp),
             parent: row.and_then(|r| r.parent.as_ref().map(|p| p.session.clone())),
             occurrences,
@@ -78,9 +83,11 @@ impl MessageEnricher {
         if let Some(ts) = m.timestamp() {
             state.last_ts = Some(ts);
         }
-        // ponytail: newest title wins; a hand-set title is not ranked above a later generated one.
-        if let Some(title) = m.title() {
-            state.title = Some(title);
+        if let Some(change) = m.title() {
+            match change.text {
+                Some(text) => state.titles.insert(change.source, text),
+                None => state.titles.remove(&change.source),
+            };
         }
         if let Some(parent) = m.parent_session().filter(|p| p != session) {
             state.parent = Some(NativeSessionId::from(parent.to_string()));
@@ -187,7 +194,8 @@ fn build(
             .stop_reason(stop_reason)
             .cwd(cwd)
             .git_branch(git_branch)
-            .session_title(state.title.clone())
+            .session_title(state.title().map(|(_, text)| text.to_owned()))
+            .session_title_source(state.title().map(|(source, _)| source))
             .build(),
     )
 }
@@ -237,9 +245,9 @@ fn parse_synthetic(id: &SourceId) -> Option<(u64, u32)> {
 /// [`MessageEnricher::resume`], or titles and synthetic ids would silently break after a restart.
 #[derive(Default)]
 struct SessionState {
-    /// Latest known title, stamped onto each captured message so session-level metadata rides
-    /// the synced records (see `Message::session_title`).
-    title: Option<String>,
+    /// The newest title from each source. The highest-ranked is stamped onto each captured
+    /// message so session-level metadata rides the synced records (see `Message::session_title`).
+    titles: BTreeMap<TitleSource, String>,
     /// Timestamp of the last line that had one. Lines without (Claude Code `ai-title` and
     /// friends) take it, so a replayed session is not stamped with capture time.
     last_ts: Option<OffsetDateTime>,
@@ -251,6 +259,13 @@ struct SessionState {
     /// Rows from before the first timestamped line, waiting to take its timestamp: the session
     /// started no earlier, and capture time would make an old session look new.
     untimed: Vec<Message>,
+}
+
+impl SessionState {
+    /// The title the session shows: the newest from its highest-ranked source.
+    fn title(&self) -> Option<(TitleSource, &str)> {
+        self.titles.iter().next_back().map(|(source, text)| (*source, text.as_str()))
+    }
 }
 
 #[cfg(test)]
@@ -478,6 +493,89 @@ mod tests {
         assert_eq!(last(|m| m.model.clone()).as_deref(), model);
         assert_eq!(last(|m| m.session_title.clone()).as_deref(), title);
         assert!(rows.iter().all(|m| m.parent.is_none()), "no fixture is a fork or subagent");
+    }
+
+    /// The title every row carries after each line: Claude Code re-appends its generated title
+    /// as a session goes on, which must not replace a name the user set or the agent's name.
+    #[rstest]
+    #[case::a_generated_title_shows_until_renamed(
+        &[("ai-title", "aiTitle", "Draft"), ("custom-title", "customTitle", "Mine"), ("ai-title", "aiTitle", "Draft 2")],
+        &["Draft", "Mine", "Mine"],
+    )]
+    #[case::an_agent_name_outranks_a_custom_title(
+        &[("custom-title", "customTitle", "Mine"), ("agent-name", "agentName", "reviewer"), ("custom-title", "customTitle", "Mine 2")],
+        &["Mine", "reviewer", "reviewer"],
+    )]
+    #[case::a_legacy_summary_never_replaces_a_generated_title(
+        &[("ai-title", "aiTitle", "Draft"), ("summary", "summary", "Old summary")],
+        &["Draft", "Draft"],
+    )]
+    fn titles_are_ranked_by_source(
+        #[case] lines: &[(&str, &str, &str)],
+        #[case] expected: &[&str],
+    ) {
+        let mut n = MessageEnricher::new(HarnessKind::ClaudeCode);
+        let opener = ccode(&serde_json::json!({
+            "type": "user", "uuid": "u0", "timestamp": "2026-09-18T10:00:00Z",
+            "message": {"role": "user", "content": "hi"},
+        }));
+        assert_eq!(n.capture(&session(), &opener).len(), 1);
+        let shown: Vec<String> = lines
+            .iter()
+            .map(|(kind, field, text)| {
+                let line = ccode(&serde_json::json!({"type": kind, (*field): text}));
+                n.capture(&session(), &line).pop().unwrap().session_title.unwrap()
+            })
+            .collect();
+        assert_eq!(shown, expected);
+    }
+
+    /// Clearing the title a source gave lets a lower-ranked one show again, or none.
+    #[rstest]
+    fn a_cleared_name_falls_back_to_the_generated_title() {
+        let mut n = MessageEnricher::new(HarnessKind::Pi);
+        let named = |name: &str| {
+            let raw = serde_json::json!({
+                "type": "session_info", "id": format!("i-{name}"), "name": name,
+                "timestamp": "2026-09-18T10:00:00Z",
+            });
+            AnyMessage::Pi(serde_json::from_value::<PiMessage>(raw).unwrap())
+        };
+        let shown = |n: &mut MessageEnricher, m: &AnyMessage| {
+            n.capture(&session(), m).pop().and_then(|row| row.session_title)
+        };
+        assert_eq!(shown(&mut n, &named("Mine")).as_deref(), Some("Mine"));
+        assert_eq!(shown(&mut n, &named("  ")), None, "a blank name clears the title");
+    }
+
+    /// A resumed capture keeps ranking against the stored title: a generated title arriving
+    /// after a restart does not replace the name the user set before it.
+    #[rstest]
+    fn a_resumed_capture_keeps_the_stored_titles_rank() {
+        let mut n = MessageEnricher::new(HarnessKind::ClaudeCode);
+        let ts = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let row = Session::builder()
+            .handle(n.handle(&session()))
+            .title(Some("Mine".to_owned()))
+            .title_source(Some(TitleSource::Named))
+            .started_at(ts)
+            .updated_at(ts)
+            .usage(atuin_common::harnesstools::session::Usage::default())
+            .build();
+        let last = Message::builder()
+            .id(RecordId(atuin_common::utils::uuid_v7()))
+            .session(n.handle(&session()))
+            .source_id(SourceId::from("u0".to_owned()))
+            .timestamp(ts)
+            .role(Role::Assistant)
+            .content(vec![])
+            .build();
+        n.resume(&session(), Some(&row), Some(&last), &[]);
+
+        let generated = ccode(&serde_json::json!({"type": "ai-title", "aiTitle": "Draft"}));
+        let msg = n.capture(&session(), &generated).pop().unwrap();
+        assert_eq!(msg.session_title.as_deref(), Some("Mine"));
+        assert_eq!(msg.session_title_source, Some(TitleSource::Named));
     }
 
     #[rstest]

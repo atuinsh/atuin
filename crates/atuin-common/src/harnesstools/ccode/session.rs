@@ -13,7 +13,8 @@ use typed_builder::TypedBuilder;
 use crate::fs::tree_watcher::{FileStat, TreeWatcher};
 use crate::harnesstools::ccode::Ccode;
 use crate::harnesstools::session::model::{
-    Content, MessageId, Role, StopReason, ToolCallId, ToolResult, ToolUse, Usage,
+    Content, MessageId, Role, StopReason, TitleChange, TitleSource, ToolCallId, ToolResult,
+    ToolUse, Usage,
 };
 use crate::harnesstools::session::{
     Checkpoint, Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId,
@@ -856,17 +857,29 @@ impl Message for CcodeMessage {
     /// generated `ai-title`, or a legacy `summary`. Claude Code re-appends its metadata lines
     /// (`reAppendSessionMetadata` in CC 2.1.281) in the order custom title, generated title,
     /// agent name.
-    fn title(&self) -> Option<String> {
+    /// Claude Code re-appends its title lines as the session goes on, generated ones included,
+    /// so each names its source and the ranking (agent name, custom, generated, legacy summary)
+    /// decides which shows.
+    fn title(&self) -> Option<TitleChange> {
         let summary = || {
             (self.kind == "summary")
-                .then(|| self.summary.as_ref()?.as_str().map(str::to_owned))
+                .then(|| self.summary.as_ref()?.as_str())
                 .flatten()
+                .map(|text| TitleChange::new(TitleSource::Summary, text))
         };
-        let agent_name = || (self.kind == "agent-name").then(|| self.agent_name.clone()).flatten();
+        let agent_name = || {
+            (self.kind == "agent-name")
+                .then_some(self.agent_name.as_deref())
+                .flatten()
+                .map(|text| TitleChange::new(TitleSource::Agent, text))
+        };
         self.custom_title
-            .clone()
+            .as_deref()
+            .map(|text| TitleChange::new(TitleSource::Named, text))
             .or_else(agent_name)
-            .or_else(|| self.ai_title.clone())
+            .or_else(|| {
+                self.ai_title.as_deref().map(|text| TitleChange::new(TitleSource::Generated, text))
+            })
             .or_else(summary)
     }
 }
@@ -1087,12 +1100,17 @@ mod tests {
     }
 
     #[rstest]
-    #[case(serde_json::json!({"type": "ai-title", "aiTitle": "generated"}), "generated")]
-    #[case(serde_json::json!({"type": "custom-title", "customTitle": "by hand"}), "by hand")]
-    #[case(serde_json::json!({"type": "agent-name", "agentName": "code-review", "sessionId": "s"}), "code-review")]
-    fn title_lines_expose_the_title(#[case] raw: serde_json::Value, #[case] expected: &str) {
+    #[case(serde_json::json!({"type": "ai-title", "aiTitle": "generated"}), TitleSource::Generated, "generated")]
+    #[case(serde_json::json!({"type": "custom-title", "customTitle": "by hand"}), TitleSource::Named, "by hand")]
+    #[case(serde_json::json!({"type": "agent-name", "agentName": "code-review", "sessionId": "s"}), TitleSource::Agent, "code-review")]
+    #[case(serde_json::json!({"type": "summary", "summary": "old", "leafUuid": "u"}), TitleSource::Summary, "old")]
+    fn title_lines_expose_the_title(
+        #[case] raw: serde_json::Value,
+        #[case] source: TitleSource,
+        #[case] expected: &str,
+    ) {
         let m: CcodeMessage = serde_json::from_str(&raw.to_string()).unwrap();
-        assert_eq!(m.title().as_deref(), Some(expected));
+        assert_eq!(m.title(), Some(TitleChange::new(source, expected)));
         assert!(m.content().is_empty());
     }
 
@@ -1368,7 +1386,7 @@ mod tests {
         let m = parse(&serde_json::json!({
             "type": "summary", "summary": "Fix the flaky sync test", "leafUuid": "u9",
         }));
-        assert_eq!(m.title().as_deref(), Some("Fix the flaky sync test"));
+        assert_eq!(m.title().and_then(|t| t.text).as_deref(), Some("Fix the flaky sync test"));
         assert!(m.content().is_empty());
     }
 

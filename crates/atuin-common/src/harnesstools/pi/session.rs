@@ -31,7 +31,8 @@ use typed_builder::TypedBuilder;
 use crate::fs::tree_watcher::{FileStat, TreeWatcher};
 use crate::harnesstools::pi::{Pi, agent_dir, expand_tilde};
 use crate::harnesstools::session::model::{
-    Content, MessageId, Role, StopReason, ToolCallId, ToolResult, ToolUse, Usage,
+    Content, MessageId, Role, StopReason, TitleChange, TitleSource, ToolCallId, ToolResult,
+    ToolUse, Usage,
 };
 use crate::harnesstools::session::{
     Checkpoint, Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId,
@@ -736,12 +737,12 @@ impl Message for PiMessage {
 
     /// A `session_info` name, trimmed as pi reads it (session-manager.ts `getSessionName`). A
     /// blank name clears pi's title, which a line cannot express here: it assigns none.
-    fn title(&self) -> Option<String> {
+    /// The session's name; a blank one clears it, as pi's `getSessionName` reads it.
+    fn title(&self) -> Option<TitleChange> {
         if self.entry.kind != "session_info" {
             return None;
         }
-        let name = self.entry.name.as_deref()?.trim();
-        (!name.is_empty()).then(|| name.to_owned())
+        Some(TitleChange::new(TitleSource::Named, self.entry.name.as_deref().unwrap_or_default()))
     }
 
     /// One model call, identified by what a fork's verbatim copy keeps: the entry's id and
@@ -995,7 +996,7 @@ mod tests {
                 .to_string(),
         )
         .unwrap();
-        assert_eq!(info.title().as_deref(), Some("my session"));
+        assert_eq!(info.title().and_then(|t| t.text).as_deref(), Some("my session"));
     }
 
     /// pi writes `parentSession` as the parent's *file path* (session-manager.ts
@@ -1347,7 +1348,7 @@ mod tests {
         assert_eq!(summaries[0].usage().and_then(|u| u.input), Some(221));
         assert_eq!(summaries[0].role(), Role::System);
 
-        let titles: Vec<String> = msgs.iter().filter_map(PiMessage::title).collect();
+        let titles: Vec<String> = msgs.iter().filter_map(|m| m.title()?.text).collect();
         assert_eq!(titles, vec!["sdk named session   x".to_owned()]);
         let models: std::collections::HashSet<String> =
             msgs.iter().filter_map(PiMessage::model).collect();
@@ -1534,7 +1535,7 @@ mod tests {
     fn session_info_names_are_trimmed_titles(#[case] name: &str, #[case] title: Option<&str>) {
         let m = pi(&serde_json::json!({"type": "session_info", "id": "i1", "parentId": "a1",
             "timestamp": "2026-09-18T10:00:00Z", "name": name}));
-        assert_eq!(m.title().as_deref(), title);
+        assert_eq!(m.title().and_then(|t| t.text).as_deref(), title);
     }
 
     /// `pi --session <path>` keeps any explicit file name (session-manager.ts `_setSessionFile`,

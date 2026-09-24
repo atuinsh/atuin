@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use atuin_common::harnesstools::AnyHarness;
-use atuin_common::harnesstools::session::{Content, Role, StopReason, Usage};
+use atuin_common::harnesstools::session::{Content, Role, StopReason, TitleSource, Usage};
 use atuin_common::string::highlighted::HighlightedString;
 use atuin_domain::record::RecordId;
 use derive_more::{AsRef, Display, From, Into};
@@ -75,10 +75,14 @@ pub struct Message {
     pub stop_reason: Option<StopReason>,
     /// The session's title at capture time, denormalised onto the message so session-level metadata
     /// survives a reproject from the synced record store (records carry messages only, not the
-    /// separate `Started` metadata).
+    /// separate `Started` metadata). `None` once a title is cleared: the newest row decides.
     #[builder(default)]
     #[serde(default)]
     pub session_title: Option<String>,
+    /// Where [`Self::session_title`] came from, so a resumed capture keeps ranking it.
+    #[builder(default)]
+    #[serde(default)]
+    pub session_title_source: Option<TitleSource>,
     /// The model call this row came from, unique within the harness and the same in every
     /// session a harness copies the row into. Groups the rows one response is split into, so
     /// their usage counts once.
@@ -108,6 +112,9 @@ pub struct Session {
     pub usage: Usage,
     #[builder(default)]
     pub title: Option<String>,
+    /// Where [`Self::title`] came from.
+    #[builder(default)]
+    pub title_source: Option<TitleSource>,
     #[builder(default)]
     pub preview: Option<String>,
 }

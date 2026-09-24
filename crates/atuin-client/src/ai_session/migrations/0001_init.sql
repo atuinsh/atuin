@@ -53,7 +53,10 @@ CREATE TABLE sessions (
     usage_cache_read INTEGER NOT NULL DEFAULT 0,
     usage_cache_write INTEGER NOT NULL DEFAULT 0,
     usage_reasoning INTEGER NOT NULL DEFAULT 0,
+    -- The newest row's title and where it came from (TitleSource: 0 summary, 1 generated,
+    -- 2 named, 3 agent), so a resumed capture keeps ranking titles.
     title TEXT,
+    title_source INTEGER,
     preview TEXT,
     PRIMARY KEY (harness, session_id)
 );
