@@ -1,0 +1,17 @@
+event.type message.part.updated.1
+event.type message.updated.1
+event.type session.created.1
+event.type session.updated.1
+message.data.role assistant
+message.data.role user
+part.data.type step-finish
+part.data.type step-start
+part.data.type text
+part.data.type tool
+table event
+table event_sequence
+table message
+table migration
+table part
+table project
+table session

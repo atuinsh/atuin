@@ -97,5 +97,9 @@ name = "onlcr"
 harness = false
 required-features = ["ansi"]
 
+[[example]]
+name = "harness_check"
+required-features = ["ai"]
+
 [lints]
 workspace = true

@@ -1,0 +1,11 @@
+message/assistant
+message/assistant > text
+message/assistant > toolCall
+message/system
+message/toolResult
+message/toolResult > text
+message/user
+message/user > text
+model_change
+session
+thinking_level_change

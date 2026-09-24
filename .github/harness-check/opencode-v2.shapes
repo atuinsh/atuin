@@ -1,0 +1,10 @@
+session_message.type assistant
+session_message.type idle
+session_message.type user
+table event_sequence
+table instruction_blob
+table instruction_state
+table migration
+table project
+table session_message
+table session_v2

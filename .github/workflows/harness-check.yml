@@ -1,0 +1,160 @@
+# Checks the latest release of each AI harness atuin captures sessions from (Claude Code, Codex,
+# OpenCode, Pi): drives the real CLI against a local mock model and runs our parser over what it
+# wrote (.github/harness-check/run.sh). A release that passes is remembered in an actions/cache
+# entry (harness-check-<id>-<version>) and never tested again; nothing visible happens. A release
+# that breaks capture gets one open issue per harness, commented on for later failing versions.
+name: Harness check
+
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: harness-check
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Runs third-party release code, so it only gets a read-only token.
+  check:
+    runs-on: depot-ubuntu-24.04
+    if: github.repository == 'atuinsh/atuin'
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { id: claude-code, pkg: "@anthropic-ai/claude-code" }
+          - { id: codex, pkg: "@openai/codex" }
+          - { id: opencode, pkg: opencode-ai }
+          - { id: opencode-v2, pkg: "@opencode/cli" }
+          - { id: pi, pkg: "@earendil-works/pi-coding-agent" }
+    steps:
+      - name: Latest release
+        id: latest
+        run: echo "version=$(npm view '${{ matrix.pkg }}' version)" >> "$GITHUB_OUTPUT"
+
+      - name: Already passed?
+        id: passed
+        uses: actions/cache/restore@v6
+        with:
+          path: harness-check-passed
+          key: harness-check-${{ matrix.id }}-${{ steps.latest.outputs.version }}
+          lookup-only: true
+
+      - uses: actions/checkout@v7
+        if: steps.passed.outputs.cache-hit != 'true'
+        with:
+          persist-credentials: false
+
+      - name: Install rust
+        if: steps.passed.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.0
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.passed.outputs.cache-hit != 'true'
+        with:
+          key: harness-check
+
+      - name: Build the parser check
+        if: steps.passed.outputs.cache-hit != 'true'
+        run: cargo build --locked -p atuin-common --features ai --example harness_check
+
+      # run.sh isolates the harness in a network namespace; Ubuntu 24.04 blocks unprivileged
+      # user namespaces by default.
+      - name: Allow user namespaces
+        if: steps.passed.outputs.cache-hit != 'true'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: Check ${{ matrix.id }} ${{ steps.latest.outputs.version }}
+        id: run
+        if: steps.passed.outputs.cache-hit != 'true'
+        env:
+          ID: ${{ matrix.id }}
+          RELEASE: ${{ matrix.pkg }}@${{ steps.latest.outputs.version }}
+          VERSION: ${{ steps.latest.outputs.version }}
+        run: |
+          mkdir -p harness-check-passed failure
+          if .github/harness-check/run.sh "$ID" "$RELEASE" > failure/log 2>&1 < /dev/null; then
+            echo ok=true >> "$GITHUB_OUTPUT"
+            echo "$RELEASE" > harness-check-passed/release
+          else
+            echo "$ID $VERSION" > failure/release
+          fi
+          cat failure/log
+
+      - name: Remember the pass
+        if: steps.run.outputs.ok == 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: harness-check-passed
+          key: harness-check-${{ matrix.id }}-${{ steps.latest.outputs.version }}
+
+      - uses: actions/upload-artifact@v7
+        if: steps.run.outcome == 'success' && steps.run.outputs.ok != 'true'
+        with:
+          name: harness-failure-${{ matrix.id }}
+          path: failure
+
+  # Never runs harness code; only files the results.
+  report:
+    needs: check
+    # Still file the harnesses that did fail when another leg errored out.
+    if: ${{ !cancelled() && github.repository == 'atuinsh/atuin' }}
+    runs-on: depot-ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/download-artifact@v8
+        id: failures
+        continue-on-error: true # no failures, no artifacts
+        with:
+          pattern: harness-failure-*
+          path: failures
+
+      # One open issue per harness; a new failing version is a comment on it. Red only when
+      # this run files or comments; a known failure re-runs quietly until it passes.
+      - name: File failures
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          acted=0
+          for dir in failures/*/; do
+            [ -f "$dir/release" ] || continue
+            read -r id version < "$dir/release"
+            title="harness-check: $id breaks session capture"
+            {
+              echo "Failing release: \`$id $version\` ([run]($RUN_URL))"
+              echo
+              echo "Lines starting \`+\` are record shapes the parsers have never seen; the parser line lists what it found."
+              echo
+              echo '```'
+              sed -n '/^--- shapes/,$p' "$dir/log"
+              echo '```'
+              echo
+              echo "Reproduce: \`cargo build -p atuin-common --features ai --example harness_check && .github/harness-check/run.sh $id <package>@$version\`."
+              echo "Once the parser handles it, refresh the known shapes with \`SEED=1\`."
+            } > body.md
+            issue=$(gh issue list --state open --search "\"$title\" in:title" --json number,title \
+              --jq "map(select(.title == \"$title\")) | first | .number // empty")
+            if [ -z "$issue" ]; then
+              gh issue create --title "$title" --body-file body.md
+            elif gh issue view "$issue" --json body,comments --jq '.body, .comments[].body' \
+              | grep -qF "Failing release: \`$id $version\`"; then
+              continue
+            else
+              gh issue comment "$issue" --body-file body.md
+            fi
+            acted=1
+          done
+          exit "$acted"
