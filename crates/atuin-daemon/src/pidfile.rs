@@ -271,7 +271,7 @@ impl PidfileGuard {
         #[cfg(unix)]
         let socket_path = Some(settings.socket_path().into_owned());
         #[cfg(not(unix))]
-        let socket_path = None;
+        let socket_path = None::<PathBuf>;
 
         PidfileInfo::current(socket_path).write(&mut file, path)?;
 
