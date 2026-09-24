@@ -9,6 +9,8 @@ use itertools::Itertools;
 use time::OffsetDateTime;
 use tracing::instrument;
 
+#[cfg(feature = "daemon")]
+use crate::command::client::daemon;
 use crate::i18n::fl;
 
 #[cfg(feature = "sync")]
@@ -33,6 +35,9 @@ pub enum Cmd {
 
     #[command(about = fl!("cmd-store-rekey"))]
     Rekey(rekey::Rekey),
+
+    #[command(about = fl!("cmd-store-compact"))]
+    Compact,
 
     #[command(about = fl!("cmd-store-purge"))]
     Purge(purge::Purge),
@@ -61,6 +66,21 @@ impl Cmd {
             Self::Status => self.status(store).await,
             Self::Rebuild(rebuild) => rebuild.run(settings, store, database).await,
             Self::Rekey(rekey) => rekey.run(settings, store).await,
+            Self::Compact => {
+                // The daemon owns the store's writes when enabled; let it do the rewrite so the
+                // binary that reads the new rows is the one that wrote them.
+                #[cfg(feature = "daemon")]
+                let rewritten = if settings.daemon.enabled {
+                    daemon::compact_store(settings).await?
+                } else {
+                    store.compact().await?
+                };
+                #[cfg(not(feature = "daemon"))]
+                let rewritten = store.compact().await?;
+
+                println!("Rewrote {rewritten} records");
+                Ok(())
+            }
             Self::Verify(verify) => verify.run(settings, store).await,
             Self::Purge(purge) => purge.run(settings, store).await,
 

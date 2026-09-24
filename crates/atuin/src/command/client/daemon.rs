@@ -471,6 +471,11 @@ pub async fn rebuild_history(settings: &Settings) -> Result<()> {
     Ok(())
 }
 
+pub async fn compact_store(settings: &Settings) -> Result<u64> {
+    let reply = try_with_restart(settings, async |client| client.compact_store().await).await?;
+    Ok(reply.rewritten)
+}
+
 async fn status_cmd(settings: &Settings) -> Result<()> {
     match probe(settings).await {
         Probe::Ready(mut client) => {

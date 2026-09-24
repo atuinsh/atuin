@@ -6,7 +6,9 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync::{ClientSource, SyncSession};
 use atuin_common::encryption::paseto_v4;
 use atuin_common::utils::uuid_v7;
-use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag};
+use atuin_domain::record::{
+    DecryptedData, EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag,
+};
 use atuin_server::db::DbSettings;
 use atuin_server::{Settings as ServerSettings, launch_with_tcp_listener};
 use easy_cast::Conv;
@@ -122,11 +124,9 @@ fn record(host: HostId, tag: &RecordTag, idx: RecordIdx) -> Record<EncryptedData
         .version("v0".to_string().into())
         .tag(tag.clone())
         .idx(idx)
-        .data(EncryptedData {
-            raw: String::from("some data"),
-            cek: String::from("some key"),
-        })
+        .data(DecryptedData(b"some data".to_vec()))
         .build()
+        .encrypt(&key())
 }
 
 /// Populate the remote with records `0..=remote_max` and the local store with records

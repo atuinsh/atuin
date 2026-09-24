@@ -318,6 +318,7 @@ arg-stats-filter-mode = Filter commands by scope [global, host, session, directo
 cmd-store-status = Print the current status of the record store
 cmd-store-rebuild = Rebuild a store (eg atuin store rebuild history)
 cmd-store-rekey = Re-encrypt the store with a new key (potential for data loss!)
+cmd-store-compact = Rewrite every record in the compact on-disk encoding and reclaim space
 cmd-store-purge = Delete all records in the store that cannot be decrypted with the current key
 cmd-store-verify = Verify that all records in the store can be decrypted with the current key
 cmd-store-push = Push all records to the remote sync server (one way sync)
