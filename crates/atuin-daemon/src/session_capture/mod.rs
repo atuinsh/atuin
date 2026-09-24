@@ -141,7 +141,9 @@ fn sanitize_message(msg: &mut Message) {
         Content::ReasoningSummary { .. } => true,
         Content::Text(_) | Content::Other(_) => false,
     });
-    if let Some(title) = &mut msg.session_title {
+    // Both titles a row carries: the session's, and the one its own line set.
+    let change = msg.title_change.as_mut().and_then(|change| change.text.as_mut());
+    for title in msg.session_title.iter_mut().chain(change) {
         *title = atuin_common::secrets::redact(title).into_owned();
     }
 }
@@ -273,7 +275,9 @@ impl AiHarnessSessionCapture {
 #[cfg(test)]
 mod tests {
     use atuin_client::ai_session::{NativeSessionId, SourceId};
-    use atuin_common::harnesstools::session::{ToolCallId, ToolResult, ToolUse, Usage};
+    use atuin_common::harnesstools::session::{
+        TitleChange, TitleSource, ToolCallId, ToolResult, ToolUse, Usage,
+    };
     use atuin_domain::record::{RecordId, RecordTag};
     use futures::StreamExt;
     use rstest::rstest;
@@ -339,6 +343,8 @@ mod tests {
             reasoning: None,
         });
         msg.session_title = Some("AWS_SECRET_ACCESS_KEY=TITLESECRET".to_owned());
+        msg.title_change =
+            Some(TitleChange::new(TitleSource::Named, "AWS_SECRET_ACCESS_KEY=CHANGESECRET"));
         msg.content = vec![
             Content::Text("AWS_SECRET_ACCESS_KEY=TEXTSECRET".to_owned()),
             Content::ToolUse(ToolUse {
@@ -364,6 +370,10 @@ mod tests {
         assert!(matches!(&msg.content[2], Content::ToolResult(t)
             if t.call.as_ref() == "call" && t.error && t.output.is_null()));
         assert_eq!(msg.session_title.as_deref(), Some("AWS_SECRET_ACCESS_KEY=****"));
+        assert_eq!(
+            msg.title_change.as_ref().and_then(|t| t.text.as_deref()),
+            Some("AWS_SECRET_ACCESS_KEY=****"),
+        );
 
         let event = sub.next().await.unwrap().unwrap();
         assert!(matches!(event, SessionTailEvent::SessionStarted(_)));
