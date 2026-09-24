@@ -34,6 +34,9 @@ pub enum Cmd {
     #[command(about = fl!("cmd-store-rekey"))]
     Rekey(rekey::Rekey),
 
+    #[command(about = fl!("cmd-store-compact"))]
+    Compact,
+
     #[command(about = fl!("cmd-store-purge"))]
     Purge(purge::Purge),
 
@@ -61,6 +64,11 @@ impl Cmd {
             Self::Status => self.status(store).await,
             Self::Rebuild(rebuild) => rebuild.run(settings, store, database).await,
             Self::Rekey(rekey) => rekey.run(settings, store).await,
+            Self::Compact => {
+                let rewritten = store.compact().await?;
+                println!("Rewrote {rewritten} records");
+                Ok(())
+            }
             Self::Verify(verify) => verify.run(settings, store).await,
             Self::Purge(purge) => purge.run(settings, store).await,
 
