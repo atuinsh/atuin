@@ -48,12 +48,14 @@ pub enum BuildError {
 impl AiSessionRecord {
     const MESSAGE_KIND: u8 = 0;
 
+    /// A kind byte, then the body as named-field msgpack: a reader ignores fields it does not
+    /// know, so adding one never breaks hosts on an older build.
     #[must_use]
     pub fn serialize(&self) -> Vec<u8> {
         match self {
             Self::Message(msg) => {
                 let mut out = vec![Self::MESSAGE_KIND];
-                out.extend(rmp_serde::to_vec(msg).expect("Message is always serializable"));
+                out.extend(rmp_serde::to_vec_named(msg).expect("Message is always serializable"));
                 out
             }
         }
