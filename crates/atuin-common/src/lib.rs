@@ -11,6 +11,7 @@ pub mod fs;
 pub mod futures;
 #[cfg(feature = "ai")]
 pub mod harnesstools;
+pub mod io;
 pub mod json;
 pub mod logs;
 pub mod os;
