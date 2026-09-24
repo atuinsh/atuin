@@ -62,7 +62,7 @@ pub struct PidfileInfo {
 
     /// The path to the socket the daemon is listening on.
     ///
-    /// This is [`None`] on Windows.
+    /// This is [`None`] on Windows, or if `daemon.systemd_socket` is true in `config.toml`.
     #[serde_as(as = "Option<AutoOsString>")]
     pub socket_path: Option<PathBuf>,
 }
@@ -70,14 +70,17 @@ pub struct PidfileInfo {
 impl PidfileInfo {
     /// Create a [`PidfileInfo`] for the current process (assuming this process is the daemon).
     #[must_use]
-    pub fn current<P>(socket_path: Option<P>) -> Self
-    where
-        P: Into<PathBuf>,
-    {
+    pub fn current(settings: &DaemonSettings) -> Self {
+        #[cfg(not(unix))]
+        let _ = settings;
+
         Self {
             pid: std::process::id(),
             version: crate::VERSION.to_string(),
-            socket_path: socket_path.map(Into::into),
+            #[cfg(unix)]
+            socket_path: (!settings.systemd_socket).then(|| settings.socket_path().into_owned()),
+            #[cfg(not(unix))]
+            socket_path: None,
         }
     }
 
@@ -268,12 +271,7 @@ impl PidfileGuard {
             inner: e,
         })?;
 
-        #[cfg(unix)]
-        let socket_path = Some(settings.socket_path().into_owned());
-        #[cfg(not(unix))]
-        let socket_path = None::<PathBuf>;
-
-        PidfileInfo::current(socket_path).write(&mut file, path)?;
+        PidfileInfo::current(settings).write(&mut file, path)?;
 
         Ok(Self { _file: file })
     }
@@ -339,22 +337,33 @@ mod tests {
         Pidfile { _dir: dir, path }
     }
 
-    fn info() -> PidfileInfo {
-        PidfileInfo::current(Some("/tmp/atuin-1000/atuin.sock"))
+    /// Info for this process with the given socket path.
+    fn info_with(socket_path: Option<&str>) -> PidfileInfo {
+        PidfileInfo {
+            pid: std::process::id(),
+            version: crate::VERSION.to_string(),
+            socket_path: socket_path.map(PathBuf::from),
+        }
     }
 
-    fn daemon_settings(pidfile: &Path) -> DaemonSettings {
+    fn info() -> PidfileInfo {
+        info_with(Some("/tmp/atuin-1000/atuin.sock"))
+    }
+
+    fn daemon_settings(pidfile: &Path, systemd_socket: bool) -> DaemonSettings {
         DaemonSettings {
             pidfile_path: pidfile.to_str().unwrap().to_string(),
             socket_path: Some("/tmp/atuin.sock".into()),
+            systemd_socket,
             ..DaemonSettings::default()
         }
     }
 
     #[rstest]
-    fn test_guard_acquire_and_drop(pidfile: Pidfile) {
+    fn test_guard_acquire_and_drop(pidfile: Pidfile, #[values(false, true)] systemd_socket: bool) {
+        let settings = daemon_settings(&pidfile.path, systemd_socket);
         {
-            let _guard = PidfileGuard::acquire(&daemon_settings(&pidfile.path)).unwrap();
+            let _guard = PidfileGuard::acquire(&settings).unwrap();
             // Guard holds an exclusive lock — on Windows other handles cannot
             // read the file, so we verify contents after the guard is dropped.
         }
@@ -363,15 +372,18 @@ mod tests {
         assert_eq!(contents.lines().next().unwrap(), std::process::id().to_string());
         let info = PidfileInfo::read(&pidfile.path).unwrap();
         assert_eq!(info.version, crate::VERSION);
-        assert_eq!(info.socket_path.as_deref(), Some("/tmp/atuin.sock".as_ref()));
+        // The socket path is only recorded if the daemon chose it: not under systemd, which passes
+        // the daemon a socket, and not on Windows, which doesn't use one.
+        let expected = (cfg!(unix) && !systemd_socket).then(|| PathBuf::from("/tmp/atuin.sock"));
+        assert_eq!(info.socket_path, expected);
 
         // After guard is dropped, lock should be released — acquiring again must succeed.
-        let _guard2 = PidfileGuard::acquire(&daemon_settings(&pidfile.path)).unwrap();
+        let _guard2 = PidfileGuard::acquire(&settings).unwrap();
     }
 
     #[rstest]
     fn test_guard_prevents_double_acquire(pidfile: Pidfile) {
-        let settings = daemon_settings(&pidfile.path);
+        let settings = daemon_settings(&pidfile.path, false);
         let _guard = PidfileGuard::acquire(&settings).unwrap();
         let result = PidfileGuard::acquire(&settings);
         assert!(matches!(
@@ -407,7 +419,7 @@ mod tests {
     #[rstest]
     fn test_write_replaces_longer_contents(pidfile: Pidfile) {
         let mut file = pidfile.create();
-        let long = PidfileInfo::current(Some("/a/much/longer/path/than/the/next/one.sock"));
+        let long = info_with(Some("/a/much/longer/path/than/the/next/one.sock"));
         long.write(&mut file, &pidfile.path).unwrap();
         info().write(&mut file, &pidfile.path).unwrap();
 
@@ -415,10 +427,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case::some(Some("/tmp/atuin-1000/atuin.sock".into()))]
+    #[case::some(Some("/tmp/atuin-1000/atuin.sock"))]
     #[case::none(None)]
-    fn test_round_trip(pidfile: Pidfile, #[case] socket_path: Option<PathBuf>) {
-        let info = PidfileInfo::current(socket_path);
+    fn test_round_trip(pidfile: Pidfile, #[case] socket_path: Option<&str>) {
+        let info = info_with(socket_path);
         info.write(&mut pidfile.create(), &pidfile.path).unwrap();
         assert_eq!(PidfileInfo::read(&pidfile.path), Some(info));
     }
