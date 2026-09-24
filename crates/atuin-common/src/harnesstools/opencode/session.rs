@@ -1108,8 +1108,8 @@ impl Tailable for EventRow {
 
     /// The `id` is a never-reused primary key. A NULL id still anchors, as the empty string: a
     /// deleted or replaced row is then still noticed, only another NULL-id row in its place is not.
-    fn identity(&self) -> Option<String> {
-        Some(self.id.clone().unwrap_or_default())
+    fn identity(&self) -> Option<impl Eq> {
+        Some(self.id.as_deref().unwrap_or_default())
     }
 }
 
@@ -1921,51 +1921,12 @@ mod tests {
         let mut captured = Vec::new();
         while captured.is_empty() {
             let line = described(&mut stream, 1).await.pop().expect("the capture ended");
-            // the polls that still met no table report it too, and the tail reconnects after each
+            // the polls that still met no table report it too, and the tail retries after each
             if !line.starts_with("watch error") {
                 captured.push(line);
             }
         }
         assert_eq!(captured, ["ses_B Assistant after"]);
-    }
-
-    // Windows refuses to unlink or replace a file SQLite holds open (it opens without
-    // FILE_SHARE_DELETE), so the database can only be swapped under a live tail on unix.
-    #[cfg(unix)]
-    #[rstest]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn rows_of_a_replaced_database_file_are_delivered() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("opencode.db");
-        let old = event_db(&path).await;
-        role_row(&old, "o1", "ses_old", "msg_o", "user").await;
-        text_row(&old, "o2", "ses_old", "prt_o", "msg_o", "before").await;
-
-        let mut stream = events(&path, ReplayBehavior::All);
-        assert_eq!(described(&mut stream, 1).await, ["ses_old User before"]);
-
-        // `rm opencode.db*` and a fresh opencode: a new file at the same path, rowids from 1
-        old.pool().close().await;
-        drop(old);
-        for suffix in ["", "-wal", "-shm"] {
-            let _ = std::fs::remove_file(dir.path().join(format!("opencode.db{suffix}")));
-        }
-        // written as one self-contained file (rollback journal) so it can be moved into place
-        let fresh = dir.path().join("fresh.db");
-        let db = with_schema(
-            Sqlite::builder(fresh.as_os_str())
-                .journal(Some(Journaling::Delete))
-                .open()
-                .await
-                .unwrap(),
-        )
-        .await;
-        role_row(&db, "n1", "ses_new", "msg_n", "user").await;
-        text_row(&db, "n2", "ses_new", "prt_n", "msg_n", "after").await;
-        db.pool().close().await;
-        std::fs::rename(&fresh, &path).unwrap();
-
-        assert_eq!(described(&mut stream, 1).await, ["ses_new User after"]);
     }
 
     #[cfg(unix)]

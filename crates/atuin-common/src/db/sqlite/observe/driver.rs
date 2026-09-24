@@ -1,78 +1,120 @@
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::io;
-use std::ops::ControlFlow;
-use std::path::Path;
-use std::time::Duration;
 
 use async_stream::stream;
 use futures::Stream;
 use itertools::{EitherOrBoth, Itertools};
-use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
-use sqlx::{AssertSqlSafe, Connection, Sqlite};
+use sqlx::sqlite::SqliteConnection;
+use sqlx::{AssertSqlSafe, Sqlite};
 
-use super::schema::{Diffable, TableSchema, Tailable};
-use super::{ObserveConfig, ObserveError, ReplayBehavior, RowAppendedEvent, RowChangedEvent};
-use crate::futures::Backoff;
-use crate::os::fs::FdIdentity;
+use super::{
+    Diffable, ObserveConfig, ObserveError, ReplayBehavior, RowAppendedEvent, RowChangedEvent,
+    Tailable,
+};
+use crate::db::sqlite::{TransientResultCode, quote_ident};
 
+/// The most rows one query reads, so a large backlog is delivered in bounded pages.
 const PAGE_SIZE: usize = 1024;
 
-fn quote_ident(ident: &str) -> String {
-    format!("\"{}\"", ident.replace('"', "\"\""))
-}
-
-fn select<T: TableSchema>(clause: &str) -> String {
-    let cols = T::COLUMNS.iter().map(|&c| quote_ident(c)).collect::<Vec<_>>().join(", ");
-    format!("SELECT {cols} FROM {} {clause}", quote_ident(T::TABLE))
-}
-
-pub(super) struct Batch<E> {
+/// The events one [`Strategy::poll`] read.
+pub struct Batch<E> {
+    /// The events, in the order they are yielded.
     events: Vec<E>,
+    /// Whether nothing is left to read until the database changes again.
     drained: bool,
 }
 
-pub(super) trait Strategy: Send + 'static {
+/// How an observation turns the observed table into events.
+pub trait Strategy: Send + 'static {
+    /// The item the observation yields.
     type Event: Send + 'static;
 
+    /// Sets the position the first poll reads from, according to `replay`.
     fn seed(
         &mut self,
         conn: &mut SqliteConnection,
         replay: ReplayBehavior,
     ) -> impl Future<Output = Result<(), sqlx::Error>> + Send;
 
+    /// Reads the next batch of events.
+    ///
+    /// This generally gets called whenever we are notified that there is new data in the database.
     fn poll(
         &mut self,
         conn: &mut SqliteConnection,
     ) -> impl Future<Output = Result<Batch<Self::Event>, sqlx::Error>> + Send;
 
-    /// The database file was replaced: forget any position that only meant something in the old
-    /// file. A snapshot-diffing strategy keeps its snapshot so the next poll reports the
-    /// difference.
-    fn reset(&mut self) {}
+    /// Tails `conn`, yielding what this strategy reports.
+    fn run(
+        mut self,
+        mut conn: SqliteConnection,
+        cfg: ObserveConfig,
+    ) -> impl Stream<Item = Result<Self::Event, ObserveError>> + Send
+    where
+        Self: Sized,
+    {
+        stream! {
+            let mut ticker = tokio::time::interval(cfg.poll_interval);
+            let mut last: Option<i64> = None;
+            'tick: loop {
+                ticker.tick().await;
+                let version =
+                    match crate::db::query_scalar::<Sqlite, i64>("PRAGMA data_version")
+                        .fetch_one(&mut conn)
+                        .await
+                    {
+                        Ok(version) => version,
+                        Err(e) => {
+                            if TransientResultCode::from_error(&e).is_none() {
+                                yield Err(ObserveError::Query(e));
+                            }
+                            continue;
+                        }
+                    };
+                if last == Some(version) {
+                    continue;
+                }
+
+                loop {
+                    let batch = match self.poll(&mut conn).await {
+                        Ok(batch) => batch,
+                        Err(e) => {
+                            if TransientResultCode::from_error(&e).is_none() {
+                                yield Err(ObserveError::Query(e));
+                            }
+                            continue 'tick;
+                        }
+                    };
+                    let drained = batch.drained;
+                    for event in batch.events {
+                        yield Ok(event);
+                    }
+                    if drained {
+                        break;
+                    }
+                }
+                last = Some(version);
+            }
+        }
+    }
 }
 
-/// The last delivered row: where the next page starts and, when the type provides one, the
-/// identity that must still be found there.
-struct Last<C> {
-    cursor: C,
-    identity: Option<String>,
-}
-
-pub(super) struct AppendStrategy<T: Tailable> {
-    last: Option<Last<T::Cursor>>,
+/// Tails `T`'s table by its cursor column (see [`Tailable`]).
+pub struct AppendStrategy<T: Tailable> {
+    /// The last delivered row: where the next page starts and, when it has an identity, the row
+    /// that must still head that page.
+    last: Option<T>,
 }
 
 impl<T: Tailable> AppendStrategy<T> {
-    pub(super) const fn new() -> Self {
+    /// A tail that has delivered nothing yet.
+    pub const fn new() -> Self {
         Self { last: None }
     }
 
+    /// Records `row` as the last delivered row.
     fn remember(&mut self, row: &T) {
-        self.last = Some(Last {
-            cursor: row.cursor(),
-            identity: row.identity(),
-        });
+        self.last = Some(row.clone());
     }
 
     /// Whether the last delivered row still heads the page that was read from its cursor. When it
@@ -80,25 +122,24 @@ impl<T: Tailable> AppendStrategy<T> {
     /// rows a `> cursor` page would skip (see [`Tailable::identity`]), so the tail rewinds to the
     /// start of the table.
     fn verify_anchor(&mut self, page: &[T]) -> bool {
-        let Some(Last {
-            cursor,
-            identity: Some(identity),
-        }) = &self.last
-        else {
+        let Some(last) = self.last.as_ref().filter(|last| last.identity().is_some()) else {
             return true;
         };
-        let found = page.first().is_some_and(|row| {
-            row.cursor() == *cursor && row.identity().as_ref() == Some(identity)
-        });
+
+        let found = page
+            .first()
+            .is_some_and(|row| row.cursor() == last.cursor() && row.identity() == last.identity());
+
         if !found {
             tracing::warn!(
                 table = T::TABLE,
-                ?cursor,
+                cursor = ?last.cursor(),
                 "the last delivered row is gone or was replaced; rewinding to the start of the \
                  table"
             );
             self.last = None;
         }
+
         found
     }
 }
@@ -114,7 +155,7 @@ impl<T: Tailable> Strategy for AppendStrategy<T> {
         self.last = None;
         if replay == ReplayBehavior::FromNow {
             let sql =
-                select::<T>(&format!("ORDER BY {} DESC LIMIT 1", quote_ident(T::CURSOR_COLUMN)));
+                T::select(&format!("ORDER BY {} DESC LIMIT 1", quote_ident(T::CURSOR_COLUMN)));
             let newest: Option<T> =
                 crate::db::query_as::<Sqlite, T>(AssertSqlSafe(sql)).fetch_optional(conn).await?;
             if let Some(row) = &newest {
@@ -131,27 +172,21 @@ impl<T: Tailable> Strategy for AppendStrategy<T> {
         let cursor_col = quote_ident(T::CURSOR_COLUMN);
         // With an identity to check, the page starts at the last delivered row itself: one
         // statement, so the check and the rows it vouches for come from the same snapshot.
-        let anchored = matches!(
-            self.last,
-            Some(Last {
-                identity: Some(_),
-                ..
-            })
-        );
+        let anchored = self.last.as_ref().is_some_and(|last| last.identity().is_some());
         let sql = match (&self.last, anchored) {
-            (Some(_), true) => select::<T>(&format!(
+            (Some(_), true) => T::select(&format!(
                 "WHERE {cursor_col} >= ?1 ORDER BY {cursor_col} ASC LIMIT {}",
                 PAGE_SIZE + 1
             )),
-            (Some(_), false) => select::<T>(&format!(
+            (Some(_), false) => T::select(&format!(
                 "WHERE {cursor_col} > ?1 ORDER BY {cursor_col} ASC LIMIT {PAGE_SIZE}"
             )),
-            (None, _) => select::<T>(&format!("ORDER BY {cursor_col} ASC LIMIT {PAGE_SIZE}")),
+            (None, _) => T::select(&format!("ORDER BY {cursor_col} ASC LIMIT {PAGE_SIZE}")),
         };
 
         let query = crate::db::query_as::<Sqlite, T>(AssertSqlSafe(sql));
         let query = match &self.last {
-            Some(last) => query.bind(last.cursor.clone()),
+            Some(last) => query.bind(last.cursor()),
             None => query,
         };
 
@@ -173,230 +208,17 @@ impl<T: Tailable> Strategy for AppendStrategy<T> {
             drained,
         })
     }
-
-    fn reset(&mut self) {
-        self.last = None;
-    }
 }
 
-fn is_transient(e: &sqlx::Error) -> bool {
-    matches!(e, sqlx::Error::Io(_))
-        || e.as_database_error()
-            .and_then(sqlx::error::DatabaseError::code)
-            .is_some_and(|code| crate::db::sqlite::TransientResultCode::from_code(&code).is_some())
-}
-
-/// The identity of the file at `path`, or `None` when there is no such file.
-async fn file_identity(path: &Path) -> io::Result<Option<FdIdentity>> {
-    #[cfg(unix)]
-    let identity = tokio::fs::metadata(path).await.map(|meta| FdIdentity::from_metadata(&meta));
-    #[cfg(windows)]
-    let identity = {
-        use crate::os::fs::FdIdentityExt;
-        tokio::fs::File::open(path).await.and_then(|file| file.identity())
-    };
-    match identity {
-        Ok(id) => Ok(Some(id)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e),
-    }
-}
-
-/// Whether the file at `path` is no longer the one `expected` was recorded from (removed or
-/// replaced). Unknown identities and failed stats are inconclusive and report `false`.
-async fn replaced(path: &Path, expected: Option<FdIdentity>) -> bool {
-    let Some(expected) = expected else {
-        return false;
-    };
-    let Ok(now) = file_identity(path).await else {
-        return false;
-    };
-    if now == Some(expected) {
-        return false;
-    }
-    tracing::warn!(
-        path = %path.display(),
-        "the observed database file was removed or replaced; reconnecting"
-    );
-    true
-}
-
-pub(super) struct Source {
-    pub(super) conn: SqliteConnection,
-    identity: Option<FdIdentity>,
-}
-
-/// Connects to `opts`, recording the identity of the database file first: a replacement that
-/// races the open then shows up as a mismatch on the first tick (one spurious reconnect) rather
-/// than going unnoticed for the lifetime of the connection.
-pub(super) async fn open(opts: &SqliteConnectOptions) -> Result<Source, sqlx::Error> {
-    let identity = file_identity(opts.get_filename()).await.ok().flatten();
-    let conn = SqliteConnection::connect_with(opts).await?;
-    Ok(Source { conn, identity })
-}
-
-/// The delay before the source is taken up again, stepped along the reconnect backoff while
-/// failures follow one another. Unjittered: this paces one observer against one file, where the
-/// thundering herd the jitter in [`Backoff`] is there for cannot arise.
-struct Wait {
-    backoff: Backoff,
-    step: u32,
-}
-
-impl Wait {
-    const fn new(backoff: Backoff) -> Self {
-        Self { backoff, step: 0 }
-    }
-
-    fn next_delay(&mut self) -> Duration {
-        let delay = match self.backoff {
-            Backoff::Constant(delay) => delay,
-            Backoff::Exponential {
-                initial,
-                max,
-                factor,
-            } => initial.saturating_mul(factor.get().saturating_pow(self.step)).min(max),
-        };
-        self.step = self.step.saturating_add(1);
-        delay
-    }
-
-    const fn reset(&mut self) {
-        self.step = 0;
-    }
-}
-
-/// Tails the source, yielding what `strategy` reports.
-///
-/// The stream does not end of its own accord: a query or a connection that fails for its own
-/// reason is yielded as an item and then recovered from, on a fresh connection and a backoff (a
-/// locked database and a replaced file are recovered from without an item). The rows are in the
-/// table, so a read that failed is read again -- the strategy resumes at the row it last
-/// delivered, or from the start of the table when that row is no longer there.
-pub(super) fn run<S: Strategy>(
-    opts: SqliteConnectOptions,
-    first: Source,
-    mut strategy: S,
-    cfg: ObserveConfig,
-) -> impl Stream<Item = Result<S::Event, ObserveError>> + Send {
-    stream! {
-        let path = opts.get_filename().to_path_buf();
-        let Source { conn, mut identity } = first;
-        let mut pending = Some(conn);
-        // How long to wait before taking the source up again. It escalates while failures follow
-        // one another, so that an outage is probed rather than spun on, and the first poll that
-        // gets through puts it back to its initial delay.
-        let mut backoff = Wait::new(cfg.reconnect);
-        loop {
-            let mut conn = if let Some(conn) = pending.take() {
-                conn
-            } else {
-                let reopened = cfg
-                    .reconnect
-                    .retry_forever(|| async {
-                        match open(&opts).await {
-                            Ok(source) => ControlFlow::Break(Ok(source)),
-                            // A missing file is the writer mid-replacement: wait for it.
-                            Err(e) => {
-                                if is_transient(&e)
-                                    || matches!(file_identity(&path).await, Ok(None))
-                                {
-                                    ControlFlow::Continue(())
-                                } else {
-                                    ControlFlow::Break(Err(e))
-                                }
-                            }
-                        }
-                    })
-                    .await;
-                match reopened {
-                    Ok(source) => {
-                        if source.identity != identity {
-                            tracing::warn!(
-                                path = %path.display(),
-                                "the observed database file was replaced; restarting from the \
-                                 beginning of the table"
-                            );
-                            strategy.reset();
-                        }
-                        identity = source.identity;
-                        source.conn
-                    }
-                    // A file that is there and will not open: a half-written replacement, a
-                    // header a writer has yet to finish. Report it and try again.
-                    Err(e) => {
-                        yield Err(ObserveError::Connect(e));
-                        tokio::time::sleep(backoff.next_delay()).await;
-                        continue;
-                    }
-                }
-            };
-
-            let mut ticker = tokio::time::interval(cfg.poll_interval);
-            let mut last: Option<i64> = None;
-            'gate: loop {
-                ticker.tick().await;
-                if replaced(&path, identity).await {
-                    break 'gate;
-                }
-
-                let version = match crate::db::query_scalar::<Sqlite, i64>("PRAGMA data_version")
-                    .fetch_one(&mut conn)
-                    .await
-                {
-                    Ok(version) => version,
-                    Err(e) => {
-                        if !(is_transient(&e) || replaced(&path, identity).await) {
-                            yield Err(ObserveError::Query(e));
-                        }
-                        break 'gate;
-                    }
-                };
-                if last == Some(version) {
-                    continue;
-                }
-
-                loop {
-                    let batch = match strategy.poll(&mut conn).await {
-                        Ok(batch) => batch,
-                        // A query that failed for its own reason -- a table a migration has
-                        // dropped and will put back, a corrupt page -- is as recoverable as a
-                        // locked database: the rows stay where they are, and the tail reads them
-                        // again once it has a connection that works.
-                        Err(e) => {
-                            if !(is_transient(&e) || replaced(&path, identity).await) {
-                                yield Err(ObserveError::Query(e));
-                            }
-                            break 'gate;
-                        }
-                    };
-                    backoff.reset();
-                    let drained = batch.drained;
-                    for event in batch.events {
-                        yield Ok(event);
-                    }
-                    if drained {
-                        break;
-                    }
-                }
-                last = Some(version);
-            }
-
-            tokio::time::sleep(backoff.next_delay()).await;
-        }
-    }
-}
-
-async fn fetch_all<T: TableSchema>(conn: &mut SqliteConnection) -> Result<Vec<T>, sqlx::Error> {
-    crate::db::query_as::<Sqlite, T>(AssertSqlSafe(select::<T>(""))).fetch_all(conn).await
-}
-
-pub(super) struct MutateStrategy<T: Diffable> {
+/// Diffs successive snapshots of `T`'s table (see [`Diffable`]).
+pub struct MutateStrategy<T: Diffable> {
+    /// The table as of the last poll, by key.
     snapshot: BTreeMap<T::Key, T>,
 }
 
 impl<T: Diffable> MutateStrategy<T> {
-    pub(super) const fn new() -> Self {
+    /// A strategy whose snapshot is still empty.
+    pub const fn new() -> Self {
         Self {
             snapshot: BTreeMap::new(),
         }
@@ -414,7 +236,12 @@ impl<T: Diffable> Strategy for MutateStrategy<T> {
         self.snapshot = match replay {
             ReplayBehavior::All => BTreeMap::new(),
             ReplayBehavior::FromNow => {
-                fetch_all::<T>(conn).await?.into_iter().map(|row| (row.key(), row)).collect()
+                crate::db::query_as::<Sqlite, T>(AssertSqlSafe(T::select("")))
+                    .fetch_all(conn)
+                    .await?
+                    .into_iter()
+                    .map(|row| (row.key(), row))
+                    .collect()
             }
         };
         Ok(())
@@ -425,7 +252,12 @@ impl<T: Diffable> Strategy for MutateStrategy<T> {
         conn: &mut SqliteConnection,
     ) -> Result<Batch<Self::Event>, sqlx::Error> {
         let fresh: BTreeMap<T::Key, T> =
-            fetch_all::<T>(conn).await?.into_iter().map(|row| (row.key(), row)).collect();
+            crate::db::query_as::<Sqlite, T>(AssertSqlSafe(T::select("")))
+                .fetch_all(conn)
+                .await?
+                .into_iter()
+                .map(|row| (row.key(), row))
+                .collect();
 
         let events = self
             .snapshot
@@ -457,6 +289,7 @@ mod tests {
 
     use futures::StreamExt;
     use rstest::rstest;
+    use sqlx::Connection;
 
     use super::*;
     use crate::db::query;
@@ -523,8 +356,8 @@ mod tests {
         fn cursor(&self) -> i64 {
             self.rowid
         }
-        fn identity(&self) -> Option<String> {
-            Some(self.id.clone())
+        fn identity(&self) -> Option<impl Eq> {
+            Some(self.id.as_str())
         }
     }
 
@@ -891,33 +724,6 @@ mod tests {
         assert_eq!(next_n(&mut stream, 1).await, [item(3, "c")]);
     }
 
-    // Windows refuses to unlink or replace a file SQLite holds open (it opens without
-    // FILE_SHARE_DELETE), so the database can only be swapped under a live tail on unix.
-    #[cfg(unix)]
-    #[rstest]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn append_follows_a_replaced_database_file() {
-        if !sqlite3_available() {
-            return;
-        }
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("db.sqlite");
-        let schema = "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL);";
-        exec_sql(&path, schema).await;
-        let observer = SqliteObserver::new(&path);
-        let mut stream = observer.append::<Item>(cfg(ReplayBehavior::FromNow)).await.unwrap();
-        insert_xproc(&path, 1, "old").await;
-        assert_eq!(next_n(&mut stream, 1).await, [item(1, "old")]);
-
-        for suffix in ["", "-wal", "-shm"] {
-            let _ = std::fs::remove_file(dir.path().join(format!("db.sqlite{suffix}")));
-        }
-        exec_sql(&path, schema).await;
-        insert_xproc(&path, 1, "new").await;
-
-        assert_eq!(next_n(&mut stream, 1).await, [item(1, "new")]);
-    }
-
     #[rstest]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_writers_no_loss() {
@@ -1144,7 +950,7 @@ mod tests {
         .await;
         let delivered = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
-                // the polls that still met no table report it; the tail reconnects after each
+                // the polls that still met no table report it; the tail retries after each
                 if let Ok(row) = next_item(&mut stream).await {
                     return row;
                 }

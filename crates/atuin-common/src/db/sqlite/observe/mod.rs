@@ -43,8 +43,8 @@
 //!         self.rowid
 //!     }
 //!
-//!     fn identity(&self) -> Option<String> {
-//!         Some(self.id.clone())
+//!     fn identity(&self) -> Option<impl Eq> {
+//!         Some(self.id.as_str())
 //!     }
 //! }
 //!
@@ -104,21 +104,107 @@
 //! ```
 
 mod driver;
-mod schema;
-mod table;
 
-use std::num::NonZeroU32;
+use std::fmt::Debug;
 use std::path::Path;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
-use driver::{AppendStrategy, MutateStrategy, Strategy, open, run};
-pub use schema::{Cursor, Diffable, TableSchema, Tailable};
-use sqlx::sqlite::SqliteConnectOptions;
+use driver::{AppendStrategy, MutateStrategy, Strategy};
+use futures::Stream;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection, SqliteRow};
+use sqlx::{Connection, Decode, Encode, FromRow, Sqlite, Type};
 use strum_macros::{Display, EnumDiscriminants, EnumIter};
-pub use table::SqliteTableObserver;
 use typed_builder::TypedBuilder;
 
-use crate::futures::Backoff;
+use super::quote_ident;
+
+pub trait TableSchema: for<'r> FromRow<'r, SqliteRow> + Clone + Send + Unpin + 'static {
+    const TABLE: &'static str;
+    const COLUMNS: &'static [&'static str];
+
+    /// A `SELECT` of [`COLUMNS`](Self::COLUMNS) from [`TABLE`](Self::TABLE), followed by `clause`.
+    #[must_use]
+    fn select(clause: &str) -> String {
+        let cols = Self::COLUMNS.iter().map(|&c| quote_ident(c)).collect::<Vec<_>>().join(", ");
+        format!("SELECT {cols} FROM {} {clause}", quote_ident(Self::TABLE))
+    }
+}
+
+/// A value [`Tailable`] rows are ordered by, such as an `i64` rowid.
+pub trait Cursor:
+    Ord
+    + Clone
+    + Debug
+    + Send
+    + Sync
+    + Unpin
+    + 'static
+    + Type<Sqlite>
+    + for<'q> Encode<'q, Sqlite>
+    + for<'r> Decode<'r, Sqlite>
+{
+}
+
+impl<C> Cursor for C where
+    C: Ord
+        + Clone
+        + Debug
+        + Send
+        + Sync
+        + Unpin
+        + 'static
+        + Type<Sqlite>
+        + for<'q> Encode<'q, Sqlite>
+        + for<'r> Decode<'r, Sqlite>
+{
+}
+
+/// A table row whose newly-inserted rows can be tailed in commit order.
+///
+/// Implementing this trait enables you to use the [`SqliteObserver::append`] utility to track
+/// appends to the table.
+///
+/// Important notes:
+///   - [`CURSOR_COLUMN`](Self::CURSOR_COLUMN) must be **unique and increasing among live rows**.
+///   - Note that `AUTOINCREMENT` rows work only if rows do not get deleted. If a row gets deleted,
+///     `AUTOINCREMENT` rows can result in recycling the value, which would cause conflicts. In that
+///     case, implement [`Self::identity`].
+pub trait Tailable: TableSchema {
+    /// The type of [`CURSOR_COLUMN`](Self::CURSOR_COLUMN), such as `i64` for a `rowid`.
+    type Cursor: Cursor;
+
+    /// The name of the cursor column.
+    const CURSOR_COLUMN: &'static str = "rowid";
+
+    /// This row's value of [`CURSOR_COLUMN`](Self::CURSOR_COLUMN).
+    fn cursor(&self) -> Self::Cursor;
+
+    /// A never-reused value, such as a primary key, telling apart rows that reuse a cursor value.
+    fn identity(&self) -> Option<impl Eq> {
+        None::<()>
+    }
+}
+
+/// A table row whose inserts, updates and deletes can be detected by diffing table snapshots.
+///
+/// Implementing this trait enables you to use the [`SqliteObserver::mutate`] utility to track
+/// changes to the table. Rows are matched across snapshots by [`key`](Self::key): a key that
+/// disappears is a delete, a new key an insert, and a key whose row is no longer [`PartialEq`] to
+/// its previous one an update.
+///
+/// Important notes:
+///   - [`key`](Self::key) must be **unique among live rows and stable across updates**. A row whose
+///     key changes is reported as a delete plus an insert.
+///   - Every commit to the database rescans the whole table, so keep observed tables small.
+pub trait Diffable: TableSchema + PartialEq {
+    /// The type rows are matched by across snapshots, such as an `i64` primary key.
+    type Key: Ord + Clone + Send + Sync + 'static;
+
+    /// This row's [`Key`](Self::Key).
+    fn key(&self) -> Self::Key;
+}
 
 /// Whether an observation first emits the rows already in the table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display)]
@@ -135,12 +221,6 @@ pub struct ObserveConfig {
     pub replay: ReplayBehavior,
     #[builder(default = Duration::from_millis(250))]
     pub poll_interval: Duration,
-    #[builder(default = Backoff::Exponential {
-        initial: Duration::from_millis(50),
-        max: Duration::from_secs(5),
-        factor: NonZeroU32::new(2).unwrap(),
-    })]
-    pub reconnect: Backoff,
 }
 
 /// A failure to open or query the observed database.
@@ -206,10 +286,11 @@ impl SqliteObserver {
         &self,
         cfg: ObserveConfig,
     ) -> Result<SqliteTableObserver<RowAppendedEvent<T>>, ObserveError> {
-        let mut source = open(&self.opts).await.map_err(ObserveError::Connect)?;
+        let mut conn =
+            SqliteConnection::connect_with(&self.opts).await.map_err(ObserveError::Connect)?;
         let mut strategy = AppendStrategy::<T>::new();
-        strategy.seed(&mut source.conn, cfg.replay).await.map_err(ObserveError::Seed)?;
-        Ok(SqliteTableObserver::new(run(self.opts.clone(), source, strategy, cfg)))
+        strategy.seed(&mut conn, cfg.replay).await.map_err(ObserveError::Seed)?;
+        Ok(SqliteTableObserver::new(strategy.run(conn, cfg)))
     }
 
     /// Reports inserts, updates and deletes to `T`'s table (see [`Diffable`]).
@@ -223,9 +304,48 @@ impl SqliteObserver {
         &self,
         cfg: ObserveConfig,
     ) -> Result<SqliteTableObserver<RowChangedEvent<T>>, ObserveError> {
-        let mut source = open(&self.opts).await.map_err(ObserveError::Connect)?;
+        let mut conn =
+            SqliteConnection::connect_with(&self.opts).await.map_err(ObserveError::Connect)?;
         let mut strategy = MutateStrategy::<T>::new();
-        strategy.seed(&mut source.conn, cfg.replay).await.map_err(ObserveError::Seed)?;
-        Ok(SqliteTableObserver::new(run(self.opts.clone(), source, strategy, cfg)))
+        strategy.seed(&mut conn, cfg.replay).await.map_err(ObserveError::Seed)?;
+        Ok(SqliteTableObserver::new(strategy.run(conn, cfg)))
+    }
+}
+
+pub struct SqliteTableObserver<E> {
+    inner: Pin<Box<dyn Stream<Item = Result<E, ObserveError>> + Send>>,
+}
+
+impl<E> SqliteTableObserver<E> {
+    fn new(inner: impl Stream<Item = Result<E, ObserveError>> + Send + 'static) -> Self {
+        Self {
+            inner: Box::pin(inner),
+        }
+    }
+}
+
+impl<E> Stream for SqliteTableObserver<E> {
+    type Item = Result<E, ObserveError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::StreamExt;
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[tokio::test]
+    async fn handle_forwards_stream_items() {
+        let inner = futures::stream::iter(vec![Ok::<u32, ObserveError>(1), Ok(2), Ok(3)]);
+        let observer = SqliteTableObserver::new(inner);
+
+        let got: Vec<u32> = observer.map(Result::unwrap).collect().await;
+        assert_eq!(got, vec![1, 2, 3]);
     }
 }
