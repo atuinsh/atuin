@@ -4,6 +4,7 @@ use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::theme::Theme;
+use atuin_common::time::OffsetDateTimeExt;
 use atuin_history::stats::{Stats, compute, split_common_prefix};
 use crossterm::style::{ResetColor, SetAttribute};
 use eyre::Result;
@@ -24,6 +25,7 @@ struct WrappedStats {
 impl WrappedStats {
     #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
     fn new(
+        year: i32,
         settings: &Settings,
         stats: &Stats,
         history: &[atuin_client::history::History],
@@ -105,7 +107,7 @@ impl WrappedStats {
 
         // Error analysis
         let mut command_errors: HashMap<String, (usize, usize)> = HashMap::new(); // (total_uses, errors)
-        let midyear = history[0].timestamp + Duration::days(182); // Split year in half
+        let midyear = OffsetDateTime::get_mid_year(year, settings.timezone);
 
         let mut first_half_commands: HashMap<String, usize> = HashMap::new();
         let mut second_half_commands: HashMap<String, usize> = HashMap::new();
@@ -326,7 +328,7 @@ pub async fn run(
         return Ok(());
     };
     let alias_map = HashMap::new();
-    let wrapped_stats = WrappedStats::new(settings, &stats, &history, &alias_map);
+    let wrapped_stats = WrappedStats::new(year, settings, &stats, &history, &alias_map);
 
     // Print wrapped format
     print_wrapped_header(year);
@@ -397,7 +399,7 @@ mod tests {
         };
         let aliases = HashMap::from([("ll".to_string(), "ls -l".to_string())]);
 
-        let wrapped = WrappedStats::new(&settings, &stats, &history, &aliases);
+        let wrapped = WrappedStats::new(2024, &settings, &stats, &history, &aliases);
 
         assert_eq!(wrapped.first_half_commands, vec![(expected.to_string(), 2)]);
         assert_eq!(wrapped.second_half_commands, vec![(expected.to_string(), 2)]);

@@ -2,9 +2,11 @@
 
 use core::fmt;
 
-use time::OffsetDateTime;
 use time::format_description::FormatItem;
 use time::macros::format_description;
+use time::{Date, Month, OffsetDateTime, Time};
+
+use crate::time::UtcOffsetSpec;
 
 /// Lowest `time::OffsetDateTime` can represent (unix) `-9999-01-01 00:00:00 UTC`.
 const MIN_UNIX_NANOS: i128 = -377_705_116_800 * 1_000_000_000;
@@ -44,8 +46,10 @@ pub trait OffsetDateTimeExt {
     /// datetime.display().ymd_hm()   // 2024-01-22 14:35
     /// ```
     fn display(self) -> OffsetDateTimeDisplay;
-}
 
+    /// Get the midpoint of a year in the given timezone.
+    fn get_mid_year(year: i32, timezone: UtcOffsetSpec) -> OffsetDateTime;
+}
 /// How an [`OffsetDateTimeDisplay`] renders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OffsetDateTimeStyle {
@@ -144,6 +148,22 @@ impl OffsetDateTimeExt for OffsetDateTime {
         OffsetDateTimeDisplay {
             datetime: self,
             style: OffsetDateTimeStyle::default(),
+        }
+    }
+    /// Both standard and leap year midpoints land on July 2nd, but the time of day is different: midnight for leap years, noon for non-leap years.
+    fn get_mid_year(year: i32, timezone: UtcOffsetSpec) -> OffsetDateTime {
+        {
+            let date = Date::from_calendar_date(year, Month::July, 2)
+                .expect("Valid year and month should create a valid date");
+
+            if time::util::is_leap_year(year) {
+                let time = Time::MIDNIGHT;
+                Self::new_in_offset(date, time, timezone.0)
+            } else {
+                let time = Time::from_hms(12, 0, 0)
+                    .expect("Valid hours/minutes/seconds should create a valid time");
+                Self::new_in_offset(date, time, timezone.0)
+            }
         }
     }
 }
