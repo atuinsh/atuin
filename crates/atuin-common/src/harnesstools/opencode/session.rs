@@ -74,6 +74,10 @@
 //!   by [`Session::read`] from opencode's `session`/`message`/`part` projection, and
 //!   [`Sessions::existing`] lists the sessions only the projection holds (see `Backlog`). The
 //!   live tail follows the log alone.
+//! - **opencode 2.0's sessions**, which it keeps in its `session_v2` and `session_message` tables
+//!   and no longer in the event log (see `v2`): polled for rather than tailed, each row delivered
+//!   once it is settled, and read in the same [`OpencodeSession`] as what opencode 1.x wrote of
+//!   the session, whose copies 2.0 made are not delivered again.
 //!
 //! A revert's removals (`message.removed.1`, `message.part.removed.1`) are not read: what was
 //! captured stands. The reverted turns happened and cost their tokens, captured rows cannot be
@@ -114,6 +118,8 @@ use crate::harnesstools::session::{
 use crate::os::fs::FdIdentity;
 use crate::sync::BlockingPool;
 use crate::utils::{env_nonempty, home_dir};
+
+mod v2;
 
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct OpencodeSessions {
@@ -211,16 +217,17 @@ impl Sessions for OpencodeSessions {
             match reads.aggregates().await {
                 Some(aggregates) => {
                     // the sessions of the log, then those only opencode's projection still holds
-                    // (see `Backlog`): older than the log, or than its last wipe
+                    // (see `Backlog`): older than the log, or than its last wipe; then those only
+                    // opencode 2.0 holds (see `v2`)
                     let projected = reads.projected_sessions().await;
-                    let logged: HashSet<Aggregate> = aggregates.iter().cloned().collect();
+                    let mut listed: HashSet<Aggregate> = aggregates.iter().cloned().collect();
                     for aggregate in aggregates {
                         yield Ok(OpencodeSession::detached(aggregate, Arc::clone(&reads)));
                     }
                     match projected {
                         Some(projected) => {
                             for aggregate in projected {
-                                if !logged.contains(&aggregate) {
+                                if listed.insert(aggregate.clone()) {
                                     yield Ok(OpencodeSession::detached(
                                         aggregate,
                                         Arc::clone(&reads),
@@ -230,6 +237,23 @@ impl Sessions for OpencodeSessions {
                         }
                         None => yield Err(RuntimeError::Io(io::Error::other(format!(
                             "{}: cannot read opencode's session projection",
+                            db.display()
+                        )))),
+                    }
+                    match reads.v2_sessions().await {
+                        Some(sessions) => {
+                            for session in sessions {
+                                let aggregate = Aggregate::Text(session.into_bytes());
+                                if listed.insert(aggregate.clone()) {
+                                    yield Ok(OpencodeSession::detached(
+                                        aggregate,
+                                        Arc::clone(&reads),
+                                    ));
+                                }
+                            }
+                        }
+                        None => yield Err(RuntimeError::Io(io::Error::other(format!(
+                            "{}: cannot read opencode 2.0's sessions",
                             db.display()
                         )))),
                     }
@@ -297,6 +321,9 @@ impl Listener for OpencodeListener {
         async_stream::stream! {
             let reads = Arc::new(Reads::new(db.clone()));
             let observe = |source| WatchError::Observe { db: db.clone(), source };
+            // opencode 1.x's sessions are tailed from its event log; opencode 2.0 creates the
+            // table too and never writes to it, so its sessions are polled for (see
+            // `v2::changes`)
             if let Err(err) = reads.require_event_table().await {
                 yield Err(err);
                 return;
@@ -311,32 +338,67 @@ impl Listener for OpencodeListener {
                     return;
                 }
             };
+            let changes = v2::changes(db.clone(), replay);
+            futures::pin_mut!(changes);
             let mut sessions: HashMap<Aggregate, Live> = HashMap::new();
-            while let Some(next) = events.next().await {
-                let row = match next {
-                    Ok(RowAppendedEvent(row)) => row,
-                    // The tail takes the table up again by itself and the rows it could not read
-                    // are still in it, so reporting the failure is all there is to do here --
-                    // ending would drop every session's wake and stop the capture for good.
-                    Err(err) => {
-                        yield Err(observe(err));
-                        continue;
-                    }
-                };
-                let Some(event) = row.event() else { continue };
-                if EventRow::classify(event.kind).is_none() {
-                    continue;
-                }
-                match sessions.entry(event.aggregate.clone()) {
-                    Entry::Occupied(entry) => {
-                        if let Some(session) = entry.into_mut().saw(event.aggregate, event.seq) {
-                            yield Ok(session);
+            loop {
+                tokio::select! {
+                    next = events.next() => {
+                        let row = match next {
+                            Some(Ok(RowAppendedEvent(row))) => row,
+                            // The tail takes the table up again by itself and the rows it could
+                            // not read are still in it, so reporting the failure is all there is
+                            // to do here -- ending would drop every session's wake and stop the
+                            // capture for good.
+                            Some(Err(err)) => {
+                                yield Err(observe(err));
+                                continue;
+                            }
+                            None => break,
+                        };
+                        let Some(event) = row.event() else { continue };
+                        if EventRow::classify(event.kind).is_none() {
+                            continue;
+                        }
+                        match sessions.entry(event.aggregate.clone()) {
+                            Entry::Occupied(entry) => {
+                                if let Some(session) = entry.into_mut().saw(event.aggregate, event.seq) {
+                                    yield Ok(session);
+                                }
+                            }
+                            // a session exists from its first forwarded kind of row on
+                            Entry::Vacant(entry) => {
+                                let live = entry.insert(Live::new(&event, Arc::clone(&reads)));
+                                yield Ok(live.offer(event.aggregate));
+                            }
                         }
                     }
-                    // a session exists from its first forwarded kind of row on
-                    Entry::Vacant(entry) => {
-                        let live = entry.insert(Live::new(&event, Arc::clone(&reads)));
-                        yield Ok(live.offer(event.aggregate));
+                    change = changes.next() => {
+                        let change = match change {
+                            Some(Ok(change)) => change,
+                            // the poll carries on by itself, as the tail does
+                            Some(Err(err)) => {
+                                yield Err(observe(err));
+                                continue;
+                            }
+                            None => break,
+                        };
+                        let aggregate = Aggregate::Text(change.session.clone().into_bytes());
+                        match sessions.entry(aggregate.clone()) {
+                            Entry::Occupied(entry) => {
+                                if let Some(session) = entry.into_mut().poke(&aggregate) {
+                                    yield Ok(session);
+                                }
+                            }
+                            Entry::Vacant(entry) => {
+                                let live = entry.insert(Live::changed(
+                                    &aggregate,
+                                    change,
+                                    Arc::clone(&reads),
+                                ));
+                                yield Ok(live.offer(&aggregate));
+                            }
+                        }
                     }
                 }
             }
@@ -354,28 +416,52 @@ struct Live {
     wake: watch::Sender<i64>,
     /// Where the session has read up to. It lives here rather than in the handle so that a
     /// consumer which drops a session and takes it up again resumes where it stopped.
-    reader: Arc<Mutex<Reader>>,
+    reader: Arc<Mutex<Readers>>,
     /// Handed to the sessions this one is offered as, so that [`Session::read`] can page the
     /// aggregate from the start without disturbing the tail's own place in it.
     reads: Arc<Reads>,
 }
 
 impl Live {
+    /// A session the 1.x event log offered, on its first forwarded row.
     fn new(event: &Event<'_>, reads: Arc<Reads>) -> Self {
         let anchor = Anchor {
             seq: event.seq,
             id: event.id.to_owned(),
             delivered: false,
         };
+        let readers = Readers {
+            legacy: Reader::new(event.aggregate.clone(), Arc::clone(&reads), anchor),
+            next: v2::Reader::from_start(event.aggregate.to_string(), Arc::clone(&reads)),
+        };
         Self {
             wake: watch::Sender::new(event.seq),
-            reader: Arc::new(Mutex::new(Reader::new(
-                event.aggregate.clone(),
-                Arc::clone(&reads),
-                anchor,
-            ))),
+            reader: Arc::new(Mutex::new(readers)),
             reads,
         }
+    }
+
+    /// A session opencode 2.0 offered, on its first change.
+    fn changed(aggregate: &Aggregate, change: v2::Change, reads: Arc<Reads>) -> Self {
+        let next = match change.from {
+            Some(mark) => v2::Reader::at(change.session, Arc::clone(&reads), mark),
+            None => v2::Reader::from_start(change.session, Arc::clone(&reads)),
+        };
+        let readers = Readers {
+            legacy: Reader::from_start(aggregate.clone(), Arc::clone(&reads)),
+            next,
+        };
+        Self {
+            wake: watch::Sender::new(0),
+            reader: Arc::new(Mutex::new(readers)),
+            reads,
+        }
+    }
+
+    /// A change of this session's 2.0 rows: wakes its reader like [`Self::saw`] does.
+    fn poke(&self, id: &Aggregate) -> Option<OpencodeSession> {
+        self.wake.send_modify(|_| {});
+        (self.wake.receiver_count() == 0).then(|| self.offer(id))
     }
 
     fn offer(&self, id: &Aggregate) -> OpencodeSession {
@@ -487,17 +573,15 @@ impl Reader {
     /// Read on past the row `from` names, if it is still the row `from` was taken after: a row
     /// that is gone, or another under the same `seq` after a wipe, leaves the aggregate to be
     /// read again from the start.
-    async fn seek(&mut self, from: Checkpoint) {
+    async fn seek(&mut self, from: v2::Mark) {
         self.ready = true;
-        let Ok(seq) = i64::try_from(from.at) else {
-            return;
-        };
+        let seq = from.seq;
         let head = self
             .reads
             .page(&self.aggregate, seq)
             .await
             .and_then(|rows| rows.into_iter().next())
-            .filter(|row| row.seq == seq && from.names(row.identity().as_bytes()));
+            .filter(|row| row.seq == seq && from.names(row.identity()));
         if head.is_none() {
             tracing::debug!(
                 session = %self.aggregate,
@@ -520,6 +604,14 @@ impl Reader {
     /// Whether the read that ended the last drain failed rather than running out of rows.
     const fn failed(&self) -> bool {
         self.failed
+    }
+
+    /// The last row this session delivered, `None` before the first.
+    fn position(&self) -> Option<(i64, &str)> {
+        self.anchor
+            .as_ref()
+            .filter(|anchor| anchor.delivered)
+            .map(|anchor| (anchor.seq, anchor.id.as_str()))
     }
 
     /// A pass over the rows this session has not delivered yet.
@@ -947,10 +1039,10 @@ struct Drain<'a> {
 }
 
 impl Drain<'_> {
-    /// The session's next message, or `None` when its aggregate has nothing more to read right
-    /// now -- a failed read included, since the rows stay in the table and are read again when
-    /// the session is woken or retried.
-    async fn next(&mut self) -> Option<(Checkpoint, Result<OpencodeMessage, MessageError>)> {
+    /// The session's next message with the `seq` and id of its row, or `None` when its aggregate
+    /// has nothing more to read right now -- a failed read included, since the rows stay in the
+    /// table and are read again when the session is woken or retried.
+    async fn next(&mut self) -> Option<((i64, String), Result<OpencodeMessage, MessageError>)> {
         loop {
             for row in self.page.by_ref() {
                 // the anchor only moves on once the message of the row is in hand: building one
@@ -963,12 +1055,33 @@ impl Drain<'_> {
                     delivered: true,
                 });
                 if let Some(message) = message {
-                    let at = u64::try_from(row.seq).unwrap_or(0);
-                    return Some((Checkpoint::new(at, row.identity().as_bytes()), message));
+                    return Some(((row.seq, row.identity().to_owned()), message));
                 }
             }
             self.page = self.reader.fill().await?;
         }
+    }
+}
+
+/// Both layouts of one session: what opencode 1.x wrote of it, read from the event log, and what
+/// opencode 2.0 wrote, read from its `session_message` rows (see [`v2`]). A session 2.0 copied
+/// from 1.x can be taken up again by either, and is read in both.
+struct Readers {
+    legacy: Reader,
+    next: v2::Reader,
+}
+
+impl Readers {
+    fn from_start(aggregate: Aggregate, reads: Arc<Reads>) -> Self {
+        Self {
+            next: v2::Reader::from_start(aggregate.to_string(), Arc::clone(&reads)),
+            legacy: Reader::from_start(aggregate, reads),
+        }
+    }
+
+    /// Whether the last read of either layout failed.
+    const fn failed(&self) -> bool {
+        self.legacy.failed() || self.next.failed()
     }
 }
 
@@ -1306,7 +1419,7 @@ pub struct OpencodeSession {
     /// The tail's wake for this session; dropping it tells the tail that no consumer holds the
     /// session any more.
     wake: watch::Receiver<i64>,
-    reader: Arc<Mutex<Reader>>,
+    reader: Arc<Mutex<Readers>>,
 }
 
 impl OpencodeSession {
@@ -1317,7 +1430,10 @@ impl OpencodeSession {
         drop(closed);
         Self {
             id: aggregate.to_string(),
-            reader: Arc::new(Mutex::new(Reader::from_start(aggregate.clone(), Arc::clone(&reads)))),
+            reader: Arc::new(Mutex::new(Readers::from_start(
+                aggregate.clone(),
+                Arc::clone(&reads),
+            ))),
             aggregate,
             reads,
             wake,
@@ -1340,11 +1456,13 @@ impl Session for OpencodeSession {
 
     /// The session as it stands, from the start, ending when it runs out of rows: what opencode's
     /// projection holds of it from before its event log began (see `Backlog`), then the
-    /// aggregate's rows. Independent of [`messages`](Self::messages): it reads a place in the log
-    /// of its own, so a session being tailed is undisturbed by it.
+    /// aggregate's rows, then what opencode 2.0 wrote of it (see `v2`), its settled rows only.
+    /// Independent of [`messages`](Self::messages): it reads a place of its own, so a session
+    /// being tailed is undisturbed by it.
     fn read(&self) -> impl Stream<Item = Result<OpencodeMessage, MessageError>> + Send + 'static {
         let reads = Arc::clone(&self.reads);
         let mut reader = Reader::from_start(self.aggregate.clone(), Arc::clone(&reads));
+        let mut next = v2::Reader::from_start(self.id.clone(), Arc::clone(&reads));
         let aggregate = self.aggregate.clone();
         async_stream::stream! {
             let mut incomplete = false;
@@ -1373,16 +1491,21 @@ impl Session for OpencodeSession {
             while let Some((_, message)) = drain.next().await {
                 yield message;
             }
+            let mut pass = next.pass();
+            while let Some((_, message)) = pass.next().await {
+                yield message;
+            }
             // A drain also ends on a failed read; a one-shot read says so rather than passing
             // for the whole session.
-            if incomplete || reader.failed() {
+            if incomplete || reader.failed() || next.failed() {
                 yield Err(MessageError::Incomplete);
             }
         }
     }
 
     /// A checkpoint is a row's `seq`, which opencode assigns contiguously from 0 within one
-    /// incarnation of an aggregate and never reuses within it, and a digest of the row's id.
+    /// incarnation of an aggregate and never reuses within it, and a digest of the row's id; for
+    /// a session opencode 2.0 wrote to, the places in both layouts (see `v2::checkpoint`).
     fn messages_from(
         self,
         from: Option<Checkpoint>,
@@ -1396,24 +1519,37 @@ impl Session for OpencodeSession {
             // and nothing can wake the session again, so it reads out the rows already in the
             // table -- those a failed read did not reach among them -- rather than abandon them
             let mut last = false;
-            // a checkpoint resumes the session past the row it names
-            if let Some(from) = from {
-                reader.lock().await.seek(from).await;
+            {
+                let mut readers = reader.lock().await;
+                // a checkpoint resumes each layout past the row it names there
+                let (legacy, next) = from.map(v2::unpack).unwrap_or_default();
+                if let Some(legacy) = legacy {
+                    readers.legacy.seek(legacy).await;
+                }
+                readers.next.reopen(next);
             }
             loop {
                 let failed = {
                     // the reader is locked for as long as this stream drains it; the only other
                     // taker is the handle this session is offered as again, which cannot exist
                     // before this one is dropped
-                    let mut reader = reader.lock().await;
+                    let mut readers = reader.lock().await;
+                    let Readers { legacy, next } = &mut *readers;
                     // a fresh handle reads at once: the row it was offered on is already in the
                     // table, and its wake was subscribed to after the tail sent it
-                    reader.wake();
-                    let mut drain = reader.drain();
-                    while let Some((at, message)) = drain.next().await {
+                    legacy.wake();
+                    let held = next.mark();
+                    let mut drain = legacy.drain();
+                    while let Some(((seq, id), message)) = drain.next().await {
+                        let at = v2::checkpoint(Some((seq, &id)), held);
                         yield message.map(|message| (at, message));
                     }
-                    reader.failed()
+                    let mut pass = next.pass();
+                    while let Some((mark, message)) = pass.next().await {
+                        let at = v2::checkpoint(legacy.position(), mark);
+                        yield message.map(|message| (at, message));
+                    }
+                    readers.failed()
                 };
                 if last {
                     break;
@@ -1817,7 +1953,8 @@ enum Body {
     },
     /// A session's info.
     Session(Value),
-    /// A `session.next.*` row (see [`Reader::next`]).
+    /// A `session.next.*` row (see [`Reader::next`]), or a row of opencode 2.0's
+    /// `session_message` projection (see [`v2`]): both are messages whole.
     Next(Next),
     /// A durable event this module does not model, whole.
     Raw(Value),
@@ -2080,14 +2217,16 @@ impl OpencodeMessage {
 
 impl Message for OpencodeMessage {
     /// A part's id; a failed message's id; for a session's info, its id and title, so that a
-    /// title is delivered once however many rows repeat it.
+    /// title is delivered once however many rows repeat it -- and one of opencode 2.0's sessions
+    /// has none until one is generated.
     fn id(&self) -> Option<MessageId> {
         let id = match &self.body {
             Body::Part(value) | Body::Raw(value) => value["id"].as_str()?.to_owned(),
             Body::Failure { id, .. } | Body::Next(Next { id, .. }) => id.clone(),
-            Body::Session(info) => {
-                format!("{}:title:{}", info["id"].as_str()?, info["title"].as_str()?)
-            }
+            Body::Session(info) => match info["title"].as_str() {
+                Some(title) => format!("{}:title:{title}", info["id"].as_str()?),
+                None => format!("{}:session", info["id"].as_str()?),
+            },
         };
         Some(MessageId::from(id))
     }
@@ -3425,7 +3564,7 @@ mod tests {
         let written: Vec<Role> =
             messages.iter().map(|(_, role)| OpencodeMessage::role_of(role)).collect();
         assert_eq!(roles, written);
-        let kept = reader.lock().await.infos.0.len();
+        let kept = reader.lock().await.legacy.infos.0.len();
         assert!(
             kept <= Infos::CAP,
             "a session that read {} messages kept {kept} of their roles",
