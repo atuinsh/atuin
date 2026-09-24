@@ -198,7 +198,10 @@ fn apply_shell_filter(sql: &mut SqlBuilder, shells: OrFilter<&[String]>) {
 /// parse again against a `now` in the corrected offset. One extra pass suffices because a DST
 /// transition moves the offset by at most a couple of hours -- far short of the gap between DST
 /// periods -- so it cannot flip which period the approximate instant landed in.
-fn parse_date_with_spec(
+///
+/// Exposed beyond this module so other offset-less-date-string parsing (e.g. `history dedup
+/// --before`) can share the exact same DST-correct resolution instead of reimplementing it.
+pub fn parse_date_with_spec(
     input: &str,
     now: OffsetDateTime,
     timezone: UtcOffsetSpec,
