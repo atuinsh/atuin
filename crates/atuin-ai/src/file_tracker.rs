@@ -1,6 +1,10 @@
-//! Tracks which files have been read in a single [`TreeWatcher`].
+//! Tracks which files have been read in the current session, for freshness
+//! checking before edits.
 //!
-//! The tracker records the content hash and mtime of each file at the time it was last read.
+//! The tracker records the content hash and mtime of each file at the time
+//! it was last read. Before an edit, the tracker verifies the file hasn't
+//! changed since the last read — catching both external modifications and
+//! concurrent tool calls.
 //!
 //! Persisted as JSON in session metadata so it survives across CLI
 //! invocations within the same logical session.
@@ -9,7 +13,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use atuin_common::time::SystemTimeExt;
+use easy_cast::Conv;
 use eyre::Result;
 use serde::{Deserialize, Serialize};
 
@@ -46,8 +50,8 @@ impl FileReadTracker {
     /// Record that a file was read. Call this after a successful `read_file`
     /// execution. The `path` should be canonical (absolute, tilde-expanded).
     pub fn record_read(&mut self, path: PathBuf, content: &[u8], mtime: SystemTime) {
-        let content_hash = Self::hash_content(content);
-        let mtime_ms = mtime.saturating_unix_millis();
+        let content_hash = hash_content(content);
+        let mtime_ms = system_time_to_ms(mtime);
 
         self.reads.insert(path, FileReadState {
             content_hash,
@@ -70,7 +74,7 @@ impl FileReadTracker {
         };
 
         let current_mtime_ms =
-            metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH).saturating_unix_millis();
+            system_time_to_ms(metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH));
 
         // Fast path: mtime unchanged → fresh
         if current_mtime_ms == state.mtime_ms {
@@ -79,7 +83,7 @@ impl FileReadTracker {
 
         // Mtime changed — re-hash to confirm
         let content = std::fs::read(path)?;
-        let current_hash = Self::hash_content(&content);
+        let current_hash = hash_content(&content);
 
         if current_hash == state.content_hash {
             Ok(FreshnessCheck::Fresh)
@@ -90,8 +94,8 @@ impl FileReadTracker {
 
     /// Update the tracker entry after a successful edit (new content written).
     pub fn update_after_edit(&mut self, path: &Path, new_content: &[u8], new_mtime: SystemTime) {
-        let content_hash = Self::hash_content(new_content);
-        let mtime_ms = new_mtime.saturating_unix_millis();
+        let content_hash = hash_content(new_content);
+        let mtime_ms = system_time_to_ms(new_mtime);
 
         self.reads.insert(path.to_path_buf(), FileReadState {
             content_hash,
@@ -108,10 +112,14 @@ impl FileReadTracker {
     pub fn from_json(json: &str) -> Result<Self> {
         Ok(serde_json::from_str(json)?)
     }
+}
 
-    fn hash_content(content: &[u8]) -> u64 {
-        xxhash_rust::xxh3::xxh3_64(content)
-    }
+fn system_time_to_ms(t: SystemTime) -> i64 {
+    t.duration_since(SystemTime::UNIX_EPOCH).map(|d| i64::conv(d.as_millis())).unwrap_or(0)
+}
+
+fn hash_content(content: &[u8]) -> u64 {
+    xxhash_rust::xxh3::xxh3_64(content)
 }
 
 #[cfg(test)]
