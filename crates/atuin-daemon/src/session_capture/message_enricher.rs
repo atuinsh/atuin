@@ -4,7 +4,7 @@ use atuin_client::ai_session::{
     HarnessKind, HarnessSession, Message, NativeSessionId, Session, SourceId,
 };
 use atuin_common::harnesstools::session::{
-    AnyMessage, Message as HarnessMessage, SessionId, TitleSource,
+    AnyMessage, Message as HarnessMessage, SessionId, TitleChange, TitleSource,
 };
 use atuin_domain::record::RecordId;
 use time::OffsetDateTime;
@@ -45,13 +45,16 @@ impl MessageEnricher {
     }
 
     /// Warm a session's bookkeeping from what the sidecar holds, for a transcript about to be
-    /// read from past its start: its row (title, parent), its newest stored message (the
-    /// timestamp an untimed line takes) and the source ids of its stored content-addressed rows
-    /// (so identical id-less lines keep counting where the earlier read left off).
+    /// read from past its start: its row (parent, and the title when no title change is
+    /// stored), every title change its lines made (replayed, so each source's title is known
+    /// and a later clear falls back to the next), its newest stored message (the timestamp an
+    /// untimed line takes) and the source ids of its stored content-addressed rows (so
+    /// identical id-less lines keep counting where the earlier read left off).
     pub fn resume(
         &mut self,
         session: &SessionId,
         row: Option<&Session>,
+        titles: &[TitleChange],
         last: Option<&Message>,
         synthetic: &[SourceId],
     ) {
@@ -62,11 +65,18 @@ impl MessageEnricher {
                 *next = (*next).max(ordinal + 1);
             }
         }
+        let mut replayed = BTreeMap::new();
+        for change in titles {
+            apply(&mut replayed, change.clone());
+        }
+        if titles.is_empty()
+            && let Some((source, title)) =
+                row.and_then(|r| Some((r.title_source?, r.title.clone()?)))
+        {
+            replayed.insert(source, title);
+        }
         self.sessions.insert(session.to_string(), SessionState {
-            titles: row
-                .and_then(|r| Some((r.title_source?, r.title.clone()?)))
-                .into_iter()
-                .collect(),
+            titles: replayed,
             last_ts: last.map(|m| m.timestamp),
             parent: row.and_then(|r| r.parent.as_ref().map(|p| p.session.clone())),
             occurrences,
@@ -84,10 +94,7 @@ impl MessageEnricher {
             state.last_ts = Some(ts);
         }
         if let Some(change) = m.title() {
-            match change.text {
-                Some(text) => state.titles.insert(change.source, text),
-                None => state.titles.remove(&change.source),
-            };
+            apply(&mut state.titles, change);
         }
         if let Some(parent) = m.parent_session().filter(|p| p != session) {
             state.parent = Some(NativeSessionId::from(parent.to_string()));
@@ -106,8 +113,13 @@ impl MessageEnricher {
         ready
     }
 
-    /// The transcript has ended: rows still waiting for a timestamp take capture time, as a
-    /// session with no timestamped line at all has nothing better.
+    /// Whether rows of `session` are waiting for a timestamp (see [`Self::finish`]).
+    pub fn has_untimed(&self, session: &SessionId) -> bool {
+        self.sessions.get(session.as_ref()).is_some_and(|state| !state.untimed.is_empty())
+    }
+
+    /// The transcript has ended, or gone quiet: rows still waiting for a timestamp take capture
+    /// time, as a session with no timestamped line at all has nothing better.
     pub fn finish(&mut self, session: &SessionId) -> Vec<Message> {
         let Some(state) = self.sessions.get_mut(session.as_ref()) else {
             return Vec::new();
@@ -196,8 +208,17 @@ fn build(
             .git_branch(git_branch)
             .session_title(state.title().map(|(_, text)| text.to_owned()))
             .session_title_source(state.title().map(|(source, _)| source))
+            .title_change(m.title())
             .build(),
     )
+}
+
+/// A title set or cleared, applied to the newest title of each source.
+fn apply(titles: &mut BTreeMap<TitleSource, String>, change: TitleChange) {
+    match change.text {
+        Some(text) => titles.insert(change.source, text),
+        None => titles.remove(&change.source),
+    };
 }
 
 /// A hash of everything a row takes from an id-less line, so lines that differ in any of it
@@ -570,7 +591,7 @@ mod tests {
             .role(Role::Assistant)
             .content(vec![])
             .build();
-        n.resume(&session(), Some(&row), Some(&last), &[]);
+        n.resume(&session(), Some(&row), &[], Some(&last), &[]);
 
         let generated = ccode(&serde_json::json!({"type": "ai-title", "aiTitle": "Draft"}));
         let msg = n.capture(&session(), &generated).pop().unwrap();
@@ -659,7 +680,7 @@ mod tests {
         let untimed = ccode(&serde_json::json!({"type": "ai-title", "aiTitle": "Renamed"}));
         let first = MessageEnricher::source_id(&session(), &untimed);
         let (hash, _) = parse_synthetic(&first).unwrap();
-        n.resume(&session(), Some(&row), Some(&last), &[first, synthetic_id(hash, 1)]);
+        n.resume(&session(), Some(&row), &[], Some(&last), &[first, synthetic_id(hash, 1)]);
 
         let msg = n.capture(&session(), &untimed).pop().unwrap();
         assert_eq!(msg.timestamp, ts);

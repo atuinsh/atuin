@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use atuin_common::db::sqlite::fts::{TextHighlighter, match_expression};
 use atuin_common::db::sqlite::{Sqlite, SqliteOpenOrCreateError};
 use atuin_common::db::{self};
-use atuin_common::harnesstools::session::{Checkpoint, Content, Role, TitleSource, Usage};
+use atuin_common::harnesstools::session::{
+    Checkpoint, Content, Role, TitleChange, TitleSource, Usage,
+};
 use atuin_domain::record::RecordId;
 use futures::{Stream, StreamExt, TryStreamExt};
 use sqlx::SqliteConnection;
@@ -101,6 +103,7 @@ struct MessageRow {
     stop_reason: Option<String>,
     usage_present: i64,
     turn_id: Option<String>,
+    title_change: Option<String>,
 }
 
 /// Input, output, cache read, cache write, reasoning: the `usage_*` columns in order.
@@ -233,6 +236,7 @@ impl AiSessionDatabase {
         let content_json = serde_json::to_string(&msg.content)?;
         let (content, content_z) = Self::split_content(content_json)?;
         let stop_reason_json = msg.stop_reason.as_ref().map(serde_json::to_string).transpose()?;
+        let title_change = msg.title_change.as_ref().map(serde_json::to_string).transpose()?;
         let [usage_input, usage_output, usage_cache_read, usage_cache_write, _] =
             Self::fold_usage(msg.usage.as_ref());
         // Unlike the others, a row's reasoning stays NULL when unreported: most harnesses never
@@ -246,8 +250,8 @@ impl AiSessionDatabase {
                 id, harness, session_id, source_id, parent_harness, parent_session_id,
                 parent_source_id, timestamp, role, content, content_z, cwd, git_branch, model,
                 usage_input, usage_output, usage_cache_read, usage_cache_write,
-                usage_reasoning, stop_reason, usage_present, turn_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                usage_reasoning, stop_reason, usage_present, turn_id, title_change
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(harness, session_id, source_id) DO NOTHING",
         )
         .bind(id)
@@ -272,6 +276,7 @@ impl AiSessionDatabase {
         .bind(stop_reason_json)
         .bind(i64::from(msg.usage.is_some()))
         .bind(msg.turn_id.as_deref())
+        .bind(title_change)
         .execute(&mut *tx)
         .await?;
 
@@ -442,6 +447,23 @@ impl AiSessionDatabase {
     }
 
     /// The source ids of a session's rows that start with `prefix`.
+    /// Every title the session's lines set or cleared, oldest first: replayed, they give each
+    /// source's current title again.
+    pub async fn title_changes(
+        &self,
+        session: &HarnessSession,
+    ) -> Result<Vec<TitleChange>, DbError> {
+        let rows: Vec<String> = db::query_scalar(
+            "SELECT title_change FROM messages WHERE harness = ? AND session_id = ? AND \
+             title_change IS NOT NULL ORDER BY timestamp, rowid",
+        )
+        .bind(session.harness as i64)
+        .bind(session.session.as_ref())
+        .fetch_all(self.db.pool())
+        .await?;
+        Ok(rows.iter().filter_map(|json| serde_json::from_str(json).ok()).collect())
+    }
+
     pub async fn source_ids_with_prefix(
         &self,
         session: &HarnessSession,
@@ -507,8 +529,8 @@ impl AiSessionDatabase {
             "SELECT id, harness, session_id, source_id, parent_harness, parent_session_id, \
              parent_source_id, timestamp, role, content, content_z, cwd, git_branch, model, \
              usage_input, usage_output, usage_cache_read, usage_cache_write, usage_reasoning, \
-             stop_reason, usage_present, turn_id FROM messages WHERE harness = ? AND session_id = \
-             ? ORDER BY timestamp DESC, id DESC LIMIT 1",
+             stop_reason, usage_present, turn_id, title_change FROM messages WHERE harness = ? \
+             AND session_id = ? ORDER BY timestamp DESC, id DESC LIMIT 1",
         )
         .bind(session.harness as i64)
         .bind(session.session.as_ref())
@@ -571,7 +593,7 @@ impl AiSessionDatabase {
                 "SELECT id, harness, session_id, source_id, parent_harness, parent_session_id, \
                  parent_source_id, timestamp, role, content, content_z, cwd, git_branch, \
                  model, usage_input, usage_output, usage_cache_read, usage_cache_write, \
-                 usage_reasoning, stop_reason, usage_present, turn_id FROM messages WHERE harness = ? AND \
+                 usage_reasoning, stop_reason, usage_present, turn_id, title_change FROM messages WHERE harness = ? AND \
                  session_id = ? \
                  ORDER BY timestamp, id",
             )
@@ -698,9 +720,9 @@ impl AiSessionDatabase {
                  m.parent_harness, m.parent_session_id, m.parent_source_id, m.timestamp, m.role, \
                  m.content, m.content_z, m.cwd, m.git_branch, m.model, m.usage_input, \
                  m.usage_output, m.usage_cache_read, m.usage_cache_write, m.usage_reasoning, \
-                 m.stop_reason, m.usage_present, m.turn_id, s.title AS session_title FROM \
-                 messages m LEFT JOIN sessions s ON s.harness = m.harness AND s.session_id = \
-                 m.session_id WHERE m.rowid > ? ORDER BY m.rowid LIMIT ?",
+                 m.stop_reason, m.usage_present, m.turn_id, m.title_change, s.title AS \
+                 session_title FROM messages m LEFT JOIN sessions s ON s.harness = m.harness AND \
+                 s.session_id = m.session_id WHERE m.rowid > ? ORDER BY m.rowid LIMIT ?",
             )
             .bind(watermark)
             .bind(REINDEX_CHUNK)
@@ -1203,6 +1225,9 @@ impl AiSessionDatabase {
             }))
             .stop_reason(stop_reason)
             .turn_id(row.turn_id)
+            .title_change(
+                row.title_change.as_deref().and_then(|json| serde_json::from_str(json).ok()),
+            )
             .build())
     }
 

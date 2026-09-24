@@ -27,6 +27,8 @@ CREATE TABLE messages (
     -- The model call this row came from; groups the rows one response is split into, across
     -- every session a harness copied them into.
     turn_id TEXT,
+    -- The title the row's own line set or cleared (JSON TitleChange), replayed on resume.
+    title_change TEXT,
     UNIQUE (harness, session_id, source_id)
 );
 

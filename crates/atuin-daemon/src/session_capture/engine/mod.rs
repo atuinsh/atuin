@@ -2,13 +2,16 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use atuin_client::ai_session::{HarnessKind, HarnessSession, NativeSessionId};
+use atuin_client::ai_session::{HarnessKind, HarnessSession, Message, NativeSessionId};
 use atuin_common::harnesstools::AnyHarness;
-use atuin_common::harnesstools::session::{Checkpoint, RuntimeError, SessionEvent, SessionId};
+use atuin_common::harnesstools::session::{
+    AnyMessage, CaptureError, Checkpoint, RuntimeError, SessionEvent, SessionId,
+};
 use atuin_common::sync::BlockingPool;
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use parking_lot::Mutex;
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
 use super::Sink;
 use super::message_enricher::{MessageEnricher, SYNTHETIC};
@@ -16,6 +19,11 @@ use super::message_enricher::{MessageEnricher, SYNTHETIC};
 /// Backoff bounds for retrying a harness listener whose session directory does not exist yet.
 const LISTENER_RETRY_START: Duration = Duration::from_secs(2);
 const LISTENER_RETRY_MAX: Duration = Duration::from_secs(60);
+
+/// How long a live session with rows waiting for a timestamp may stay quiet before they are
+/// stored with capture time: a transcript of untimed lines alone (Claude Code title lines)
+/// would otherwise hold them until the daemon stops, and never checkpoint past them.
+const UNTIMED_GRACE: Duration = Duration::from_secs(5);
 
 pub struct SessionCaptureEngine {
     listeners: Vec<JoinHandle<()>>,
@@ -75,53 +83,99 @@ impl SessionCaptureEngine {
                         }
                     }
                 };
-                let mut events = listener.events(checkpoint);
-                let mut enricher = MessageEnricher::new(kind);
-                // Sessions with a failed append: their checkpoint must not move past the line
-                // that was lost, or a restart would never re-read it.
-                let mut stuck: HashSet<SessionId> = HashSet::new();
-
-                while let Some(ev) = events.next().await {
-                    match ev {
-                        Ok(SessionEvent {
-                            session,
-                            checkpoint,
-                            message,
-                        }) => {
-                            let opened = opened.lock().remove(&session);
-                            if let Some(from) = opened {
-                                let start = Start::of(from, checkpoint);
-                                // A new read retries whatever a failed append lost.
-                                stuck.remove(&session);
-                                warm(&sink, &mut enricher, &session, start).await;
-                            }
-                            let rows = enricher.capture(&session, &message);
-                            if rows.is_empty() {
-                                continue;
-                            }
-                            for msg in rows {
-                                if let Err(e) = sink.append(msg).await {
-                                    tracing::warn!(?e, "failed to capture ai-session message");
-                                    stuck.insert(session.clone());
-                                }
-                            }
-                            if stuck.contains(&session) {
-                                continue;
-                            }
-                            // ponytail: one checkpoint write per row; batch per session on idle
-                            // if it shows up in profiles.
-                            let handle = enricher.handle(&session);
-                            if let Err(e) = sink.sidecar.set_checkpoint(&handle, checkpoint).await {
-                                tracing::warn!(?e, "failed to record ai-session checkpoint");
-                            }
-                        }
-                        Err(e) => tracing::warn!(?e, "capture error"),
-                    }
-                }
+                capture(kind, &sink, listener.events(checkpoint), &opened, UNTIMED_GRACE).await;
             }));
         }
 
         Self { listeners }
+    }
+}
+
+/// Capture every event of one harness's listener until it ends. Rows waiting for a timestamp
+/// are stored once their session has been quiet for `grace` (see [`UNTIMED_GRACE`]).
+async fn capture(
+    kind: HarnessKind,
+    sink: &Sink,
+    events: impl Stream<Item = Result<SessionEvent<AnyMessage>, CaptureError>>,
+    opened: &Opened,
+    grace: Duration,
+) {
+    futures::pin_mut!(events);
+    let mut enricher = MessageEnricher::new(kind);
+    // Sessions with a failed append: their checkpoint must not move past the line that was
+    // lost, or a restart would never re-read it.
+    let mut stuck: HashSet<SessionId> = HashSet::new();
+    // Sessions holding rows that wait for a timestamp: when they may be flushed, and the
+    // checkpoint past the last line seen.
+    let mut untimed: HashMap<SessionId, (Instant, Checkpoint)> = HashMap::new();
+
+    loop {
+        let due = untimed.values().map(|(at, _)| *at).min();
+        tokio::select! {
+            ev = events.next() => {
+                let Some(ev) = ev else { break };
+                let SessionEvent { session, checkpoint, message } = match ev {
+                    Ok(ev) => ev,
+                    Err(e) => {
+                        tracing::warn!(?e, "capture error");
+                        continue;
+                    }
+                };
+                let opened = opened.lock().remove(&session);
+                if let Some(from) = opened {
+                    let start = Start::of(from, checkpoint);
+                    // A new read retries whatever a failed append lost.
+                    stuck.remove(&session);
+                    untimed.remove(&session);
+                    warm(sink, &mut enricher, &session, start).await;
+                }
+                let rows = enricher.capture(&session, &message);
+                if rows.is_empty() {
+                    if enricher.has_untimed(&session) {
+                        untimed.insert(session, (Instant::now() + grace, checkpoint));
+                    }
+                    continue;
+                }
+                untimed.remove(&session);
+                store(sink, &enricher, &mut stuck, &session, rows, checkpoint).await;
+            }
+            () = tokio::time::sleep_until(due.unwrap_or_else(Instant::now)), if due.is_some() => {
+                let now = Instant::now();
+                let quiet: Vec<SessionId> =
+                    untimed.iter().filter(|(_, (at, _))| *at <= now).map(|(s, _)| s.clone()).collect();
+                for session in quiet {
+                    let Some((_, checkpoint)) = untimed.remove(&session) else { continue };
+                    let rows = enricher.finish(&session);
+                    store(sink, &enricher, &mut stuck, &session, rows, checkpoint).await;
+                }
+            }
+        }
+    }
+}
+
+/// Append a session's rows, then checkpoint just past the line that completed them unless an
+/// append failed.
+async fn store(
+    sink: &Sink,
+    enricher: &MessageEnricher,
+    stuck: &mut HashSet<SessionId>,
+    session: &SessionId,
+    rows: Vec<Message>,
+    checkpoint: Checkpoint,
+) {
+    for msg in rows {
+        if let Err(e) = sink.append(msg).await {
+            tracing::warn!(?e, "failed to capture ai-session message");
+            stuck.insert(session.clone());
+        }
+    }
+    if stuck.contains(session) {
+        return;
+    }
+    // ponytail: one checkpoint write per row; batch per session on idle if it shows up in
+    // profiles.
+    if let Err(e) = sink.sidecar.set_checkpoint(&enricher.handle(session), checkpoint).await {
+        tracing::warn!(?e, "failed to record ai-session checkpoint");
     }
 }
 
@@ -188,7 +242,11 @@ pub(super) async fn warm(
             tracing::warn!(?e, %session, "failed to load the ai-session synthetic ids");
             Vec::new()
         });
-    enricher.resume(session, row.as_ref(), last.as_ref(), &synthetic);
+    let titles = sink.sidecar.title_changes(&handle).await.unwrap_or_else(|e| {
+        tracing::warn!(?e, %session, "failed to load the ai-session title changes");
+        Vec::new()
+    });
+    enricher.resume(session, row.as_ref(), &titles, last.as_ref(), &synthetic);
 }
 
 /// The checkpoint stored for a session, if any; the session checks it against its source itself.
@@ -222,6 +280,92 @@ mod tests {
 
     const fn at(at: u64) -> Checkpoint {
         Checkpoint { at, digest: 7 }
+    }
+
+    async fn sink() -> Sink {
+        use atuin_client::ai_session::{AiSessionDatabase, AiSessionStore};
+        use atuin_client::record::sqlite_store::SqliteStore;
+        use atuin_common::encryption::paseto_v4::Key;
+        use atuin_domain::record::HostId;
+
+        let store = SqliteStore::in_memory(super::super::NOP_STORE_TIMEOUT).await.unwrap();
+        let records = AiSessionStore::builder()
+            .store(store)
+            .host_id(HostId(atuin_common::utils::uuid_v7()))
+            .key(Key::generate())
+            .build();
+        Sink::new(records, AiSessionDatabase::in_memory().await.unwrap())
+    }
+
+    /// After a restart the session still knows every source's title: a generated title, then
+    /// a name, then the name cleared once capture resumed, shows the generated title again.
+    #[rstest]
+    #[tokio::test]
+    async fn a_resumed_session_falls_back_to_a_title_from_before_the_restart() {
+        let sink = sink().await;
+        let session = SessionId::from("s1".to_owned());
+        let line = |raw: serde_json::Value| AnyMessage::Ccode(serde_json::from_value(raw).unwrap());
+        let title = |kind: &str, field: &str, text: &str| {
+            line(serde_json::json!({"type": kind, (field): text, "sessionId": "s1"}))
+        };
+
+        let mut before = MessageEnricher::new(HarnessKind::ClaudeCode);
+        for m in [
+            line(serde_json::json!({
+                "type": "user", "uuid": "u0", "sessionId": "s1",
+                "timestamp": "2026-09-18T10:00:00Z", "message": {"role": "user", "content": "hi"},
+            })),
+            title("ai-title", "aiTitle", "Draft"),
+            title("custom-title", "customTitle", "Mine"),
+        ] {
+            for row in before.capture(&session, &m) {
+                sink.append(row).await.unwrap();
+            }
+        }
+
+        let mut after = MessageEnricher::new(HarnessKind::ClaudeCode);
+        warm(&sink, &mut after, &session, Start::Resumed).await;
+        let cleared =
+            after.capture(&session, &title("custom-title", "customTitle", "")).pop().unwrap();
+        assert_eq!(cleared.session_title.as_deref(), Some("Draft"));
+    }
+
+    /// A live transcript of untimed lines alone (a Claude Code title line) is stored, and
+    /// checkpointed past, once it has been quiet for the grace period -- not only when the
+    /// daemon stops.
+    #[rstest]
+    #[tokio::test]
+    async fn a_quiet_session_of_untimed_lines_is_stored() {
+        const GRACE: Duration = Duration::from_millis(300);
+        let sink = sink().await;
+        let session = SessionId::from("s1".to_owned());
+        let handle = handle_of(HarnessKind::ClaudeCode, &session);
+        let title = AnyMessage::Ccode(
+            serde_json::from_value(serde_json::json!({
+                "type": "ai-title", "aiTitle": "Draft", "sessionId": "s1",
+            }))
+            .unwrap(),
+        );
+        let (tx, rx) = futures::channel::mpsc::unbounded();
+        tx.unbounded_send(Ok(SessionEvent {
+            session,
+            checkpoint: at(40),
+            message: title,
+        }))
+        .unwrap();
+
+        let opened = Opened::default();
+        let run = capture(HarnessKind::ClaudeCode, &sink, rx, &opened, GRACE);
+        let check = async {
+            tokio::time::sleep(GRACE / 10).await;
+            assert!(sink.sidecar.get_session(&handle).await.unwrap().is_none(), "flushed early");
+            tokio::time::sleep(GRACE * 2).await;
+            let row = sink.sidecar.get_session(&handle).await.unwrap().expect("never stored");
+            assert_eq!(row.title.as_deref(), Some("Draft"));
+            assert_eq!(sink.sidecar.checkpoint(&handle).await.unwrap(), Some(at(40)));
+            drop(tx);
+        };
+        tokio::join!(run, check);
     }
 
     /// Byte offsets and row seqs alike: only a first event strictly past the checkpoint handed

@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 use atuin_common::harnesstools::AnyHarness;
-use atuin_common::harnesstools::session::{Content, Role, StopReason, TitleSource, Usage};
+use atuin_common::harnesstools::session::{
+    Content, Role, StopReason, TitleChange, TitleSource, Usage,
+};
 use atuin_common::string::highlighted::HighlightedString;
 use atuin_domain::record::RecordId;
 use derive_more::{AsRef, Display, From, Into};
@@ -81,6 +83,11 @@ pub struct Message {
     #[builder(default)]
     #[serde(default)]
     pub session_title_source: Option<TitleSource>,
+    /// The title this row's own line set or cleared. Replayed on resume, so every source's
+    /// title is known again and a cleared one can fall back to the next.
+    #[builder(default)]
+    #[serde(default)]
+    pub title_change: Option<TitleChange>,
     /// The model call this row came from, unique within the harness and the same in every
     /// session a harness copies the row into. Groups the rows one response is split into, so
     /// their usage counts once.
