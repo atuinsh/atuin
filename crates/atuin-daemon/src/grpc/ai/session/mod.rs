@@ -8,9 +8,9 @@ use tokio_stream::Stream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};
 
-use crate::grpc::ai_agent::pb as agent;
-use crate::grpc::ai_session::pb::ai_session_server::AiSession as GrpcService;
-use crate::grpc::ai_session::pb::{
+use crate::grpc::ai::agent::pb as agent;
+use crate::grpc::ai::session::pb::ai_session_server::AiSession as GrpcService;
+use crate::grpc::ai::session::pb::{
     GetSessionEvent, GetSessionRequest, GetTranscriptChunk, GetTranscriptRequest,
     HarnessFilterRequest, ImportSessionsEvent, ImportSessionsProgress, ImportSessionsRequest,
     ImportSessionsSummary, ListSessionsRequest, SearchSessionsMatch, SearchSessionsRequest,

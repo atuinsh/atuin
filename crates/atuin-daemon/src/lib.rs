@@ -10,7 +10,7 @@ use atuin_client::settings::watcher::global_settings_watcher;
 use atuin_common::sync::BlockingPool;
 use eyre::Result;
 
-use crate::grpc::ai_session::pb::ai_session_server::AiSessionServer;
+use crate::grpc::ai::session::pb::ai_session_server::AiSessionServer;
 use crate::grpc::history::pb::history_server::HistoryServer;
 use crate::session_capture::AiHarnessSessionCapture;
 

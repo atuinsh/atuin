@@ -11,8 +11,8 @@ use std::io::{self, IsTerminal, Write};
 use atuin_client::settings::Settings;
 use atuin_common::string::highlighted::{HighlightedStr, HighlightedTextProto};
 use atuin_daemon::AiClient;
-use atuin_daemon::grpc::ai_agent::pb as agent;
-use atuin_daemon::grpc::ai_session::pb::{
+use atuin_daemon::grpc::ai::agent::pb as agent;
+use atuin_daemon::grpc::ai::session::pb::{
     SearchSessionsMatch, get_session_event, import_sessions_event, tail_sessions_event,
 };
 use chrono::{DateTime, Utc};

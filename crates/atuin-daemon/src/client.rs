@@ -21,11 +21,11 @@ use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
 use tracing::{Level, instrument, span};
 
-use crate::grpc::ai_agent::pb::{
+use crate::grpc::ai::agent::pb::{
     HarnessKind as AiHarnessKind, HarnessSession as AiHarnessSession, Session as AiSession,
 };
-use crate::grpc::ai_session::pb::ai_session_client::AiSessionClient as AiSessionServiceClient;
-use crate::grpc::ai_session::pb::{
+use crate::grpc::ai::session::pb::ai_session_client::AiSessionClient as AiSessionServiceClient;
+use crate::grpc::ai::session::pb::{
     GetSessionEvent, GetSessionRequest, GetTranscriptChunk, GetTranscriptRequest,
     ImportSessionsEvent, ImportSessionsRequest, ListSessionsRequest, SearchSessionsMatch,
     SearchSessionsRequest, TailSessionsEvent, TailSessionsRequest,

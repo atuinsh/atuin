@@ -434,10 +434,10 @@ mod tests {
         let mut messages = Box::pin(rebuilt.messages(&msg.session));
         let stored = messages.next().await.unwrap().unwrap();
         assert_eq!(stored.content, msg.content);
-        let block = crate::grpc::ai_agent::pb::ContentBlock::from(stored.content[0].clone());
+        let block = crate::grpc::ai::agent::pb::ContentBlock::from(stored.content[0].clone());
         assert_eq!(
             block.block,
-            Some(crate::grpc::ai_agent::pb::content_block::Block::Thinking(label.to_owned()))
+            Some(crate::grpc::ai::agent::pb::content_block::Block::Thinking(label.to_owned()))
         );
         let mut transcript = Box::pin(rebuilt.transcript(&msg.session));
         assert_eq!(transcript.next().await.unwrap().unwrap(), format!("assistant: {label}\n"));

@@ -6,8 +6,8 @@ use atuin_common::string::NonBlankString;
 use atuin_common::string::highlighted::{FromHighlightedTextProtoError, HighlightedStr};
 use atuin_common::time::UtcOffsetExt;
 use atuin_daemon::AiClient;
-use atuin_daemon::grpc::ai_agent::pb::HarnessKind;
-use atuin_daemon::grpc::ai_session::pb::SearchSessionsMatch;
+use atuin_daemon::grpc::ai::agent::pb::HarnessKind;
+use atuin_daemon::grpc::ai::session::pb::SearchSessionsMatch;
 use futures::TryStreamExt;
 use serde::Deserialize;
 
@@ -144,7 +144,7 @@ impl SessionHit<'_> {
 #[cfg(test)]
 mod tests {
     use atuin_common::string::highlighted::TextHighlighter;
-    use atuin_daemon::grpc::ai_agent::pb::Session;
+    use atuin_daemon::grpc::ai::agent::pb::Session;
     use rstest::rstest;
     use serde_json::json;
 

@@ -10,7 +10,7 @@ use atuin_client::ai_session::{HarnessKind, HarnessSession, SessionMatch};
 use atuin_common::string::highlighted::HighlightedTextProto;
 pub use codegen::*;
 
-use crate::grpc::ai_agent::pb as agent;
+use crate::grpc::ai::agent::pb as agent;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum HarnessFilterParseError {
