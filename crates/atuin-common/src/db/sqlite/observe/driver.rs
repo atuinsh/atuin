@@ -11,9 +11,8 @@ use itertools::{EitherOrBoth, Itertools};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
 use sqlx::{AssertSqlSafe, Connection, Sqlite};
 
-use super::event::{Appended, Change};
 use super::schema::{Diffable, TableSchema, Tailable};
-use super::{ObserveConfig, ObserveError, Replay};
+use super::{ObserveConfig, ObserveError, ReplayBehavior, RowAppendedEvent, RowChangedEvent};
 use crate::futures::Backoff;
 use crate::os::fs::FdIdentity;
 
@@ -39,7 +38,7 @@ pub(super) trait Strategy: Send + 'static {
     fn seed(
         &mut self,
         conn: &mut SqliteConnection,
-        replay: Replay,
+        replay: ReplayBehavior,
     ) -> impl Future<Output = Result<(), sqlx::Error>> + Send;
 
     fn poll(
@@ -105,15 +104,15 @@ impl<T: Tailable> AppendStrategy<T> {
 }
 
 impl<T: Tailable> Strategy for AppendStrategy<T> {
-    type Event = Appended<T>;
+    type Event = RowAppendedEvent<T>;
 
     async fn seed(
         &mut self,
         conn: &mut SqliteConnection,
-        replay: Replay,
+        replay: ReplayBehavior,
     ) -> Result<(), sqlx::Error> {
         self.last = None;
-        if replay == Replay::FromNow {
+        if replay == ReplayBehavior::FromNow {
             let sql =
                 select::<T>(&format!("ORDER BY {} DESC LIMIT 1", quote_ident(T::CURSOR_COLUMN)));
             let newest: Option<T> =
@@ -170,7 +169,7 @@ impl<T: Tailable> Strategy for AppendStrategy<T> {
             self.remember(row);
         }
         Ok(Batch {
-            events: rows.into_iter().skip(skip).map(Appended).collect(),
+            events: rows.into_iter().skip(skip).map(RowAppendedEvent).collect(),
             drained,
         })
     }
@@ -405,16 +404,16 @@ impl<T: Diffable> MutateStrategy<T> {
 }
 
 impl<T: Diffable> Strategy for MutateStrategy<T> {
-    type Event = Change<T>;
+    type Event = RowChangedEvent<T>;
 
     async fn seed(
         &mut self,
         conn: &mut SqliteConnection,
-        replay: Replay,
+        replay: ReplayBehavior,
     ) -> Result<(), sqlx::Error> {
         self.snapshot = match replay {
-            Replay::All => BTreeMap::new(),
-            Replay::FromNow => {
+            ReplayBehavior::All => BTreeMap::new(),
+            ReplayBehavior::FromNow => {
                 fetch_all::<T>(conn).await?.into_iter().map(|row| (row.key(), row)).collect()
             }
         };
@@ -433,12 +432,14 @@ impl<T: Diffable> Strategy for MutateStrategy<T> {
             .iter()
             .merge_join_by(fresh.iter(), |(a, _), (b, _)| a.cmp(b))
             .filter_map(|joined| match joined {
-                EitherOrBoth::Left((_, old)) => Some(Change::Deleted(old.clone())),
-                EitherOrBoth::Right((_, new)) => Some(Change::Inserted(new.clone())),
-                EitherOrBoth::Both((_, old), (_, new)) => (old != new).then(|| Change::Updated {
-                    old: old.clone(),
-                    new: new.clone(),
-                }),
+                EitherOrBoth::Left((_, old)) => Some(RowChangedEvent::Deleted(old.clone())),
+                EitherOrBoth::Right((_, new)) => Some(RowChangedEvent::Inserted(new.clone())),
+                EitherOrBoth::Both((_, old), (_, new)) => {
+                    (old != new).then(|| RowChangedEvent::Updated {
+                        old: old.clone(),
+                        new: new.clone(),
+                    })
+                }
             })
             .collect();
 
@@ -461,7 +462,8 @@ mod tests {
     use crate::db::query;
     use crate::db::sqlite::Sqlite;
     use crate::db::sqlite::observe::{
-        ObserveConfig, ObserveError, Replay, SqliteObserver, SqliteTableObserver, TableSchema,
+        ObserveConfig, ObserveError, ReplayBehavior, SqliteObserver, SqliteTableObserver,
+        TableSchema,
     };
 
     #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
@@ -569,7 +571,7 @@ mod tests {
         exec_sql(path, &format!("DELETE FROM items WHERE id = {id};")).await;
     }
 
-    fn cfg(replay: Replay) -> ObserveConfig {
+    fn cfg(replay: ReplayBehavior) -> ObserveConfig {
         ObserveConfig::builder().replay(replay).poll_interval(Duration::from_millis(10)).build()
     }
 
@@ -594,7 +596,7 @@ mod tests {
 
     /// The next `n` rows, failing instead of hanging when the tail never delivers them.
     async fn next_n<T: Tailable>(
-        stream: &mut SqliteTableObserver<Appended<T>>,
+        stream: &mut SqliteTableObserver<RowAppendedEvent<T>>,
         n: usize,
     ) -> Vec<T> {
         tokio::time::timeout(Duration::from_secs(5), stream.take(n).map(|r| r.unwrap().0).collect())
@@ -604,13 +606,13 @@ mod tests {
 
     /// The tail's next item, row or failure, insisting that the tail is still there.
     async fn next_item<T: Tailable>(
-        stream: &mut SqliteTableObserver<Appended<T>>,
+        stream: &mut SqliteTableObserver<RowAppendedEvent<T>>,
     ) -> Result<T, ObserveError> {
         tokio::time::timeout(Duration::from_secs(5), stream.next())
             .await
             .expect("the tail yielded nothing")
             .expect("the tail ended")
-            .map(|Appended(row)| row)
+            .map(|RowAppendedEvent(row)| row)
     }
 
     fn sqlite3_available() -> bool {
@@ -632,7 +634,7 @@ mod tests {
         let path = dir.path().join("db.sqlite");
         let _db = writer(dir.path()).await;
         let observer = SqliteObserver::new(&path);
-        let stream = observer.append::<Item>(cfg(Replay::FromNow)).await.unwrap();
+        let stream = observer.append::<Item>(cfg(ReplayBehavior::FromNow)).await.unwrap();
 
         insert_xproc(&path, 1, "a").await;
         insert_xproc(&path, 2, "b").await;
@@ -659,7 +661,7 @@ mod tests {
         .unwrap();
 
         let observer = SqliteObserver::new(&path);
-        let stream = observer.append::<Reserved>(cfg(Replay::FromNow)).await.unwrap();
+        let stream = observer.append::<Reserved>(cfg(ReplayBehavior::FromNow)).await.unwrap();
 
         exec_sql(&path, r#"INSERT INTO "transaction" ("id", "order") VALUES (1, 10), (2, 20);"#)
             .await;
@@ -671,7 +673,7 @@ mod tests {
     #[rstest]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn append_replay_all_crosses_page_boundary() {
-        // Replay::All drains pre-existing rows one PAGE_SIZE page at a time; a table larger than a
+        // ReplayBehavior::All drains pre-existing rows one PAGE_SIZE page at a time; a table larger than a
         // page must still emit every row across the boundary.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("db.sqlite");
@@ -687,7 +689,7 @@ mod tests {
         .unwrap();
 
         let observer = SqliteObserver::new(&path);
-        let stream = observer.append::<Item>(cfg(Replay::All)).await.unwrap();
+        let stream = observer.append::<Item>(cfg(ReplayBehavior::All)).await.unwrap();
 
         let got: Vec<i64> =
             stream.take(usize::try_from(n).unwrap()).map(|r| r.unwrap().0.id).collect().await;
@@ -695,10 +697,13 @@ mod tests {
     }
 
     #[rstest]
-    #[case::from_now(Replay::FromNow, vec![item(3, "c")])]
-    #[case::all(Replay::All, vec![item(1, "a"), item(2, "b"), item(3, "c")])]
+    #[case::from_now(ReplayBehavior::FromNow, vec![item(3, "c")])]
+    #[case::all(ReplayBehavior::All, vec![item(1, "a"), item(2, "b"), item(3, "c")])]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn replay_controls_preexisting_rows(#[case] replay: Replay, #[case] expected: Vec<Item>) {
+    async fn replay_controls_preexisting_rows(
+        #[case] replay: ReplayBehavior,
+        #[case] expected: Vec<Item>,
+    ) {
         if !sqlite3_available() {
             return;
         }
@@ -728,7 +733,7 @@ mod tests {
         exec_sql(&path, "CREATE TABLE events (id TEXT PRIMARY KEY);").await;
         insert_events(&path, &["e1", "e2", "e3", "e4"]).await;
         let observer = SqliteObserver::new(&path);
-        let mut stream = observer.append::<Event>(cfg(Replay::All)).await.unwrap();
+        let mut stream = observer.append::<Event>(cfg(ReplayBehavior::All)).await.unwrap();
         assert_eq!(next_n(&mut stream, 4).await, [
             event(1, "e1"),
             event(2, "e2"),
@@ -780,7 +785,7 @@ mod tests {
 
         let observer = SqliteObserver::new(&path);
         let cfg = ObserveConfig::builder()
-            .replay(Replay::All)
+            .replay(ReplayBehavior::All)
             .poll_interval(Duration::from_millis(1))
             .build();
         let mut stream = observer.append::<Event>(cfg).await.unwrap();
@@ -857,7 +862,7 @@ mod tests {
         exec_sql(&path, "CREATE TABLE events (id TEXT PRIMARY KEY);").await;
         insert_events(&path, &["e1", "e2", "e3"]).await;
         let observer = SqliteObserver::new(&path);
-        let mut stream = observer.append::<Event>(cfg(Replay::FromNow)).await.unwrap();
+        let mut stream = observer.append::<Event>(cfg(ReplayBehavior::FromNow)).await.unwrap();
 
         exec_sql(&path, delete).await;
         insert_events(&path, then_insert).await;
@@ -877,7 +882,7 @@ mod tests {
         insert(&db, 1, "a").await;
         insert(&db, 2, "b").await;
         let observer = SqliteObserver::new(&path);
-        let mut stream = observer.append::<Item>(cfg(Replay::All)).await.unwrap();
+        let mut stream = observer.append::<Item>(cfg(ReplayBehavior::All)).await.unwrap();
         assert_eq!(next_n(&mut stream, 2).await, [item(1, "a"), item(2, "b")]);
 
         delete_xproc(&path, 2).await;
@@ -900,7 +905,7 @@ mod tests {
         let schema = "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL);";
         exec_sql(&path, schema).await;
         let observer = SqliteObserver::new(&path);
-        let mut stream = observer.append::<Item>(cfg(Replay::FromNow)).await.unwrap();
+        let mut stream = observer.append::<Item>(cfg(ReplayBehavior::FromNow)).await.unwrap();
         insert_xproc(&path, 1, "old").await;
         assert_eq!(next_n(&mut stream, 1).await, [item(1, "old")]);
 
@@ -923,7 +928,7 @@ mod tests {
         let path = dir.path().join("db.sqlite");
         let _db = writer(dir.path()).await;
         let observer = SqliteObserver::new(&path);
-        let stream = observer.append::<Item>(cfg(Replay::FromNow)).await.unwrap();
+        let stream = observer.append::<Item>(cfg(ReplayBehavior::FromNow)).await.unwrap();
 
         let writers = (0..4).map(|w| {
             let path = path.clone();
@@ -961,7 +966,7 @@ mod tests {
                 let path = dir.path().join("db.sqlite");
                 let _db = writer(dir.path()).await;
                 let observer = SqliteObserver::new(&path);
-                let stream = observer.append::<Item>(cfg(Replay::FromNow)).await.unwrap();
+                let stream = observer.append::<Item>(cfg(ReplayBehavior::FromNow)).await.unwrap();
 
                 let mut sorted: Vec<i64> = ids.iter().copied().collect();
                 sorted.sort_unstable();
@@ -990,19 +995,19 @@ mod tests {
         insert(&db, 1, "a").await;
 
         let observer = SqliteObserver::new(&path);
-        let mut stream = observer.mutate::<Item>(cfg(Replay::FromNow)).await.unwrap();
+        let mut stream = observer.mutate::<Item>(cfg(ReplayBehavior::FromNow)).await.unwrap();
 
         insert_xproc(&path, 2, "b").await;
-        assert_eq!(stream.next().await.unwrap().unwrap(), Change::Inserted(item(2, "b")));
+        assert_eq!(stream.next().await.unwrap().unwrap(), RowChangedEvent::Inserted(item(2, "b")));
 
         update_xproc(&path, 1, "a2").await;
-        assert_eq!(stream.next().await.unwrap().unwrap(), Change::Updated {
+        assert_eq!(stream.next().await.unwrap().unwrap(), RowChangedEvent::Updated {
             old: item(1, "a"),
             new: item(1, "a2")
         });
 
         delete_xproc(&path, 2).await;
-        assert_eq!(stream.next().await.unwrap().unwrap(), Change::Deleted(item(2, "b")));
+        assert_eq!(stream.next().await.unwrap().unwrap(), RowChangedEvent::Deleted(item(2, "b")));
     }
 
     #[rstest]
@@ -1017,12 +1022,12 @@ mod tests {
         insert(&db, 1, "a").await;
 
         let observer = SqliteObserver::new(&path);
-        let mut stream = observer.mutate::<Item>(cfg(Replay::FromNow)).await.unwrap();
+        let mut stream = observer.mutate::<Item>(cfg(ReplayBehavior::FromNow)).await.unwrap();
 
         update_xproc(&path, 1, "a").await;
         insert_xproc(&path, 2, "b").await;
 
-        assert_eq!(stream.next().await.unwrap().unwrap(), Change::Inserted(item(2, "b")));
+        assert_eq!(stream.next().await.unwrap().unwrap(), RowChangedEvent::Inserted(item(2, "b")));
     }
 
     proptest::proptest! {
@@ -1044,7 +1049,7 @@ mod tests {
                 let path = dir.path().join("db.sqlite");
                 let _db = writer(dir.path()).await;
                 let observer = SqliteObserver::new(&path);
-                let mut stream = observer.mutate::<Item>(cfg(Replay::All)).await.unwrap();
+                let mut stream = observer.mutate::<Item>(cfg(ReplayBehavior::All)).await.unwrap();
 
                 let mut expected = std::collections::BTreeMap::<i64, String>::new();
                 for (id, op, name) in &ops {
@@ -1065,10 +1070,10 @@ mod tests {
                 while state != expected {
                     match tokio::time::timeout_at(deadline, stream.next()).await {
                         Ok(Some(Ok(change))) => match change {
-                            Change::Inserted(i) | Change::Updated { new: i, .. } => {
+                            RowChangedEvent::Inserted(i) | RowChangedEvent::Updated { new: i, .. } => {
                                 state.insert(i.id, i.name);
                             }
-                            Change::Deleted(i) => {
+                            RowChangedEvent::Deleted(i) => {
                                 state.remove(&i.id);
                             }
                         },
@@ -1122,7 +1127,7 @@ mod tests {
         let path = dir.path().join("db.sqlite");
         let _db = writer(dir.path()).await;
         let observer = SqliteObserver::new(&path);
-        let mut stream = observer.append::<Item>(cfg(Replay::FromNow)).await.unwrap();
+        let mut stream = observer.append::<Item>(cfg(ReplayBehavior::FromNow)).await.unwrap();
 
         insert_xproc(&path, 1, "a").await;
         assert_eq!(next_n(&mut stream, 1).await, vec![item(1, "a")]);

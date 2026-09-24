@@ -51,7 +51,7 @@ impl<C> Cursor for C where
 /// delivered row and, when that row is gone or carries a different identity, the tail rewinds to
 /// the start of the table so rows occupying recycled cursor values are still delivered.
 /// Delivery is therefore at-least-once: a rewind re-emits every live row, including rows that
-/// predate a [`Replay::FromNow`](super::Replay::FromNow) start, and consumers must dedup by
+/// predate a [`ReplayBehavior::FromNow`](super::ReplayBehavior::FromNow) start, and consumers must dedup by
 /// identity.
 pub trait Tailable: TableSchema {
     type Cursor: Cursor;
@@ -66,7 +66,7 @@ pub trait Tailable: TableSchema {
     /// delivered row included, to have been deleted first, so re-checking that single row catches
     /// every reuse. The one blind spot is a row re-inserted with the *same* identity at exactly
     /// the last delivered cursor value after lower values were recycled; only a replay from the
-    /// start (a fresh observer with [`Replay::All`](super::Replay::All)) recovers from that.
+    /// start (a fresh observer with [`ReplayBehavior::All`](super::ReplayBehavior::All)) recovers from that.
     fn identity(&self) -> Option<String> {
         None
     }
