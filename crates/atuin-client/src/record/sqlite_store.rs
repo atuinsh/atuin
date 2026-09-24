@@ -546,9 +546,27 @@ impl SqliteStore {
         }
 
         // Vacuum writes the whole file through the WAL; checkpoint so the space is freed now,
-        // not whenever the next checkpoint happens to run.
+        // not whenever the next checkpoint happens to run. A checkpoint blocked by a reader
+        // reports `busy` in its result row rather than failing, so check it and retry briefly.
         db::query("vacuum").execute(self.sqlite.pool()).await?;
-        db::query("pragma wal_checkpoint(truncate)").execute(self.sqlite.pool()).await?;
+
+        for attempt in 0..10 {
+            let busy: i64 = db::query_scalar("pragma wal_checkpoint(truncate)")
+                .fetch_one(self.sqlite.pool())
+                .await?;
+
+            if busy == 0 {
+                return Ok(rewritten);
+            }
+
+            debug!("wal checkpoint busy (attempt {attempt}); retrying");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        warn!(
+            "could not checkpoint the wal after compacting; space is reclaimed on a later \
+             checkpoint"
+        );
 
         Ok(rewritten)
     }
