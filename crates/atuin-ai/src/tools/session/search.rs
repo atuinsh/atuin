@@ -3,6 +3,7 @@ use std::fmt::Write as _;
 use atuin_client::settings::Settings;
 use atuin_common::range::Clamped;
 use atuin_common::string::NonBlankString;
+use atuin_common::string::highlighted::{FromHighlightedTextProtoError, HighlightedStr};
 use atuin_common::time::UtcOffsetExt;
 use atuin_daemon::AiClient;
 use atuin_daemon::grpc::ai_agent::pb::HarnessKind;
@@ -84,7 +85,11 @@ impl AtuinAiSessionSearchToolCall {
         let offset = time::UtcOffset::local_or_utc();
         let mut out = String::new();
         for (index, hit) in hits.iter().enumerate() {
-            SessionHit(hit).render_into(&mut out, index + 1, offset);
+            if let Err(e) = SessionHit(hit).render_into(&mut out, index + 1, offset) {
+                return ToolOutcome::Error(format!(
+                    "AI session search returned a malformed result: {e}"
+                ));
+            }
         }
         ToolOutcome::Success(out)
     }
@@ -93,7 +98,12 @@ impl AtuinAiSessionSearchToolCall {
 struct SessionHit<'a>(&'a SearchSessionsMatch);
 
 impl SessionHit<'_> {
-    fn render_into(&self, out: &mut String, index: usize, offset: time::UtcOffset) {
+    fn render_into(
+        &self,
+        out: &mut String,
+        index: usize,
+        offset: time::UtcOffset,
+    ) -> Result<(), FromHighlightedTextProtoError> {
         let session = self.0.session.as_ref();
         let id = session.map_or("", |s| s.session_id.as_str());
         let harness = session.map_or("unknown", |s| harness_name(s.harness));
@@ -103,18 +113,21 @@ impl SessionHit<'_> {
 
         let _ = writeln!(out, "{index}. [{harness}] {when}  {id}");
 
-        if let Some(title) = self.0.title.as_ref().map(|t| t.plain()) {
+        if let Some(proto) = self.0.title.as_ref() {
+            let title = HighlightedStr::try_from(proto)?.plain();
             let title = title.trim();
             if !title.is_empty() {
                 let _ = writeln!(out, "   title: {title}");
             }
         }
-        if let Some(preview) = self.0.preview.as_ref().map(|p| p.plain()) {
+        if let Some(proto) = self.0.preview.as_ref() {
+            let preview = HighlightedStr::try_from(proto)?.plain();
             let preview = preview.trim();
             if !preview.is_empty() {
                 let _ = writeln!(out, "   match: {preview}");
             }
         }
+        Ok(())
     }
 
     fn timestamp(ts: &prost_types::Timestamp, offset: time::UtcOffset) -> String {
@@ -188,7 +201,7 @@ mod tests {
         };
 
         let mut out = String::new();
-        SessionHit(&hit).render_into(&mut out, 1, time::UtcOffset::UTC);
+        SessionHit(&hit).render_into(&mut out, 1, time::UtcOffset::UTC).unwrap();
 
         assert!(out.contains("claude-code"));
         assert!(out.contains("abc-123"));
