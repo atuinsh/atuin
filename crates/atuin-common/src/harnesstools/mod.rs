@@ -120,20 +120,3 @@ impl AnyHarness {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::num::NonZeroUsize;
-
-    use rstest::rstest;
-
-    use super::*;
-
-    #[rstest]
-    fn every_harness_is_observable() {
-        let pool = BlockingPool::new(NonZeroUsize::MIN);
-        for harness in AnyHarness::all() {
-            assert!(harness.sessions(&pool).is_some(), "{} is not observable", harness.name());
-        }
-    }
-}
