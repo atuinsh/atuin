@@ -430,7 +430,9 @@ mod tests {
         let block = crate::grpc::ai::agent::pb::ContentBlock::from(stored.content[0].clone());
         assert_eq!(
             block.block,
-            Some(crate::grpc::ai::agent::pb::content_block::Block::Thinking(label.to_owned()))
+            Some(crate::grpc::ai::agent::pb::content_block::Block::ReasoningSummary(
+                crate::grpc::ai::agent::pb::ReasoningSummary { tokens }
+            ))
         );
         let mut transcript = Box::pin(rebuilt.transcript(&msg.session));
         assert_eq!(transcript.next().await.unwrap().unwrap(), format!("assistant: {label}\n"));

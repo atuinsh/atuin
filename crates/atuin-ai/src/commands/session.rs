@@ -10,6 +10,7 @@ use std::io::{self, IsTerminal, Write};
 
 use atuin_client::ai_session::HarnessKind;
 use atuin_client::settings::Settings;
+use atuin_common::harnesstools::session::model::reasoning_label;
 use atuin_common::string::highlighted::{HighlightedStr, HighlightedTextProto};
 use atuin_daemon::AiClient;
 use atuin_daemon::grpc::ai::agent::pb as agent;
@@ -612,7 +613,10 @@ fn write_session_header(out: &mut dyn Write, s: &agent::Session) -> io::Result<(
         writeln!(
             out,
             "tokens    in {} / out {} / cache {}+{}",
-            t.input, t.output, t.cache_read, t.cache_write
+            t.input.unwrap_or_default(),
+            t.output.unwrap_or_default(),
+            t.cache_read.unwrap_or_default(),
+            t.cache_write.unwrap_or_default()
         )?;
     }
     writeln!(out)
@@ -622,9 +626,15 @@ fn write_message_text(out: &mut dyn Write, m: &agent::Message) -> io::Result<()>
     writeln!(out, "── {} · {} ──", role_name(m.role), age(m.timestamp.as_ref()))?;
     for block in &m.content {
         match &block.block {
-            Some(agent::content_block::Block::Text(t)) => writeln!(out, "{}", sanitize(t))?,
+            Some(agent::content_block::Block::Text(t) | agent::content_block::Block::Other(t)) => {
+                writeln!(out, "{}", sanitize(t))?;
+            }
             Some(agent::content_block::Block::Thinking(t)) => {
                 writeln!(out, "[thinking] {}", sanitize(t))?;
+            }
+            Some(agent::content_block::Block::ReasoningSummary(summary)) => {
+                let tokens = summary.tokens.or(m.tokens.as_ref().and_then(|t| t.reasoning));
+                writeln!(out, "[thinking] {}", reasoning_label(tokens))?;
             }
             Some(agent::content_block::Block::Summary(t)) => {
                 writeln!(out, "[summary] {}", sanitize(t))?;
@@ -632,11 +642,11 @@ fn write_message_text(out: &mut dyn Write, m: &agent::Message) -> io::Result<()>
             Some(agent::content_block::Block::Error(t)) => {
                 writeln!(out, "[error] {}", sanitize(t))?;
             }
-            // An empty input or content means capture did not keep it; print the tag alone.
+            // An absent or empty input or output means capture did not keep it; print the tag alone.
             Some(agent::content_block::Block::ToolCall(tc)) => {
                 write!(out, "[tool-call {}]", sanitize(&tc.name))?;
-                if !tc.input.is_empty() {
-                    write!(out, " {}", sanitize(&tc.input))?;
+                if let Some(input) = &tc.input {
+                    write!(out, " {}", sanitize(input))?;
                 }
                 writeln!(out)?;
             }
@@ -647,8 +657,8 @@ fn write_message_text(out: &mut dyn Write, m: &agent::Message) -> io::Result<()>
                     "tool-result"
                 };
                 write!(out, "[{tag}]")?;
-                if !tr.content.is_empty() {
-                    write!(out, " {}", sanitize(&tr.content))?;
+                if let Some(output) = tr.output_text().filter(|output| !output.is_empty()) {
+                    write!(out, " {}", sanitize(&output))?;
                 }
                 writeln!(out)?;
             }
@@ -715,7 +725,7 @@ impl Summary {
 fn message_summary(m: &agent::Message) -> Option<Summary> {
     for block in &m.content {
         match &block.block {
-            Some(agent::content_block::Block::Text(t)) => {
+            Some(agent::content_block::Block::Text(t) | agent::content_block::Block::Other(t)) => {
                 let line = one_line(t, SUMMARY_WIDTH);
                 if !line.is_empty() {
                     return Some(Summary::Text(line));
@@ -726,6 +736,10 @@ fn message_summary(m: &agent::Message) -> Option<Summary> {
                 if !line.is_empty() {
                     return Some(Summary::Thinking(line));
                 }
+            }
+            Some(agent::content_block::Block::ReasoningSummary(summary)) => {
+                let tokens = summary.tokens.or(m.tokens.as_ref().and_then(|t| t.reasoning));
+                return Some(Summary::Thinking(reasoning_label(tokens)));
             }
             Some(agent::content_block::Block::Summary(t)) => {
                 let line = one_line(t, SUMMARY_WIDTH);
@@ -744,7 +758,10 @@ fn message_summary(m: &agent::Message) -> Option<Summary> {
             Some(agent::content_block::Block::ToolResult(tr)) => {
                 return Some(Summary::ToolResult {
                     is_error: tr.is_error,
-                    body: one_line(&tr.content, SUMMARY_WIDTH),
+                    body: tr
+                        .output_text()
+                        .map(|output| one_line(&output, SUMMARY_WIDTH))
+                        .unwrap_or_default(),
                 });
             }
             None => {}
@@ -846,7 +863,7 @@ fn role_color(role: i32) -> Ansi {
         Ok(agent::Role::User) => Ansi::Yellow,
         Ok(agent::Role::System) => Ansi::Magenta,
         Ok(agent::Role::Tool) => Ansi::Blue,
-        Ok(agent::Role::Unknown) | Err(_) => Ansi::Dim,
+        Ok(agent::Role::Other) | Err(_) => Ansi::Dim,
     }
 }
 
@@ -947,18 +964,23 @@ fn role_name(role: i32) -> &'static str {
         Ok(agent::Role::Assistant) => "assistant",
         Ok(agent::Role::System) => "system",
         Ok(agent::Role::Tool) => "tool",
-        Ok(agent::Role::Unknown) | Err(_) => "unknown",
+        Ok(agent::Role::Other) | Err(_) => "unknown",
     }
 }
 
-fn stop_reason_name(stop_reason: i32) -> &'static str {
-    match agent::StopReason::try_from(stop_reason) {
-        Ok(agent::StopReason::EndTurn) => "end_turn",
-        Ok(agent::StopReason::ToolUse) => "tool_use",
-        Ok(agent::StopReason::MaxTokens) => "max_tokens",
-        Ok(agent::StopReason::Aborted) => "aborted",
-        Ok(agent::StopReason::Error) => "error",
-        Ok(agent::StopReason::Unknown) | Err(_) => "unknown",
+fn stop_reason_name(stop_reason: Option<i32>) -> &'static str {
+    let Some(Ok(stop_reason)) = stop_reason.map(agent::StopReason::try_from) else {
+        return "unknown";
+    };
+    match stop_reason {
+        agent::StopReason::EndTurn => "end_turn",
+        agent::StopReason::ToolUse => "tool_use",
+        agent::StopReason::MaxTokens => "max_tokens",
+        agent::StopReason::Aborted => "aborted",
+        agent::StopReason::Error => "error",
+        agent::StopReason::StopSequence => "stop_sequence",
+        agent::StopReason::Refusal => "refusal",
+        agent::StopReason::Other => "unknown",
     }
 }
 
@@ -1133,10 +1155,10 @@ fn tokens_json(tokens: Option<&agent::Tokens>) -> TokensJson {
             cache_write: 0,
         },
         |t| TokensJson {
-            input: t.input,
-            output: t.output,
-            cache_read: t.cache_read,
-            cache_write: t.cache_write,
+            input: t.input.unwrap_or_default(),
+            output: t.output.unwrap_or_default(),
+            cache_read: t.cache_read.unwrap_or_default(),
+            cache_write: t.cache_write.unwrap_or_default(),
         },
     )
 }
@@ -1165,20 +1187,26 @@ fn session_json(s: &agent::Session) -> SessionJson {
     }
 }
 
-fn content_json(block: &agent::ContentBlock) -> Option<ContentJson> {
+/// `reasoning` is the message's reasoning token count, for a summary block that lacks its own.
+fn content_json(block: &agent::ContentBlock, reasoning: Option<u64>) -> Option<ContentJson> {
     Some(match block.block.as_ref()? {
-        agent::content_block::Block::Text(t) => ContentJson::Text { text: t.clone() },
+        agent::content_block::Block::Text(t) | agent::content_block::Block::Other(t) => {
+            ContentJson::Text { text: t.clone() }
+        }
         agent::content_block::Block::Thinking(t) => ContentJson::Thinking { text: t.clone() },
+        agent::content_block::Block::ReasoningSummary(summary) => ContentJson::Thinking {
+            text: reasoning_label(summary.tokens.or(reasoning)),
+        },
         agent::content_block::Block::Summary(t) => ContentJson::Summary { text: t.clone() },
         agent::content_block::Block::Error(t) => ContentJson::Error { text: t.clone() },
         agent::content_block::Block::ToolCall(tc) => ContentJson::ToolCall {
             id: tc.id.clone(),
             name: tc.name.clone(),
-            input: tc.input.clone(),
+            input: tc.input.clone().unwrap_or_default(),
         },
         agent::content_block::Block::ToolResult(tr) => ContentJson::ToolResult {
             tool_use_id: tr.tool_use_id.clone(),
-            content: tr.content.clone(),
+            content: tr.output_text().unwrap_or_default().into_owned(),
             is_error: tr.is_error,
         },
     })
@@ -1194,9 +1222,16 @@ fn message_json(m: &agent::Message) -> MessageJson {
         model: m.model.clone(),
         cwd: m.cwd.clone(),
         git_branch: m.git_branch.clone(),
-        content: m.content.iter().filter_map(content_json).collect(),
+        content: m
+            .content
+            .iter()
+            .filter_map(|block| content_json(block, m.tokens.as_ref().and_then(|t| t.reasoning)))
+            .collect(),
         tokens: tokens_json(m.tokens.as_ref()),
-        stop_reason: stop_reason_name(m.stop_reason).to_owned(),
+        stop_reason: m
+            .stop_reason_label
+            .clone()
+            .unwrap_or_else(|| stop_reason_name(m.stop_reason).to_owned()),
     }
 }
 
@@ -1303,11 +1338,11 @@ mod tests {
         let mut s = session(HarnessKind::ClaudeCode, "abcdef0123456789");
         s.message_count = 3;
         s.tokens = Some(agent::Tokens {
-            input: 10,
-            output: 20,
-            cache_read: 1,
-            cache_write: 2,
-            ..Default::default()
+            input: Some(10),
+            output: Some(20),
+            cache_read: Some(1),
+            cache_write: Some(2),
+            reasoning: None,
         });
         s.title = Some("hello".to_owned());
 
@@ -1390,7 +1425,7 @@ mod tests {
         };
         let m = msg(agent::Role::Tool, vec![agent::content_block::Block::ToolResult(
             agent::ToolResult {
-                content: content.to_owned(),
+                output: Some(serde_json::json!(content).to_string()),
                 is_error,
                 ..Default::default()
             },
@@ -1416,7 +1451,7 @@ mod tests {
 
     #[rstest]
     fn role_label_overrides_the_enum() {
-        let mut m = msg(agent::Role::Unknown, vec![]);
+        let mut m = msg(agent::Role::Other, vec![]);
         m.role_label = Some("developer".to_owned());
         assert_eq!(message_role(&m), "developer");
         // A standard role with no label falls back to the enum name.
@@ -1428,7 +1463,7 @@ mod tests {
         // Claude models a tool result as a user-turn message; the line should still say "tool".
         let m = msg(agent::Role::User, vec![agent::content_block::Block::ToolResult(
             agent::ToolResult {
-                content: "ok".to_owned(),
+                output: Some(r#""ok""#.to_owned()),
                 is_error: false,
                 ..Default::default()
             },

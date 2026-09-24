@@ -43,21 +43,7 @@ pub enum Content {
     Error(String),
 }
 
-impl Content {
-    /// A reasoning marker that names no count takes the one its row's usage reports, for
-    /// display; every other block is returned as it is.
-    #[must_use]
-    pub fn with_reasoning_of(self, usage: Option<&Usage>) -> Self {
-        match self {
-            Self::ReasoningSummary { tokens: None } => Self::ReasoningSummary {
-                tokens: usage.and_then(|u| u.reasoning),
-            },
-            other => other,
-        }
-    }
-}
-
-/// Human-readable breadcrumb shared by transcript and RPC rendering.
+/// Human-readable breadcrumb shared by the transcript and `atuin ai session` rendering.
 #[must_use]
 pub fn reasoning_label(tokens: Option<u64>) -> String {
     tokens.map_or_else(|| "Reasoned".to_owned(), |n| format!("Reasoning · {n} tokens"))
