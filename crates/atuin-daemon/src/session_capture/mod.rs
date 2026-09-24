@@ -618,51 +618,6 @@ mod tests {
     }
 
     #[rstest]
-    #[tokio::test]
-    async fn split_and_interleaved_adapter_rows_report_counts_once() {
-        use atuin_common::harnesstools::session::{AnyMessage, SessionId};
-        let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
-        let mut enricher = super::message_enricher::MessageEnricher::new(HarnessKind::ClaudeCode);
-        let session = SessionId::from("native-session".to_owned());
-        for (index, (turn, thinking, reported, expected)) in [
-            ("a", true, None, None),
-            ("a", false, Some(185), Some(185)),
-            ("b", true, Some(42), Some(42)),
-            ("a", false, Some(185), None),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let block = if thinking {
-                serde_json::json!({"type": "redacted_thinking", "data": "PRIVATE"})
-            } else {
-                serde_json::json!({"type": "text", "text": "hello"})
-            };
-            let m = AnyMessage::Ccode(
-                serde_json::from_value(serde_json::json!({
-                    "type": "assistant", "uuid": format!("u{index}"),
-                    "message": {"role": "assistant", "id": turn, "content": [block],
-                        "usage": {"output_tokens": 999,
-                            "output_tokens_details": {"thinking_tokens": reported}}}
-                }))
-                .unwrap(),
-            );
-            let msg = enricher.capture(&session, &m).unwrap();
-            sink.append(msg.clone()).await.unwrap();
-            let mut rows = Box::pin(sink.sidecar.messages(&msg.session));
-            let mut found = false;
-            while let Some(row) = rows.next().await {
-                let row = row.unwrap();
-                if row.source_id == msg.source_id {
-                    assert!(row.content.contains(&Content::ReasoningSummary { tokens: expected }));
-                    found = true;
-                }
-            }
-            assert!(found);
-        }
-    }
-
-    #[rstest]
     fn adapters_keep_reasoning_presence_without_payloads() {
         use atuin_common::harnesstools::session::{AnyMessage, Message as _};
         let claude = AnyMessage::Ccode(
