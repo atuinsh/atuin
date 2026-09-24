@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_common::utils::uuid_v7;
 use atuin_common::encryption::paseto_v4;
+use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{
     DecryptedData, EncryptedData, Host, HostId, Record, RecordTag, RecordVersion,
 };

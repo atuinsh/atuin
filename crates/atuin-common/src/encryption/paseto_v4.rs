@@ -1008,7 +1008,12 @@ mod test {
         let bytes = EncryptedBytes::try_from(&data).unwrap();
 
         assert_eq!(EncryptedData::from(&bytes), data);
-        assert!(bytes.data.len() * 4 < data.raw.len() * 3, "{} -> {}", data.raw.len(), bytes.data.len());
+        assert!(
+            bytes.data.len() * 4 < data.raw.len() * 3,
+            "{} -> {}",
+            data.raw.len(),
+            bytes.data.len()
+        );
         assert!(CEK_LEN * 4 < data.cek.len() * 3, "{} -> {CEK_LEN}", data.cek.len());
     }
 
@@ -1021,8 +1026,14 @@ mod test {
     #[case::cek_wrong_shape(r#"{"wpk":"x","kid":"y"}"#)]
     fn encrypted_bytes_refuse_anything_not_in_wire_form(#[case] value: &str, key: Key) {
         let good = encrypt_sync(b"ls -la", None, &key).unwrap();
-        let bad_data = EncryptedData { raw: value.into(), cek: good.cek.clone() };
-        let bad_cek = EncryptedData { raw: good.raw, cek: value.into() };
+        let bad_data = EncryptedData {
+            raw: value.into(),
+            cek: good.cek.clone(),
+        };
+        let bad_cek = EncryptedData {
+            raw: good.raw,
+            cek: value.into(),
+        };
 
         assert!(EncryptedBytes::try_from(&bad_data).is_err());
         assert!(EncryptedBytes::try_from(&bad_cek).is_err());
@@ -1034,6 +1045,12 @@ mod test {
         let reordered: serde_json::Value = serde_json::from_str(&good.cek).unwrap();
         let reordered = format!("{{\"kid\":{},\"wpk\":{}}}", reordered["kid"], reordered["wpk"]);
 
-        assert!(EncryptedBytes::try_from(&EncryptedData { cek: reordered, ..good }).is_err());
+        assert!(
+            EncryptedBytes::try_from(&EncryptedData {
+                cek: reordered,
+                ..good
+            })
+            .is_err()
+        );
     }
 }

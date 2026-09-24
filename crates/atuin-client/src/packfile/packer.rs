@@ -95,8 +95,8 @@ pub async fn try_pack(
 
 #[cfg(test)]
 mod tests {
-    use atuin_common::utils::uuid_v7;
     use atuin_common::encryption::paseto_v4;
+    use atuin_common::utils::uuid_v7;
     use atuin_domain::record::{DecryptedData, HostId};
     use proptest::prelude::*;
     use rstest::{fixture, rstest};

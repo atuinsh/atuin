@@ -693,8 +693,8 @@ impl Keyed<'_> {
 
 #[cfg(test)]
 mod tests {
-    use atuin_common::utils::uuid_v7;
     use atuin_common::encryption::paseto_v4;
+    use atuin_common::utils::uuid_v7;
     use atuin_domain::record::{
         DecryptedData, Diff, EncryptedData, HostId, Record, RecordIdx, RecordSeriesKey, RecordTag,
     };
