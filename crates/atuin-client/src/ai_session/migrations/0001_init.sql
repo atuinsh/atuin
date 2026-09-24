@@ -6,7 +6,6 @@ CREATE TABLE messages (
     parent_harness INTEGER,
     parent_session_id TEXT,
     parent_source_id TEXT,
-    thread TEXT,
     timestamp INTEGER NOT NULL,
     role TEXT NOT NULL,
     content TEXT NOT NULL,

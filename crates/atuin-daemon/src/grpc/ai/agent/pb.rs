@@ -167,7 +167,6 @@ impl From<DomainMessage> for Message {
             harness: HarnessKind::from(value.session.harness) as i32,
             session_id: value.session.session.into(),
             parent: value.parent.map(Into::into),
-            thread: value.thread,
             source_id: value.source_id.into(),
             parent_source_id: value.parent_source_id.map(Into::into),
             timestamp: Some(prost_types::Timestamp {

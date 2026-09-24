@@ -86,7 +86,6 @@ struct MessageRow {
     parent_harness: Option<i64>,
     parent_session_id: Option<String>,
     parent_source_id: Option<String>,
-    thread: Option<String>,
     timestamp: i64,
     role: String,
     content: String,
@@ -245,10 +244,10 @@ impl AiSessionDatabase {
         let inserted = db::query(
             "INSERT INTO messages (
                 id, harness, session_id, source_id, parent_harness, parent_session_id,
-                parent_source_id, thread, timestamp, role, content, content_z, cwd, git_branch,
-                model, usage_input, usage_output, usage_cache_read, usage_cache_write,
+                parent_source_id, timestamp, role, content, content_z, cwd, git_branch, model,
+                usage_input, usage_output, usage_cache_read, usage_cache_write,
                 usage_reasoning, stop_reason, usage_present, turn_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(harness, session_id, source_id) DO NOTHING",
         )
         .bind(id)
@@ -258,7 +257,6 @@ impl AiSessionDatabase {
         .bind(parent_harness)
         .bind(parent_session_id.clone())
         .bind(msg.parent_source_id.as_ref().map(|s| s.as_ref()))
-        .bind(msg.thread.as_deref())
         .bind(timestamp)
         .bind(role_json)
         .bind(content)
@@ -507,10 +505,10 @@ impl AiSessionDatabase {
     pub async fn last_message(&self, session: &HarnessSession) -> Result<Option<Message>, DbError> {
         let row: Option<MessageRow> = db::query_as(
             "SELECT id, harness, session_id, source_id, parent_harness, parent_session_id, \
-             parent_source_id, thread, timestamp, role, content, content_z, cwd, git_branch, \
-             model, usage_input, usage_output, usage_cache_read, usage_cache_write, \
-             usage_reasoning, stop_reason, usage_present, turn_id FROM messages WHERE harness = ? \
-             AND session_id = ? ORDER BY timestamp DESC, id DESC LIMIT 1",
+             parent_source_id, timestamp, role, content, content_z, cwd, git_branch, model, \
+             usage_input, usage_output, usage_cache_read, usage_cache_write, usage_reasoning, \
+             stop_reason, usage_present, turn_id FROM messages WHERE harness = ? AND session_id = \
+             ? ORDER BY timestamp DESC, id DESC LIMIT 1",
         )
         .bind(session.harness as i64)
         .bind(session.session.as_ref())
@@ -571,7 +569,7 @@ impl AiSessionDatabase {
         async_stream::try_stream! {
             let mut rows = db::query_as::<_, MessageRow>(
                 "SELECT id, harness, session_id, source_id, parent_harness, parent_session_id, \
-                 parent_source_id, thread, timestamp, role, content, content_z, cwd, git_branch, \
+                 parent_source_id, timestamp, role, content, content_z, cwd, git_branch, \
                  model, usage_input, usage_output, usage_cache_read, usage_cache_write, \
                  usage_reasoning, stop_reason, usage_present, turn_id FROM messages WHERE harness = ? AND \
                  session_id = ? \
@@ -697,12 +695,12 @@ impl AiSessionDatabase {
             let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
             let rows: Vec<ReindexRow> = db::query_as::<_, ReindexRow>(
                 "SELECT m.rowid AS rowid, m.id, m.harness, m.session_id, m.source_id, \
-                 m.parent_harness, m.parent_session_id, m.parent_source_id, m.thread, \
-                 m.timestamp, m.role, m.content, m.content_z, m.cwd, m.git_branch, m.model, \
-                 m.usage_input, m.usage_output, m.usage_cache_read, m.usage_cache_write, \
-                 m.usage_reasoning, m.stop_reason, m.usage_present, m.turn_id, s.title AS \
-                 session_title FROM messages m LEFT JOIN sessions s ON s.harness = m.harness AND \
-                 s.session_id = m.session_id WHERE m.rowid > ? ORDER BY m.rowid LIMIT ?",
+                 m.parent_harness, m.parent_session_id, m.parent_source_id, m.timestamp, m.role, \
+                 m.content, m.content_z, m.cwd, m.git_branch, m.model, m.usage_input, \
+                 m.usage_output, m.usage_cache_read, m.usage_cache_write, m.usage_reasoning, \
+                 m.stop_reason, m.usage_present, m.turn_id, s.title AS session_title FROM \
+                 messages m LEFT JOIN sessions s ON s.harness = m.harness AND s.session_id = \
+                 m.session_id WHERE m.rowid > ? ORDER BY m.rowid LIMIT ?",
             )
             .bind(watermark)
             .bind(REINDEX_CHUNK)
@@ -1190,7 +1188,6 @@ impl AiSessionDatabase {
             .source_id(SourceId::from(row.source_id))
             .parent(parent)
             .parent_source_id(row.parent_source_id.map(SourceId::from))
-            .thread(row.thread)
             .timestamp(Self::time_from_millis(row.timestamp)?)
             .role(role)
             .content(content)

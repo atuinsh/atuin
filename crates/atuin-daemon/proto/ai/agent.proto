@@ -117,8 +117,9 @@ message Message {
   string session_id = 3;
   // Session this one was handed off from, if any.
   optional HarnessSession parent = 4;
-  // Harness-native thread identifier, if any.
-  optional string thread = 5;
+  // Was a harness-native thread identifier that no harness supplied.
+  reserved 5;
+  reserved "thread";
   // Harness-native message identifier, unique within the session.
   string source_id = 6;
   // Harness-native identifier of the message this one replies to.

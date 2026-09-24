@@ -54,8 +54,6 @@ pub struct Message {
     pub parent: Option<HarnessSession>,
     #[builder(default)]
     pub parent_source_id: Option<SourceId>,
-    #[builder(default)]
-    pub thread: Option<String>,
     pub timestamp: OffsetDateTime,
     pub role: Role,
     pub content: Vec<Content>,
@@ -168,7 +166,6 @@ mod tests {
             source_id: SourceId,
             parent: Option<HarnessSession>,
             parent_source_id: Option<SourceId>,
-            thread: Option<String>,
             timestamp: OffsetDateTime,
             role: Role,
             content: Vec<Content>,
