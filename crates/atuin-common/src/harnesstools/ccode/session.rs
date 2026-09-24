@@ -200,20 +200,33 @@ impl CcodeSession {
     /// The subagent that spawned this one, for a nested subagent's transcript. Its lines name
     /// only the root session (`sessionId`); Claude Code records the spawning agent as
     /// `parentAgentId` in the `agent-<id>.meta.json` beside the transcript, whose own transcript
-    /// is `agent-<parentAgentId>.jsonl`. Read when a stream starts, since Claude Code may create
-    /// the transcript before its metadata.
-    async fn spawned_by(&self) -> Option<SessionId> {
-        let name = self.path.file_name()?.to_str()?.strip_suffix(".jsonl")?;
+    /// is `agent-<parentAgentId>.jsonl`.
+    ///
+    /// `None` while that metadata cannot be read yet: Claude Code may create the transcript
+    /// before it (within the same second, in real sessions, and occasionally long after), so a
+    /// followed transcript asks again with each line until it can.
+    async fn spawned_by(&self) -> Option<Option<SessionId>> {
+        let Some(name) = self
+            .path
+            .file_name()
+            .and_then(|n| n.to_str()?.strip_suffix(".jsonl"))
+            .map(str::to_owned)
+        else {
+            return Some(None);
+        };
         if !name.starts_with("agent-") {
-            return None;
+            return Some(None);
         }
         let meta = self.path.with_file_name(format!("{name}.meta.json"));
         self.pool
             .run(move || {
                 let meta: serde_json::Value =
                     serde_json::from_slice(&std::fs::read(meta).ok()?).ok()?;
-                let parent = meta["parentAgentId"].as_str()?;
-                Some(SessionId::from(format!("agent-{parent}")))
+                Some(
+                    meta["parentAgentId"]
+                        .as_str()
+                        .map(|parent| SessionId::from(format!("agent-{parent}"))),
+                )
             })
             .await
             .ok()
@@ -263,7 +276,8 @@ impl Session for CcodeSession {
         from: Option<Checkpoint>,
     ) -> impl Stream<Item = Result<(Checkpoint, CcodeMessage), MessageError>> + Send + 'static {
         async_stream::stream! {
-            let spawner = self.spawned_by().await;
+            let probe = self.clone();
+            let mut spawner = probe.spawned_by().await;
             let start = match from {
                 Some(from) => self.start(from).await,
                 None => 0,
@@ -278,12 +292,13 @@ impl Session for CcodeSession {
             }
             .json_with(CcodeMessage::decode);
             for await item in messages {
+                if spawner.is_none() && item.is_ok() {
+                    spawner = probe.spawned_by().await;
+                }
+                let known = spawner.clone().flatten();
                 yield item
                     .map(|(line, message)| {
-                        (
-                            Checkpoint::new(line.end, &line.bytes),
-                            message.with_spawner(spawner.clone()),
-                        )
+                        (Checkpoint::new(line.end, &line.bytes), message.with_spawner(known))
                     })
                     .map_err(MessageError::from);
             }
@@ -293,7 +308,7 @@ impl Session for CcodeSession {
     fn read(&self) -> impl Stream<Item = Result<CcodeMessage, MessageError>> + Send + 'static {
         let session = self.clone();
         async_stream::stream! {
-            let spawner = session.spawned_by().await;
+            let spawner = session.spawned_by().await.flatten();
             let messages = FollowLines::new(PooledReadLines::new(
                 PathLineReader::new(&session.path),
                 session.pool,
@@ -1272,6 +1287,43 @@ mod tests {
         .unwrap();
         assert_eq!(events[0].message.role(), Role::Assistant);
         assert_eq!(events[0].checkpoint.at, u64::try_from(body.len()).unwrap());
+    }
+
+    /// A nested subagent's transcript followed before Claude Code wrote its metadata takes its
+    /// spawning agent as parent once the metadata appears, rather than the root session for good.
+    #[rstest]
+    #[tokio::test]
+    async fn a_followed_subagent_finds_its_spawner_once_the_metadata_lands(projects: Projects) {
+        let dir = projects.project.join("s1/subagents");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent-a2.jsonl");
+        let raw = |uuid: &str| {
+            serde_json::json!({"type": "user", "uuid": uuid, "sessionId": "s1", "agentId": "a2",
+                "isSidechain": true, "message": {"role": "user", "content": "go"}})
+            .to_string()
+                + "\n"
+        };
+        std::fs::write(&path, raw("u1")).unwrap();
+
+        let listener = CcodeSessions::builder()
+            .root(projects.root.path().to_path_buf())
+            .pool(pool())
+            .build()
+            .listener()
+            .unwrap();
+        // The watch stream owns the watcher: it must outlive the message stream.
+        let mut sessions = std::pin::pin!(listener.watch());
+        let session = sessions.next().await.unwrap().unwrap();
+        let mut messages = std::pin::pin!(session.messages());
+        let wait = std::time::Duration::from_secs(10);
+        let before = tokio::time::timeout(wait, messages.next()).await.unwrap().unwrap().unwrap();
+        assert_eq!(before.parent_session(), Some(SessionId::from("s1".to_owned())));
+
+        std::fs::write(dir.join("agent-a2.meta.json"), r#"{"parentAgentId":"a1"}"#).unwrap();
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        std::io::Write::write_all(&mut file, raw("u2").as_bytes()).unwrap();
+        let after = tokio::time::timeout(wait, messages.next()).await.unwrap().unwrap().unwrap();
+        assert_eq!(after.parent_session(), Some(SessionId::from("agent-a1".to_owned())));
     }
 
     #[rstest]
