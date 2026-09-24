@@ -1,6 +1,8 @@
+use std::fs::File;
+use std::io;
 use std::path::{Path, PathBuf};
 
-use futures::{Stream, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use serde::Deserialize;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -13,10 +15,11 @@ use crate::harnesstools::session::model::{
     Content, MessageId, Role, StopReason, ToolCallId, ToolResult, ToolUse, Usage,
 };
 use crate::harnesstools::session::{
-    Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId, Sessions,
-    WatchError, scan_sessions,
+    Checkpoint, Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId,
+    Sessions, WatchError, scan_sessions,
 };
-use crate::json::jsonl;
+use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
+use crate::json::jsonl::JsonlExt;
 use crate::sync::BlockingPool;
 use crate::utils::{env_nonempty, home_dir};
 
@@ -166,6 +169,36 @@ impl CcodeSession {
             pool,
         }
     }
+
+    /// The byte offset to read from: `from`'s, if the line ending there is still the one `from`
+    /// was taken after, else the transcript's start.
+    async fn start(&self, from: Checkpoint) -> u64 {
+        let path = self.path.clone();
+        let found = self
+            .pool
+            .run(move || File::open(path).and_then(|file| Line::ending_at(&file, from.at)))
+            .await
+            .map_err(io::Error::other)
+            .and_then(|found| found);
+        match found {
+            Ok(Some(line)) if from.names(&line.bytes) => from.at,
+            Ok(_) => {
+                tracing::debug!(
+                    path = %self.path.display(),
+                    "the checkpoint no longer names its line; reading from the start"
+                );
+                0
+            }
+            Err(err) => {
+                tracing::warn!(
+                    ?err,
+                    path = %self.path.display(),
+                    "failed to read the line a checkpoint names; reading from the start"
+                );
+                0
+            }
+        }
+    }
 }
 
 impl Session for CcodeSession {
@@ -175,20 +208,37 @@ impl Session for CcodeSession {
         self.id.clone()
     }
 
-    async fn message_at(&self, at: u64) -> Option<CcodeMessage> {
-        jsonl::value_at(&self.path, at, &self.pool).await
-    }
-
     fn messages_from(
         self,
-        from: u64,
-    ) -> impl Stream<Item = Result<(u64, CcodeMessage), MessageError>> + Send + 'static {
-        jsonl::follow_from::<CcodeMessage>(self.path, from, self.changes, self.pool)
-            .map_err(MessageError::from)
+        from: Option<Checkpoint>,
+    ) -> impl Stream<Item = Result<(Checkpoint, CcodeMessage), MessageError>> + Send + 'static {
+        async_stream::stream! {
+            let start = match from {
+                Some(from) => self.start(from).await,
+                None => 0,
+            };
+            let lines = FollowLines::new(PooledReadLines::new(
+                PathLineReader::at(&self.path, start),
+                self.pool,
+            ));
+            let messages = match self.changes {
+                Some(changes) => lines.follow(changes).left_stream(),
+                None => lines.read_to_end().right_stream(),
+            }
+            .json::<CcodeMessage>();
+            for await item in messages {
+                yield item
+                    .map(|(line, message)| (Checkpoint::new(line.end, &line.bytes), message))
+                    .map_err(MessageError::from);
+            }
+        }
     }
 
     fn read(&self) -> impl Stream<Item = Result<CcodeMessage, MessageError>> + Send + 'static {
-        jsonl::read_all::<CcodeMessage>(self.path.clone(), self.pool.clone())
+        FollowLines::new(PooledReadLines::new(PathLineReader::new(&self.path), self.pool.clone()))
+            .read_to_end()
+            .json::<CcodeMessage>()
+            .map_ok(|(_, message)| message)
             .map_err(MessageError::from)
     }
 }
@@ -616,10 +666,7 @@ mod tests {
             .unwrap();
         let events: Vec<SessionEvent<CcodeMessage>> = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            listener
-                .events(|_| std::future::ready(0), |_, _| std::future::ready(true))
-                .take(2)
-                .try_collect(),
+            listener.events(|_| std::future::ready(None)).take(2).try_collect(),
         )
         .await
         .expect("events() did not produce within 10s")
@@ -629,15 +676,15 @@ mod tests {
         assert!(events.iter().all(|event| event.session == sid));
         let roles: Vec<Role> = events.iter().map(|event| event.message.role()).collect();
         assert_eq!(roles, vec![Role::User, Role::Assistant]);
-        // Each event carries the offset past its line; the last one is the file's length.
-        assert!(events[0].offset < events[1].offset);
-        assert_eq!(events[1].offset, u64::try_from(body.len()).unwrap());
+        // Each event carries the checkpoint past its line; the last one is at the file's length.
+        assert!(events[0].checkpoint.at < events[1].checkpoint.at);
+        assert_eq!(events[1].checkpoint.at, u64::try_from(body.len()).unwrap());
     }
 
-    /// The offset a caller resumes from is honoured: only lines past it are yielded.
+    /// The checkpoint a caller resumes from is honoured: only lines past it are yielded.
     #[rstest]
     #[tokio::test]
-    async fn events_resume_each_session_from_the_given_offset() {
+    async fn events_resume_each_session_from_its_checkpoint() {
         let dir = tempfile::tempdir().unwrap();
         let first = line("user", "user", serde_json::json!("hi")) + "\n";
         let body = first.clone()
@@ -652,19 +699,17 @@ mod tests {
             .build()
             .listener()
             .unwrap();
-        let start = u64::try_from(first.len()).unwrap();
+        let from =
+            Checkpoint::new(u64::try_from(first.len()).unwrap(), first.trim_end().as_bytes());
         let events: Vec<SessionEvent<CcodeMessage>> = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            listener
-                .events(move |_| std::future::ready(start), |_, _| std::future::ready(true))
-                .take(1)
-                .try_collect(),
+            listener.events(move |_| std::future::ready(Some(from))).take(1).try_collect(),
         )
         .await
         .expect("events() did not produce within 10s")
         .unwrap();
         assert_eq!(events[0].message.role(), Role::Assistant);
-        assert_eq!(events[0].offset, u64::try_from(body.len()).unwrap());
+        assert_eq!(events[0].checkpoint.at, u64::try_from(body.len()).unwrap());
     }
 
     #[rstest]

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use atuin_common::db::sqlite::fts::{TextHighlighter, match_expression};
 use atuin_common::db::sqlite::{Sqlite, SqliteOpenOrCreateError};
 use atuin_common::db::{self};
-use atuin_common::harnesstools::session::{Content, Role, Usage};
+use atuin_common::harnesstools::session::{Checkpoint, Content, Role, Usage};
 use atuin_domain::record::RecordId;
 use futures::{Stream, StreamExt, TryStreamExt};
 use time::OffsetDateTime;
@@ -353,30 +353,41 @@ impl AiSessionDatabase {
         Ok(found.is_some())
     }
 
-    /// How far into a session's transcript capture has read: the byte offset to resume from.
-    pub async fn checkpoint(&self, session: &HarnessSession) -> Result<Option<u64>, DbError> {
-        let offset: Option<i64> = db::query_scalar(
-            "SELECT \"offset\" FROM checkpoints WHERE harness = ? AND session_id = ?",
+    /// Where capture resumes a session, if it checkpointed one with a digest; one stored before
+    /// digests reads as `None`, so the session is read again from its start.
+    pub async fn checkpoint(
+        &self,
+        session: &HarnessSession,
+    ) -> Result<Option<Checkpoint>, DbError> {
+        let row: Option<(i64, Option<i64>)> = db::query_as(
+            "SELECT \"offset\", digest FROM checkpoints WHERE harness = ? AND session_id = ?",
         )
         .bind(session.harness as i64)
         .bind(session.session.as_ref())
         .fetch_optional(self.db.pool())
         .await?;
 
-        Ok(offset.map(|offset| u64::try_from(offset).unwrap_or(0)))
+        Ok(row.and_then(|(at, digest)| {
+            Some(Checkpoint {
+                at: u64::try_from(at).unwrap_or(0),
+                digest: digest?.cast_unsigned(),
+            })
+        }))
     }
 
     pub async fn set_checkpoint(
         &self,
         session: &HarnessSession,
-        offset: u64,
+        checkpoint: Checkpoint,
     ) -> Result<(), DbError> {
         db::query(
-            "INSERT OR REPLACE INTO checkpoints (harness, session_id, \"offset\") VALUES (?, ?, ?)",
+            "INSERT OR REPLACE INTO checkpoints (harness, session_id, \"offset\", digest) VALUES \
+             (?, ?, ?, ?)",
         )
         .bind(session.harness as i64)
         .bind(session.session.as_ref())
-        .bind(i64::try_from(offset).unwrap_or(i64::MAX))
+        .bind(i64::try_from(checkpoint.at).unwrap_or(i64::MAX))
+        .bind(checkpoint.digest.cast_signed())
         .execute(self.db.pool())
         .await?;
 
@@ -988,8 +999,9 @@ impl AiSessionDatabase {
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::db;
     use atuin_common::harnesstools::session::{
-        Content, Role, ToolCallId, ToolResult, ToolUse, Usage,
+        Checkpoint, Content, Role, ToolCallId, ToolResult, ToolUse, Usage,
     };
     use atuin_domain::record::RecordId;
     use futures::TryStreamExt;
@@ -1036,9 +1048,28 @@ mod tests {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         let session = sample_handle();
         assert_eq!(db.checkpoint(&session).await.unwrap(), None);
-        db.set_checkpoint(&session, 42).await.unwrap();
-        db.set_checkpoint(&session, 4096).await.unwrap();
-        assert_eq!(db.checkpoint(&session).await.unwrap(), Some(4096));
+        db.set_checkpoint(&session, Checkpoint { at: 42, digest: 1 }).await.unwrap();
+        // A digest with its top bit set survives the signed column.
+        let latest = Checkpoint {
+            at: 4096,
+            digest: u64::MAX - 1,
+        };
+        db.set_checkpoint(&session, latest).await.unwrap();
+        assert_eq!(db.checkpoint(&session).await.unwrap(), Some(latest));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_checkpoint_stored_before_digests_reads_as_none() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        db::query("INSERT INTO checkpoints (harness, session_id, \"offset\") VALUES (?, ?, 42)")
+            .bind(session.harness as i64)
+            .bind(session.session.as_ref())
+            .execute(db.db.pool())
+            .await
+            .unwrap();
+        assert_eq!(db.checkpoint(&session).await.unwrap(), None);
     }
 
     #[rstest]

@@ -77,8 +77,8 @@ use crate::harnesstools::session::model::{
     Content, MessageId, Role, ToolCallId, ToolResult, ToolUse,
 };
 use crate::harnesstools::session::{
-    Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId, Sessions,
-    WatchError,
+    Checkpoint, Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId,
+    Sessions, WatchError,
 };
 use crate::os::fs::FdIdentity;
 use crate::sync::BlockingPool;
@@ -428,18 +428,27 @@ impl Reader {
         }
     }
 
-    /// Read on past the row at `seq`, where a resume token puts this session. The row is read
-    /// for its id, which anchors the session: without it the next page could not tell the
-    /// incarnation the token came from apart from one written over it.
-    async fn seek(&mut self, seq: i64) {
+    /// Read on past the row `from` names, if it is still the row `from` was taken after: a row
+    /// that is gone, or another under the same `seq` after a wipe, leaves the aggregate to be
+    /// read again from the start.
+    async fn seek(&mut self, from: Checkpoint) {
         self.ready = true;
+        let Ok(seq) = i64::try_from(from.at) else {
+            return;
+        };
         let head = self
             .reads
             .page(&self.aggregate, seq)
             .await
             .and_then(|rows| rows.into_iter().next())
-            .filter(|row| row.seq == seq);
-        // a token naming a row that is gone resumes nothing: the aggregate is read again whole
+            .filter(|row| row.seq == seq && from.names(row.identity().as_bytes()));
+        if head.is_none() {
+            tracing::debug!(
+                session = %self.aggregate,
+                seq,
+                "the checkpoint no longer names its row; reading the aggregate from the start"
+            );
+        }
         self.anchor = head.map(|row| Anchor {
             seq,
             id: row.identity().to_owned(),
@@ -614,7 +623,7 @@ impl Drain<'_> {
     /// The session's next message, or `None` when its aggregate has nothing more to read right
     /// now -- a failed read included, since the rows stay in the table and are read again when
     /// the session is woken or retried.
-    async fn next(&mut self) -> Option<(i64, Result<OpencodeMessage, MessageError>)> {
+    async fn next(&mut self) -> Option<(Checkpoint, Result<OpencodeMessage, MessageError>)> {
         loop {
             for row in self.page.by_ref() {
                 // the anchor only moves on once the message of the row is in hand: building one
@@ -627,7 +636,8 @@ impl Drain<'_> {
                     delivered: true,
                 });
                 if let Some(message) = message {
-                    return Some((row.seq, message));
+                    let at = u64::try_from(row.seq).unwrap_or(0);
+                    return Some((Checkpoint::new(at, row.identity().as_bytes()), message));
                 }
             }
             self.page = self.reader.fill().await?;
@@ -892,40 +902,24 @@ impl Session for OpencodeSession {
         }
     }
 
-    /// The message the row at `at` carries. A session's resume token is its row's `seq`, which
-    /// opencode assigns contiguously from 0 within one incarnation of an aggregate and never
-    /// reuses within it.
-    async fn message_at(&self, at: u64) -> Option<OpencodeMessage> {
-        let seq = i64::try_from(at).ok()?;
-        let row = self
-            .reads
-            .page(&self.aggregate, seq)
-            .await?
-            .into_iter()
-            .next()
-            .filter(|row| row.seq == seq)?;
-        Reader::from_start(self.aggregate.clone(), Arc::clone(&self.reads))
-            .message(&row)
-            .await?
-            .ok()
-    }
-
+    /// A checkpoint is a row's `seq`, which opencode assigns contiguously from 0 within one
+    /// incarnation of an aggregate and never reuses within it, and a digest of the row's id.
     fn messages_from(
         self,
-        from: u64,
-    ) -> impl Stream<Item = Result<(u64, OpencodeMessage), MessageError>> + Send + 'static {
+        from: Option<Checkpoint>,
+    ) -> impl Stream<Item = Result<(Checkpoint, OpencodeMessage), MessageError>> + Send + 'static
+    {
         let Self {
             mut wake, reader, ..
         } = self;
-        let seek = i64::try_from(from).ok().filter(|&seq| seq > 0);
         async_stream::stream! {
             // whether the drain at the top of the loop is this session's last: the tail has gone
             // and nothing can wake the session again, so it reads out the rows already in the
             // table -- those a failed read did not reach among them -- rather than abandon them
             let mut last = false;
-            // a token resumes the session at the row it names, past the one it names
-            if let Some(seq) = seek {
-                reader.lock().await.seek(seq).await;
+            // a checkpoint resumes the session past the row it names
+            if let Some(from) = from {
+                reader.lock().await.seek(from).await;
             }
             loop {
                 let failed = {
@@ -937,8 +931,8 @@ impl Session for OpencodeSession {
                     // table, and its wake was subscribed to after the tail sent it
                     reader.wake();
                     let mut drain = reader.drain();
-                    while let Some((seq, message)) = drain.next().await {
-                        yield message.map(|message| (u64::try_from(seq).unwrap_or(0), message));
+                    while let Some((at, message)) = drain.next().await {
+                        yield message.map(|message| (at, message));
                     }
                     reader.failed()
                 };
@@ -1599,7 +1593,7 @@ mod tests {
             .build()
             .listener()
             .unwrap()
-            .events(|_| async { 0 }, |_, _| async { true })
+            .events(|_| async { None })
             .boxed()
     }
 
@@ -2127,6 +2121,46 @@ mod tests {
             tokio::time::timeout(Duration::from_secs(1), stream.next()).await.is_err(),
             "watch() offered a session without a row of it"
         );
+    }
+
+    /// A checkpoint names its row by id as well as `seq`: it resumes the session past that row
+    /// while the row is there, and once a wipe has put other rows under the same seqs the session
+    /// reads its aggregate again from the start.
+    #[rstest]
+    #[case::the_row_is_still_there(false, ["two", "three"])]
+    #[case::a_wipe_reused_its_seq(true, ["three", "four"])]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_checkpoint_resumes_only_past_the_row_it_was_taken_after(
+        #[case] wipe: bool,
+        #[case] expected: [&str; 2],
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.db");
+        let db = event_db(&path).await;
+        role_row(&db, "e1", "ses_1", "msg_1", "user").await;
+        text_row(&db, "e2", "ses_1", "prt_e2", "msg_1", "one").await;
+        text_row(&db, "e3", "ses_1", "prt_e3", "msg_1", "two").await;
+
+        let mut stream = watch(&path);
+        let mut first = offered(&mut stream).await.messages_from(None).boxed();
+        let (after_one, _) = next_n(&mut first, 1).await.pop().unwrap().unwrap();
+        drop(first);
+
+        if wipe {
+            execute(&db, "DELETE FROM event").await;
+            role_row(&db, "f1", "ses_1", "msg_2", "user").await;
+            text_row(&db, "f2", "ses_1", "prt_f2", "msg_2", "three").await;
+            text_row(&db, "f3", "ses_1", "prt_f3", "msg_2", "four").await;
+        } else {
+            text_row(&db, "e4", "ses_1", "prt_e4", "msg_1", "three").await;
+        }
+        let mut resumed = offered(&mut stream).await.messages_from(Some(after_one)).boxed();
+        let contents: Vec<Vec<Content>> = next_n(&mut resumed, 2)
+            .await
+            .into_iter()
+            .map(|item| item.unwrap().1.content())
+            .collect();
+        assert_eq!(contents, expected.map(|text| vec![Content::Text(text.into())]));
     }
 
     /// What `stream` delivers before it goes quiet, or before it has had to wait `waits` times,

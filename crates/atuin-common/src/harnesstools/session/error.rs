@@ -32,10 +32,6 @@ pub enum MessageError {
     Jsonl(#[from] JsonlError),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
-    #[error("unrecognized record on line {line}")]
-    Unrecognized {
-        line: u64,
-    },
 }
 
 #[derive(Debug, thiserror::Error)]

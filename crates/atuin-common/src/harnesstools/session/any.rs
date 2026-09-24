@@ -9,8 +9,8 @@ use crate::harnesstools::codex::session::{CodexListener, CodexSession, CodexSess
 use crate::harnesstools::opencode::session::{OpencodeListener, OpencodeSession, OpencodeSessions};
 use crate::harnesstools::pi::session::{PiListener, PiSession, PiSessions};
 use crate::harnesstools::session::{
-    AnyMessage, CaptureError, Listener, MessageError, RuntimeError, Session, SessionEvent,
-    SessionId, Sessions, WatchError,
+    AnyMessage, CaptureError, Checkpoint, Listener, MessageError, RuntimeError, Session,
+    SessionEvent, SessionId, Sessions, WatchError,
 };
 
 #[derive(Debug, Clone, From)]
@@ -64,32 +64,26 @@ impl AnyListener {
 
     /// See [`Listener::events`].
     #[must_use]
-    pub fn events<F, G>(
+    pub fn events<F>(
         self,
         checkpoint: impl Fn(&SessionId) -> F + Send + 'static,
-        knows: impl Fn(SessionId, AnyMessage) -> G + Send + 'static,
     ) -> BoxStream<'static, Result<SessionEvent<AnyMessage>, CaptureError>>
     where
-        F: Future<Output = u64> + Send + 'static,
-        G: Future<Output = bool> + Send + 'static,
+        F: Future<Output = Option<Checkpoint>> + Send + 'static,
     {
         match self {
-            Self::Ccode(l) => l
-                .events(checkpoint, move |id, m| knows(id, AnyMessage::from(m)))
-                .map_ok(|ev| ev.map_message(AnyMessage::from))
-                .boxed(),
-            Self::Codex(l) => l
-                .events(checkpoint, move |id, m| knows(id, AnyMessage::from(m)))
-                .map_ok(|ev| ev.map_message(AnyMessage::from))
-                .boxed(),
-            Self::Opencode(l) => l
-                .events(checkpoint, move |id, m| knows(id, AnyMessage::from(m)))
-                .map_ok(|ev| ev.map_message(AnyMessage::from))
-                .boxed(),
-            Self::Pi(l) => l
-                .events(checkpoint, move |id, m| knows(id, AnyMessage::from(m)))
-                .map_ok(|ev| ev.map_message(AnyMessage::from))
-                .boxed(),
+            Self::Ccode(l) => {
+                l.events(checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
+            }
+            Self::Codex(l) => {
+                l.events(checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
+            }
+            Self::Opencode(l) => {
+                l.events(checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
+            }
+            Self::Pi(l) => {
+                l.events(checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
+            }
         }
     }
 }
@@ -120,16 +114,6 @@ impl AnySession {
             Self::Codex(s) => s.messages().map_ok(AnyMessage::from).boxed(),
             Self::Opencode(s) => s.messages().map_ok(AnyMessage::from).boxed(),
             Self::Pi(s) => s.messages().map_ok(AnyMessage::from).boxed(),
-        }
-    }
-
-    #[must_use]
-    pub async fn message_at(&self, at: u64) -> Option<AnyMessage> {
-        match self {
-            Self::Ccode(s) => s.message_at(at).await.map(AnyMessage::from),
-            Self::Codex(s) => s.message_at(at).await.map(AnyMessage::from),
-            Self::Opencode(s) => s.message_at(at).await.map(AnyMessage::from),
-            Self::Pi(s) => s.message_at(at).await.map(AnyMessage::from),
         }
     }
 

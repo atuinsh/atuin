@@ -1,6 +1,8 @@
 use derive_more::{AsRef, Display, From, Into};
 use serde::{Deserialize, Serialize};
 
+use crate::harnesstools::session::Checkpoint;
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Display, From, Into, AsRef, Serialize, Deserialize)]
 pub struct SessionId(#[as_ref(str)] String);
 
@@ -79,9 +81,8 @@ pub enum StopReason {
 #[derive(Clone, Debug)]
 pub struct SessionEvent<M> {
     pub session: SessionId,
-    /// Byte offset just past this line in its transcript: checkpoint it, and resume from it
-    /// with `Session::messages_from`.
-    pub offset: u64,
+    /// Just past this message: store it, and resume from it with `Session::messages_from`.
+    pub checkpoint: Checkpoint,
     pub message: M,
 }
 
@@ -90,7 +91,7 @@ impl<M> SessionEvent<M> {
     pub fn map_message<N>(self, f: impl FnOnce(M) -> N) -> SessionEvent<N> {
         SessionEvent {
             session: self.session,
-            offset: self.offset,
+            checkpoint: self.checkpoint,
             message: f(self.message),
         }
     }

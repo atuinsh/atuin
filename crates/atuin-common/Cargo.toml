@@ -12,7 +12,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
-ai = ["dep:shlex", "sqlite"]
+ai = ["dep:shlex", "dep:xxhash-rust", "sqlite"]
 ansi = ["dep:atuin-vt100"]
 db = ["dep:sqlx"]
 os = ["dep:rustix"]
@@ -73,6 +73,8 @@ unicode-segmentation = { workspace = true, optional = true }
 unicode-width = { workspace = true, optional = true }
 url = { workspace = true }
 uuid = { workspace = true }
+# Digests the item a session checkpoint was taken after; xxh3 is stable across versions.
+xxhash-rust = { workspace = true, optional = true }
 zeroize = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
