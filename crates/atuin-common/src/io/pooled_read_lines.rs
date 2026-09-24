@@ -9,31 +9,21 @@ use std::sync::Arc;
 use futures::Stream;
 use parking_lot::Mutex;
 
-use crate::io::{Line, ReadLines, ReadLinesError};
+use crate::io::{AsyncReadLines, Line, ReadLines, ReadLinesError};
 use crate::sync::BlockingPool;
 
 /// Bytes of lines pulled per trip to the pool.
-const BATCH_BYTES: u64 = 64 * 1024;
-
-/// Reads the complete lines appended to a file without blocking the async runtime.
-pub trait AsyncReadLines {
-    /// The complete lines past the last one handed out, read as the stream is pulled.
-    ///
-    /// The stream ends at the end of the file or after its first error; a truncated or replaced
-    /// file is read on from its start. Lines read but not yet yielded are dropped with the stream
-    /// and not read again.
-    fn lines(&mut self) -> impl Stream<Item = io::Result<Line>> + Send + '_;
-}
+const LINE_BATCH_BYTES: u64 = 64 * 1024;
 
 /// Reads a [`ReadLines`] in a [`BlockingPool`].
 #[derive(Debug)]
-pub struct PooledLines<R> {
+pub struct PooledReadLines<R> {
     /// Shared with the trip in flight, which runs on after a dropped stream stops waiting for it.
     reader: Arc<Mutex<R>>,
     pool: BlockingPool,
 }
 
-impl<R> PooledLines<R> {
+impl<R> PooledReadLines<R> {
     #[must_use]
     pub fn new(reader: R, pool: BlockingPool) -> Self {
         Self {
@@ -43,12 +33,12 @@ impl<R> PooledLines<R> {
     }
 }
 
-impl<R: ReadLines + Send + 'static> AsyncReadLines for PooledLines<R> {
+impl<R: ReadLines + Send + 'static> AsyncReadLines for PooledReadLines<R> {
     fn lines(&mut self) -> impl Stream<Item = io::Result<Line>> + Send + '_ {
         async_stream::stream! {
             loop {
                 let reader = Arc::clone(&self.reader);
-                let batch = match self.pool.run(move || Batch::read(&mut *reader.lock())).await {
+                let batch = match self.pool.run(move || LineBatch::read(&mut *reader.lock())).await {
                     Ok(batch) => batch,
                     Err(cancelled) => {
                         yield Err(io::Error::other(cancelled));
@@ -58,10 +48,10 @@ impl<R: ReadLines + Send + 'static> AsyncReadLines for PooledLines<R> {
                 for line in batch.lines {
                     yield Ok(line);
                 }
-                match batch.stop {
-                    Stop::Drained => break,
-                    Stop::Full => {}
-                    Stop::Failed(err) => {
+                match batch.end {
+                    LineBatchEnd::Drained => break,
+                    LineBatchEnd::Full => {}
+                    LineBatchEnd::Failed(err) => {
                         yield Err(err);
                         break;
                     }
@@ -71,25 +61,26 @@ impl<R: ReadLines + Send + 'static> AsyncReadLines for PooledLines<R> {
     }
 }
 
-/// The lines of one trip to the pool, and why it stopped there.
+/// The lines one trip to the pool read, and why the trip ended there.
 #[derive(Debug)]
-struct Batch {
+struct LineBatch {
     lines: Vec<Line>,
-    stop: Stop,
+    end: LineBatchEnd,
 }
 
+/// Why a [`LineBatch`] ended.
 #[derive(Debug)]
-enum Stop {
+enum LineBatchEnd {
     /// The reader has no complete line left.
     Drained,
-    /// The lines reached [`BATCH_BYTES`]; the reader may have more right away.
+    /// The lines reached [`LINE_BATCH_BYTES`]; the reader may have more right away.
     Full,
     /// A read failed after the lines in the batch.
     Failed(io::Error),
 }
 
-impl Batch {
-    /// Pull lines from `reader` until they reach [`BATCH_BYTES`], the file ends, or a read fails;
+impl LineBatch {
+    /// Pull lines from `reader` until they reach [`LINE_BATCH_BYTES`], the file ends, or a read fails;
     /// a truncated or replaced file is read on from its start.
     fn read(reader: &mut impl ReadLines) -> Self {
         // A reader reports each truncation or replacement once, so this goes round again only
@@ -103,7 +94,7 @@ impl Batch {
                 Err(ReadLinesError::Io(err)) => {
                     return Self {
                         lines: Vec::new(),
-                        stop: Stop::Failed(err),
+                        end: LineBatchEnd::Failed(err),
                     };
                 }
             }
@@ -118,22 +109,22 @@ impl Batch {
                 Err(err) => {
                     return Self {
                         lines: batch,
-                        stop: Stop::Failed(err),
+                        end: LineBatchEnd::Failed(err),
                     };
                 }
             };
             bytes += u64::try_from(line.bytes.len()).expect("a line length fits u64") + 1;
             batch.push(line);
-            if bytes >= BATCH_BYTES {
+            if bytes >= LINE_BATCH_BYTES {
                 return Self {
                     lines: batch,
-                    stop: Stop::Full,
+                    end: LineBatchEnd::Full,
                 };
             }
         }
         Self {
             lines: batch,
-            stop: Stop::Drained,
+            end: LineBatchEnd::Drained,
         }
     }
 }
@@ -186,10 +177,14 @@ mod tests {
         let long = "x".repeat(40 * 1024);
         let file = file(format!("{long}\n{long}\n{long}\n").as_bytes());
         let mut reader = PathLineReader::new(file.path());
-        let first = Batch::read(&mut reader);
-        assert!(matches!(first, Batch { ref lines, stop: Stop::Full } if lines.len() == 2));
-        let rest = Batch::read(&mut reader);
-        assert!(matches!(rest, Batch { ref lines, stop: Stop::Drained } if lines.len() == 1));
+        let first = LineBatch::read(&mut reader);
+        assert!(
+            matches!(first, LineBatch { ref lines, end: LineBatchEnd::Full } if lines.len() == 2)
+        );
+        let rest = LineBatch::read(&mut reader);
+        assert!(
+            matches!(rest, LineBatch { ref lines, end: LineBatchEnd::Drained } if lines.len() == 1)
+        );
     }
 
     #[rstest]
@@ -197,8 +192,10 @@ mod tests {
         #[values(ReadLinesError::Truncated, ReadLinesError::Replaced)] restart: ReadLinesError,
     ) {
         let mut reader = Scripted([Err(restart), Ok(vec![Ok(line("a"))])].into());
-        let batch = Batch::read(&mut reader);
-        assert!(matches!(batch, Batch { ref lines, stop: Stop::Drained } if *lines == [line("a")]));
+        let batch = LineBatch::read(&mut reader);
+        assert!(
+            matches!(batch, LineBatch { ref lines, end: LineBatchEnd::Drained } if *lines == [line("a")])
+        );
     }
 
     #[rstest]
@@ -206,7 +203,7 @@ mod tests {
     async fn a_file_larger_than_a_batch_is_read_to_its_end() {
         let body: String = (0..20_000).map(|n| format!("{n}\n")).collect();
         let file = file(format!("{body}partial").as_bytes());
-        let mut reader = PooledLines::new(PathLineReader::new(file.path()), pool());
+        let mut reader = PooledReadLines::new(PathLineReader::new(file.path()), pool());
         let lines: Vec<Line> = reader.lines().try_collect().await.unwrap();
         let texts: Vec<Bytes> = lines.into_iter().map(|line| line.bytes).collect();
         let expected: Vec<Bytes> = (0..20_000).map(|n| Bytes::from(n.to_string())).collect();
@@ -217,7 +214,7 @@ mod tests {
     #[tokio::test]
     async fn the_lines_before_a_failure_are_yielded_then_the_stream_ends() {
         let reader = Scripted([Ok(vec![Ok(line("a")), Err(io::Error::other("broken"))])].into());
-        let mut reader = PooledLines::new(reader, pool());
+        let mut reader = PooledReadLines::new(reader, pool());
         let got: Vec<io::Result<Line>> = reader.lines().collect().await;
         assert!(matches!(&got[..], [Ok(a), Err(_)] if *a == line("a")));
     }

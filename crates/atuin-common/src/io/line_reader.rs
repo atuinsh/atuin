@@ -7,6 +7,7 @@ use std::iter;
 use std::path::PathBuf;
 
 use bytes::{BufMut, Bytes, BytesMut};
+use futures::Stream;
 
 use crate::os::fs::FdIdentity;
 #[cfg(windows)]
@@ -76,11 +77,17 @@ pub enum ReadLinesError {
 /// [`PathLineReader`] whatever is at its path.
 pub trait ReadLines {
     /// The complete lines past the last one handed out, read as the iterator is pulled.
-    ///
-    /// The iterator ends at the end of the file or after its first error. A line pulled is handed
-    /// out and not read again: `take_while` drops the line it stops on, and collecting into a
-    /// `Result` drops every line before an error.
     fn lines(&mut self) -> Result<impl Iterator<Item = io::Result<Line>>, ReadLinesError>;
+}
+
+/// Reads the complete lines appended to a file, each once, as a stream.
+pub trait AsyncReadLines {
+    /// The complete lines past the last one handed out, read as the stream is pulled.
+    ///
+    /// The stream ends at the end of the file or after its first error; a truncated or replaced
+    /// file is read on from its start. Lines read but not yet yielded are dropped with the stream
+    /// and not read again.
+    fn lines(&mut self) -> impl Stream<Item = io::Result<Line>> + Send + '_;
 }
 
 /// What a reader keeps between reads.

@@ -16,7 +16,7 @@ use crate::harnesstools::session::{
     Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId, Sessions,
     WatchError, scan_sessions,
 };
-use crate::io::{FollowLines, PathLineReader, PooledLines};
+use crate::io::{FollowLines, PathLineReader, PooledReadLines};
 use crate::json::jsonl::{self, JsonlExt};
 use crate::sync::BlockingPool;
 use crate::utils::{env_nonempty, home_dir};
@@ -196,7 +196,7 @@ impl Session for CcodeSession {
         from: u64,
     ) -> impl Stream<Item = Result<(u64, CcodeMessage), MessageError>> + Send + 'static {
         let lines =
-            FollowLines::new(PooledLines::new(PathLineReader::at(self.path, from), self.pool));
+            FollowLines::new(PooledReadLines::new(PathLineReader::at(self.path, from), self.pool));
         match self.changes {
             Some(changes) => lines.follow(changes).left_stream(),
             None => lines.read_to_end().right_stream(),
@@ -206,7 +206,7 @@ impl Session for CcodeSession {
     }
 
     fn read(&self) -> impl Stream<Item = Result<CcodeMessage, MessageError>> + Send + 'static {
-        FollowLines::new(PooledLines::new(PathLineReader::new(&self.path), self.pool.clone()))
+        FollowLines::new(PooledReadLines::new(PathLineReader::new(&self.path), self.pool.clone()))
             .read_to_end()
             .json::<CcodeMessage>()
             .map_ok(|(_, message)| message)

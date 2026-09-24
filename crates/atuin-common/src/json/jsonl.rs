@@ -80,7 +80,7 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use super::*;
-    use crate::io::{FollowLines, PathLineReader, PooledLines};
+    use crate::io::{FollowLines, PathLineReader, PooledReadLines};
 
     #[derive(Debug, PartialEq, Eq)]
     enum Item {
@@ -193,7 +193,7 @@ mod tests {
                 tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             let got: Vec<(u64, Rec)> = runtime
                 .block_on(
-                    FollowLines::new(PooledLines::new(PathLineReader::new(file.path()), pool()))
+                    FollowLines::new(PooledReadLines::new(PathLineReader::new(file.path()), pool()))
                         .read_to_end()
                         .json()
                         .try_collect(),

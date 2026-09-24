@@ -19,11 +19,9 @@ const RETRY_MAX: Duration = Duration::from_secs(5);
 /// ```
 /// use std::fs::OpenOptions;
 /// use std::io::Write;
-/// use std::num::NonZeroUsize;
 /// use std::pin::pin;
 ///
-/// use atuin_common::io::{FollowLines, Line, PathLineReader, PooledLines};
-/// use atuin_common::sync::BlockingPool;
+/// use atuin_common::io::{FollowLines, Line};
 /// use futures::{StreamExt, TryStreamExt};
 /// use tokio::sync::watch;
 ///
@@ -31,19 +29,19 @@ const RETRY_MAX: Duration = Duration::from_secs(5);
 /// # async fn main() {
 /// # let dir = tempfile::tempdir().unwrap();
 /// # let path = dir.path().join("log");
+/// # use atuin_common::io::{PathLineReader, PooledReadLines};
+/// # let pool = atuin_common::sync::BlockingPool::new(std::num::NonZeroUsize::MIN);
+/// # let source = || PooledReadLines::new(PathLineReader::new(&path), pool.clone());
 /// std::fs::write(&path, b"first\n").unwrap();
-/// let pool = BlockingPool::new(NonZeroUsize::MIN);
 ///
-/// // One pass over the lines the file holds now.
-/// let source = PooledLines::new(PathLineReader::new(&path), pool.clone());
-/// let lines: Vec<Line> = FollowLines::new(source).read_to_end().try_collect().await.unwrap();
+/// // One pass over the lines the file holds now; `source()` is any `AsyncReadLines` over it.
+/// let lines: Vec<Line> = FollowLines::new(source()).read_to_end().try_collect().await.unwrap();
 /// assert_eq!(lines.len(), 1);
 /// assert_eq!(lines[0].bytes, "first");
 ///
 /// // The same lines, then those appended after each change, until the sender drops.
 /// let (changed, changes) = watch::channel(());
-/// let source = PooledLines::new(PathLineReader::new(&path), pool);
-/// let mut lines = pin!(FollowLines::new(source).follow(changes));
+/// let mut lines = pin!(FollowLines::new(source()).follow(changes));
 /// assert_eq!(lines.next().await.unwrap().unwrap().bytes, "first");
 ///
 /// OpenOptions::new().append(true).open(&path).unwrap().write_all(b"second\n").unwrap();
