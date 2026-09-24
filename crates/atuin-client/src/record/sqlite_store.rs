@@ -511,21 +511,23 @@ impl SqliteStore {
         let mut cursor = 0i64;
 
         loop {
+            // Select under the write lock: a row deleted and its rowid reused between the select
+            // and the update would otherwise have the new record's payload overwritten.
+            let mut tx = self.sqlite.pool().begin_with("BEGIN IMMEDIATE").await?;
+
             let rows = db::query(sqlx::AssertSqlSafe(format!(
                 "select rowid, {STORE_COLUMNS} from store
                     where rowid > ?1 and typeof(data) = 'text' order by rowid limit ?2"
             )))
             .bind(cursor)
             .bind(CHUNK)
-            .fetch_all(self.sqlite.pool())
+            .fetch_all(&mut *tx)
             .await?;
 
             let Some(last) = rows.last() else {
                 break;
             };
             cursor = last.try_get("rowid")?;
-
-            let mut tx = self.sqlite.pool().begin().await?;
 
             for row in &rows {
                 let record: Record<paseto_v4::EncryptedData> = DbRecord::from_row(row)?.into();
