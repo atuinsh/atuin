@@ -1,11 +1,4 @@
 //! JSON as JavaScript writes and reads it.
-//!
-//! A JavaScript string is UTF-16 with nothing to keep a surrogate paired, and `JSON.stringify`
-//! writes one it finds alone as an escape (`\ud83d`) rather than failing. Harnesses written in
-//! JavaScript leave such halves behind wherever they cut text by code units -- a truncated tool
-//! output with an emoji at the cut -- and `JSON.parse` reads them back without complaint. Node
-//! also decodes invalid UTF-8 in a file as U+FFFD. `serde_json` rejects both, which would lose the
-//! whole line or row they are in.
 
 use serde::de::DeserializeOwned;
 
@@ -21,10 +14,10 @@ pub fn from_slice<T: DeserializeOwned>(bytes: &[u8]) -> serde_json::Result<T> {
 
 /// `bytes` as UTF-8 with invalid sequences and unpaired `\uXXXX` surrogate escapes replaced by
 /// U+FFFD, as `String.prototype.toWellFormed` would leave the strings, or `None` when there is
-/// neither. Escapes are only ever ASCII and only inside strings, so a scan that steps over each
-/// escape whole (`\\` among them) sees every one and nothing else.
-#[must_use]
-pub fn well_formed(bytes: &[u8]) -> Option<String> {
+/// neither.
+///
+/// TODO(markovejnovic): Should this perhaps live in some sort of ut16 interop utility module?
+fn well_formed(bytes: &[u8]) -> Option<String> {
     /// The UTF-16 code unit a `\uXXXX` escape at the start of `s` names.
     fn unit(s: &str) -> Option<u16> {
         let hex = s.strip_prefix("\\u")?.get(..4)?;
