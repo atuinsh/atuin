@@ -219,7 +219,7 @@ impl From<DomainMessage> for Message {
             git_branch: value.git_branch,
             model: value.model,
             tokens: value.usage.map(Tokens::from),
-            stop_reason: value.stop_reason.map_or(StopReason::Unknown, StopReason::from) as i32,
+            stop_reason: value.stop_reason.map(|reason| StopReason::from(reason) as i32),
             role_label,
             stop_reason_label,
         }
@@ -240,10 +240,12 @@ impl Message {
     }
 
     fn domain_stop_reason(&self) -> Result<Option<DomainStopReason>, ParseError> {
-        let stop_reason = StopReason::try_from(self.stop_reason)
-            .map_err(|_| ParseError::UnknownStopReason(self.stop_reason))?;
+        let Some(raw) = self.stop_reason else {
+            return Ok(None);
+        };
+        let stop_reason =
+            StopReason::try_from(raw).map_err(|_| ParseError::UnknownStopReason(raw))?;
         Ok(Some(match stop_reason {
-            StopReason::Unknown => return Ok(None),
             StopReason::EndTurn => DomainStopReason::EndTurn,
             StopReason::ToolUse => DomainStopReason::ToolUse,
             StopReason::MaxTokens => DomainStopReason::MaxTokens,

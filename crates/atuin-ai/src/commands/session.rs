@@ -948,16 +948,19 @@ fn role_name(role: i32) -> &'static str {
     }
 }
 
-fn stop_reason_name(stop_reason: i32) -> &'static str {
-    match agent::StopReason::try_from(stop_reason) {
-        Ok(agent::StopReason::EndTurn) => "end_turn",
-        Ok(agent::StopReason::ToolUse) => "tool_use",
-        Ok(agent::StopReason::MaxTokens) => "max_tokens",
-        Ok(agent::StopReason::Aborted) => "aborted",
-        Ok(agent::StopReason::Error) => "error",
-        Ok(agent::StopReason::StopSequence) => "stop_sequence",
-        Ok(agent::StopReason::Refusal) => "refusal",
-        Ok(agent::StopReason::Unknown | agent::StopReason::Other) | Err(_) => "unknown",
+fn stop_reason_name(stop_reason: Option<i32>) -> &'static str {
+    let Some(Ok(stop_reason)) = stop_reason.map(agent::StopReason::try_from) else {
+        return "unknown";
+    };
+    match stop_reason {
+        agent::StopReason::EndTurn => "end_turn",
+        agent::StopReason::ToolUse => "tool_use",
+        agent::StopReason::MaxTokens => "max_tokens",
+        agent::StopReason::Aborted => "aborted",
+        agent::StopReason::Error => "error",
+        agent::StopReason::StopSequence => "stop_sequence",
+        agent::StopReason::Refusal => "refusal",
+        agent::StopReason::Other => "unknown",
     }
 }
 

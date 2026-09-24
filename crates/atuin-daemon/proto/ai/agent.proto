@@ -29,8 +29,8 @@ enum Role {
 }
 
 enum StopReason {
-  // Not stated by the harness.
-  STOP_REASON_UNKNOWN = 0;
+  // A reason the harness named that is none of the below; Message.stop_reason_label carries it.
+  STOP_REASON_OTHER = 0;
   // The AI finished its reply on its own.
   STOP_REASON_END_TURN = 1;
   // The AI paused to run a tool.
@@ -45,8 +45,6 @@ enum StopReason {
   STOP_REASON_STOP_SEQUENCE = 6;
   // The AI declined to answer.
   STOP_REASON_REFUSAL = 7;
-  // A reason the harness named that is none of the above; Message.stop_reason_label carries it.
-  STOP_REASON_OTHER = 8;
 }
 
 // Token counts as the harness reported them. A count the harness did not report is
@@ -148,8 +146,8 @@ message Message {
   optional string model = 13;
   // Token usage attributed to this message, if the harness reported any.
   Tokens tokens = 14;
-  // Why an assistant turn ended. STOP_REASON_UNKNOWN when the harness did not say.
-  StopReason stop_reason = 15;
+  // Why an assistant turn ended. Absent when the harness did not say.
+  optional StopReason stop_reason = 15;
   // The harness's own role string (e.g. codex "developer"); set exactly when role is
   // ROLE_OTHER.
   optional string role_label = 16;
