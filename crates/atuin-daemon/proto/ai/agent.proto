@@ -52,6 +52,8 @@ message Tokens {
   uint64 cache_read = 3;
   // Tokens saved so a later prompt can reuse them.
   uint64 cache_write = 4;
+  // Of `output`, how much the model spent reasoning (thinking), when the harness reports it.
+  uint64 reasoning = 5;
 }
 
 // The AI's request to run a tool.
@@ -88,6 +90,11 @@ message ContentBlock {
     ToolResult tool_result = 3;
     // The model's private reasoning, when the harness records it.
     string thinking = 4;
+    // A model-written summary standing in for earlier conversation (compaction,
+    // an abandoned branch).
+    string summary = 5;
+    // Why a model call failed or was aborted, as the harness reported it.
+    string error = 6;
   }
 }
 
@@ -110,8 +117,9 @@ message Message {
   string session_id = 3;
   // Session this one was handed off from, if any.
   optional HarnessSession parent = 4;
-  // Harness-native thread identifier, if any.
-  optional string thread = 5;
+  // Was a harness-native thread identifier that no harness supplied.
+  reserved 5;
+  reserved "thread";
   // Harness-native message identifier, unique within the session.
   string source_id = 6;
   // Harness-native identifier of the message this one replies to.

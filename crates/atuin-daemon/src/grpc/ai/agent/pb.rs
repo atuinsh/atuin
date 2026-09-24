@@ -79,6 +79,7 @@ impl From<Usage> for Tokens {
             output: value.output.unwrap_or(0),
             cache_read: value.cache_read.unwrap_or(0),
             cache_write: value.cache_write.unwrap_or(0),
+            reasoning: value.reasoning.unwrap_or(0),
         }
     }
 }
@@ -115,6 +116,8 @@ impl From<Content> for ContentBlock {
                 },
                 is_error: tr.error,
             }),
+            Content::Summary(text) => Block::Summary(text),
+            Content::Error(text) => Block::Error(text),
             Content::Other(v) => Block::Text(v.to_string()),
         };
 
@@ -137,7 +140,6 @@ impl From<DomainMessage> for Message {
             harness: value.session.harness as i32,
             session_id: value.session.session.into(),
             parent: value.parent.map(Into::into),
-            thread: value.thread,
             source_id: value.source_id.into(),
             parent_source_id: value.parent_source_id.map(Into::into),
             timestamp: Some(prost_types::Timestamp {
@@ -145,7 +147,11 @@ impl From<DomainMessage> for Message {
                 nanos: value.timestamp.nanosecond().cast_signed(),
             }),
             role: Role::from(value.role) as i32,
-            content: value.content.into_iter().map(ContentBlock::from).collect(),
+            content: value
+                .content
+                .into_iter()
+                .map(|block| ContentBlock::from(block.with_reasoning_of(value.usage.as_ref())))
+                .collect(),
             cwd: value.cwd.map(|path| path.to_string_lossy().into_owned()),
             git_branch: value.git_branch,
             model: value.model,
@@ -344,6 +350,7 @@ mod tests {
             output: Some(3),
             cache_read: None,
             cache_write: None,
+            reasoning: None,
         }
         .into();
         assert_eq!((t.input, t.output, t.cache_read, t.cache_write), (0, 3, 0, 0));

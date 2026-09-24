@@ -626,6 +626,12 @@ fn write_message_text(out: &mut dyn Write, m: &agent::Message) -> io::Result<()>
             Some(agent::content_block::Block::Thinking(t)) => {
                 writeln!(out, "[thinking] {}", sanitize(t))?;
             }
+            Some(agent::content_block::Block::Summary(t)) => {
+                writeln!(out, "[summary] {}", sanitize(t))?;
+            }
+            Some(agent::content_block::Block::Error(t)) => {
+                writeln!(out, "[error] {}", sanitize(t))?;
+            }
             // An empty input or content means capture did not keep it; print the tag alone.
             Some(agent::content_block::Block::ToolCall(tc)) => {
                 write!(out, "[tool-call {}]", sanitize(&tc.name))?;
@@ -671,6 +677,8 @@ enum Summary {
     Thinking(String),
     /// A tool invocation, by name.
     ToolCall(String),
+    /// A failed or aborted model call.
+    Error(String),
     /// A tool result and whether it errored.
     ToolResult {
         is_error: bool,
@@ -685,6 +693,7 @@ impl Summary {
             Self::Text(t) => t.clone(),
             Self::Thinking(t) => format!("{} {t}", paint("»", Ansi::Dim, color)),
             Self::ToolCall(name) => format!("{} {name}", paint("⚙", Ansi::Blue, color)),
+            Self::Error(body) => format!("{} {body}", paint("✗", Ansi::Red, color)),
             Self::ToolResult { is_error, body } => {
                 let mark = if *is_error {
                     paint("✗", Ansi::Red, color)
@@ -717,6 +726,15 @@ fn message_summary(m: &agent::Message) -> Option<Summary> {
                 if !line.is_empty() {
                     return Some(Summary::Thinking(line));
                 }
+            }
+            Some(agent::content_block::Block::Summary(t)) => {
+                let line = one_line(t, SUMMARY_WIDTH);
+                if !line.is_empty() {
+                    return Some(Summary::Text(line));
+                }
+            }
+            Some(agent::content_block::Block::Error(t)) => {
+                return Some(Summary::Error(one_line(t, SUMMARY_WIDTH)));
             }
             Some(agent::content_block::Block::ToolCall(tc)) => {
                 // Fold like the sibling arms: the tool name is captured content and must not carry
@@ -996,6 +1014,12 @@ enum ContentJson {
     Thinking {
         text: String,
     },
+    Summary {
+        text: String,
+    },
+    Error {
+        text: String,
+    },
     ToolCall {
         id: String,
         name: String,
@@ -1145,6 +1169,8 @@ fn content_json(block: &agent::ContentBlock) -> Option<ContentJson> {
     Some(match block.block.as_ref()? {
         agent::content_block::Block::Text(t) => ContentJson::Text { text: t.clone() },
         agent::content_block::Block::Thinking(t) => ContentJson::Thinking { text: t.clone() },
+        agent::content_block::Block::Summary(t) => ContentJson::Summary { text: t.clone() },
+        agent::content_block::Block::Error(t) => ContentJson::Error { text: t.clone() },
         agent::content_block::Block::ToolCall(tc) => ContentJson::ToolCall {
             id: tc.id.clone(),
             name: tc.name.clone(),
@@ -1281,6 +1307,7 @@ mod tests {
             output: 20,
             cache_read: 1,
             cache_write: 2,
+            ..Default::default()
         });
         s.title = Some("hello".to_owned());
 

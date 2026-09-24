@@ -10,8 +10,8 @@ use enum_dispatch::enum_dispatch;
 pub use error::{CaptureError, MessageError, RuntimeError, WatchError};
 use futures::{Stream, StreamExt, TryStreamExt};
 pub use model::{
-    Content, MessageId, Role, SessionEvent, SessionId, StopReason, ToolCallId, ToolResult, ToolUse,
-    Usage,
+    Content, MessageId, Role, SessionEvent, SessionId, StopReason, TitleChange, TitleSource,
+    ToolCallId, ToolResult, ToolUse, Usage,
 };
 use time::OffsetDateTime;
 
@@ -91,12 +91,15 @@ pub trait Message: Send + 'static {
     fn parent_session(&self) -> Option<SessionId> {
         None
     }
-    /// One model call: groups the rows a single API response is split into.
+    /// One model call: groups the rows a single API response is split into. Unique within the
+    /// harness and unchanged when the harness copies the line into another session (forks,
+    /// subagent replays), since capture counts a call's usage once across every session holding
+    /// it, at the field-wise max of its rows. `Some` on every line that carries usage.
     fn turn_id(&self) -> Option<String> {
         None
     }
-    /// A title this line assigns to the session.
-    fn title(&self) -> Option<String> {
+    /// A title this line assigns to the session, or clears.
+    fn title(&self) -> Option<TitleChange> {
         None
     }
 }

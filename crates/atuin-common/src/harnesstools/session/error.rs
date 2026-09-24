@@ -32,6 +32,9 @@ pub enum MessageError {
     Jsonl(#[from] JsonlError),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    /// The session's store failed partway, so what was read is not the whole session.
+    #[error("the session could not be read to its end")]
+    Incomplete,
 }
 
 #[derive(Debug, thiserror::Error)]

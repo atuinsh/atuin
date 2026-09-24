@@ -49,9 +49,43 @@
 //!   offered again under the same id with the aggregate's next row, resuming at the row it had
 //!   reached. A handle let go of mid-row is no different: the reader only moves on to the next
 //!   row once the message of this one is in the consumer's hands.
+//!
+//! # What is captured
+//!
+//! - **Parts**, each under its own id, with what they need of their message: its role, and for an
+//!   assistant's its model, cwd, the user message it answers and the model call it belongs to.
+//!   Text opencode injected into a message (`synthetic`) or kept from the model (`ignored`) is
+//!   the system's, and a compaction's summary is a [`Content::Summary`].
+//! - **Usage**, once per model call, from the call's `step-finish` part (see
+//!   [`OpencodeMessage::usage`](Message::usage)). A fork copies every message and part under
+//!   fresh ids; the copy names the same turn as its original, so its usage is not counted twice
+//!   (see `MessageInfo::turn_of`).
+//! - **Failures**: an assistant message whose info reports `error` is a row of its own, under the
+//!   message's id.
+//! - **The session**: its title, when first seen and each time it changes, its directory and the
+//!   session it was spawned from, from its `session.created.1` / `session.updated.1` rows.
+//! - **The experimental event system's sessions** (`session.next.*`, written for the
+//!   `/api/session` routes of `opencode serve`): prompts, finished text, reasoning and tool
+//!   calls, each model call's usage and failure (see `Reader::next`). A row of a type or version
+//!   this module does not model is delivered whole, as [`Content::Other`]: the schema
+//!   (`packages/schema/src/session-event.ts`) is still moving.
+//! - **What the event log does not hold**: a session's messages from before its log began --
+//!   opencode's log is younger than its sessions and one of its migrations empties it -- are read
+//!   by [`Session::read`] from opencode's `session`/`message`/`part` projection, and
+//!   [`Sessions::existing`] lists the sessions only the projection holds (see `Backlog`). The
+//!   live tail follows the log alone.
+//! - **opencode 2.0's sessions**, which it keeps in its `session_v2` and `session_message` tables
+//!   and no longer in the event log (see `v2`): polled for rather than tailed, each row delivered
+//!   once it is settled, and read in the same [`OpencodeSession`] as what opencode 1.x wrote of
+//!   the session, whose copies 2.0 made are not delivered again.
+//!
+//! A revert's removals (`message.removed.1`, `message.part.removed.1`) are not read: what was
+//! captured stands. The reverted turns happened and cost their tokens, captured rows cannot be
+//! retracted downstream, and opencode writes one removal per message and part when the next
+//! prompt commits the revert, not when it is made.
 
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -74,7 +108,8 @@ use crate::db::sqlite::observe::{
 use crate::db::{query_as, query_scalar};
 use crate::harnesstools::opencode::Opencode;
 use crate::harnesstools::session::model::{
-    Content, MessageId, Role, ToolCallId, ToolResult, ToolUse,
+    Content, MessageId, Role, StopReason, TitleChange, TitleSource, ToolCallId, ToolResult,
+    ToolUse, Usage,
 };
 use crate::harnesstools::session::{
     Checkpoint, Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId,
@@ -83,6 +118,8 @@ use crate::harnesstools::session::{
 use crate::os::fs::FdIdentity;
 use crate::sync::BlockingPool;
 use crate::utils::{env_nonempty, home_dir};
+
+mod v2;
 
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct OpencodeSessions {
@@ -179,8 +216,46 @@ impl Sessions for OpencodeSessions {
             let reads = Arc::new(Reads::new(db.clone()));
             match reads.aggregates().await {
                 Some(aggregates) => {
+                    // the sessions of the log, then those only opencode's projection still holds
+                    // (see `Backlog`): older than the log, or than its last wipe; then those only
+                    // opencode 2.0 holds (see `v2`)
+                    let projected = reads.projected_sessions().await;
+                    let mut listed: HashSet<Aggregate> = aggregates.iter().cloned().collect();
                     for aggregate in aggregates {
                         yield Ok(OpencodeSession::detached(aggregate, Arc::clone(&reads)));
+                    }
+                    match projected {
+                        Some(projected) => {
+                            for aggregate in projected {
+                                if listed.insert(aggregate.clone()) {
+                                    yield Ok(OpencodeSession::detached(
+                                        aggregate,
+                                        Arc::clone(&reads),
+                                    ));
+                                }
+                            }
+                        }
+                        None => yield Err(RuntimeError::Io(io::Error::other(format!(
+                            "{}: cannot read opencode's session projection",
+                            db.display()
+                        )))),
+                    }
+                    match reads.v2_sessions().await {
+                        Some(sessions) => {
+                            for session in sessions {
+                                let aggregate = Aggregate::Text(session.into_bytes());
+                                if listed.insert(aggregate.clone()) {
+                                    yield Ok(OpencodeSession::detached(
+                                        aggregate,
+                                        Arc::clone(&reads),
+                                    ));
+                                }
+                            }
+                        }
+                        None => yield Err(RuntimeError::Io(io::Error::other(format!(
+                            "{}: cannot read opencode 2.0's sessions",
+                            db.display()
+                        )))),
                     }
                 }
                 // one scan, one answer: a log that cannot be read is not an empty one
@@ -246,6 +321,9 @@ impl Listener for OpencodeListener {
         async_stream::stream! {
             let reads = Arc::new(Reads::new(db.clone()));
             let observe = |source| WatchError::Observe { db: db.clone(), source };
+            // opencode 1.x's sessions are tailed from its event log; opencode 2.0 creates the
+            // table too and never writes to it, so its sessions are polled for (see
+            // `v2::changes`)
             if let Err(err) = reads.require_event_table().await {
                 yield Err(err);
                 return;
@@ -260,32 +338,67 @@ impl Listener for OpencodeListener {
                     return;
                 }
             };
+            let changes = v2::changes(db.clone(), replay);
+            futures::pin_mut!(changes);
             let mut sessions: HashMap<Aggregate, Live> = HashMap::new();
-            while let Some(next) = events.next().await {
-                let row = match next {
-                    Ok(RowAppendedEvent(row)) => row,
-                    // The tail takes the table up again by itself and the rows it could not read
-                    // are still in it, so reporting the failure is all there is to do here --
-                    // ending would drop every session's wake and stop the capture for good.
-                    Err(err) => {
-                        yield Err(observe(err));
-                        continue;
-                    }
-                };
-                let Some(event) = row.event() else { continue };
-                if EventRow::classify(event.kind).is_none() {
-                    continue;
-                }
-                match sessions.entry(event.aggregate.clone()) {
-                    Entry::Occupied(entry) => {
-                        if let Some(session) = entry.into_mut().saw(event.aggregate, event.seq) {
-                            yield Ok(session);
+            loop {
+                tokio::select! {
+                    next = events.next() => {
+                        let row = match next {
+                            Some(Ok(RowAppendedEvent(row))) => row,
+                            // The tail takes the table up again by itself and the rows it could
+                            // not read are still in it, so reporting the failure is all there is
+                            // to do here -- ending would drop every session's wake and stop the
+                            // capture for good.
+                            Some(Err(err)) => {
+                                yield Err(observe(err));
+                                continue;
+                            }
+                            None => break,
+                        };
+                        let Some(event) = row.event() else { continue };
+                        if EventRow::classify(event.kind).is_none() {
+                            continue;
+                        }
+                        match sessions.entry(event.aggregate.clone()) {
+                            Entry::Occupied(entry) => {
+                                if let Some(session) = entry.into_mut().saw(event.aggregate, event.seq) {
+                                    yield Ok(session);
+                                }
+                            }
+                            // a session exists from its first forwarded kind of row on
+                            Entry::Vacant(entry) => {
+                                let live = entry.insert(Live::new(&event, Arc::clone(&reads)));
+                                yield Ok(live.offer(event.aggregate));
+                            }
                         }
                     }
-                    // a session exists from its first forwarded kind of row on
-                    Entry::Vacant(entry) => {
-                        let live = entry.insert(Live::new(&event, Arc::clone(&reads)));
-                        yield Ok(live.offer(event.aggregate));
+                    change = changes.next() => {
+                        let change = match change {
+                            Some(Ok(change)) => change,
+                            // the poll carries on by itself, as the tail does
+                            Some(Err(err)) => {
+                                yield Err(observe(err));
+                                continue;
+                            }
+                            None => break,
+                        };
+                        let aggregate = Aggregate::Text(change.session.clone().into_bytes());
+                        match sessions.entry(aggregate.clone()) {
+                            Entry::Occupied(entry) => {
+                                if let Some(session) = entry.into_mut().poke(&aggregate) {
+                                    yield Ok(session);
+                                }
+                            }
+                            Entry::Vacant(entry) => {
+                                let live = entry.insert(Live::changed(
+                                    &aggregate,
+                                    change,
+                                    Arc::clone(&reads),
+                                ));
+                                yield Ok(live.offer(&aggregate));
+                            }
+                        }
                     }
                 }
             }
@@ -303,28 +416,52 @@ struct Live {
     wake: watch::Sender<i64>,
     /// Where the session has read up to. It lives here rather than in the handle so that a
     /// consumer which drops a session and takes it up again resumes where it stopped.
-    reader: Arc<Mutex<Reader>>,
+    reader: Arc<Mutex<Readers>>,
     /// Handed to the sessions this one is offered as, so that [`Session::read`] can page the
     /// aggregate from the start without disturbing the tail's own place in it.
     reads: Arc<Reads>,
 }
 
 impl Live {
+    /// A session the 1.x event log offered, on its first forwarded row.
     fn new(event: &Event<'_>, reads: Arc<Reads>) -> Self {
         let anchor = Anchor {
             seq: event.seq,
             id: event.id.to_owned(),
             delivered: false,
         };
+        let readers = Readers {
+            legacy: Reader::new(event.aggregate.clone(), Arc::clone(&reads), anchor),
+            next: v2::Reader::from_start(event.aggregate.to_string(), Arc::clone(&reads)),
+        };
         Self {
             wake: watch::Sender::new(event.seq),
-            reader: Arc::new(Mutex::new(Reader::new(
-                event.aggregate.clone(),
-                Arc::clone(&reads),
-                anchor,
-            ))),
+            reader: Arc::new(Mutex::new(readers)),
             reads,
         }
+    }
+
+    /// A session opencode 2.0 offered, on its first change.
+    fn changed(aggregate: &Aggregate, change: v2::Change, reads: Arc<Reads>) -> Self {
+        let next = match change.from {
+            Some(mark) => v2::Reader::at(change.session, Arc::clone(&reads), mark),
+            None => v2::Reader::from_start(change.session, Arc::clone(&reads)),
+        };
+        let readers = Readers {
+            legacy: Reader::from_start(aggregate.clone(), Arc::clone(&reads)),
+            next,
+        };
+        Self {
+            wake: watch::Sender::new(0),
+            reader: Arc::new(Mutex::new(readers)),
+            reads,
+        }
+    }
+
+    /// A change of this session's 2.0 rows: wakes its reader like [`Self::saw`] does.
+    fn poke(&self, id: &Aggregate) -> Option<OpencodeSession> {
+        self.wake.send_modify(|_| {});
+        (self.wake.receiver_count() == 0).then(|| self.offer(id))
     }
 
     fn offer(&self, id: &Aggregate) -> OpencodeSession {
@@ -394,8 +531,11 @@ struct Reader {
     aggregate: Aggregate,
     reads: Arc<Reads>,
     anchor: Option<Anchor>,
-    /// The roles of the messages this session has lately read a `message.updated.1` row for.
-    roles: Roles,
+    /// What this session has lately learned of its messages from their `message.updated.1` rows.
+    infos: Infos,
+    /// The title this session last delivered, so that the `session.updated.1` rows opencode
+    /// writes on every prompt deliver a title only when it changes.
+    title: Option<TitleChange>,
     /// Whether the aggregate may have a row to read right now: set by a wake, kept while pages
     /// come back full.
     ready: bool,
@@ -411,7 +551,8 @@ impl Reader {
             aggregate,
             reads,
             anchor: None,
-            roles: Roles::default(),
+            infos: Infos::default(),
+            title: None,
             ready: true,
             failed: false,
         }
@@ -422,7 +563,8 @@ impl Reader {
             aggregate,
             reads,
             anchor: Some(anchor),
-            roles: Roles::default(),
+            infos: Infos::default(),
+            title: None,
             ready: true,
             failed: false,
         }
@@ -431,17 +573,15 @@ impl Reader {
     /// Read on past the row `from` names, if it is still the row `from` was taken after: a row
     /// that is gone, or another under the same `seq` after a wipe, leaves the aggregate to be
     /// read again from the start.
-    async fn seek(&mut self, from: Checkpoint) {
+    async fn seek(&mut self, from: v2::Mark) {
         self.ready = true;
-        let Ok(seq) = i64::try_from(from.at) else {
-            return;
-        };
+        let seq = from.seq;
         let head = self
             .reads
             .page(&self.aggregate, seq)
             .await
             .and_then(|rows| rows.into_iter().next())
-            .filter(|row| row.seq == seq && from.names(row.identity().as_bytes()));
+            .filter(|row| row.seq == seq && from.names(row.identity()));
         if head.is_none() {
             tracing::debug!(
                 session = %self.aggregate,
@@ -464,6 +604,14 @@ impl Reader {
     /// Whether the read that ended the last drain failed rather than running out of rows.
     const fn failed(&self) -> bool {
         self.failed
+    }
+
+    /// The last row this session delivered, `None` before the first.
+    fn position(&self) -> Option<(i64, &str)> {
+        self.anchor
+            .as_ref()
+            .filter(|anchor| anchor.delivered)
+            .map(|anchor| (anchor.seq, anchor.id.as_str()))
     }
 
     /// A pass over the rows this session has not delivered yet.
@@ -507,9 +655,11 @@ impl Reader {
         None
     }
 
-    /// The message a row carries, if any: a `message.updated.1` row only records a role, a draft
-    /// of a part opencode is still writing is superseded by a later row, and an unmodelled kind
-    /// of row is skipped.
+    /// The message a row carries, if any. A `message.updated.1` row records what its parts need
+    /// to know of their message and is a message itself only when it reports a failed model call;
+    /// a draft of a part opencode is still writing is superseded by a later row; a
+    /// `session.updated.1` row that leaves the title as it was is one of the many opencode writes
+    /// to touch a session; and an unmodelled kind of row is skipped.
     ///
     /// The row's `id` is not read here. It anchors the session, and a NULL one anchors as the
     /// empty string (see [`PageRow::identity`]), so a row whose payload is whole is decoded and
@@ -524,83 +674,352 @@ impl Reader {
             return None;
         };
         let classified = EventRow::classify(kind)?;
-        let data = match serde_json::from_str::<Value>(data) {
+        let data = match json(data) {
             Ok(data) => data,
             Err(err) => return Some(Err(MessageError::from(err))),
         };
         match classified {
-            EventKind::Role => {
-                self.learn(&data);
-                None
-            }
+            EventKind::Message => self.learn(&data).map(Ok),
             EventKind::Part => match OpencodeMessage::split_part(data) {
                 Ok((part, _)) if OpencodeMessage::is_draft(&part) => None,
                 Ok((part, time)) => {
                     let message_id = part.get("messageID").and_then(Value::as_str);
-                    let role = self.role(message_id).await;
-                    Some(Ok(OpencodeMessage::part(role, part, time)))
+                    let info = self.info(message_id).await;
+                    Some(Ok(OpencodeMessage::part(info, part, time)))
                 }
                 Err(err) => Some(Err(MessageError::from(err))),
             },
+            EventKind::Session => {
+                let message = OpencodeMessage::session(data)?;
+                let title = message.title();
+                if title.is_some() && title == self.title {
+                    return None;
+                }
+                self.title = title;
+                Some(Ok(message))
+            }
+            EventKind::Next => self.next(kind, row.identity(), data).map(Ok),
             EventKind::Unmapped => Some(Ok(OpencodeMessage::raw(kind, data))),
         }
     }
 
-    fn learn(&mut self, data: &Value) {
-        let info = data.get("info");
-        let id = info.and_then(|info| info.get("id")).and_then(Value::as_str);
-        let role = info.and_then(|info| info.get("role")).and_then(Value::as_str);
-        if let (Some(id), Some(role)) = (id, role) {
-            self.roles.insert(id, OpencodeMessage::role_of(role));
-        }
+    /// The message a `session.next.*` row carries, the experimental event system's
+    /// (`packages/schema/src/session-event.ts`, written by `packages/core/src/session`: the
+    /// `/api/session` routes of `opencode serve`). It records a session as events of their own
+    /// rather than as messages and parts: a prompt, then per model call (one assistant message
+    /// id each) a `step.started`, the finished text, reasoning and tool calls, and a
+    /// `step.ended` with its usage or a `step.failed`.
+    ///
+    /// Only the full values are read: the `*.started`, `tool.input.*` and `tool.progress` rows
+    /// a finished value follows, and `prompt.admitted` (a prompt queued, recorded again as
+    /// `prompted` once it joins the conversation), are no messages. A row whose type or version
+    /// this does not know, or whose payload lacks what it needs, is delivered whole, as
+    /// [`OpencodeMessage::raw`].
+    fn next(&mut self, kind: &str, event: &str, data: Value) -> Option<OpencodeMessage> {
+        let time = epoch_millis(&data["timestamp"]);
+        let text = |key: &str| data[key].as_str().map(str::to_owned);
+        let assistant = text("assistantMessageID");
+        let modelled = match kind {
+            "session.next.prompt.admitted.1"
+            | "session.next.text.started.1"
+            | "session.next.reasoning.started.1"
+            | "session.next.tool.input.started.1"
+            | "session.next.tool.input.ended.1"
+            | "session.next.tool.progress.1"
+            | "session.next.compaction.started.1" => return None,
+            "session.next.step.started.1" if assistant.is_some() => {
+                let id = assistant.unwrap_or_default();
+                let info = MessageInfo {
+                    role: Role::Assistant,
+                    turn: Some(id.clone()),
+                    model: data["model"]["id"].as_str().map(str::to_owned),
+                    ..MessageInfo::unknown()
+                };
+                self.infos.insert(&id, info);
+                return None;
+            }
+            "session.next.prompted.1" => text("messageID")
+                .zip(data["prompt"]["text"].as_str())
+                .map(|(id, prompt)| Next::said(Role::User, id, Content::Text(prompt.to_owned()))),
+            "session.next.synthetic.1" | "session.next.context.updated.1" => text("messageID")
+                .zip(data["text"].as_str())
+                .map(|(id, said)| Next::said(Role::System, id, Content::Text(said.to_owned()))),
+            "session.next.compaction.ended.1" => {
+                text("messageID").zip(data["text"].as_str()).map(|(id, said)| {
+                    Next::said(Role::Assistant, id, Content::Summary(said.to_owned()))
+                })
+            }
+            "session.next.text.ended.1" => {
+                assistant.as_ref().zip(data["textID"].as_str()).zip(data["text"].as_str()).map(
+                    |((message, part), said)| {
+                        let content = Content::Text(said.to_owned());
+                        Next::said(Role::Assistant, format!("{message}/{part}"), content)
+                    },
+                )
+            }
+            "session.next.reasoning.ended.1" => {
+                assistant.as_ref().zip(data["reasoningID"].as_str()).zip(data["text"].as_str()).map(
+                    |((message, part), said)| {
+                        let content = Content::Reasoning(said.to_owned());
+                        Next::said(Role::Assistant, format!("{message}/{part}"), content)
+                    },
+                )
+            }
+            "session.next.tool.called.1" => {
+                assistant.as_ref().zip(data["callID"].as_str()).map(|(message, call)| {
+                    let content = Content::ToolUse(ToolUse {
+                        id: ToolCallId::from(call.to_owned()),
+                        name: data["tool"].as_str().unwrap_or_default().to_owned(),
+                        input: data["input"].clone(),
+                    });
+                    Next::said(Role::Assistant, format!("{message}/{call}"), content)
+                })
+            }
+            "session.next.tool.success.1" | "session.next.tool.failed.1" => {
+                let error = kind == "session.next.tool.failed.1";
+                assistant.as_ref().zip(data["callID"].as_str()).map(|(message, call)| {
+                    let content = Content::ToolResult(ToolResult {
+                        call: ToolCallId::from(call.to_owned()),
+                        output: if error {
+                            data["error"]["message"].clone()
+                        } else {
+                            data["content"].clone()
+                        },
+                        error,
+                    });
+                    Next::said(Role::Assistant, format!("{message}/{call}/result"), content)
+                })
+            }
+            "session.next.step.ended.2" => assistant.as_ref().map(|message| Next {
+                role: Role::Assistant,
+                id: format!("{message}/step"),
+                content: Vec::new(),
+                usage: usage_of(&data["tokens"]),
+                stop: data["finish"].as_str().map(OpencodeMessage::stop_reason_of),
+            }),
+            "session.next.step.failed.2" => assistant.as_ref().map(|message| Next {
+                role: Role::Assistant,
+                id: format!("{message}/step"),
+                content: vec![Content::Error(
+                    data["error"]["message"].as_str().unwrap_or("error").to_owned(),
+                )],
+                usage: None,
+                stop: Some(StopReason::Error),
+            }),
+            _ => None,
+        };
+        let Some(next) = modelled else {
+            tracing::debug!(session = %self.aggregate, event, kind, "delivering a session.next row whole");
+            return Some(OpencodeMessage::raw(kind, data));
+        };
+        // an assistant row belongs to its model call, whose model the call's `step.started`
+        // recorded; the call is the turn even when that row is no longer to hand
+        let info = (next.role == Role::Assistant).then(|| {
+            let id = assistant.unwrap_or_default();
+            self.infos.get(&id).unwrap_or_else(|| MessageInfo {
+                role: Role::Assistant,
+                turn: (!id.is_empty()).then_some(id),
+                ..MessageInfo::unknown()
+            })
+        });
+        Some(OpencodeMessage {
+            role: next.role.clone(),
+            body: Body::Next(next),
+            time,
+            info,
+        })
     }
 
-    async fn role(&mut self, message_id: Option<&str>) -> Role {
-        let unknown = || Role::Other("unknown".to_owned());
-        let Some(message_id) = message_id else {
-            return unknown();
-        };
-        if let Some(role) = self.roles.get(message_id) {
-            return role;
-        }
-        match self.reads.role(message_id).await {
-            Some(role) => {
-                self.roles.insert(message_id, role.clone());
-                role
+    /// The messages one message of opencode's projection makes (see [`Backlog`]): its finished
+    /// parts, as its `message.part.updated.1` rows would have delivered them, then its failure,
+    /// if it reports one, as its last `message.updated.1` row would have.
+    fn projected(
+        &mut self,
+        message_id: &str,
+        data: &str,
+        parts: Vec<PartProjection>,
+    ) -> Vec<Result<OpencodeMessage, MessageError>> {
+        let mut info = match json(data) {
+            Ok(info) if info.is_object() => info,
+            Ok(_) => {
+                let err = serde_json::Error::custom("a projected message's data is no object");
+                return vec![Err(MessageError::from(err))];
             }
-            None => unknown(),
+            Err(err) => return vec![Err(MessageError::from(err))],
+        };
+        // the projection keeps a message's `id` and `sessionID` in columns of their own
+        info["id"] = Value::from(message_id);
+        let learned = MessageInfo::of(message_id, &info);
+        if let Some(learned) = &learned {
+            self.infos.insert(message_id, learned.clone());
+        }
+        let mut out = Vec::with_capacity(parts.len() + 1);
+        for row in parts {
+            let part = match row.data.as_deref().map(json) {
+                Some(Ok(mut part)) if part.is_object() => {
+                    part["id"] = row.id.map_or(Value::Null, Value::from);
+                    part["messageID"] = Value::from(message_id);
+                    part["sessionID"] = Value::from(self.aggregate.to_string());
+                    part
+                }
+                Some(Err(err)) => {
+                    out.push(Err(MessageError::from(err)));
+                    continue;
+                }
+                _ => {
+                    let err = serde_json::Error::custom("a projected part's data is no object");
+                    out.push(Err(MessageError::from(err)));
+                    continue;
+                }
+            };
+            // the column is when the part was first written, the envelope `time` of its first row
+            let data = serde_json::json!({"part": part, "time": row.time_created});
+            match OpencodeMessage::split_part(data) {
+                Ok((part, _)) if OpencodeMessage::is_draft(&part) => {}
+                Ok((part, time)) => {
+                    let info = learned.clone().unwrap_or_else(MessageInfo::unknown);
+                    out.push(Ok(OpencodeMessage::part(info, part, time)));
+                }
+                Err(err) => out.push(Err(MessageError::from(err))),
+            }
+        }
+        if let Some(failure) =
+            learned.and_then(|learned| OpencodeMessage::failure(message_id, learned, &info))
+        {
+            out.push(Ok(failure));
+        }
+        out
+    }
+
+    /// Records what a `message.updated.1` row says of its message, handing back the failure it
+    /// reports, if any.
+    fn learn(&mut self, data: &Value) -> Option<OpencodeMessage> {
+        let info = data.get("info")?;
+        let id = info.get("id").and_then(Value::as_str)?;
+        let learned = MessageInfo::of(id, info)?;
+        self.infos.insert(id, learned.clone());
+        OpencodeMessage::failure(id, learned, info)
+    }
+
+    /// What is known of the message `message_id`: from its `message.updated.1` row, or opencode's
+    /// `message` projection when that row is no longer to hand.
+    async fn info(&mut self, message_id: Option<&str>) -> MessageInfo {
+        let Some(message_id) = message_id else {
+            return MessageInfo::unknown();
+        };
+        if let Some(info) = self.infos.get(message_id) {
+            return info;
+        }
+        match self.reads.info(message_id).await {
+            Some(info) => {
+                self.infos.insert(message_id, info.clone());
+                info
+            }
+            None => MessageInfo::unknown(),
         }
     }
 }
 
-/// The roles a [`Reader`] has to hand, most recently used first.
-///
-/// Bounded, and small: opencode writes a message's `message.updated.1` row immediately before the
-/// parts that carry it, so a part asks for one of the newest roles of all. Keeping the rest would
-/// keep an entry per message for as long as the tail runs -- the history of every session anyone
-/// ever read, pinned by a tail that never prunes the sessions it has seen. Dropping one costs a
-/// lookup rather than a role: opencode's `message` projection records the same thing durably, and
-/// that is where [`Reader::role`] goes when this cannot answer.
-#[derive(Debug, Default)]
-struct Roles(VecDeque<(String, Role)>);
+/// What a part needs to know of the message it belongs to. opencode fixes all of it when it
+/// creates the message, so any `message.updated.1` row of a message says it for good.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MessageInfo {
+    role: Role,
+    /// The model call an assistant message is (see [`MessageInfo::turn_of`]).
+    turn: Option<String>,
+    /// The user message an assistant message answers (`parentID`).
+    parent: Option<String>,
+    /// `modelID`, of an assistant message.
+    model: Option<String>,
+    /// `path.cwd`, of an assistant message.
+    cwd: Option<String>,
+    /// A compaction summary (`summary: true`), whose text stands in for the conversation before
+    /// it.
+    summary: bool,
+}
 
-impl Roles {
-    /// How many messages' roles a session keeps.
-    const CAP: usize = 8;
-
-    /// The role of `message`, made the most recently used of those kept.
-    fn get(&mut self, message: &str) -> Option<Role> {
-        let at = self.0.iter().position(|(id, _)| id == message)?;
-        let kept = self.0.remove(at).expect("position() named an entry");
-        let role = kept.1.clone();
-        self.0.push_front(kept);
-        Some(role)
+impl MessageInfo {
+    fn unknown() -> Self {
+        Self {
+            role: Role::Other("unknown".to_owned()),
+            turn: None,
+            parent: None,
+            model: None,
+            cwd: None,
+            summary: false,
+        }
     }
 
-    /// Records `message`'s role, dropping the least recently used once [`Self::CAP`] are kept.
-    fn insert(&mut self, message: &str, role: Role) {
+    /// What `info`, the `Assistant` or `User` info of the message `id`, says. `None` when it
+    /// names no role.
+    fn of(id: &str, info: &Value) -> Option<Self> {
+        let role = OpencodeMessage::role_of(info.get("role")?.as_str()?);
+        if role != Role::Assistant {
+            return Some(Self {
+                role,
+                ..Self::unknown()
+            });
+        }
+        let text = |value: &Value| value.as_str().map(str::to_owned);
+        Some(Self {
+            role,
+            turn: Some(Self::turn_of(id, info)),
+            parent: text(&info["parentID"]),
+            model: text(&info["modelID"]),
+            cwd: text(&info["path"]["cwd"]),
+            summary: info["summary"].as_bool().unwrap_or_default(),
+        })
+    }
+
+    /// The model call an assistant message is: when it was created, and with which model.
+    ///
+    /// Not its id, because that is not the call's: forking a session (`Session.fork`) copies
+    /// every message into the new session under a fresh id, with the rest of its info -- the
+    /// creation time, the model, the tokens -- as it was, and every part likewise. Keyed on what
+    /// the copy keeps, the copy is the same call as its original and its usage is not counted
+    /// twice. opencode creates one assistant message per model call and stamps it to the
+    /// millisecond, so two calls of one model share this key only when they start in the same
+    /// millisecond -- parallel subagents can -- which the usage key of their steps then tells
+    /// apart (see [`OpencodeMessage::turn_id`]). A message whose info lacks any of these falls
+    /// back to its id.
+    fn turn_of(id: &str, info: &Value) -> String {
+        let created = epoch_millis(&info["time"]["created"]);
+        match (created, info["providerID"].as_str(), info["modelID"].as_str()) {
+            (Some(created), Some(provider), Some(model)) => format!("{created}:{provider}/{model}"),
+            _ => id.to_owned(),
+        }
+    }
+}
+
+/// What a [`Reader`] knows of its messages, most recently used first.
+///
+/// Bounded, and small: opencode writes a message's `message.updated.1` row immediately before the
+/// parts that carry it, so a part asks after one of the newest messages of all. Keeping the rest
+/// would keep an entry per message for as long as the tail runs -- the history of every session
+/// anyone ever read, pinned by a tail that never prunes the sessions it has seen. Dropping one
+/// costs a lookup rather than an answer: opencode's `message` projection records the same thing
+/// durably, and that is where [`Reader::info`] goes when this cannot answer.
+#[derive(Debug, Default)]
+struct Infos(VecDeque<(String, MessageInfo)>);
+
+impl Infos {
+    /// How many messages a session keeps what it knows of.
+    const CAP: usize = 8;
+
+    /// What is known of `message`, made the most recently used of those kept.
+    fn get(&mut self, message: &str) -> Option<MessageInfo> {
+        let at = self.0.iter().position(|(id, _)| id == message)?;
+        let kept = self.0.remove(at).expect("position() named an entry");
+        let info = kept.1.clone();
+        self.0.push_front(kept);
+        Some(info)
+    }
+
+    /// Records what is known of `message`, dropping the least recently used once [`Self::CAP`]
+    /// are kept.
+    fn insert(&mut self, message: &str, info: MessageInfo) {
         self.0.retain(|(id, _)| id != message);
-        self.0.push_front((message.to_owned(), role));
+        self.0.push_front((message.to_owned(), info));
         self.0.truncate(Self::CAP);
     }
 }
@@ -620,10 +1039,10 @@ struct Drain<'a> {
 }
 
 impl Drain<'_> {
-    /// The session's next message, or `None` when its aggregate has nothing more to read right
-    /// now -- a failed read included, since the rows stay in the table and are read again when
-    /// the session is woken or retried.
-    async fn next(&mut self) -> Option<(Checkpoint, Result<OpencodeMessage, MessageError>)> {
+    /// The session's next message with the `seq` and id of its row, or `None` when its aggregate
+    /// has nothing more to read right now -- a failed read included, since the rows stay in the
+    /// table and are read again when the session is woken or retried.
+    async fn next(&mut self) -> Option<((i64, String), Result<OpencodeMessage, MessageError>)> {
         loop {
             for row in self.page.by_ref() {
                 // the anchor only moves on once the message of the row is in hand: building one
@@ -636,12 +1055,33 @@ impl Drain<'_> {
                     delivered: true,
                 });
                 if let Some(message) = message {
-                    let at = u64::try_from(row.seq).unwrap_or(0);
-                    return Some((Checkpoint::new(at, row.identity().as_bytes()), message));
+                    return Some(((row.seq, row.identity().to_owned()), message));
                 }
             }
             self.page = self.reader.fill().await?;
         }
+    }
+}
+
+/// Both layouts of one session: what opencode 1.x wrote of it, read from the event log, and what
+/// opencode 2.0 wrote, read from its `session_message` rows (see [`v2`]). A session 2.0 copied
+/// from 1.x can be taken up again by either, and is read in both.
+struct Readers {
+    legacy: Reader,
+    next: v2::Reader,
+}
+
+impl Readers {
+    fn from_start(aggregate: Aggregate, reads: Arc<Reads>) -> Self {
+        Self {
+            next: v2::Reader::from_start(aggregate.to_string(), Arc::clone(&reads)),
+            legacy: Reader::from_start(aggregate, reads),
+        }
+    }
+
+    /// Whether the last read of either layout failed.
+    const fn failed(&self) -> bool {
+        self.legacy.failed() || self.next.failed()
     }
 }
 
@@ -818,6 +1258,7 @@ impl Reads {
     async fn aggregates(self: &Arc<Self>) -> Option<Vec<Aggregate>> {
         const SQL: &str = "SELECT aggregate_id, min(rowid) AS first FROM event WHERE type LIKE \
                            'message.updated.%' OR type LIKE 'message.part.updated.%' OR type LIKE \
+                           'session.created.%' OR type LIKE 'session.updated.%' OR type LIKE \
                            'session.next.%' GROUP BY aggregate_id ORDER BY first ASC";
         let rows: Vec<AggregateRow> = self
             .read("aggregate scan", |conn| {
@@ -827,26 +1268,147 @@ impl Reads {
         Some(rows.into_iter().filter_map(|row| row.aggregate).collect())
     }
 
-    /// The role opencode's `message` projection records for `message_id` (its `data` is the
-    /// message info minus `id` and `sessionID`), for parts whose `message.updated.1` row predates
-    /// the session's start.
-    async fn role(self: &Arc<Self>, message_id: &str) -> Option<Role> {
-        let message_id = message_id.to_owned();
+    /// Every session opencode's `session` projection holds, oldest first: the sessions whose
+    /// event log is gone are among them (see [`Backlog`]). No projection, no sessions.
+    async fn projected_sessions(self: &Arc<Self>) -> Option<Vec<Aggregate>> {
+        let rows: Vec<AggregateRow> = self
+            .read("session scan", |conn| {
+                Box::pin(async move {
+                    if !projected(conn, &["session"]).await? {
+                        return Ok(Vec::new());
+                    }
+                    query_as::<Sqlite, AggregateRow>(
+                        "SELECT id AS aggregate_id FROM session ORDER BY time_created, id",
+                    )
+                    .fetch_all(conn)
+                    .await
+                })
+            })
+            .await?;
+        Some(rows.into_iter().filter_map(|row| row.aggregate).collect())
+    }
+
+    /// What opencode's projection holds of a session that its event log does not (see
+    /// [`Backlog`]).
+    async fn backlog(self: &Arc<Self>, aggregate: &Aggregate) -> Option<Backlog> {
+        // opencode's session ids are TEXT; a BLOB id names no session of the projection
+        let Aggregate::Text(bytes) = aggregate else {
+            return Some(Backlog::default());
+        };
+        let bytes = bytes.clone();
+        self.read("projection backlog", move |conn| {
+            Box::pin(async move {
+                if !projected(conn, &["session", "message", "part"]).await? {
+                    return Ok(Backlog::default());
+                }
+                let (created, updated) = query_as::<Sqlite, (bool, bool)>(
+                    "SELECT EXISTS (SELECT 1 FROM event WHERE aggregate_id = CAST(?1 AS TEXT) AND \
+                     type LIKE 'session.created.%'), EXISTS (SELECT 1 FROM event WHERE \
+                     aggregate_id = CAST(?1 AS TEXT) AND type LIKE 'session.updated.%')",
+                )
+                .bind(bytes.clone())
+                .fetch_one(&mut *conn)
+                .await?;
+                if created {
+                    return Ok(Backlog::default());
+                }
+                // the log's own `session.updated` rows say what the session is, in the order it
+                // changed: the projection's row is only its latest state, and delivered ahead of
+                // them it would be the first of its title, and a later change back to it a
+                // duplicate
+                let session = if updated {
+                    None
+                } else {
+                    query_as::<Sqlite, SessionRow>(
+                        "SELECT id, title, parent_id, directory, time_created, time_updated FROM \
+                         session WHERE id = CAST(?1 AS TEXT)",
+                    )
+                    .bind(bytes.clone())
+                    .fetch_optional(&mut *conn)
+                    .await?
+                };
+                // `json_valid` first: one malformed payload would fail `json_extract`, and with it
+                // the whole statement
+                let logged: HashSet<String> = query_as::<Sqlite, IdRow>(
+                    "SELECT DISTINCT CASE WHEN json_valid(data) THEN json_extract(data, \
+                     '$.info.id') END AS id FROM event WHERE aggregate_id = CAST(?1 AS TEXT) AND \
+                     type LIKE 'message.updated.%'",
+                )
+                .bind(bytes.clone())
+                .fetch_all(&mut *conn)
+                .await?
+                .into_iter()
+                .filter_map(|row| row.id)
+                .collect();
+                let messages = query_as::<Sqlite, IdRow>(
+                    "SELECT id FROM message WHERE session_id = CAST(?1 AS TEXT) ORDER BY \
+                     time_created, id",
+                )
+                .bind(bytes)
+                .fetch_all(&mut *conn)
+                .await?
+                .into_iter()
+                .filter_map(|row| row.id)
+                .filter(|id| !logged.contains(id))
+                .collect();
+                Ok(Backlog {
+                    session: session.map(SessionRow::info),
+                    messages,
+                })
+            })
+        })
+        .await
+    }
+
+    /// One message of opencode's projection, with its parts in the order opencode reads them
+    /// (`MessageV2.page`). `Ok(None)` for a message deleted since the backlog listed it.
+    async fn projected_message(
+        self: &Arc<Self>,
+        message_id: &str,
+    ) -> Option<Option<(String, Vec<PartProjection>)>> {
+        let id = message_id.to_owned();
+        self.read("projected message read", move |conn| {
+            Box::pin(async move {
+                let Some(row) =
+                    query_as::<Sqlite, DataRow>("SELECT data FROM message WHERE id = ?1")
+                        .bind(id.clone())
+                        .fetch_optional(&mut *conn)
+                        .await?
+                else {
+                    return Ok(None);
+                };
+                let parts = query_as::<Sqlite, PartProjection>(
+                    "SELECT id, time_created, data FROM part WHERE message_id = ?1 ORDER BY id",
+                )
+                .bind(id)
+                .fetch_all(&mut *conn)
+                .await?;
+                Ok(Some((row.data.unwrap_or_default(), parts)))
+            })
+        })
+        .await
+    }
+
+    /// What opencode's `message` projection records of `message_id` (its `data` is the message
+    /// info minus `id` and `sessionID`), for parts whose `message.updated.1` row predates the
+    /// session's start.
+    async fn info(self: &Arc<Self>, message_id: &str) -> Option<MessageInfo> {
+        let id = message_id.to_owned();
         let data = self
-            .read("message role lookup", move |conn| {
+            .read("message info lookup", move |conn| {
                 Box::pin(async move {
                     query_scalar::<Sqlite, Option<Vec<u8>>>(
                         "SELECT data FROM message WHERE id = ?1",
                     )
-                    .bind(message_id)
+                    .bind(id)
                     .fetch_optional(conn)
                     .await
                 })
             })
             .await?
             .flatten()?;
-        let info: Value = serde_json::from_slice(&data).ok()?;
-        info.get("role").and_then(Value::as_str).map(OpencodeMessage::role_of)
+        let info = json(&String::from_utf8_lossy(&data)).ok()?;
+        MessageInfo::of(message_id, &info)
     }
 }
 
@@ -857,7 +1419,7 @@ pub struct OpencodeSession {
     /// The tail's wake for this session; dropping it tells the tail that no consumer holds the
     /// session any more.
     wake: watch::Receiver<i64>,
-    reader: Arc<Mutex<Reader>>,
+    reader: Arc<Mutex<Readers>>,
 }
 
 impl OpencodeSession {
@@ -868,7 +1430,10 @@ impl OpencodeSession {
         drop(closed);
         Self {
             id: aggregate.to_string(),
-            reader: Arc::new(Mutex::new(Reader::from_start(aggregate.clone(), Arc::clone(&reads)))),
+            reader: Arc::new(Mutex::new(Readers::from_start(
+                aggregate.clone(),
+                Arc::clone(&reads),
+            ))),
             aggregate,
             reads,
             wake,
@@ -889,21 +1454,58 @@ impl Session for OpencodeSession {
         SessionId::from(self.id.clone())
     }
 
-    /// The aggregate's rows as they stand, from the start, ending when it runs out of them.
-    /// Independent of [`messages`](Self::messages): it reads a place in the log of its own, so a
-    /// session being tailed is undisturbed by it.
+    /// The session as it stands, from the start, ending when it runs out of rows: what opencode's
+    /// projection holds of it from before its event log began (see `Backlog`), then the
+    /// aggregate's rows, then what opencode 2.0 wrote of it (see `v2`), its settled rows only.
+    /// Independent of [`messages`](Self::messages): it reads a place of its own, so a session
+    /// being tailed is undisturbed by it.
     fn read(&self) -> impl Stream<Item = Result<OpencodeMessage, MessageError>> + Send + 'static {
-        let mut reader = Reader::from_start(self.aggregate.clone(), Arc::clone(&self.reads));
+        let reads = Arc::clone(&self.reads);
+        let mut reader = Reader::from_start(self.aggregate.clone(), Arc::clone(&reads));
+        let mut next = v2::Reader::from_start(self.id.clone(), Arc::clone(&reads));
+        let aggregate = self.aggregate.clone();
         async_stream::stream! {
+            let mut incomplete = false;
+            match reads.backlog(&aggregate).await {
+                Some(backlog) => {
+                    if let Some(message) = backlog.session.and_then(|info| {
+                        OpencodeMessage::session(serde_json::json!({"info": info}))
+                    }) {
+                        yield Ok(message);
+                    }
+                    for id in backlog.messages {
+                        match reads.projected_message(&id).await {
+                            Some(Some((data, parts))) => {
+                                for message in reader.projected(&id, &data, parts) {
+                                    yield message;
+                                }
+                            }
+                            Some(None) => {}
+                            None => incomplete = true,
+                        }
+                    }
+                }
+                None => incomplete = true,
+            }
             let mut drain = reader.drain();
             while let Some((_, message)) = drain.next().await {
                 yield message;
+            }
+            let mut pass = next.pass();
+            while let Some((_, message)) = pass.next().await {
+                yield message;
+            }
+            // A drain also ends on a failed read; a one-shot read says so rather than passing
+            // for the whole session.
+            if incomplete || reader.failed() || next.failed() {
+                yield Err(MessageError::Incomplete);
             }
         }
     }
 
     /// A checkpoint is a row's `seq`, which opencode assigns contiguously from 0 within one
-    /// incarnation of an aggregate and never reuses within it, and a digest of the row's id.
+    /// incarnation of an aggregate and never reuses within it, and a digest of the row's id; for
+    /// a session opencode 2.0 wrote to, the places in both layouts (see `v2::checkpoint`).
     fn messages_from(
         self,
         from: Option<Checkpoint>,
@@ -917,24 +1519,37 @@ impl Session for OpencodeSession {
             // and nothing can wake the session again, so it reads out the rows already in the
             // table -- those a failed read did not reach among them -- rather than abandon them
             let mut last = false;
-            // a checkpoint resumes the session past the row it names
-            if let Some(from) = from {
-                reader.lock().await.seek(from).await;
+            {
+                let mut readers = reader.lock().await;
+                // a checkpoint resumes each layout past the row it names there
+                let (legacy, next) = from.map(v2::unpack).unwrap_or_default();
+                if let Some(legacy) = legacy {
+                    readers.legacy.seek(legacy).await;
+                }
+                readers.next.reopen(next);
             }
             loop {
                 let failed = {
                     // the reader is locked for as long as this stream drains it; the only other
                     // taker is the handle this session is offered as again, which cannot exist
                     // before this one is dropped
-                    let mut reader = reader.lock().await;
+                    let mut readers = reader.lock().await;
+                    let Readers { legacy, next } = &mut *readers;
                     // a fresh handle reads at once: the row it was offered on is already in the
                     // table, and its wake was subscribed to after the tail sent it
-                    reader.wake();
-                    let mut drain = reader.drain();
-                    while let Some((at, message)) = drain.next().await {
+                    legacy.wake();
+                    let held = next.mark();
+                    let mut drain = legacy.drain();
+                    while let Some(((seq, id), message)) = drain.next().await {
+                        let at = v2::checkpoint(Some((seq, &id)), held);
                         yield message.map(|message| (at, message));
                     }
-                    reader.failed()
+                    let mut pass = next.pass();
+                    while let Some((mark, message)) = pass.next().await {
+                        let at = v2::checkpoint(legacy.position(), mark);
+                        yield message.map(|message| (at, message));
+                    }
+                    readers.failed()
                 };
                 if last {
                     break;
@@ -956,6 +1571,128 @@ impl Session for OpencodeSession {
     }
 }
 
+/// Whether every one of `tables` is there to read. opencode has kept its `session`, `message` and
+/// `part` projections since it moved to SQLite, before it kept an event log, so a database with
+/// an `event` table has them; one without is a database this module was not given by opencode,
+/// and has no projection to read rather than a broken one.
+async fn projected(conn: &mut SqliteConnection, tables: &[&str]) -> Result<bool, sqlx::Error> {
+    let listed: Vec<String> = query_as::<Sqlite, IdRow>(
+        "SELECT name AS id FROM sqlite_master WHERE type = 'table' AND name IN ('session', \
+         'message', 'part')",
+    )
+    .fetch_all(conn)
+    .await?
+    .into_iter()
+    .filter_map(|row| row.id)
+    .collect();
+    Ok(tables.iter().all(|table| listed.iter().any(|name| name == table)))
+}
+
+/// What opencode's projection holds of a session that its event log does not.
+///
+/// opencode records a session twice: as the durable rows of its event log, and in the `session`,
+/// `message` and `part` tables its projectors keep from those rows, which are what opencode
+/// itself reads. The projection holds the whole of every session; the event log only what was
+/// written since it began. opencode kept no event log before 1.3 and wrote one unconditionally
+/// only from 1.16; its 1.17.10 migration (`20260622170816_reset_v2_session_state`) empties it;
+/// and sessions migrated from its JSON storage never had one. A session with no `session.created`
+/// row therefore predates its log, and what the projection holds of it -- messages the log has no
+/// `message.updated` row for -- is read from the projection, ahead of its log.
+///
+/// A session whose log has its `session.created` row is read from the log alone: the projection
+/// holds nothing it does not.
+#[derive(Debug, Default)]
+struct Backlog {
+    /// The session's info as the projection holds it -- its title, directory and parent -- when
+    /// the log has no `session.updated` row to say it.
+    session: Option<Value>,
+    /// The messages the projection holds and the log does not, in opencode's order.
+    messages: Vec<String>,
+}
+
+/// A row of opencode's `session` projection: what a [`Body::Session`] reads of it.
+struct SessionRow {
+    id: Option<String>,
+    title: Option<String>,
+    parent_id: Option<String>,
+    directory: Option<String>,
+    created: Option<i64>,
+    updated: Option<i64>,
+}
+
+impl<'r> sqlx::FromRow<'r, SqliteRow> for SessionRow {
+    fn from_row(row: &'r SqliteRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            id: text(row, "id")?,
+            title: text(row, "title")?,
+            parent_id: text(row, "parent_id")?,
+            directory: text(row, "directory")?,
+            created: row.try_get_unchecked("time_created")?,
+            updated: row.try_get_unchecked("time_updated")?,
+        })
+    }
+}
+
+impl SessionRow {
+    /// The row as the session info a `session.updated.1` row would carry.
+    fn info(self) -> Value {
+        let mut info = serde_json::json!({
+            "id": self.id,
+            "title": self.title,
+            "directory": self.directory,
+            "time": {"created": self.created, "updated": self.updated},
+        });
+        if let Some(parent) = self.parent_id {
+            info["parentID"] = Value::from(parent);
+        }
+        info
+    }
+}
+
+/// A single text column, `id`, of any storage class.
+struct IdRow {
+    id: Option<String>,
+}
+
+impl<'r> sqlx::FromRow<'r, SqliteRow> for IdRow {
+    fn from_row(row: &'r SqliteRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            id: text(row, "id")?,
+        })
+    }
+}
+
+/// A single text column, `data`, of any storage class.
+struct DataRow {
+    data: Option<String>,
+}
+
+impl<'r> sqlx::FromRow<'r, SqliteRow> for DataRow {
+    fn from_row(row: &'r SqliteRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            data: text(row, "data")?,
+        })
+    }
+}
+
+/// A row of opencode's `part` projection: the part minus its `id`, `messageID` and `sessionID`,
+/// and when it was first written.
+struct PartProjection {
+    id: Option<String>,
+    time_created: Option<i64>,
+    data: Option<String>,
+}
+
+impl<'r> sqlx::FromRow<'r, SqliteRow> for PartProjection {
+    fn from_row(row: &'r SqliteRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            id: text(row, "id")?,
+            time_created: row.try_get_unchecked("time_created")?,
+            data: text(row, "data")?,
+        })
+    }
+}
+
 /// One row of the aggregate scan: the ids the event log holds rows for.
 struct AggregateRow {
     aggregate: Option<Aggregate>,
@@ -971,8 +1708,15 @@ impl<'r> sqlx::FromRow<'r, SqliteRow> for AggregateRow {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EventKind {
-    Role,
+    /// `message.updated.1`: a message's info.
+    Message,
+    /// `message.part.updated.1`: one part of a message, as it was upserted.
     Part,
+    /// `session.created.1` / `session.updated.1`: the session's info.
+    Session,
+    /// `session.next.*`: a row of the experimental event system (see [`Reader::next`]).
+    Next,
+    /// A durable event this module does not model.
     Unmapped,
 }
 
@@ -1056,13 +1800,19 @@ impl<'r> sqlx::FromRow<'r, SqliteRow> for EventRow {
 }
 
 impl EventRow {
+    /// What a row of `kind` is to a session, or `None` for one no session reads: a revert's
+    /// removals (`message.removed.1`, `message.part.removed.1`; see the module docs) and a
+    /// deletion among them.
     fn classify(kind: &str) -> Option<EventKind> {
         match kind {
-            "message.updated.1" => Some(EventKind::Role),
+            "message.updated.1" => Some(EventKind::Message),
             "message.part.updated.1" => Some(EventKind::Part),
-            k if k.starts_with("session.next.")
-                || k.starts_with("message.updated.")
-                || k.starts_with("message.part.updated.") =>
+            "session.created.1" | "session.updated.1" => Some(EventKind::Session),
+            k if k.starts_with("session.next.") => Some(EventKind::Next),
+            k if k.starts_with("message.updated.")
+                || k.starts_with("message.part.updated.")
+                || k.starts_with("session.created.")
+                || k.starts_with("session.updated.") =>
             {
                 Some(EventKind::Unmapped)
             }
@@ -1148,6 +1898,13 @@ fn unversioned(kind: &str) -> &str {
     }
 }
 
+/// A JSON payload opencode wrote, read as `JSON.parse` would (see [`crate::json::js`]): opencode
+/// cuts text by UTF-16 code units -- a shell tool keeps the last 30,000 of its output, the read
+/// tool the first 2,000 of a long line -- so an emoji at the cut leaves a lone surrogate behind.
+fn json(text: &str) -> Result<Value, serde_json::Error> {
+    crate::json::js::from_slice(text.as_bytes())
+}
+
 /// opencode's clocks are `Date.now()` millisecond epochs: integers in practice, declared as finite
 /// numbers.
 #[allow(clippy::cast_possible_truncation, reason = "millisecond epochs fit i64 by a wide margin")]
@@ -1155,16 +1912,162 @@ fn epoch_millis(value: &Value) -> Option<i64> {
     value.as_i64().or_else(|| value.as_f64().map(|ms| ms.round() as i64))
 }
 
+/// A token count: a finite number in opencode's schema, an integer in practice. A negative one
+/// (a provider's accounting gone wrong) counts as none.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "clamped to be non-negative; token counts fit u64 by a wide margin"
+)]
+fn tokens(value: &Value) -> Option<u64> {
+    value.as_u64().or_else(|| value.as_f64().map(|n| n.max(0.0).round() as u64))
+}
+
+/// One message of an opencode session.
+///
+/// Most are parts (`message.part.updated.1`): opencode stores a message as its info plus parts,
+/// and each part is delivered once finished, under its own id. What a part needs of its message
+/// -- role, model, cwd, the user message it answers -- comes from the message's info. A step's
+/// usage rides its `step-finish` part (see [`Message::usage`]).
+///
+/// The rest are rows of their own: a failed assistant message, under the message's id (a model
+/// call that fails before a single part is written leaves nothing else behind), and the
+/// session's title and parent, from its `session.created.1` / `session.updated.1` rows.
 #[derive(Debug, Clone)]
 pub struct OpencodeMessage {
     role: Role,
-    part: Value,
+    body: Body,
     time: Option<i64>,
+    /// The message a part or failure belongs to.
+    info: Option<MessageInfo>,
+}
+
+#[derive(Debug, Clone)]
+enum Body {
+    /// A part of a message.
+    Part(Value),
+    /// A message whose info reports `error`: its id and that info.
+    Failure {
+        id: String,
+        info: Value,
+    },
+    /// A session's info.
+    Session(Value),
+    /// A `session.next.*` row (see [`Reader::next`]), or a row of opencode 2.0's
+    /// `session_message` projection (see [`v2`]): both are messages whole.
+    Next(Next),
+    /// A durable event this module does not model, whole.
+    Raw(Value),
+}
+
+/// What a `session.next.*` row says, under the id it is delivered as: the message's own id for a
+/// prompt, a summary or injected text; for a model call's rows, its assistant message id and the
+/// part of the call the row is (`<message>/<textID>`, `<message>/<callID>`,
+/// `<message>/<callID>/result`, `<message>/step`), since the call's rows share its message id.
+#[derive(Debug, Clone)]
+struct Next {
+    role: Role,
+    id: String,
+    content: Vec<Content>,
+    usage: Option<Usage>,
+    stop: Option<StopReason>,
+}
+
+impl Next {
+    fn said(role: Role, id: String, content: Content) -> Self {
+        Self {
+            role,
+            id,
+            content: vec![content],
+            usage: None,
+            stop: None,
+        }
+    }
+}
+
+/// A model call's usage from its token counts (a `step-finish` part's or a
+/// `session.next.step.ended` row's `tokens`), `None` when there are none.
+///
+/// opencode's `input` already leaves out the cached tokens, and its `output` the reasoning ones
+/// (`Session.getUsage`; the experimental runner's `nonCachedInputTokens` and
+/// `visibleOutputTokens`), which are added back here: reasoning is billed as output.
+fn usage_of(counts: &Value) -> Option<Usage> {
+    if !counts.is_object() {
+        return None;
+    }
+    let reasoning = tokens(&counts["reasoning"]);
+    let output = match (tokens(&counts["output"]), reasoning) {
+        (None, None) => None,
+        (output, reasoning) => {
+            Some(output.unwrap_or_default().saturating_add(reasoning.unwrap_or_default()))
+        }
+    };
+    Some(Usage {
+        input: tokens(&counts["input"]),
+        output,
+        cache_read: tokens(&counts["cache"]["read"]),
+        cache_write: tokens(&counts["cache"]["write"]),
+        reasoning,
+    })
 }
 
 impl OpencodeMessage {
-    const fn part(role: Role, part: Value, time: Option<i64>) -> Self {
-        Self { role, part, time }
+    /// A finished part of the message `info` describes.
+    ///
+    /// A `synthetic` text part is one opencode wrote into the message itself -- a file an `@`
+    /// mention read, an MCP resource, a plan-mode reminder, a subagent's result, the prompt that
+    /// resumes a session after compaction -- and an `ignored` one is context a client showed the
+    /// user and kept from the model. Neither was typed by anyone, so both are the harness's
+    /// ([`Role::System`]), whichever message they sit in. So is a `compaction` part: the marker
+    /// opencode writes as the whole of a user message it creates to ask for a compaction
+    /// (`SessionCompaction.create`, on `/compact` or when the context overflows).
+    fn part(info: MessageInfo, part: Value, time: Option<i64>) -> Self {
+        let injected = part["type"] == "compaction"
+            || (part["type"] == "text"
+                && (part["synthetic"].as_bool() == Some(true)
+                    || part["ignored"].as_bool() == Some(true)));
+        Self {
+            role: if injected {
+                Role::System
+            } else {
+                info.role.clone()
+            },
+            body: Body::Part(part),
+            time,
+            info: Some(info),
+        }
+    }
+
+    /// The failure `info`, the message `id`'s info, reports, if it reports one: `info.error`, set
+    /// when a model call is aborted or fails (`processor.ts` `halt`) and when a finished one is
+    /// refused (`prompt.ts`, a `content-filter` finish).
+    fn failure(id: &str, learned: MessageInfo, info: &Value) -> Option<Self> {
+        if learned.role != Role::Assistant || !info["error"].is_object() {
+            return None;
+        }
+        let time = &info["time"];
+        Some(Self {
+            role: Role::Assistant,
+            time: epoch_millis(&time["completed"]).or_else(|| epoch_millis(&time["created"])),
+            body: Body::Failure {
+                id: id.to_owned(),
+                info: info.clone(),
+            },
+            info: Some(learned),
+        })
+    }
+
+    /// A session's `session.created.1` or `session.updated.1` payload, as a row carrying its
+    /// title and the session it was spawned from. `None` for a payload with no info.
+    fn session(mut data: Value) -> Option<Self> {
+        let info = data.get_mut("info").filter(|info| info.is_object()).map(Value::take)?;
+        let time = &info["time"];
+        Some(Self {
+            role: Role::System,
+            time: epoch_millis(&time["updated"]).or_else(|| epoch_millis(&time["created"])),
+            body: Body::Session(info),
+            info: None,
+        })
     }
 
     /// A durable event this module does not model (`session.next.*`, or a newer version of a
@@ -1178,8 +2081,92 @@ impl OpencodeMessage {
             .and_then(epoch_millis);
         Self {
             role: Role::Other(unversioned(kind).to_owned()),
-            part: data,
+            body: Body::Raw(data),
             time,
+            info: None,
+        }
+    }
+
+    /// The part this message is, if it is one.
+    const fn as_part(&self) -> Option<&Value> {
+        match &self.body {
+            Body::Part(part) => Some(part),
+            _ => None,
+        }
+    }
+
+    /// The part this message is, if it is a `step-finish`: the end of one model call.
+    fn step_finish(&self) -> Option<&Value> {
+        self.as_part().filter(|part| part["type"] == "step-finish")
+    }
+
+    /// The assistant message this one belongs to, if any.
+    fn assistant(&self) -> Option<&MessageInfo> {
+        self.info.as_ref().filter(|info| info.role == Role::Assistant)
+    }
+
+    /// What an opencode error (`{name, data: {message, ..}}`) says happened.
+    fn error_text(error: &Value) -> String {
+        match error["data"]["message"].as_str() {
+            Some(message) if !message.is_empty() => message.to_owned(),
+            _ => error["name"].as_str().unwrap_or("error").to_owned(),
+        }
+    }
+
+    /// The stop reason of a step's `finish` (the AI SDK's finish reasons).
+    fn stop_reason_of(finish: &str) -> StopReason {
+        match finish {
+            "stop" => StopReason::EndTurn,
+            "length" => StopReason::MaxTokens,
+            "tool-calls" => StopReason::ToolUse,
+            "content-filter" => StopReason::Refusal,
+            "error" => StopReason::Error,
+            other => StopReason::Other(other.to_owned()),
+        }
+    }
+
+    /// What a part says. A `step-finish` says nothing: it carries its step's usage and why the
+    /// step ended, which are no conversation.
+    fn part_content(&self, part: &Value) -> Vec<Content> {
+        match part["type"].as_str() {
+            Some("text") => {
+                let text = part["text"].as_str().unwrap_or_default().to_owned();
+                if self.assistant().is_some_and(|info| info.summary) {
+                    vec![Content::Summary(text)]
+                } else {
+                    vec![Content::Text(text)]
+                }
+            }
+            Some("step-finish") => Vec::new(),
+            // an API error the call is retried after
+            Some("retry") => vec![Content::Error(Self::error_text(&part["error"]))],
+            Some("reasoning") => {
+                vec![Content::Reasoning(part["text"].as_str().unwrap_or_default().to_owned())]
+            }
+            Some("tool") => {
+                let call = ToolCallId::from(part["callID"].as_str().unwrap_or_default().to_owned());
+                let state = &part["state"];
+                let mut content = vec![Content::ToolUse(ToolUse {
+                    id: call.clone(),
+                    name: part["tool"].as_str().unwrap_or_default().to_owned(),
+                    input: state["input"].clone(),
+                })];
+                match state["status"].as_str() {
+                    Some("completed") => content.push(Content::ToolResult(ToolResult {
+                        call,
+                        output: state["output"].clone(),
+                        error: false,
+                    })),
+                    Some("error") => content.push(Content::ToolResult(ToolResult {
+                        call,
+                        output: state["error"].clone(),
+                        error: true,
+                    })),
+                    _ => {}
+                }
+                content
+            }
+            _ => vec![Content::Other(part.clone())],
         }
     }
 
@@ -1229,8 +2216,19 @@ impl OpencodeMessage {
 }
 
 impl Message for OpencodeMessage {
+    /// A part's id; a failed message's id; for a session's info, its id and title, so that a
+    /// title is delivered once however many rows repeat it -- and one of opencode 2.0's sessions
+    /// has none until one is generated.
     fn id(&self) -> Option<MessageId> {
-        self.part["id"].as_str().map(|id| MessageId::from(id.to_owned()))
+        let id = match &self.body {
+            Body::Part(value) | Body::Raw(value) => value["id"].as_str()?.to_owned(),
+            Body::Failure { id, .. } | Body::Next(Next { id, .. }) => id.clone(),
+            Body::Session(info) => match info["title"].as_str() {
+                Some(title) => format!("{}:title:{title}", info["id"].as_str()?),
+                None => format!("{}:session", info["id"].as_str()?),
+            },
+        };
+        Some(MessageId::from(id))
     }
 
     fn role(&self) -> Role {
@@ -1244,38 +2242,104 @@ impl Message for OpencodeMessage {
     }
 
     fn content(&self) -> Vec<Content> {
-        let part = &self.part;
-        match part["type"].as_str() {
-            Some("text") => {
-                vec![Content::Text(part["text"].as_str().unwrap_or_default().to_owned())]
+        match &self.body {
+            Body::Part(part) => self.part_content(part),
+            Body::Failure { info, .. } => vec![Content::Error(Self::error_text(&info["error"]))],
+            Body::Next(next) => next.content.clone(),
+            Body::Session(_) => Vec::new(),
+            Body::Raw(data) => vec![Content::Other(data.clone())],
+        }
+    }
+
+    fn model(&self) -> Option<String> {
+        self.assistant()?.model.clone()
+    }
+
+    /// A step's usage, from its `step-finish` part: one per model call, which is what opencode
+    /// reports usage for. The message's own `tokens` are not used, as opencode overwrites them
+    /// with each step's (`processor.ts`, `step-finish`) and a message of several steps would
+    /// report its last one only.
+    ///
+    /// opencode's `input` already leaves out the cached tokens, and its `output` the reasoning
+    /// ones (`Session.getUsage`), which are added back here: reasoning is billed as output (see
+    /// `usage_of`). An experimental `session.next.step.ended` row carries its call's usage
+    /// likewise.
+    fn usage(&self) -> Option<Usage> {
+        match &self.body {
+            Body::Next(next) => next.usage,
+            _ => usage_of(&self.step_finish()?["tokens"]),
+        }
+    }
+
+    fn stop_reason(&self) -> Option<StopReason> {
+        match &self.body {
+            Body::Part(_) => self.step_finish()?["reason"].as_str().map(Self::stop_reason_of),
+            // the names of `SessionV1.Assistant.error` (`packages/schema/src/v1/session.ts`)
+            Body::Failure { info, .. } => Some(match info["error"]["name"].as_str() {
+                Some("MessageAbortedError") => StopReason::Aborted,
+                // `prompt.ts`: a `content-filter` finish is surfaced as this error
+                Some("ContentFilterError") => StopReason::Refusal,
+                Some("MessageOutputLengthError") => StopReason::MaxTokens,
+                _ => StopReason::Error,
+            }),
+            Body::Next(next) => next.stop.clone(),
+            Body::Session(_) | Body::Raw(_) => None,
+        }
+    }
+
+    fn cwd(&self) -> Option<PathBuf> {
+        match &self.body {
+            Body::Session(info) => info["directory"].as_str().map(PathBuf::from),
+            _ => self.assistant()?.cwd.as_deref().map(PathBuf::from),
+        }
+    }
+
+    /// The user message an assistant message's rows answer.
+    fn parent_id(&self) -> Option<MessageId> {
+        self.assistant()?.parent.clone().map(MessageId::from)
+    }
+
+    fn parent_session(&self) -> Option<SessionId> {
+        match &self.body {
+            Body::Session(info) => {
+                info["parentID"].as_str().map(|id| SessionId::from(id.to_owned()))
             }
-            Some("reasoning") => {
-                vec![Content::Reasoning(part["text"].as_str().unwrap_or_default().to_owned())]
+            _ => None,
+        }
+    }
+
+    /// The model call a row of an assistant message belongs to (see `MessageInfo::turn_of`).
+    ///
+    /// A `step-finish` part is one model call on its own, whose usage the key has to tell apart
+    /// from every other call's: it is its message's key and the counts it reports, which a fork's
+    /// copy of it keeps and which two calls that start in the same millisecond, or two steps of
+    /// one message, do not share.
+    fn turn_id(&self) -> Option<String> {
+        let turn = self.assistant().and_then(|info| info.turn.clone());
+        let Some(step) = self.step_finish() else {
+            return turn;
+        };
+        let turn = turn.or_else(|| step["messageID"].as_str().map(str::to_owned))?;
+        let counts = &step["tokens"];
+        let count = |value: &Value| tokens(value).unwrap_or_default();
+        Some(format!(
+            "{turn}#{}/{}/{}/{}/{}",
+            count(&counts["input"]),
+            count(&counts["output"]),
+            count(&counts["reasoning"]),
+            count(&counts["cache"]["read"]),
+            count(&counts["cache"]["write"]),
+        ))
+    }
+
+    /// opencode records no difference between a title it generated and one the user set, so
+    /// every title is ranked as generated and the newest wins.
+    fn title(&self) -> Option<TitleChange> {
+        match &self.body {
+            Body::Session(info) => {
+                info["title"].as_str().map(|text| TitleChange::new(TitleSource::Generated, text))
             }
-            Some("tool") => {
-                let call = ToolCallId::from(part["callID"].as_str().unwrap_or_default().to_owned());
-                let state = &part["state"];
-                let mut content = vec![Content::ToolUse(ToolUse {
-                    id: call.clone(),
-                    name: part["tool"].as_str().unwrap_or_default().to_owned(),
-                    input: state["input"].clone(),
-                })];
-                match state["status"].as_str() {
-                    Some("completed") => content.push(Content::ToolResult(ToolResult {
-                        call,
-                        output: state["output"].clone(),
-                        error: false,
-                    })),
-                    Some("error") => content.push(Content::ToolResult(ToolResult {
-                        call,
-                        output: state["error"].clone(),
-                        error: true,
-                    })),
-                    _ => {}
-                }
-                content
-            }
-            _ => vec![Content::Other(part.clone())],
+            _ => None,
         }
     }
 }
@@ -1298,11 +2362,11 @@ mod tests {
     use crate::harnesstools::session::{CaptureError, Message, SessionEvent, Sessions};
 
     fn part_message(part: Value) -> OpencodeMessage {
-        OpencodeMessage {
+        let info = MessageInfo {
             role: Role::Assistant,
-            part,
-            time: Some(1_700_000_000_000),
-        }
+            ..MessageInfo::unknown()
+        };
+        OpencodeMessage::part(info, part, Some(1_700_000_000_000))
     }
 
     #[rstest]
@@ -1984,7 +3048,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("opencode.db");
         let db = event_db(&path).await;
-        insert_event(&db, "e1", "ses_old", "session.updated.1", r#"{"sessionID":"ses_old"}"#).await;
+        // a revert's removal and a deletion are rows no session reads
+        let removed = r#"{"sessionID":"ses_old","messageID":"msg_0"}"#;
+        insert_event(&db, "e1", "ses_old", "message.removed.1", removed).await;
         insert_event(&db, "e2", "ses_gone", "session.deleted.1", r#"{"sessionID":"ses_gone"}"#)
             .await;
         role_row(&db, "e3", "ses_1", "msg_1", "user").await;
@@ -2468,7 +3534,7 @@ mod tests {
         let path = dir.path().join("opencode.db");
         let db = event_db(&path).await;
         // alternated, so that a role read back from the wrong message shows
-        let messages: Vec<(String, &str)> = (0..Roles::CAP * 3)
+        let messages: Vec<(String, &str)> = (0..Infos::CAP * 3)
             .map(|i| (format!("msg_{i:02}"), ["user", "assistant"][i % 2]))
             .collect();
         for (i, (message, role)) in messages.iter().enumerate() {
@@ -2498,9 +3564,9 @@ mod tests {
         let written: Vec<Role> =
             messages.iter().map(|(_, role)| OpencodeMessage::role_of(role)).collect();
         assert_eq!(roles, written);
-        let kept = reader.lock().await.roles.0.len();
+        let kept = reader.lock().await.legacy.infos.0.len();
         assert!(
-            kept <= Roles::CAP,
+            kept <= Infos::CAP,
             "a session that read {} messages kept {kept} of their roles",
             messages.len()
         );
@@ -2595,6 +3661,50 @@ mod tests {
         assert_eq!(got, expected);
     }
 
+    /// opencode 1.18.32 keeps a shell tool's last 30,000 code units of output; with an emoji at
+    /// the cut its payload holds a lone low surrogate, both in the running tool's rows and in the
+    /// finished one.
+    #[rstest]
+    #[tokio::test]
+    async fn a_part_with_a_lone_surrogate_is_delivered() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.db");
+        let db = event_db(&path).await;
+        role_row(&db, "evt_1", "ses_a", "msg_a", "assistant").await;
+        let tool = |status: &str| {
+            serde_json::json!({
+                "part": {
+                    "id": "prt_1", "messageID": "msg_a", "type": "tool", "callID": "call_1",
+                    "tool": "bash",
+                    "state": {
+                        "status": status, "input": {"command": "cat emoji"},
+                        "output": "...LONEa", "metadata": {"output": "...LONEa"},
+                    },
+                },
+                "time": 1_700_000_000_000i64,
+            })
+            .to_string()
+            .replace("LONE", r"\ude00")
+        };
+        insert_event(&db, "evt_2", "ses_a", "message.part.updated.1", &tool("running")).await;
+        insert_event(&db, "evt_3", "ses_a", "message.part.updated.1", &tool("completed")).await;
+
+        let messages: Vec<_> = read_all(&path).await.into_iter().map(|(_, m)| m).collect();
+        let contents: Vec<Content> = messages.iter().flat_map(Message::content).collect();
+        assert_eq!(contents, vec![
+            Content::ToolUse(ToolUse {
+                id: ToolCallId::from("call_1".to_owned()),
+                name: "bash".into(),
+                input: serde_json::json!({"command": "cat emoji"}),
+            }),
+            Content::ToolResult(ToolResult {
+                call: ToolCallId::from("call_1".to_owned()),
+                output: Value::from("...\u{fffd}a"),
+                error: false,
+            }),
+        ]);
+    }
+
     #[rstest]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_backfill_delivers_every_session_and_part() {
@@ -2683,8 +3793,9 @@ mod tests {
             .expect("no completed tool result");
         assert_eq!(tool.output, serde_json::json!({"stdout": "listing", "exit": 0}));
 
-        // session.created.1 and message.part.removed.1 yield nothing; the unmapped version and
-        // the session.next event surface whole, dated and named by their type
+        // a session.created.1 with no info and message.part.removed.1 yield nothing; the unmapped
+        // version surfaces whole, dated and named by its type; the session.next prompt is the
+        // user's
         let b = &by_session["ses_B"];
         let [b1, future, prompted] = b.as_slice() else {
             panic!("expected exactly three messages for ses_B, got {}", b.len());
@@ -2697,11 +3808,941 @@ mod tests {
             future.content().as_slice(),
             [Content::Other(v)] if v["part"]["kind"] == "future"
         ));
-        assert_eq!(prompted.role(), Role::Other("session.next.prompted".to_owned()));
+        assert_eq!(prompted.role(), Role::User);
+        assert_eq!(prompted.id(), Some(MessageId::from("msgB2".to_owned())));
         assert_eq!(prompted.timestamp().unwrap().unix_timestamp(), 1_700_000_011);
+        assert_eq!(prompted.content(), vec![Content::Text("second prompt from B".into())]);
+    }
+
+    /// What opencode's durable events capture, end to end. Payloads follow opencode's durable
+    /// event schemas (`packages/schema/src/v1/session.ts`: `session.created`/`session.updated`
+    /// carry the whole `SessionInfo`, `message.updated` the whole `Assistant`/`User` info,
+    /// `message.part.updated` `{sessionID, part, time}`) and the order `session/prompt.ts` and
+    /// `session/processor.ts` write them in.
+    mod captured {
+        use super::*;
+        use crate::harnesstools::session::model::{StopReason, Usage};
+
+        const SES: &str = "ses_R";
+
+        /// Every message the event log yields, read out by a one-shot backfill.
+        async fn backfill(path: &Path) -> Vec<OpencodeMessage> {
+            let sessions: Vec<OpencodeSession> = OpencodeSessions::builder()
+                .db(path)
+                .build()
+                .existing()
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+                .await;
+            let mut out = Vec::new();
+            for session in sessions {
+                let messages: Vec<_> = session.messages().collect().await;
+                out.extend(messages.into_iter().map(Result::unwrap));
+            }
+            out
+        }
+
+        fn find<'a>(messages: &'a [OpencodeMessage], id: &str) -> &'a OpencodeMessage {
+            messages
+                .iter()
+                .find(|m| m.id() == Some(MessageId::from(id.to_owned())))
+                .unwrap_or_else(|| panic!("{id} was not delivered"))
+        }
+
+        fn session_info(title: &str, parent: Option<&str>) -> Value {
+            let mut info = serde_json::json!({
+                "id": SES, "slug": "s", "projectID": "p", "directory": "/work/proj",
+                "title": title, "version": "1.0.0",
+                "time": {"created": 1_700_000_000_000i64, "updated": 1_700_000_000_000i64},
+            });
+            if let Some(parent) = parent {
+                info["parentID"] = Value::from(parent);
+            }
+            info
+        }
+
+        async fn session_row(db: &Sqlite, id: &str, kind: &str, info: Value) {
+            let data = serde_json::json!({"sessionID": info["id"], "info": info});
+            insert_event(db, id, info["id"].as_str().unwrap(), kind, &data.to_string()).await;
+        }
+
+        /// An assistant message's info as opencode's processor writes it at `step-finish`
+        /// (`processor.ts`: `assistantMessage.tokens = usage.tokens; finish = reason`).
+        fn assistant_info(tokens_in: u64, error: Option<Value>) -> Value {
+            let mut info = serde_json::json!({
+                "id": "msg_a1", "sessionID": SES, "role": "assistant",
+                "time": {"created": 1_700_000_001_000i64, "completed": 1_700_000_009_000i64},
+                "parentID": "msg_u1", "modelID": "claude-sonnet-4", "providerID": "anthropic",
+                "mode": "build", "agent": "build",
+                "path": {"cwd": "/work/proj/sub", "root": "/work/proj"},
+                "cost": 0.0123,
+                "tokens": {"input": tokens_in, "output": 250, "reasoning": 40,
+                           "cache": {"read": 900, "write": 30}},
+                "finish": "stop",
+            });
+            if let Some(error) = error {
+                info["error"] = error;
+            }
+            info
+        }
+
+        async fn message_updated(db: &Sqlite, id: &str, info: &Value) {
+            let data = serde_json::json!({"sessionID": info["sessionID"], "info": info});
+            let session = info["sessionID"].as_str().unwrap();
+            insert_event(db, id, session, "message.updated.1", &data.to_string()).await;
+        }
+
+        async fn part_row(db: &Sqlite, id: &str, part: Value) {
+            let session = part["sessionID"].as_str().unwrap().to_owned();
+            let data = serde_json::json!({"sessionID": session, "time": 1_700_000_008_000i64,
+                                          "part": part});
+            insert_event(db, id, &session, "message.part.updated.1", &data.to_string()).await;
+        }
+
+        fn step_finish(session: &str, id: &str, message: &str, input: u64) -> Value {
+            serde_json::json!({
+                "id": id, "sessionID": session, "messageID": message, "type": "step-finish",
+                "reason": "stop", "cost": 0.0123,
+                "tokens": {"input": input, "output": 250, "reasoning": 40,
+                           "cache": {"read": 900, "write": 30}}})
+        }
+
+        /// One assistant turn as opencode writes it: the session, the user's prompt, the
+        /// assistant message (zero tokens when created, filled in at step-finish), a finished
+        /// text part, a step-finish part, and the message again once completed.
+        async fn seed_turn(db: &Sqlite) {
+            session_row(db, "evt_00", "session.created.1", session_info("New session", None)).await;
+            let user = serde_json::json!({
+                "id": "msg_u1", "sessionID": SES, "role": "user",
+                "time": {"created": 1_700_000_000_500i64}, "agent": "build",
+                "model": {"providerID": "anthropic", "modelID": "claude-sonnet-4"}});
+            message_updated(db, "evt_01", &user).await;
+            text_row(db, "evt_02", SES, "prt_u1", "msg_u1", "hello").await;
+            message_updated(db, "evt_03", &assistant_info(0, None)).await;
+            let text = serde_json::json!({"sessionID": SES, "time": 1_700_000_005_000i64, "part": {
+                "id": "prt_a1", "sessionID": SES, "messageID": "msg_a1", "type": "text",
+                "text": "hi there",
+                "time": {"start": 1_700_000_002_000i64, "end": 1_700_000_005_000i64}}});
+            insert_event(db, "evt_04", SES, "message.part.updated.1", &text.to_string()).await;
+            part_row(db, "evt_05", step_finish(SES, "prt_a2", "msg_a1", 1200)).await;
+            message_updated(db, "evt_06", &assistant_info(1200, None)).await;
+        }
+
+        /// A one-shot read whose store fails partway ends in an error, not in a stream that
+        /// passes for the whole session.
+        #[rstest]
+        #[tokio::test]
+        async fn a_read_that_fails_partway_says_so() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("opencode.db");
+            let db = event_db(&path).await;
+            seed_turn(&db).await;
+            let sessions: Vec<OpencodeSession> = OpencodeSessions::builder()
+                .db(&path)
+                .build()
+                .existing()
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+                .await;
+            let [session] = <[_; 1]>::try_from(sessions).unwrap();
+            query::<sqlx::Sqlite>("DROP TABLE event")
+                .execute(&mut *db.pool().acquire().await.unwrap())
+                .await
+                .unwrap();
+
+            let read: Vec<_> = session.read().collect().await;
+            assert!(
+                matches!(read.last(), Some(Err(MessageError::Incomplete))),
+                "a failed read ended the stream silently: {read:?}"
+            );
+        }
+
+        async fn seeded() -> (tempfile::TempDir, Vec<OpencodeMessage>) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("opencode.db");
+            let db = event_db(&path).await;
+            seed_turn(&db).await;
+            let messages = backfill(&path).await;
+            (dir, messages)
+        }
+
+        /// The usage opencode reports on the message and again on its step-finish part is
+        /// captured once, from the step. opencode's `output` leaves the reasoning tokens out
+        /// (`Session.getUsage`: `output: outputTokens - reasoningTokens`), and they are billed
+        /// as output (ccusage and tokscale both add them back), so 250 + 40.
+        #[rstest]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_turns_usage_is_captured_once_from_its_step() {
+            let (_dir, messages) = seeded().await;
+            let usage: Vec<(Option<MessageId>, Usage)> =
+                messages.iter().filter_map(|m| Some((m.id(), m.usage()?))).collect();
+            assert_eq!(usage, vec![(Some(MessageId::from("prt_a2".to_owned())), Usage {
+                input: Some(1200),
+                output: Some(290),
+                cache_read: Some(900),
+                cache_write: Some(30),
+                reasoning: Some(40),
+            })]);
+            let step = find(&messages, "prt_a2");
+            assert!(step.content().is_empty());
+            assert_eq!(step.stop_reason(), Some(StopReason::EndTurn));
+            assert_eq!(
+                step.turn_id().as_deref(),
+                Some("1700000001000:anthropic/claude-sonnet-4#1200/250/40/900/30")
+            );
+            assert_eq!(step.parent_id(), Some(MessageId::from("msg_u1".to_owned())));
+        }
+
+        /// Every row of an assistant message says which model wrote it, where, in which call,
+        /// and which user message it answers; a user's row says none of it.
+        #[rstest]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn an_assistant_part_carries_its_messages_context() {
+            let (_dir, messages) = seeded().await;
+            let reply = find(&messages, "prt_a1");
+            assert_eq!(reply.role(), Role::Assistant);
+            assert_eq!(reply.model().as_deref(), Some("claude-sonnet-4"));
+            assert_eq!(reply.cwd(), Some(PathBuf::from("/work/proj/sub")));
+            assert_eq!(reply.parent_id(), Some(MessageId::from("msg_u1".to_owned())));
+            assert_eq!(reply.turn_id().as_deref(), Some("1700000001000:anthropic/claude-sonnet-4"));
+            assert_eq!(reply.stop_reason(), None);
+            assert_eq!(reply.usage(), None);
+
+            let prompt = find(&messages, "prt_u1");
+            assert_eq!(prompt.role(), Role::User);
+            assert_eq!(
+                (prompt.model(), prompt.cwd(), prompt.parent_id(), prompt.turn_id()),
+                (None, None, None, None)
+            );
+        }
+
+        /// A message's info, read back from opencode's `message` projection when its
+        /// `message.updated.1` row is not in the part of the log a session reads, says the same.
+        #[rstest]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_parts_context_is_looked_up_when_its_message_row_is_not_to_hand() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("opencode.db");
+            let db = event_db(&path).await;
+            let mut info = assistant_info(1200, None);
+            let data = {
+                let object = info.as_object_mut().unwrap();
+                object.remove("id");
+                object.remove("sessionID");
+                info.to_string()
+            };
+            query::<sqlx::Sqlite>(
+                "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES \
+                 ('msg_a1', ?1, 0, 0, ?2)",
+            )
+            .bind(SES)
+            .bind(data)
+            .execute(&mut *db.pool().acquire().await.unwrap())
+            .await
+            .unwrap();
+            part_row(&db, "evt_00", step_finish(SES, "prt_a2", "msg_a1", 1200)).await;
+
+            let messages = backfill(&path).await;
+            let step = find(&messages, "prt_a2");
+            assert_eq!(step.role(), Role::Assistant);
+            assert_eq!(step.model().as_deref(), Some("claude-sonnet-4"));
+            assert_eq!(
+                step.turn_id().as_deref(),
+                Some("1700000001000:anthropic/claude-sonnet-4#1200/250/40/900/30")
+            );
+        }
+
+        /// `Session.fork` copies every message and part into the new session under fresh ids
+        /// and with everything else -- times, model, tokens -- as it was: the copy of a step is
+        /// the same model call as its original, and names the same turn so its usage is counted
+        /// once.
+        #[rstest]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_forked_copy_of_a_step_is_the_same_turn_as_its_original() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("opencode.db");
+            let db = event_db(&path).await;
+            seed_turn(&db).await;
+            let mut fork = session_info("New session (fork #1)", None);
+            fork["id"] = Value::from("ses_F");
+            session_row(&db, "evt_f0", "session.created.1", fork).await;
+            let user = serde_json::json!({
+                "id": "msg_fu1", "sessionID": "ses_F", "role": "user",
+                "time": {"created": 1_700_000_000_500i64}, "agent": "build",
+                "model": {"providerID": "anthropic", "modelID": "claude-sonnet-4"}});
+            message_updated(&db, "evt_f1", &user).await;
+            text_row(&db, "evt_f2", "ses_F", "prt_fu1", "msg_fu1", "hello").await;
+            let mut copy = assistant_info(1200, None);
+            copy["id"] = Value::from("msg_fa1");
+            copy["sessionID"] = Value::from("ses_F");
+            copy["parentID"] = Value::from("msg_fu1");
+            message_updated(&db, "evt_f3", &copy).await;
+            part_row(&db, "evt_f4", step_finish("ses_F", "prt_fa2", "msg_fa1", 1200)).await;
+
+            let messages = backfill(&path).await;
+            let (original, copy) = (find(&messages, "prt_a2"), find(&messages, "prt_fa2"));
+            assert!(original.usage().is_some());
+            assert_eq!(copy.usage(), original.usage());
+            assert_eq!(copy.turn_id(), original.turn_id());
+            assert_eq!(copy.parent_id(), Some(MessageId::from("msg_fu1".to_owned())));
+        }
+
+        /// A message of several steps -- a retried stream, an older opencode that ran many steps
+        /// per message -- reports each step's usage on its own step-finish, and each is a model
+        /// call of its own.
+        #[rstest]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn each_step_of_a_message_is_a_turn_of_its_own() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("opencode.db");
+            let db = event_db(&path).await;
+            message_updated(&db, "evt_00", &assistant_info(0, None)).await;
+            part_row(&db, "evt_01", step_finish(SES, "prt_s1", "msg_a1", 1000)).await;
+            part_row(&db, "evt_02", step_finish(SES, "prt_s2", "msg_a1", 2000)).await;
+
+            let messages = backfill(&path).await;
+            let turns: Vec<String> = messages.iter().filter_map(Message::turn_id).collect();
+            assert_eq!(turns, [
+                "1700000001000:anthropic/claude-sonnet-4#1000/250/40/900/30",
+                "1700000001000:anthropic/claude-sonnet-4#2000/250/40/900/30",
+            ]);
+            let inputs: Vec<Option<u64>> =
+                messages.iter().filter_map(|m| Some(m.usage()?.input)).collect();
+            assert_eq!(inputs, [Some(1000), Some(2000)]);
+        }
+
+        /// A model call that fails or is aborted exists only as its message's info with
+        /// `error`, if it fails before a single part is written: that is a row of its own.
+        #[rstest]
+        #[case::aborted(
+            serde_json::json!({"name": "MessageAbortedError", "data": {"message": "aborted"}}),
+            StopReason::Aborted,
+            "aborted"
+        )]
+        #[case::api(
+            serde_json::json!({
+                "name": "APIError", "data": {"message": "overloaded", "isRetryable": true}
+            }),
+            StopReason::Error,
+            "overloaded"
+        )]
+        #[case::output_length(
+            serde_json::json!({"name": "MessageOutputLengthError", "data": {}}),
+            StopReason::MaxTokens,
+            "MessageOutputLengthError"
+        )]
+        #[case::content_filter(
+            serde_json::json!({"name": "ContentFilterError", "data": {
+                "message": "The response was blocked by the provider's content filter"}}),
+            StopReason::Refusal,
+            "The response was blocked by the provider's content filter"
+        )]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_failed_assistant_turn_is_captured(
+            #[case] error: Value,
+            #[case] reason: StopReason,
+            #[case] text: &str,
+        ) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("opencode.db");
+            let db = event_db(&path).await;
+            role_row(&db, "evt_00", SES, "msg_u1", "user").await;
+            text_row(&db, "evt_01", SES, "prt_u1", "msg_u1", "hello").await;
+            message_updated(&db, "evt_02", &assistant_info(0, None)).await;
+            message_updated(&db, "evt_03", &assistant_info(0, Some(error))).await;
+
+            let messages = backfill(&path).await;
+            assert_eq!(messages.len(), 2, "the prompt and the failure");
+            let failed = find(&messages, "msg_a1");
+            assert_eq!(failed.role(), Role::Assistant);
+            assert_eq!(failed.content(), vec![Content::Error(text.to_owned())]);
+            assert_eq!(failed.stop_reason(), Some(reason));
+            assert_eq!(failed.timestamp().unwrap().unix_timestamp(), 1_700_000_009);
+            assert_eq!(failed.model().as_deref(), Some("claude-sonnet-4"));
+            assert_eq!(failed.parent_id(), Some(MessageId::from("msg_u1".to_owned())));
+            assert_eq!(
+                failed.turn_id().as_deref(),
+                Some("1700000001000:anthropic/claude-sonnet-4")
+            );
+            assert_eq!(failed.usage(), None);
+        }
+
+        /// opencode writes `session.updated` on every prompt (`touch`) and whenever anything of
+        /// the session changes; its title is delivered when it is first seen and each time it
+        /// changes.
+        #[rstest]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn the_session_title_is_captured_as_it_changes() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("opencode.db");
+            let db = event_db(&path).await;
+            seed_turn(&db).await;
+            let touched = session_info("New session", None);
+            session_row(&db, "evt_07", "session.updated.1", touched).await;
+            // ensureTitle -> setTitle
+            let titled = session_info("Fix the flaky test", None);
+            session_row(&db, "evt_08", "session.updated.1", titled.clone()).await;
+            session_row(&db, "evt_09", "session.updated.1", titled).await;
+
+            let messages = backfill(&path).await;
+            let titles: Vec<(Option<MessageId>, String)> =
+                messages.iter().filter_map(|m| Some((m.id(), m.title()?.text?))).collect();
+            assert_eq!(titles, [
+                (Some(MessageId::from("ses_R:title:New session".to_owned())), "New session".into()),
+                (
+                    Some(MessageId::from("ses_R:title:Fix the flaky test".to_owned())),
+                    "Fix the flaky test".into()
+                ),
+            ]);
+            let session = find(&messages, "ses_R:title:New session");
+            assert_eq!(session.role(), Role::System);
+            assert!(session.content().is_empty());
+            assert_eq!(session.cwd(), Some(PathBuf::from("/work/proj")));
+        }
+
+        /// A task-tool subagent session is created with `parentID` (`tool/task.ts`).
+        #[rstest]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_child_session_names_its_parent() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("opencode.db");
+            let db = event_db(&path).await;
+            let created = session_info("sub", Some("ses_parent"));
+            session_row(&db, "evt_00", "session.created.1", created).await;
+            role_row(&db, "evt_01", SES, "msg_u1", "user").await;
+            text_row(&db, "evt_02", SES, "prt_u1", "msg_u1", "do the subtask").await;
+
+            let messages = backfill(&path).await;
+            let parents: Vec<SessionId> =
+                messages.iter().filter_map(Message::parent_session).collect();
+            assert_eq!(parents, [SessionId::from("ses_parent".to_owned())]);
+        }
+
+        /// `@file` in a prompt makes opencode run the Read tool itself and store its output as a
+        /// `synthetic` text part of the *user* message (`session/prompt.ts`); ACP content meant
+        /// for the user alone is stored `ignored` (`acp/content.ts`). Neither was typed.
+        #[rstest]
+        #[case::synthetic("synthetic")]
+        #[case::ignored("ignored")]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn text_the_harness_injected_is_the_systems(#[case] flag: &str) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("opencode.db");
+            let db = event_db(&path).await;
+            role_row(&db, "evt_00", SES, "msg_u1", "user").await;
+            text_row(&db, "evt_01", SES, "prt_u1", "msg_u1", "look at @config.env").await;
+            let mut injected = serde_json::json!({
+                "id": "prt_u2", "sessionID": SES, "messageID": "msg_u1", "type": "text",
+                "text": "<file>\n00001| DB_HOST=prod.internal\n</file>"});
+            injected[flag] = Value::Bool(true);
+            part_row(&db, "evt_02", injected).await;
+
+            let messages = backfill(&path).await;
+            assert_eq!(find(&messages, "prt_u1").role(), Role::User);
+            let injected = find(&messages, "prt_u2");
+            assert_eq!(injected.role(), Role::System);
+            assert!(matches!(injected.content().as_slice(), [Content::Text(_)]));
+        }
+
+        /// A compaction writes its summary as the text of an assistant message marked `summary`
+        /// (`session/compaction.ts`).
+        #[rstest]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_compaction_summary_is_a_summary() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("opencode.db");
+            let db = event_db(&path).await;
+            let mut info = assistant_info(0, None);
+            info["summary"] = Value::Bool(true);
+            info["mode"] = Value::from("compaction");
+            message_updated(&db, "evt_00", &info).await;
+            text_row(&db, "evt_01", SES, "prt_a1", "msg_a1", "we fixed the test").await;
+
+            let messages = backfill(&path).await;
+            assert_eq!(find(&messages, "prt_a1").content(), vec![Content::Summary(
+                "we fixed the test".into()
+            )]);
+        }
+
+        /// `/compact` and a context overflow ask for a compaction with a user message opencode
+        /// writes itself, whose only part is a `compaction` marker (`SessionCompaction.create`).
+        #[rstest]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_compaction_request_is_the_systems() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("opencode.db");
+            let db = event_db(&path).await;
+            role_row(&db, "evt_00", SES, "msg_u1", "user").await;
+            // as opencode 1.18.32 wrote it for `POST /session/:id/summarize`
+            let marker = serde_json::json!({
+                "id": "prt_0d14b98e70014t9fK6vIkrdBD4", "sessionID": SES, "messageID": "msg_u1",
+                "type": "compaction", "auto": false});
+            part_row(&db, "evt_01", marker).await;
+
+            let messages = backfill(&path).await;
+            assert_eq!(find(&messages, "prt_0d14b98e70014t9fK6vIkrdBD4").role(), Role::System);
+        }
+
+        /// `/undo` (`session/revert.ts`) removes messages and parts with durable
+        /// `message.removed.1` / `message.part.removed.1` rows, written when the next prompt
+        /// commits the revert. They are left unread, and what was captured stands: the reverted
+        /// turns did happen and did cost their tokens; captured rows are immutable, so nothing
+        /// downstream could retract them; and no content says "retracted", so a marker would be
+        /// made-up text, one per removed message and part, dated at the next prompt rather than
+        /// the undo.
+        #[rstest]
+        #[case::part(
+            "message.part.removed.1",
+            serde_json::json!({"sessionID": SES, "messageID": "msg_u1", "partID": "prt_u1"})
+        )]
+        #[case::message(
+            "message.removed.1",
+            serde_json::json!({"sessionID": SES, "messageID": "msg_u1"})
+        )]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_revert_leaves_what_was_captured_as_it_stands(
+            #[case] kind: &str,
+            #[case] data: Value,
+        ) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("opencode.db");
+            let db = event_db(&path).await;
+            role_row(&db, "evt_00", SES, "msg_u1", "user").await;
+            text_row(&db, "evt_01", SES, "prt_u1", "msg_u1", "oops").await;
+            insert_event(&db, "evt_02", SES, kind, &data.to_string()).await;
+
+            let messages = backfill(&path).await;
+            let delivered: Vec<(Option<MessageId>, Vec<Content>)> =
+                messages.iter().map(|m| (m.id(), m.content())).collect();
+            assert_eq!(delivered, [(Some(MessageId::from("prt_u1".to_owned())), vec![
+                Content::Text("oops".into())
+            ])]);
+        }
+    }
+
+    /// Every message a one-shot backfill yields: each session `existing` lists, `read` out.
+    async fn read_all(path: &Path) -> Vec<(String, OpencodeMessage)> {
+        let sessions: Vec<OpencodeSession> = OpencodeSessions::builder()
+            .db(path)
+            .build()
+            .existing()
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+            .await;
+        let mut out = Vec::new();
+        for session in sessions {
+            let id = session.id().to_string();
+            let messages: Vec<_> = session.read().collect().await;
+            out.extend(messages.into_iter().map(|m| (id.clone(), m.unwrap())));
+        }
+        out
+    }
+
+    fn ids(messages: &[(String, OpencodeMessage)]) -> Vec<String> {
+        messages.iter().filter_map(|(_, m)| m.id()).map(String::from).collect()
+    }
+
+    /// Sessions older than opencode's event log, read from its projection. The fixture is a
+    /// session opencode 1.18.32 wrote, whose event log was then emptied as its 1.17.10 migration
+    /// empties it, and which opencode continued afterwards (`opencode run --session`): its
+    /// `session`, `message` and `part` rows and the log's rows since, paths redacted.
+    mod projected {
+        use super::*;
+        use crate::harnesstools::session::model::{StopReason, Usage};
+
+        const FIXTURE: &str = include_str!("../../../tests/fixtures/opencode/projection.json");
+
+        /// opencode's `session` and `part` projections, as far as this module reads them, beside
+        /// the event log and `message` projection [`event_db`] creates.
+        async fn projection_db(path: &Path) -> Sqlite {
+            let db = event_db(path).await;
+            execute(
+                &db,
+                "CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT NOT \
+                 NULL, title TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER \
+                 NOT NULL)",
+            )
+            .await;
+            execute(
+                &db,
+                "CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id \
+                 TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, \
+                 data TEXT NOT NULL)",
+            )
+            .await;
+            db
+        }
+
+        async fn session_projection(db: &Sqlite, row: &Value) {
+            query::<sqlx::Sqlite>(
+                "INSERT INTO session (id, parent_id, directory, title, time_created, \
+                 time_updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )
+            .bind(row["id"].as_str())
+            .bind(row["parent_id"].as_str())
+            .bind(row["directory"].as_str())
+            .bind(row["title"].as_str())
+            .bind(row["time_created"].as_i64())
+            .bind(row["time_updated"].as_i64())
+            .execute(&mut *db.pool().acquire().await.unwrap())
+            .await
+            .unwrap();
+        }
+
+        async fn message_projection(db: &Sqlite, session: &str, row: &Value) {
+            query::<sqlx::Sqlite>(
+                "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES \
+                 (?1, ?2, ?3, ?3, ?4)",
+            )
+            .bind(row["id"].as_str())
+            .bind(session)
+            .bind(row["time_created"].as_i64())
+            .bind(row["data"].to_string())
+            .execute(&mut *db.pool().acquire().await.unwrap())
+            .await
+            .unwrap();
+        }
+
+        async fn part_projection(db: &Sqlite, session: &str, row: &Value) {
+            query::<sqlx::Sqlite>(
+                "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) \
+                 VALUES (?1, ?2, ?3, ?4, ?4, ?5)",
+            )
+            .bind(row["id"].as_str())
+            .bind(row["message_id"].as_str())
+            .bind(session)
+            .bind(row["time_created"].as_i64())
+            .bind(row["data"].to_string())
+            .execute(&mut *db.pool().acquire().await.unwrap())
+            .await
+            .unwrap();
+        }
+
+        /// The fixture's projection rows, and its log rows unless `logged` is false.
+        async fn load(db: &Sqlite, logged: bool) {
+            let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
+            let session = fixture["session"]["id"].as_str().unwrap();
+            session_projection(db, &fixture["session"]).await;
+            for row in fixture["messages"].as_array().unwrap() {
+                message_projection(db, session, row).await;
+            }
+            for row in fixture["parts"].as_array().unwrap() {
+                part_projection(db, session, row).await;
+            }
+            if logged {
+                for row in fixture["events"].as_array().unwrap() {
+                    let (id, kind) = (row["id"].as_str().unwrap(), row["type"].as_str().unwrap());
+                    insert_event(db, id, session, kind, &row["data"].to_string()).await;
+                }
+            }
+        }
+
+        fn find<'a>(messages: &'a [(String, OpencodeMessage)], id: &str) -> &'a OpencodeMessage {
+            messages
+                .iter()
+                .map(|(_, m)| m)
+                .find(|m| m.id() == Some(MessageId::from(id.to_owned())))
+                .unwrap_or_else(|| panic!("{id} was not delivered"))
+        }
+
+        /// What the log has no `message.updated` row for is read from the projection, ahead of
+        /// the log and just as the log would have delivered it; what the log does have is read
+        /// from the log alone; the title is the session's as it stands, once.
+        #[rstest]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_session_older_than_its_log_is_read_from_the_projection() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("opencode.db");
+            let db = projection_db(&path).await;
+            load(&db, true).await;
+
+            let messages = read_all(&path).await;
+            assert_eq!(ids(&messages), [
+                // from the projection
+                "prt_0d148d4bf001JaxA9TwaMgU5vE",
+                "prt_0d148db28001TznIjdIVqXAvJ3",
+                "prt_0d148db2c001S3pTr5s7fXT3RP",
+                "prt_0d148db35001Zcq9788cC4lx83",
+                "prt_0d149b05c0015TIlARpqWlDXNK",
+                "msg_0d149b2d5001gkfmc9bUMDXLJ5",
+                // from the log, which opencode continued after the wipe
+                "prt_0d154c3f0001VPSmfCQt4r6LWN",
+                "ses_W:title:Mock title number 1",
+                "prt_0d154c996001Lr5h4i3jpsGN60",
+                "prt_0d154c99a001dtKmLh8SYe2pad",
+                "prt_0d154c9a5001gvwUYJAY42itXy",
+            ]);
+
+            let title = find(&messages, "ses_W:title:Mock title number 1");
+            assert_eq!(title.cwd(), Some(PathBuf::from("/work/proj")));
+            assert_eq!(title.timestamp().unwrap().unix_timestamp(), 1_790_218_388);
+
+            let prompt = find(&messages, "prt_0d148d4bf001JaxA9TwaMgU5vE");
+            assert_eq!(prompt.role(), Role::User);
+            assert_eq!(prompt.content(), vec![Content::Text("\"hello there\"".into())]);
+            assert_eq!(prompt.timestamp().unwrap().unix_timestamp(), 1_790_217_606);
+
+            let reply = find(&messages, "prt_0d148db2c001S3pTr5s7fXT3RP");
+            assert_eq!(reply.role(), Role::Assistant);
+            assert_eq!(reply.model().as_deref(), Some("mock-model"));
+            assert_eq!(reply.cwd(), Some(PathBuf::from("/work/proj")));
+            assert_eq!(
+                reply.parent_id(),
+                Some(MessageId::from("msg_0d148d4b9001WQdGo06CVdqA3u".to_owned()))
+            );
+
+            let step = find(&messages, "prt_0d148db35001Zcq9788cC4lx83");
+            assert_eq!(
+                step.usage(),
+                Some(Usage {
+                    input: Some(802),
+                    output: Some(52),
+                    cache_read: Some(200),
+                    cache_write: Some(0),
+                    reasoning: Some(10),
+                })
+            );
+            assert_eq!(step.stop_reason(), Some(StopReason::EndTurn));
+            assert_eq!(
+                step.turn_id().as_deref(),
+                Some("1790217606979:mock/mock-model#802/42/10/200/0")
+            );
+
+            let failed = find(&messages, "msg_0d149b2d5001gkfmc9bUMDXLJ5");
+            assert_eq!(failed.content(), vec![Content::Error("mock bad request".into())]);
+            assert_eq!(failed.stop_reason(), Some(StopReason::Error));
+        }
+
+        /// The projection holds a session's title as it stands, the log each title it has had
+        /// since the wipe: the log's say which came last, where the projection's, delivered ahead
+        /// of them, would make an older title the session's.
+        #[rstest]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_title_the_log_changed_since_the_wipe_is_the_last() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("opencode.db");
+            let db = projection_db(&path).await;
+            load(&db, true).await;
+            execute(&db, "UPDATE session SET title = 'Renamed'").await;
+            let renamed = serde_json::json!({"sessionID": "ses_W", "info": {
+                "id": "ses_W", "title": "Renamed", "directory": "/work/proj",
+                "time": {"created": 1_790_217_606_267i64, "updated": 1_790_218_600_000i64}}});
+            insert_event(&db, "evt_renamed", "ses_W", "session.updated.1", &renamed.to_string())
+                .await;
+
+            let titles: Vec<String> =
+                read_all(&path).await.iter().filter_map(|(_, m)| m.title()?.text).collect();
+            assert_eq!(titles, ["Mock title number 1", "Renamed"]);
+        }
+
+        /// A session whose log was emptied and never written again is still a session: it is
+        /// listed, and read from the projection alone, a subagent's naming its parent.
+        #[rstest]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_session_only_the_projection_holds_is_listed_and_read() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("opencode.db");
+            let db = projection_db(&path).await;
+            load(&db, false).await;
+            session_projection(
+                &db,
+                &serde_json::json!({
+                    "id": "ses_child", "parent_id": "ses_W", "directory": "/work/proj",
+                    "title": "mock subtask (@general subagent)",
+                    "time_created": 1_790_217_674_726i64, "time_updated": 1_790_217_674_898i64,
+                }),
+            )
+            .await;
+
+            let messages = read_all(&path).await;
+            let sessions: Vec<&str> = messages.iter().map(|(s, _)| s.as_str()).collect();
+            assert_eq!(sessions.first(), Some(&"ses_W"));
+            assert_eq!(sessions.last(), Some(&"ses_child"));
+            assert_eq!(
+                messages.len(),
+                12,
+                "ses_W's title, nine parts and failure; ses_child's title"
+            );
+            let (_, child) = messages.last().unwrap();
+            assert_eq!(child.parent_session(), Some(SessionId::from("ses_W".to_owned())));
+            assert_eq!(
+                child.title().and_then(|t| t.text).as_deref(),
+                Some("mock subtask (@general subagent)")
+            );
+        }
+
+        /// A session whose log holds its `session.created` row is read from the log alone, even
+        /// where the projection holds the same messages.
+        #[rstest]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_session_whose_log_holds_its_start_is_read_from_the_log_alone() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("opencode.db");
+            let db = projection_db(&path).await;
+            let created = serde_json::json!({"sessionID": "ses_W", "info": {
+                "id": "ses_W", "title": "New session", "directory": "/work/proj",
+                "time": {"created": 1_790_217_606_267i64, "updated": 1_790_217_606_267i64}}});
+            insert_event(&db, "evt_created", "ses_W", "session.created.1", &created.to_string())
+                .await;
+            load(&db, true).await;
+
+            let messages = read_all(&path).await;
+            let delivered = ids(&messages);
+            assert_eq!(delivered.first().map(String::as_str), Some("ses_W:title:New session"));
+            assert!(
+                !delivered.contains(&"prt_0d148d4bf001JaxA9TwaMgU5vE".to_owned()),
+                "the projection was read for a session the log holds from its start"
+            );
+        }
+
+        /// A part opencode never finished writing -- a stream a retry abandoned, a process that
+        /// died mid-answer -- is left in the projection as a draft, and is no more delivered from
+        /// there than from the log.
+        #[rstest]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_projected_draft_is_not_delivered() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("opencode.db");
+            let db = projection_db(&path).await;
+            load(&db, false).await;
+            part_projection(&db, "ses_W", &serde_json::json!({
+                "id": "prt_0d148db2d001abandonedDraft1", "message_id": "msg_0d148d743001qhQZH5hIpZVrlb",
+                "time_created": 1_790_217_607_981i64,
+                "data": {"type": "text", "text": "half an ans", "time": {"start": 1_790_217_607_981i64}},
+            }))
+            .await;
+
+            let messages = read_all(&path).await;
+            assert!(!ids(&messages).contains(&"prt_0d148db2d001abandonedDraft1".to_owned()));
+            assert_eq!(messages.len(), 11, "the title, nine parts and a failure");
+        }
+    }
+
+    /// The experimental event system's rows (`session.next.*`), as opencode 1.18.32 wrote them
+    /// for two prompts to `POST /api/session/:id/prompt`: one answered with reasoning, a tool
+    /// call and a second model call, one the provider refused with HTTP 400.
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_session_of_the_experimental_event_system_is_read() {
+        use crate::harnesstools::session::model::{StopReason, Usage};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.db");
+        let db = event_db(&path).await;
+        load_fixture(&db, include_str!("../../../tests/fixtures/opencode/session_next.jsonl"))
+            .await;
+
+        let messages: Vec<OpencodeMessage> =
+            read_all(&path).await.into_iter().map(|(_, m)| m).collect();
+        let first = "msg_0d14e8cc0001K0TEI9JoV4l4pr";
+        let second = "msg_0d14e8d380015hjKD5i0Ef3Mxa";
+        let failed = "msg_0d1598e09001440ss0zBu2x76T";
+        let summary: Vec<(String, Role, Option<String>)> = messages
+            .iter()
+            .map(|m| (m.id().map(String::from).unwrap_or_default(), m.role(), m.turn_id()))
+            .collect();
+        let turn = |id: &str| Some(id.to_owned());
+        assert_eq!(summary, [
+            ("msg_0d14e8c60001TZVSAQxcC0zepK".to_owned(), Role::User, None),
+            ("msg_0d14e8ca8001bv5Yyq3BwLdvdJ".to_owned(), Role::System, None),
+            (format!("{first}/reasoning-0"), Role::Assistant, turn(first)),
+            (format!("{first}/call_2"), Role::Assistant, turn(first)),
+            (format!("{first}/text-0"), Role::Assistant, turn(first)),
+            (format!("{first}/call_2/result"), Role::Assistant, turn(first)),
+            (format!("{first}/step"), Role::Assistant, turn(first)),
+            (format!("{second}/text-0"), Role::Assistant, turn(second)),
+            (format!("{second}/step"), Role::Assistant, turn(second)),
+            ("msg_0d1598db5001GmuaZBhAHyx1g7".to_owned(), Role::User, None),
+            (format!("{failed}/step"), Role::Assistant, turn(failed)),
+        ]);
+
+        assert_eq!(messages[0].content(), vec![Content::Text("v2 THINK TOOL go".into())]);
+        assert_eq!(messages[0].timestamp().unwrap().unix_timestamp(), 1_790_217_981);
+        assert_eq!(messages[2].content(), vec![Content::Reasoning(
+            "Let me think about it.".into()
+        )]);
+        assert_eq!(messages[2].model().as_deref(), Some("mock-model"));
         assert!(matches!(
-            prompted.content().as_slice(),
-            [Content::Other(v)] if v["prompt"]["text"] == "second prompt from B"
+            messages[3].content().as_slice(),
+            [Content::ToolUse(u)] if u.name == "bash" && u.id.as_ref() == "call_2"
         ));
+        assert!(matches!(
+            messages[5].content().as_slice(),
+            [Content::ToolResult(r)] if r.call.as_ref() == "call_2" && !r.error
+        ));
+        let usage: Vec<(Option<Usage>, Option<StopReason>)> = messages
+            .iter()
+            .filter(|m| m.usage().is_some())
+            .map(|m| (m.usage(), m.stop_reason()))
+            .collect();
+        let used = |input, output| Usage {
+            input: Some(input),
+            output: Some(output),
+            cache_read: Some(200),
+            cache_write: Some(0),
+            reasoning: Some(10),
+        };
+        assert_eq!(usage, [
+            (Some(used(802, 52)), Some(StopReason::ToolUse)),
+            (Some(used(803, 53)), Some(StopReason::EndTurn)),
+        ]);
+        let refused = messages.last().unwrap();
+        assert_eq!(refused.stop_reason(), Some(StopReason::Error));
+        assert!(matches!(
+            refused.content().as_slice(),
+            [Content::Error(e)] if e.contains("mock bad request")
+        ));
+    }
+
+    #[rstest]
+    #[case::stop("stop", StopReason::EndTurn)]
+    #[case::length("length", StopReason::MaxTokens)]
+    #[case::tool_calls("tool-calls", StopReason::ToolUse)]
+    #[case::content_filter("content-filter", StopReason::Refusal)]
+    #[case::error("error", StopReason::Error)]
+    #[case::unknown("unknown", StopReason::Other("unknown".into()))]
+    fn a_step_says_why_it_ended(#[case] reason: &str, #[case] expected: StopReason) {
+        let step = part_message(serde_json::json!({
+            "id": "prt_1", "type": "step-finish", "reason": reason,
+            "tokens": {"input": 1, "output": 2, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+        }));
+        assert_eq!(step.stop_reason(), Some(expected));
+    }
+
+    #[rstest]
+    #[case::whole(
+        serde_json::json!({"input": 10, "output": 5, "reasoning": 2, "cache": {"read": 3, "write": 1}}),
+        Some(Usage { input: Some(10), output: Some(7), cache_read: Some(3), cache_write: Some(1), reasoning: Some(2) })
+    )]
+    #[case::fractional_and_negative(
+        serde_json::json!({"input": 10.4, "output": -5, "reasoning": 2, "cache": {"read": 3}}),
+        Some(Usage { input: Some(10), output: Some(2), cache_read: Some(3), cache_write: None, reasoning: Some(2) })
+    )]
+    #[case::no_output_at_all(
+        serde_json::json!({"input": 10}),
+        Some(Usage { input: Some(10), output: None, cache_read: None, cache_write: None, reasoning: None })
+    )]
+    #[case::no_tokens(Value::Null, None)]
+    fn a_steps_usage_counts_reasoning_as_output(
+        #[case] tokens: Value,
+        #[case] expected: Option<Usage>,
+    ) {
+        let step = part_message(serde_json::json!({
+            "id": "prt_1", "type": "step-finish", "reason": "stop", "tokens": tokens,
+        }));
+        assert_eq!(step.usage(), expected);
+    }
+
+    #[rstest]
+    fn a_retry_reports_the_error_it_retries_after() {
+        let retry = part_message(serde_json::json!({
+            "id": "prt_1", "type": "retry", "attempt": 1, "time": {"created": 1},
+            "error": {"name": "APIError", "data": {"message": "overloaded", "isRetryable": true}},
+        }));
+        assert_eq!(retry.content(), vec![Content::Error("overloaded".into())]);
+        assert_eq!(retry.stop_reason(), None);
     }
 }
