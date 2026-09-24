@@ -188,6 +188,27 @@ fn apply_shell_filter(sql: &mut SqlBuilder, shells: OrFilter<&[String]>) {
     sql.and_where(cond.expect("nonempty list of shells must result in at least one condition"));
 }
 
+/// Parse a `before`/`after` filter string anchored at `now`.
+///
+/// A bare (offset-less) date/time in `input` is interpreted in whatever offset `timezone`
+/// resolves to. For `UtcOffsetSpec::Local` that offset depends on *when* the date falls, not on
+/// when the query runs, so a single resolution against `now` is not enough: a query for a date
+/// outside the current DST period would silently keep today's offset. Instead, parse once
+/// against `now` to get an approximate instant, re-resolve `timezone` for that instant, and
+/// parse again against a `now` in the corrected offset. One extra pass suffices because a DST
+/// transition moves the offset by at most a couple of hours -- far short of the gap between DST
+/// periods -- so it cannot flip which period the approximate instant landed in.
+fn parse_date_with_spec(
+    input: &str,
+    now: OffsetDateTime,
+    timezone: UtcOffsetSpec,
+    dialect: interim::Dialect,
+) -> interim::DateResult<OffsetDateTime> {
+    let approx = interim::parse_date_string(input, now, dialect)?;
+    let now = now.to_offset(timezone.offset_at(approx));
+    interim::parse_date_string(input, now, dialect)
+}
+
 fn get_session_start_time(session_id: &str) -> Option<i64> {
     // A session id is not guaranteed to be one of our UUIDv7s: ATUIN_SESSION comes from the
     // environment, and a stray value whose version nibble reads as v1/v6/v7 can carry a timestamp
@@ -826,20 +847,23 @@ impl Sqlite {
 
         filter_options.exclude_cwd.map(|exclude_cwd| sql.and_where_ne("cwd", quote(exclude_cwd)));
 
-        let now = OffsetDateTime::now_utc().to_offset(filter_options.timezone.0);
+        let now = OffsetDateTime::now_utc();
+        let now = now.to_offset(filter_options.timezone.offset_at(now));
         let dialect = filter_options.dialect.into();
 
         if let Some(before) = filter_options.before {
-            let parsed = interim::parse_date_string(before, now, dialect).map_err(|e| {
-                sqlx::Error::Decode(format!("invalid `before` filter {before:?}: {e}").into())
-            })?;
+            let parsed = parse_date_with_spec(before, now, filter_options.timezone, dialect)
+                .map_err(|e| {
+                    sqlx::Error::Decode(format!("invalid `before` filter {before:?}: {e}").into())
+                })?;
             sql.and_where_lt("timestamp", quote(i64::conv(parsed.unix_timestamp_nanos())));
         }
 
         if let Some(after) = filter_options.after {
-            let parsed = interim::parse_date_string(after, now, dialect).map_err(|e| {
-                sqlx::Error::Decode(format!("invalid `after` filter {after:?}: {e}").into())
-            })?;
+            let parsed = parse_date_with_spec(after, now, filter_options.timezone, dialect)
+                .map_err(|e| {
+                    sqlx::Error::Decode(format!("invalid `after` filter {after:?}: {e}").into())
+                })?;
             sql.and_where_gt("timestamp", quote(i64::conv(parsed.unix_timestamp_nanos())));
         }
 
@@ -1329,6 +1353,7 @@ impl<'a> Iterator for QueryTokenizer<'a> {
 }
 
 #[cfg(test)]
+#[allow(unsafe_code)]
 mod test {
     use std::time::{Duration, Instant};
 
@@ -1894,6 +1919,50 @@ mod test {
                 after: Some(after),
                 before: Some(before),
                 timezone: "-04:00".parse().unwrap(),
+                include_duplicates: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+    }
+
+    /// Regression test for atuinsh/atuin#3907: `timezone = "local"` used to resolve to a single
+    /// [`UtcOffset`], once, and every `before`/`after` filter reused it regardless of what date
+    /// the filter actually named -- so a query for a date outside *that* offset's own DST period
+    /// landed an hour off. `America/Chicago` is `-06:00` (CST) in January and `-05:00` (CDT) in
+    /// August: each case's window is exactly what the *correct*, date-specific offset gives, and
+    /// the item sits inside it. Whichever DST period is actually in effect on the machine running
+    /// this test (i.e. "now"), at least one of the two cases queries the *other* period, so the
+    /// old single-resolution bug cannot hide behind a lucky test date.
+    #[cfg(not(windows))]
+    #[rstest]
+    // -06:00: 11:00/12:00 CST = 17:00/18:00Z
+    #[case::winter_is_cst("2026-01-12T17:30:00Z", "2026-01-12T11:00:00", "2026-01-12T12:00:00")]
+    // -05:00: 11:00/12:00 CDT = 16:00/17:00Z
+    #[case::summer_is_cdt("2026-08-12T16:30:00Z", "2026-08-12T11:00:00", "2026-08-12T12:00:00")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_local_timezone_before_after_is_dst_correct(
+        #[case] item_utc: &str,
+        #[case] after: &str,
+        #[case] before: &str,
+    ) {
+        // SAFETY: nextest runs each test in its own process, so no other test observes this.
+        unsafe { std::env::set_var("TZ", "America/Chicago") };
+
+        let item_time = OffsetDateTime::parse(item_utc, &Rfc3339).unwrap();
+
+        let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
+        new_history_item_at(&db, "ls /home/ellie", Some(item_time)).await.unwrap();
+
+        let context = new_context();
+
+        let results = db
+            .search(DbSearchMode::FullText, FilterMode::Global, &context, "", OptFilters {
+                after: Some(after),
+                before: Some(before),
+                timezone: UtcOffsetSpec::Local,
                 include_duplicates: true,
                 ..Default::default()
             })

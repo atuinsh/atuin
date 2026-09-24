@@ -13,6 +13,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
     Block, BorderType, Borders, Cell, Padding, Paragraph, Row, Table, TableState, Tabs, Wrap,
 };
+use time::OffsetDateTime;
 use time::macros::format_description;
 use unicode_width::UnicodeWidthStr as _;
 
@@ -417,7 +418,7 @@ fn panel<'a>(title: impl Into<Line<'a>>, styles: Styles) -> Block<'a> {
 fn timestamp(entry: &History, settings: &Settings) -> String {
     entry
         .timestamp
-        .to_offset(settings.timezone.0)
+        .to_offset(settings.timezone.offset_at(OffsetDateTime::now_utc()))
         .format(format_description!("[year]-[month]-[day] [hour]:[minute]:[second]"))
         .unwrap_or_default()
 }

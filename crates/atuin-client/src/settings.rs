@@ -1944,7 +1944,10 @@ mod tests {
         #[case] input: &str,
         #[case] expected: (i8, i8, i8),
     ) -> Result<()> {
-        assert_eq!(UtcOffsetSpec::from_str(input)?.0.as_hms(), expected);
+        let UtcOffsetSpec::Fixed(offset) = UtcOffsetSpec::from_str(input)? else {
+            panic!("{input:?} should resolve to a fixed offset");
+        };
+        assert_eq!(offset.as_hms(), expected);
         Ok(())
     }
 

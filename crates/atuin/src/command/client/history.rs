@@ -322,7 +322,12 @@ impl FormatKey for FmtHistory<'_> {
                 write!(f, "{}", dur.display().largest_unit())?;
             }
             "time" => {
-                self.history.timestamp.to_offset(self.tz.0).display().ymd_hms().fmt(f)?;
+                self.history
+                    .timestamp
+                    .to_offset(self.tz.offset_at(OffsetDateTime::now_utc()))
+                    .display()
+                    .ymd_hms()
+                    .fmt(f)?;
             }
             "relativetime" => {
                 let d = OffsetDateTime::now_utc().saturating_duration_since(self.history.timestamp);
@@ -714,11 +719,12 @@ impl TailEvent {
     }
 
     fn render_json(&self, tz: UtcOffsetSpec) -> Result<String> {
+        let offset = tz.offset_at(OffsetDateTime::now_utc());
         let payload = TailJsonEvent {
             event: self.kind.as_str(),
             history: TailJsonHistory {
                 id: self.history.id,
-                timestamp: self.history.timestamp.to_offset(tz.0).display().ymd_hms().to_string(),
+                timestamp: self.history.timestamp.to_offset(offset).display().ymd_hms().to_string(),
                 timestamp_unix_ns: u64::try_from(self.history.timestamp.unix_timestamp_nanos())
                     .context("history timestamp predates unix epoch")?,
                 command: &self.history.command,
@@ -737,7 +743,7 @@ impl TailEvent {
                 success: self.success_value(),
                 finished_at: self
                     .finished_at()
-                    .map(|time| time.to_offset(tz.0).display().ymd_hms().to_string()),
+                    .map(|time| time.to_offset(offset).display().ymd_hms().to_string()),
             },
         };
 
@@ -745,6 +751,7 @@ impl TailEvent {
     }
 
     fn render_pretty(&self, tz: UtcOffsetSpec) -> String {
+        let offset = tz.offset_at(OffsetDateTime::now_utc());
         let mut out = String::new();
         let border = match self.kind {
             TailKind::Started => "-".repeat(72).bright_blue().to_string(),
@@ -776,7 +783,7 @@ impl TailEvent {
         push_pretty_field(
             &mut out,
             "start",
-            &self.history.timestamp.to_offset(tz.0).display().ymd_hms().to_string(),
+            &self.history.timestamp.to_offset(offset).display().ymd_hms().to_string(),
         );
         push_pretty_field(&mut out, "history", &self.history.id.to_string());
         push_pretty_field(&mut out, "session", &self.history.session);
@@ -796,7 +803,7 @@ impl TailEvent {
         }
 
         if let Some(finished) = self.finished_at() {
-            let finished = finished.to_offset(tz.0).display().ymd_hms().to_string();
+            let finished = finished.to_offset(offset).display().ymd_hms().to_string();
             push_pretty_field(&mut out, "finished", &finished);
         }
 
@@ -1185,7 +1192,9 @@ impl Cmd {
                         let before = i64::try_from(
                             interim::parse_date_string(
                                 before.as_str(),
-                                OffsetDateTime::now_utc().to_offset(settings.timezone.0),
+                                OffsetDateTime::now_utc().to_offset(
+                                    settings.timezone.offset_at(OffsetDateTime::now_utc()),
+                                ),
                                 settings.dialect.into(),
                             )?
                             .unix_timestamp_nanos(),
@@ -1313,7 +1322,7 @@ mod tests {
     #[cfg(feature = "daemon")]
     #[rstest]
     fn test_tail_json_output_contains_history_fields(tail_event: TailEvent) {
-        let json = tail_event.render(false, UtcOffsetSpec(time::UtcOffset::UTC)).unwrap();
+        let json = tail_event.render(false, UtcOffsetSpec::Fixed(time::UtcOffset::UTC)).unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(value["event"], "ended");
@@ -1328,7 +1337,7 @@ mod tests {
     fn test_tail_pretty_output_shows_pending_fields_for_started_events(
         #[with(TailKind::Started)] tail_event: TailEvent,
     ) {
-        let rendered = tail_event.render(true, UtcOffsetSpec(time::UtcOffset::UTC)).unwrap();
+        let rendered = tail_event.render(true, UtcOffsetSpec::Fixed(time::UtcOffset::UTC)).unwrap();
         let plain = regex::Regex::new(r"\x1b\[[0-9;]*m").unwrap().replace_all(&rendered, "");
 
         assert!(plain.contains("STARTED git status"));
