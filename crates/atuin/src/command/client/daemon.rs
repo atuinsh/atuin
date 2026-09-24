@@ -1,5 +1,5 @@
-use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io::{ErrorKind, Write};
+use std::fs;
+use std::io::ErrorKind;
 use std::ops::ControlFlow;
 #[cfg(unix)]
 use std::os::unix::net::UnixStream as StdUnixStream;
@@ -11,8 +11,11 @@ use atuin_client::database::Sqlite;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
+use atuin_common::fs::lock::{LockMode, LockOptions};
 use atuin_common::futures::Backoff;
 use atuin_daemon::client::{DaemonClientErrorKind, HistoryClient, classify_error};
+use atuin_daemon::pidfile::{self, PidfileGuard};
+use atuin_daemon::{PROTOCOL_VERSION, VERSION};
 use clap::Subcommand;
 #[cfg(unix)]
 use daemonix::Daemonize;
@@ -97,46 +100,8 @@ impl Cmd {
     }
 }
 
-const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
-const DAEMON_PROTOCOL_VERSION: u32 = 3;
 const STARTUP_POLL: Duration = Duration::from_millis(40);
-const LOCK_POLL: Duration = Duration::from_millis(20);
 const LEGACY_DAEMON_RESTART_MESSAGE: &str = "legacy daemon detected; restart daemon manually";
-
-struct PidfileGuard {
-    file: File,
-}
-
-impl PidfileGuard {
-    fn acquire(path: &Path) -> Result<Self> {
-        let mut file = open_lock_file(path)?;
-
-        match file.try_lock() {
-            Ok(()) => {}
-            Err(TryLockError::WouldBlock) => {
-                bail!("daemon already running (pidfile lock busy at {})", path.display())
-            }
-            Err(TryLockError::Error(err)) => {
-                return Err(err)
-                    .wrap_err_with(|| format!("could not lock daemon pidfile {}", path.display()));
-            }
-        }
-
-        file.set_len(0)
-            .wrap_err_with(|| format!("could not truncate daemon pidfile {}", path.display()))?;
-        writeln!(file, "{}", std::process::id())
-            .and_then(|()| writeln!(file, "{DAEMON_VERSION}"))
-            .wrap_err_with(|| format!("could not write daemon pidfile {}", path.display()))?;
-
-        Ok(Self { file })
-    }
-}
-
-impl Drop for PidfileGuard {
-    fn drop(&mut self) {
-        let _ = self.file.unlock();
-    }
-}
 
 enum Probe {
     Ready(HistoryClient),
@@ -145,14 +110,14 @@ enum Probe {
 }
 
 fn daemon_matches_expected(version: &str, protocol: u32) -> bool {
-    version == DAEMON_VERSION && protocol == DAEMON_PROTOCOL_VERSION
+    version == VERSION && protocol == PROTOCOL_VERSION
 }
 
 fn daemon_mismatch_message(version: &str, protocol: u32) -> String {
-    if protocol == DAEMON_PROTOCOL_VERSION {
-        format!("daemon is out of date: expected {DAEMON_VERSION}, got {version}")
+    if protocol == PROTOCOL_VERSION {
+        format!("daemon is out of date: expected {VERSION}, got {version}")
     } else {
-        format!("daemon protocol mismatch: expected {DAEMON_PROTOCOL_VERSION}, got {protocol}")
+        format!("daemon protocol mismatch: expected {PROTOCOL_VERSION}, got {protocol}")
     }
 }
 
@@ -169,64 +134,22 @@ pub(super) fn should_retry_after_error(err: &eyre::Report) -> bool {
     )
 }
 
-fn daemon_startup_lock_path(pidfile_path: &Path) -> PathBuf {
-    let mut os = pidfile_path.as_os_str().to_os_string();
-    os.push(".startup.lock");
-    PathBuf::from(os)
-}
-
-fn open_lock_file(path: &Path) -> Result<File> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .wrap_err_with(|| format!("could not create lock directory {}", parent.display()))?;
-    }
-
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(path)
-        .wrap_err_with(|| format!("could not open lock file {}", path.display()))
-}
-
-async fn wait_for_lock(path: &Path, timeout: Duration) -> Result<File> {
-    let file = open_lock_file(path)?;
-
-    let outcome = Backoff::Constant(LOCK_POLL)
-        .retry_sync(
-            || match file.try_lock() {
-                Ok(()) => ControlFlow::Break(Ok(())),
-                Err(TryLockError::WouldBlock) => ControlFlow::Continue(()),
-                Err(TryLockError::Error(err)) => {
-                    ControlFlow::Break(Err(eyre!("could not lock {}: {err}", path.display())))
-                }
-            },
-            timeout,
-        )
-        .await;
-
-    match outcome {
-        Ok(Ok(())) => Ok(file),
-        Ok(Err(err)) => Err(err),
-        Err(()) => bail!("timed out waiting for lock at {}", path.display()),
-    }
-}
-
 async fn wait_for_pidfile_available(path: &Path, timeout: Duration) -> Result<()> {
-    let file = wait_for_lock(path, timeout).await?;
-    file.unlock().wrap_err_with(|| format!("failed to unlock {}", path.display()))?;
+    let file = LockOptions {
+        create: true,
+        mode: LockMode::Exclusive,
+    }
+    .wait(path, timeout)
+    .await
+    .wrap_err_with(|| format!("failed to lock daemon pidfile at {}", path.display()))?;
+
+    file.unlock()
+        .wrap_err_with(|| format!("failed to unlock daemon pidfile at {}", path.display()))?;
     Ok(())
 }
 
 async fn connect_client(settings: &Settings) -> Result<HistoryClient> {
-    HistoryClient::new(
-        #[cfg(not(unix))]
-        settings.daemon.tcp_port,
-        #[cfg(unix)]
-        settings.daemon.existing_socket_path().into_owned(),
-    )
-    .await
+    HistoryClient::from_settings(settings).await
 }
 
 async fn probe(settings: &Settings) -> Probe {
@@ -372,6 +295,15 @@ fn ensure_autostart_supported(settings: &Settings) -> Result<()> {
     Ok(())
 }
 
+/// The path to the lock used to prevent two clients from trying to start the daemon at the same
+/// time.
+#[must_use]
+fn startup_lock_path(pidfile_path: &Path) -> PathBuf {
+    let mut os = pidfile_path.as_os_str().to_os_string();
+    os.push(".startup.lock");
+    PathBuf::from(os)
+}
+
 /// Ensure the daemon is running, starting it if necessary.
 ///
 /// If the daemon is already running and up-to-date, this is a no-op.
@@ -384,8 +316,16 @@ pub async fn ensure_daemon_running(settings: &Settings) -> Result<()> {
 
     let timeout = startup_timeout(settings);
     let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
-    let startup_lock_path = daemon_startup_lock_path(&pidfile_path);
-    let startup_lock = wait_for_lock(&startup_lock_path, timeout).await?;
+    let startup_lock_path = startup_lock_path(&pidfile_path);
+    let startup_lock = LockOptions {
+        create: true,
+        mode: LockMode::Exclusive,
+    }
+    .wait(&startup_lock_path, timeout)
+    .await
+    .wrap_err_with(|| {
+        format!("failed to acquire daemon startup lock at {}", startup_lock_path.display())
+    })?;
 
     match probe(settings).await {
         Probe::Ready(_) => {
@@ -541,7 +481,7 @@ async fn status_cmd(settings: &Settings) -> Result<()> {
             println!("  Protocol: {}", status.protocol);
             println!("  Healthy:  {}", status.healthy);
             #[cfg(unix)]
-            println!("  Socket:   {}", settings.daemon.existing_socket_path().display());
+            println!("  Socket:   {}", atuin_daemon::client::socket_path(settings).display());
             #[cfg(not(unix))]
             println!("  Port:     {}", settings.daemon.tcp_port);
         }
@@ -638,8 +578,7 @@ async fn run(
         force_cleanup(&settings).await;
     }
 
-    let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
-    let _pidfile_guard = PidfileGuard::acquire(&pidfile_path)?;
+    let _pidfile_guard = PidfileGuard::acquire(&settings.daemon)?;
 
     atuin_daemon::boot(settings, store, history_db).await?;
 
@@ -652,15 +591,10 @@ async fn force_cleanup(settings: &Settings) {
 
     // Read and kill the existing process if pidfile exists
     if pidfile_path.exists() {
-        if let Ok(contents) = fs::read_to_string(pidfile_path)
-            && let Some(pid_str) = contents.lines().next()
-            && let Some(pid) = pid_str.trim().parse::<i32>().ok()
-            && pid > 0
-            && let Err(e) = atuin_common::os::process::force_terminate(
-                pid.unsigned_abs(),
-                Duration::from_secs(2),
-            )
-            .await
+        if let Some(pid) = pidfile::try_read_pid(pidfile_path)
+            && pid != 0
+            && let Err(e) =
+                atuin_common::os::process::force_terminate(pid, Duration::from_secs(2)).await
         {
             tracing::warn!("could not terminate existing daemon (pid {pid}): {e}");
         }
@@ -682,7 +616,7 @@ async fn force_cleanup(settings: &Settings) {
 
 #[cfg(test)]
 mod tests {
-    use rstest::{fixture, rstest};
+    use rstest::rstest;
 
     use super::*;
 
@@ -700,9 +634,9 @@ mod tests {
     }
 
     #[rstest]
-    #[case::matches(DAEMON_VERSION, DAEMON_PROTOCOL_VERSION, true)]
-    #[case::wrong_version("0.0.0", DAEMON_PROTOCOL_VERSION, false)]
-    #[case::wrong_protocol(DAEMON_VERSION, 999, false)]
+    #[case::matches(VERSION, PROTOCOL_VERSION, true)]
+    #[case::wrong_version("0.0.0", PROTOCOL_VERSION, false)]
+    #[case::wrong_protocol(VERSION, 999, false)]
     #[case::wrong_both("0.0.0", 999, false)]
     fn daemon_matches_expected_cases(
         #[case] version: &str,
@@ -713,8 +647,8 @@ mod tests {
     }
 
     #[rstest]
-    #[case::out_of_date("0.0.0", DAEMON_PROTOCOL_VERSION, vec!["out of date", "0.0.0", DAEMON_VERSION])]
-    #[case::protocol_mismatch(DAEMON_VERSION, 999, vec!["protocol mismatch"])]
+    #[case::out_of_date("0.0.0", PROTOCOL_VERSION, vec!["out of date", "0.0.0", VERSION])]
+    #[case::protocol_mismatch(VERSION, 999, vec!["protocol mismatch"])]
     fn daemon_mismatch_message_cases(
         #[case] version: &str,
         #[case] protocol: u32,
@@ -726,46 +660,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_startup_lock_path() {
-        let pidfile = Path::new("/tmp/atuin-daemon.pid");
-        let lock = daemon_startup_lock_path(pidfile);
-        assert_eq!(lock, PathBuf::from("/tmp/atuin-daemon.pid.startup.lock"));
-    }
-
-    #[fixture]
-    fn pidfile() -> (tempfile::TempDir, PathBuf) {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("daemon.pid");
-        (tmp, path)
-    }
-
     #[rstest]
-    fn test_pidfile_guard_acquire_and_drop(
-        #[from(pidfile)] (_tmp, pidfile): (tempfile::TempDir, PathBuf),
-    ) {
-        {
-            let _guard = PidfileGuard::acquire(&pidfile).unwrap();
-            // Guard holds an exclusive lock — on Windows other handles cannot
-            // read the file, so we verify contents after the guard is dropped.
-        }
-
-        let contents = std::fs::read_to_string(&pidfile).unwrap();
-        let lines: Vec<&str> = contents.lines().collect();
-        assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0], std::process::id().to_string());
-        assert_eq!(lines[1], DAEMON_VERSION);
-
-        // After guard is dropped, lock should be released — acquiring again must succeed.
-        let _guard2 = PidfileGuard::acquire(&pidfile).unwrap();
-    }
-
-    #[rstest]
-    fn test_pidfile_guard_prevents_double_acquire(
-        #[from(pidfile)] (_tmp, pidfile): (tempfile::TempDir, PathBuf),
-    ) {
-        let _guard = PidfileGuard::acquire(&pidfile).unwrap();
-        let result = PidfileGuard::acquire(&pidfile);
-        assert!(result.is_err());
+    #[case("/tmp/atuin-daemon.pid", "/tmp/atuin-daemon.pid.startup.lock")]
+    #[case("/path/to/pidfile", "/path/to/pidfile.startup.lock")]
+    fn test_startup_lock_path(#[case] pidfile_path: &str, #[case] expected: &str) {
+        assert_eq!(startup_lock_path(Path::new(pidfile_path)), Path::new(expected));
     }
 }
