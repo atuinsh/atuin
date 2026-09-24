@@ -236,7 +236,7 @@ mod tests {
             &BlockingPool::new(std::num::NonZeroUsize::MIN),
         )
         .await
-        else {
+        .unwrap() else {
             return 0;
         };
         if is_stored(sink, kind, session, &AnyMessage::from(m)).await {

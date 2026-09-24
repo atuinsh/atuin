@@ -24,7 +24,39 @@ pub struct Line {
     pub bytes: Bytes,
 }
 
-/// Errors returned by [`LineReader::lines`] and [`PathLineReader::lines`].
+impl Line {
+    /// The line of `file` that ends at byte `end`, if the byte before `end` is a newline.
+    pub fn ending_at(mut file: &File, end: u64) -> io::Result<Option<Self>> {
+        if end == 0 || file.metadata()?.len() < end {
+            return Ok(None);
+        }
+        let mut window = READ_CHUNK_BYTES;
+        loop {
+            let start = end.saturating_sub(window);
+            let mut buf = vec![0; usize::try_from(end - start).map_err(io::Error::other)?];
+            file.seek(SeekFrom::Start(start))?;
+            file.read_exact(&mut buf)?;
+            let Some((&b'\n', body)) = buf.split_last() else {
+                return Ok(None);
+            };
+            let from = match memchr::memrchr(b'\n', body) {
+                Some(newline) => newline + 1,
+                None if start == 0 => 0,
+                None => {
+                    window = window.saturating_mul(2);
+                    continue;
+                }
+            };
+            let to = body.len();
+            return Ok(Some(Self {
+                end,
+                bytes: Bytes::from(buf).slice(from..to),
+            }));
+        }
+    }
+}
+
+/// Errors returned by [`ReadLines::lines`].
 ///
 /// `Truncated` and `Replaced` have already restarted the reader: the next call reads the file from
 /// its first byte.
@@ -36,6 +68,19 @@ pub enum ReadLinesError {
     Truncated,
     #[error("the file was replaced; reading restarts from its start")]
     Replaced,
+}
+
+/// Reads the complete lines appended to a file, each once.
+///
+/// Which file is the implementor's to say: [`LineReader`] reads the one it holds open,
+/// [`PathLineReader`] whatever is at its path.
+pub trait ReadLines {
+    /// The complete lines past the last one handed out, read as the iterator is pulled.
+    ///
+    /// The iterator ends at the end of the file or after its first error. A line pulled is handed
+    /// out and not read again: `take_while` drops the line it stops on, and collecting into a
+    /// `Result` drops every line before an error.
+    fn lines(&mut self) -> Result<impl Iterator<Item = io::Result<Line>>, ReadLinesError>;
 }
 
 /// What a reader keeps between reads.
@@ -150,13 +195,16 @@ impl Cursor {
 
 /// Reads the complete lines appended to an open file.
 ///
+/// **Be warned**: it reads the file it holds, not whatever is at its path, so a file replaced at
+/// the path is never read and never reported as [`ReadLinesError::Replaced`].
+///
 /// # Example
 ///
 /// ```
 /// use std::fs::OpenOptions;
 /// use std::io::Write;
 ///
-/// use atuin_common::io::{Line, LineReader};
+/// use atuin_common::io::{Line, LineReader, ReadLines};
 ///
 /// # let dir = tempfile::tempdir().unwrap();
 /// # let path = dir.path().join("log");
@@ -202,13 +250,10 @@ impl LineReader {
             cursor: Cursor::at(offset),
         }
     }
+}
 
-    /// The complete lines past the last one handed out, read as the iterator is pulled.
-    ///
-    /// The iterator ends at the end of the file or after its first error. A line pulled is handed
-    /// out and not read again: `take_while` drops the line it stops on, and collecting into a
-    /// `Result` drops every line before an error.
-    pub fn lines(&mut self) -> Result<impl Iterator<Item = io::Result<Line>>, ReadLinesError> {
+impl ReadLines for LineReader {
+    fn lines(&mut self) -> Result<impl Iterator<Item = io::Result<Line>>, ReadLinesError> {
         self.cursor.lines(&self.file)
     }
 }
@@ -216,13 +261,13 @@ impl LineReader {
 /// Reads the complete lines appended to the file at a path, opening it for each read.
 ///
 /// This is identical to [`LineReader`] except that it re-opens files for the duration of the
-/// [`PathLineReader::lines`] call. Using this over [`LineReader`] is recommended to avoid FD
+/// [`ReadLines::lines`] call. Using this over [`LineReader`] is recommended to avoid FD
 /// exhaustion. Note that this is significantly slower than [`LineReader`] because of it.
 ///
 /// # Example
 ///
 /// ```
-/// use atuin_common::io::{Line, PathLineReader, ReadLinesError};
+/// use atuin_common::io::{Line, PathLineReader, ReadLines, ReadLinesError};
 ///
 /// # let dir = tempfile::tempdir().unwrap();
 /// # let path = dir.path().join("log");
@@ -259,9 +304,11 @@ impl PathLineReader {
             cursor: Cursor::at(offset),
         }
     }
+}
 
-    /// Open the file and read it as [`LineReader::lines`] does; it closes when the iterator drops.
-    pub fn lines(&mut self) -> Result<impl Iterator<Item = io::Result<Line>>, ReadLinesError> {
+impl ReadLines for PathLineReader {
+    /// Open the file for the read; it closes when the iterator drops.
+    fn lines(&mut self) -> Result<impl Iterator<Item = io::Result<Line>>, ReadLinesError> {
         self.cursor.lines(File::open(&self.path)?)
     }
 }
@@ -416,6 +463,32 @@ mod tests {
         assert!(lines.next().is_none());
     }
 
+    #[rstest]
+    #[case::first_line(b"1\n22\n", 2, Some("1"))]
+    #[case::last_line(b"1\n22\n", 5, Some("22"))]
+    #[case::blank_line(b"1\n\n", 3, Some(""))]
+    #[case::start_of_file(b"1\n", 0, None)]
+    #[case::mid_line(b"1\n22\n", 4, None)]
+    #[case::past_the_end(b"1\n", 3, None)]
+    fn finds_the_line_ending_at_an_offset(
+        #[case] contents: &[u8],
+        #[case] end: u64,
+        #[case] expected: Option<&'static str>,
+    ) {
+        let file = file(contents);
+        let found = Line::ending_at(&File::open(&file.path).unwrap(), end).unwrap();
+        assert_eq!(found, expected.map(|text| line(end, text)));
+    }
+
+    #[rstest]
+    fn finds_a_line_longer_than_a_read(#[values("", "a\n")] before: &str) {
+        let long = "m".repeat(3 * usize::try_from(READ_CHUNK_BYTES).unwrap());
+        let file = file(format!("{before}{long}\n").as_bytes());
+        let end = u64::try_from(before.len() + long.len() + 1).unwrap();
+        let found = Line::ending_at(&File::open(&file.path).unwrap(), end).unwrap();
+        assert_eq!(found.map(|line| line.bytes), Some(Bytes::from(long)));
+    }
+
     #[derive(Debug, Clone)]
     enum Op {
         Append(Vec<u8>),
@@ -423,15 +496,31 @@ mod tests {
         Pull(usize),
     }
 
+    fn byte() -> impl Strategy<Value = u8> {
+        prop_oneof![3 => any::<u8>(), 1 => Just(b'\n')]
+    }
+
     fn op() -> impl Strategy<Value = Op> {
-        let byte = prop_oneof![3 => any::<u8>(), 1 => Just(b'\n')];
         prop_oneof![
-            prop::collection::vec(byte, 0..16).prop_map(Op::Append),
+            prop::collection::vec(byte(), 0..16).prop_map(Op::Append),
             (0usize..4).prop_map(Op::Pull),
         ]
     }
 
     proptest! {
+        // Against the reader as the oracle: an offset names a line exactly when the reader handed
+        // out a line ending there.
+        #[test]
+        fn a_line_is_found_by_its_end(contents in prop::collection::vec(byte(), 0..64)) {
+            let file = file(&contents);
+            let lines = drain(PathLineReader::new(&file.path).lines().unwrap());
+            let handle = File::open(&file.path).unwrap();
+            for end in 0..=contents.len() as u64 + 1 {
+                let expected = lines.iter().find(|line| line.end == end).cloned();
+                prop_assert_eq!(Line::ending_at(&handle, end).unwrap(), expected);
+            }
+        }
+
         // Against the bytes written so far as the model: whatever interleaving of appends and
         // partly pulled iterators, the lines handed out followed by what is pending are a prefix
         // of the file, so nothing is skipped, duplicated or reordered, and pulling to the end

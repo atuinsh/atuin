@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use futures::{Stream, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use serde::Deserialize;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -16,7 +16,8 @@ use crate::harnesstools::session::{
     Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId, Sessions,
     WatchError, scan_sessions,
 };
-use crate::json::jsonl;
+use crate::io::{FollowLines, PathLineReader, PooledLines};
+use crate::json::jsonl::{self, JsonlExt};
 use crate::sync::BlockingPool;
 use crate::utils::{env_nonempty, home_dir};
 
@@ -176,19 +177,39 @@ impl Session for CcodeSession {
     }
 
     async fn message_at(&self, at: u64) -> Option<CcodeMessage> {
-        jsonl::value_at(&self.path, at, &self.pool).await
+        jsonl::value_at(&self.path, at, &self.pool)
+            .await
+            .inspect_err(|err| {
+                tracing::warn!(
+                    ?err,
+                    path = %self.path.display(),
+                    at,
+                    "failed to read the message at a resume point"
+                );
+            })
+            .ok()
+            .flatten()
     }
 
     fn messages_from(
         self,
         from: u64,
     ) -> impl Stream<Item = Result<(u64, CcodeMessage), MessageError>> + Send + 'static {
-        jsonl::follow_from::<CcodeMessage>(self.path, from, self.changes, self.pool)
-            .map_err(MessageError::from)
+        let lines =
+            FollowLines::new(PooledLines::new(PathLineReader::at(self.path, from), self.pool));
+        match self.changes {
+            Some(changes) => lines.follow(changes).left_stream(),
+            None => lines.read_to_end().right_stream(),
+        }
+        .json::<CcodeMessage>()
+        .map_err(MessageError::from)
     }
 
     fn read(&self) -> impl Stream<Item = Result<CcodeMessage, MessageError>> + Send + 'static {
-        jsonl::read_all::<CcodeMessage>(self.path.clone(), self.pool.clone())
+        FollowLines::new(PooledLines::new(PathLineReader::new(&self.path), self.pool.clone()))
+            .read_to_end()
+            .json::<CcodeMessage>()
+            .map_ok(|(_, message)| message)
             .map_err(MessageError::from)
     }
 }
