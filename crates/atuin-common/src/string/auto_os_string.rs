@@ -1,4 +1,4 @@
-//! Defines the [`AutoOsString`] converter.
+//! Defines the [`AutoOsString`] converter for use with [`serde_with`].
 
 use std::ffi::{OsStr, OsString};
 

@@ -18,7 +18,6 @@ pub mod path;
 pub mod range;
 pub mod rmp;
 pub mod secrets;
-pub mod serde;
 pub mod shell;
 pub mod slice;
 pub mod string;

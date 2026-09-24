@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 
 use atuin_client::settings::Daemon as DaemonSettings;
 use atuin_common::fs::lock::{LockError, LockMode, LockOptions};
-use atuin_common::serde::AutoOsString;
+use atuin_common::string::AutoOsString;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
