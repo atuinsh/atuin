@@ -23,7 +23,7 @@ pub(crate) enum SessionRefParseError {
     #[error("missing session")]
     Missing,
     #[error("invalid session: {0}")]
-    Invalid(#[from] agent::HarnessSessionParseError),
+    Invalid(#[from] agent::ParseError),
 }
 
 pub(crate) trait HarnessFilterRequest {

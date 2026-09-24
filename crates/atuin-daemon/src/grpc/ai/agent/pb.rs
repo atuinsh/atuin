@@ -1,21 +1,52 @@
 //! Model conversion utilities for the `ai.agent` gRPC protobuf.
+//!
+//! The wire is lossless: a domain value survives `domain -> wire -> domain` unchanged, so how to
+//! render it is the client's call. The exceptions are `Message::session_title` and
+//! `Message::turn_id`, storage bookkeeping the wire never carries, and a non-UTF-8 `cwd`, which is
+//! sent lossily.
 mod codegen {
     #![allow(clippy::must_use_candidate)]
     #![allow(clippy::derive_partial_eq_without_eq)]
     tonic::include_proto!("ai.agent");
 }
 
+use std::borrow::Cow;
+use std::path::PathBuf;
+
 use atuin_client::ai_session::{
     HarnessKind, HarnessSession as DomainHarnessSession, Message as DomainMessage, NativeSessionId,
-    Session as DomainSession,
+    Session as DomainSession, SourceId,
 };
 use atuin_common::harnesstools::session::{
-    Content, Role as DomainRole, StopReason as DomainStopReason, Usage,
+    Content, Role as DomainRole, StopReason as DomainStopReason, ToolCallId,
+    ToolResult as DomainToolResult, ToolUse, Usage,
 };
+use atuin_common::time::{OffsetDateTimeExt, TimespecOutOfRange};
+use atuin_domain::record::RecordId;
 pub use codegen::*;
 use thiserror::Error;
+use time::OffsetDateTime;
 
 use crate::grpc::common::pb::Uuid;
+
+/// Errors decoding an `ai.agent` wire type into its domain type.
+#[derive(Debug, Error)]
+pub enum ParseError {
+    #[error("unrecognized harness kind: {0}")]
+    UnknownHarnessKind(i32),
+    #[error("unrecognized role: {0}")]
+    UnknownRole(i32),
+    #[error("unrecognized stop reason: {0}")]
+    UnknownStopReason(i32),
+    #[error("missing {0}")]
+    Missing(&'static str),
+    #[error("invalid id: {0}")]
+    InvalidId(#[from] uuid::Error),
+    #[error("invalid timestamp: {0}")]
+    InvalidTimestamp(#[from] TimespecOutOfRange),
+    #[error("invalid JSON: {0}")]
+    InvalidJson(#[from] serde_json::Error),
+}
 
 impl From<DomainHarnessSession> for HarnessSession {
     fn from(value: DomainHarnessSession) -> Self {
@@ -26,18 +57,12 @@ impl From<DomainHarnessSession> for HarnessSession {
     }
 }
 
-#[derive(Debug, Error)]
-pub enum HarnessSessionParseError {
-    #[error("unrecognized harness kind: {0}")]
-    UnknownHarnessKind(i32),
-}
-
 impl TryFrom<HarnessSession> for DomainHarnessSession {
-    type Error = HarnessSessionParseError;
+    type Error = ParseError;
 
     fn try_from(value: HarnessSession) -> Result<Self, Self::Error> {
         let harness = HarnessKind::try_from(value.harness)
-            .map_err(|_| HarnessSessionParseError::UnknownHarnessKind(value.harness))?;
+            .map_err(|_| ParseError::UnknownHarnessKind(value.harness))?;
         Ok(Self {
             harness,
             session: NativeSessionId::from(value.session_id),
@@ -52,7 +77,7 @@ impl From<DomainRole> for Role {
             DomainRole::Assistant => Self::Assistant,
             DomainRole::System => Self::System,
             DomainRole::Tool => Self::Tool,
-            DomainRole::Other(_) => Self::Unknown,
+            DomainRole::Other(_) => Self::Other,
         }
     }
 }
@@ -60,14 +85,14 @@ impl From<DomainRole> for Role {
 impl From<DomainStopReason> for StopReason {
     fn from(value: DomainStopReason) -> Self {
         match value {
-            DomainStopReason::EndTurn
-            | DomainStopReason::StopSequence
-            | DomainStopReason::Refusal => Self::EndTurn,
+            DomainStopReason::EndTurn => Self::EndTurn,
             DomainStopReason::MaxTokens => Self::MaxTokens,
             DomainStopReason::ToolUse => Self::ToolUse,
+            DomainStopReason::StopSequence => Self::StopSequence,
+            DomainStopReason::Refusal => Self::Refusal,
             DomainStopReason::Aborted => Self::Aborted,
             DomainStopReason::Error => Self::Error,
-            DomainStopReason::Other(_) => Self::Unknown,
+            DomainStopReason::Other(_) => Self::Other,
         }
     }
 }
@@ -75,10 +100,21 @@ impl From<DomainStopReason> for StopReason {
 impl From<Usage> for Tokens {
     fn from(value: Usage) -> Self {
         Self {
-            input: value.input.unwrap_or(0),
-            output: value.output.unwrap_or(0),
-            cache_read: value.cache_read.unwrap_or(0),
-            cache_write: value.cache_write.unwrap_or(0),
+            input: value.input,
+            output: value.output,
+            cache_read: value.cache_read,
+            cache_write: value.cache_write,
+        }
+    }
+}
+
+impl From<Tokens> for Usage {
+    fn from(value: Tokens) -> Self {
+        Self {
+            input: value.input,
+            output: value.output,
+            cache_read: value.cache_read,
+            cache_write: value.cache_write,
         }
     }
 }
@@ -91,43 +127,76 @@ impl From<Content> for ContentBlock {
             Content::Text(text) => Block::Text(text),
             Content::Reasoning(text) => Block::Thinking(text),
             Content::ReasoningSummary { tokens } => {
-                Block::Thinking(atuin_common::harnesstools::session::model::reasoning_label(tokens))
+                Block::ReasoningSummary(ReasoningSummary { tokens })
             }
             // Capture stores a JSON null in place of arguments and results it does not keep; on
-            // the wire that is "not captured", an empty string, not the text `null`.
+            // the wire that is an absent field.
             Content::ToolUse(tu) => Block::ToolCall(ToolCall {
                 id: tu.id.into(),
                 name: tu.name,
-                input: match tu.input {
-                    serde_json::Value::Null => String::new(),
-                    other => serde_json::to_string(&other).unwrap_or_default(),
-                },
+                input: (!tu.input.is_null()).then(|| tu.input.to_string()),
             }),
             Content::ToolResult(tr) => Block::ToolResult(ToolResult {
                 tool_use_id: tr.call.into(),
-                // The proto documents this as the raw tool output, unlike ToolCall.input which is
-                // JSON. A string output is already the raw text, so emit it verbatim rather than
-                // re-encoding it into a quoted, escaped JSON string.
-                content: match tr.output {
-                    serde_json::Value::Null => String::new(),
-                    serde_json::Value::String(s) => s,
-                    other => serde_json::to_string(&other).unwrap_or_default(),
-                },
+                output: (!tr.output.is_null()).then(|| tr.output.to_string()),
                 is_error: tr.error,
             }),
-            Content::Other(v) => Block::Text(v.to_string()),
+            Content::Other(v) => Block::Other(v.to_string()),
         };
 
         Self { block: Some(block) }
     }
 }
 
+impl TryFrom<ContentBlock> for Content {
+    type Error = ParseError;
+
+    fn try_from(value: ContentBlock) -> Result<Self, Self::Error> {
+        use content_block::Block;
+
+        let captured = |json: Option<String>| {
+            json.map_or(Ok(serde_json::Value::Null), |json| serde_json::from_str(&json))
+        };
+
+        Ok(match value.block.ok_or(ParseError::Missing("content block"))? {
+            Block::Text(text) => Self::Text(text),
+            Block::Thinking(text) => Self::Reasoning(text),
+            Block::ReasoningSummary(summary) => Self::ReasoningSummary {
+                tokens: summary.tokens,
+            },
+            Block::ToolCall(tc) => Self::ToolUse(ToolUse {
+                id: ToolCallId::from(tc.id),
+                name: tc.name,
+                input: captured(tc.input)?,
+            }),
+            Block::ToolResult(tr) => Self::ToolResult(DomainToolResult {
+                call: ToolCallId::from(tr.tool_use_id),
+                output: captured(tr.output)?,
+                error: tr.is_error,
+            }),
+            Block::Other(json) => Self::Other(serde_json::from_str(&json)?),
+        })
+    }
+}
+
+impl ToolResult {
+    /// The output as display text: a JSON string's contents verbatim, any other JSON as encoded,
+    /// or `None` when capture did not keep it.
+    #[must_use]
+    pub fn output_text(&self) -> Option<Cow<'_, str>> {
+        let json = self.output.as_deref()?;
+        Some(serde_json::from_str::<String>(json).map_or(Cow::Borrowed(json), Cow::Owned))
+    }
+}
+
 impl From<DomainMessage> for Message {
     fn from(value: DomainMessage) -> Self {
-        // The enum collapses non-standard roles to Unknown; keep the original string so clients can
-        // display the real role (e.g. codex "developer") instead of "unknown".
         let role_label = match &value.role {
             DomainRole::Other(other) => Some(other.clone()),
+            _ => None,
+        };
+        let stop_reason_label = match &value.stop_reason {
+            Some(DomainStopReason::Other(other)) => Some(other.clone()),
             _ => None,
         };
         Self {
@@ -149,11 +218,79 @@ impl From<DomainMessage> for Message {
             cwd: value.cwd.map(|path| path.to_string_lossy().into_owned()),
             git_branch: value.git_branch,
             model: value.model,
-            tokens: Some(value.usage.map(Tokens::from).unwrap_or_default()),
-            stop_reason: value.stop_reason.map(StopReason::from).unwrap_or(StopReason::Unknown)
-                as i32,
+            tokens: value.usage.map(Tokens::from),
+            stop_reason: value.stop_reason.map_or(StopReason::Unknown, StopReason::from) as i32,
             role_label,
+            stop_reason_label,
         }
+    }
+}
+
+impl Message {
+    fn domain_role(&self) -> Result<DomainRole, ParseError> {
+        Ok(match Role::try_from(self.role).map_err(|_| ParseError::UnknownRole(self.role))? {
+            Role::User => DomainRole::User,
+            Role::Assistant => DomainRole::Assistant,
+            Role::System => DomainRole::System,
+            Role::Tool => DomainRole::Tool,
+            Role::Other => {
+                DomainRole::Other(self.role_label.clone().ok_or(ParseError::Missing("role_label"))?)
+            }
+        })
+    }
+
+    fn domain_stop_reason(&self) -> Result<Option<DomainStopReason>, ParseError> {
+        let stop_reason = StopReason::try_from(self.stop_reason)
+            .map_err(|_| ParseError::UnknownStopReason(self.stop_reason))?;
+        Ok(Some(match stop_reason {
+            StopReason::Unknown => return Ok(None),
+            StopReason::EndTurn => DomainStopReason::EndTurn,
+            StopReason::ToolUse => DomainStopReason::ToolUse,
+            StopReason::MaxTokens => DomainStopReason::MaxTokens,
+            StopReason::Aborted => DomainStopReason::Aborted,
+            StopReason::Error => DomainStopReason::Error,
+            StopReason::StopSequence => DomainStopReason::StopSequence,
+            StopReason::Refusal => DomainStopReason::Refusal,
+            StopReason::Other => DomainStopReason::Other(
+                self.stop_reason_label.clone().ok_or(ParseError::Missing("stop_reason_label"))?,
+            ),
+        }))
+    }
+}
+
+impl TryFrom<Message> for DomainMessage {
+    type Error = ParseError;
+
+    fn try_from(value: Message) -> Result<Self, Self::Error> {
+        let role = value.domain_role()?;
+        let stop_reason = value.domain_stop_reason()?;
+        let id = value.id.ok_or(ParseError::Missing("id"))?;
+        let timestamp = value.timestamp.ok_or(ParseError::Missing("timestamp"))?;
+        let session = HarnessSession {
+            harness: value.harness,
+            session_id: value.session_id,
+        };
+        Ok(Self {
+            id: RecordId(uuid::Uuid::from_slice(&id.value)?),
+            session: session.try_into()?,
+            source_id: SourceId::from(value.source_id),
+            parent: value.parent.map(TryInto::try_into).transpose()?,
+            parent_source_id: value.parent_source_id.map(SourceId::from),
+            thread: value.thread,
+            timestamp: OffsetDateTime::from_timespec(
+                timestamp.seconds.into(),
+                timestamp.nanos.into(),
+            )?,
+            role,
+            content: value.content.into_iter().map(Content::try_from).collect::<Result<_, _>>()?,
+            cwd: value.cwd.map(PathBuf::from),
+            git_branch: value.git_branch,
+            model: value.model,
+            usage: value.tokens.map(Usage::from),
+            stop_reason,
+            session_title: None,
+            turn_id: None,
+        })
     }
 }
 
@@ -182,10 +319,42 @@ impl From<DomainSession> for Session {
     }
 }
 
+impl TryFrom<Session> for DomainSession {
+    type Error = ParseError;
+
+    fn try_from(value: Session) -> Result<Self, Self::Error> {
+        let at = |timestamp: Option<prost_types::Timestamp>, field| {
+            let timestamp = timestamp.ok_or(ParseError::Missing(field))?;
+            Ok::<_, ParseError>(OffsetDateTime::from_timespec(
+                timestamp.seconds.into(),
+                timestamp.nanos.into(),
+            )?)
+        };
+        let handle = HarnessSession {
+            harness: value.harness,
+            session_id: value.session_id,
+        };
+        Ok(Self {
+            handle: handle.try_into()?,
+            parent: value.parent.map(TryInto::try_into).transpose()?,
+            cwd: value.cwd.map(PathBuf::from),
+            git_branch: value.git_branch,
+            model: value.model,
+            started_at: at(value.started_at, "started_at")?,
+            updated_at: at(value.updated_at, "updated_at")?,
+            message_count: value.message_count,
+            usage: value.tokens.ok_or(ParseError::Missing("tokens"))?.into(),
+            title: value.title,
+            preview: value.preview,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
     use rstest::rstest;
+    use serde_json::{Value, json};
 
     use super::*;
 
@@ -207,11 +376,182 @@ mod tests {
         })
     }
 
+    fn arb_timestamp() -> impl Strategy<Value = OffsetDateTime> {
+        // Roughly ±6000 years around the epoch, inside what `OffsetDateTime` represents.
+        (-190_000_000_000i64..190_000_000_000, 0i32..1_000_000_000).prop_map(|(secs, nanos)| {
+            OffsetDateTime::from_timespec(secs.into(), nanos.into()).unwrap()
+        })
+    }
+
+    fn arb_usage() -> impl Strategy<Value = Usage> {
+        any::<[Option<u64>; 4]>().prop_map(|[input, output, cache_read, cache_write]| Usage {
+            input,
+            output,
+            cache_read,
+            cache_write,
+        })
+    }
+
+    fn arb_role() -> impl Strategy<Value = DomainRole> {
+        prop_oneof![
+            Just(DomainRole::User),
+            Just(DomainRole::Assistant),
+            Just(DomainRole::System),
+            Just(DomainRole::Tool),
+            ".{0,8}".prop_map(DomainRole::Other),
+        ]
+    }
+
+    fn arb_stop_reason() -> impl Strategy<Value = DomainStopReason> {
+        prop_oneof![
+            Just(DomainStopReason::EndTurn),
+            Just(DomainStopReason::MaxTokens),
+            Just(DomainStopReason::ToolUse),
+            Just(DomainStopReason::StopSequence),
+            Just(DomainStopReason::Refusal),
+            Just(DomainStopReason::Aborted),
+            Just(DomainStopReason::Error),
+            ".{0,8}".prop_map(DomainStopReason::Other),
+        ]
+    }
+
+    /// No floats: `serde_json` without `float_roundtrip` may parse a float back one ULP off.
+    fn arb_json() -> impl Strategy<Value = Value> {
+        let leaf = prop_oneof![
+            Just(Value::Null),
+            any::<bool>().prop_map(Value::from),
+            any::<i64>().prop_map(Value::from),
+            ".{0,8}".prop_map(Value::from),
+        ];
+        leaf.prop_recursive(2, 8, 4, |inner| {
+            prop_oneof![
+                prop::collection::vec(inner.clone(), 0..4).prop_map(Value::from),
+                prop::collection::btree_map("[a-z]{1,4}", inner, 0..4)
+                    .prop_map(|map| Value::Object(map.into_iter().collect())),
+            ]
+        })
+    }
+
+    fn arb_content() -> impl Strategy<Value = Content> {
+        prop_oneof![
+            ".{0,8}".prop_map(Content::Text),
+            ".{0,8}".prop_map(Content::Reasoning),
+            any::<Option<u64>>().prop_map(|tokens| Content::ReasoningSummary { tokens }),
+            ("[a-z0-9]{1,8}", "[a-z]{1,8}", arb_json()).prop_map(|(id, name, input)| {
+                Content::ToolUse(ToolUse {
+                    id: ToolCallId::from(id),
+                    name,
+                    input,
+                })
+            }),
+            ("[a-z0-9]{1,8}", arb_json(), any::<bool>()).prop_map(|(call, output, error)| {
+                Content::ToolResult(DomainToolResult {
+                    call: ToolCallId::from(call),
+                    output,
+                    error,
+                })
+            }),
+            arb_json().prop_map(Content::Other),
+        ]
+    }
+
+    fn arb_message() -> impl Strategy<Value = DomainMessage> {
+        let handles = (
+            any::<u128>(),
+            arb_harness_session(),
+            "[a-z0-9]{1,8}",
+            prop::option::of(arb_harness_session()),
+            prop::option::of("[a-z0-9]{1,8}"),
+            prop::option::of("[a-z0-9]{1,8}"),
+        );
+        let body = (
+            arb_timestamp(),
+            arb_role(),
+            prop::collection::vec(arb_content(), 0..4),
+            prop::option::of("[a-z/]{1,16}"),
+            prop::option::of("[a-z]{1,8}"),
+            prop::option::of("[a-z]{1,8}"),
+        );
+        let outcome = (prop::option::of(arb_usage()), prop::option::of(arb_stop_reason()));
+        (handles, body, outcome).prop_map(
+            |(
+                (id, session, source_id, parent, parent_source_id, thread),
+                (timestamp, role, content, cwd, git_branch, model),
+                (usage, stop_reason),
+            )| DomainMessage {
+                id: RecordId(uuid::Uuid::from_u128(id)),
+                session,
+                source_id: SourceId::from(source_id),
+                parent,
+                parent_source_id: parent_source_id.map(SourceId::from),
+                thread,
+                timestamp,
+                role,
+                content,
+                cwd: cwd.map(PathBuf::from),
+                git_branch,
+                model,
+                usage,
+                stop_reason,
+                session_title: None,
+                turn_id: None,
+            },
+        )
+    }
+
+    fn arb_session() -> impl Strategy<Value = DomainSession> {
+        let handles = (
+            arb_harness_session(),
+            prop::option::of(arb_harness_session()),
+            prop::option::of("[a-z/]{1,16}"),
+            prop::option::of("[a-z]{1,8}"),
+            prop::option::of("[a-z]{1,8}"),
+        );
+        let summary = (
+            arb_timestamp(),
+            arb_timestamp(),
+            any::<u64>(),
+            arb_usage(),
+            prop::option::of(".{0,8}"),
+            prop::option::of(".{0,8}"),
+        );
+        (handles, summary).prop_map(
+            |(
+                (handle, parent, cwd, git_branch, model),
+                (started_at, updated_at, message_count, usage, title, preview),
+            )| DomainSession {
+                handle,
+                parent,
+                cwd: cwd.map(PathBuf::from),
+                git_branch,
+                model,
+                started_at,
+                updated_at,
+                message_count,
+                usage,
+                title,
+                preview,
+            },
+        )
+    }
+
     proptest! {
         #[test]
         fn harness_session_roundtrips(hs in arb_harness_session()) {
             let pb: HarnessSession = hs.clone().into();
             prop_assert_eq!(DomainHarnessSession::try_from(pb).unwrap(), hs);
+        }
+
+        #[test]
+        fn message_roundtrips(message in arb_message()) {
+            let pb = Message::from(message.clone());
+            prop_assert_eq!(DomainMessage::try_from(pb).unwrap(), message);
+        }
+
+        #[test]
+        fn session_roundtrips(session in arb_session()) {
+            let pb = Session::from(session.clone());
+            prop_assert_eq!(DomainSession::try_from(pb).unwrap(), session);
         }
     }
 
@@ -251,75 +591,41 @@ mod tests {
     }
 
     #[rstest]
-    #[case(DomainStopReason::StopSequence, StopReason::EndTurn)]
-    #[case(DomainStopReason::Refusal, StopReason::EndTurn)]
-    #[case(DomainStopReason::Other("x".into()), StopReason::Unknown)]
-    fn stop_reason_coalesces_at_edge(#[case] from: DomainStopReason, #[case] want: StopReason) {
-        assert_eq!(StopReason::from(from), want);
-    }
-
-    /// Capture nulls arguments and results it does not keep; the wire carries "not captured" as
-    /// an empty string, never the text `null`.
-    #[rstest]
-    fn uncaptured_tool_payloads_are_empty_on_the_wire() {
-        use atuin_common::harnesstools::session::{ToolCallId, ToolResult, ToolUse};
-
+    fn uncaptured_tool_input_is_absent_on_the_wire() {
         let call: ContentBlock = Content::ToolUse(ToolUse {
             id: ToolCallId::from("c1".to_owned()),
             name: "Bash".to_owned(),
-            input: serde_json::Value::Null,
+            input: Value::Null,
         })
         .into();
         let content_block::Block::ToolCall(tc) = call.block.unwrap() else {
             panic!("expected a tool call block");
         };
-        assert_eq!((tc.name.as_str(), tc.input.as_str()), ("Bash", ""));
+        assert_eq!(tc.input, None);
+    }
 
-        let result: ContentBlock = Content::ToolResult(ToolResult {
+    #[rstest]
+    #[case::string(json!("line1\nline2"), Some("line1\nline2"))]
+    #[case::structured(json!({"exit": 0}), Some(r#"{"exit":0}"#))]
+    #[case::uncaptured(Value::Null, None)]
+    fn tool_result_output_text_unwraps_json_strings(
+        #[case] output: Value,
+        #[case] want: Option<&str>,
+    ) {
+        let result: ContentBlock = Content::ToolResult(DomainToolResult {
             call: ToolCallId::from("c1".to_owned()),
-            output: serde_json::Value::Null,
-            error: true,
+            output,
+            error: false,
         })
         .into();
         let content_block::Block::ToolResult(tr) = result.block.unwrap() else {
             panic!("expected a tool result block");
         };
-        assert_eq!((tr.content.as_str(), tr.is_error), ("", true));
-    }
-
-    #[rstest]
-    fn tool_result_string_output_is_emitted_raw() {
-        use atuin_common::harnesstools::session::{ToolCallId, ToolResult};
-
-        let raw: ContentBlock = Content::ToolResult(ToolResult {
-            call: ToolCallId::from("c1".to_owned()),
-            output: serde_json::Value::String("line1\nline2".to_owned()),
-            error: false,
-        })
-        .into();
-        let content_block::Block::ToolResult(tr) = raw.block.unwrap() else {
-            panic!("expected a tool result block");
-        };
-        assert_eq!(tr.content, "line1\nline2");
-
-        let structured: ContentBlock = Content::ToolResult(ToolResult {
-            call: ToolCallId::from("c1".to_owned()),
-            output: serde_json::json!({"exit": 0}),
-            error: false,
-        })
-        .into();
-        let content_block::Block::ToolResult(tr) = structured.block.unwrap() else {
-            panic!("expected a tool result block");
-        };
-        assert_eq!(tr.content, r#"{"exit":0}"#);
+        assert_eq!(tr.output_text().as_deref(), want);
     }
 
     #[rstest]
     fn other_role_is_carried_as_role_label() {
-        use atuin_client::ai_session::SourceId;
-        use atuin_domain::record::RecordId;
-        use time::OffsetDateTime;
-
         let msg = DomainMessage::builder()
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .session(DomainHarnessSession {
@@ -333,19 +639,7 @@ mod tests {
             .build();
 
         let pb = Message::from(msg);
-        assert_eq!(pb.role, Role::Unknown as i32);
+        assert_eq!(pb.role, Role::Other as i32);
         assert_eq!(pb.role_label.as_deref(), Some("developer"));
-    }
-
-    #[rstest]
-    fn usage_none_becomes_zero() {
-        let t: Tokens = Usage {
-            input: None,
-            output: Some(3),
-            cache_read: None,
-            cache_write: None,
-        }
-        .into();
-        assert_eq!((t.input, t.output, t.cache_read, t.cache_write), (0, 3, 0, 0));
     }
 }

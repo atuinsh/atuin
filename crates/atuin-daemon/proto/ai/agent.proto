@@ -16,8 +16,8 @@ enum HarnessKind {
 }
 
 enum Role {
-  // Not stated by the harness.
-  ROLE_UNKNOWN = 0;
+  // A role the harness named that is none of the below; Message.role_label carries it.
+  ROLE_OTHER = 0;
   // Something you typed to the AI.
   ROLE_USER = 1;
   // The AI's reply.
@@ -41,17 +41,25 @@ enum StopReason {
   STOP_REASON_ABORTED = 4;
   // Something went wrong before it could finish.
   STOP_REASON_ERROR = 5;
+  // The reply hit one of the caller's stop sequences.
+  STOP_REASON_STOP_SEQUENCE = 6;
+  // The AI declined to answer.
+  STOP_REASON_REFUSAL = 7;
+  // A reason the harness named that is none of the above; Message.stop_reason_label carries it.
+  STOP_REASON_OTHER = 8;
 }
 
+// Token counts as the harness reported them. A count the harness did not report is
+// absent, never 0.
 message Tokens {
   // How much text was fed into the model, in tokens.
-  uint64 input = 1;
+  optional uint64 input = 1;
   // How much text the model produced, in tokens.
-  uint64 output = 2;
+  optional uint64 output = 2;
   // Tokens reused from an earlier prompt instead of resent (cheaper).
-  uint64 cache_read = 3;
+  optional uint64 cache_read = 3;
   // Tokens saved so a later prompt can reuse them.
-  uint64 cache_write = 4;
+  optional uint64 cache_write = 4;
 }
 
 // The AI's request to run a tool.
@@ -60,18 +68,24 @@ message ToolCall {
   string id = 1;
   // Which tool the AI used, such as reading a file or running a command.
   string name = 2;
-  // The arguments the AI passed to the tool, as JSON.
-  string input = 3;
+  // The arguments the AI passed to the tool, as JSON. Absent when capture did not keep them.
+  optional string input = 3;
 }
 
 // The result handed back from a tool the AI ran.
 message ToolResult {
   // Identifier of the ToolCall this result answers.
   string tool_use_id = 1;
-  // The tool's output.
-  string content = 2;
+  // The tool's output, as JSON. Absent when capture did not keep it.
+  optional string output = 2;
   // Whether the tool reported failure.
   bool is_error = 3;
+}
+
+// Reasoning the harness recorded without its text.
+message ReasoningSummary {
+  // Tokens of the model call the reasoning happened in, if the harness reported them.
+  optional uint64 tokens = 1;
 }
 
 // One ordered piece of a message's content. A single turn interleaves these:
@@ -88,6 +102,10 @@ message ContentBlock {
     ToolResult tool_result = 3;
     // The model's private reasoning, when the harness records it.
     string thinking = 4;
+    // The model reasoned, but the harness kept only that it did.
+    ReasoningSummary reasoning_summary = 5;
+    // A block Atuin does not model, as JSON.
+    string other = 6;
   }
 }
 
@@ -128,13 +146,15 @@ message Message {
   optional string git_branch = 12;
   // Model that produced the message.
   optional string model = 13;
-  // Token usage attributed to this message.
+  // Token usage attributed to this message, if the harness reported any.
   Tokens tokens = 14;
-  // Why an assistant turn ended.
+  // Why an assistant turn ended. STOP_REASON_UNKNOWN when the harness did not say.
   StopReason stop_reason = 15;
-  // The harness's own role string when it is not one of the standard roles above (e.g. codex
-  // "developer"); unset for standard roles. A display fallback for ROLE_UNKNOWN.
+  // The harness's own role string (e.g. codex "developer"); set exactly when role is
+  // ROLE_OTHER.
   optional string role_label = 16;
+  // The harness's own stop reason; set exactly when stop_reason is STOP_REASON_OTHER.
+  optional string stop_reason_label = 17;
 }
 
 message Session {
