@@ -36,6 +36,20 @@ use crate::search::{
     SearchContext as RpcSearchContext, SearchRequest, SearchResponse,
 };
 
+/// The path to the daemon's socket.
+///
+/// If the daemon is running and has recorded its socket path in the pidfile, this function returns
+/// that. Otherwise, this function returns [`settings.daemon.existing_socket_path()`][0].
+///
+/// [0]: atuin_client::settings::Daemon::existing_socket_path
+#[cfg(unix)]
+#[must_use]
+pub fn socket_path(settings: &atuin_client::settings::Settings) -> PathBuf {
+    crate::pidfile::PidfileInfo::read(settings.daemon.pidfile_path.as_ref())
+        .and_then(|info| info.socket_path)
+        .unwrap_or_else(|| settings.daemon.existing_socket_path().into_owned())
+}
+
 pub struct HistoryClient {
     client: HistoryServiceClient<Channel>,
 }
@@ -121,7 +135,7 @@ impl HistoryClient {
 
     #[cfg(unix)]
     pub async fn from_settings(settings: &Settings) -> Result<Self> {
-        Self::new(settings.daemon.existing_socket_path().into_owned()).await
+        Self::new(socket_path(settings)).await
     }
 
     #[cfg(not(unix))]
@@ -338,7 +352,7 @@ impl SearchClient {
 
     #[cfg(unix)]
     pub async fn from_settings(settings: &Settings) -> Result<Self> {
-        Self::new(settings.daemon.existing_socket_path().into_owned()).await
+        Self::new(socket_path(settings)).await
     }
 
     #[cfg(not(unix))]
