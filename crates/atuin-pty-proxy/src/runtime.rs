@@ -65,17 +65,22 @@ enum Error {
     Io(#[from] std::io::Error),
 }
 
+/// Query the active terminal size, including pixel dimensions.
+fn query_size() -> std::io::Result<PtySize> {
+    let ws = terminal::window_size()?;
+
+    Ok(PtySize {
+        rows: ws.rows,
+        cols: ws.columns,
+        pixel_width: ws.width,
+        pixel_height: ws.height,
+    })
+}
+
 fn run(options: RuntimeOptions) -> Result<(), Error> {
-    let (cols, rows) = terminal::size()?;
+    let pty_size = query_size()?;
     let pty_system = native_pty_system();
-    let pair = pty_system
-        .openpty(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| Error::OpenPty(e.into()))?;
+    let pair = pty_system.openpty(pty_size).map_err(|e| Error::OpenPty(e.into()))?;
 
     // The PTY proxy server and the path of its socket.
     let server_and_path: Option<(SocketServer, atuin_common::fs::RemoveOnDropPath)> = pair
@@ -105,10 +110,15 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
         .ok();
 
     let (msg_tx, msg_rx) = mpsc::sync_channel::<Msg>(64);
-    let _parser_handle = screen::spawn_parser_thread(rows, cols, msg_rx, screen::ParserOptions {
-        command_capture: options.command_capture,
-        debug_osc133: options.debug_osc133,
-    });
+    let _parser_handle = screen::spawn_parser_thread(
+        pty_size.rows,
+        pty_size.cols,
+        msg_rx,
+        screen::ParserOptions {
+            command_capture: options.command_capture,
+            debug_osc133: options.debug_osc133,
+        },
+    );
 
     let socket_path = if let Some((server, path)) = server_and_path {
         server.spawn(msg_tx.clone());
@@ -225,14 +235,12 @@ fn spawn_resize_handler(
 
     std::thread::spawn(move || {
         for _ in signals.forever() {
-            if let Ok((cols, rows)) = terminal::size() {
-                let _ = master.resize(PtySize {
-                    rows,
-                    cols,
-                    pixel_width: 0,
-                    pixel_height: 0,
+            if let Ok(size) = query_size() {
+                let _ = master.resize(size);
+                let _ = resize_tx.send(Msg::Resize {
+                    rows: size.rows,
+                    cols: size.cols,
                 });
-                let _ = resize_tx.send(Msg::Resize { rows, cols });
             }
         }
     });
