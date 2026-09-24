@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::io::{self, IsTerminal, Write};
 
 use atuin_client::settings::Settings;
-use atuin_common::string::highlighted::{HighlightedString, HighlightedTextProto};
+use atuin_common::string::highlighted::{HighlightedStr, HighlightedTextProto};
 use atuin_daemon::AiClient;
 use atuin_daemon::grpc::ai_agent::pb as agent;
 use atuin_daemon::grpc::ai_session::pb::{
@@ -336,13 +336,23 @@ async fn search(
                     .session
                     .as_ref()
                     .ok_or_else(|| eyre!("the daemon returned a match without a session"))?;
-                let label = m
+                let title = m
                     .title
                     .as_ref()
-                    .map(HighlightedTextProto::plain)
-                    .filter(|t| !t.trim().is_empty())
-                    .or_else(|| m.preview.as_ref().map(HighlightedTextProto::plain))
-                    .unwrap_or(Cow::Borrowed(""));
+                    .map(HighlightedStr::try_from)
+                    .transpose()?
+                    .map(HighlightedStr::plain)
+                    .filter(|t| !t.trim().is_empty());
+                let label = match title {
+                    Some(label) => label,
+                    None => m
+                        .preview
+                        .as_ref()
+                        .map(HighlightedStr::try_from)
+                        .transpose()?
+                        .map(HighlightedStr::plain)
+                        .unwrap_or(Cow::Borrowed("")),
+                };
                 writeln!(
                     out,
                     "{:<14} {:<12} {:<16}  {}",
@@ -1069,7 +1079,7 @@ struct SearchMatchJson {
 
 impl HighlightJson {
     fn from_proto(proto: &HighlightedTextProto) -> Result<Self> {
-        let highlighted = HighlightedString::try_from(proto.clone())?;
+        let highlighted = HighlightedStr::try_from(proto)?;
         let plain = highlighted.to_plain();
         Ok(Self {
             text: plain.text.into_owned(),
