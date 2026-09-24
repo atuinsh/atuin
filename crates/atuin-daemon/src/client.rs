@@ -37,6 +37,28 @@ use crate::search::{
     SearchContext as RpcSearchContext, SearchRequest, SearchResponse,
 };
 
+/// The path to the daemon's socket.
+///
+/// If the daemon is running and has recorded its socket path in the pidfile, this function returns
+/// that. Otherwise, this function returns [`settings.daemon.existing_socket_path()`][0].
+///
+/// As an exception, if [`systemd_socket`][1] is true, the pidfile isn't consulted, as the socket
+/// path comes from systemd directly through a file descriptor.
+///
+/// [0]: atuin_client::settings::Daemon::existing_socket_path
+/// [1]: atuin_client::settings::Daemon::systemd_socket
+#[cfg(unix)]
+#[must_use]
+pub fn socket_path(settings: &atuin_client::settings::Settings) -> PathBuf {
+    (!settings.daemon.systemd_socket)
+        .then(|| {
+            crate::pidfile::PidfileInfo::read(settings.daemon.pidfile_path.as_ref())
+                .and_then(|info| info.socket_path)
+        })
+        .flatten()
+        .unwrap_or_else(|| settings.daemon.existing_socket_path().into_owned())
+}
+
 pub struct HistoryClient {
     client: HistoryServiceClient<Channel>,
 }
@@ -122,7 +144,7 @@ impl HistoryClient {
 
     #[cfg(unix)]
     pub async fn from_settings(settings: &Settings) -> Result<Self> {
-        Self::new(settings.daemon.existing_socket_path().into_owned()).await
+        Self::new(socket_path(settings)).await
     }
 
     #[cfg(not(unix))]
@@ -343,7 +365,7 @@ impl SearchClient {
 
     #[cfg(unix)]
     pub async fn from_settings(settings: &Settings) -> Result<Self> {
-        Self::new(settings.daemon.existing_socket_path().into_owned()).await
+        Self::new(socket_path(settings)).await
     }
 
     #[cfg(not(unix))]
@@ -428,5 +450,57 @@ impl From<Context> for RpcSearchContext {
             host_id: context.host_id,
             git_root: context.git_root.map(|path| path.to_string_lossy().to_string()),
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::path::Path;
+
+    use rstest::rstest;
+
+    use super::*;
+    use crate::pidfile::PidfileGuard;
+
+    /// Settings for a client whose daemon socket is configured at `socket_path`.
+    fn settings(pidfile: &Path, socket_path: &Path, systemd_socket: bool) -> Settings {
+        let mut settings = Settings::default();
+        settings.daemon.pidfile_path = pidfile.to_str().unwrap().to_string();
+        settings.daemon.socket_path = Some(socket_path.to_owned());
+        settings.daemon.systemd_socket = systemd_socket;
+        settings
+    }
+
+    /// A daemon configured for `old.sock` has exited, leaving its pidfile behind, and the client is
+    /// now configured for `new.sock`.
+    #[rstest]
+    #[case::pidfile_path_is_used(false, false, "old.sock")]
+    #[case::systemd_client_ignores_pidfile(false, true, "new.sock")]
+    #[case::systemd_daemon_records_no_path(true, false, "new.sock")]
+    #[case::both_systemd(true, true, "new.sock")]
+    fn test_socket_path_with_stale_pidfile(
+        #[case] daemon_systemd_socket: bool,
+        #[case] client_systemd_socket: bool,
+        #[case] expected: &str,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("atuin-daemon.pid");
+
+        let old = settings(&pidfile, &dir.path().join("old.sock"), daemon_systemd_socket);
+        drop(PidfileGuard::acquire(&old.daemon).unwrap());
+
+        let new = settings(&pidfile, &dir.path().join("new.sock"), client_systemd_socket);
+        assert_eq!(socket_path(&new), dir.path().join(expected));
+    }
+
+    #[rstest]
+    fn test_socket_path_without_pidfile(#[values(false, true)] systemd_socket: bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = settings(
+            &dir.path().join("atuin-daemon.pid"),
+            &dir.path().join("a.sock"),
+            systemd_socket,
+        );
+        assert_eq!(socket_path(&settings), dir.path().join("a.sock"));
     }
 }
