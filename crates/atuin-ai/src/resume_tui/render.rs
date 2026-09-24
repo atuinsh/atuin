@@ -1462,7 +1462,7 @@ impl State {
             inverted: invert,
             alternate_highlight: self.keymap_mode == KeymapMode::VimNormal,
             now: (self.now)(),
-            tz: settings.timezone.0,
+            tz: settings.timezone.offset_at((self.now)()),
             indicator: &indicator,
             theme,
             cells: &cells,
@@ -1516,7 +1516,7 @@ impl State {
         }
 
         if let Some(pane) = pane {
-            self.draw_side(f, pane, settings.timezone.0, theme);
+            self.draw_side(f, pane, settings.timezone.offset_at((self.now)()), theme);
         }
 
         if compactness == Compactness::Ultracompact {
@@ -1906,7 +1906,7 @@ impl State {
         };
 
         let now = (self.now)();
-        let tz = settings.timezone.0;
+        let tz = settings.timezone.offset_at(now);
         let key = style(theme, Meaning::Annotation);
         let base = style(theme, Meaning::Base);
         let width = usize::from(inner.width).saturating_sub(12);
