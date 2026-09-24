@@ -27,90 +27,6 @@ pub struct SqliteStore {
     sqlite: Sqlite,
 }
 
-/// On-disk encoding of the `data` and `cek` columns.
-///
-/// Rows written before this module hold the PASETO token and the cek JSON as TEXT. Rows written
-/// since hold BLOBs: the token's base64url payload decoded to bytes, and the cek's two PASERK
-/// payloads decoded the same way, which is roughly 40% smaller. Sqlite is dynamically typed, so
-/// both live in one column and the reader picks by storage class.
-///
-/// A leading tag byte names the layout. A value that does not have the expected shape, such as a
-/// plaintext packfile manifest or an empty cek, is kept verbatim so the encoding is total. Every
-/// decode is checked to re-encode to the identical string before it is used, so a stored blob
-/// always unpacks to exactly what was pushed.
-mod column {
-    use base64::Engine;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
-
-    const VERBATIM: u8 = 0;
-    const DECODED: u8 = 1;
-
-    const TOKEN_PREFIX: &str = "v4.local.";
-    const WPK_PREFIX: &str = "k4.local-wrap.pie.";
-    const KID_PREFIX: &str = "k4.lid.";
-
-    fn decode(s: &str, prefix: &str) -> Option<Vec<u8>> {
-        let payload = s.strip_prefix(prefix)?;
-        let bytes = B64.decode(payload).ok()?;
-
-        (B64.encode(&bytes) == payload).then_some(bytes)
-    }
-
-    fn verbatim(s: &str) -> Vec<u8> {
-        [&[VERBATIM], s.as_bytes()].concat()
-    }
-
-    pub fn pack_data(raw: &str) -> Vec<u8> {
-        match decode(raw, TOKEN_PREFIX) {
-            Some(bytes) => [&[DECODED], bytes.as_slice()].concat(),
-            None => verbatim(raw),
-        }
-    }
-
-    pub fn unpack_data(blob: &[u8]) -> Option<String> {
-        match blob.split_first()? {
-            (&DECODED, bytes) => Some(format!("{TOKEN_PREFIX}{}", B64.encode(bytes))),
-            (&VERBATIM, bytes) => String::from_utf8(bytes.to_vec()).ok(),
-            _ => None,
-        }
-    }
-
-    /// Layout: `DECODED, wpk.len() as u8, wpk bytes, kid bytes`.
-    pub fn pack_cek(cek: &str) -> Vec<u8> {
-        let packed = (|| {
-            let json: serde_json::Value = serde_json::from_str(cek).ok()?;
-            let obj = json.as_object()?;
-            let wpk = decode(obj.get("wpk")?.as_str()?, WPK_PREFIX)?;
-            let kid = decode(obj.get("kid")?.as_str()?, KID_PREFIX)?;
-            let len = u8::try_from(wpk.len()).ok()?;
-            let blob = [&[DECODED, len], wpk.as_slice(), kid.as_slice()].concat();
-
-            (unpack_cek(&blob)? == cek).then_some(blob)
-        })();
-
-        packed.unwrap_or_else(|| verbatim(cek))
-    }
-
-    pub fn unpack_cek(blob: &[u8]) -> Option<String> {
-        match blob.split_first()? {
-            (&DECODED, rest) => {
-                let (&len, rest) = rest.split_first()?;
-                let (wpk, kid) = rest.split_at_checked(usize::from(len))?;
-
-                Some(
-                    serde_json::json!({
-                        "wpk": format!("{WPK_PREFIX}{}", B64.encode(wpk)),
-                        "kid": format!("{KID_PREFIX}{}", B64.encode(kid)),
-                    })
-                    .to_string(),
-                )
-            }
-            (&VERBATIM, bytes) => String::from_utf8(bytes.to_vec()).ok(),
-            _ => None,
-        }
-    }
-}
-
 /// Newtype over the foreign `Record<EncryptedData>` so we can `impl FromRow` for
 /// it locally (the orphan rule blocks implementing it on `Record` here). Unwrap
 /// back to the inner record with `.into()`.
@@ -132,35 +48,61 @@ impl<'r> ::sqlx::FromRow<'r, SqliteRow> for DbRecord {
             })
         };
 
+        let tag = RecordTag::from(row.try_get::<String, _>("tag")?);
+        let data = stored_data(row, &tag)?;
+
         Ok(Self(Record {
             id: RecordId(parse_uuid("id")?),
             idx: u64::conv(idx),
             host: Host::new(HostId(parse_uuid("host")?)),
             timestamp: u64::conv(timestamp),
-            tag: RecordTag::from(row.try_get::<String, _>("tag")?),
+            tag,
             version: RecordVersion::from(row.try_get::<String, _>("version")?),
-            data: paseto_v4::EncryptedData {
-                raw: packed_column(row, "data", column::unpack_data)?,
-                cek: packed_column(row, "cek", column::unpack_cek)?,
-            },
+            data,
         }))
     }
 }
 
-/// Read `data` or `cek`: TEXT is a legacy row and is taken as is, BLOB goes through `unpack`.
-fn packed_column(
-    row: &SqliteRow,
-    name: &'static str,
-    unpack: fn(&[u8]) -> Option<String>,
-) -> ::sqlx::Result<String> {
-    if *row.try_get_raw(name)?.type_info() != <&[u8] as Type<sqlx::Sqlite>>::type_info() {
-        return row.try_get(name);
+/// Inverse of [`stored_columns`]. Rows written before it hold the wire form as TEXT and are
+/// taken as is; sqlite is dynamically typed, so the storage class of the cell says which.
+fn stored_data(row: &SqliteRow, tag: &RecordTag) -> ::sqlx::Result<paseto_v4::EncryptedData> {
+    if *row.try_get_raw("data")?.type_info() != <&[u8] as Type<sqlx::Sqlite>>::type_info() {
+        return Ok(paseto_v4::EncryptedData {
+            raw: row.try_get("data")?,
+            cek: row.try_get("cek")?,
+        });
     }
 
-    unpack(row.try_get(name)?).ok_or_else(|| ::sqlx::Error::ColumnDecode {
-        index: name.to_owned(),
-        source: "malformed packed column".into(),
-    })
+    let decode = |column: &'static str, source: Box<dyn std::error::Error + Send + Sync>| {
+        ::sqlx::Error::ColumnDecode {
+            index: column.to_owned(),
+            source,
+        }
+    };
+    let (data, cek): (Vec<u8>, Vec<u8>) = (row.try_get("data")?, row.try_get("cek")?);
+
+    if tag.is_plaintext() {
+        return Ok(paseto_v4::EncryptedData {
+            raw: String::from_utf8(data).map_err(|e| decode("data", e.into()))?,
+            cek: String::from_utf8(cek).map_err(|e| decode("cek", e.into()))?,
+        });
+    }
+
+    let cek = cek.try_into().map_err(|_| decode("cek", "wrong length".into()))?;
+
+    Ok((&paseto_v4::EncryptedBytes { data, cek }).into())
+}
+
+/// The `data` and `cek` columns for a record. Plaintext tags (packfile manifests) carry their
+/// bytes as is; everything else is stored as [`paseto_v4::EncryptedBytes`].
+fn stored_columns(record: &Record<paseto_v4::EncryptedData>) -> Result<(Vec<u8>, Vec<u8>)> {
+    if record.tag.is_plaintext() {
+        return Ok((record.data.raw.clone().into_bytes(), record.data.cek.clone().into_bytes()));
+    }
+
+    let bytes = paseto_v4::EncryptedBytes::try_from(&record.data)?;
+
+    Ok((bytes.data, bytes.cek.to_vec()))
 }
 
 impl SqliteStore {
@@ -198,6 +140,8 @@ impl SqliteStore {
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         r: &Record<paseto_v4::EncryptedData>,
     ) -> Result<()> {
+        let (data, cek) = stored_columns(r)?;
+
         // In sqlite, we are "limited" to i64. But that is still fine, until 2262.
         db::query(
             "insert or ignore into store(id, idx, host, tag, timestamp, version, data, cek)
@@ -209,8 +153,8 @@ impl SqliteStore {
         .bind(r.tag.as_str())
         .bind(i64::conv(r.timestamp))
         .bind(r.version.as_str())
-        .bind(column::pack_data(&r.data.raw))
-        .bind(column::pack_cek(&r.data.cek))
+        .bind(data)
+        .bind(cek)
         .execute(&mut **tx)
         .await?;
 
@@ -293,7 +237,13 @@ impl SqliteStore {
                 "insert or ignore into store(id, idx, host, tag, timestamp, version, data, cek) ",
             );
 
-            builder.push_values(records.by_ref().take(rows_per_insert), |mut b, r| {
+            let chunk = records
+                .by_ref()
+                .take(rows_per_insert)
+                .map(|r| stored_columns(r).map(|columns| (r, columns)))
+                .collect::<Result<Vec<_>>>()?;
+
+            builder.push_values(chunk, |mut b, (r, (data, cek))| {
                 attempted += 1;
                 b.push_bind(r.id.0.as_hyphenated().to_string())
                     .push_bind(i64::conv(r.idx))
@@ -301,8 +251,8 @@ impl SqliteStore {
                     .push_bind(r.tag.as_str())
                     .push_bind(i64::conv(r.timestamp))
                     .push_bind(r.version.as_str())
-                    .push_bind(column::pack_data(&r.data.raw))
-                    .push_bind(column::pack_cek(&r.data.cek));
+                    .push_bind(data)
+                    .push_bind(cek);
             });
 
             inserted += builder.build().execute(&mut **tx).await?.rows_affected();
@@ -323,6 +273,7 @@ impl SqliteStore {
     /// tries again.
     #[instrument(level = "trace", skip_all, fields(id = ?record.id, idx = record.idx, host = ?record.host.id, tag = ?record.tag), err)]
     pub async fn push_unique(&self, record: &Record<paseto_v4::EncryptedData>) -> Result<bool> {
+        let (data, cek) = stored_columns(record)?;
         let res = db::query(
             "insert or ignore into store(id, idx, host, tag, timestamp, version, data, cek)
                 values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -333,8 +284,8 @@ impl SqliteStore {
         .bind(record.tag.as_str())
         .bind(i64::conv(record.timestamp))
         .bind(record.version.as_str())
-        .bind(column::pack_data(&record.data.raw))
-        .bind(column::pack_cek(&record.data.cek))
+        .bind(data)
+        .bind(cek)
         .execute(self.sqlite.pool())
         .await?;
 
@@ -668,7 +619,7 @@ mod tests {
     };
     use rstest::{fixture, rstest};
 
-    use super::{SqliteStore, column};
+    use super::{SqliteStore, db};
     use crate::settings::test_local_timeout;
 
     #[fixture]
@@ -682,12 +633,10 @@ mod tests {
             .host(Host::new(HostId(uuid_v7())))
             .version("v1".into())
             .tag(RecordTag::Other(uuid_v7().simple().to_string()))
-            .data(paseto_v4::EncryptedData {
-                raw: "1234".into(),
-                cek: "1234".into(),
-            })
+            .data(DecryptedData(b"ls -la".to_vec()))
             .idx(0)
             .build()
+            .encrypt(&paseto_v4::Key::generate())
     }
 
     #[rstest]
@@ -746,11 +695,9 @@ mod tests {
                 .version("v1".into())
                 .tag(tag.clone())
                 .idx(idx)
-                .data(paseto_v4::EncryptedData {
-                    raw: "x".into(),
-                    cek: "x".into(),
-                })
+                .data(DecryptedData(b"x".to_vec()))
                 .build()
+                .encrypt(&paseto_v4::Key::generate())
         };
 
         // Empty stream -> frontier is 0.
@@ -941,12 +888,10 @@ mod tests {
             .host(host.clone())
             .version("v1".into())
             .tag(tag.clone())
-            .data(paseto_v4::EncryptedData {
-                raw: "1234".into(),
-                cek: "1234".into(),
-            })
+            .data(DecryptedData(b"ls -la".to_vec()))
             .idx(idx)
             .build()
+            .encrypt(&paseto_v4::Key::generate())
     }
 
     /// A batch whose `(host, tag, idx)` slots are partly taken is rejected whole, so the caller
@@ -991,46 +936,12 @@ mod tests {
         assert_eq!(store.len_all().await.unwrap(), 1);
     }
 
-    fn encrypted_record() -> Record<paseto_v4::EncryptedData> {
-        Record::builder()
-            .host(Host::new(HostId(uuid_v7())))
-            .version("v1".into())
-            .tag(RecordTag::History)
-            .data(DecryptedData(b"ls -la".to_vec()))
-            .idx(0)
-            .build()
-            .encrypt(&paseto_v4::Key::generate())
-    }
-
-    #[rstest]
-    #[case::token(column::pack_data, column::unpack_data, |r: &paseto_v4::EncryptedData| r.raw.clone())]
-    #[case::cek(column::pack_cek, column::unpack_cek, |r: &paseto_v4::EncryptedData| r.cek.clone())]
-    fn packed_columns_round_trip_and_shrink(
-        #[case] pack: fn(&str) -> Vec<u8>,
-        #[case] unpack: fn(&[u8]) -> Option<String>,
-        #[case] pick: fn(&paseto_v4::EncryptedData) -> String,
-    ) {
-        let value = pick(&encrypted_record().data);
-        let blob = pack(&value);
-
-        assert_eq!(unpack(&blob).as_deref(), Some(value.as_str()));
-        assert!(blob.len() * 4 < value.len() * 3, "{} -> {}", value.len(), blob.len());
-
-        // Anything else is kept verbatim, never mangled.
-        for other in ["", "1234", "v4.local.not base64!", r#"{"wpk":"x","kid":"y"}"#] {
-            assert_eq!(unpack(&pack(other)).as_deref(), Some(other));
-        }
-
-        assert_eq!(unpack(&[]), None);
-        assert_eq!(unpack(&[9, 1, 2]), None);
-    }
-
     #[rstest]
     #[tokio::test]
     async fn reads_legacy_text_rows_and_new_blob_rows(#[future(awt)] store: SqliteStore) {
-        let legacy = encrypted_record();
+        let legacy = record();
         // The pre-blob layout: token and cek json stored as TEXT.
-        sqlx::query(
+        db::query(
             "insert into store(id, idx, host, tag, timestamp, version, data, cek)
                 values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
@@ -1046,14 +957,27 @@ mod tests {
         .await
         .unwrap();
 
-        let fresh = encrypted_record();
+        let fresh = record();
         store.push(&fresh).await.unwrap();
+
+        let manifest = Record::builder()
+            .host(Host::new(HostId(uuid_v7())))
+            .version("v1".into())
+            .tag(RecordTag::Packfile)
+            .data(paseto_v4::EncryptedData {
+                raw: "001{\"host\":\"x\"}".into(),
+                cek: String::new(),
+            })
+            .idx(0)
+            .build();
+        store.push(&manifest).await.unwrap();
 
         assert_eq!(store.get(legacy.id).await.unwrap(), legacy);
         assert_eq!(store.get(fresh.id).await.unwrap(), fresh);
+        assert_eq!(store.get(manifest.id).await.unwrap(), manifest);
 
         let storage_class = |id: String| {
-            sqlx::query_scalar::<_, String>(
+            db::query_scalar::<_, String>(
                 "select typeof(data) || typeof(cek) from store where id = ?1",
             )
             .bind(id)
@@ -1063,8 +987,12 @@ mod tests {
         let fresh_id = fresh.id.0.as_hyphenated().to_string();
         assert_eq!(storage_class(legacy_id.clone()).await.unwrap(), "texttext");
         assert_eq!(storage_class(fresh_id).await.unwrap(), "blobblob");
+        assert_eq!(
+            storage_class(manifest.id.0.as_hyphenated().to_string()).await.unwrap(),
+            "blobblob"
+        );
 
-        assert_eq!(store.compact().await.unwrap(), 2);
+        assert_eq!(store.compact().await.unwrap(), 3);
         assert_eq!(storage_class(legacy_id).await.unwrap(), "blobblob");
         assert_eq!(store.get(legacy.id).await.unwrap(), legacy);
     }

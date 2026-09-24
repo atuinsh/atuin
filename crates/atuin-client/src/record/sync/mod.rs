@@ -694,8 +694,9 @@ impl Keyed<'_> {
 #[cfg(test)]
 mod tests {
     use atuin_common::utils::uuid_v7;
+    use atuin_common::encryption::paseto_v4;
     use atuin_domain::record::{
-        Diff, EncryptedData, HostId, Record, RecordIdx, RecordSeriesKey, RecordTag,
+        DecryptedData, Diff, EncryptedData, HostId, Record, RecordIdx, RecordSeriesKey, RecordTag,
     };
     use pretty_assertions::assert_eq;
     use rstest::rstest;
@@ -721,12 +722,10 @@ mod tests {
             .host(atuin_domain::record::Host::new(HostId(atuin_common::utils::uuid_v7())))
             .version("v1".into())
             .tag(RecordTag::Other(atuin_common::utils::uuid_v7().simple().to_string()))
-            .data(EncryptedData {
-                raw: String::new(),
-                cek: String::new(),
-            })
+            .data(DecryptedData(Vec::new()))
             .idx(0)
             .build()
+            .encrypt(&paseto_v4::Key::generate())
     }
 
     // Take a list of local records, and a list of remote records.

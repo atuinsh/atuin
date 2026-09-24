@@ -546,6 +546,90 @@ pub struct EncryptedData {
     pub cek: String,
 }
 
+/// [`EncryptedData`] in its storage form.
+///
+/// The wire form above is what PASETO and PASERK speak: a base64url token and a JSON envelope
+/// holding two base64url PASERK strings. That is what the crypto library produces and what the
+/// server accepts, but on disk it is roughly 40% air. This is the same two values with the
+/// base64 and JSON stripped.
+///
+/// Packing is the trust boundary: it refuses anything that is not in the canonical wire form
+/// rather than guess at it, so every value of this type unpacks to exactly the string it came
+/// from and unpacking cannot fail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncryptedBytes {
+    /// The token payload: nonce, ciphertext, tag.
+    pub data: Vec<u8>,
+    /// The PIE-wrapped content key (tag, nonce, key: 96 bytes) followed by the 33-byte id of the
+    /// key that wrapped it. Both are fixed by the PASERK v4 spec.
+    pub cek: [u8; CEK_LEN],
+}
+
+const WPK_LEN: usize = 96;
+const KID_LEN: usize = 33;
+pub const CEK_LEN: usize = WPK_LEN + KID_LEN;
+
+#[derive(Debug, Error)]
+#[error("`{0}` is not in the PASETO wire form")]
+pub struct NotWireForm(&'static str);
+
+impl EncryptedBytes {
+    const TOKEN_PREFIX: &str = "v4.local.";
+    const WPK_PREFIX: &str = "k4.local-wrap.pie.";
+    const KID_PREFIX: &str = "k4.lid.";
+
+    /// `B64_URL_SAFE_NO_PAD` rejects padding and non-zero trailing bits, so a successful decode
+    /// re-encodes to the same string.
+    fn decode(s: &str, prefix: &str) -> Option<Vec<u8>> {
+        B64_URL_SAFE_NO_PAD.decode(s.strip_prefix(prefix)?).ok()
+    }
+
+    fn pack_cek(cek: &str) -> Option<[u8; CEK_LEN]> {
+        let json: serde_json::Value = serde_json::from_str(cek).ok()?;
+        let obj = json.as_object()?;
+        let wpk = Self::decode(obj.get("wpk")?.as_str()?, Self::WPK_PREFIX)?;
+        let kid = Self::decode(obj.get("kid")?.as_str()?, Self::KID_PREFIX)?;
+        let bytes: [u8; CEK_LEN] = [wpk, kid].concat().try_into().ok()?;
+
+        // The JSON must round-trip too: field order and whitespace are not ours to normalise.
+        (Self::unpack_cek(&bytes) == cek).then_some(bytes)
+    }
+
+    fn unpack_cek(bytes: &[u8; CEK_LEN]) -> String {
+        let (wpk, kid) = bytes.split_at(WPK_LEN);
+
+        serde_json::json!({
+            "wpk": format!("{}{}", Self::WPK_PREFIX, B64_URL_SAFE_NO_PAD.encode(wpk)),
+            "kid": format!("{}{}", Self::KID_PREFIX, B64_URL_SAFE_NO_PAD.encode(kid)),
+        })
+        .to_string()
+    }
+}
+
+impl TryFrom<&EncryptedData> for EncryptedBytes {
+    type Error = NotWireForm;
+
+    fn try_from(data: &EncryptedData) -> Result<Self, Self::Error> {
+        Ok(Self {
+            data: Self::decode(&data.raw, Self::TOKEN_PREFIX).ok_or(NotWireForm("data"))?,
+            cek: Self::pack_cek(&data.cek).ok_or(NotWireForm("cek"))?,
+        })
+    }
+}
+
+impl From<&EncryptedBytes> for EncryptedData {
+    fn from(bytes: &EncryptedBytes) -> Self {
+        Self {
+            raw: format!(
+                "{}{}",
+                EncryptedBytes::TOKEN_PREFIX,
+                B64_URL_SAFE_NO_PAD.encode(&bytes.data)
+            ),
+            cek: EncryptedBytes::unpack_cek(&bytes.cek),
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum EncryptionError {
     #[error("unexpected paseto error creating new CEK: {_0}")]
@@ -916,5 +1000,40 @@ mod test {
 
         let mode = fs::metadata(&path).expect("stat key").permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[rstest]
+    fn encrypted_bytes_round_trip_and_shrink(key: Key) {
+        let data = encrypt_sync(b"ls -la", None, &key).unwrap();
+        let bytes = EncryptedBytes::try_from(&data).unwrap();
+
+        assert_eq!(EncryptedData::from(&bytes), data);
+        assert!(bytes.data.len() * 4 < data.raw.len() * 3, "{} -> {}", data.raw.len(), bytes.data.len());
+        assert!(CEK_LEN * 4 < data.cek.len() * 3, "{} -> {CEK_LEN}", data.cek.len());
+    }
+
+    #[rstest]
+    #[case::empty("")]
+    #[case::plaintext_manifest("001{\"host\":\"x\"}")]
+    #[case::token_with_footer("v4.local.abc.footer")]
+    #[case::not_base64("v4.local.not base64!")]
+    #[case::non_canonical_base64("v4.local.QR")]
+    #[case::cek_wrong_shape(r#"{"wpk":"x","kid":"y"}"#)]
+    fn encrypted_bytes_refuse_anything_not_in_wire_form(#[case] value: &str, key: Key) {
+        let good = encrypt_sync(b"ls -la", None, &key).unwrap();
+        let bad_data = EncryptedData { raw: value.into(), cek: good.cek.clone() };
+        let bad_cek = EncryptedData { raw: good.raw, cek: value.into() };
+
+        assert!(EncryptedBytes::try_from(&bad_data).is_err());
+        assert!(EncryptedBytes::try_from(&bad_cek).is_err());
+    }
+
+    #[rstest]
+    fn encrypted_bytes_refuse_reformatted_cek_json(key: Key) {
+        let good = encrypt_sync(b"ls -la", None, &key).unwrap();
+        let reordered: serde_json::Value = serde_json::from_str(&good.cek).unwrap();
+        let reordered = format!("{{\"kid\":{},\"wpk\":{}}}", reordered["kid"], reordered["wpk"]);
+
+        assert!(EncryptedBytes::try_from(&EncryptedData { cek: reordered, ..good }).is_err());
     }
 }
