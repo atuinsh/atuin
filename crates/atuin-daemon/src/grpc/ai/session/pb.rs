@@ -31,11 +31,7 @@ pub(crate) trait HarnessFilterRequest {
 
     fn harness(&self) -> Result<Option<HarnessKind>, HarnessFilterParseError> {
         self.harness_filter()
-            .map(|h| {
-                agent::HarnessKind::try_from(h)
-                    .map(HarnessKind::from)
-                    .map_err(|_| HarnessFilterParseError::Unrecognized(h))
-            })
+            .map(|h| HarnessKind::try_from(h).map_err(|_| HarnessFilterParseError::Unrecognized(h)))
             .transpose()
     }
 }

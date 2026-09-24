@@ -27,6 +27,7 @@ fn main() -> std::io::Result<()> {
             ".common.HighlightedText",
             "::atuin_common::string::highlighted::HighlightedTextProto",
         )
+        .extern_path(".ai.agent.HarnessKind", "::atuin_client::ai_session::HarnessKind")
         .skip_protoc_run()
         .compile_protos(&proto_paths, &proto_include_dirs)
 }

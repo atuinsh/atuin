@@ -2,6 +2,7 @@ use std::num::NonZeroU32;
 #[cfg(unix)]
 use std::path::PathBuf;
 
+use atuin_client::ai_session::HarnessKind;
 use atuin_client::database::Context;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::{FilterMode, Settings};
@@ -21,9 +22,7 @@ use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
 use tracing::{Level, instrument, span};
 
-use crate::grpc::ai::agent::pb::{
-    HarnessKind as AiHarnessKind, HarnessSession as AiHarnessSession, Session as AiSession,
-};
+use crate::grpc::ai::agent::pb::{HarnessSession as AiHarnessSession, Session as AiSession};
 use crate::grpc::ai::session::pb::ai_session_client::AiSessionClient as AiSessionServiceClient;
 use crate::grpc::ai::session::pb::{
     GetSessionEvent, GetSessionRequest, GetTranscriptChunk, GetTranscriptRequest,
@@ -506,7 +505,7 @@ impl AiClient {
     /// that only want the newest can take the first item without draining the rest.
     pub async fn list_sessions(
         &mut self,
-        harness: Option<AiHarnessKind>,
+        harness: Option<HarnessKind>,
     ) -> Result<tonic::Streaming<AiSession>> {
         let request = ListSessionsRequest {
             harness: harness.map(|h| h as i32),
@@ -539,7 +538,7 @@ impl AiClient {
     /// Follow sessions and messages as they are recorded. `harness` filters to one harness when set.
     pub async fn tail_sessions(
         &mut self,
-        harness: Option<AiHarnessKind>,
+        harness: Option<HarnessKind>,
     ) -> Result<tonic::Streaming<TailSessionsEvent>> {
         let request = TailSessionsRequest {
             harness: harness.map(|h| h as i32),
@@ -550,7 +549,7 @@ impl AiClient {
     pub async fn search_sessions(
         &mut self,
         query: &str,
-        harness: Option<AiHarnessKind>,
+        harness: Option<HarnessKind>,
         limit: u32,
     ) -> Result<tonic::Streaming<SearchSessionsMatch>> {
         let request = SearchSessionsRequest {
@@ -563,7 +562,7 @@ impl AiClient {
 
     pub async fn import_sessions(
         &mut self,
-        harness: Option<AiHarnessKind>,
+        harness: Option<HarnessKind>,
     ) -> Result<tonic::Streaming<ImportSessionsEvent>> {
         let request = ImportSessionsRequest {
             harness: harness.map(|h| h as i32),

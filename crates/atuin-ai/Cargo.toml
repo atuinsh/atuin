@@ -17,7 +17,7 @@ daemon = []
 tree-sitter = ["dep:tree-sitter", "dep:tree-sitter-bash", "dep:tree-sitter-fish"]
 
 [dependencies]
-atuin-client = { workspace = true }
+atuin-client = { workspace = true, features = ["proto"] }
 atuin-common = { workspace = true, features = ["unicode", "ansi", "sqlite", "proto"] }
 atuin-daemon = { workspace = true }
 atuin-domain = { workspace = true }

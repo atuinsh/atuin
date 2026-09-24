@@ -6,8 +6,8 @@ mod codegen {
 }
 
 use atuin_client::ai_session::{
-    HarnessKind as DomainHarnessKind, HarnessSession as DomainHarnessSession,
-    Message as DomainMessage, NativeSessionId, Session as DomainSession,
+    HarnessKind, HarnessSession as DomainHarnessSession, Message as DomainMessage, NativeSessionId,
+    Session as DomainSession,
 };
 use atuin_common::harnesstools::session::{
     Content, Role as DomainRole, StopReason as DomainStopReason, Usage,
@@ -17,36 +17,10 @@ use thiserror::Error;
 
 use crate::grpc::common::pb::Uuid;
 
-impl From<DomainHarnessKind> for HarnessKind {
-    fn from(value: DomainHarnessKind) -> Self {
-        match value {
-            DomainHarnessKind::Unknown => Self::Unknown,
-            DomainHarnessKind::ClaudeCode => Self::ClaudeCode,
-            DomainHarnessKind::Codex => Self::Codex,
-            DomainHarnessKind::Copilot => Self::Copilot,
-            DomainHarnessKind::Opencode => Self::Opencode,
-            DomainHarnessKind::Pi => Self::Pi,
-        }
-    }
-}
-
-impl From<HarnessKind> for DomainHarnessKind {
-    fn from(value: HarnessKind) -> Self {
-        match value {
-            HarnessKind::Unknown => Self::Unknown,
-            HarnessKind::ClaudeCode => Self::ClaudeCode,
-            HarnessKind::Codex => Self::Codex,
-            HarnessKind::Copilot => Self::Copilot,
-            HarnessKind::Opencode => Self::Opencode,
-            HarnessKind::Pi => Self::Pi,
-        }
-    }
-}
-
 impl From<DomainHarnessSession> for HarnessSession {
     fn from(value: DomainHarnessSession) -> Self {
         Self {
-            harness: HarnessKind::from(value.harness) as i32,
+            harness: value.harness as i32,
             session_id: value.session.into(),
         }
     }
@@ -63,8 +37,7 @@ impl TryFrom<HarnessSession> for DomainHarnessSession {
 
     fn try_from(value: HarnessSession) -> Result<Self, Self::Error> {
         let harness = HarnessKind::try_from(value.harness)
-            .map_err(|_| HarnessSessionParseError::UnknownHarnessKind(value.harness))?
-            .into();
+            .map_err(|_| HarnessSessionParseError::UnknownHarnessKind(value.harness))?;
         Ok(Self {
             harness,
             session: NativeSessionId::from(value.session_id),
@@ -161,7 +134,7 @@ impl From<DomainMessage> for Message {
             id: Some(Uuid {
                 value: value.id.0.into_bytes().to_vec(),
             }),
-            harness: HarnessKind::from(value.session.harness) as i32,
+            harness: value.session.harness as i32,
             session_id: value.session.session.into(),
             parent: value.parent.map(Into::into),
             thread: value.thread,
@@ -187,7 +160,7 @@ impl From<DomainMessage> for Message {
 impl From<DomainSession> for Session {
     fn from(value: DomainSession) -> Self {
         Self {
-            harness: HarnessKind::from(value.handle.harness) as i32,
+            harness: value.handle.harness as i32,
             session_id: value.handle.session.into(),
             parent: value.parent.map(Into::into),
             cwd: value.cwd.map(|path| path.to_string_lossy().into_owned()),
@@ -216,14 +189,14 @@ mod tests {
 
     use super::*;
 
-    fn arb_harness_kind() -> impl Strategy<Value = DomainHarnessKind> {
+    fn arb_harness_kind() -> impl Strategy<Value = HarnessKind> {
         prop_oneof![
-            Just(DomainHarnessKind::Unknown),
-            Just(DomainHarnessKind::ClaudeCode),
-            Just(DomainHarnessKind::Codex),
-            Just(DomainHarnessKind::Copilot),
-            Just(DomainHarnessKind::Opencode),
-            Just(DomainHarnessKind::Pi),
+            Just(HarnessKind::Unknown),
+            Just(HarnessKind::ClaudeCode),
+            Just(HarnessKind::Codex),
+            Just(HarnessKind::Copilot),
+            Just(HarnessKind::Opencode),
+            Just(HarnessKind::Pi),
         ]
     }
 
@@ -240,6 +213,41 @@ mod tests {
             let pb: HarnessSession = hs.clone().into();
             prop_assert_eq!(DomainHarnessSession::try_from(pb).unwrap(), hs);
         }
+    }
+
+    /// `ai.agent.HarnessKind` is extern-pathed to the domain enum, so its discriminants are the wire
+    /// values and nothing generated from `agent.proto` keeps the two in step.
+    #[rstest]
+    fn harness_kind_matches_the_proto_enum() {
+        use std::collections::BTreeMap;
+
+        use prost::Message as _;
+
+        let descriptors = prost_types::FileDescriptorSet::decode(
+            include_bytes!(concat!(env!("OUT_DIR"), "/file_descriptor_set.bin")).as_slice(),
+        )
+        .unwrap();
+        let proto = descriptors
+            .file
+            .iter()
+            .filter(|file| file.package() == "ai.agent")
+            .flat_map(|file| &file.enum_type)
+            .find(|e| e.name() == "HarnessKind")
+            .unwrap();
+        let wire: BTreeMap<i32, String> = proto
+            .value
+            .iter()
+            .map(|v| {
+                let variant = v.name().strip_prefix("HARNESS_KIND_").unwrap();
+                let camel = variant.split('_').map(|w| w[..1].to_owned() + &w[1..].to_lowercase());
+                (v.number(), camel.collect())
+            })
+            .collect();
+
+        let domain: BTreeMap<i32, String> = (0..=i32::from(u8::MAX))
+            .filter_map(|n| HarnessKind::try_from(n).ok().map(|kind| (n, format!("{kind:?}"))))
+            .collect();
+        assert_eq!(domain, wire);
     }
 
     #[rstest]
@@ -315,7 +323,7 @@ mod tests {
         let msg = DomainMessage::builder()
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .session(DomainHarnessSession {
-                harness: DomainHarnessKind::Codex,
+                harness: HarnessKind::Codex,
                 session: NativeSessionId::from("s".to_owned()),
             })
             .source_id(SourceId::from("src".to_owned()))

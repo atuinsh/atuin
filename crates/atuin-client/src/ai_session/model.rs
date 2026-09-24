@@ -11,6 +11,7 @@ use typed_builder::TypedBuilder;
 
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "proto", derive(prost::Enumeration))]
 pub enum HarnessKind {
     Unknown = 0,
     ClaudeCode = 1,

@@ -435,6 +435,7 @@ dependencies = [
  "palette",
  "pretty_assertions",
  "proptest",
+ "prost",
  "rand 0.8.7",
  "regex",
  "reqwest",

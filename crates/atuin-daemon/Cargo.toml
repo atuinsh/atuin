@@ -13,7 +13,7 @@ version.workspace = true
 
 [dependencies]
 async-stream = { workspace = true }
-atuin-client = { workspace = true }
+atuin-client = { workspace = true, features = ["proto"] }
 atuin-common = { workspace = true, features = ["ai", "os", "proto", "sqlite"] }
 atuin-domain = { workspace = true }
 atuin-history = { workspace = true }

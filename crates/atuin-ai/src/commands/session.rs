@@ -8,6 +8,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{self, IsTerminal, Write};
 
+use atuin_client::ai_session::HarnessKind;
 use atuin_client::settings::Settings;
 use atuin_common::string::highlighted::{HighlightedStr, HighlightedTextProto};
 use atuin_daemon::AiClient;
@@ -74,7 +75,7 @@ enum SubCmd {
 
     Import {
         #[arg(long, value_parser = parse_harness)]
-        harness: Option<agent::HarnessKind>,
+        harness: Option<HarnessKind>,
     },
 }
 
@@ -89,12 +90,12 @@ enum HarnessArg {
 }
 
 impl HarnessArg {
-    fn to_pb(self) -> agent::HarnessKind {
+    fn to_pb(self) -> HarnessKind {
         match self {
-            Self::ClaudeCode => agent::HarnessKind::ClaudeCode,
-            Self::Codex => agent::HarnessKind::Codex,
-            Self::Opencode => agent::HarnessKind::Opencode,
-            Self::Pi => agent::HarnessKind::Pi,
+            Self::ClaudeCode => HarnessKind::ClaudeCode,
+            Self::Codex => HarnessKind::Codex,
+            Self::Opencode => HarnessKind::Opencode,
+            Self::Pi => HarnessKind::Pi,
         }
     }
 }
@@ -302,7 +303,7 @@ async fn transcript(client: &mut AiClient, selector: &str, style: Style) -> Resu
 async fn search(
     client: &mut AiClient,
     query: &str,
-    harness: Option<agent::HarnessKind>,
+    harness: Option<HarnessKind>,
     limit: u32,
     style: Style,
 ) -> Result<()> {
@@ -459,11 +460,7 @@ async fn tail(client: &mut AiClient, style: Style) -> Result<()> {
     Ok(())
 }
 
-async fn import(
-    client: &mut AiClient,
-    harness: Option<agent::HarnessKind>,
-    style: Style,
-) -> Result<()> {
+async fn import(client: &mut AiClient, harness: Option<HarnessKind>, style: Style) -> Result<()> {
     let mut stream = client.import_sessions(harness).await?;
 
     // `--style json` is one document, so its per-session progress and final summary are collected
@@ -836,13 +833,13 @@ fn role_color(role: i32) -> Ansi {
 }
 
 fn harness_color(harness: i32) -> Ansi {
-    match agent::HarnessKind::try_from(harness) {
-        Ok(agent::HarnessKind::ClaudeCode) => Ansi::Magenta,
-        Ok(agent::HarnessKind::Codex) => Ansi::Green,
-        Ok(agent::HarnessKind::Copilot) => Ansi::Blue,
-        Ok(agent::HarnessKind::Opencode) => Ansi::Cyan,
-        Ok(agent::HarnessKind::Pi) => Ansi::Yellow,
-        Ok(agent::HarnessKind::Unknown) | Err(_) => Ansi::Dim,
+    match HarnessKind::try_from(harness) {
+        Ok(HarnessKind::ClaudeCode) => Ansi::Magenta,
+        Ok(HarnessKind::Codex) => Ansi::Green,
+        Ok(HarnessKind::Copilot) => Ansi::Blue,
+        Ok(HarnessKind::Opencode) => Ansi::Cyan,
+        Ok(HarnessKind::Pi) => Ansi::Yellow,
+        Ok(HarnessKind::Unknown) | Err(_) => Ansi::Dim,
     }
 }
 
@@ -903,11 +900,11 @@ fn rfc3339(ts: Option<&prost_types::Timestamp>) -> Option<String> {
     to_datetime(ts).map(|dt| dt.to_rfc3339())
 }
 
-fn parse_harness(value: &str) -> Result<agent::HarnessKind, String> {
+fn parse_harness(value: &str) -> Result<HarnessKind, String> {
     match value {
-        "claude-code" => Ok(agent::HarnessKind::ClaudeCode),
-        "codex" => Ok(agent::HarnessKind::Codex),
-        "pi" => Ok(agent::HarnessKind::Pi),
+        "claude-code" => Ok(HarnessKind::ClaudeCode),
+        "codex" => Ok(HarnessKind::Codex),
+        "pi" => Ok(HarnessKind::Pi),
         other => Err(format!("unknown harness `{other}` (expected claude-code, codex, or pi)")),
     }
 }
@@ -916,13 +913,13 @@ fn parse_harness(value: &str) -> Result<agent::HarnessKind, String> {
 /// (including ones no capture path yet produces) so a stored value always renders. Shared with the
 /// MCP session-search renderer.
 pub fn harness_name(harness: i32) -> &'static str {
-    match agent::HarnessKind::try_from(harness) {
-        Ok(agent::HarnessKind::ClaudeCode) => "claude-code",
-        Ok(agent::HarnessKind::Codex) => "codex",
-        Ok(agent::HarnessKind::Copilot) => "copilot",
-        Ok(agent::HarnessKind::Opencode) => "opencode",
-        Ok(agent::HarnessKind::Pi) => "pi",
-        Ok(agent::HarnessKind::Unknown) | Err(_) => "unknown",
+    match HarnessKind::try_from(harness) {
+        Ok(HarnessKind::ClaudeCode) => "claude-code",
+        Ok(HarnessKind::Codex) => "codex",
+        Ok(HarnessKind::Copilot) => "copilot",
+        Ok(HarnessKind::Opencode) => "opencode",
+        Ok(HarnessKind::Pi) => "pi",
+        Ok(HarnessKind::Unknown) | Err(_) => "unknown",
     }
 }
 
@@ -1183,7 +1180,7 @@ mod tests {
 
     use super::*;
 
-    fn session(harness: agent::HarnessKind, id: &str) -> agent::Session {
+    fn session(harness: HarnessKind, id: &str) -> agent::Session {
         agent::Session {
             harness: harness as i32,
             session_id: id.to_owned(),
@@ -1201,10 +1198,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case("claude-code", agent::HarnessKind::ClaudeCode)]
-    #[case("codex", agent::HarnessKind::Codex)]
-    #[case("pi", agent::HarnessKind::Pi)]
-    fn parse_harness_maps_names(#[case] input: &str, #[case] want: agent::HarnessKind) {
+    #[case("claude-code", HarnessKind::ClaudeCode)]
+    #[case("codex", HarnessKind::Codex)]
+    #[case("pi", HarnessKind::Pi)]
+    fn parse_harness_maps_names(#[case] input: &str, #[case] want: HarnessKind) {
         assert_eq!(parse_harness(input).unwrap(), want);
     }
 
@@ -1215,10 +1212,7 @@ mod tests {
 
     #[rstest]
     fn latest_picks_the_first_listed() {
-        let sessions = vec![
-            session(agent::HarnessKind::Codex, "newest"),
-            session(agent::HarnessKind::Pi, "old"),
-        ];
+        let sessions = vec![session(HarnessKind::Codex, "newest"), session(HarnessKind::Pi, "old")];
         assert_eq!(select_session(sessions, "latest").unwrap().session_id, "newest");
     }
 
@@ -1232,62 +1226,55 @@ mod tests {
         // `resolve` now hands `select_session` just the newest session for `latest`, so a
         // one-element list must still resolve.
         let handle =
-            select_session(vec![session(agent::HarnessKind::ClaudeCode, "only")], "latest")
-                .unwrap();
+            select_session(vec![session(HarnessKind::ClaudeCode, "only")], "latest").unwrap();
         assert_eq!(handle.session_id, "only");
-        assert_eq!(handle.harness, agent::HarnessKind::ClaudeCode as i32);
+        assert_eq!(handle.harness, HarnessKind::ClaudeCode as i32);
     }
 
     #[rstest]
     fn exact_id_resolves_the_harness_from_the_listing() {
-        let sessions = vec![
-            session(agent::HarnessKind::Codex, "aaa"),
-            session(agent::HarnessKind::ClaudeCode, "bbb"),
-        ];
+        let sessions =
+            vec![session(HarnessKind::Codex, "aaa"), session(HarnessKind::ClaudeCode, "bbb")];
         let handle = select_session(sessions, "bbb").unwrap();
         assert_eq!(handle.session_id, "bbb");
-        assert_eq!(handle.harness, agent::HarnessKind::ClaudeCode as i32);
+        assert_eq!(handle.harness, HarnessKind::ClaudeCode as i32);
     }
 
     #[rstest]
     fn id_prefix_resolves_a_session() {
         // `list` prints ids truncated, so a copied prefix must resolve.
         let sessions = vec![
-            session(agent::HarnessKind::Codex, "abcdef0123456789"),
-            session(agent::HarnessKind::ClaudeCode, "fedcba9876543210"),
+            session(HarnessKind::Codex, "abcdef0123456789"),
+            session(HarnessKind::ClaudeCode, "fedcba9876543210"),
         ];
         let handle = select_session(sessions, "abcdef012345").unwrap();
         assert_eq!(handle.session_id, "abcdef0123456789");
-        assert_eq!(handle.harness, agent::HarnessKind::Codex as i32);
+        assert_eq!(handle.harness, HarnessKind::Codex as i32);
     }
 
     #[rstest]
     fn ambiguous_prefix_is_an_error() {
-        let sessions = vec![
-            session(agent::HarnessKind::Codex, "abc111"),
-            session(agent::HarnessKind::ClaudeCode, "abc222"),
-        ];
+        let sessions =
+            vec![session(HarnessKind::Codex, "abc111"), session(HarnessKind::ClaudeCode, "abc222")];
         assert!(select_session(sessions, "abc").is_err());
     }
 
     #[rstest]
     fn unknown_id_is_an_error() {
-        let sessions = vec![session(agent::HarnessKind::Codex, "aaa")];
+        let sessions = vec![session(HarnessKind::Codex, "aaa")];
         assert!(select_session(sessions, "zzz").is_err());
     }
 
     #[rstest]
     fn ambiguous_id_across_harnesses_is_an_error() {
-        let sessions = vec![
-            session(agent::HarnessKind::Codex, "dup"),
-            session(agent::HarnessKind::ClaudeCode, "dup"),
-        ];
+        let sessions =
+            vec![session(HarnessKind::Codex, "dup"), session(HarnessKind::ClaudeCode, "dup")];
         assert!(select_session(sessions, "dup").is_err());
     }
 
     #[rstest]
     fn session_json_has_a_stable_shape() {
-        let mut s = session(agent::HarnessKind::ClaudeCode, "abcdef0123456789");
+        let mut s = session(HarnessKind::ClaudeCode, "abcdef0123456789");
         s.message_count = 3;
         s.tokens = Some(agent::Tokens {
             input: 10,
@@ -1309,8 +1296,8 @@ mod tests {
     }
 
     #[rstest]
-    #[case(agent::HarnessKind::ClaudeCode as i32, "claude-code")]
-    #[case(agent::HarnessKind::Pi as i32, "pi")]
+    #[case(HarnessKind::ClaudeCode as i32, "claude-code")]
+    #[case(HarnessKind::Pi as i32, "pi")]
     #[case(999, "unknown")]
     fn harness_name_maps_known_and_unknown(#[case] raw: i32, #[case] expected: &str) {
         assert_eq!(harness_name(raw), expected);
@@ -1437,10 +1424,10 @@ mod tests {
 
     #[rstest]
     fn header_includes_title_when_present() {
-        let mut s = session(agent::HarnessKind::ClaudeCode, "abcdef0123456789");
+        let mut s = session(HarnessKind::ClaudeCode, "abcdef0123456789");
         s.title = Some("My Session".to_owned());
         assert_eq!(
-            tail_header("abcdef0123456789", agent::HarnessKind::ClaudeCode as i32, Some(&s), false),
+            tail_header("abcdef0123456789", HarnessKind::ClaudeCode as i32, Some(&s), false),
             "● abcdef012345 · claude-code · My Session"
         );
     }
@@ -1448,7 +1435,7 @@ mod tests {
     #[rstest]
     fn header_omits_title_when_absent() {
         assert_eq!(
-            tail_header("abcdef0123456789", agent::HarnessKind::ClaudeCode as i32, None, false),
+            tail_header("abcdef0123456789", HarnessKind::ClaudeCode as i32, None, false),
             "● abcdef012345 · claude-code"
         );
     }
@@ -1469,11 +1456,11 @@ mod tests {
     }
 
     #[rstest]
-    #[case(HarnessArg::ClaudeCode, agent::HarnessKind::ClaudeCode)]
-    #[case(HarnessArg::Codex, agent::HarnessKind::Codex)]
-    #[case(HarnessArg::Opencode, agent::HarnessKind::Opencode)]
-    #[case(HarnessArg::Pi, agent::HarnessKind::Pi)]
-    fn harness_arg_maps_to_pb(#[case] arg: HarnessArg, #[case] expected: agent::HarnessKind) {
+    #[case(HarnessArg::ClaudeCode, HarnessKind::ClaudeCode)]
+    #[case(HarnessArg::Codex, HarnessKind::Codex)]
+    #[case(HarnessArg::Opencode, HarnessKind::Opencode)]
+    #[case(HarnessArg::Pi, HarnessKind::Pi)]
+    fn harness_arg_maps_to_pb(#[case] arg: HarnessArg, #[case] expected: HarnessKind) {
         assert_eq!(arg.to_pb(), expected);
     }
 
@@ -1500,7 +1487,7 @@ mod tests {
     #[rstest]
     fn search_match_json_carries_plain_text_and_match_ranges() {
         let m = SearchSessionsMatch {
-            session: Some(session(agent::HarnessKind::ClaudeCode, "abc")),
+            session: Some(session(HarnessKind::ClaudeCode, "abc")),
             title: Some(HighlightedTextProto {
                 open: 0xE000,
                 close: 0xE001,
