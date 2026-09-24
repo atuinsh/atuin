@@ -27,10 +27,24 @@ pub enum JsonlError {
 pub trait JsonlExt: Stream<Item = io::Result<Line>> + Sized {
     /// Deserialize each non-blank line as a `T`, yielded with the line it came from.
     fn json<T: DeserializeOwned>(self) -> impl Stream<Item = Result<(Line, T), JsonlError>> {
-        self.filter_map(|line| {
+        self.json_with(|bytes| serde_json::from_slice(bytes))
+    }
+
+    /// [`Self::json`] for files a JavaScript program wrote, read as `JSON.parse` reads them
+    /// (see [`crate::json::js`]).
+    fn js_json<T: DeserializeOwned>(self) -> impl Stream<Item = Result<(Line, T), JsonlError>> {
+        self.json_with(|bytes| crate::json::js::from_slice(bytes))
+    }
+
+    /// Each non-blank line decoded by `parse`, yielded with the line it came from.
+    fn json_with<T>(
+        self,
+        parse: impl Fn(&[u8]) -> serde_json::Result<T>,
+    ) -> impl Stream<Item = Result<(Line, T), JsonlError>> {
+        self.filter_map(move |line| {
             let item = match line {
                 Ok(line) if line.bytes.trim_ascii().is_empty() => None,
-                Ok(line) => Some(match serde_json::from_slice(&line.bytes) {
+                Ok(line) => Some(match parse(&line.bytes) {
                     Ok(value) => Ok((line, value)),
                     Err(source) => Err(JsonlError::Parse {
                         source,
