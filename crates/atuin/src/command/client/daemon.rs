@@ -18,14 +18,14 @@ use clap::Subcommand;
 use daemonix::Daemonize;
 use eyre::{Result, WrapErr, bail, eyre};
 
+use crate::i18n::fl;
+
 #[derive(clap::Args, Debug)]
 pub struct Cmd {
-    /// Internal flag for daemonization
-    #[arg(long, hide = true)]
+    #[arg(long, hide = true, help = fl!("arg-daemon-daemonize"))]
     daemonize: bool,
 
-    /// Also write daemon logs to the console (useful for debugging)
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-daemon-show-logs"))]
     show_logs: bool,
 
     #[command(subcommand)]
@@ -35,27 +35,25 @@ pub struct Cmd {
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum SubCmd {
-    /// Start the daemon server
+    #[command(about = fl!("cmd-daemon-start"))]
     Start {
         #[arg(long, hide = true)]
         daemonize: bool,
 
-        /// Also write daemon logs to the console (useful for debugging)
-        #[arg(long)]
+        #[arg(long, help = fl!("arg-daemon-show-logs"))]
         show_logs: bool,
 
-        /// Force start: kill existing daemon process and reset the socket
-        #[arg(long)]
+        #[arg(long, help = fl!("arg-daemon-start-force"))]
         force: bool,
     },
 
-    /// Show the daemon's current status
+    #[command(about = fl!("cmd-daemon-status"))]
     Status,
 
-    /// Stop the daemon gracefully
+    #[command(about = fl!("cmd-daemon-stop"))]
     Stop,
 
-    /// Restart the daemon (stop, then start in background)
+    #[command(about = fl!("cmd-daemon-restart"))]
     Restart,
 }
 
@@ -195,7 +193,7 @@ fn open_lock_file(path: &Path) -> Result<File> {
 async fn wait_for_lock(path: &Path, timeout: Duration) -> Result<File> {
     let file = open_lock_file(path)?;
 
-    let outcome = Backoff::Linear(LOCK_POLL)
+    let outcome = Backoff::Constant(LOCK_POLL)
         .retry_sync(
             || match file.try_lock() {
                 Ok(()) => ControlFlow::Break(Ok(())),
@@ -276,7 +274,14 @@ fn startup_timeout(settings: &Settings) -> Duration {
 /// An error that occurred while trying to remove a socket.
 #[cfg(unix)]
 #[derive(Debug, thiserror::Error)]
-#[error("failed to remove daemon socket {}: {source}", .path.display())]
+#[error(
+    "{}",
+    fl!(
+        "daemon-remove-socket-failed",
+        path = .path.display().to_string(),
+        source = .source.to_string()
+    )
+)]
 struct RemoveSocketError {
     path: PathBuf,
     source: std::io::Error,
@@ -326,7 +331,7 @@ fn remove_stale_socket_if_present(settings: &Settings) -> Result<(), RemoveSocke
 }
 
 async fn wait_until_ready(settings: &Settings, timeout: Duration) -> Result<HistoryClient> {
-    Backoff::Linear(STARTUP_POLL)
+    Backoff::Constant(STARTUP_POLL)
         .retry(
             || async move {
                 match probe(settings).await {
@@ -453,24 +458,49 @@ pub async fn ready_client(settings: &Settings) -> Result<HistoryClient> {
 
 /// Send a request to the daemon, first ensuring (via [`ready_client`]) that it is running and
 /// speaks our version.
-async fn try_with_restart<C, F, R>(settings: &Settings, send_request: F, context: C) -> Result<R>
+async fn try_with_restart<F, R>(settings: &Settings, send_request: F) -> Result<R>
 where
-    F: AsyncFn(&mut HistoryClient, C) -> Result<R> + Sync,
+    F: AsyncFnOnce(&mut HistoryClient) -> Result<R> + Sync,
     R: atuin_daemon::grpc::VersionedReply,
 {
-    let mut client = ready_client(settings).await?;
-    let resp = send_request(&mut client, context).await?;
+    let client = ready_client(settings).await?;
+    send_checked(settings, client, send_request).await
+}
+
+/// Send a request to an already-running daemon that speaks our version.
+///
+/// This function never starts or restarts the daemon.
+async fn try_without_restart<F, R>(settings: &Settings, send_request: F) -> Result<R>
+where
+    F: AsyncFnOnce(&mut HistoryClient) -> Result<R> + Sync,
+    R: atuin_daemon::grpc::VersionedReply,
+{
+    let client = match probe(settings).await {
+        Probe::Ready(client) => client,
+        Probe::NeedsRestart(reason) => bail!(reason),
+        Probe::Unreachable(err) => return Err(err),
+    };
+    send_checked(settings, client, send_request).await
+}
+
+/// Send a message to the daemon and ensure the response is [compatible](ensure_reply_compatible).
+async fn send_checked<F, R>(
+    settings: &Settings,
+    mut client: HistoryClient,
+    send_request: F,
+) -> Result<R>
+where
+    F: AsyncFnOnce(&mut HistoryClient) -> Result<R> + Sync,
+    R: atuin_daemon::grpc::VersionedReply,
+{
+    let resp = send_request(&mut client).await?;
     ensure_reply_compatible(settings, resp.version(), resp.protocol())?;
     Ok(resp)
 }
 
 pub async fn start_history(settings: &Settings, history: History) -> Result<HistoryId> {
-    let resp = try_with_restart(
-        settings,
-        async |client, history| client.start_history(history).await,
-        history,
-    )
-    .await?;
+    let resp =
+        try_with_restart(settings, async |client| client.start_history(history).await).await?;
     let id = resp.id.ok_or_else(|| eyre::eyre!("daemon reply is missing the history id"))?;
     Ok(HistoryId::try_from(id)?)
 }
@@ -481,25 +511,23 @@ pub async fn end_history(
     duration: Option<std::time::Duration>,
     exit: i64,
 ) -> Result<()> {
-    try_with_restart(settings, async |client, id| client.end_history(id, duration, exit).await, id)
+    try_without_restart(settings, async |client| client.end_history(id, duration, exit).await)
         .await?;
     Ok(())
 }
 
 pub async fn cancel_history(settings: &Settings, id: HistoryId) -> Result<()> {
-    try_with_restart(settings, async |client, id| client.cancel_history(id).await, id).await?;
+    try_without_restart(settings, async |client| client.cancel_history(id).await).await?;
     Ok(())
 }
 
 pub async fn delete_history(settings: &Settings, ids: Vec<HistoryId>) -> Result<u64> {
-    let reply =
-        try_with_restart(settings, async |client, ids| client.delete_history(ids).await, ids)
-            .await?;
+    let reply = try_with_restart(settings, async |client| client.delete_history(ids).await).await?;
     Ok(reply.deleted)
 }
 
 pub async fn rebuild_history(settings: &Settings) -> Result<()> {
-    try_with_restart(settings, async |client, ()| client.rebuild_history().await, ()).await?;
+    try_with_restart(settings, async |client| client.rebuild_history().await).await?;
     Ok(())
 }
 
@@ -553,7 +581,7 @@ async fn stop_cmd(settings: &Settings) -> Result<()> {
     }
 }
 
-async fn restart_cmd(settings: &Settings) -> Result<()> {
+pub(super) async fn restart_cmd(settings: &Settings) -> Result<()> {
     // Stop if running
     match probe(settings).await {
         Probe::Ready(_) | Probe::NeedsRestart(_) => {
@@ -657,6 +685,19 @@ mod tests {
     use rstest::{fixture, rstest};
 
     use super::*;
+
+    #[cfg(unix)]
+    #[rstest]
+    fn remove_socket_error_names_the_path_and_cause() {
+        let err = RemoveSocketError {
+            path: PathBuf::from("/run/atuin.sock"),
+            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        };
+        assert_eq!(
+            err.to_string(),
+            "failed to remove daemon socket /run/atuin.sock: permission denied"
+        );
+    }
 
     #[rstest]
     #[case::matches(DAEMON_VERSION, DAEMON_PROTOCOL_VERSION, true)]

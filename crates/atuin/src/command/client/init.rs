@@ -3,6 +3,8 @@ use clap::{Parser, ValueEnum};
 use eyre::Result;
 use tracing::instrument;
 
+use crate::i18n::fl;
+
 mod bash;
 mod fish;
 mod nu;
@@ -14,16 +16,13 @@ mod zsh;
 pub struct Cmd {
     shell: Shell,
 
-    /// Disable the binding of CTRL-R to atuin
-    #[clap(long)]
+    #[clap(long, help = fl!("arg-init-disable-ctrl-r"))]
     disable_ctrl_r: bool,
 
-    /// Disable the binding of the Up Arrow key to atuin
-    #[clap(long)]
+    #[clap(long, help = fl!("arg-init-disable-up-arrow"))]
     disable_up_arrow: bool,
 
-    /// Disable the binding of ? to Atuin AI
-    #[clap(long)]
+    #[clap(long, help = fl!("arg-init-disable-ai"))]
     disable_ai: bool,
 }
 
@@ -31,17 +30,17 @@ pub struct Cmd {
 #[value(rename_all = "lower")]
 #[allow(clippy::enum_variant_names, clippy::doc_markdown)]
 pub enum Shell {
-    /// Zsh setup
+    #[value(help = fl!("value-init-shell-zsh"))]
     Zsh,
-    /// Bash setup
+    #[value(help = fl!("value-init-shell-bash"))]
     Bash,
-    /// Fish setup
+    #[value(help = fl!("value-init-shell-fish"))]
     Fish,
-    /// Nu setup
+    #[value(help = fl!("value-init-shell-nu"))]
     Nu,
-    /// Xonsh setup
+    #[value(help = fl!("value-init-shell-xonsh"))]
     Xonsh,
-    /// PowerShell setup
+    #[value(help = fl!("value-init-shell-powershell"))]
     PowerShell,
 }
 

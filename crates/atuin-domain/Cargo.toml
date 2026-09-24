@@ -22,6 +22,7 @@ http = { workspace = true }
 parking_lot = { workspace = true }
 reqwest = { workspace = true }
 reqwest-middleware = { workspace = true }
+secrecy = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

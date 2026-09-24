@@ -17,7 +17,8 @@
 ## date format used, either "us" or "uk"
 # dialect = "us"
 
-## default timezone to use when displaying time
+## default timezone to use when displaying time, and when reading date filters
+## (e.g. `--before`/`--after`) that don't carry an explicit offset
 ## either "l", "local" to use the system's current local timezone, or an offset
 ## from UTC in the format of "<+|->H[H][:M[M][:S[S]]]"
 ## for example: "+9", "-05", "+03:30", "-01:23:45", etc.
@@ -61,12 +62,12 @@
 # filter_mode_shell_up_key_binding = "global"
 
 ## With workspace filtering enabled, Atuin will filter for commands executed
-## in any directory within a git repository tree (default: false).
+## in any directory within a git repository tree (default: true).
 ##
-## To use workspace mode by default when available, set this to true and
-## set filter_mode to "workspace" or leave it unspecified and
-## set search.filters to include "workspace" before other filter modes.
-# workspaces = false
+## To use workspace mode by default when available, set filter_mode to
+## "workspace" or leave it unspecified and set search.filters to include
+## "workspace" before other filter modes.
+# workspaces = true
 
 ## which display style to use
 ## possible values: auto, full, compact

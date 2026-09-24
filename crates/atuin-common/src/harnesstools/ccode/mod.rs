@@ -29,7 +29,7 @@ impl Harness for Ccode {
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
         // Claude Code reads hooks from its settings.json.
         let config_path = home_dir().join(".claude").join("settings.json");
-        json_hooks::install(&config_path, "^Bash$", "atuin hook claude-code").await?;
+        json_hooks::install(&config_path, "^Bash$", self.name()).await?;
         Ok(config_path)
     }
 }

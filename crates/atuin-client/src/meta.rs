@@ -6,6 +6,7 @@ use atuin_common::db;
 use atuin_common::db::sqlite::{Journaling, Sqlite, SqliteBuilder};
 use atuin_domain::record::HostId;
 use eyre::{Result, eyre};
+use secrecy::{ExposeSecret, SecretString};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio::sync::OnceCell;
@@ -25,6 +26,14 @@ const KEY_LATEST_VERSION: &str = "latest_version";
 const KEY_SESSION: &str = "session";
 const KEY_HUB_SESSION: &str = "hub_session";
 const KEY_FILES_MIGRATED: &str = "files_migrated";
+
+const HUB_TOKEN_PREFIX: &str = "atapi_";
+
+/// Whether `token` is a Hub API token rather than a legacy CLI session token.
+#[must_use]
+pub fn is_hub_token(token: &SecretString) -> bool {
+    token.expose_secret().starts_with(HUB_TOKEN_PREFIX)
+}
 
 pub struct MetaStore {
     sqlite: Sqlite,
@@ -149,12 +158,12 @@ impl MetaStore {
         self.set(KEY_LATEST_VERSION, version).await
     }
 
-    pub async fn session_token(&self) -> Result<Option<String>> {
-        self.get(KEY_SESSION).await
+    pub async fn session_token(&self) -> Result<Option<SecretString>> {
+        Ok(self.get(KEY_SESSION).await?.map(SecretString::from))
     }
 
-    pub async fn save_session(&self, token: &str) -> Result<()> {
-        self.set(KEY_SESSION, token).await
+    pub async fn save_session(&self, token: &SecretString) -> Result<()> {
+        self.set(KEY_SESSION, token.expose_secret()).await
     }
 
     pub async fn delete_session(&self) -> Result<()> {
@@ -162,17 +171,24 @@ impl MetaStore {
     }
 
     pub async fn logged_in(&self) -> Result<bool> {
-        Ok(self.session_token().await?.is_some() || self.hub_session_token().await?.is_some())
+        let (logged_in,): (bool,) =
+            db::query_as("SELECT EXISTS (SELECT 1 FROM meta WHERE key IN (?1, ?2))")
+                .bind(KEY_SESSION)
+                .bind(KEY_HUB_SESSION)
+                .fetch_one(self.sqlite.pool())
+                .await?;
+
+        Ok(logged_in)
     }
 
     // Hub session methods (separate from sync session, used for Hub-specific features like AI)
 
-    pub async fn hub_session_token(&self) -> Result<Option<String>> {
-        self.get(KEY_HUB_SESSION).await
+    pub async fn hub_session_token(&self) -> Result<Option<SecretString>> {
+        Ok(self.get(KEY_HUB_SESSION).await?.map(SecretString::from))
     }
 
-    pub async fn save_hub_session(&self, token: &str) -> Result<()> {
-        self.set(KEY_HUB_SESSION, token).await
+    pub async fn save_hub_session(&self, token: &SecretString) -> Result<()> {
+        self.set(KEY_HUB_SESSION, token.expose_secret()).await
     }
 
     pub async fn delete_hub_session(&self) -> Result<()> {
@@ -180,7 +196,7 @@ impl MetaStore {
     }
 
     pub async fn hub_logged_in(&self) -> Result<bool> {
-        Ok(self.hub_session_token().await?.is_some())
+        Ok(self.get(KEY_HUB_SESSION).await?.is_some())
     }
 
     // File migration: on first open, migrate old plain-text files into the database.
@@ -256,9 +272,10 @@ impl MetaStore {
         if session_path.exists()
             && let Ok(value) = fs_err::read_to_string(&session_path)
         {
-            let value = value.trim();
-            if !value.is_empty() {
-                self.set(KEY_SESSION, value).await?;
+            let value = SecretString::from(value);
+            let token = value.expose_secret().trim();
+            if !token.is_empty() {
+                self.set(KEY_SESSION, token).await?;
             }
         }
 
@@ -329,14 +346,26 @@ mod tests {
     #[tokio::test]
     async fn test_session_crud(#[future(awt)] store: MetaStore) {
         assert!(!store.logged_in().await.unwrap());
-        assert_eq!(store.session_token().await.unwrap(), None);
+        assert!(store.session_token().await.unwrap().is_none());
 
-        store.save_session("tok123").await.unwrap();
+        store.save_session(&"tok123".into()).await.unwrap();
         assert!(store.logged_in().await.unwrap());
-        assert_eq!(store.session_token().await.unwrap(), Some("tok123".to_string()));
+        assert_eq!(
+            store.session_token().await.unwrap().as_ref().map(ExposeSecret::expose_secret),
+            Some("tok123")
+        );
 
         store.delete_session().await.unwrap();
         assert!(!store.logged_in().await.unwrap());
+    }
+
+    #[rstest]
+    #[case::sync(KEY_SESSION)]
+    #[case::hub(KEY_HUB_SESSION)]
+    #[tokio::test]
+    async fn logged_in_with_either_session(#[future(awt)] store: MetaStore, #[case] key: &str) {
+        store.set(key, "tok123").await.unwrap();
+        assert!(store.logged_in().await.unwrap());
     }
 
     #[rstest]
@@ -348,6 +377,7 @@ mod tests {
         assert_eq!(store.latest_version().await.unwrap(), Some("1.2.3".to_string()));
     }
 
+    #[rstest]
     #[tokio::test]
     async fn memory_store_skips_file_migration() {
         let store = MetaStore::new(":memory:", Duration::from_secs(2)).await.unwrap();

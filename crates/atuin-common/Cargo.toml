@@ -12,7 +12,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
-ai = ["sqlite"]
+ai = ["dep:shlex", "sqlite"]
 ansi = ["dep:atuin-vt100"]
 db = ["dep:sqlx"]
 os = ["dep:rustix"]
@@ -51,10 +51,12 @@ rmp = { workspace = true }
 schemars = { workspace = true }
 rusty_paserk = { workspace = true }
 rusty_paseto = { workspace = true }
+secrecy = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
+shlex = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }

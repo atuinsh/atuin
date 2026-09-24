@@ -16,12 +16,13 @@ mod wire;
 
 use event::HookEvent;
 
+use crate::i18n::fl;
+
 #[derive(Subcommand, Debug)]
 enum Action {
-    /// Install hooks for an AI agent to capture commands in atuin history
+    #[command(about = fl!("cmd-hook-install"))]
     Install {
-        /// Agent to install hooks for (e.g., "claude-code")
-        #[arg(value_name = "AGENT")]
+        #[arg(value_name = "AGENT", help = fl!("arg-hook-install-agent"))]
         agent: String,
     },
 }
@@ -32,8 +33,7 @@ pub struct Cmd {
     #[command(subcommand)]
     action: Option<Action>,
 
-    /// Which agent's hook format to parse (e.g., "claude-code")
-    #[arg(value_name = "AGENT", hide = true)]
+    #[arg(value_name = "AGENT", hide = true, help = fl!("arg-hook-agent"))]
     agent: Option<String>,
 }
 
@@ -140,7 +140,7 @@ mod tests {
     use crate::Atuin;
     use crate::command::{AtuinCmd, client};
 
-    #[test]
+    #[rstest]
     fn parse_hook_agent_command() {
         let cmd = Cmd::try_parse_from(["hook", "codex"]).unwrap();
 
@@ -162,7 +162,7 @@ mod tests {
 
     /// A harness whose author is missing from `KNOWN_AGENTS` would be installable
     /// but invisible to `$all-agent`, and would pollute `$all-user` with its commands.
-    #[test]
+    #[rstest]
     fn every_harness_author_is_a_known_agent() {
         for harness in AnyHarness::all() {
             assert!(
@@ -173,7 +173,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn parse_top_level_hook_command() {
         let cmd = Atuin::try_parse_from(["atuin", "hook", "codex"]).unwrap();
 

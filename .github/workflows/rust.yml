@@ -35,6 +35,10 @@ jobs:
       # leave most cores idle with the default 16 codegen units; more, smaller
       # units let LLVM spread them out. Drop if the timings don't improve.
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "256"
+      # sccache serves compiled objects from Depot's managed WebDAV cache; keep
+      # incremental off (sccache can't cache incremental compilations).
+      RUSTC_WRAPPER: sccache
+      CARGO_INCREMENTAL: "0"
 
     steps:
       - uses: actions/checkout@v7
@@ -50,20 +54,22 @@ jobs:
         with:
           toolchain: 1.98.0
 
-      - uses: actions/cache@v6
+      # rust-cache restores a warm, bounded target/ so cargo skips unchanged
+      # crates; sccache (RUSTC_WRAPPER, env) then serves the crates that DO
+      # compile -- cold, new-branch, or changed -- from Depot's cross-branch
+      # WebDAV cache. rust-cache also caches ~/.cargo and cleans stale target/
+      # artifacts, so the disk stays bounded.
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          # The suffix keeps this entry apart from caches built with the default
-          # release profile: the CARGO_PROFILE_RELEASE_* overrides above change
-          # every unit's fingerprint. Bump it when they change.
-          key: ${{ runner.os }}-cargo-release-nolto-cgu256-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
-          restore-keys: ${{ runner.os }}-cargo-release-nolto-cgu256-
+          key: build
 
       - name: Run cargo build (release)
         run: cargo build --workspace --locked --release
+
+      - name: sccache stats
+        if: ${{ always() }}
+        run: sccache --show-stats
 
   # This used to use cross compilling via `cross` but it's more reliable to just
   # run this on a real illumos (OmniOS) system.
@@ -77,7 +83,7 @@ jobs:
           persist-credentials: false
 
       - name: Test on illumos
-        uses: vmactions/omnios-vm@027e3ec08fed6fb740ab5f300c2605f9de02997a # v1.3.4
+        uses: vmactions/omnios-vm@317e4f8069dad8a65e1520808f1a68ef3fd20565 # v1.3.6
         with:
           # use the latest omnios LTS
           release: "r151054-build"
@@ -103,6 +109,12 @@ jobs:
         os: [depot-ubuntu-24.04-8, depot-macos-26, depot-windows-2025-16]
     runs-on: ${{ matrix.os }}
 
+    env:
+      # sccache serves compiled objects from Depot's managed WebDAV cache; keep
+      # incremental off (sccache can't cache incremental compilations).
+      RUSTC_WRAPPER: sccache
+      CARGO_INCREMENTAL: "0"
+
     steps:
       - uses: actions/checkout@v7
 
@@ -123,17 +135,19 @@ jobs:
         with:
           tool: cargo-nextest
 
-      - uses: actions/cache@v6
+      # rust-cache (warm target skip) + sccache (serves compiled crates from
+      # Depot's cross-branch cache); see the build job.
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-             ~/.cargo/git
-             target
-          key: ${{ runner.os }}-cargo-unit-test-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
-          restore-keys: ${{ runner.os }}-cargo-unit-test-
+          key: unit-test
 
       - name: Run cargo test
         run: cargo nextest run --lib --bins
+
+      - name: sccache stats
+        if: ${{ always() }}
+        run: sccache --show-stats
 
       - name: Show new proptest regressions
         if: ${{ failure() }}
@@ -179,14 +193,13 @@ jobs:
         with:
           toolchain: 1.98.0
 
-      - uses: actions/cache@v6
+      # rust-cache (not sccache) for check/msrv/clippy/docs: these emit metadata
+      # only (no link), which sccache refuses to cache, so sccache gives 0 hits
+      # here. rust-cache instead bounds target/ growth (it cleans stale
+      # artifacts before each save) and keeps these jobs warm.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-             ~/.cargo/git
-             target
-          key: ${{ runner.os }}-cargo-check-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
-          restore-keys: ${{ runner.os }}-cargo-check-
+          key: check
 
       - name: Run cargo check (all features)
         run: cargo check --all-features --workspace
@@ -231,14 +244,10 @@ jobs:
         with:
           toolchain: 1.95.0
 
-      - uses: actions/cache@v6
+      # rust-cache (see check job): sccache can't cache metadata-only builds.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-msrv-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
-          restore-keys: ${{ runner.os }}-cargo-msrv-
+          key: msrv
 
       # Verifies the declared MSRV (workspace.package.rust-version) still holds
       # with all features enabled. --all-features isn't a strict superset (it
@@ -288,11 +297,11 @@ jobs:
         with:
           tool: cargo-nextest
 
-      # rust-cache (not raw actions/cache) because it cleans stale target/
-      # artifacts before every save, so the cache can't accrete unboundedly.
-      # A restored target/ under the old actions/cache had grown to 71 GB,
-      # filling the runner root disk and crashing the worker with ENOSPC. It
-      # also caches selectively and keys on the lockfile + rustc version.
+      # rust-cache (warm target skip) + sccache (serves compiled crates from
+      # Depot's cross-branch cache); see the build job. rust-cache cleans stale
+      # target/ artifacts, so it can't re-accrete the 71 GB that once crashed
+      # the runner with ENOSPC.
+      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
         with:
           key: integration-test
@@ -326,6 +335,15 @@ jobs:
           # at once the runner disk stalls for seconds and unrelated tests miss
           # their 5 s pool-open timeout; tmpfs takes fsync out of the picture.
           TMPDIR: /dev/shm
+          # sccache: wrap rustc + disable incremental (sccache cannot cache
+          # incremental compilation). Endpoint/auth for Depot Cache come from
+          # the runner's pre-injected SCCACHE_WEBDAV_* env.
+          RUSTC_WRAPPER: sccache
+          CARGO_INCREMENTAL: "0"
+
+      - name: sccache stats (hit rate)
+        if: ${{ always() }}
+        run: sccache --show-stats
 
       - name: Show new proptest regressions
         if: ${{ failure() }}
@@ -357,6 +375,12 @@ jobs:
       matrix:
         os: [depot-ubuntu-24.04, depot-macos-26]
     runs-on: ${{ matrix.os }}
+
+    env:
+      # sccache serves compiled objects from Depot's managed WebDAV cache; keep
+      # incremental off (sccache can't cache incremental compilations).
+      RUSTC_WRAPPER: sccache
+      CARGO_INCREMENTAL: "0"
 
     steps:
       - uses: actions/checkout@v7
@@ -397,19 +421,21 @@ jobs:
         with:
           tool: cargo-nextest
 
-      - uses: actions/cache@v6
+      # rust-cache (warm target skip) + sccache (serves compiled crates from
+      # Depot's cross-branch cache); see the build job.
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-e2e-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
-          restore-keys: ${{ runner.os }}-cargo-e2e-
+          key: e2e
 
       - name: Run fresh-install and PTY e2e tests
         run: cargo nextest run -p atuin --test 'e2e_*'
         env:
           ATUIN_E2E_REQUIRE_SHELLS: "1"
+
+      - name: sccache stats
+        if: ${{ always() }}
+        run: sccache --show-stats
 
   clippy:
     runs-on: depot-ubuntu-24.04
@@ -430,14 +456,10 @@ jobs:
           toolchain: 1.98.0
           components: clippy
 
-      - uses: actions/cache@v6
+      # rust-cache (see check job): sccache can't cache clippy's metadata builds.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
-          restore-keys: ${{ runner.os }}-cargo-clippy-
+          key: clippy
 
       - name: Run clippy
         run: cargo clippy -- -D warnings
@@ -463,14 +485,10 @@ jobs:
         with:
           toolchain: 1.98.0
 
-      - uses: actions/cache@v6
+      # rust-cache (see check job): sccache doesn't wrap rustdoc.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-doc-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
-          restore-keys: ${{ runner.os }}-cargo-doc-
+          key: doc
 
       - name: Run cargo doc
         run: cargo doc --document-private-items --no-deps --workspace
@@ -541,14 +559,10 @@ jobs:
         with:
           toolchain: 1.98.0
 
-      - uses: actions/cache@v6
+      # rust-cache (see check job): bounds target/ growth for the verify build.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-package-${{ hashFiles('**/Cargo.lock', 'Cargo.toml') }}
-          restore-keys: ${{ runner.os }}-cargo-package-
+          key: package
 
       - name: Build packaged tarballs
         run: |

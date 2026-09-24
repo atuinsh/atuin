@@ -126,3 +126,72 @@ async fn fresh_daemon_serves_history(
         wait_until("daemon socket removed", || !daemon.env.socket().exists());
     }
 }
+
+/// Ending a command must not autostart the daemon: a fresh daemon has no record of a command it
+/// didn't see start, and a daemon spawned while systemd tears down the terminal's scope would miss
+/// the SIGTERM sweep and stall shutdown until SIGKILL (#4225).
+#[rstest]
+#[case::end(0)]
+#[case::cancel(1)]
+#[tokio::test]
+async fn history_end_does_not_autostart_daemon(daemon: Daemon, #[case] exit: i64) {
+    daemon.env.write_config(
+        "local_timeout = 15\nstore_failed = false\n[daemon]\nenabled = true\nautostart = true\n",
+    );
+
+    let mut start = daemon.env.atuin(&["history", "start", "--", &format!("echo {}", marker())]);
+    start.env("ATUIN_SESSION", SESSION);
+    let id = output(start).trim().to_owned();
+    assert!(daemon.env.socket().exists(), "history start should autostart the daemon");
+
+    assert!(daemon.env.run(&["daemon", "stop"]).contains("Daemon stopped"));
+    wait_until("daemon socket removed", || !daemon.env.socket().exists());
+
+    let end = daemon.env.atuin(&["history", "end", "--exit", &exit.to_string(), "--", &id]);
+    let _ = Process::spawn(end).wait();
+
+    assert!(!daemon.env.socket().exists(), "history end autostarted the daemon");
+    assert!(daemon.env.run(&["daemon", "status"]).contains("Daemon is not running"));
+}
+
+/// With the daemon enabled but not running (and not allowed to start), history is saved locally
+/// instead of being dropped (#3866). The fallback warns, unless `--hook` silences logging.
+#[rstest]
+#[tokio::test]
+async fn history_falls_back_to_local_when_daemon_not_running(
+    daemon: Daemon,
+    #[values(false, true)] hook: bool,
+) {
+    daemon.env.write_config("local_timeout = 15\n[daemon]\nenabled = true\nautostart = false\n");
+    let command = format!("echo {}", marker());
+    let hook_arg: &[&str] = if hook {
+        &["--hook"]
+    } else {
+        &[]
+    };
+
+    let mut start =
+        daemon.env.atuin(&[&["history", "start"], hook_arg, &["--", &command]].concat());
+    start.env("ATUIN_SESSION", SESSION);
+    let out = Process::spawn(start).wait();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let start_stderr = String::from_utf8(out.stderr).unwrap();
+    let id = String::from_utf8(out.stdout).unwrap().trim().to_owned();
+
+    let end =
+        daemon.env.atuin(&[&["history", "end", "--exit", "7"], hook_arg, &["--", &id]].concat());
+    let out = Process::spawn(end).wait();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let end_stderr = String::from_utf8(out.stderr).unwrap();
+
+    assert!(!daemon.env.socket().exists(), "the daemon should not have been started");
+    for (stderr, verb) in [(start_stderr, "start"), (end_stderr, "end")] {
+        let warned = stderr.contains(&format!("failed to {verb} history via the daemon"));
+        assert_eq!(warned, !hook, "unexpected `history {verb}` stderr: {stderr}");
+    }
+
+    let mut list = daemon.env.atuin(&["history", "list", "--format", "{uuid}\t{exit}\t{command}"]);
+    list.env("ATUIN_SESSION", SESSION);
+    let expected = format!("{id}\t7\t{command}");
+    assert!(output(list).lines().any(|line| line == expected), "history was not saved locally");
+}

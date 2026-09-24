@@ -1,6 +1,7 @@
 use atuin_client::database::Sqlite;
 use easy_cast::Conv;
 use eyre::{Context as _, Result, bail};
+use secrecy::{ExposeSecret as _, SecretString};
 use tracing::{debug, info};
 
 use crate::context::{AppContext, ClientContext};
@@ -12,7 +13,7 @@ use crate::tui::state::ConversationEvent;
 pub async fn run(
     initial_command: Option<String>,
     api_endpoint: Option<String>,
-    api_token: Option<String>,
+    api_token: Option<SecretString>,
     settings: &atuin_client::settings::Settings,
     output_for_hook: bool,
 ) -> Result<()> {
@@ -46,14 +47,15 @@ pub async fn run(
             .unwrap_or_else(|| atuin_client::settings::DEFAULT_HUB_URL.clone()),
     };
     let endpoint_is_hub = settings.is_hub_ai_endpoint(&endpoint);
-    let api_token = api_token.as_deref().or(settings.ai.api_token.as_deref());
+    let api_token = api_token.or_else(|| settings.ai.api_token.clone());
 
     let (token, token_from_hub_session) = match api_token {
-        Some(token) => (token.to_string(), false),
-        None if endpoint_is_hub => (ensure_hub_session(settings).await?, true),
+        // An empty token means unauthenticated, not a login prompt.
+        Some(token) => (Some(token).filter(|t| !t.expose_secret().is_empty()), false),
+        None if endpoint_is_hub => (Some(ensure_hub_session(settings).await?), true),
         // An OSS server may not require auth; hit it without a token rather
         // than forcing a login flow that doesn't apply.
-        None => (String::new(), false),
+        None => (None, false),
     };
 
     let history_db_path = &settings.db_path;
@@ -95,7 +97,7 @@ pub async fn run(
     Ok(())
 }
 
-async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Result<String> {
+async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Result<SecretString> {
     if let Some(token) = atuin_client::hub::get_session_token().await? {
         debug!("Found Hub session, using existing token");
         return Ok(token);
@@ -171,8 +173,10 @@ async fn run_inline_tui(
     // once the event channel exists) replaces it unless it's fresh. OSS
     // endpoints have no usage API, so both are skipped ("fresh" suppresses
     // the fetch).
-    let (cached_usage, usage_is_fresh) = if ctx.endpoint_is_hub {
-        let usage_key = crate::usage::cache_key(&ctx.token);
+    let (cached_usage, usage_is_fresh) = if ctx.endpoint_is_hub
+        && let Some(token) = &ctx.token
+    {
+        let usage_key = crate::usage::cache_key(token);
         match service.get_cached_usage(&usage_key).await {
             Ok(Some(cached_snapshot)) => {
                 let age =

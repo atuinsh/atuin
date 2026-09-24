@@ -31,10 +31,15 @@ impl TestServer {
         let password = uuid_v7().as_simple().to_string();
         let email = format!("{}@example.com", uuid_v7().as_simple());
 
-        let resp =
-            api_client::register(&self.address, &username, &email, &password, &Default::default())
-                .await
-                .unwrap();
+        let resp = api_client::register(
+            &self.address,
+            &username,
+            &email,
+            &password.into(),
+            &Default::default(),
+        )
+        .await
+        .unwrap();
 
         api_client::Client::new(
             self.address.clone(),

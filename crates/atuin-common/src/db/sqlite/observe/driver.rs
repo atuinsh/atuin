@@ -251,7 +251,7 @@ impl Wait {
 
     fn next_delay(&mut self) -> Duration {
         let delay = match self.backoff {
-            Backoff::Linear(delay) => delay,
+            Backoff::Constant(delay) => delay,
             Backoff::Exponential {
                 initial,
                 max,

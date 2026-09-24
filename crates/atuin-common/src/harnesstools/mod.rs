@@ -73,6 +73,16 @@ pub enum InstallHookError {
     #[error("the config has an unexpected shape: {0}")]
     Malformed(&'static str),
 
+    #[error("the atuin executable path is not valid UTF-8: {}", .0.display())]
+    NonUtf8Executable(PathBuf),
+
+    #[error("could not shell-quote the atuin executable path {}", .path.display())]
+    UnquotableExecutable {
+        path: PathBuf,
+        #[source]
+        source: shlex::QuoteError,
+    },
+
     #[error("hook already installed")]
     AlreadyInstalled,
 }

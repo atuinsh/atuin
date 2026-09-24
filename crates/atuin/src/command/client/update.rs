@@ -4,15 +4,14 @@ use clap::Parser;
 use eyre::{Result, bail, eyre};
 use tracing::instrument;
 
+use crate::i18n::fl;
+
 #[derive(Parser, Debug)]
 pub struct Cmd {
-    /// Check whether an update is available without installing it
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-update-check"))]
     check: bool,
 
-    /// Update (or roll back) to a specific version, e.g. "18.9.0" or
-    /// "18.9.0-nightly.1", instead of the channel's latest release
-    #[arg(long, conflicts_with = "check")]
+    #[arg(long, conflicts_with = "check", help = fl!("arg-update-version"))]
     version: Option<String>,
 }
 
