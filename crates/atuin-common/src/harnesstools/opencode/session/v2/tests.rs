@@ -365,7 +365,7 @@ async fn next_n(stream: &mut Events, stored: &Stored, n: usize) -> Vec<(String, 
 
 /// Nothing more arrives for a while: a few of the poll's ticks.
 async fn quiet(stream: &mut Events) {
-    if let Ok(Some(event)) = tokio::time::timeout(Duration::from_millis(800), stream.next()).await {
+    if let Ok(Some(event)) = tokio::time::timeout(POLL * 3, stream.next()).await {
         panic!("nothing more was due, got {:?}", event.map(|event| event.message.id()));
     }
 }

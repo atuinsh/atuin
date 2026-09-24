@@ -80,7 +80,7 @@ use sqlx::{Connection, Row, Sqlite};
 use xxhash_rust::xxh3::xxh3_64;
 
 use super::{
-    Body, MessageInfo, Next, OpencodeMessage, Reads, epoch_millis, file_identity, json, text,
+    Body, MessageInfo, Next, OpencodeMessage, POLL, Reads, epoch_millis, file_identity, json, text,
     tokens, usage_of,
 };
 use crate::db::sqlite::TransientResultCode;
@@ -98,9 +98,6 @@ const SUBAGENT_PROMPT: &str = "You are a subagent spawned by another session.";
 
 /// Light rows a pass reads at a time.
 const ROWS: usize = 256;
-
-/// How often [`changes`] asks whether the database changed.
-const POLL: Duration = Duration::from_millis(250);
 
 /// A place in one layout of a session: the `seq` of the last row passed and a digest of its id.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -303,6 +303,9 @@ const PAGE: usize = 64;
 /// it first.
 const RETRY: Duration = Duration::from_secs(1);
 
+/// How often the database is polled for changes, by the event tail and [`v2::changes`] alike.
+const POLL: Duration = Duration::from_secs(1);
+
 impl Listener for OpencodeListener {
     type Session = OpencodeSession;
 
@@ -329,7 +332,9 @@ impl Listener for OpencodeListener {
                 return;
             }
             let mut events = match SqliteObserver::new(&db)
-                .append::<EventRow>(ObserveConfig::builder().replay(replay).build())
+                .append::<EventRow>(
+                    ObserveConfig::builder().replay(replay).poll_interval(POLL).build(),
+                )
                 .await
             {
                 Ok(events) => events,
