@@ -1,3 +1,5 @@
+use std::fs::File;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -13,11 +15,11 @@ use crate::harnesstools::session::model::{
     Content, MessageId, Role, StopReason, ToolCallId, ToolResult, ToolUse, Usage,
 };
 use crate::harnesstools::session::{
-    Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId, Sessions,
-    WatchError, scan_sessions,
+    Checkpoint, Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId,
+    Sessions, WatchError, scan_sessions,
 };
-use crate::io::{FollowLines, PathLineReader, PooledReadLines};
-use crate::json::jsonl::{self, JsonlExt};
+use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
+use crate::json::jsonl::JsonlExt;
 use crate::sync::BlockingPool;
 use crate::utils::{env_nonempty, home_dir};
 
@@ -172,6 +174,36 @@ impl CodexSession {
             pool,
         }
     }
+
+    /// The byte offset to read from: `from`'s, if the line ending there is still the one `from`
+    /// was taken after, else the transcript's start.
+    async fn start(&self, from: Checkpoint) -> u64 {
+        let path = self.path.clone();
+        let found = self
+            .pool
+            .run(move || File::open(path).and_then(|file| Line::ending_at(&file, from.at)))
+            .await
+            .map_err(io::Error::other)
+            .and_then(|found| found);
+        match found {
+            Ok(Some(line)) if from.names(&line.bytes) => from.at,
+            Ok(_) => {
+                tracing::debug!(
+                    path = %self.path.display(),
+                    "the checkpoint no longer names its line; reading from the start"
+                );
+                0
+            }
+            Err(err) => {
+                tracing::warn!(
+                    ?err,
+                    path = %self.path.display(),
+                    "failed to read the line a checkpoint names; reading from the start"
+                );
+                0
+            }
+        }
+    }
 }
 
 impl Session for CodexSession {
@@ -181,33 +213,30 @@ impl Session for CodexSession {
         self.id.clone()
     }
 
-    async fn message_at(&self, at: u64) -> Option<CodexMessage> {
-        jsonl::value_at(&self.path, at, &self.pool)
-            .await
-            .inspect_err(|err| {
-                tracing::warn!(
-                    ?err,
-                    path = %self.path.display(),
-                    at,
-                    "failed to read the message at a resume point"
-                );
-            })
-            .ok()
-            .flatten()
-    }
-
     fn messages_from(
         self,
-        from: u64,
-    ) -> impl Stream<Item = Result<(u64, CodexMessage), MessageError>> + Send + 'static {
-        let lines =
-            FollowLines::new(PooledReadLines::new(PathLineReader::at(self.path, from), self.pool));
-        match self.changes {
-            Some(changes) => lines.follow(changes).left_stream(),
-            None => lines.read_to_end().right_stream(),
+        from: Option<Checkpoint>,
+    ) -> impl Stream<Item = Result<(Checkpoint, CodexMessage), MessageError>> + Send + 'static {
+        async_stream::stream! {
+            let start = match from {
+                Some(from) => self.start(from).await,
+                None => 0,
+            };
+            let lines = FollowLines::new(PooledReadLines::new(
+                PathLineReader::at(&self.path, start),
+                self.pool,
+            ));
+            let messages = match self.changes {
+                Some(changes) => lines.follow(changes).left_stream(),
+                None => lines.read_to_end().right_stream(),
+            }
+            .json::<CodexMessage>();
+            for await item in messages {
+                yield item
+                    .map(|(line, message)| (Checkpoint::new(line.end, &line.bytes), message))
+                    .map_err(MessageError::from);
+            }
         }
-        .json::<CodexMessage>()
-        .map_err(MessageError::from)
     }
 
     fn read(&self) -> impl Stream<Item = Result<CodexMessage, MessageError>> + Send + 'static {

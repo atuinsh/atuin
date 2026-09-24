@@ -1,9 +1,11 @@
+mod checkpoint;
 pub mod error;
 pub mod model;
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
 
+pub use checkpoint::Checkpoint;
 use enum_dispatch::enum_dispatch;
 pub use error::{CaptureError, MessageError, RuntimeError, WatchError};
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -104,30 +106,23 @@ pub trait Session: Send + 'static {
 
     fn id(&self) -> SessionId;
 
-    /// The message the resume token `at` names, so a consumer can decide whether the token is
-    /// still one it may resume from -- typically by asking whether it already has that message.
+    /// Follow the session from just past `from`, yielding with each message the checkpoint just
+    /// past it.
     ///
-    /// `None` when the token names nothing this session can read: a transcript shorter than the
-    /// byte offset it came from, a row a log has since dropped. The consumer then resumes from 0.
-    fn message_at(&self, at: u64) -> impl Future<Output = Option<Self::Message>> + Send;
-
-    /// Follow the session from the resume token `from`, `0` being its beginning, yielding with
-    /// each message the token that resumes just past it.
-    ///
-    /// **Be warned**: a token means whatever the harness reading the session makes it mean -- a
-    /// byte offset into a transcript, a row's sequence in a log -- and belongs to that harness
-    /// alone. A consumer stores one and hands it back; it never does arithmetic on one, and a
-    /// token from one harness names nothing in another.
+    /// The session reads from its beginning instead when `from` is `None`, or no longer names the
+    /// item it was taken after. **Be warned**: a checkpoint's position means whatever the harness
+    /// reading the session makes it mean -- a byte offset into a transcript, a row's sequence in
+    /// a log -- and belongs to that harness alone: a consumer stores one and hands it back.
     fn messages_from(
         self,
-        from: u64,
-    ) -> impl Stream<Item = Result<(u64, Self::Message), MessageError>> + Send + 'static;
+        from: Option<Checkpoint>,
+    ) -> impl Stream<Item = Result<(Checkpoint, Self::Message), MessageError>> + Send + 'static;
 
     fn messages(self) -> impl Stream<Item = Result<Self::Message, MessageError>> + Send + 'static
     where
         Self: Sized,
     {
-        self.messages_from(0).map_ok(|(_, message)| message)
+        self.messages_from(None).map_ok(|(_, message)| message)
     }
 
     fn read(&self) -> impl Stream<Item = Result<Self::Message, MessageError>> + Send + 'static;
@@ -138,27 +133,21 @@ pub trait Listener {
 
     fn watch(self) -> impl Stream<Item = Result<Self::Session, WatchError>> + Send + 'static;
 
-    /// Every line of every session the watcher reports, tagged with its session and the byte
-    /// offset past it. `resume_from` is awaited once per session, with its id and transcript
-    /// path, before the transcript is opened, and gives the offset to start at; 0 reads the
-    /// whole file.
-    /// Follow every session this listener reports, each from where the consumer last left it.
+    /// Follow every session this listener reports, each from the checkpoint the consumer stored
+    /// for it.
     ///
-    /// `checkpoint` gives the resume token stored for a session, `0` for none. A token is only
-    /// as good as the message it names, which is the harness's to answer ([`Session::message_at`])
-    /// and the consumer's to vouch for: `knows` is asked whether that message is one it already
-    /// has, and a token it will not vouch for reads the session from its beginning instead.
-    fn events<F, G>(
+    /// `checkpoint` gives that checkpoint, `None` for none. A session checks it itself and reads
+    /// from its beginning when it no longer names what it was taken after
+    /// ([`Session::messages_from`]).
+    fn events<F>(
         self,
         checkpoint: impl Fn(&SessionId) -> F + Send + 'static,
-        knows: impl Fn(SessionId, <Self::Session as Session>::Message) -> G + Send + 'static,
     ) -> impl Stream<Item = Result<SessionEvent<<Self::Session as Session>::Message>, CaptureError>>
     + Send
     + 'static
     where
         Self: Sized,
-        F: Future<Output = u64> + Send + 'static,
-        G: Future<Output = bool> + Send + 'static,
+        F: Future<Output = Option<Checkpoint>> + Send + 'static,
     {
         let sessions = self.watch();
         async_stream::stream! {
@@ -181,19 +170,10 @@ pub trait Listener {
                     appeared = sessions.next(), if !sessions_done => match appeared {
                         Some(Ok(session)) => {
                             let id = session.id();
-                            let at = checkpoint(&id).await;
-                            let vouched = if at == 0 {
-                                false
-                            } else {
-                                match session.message_at(at).await {
-                                    Some(message) => knows(id.clone(), message).await,
-                                    None => false,
-                                }
-                            };
-                            let start = if vouched { at } else { 0 };
+                            let from = checkpoint(&id).await;
                             let tag = id.clone();
                             let (tagged, handle) = futures::stream::abortable(
-                                session.messages_from(start).map(move |item| (tag.clone(), item)),
+                                session.messages_from(from).map(move |item| (tag.clone(), item)),
                             );
                             if let Some(old) = handles.insert(id, handle) {
                                 old.abort();
@@ -206,8 +186,8 @@ pub trait Listener {
                     tagged = active.next(), if !active.is_empty() => {
                         if let Some((session, result)) = tagged {
                             match result {
-                                Ok((offset, message)) => {
-                                    yield Ok(SessionEvent { session, offset, message });
+                                Ok((at, message)) => {
+                                    yield Ok(SessionEvent { session, checkpoint: at, message });
                                 }
                                 Err(source) => yield Err(CaptureError::Message { session, source }),
                             }
@@ -249,10 +229,15 @@ pub mod prelude {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
     use rstest::rstest;
     use time::OffsetDateTime;
 
     use super::*;
+    use crate::harnesstools::ccode::session::CcodeSession;
+    use crate::harnesstools::codex::session::CodexSession;
+    use crate::harnesstools::pi::session::PiSession;
     use crate::harnesstools::session::model::{Content, MessageId, Role};
 
     #[derive(Debug, Clone)]
@@ -281,8 +266,8 @@ mod tests {
         assert_eq!(m.id(), Some(MessageId::from("m1".to_owned())));
     }
 
-    /// A transcript that yields the given offsets, then either ends or hangs like a live file
-    /// waiting for more.
+    /// A transcript that yields a message at each of the given positions, then either ends or
+    /// hangs like a live file waiting for more.
     struct StubSession {
         id: &'static str,
         offsets: Vec<u64>,
@@ -296,15 +281,14 @@ mod tests {
             SessionId::from(self.id.to_owned())
         }
 
-        async fn message_at(&self, _at: u64) -> Option<StubMsg> {
-            None
-        }
-
         fn messages_from(
             self,
-            _from: u64,
-        ) -> impl Stream<Item = Result<(u64, StubMsg), MessageError>> + Send + 'static {
-            let items = futures::stream::iter(self.offsets.into_iter().map(|o| Ok((o, StubMsg))));
+            _from: Option<Checkpoint>,
+        ) -> impl Stream<Item = Result<(Checkpoint, StubMsg), MessageError>> + Send + 'static
+        {
+            let items = futures::stream::iter(
+                self.offsets.into_iter().map(|at| Ok((Checkpoint { at, digest: 0 }, StubMsg))),
+            );
             if self.hang {
                 items.chain(futures::stream::pending()).left_stream()
             } else {
@@ -353,14 +337,74 @@ mod tests {
                 hang: false,
             },
         };
-        let events = listener.events(|_| async { 0 }, |_, _| async { true });
+        let events = listener.events(|_| async { None });
         let offsets: Vec<u64> = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            events.map(|ev| ev.unwrap().offset).collect(),
+            events.map(|ev| ev.unwrap().checkpoint.at).collect(),
         )
         .await
         .expect("the replaced stream must not keep events() alive");
         assert_eq!(offsets, vec![1, 2]);
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum JsonlHarness {
+        Ccode,
+        Codex,
+        Pi,
+    }
+
+    impl JsonlHarness {
+        /// The checkpoints of the messages this harness's session over `path` reads from `from`.
+        async fn resumed(self, path: PathBuf, from: Option<Checkpoint>) -> Vec<Checkpoint> {
+            let id = SessionId::from("s".to_owned());
+            let pool = BlockingPool::new(NonZeroUsize::MIN);
+            let checkpoints = match self {
+                Self::Ccode => CcodeSession::open(id, path, pool)
+                    .messages_from(from)
+                    .map_ok(|(at, _)| at)
+                    .boxed(),
+                Self::Codex => CodexSession::open(id, path, pool)
+                    .messages_from(from)
+                    .map_ok(|(at, _)| at)
+                    .boxed(),
+                Self::Pi => {
+                    PiSession::open(id, path, pool).messages_from(from).map_ok(|(at, _)| at).boxed()
+                }
+            };
+            checkpoints.try_collect().await.unwrap()
+        }
+    }
+
+    const A: &str = r#"{"type":"a"}"#;
+    const B: &str = r#"{"type":"b"}"#;
+    const X: &str = r#"{"type":"x"}"#;
+    const Y: &str = r#"{"type":"y"}"#;
+
+    /// Each line is 12 bytes, so lines end at 13 and 26.
+    #[rstest]
+    #[case::untouched(
+        &[A, B], Some(Checkpoint::new(13, A.as_bytes())), vec![Checkpoint::new(26, B.as_bytes())])]
+    #[case::without_a_checkpoint(
+        &[A, B], None, vec![Checkpoint::new(13, A.as_bytes()), Checkpoint::new(26, B.as_bytes())])]
+    #[case::rewritten_to_the_same_length(
+        &[X, Y],
+        Some(Checkpoint::new(13, A.as_bytes())),
+        vec![Checkpoint::new(13, X.as_bytes()), Checkpoint::new(26, Y.as_bytes())],
+    )]
+    #[case::cut_shorter(
+        &[A], Some(Checkpoint::new(26, B.as_bytes())), vec![Checkpoint::new(13, A.as_bytes())])]
+    #[tokio::test]
+    async fn a_transcript_resumes_only_where_its_checkpoint_still_holds(
+        #[values(JsonlHarness::Ccode, JsonlHarness::Codex, JsonlHarness::Pi)] harness: JsonlHarness,
+        #[case] lines: &[&str],
+        #[case] from: Option<Checkpoint>,
+        #[case] expected: Vec<Checkpoint>,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+        assert_eq!(harness.resumed(path, from).await, expected);
     }
 }
 

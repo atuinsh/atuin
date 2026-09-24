@@ -1,17 +1,14 @@
 //! Newline-delimited JSON (JSONL): one value per line, blank lines skipped.
 //!
-//! The lines come from [`crate::io`]: a [`FollowLines`](crate::io::FollowLines) stream decoded
-//! with [`JsonlExt::json`], or a single line looked up by [`value_at`].
+//! The lines come from [`crate::io`], such as a [`FollowLines`](crate::io::FollowLines) stream,
+//! decoded with [`JsonlExt::json`].
 
-use std::fs::File;
 use std::io;
-use std::path::Path;
 
 use futures::{Stream, StreamExt};
 use serde::de::DeserializeOwned;
 
 use crate::io::Line;
-use crate::sync::BlockingPool;
 
 /// An error encountered while reading a JSONL file.
 #[derive(Debug, thiserror::Error)]
@@ -28,16 +25,18 @@ pub enum JsonlError {
 
 /// Deserializing a stream of lines as JSONL.
 pub trait JsonlExt: Stream<Item = io::Result<Line>> + Sized {
-    /// Deserialize each non-blank line as a `T`, yielded with the [`Line::end`] of its line.
-    fn json<T: DeserializeOwned>(self) -> impl Stream<Item = Result<(u64, T), JsonlError>> {
+    /// Deserialize each non-blank line as a `T`, yielded with the line it came from.
+    fn json<T: DeserializeOwned>(self) -> impl Stream<Item = Result<(Line, T), JsonlError>> {
         self.filter_map(|line| {
             let item = match line {
                 Ok(line) if line.bytes.trim_ascii().is_empty() => None,
-                Ok(Line { end, bytes }) => Some(
-                    serde_json::from_slice(&bytes)
-                        .map(|value| (end, value))
-                        .map_err(|source| JsonlError::Parse { source, end }),
-                ),
+                Ok(line) => Some(match serde_json::from_slice(&line.bytes) {
+                    Ok(value) => Ok((line, value)),
+                    Err(source) => Err(JsonlError::Parse {
+                        source,
+                        end: line.end,
+                    }),
+                }),
                 Err(err) => Some(Err(JsonlError::Io(err))),
             };
             std::future::ready(item)
@@ -46,26 +45,6 @@ pub trait JsonlExt: Stream<Item = io::Result<Line>> + Sized {
 }
 
 impl<S: Stream<Item = io::Result<Line>>> JsonlExt for S {}
-
-/// The value on the line of the file at `path` that ends at byte `at`, if a line ends there.
-///
-/// The counterpart of the offsets [`JsonlExt::json`] yields: a reader hands one back to ask what
-/// it named, and decides from that whether it may resume there. Reads run in `pool`.
-pub async fn value_at<T: DeserializeOwned>(
-    path: &Path,
-    at: u64,
-    pool: &BlockingPool,
-) -> Result<Option<T>, JsonlError> {
-    let path = path.to_path_buf();
-    let line = pool
-        .run(move || File::open(path).and_then(|file| Line::ending_at(&file, at)))
-        .await
-        .map_err(io::Error::other)??;
-    line.map(|Line { end, bytes }| {
-        serde_json::from_slice(&bytes).map_err(|source| JsonlError::Parse { source, end })
-    })
-    .transpose()
-}
 
 #[cfg(test)]
 mod tests {
@@ -81,6 +60,7 @@ mod tests {
 
     use super::*;
     use crate::io::{FollowLines, PathLineReader, PooledReadLines};
+    use crate::sync::BlockingPool;
 
     #[derive(Debug, PartialEq, Eq)]
     enum Item {
@@ -137,36 +117,13 @@ mod tests {
         let got: Vec<Item> = stream::iter(lines)
             .json::<i64>()
             .map(|item| match item {
-                Ok((end, value)) => Item::Value(end, value),
+                Ok((line, value)) => Item::Value(line.end, value),
                 Err(JsonlError::Parse { end, .. }) => Item::Malformed(end),
                 Err(JsonlError::Io(_)) => Item::Unreadable,
             })
             .collect()
             .await;
         assert_eq!(got, expected);
-    }
-
-    /// "1\n22\nx\n" has lines ending at 2, 5 and 7.
-    #[rstest]
-    #[case::a_value(5, Some(22))]
-    #[case::no_line_ends_there(4, None)]
-    #[tokio::test]
-    async fn reads_the_value_on_the_line_ending_at_an_offset(
-        #[case] at: u64,
-        #[case] expected: Option<i64>,
-    ) {
-        let file = file(b"1\n22\nx\n");
-        assert_eq!(value_at::<i64>(file.path(), at, &pool()).await.unwrap(), expected);
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn a_malformed_line_at_an_offset_is_a_parse_error() {
-        let file = file(b"1\n22\nx\n");
-        assert!(matches!(
-            value_at::<i64>(file.path(), 7, &pool()).await,
-            Err(JsonlError::Parse { end: 7, .. })
-        ));
     }
 
     proptest! {
@@ -196,6 +153,7 @@ mod tests {
                     FollowLines::new(PooledReadLines::new(PathLineReader::new(file.path()), pool()))
                         .read_to_end()
                         .json()
+                        .map_ok(|(line, rec)| (line.end, rec))
                         .try_collect(),
                 )
                 .unwrap();
