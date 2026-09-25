@@ -11,12 +11,12 @@ use std::time::Duration;
 
 use atuin_client::history::HistoryId;
 use atuin_client::history::store::HistoryRecord;
-use atuin_client::settings::{CommandFilter, Search};
+use atuin_client::settings::Search;
 use atuin_daemon::grpc::history::pb::RegisterCommandOutputRequest;
 use atuin_daemon::grpc::history::pb::tail_history_reply::Event;
 use atuin_daemon::search::SearchIndex;
 use atuin_daemon::{CmdDeleteError, CmdFinishError, RegisterOutputError};
-use common::{TestEnv, capture, history};
+use common::{TestEnv, capture, history, output_enabled};
 use easy_cast::Conv;
 use rstest::*;
 use tonic::Code;
@@ -316,7 +316,7 @@ async fn delete_forgets_captured_output(
         env.journal.finish(id, 0, Duration::from_millis(1)).await.unwrap();
     }
     env.journal
-        .register_command_output(id, capture("secret output"), &CommandFilter::default())
+        .register_command_output(id, capture("secret output"), &output_enabled())
         .await
         .unwrap();
     assert!(env.journal.get_command_output(id).await.unwrap().is_some());
@@ -370,7 +370,7 @@ async fn output_for_a_deleted_or_unknown_id_is_refused(
     for id in [deleted, unknown] {
         let err = env
             .journal
-            .register_command_output(id, capture("late"), &CommandFilter::default())
+            .register_command_output(id, capture("late"), &output_enabled())
             .await
             .unwrap_err();
         assert!(matches!(err, RegisterOutputError::NotLive(_)), "{id}: {err}");
@@ -399,10 +399,7 @@ async fn refused_output_is_not_found_over_the_wire(#[future(awt)] env: TestEnv) 
 #[tokio::test]
 async fn cancel_discards_captured_output(#[future(awt)] env: TestEnv) {
     let id = env.journal.start_cmd(history("echo failed"));
-    env.journal
-        .register_command_output(id, capture("boom"), &CommandFilter::default())
-        .await
-        .unwrap();
+    env.journal.register_command_output(id, capture("boom"), &output_enabled()).await.unwrap();
     assert!(env.journal.get_command_output(id).await.unwrap().is_some());
 
     env.journal.cancel(id).await.unwrap();
@@ -410,7 +407,7 @@ async fn cancel_discards_captured_output(#[future(awt)] env: TestEnv) {
     assert!(env.journal.get_command_output(id).await.unwrap().is_none());
     let err = env
         .journal
-        .register_command_output(id, capture("late"), &CommandFilter::default())
+        .register_command_output(id, capture("late"), &output_enabled())
         .await
         .unwrap_err();
     assert!(matches!(err, RegisterOutputError::NotLive(_)), "{err}");
@@ -434,7 +431,7 @@ async fn output_arriving_mid_delete_is_refused(#[future(awt)] env: TestEnv) {
 
     let err = env
         .journal
-        .register_command_output(id, capture("late"), &CommandFilter::default())
+        .register_command_output(id, capture("late"), &output_enabled())
         .await
         .unwrap_err();
     assert!(matches!(err, RegisterOutputError::NotLive(_)), "{err}");
@@ -477,7 +474,7 @@ async fn abandoned_delete_still_completes(#[future(awt)] env: TestEnv) {
     assert!(env.journal.get_command_output(id).await.unwrap().is_none());
     let err = env
         .journal
-        .register_command_output(id, capture("late"), &CommandFilter::default())
+        .register_command_output(id, capture("late"), &output_enabled())
         .await
         .unwrap_err();
     assert!(matches!(err, RegisterOutputError::NotLive(_)), "{err}");

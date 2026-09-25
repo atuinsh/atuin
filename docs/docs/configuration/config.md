@@ -1048,9 +1048,10 @@ command_filter = []
 Default: `false`
 
 Capture and store the output of the commands you run. When `false`, nothing is
-captured and the other keys in this section are ignored. Restart the daemon and
-your shell after changing it, or run `atuin config enable output-capture`,
-which also sets up the daemon and pty-proxy.
+captured and the other keys in this section are ignored. Turning it off stops
+the daemon storing output right away; turning it on takes a daemon restart and
+a new shell, or run `atuin config enable output-capture`, which also sets up
+the daemon and pty-proxy.
 
 ```toml
 [output]

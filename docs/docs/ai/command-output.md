@@ -14,7 +14,7 @@ atuin config enable output-capture
 
 Then open a new terminal. To set it up by hand instead, see [Setting it up](../guide/output-capture.md#setting-it-up).
 
-To try it out, run a command that fails, then press `?` and ask Atuin AI why it failed. It will ask permission to use the `AtuinOutput` tool, then read the output and answer.
+To try it out, run a command that fails, then press ++question++ and ask Atuin AI why it failed. It will ask permission to use the `AtuinOutput` tool, then read the output and answer.
 
 ## How it works
 

@@ -11,9 +11,9 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use atuin_client::history::{History, HistoryId};
-use atuin_client::settings::{CommandFilter, Search};
+use atuin_client::settings::Search;
 use atuin_daemon::{CaptureError, CmdEvent, RegisterOutputError};
-use common::{TestEnv, capture, history};
+use common::{TestEnv, capture, history, output_enabled};
 use futures::{FutureExt, StreamExt};
 use proptest::prelude::*;
 
@@ -155,10 +155,8 @@ async fn apply(env: &TestEnv, model: &mut Model, op: &Op) {
         }
         Op::Register(slot) => {
             let id = model.id(*slot);
-            let result = env
-                .journal
-                .register_command_output(id, capture("out"), &CommandFilter::default())
-                .await;
+            let result =
+                env.journal.register_command_output(id, capture("out"), &output_enabled()).await;
             let state = model.slots[usize::from(*slot)].1;
             let has_output = &mut model.has_output[usize::from(*slot)];
             match (state, *has_output) {

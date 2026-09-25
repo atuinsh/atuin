@@ -20,7 +20,7 @@ use atuin_client::database::{Context, Sqlite};
 use atuin_client::history::store::{HistoryRecord, HistoryStore};
 use atuin_client::history::{CommandCapture, History, HistoryId};
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::settings::{DiskUsageLimit, FilterMode, Settings};
+use atuin_client::settings::{CaptureLimits, DiskUsageLimit, FilterMode, OutputCapture, Settings};
 use atuin_common::db::sqlite::Sqlite as CommonSqlite;
 use atuin_common::filter::OrFilter;
 use atuin_common::utils::uuid_v7;
@@ -65,6 +65,11 @@ pub fn history_at(cmd: &str, timestamp: time::OffsetDateTime) -> History {
         .author("test-user")
         .build()
         .into()
+}
+
+/// Output capture on, with the default limits and no `command_filter`.
+pub fn output_enabled() -> OutputCapture {
+    OutputCapture::Enabled(CaptureLimits::default())
 }
 
 /// A complete capture holding `output`, in the daemon's domain representation.
@@ -136,6 +141,9 @@ impl TestEnvBuilder {
             .unwrap()
             // Unroutable on purpose: the capability warm-up must fail fast, not dial the internet.
             .set_override("sync_address", "http://127.0.0.1:1")
+            .unwrap()
+            // The harness opens a real output store, as the daemon only does with capture on.
+            .set_override("output.enabled", true)
             .unwrap()
             .build()
             .expect("could not build settings")

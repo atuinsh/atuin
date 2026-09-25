@@ -131,6 +131,37 @@ async fn output_command_filter_drops_output_but_keeps_history(
     assert!(env.history_db.load(id).await.unwrap().is_some(), "{command} left history");
 }
 
+/// Turning `[output]` off on a running daemon stops it storing captures at once. Proxies started
+/// before the change keep sending them, and none may land -- least of all one `command_filter`
+/// excluded while capture was on.
+#[rstest]
+#[case::filtered("cat .env")]
+#[case::not_filtered("echo hello")]
+#[tokio::test]
+async fn disabling_output_on_a_live_daemon_stores_no_captures(
+    #[future(awt)] env: TestEnv,
+    #[case] command: &str,
+) {
+    let mut settings = env.settings.clone();
+    settings.output = OutputCapture::Enabled(CaptureLimits {
+        command_filter: CommandFilter::from(RegexSet::new(["^cat "]).unwrap()),
+        ..CaptureLimits::default()
+    });
+    env.handle.apply_settings(settings.clone()).await;
+    settings.output = OutputCapture::Disabled;
+    env.handle.apply_settings(settings).await;
+
+    let mut client = env.history_client().await;
+    let id: HistoryId =
+        client.start_history(history(command)).await.unwrap().id.unwrap().try_into().unwrap();
+    client
+        .register_command_output(id, "adapt amused able anxiety mother", None, 32, 80, 24)
+        .await
+        .unwrap();
+
+    assert!(client.get_command_output(id, vec![]).await.unwrap().is_none());
+}
+
 /// A capture whose middle was discarded has to survive the whole round trip -- proto, storage
 /// schema, and chunking -- with its two halves still distinguishable. Storing only the first
 /// bytes, as the capture used to, threw away the end of every long-running command's output.
