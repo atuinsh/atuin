@@ -482,6 +482,7 @@ versioned_messages!(
     CancelHistoryReply,
     DeleteHistoryReply,
     RebuildHistoryReply,
+    CompactStoreReply,
 );
 
 internal_errors!(GetOutputError);
