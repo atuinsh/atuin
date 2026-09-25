@@ -150,21 +150,11 @@ impl OffsetDateTimeExt for OffsetDateTime {
             style: OffsetDateTimeStyle::default(),
         }
     }
-    /// Both standard and leap year midpoints land on July 2nd, but the time of day is different: midnight for leap years, noon for non-leap years.
+    /// The cutoff between the first and second calendar halves of a year is July 1st at midnight.
     fn get_mid_year(year: i32, timezone: UtcOffsetSpec) -> OffsetDateTime {
-        {
-            let date = Date::from_calendar_date(year, Month::July, 2)
-                .expect("Valid year and month should create a valid date");
-
-            if time::util::is_leap_year(year) {
-                let time = Time::MIDNIGHT;
-                Self::new_in_offset(date, time, timezone.0)
-            } else {
-                let time = Time::from_hms(12, 0, 0)
-                    .expect("Valid hours/minutes/seconds should create a valid time");
-                Self::new_in_offset(date, time, timezone.0)
-            }
-        }
+        let date = Date::from_calendar_date(year, Month::July, 1)
+            .expect("Valid year and month should create a valid date");
+        Self::new_in_offset(date, Time::MIDNIGHT, timezone.0)
     }
 }
 

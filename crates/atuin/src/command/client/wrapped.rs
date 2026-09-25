@@ -405,4 +405,31 @@ mod tests {
         assert_eq!(wrapped.second_half_commands, vec![(expected.to_string(), 2)]);
         assert!((wrapped.error_rate - 0.5).abs() < f64::EPSILON);
     }
+
+    #[rstest]
+    fn midyear_regression_for_late_adopters() {
+        let settings = Settings::utc();
+        let history: Vec<History> =
+            [datetime!(2024-08-01 0:00 UTC), datetime!(2024-08-02 12:00 UTC)]
+                .into_iter()
+                .map(|timestamp| {
+                    History::import().timestamp(timestamp).command("echo").exit(0).build().into()
+                })
+                .collect();
+
+        let stats = Stats {
+            total_commands: 2,
+            unique_commands: 1,
+            top: vec![],
+        };
+        let aliases = HashMap::new();
+
+        let wrapped = WrappedStats::new(2024, &settings, &stats, &history, &aliases);
+
+        assert!(
+            wrapped.first_half_commands.is_empty(),
+            "First half should be empty since user installed in August"
+        );
+        assert_eq!(wrapped.second_half_commands, vec![("echo".to_string(), 2)]);
+    }
 }
