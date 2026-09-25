@@ -16,7 +16,8 @@ use tokio::time::Instant;
 use super::Sink;
 use super::message_enricher::{MessageEnricher, SYNTHETIC};
 
-/// Backoff bounds for retrying a harness listener whose session directory does not exist yet.
+/// Backoff bounds for (re)opening a harness listener: a missing session directory, a failed
+/// open, or an ended event stream.
 const LISTENER_RETRY_START: Duration = Duration::from_secs(2);
 const LISTENER_RETRY_MAX: Duration = Duration::from_secs(60);
 
@@ -47,43 +48,53 @@ impl SessionCaptureEngine {
             let sink = sink.clone();
 
             listeners.push(tokio::spawn(async move {
-                // A harness whose session directory does not exist yet (not installed, or never
-                // run) must not be dropped for the life of the daemon: retry with capped backoff
-                // until it appears, so capture starts without a restart.
+                // A harness must not be dropped for the life of the daemon: whether its session
+                // directory does not exist yet (not installed, or never run), its listener fails
+                // to open, or its event stream ends, retry with capped backoff so capture starts
+                // or resumes without a restart.
                 let mut delay = LISTENER_RETRY_START;
-                let listener = loop {
+                loop {
                     match sessions.listener() {
-                        Ok(listener) => break listener,
-                        Err(RuntimeError::NotFound(_)) => {
-                            tokio::time::sleep(delay).await;
-                            delay = (delay * 2).min(LISTENER_RETRY_MAX);
+                        Ok(listener) => {
+                            // Sessions `events()` has just (re)opened, with the checkpoint each
+                            // was handed: set before the new read yields anything, so its first
+                            // event finds it here.
+                            let opened: Opened = Arc::default();
+                            let checkpoint = {
+                                let (sink, opened) = (sink.clone(), opened.clone());
+                                move |id: &SessionId| {
+                                    let (sink, opened, id) =
+                                        (sink.clone(), opened.clone(), id.clone());
+                                    async move {
+                                        let from = checkpoint_of(&sink, kind, &id).await;
+                                        opened.lock().insert(id, from);
+                                        from
+                                    }
+                                }
+                            };
+                            let started = Instant::now();
+                            capture(
+                                kind,
+                                &sink,
+                                listener.events(checkpoint),
+                                &opened,
+                                UNTIMED_GRACE,
+                            )
+                            .await;
+                            // A listener that ran a while was healthy: its next failure starts
+                            // the backoff over rather than inheriting a long delay.
+                            if started.elapsed() >= LISTENER_RETRY_MAX {
+                                delay = LISTENER_RETRY_START;
+                            }
+                            tracing::warn!(?kind, "ai-session listener ended; reopening");
                         }
-                        Err(e) => {
-                            tracing::warn!(
-                                ?e,
-                                ?kind,
-                                "ai-session listener failed; capture disabled for this harness"
-                            );
-                            return;
-                        }
+                        Err(RuntimeError::NotFound(_)) => {}
+                        Err(e) => tracing::warn!(?e, ?kind, "ai-session listener failed; retrying"),
                     }
-                };
 
-                // Sessions `events()` has just (re)opened, with the checkpoint each was handed:
-                // set before the new read yields anything, so its first event finds it here.
-                let opened: Opened = Arc::default();
-                let checkpoint = {
-                    let (sink, opened) = (sink.clone(), opened.clone());
-                    move |id: &SessionId| {
-                        let (sink, opened, id) = (sink.clone(), opened.clone(), id.clone());
-                        async move {
-                            let from = checkpoint_of(&sink, kind, &id).await;
-                            opened.lock().insert(id, from);
-                            from
-                        }
-                    }
-                };
-                capture(kind, &sink, listener.events(checkpoint), &opened, UNTIMED_GRACE).await;
+                    tokio::time::sleep(delay).await;
+                    delay = (delay * 2).min(LISTENER_RETRY_MAX);
+                }
             }));
         }
 
