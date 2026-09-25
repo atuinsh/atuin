@@ -708,6 +708,8 @@ pub struct Ai {
     /// Whether the daemon captures live AI harness sessions (Claude Code, Codex, ...) into the
     /// synced record store. Off by default: capture copies full transcripts -- including reasoning
     /// and tool output -- into the encrypted store used by sync, so it is strictly opt-in.
+    ///
+    /// Read once at daemon startup: changing it takes effect on the next daemon restart.
     #[serde(default)]
     pub capture_sessions: bool,
 }
