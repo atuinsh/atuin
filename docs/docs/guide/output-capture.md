@@ -98,7 +98,7 @@ recording that it's missing.
   [`command_filter`](../configuration/config.md#command_filter). See
   [Excluding commands](excluding-commands.md#keep-the-command-drop-its-output-command_filter).
 - Captured output stays on your machine. **It isn't synced**, even with
-  [sync](sync.md) set up. We are actively working on supporting this.
+  [sync](sync.md) set up. We're actively working on supporting this.
 - Atuin AI only sends output to the LLM when it asks for a specific command's
   output, and asks your permission first by default. See [Reading Command
   Output](../ai/command-output.md#permissions).
