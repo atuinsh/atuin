@@ -15,6 +15,11 @@ pub struct PtyProxy {
     #[arg(long, value_name = "PATH")]
     shell: Option<PathBuf>,
 
+    /// Start the `--shell` binary as a login shell, as the init script does when the shell it
+    /// replaces is one. The default shell always starts as a login shell.
+    #[arg(long)]
+    login: bool,
+
     #[command(subcommand)]
     cmd: Option<Cmd>,
 }
@@ -49,6 +54,7 @@ pub enum Shell {
 pub struct RuntimeOptions {
     pub(crate) debug_osc133: bool,
     pub(crate) shell: Option<PathBuf>,
+    pub(crate) login: bool,
     pub(crate) command_capture: Option<CaptureConfig>,
     pub(crate) child_umask: Option<u32>,
 }
@@ -57,12 +63,14 @@ impl RuntimeOptions {
     fn new(
         debug_osc133: bool,
         shell: Option<PathBuf>,
+        login: bool,
         command_capture: Option<CaptureConfig>,
         child_umask: Option<u32>,
     ) -> Self {
         Self {
             debug_osc133: debug_osc133 || env_flag("ATUIN_PTY_PROXY_DEBUG"),
             shell,
+            login,
             command_capture,
             child_umask,
         }
@@ -74,8 +82,10 @@ impl PtyProxy {
     /// a restrictive process-wide umask early in startup, which the shell
     /// would otherwise inherit (#3695).
     pub fn run(self, command_capture: Option<CaptureConfig>, child_umask: Option<u32>) {
-        if self.cmd.is_some() && self.shell.is_some() {
-            eprintln!("atuin pty-proxy: --shell only applies when no subcommand is given");
+        if self.cmd.is_some() && (self.shell.is_some() || self.login) {
+            eprintln!(
+                "atuin pty-proxy: --shell and --login only apply when no subcommand is given"
+            );
             std::process::exit(2);
         }
         match self.cmd {
@@ -88,6 +98,7 @@ impl PtyProxy {
             None => runtime::main(RuntimeOptions::new(
                 self.debug_osc133,
                 self.shell,
+                self.login,
                 command_capture,
                 child_umask,
             )),
@@ -164,7 +175,8 @@ pub fn init_script(shell: Shell) -> &'static str {
 /// Each shell embeds its own interpreter path in the `--shell` argument so `atuin pty-proxy`
 /// spawns the same binary that sourced the init, rather than resolving via `$PATH` (which can
 /// pick the wrong installation when the user has, for instance, both `/usr/bin/bash` and
-/// `/opt/homebrew/bin/bash`).
+/// `/opt/homebrew/bin/bash`). A login shell also passes `--login`, so the shell the proxy spawns
+/// is a login shell too (#4263).
 const BASH_ZSH_INIT: &str = r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]] &&
   [[ -z ${__atuin_pty_proxy_owns_tty-} ]]
 then
@@ -180,7 +192,9 @@ then
     # trying to spawn more proxies.
     :
   elif [[ -n "${BASH_VERSION:-}" ]]; then
-    exec atuin pty-proxy --shell "$BASH"
+    __atuin_pty_proxy_login=
+    shopt -q login_shell && __atuin_pty_proxy_login=1
+    exec atuin pty-proxy ${__atuin_pty_proxy_login:+--login} --shell "$BASH"
   elif [[ -n "${ZSH_VERSION:-}" ]]; then
     # Prefer ZSH_ARGZERO (zsh 5.3+) -- it preserves the path zsh was
     # invoked with -- and fall back to PATH lookup otherwise. Login shells
@@ -190,7 +204,9 @@ then
     # resolves that to an absolute path via $PATH, leaves an absolute path
     # unchanged, and leaves an unresolvable name as-is.
     _atuin_pty_proxy_zsh="${ZSH_ARGZERO:-$(command -v zsh)}"
-    exec atuin pty-proxy --shell "${${_atuin_pty_proxy_zsh#-}:c}"
+    __atuin_pty_proxy_login=
+    [[ -o login ]] && __atuin_pty_proxy_login=1
+    exec atuin pty-proxy ${__atuin_pty_proxy_login:+--login} --shell "${${_atuin_pty_proxy_zsh#-}:c}"
   else
     exec atuin pty-proxy
   fi
@@ -301,18 +317,33 @@ mod tests {
     #[rstest]
     fn init_scripts_forward_shell_path() {
         let posix = init_script(Shell::Bash);
-        assert!(posix.contains(r#"exec atuin pty-proxy --shell "$BASH""#));
+        assert!(posix.contains(r#"--shell "$BASH""#));
         // zsh: capture ZSH_ARGZERO (with PATH fallback), strip the leading
         // dash present on login shells, then resolve a bare command name to
         // an absolute path with the :c modifier before forwarding it.
         assert!(posix.contains(r#"_atuin_pty_proxy_zsh="${ZSH_ARGZERO:-$(command -v zsh)}""#));
-        assert!(posix.contains(r#"exec atuin pty-proxy --shell "${${_atuin_pty_proxy_zsh#-}:c}""#));
+        assert!(posix.contains(r#"--shell "${${_atuin_pty_proxy_zsh#-}:c}""#));
 
         let fish = init_script(Shell::Fish);
         assert!(fish.contains("exec atuin pty-proxy --shell (status fish-path)"));
 
         let nu = init_script(Shell::Nu);
         assert!(nu.contains("exec atuin pty-proxy --shell $nu.current-exe"));
+    }
+
+    #[rstest]
+    fn posix_init_forwards_login_shell_state() {
+        // A login shell that execs the proxy must get a login shell back (#4263), so each shell
+        // checks its own login state and passes `--login` along.
+        let posix = init_script(Shell::Bash);
+        assert!(posix.contains("shopt -q login_shell && __atuin_pty_proxy_login=1"));
+        assert!(posix.contains("[[ -o login ]] && __atuin_pty_proxy_login=1"));
+        assert!(posix.contains(
+            r#"exec atuin pty-proxy ${__atuin_pty_proxy_login:+--login} --shell "$BASH""#
+        ));
+        assert!(posix.contains(
+            r#"exec atuin pty-proxy ${__atuin_pty_proxy_login:+--login} --shell "${${_atuin_pty_proxy_zsh#-}:c}""#
+        ));
     }
 
     #[rstest]
