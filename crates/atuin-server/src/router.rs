@@ -11,6 +11,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
 use eyre::Result;
+use secrecy::SecretString;
 use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
 
@@ -53,7 +54,8 @@ impl FromRequestParts<AppState> for UserAuth {
                 .with_status(http::StatusCode::BAD_REQUEST));
         }
 
-        let user = state.database.get_session_user(token).await.map_err(|e| match e {
+        let token = SecretString::from(token);
+        let user = state.database.get_session_user(&token).await.map_err(|e| match e {
             DbError::NotFound => {
                 tracing::warn!("presented session token was not recognised");
                 ErrorResponse::reply("session not found").with_status(http::StatusCode::FORBIDDEN)

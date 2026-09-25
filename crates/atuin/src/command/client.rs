@@ -7,6 +7,7 @@ use atuin_common::logs::{self, LogConfig};
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
+use crate::i18n::fl;
 use crate::logs::LogCtx;
 
 #[cfg(feature = "sync")]
@@ -45,7 +46,7 @@ mod wrapped;
 pub enum Cmd {
     // Variant order sets the `--help` command list order, so keep the commands users reach for
     // most (search, sync, stats) at the top and the plumbing/config commands lower down.
-    /// Interactive history search
+    #[command(about = fl!("cmd-search"))]
     Search(search::Cmd),
 
     /// Work with captured command output
@@ -53,14 +54,14 @@ pub enum Cmd {
     #[command(subcommand)]
     Output(output::Cmd),
 
-    /// Calculate statistics for your history
+    #[command(about = fl!("cmd-stats"))]
     Stats(stats::Cmd),
 
     #[cfg(feature = "sync")]
     #[command(flatten)]
     Sync(sync::Cmd),
 
-    /// Manage your sync account
+    #[command(about = fl!("cmd-account"))]
     #[cfg(feature = "sync")]
     Account(account::Cmd),
 
@@ -68,25 +69,21 @@ pub enum Cmd {
     #[command(subcommand)]
     History(history::Cmd),
 
-    /// Setup Atuin features
-    #[command()]
+    #[command(about = fl!("cmd-setup"))]
     Setup,
 
-    /// Print Atuin's shell init script
-    #[command()]
+    #[command(about = fl!("cmd-init"))]
     Init(init::Cmd),
 
     /// Import shell history from file
     #[command(subcommand)]
     Import(import::Cmd),
 
-    /// Run the doctor to check for common issues
-    #[command()]
+    #[command(about = fl!("cmd-doctor"))]
     Doctor,
 
-    /// Update atuin to the latest version on your release channel
     #[cfg(feature = "self-update")]
-    #[command()]
+    #[command(about = fl!("cmd-update"))]
     Update(update::Cmd),
 
     /// Get or set small key-value pairs
@@ -105,7 +102,7 @@ pub enum Cmd {
     #[command(subcommand)]
     Scripts(scripts::Cmd),
 
-    /// Manage AI-agent shell hooks
+    #[command(about = fl!("cmd-hook"))]
     Hook(hook::Cmd),
 
     /// Run the AI assistant
@@ -113,33 +110,28 @@ pub enum Cmd {
     #[command(subcommand)]
     Ai(atuin_ai::commands::Command),
 
-    /// Start an MCP server exposing history search to AI tools (stdio)
     #[cfg(feature = "ai")]
-    #[command()]
+    #[command(about = fl!("cmd-mcp"))]
     Mcp,
 
-    /// Show a fun, year-in-review recap of your shell history
-    #[command()]
+    #[command(about = fl!("cmd-wrapped"))]
     Wrapped {
-        /// Year to recap (defaults to last year)
+        #[arg(help = fl!("arg-wrapped-year"))]
         year: Option<i32>,
     },
 
-    /// Print the default atuin configuration (config.toml)
-    #[command()]
+    #[command(about = fl!("cmd-default-config"))]
     DefaultConfig,
 
     /// Get, set, or print values in your atuin config file
     #[command(subcommand)]
     Config(config::Cmd),
 
-    /// Information about Atuin data locations and ENV vars
-    #[command()]
+    #[command(about = fl!("cmd-info"))]
     Info,
 
-    /// *Experimental* Manage the background daemon
     #[cfg(feature = "daemon")]
-    #[command()]
+    #[command(about = fl!("cmd-daemon"))]
     Daemon(daemon::Cmd),
 
     /// Internal subcommands, not for direct use by users.
@@ -153,16 +145,12 @@ pub enum Cmd {
     )]
     Internal(internal::Cmd),
 
-    /// We want to exclude the `__internal` subcommand from Clap's `infer_subcommands`; otherwise,
-    /// a user could access it simply by typing `atuin _`. However, Clap has no way to disable
-    /// `infer_subcommands` for a single command. As a workaround, we define a dummy command with
-    /// the same name but with an extra understore, which forces `__internal` to be typed out in
-    /// entirety, since any prefix of the name would be ambiguous.
     #[command(
         hide = true,
         name = "__internal_",
         disable_help_flag = true,
-        disable_help_subcommand = true
+        disable_help_subcommand = true,
+        about = fl!("cmd-__internal_")
     )]
     InternalDecoy,
 }
@@ -347,5 +335,44 @@ impl Cmd {
 
             _ => Some(LogConfig::stderr_only()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+    use rstest::rstest;
+
+    use super::Cmd;
+
+    const SECRET: &str = "hunter2-s3cr3t";
+
+    #[derive(Parser, Debug)]
+    struct Cli {
+        #[command(subcommand)]
+        cmd: Cmd,
+    }
+
+    #[rstest]
+    #[cfg_attr(feature = "sync", case::login(&["login", "-u", "u", "--password", SECRET]))]
+    #[cfg_attr(feature = "sync", case::login_key(&["login", "-u", "u", "--key", SECRET]))]
+    #[cfg_attr(feature = "sync", case::login_totp(&["login", "-u", "u", "--totp-code", SECRET]))]
+    #[cfg_attr(feature = "sync", case::register(&["register", "-u", "u", "--password", SECRET]))]
+    #[cfg_attr(feature = "sync", case::account_login(&["account", "login", "--password", SECRET]))]
+    #[cfg_attr(feature = "sync", case::delete(&["account", "delete", "--password", SECRET]))]
+    #[cfg_attr(
+        feature = "sync",
+        case::change_current(&["account", "change-password", "--current-password", SECRET])
+    )]
+    #[cfg_attr(
+        feature = "sync",
+        case::change_new(&["account", "change-password", "--new-password", SECRET])
+    )]
+    #[case::rekey(&["store", "rekey", SECRET])]
+    #[cfg_attr(feature = "ai", case::ai_token(&["ai", "inline", "--api-token", SECRET]))]
+    fn debug_redacts_argv_secrets(#[case] args: &[&str]) {
+        let cli = Cli::try_parse_from(std::iter::once("atuin").chain(args.iter().copied()))
+            .expect("the argv parses");
+        assert!(!format!("{:?}", cli.cmd).contains(SECRET));
     }
 }

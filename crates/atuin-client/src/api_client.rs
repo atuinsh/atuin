@@ -10,7 +10,7 @@ use atuin_common::url::UrlAppendExt;
 use atuin_domain::api::{
     ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION, ChangePasswordRequest, ErrorResponse,
     LoginRequest, LoginResponse, MeResponse, PackfileDownloadResponse, PackfileResponse,
-    RegisterResponse,
+    RegisterRequest, RegisterResponse,
 };
 use atuin_domain::caps::{AuthHeaderProvider, CapClient, CapMismatch, CapabilitiesExt};
 use atuin_domain::record::{
@@ -19,9 +19,13 @@ use atuin_domain::record::{
 use easy_cast::Conv;
 use eyre::{Result, bail};
 use futures::{Stream, StreamExt, TryStreamExt, stream};
-use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AGENT};
+use reqwest::header::{
+    AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue, USER_AGENT,
+};
 use reqwest::{Response, StatusCode, Url};
 use reqwest_middleware::ClientWithMiddleware;
+use secrecy::zeroize::Zeroizing;
+use secrecy::{ExposeSecret, SecretString};
 use semver::Version;
 use tracing::{Instrument, instrument};
 
@@ -47,18 +51,22 @@ const MAX_CONCURRENT_PACKFILE_UPLOADS: usize = 16;
 #[derive(Debug, Clone)]
 pub enum AuthToken {
     /// Hub API token, used with "Bearer {token}" header
-    Bearer(String),
+    Bearer(SecretString),
     /// Legacy CLI session token, used with "Token {token}" header
-    Token(String),
+    Token(SecretString),
 }
 
 impl AuthToken {
-    /// Format the token as an Authorization header value
-    fn to_header_value(&self) -> String {
-        match self {
-            Self::Bearer(token) => format!("Bearer {token}"),
-            Self::Token(token) => format!("Token {token}"),
-        }
+    /// Format the token as a sensitive Authorization header value.
+    pub(crate) fn to_header_value(&self) -> Result<HeaderValue, InvalidHeaderValue> {
+        let (scheme, token) = match self {
+            Self::Bearer(token) => ("Bearer", token),
+            Self::Token(token) => ("Token", token),
+        };
+        let value = Zeroizing::new(format!("{scheme} {}", token.expose_secret()));
+        let mut header = HeaderValue::from_str(&value)?;
+        header.set_sensitive(true);
+        Ok(header)
     }
 }
 
@@ -78,7 +86,9 @@ pub struct Client {
 /// headers would be forwarded as-is. Since those often carry credentials
 /// (e.g. Cloudflare Access secrets), refuse cross-origin redirects entirely
 /// whenever extra headers are configured.
-pub(crate) fn client_builder(extra_headers: &HashMap<String, String>) -> reqwest::ClientBuilder {
+pub(crate) fn client_builder(
+    extra_headers: &HashMap<String, SecretString>,
+) -> reqwest::ClientBuilder {
     let builder = reqwest::Client::builder();
 
     if extra_headers.is_empty() {
@@ -108,13 +118,18 @@ pub(crate) fn client_builder(extra_headers: &HashMap<String, String>) -> reqwest
 /// Build a [`HeaderMap`] from user-configured extra headers (the
 /// `extra_headers` setting). Headers Atuin sets itself should be inserted
 /// after these so that Atuin's values win.
-pub(crate) fn extra_headers_map(extra_headers: &HashMap<String, String>) -> Result<HeaderMap> {
+///
+/// Every value is marked sensitive, since these often carry credentials.
+pub(crate) fn extra_headers_map(
+    extra_headers: &HashMap<String, SecretString>,
+) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     for (name, value) in extra_headers {
         let name = HeaderName::from_bytes(name.as_bytes())
             .map_err(|e| eyre::eyre!("invalid extra_headers name {name:?}: {e}"))?;
-        let value = HeaderValue::from_str(value)
+        let mut value = HeaderValue::from_str(value.expose_secret())
             .map_err(|e| eyre::eyre!("invalid extra_headers value for {name:?}: {e}"))?;
+        value.set_sensitive(true);
         headers.insert(name, value);
     }
     Ok(headers)
@@ -125,13 +140,14 @@ pub async fn register(
     address: &Url,
     username: &str,
     email: &str,
-    password: &str,
-    extra_headers: &HashMap<String, String>,
+    password: &SecretString,
+    extra_headers: &HashMap<String, SecretString>,
 ) -> Result<RegisterResponse> {
-    let mut map = HashMap::new();
-    map.insert("username", username);
-    map.insert("email", email);
-    map.insert("password", password);
+    let req = RegisterRequest {
+        email: email.to_owned(),
+        username: username.to_owned(),
+        password: password.clone(),
+    };
 
     let mut headers = extra_headers_map(extra_headers)?;
     headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
@@ -147,7 +163,7 @@ pub async fn register(
     }
 
     let url = address.append(["register"])?;
-    let resp = client.post(url).headers(headers).json(&map).send().await?;
+    let resp = client.post(url).headers(headers).json(&req).send().await?;
     let resp = handle_resp_error(resp).await?;
 
     if !ensure_version(&resp)? {
@@ -162,7 +178,7 @@ pub async fn register(
 pub async fn login(
     address: &Url,
     req: LoginRequest,
-    extra_headers: &HashMap<String, String>,
+    extra_headers: &HashMap<String, SecretString>,
 ) -> Result<LoginResponse> {
     let url = address.append(["login"])?;
     let client = client_builder(extra_headers).build()?;
@@ -230,7 +246,9 @@ pub fn ensure_version(response: &Response) -> Result<bool> {
 #[instrument(level = "trace", skip_all, err)]
 async fn handle_resp_error(resp: Response) -> Result<Response> {
     let status = resp.status();
-    let url = resp.url().to_string();
+    // Presigned packfile URLs carry their signature in the query string.
+    let mut url = resp.url().clone();
+    url.set_query(None);
 
     if status == StatusCode::SERVICE_UNAVAILABLE {
         bail!(
@@ -274,7 +292,9 @@ pub fn caps_client(settings: &Settings) -> Result<Arc<CapClient>> {
 
     let auth = AuthHeaderProvider::new(move || {
         let settings = auth_settings.clone();
-        Box::pin(async move { settings.sync_auth_token().await.ok().map(|t| t.to_header_value()) })
+        Box::pin(async move {
+            settings.sync_auth_token().await.ok().and_then(|t| t.to_header_value().ok())
+        })
     });
 
     Ok(CapClient::new_with_auth(
@@ -288,12 +308,12 @@ pub fn caps_client(settings: &Settings) -> Result<Arc<CapClient>> {
 /// document. For contexts with no user auth in play (tests, tooling).
 pub fn caps_client_anonymous(
     sync_addr: &Url,
-    extra_headers: &HashMap<String, String>,
+    extra_headers: &HashMap<String, SecretString>,
 ) -> Result<Arc<CapClient>> {
     Ok(CapClient::new(sync_addr.append_path("api/v0/capabilities")?, caps_http(extra_headers)?))
 }
 
-fn caps_http(extra_headers: &HashMap<String, String>) -> Result<reqwest::Client> {
+fn caps_http(extra_headers: &HashMap<String, SecretString>) -> Result<reqwest::Client> {
     let mut headers = extra_headers_map(extra_headers)?;
     headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
     headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
@@ -426,13 +446,13 @@ impl Client {
         auth: &AuthToken,
         connect_timeout: Duration,
         timeout: Duration,
-        extra_headers: &HashMap<String, String>,
+        extra_headers: &HashMap<String, SecretString>,
         caps: Arc<CapClient>,
     ) -> Result<Self> {
         let sync_addr: Arc<Url> = sync_addr.into();
 
         let mut headers = extra_headers_map(extra_headers)?;
-        headers.insert(AUTHORIZATION, auth.to_header_value().parse()?);
+        headers.insert(AUTHORIZATION, auth.to_header_value()?);
         headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
 
         // used for semver server check
@@ -568,7 +588,13 @@ impl Client {
         packfile: impl Into<reqwest::Body>,
     ) -> Result<()> {
         // Not self.client: S3 rejects presigned requests that also carry an Authorization header.
-        let resp = self.lfs_client.put(upload_url.clone()).body(packfile).send().await?;
+        let resp = self
+            .lfs_client
+            .put(upload_url)
+            .body(packfile)
+            .send()
+            .await
+            .map_err(reqwest::Error::without_url)?;
         handle_resp_error(resp).await?;
         Ok(())
     }
@@ -594,9 +620,10 @@ impl Client {
             .get(download_url)
             .send()
             .instrument(tracing::trace_span!("lfs_download"))
-            .await?;
+            .await
+            .map_err(reqwest::Error::without_url)?;
         let resp = handle_resp_error(resp).await?;
-        Ok(resp.bytes().await?.to_vec())
+        Ok(resp.bytes().await.map_err(reqwest::Error::without_url)?.to_vec())
     }
 
     /// Build a records request for `series`.
@@ -643,8 +670,8 @@ impl Client {
     #[instrument(level = "trace", skip_all, err)]
     pub async fn change_password(
         &self,
-        current_password: String,
-        new_password: String,
+        current_password: &SecretString,
+        new_password: &SecretString,
     ) -> Result<()> {
         let url = self.sync_addr.append_path("account/password")?;
 
@@ -652,8 +679,9 @@ impl Client {
             .client
             .patch(url)
             .json(&ChangePasswordRequest {
-                current_password,
-                new_password,
+                current_password: current_password.clone(),
+                new_password: new_password.clone(),
+                totp_code: None,
             })
             .send()
             .await?;
@@ -677,22 +705,33 @@ mod tests {
     use super::*;
 
     #[fixture]
-    fn extra_headers() -> HashMap<String, String> {
+    fn extra_headers() -> HashMap<String, SecretString> {
         let mut extra = HashMap::new();
-        extra.insert("X-Auth-Token".to_string(), "secret".to_string());
+        extra.insert("X-Auth-Token".to_string(), "secret".into());
         extra
     }
 
     #[rstest]
-    fn extra_headers_map_parses_headers(extra_headers: HashMap<String, String>) {
+    fn extra_headers_map_parses_headers(extra_headers: HashMap<String, SecretString>) {
         let headers = extra_headers_map(&extra_headers).unwrap();
-        assert_eq!(headers.get("x-auth-token").unwrap(), "secret");
+        let value = headers.get("x-auth-token").unwrap();
+        assert_eq!(value, "secret");
+        assert!(value.is_sensitive());
+    }
+
+    #[rstest]
+    #[case::bearer(AuthToken::Bearer("tok".into()), "Bearer tok")]
+    #[case::token(AuthToken::Token("tok".into()), "Token tok")]
+    fn auth_header_is_sensitive(#[case] token: AuthToken, #[case] expected: &str) {
+        let header = token.to_header_value().unwrap();
+        assert_eq!(header, expected);
+        assert!(header.is_sensitive());
     }
 
     #[rstest]
     fn atuin_headers_override_extra_headers() {
         let mut extra = HashMap::new();
-        extra.insert("Authorization".to_string(), "Token user-value".to_string());
+        extra.insert("Authorization".to_string(), "Token user-value".into());
 
         let mut headers = extra_headers_map(&extra).unwrap();
         headers.insert(AUTHORIZATION, "Token atuin-value".parse().unwrap());
@@ -704,7 +743,7 @@ mod tests {
     #[rstest]
     fn extra_headers_map_rejects_invalid_names() {
         let mut extra = HashMap::new();
-        extra.insert("bad header".to_string(), "value".to_string());
+        extra.insert("bad header".to_string(), "value".into());
         assert!(extra_headers_map(&extra).is_err());
     }
 
@@ -721,7 +760,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn cross_origin_redirects_refused_with_extra_headers(
-        extra_headers: HashMap<String, String>,
+        extra_headers: HashMap<String, SecretString>,
     ) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -748,7 +787,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn same_origin_redirects_followed_with_extra_headers(
-        extra_headers: HashMap<String, String>,
+        extra_headers: HashMap<String, SecretString>,
     ) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -774,6 +813,22 @@ mod tests {
 
         assert_eq!(resp.status(), 200);
         assert_eq!(resp.url().path(), "/ok");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn resp_error_omits_the_query_string() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).respond_with(ResponseTemplate::new(403)).mount(&server).await;
+
+        let resp =
+            reqwest::get(format!("{}/blob?X-Amz-Signature=sekrit", server.uri())).await.unwrap();
+        let err = handle_resp_error(resp).await.unwrap_err();
+
+        assert!(!format!("{err:#}").contains("sekrit"), "{err:#}");
     }
 
     #[rstest]
@@ -838,6 +893,7 @@ mod records_stream_tests {
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordSeriesKey, RecordTag};
     use futures::TryStreamExt;
+    use rstest::rstest;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -906,6 +962,7 @@ mod records_stream_tests {
 
     /// The fast path predicts offsets (`start + i * page_size`) and pipelines the fetches; every
     /// page must still be reassembled in idx order.
+    #[rstest]
     #[tokio::test]
     async fn records_reassembles_pages_in_order() {
         let host = HostId(uuid_v7());
@@ -930,6 +987,7 @@ mod records_stream_tests {
     /// GUARD: a server that clamps `count` below the client's `page_size` returns a short page
     /// *mid-stream*. The predicted offsets past it would skip records, so the stream must detect the
     /// short page and finish serially from the real progress -- losing nothing.
+    #[rstest]
     #[tokio::test]
     async fn records_recovers_from_a_short_midstream_page() {
         let host = HostId(uuid_v7());
@@ -952,6 +1010,7 @@ mod records_stream_tests {
         assert_eq!(idxs, vec![0, 1, 2, 3, 4, 5], "a short mid-stream page must not skip records");
     }
 
+    #[rstest]
     #[tokio::test]
     async fn records_yields_nothing_when_server_is_empty() {
         let host = HostId(uuid_v7());

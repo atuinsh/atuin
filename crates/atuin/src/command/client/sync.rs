@@ -13,34 +13,33 @@ use tracing::instrument;
 mod status;
 
 use crate::command::client::account;
+use crate::i18n::fl;
 
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
-    /// Sync with the configured server
+    #[command(about = fl!("cmd-sync"))]
     Sync {
-        /// Force re-download everything
-        #[arg(long, short)]
+        #[arg(long, short, help = fl!("arg-sync-force"))]
         force: bool,
     },
 
-    /// Login to the configured server
+    #[command(about = fl!("cmd-login"))]
     Login(account::login::Cmd),
 
-    /// Log out
+    #[command(about = fl!("cmd-logout"))]
     Logout,
 
-    /// Register with the configured server
+    #[command(about = fl!("cmd-register"))]
     Register(account::register::Cmd),
 
-    /// Print the encryption key for transfer to another machine
+    #[command(about = fl!("cmd-key"))]
     Key {
-        /// Switch to base64 output of the key
-        #[arg(long)]
+        #[arg(long, help = fl!("arg-key-base64"))]
         base64: bool,
     },
 
-    /// Display the sync status
+    #[command(about = fl!("cmd-status"))]
     Status,
 }
 
@@ -55,12 +54,12 @@ impl Cmd {
             Self::Status => status::run(&settings).await,
             Self::Key { base64 } => {
                 let key = paseto_v4::Key::try_load_from_path(&settings.key_path)
-                    .wrap_err("could not load encryption key")?;
+                    .wrap_err(fl!("sync-key-load-failed"))?;
 
                 if base64 {
                     println!("{}", key.encode().dangerously_leak_secret());
                 } else {
-                    println!("{}", key.try_mnemonic().context("invalid key")?);
+                    println!("{}", key.try_mnemonic().context(fl!("sync-key-invalid"))?);
                 }
                 Ok(())
             }
@@ -97,20 +96,23 @@ async fn run(settings: &Settings, force: bool, db: &Sqlite, store: SqliteStore) 
 
     crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
 
-    println!("{uploaded}/{} up/down to record store", downloaded.len());
+    println!("{}", fl!("sync-up-down", uploaded = uploaded, downloaded = downloaded.len()));
 
     let history_length = db.history_count(true).await?;
     let store_history_length = store.len_tag(&RecordTag::History).await?;
 
     if u64::conv(history_length) > store_history_length {
-        println!("{history_length} in history index, but {store_history_length} in history store");
-        println!("Running automatic history store init...");
+        println!(
+            "{}",
+            fl!("sync-history-mismatch", index = history_length, store = store_history_length)
+        );
+        println!("{}", fl!("sync-store-init"));
 
         // Internally we use the global filter mode, so this context is ignored.
         // don't recurse or loop here.
         history_store.init_store(db).await?;
 
-        println!("Re-running sync due to new records locally");
+        println!("{}", fl!("sync-rerun"));
 
         // we'll want to run sync once more, as there will now be stuff to upload -- re-key the same
         // session rather than reconnecting.
@@ -122,13 +124,12 @@ async fn run(settings: &Settings, force: bool, db: &Sqlite, store: SqliteStore) 
 
         crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
 
-        println!("{uploaded}/{} up/down to record store", downloaded.len());
+        println!("{}", fl!("sync-up-down", uploaded = uploaded, downloaded = downloaded.len()));
     }
 
     println!(
-        "Sync complete! {} items in history database, force: {}",
-        db.history_count(true).await?,
-        force
+        "{}",
+        fl!("sync-complete", count = db.history_count(true).await?, force = force.to_string())
     );
 
     Ok(())

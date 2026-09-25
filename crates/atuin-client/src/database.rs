@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use atuin_common::db::sqlite::{Sqlite as CommonSqlite, SqliteBuilder};
 use atuin_common::filter::{self, OrFilter};
-use atuin_common::time::OffsetDateTimeExt;
+use atuin_common::time::{OffsetDateTimeExt, UtcOffsetSpec};
 use atuin_common::{db, utils};
 use atuin_domain::record::{CmdOrigin, UNKNOWN_USER};
 use easy_cast::{CastFloat, Conv};
@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use super::history::History;
 use super::ordering;
-use super::settings::{FilterMode, SearchMode, Settings};
+use super::settings::{Dialect, FilterMode, SearchMode, Settings};
 use crate::history::{AuthorKind, AuthorPattern, HistoryId, HistoryStats, KNOWN_AGENTS};
 
 #[derive(Clone)]
@@ -55,6 +55,12 @@ pub struct OptFilters<'a> {
     pub authors: OrFilter<&'a [AuthorPattern]>,
     /// Shell filter. The empty string matches commands that have no recorded shell.
     pub shells: OrFilter<&'a [String]>,
+    /// Offset that `before`/`after` strings without an explicit offset are interpreted in, and
+    /// that relative phrases like "today" are anchored to. Pass `settings.timezone`; the
+    /// `Default` is UTC.
+    pub timezone: UtcOffsetSpec,
+    /// Date dialect (day/month order) for parsing `before`/`after`. Pass `settings.dialect`.
+    pub dialect: Dialect,
 }
 
 /// Build a query [`Context`] without requiring a live shell session.
@@ -820,23 +826,20 @@ impl Sqlite {
 
         filter_options.exclude_cwd.map(|exclude_cwd| sql.and_where_ne("cwd", quote(exclude_cwd)));
 
+        let now = OffsetDateTime::now_utc().to_offset(filter_options.timezone.0);
+        let dialect = filter_options.dialect.into();
+
         if let Some(before) = filter_options.before {
-            let parsed =
-                interim::parse_date_string(before, OffsetDateTime::now_utc(), interim::Dialect::Uk)
-                    .map_err(|e| {
-                        sqlx::Error::Decode(
-                            format!("invalid `before` filter {before:?}: {e}").into(),
-                        )
-                    })?;
+            let parsed = interim::parse_date_string(before, now, dialect).map_err(|e| {
+                sqlx::Error::Decode(format!("invalid `before` filter {before:?}: {e}").into())
+            })?;
             sql.and_where_lt("timestamp", quote(i64::conv(parsed.unix_timestamp_nanos())));
         }
 
         if let Some(after) = filter_options.after {
-            let parsed =
-                interim::parse_date_string(after, OffsetDateTime::now_utc(), interim::Dialect::Uk)
-                    .map_err(|e| {
-                        sqlx::Error::Decode(format!("invalid `after` filter {after:?}: {e}").into())
-                    })?;
+            let parsed = interim::parse_date_string(after, now, dialect).map_err(|e| {
+                sqlx::Error::Decode(format!("invalid `after` filter {after:?}: {e}").into())
+            })?;
             sql.and_where_gt("timestamp", quote(i64::conv(parsed.unix_timestamp_nanos())));
         }
 
@@ -1870,6 +1873,34 @@ mod test {
         if expect_ellie_match {
             assert_eq!(results[0].command, "ls /home/ellie");
         }
+    }
+    // The item sits at 15:30:05Z. An explicit offset in the filter must win over the configured
+    // one (+01:00 window = 15:00-16:00Z; misapplying -04:00 would give 20:00-21:00Z), and a bare
+    // string must adopt the configured -04:00 (11:00-12:00 -04:00 = 15:00-16:00Z; UTC would miss).
+    #[rstest]
+    #[case::explicit_offset_wins("2026-01-12T16:00:00+01:00", "2026-01-12T17:00:00+01:00")]
+    #[case::bare_string_uses_configured_offset("2026-01-12T11:00:00", "2026-01-12T12:00:00")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_timezone_before_after(#[case] after: &str, #[case] before: &str) {
+        let item_time = OffsetDateTime::parse("2026-01-12T11:30:05-04:00", &Rfc3339).unwrap();
+
+        let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
+        new_history_item_at(&db, "ls /home/ellie", Some(item_time)).await.unwrap();
+
+        let context = new_context();
+
+        let results = db
+            .search(DbSearchMode::FullText, FilterMode::Global, &context, "", OptFilters {
+                after: Some(after),
+                before: Some(before),
+                timezone: "-04:00".parse().unwrap(),
+                include_duplicates: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
     }
 
     #[rstest]

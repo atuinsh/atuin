@@ -4,23 +4,23 @@ use eyre::Result;
 use toml_edit::{Document, DocumentMut, Item, Table, TableLike, Value};
 use tracing::instrument;
 
+#[cfg(feature = "daemon")]
+use crate::command::client::daemon;
+use crate::i18n::fl;
+
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
-    /// Get a configuration value from your config.toml file
-    /// or after defaults and overrides are applied
-    #[command()]
+    #[command(about = fl!("cmd-config-get"))]
     Get(GetCmd),
 
-    /// Set a configuration value in your config.toml file
-    #[command()]
+    #[command(about = fl!("cmd-config-set"))]
     Set(SetCmd),
 
-    /// Print all configuration values from your config.toml file
-    /// in TOML format
-    ///
-    /// If a key is provided, only print the value of that key and all its children
-    #[command()]
+    #[command(about = fl!("cmd-config-enable"))]
+    Enable(EnableCmd),
+
+    #[command(about = fl!("cmd-config-print"), long_about = fl!("cmd-config-print", "long"))]
     Print(PrintCmd),
 }
 
@@ -30,6 +30,7 @@ impl Cmd {
         match self {
             Self::Get(get) => get.run(settings).await,
             Self::Set(set) => set.run(settings).await,
+            Self::Enable(enable) => enable.run(settings).await,
             Self::Print(print) => print.run(settings).await,
         }
     }
@@ -39,15 +40,13 @@ impl Cmd {
 /// or optionally the effective value after defaults and overrides are applied.
 #[derive(Args, Debug)]
 pub struct GetCmd {
-    /// The configuration key to get
+    #[arg(help = fl!("arg-config-get-key"))]
     pub key: String,
 
-    /// Print the value after defaults and overrides are applied
-    #[arg(long, short)]
+    #[arg(long, short, help = fl!("arg-config-get-resolved"))]
     pub resolved: bool,
 
-    /// Print both the config file value and the resolved value
-    #[arg(long, short)]
+    #[arg(long, short, help = fl!("arg-config-get-verbose"))]
     pub verbose: bool,
 }
 
@@ -118,28 +117,34 @@ impl GetCmd {
 
 #[derive(Args, Debug)]
 pub struct SetCmd {
-    /// The configuration key to set
+    #[arg(help = fl!("arg-config-set-key"))]
     pub key: String,
 
-    /// The value to set
+    #[arg(help = fl!("arg-config-set-value"))]
     pub value: String,
 
-    /// Store value as an explicit type
-    #[arg(long = "type", short, value_enum, default_value_t = ValueType::Auto, value_name = "TYPE")]
+    #[arg(
+        long = "type",
+        short,
+        value_enum,
+        default_value_t = ValueType::Auto,
+        value_name = "TYPE",
+        help = fl!("arg-config-set-the-type")
+    )]
     pub the_type: ValueType,
 }
 
 #[derive(ValueEnum, Debug, Clone, PartialEq, Eq)]
 pub enum ValueType {
-    /// Automatically determine the type of the value
+    #[value(help = fl!("value-config-set-the-type-auto"))]
     Auto,
-    /// Store value as a string
+    #[value(help = fl!("value-config-set-the-type-string"))]
     String,
-    /// Store value as a boolean
+    #[value(help = fl!("value-config-set-the-type-boolean"))]
     Boolean,
-    /// Store value as an integer
+    #[value(help = fl!("value-config-set-the-type-integer"))]
     Integer,
-    /// Store the value as a float
+    #[value(help = fl!("value-config-set-the-type-float"))]
     Float,
 }
 
@@ -223,8 +228,76 @@ impl SetCmd {
 }
 
 #[derive(Args, Debug)]
+pub struct EnableCmd {
+    #[arg(value_enum, help = fl!("arg-config-enable-feature"))]
+    pub feature: Feature,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Feature {
+    #[value(help = fl!("value-config-enable-feature-daemon"))]
+    Daemon,
+    #[value(help = fl!("value-config-enable-feature-output-capture"))]
+    OutputCapture,
+}
+
+impl EnableCmd {
+    pub async fn run(self, settings: &Settings) -> Result<()> {
+        let config_file = Settings::get_config_path()?;
+        let config_str = tokio::fs::read_to_string(&config_file).await?;
+
+        let updated = self.get_updated_config(&config_str, settings.daemon.enabled)?;
+        tokio::fs::write(&config_file, &updated).await?;
+
+        println!("Enabled.");
+
+        // The daemon reads these settings only at startup, so it needs a restart to pick them
+        // up. A running daemon with autostart off may be externally managed (systemd, launchd),
+        // so leave that one alone and tell the user instead.
+        #[cfg(feature = "daemon")]
+        if settings.daemon.enabled && !settings.daemon.autostart {
+            println!("Restart the Atuin daemon and your shell for the change to take effect.");
+            return Ok(());
+        } else if let Err(e) = daemon::restart_cmd(settings).await {
+            eprintln!(
+                "Could not restart the Atuin daemon: {e}\nRun `atuin daemon restart` manually."
+            );
+        }
+
+        println!("Restart your shell for the change to take effect.");
+
+        Ok(())
+    }
+
+    fn get_updated_config(&self, config_str: &str, daemon_enabled: bool) -> Result<String> {
+        let mut doc: DocumentMut = config_str.parse()?;
+
+        // An already-running daemon may be managed externally (systemd, launchd), so leave
+        // its autostart alone.
+        if !daemon_enabled {
+            set_deep_key(&mut doc, "daemon.enabled", Value::from(true))?;
+            set_deep_key(&mut doc, "daemon.autostart", Value::from(true))?;
+        }
+
+        match self.feature {
+            Feature::Daemon => set_deep_key(&mut doc, "search_mode", Value::from("daemon-fuzzy"))?,
+            Feature::OutputCapture => {
+                set_deep_key(&mut doc, "pty_proxy.enabled", Value::from(true))?;
+                set_deep_key(&mut doc, "output.enabled", Value::from(true))?;
+            }
+        }
+
+        let updated = doc.to_string();
+        Settings::validate_str(&updated)
+            .map_err(|e| eyre::eyre!("cannot update config: it would be invalid\n\n{e}"))?;
+
+        Ok(updated)
+    }
+}
+
+#[derive(Args, Debug)]
 pub struct PrintCmd {
-    /// Print the value of a specific key and all its children
+    #[arg(help = fl!("arg-config-print-key"))]
     pub key: Option<String>,
 }
 
@@ -511,6 +584,46 @@ mod tests {
     ) {
         let updated =
             set_cmd(key, value).get_updated_config(input).expect("the update should be accepted");
+
+        assert_eq!(updated, expected);
+    }
+
+    #[rstest]
+    #[case::daemon(
+        Feature::Daemon,
+        "",
+        false,
+        "search_mode = \"daemon-fuzzy\"\n\n[daemon]\nenabled = true\nautostart = true\n"
+    )]
+    #[case::output_capture(
+        Feature::OutputCapture,
+        "",
+        false,
+        "[daemon]\nenabled = true\nautostart = true\n\n[pty_proxy]\nenabled = \
+         true\n\n[output]\nenabled = true\n"
+    )]
+    #[case::daemon_already_enabled(
+        Feature::Daemon,
+        "[daemon]\nenabled = true\nautostart = false\n",
+        true,
+        "search_mode = \"daemon-fuzzy\"\n[daemon]\nenabled = true\nautostart = false\n"
+    )]
+    #[case::output_capture_with_daemon_already_enabled(
+        Feature::OutputCapture,
+        "[daemon]\nenabled = true\nautostart = false\n",
+        true,
+        "[daemon]\nenabled = true\nautostart = false\n\n[pty_proxy]\nenabled = \
+         true\n\n[output]\nenabled = true\n"
+    )]
+    fn enable_writes(
+        #[case] feature: Feature,
+        #[case] input: &str,
+        #[case] daemon_enabled: bool,
+        #[case] expected: &str,
+    ) {
+        let updated = EnableCmd { feature }
+            .get_updated_config(input, daemon_enabled)
+            .expect("the update should be accepted");
 
         assert_eq!(updated, expected);
     }

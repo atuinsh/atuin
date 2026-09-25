@@ -1,5 +1,4 @@
-pub mod tail;
-pub mod tree_watcher;
+pub mod lock;
 
 use std::path::{Path, PathBuf};
 

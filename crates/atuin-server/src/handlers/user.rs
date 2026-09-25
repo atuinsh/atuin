@@ -16,6 +16,7 @@ use axum::http::StatusCode;
 use metrics::counter;
 use rand::rngs::OsRng;
 use reqwest::header::CONTENT_TYPE;
+use secrecy::{ExposeSecret, SecretString};
 use tracing::{debug, error, info, instrument, warn};
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
@@ -23,12 +24,12 @@ use crate::db::DbError;
 use crate::db::models::NewUser;
 use crate::router::{AppState, UserAuth};
 
-pub fn verify_str(hash: &str, password: &str) -> bool {
+pub fn verify_str(hash: &str, password: &SecretString) -> bool {
     let arg2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::default());
     let Ok(hash) = PasswordHash::new(hash) else {
         return false;
     };
-    arg2.verify_password(password.as_bytes(), &hash).is_ok()
+    arg2.verify_password(password.expose_secret().as_bytes(), &hash).is_ok()
 }
 
 // Try to send a Discord webhook once - if it fails, we don't retry. "At most once", and best effort.
@@ -51,7 +52,7 @@ async fn send_register_hook(url: &url::Url, username: String, registered: String
 
     match resp {
         Ok(_) => info!("register webhook sent ok!"),
-        Err(e) => error!("failed to send register webhook: {}", e),
+        Err(e) => error!("failed to send register webhook: {}", e.without_url()),
     }
 }
 
@@ -174,7 +175,7 @@ pub async fn change_password(
 ) -> Result<Json<ChangePasswordResponse>, ErrorResponseStatus<'static>> {
     let db = &state.0.database;
 
-    let verified = verify_str(user.password.as_str(), change_password.current_password.borrow());
+    let verified = verify_str(user.password.as_str(), &change_password.current_password);
     if !verified {
         return Err(
             ErrorResponse::reply("password is not correct").with_status(StatusCode::UNAUTHORIZED)
@@ -229,7 +230,7 @@ pub async fn login(
         }
     };
 
-    let verified = verify_str(user.password.as_str(), login.password.borrow());
+    let verified = verify_str(user.password.as_str(), &login.password);
 
     if !verified {
         warn!(user.id = user.id, "login failed: incorrect password");
@@ -246,9 +247,9 @@ pub async fn login(
     }))
 }
 
-fn hash_secret(password: &str) -> String {
+fn hash_secret(password: &SecretString) -> String {
     let arg2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::default());
     let salt = SaltString::generate(&mut OsRng);
-    let hash = arg2.hash_password(password.as_bytes(), &salt).unwrap();
+    let hash = arg2.hash_password(password.expose_secret().as_bytes(), &salt).unwrap();
     hash.to_string()
 }

@@ -4,7 +4,7 @@ members = ["crates/*"]
 exclude = ["ui/backend"]
 
 [workspace.package]
-version = "18.22.0"
+version = "18.23.0"
 authors = ["Ellie Huxtable <ellie@atuin.sh>"]
 rust-version = "1.95.0"
 license = "MIT"
@@ -13,17 +13,17 @@ repository = "https://github.com/atuinsh/atuin"
 readme = "README.md"
 
 [workspace.dependencies]
-atuin-ai = { path = "crates/atuin-ai", version = "18.22.0", default-features = false }
-atuin-client = { path = "crates/atuin-client", version = "18.22.0" }
-atuin-common = { path = "crates/atuin-common", version = "18.22.0" }
-atuin-daemon = { path = "crates/atuin-daemon", version = "18.22.0", default-features = false }
-atuin-domain = { path = "crates/atuin-domain", version = "18.22.0" }
-atuin-dotfiles = { path = "crates/atuin-dotfiles", version = "18.22.0" }
-atuin-history = { path = "crates/atuin-history", version = "18.22.0" }
-atuin-kv = { path = "crates/atuin-kv", version = "18.22.0" }
-atuin-pty-proxy = { path = "crates/atuin-pty-proxy", version = "18.22.0", default-features = false }
-atuin-scripts = { path = "crates/atuin-scripts", version = "18.22.0" }
-atuin-server = { path = "crates/atuin-server", version = "18.22.0" }
+atuin-ai = { path = "crates/atuin-ai", version = "18.23.0", default-features = false }
+atuin-client = { path = "crates/atuin-client", version = "18.23.0" }
+atuin-common = { path = "crates/atuin-common", version = "18.23.0" }
+atuin-daemon = { path = "crates/atuin-daemon", version = "18.23.0", default-features = false }
+atuin-domain = { path = "crates/atuin-domain", version = "18.23.0" }
+atuin-dotfiles = { path = "crates/atuin-dotfiles", version = "18.23.0" }
+atuin-history = { path = "crates/atuin-history", version = "18.23.0" }
+atuin-kv = { path = "crates/atuin-kv", version = "18.23.0" }
+atuin-pty-proxy = { path = "crates/atuin-pty-proxy", version = "18.23.0", default-features = false }
+atuin-scripts = { path = "crates/atuin-scripts", version = "18.23.0" }
+atuin-server = { path = "crates/atuin-server", version = "18.23.0" }
 atuin-vt100 = "0.19"
 
 ansi-to-tui = { version = "8", default-features = false }
@@ -36,7 +36,6 @@ axoupdater = "0.10"
 axum = "0.8"
 # held at 0.22: sqlx-postgres 0.9 pins base64 0.22; bumping would add a 2nd copy
 base64 = "0.22"
-bytes = "1"
 bytesize = { version = "2", features = ["serde"] }
 chrono = "0.4"
 chrono-humanize = "0.2"
@@ -77,7 +76,6 @@ eye_declare = "0.7"
 eye_declare_engine = { version = "0.7", features = ["test-util"] }
 eyre = "0.6"
 fjall = { version = "3" }
-flume = { version = "0.12", default-features = false, features = ["async"] }
 frizbee = "0.13"
 fs-err = "3"
 futures = "0.3"
@@ -87,6 +85,8 @@ glob-match = "0.2"
 http = "1"
 humantime = "2"
 hyper-util = "0.1"
+i18n-embed = { version = "0.16", features = ["fluent-system"] }
+i18n-embed-fl = "0.10"
 imara-diff = "0.2"
 indicatif = "0.18"
 interim = { version = "0.2", features = ["time_0_3"] }
@@ -105,7 +105,6 @@ minijinja = "2"
 minspan = "0.1"
 norm = { version = "0.1", features = ["fzf-v2"] }
 notify = "8"
-notify-debouncer-full = "0.7"
 num-traits = "0.2"
 opentelemetry = "0.32"
 opentelemetry-otlp = "0.32"
@@ -134,8 +133,10 @@ rmp = "0.8"
 rpassword = "7"
 rstest = "0.27"
 runtime-format = "0.1"
-rustix = { version = "1", features = ["process", "fs", "pty", "termios", "stdio"] }
+rust-embed = "8"
+rustix = { version = "1", features = ["process", "fs", "pty", "termios", "stdio", "event"] }
 schemars = "1"
+secrecy = { version = "0.10", features = ["serde"] }
 rusty_paserk = { version = "0.5", default-features = false, features = ["v4", "serde"] }
 # rusty_paserk 0.5.0 (latest) requires rusty_paseto 0.8.0 unfortunately
 rusty_paseto = { version = "0.8", default-features = false }

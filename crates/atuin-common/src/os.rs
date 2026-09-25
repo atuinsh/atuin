@@ -1,14 +1,10 @@
 //! OS-specific utilities.
 
-pub mod fs;
-
-#[cfg(feature = "os")]
 pub mod disk;
-#[cfg(feature = "os")]
 pub mod process;
 
-#[cfg(all(unix, feature = "os"))]
+#[cfg(unix)]
 pub mod unix;
 
-#[cfg(all(windows, feature = "os"))]
+#[cfg(windows)]
 pub mod windows;

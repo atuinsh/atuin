@@ -18,6 +18,7 @@ use config::{Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat}
 use eyre::{Context, Result, eyre};
 use fs_err::{File, create_dir_all};
 use regex::RegexSet;
+use secrecy::SecretString;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -171,8 +172,9 @@ pub enum ExitMode {
 
 // FIXME: Can use upstream Dialect enum if https://github.com/stevedonovan/chrono-english/pull/16 is merged
 // FIXME: Above PR was merged, but dependency was changed to interim (fork of chrono-english) in the ... interim
-#[derive(Clone, Debug, Deserialize, Copy, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Copy, Serialize)]
 pub enum Dialect {
+    #[default]
     #[serde(rename = "us")]
     Us,
 
@@ -386,19 +388,19 @@ pub enum SyncAuth {
     /// Self-hosted Rust server. Uses `Authorization: Token <session>` and
     /// legacy endpoints.
     Legacy {
-        token: String,
+        token: SecretString,
     },
     /// Hub with a valid Hub API token (`atapi_*`). Uses
     /// `Authorization: Bearer <token>` and v0 endpoints.
     Hub {
-        token: String,
+        token: SecretString,
     },
     /// Targeting Hub but only has a CLI session token. Uses
     /// `Authorization: Token <session>` against compat/record endpoints.
     /// Sync, password change, and account deletion still work, but the user
     /// should be nudged to run `atuin login` for full Hub auth.
     HubViaCli {
-        token: String,
+        token: SecretString,
     },
     /// Not authenticated at all. Contains an actionable user-facing message.
     NotLoggedIn {
@@ -670,7 +672,8 @@ pub struct Ai {
 
     /// The API token for the Atuin AI endpoint. Used for AI features like command generation.
     /// Only necessary for custom AI endpoints.
-    pub api_token: Option<String>,
+    #[serde(skip_serializing)]
+    pub api_token: Option<SecretString>,
 
     /// Path to the AI sessions database.
     pub db_path: String,
@@ -1091,8 +1094,8 @@ pub struct Settings {
     /// for services like Cloudflare Access that sit in front of a self-hosted
     /// server. Headers that Atuin sets itself (e.g. Authorization) win over
     /// values configured here.
-    #[serde(default)]
-    pub extra_headers: HashMap<String, String>,
+    #[serde(default, skip_serializing)]
+    pub extra_headers: HashMap<String, SecretString>,
 
     pub enter_accept: bool,
     pub smart_sort: bool,
@@ -1250,14 +1253,14 @@ impl Settings {
         Self::meta_store().await?.logged_in().await
     }
 
-    pub async fn session_token(&self) -> Result<String> {
+    pub async fn session_token(&self) -> Result<SecretString> {
         match Self::meta_store().await?.session_token().await? {
             Some(token) => Ok(token),
             None => Err(eyre!("Tried to load session; not logged in")),
         }
     }
 
-    pub async fn hub_session_token(&self) -> Result<String> {
+    pub async fn hub_session_token(&self) -> Result<SecretString> {
         match Self::meta_store().await?.hub_session_token().await? {
             Some(token) => Ok(token),
             None => Err(eyre!("Tried to load hub session; not logged in")),
@@ -1343,7 +1346,7 @@ impl Settings {
 
         // Targeting Hub — check for a valid Hub API token first
         if let Ok(Some(hub_token)) = meta.hub_session_token().await {
-            if hub_token.starts_with("atapi_") {
+            if crate::meta::is_hub_token(&hub_token) {
                 return SyncAuth::Hub { token: hub_token };
             }
 
@@ -1526,7 +1529,7 @@ impl Settings {
             )?
             .set_default("scroll_context_lines", 1)?
             .set_default("shell_up_key_binding", false)?
-            .set_default("workspaces", false)?
+            .set_default("workspaces", true)?
             .set_default("ctrl_n_shortcuts", false)?
             .set_default("secrets_filter", true)?
             .set_default("strip_trailing_whitespace", true)?
@@ -1975,7 +1978,7 @@ mod tests {
 
     /// Forces both `LazyLock`s, so a typo in either constant fails here rather
     /// than panicking at runtime.
-    #[test]
+    #[rstest]
     fn default_addresses_parse() {
         assert_eq!(super::DEFAULT_SYNC_URL.host_str(), Some("api.atuin.sh"));
         assert_eq!(super::DEFAULT_HUB_URL.host_str(), Some("hub.atuin.sh"));
@@ -2003,7 +2006,7 @@ mod tests {
         assert_eq!(settings.default_filter_mode(git_root), expected);
     }
 
-    #[test]
+    #[rstest]
     fn builder_with_data_dir_uses_custom_paths() -> Result<()> {
         use std::path::PathBuf;
 
@@ -2062,7 +2065,7 @@ mod tests {
         assert!(err.contains(expected_err), "error should mention `{expected_err}`, got: {err}");
     }
 
-    #[test]
+    #[rstest]
     fn effective_data_dir_returns_default_when_not_set() {
         let effective = super::Settings::effective_data_dir();
         let default = atuin_common::utils::data_dir();
@@ -2071,7 +2074,7 @@ mod tests {
         assert!(effective.ends_with("atuin") || effective == default);
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_deserializes_simple_binding() {
         let json = r#"{"emacs": {"ctrl-c": "exit"}}"#;
         let config: super::KeymapConfig = serde_json::from_str(json).unwrap();
@@ -2081,7 +2084,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_deserializes_conditional_binding() {
         let json = r#"{
             "emacs": {
@@ -2103,7 +2106,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_deserializes_vim_normal() {
         let json = r#"{"vim-normal": {"j": "select-next", "k": "select-previous"}}"#;
         let config: super::KeymapConfig = serde_json::from_str(json).unwrap();
@@ -2111,13 +2114,13 @@ mod tests {
         assert!(config.emacs.is_empty());
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_is_empty_when_default() {
         let config = super::KeymapConfig::default();
         assert!(config.is_empty());
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_mixed_modes() {
         let json = r#"{
             "emacs": {"ctrl-c": "exit"},
@@ -2185,7 +2188,7 @@ mod tests {
         assert!(Settings::validate_str("sync_frequency = -5\n").is_err());
     }
 
-    #[test]
+    #[rstest]
     fn skim_is_requested_but_resolves_to_fuzzy() {
         let settings = parse_settings("search_mode = \"skim\"\n");
 
@@ -2193,7 +2196,7 @@ mod tests {
         assert_eq!(settings.search_mode(), SearchMode::Fuzzy);
     }
 
-    #[test]
+    #[rstest]
     fn skim_shell_up_key_binding_resolves_to_fuzzy() {
         let settings = parse_settings("search_mode_shell_up_key_binding = \"skim\"\n");
 

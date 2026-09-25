@@ -18,8 +18,8 @@ modes by pressing **ctrl-r** inside the TUI.
 | workspace        | Only history from anywhere in the current git repository                             |
 | session-preload  | The current session, plus all global history from before the session started         |
 
-`workspace` mode requires [`workspaces = true`](../configuration/config.md#workspaces).
-Atuin skips it when you aren't inside a git repository.
+Atuin skips `workspace` mode when you aren't inside a git repository or when
+[`workspaces = false`](../configuration/config.md#workspaces).
 
 To change which mode searches start in, set
 [`filter_mode`](../configuration/config.md#filter_mode). To remove modes from the

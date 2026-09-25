@@ -30,6 +30,7 @@ thiserror = { workspace = true }
 [dev-dependencies]
 divan = { workspace = true }
 parking_lot = { workspace = true }
+regex = { workspace = true }
 rstest = { workspace = true }
 tempfile = { workspace = true }
 

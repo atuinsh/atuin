@@ -18,10 +18,15 @@ pub(crate) const EXIT_BACKOFF: Backoff = Backoff::Exponential {
 };
 
 /// Gracefully (and then forcefully) terminate the process.
+///
+/// TODO(taylordotfish): On Unix, if the process doesn't exist, this function returns [`Ok`], but on
+/// Windows, it returns an error. This should be unified.
 pub async fn force_terminate(pid: u32, timeout: Duration) -> Result<(), std::io::Error> {
     #[cfg(unix)]
     {
-        let Some(pid) = rustix::process::Pid::from_raw(pid.cast_signed()) else {
+        let Some(pid) = unix::process::pid_from_u32(pid) else {
+            // Return `Ok` if the PID doesn't fit in a pid_t, the same behavior as if the process
+            // doesn't exist (`unix::process::force_terminate` handles `ESRCH` by returning `Ok`).
             return Ok(());
         };
         unix::process::force_terminate(pid, timeout).await

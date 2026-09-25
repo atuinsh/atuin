@@ -3,11 +3,14 @@ use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use clap::Args;
 use eyre::{Context as _, Result};
+use secrecy::{ExposeSecret, SecretString};
+
+use crate::i18n::fl;
 
 #[derive(Args, Debug)]
 pub struct Rekey {
-    /// The new key to use for encryption. Omit for a randomly-generated key
-    key: Option<String>,
+    #[arg(help = fl!("arg-store-rekey-key"))]
+    key: Option<SecretString>,
 }
 
 impl Rekey {
@@ -15,7 +18,7 @@ impl Rekey {
         let key: paseto_v4::Key = if let Some(key_str) = &self.key {
             println!("Re-encrypting store with specified key");
 
-            paseto_v4::Key::try_from_mnemonic(key_str)?
+            paseto_v4::Key::try_from_mnemonic(key_str.expose_secret())?
         } else {
             println!("Re-encrypting store with freshly-generated key");
             paseto_v4::Key::generate()
