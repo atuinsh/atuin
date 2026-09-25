@@ -1,15 +1,14 @@
 use std::fmt::Write as _;
 
-use atuin_client::ai_session::HarnessKind;
+use atuin_client::ai_session::{HarnessKind, SessionMatch};
 use atuin_client::settings::Settings;
 use atuin_common::range::Clamped;
 use atuin_common::string::NonBlankString;
-use atuin_common::string::highlighted::{FromHighlightedTextProtoError, HighlightedStr};
 use atuin_common::time::UtcOffsetExt;
 use atuin_daemon::AiClient;
-use atuin_daemon::grpc::ai::session::pb::SearchSessionsMatch;
 use futures::TryStreamExt;
 use serde::Deserialize;
+use time::OffsetDateTime;
 
 use crate::commands::session::harness_name;
 use crate::tools::ToolOutcome;
@@ -72,6 +71,15 @@ impl AtuinAiSessionSearchToolCall {
             Ok(hits) => hits,
             Err(e) => return ToolOutcome::Error(e),
         };
+        let hits = match hits.into_iter().map(SessionMatch::try_from).collect::<Result<Vec<_>, _>>()
+        {
+            Ok(hits) => hits,
+            Err(e) => {
+                return ToolOutcome::Error(format!(
+                    "AI session search returned a malformed result: {e}"
+                ));
+            }
+        };
 
         if hits.is_empty() {
             return ToolOutcome::Success(format!(
@@ -85,66 +93,48 @@ impl AtuinAiSessionSearchToolCall {
         let offset = time::UtcOffset::local_or_utc();
         let mut out = String::new();
         for (index, hit) in hits.iter().enumerate() {
-            if let Err(e) = SessionHit(hit).render_into(&mut out, index + 1, offset) {
-                return ToolOutcome::Error(format!(
-                    "AI session search returned a malformed result: {e}"
-                ));
-            }
+            SessionHit(hit).render_into(&mut out, index + 1, offset);
         }
         ToolOutcome::Success(out)
     }
 }
 
-struct SessionHit<'a>(&'a SearchSessionsMatch);
+struct SessionHit<'a>(&'a SessionMatch);
 
 impl SessionHit<'_> {
-    fn render_into(
-        &self,
-        out: &mut String,
-        index: usize,
-        offset: time::UtcOffset,
-    ) -> Result<(), FromHighlightedTextProtoError> {
-        let session = self.0.session.as_ref();
-        let id = session.map_or("", |s| s.session_id.as_str());
-        let harness = session.map_or("unknown", |s| harness_name(s.harness));
-        let when = session
-            .and_then(|s| s.updated_at.as_ref())
-            .map_or_else(|| "unknown time".to_owned(), |ts| Self::timestamp(ts, offset));
+    fn render_into(&self, out: &mut String, index: usize, offset: time::UtcOffset) {
+        let session = &self.0.session;
+        let id = &session.handle.session;
+        let harness = harness_name(session.handle.harness);
+        let when = Self::timestamp(session.updated_at, offset);
 
         let _ = writeln!(out, "{index}. [{harness}] {when}  {id}");
 
-        if let Some(proto) = self.0.title.as_ref() {
-            let title = HighlightedStr::try_from(proto)?.plain();
-            let title = title.trim();
-            if !title.is_empty() {
-                let _ = writeln!(out, "   title: {title}");
-            }
+        let title = self.0.title.to_plain().text;
+        let title = title.trim();
+        if !title.is_empty() {
+            let _ = writeln!(out, "   title: {title}");
         }
-        if let Some(proto) = self.0.preview.as_ref() {
-            let preview = HighlightedStr::try_from(proto)?.plain();
-            let preview = preview.trim();
-            if !preview.is_empty() {
-                let _ = writeln!(out, "   match: {preview}");
-            }
+        let preview = self.0.preview.to_plain().text;
+        let preview = preview.trim();
+        if !preview.is_empty() {
+            let _ = writeln!(out, "   match: {preview}");
         }
-        Ok(())
     }
 
-    fn timestamp(ts: &prost_types::Timestamp, offset: time::UtcOffset) -> String {
-        match time::OffsetDateTime::from_unix_timestamp(ts.seconds) {
-            Ok(when) => {
-                let local = when.to_offset(offset);
-                format!("{} {:02}:{:02}", local.date(), local.hour(), local.minute())
-            }
-            Err(_) => "unknown time".to_owned(),
+    fn timestamp(ts: OffsetDateTime, offset: time::UtcOffset) -> String {
+        match ts.checked_to_offset(offset) {
+            Some(local) => format!("{} {:02}:{:02}", local.date(), local.hour(), local.minute()),
+            None => "unknown time".to_owned(),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use atuin_client::ai_session::{HarnessSession, NativeSessionId, Session};
+    use atuin_common::harnesstools::session::Usage;
     use atuin_common::string::highlighted::TextHighlighter;
-    use atuin_daemon::grpc::ai::agent::pb::Session;
     use rstest::rstest;
     use serde_json::json;
 
@@ -183,25 +173,23 @@ mod tests {
 
     #[rstest]
     fn renders_a_hit_with_harness_time_title_and_snippet() {
-        let hit = SearchSessionsMatch {
-            session: Some(Session {
-                harness: HarnessKind::ClaudeCode as i32,
-                session_id: "abc-123".to_owned(),
-                updated_at: Some(prost_types::Timestamp {
-                    seconds: 0,
-                    nanos: 0,
-                }),
-                ..Session::default()
-            }),
-            title: Some((&TextHighlighter::default().as_highlighted("Add FTS".to_owned())).into()),
-            preview: Some(
-                (&TextHighlighter::default().as_highlighted("the flaky test".to_owned())).into(),
-            ),
+        let hit = SessionMatch {
+            session: Session::builder()
+                .handle(HarnessSession {
+                    harness: HarnessKind::ClaudeCode,
+                    session: NativeSessionId::from("abc-123".to_owned()),
+                })
+                .started_at(OffsetDateTime::UNIX_EPOCH)
+                .updated_at(OffsetDateTime::UNIX_EPOCH)
+                .usage(Usage::default())
+                .build(),
+            title: TextHighlighter::default().as_highlighted("Add FTS".to_owned()),
+            preview: TextHighlighter::default().as_highlighted("the flaky test".to_owned()),
             score: 1.0,
         };
 
         let mut out = String::new();
-        SessionHit(&hit).render_into(&mut out, 1, time::UtcOffset::UTC).unwrap();
+        SessionHit(&hit).render_into(&mut out, 1, time::UtcOffset::UTC);
 
         assert!(out.contains("claude-code"));
         assert!(out.contains("abc-123"));

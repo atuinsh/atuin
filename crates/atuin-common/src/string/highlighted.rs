@@ -238,16 +238,6 @@ impl<S: AsRef<str>> HighlightedText<S> {
     }
 }
 
-impl<'a> HighlightedText<&'a str> {
-    /// The marker-free text, borrowing the source when it holds no markers.
-    ///
-    /// The lightweight counterpart to [`Self::to_plain`], which also reports each match's range.
-    #[must_use]
-    pub fn plain(self) -> Cow<'a, str> {
-        self.highlighter.sanitize(self.data)
-    }
-}
-
 /// The marker-free view of a [`HighlightedText`], from [`HighlightedText::to_plain`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plain<'a> {
@@ -410,10 +400,7 @@ pub type HighlightedCowStr<'a> = HighlightedText<Cow<'a, str>>;
 mod proto {
     use thiserror::Error;
 
-    use super::{
-        HighlightedStr, HighlightedString, HighlightedText, NewTextHighlighterError,
-        TextHighlighter,
-    };
+    use super::{HighlightedString, HighlightedText, NewTextHighlighterError, TextHighlighter};
 
     #[derive(Clone, PartialEq, Eq, Hash, prost::Message)]
     pub struct HighlightedTextProto {
@@ -444,23 +431,15 @@ mod proto {
         }
     }
 
-    impl<'a> TryFrom<&'a HighlightedTextProto> for HighlightedStr<'a> {
-        type Error = FromHighlightedTextProtoError;
-
-        fn try_from(value: &'a HighlightedTextProto) -> Result<Self, Self::Error> {
-            let open = char::from_u32(value.open)
-                .ok_or(FromHighlightedTextProtoError::InvalidMarker(value.open))?;
-            let close = char::from_u32(value.close)
-                .ok_or(FromHighlightedTextProtoError::InvalidMarker(value.close))?;
-            Ok(TextHighlighter::with_markers([open, close])?.as_highlighted(value.raw.as_str()))
-        }
-    }
-
     impl TryFrom<HighlightedTextProto> for HighlightedString {
         type Error = FromHighlightedTextProtoError;
 
         fn try_from(value: HighlightedTextProto) -> Result<Self, Self::Error> {
-            Ok(HighlightedStr::try_from(&value)?.map(str::to_owned))
+            let open = char::from_u32(value.open)
+                .ok_or(FromHighlightedTextProtoError::InvalidMarker(value.open))?;
+            let close = char::from_u32(value.close)
+                .ok_or(FromHighlightedTextProtoError::InvalidMarker(value.close))?;
+            Ok(TextHighlighter::with_markers([open, close])?.as_highlighted(value.raw))
         }
     }
 }
@@ -858,23 +837,12 @@ mod tests {
 
     #[cfg(feature = "proto")]
     proptest! {
-        /// A highlighted text survives the round-trip through its proto -- same markers, same raw --
-        /// and `plain()` (via `sanitize`'s `replace`) strips exactly what `display_plain` (via
-        /// `split`) does.
+        /// A highlighted text survives the round-trip through its proto: same markers, same raw.
         #[test]
-        fn proto_round_trips_and_plain_agrees_with_display(
-            markers in distinct_markers(),
-            text in nasty_string(),
-        ) {
+        fn proto_round_trips(markers in distinct_markers(), text in nasty_string()) {
             let hl = TextHighlighter::with_markers(markers).unwrap().as_highlighted(text.as_str());
-            let proto = HighlightedTextProto::from(&hl);
 
-            let borrowed = HighlightedStr::try_from(&proto).unwrap();
-            prop_assert_eq!(borrowed.as_ref(), text.as_str());
-            prop_assert_eq!(borrowed.markers(), markers);
-            prop_assert_eq!(borrowed.plain().into_owned(), hl.display_plain().to_string());
-
-            let owned = HighlightedString::try_from(proto).unwrap();
+            let owned = HighlightedString::try_from(HighlightedTextProto::from(&hl)).unwrap();
             prop_assert_eq!(owned.as_ref(), text.as_str());
             prop_assert_eq!(owned.markers(), markers);
         }
@@ -891,7 +859,7 @@ mod tests {
             raw: "hi".to_owned(),
         };
         assert!(matches!(
-            HighlightedStr::try_from(&proto),
+            HighlightedString::try_from(proto),
             Err(FromHighlightedTextProtoError::InvalidMarker(_))
         ));
     }
@@ -905,7 +873,7 @@ mod tests {
             raw: "x".to_owned(),
         };
         assert!(matches!(
-            HighlightedStr::try_from(&proto),
+            HighlightedString::try_from(proto),
             Err(FromHighlightedTextProtoError::Markers(NewTextHighlighterError::IdenticalMarkers(
                 _
             )))

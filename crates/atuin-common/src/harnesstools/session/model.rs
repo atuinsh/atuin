@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use derive_more::{AsRef, Display, From, Into};
 use serde::{Deserialize, Serialize};
 
@@ -63,15 +65,37 @@ pub struct ToolResult {
     pub error: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+impl ToolResult {
+    /// The output as display text: a JSON string's contents verbatim, any other JSON as encoded,
+    /// or `None` when capture did not keep it.
+    #[must_use]
+    pub fn output_text(&self) -> Option<Cow<'_, str>> {
+        match &self.output {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(text) => Some(Cow::Borrowed(text)),
+            json => Some(Cow::Owned(json.to_string())),
+        }
+    }
+}
+
+/// Also the daemon's `ai.agent.Tokens` wire message, so its prost tags are that message's field
+/// numbers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "proto", derive(prost::Message), prost(skip_debug))]
+#[cfg_attr(not(feature = "proto"), derive(Default))]
 pub struct Usage {
+    #[cfg_attr(feature = "proto", prost(uint64, optional, tag = "1"))]
     pub input: Option<u64>,
+    #[cfg_attr(feature = "proto", prost(uint64, optional, tag = "2"))]
     pub output: Option<u64>,
+    #[cfg_attr(feature = "proto", prost(uint64, optional, tag = "3"))]
     pub cache_read: Option<u64>,
+    #[cfg_attr(feature = "proto", prost(uint64, optional, tag = "4"))]
     pub cache_write: Option<u64>,
     /// Reasoning (thinking) tokens of the model call, already included in `output`: a
     /// breakdown, never extra usage to add to it.
     #[serde(default)]
+    #[cfg_attr(feature = "proto", prost(uint64, optional, tag = "5"))]
     pub reasoning: Option<u64>,
 }
 
@@ -167,6 +191,22 @@ mod tests {
             input: serde_json::json!({"cmd": "ls"}),
         });
         assert_ne!(a, b);
+    }
+
+    #[rstest]
+    #[case::string(serde_json::json!("line1\nline2"), Some("line1\nline2"))]
+    #[case::structured(serde_json::json!({"exit": 0}), Some(r#"{"exit":0}"#))]
+    #[case::uncaptured(serde_json::Value::Null, None)]
+    fn tool_result_output_text_unwraps_json_strings(
+        #[case] output: serde_json::Value,
+        #[case] want: Option<&str>,
+    ) {
+        let result = ToolResult {
+            call: ToolCallId::from("c1".to_owned()),
+            output,
+            error: false,
+        };
+        assert_eq!(result.output_text().as_deref(), want);
     }
 
     proptest! {

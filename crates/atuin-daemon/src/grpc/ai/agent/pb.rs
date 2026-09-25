@@ -11,7 +11,6 @@ mod codegen {
     tonic::include_proto!("ai.agent");
 }
 
-use std::borrow::Cow;
 use std::path::PathBuf;
 
 use atuin_client::ai_session::{
@@ -20,8 +19,9 @@ use atuin_client::ai_session::{
 };
 use atuin_common::harnesstools::session::{
     Content, Role as DomainRole, StopReason as DomainStopReason, ToolCallId,
-    ToolResult as DomainToolResult, ToolUse, Usage,
+    ToolResult as DomainToolResult, ToolUse,
 };
+use atuin_common::string::highlighted::FromHighlightedTextProtoError;
 use atuin_common::time::{OffsetDateTimeExt, TimespecOutOfRange};
 use atuin_domain::record::RecordId;
 pub use codegen::*;
@@ -30,7 +30,7 @@ use time::OffsetDateTime;
 
 use crate::grpc::common::pb::Uuid;
 
-/// Errors decoding an `ai.agent` wire type into its domain type.
+/// Errors decoding an `ai` wire type into its domain type.
 #[derive(Debug, Error)]
 pub enum ParseError {
     #[error("unrecognized harness kind: {0}")]
@@ -47,7 +47,11 @@ pub enum ParseError {
     InvalidTimestamp(#[from] TimespecOutOfRange),
     #[error("invalid JSON: {0}")]
     InvalidJson(#[from] serde_json::Error),
+    #[error("invalid highlighted text: {0}")]
+    InvalidHighlight(#[from] FromHighlightedTextProtoError),
 }
+
+invalid_argument_errors!(ParseError);
 
 impl From<DomainHarnessSession> for HarnessSession {
     fn from(value: DomainHarnessSession) -> Self {
@@ -94,30 +98,6 @@ impl From<DomainStopReason> for StopReason {
             DomainStopReason::Aborted => Self::Aborted,
             DomainStopReason::Error => Self::Error,
             DomainStopReason::Other(_) => Self::Other,
-        }
-    }
-}
-
-impl From<Usage> for Tokens {
-    fn from(value: Usage) -> Self {
-        Self {
-            input: value.input,
-            output: value.output,
-            cache_read: value.cache_read,
-            cache_write: value.cache_write,
-            reasoning: value.reasoning,
-        }
-    }
-}
-
-impl From<Tokens> for Usage {
-    fn from(value: Tokens) -> Self {
-        Self {
-            input: value.input,
-            output: value.output,
-            cache_read: value.cache_read,
-            cache_write: value.cache_write,
-            reasoning: value.reasoning,
         }
     }
 }
@@ -186,16 +166,6 @@ impl TryFrom<ContentBlock> for Content {
     }
 }
 
-impl ToolResult {
-    /// The output as display text: a JSON string's contents verbatim, any other JSON as encoded,
-    /// or `None` when capture did not keep it.
-    #[must_use]
-    pub fn output_text(&self) -> Option<Cow<'_, str>> {
-        let json = self.output.as_deref()?;
-        Some(serde_json::from_str::<String>(json).map_or(Cow::Borrowed(json), Cow::Owned))
-    }
-}
-
 impl From<DomainMessage> for Message {
     fn from(value: DomainMessage) -> Self {
         let role_label = match &value.role {
@@ -210,8 +180,7 @@ impl From<DomainMessage> for Message {
             id: Some(Uuid {
                 value: value.id.0.into_bytes().to_vec(),
             }),
-            harness: value.session.harness as i32,
-            session_id: value.session.session.into(),
+            session: Some(value.session.into()),
             parent: value.parent.map(Into::into),
             source_id: value.source_id.into(),
             parent_source_id: value.parent_source_id.map(Into::into),
@@ -224,7 +193,7 @@ impl From<DomainMessage> for Message {
             cwd: value.cwd.map(|path| path.to_string_lossy().into_owned()),
             git_branch: value.git_branch,
             model: value.model,
-            tokens: value.usage.map(Tokens::from),
+            tokens: value.usage,
             stop_reason: value.stop_reason.map(|reason| StopReason::from(reason) as i32),
             role_label,
             stop_reason_label,
@@ -274,13 +243,9 @@ impl TryFrom<Message> for DomainMessage {
         let stop_reason = value.domain_stop_reason()?;
         let id = value.id.ok_or(ParseError::Missing("id"))?;
         let timestamp = value.timestamp.ok_or(ParseError::Missing("timestamp"))?;
-        let session = HarnessSession {
-            harness: value.harness,
-            session_id: value.session_id,
-        };
         Ok(Self {
             id: RecordId(uuid::Uuid::from_slice(&id.value)?),
-            session: session.try_into()?,
+            session: value.session.ok_or(ParseError::Missing("session"))?.try_into()?,
             source_id: SourceId::from(value.source_id),
             parent: value.parent.map(TryInto::try_into).transpose()?,
             parent_source_id: value.parent_source_id.map(SourceId::from),
@@ -293,7 +258,7 @@ impl TryFrom<Message> for DomainMessage {
             cwd: value.cwd.map(PathBuf::from),
             git_branch: value.git_branch,
             model: value.model,
-            usage: value.tokens.map(Usage::from),
+            usage: value.tokens,
             stop_reason,
             session_title: None,
             session_title_source: None,
@@ -306,8 +271,7 @@ impl TryFrom<Message> for DomainMessage {
 impl From<DomainSession> for Session {
     fn from(value: DomainSession) -> Self {
         Self {
-            harness: value.handle.harness as i32,
-            session_id: value.handle.session.into(),
+            handle: Some(value.handle.into()),
             parent: value.parent.map(Into::into),
             cwd: value.cwd.map(|path| path.to_string_lossy().into_owned()),
             git_branch: value.git_branch,
@@ -321,7 +285,7 @@ impl From<DomainSession> for Session {
                 nanos: value.updated_at.nanosecond().cast_signed(),
             }),
             message_count: value.message_count,
-            tokens: Some(value.usage.into()),
+            tokens: Some(value.usage),
             title: value.title,
             preview: value.preview,
         }
@@ -339,12 +303,8 @@ impl TryFrom<Session> for DomainSession {
                 timestamp.nanos.into(),
             )?)
         };
-        let handle = HarnessSession {
-            harness: value.harness,
-            session_id: value.session_id,
-        };
         Ok(Self {
-            handle: handle.try_into()?,
+            handle: value.handle.ok_or(ParseError::Missing("handle"))?.try_into()?,
             parent: value.parent.map(TryInto::try_into).transpose()?,
             cwd: value.cwd.map(PathBuf::from),
             git_branch: value.git_branch,
@@ -352,7 +312,7 @@ impl TryFrom<Session> for DomainSession {
             started_at: at(value.started_at, "started_at")?,
             updated_at: at(value.updated_at, "updated_at")?,
             message_count: value.message_count,
-            usage: value.tokens.ok_or(ParseError::Missing("tokens"))?.into(),
+            usage: value.tokens.ok_or(ParseError::Missing("tokens"))?,
             title: value.title,
             title_source: None,
             preview: value.preview,
@@ -362,9 +322,13 @@ impl TryFrom<Session> for DomainSession {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use atuin_common::harnesstools::session::Usage;
     use proptest::prelude::*;
-    use rstest::rstest;
-    use serde_json::{Value, json};
+    use prost::Message as _;
+    use rstest::{fixture, rstest};
+    use serde_json::Value;
 
     use super::*;
 
@@ -571,18 +535,18 @@ mod tests {
         }
     }
 
+    #[fixture]
+    fn descriptors() -> prost_types::FileDescriptorSet {
+        prost_types::FileDescriptorSet::decode(
+            include_bytes!(concat!(env!("OUT_DIR"), "/file_descriptor_set.bin")).as_slice(),
+        )
+        .unwrap()
+    }
+
     /// `ai.agent.HarnessKind` is extern-pathed to the domain enum, so its discriminants are the wire
     /// values and nothing generated from `agent.proto` keeps the two in step.
     #[rstest]
-    fn harness_kind_matches_the_proto_enum() {
-        use std::collections::BTreeMap;
-
-        use prost::Message as _;
-
-        let descriptors = prost_types::FileDescriptorSet::decode(
-            include_bytes!(concat!(env!("OUT_DIR"), "/file_descriptor_set.bin")).as_slice(),
-        )
-        .unwrap();
+    fn harness_kind_matches_the_proto_enum(descriptors: prost_types::FileDescriptorSet) {
         let proto = descriptors
             .file
             .iter()
@@ -606,6 +570,46 @@ mod tests {
         assert_eq!(domain, wire);
     }
 
+    /// `ai.agent.Tokens` is extern-pathed to [`Usage`], whose prost tags are written by hand.
+    #[rstest]
+    fn usage_matches_the_proto_tokens(descriptors: prost_types::FileDescriptorSet) {
+        let values = BTreeMap::from([
+            ("input", 1),
+            ("output", 2),
+            ("cache_read", 3),
+            ("cache_write", 4),
+            ("reasoning", 5),
+        ]);
+        let proto = descriptors
+            .file
+            .iter()
+            .filter(|file| file.package() == "ai.agent")
+            .flat_map(|file| &file.message_type)
+            .find(|m| m.name() == "Tokens")
+            .unwrap();
+        let wire: BTreeMap<u32, u64> = proto
+            .field
+            .iter()
+            .map(|f| (u32::try_from(f.number()).unwrap(), values[f.name()]))
+            .collect();
+
+        let usage = Usage {
+            input: Some(values["input"]),
+            output: Some(values["output"]),
+            cache_read: Some(values["cache_read"]),
+            cache_write: Some(values["cache_write"]),
+            reasoning: Some(values["reasoning"]),
+        };
+        let encoded = usage.encode_to_vec();
+        let mut buf = encoded.as_slice();
+        let mut domain = BTreeMap::new();
+        while !buf.is_empty() {
+            let (tag, _) = prost::encoding::decode_key(&mut buf).unwrap();
+            domain.insert(tag, prost::encoding::decode_varint(&mut buf).unwrap());
+        }
+        assert_eq!(domain, wire);
+    }
+
     #[rstest]
     fn uncaptured_tool_input_is_absent_on_the_wire() {
         let call: ContentBlock = Content::ToolUse(ToolUse {
@@ -618,26 +622,6 @@ mod tests {
             panic!("expected a tool call block");
         };
         assert_eq!(tc.input, None);
-    }
-
-    #[rstest]
-    #[case::string(json!("line1\nline2"), Some("line1\nline2"))]
-    #[case::structured(json!({"exit": 0}), Some(r#"{"exit":0}"#))]
-    #[case::uncaptured(Value::Null, None)]
-    fn tool_result_output_text_unwraps_json_strings(
-        #[case] output: Value,
-        #[case] want: Option<&str>,
-    ) {
-        let result: ContentBlock = Content::ToolResult(DomainToolResult {
-            call: ToolCallId::from("c1".to_owned()),
-            output,
-            error: false,
-        })
-        .into();
-        let content_block::Block::ToolResult(tr) = result.block.unwrap() else {
-            panic!("expected a tool result block");
-        };
-        assert_eq!(tr.output_text().as_deref(), want);
     }
 
     #[rstest]
