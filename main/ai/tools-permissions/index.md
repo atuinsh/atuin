@@ -74,7 +74,7 @@ allow = ["AtuinHistory"]
 
 ### Atuin Output
 
-The `AtuinOutput` tool allows Atuin AI to read the captured output of commands in your Atuin history. This tool is read-only. Atuin AI might ask to use this tool when you ask about the result of a command you ran, or for help with a failing command. Output capture requires the daemon and pty-proxy to be set up — see [Reading Command Output](https://docs.atuin.sh/ai/command-output/index.md).
+The `AtuinOutput` tool allows Atuin AI to read the captured output of commands in your Atuin history. This tool is read-only. Atuin AI might ask to use this tool when you ask about the result of a command you ran, or for help with a failing command. Output capture has to be set up first — see [Capturing Command Output](https://docs.atuin.sh/guide/output-capture/index.md).
 
 **Permission rule and scope:** `AtuinOutput`
 

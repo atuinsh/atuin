@@ -42,6 +42,21 @@ cwd_filter = [
 
 These patterns are unanchored regular expressions too, matched against the working directory path.
 
+## Keep the command, drop its output: `command_filter`
+
+With [output capture](https://docs.atuin.sh/guide/output-capture/index.md) on, both filters above also keep a command's output out of the store. To record a command in your history but never store what it prints, use [`command_filter`](https://docs.atuin.sh/configuration/config/#command_filter) in `[output]`:
+
+```
+[output]
+enabled = true
+command_filter = [
+    "^cat ",              # file contents, like `cat .env`
+    "^kubectl get secret",
+]
+```
+
+Patterns work like `history_filter`'s: unanchored regular expressions matched against the command.
+
 ## Skip Atuin entirely for a tool
 
 If a tool spawns interactive shells and you'd rather it recorded nothing at all, guard the `atuin init` call in your shell config:

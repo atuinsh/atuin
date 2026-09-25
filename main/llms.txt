@@ -21,7 +21,8 @@ usage, self-hosting, and AI features.
 - [Advanced usage](https://docs.atuin.sh/guide/advanced-usage/index.md): Filter modes (global, host, session, directory, workspace) and search modes (prefix, fulltext, fuzzy, daemon-fuzzy).
 - [Shell Integration](https://docs.atuin.sh/guide/shell-integration/index.md): How shell hooks work, environment variables, and embedded terminals.
 - [AI Agent Hooks](https://docs.atuin.sh/guide/agent-hooks/index.md): Capture commands from AI coding agents (Claude Code, Codex, opencode, pi) and filter by author.
-- [Excluding commands](https://docs.atuin.sh/guide/excluding-commands/index.md): Keep commands out of history with ignorespace, history_filter, and cwd_filter.
+- [Excluding commands](https://docs.atuin.sh/guide/excluding-commands/index.md): Keep commands out of history with ignorespace, history_filter, and cwd_filter, or keep only their output out with command_filter.
+- [Capturing command output](https://docs.atuin.sh/guide/output-capture/index.md): Capture what each command printed - setup, reading and searching it, what's kept, privacy, and disk retention.
 - [Deleting history](https://docs.atuin.sh/guide/delete-history/index.md): Delete single entries, bulk delete by query, remove duplicates, or wipe everything.
 - [Theming](https://docs.atuin.sh/guide/theming/index.md): Customize the TUI with color themes.
 
@@ -43,6 +44,7 @@ usage, self-hosting, and AI features.
 - [pty-proxy](https://docs.atuin.sh/reference/pty-proxy/index.md): Experimental PTY proxy with popup rendering over existing terminal output.
 - [import](https://docs.atuin.sh/reference/import/index.md): Import history from bash, fish, zsh, replxx, mcfly, resh, and xonsh.
 - [info](https://docs.atuin.sh/reference/info/index.md): Show config file paths, env vars, and version info.
+- [output](https://docs.atuin.sh/reference/output/index.md): The `atuin output search` command - full-text search over captured command output, with plain, pretty, and JSON output.
 - [history list](https://docs.atuin.sh/reference/list/index.md): List history entries with formatting, filtering by cwd/session, and custom output templates.
 - [history prune](https://docs.atuin.sh/reference/prune/index.md): Delete entries matching history_filter config (useful after updating filters).
 - [search](https://docs.atuin.sh/reference/search/index.md): Search history with wildcards, filters (cwd, exit code, before/after), and delete mode.
