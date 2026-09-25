@@ -1038,8 +1038,12 @@ mod tests {
     #[case::default(None, None, "<agent>/sessions")]
     #[case::env(Some("/s/env"), Some(r#"{"sessionDir": "/s/settings"}"#), "/s/env")]
     #[case::env_tilde(Some("~/pi-sessions"), None, "<home>/pi-sessions")]
-    #[case::settings(None, Some(r#"{"sessionDir": "/s/settings"}"#), "/s/settings")]
-    #[case::settings_bom(None, Some("\u{feff}{\"sessionDir\": \"/s/settings\"}"), "/s/settings")]
+    #[case::settings(None, Some(r#"{"sessionDir": "<abs>/settings"}"#), "<abs>/settings")]
+    #[case::settings_bom(
+        None,
+        Some("\u{feff}{\"sessionDir\": \"<abs>/settings\"}"),
+        "<abs>/settings"
+    )]
     #[case::settings_tilde(None, Some(r#"{"sessionDir": "~/x"}"#), "<home>/x")]
     #[case::settings_relative(None, Some(r#"{"sessionDir": "x"}"#), "<agent>/sessions")]
     #[case::settings_without(None, Some(r#"{"theme": "dark"}"#), "<agent>/sessions")]
@@ -1049,11 +1053,19 @@ mod tests {
         #[case] settings: Option<&str>,
         #[case] expected: &str,
     ) {
+        // `/s` has a root but no drive, so Windows does not count it as absolute.
+        let abs = if cfg!(windows) {
+            "C:/s"
+        } else {
+            "/s"
+        };
         let agent = tempfile::tempdir().unwrap();
         if let Some(settings) = settings {
-            std::fs::write(agent.path().join("settings.json"), settings).unwrap();
+            std::fs::write(agent.path().join("settings.json"), settings.replace("<abs>", abs))
+                .unwrap();
         }
         let expected = expected
+            .replace("<abs>", abs)
             .replace("<agent>", &agent.path().to_string_lossy())
             .replace("<home>", &crate::utils::home_dir().to_string_lossy());
         assert_eq!(
