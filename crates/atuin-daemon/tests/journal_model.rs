@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use atuin_client::history::{History, HistoryId};
-use atuin_client::settings::Search;
+use atuin_client::settings::{CaptureLimits, OutputCapture, Search};
 use atuin_daemon::{CaptureError, CmdEvent, RegisterOutputError};
 use common::{TestEnv, capture, history};
 use futures::{FutureExt, StreamExt};
@@ -155,7 +155,14 @@ async fn apply(env: &TestEnv, model: &mut Model, op: &Op) {
         }
         Op::Register(slot) => {
             let id = model.id(*slot);
-            let result = env.journal.register_command_output(id, capture("out")).await;
+            let result = env
+                .journal
+                .register_command_output(
+                    id,
+                    capture("out"),
+                    &OutputCapture::Enabled(CaptureLimits::default()),
+                )
+                .await;
             let state = model.slots[usize::from(*slot)].1;
             let has_output = &mut model.has_output[usize::from(*slot)];
             match (state, *has_output) {

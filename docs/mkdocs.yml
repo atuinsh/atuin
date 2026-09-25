@@ -145,7 +145,8 @@ plugins:
           - guide/advanced-usage.md: Filter modes (global, host, session, directory, workspace) and search modes (prefix, fulltext, fuzzy, daemon-fuzzy).
           - guide/shell-integration.md: How shell hooks work, environment variables, and embedded terminals.
           - guide/agent-hooks.md: Capture commands from AI coding agents (Claude Code, Codex, opencode, pi) and filter by author.
-          - guide/excluding-commands.md: Keep commands out of history with ignorespace, history_filter, and cwd_filter.
+          - guide/excluding-commands.md: Keep commands out of history with ignorespace, history_filter, and cwd_filter, or keep only their output out with command_filter.
+          - guide/output-capture.md: Capture what each command printed - setup, reading and searching it, what's kept, privacy, and disk retention.
           - guide/delete-history.md: Delete single entries, bulk delete by query, remove duplicates, or wipe everything.
           - guide/theming.md: Customize the TUI with color themes.
         Configuration:
@@ -163,6 +164,7 @@ plugins:
           - reference/pty-proxy.md: Experimental PTY proxy with popup rendering over existing terminal output.
           - reference/import.md: Import history from bash, fish, zsh, replxx, mcfly, resh, and xonsh.
           - reference/info.md: Show config file paths, env vars, and version info.
+          - reference/output.md: The `atuin output search` command - full-text search over captured command output, with plain, pretty, and JSON output.
           - reference/list.md: List history entries with formatting, filtering by cwd/session, and custom output templates.
           - reference/prune.md: Delete entries matching history_filter config (useful after updating filters).
           - reference/search.md: Search history with wildcards, filters (cwd, exit code, before/after), and delete mode.
@@ -263,6 +265,7 @@ nav:
       - Shell Integration: guide/shell-integration.md
       - AI Agent Hooks: guide/agent-hooks.md
       - Excluding commands: guide/excluding-commands.md
+      - Capturing command output: guide/output-capture.md
       - Deleting history: guide/delete-history.md
       - Theming: guide/theming.md
   - Supported platforms: support.md
@@ -280,6 +283,7 @@ nav:
       - pty-proxy: reference/pty-proxy.md
       - import: reference/import.md
       - info: reference/info.md
+      - output: reference/output.md
       - history list: reference/list.md
       - history prune: reference/prune.md
       - search: reference/search.md

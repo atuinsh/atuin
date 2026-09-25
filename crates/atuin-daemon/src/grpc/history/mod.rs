@@ -234,10 +234,11 @@ impl GrpcService for Service {
         let request = request.into_inner();
         let id = request.history_id()?;
         let capture = request.capture()?.into();
+        let output = self.daemon_handle.settings().await.output.clone();
         let journal = self.journal.clone();
         // Spawned so a client disconnect cannot drop the call half-way.
         tokio::spawn(
-            async move { journal.register_command_output(id, capture).await }
+            async move { journal.register_command_output(id, capture, &output).await }
                 .instrument(tracing::Span::current()),
         )
         .await

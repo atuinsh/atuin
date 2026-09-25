@@ -137,6 +137,9 @@ impl TestEnvBuilder {
             // Unroutable on purpose: the capability warm-up must fail fast, not dial the internet.
             .set_override("sync_address", "http://127.0.0.1:1")
             .unwrap()
+            // The harness opens a real output store, as the daemon only does with capture on.
+            .set_override("output.enabled", true)
+            .unwrap()
             .build()
             .expect("could not build settings")
             .try_deserialize()

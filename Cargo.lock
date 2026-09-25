@@ -562,6 +562,7 @@ dependencies = [
  "prost-types",
  "protox",
  "rand 0.8.7",
+ "regex",
  "reqwest",
  "rstest",
  "serde",
