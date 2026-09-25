@@ -1133,7 +1133,7 @@ impl State {
                     results,
                     self.keymap_mode,
                     &self.now,
-                    settings.timezone.0,
+                    settings.timezone.offset_at(OffsetDateTime::now_utc()),
                     indicator.as_str(),
                     theme,
                     history_highlighter,
