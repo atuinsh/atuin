@@ -194,7 +194,7 @@ then
   elif [[ -n "${BASH_VERSION:-}" ]]; then
     __atuin_pty_proxy_login=
     shopt -q login_shell && __atuin_pty_proxy_login=1
-    exec atuin pty-proxy ${__atuin_pty_proxy_login:+--login} --shell "$BASH"
+    exec atuin pty-proxy ${__atuin_pty_proxy_login:+"--login"} --shell "$BASH"
   elif [[ -n "${ZSH_VERSION:-}" ]]; then
     # Prefer ZSH_ARGZERO (zsh 5.3+) -- it preserves the path zsh was
     # invoked with -- and fall back to PATH lookup otherwise. Login shells
@@ -206,7 +206,7 @@ then
     _atuin_pty_proxy_zsh="${ZSH_ARGZERO:-$(command -v zsh)}"
     __atuin_pty_proxy_login=
     [[ -o login ]] && __atuin_pty_proxy_login=1
-    exec atuin pty-proxy ${__atuin_pty_proxy_login:+--login} --shell "${${_atuin_pty_proxy_zsh#-}:c}"
+    exec atuin pty-proxy ${__atuin_pty_proxy_login:+"--login"} --shell "${${_atuin_pty_proxy_zsh#-}:c}"
   else
     exec atuin pty-proxy
   fi
@@ -339,10 +339,10 @@ mod tests {
         assert!(posix.contains("shopt -q login_shell && __atuin_pty_proxy_login=1"));
         assert!(posix.contains("[[ -o login ]] && __atuin_pty_proxy_login=1"));
         assert!(posix.contains(
-            r#"exec atuin pty-proxy ${__atuin_pty_proxy_login:+--login} --shell "$BASH""#
+            r#"exec atuin pty-proxy ${__atuin_pty_proxy_login:+"--login"} --shell "$BASH""#
         ));
         assert!(posix.contains(
-            r#"exec atuin pty-proxy ${__atuin_pty_proxy_login:+--login} --shell "${${_atuin_pty_proxy_zsh#-}:c}""#
+            r#"exec atuin pty-proxy ${__atuin_pty_proxy_login:+"--login"} --shell "${${_atuin_pty_proxy_zsh#-}:c}""#
         ));
     }
 
