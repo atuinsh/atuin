@@ -424,13 +424,15 @@ The same patterns are applied to captured command output. A command whose
 own text is clean can still print a credential — `cat .env`, `gh auth token`
 — so recognised values in the captured output are replaced with `****`
 before storage. Only the value is replaced; the variable name or flag
-beside it stays.
+beside it stays. A credential that color codes split apart in the output
+isn't recognised.
 
 !!! note
 
     This is a safety net, not a guarantee. It only catches credentials in
     recognized formats — use [`history_filter`](#history_filter) for anything
-    else you need kept out, and see
+    else you need kept out, or [`command_filter`](#command_filter) to keep a
+    command but not its output, and see
     [Excluding Commands from History](../guide/excluding-commands.md).
 
 ### macOS Ctrl-n key shortcuts

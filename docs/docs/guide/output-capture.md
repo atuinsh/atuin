@@ -93,9 +93,11 @@ recording that it's missing.
 - Recognised credentials in the output (API keys, tokens, and the like) are
   replaced with `****` before storage, while
   [`secrets_filter`](../configuration/config.md#secrets_filter) is on (the
-  default).
-- To keep a command in your history but never store its output, add it to
-  [`command_filter`](../configuration/config.md#command_filter). See
+  default). This is best-effort: it only knows common formats, and misses a
+  credential that colour codes split apart.
+- For a command that prints secrets, don't rely on redaction: add it to
+  [`command_filter`](../configuration/config.md#command_filter) to keep it in
+  your history but never store its output. See
   [Excluding commands](excluding-commands.md#keep-the-command-drop-its-output-command_filter).
 - Captured output stays on your machine. **It isn't synced**, even with
   [sync](sync.md) set up. We're actively working on supporting this.
