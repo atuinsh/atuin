@@ -18,12 +18,14 @@ sync = ["reqwest", "dep:reqwest-middleware"]
 hub = ["reqwest"]
 daemon = []
 check-update = []
+# Derive the protobuf enum traits on domain enums the daemon extern-paths into its codegen.
+proto = ["dep:prost"]
 # Statically link (vendor) OpenSSL for native-tls instead of using the system
 # libssl. Used for portable release artifacts; a no-op on macOS/Windows.
 vendored-tls = ["reqwest?/native-tls-vendored"]
 
 [dependencies]
-atuin-common = { workspace = true, features = ["os", "sqlite"] }
+atuin-common = { workspace = true, features = ["ai", "os", "sqlite"] }
 atuin-domain = { workspace = true }
 atuin-vt100 = { workspace = true }
 
@@ -45,8 +47,10 @@ libsqlite3-sys = { workspace = true }
 memchr = { workspace = true }
 minspan = { workspace = true }
 notify = { workspace = true }
+prost = { workspace = true, optional = true }
 rand = { workspace = true }
 regex = { workspace = true }
+rmp-serde = { workspace = true }
 secrecy = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
@@ -61,6 +65,7 @@ time = { workspace = true, features = ["macros", "formatting", "parsing"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-futures = { workspace = true }
+unicode-normalization = { workspace = true }
 typed-builder = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
@@ -89,6 +94,7 @@ atuin-common = { workspace = true, features = ["test-utils"] }
 divan = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
+rmp-serde = { workspace = true }
 rstest = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }

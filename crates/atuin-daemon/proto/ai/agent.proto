@@ -1,0 +1,179 @@
+syntax = "proto3";
+package ai.agent;
+
+import "common.proto";
+import "google/protobuf/timestamp.proto";
+
+// The AI coding harnesses Atuin recognises.
+enum HarnessKind {
+  // Not stated, or a harness Atuin does not recognise.
+  HARNESS_KIND_UNKNOWN = 0;
+  HARNESS_KIND_CLAUDE_CODE = 1;
+  HARNESS_KIND_CODEX = 2;
+  HARNESS_KIND_COPILOT = 3;
+  HARNESS_KIND_OPENCODE = 4;
+  HARNESS_KIND_PI = 5;
+}
+
+enum Role {
+  // A role the harness named that is none of the below; Message.role_label carries it.
+  ROLE_OTHER = 0;
+  // Something you typed to the AI.
+  ROLE_USER = 1;
+  // The AI's reply.
+  ROLE_ASSISTANT = 2;
+  // Behind-the-scenes instructions the harness gives the AI.
+  ROLE_SYSTEM = 3;
+  // A turn carrying tool output, for harnesses that model it as its own turn.
+  ROLE_TOOL = 4;
+}
+
+enum StopReason {
+  // A reason the harness named that is none of the below; Message.stop_reason_label carries it.
+  STOP_REASON_OTHER = 0;
+  // The AI finished its reply on its own.
+  STOP_REASON_END_TURN = 1;
+  // The AI paused to run a tool.
+  STOP_REASON_TOOL_USE = 2;
+  // The reply hit its length limit and was cut off.
+  STOP_REASON_MAX_TOKENS = 3;
+  // You or the harness stopped it early.
+  STOP_REASON_ABORTED = 4;
+  // Something went wrong before it could finish.
+  STOP_REASON_ERROR = 5;
+  // The reply hit one of the caller's stop sequences.
+  STOP_REASON_STOP_SEQUENCE = 6;
+  // The AI declined to answer.
+  STOP_REASON_REFUSAL = 7;
+}
+
+// Token counts as the harness reported them. A count the harness did not report is
+// absent, never 0. Extern-pathed to `atuin_common::harnesstools::session::Usage`, whose prost
+// tags are these field numbers.
+message Tokens {
+  // How much text was fed into the model, in tokens.
+  optional uint64 input = 1;
+  // How much text the model produced, in tokens.
+  optional uint64 output = 2;
+  // Tokens reused from an earlier prompt instead of resent (cheaper).
+  optional uint64 cache_read = 3;
+  // Tokens saved so a later prompt can reuse them.
+  optional uint64 cache_write = 4;
+  // Of `output`, how much the model spent reasoning (thinking).
+  optional uint64 reasoning = 5;
+}
+
+// The AI's request to run a tool.
+message ToolCall {
+  // Unique id for this tool run, used to match its result.
+  string id = 1;
+  // Which tool the AI used, such as reading a file or running a command.
+  string name = 2;
+  // The arguments the AI passed to the tool, as JSON. Absent when capture did not keep them.
+  optional string input = 3;
+}
+
+// The result handed back from a tool the AI ran.
+message ToolResult {
+  // Identifier of the ToolCall this result answers.
+  string tool_use_id = 1;
+  // The tool's output, as JSON. Absent when capture did not keep it.
+  optional string output = 2;
+  // Whether the tool reported failure.
+  bool is_error = 3;
+}
+
+// Reasoning the harness recorded without its text.
+message ReasoningSummary {
+  // Tokens of the model call the reasoning happened in, if the harness reported them.
+  optional uint64 tokens = 1;
+}
+
+// One ordered piece of a message's content. A single turn interleaves these:
+// some text, a tool call, more text, another tool call, and so on. Keeping them
+// ordered preserves the shape every major harness records; flattening to a
+// single string would lose it.
+message ContentBlock {
+  oneof block {
+    // A run of assistant- or user-authored text.
+    string text = 1;
+    // The AI asked to run a tool.
+    ToolCall tool_call = 2;
+    // A tool answered.
+    ToolResult tool_result = 3;
+    // The model's private reasoning, when the harness records it.
+    string thinking = 4;
+    // The model reasoned, but the harness kept only that it did.
+    ReasoningSummary reasoning_summary = 5;
+    // A block Atuin does not model, as JSON.
+    string other = 6;
+    // A model-written summary standing in for earlier conversation (compaction,
+    // an abandoned branch).
+    string summary = 7;
+    // Why a model call failed or was aborted, as the harness reported it.
+    string error = 8;
+  }
+}
+
+// A native session handle: a harness plus its harness-native session id. Used as
+// a session's own identity and as a parent link. Present or absent as a unit --
+// absence means "no parent", never overloaded onto a field's zero value.
+message HarnessSession {
+  // The harness that owns this session.
+  HarnessKind harness = 1;
+  // Harness-native session id.
+  string session_id = 2;
+}
+
+message Message {
+  // Atuin's stable identifier for this message (UUIDv7).
+  common.Uuid id = 1;
+  // The session this message belongs to.
+  HarnessSession session = 2;
+  // Session this one was handed off from, if any.
+  optional HarnessSession parent = 4;
+  // Was a harness-native thread identifier that no harness supplied.
+  reserved 5;
+  reserved "thread";
+  // Harness-native message identifier, unique within the session.
+  string source_id = 6;
+  // Harness-native identifier of the message this one replies to.
+  optional string parent_source_id = 7;
+  // When the message was produced.
+  google.protobuf.Timestamp timestamp = 8;
+  // Who or what produced this message.
+  Role role = 9;
+  // The message's content, in order.
+  repeated ContentBlock content = 10;
+  // Working directory at the time of the message.
+  optional string cwd = 11;
+  // Git branch checked out at the time of the message.
+  optional string git_branch = 12;
+  // Model that produced the message.
+  optional string model = 13;
+  // Token usage attributed to this message, if the harness reported any.
+  Tokens tokens = 14;
+  // Why an assistant turn ended. Absent when the harness did not say.
+  optional StopReason stop_reason = 15;
+  // The harness's own role string (e.g. codex "developer"); set exactly when role is
+  // ROLE_OTHER.
+  optional string role_label = 16;
+  // The harness's own stop reason; set exactly when stop_reason is STOP_REASON_OTHER.
+  optional string stop_reason_label = 17;
+}
+
+message Session {
+  // This session's own identity.
+  HarnessSession handle = 1;
+  // Session this one was handed off from, if any.
+  optional HarnessSession parent = 3;
+  optional string cwd = 4;
+  optional string git_branch = 5;
+  optional string model = 6;
+  google.protobuf.Timestamp started_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  uint64 message_count = 9;
+  Tokens tokens = 10;
+  optional string title = 11;
+  optional string preview = 12;
+}

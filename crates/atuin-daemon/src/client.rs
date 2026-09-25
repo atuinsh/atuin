@@ -2,6 +2,7 @@ use std::num::NonZeroU32;
 #[cfg(unix)]
 use std::path::PathBuf;
 
+use atuin_client::ai_session::{HarnessKind, HarnessSession};
 use atuin_client::database::Context;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::{FilterMode, Settings};
@@ -21,6 +22,13 @@ use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
 use tracing::{Level, instrument, span};
 
+use crate::grpc::ai::agent::pb::Session as AiSession;
+use crate::grpc::ai::session::pb::ai_session_client::AiSessionClient as AiSessionServiceClient;
+use crate::grpc::ai::session::pb::{
+    GetSessionEvent, GetSessionRequest, GetTranscriptChunk, GetTranscriptRequest,
+    ImportSessionsEvent, ImportSessionsRequest, ListSessionsRequest, SearchSessionsMatch,
+    SearchSessionsRequest, TailSessionsEvent, TailSessionsRequest,
+};
 use crate::grpc::history::pb::history_client::HistoryClient as HistoryServiceClient;
 use crate::grpc::history::pb::{
     AuthorKind, CancelHistoryReply, CancelHistoryRequest, CommandCapture, CommandCaptureMeta,
@@ -450,6 +458,143 @@ impl From<Context> for RpcSearchContext {
             host_id: context.host_id,
             git_root: context.git_root.map(|path| path.to_string_lossy().to_string()),
         }
+    }
+}
+
+/// Client for the daemon's `ai.session.AiSession` service. Wraps the generated tonic stub the same
+/// way [`HistoryClient`] and [`SearchClient`] do, returning the raw protobuf messages so callers can
+/// render them however they like.
+pub struct AiClient {
+    client: AiSessionServiceClient<Channel>,
+}
+
+impl AiClient {
+    #[cfg(unix)]
+    pub async fn new(path: PathBuf) -> Result<Self> {
+        let log_path = path.clone();
+        let channel =
+            Endpoint::try_from("http://atuin_local_daemon:0")?
+                .connect_with_connector(service_fn(move |_: Uri| {
+                    let path = path.clone();
+
+                    async move {
+                        Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?))
+                    }
+                }))
+                .await
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to connect to local atuin daemon at {}. Is it running?",
+                        log_path.display()
+                    )
+                })?;
+
+        Ok(Self {
+            client: AiSessionServiceClient::new(channel),
+        })
+    }
+
+    #[cfg(not(unix))]
+    pub async fn new(port: u64) -> Result<Self> {
+        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
+            .connect_with_connector(service_fn(move |_: Uri| {
+                let url = format!("127.0.0.1:{port}");
+
+                async move {
+                    Ok::<_, std::io::Error>(TokioIo::new(TcpStream::connect(url.clone()).await?))
+                }
+            }))
+            .await
+            .wrap_err_with(|| {
+                format!(
+                    "failed to connect to local atuin daemon at 127.0.0.1:{port}. Is it running?"
+                )
+            })?;
+
+        Ok(Self {
+            client: AiSessionServiceClient::new(channel),
+        })
+    }
+
+    #[cfg(unix)]
+    pub async fn from_settings(settings: &Settings) -> Result<Self> {
+        Self::new(socket_path(settings)).await
+    }
+
+    #[cfg(not(unix))]
+    pub async fn from_settings(settings: &Settings) -> Result<Self> {
+        Self::new(settings.daemon.tcp_port).await
+    }
+
+    /// Stream captured session summaries, newest first. `harness` filters to a single harness when
+    /// set. The daemon sends one session per message (so a long list never trips the gRPC
+    /// message-size limit); callers that want the whole set collect it with `try_collect`, and ones
+    /// that only want the newest can take the first item without draining the rest.
+    pub async fn list_sessions(
+        &mut self,
+        harness: Option<HarnessKind>,
+    ) -> Result<tonic::Streaming<AiSession>> {
+        let request = ListSessionsRequest {
+            harness: harness.map(|h| h as i32),
+        };
+        Ok(self.client.list_sessions(request).await?.into_inner())
+    }
+
+    /// Stream one session: the first event carries the [`AiSession`], each event after it a message.
+    pub async fn get_session(
+        &mut self,
+        session: HarnessSession,
+    ) -> Result<tonic::Streaming<GetSessionEvent>> {
+        let request = GetSessionRequest {
+            session: Some(session.into()),
+        };
+        Ok(self.client.get_session(request).await?.into_inner())
+    }
+
+    /// Stream a rendered plain-text transcript in chunks; concatenate them in arrival order.
+    pub async fn get_transcript(
+        &mut self,
+        session: HarnessSession,
+    ) -> Result<tonic::Streaming<GetTranscriptChunk>> {
+        let request = GetTranscriptRequest {
+            session: Some(session.into()),
+        };
+        Ok(self.client.get_transcript(request).await?.into_inner())
+    }
+
+    /// Follow sessions and messages as they are recorded. `harness` filters to one harness when set.
+    pub async fn tail_sessions(
+        &mut self,
+        harness: Option<HarnessKind>,
+    ) -> Result<tonic::Streaming<TailSessionsEvent>> {
+        let request = TailSessionsRequest {
+            harness: harness.map(|h| h as i32),
+        };
+        Ok(self.client.tail_sessions(request).await?.into_inner())
+    }
+
+    pub async fn search_sessions(
+        &mut self,
+        query: &str,
+        harness: Option<HarnessKind>,
+        limit: u32,
+    ) -> Result<tonic::Streaming<SearchSessionsMatch>> {
+        let request = SearchSessionsRequest {
+            query: query.to_owned(),
+            limit,
+            harness: harness.map(|h| h as i32),
+        };
+        Ok(self.client.search_sessions(request).await?.into_inner())
+    }
+
+    pub async fn import_sessions(
+        &mut self,
+        harness: Option<HarnessKind>,
+    ) -> Result<tonic::Streaming<ImportSessionsEvent>> {
+        let request = ImportSessionsRequest {
+            harness: harness.map(|h| h as i32),
+        };
+        Ok(self.client.import_sessions(request).await?.into_inner())
     }
 }
 

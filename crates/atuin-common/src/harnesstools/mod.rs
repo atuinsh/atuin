@@ -9,11 +9,16 @@ pub mod codex;
 mod json_hooks;
 pub mod opencode;
 pub mod pi;
+pub mod session;
 
 use ccode::Ccode;
 use codex::Codex;
 use opencode::Opencode;
 use pi::Pi;
+use session::Observable;
+use session::any::AnySessions;
+
+use crate::sync::BlockingPool;
 
 /// Defines a generic harness trait that all implementations need to implement.
 #[enum_dispatch]
@@ -102,5 +107,16 @@ impl AnyHarness {
     #[must_use]
     pub fn all() -> &'static [Self] {
         &[Self::ClaudeCode(Ccode), Self::Codex(Codex), Self::Opencode(Opencode), Self::Pi(Pi)]
+    }
+
+    /// The harness's sessions, whose file reads all run in `pool`.
+    #[must_use]
+    pub fn sessions(&self, pool: &BlockingPool) -> Option<AnySessions> {
+        match self {
+            Self::ClaudeCode(h) => Some(h.sessions(pool.clone()).into()),
+            Self::Codex(h) => Some(h.sessions(pool.clone()).into()),
+            Self::Opencode(h) => Some(h.sessions(pool.clone()).into()),
+            Self::Pi(h) => Some(h.sessions(pool.clone()).into()),
+        }
     }
 }

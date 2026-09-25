@@ -704,6 +704,12 @@ pub struct Ai {
 
     /// Whether the AI TUI surfaces feature tips. `None` = enabled.
     pub tips: Option<bool>,
+
+    /// Whether the daemon captures live AI harness sessions (Claude Code, Codex, ...) into the
+    /// synced record store. Off by default: capture copies full transcripts -- including reasoning
+    /// and tool output -- into the encrypted store used by sync, so it is strictly opt-in.
+    #[serde(default)]
+    pub capture_sessions: bool,
 }
 
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
@@ -1582,6 +1588,7 @@ impl Settings {
             .set_default("ai.db_path", ai_sessions_path.to_str())?
             .set_default("ai.session_continue_minutes", 60)?
             .set_default("ai.send_cwd", false)?
+            .set_default("ai.capture_sessions", false)?
             .set_default("ai.opening.send_cwd", false)?
             .set_default("ai.opening.send_last_command", false)?
             .set_default("ui.syntax_highlight", true)?

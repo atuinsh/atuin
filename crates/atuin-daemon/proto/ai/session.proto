@@ -1,0 +1,123 @@
+syntax = "proto3";
+package ai.session;
+
+import "ai/agent.proto";
+import "common.proto";
+
+message ListSessionsRequest {
+  optional ai.agent.HarnessKind harness = 1;
+}
+
+message GetSessionRequest {
+  ai.agent.HarnessSession session = 1;
+}
+
+// Streamed by GetSession: the first event carries the session, and every event
+// after it carries one message, in order.
+message GetSessionEvent {
+  oneof event {
+    ai.agent.Session session = 1;
+    ai.agent.Message message = 2;
+  }
+}
+
+message GetTranscriptRequest {
+  ai.agent.HarnessSession session = 1;
+}
+
+// One chunk of a rendered transcript. Concatenate `chunk`s in arrival order to
+// reconstruct the whole transcript.
+message GetTranscriptChunk {
+  string chunk = 1;
+}
+
+message SearchSessionsRequest {
+  string query = 1;
+  // Maximum number of distinct sessions to return, most-relevant first. 0 means
+  // unbounded: every matching session is ranked and streamed. Ranking is eager
+  // (the full match set is scored before the first result), so prefer a bound.
+  uint32 limit = 2;
+  // Only search sessions from this harness. Absent searches every harness.
+  optional ai.agent.HarnessKind harness = 3;
+}
+
+message SearchSessionsMatch {
+  ai.agent.Session session = 1;
+  common.HighlightedText title = 2;
+  common.HighlightedText preview = 3;
+  double score = 4;
+}
+
+// Which sessions to follow. An absent field is not a filter.
+message TailSessionsRequest {
+  // Only stream events for sessions from this harness. Absent follows every
+  // harness.
+  optional ai.agent.HarnessKind harness = 1;
+}
+
+message TailSessionsEvent {
+  oneof event {
+    // A new session was created.
+    ai.agent.Session session_started = 1;
+    // A session's summary changed (title, message_count, tokens, updated_at).
+    ai.agent.Session session_updated = 2;
+    // A message was recorded.
+    ai.agent.Message message = 3;
+    // The consumer fell behind the stream and events were dropped.
+    common.Lagged lagged = 4;
+  }
+}
+
+// Which existing on-disk sessions to import. An absent field is not a filter.
+message ImportSessionsRequest {
+  // Only import sessions from this harness. Absent imports every file-based
+  // harness.
+  optional ai.agent.HarnessKind harness = 1;
+}
+
+// Per-session progress: one session finished importing.
+message ImportSessionsProgress {
+  ai.agent.HarnessKind harness = 1;
+  string session_id = 2;
+  uint64 imported = 3;
+  uint64 skipped = 4;
+}
+
+// The final tally, emitted once after every session drains.
+message ImportSessionsSummary {
+  uint64 sessions = 1;
+  uint64 imported = 2;
+  uint64 skipped = 3;
+  uint64 failed = 4;
+}
+
+message ImportSessionsEvent {
+  oneof event {
+    ImportSessionsProgress progress = 1;
+    ImportSessionsSummary summary = 2;
+  }
+}
+
+service AiSession {
+  // List session summaries, newest first, streamed one per message so a machine with a long
+  // harness history never has to fit every session into a single response.
+  rpc ListSessions(ListSessionsRequest) returns (stream ai.agent.Session);
+
+  // Fetch one session and its messages, streamed: the session first, then each
+  // message in order. Streamed so a large session never has to fit in one
+  // response.
+  rpc GetSession(GetSessionRequest) returns (stream GetSessionEvent);
+
+  // Render one session as a plain-text transcript, streamed in chunks.
+  rpc GetTranscript(GetTranscriptRequest) returns (stream GetTranscriptChunk);
+
+  // Fuzzy-search sessions, streamed most-relevant-first.
+  rpc SearchSessions(SearchSessionsRequest) returns (stream SearchSessionsMatch);
+
+  // Follow sessions and messages as they are recorded.
+  rpc TailSessions(TailSessionsRequest) returns (stream TailSessionsEvent);
+
+  // Import every already-existing on-disk session, streaming per-session
+  // progress and a final summary.
+  rpc ImportSessions(ImportSessionsRequest) returns (stream ImportSessionsEvent);
+}
