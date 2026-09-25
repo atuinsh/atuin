@@ -51,6 +51,25 @@ cwd_filter = [
 These patterns are unanchored regular expressions too, matched against the
 working directory path.
 
+## Keep the command, drop its output: `command_filter`
+
+With [output capture](../ai/command-output.md) on, both filters above also keep
+a command's output out of the store. To record a command in your history but
+never store what it prints, use
+[`command_filter`](../configuration/config.md#command_filter) in `[output]`:
+
+```toml
+[output]
+enabled = true
+command_filter = [
+    "^cat ",              # file contents, like `cat .env`
+    "^kubectl get secret",
+]
+```
+
+Patterns work like `history_filter`'s: unanchored regular expressions matched
+against the command.
+
 ## Skip Atuin entirely for a tool
 
 If a tool spawns interactive shells and you'd rather it recorded nothing at

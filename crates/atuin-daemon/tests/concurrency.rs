@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use atuin_client::history::HistoryId;
 use atuin_client::history::store::HistoryRecord;
-use atuin_client::settings::Search;
+use atuin_client::settings::{CommandFilter, Search};
 use atuin_daemon::grpc::history::pb::tail_history_reply::Event;
 use common::corpus::HistoryGen;
 use common::{TestEnv, capture, history};
@@ -548,7 +548,9 @@ async fn captures_never_outlive_their_entries_under_contention() {
         for (i, id) in ids.iter().copied().enumerate() {
             let journal = env.journal.clone();
             tasks.push(tokio::spawn(async move {
-                let _ = journal.register_command_output(id, capture("out")).await;
+                let _ = journal
+                    .register_command_output(id, capture("out"), &CommandFilter::default())
+                    .await;
             }));
             let journal = env.journal.clone();
             tasks.push(tokio::spawn(async move {

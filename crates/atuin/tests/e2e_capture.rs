@@ -1,10 +1,12 @@
-//! Output capture must never store the output of a command `history_filter` excludes.
+//! Output capture must never store the output of a command `history_filter` or `[output]
+//! command_filter` excludes.
 //!
-//! Nothing in the capture path itself consults the filters. A filtered command is kept out of the
-//! store only because `atuin history start` returns no id for it, so `$ATUIN_HISTORY_ID` stays
-//! empty and the shell integration omits the OSC 133 markers the pty proxy needs to report a
-//! capture at all. That coupling spans the CLI, the shell integration, the proxy and the daemon,
-//! so this drives all four and checks the property they exist to provide.
+//! The two take different routes. A `history_filter` match is kept out of the store only because
+//! `atuin history start` returns no id for it, so `$ATUIN_HISTORY_ID` stays empty and the shell
+//! integration omits the OSC 133 markers the pty proxy needs to report a capture at all. A
+//! `command_filter` match is recorded and captured as usual, and the daemon drops its output on
+//! arrival. Both span the CLI, the shell integration, the proxy and the daemon, so this drives all
+//! four and checks the property they exist to provide.
 
 #![cfg(all(unix, feature = "daemon", feature = "pty-proxy"))]
 
@@ -26,6 +28,7 @@ use atuin_common::range::PyStyleIdxRange;
 use atuin_daemon::client::HistoryClient;
 use common::{FreshEnv, Process, SESSION, TIMEOUT, marker, output};
 use pty::PtyShell;
+use rstest::rstest;
 
 /// Everything the daemon has ever been told to store history for, as `(id, command)`.
 fn recorded(env: &FreshEnv) -> Vec<(HistoryId, String)> {
@@ -68,8 +71,16 @@ fn bash() -> Option<PathBuf> {
     found
 }
 
+/// `config` excludes commands starting `echo filtered-`; `in_history` is whether it leaves them in
+/// history all the same.
+#[rstest]
+#[case::history_filter("history_filter = [\"^echo filtered-\"]\n[output]\n", false)]
+#[case::output_command_filter("[output]\ncommand_filter = [\"^echo filtered-\"]\n", true)]
 #[tokio::test]
-async fn filtered_commands_leave_no_captured_output() {
+async fn filtered_commands_leave_no_captured_output(
+    #[case] config: &str,
+    #[case] in_history: bool,
+) {
     let Some(bash) = bash() else {
         return;
     };
@@ -79,11 +90,10 @@ async fn filtered_commands_leave_no_captured_output() {
     let last = format!("kept-last-{}", marker());
 
     let env = FreshEnv::new();
-    env.write_config(
-        "history_filter = [\"^echo filtered-\"]\n[output]\nenabled = true\nmax_output_size = \
-         \"1MB\"\nsync = false\nmax_disk_usage = \"unlimited\"\n[daemon]\nenabled = \
-         true\nautostart = false\n",
-    );
+    env.write_config(&format!(
+        "{config}enabled = true\nmax_output_size = \"1MB\"\nsync = false\nmax_disk_usage = \
+         \"unlimited\"\n[daemon]\nenabled = true\nautostart = false\n",
+    ));
     // Finish migrations before the daemon and the shell hooks race for the databases.
     env.run(&["store", "status"]);
     std::fs::write(
@@ -133,24 +143,30 @@ async fn filtered_commands_leave_no_captured_output() {
     //
     // Waiting for it is also the positive control: capture really is running in this test, so the
     // assertions after it have teeth instead of passing vacuously.
+    //
+    // `captured` only looks up ids already in history, and `atuin history end` runs in the
+    // background, so a filtered command meant to stay in history is waited for too -- before the
+    // captures are read, or its output could be stored and still go unseen.
+    let is_filtered_recorded =
+        || recorded(&env).iter().any(|(_, command)| command.contains(&filtered));
     let deadline = Instant::now() + TIMEOUT;
     let captured = loop {
+        let filtered_recorded = is_filtered_recorded();
         let captured = captured(&env, &mut client).await;
-        if captured.iter().any(|(_, output)| output.contains(&last)) {
+        if captured.iter().any(|(_, output)| output.contains(&last))
+            && (filtered_recorded || !in_history)
+        {
             break captured;
         }
         assert!(
             Instant::now() < deadline,
-            "timed out waiting for the last command's captured output; captured: {captured:#?}",
+            "timed out waiting for the last command's captured output and the filtered command's \
+             history entry; captured: {captured:#?}",
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
 
-    // The filter kept it out of history entirely, so it never had an id to be captured under.
-    assert!(
-        !recorded(&env).iter().any(|(_, command)| command.contains(&filtered)),
-        "filtered command was recorded in history",
-    );
+    assert_eq!(is_filtered_recorded(), in_history, "whether the filtered command is in history");
 
     // Captures are keyed by history id, and the ids above are every id the daemon ever issued, so
     // this covers the whole store.

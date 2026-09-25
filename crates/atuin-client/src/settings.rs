@@ -46,7 +46,7 @@ pub mod watcher;
 pub use daemon::Daemon;
 pub use disk_usage_limit::{DiskUsageLimit, DiskUsageLimitParseError};
 use output::OutputCaptureConfig;
-pub use output::{CaptureLimits, OutputCapture};
+pub use output::{CaptureLimits, CommandFilter, OutputCapture};
 pub use shells::Shells;
 
 /// Default sync address for Atuin's hosted service, parsed once.
@@ -2168,6 +2168,29 @@ mod tests {
 
         let settings = parse_settings("[ai]\nsession_continue_minutes = -5\n");
         assert_eq!(settings.ai.session_continue_minutes, None);
+    }
+
+    #[rstest]
+    #[case::anchored(Some(r#"["^cat "]"#), "cat .env", true)]
+    #[case::anchor_holds(Some(r#"["^cat "]"#), "echo cat .env", false)]
+    #[case::unanchored(Some(r#"["token"]"#), "gh auth token", true)]
+    #[case::any_of_several(Some(r#"["^cat ", "token"]"#), "gh auth token", true)]
+    #[case::omitted(None, "cat .env", false)]
+    fn output_command_filter_matches_the_command_line(
+        #[case] patterns: Option<&str>,
+        #[case] command: &str,
+        #[case] expected: bool,
+    ) {
+        let filter = patterns.map(|p| format!("command_filter = {p}\n")).unwrap_or_default();
+        let settings = parse_settings(&format!("[output]\nenabled = true\n{filter}"));
+
+        let limits = settings.output.limits().expect("output capture is enabled");
+        assert_eq!(limits.command_filter.is_match(command), expected);
+    }
+
+    #[rstest]
+    fn output_command_filter_rejects_an_invalid_expression() {
+        assert!(Settings::validate_str("[output]\ncommand_filter = [\"(\"]\n").is_err());
     }
 
     #[rstest]

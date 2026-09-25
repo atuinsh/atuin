@@ -7,11 +7,12 @@ mod common;
 use std::time::Duration;
 
 use atuin_client::history::{History, HistoryId};
-use atuin_client::settings::Search;
+use atuin_client::settings::{CaptureLimits, CommandFilter, OutputCapture, Search};
 use atuin_common::range::PyStyleIdxRange;
 use atuin_daemon::grpc::history::pb::tail_history_reply::Event;
 use atuin_daemon::search::IndexFilterMode;
 use common::{TestEnv, history};
+use regex::RegexSet;
 use rstest::*;
 
 #[fixture]
@@ -89,6 +90,45 @@ async fn output_is_stored_only_for_commands_that_cannot_print_the_key(
         .unwrap();
 
     assert_eq!(client.get_command_output(id, vec![]).await.unwrap().is_some(), stored);
+}
+
+/// `[output] command_filter` keeps a command's output out of the store, not the command out of
+/// history. The daemon reads the filter from its live settings, so a config reload applies to the
+/// next capture.
+#[rstest]
+#[case::filtered("cat .env", false)]
+#[case::not_filtered("echo hello", true)]
+#[tokio::test]
+async fn output_command_filter_drops_output_but_keeps_history(
+    #[future(awt)] env: TestEnv,
+    #[case] command: &str,
+    #[case] stored: bool,
+    #[values(false, true)] ended_before_capture: bool,
+) {
+    let mut settings = env.settings.clone();
+    settings.output = OutputCapture::Enabled(CaptureLimits {
+        command_filter: CommandFilter::from(RegexSet::new(["^cat "]).unwrap()),
+        ..CaptureLimits::default()
+    });
+    env.handle.apply_settings(settings).await;
+
+    let mut client = env.history_client().await;
+    let id: HistoryId =
+        client.start_history(history(command)).await.unwrap().id.unwrap().try_into().unwrap();
+    let end = Some(Duration::from_nanos(1_000_000));
+    if ended_before_capture {
+        client.end_history(id, end, 0).await.unwrap();
+    }
+    client
+        .register_command_output(id, "adapt amused able anxiety mother", None, 32, 80, 24)
+        .await
+        .unwrap();
+    if !ended_before_capture {
+        client.end_history(id, end, 0).await.unwrap();
+    }
+
+    assert_eq!(client.get_command_output(id, vec![]).await.unwrap().is_some(), stored);
+    assert!(env.history_db.load(id).await.unwrap().is_some(), "{command} left history");
 }
 
 /// A capture whose middle was discarded has to survive the whole round trip -- proto, storage

@@ -80,6 +80,7 @@ Captured output is stored in memory, on your machine:
 - Output is lost when the daemon stops. Only commands captured while the daemon was running are available.
 - When you delete a history entry, Atuin also deletes its captured output.
 - Atuin only keeps output for commands in your history. If Atuin doesn't record a command (for example a failing command when `store_failed = false`), it discards that command's output too.
+- To keep a command in your history but never store its output, add it to [`command_filter`](../configuration/config.md#command_filter) in `[output]`.
 
 Atuin sends nothing to the LLM until the LLM requests the output of a specific command, and by default Atuin AI asks your permission first.
 

@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use atuin_client::history::HistoryId;
 use atuin_client::history::store::HistoryRecord;
-use atuin_client::settings::Search;
+use atuin_client::settings::{CommandFilter, Search};
 use atuin_daemon::grpc::history::pb::RegisterCommandOutputRequest;
 use atuin_daemon::grpc::history::pb::tail_history_reply::Event;
 use atuin_daemon::search::SearchIndex;
@@ -315,7 +315,10 @@ async fn delete_forgets_captured_output(
     if finished {
         env.journal.finish(id, 0, Duration::from_millis(1)).await.unwrap();
     }
-    env.journal.register_command_output(id, capture("secret output")).await.unwrap();
+    env.journal
+        .register_command_output(id, capture("secret output"), &CommandFilter::default())
+        .await
+        .unwrap();
     assert!(env.journal.get_command_output(id).await.unwrap().is_some());
 
     assert_eq!(env.journal.delete(&[id], &Search::default()).await.unwrap(), 1);
@@ -365,7 +368,11 @@ async fn output_for_a_deleted_or_unknown_id_is_refused(
     let unknown = HistoryId::from_bytes([0xCD; 16]);
 
     for id in [deleted, unknown] {
-        let err = env.journal.register_command_output(id, capture("late")).await.unwrap_err();
+        let err = env
+            .journal
+            .register_command_output(id, capture("late"), &CommandFilter::default())
+            .await
+            .unwrap_err();
         assert!(matches!(err, RegisterOutputError::NotLive(_)), "{id}: {err}");
         assert!(env.journal.get_command_output(id).await.unwrap().is_none(), "{id}");
     }
@@ -392,13 +399,20 @@ async fn refused_output_is_not_found_over_the_wire(#[future(awt)] env: TestEnv) 
 #[tokio::test]
 async fn cancel_discards_captured_output(#[future(awt)] env: TestEnv) {
     let id = env.journal.start_cmd(history("echo failed"));
-    env.journal.register_command_output(id, capture("boom")).await.unwrap();
+    env.journal
+        .register_command_output(id, capture("boom"), &CommandFilter::default())
+        .await
+        .unwrap();
     assert!(env.journal.get_command_output(id).await.unwrap().is_some());
 
     env.journal.cancel(id).await.unwrap();
 
     assert!(env.journal.get_command_output(id).await.unwrap().is_none());
-    let err = env.journal.register_command_output(id, capture("late")).await.unwrap_err();
+    let err = env
+        .journal
+        .register_command_output(id, capture("late"), &CommandFilter::default())
+        .await
+        .unwrap_err();
     assert!(matches!(err, RegisterOutputError::NotLive(_)), "{err}");
 }
 
@@ -418,7 +432,11 @@ async fn output_arriving_mid_delete_is_refused(#[future(awt)] env: TestEnv) {
     // store. The harness's default db timeout is 5s, far beyond this wait.
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let err = env.journal.register_command_output(id, capture("late")).await.unwrap_err();
+    let err = env
+        .journal
+        .register_command_output(id, capture("late"), &CommandFilter::default())
+        .await
+        .unwrap_err();
     assert!(matches!(err, RegisterOutputError::NotLive(_)), "{err}");
 
     lock.release().await;
@@ -457,6 +475,10 @@ async fn abandoned_delete_still_completes(#[future(awt)] env: TestEnv) {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert!(env.journal.get_command_output(id).await.unwrap().is_none());
-    let err = env.journal.register_command_output(id, capture("late")).await.unwrap_err();
+    let err = env
+        .journal
+        .register_command_output(id, capture("late"), &CommandFilter::default())
+        .await
+        .unwrap_err();
     assert!(matches!(err, RegisterOutputError::NotLive(_)), "{err}");
 }

@@ -363,6 +363,9 @@ history_filter = [
 ]
 ```
 
+A filtered command's output isn't captured either. To keep a command in history
+but not its output, use [`command_filter`](#command_filter) in `[output]`.
+
 ### `cwd_filter`
 
 Use the `cwd` filter to exclude directories from history tracking.
@@ -1026,6 +1029,46 @@ The port to use for client -> daemon communication. Only used on non-Unix system
 ```toml
 tcp_port = 8889
 ```
+
+## Output capture
+
+Settings for capturing command output, which needs the [daemon](#daemon) and
+[pty-proxy](../reference/pty-proxy.md). See [Reading Command
+Output](../ai/command-output.md).
+
+### `enabled`
+
+Default: `false`
+
+Capture and store the output of the commands you run. When `false`, nothing is
+captured and the other keys in this section are ignored.
+
+```toml
+[output]
+enabled = true
+```
+
+### `command_filter`
+
+Default: `[]`
+
+Commands whose output is never stored. Unlike
+[`history_filter`](#history_filter), a matching command is still recorded in
+your history -- only its output is dropped. Commands `history_filter` excludes
+never have their output stored either.
+
+```toml
+[output]
+## Note that these regular expressions are unanchored, i.e. if they don't start
+## with ^ or end with $, they'll match anywhere in the command.
+command_filter = [
+   "^cat ",
+   "^kubectl get secret",
+]
+```
+
+The filter applies to output captured after the daemon picks up the change; it
+doesn't remove output that's already stored.
 
 ## logs
 

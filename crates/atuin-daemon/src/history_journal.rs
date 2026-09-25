@@ -88,7 +88,7 @@ use atuin_client::database::Sqlite as HistoryDatabase;
 use atuin_client::history::store::HistoryStore;
 use atuin_client::history::{CommandCapture, History, HistoryId};
 use atuin_client::packfile;
-use atuin_client::settings::Search;
+use atuin_client::settings::{CommandFilter, Search};
 use atuin_common::sync::AsyncShardedMutex;
 use atuin_domain::caps::{CapClient, PackfileCap};
 use atuin_domain::record::{RecordId, RecordIdx, RecordSeriesKey, RecordTag};
@@ -608,7 +608,7 @@ impl HistoryJournal {
         marks
     }
 
-    /// Store a command's captured output.
+    /// Store a command's captured output, unless `command_filter` matches the command.
     ///
     /// If the output is received for an unknown command, this returns a
     /// [`RegisterOutputError::NotLive`].
@@ -616,6 +616,7 @@ impl HistoryJournal {
         &self,
         id: HistoryId,
         capture: CommandCapture,
+        command_filter: &CommandFilter,
     ) -> Result<(), RegisterOutputError> {
         let _lifecycle = self.lifecycle_mutex.lock(&id).await;
 
@@ -640,8 +641,8 @@ impl HistoryJournal {
             return Err(RegisterOutputError::NotLive(id));
         };
 
-        // Never persist output for commands that may carry secrets.
-        if atuin_common::secrets::output_unsafe(&command) {
+        // Never persist output for commands that may carry secrets, or that the user excluded.
+        if atuin_common::secrets::output_unsafe(&command) || command_filter.is_match(&command) {
             return Ok(());
         }
 
