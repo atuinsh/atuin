@@ -1032,20 +1032,56 @@ tcp_port = 8889
 
 ## Output capture
 
-Settings for capturing command output, which needs the [daemon](#daemon) and
-[pty-proxy](../reference/pty-proxy.md). See [Reading Command
-Output](../ai/command-output.md).
+Settings for [capturing command output](../guide/output-capture.md), which
+needs the [daemon](#daemon) and [pty-proxy](../reference/pty-proxy.md).
+
+```toml
+[output]
+enabled = true
+max_output_size = "1MB"
+max_disk_usage = "10%"
+command_filter = []
+```
 
 ### `enabled`
 
 Default: `false`
 
 Capture and store the output of the commands you run. When `false`, nothing is
-captured and the other keys in this section are ignored.
+captured and the other keys in this section are ignored. Restart the daemon and
+your shell after changing it, or run `atuin config enable output-capture`,
+which also sets up the daemon and pty-proxy.
 
 ```toml
 [output]
 enabled = true
+```
+
+### `max_output_size`
+
+Default: `"1MB"`
+
+The most output kept for a single command. When a command prints more, Atuin
+keeps the start and the end, half each, and drops the middle. Takes a size like
+`"512KB"` or `"2MB"`. pty-proxy reads it when your shell starts.
+
+```toml
+[output]
+max_output_size = "1MB"
+```
+
+### `max_disk_usage`
+
+Default: `"10%"`
+
+The most disk space captured output may use: a size (`"10GB"`), a share of
+the total size of the disk that holds Atuin's data directory (`"10%"`), or
+`"unlimited"`. Past the limit, the daemon deletes the oldest output first.
+Restart the daemon after changing it.
+
+```toml
+[output]
+max_disk_usage = "10%"
 ```
 
 ### `command_filter`
@@ -1069,6 +1105,14 @@ command_filter = [
 
 The filter applies to output captured after the daemon picks up the change; it
 doesn't remove output that's already stored.
+
+### `sync`
+
+Default: `false`
+
+Reserved for syncing captured output between machines, which isn't
+implemented yet: captured output never leaves your machine, whatever this is
+set to.
 
 ## logs
 

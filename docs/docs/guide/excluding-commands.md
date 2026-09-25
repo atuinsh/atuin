@@ -53,7 +53,7 @@ working directory path.
 
 ## Keep the command, drop its output: `command_filter`
 
-With [output capture](../ai/command-output.md) on, both filters above also keep
+With [output capture](output-capture.md) on, both filters above also keep
 a command's output out of the store. To record a command in your history but
 never store what it prints, use
 [`command_filter`](../configuration/config.md#command_filter) in `[output]`:
