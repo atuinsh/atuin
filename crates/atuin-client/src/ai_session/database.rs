@@ -1244,7 +1244,10 @@ impl AiSessionDatabase {
             .content
             .iter()
             .filter_map(|content| match content {
-                Content::Text(text) | Content::Reasoning(text) => Some(text.clone()),
+                Content::Text(text) | Content::Reasoning(text) | Content::Summary(text) => {
+                    Some(text.clone())
+                }
+                Content::Error(text) => Some(format!("[error] {text}")),
                 Content::ReasoningSummary { tokens } => {
                     Some(atuin_common::harnesstools::session::model::reasoning_label(
                         tokens.or(message.usage.and_then(|u| u.reasoning)),
@@ -1752,6 +1755,19 @@ mod tests {
         let chunks: Vec<String> = db.transcript(&session).try_collect().await.unwrap();
         assert!(chunks.iter().all(|c| c.ends_with('\n')), "each chunk must be newline-terminated");
         assert_eq!(chunks.concat().lines().count(), 3, "messages must not run together");
+    }
+
+    #[rstest]
+    #[case::summary(Content::Summary("compacted".to_owned()), "assistant: compacted\n")]
+    #[case::error(Content::Error("rate limited".to_owned()), "assistant: [error] rate limited\n")]
+    #[tokio::test]
+    async fn transcript_keeps_summaries_and_errors(#[case] content: Content, #[case] want: &str) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        db.append(&message_with(&session, 1, Role::Assistant, vec![content])).await.unwrap();
+
+        let chunks: Vec<String> = db.transcript(&session).try_collect().await.unwrap();
+        assert_eq!(chunks.concat(), want);
     }
 
     fn handle(harness: HarnessKind, id: &str) -> HarnessSession {
