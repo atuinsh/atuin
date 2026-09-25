@@ -218,13 +218,13 @@ impl Cursor {
 /// # let mut log = OpenOptions::new().read(true).append(true).create(true).open(&path).unwrap();
 /// let mut reader = LineReader::new(log.try_clone().unwrap());
 ///
-/// log.write_all(b"first\nsec").unwrap();
+/// log.write_all(b"first\nsecon").unwrap();
 /// let lines: Vec<Line> = reader.lines().unwrap().map(Result::unwrap).collect();
 /// assert_eq!(lines.len(), 1);
 /// assert_eq!(lines[0].bytes, "first");
 ///
 /// // The unterminated tail is withheld until its newline lands.
-/// log.write_all(b"ond\n").unwrap();
+/// log.write_all(b"d\n").unwrap();
 /// let lines: Vec<Line> = reader.lines().unwrap().map(Result::unwrap).collect();
 /// assert_eq!(lines[0].bytes, "second");
 ///

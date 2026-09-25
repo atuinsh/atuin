@@ -4616,7 +4616,7 @@ mod tests {
             part_projection(&db, "ses_W", &serde_json::json!({
                 "id": "prt_0d148db2d001abandonedDraft1", "message_id": "msg_0d148d743001qhQZH5hIpZVrlb",
                 "time_created": 1_790_217_607_981i64,
-                "data": {"type": "text", "text": "half an ans", "time": {"start": 1_790_217_607_981i64}},
+                "data": {"type": "text", "text": "half an answ", "time": {"start": 1_790_217_607_981i64}},
             }))
             .await;
 
