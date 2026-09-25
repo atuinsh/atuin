@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use atuin_domain::api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ErrorResponse};
 use atuin_domain::caps::axum::{CapabilitiesRouterExt, get as capabilities_endpoint};
-use atuin_domain::caps::{CapServer, CapabilitiesCap, PageSizeCap};
+use atuin_domain::caps::{CapServer, CapabilitiesCap, MaxSizeRecordCap, PageSizeCap};
 use axum::Router;
 use axum::extract::{FromRequestParts, Request};
 use axum::http::request::Parts;
@@ -103,7 +103,7 @@ pub struct AppState {
     pub settings: Settings,
 }
 
-fn capabilities() -> CapServer {
+fn capabilities(max_record_size: u64) -> CapServer {
     CapServer::new()
         .add(CapabilitiesCap { version: 1 })
         .expect("CapabilitiesCap is registered exactly once")
@@ -112,12 +112,14 @@ fn capabilities() -> CapServer {
             page_size: 100,
         })
         .expect("PageSizeCap is registered exactly once")
+        .add(MaxSizeRecordCap(max_record_size))
+        .expect("MaxSizeRecordCap is registered exactly once")
 }
 
 pub fn router(database: Arc<dyn DynDatabase>, settings: Settings) -> Router {
     // Advertise the self-referential capabilities capability, so every server that speaks the
     // protocol carries at least one concrete capability a client can observe.
-    let caps = Arc::new(capabilities());
+    let caps = Arc::new(capabilities(settings.max_record_size.0));
 
     let negotiated = Router::new()
         .route("/", get(handlers::index))
