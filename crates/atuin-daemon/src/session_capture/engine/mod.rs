@@ -1,8 +1,11 @@
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroU32;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::Duration;
 
 use atuin_client::ai_session::{HarnessKind, HarnessSession, Message, NativeSessionId};
+use atuin_common::futures::Backoff;
 use atuin_common::harnesstools::AnyHarness;
 use atuin_common::harnesstools::session::{
     AnyMessage, CaptureError, Checkpoint, RuntimeError, SessionEvent, SessionId,
@@ -19,6 +22,14 @@ use super::message_enricher::{MessageEnricher, SYNTHETIC};
 /// Backoff bounds for retrying a harness listener whose session directory does not exist yet.
 const LISTENER_RETRY_START: Duration = Duration::from_secs(2);
 const LISTENER_RETRY_MAX: Duration = Duration::from_secs(60);
+
+/// How a failed append is retried before its session is left for a restart to re-read.
+const APPEND_RETRY: Backoff = Backoff::Exponential {
+    initial: Duration::from_millis(100),
+    max: Duration::from_secs(1),
+    factor: NonZeroU32::new(2).unwrap(),
+};
+const APPEND_RETRY_FOR: Duration = Duration::from_secs(5);
 
 /// How long a live session with rows waiting for a timestamp may stay quiet before they are
 /// stored with capture time: a transcript of untimed lines alone (Claude Code title lines)
@@ -164,7 +175,21 @@ async fn store(
     checkpoint: Checkpoint,
 ) {
     for msg in rows {
-        if let Err(e) = sink.append(msg).await {
+        // A busy sidecar or record store is the realistic failure: retry briefly before pinning
+        // the checkpoint so a restart re-reads the line. `append` is idempotent, so a retry after
+        // a half-done attempt is safe.
+        let appended = APPEND_RETRY
+            .retry(
+                || async {
+                    match sink.append(msg.clone()).await {
+                        Ok(_) => ControlFlow::Break(()),
+                        Err(e) => ControlFlow::Continue(e),
+                    }
+                },
+                APPEND_RETRY_FOR,
+            )
+            .await;
+        if let Err(e) = appended {
             tracing::warn!(?e, "failed to capture ai-session message");
             stuck.insert(session.clone());
         }
