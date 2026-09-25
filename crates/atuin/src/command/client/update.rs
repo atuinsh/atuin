@@ -23,7 +23,9 @@ impl Cmd {
         let mut updater = AxoUpdater::new_for("atuin");
         updater.disable_installer_output();
         if let Ok(token) = std::env::var("ATUIN_GITHUB_TOKEN") {
-            updater.set_github_token(&token);
+            if !token.is_empty() {
+                updater.set_github_token(&token);
+            }
         }
 
         // The install receipt is written by the shell/powershell installers.
