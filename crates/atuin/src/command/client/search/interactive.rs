@@ -1,6 +1,8 @@
+use std::fs;
 #[cfg(unix)]
 use std::io::Read as _;
 use std::io::{IsTerminal, Write, stdout};
+use std::process::Command;
 use std::time::Duration;
 
 use atuin_client::database::{Context, Sqlite, current_context};
@@ -30,6 +32,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Tabs};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 use semver::Version;
+use tempfile::NamedTempFile;
 use time::{OffsetDateTime, UtcOffset};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 #[cfg(windows)]
@@ -52,6 +55,7 @@ const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
 pub enum InputAction {
     Accept(usize),
     AcceptInspecting,
+    EditAccept(usize),
     Copy(usize),
     Delete(usize),
     DeleteInspecting,
@@ -187,6 +191,136 @@ struct StyleState {
     compactness: Compactness,
     invert: bool,
     inner_width: usize,
+}
+
+/// A resolved `$VISUAL`/`$EDITOR`/`$FCEDIT` invocation: the program to exec,
+/// plus any arguments baked into the variable itself (e.g. `EDITOR="code
+/// --wait"`).
+///
+/// `program` is *not* guaranteed to exist on disk. When resolved from an
+/// environment variable it's frequently just a bare name (`EDITOR=vim`,
+/// `EDITOR=nano`) that the OS resolves against `$PATH` when we exec it —
+/// same as today, we don't second-guess the user's explicit choice. Only the
+/// two internal fallbacks below (`/usr/bin/editor`, or `vim`/`vi` found by
+/// walking `$PATH` ourselves) are pre-verified to exist.
+struct EditorCommand {
+    program: std::path::PathBuf,
+    args: Vec<String>,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum VisualEditorError {
+    #[error("no editor found; set $VISUAL, $EDITOR, or $FCEDIT")]
+    NotFound,
+    #[error("failed to parse {0:?} as a shell command")]
+    UnparseableCommand(String),
+}
+
+/// Splits a `$VISUAL`/`$EDITOR`/`$FCEDIT` value into a program and its
+/// arguments, e.g. `"code --wait"` -> `code`, `["--wait"]`.
+fn parse_editor_var(val: String) -> std::result::Result<EditorCommand, VisualEditorError> {
+    let parts =
+        shlex::split(&val).ok_or_else(|| VisualEditorError::UnparseableCommand(val.clone()))?;
+    let (program, args) = parts.split_first().ok_or(VisualEditorError::UnparseableCommand(val))?;
+    Ok(EditorCommand {
+        program: std::path::PathBuf::from(program),
+        args: args.to_vec(),
+    })
+}
+
+fn get_visual_editor() -> std::result::Result<EditorCommand, VisualEditorError> {
+    // FCEDIT is the fc-specific override; $VISUAL is for full-screen editors,
+    // $EDITOR is the fallback for any editor.
+    for var in ["FCEDIT", "VISUAL", "EDITOR"] {
+        if let Ok(val) = std::env::var(var)
+            && !val.is_empty()
+        {
+            return parse_editor_var(val);
+        }
+    }
+
+    // On Debian/Ubuntu, /usr/bin/editor is an update-alternatives symlink to
+    // the system-preferred editor, independent of $EDITOR.
+    let editor_alternative = std::path::PathBuf::from("/usr/bin/editor");
+    if editor_alternative.exists() {
+        return Ok(EditorCommand {
+            program: editor_alternative,
+            args: Vec::new(),
+        });
+    }
+
+    // Fall back to vim or vi, whichever is found first in PATH.
+    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    for name in ["vim", "vi"] {
+        if let Some(program) =
+            std::env::split_paths(&path_var).map(|dir| dir.join(name)).find(|path| path.is_file())
+        {
+            return Ok(EditorCommand {
+                program,
+                args: Vec::new(),
+            });
+        }
+    }
+
+    Err(VisualEditorError::NotFound)
+}
+
+/// Proof that the TUI's [`Terminal`] has been torn down, so the tty is free for
+/// an external editor. Only [`TtyReleased::new`] can produce one, and doing so
+/// consumes the `Terminal` — so `visual_edit_command` can't be called, even
+/// after a future reshuffle of its call site, without the tty already released.
+struct TtyReleased(());
+
+impl TtyReleased {
+    fn new(terminal: Terminal<CrosstermBackend<Stdout>>) -> Self {
+        drop(terminal);
+        Self(())
+    }
+}
+
+// `_tty` is never read — the caller holding one at all is the guarantee (see `TtyReleased`).
+fn visual_edit_command(_tty: &TtyReleased, original_command: &str) -> Result<String> {
+    // Write the command to a temp file, then close the write fd before the
+    // editor opens it (same pattern as scripts.rs open_editor).
+    let temp_file = NamedTempFile::new()?;
+    fs::write(temp_file.path(), format!("{original_command}\n"))?;
+    let temp_path = temp_file.into_temp_path();
+
+    let editor = get_visual_editor()?;
+    let mut cmd = Command::new(&editor.program);
+    cmd.args(&editor.args).arg(&temp_path);
+
+    // The shell integration runs atuin inside $() command substitution with an
+    // fd-swap so atuin's stderr is a pipe back to the shell. Editors that use
+    // ncurses (nano, etc.) inherit those fds and may get confused — arrow keys
+    // break and terminal cleanup sequences end up captured in the shell output.
+    // Open /dev/tty directly so the editor always gets a clean terminal.
+    #[cfg(unix)]
+    if let Ok(tty) = std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty")
+        && let (Ok(tty_out), Ok(tty_err)) = (tty.try_clone(), tty.try_clone())
+    {
+        cmd.stdin(tty).stdout(tty_out).stderr(tty_err);
+    }
+
+    let status = cmd.status()?;
+
+    if !status.success() {
+        return Ok(original_command.to_string());
+    }
+
+    Ok(fs::read_to_string(&temp_path)?.trim_end().to_string())
+}
+
+/// Prefixes `command` with the shell-integration accept marker when the shell
+/// should auto-execute it. A blank `command` — e.g. the user cleared the
+/// buffer while editing — is left alone rather than auto-executing an empty
+/// line.
+fn with_accept_prefix(command: String, accept: bool, accept_prefix: &str) -> String {
+    if accept && !command.is_empty() {
+        format!("{accept_prefix}{command}")
+    } else {
+        command
+    }
 }
 
 impl State {
@@ -746,6 +880,10 @@ impl State {
             Action::Delete if self.tab_index == 1 => InputAction::DeleteInspecting,
             Action::Delete => InputAction::Delete(self.results_state.selected()),
             Action::DeleteAll => InputAction::DeleteAllMatching(self.results_state.selected()),
+            Action::EditAccept => {
+                self.accept = true;
+                InputAction::EditAccept(self.results_state.selected())
+            }
             Action::ReturnOriginal => InputAction::ReturnOriginal,
             Action::ReturnQuery => InputAction::ReturnQuery,
             Action::Exit => Self::handle_key_exit(settings),
@@ -2228,15 +2366,17 @@ pub async fn history(
 
     let accept_prefix = "__atuin_accept__:";
 
+    // `EditAccept` (below) launches an external editor, which needs the tty to
+    // itself. Requiring a `TtyReleased` token — obtainable only by consuming
+    // `terminal` — makes that ordering a compile error to violate, rather than
+    // an invariant that depends on this statement staying above the `match`.
+    let tty_released = TtyReleased::new(terminal);
+
     match result {
         InputAction::AcceptInspecting => {
             match inspecting {
                 Some(result) => {
-                    let mut command = result.command;
-
-                    if accept {
-                        command = String::from(accept_prefix) + &command;
-                    }
+                    let command = with_accept_prefix(result.command, accept, accept_prefix);
 
                     // index is in bounds so we return that entry
                     Ok(command)
@@ -2245,16 +2385,20 @@ pub async fn history(
             }
         }
         InputAction::Accept(index) if index < results.len() => {
-            let mut command = results.swap_remove(index).command;
+            let command = results.swap_remove(index).command;
 
-            if is_command_chaining {
-                command = format!("{} {}", original_query.trim_end(), command);
-            } else if accept {
-                command = String::from(accept_prefix) + &command;
-            }
+            let command = if is_command_chaining {
+                format!("{} {}", original_query.trim_end(), command)
+            } else {
+                with_accept_prefix(command, accept, accept_prefix)
+            };
 
             // index is in bounds so we return that entry
             Ok(command)
+        }
+        InputAction::EditAccept(index) if index < results.len() => {
+            let command = visual_edit_command(&tty_released, &results[index].command)?;
+            Ok(with_accept_prefix(command, accept, accept_prefix))
         }
         InputAction::ReturnOriginal => Ok(String::new()),
         InputAction::Copy(index) => {
@@ -2268,7 +2412,7 @@ pub async fn history(
             }
             Ok(String::new())
         }
-        InputAction::ReturnQuery | InputAction::Accept(_) => {
+        InputAction::ReturnQuery | InputAction::Accept(_) | InputAction::EditAccept(_) => {
             // Either:
             // * index == RETURN_QUERY, in which case we should return the input
             // * out of bounds -> usually implies no selected entry so we return the input
@@ -2842,6 +2986,53 @@ mod tests {
 
         let result = state.execute_action(&Action::Delete, &settings);
         assert!(matches!(result, super::InputAction::Delete(7)));
+    }
+
+    #[rstest]
+    fn execute_edit_accept(
+        #[with(KeymapMode::Emacs, 100, 7)] mut state: State,
+        settings: Settings,
+    ) {
+        use crate::command::client::search::keybindings::Action;
+
+        let result = state.execute_action(&Action::EditAccept, &settings);
+        assert!(matches!(result, super::InputAction::EditAccept(7)));
+        assert!(state.accept);
+    }
+
+    #[rstest]
+    #[case("git log", true, "__atuin_accept__:git log")]
+    #[case("git log", false, "git log")]
+    #[case("", true, "")]
+    #[case("", false, "")]
+    fn with_accept_prefix_cases(
+        #[case] command: &str,
+        #[case] accept: bool,
+        #[case] expected: &str,
+    ) {
+        let result = super::with_accept_prefix(command.to_string(), accept, "__atuin_accept__:");
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    #[case("vim", "vim", &[])]
+    #[case("code --wait", "code", &["--wait"])]
+    #[case("emacsclient -t -a \"\"", "emacsclient", &["-t", "-a", ""])]
+    fn parse_editor_var_splits_program_and_args(
+        #[case] val: &str,
+        #[case] expected_program: &str,
+        #[case] expected_args: &[&str],
+    ) {
+        let editor = super::parse_editor_var(val.to_string()).unwrap();
+        assert_eq!(editor.program, std::path::Path::new(expected_program));
+        assert_eq!(editor.args, expected_args);
+    }
+
+    #[rstest]
+    #[case("")]
+    #[case("   ")]
+    fn parse_editor_var_rejects_unparseable_values(#[case] val: &str) {
+        assert!(super::parse_editor_var(val.to_string()).is_err());
     }
 
     #[rstest]
