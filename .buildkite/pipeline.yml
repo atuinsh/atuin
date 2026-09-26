@@ -10,8 +10,9 @@
 # and Cargo.lock. Saves run only after the step's commands have succeeded.
 #
 # Queues: light jobs use the cluster's default queue (linux-small, 2 vCPU).
-# Compile-bound jobs (build, unit-test, integration-test, package,
-# nix-build) use linux-large (8 vCPU), which every Buildkite cluster has.
+# Compile-bound jobs use linux-large (8 vCPU) and macOS jobs macos-large
+# (12 vCPU), both default queues in every Buildkite cluster. Test steps are
+# split across jobs with `parallelism` + nextest --partition.
 #
 # Not ported yet: the `paths-ignore: ui/**` filters on rust.yml and nix.yml
 # (if_changed needs a diff base set for main builds first).
@@ -47,38 +48,42 @@ steps:
       CARGO_PROFILE_RELEASE_LTO: "off"
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "256"
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup
+      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
       - source .buildkite/scripts/toolchain.sh
-      - buildkite-agent cache save --name rustup
+      - buildkite-agent cache save --name rustup --name apt_debs
       - 'section ":hammer: cargo build --release" cargo build --workspace --locked --release'
       - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
       - buildkite-agent cache save --name target
 
-  - label: ":test_tube: Unit tests (Linux)"
+  - label: ":test_tube: Unit tests (Linux) %n"
     key: unit-test
     notify:
       - github_check:
           name: "buildkite/unit-test"
     agents:
       queue: linux-large
+    # Split with nextest --partition; raise this as the suite grows.
+    parallelism: 2
     timeout_in_minutes: 45
     env:
       CARGO_TOOLS: nextest
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup
+      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
       - source .buildkite/scripts/toolchain.sh
-      - buildkite-agent cache save --name rustup
-      - 'section ":test_tube: cargo nextest (lib + bins)" cargo nextest run --lib --bins || { .buildkite/scripts/proptest-regressions.sh; exit 1; }'
+      - buildkite-agent cache save --name rustup --name apt_debs
+      - 'section ":test_tube: cargo nextest (lib + bins)" cargo nextest run $$(nextest_partition) --lib --bins || { .buildkite/scripts/proptest-regressions.sh; exit 1; }'
       - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
       - buildkite-agent cache save --name target
 
-  - label: ":test_tube: Unit tests (macOS)"
+  - label: ":test_tube: Unit tests (macOS) %n"
     key: unit-test-macos
     notify:
       - github_check:
           name: "buildkite/unit-test-macos"
     agents:
-      queue: macos-medium
+      queue: macos-large
+    # Split with nextest --partition; raise this as the suite grows.
+    parallelism: 2
     timeout_in_minutes: 45
     env:
       CARGO_TOOLS: nextest
@@ -86,7 +91,7 @@ steps:
       - buildkite-agent cache restore --name cargo_registry --name target --name rustup
       - source .buildkite/scripts/toolchain.sh
       - buildkite-agent cache save --name rustup
-      - 'section ":test_tube: cargo nextest (lib + bins)" cargo nextest run --lib --bins || { .buildkite/scripts/proptest-regressions.sh; exit 1; }'
+      - 'section ":test_tube: cargo nextest (lib + bins)" cargo nextest run $$(nextest_partition) --lib --bins || { .buildkite/scripts/proptest-regressions.sh; exit 1; }'
       - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
       - buildkite-agent cache save --name target
 
@@ -97,9 +102,9 @@ steps:
           name: "buildkite/check"
     timeout_in_minutes: 45
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup
+      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
       - source .buildkite/scripts/toolchain.sh
-      - buildkite-agent cache save --name rustup
+      - buildkite-agent cache save --name rustup --name apt_debs
       - 'section ":package: cargo fetch" cargo fetch --locked'
       # Registry contents are the same for every step; this one saves them.
       - buildkite-agent cache save --name cargo_registry
@@ -119,9 +124,9 @@ steps:
           name: "buildkite/check-subsets"
     timeout_in_minutes: 45
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup
+      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
       - source .buildkite/scripts/toolchain.sh
-      - buildkite-agent cache save --name rustup
+      - buildkite-agent cache save --name rustup --name apt_debs
       - 'section ":mag: check (sync)" cargo check --no-default-features --features sync --workspace'
       - 'section ":mag: check (server)" cargo check -p atuin-server'
       - 'section ":mag: check (client only)" cargo check --no-default-features --features client --workspace'
@@ -134,7 +139,7 @@ steps:
       - github_check:
           name: "buildkite/check-macos"
     agents:
-      queue: macos-medium
+      queue: macos-large
     timeout_in_minutes: 45
     command:
       - buildkite-agent cache restore --name cargo_registry --name target --name rustup
@@ -164,51 +169,57 @@ steps:
       # rust-toolchain.toml pins the dev toolchain; override it explicitly.
       RUST_TOOLCHAIN: "1.95.0"
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup
+      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
       - source .buildkite/scripts/toolchain.sh
-      - buildkite-agent cache save --name rustup
+      - buildkite-agent cache save --name rustup --name apt_debs
       - 'section ":crab: check on MSRV (all features)" cargo check --locked --workspace --all-features'
       - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
       - buildkite-agent cache save --name target
 
-  - label: ":postgres: Integration tests"
+  - label: ":postgres: Integration tests %n"
     key: integration-test
     notify:
       - github_check:
           name: "buildkite/integration-test"
     agents:
       queue: linux-large
+    # Split with nextest --partition; raise this as the suite grows.
+    parallelism: 2
     timeout_in_minutes: 45
     env:
       CARGO_TOOLS: nextest
       ATUIN_DB_URI: postgres://atuin:pass@localhost:5432/atuin
     command:
       - .buildkite/scripts/start-postgres.sh
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup
+      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
       - source .buildkite/scripts/toolchain.sh
-      - buildkite-agent cache save --name rustup
+      - buildkite-agent cache save --name rustup --name apt_debs
       # e2e tests have their own step. Test databases live in tempdirs;
       # tmpfs keeps concurrent SQLite WAL fsyncs from stalling the disk.
-      - 'section ":test_tube: cargo nextest (integration)" env TMPDIR=/dev/shm cargo nextest run --test "*" -E "not binary(/e2e_.*/)" || { .buildkite/scripts/proptest-regressions.sh; exit 1; }'
+      - 'section ":test_tube: cargo nextest (integration)" env TMPDIR=/dev/shm cargo nextest run $$(nextest_partition) --test "*" -E "not binary(/e2e_.*/)" || { .buildkite/scripts/proptest-regressions.sh; exit 1; }'
       - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
       - buildkite-agent cache save --name target
 
-  - label: ":terminal: e2e (Linux)"
+  - label: ":terminal: e2e (Linux) %n"
     key: e2e
     notify:
       - github_check:
           name: "buildkite/e2e"
+    # Split with nextest --partition; raise this as the suite grows.
+    parallelism: 2
+    agents:
+      queue: linux-large
     timeout_in_minutes: 45
     env:
       CARGO_TOOLS: nextest
       APT_PACKAGES: "zsh fish xz-utils"
       ATUIN_E2E_REQUIRE_SHELLS: "1"
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup
+      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
       - source .buildkite/scripts/toolchain.sh
-      - buildkite-agent cache save --name rustup
+      - buildkite-agent cache save --name rustup --name apt_debs
       - 'section ":shell: Install ble.sh" .buildkite/scripts/install-blesh.sh'
-      - 'section ":terminal: cargo nextest (e2e)" cargo nextest run -p atuin --test "e2e_*"'
+      - 'section ":terminal: cargo nextest (e2e)" cargo nextest run $$(nextest_partition) -p atuin --test "e2e_*"'
       - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
       - buildkite-agent cache save --name target
 
@@ -218,7 +229,7 @@ steps:
       - github_check:
           name: "buildkite/e2e-macos"
     agents:
-      queue: macos-medium
+      queue: macos-large
     timeout_in_minutes: 45
     env:
       CARGO_TOOLS: nextest
@@ -245,9 +256,9 @@ steps:
     env:
       RUST_COMPONENTS: clippy
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup
+      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
       - source .buildkite/scripts/toolchain.sh
-      - buildkite-agent cache save --name rustup
+      - buildkite-agent cache save --name rustup --name apt_debs
       # One run over the union of what `cargo clippy` (lib + bins) and
       # `cargo clippy --tests` lint, so the two share their work.
       - 'section ":paperclip: clippy (lib, bins, tests)" cargo clippy --lib --bins --tests -- -D warnings'
@@ -263,9 +274,9 @@ steps:
     env:
       RUSTDOCFLAGS: "-D warnings"
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup
+      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
       - source .buildkite/scripts/toolchain.sh
-      - buildkite-agent cache save --name rustup
+      - buildkite-agent cache save --name rustup --name apt_debs
       - 'section ":books: cargo doc" cargo doc --document-private-items --no-deps --workspace'
       - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
       - buildkite-agent cache save --name target
@@ -292,9 +303,9 @@ steps:
     env:
       CARGO_TOOLS: deny
     command:
-      - buildkite-agent cache restore --name cargo_registry --name rustup
+      - buildkite-agent cache restore --name cargo_registry --name rustup --name apt_debs
       - source .buildkite/scripts/toolchain.sh
-      - buildkite-agent cache save --name rustup
+      - buildkite-agent cache save --name rustup --name apt_debs
       # Same arguments cargo-deny-action passes by default.
       - 'section ":no_entry: cargo deny check" cargo deny --log-level warn --all-features check'
       # Library crates must never (re)add eyre or anyhow; each has its own
@@ -317,9 +328,9 @@ steps:
       queue: linux-large
     timeout_in_minutes: 45
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup
+      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
       - source .buildkite/scripts/toolchain.sh
-      - buildkite-agent cache save --name rustup
+      - buildkite-agent cache save --name rustup --name apt_debs
       # Make sure the packaged crates build from their tarballs, not from
       # anything left over from the workspace build. The restored target/
       # holds only third-party builds (prune-target.sh), which verification
@@ -339,9 +350,9 @@ steps:
     env:
       CARGO_TOOLS: nextest
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup
+      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
       - source .buildkite/scripts/toolchain.sh
-      - buildkite-agent cache save --name rustup
+      - buildkite-agent cache save --name rustup --name apt_debs
       - 'section ":moon: cargo nextest (nightly)" cargo nextest run -p atuin-daemon --test nightly --run-ignored all || { .buildkite/scripts/proptest-regressions.sh; exit 1; }'
       - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
       - buildkite-agent cache save --name target

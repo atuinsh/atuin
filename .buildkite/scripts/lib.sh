@@ -28,6 +28,11 @@ fetch_verified() { # <url> <sha256> <file>
   verify_sha256 "$2" "$3"
 }
 
+# Downloaded .debs, kept by the `apt_debs` cache so later jobs can install
+# them with dpkg instead of paying ~5s for `apt-get update` + download.
+APT_DEBS_DIR="$HOME/.cache/apt-debs"
+mkdir -p "$APT_DEBS_DIR/partial"
+
 # Installs whichever of the given apt packages are missing (Linux only).
 apt_install() {
   local sudo="" missing="" pkg
@@ -36,13 +41,29 @@ apt_install() {
     dpkg -s "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
   done
   [ -n "$missing" ] || return 0
-  # Try the image's existing package lists first: `apt-get update` costs
-  # ~4.5s on every job. If they're too stale to resolve, update and retry.
+  # Fast path: the .debs a previous job downloaded. --refuse-downgrade makes
+  # a newer base image fall through to apt rather than downgrade its
+  # packages to the cached versions.
+  if ls "$APT_DEBS_DIR"/*.deb >/dev/null 2>&1 &&
+    $sudo dpkg -i --refuse-downgrade "$APT_DEBS_DIR"/*.deb >/dev/null; then
+    echo "Installed$missing from cached .debs"
+    return 0
+  fi
+  # Download into APT_DEBS_DIR (not /var/cache/apt/archives, which images
+  # often clean after every install) so they can be cached. -f repairs
+  # anything a failed dpkg fast path left half-configured.
+  $sudo apt-get update -qq
   # shellcheck disable=SC2086 # word-split the package list
-  if ! $sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $missing 2>/dev/null; then
-    $sudo apt-get update -qq
-    # shellcheck disable=SC2086
-    $sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $missing
+  $sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -f --no-install-recommends \
+    -o Dir::Cache::archives="$APT_DEBS_DIR" -o APT::Keep-Downloaded-Packages=true $missing
+}
+
+# nextest's `--partition count:K/N` for a step split with Buildkite's
+# `parallelism: N`, and nothing for a single job, so how many ways a test
+# step is split is just that one number in the pipeline.
+nextest_partition() {
+  if [ -n "${BUILDKITE_PARALLEL_JOB_COUNT:-}" ]; then
+    echo "--partition count:$((BUILDKITE_PARALLEL_JOB + 1))/${BUILDKITE_PARALLEL_JOB_COUNT}"
   fi
 }
 

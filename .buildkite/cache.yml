@@ -59,3 +59,17 @@ caches:
     target_paths:
       - ~/.rustup
       - ~/.cargo/bin
+
+  # .debs apt_install downloaded (libssl-dev, pkg-config, and per-step extras
+  # like zsh/fish), installed with dpkg on later jobs. Per step because the
+  # package lists differ. Bump v1 if the hosted image's base packages move
+  # on (dpkg --refuse-downgrade falls back to apt meanwhile).
+  - name: apt_debs
+    cache_key:
+      - apt-debs
+      - v1
+      - agent: step
+      - agent: os
+      - agent: arch
+    target_paths:
+      - ~/.cache/apt-debs
