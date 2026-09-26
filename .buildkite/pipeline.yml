@@ -31,6 +31,10 @@ env:
 steps:
   - label: ":rust: Build (release)"
     key: build
+    # main only: PRs are type-checked in the release profile by `check`
+    # (cargo check --release), and nearly all of this job is LLVM codegen
+    # for the atuin binary (~2 min on any machine).
+    if: build.branch == pipeline.default_branch
     notify:
       - github_check:
           name: "buildkite/build"
