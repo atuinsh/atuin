@@ -430,16 +430,6 @@ impl Sqlite {
         Ok(())
     }
 
-    #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
-    async fn delete_row_raw(
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-        id: HistoryId,
-    ) -> Result<()> {
-        db::query("delete from history where id = ?1").bind(id).execute(&mut **tx).await?;
-
-        Ok(())
-    }
-
     #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
     pub async fn save(&self, h: &History) -> Result<()> {
         debug!("saving history to sqlite");
@@ -1020,10 +1010,21 @@ impl Sqlite {
             return Ok(());
         }
 
+        // One `in (...)` statement per chunk that fits the bind-parameter limit, not one
+        // statement per id: per-row deletes made removing 200k entries take ~13s.
+        let ids_per_delete = self.sqlite.info().await.variable_number_limit().max(1);
+
         let mut tx = self.sqlite.pool().begin().await?;
 
-        for id in ids {
-            Self::delete_row_raw(&mut tx, id).await?;
+        while ids.peek().is_some() {
+            let mut builder = sqlx::QueryBuilder::new("delete from history where id in (");
+            let mut list = builder.separated(", ");
+            for id in ids.by_ref().take(ids_per_delete) {
+                list.push_bind(id);
+            }
+            builder.push(")");
+
+            builder.build().execute(&mut *tx).await?;
         }
 
         tx.commit().await?;
