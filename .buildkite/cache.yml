@@ -32,7 +32,8 @@ caches:
   - name: target
     cache_key:
       - target
-      - v1
+      # v2: dev/test builds without debuginfo (pipeline env).
+      - v2
       - agent: step
       - agent: os
       - agent: arch
@@ -41,3 +42,20 @@ caches:
       - checksum: Cargo.lock
     target_paths:
       - target
+
+  # The step's Rust toolchain (rustup's dir plus ~/.cargo/bin, where rustup
+  # and its proxies live): restoring it takes a second or two against ~11s
+  # to download. Per step, since steps pin different toolchains (MSRV) and
+  # components (clippy). Not used for the nightly rustfmt step, which should
+  # pick up new nightlies.
+  - name: rustup
+    cache_key:
+      - rustup
+      - v1
+      - agent: step
+      - agent: os
+      - agent: arch
+      - checksum: rust-toolchain.toml
+    target_paths:
+      - ~/.rustup
+      - ~/.cargo/bin
