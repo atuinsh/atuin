@@ -370,8 +370,7 @@ steps:
   # like build and nix-build: it was ~12 min per PR on GitHub Actions.
   - label: ":sunrise: Build on illumos (OmniOS VM)"
     key: illumos
-    # TEMPORARY: also runs on the prototype branch until it's been validated.
-    if: build.branch == pipeline.default_branch || build.branch == "ci/buildkite-prototype"
+    if: build.branch == pipeline.default_branch
     notify:
       - github_check:
           name: "buildkite/illumos"
