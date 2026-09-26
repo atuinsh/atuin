@@ -88,9 +88,10 @@ steps:
     env:
       CARGO_TOOLS: nextest
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup
+      - buildkite-agent cache restore --name cargo_registry --name target
       - source .buildkite/scripts/toolchain.sh
-      - buildkite-agent cache save --name rustup
+      # No rustup cache on macOS: the image ships several toolchains, so the
+      # entry is 1.7 GB (20s to restore) against ~4s to install 1.98.0.
       - 'section ":test_tube: cargo nextest (lib + bins)" cargo nextest run $$(nextest_partition) --lib --bins || { .buildkite/scripts/proptest-regressions.sh; exit 1; }'
       - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
       - buildkite-agent cache save --name target
@@ -142,9 +143,10 @@ steps:
       queue: macos-large
     timeout_in_minutes: 45
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup
+      - buildkite-agent cache restore --name cargo_registry --name target
       - source .buildkite/scripts/toolchain.sh
-      - buildkite-agent cache save --name rustup
+      # No rustup cache on macOS: the image ships several toolchains, so the
+      # entry is 1.7 GB (20s to restore) against ~4s to install 1.98.0.
       - 'section ":package: cargo fetch" cargo fetch --locked'
       # The registry key includes the OS, so macOS saves its own.
       - buildkite-agent cache save --name cargo_registry
@@ -236,9 +238,10 @@ steps:
       BREW_PACKAGES: "bash fish"
       ATUIN_E2E_REQUIRE_SHELLS: "1"
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup
+      - buildkite-agent cache restore --name cargo_registry --name target
       - source .buildkite/scripts/toolchain.sh
-      - buildkite-agent cache save --name rustup
+      # No rustup cache on macOS: the image ships several toolchains, so the
+      # entry is 1.7 GB (20s to restore) against ~4s to install 1.98.0.
       # Test with Homebrew's bash, not macOS's /bin/bash 3.2.
       # ($$ escapes pipeline-upload interpolation.)
       - export ATUIN_E2E_BASH="$$(brew --prefix bash)/bin/bash"

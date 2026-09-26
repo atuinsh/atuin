@@ -46,8 +46,9 @@ caches:
   # The step's Rust toolchain (rustup's dir plus ~/.cargo/bin, where rustup
   # and its proxies live): restoring it takes a second or two against ~11s
   # to download. Per step, since steps pin different toolchains (MSRV) and
-  # components (clippy). Not used for the nightly rustfmt step, which should
-  # pick up new nightlies.
+  # components (clippy). Linux only: macOS images ship several toolchains,
+  # so there the entry is 1.7 GB and slower to restore than installing. Not
+  # used for the nightly rustfmt step, which should pick up new nightlies.
   - name: rustup
     cache_key:
       - rustup
