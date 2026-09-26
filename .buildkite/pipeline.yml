@@ -344,9 +344,10 @@ steps:
     notify:
       - github_check:
           name: "buildkite/nix-build"
-    # buildRustPackage builds atuin and every dependency in one derivation,
-    # so nothing carries over between builds; more cores is the only lever
-    # short of restructuring the flake.
+    # main only: buildRustPackage builds atuin and every dependency in one
+    # derivation, so every change rebuilds from scratch (~4 min). The flake
+    # check and nixfmt steps still run on PRs.
+    if: build.branch == pipeline.default_branch
     agents:
       queue: linux-large
     timeout_in_minutes: 45
