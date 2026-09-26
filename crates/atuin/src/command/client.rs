@@ -307,7 +307,16 @@ impl Cmd {
             Self::Update(_) => unreachable!(),
 
             #[cfg(feature = "ai")]
-            Self::Ai(cli) => atuin_ai::commands::run(cli, &settings).await,
+            Self::Ai(cli) => {
+                // Session commands talk to the daemon: start or replace it as history does,
+                // instead of failing against a stopped or stale one.
+                #[cfg(feature = "daemon")]
+                if matches!(cli, atuin_ai::commands::Command::Session(_)) {
+                    daemon::ready_client(&settings).await?;
+                }
+
+                atuin_ai::commands::run(cli, &settings).await
+            }
 
             #[cfg(feature = "ai")]
             Self::Mcp => Box::pin(atuin_ai::mcp::run(&db, &settings)).await,
