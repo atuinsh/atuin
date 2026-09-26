@@ -1,0 +1,43 @@
+# Buildkite Cache definitions, used by `buildkite-agent cache restore/save`
+# in .buildkite/pipeline.yml.
+#
+# Keys go coarse to fine. The toolchain file is the last required part
+# (fallback_limit), so a Cargo.lock change restores the newest entry for the
+# same toolchain and cargo rebuilds only the dependencies that changed.
+#
+# Branch isolation comes from the cluster's cache registry policy: entries
+# are saved scoped to their branch, and restores search the current branch
+# and then main, so a branch build can never write into what main restores.
+#
+# Bump `v1` to invalidate a cache; an entry is written once per address.
+
+caches:
+  # The crates.io index and downloaded .crate files. Identical for every
+  # step, so only the check step saves it.
+  - name: cargo_registry
+    cache_key:
+      - cargo-registry
+      - v1
+      - agent: os
+      - agent: arch
+        fallback_limit: true
+      - checksum: Cargo.lock
+    target_paths:
+      - ~/.cargo/registry/index
+      - ~/.cargo/registry/cache
+
+  # target/ after prune-target.sh: third-party dependency builds only. One
+  # entry per step, since each step builds a different profile and feature
+  # set (the key's `step` part is the step key).
+  - name: target
+    cache_key:
+      - target
+      - v1
+      - agent: step
+      - agent: os
+      - agent: arch
+      - checksum: rust-toolchain.toml
+        fallback_limit: true
+      - checksum: Cargo.lock
+    target_paths:
+      - target

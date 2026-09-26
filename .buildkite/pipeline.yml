@@ -1,0 +1,279 @@
+# atuin CI on Buildkite: PROTOTYPE of .github/workflows/rust.yml, running
+# alongside GitHub Actions to compare. Same jobs and commands on Linux and
+# macOS hosted agents; Windows and the illumos VM job stay on GitHub Actions
+# for now.
+#
+# Each step sources .buildkite/scripts/toolchain.sh (rustup + pinned tools,
+# and the `section` log-group helper). Caching is Buildkite Cache
+# (.buildkite/cache.yml): the cargo registry, plus a per-step target/ pruned
+# to third-party dependency builds (prune-target.sh), keyed on the toolchain
+# and Cargo.lock. Saves run only after the step's commands have succeeded.
+#
+# Queues: light jobs use the cluster's default (small) queue. build,
+# unit-test and integration-test ran on 8-16 vCPU at Depot; they're on
+# linux-medium (4 vCPU) until larger queues exist, so they'll be slower.
+#
+# Not ported yet: rust.yml's `paths-ignore: ui/**` (if_changed needs a diff
+# base set for main builds first).
+
+env:
+  CARGO_TERM_COLOR: always
+
+steps:
+  - label: ":rust: Build (release)"
+    key: build
+    notify:
+      - github_check:
+          name: "buildkite/build"
+    agents:
+      queue: linux-medium
+    timeout_in_minutes: 45
+    env:
+      # Only proves the release profile compiles (release.yml ships the
+      # `dist` profile), so skip LTO and spread codegen across more units.
+      CARGO_PROFILE_RELEASE_LTO: "off"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "256"
+    command:
+      - buildkite-agent cache restore --name cargo_registry --name target
+      - source .buildkite/scripts/toolchain.sh
+      - 'section ":hammer: cargo build --release" cargo build --workspace --locked --release'
+      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
+      - buildkite-agent cache save --name target
+
+  - label: ":test_tube: Unit tests (Linux)"
+    key: unit-test
+    notify:
+      - github_check:
+          name: "buildkite/unit-test"
+    agents:
+      queue: linux-medium
+    timeout_in_minutes: 45
+    env:
+      CARGO_TOOLS: nextest
+    command:
+      - buildkite-agent cache restore --name cargo_registry --name target
+      - source .buildkite/scripts/toolchain.sh
+      - 'section ":test_tube: cargo nextest (lib + bins)" cargo nextest run --lib --bins || { .buildkite/scripts/proptest-regressions.sh; exit 1; }'
+      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
+      - buildkite-agent cache save --name target
+
+  - label: ":test_tube: Unit tests (macOS)"
+    key: unit-test-macos
+    notify:
+      - github_check:
+          name: "buildkite/unit-test-macos"
+    agents:
+      queue: macos-medium
+    timeout_in_minutes: 45
+    env:
+      CARGO_TOOLS: nextest
+    command:
+      - buildkite-agent cache restore --name cargo_registry --name target
+      - source .buildkite/scripts/toolchain.sh
+      - 'section ":test_tube: cargo nextest (lib + bins)" cargo nextest run --lib --bins || { .buildkite/scripts/proptest-regressions.sh; exit 1; }'
+      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
+      - buildkite-agent cache save --name target
+
+  - label: ":mag: Check (Linux)"
+    key: check
+    notify:
+      - github_check:
+          name: "buildkite/check"
+    timeout_in_minutes: 45
+    command:
+      - buildkite-agent cache restore --name cargo_registry --name target
+      - source .buildkite/scripts/toolchain.sh
+      - 'section ":package: cargo fetch" cargo fetch --locked'
+      # Registry contents are the same for every step; this one saves them.
+      - buildkite-agent cache save --name cargo_registry
+      # --all-features enables vendored-tls, which compiles OpenSSL from
+      # source; type-checking can use the system libssl instead.
+      - 'section ":mag: check (all features)" env OPENSSL_NO_VENDOR=1 cargo check --all-features --workspace'
+      - 'section ":mag: check (no features)" cargo check --no-default-features --workspace'
+      - 'section ":mag: check (sync)" cargo check --no-default-features --features sync --workspace'
+      - 'section ":mag: check (server)" cargo check -p atuin-server'
+      - 'section ":mag: check (client only)" cargo check --no-default-features --features client --workspace'
+      - 'section ":mag: check (release profile)" cargo check --workspace --locked --release'
+      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
+      - buildkite-agent cache save --name target
+
+  - label: ":mag: Check (macOS)"
+    key: check-macos
+    notify:
+      - github_check:
+          name: "buildkite/check-macos"
+    agents:
+      queue: macos-medium
+    timeout_in_minutes: 45
+    command:
+      - buildkite-agent cache restore --name cargo_registry --name target
+      - source .buildkite/scripts/toolchain.sh
+      - 'section ":package: cargo fetch" cargo fetch --locked'
+      # The registry key includes the OS, so macOS saves its own.
+      - buildkite-agent cache save --name cargo_registry
+      # No system libssl on macOS: --all-features builds vendored OpenSSL,
+      # as it does on GitHub Actions.
+      - 'section ":mag: check (all features)" cargo check --all-features --workspace'
+      - 'section ":mag: check (no features)" cargo check --no-default-features --workspace'
+      - 'section ":mag: check (sync)" cargo check --no-default-features --features sync --workspace'
+      - 'section ":mag: check (server)" cargo check -p atuin-server'
+      - 'section ":mag: check (client only)" cargo check --no-default-features --features client --workspace'
+      - 'section ":mag: check (release profile)" cargo check --workspace --locked --release'
+      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
+      - buildkite-agent cache save --name target
+
+  - label: ":crab: MSRV (1.95.0)"
+    key: msrv
+    notify:
+      - github_check:
+          name: "buildkite/msrv"
+    timeout_in_minutes: 45
+    env:
+      # rust-toolchain.toml pins the dev toolchain; override it explicitly.
+      RUST_TOOLCHAIN: "1.95.0"
+    command:
+      - buildkite-agent cache restore --name cargo_registry --name target
+      - source .buildkite/scripts/toolchain.sh
+      - 'section ":crab: check on MSRV (all features)" cargo check --locked --workspace --all-features'
+      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
+      - buildkite-agent cache save --name target
+
+  - label: ":postgres: Integration tests"
+    key: integration-test
+    notify:
+      - github_check:
+          name: "buildkite/integration-test"
+    agents:
+      queue: linux-medium
+    timeout_in_minutes: 45
+    env:
+      CARGO_TOOLS: nextest
+      ATUIN_DB_URI: postgres://atuin:pass@localhost:5432/atuin
+    command:
+      - .buildkite/scripts/start-postgres.sh
+      - buildkite-agent cache restore --name cargo_registry --name target
+      - source .buildkite/scripts/toolchain.sh
+      # e2e tests have their own step. Test databases live in tempdirs;
+      # tmpfs keeps concurrent SQLite WAL fsyncs from stalling the disk.
+      - 'section ":test_tube: cargo nextest (integration)" env TMPDIR=/dev/shm cargo nextest run --test "*" -E "not binary(/e2e_.*/)" || { .buildkite/scripts/proptest-regressions.sh; exit 1; }'
+      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
+      - buildkite-agent cache save --name target
+
+  - label: ":terminal: e2e (Linux)"
+    key: e2e
+    notify:
+      - github_check:
+          name: "buildkite/e2e"
+    timeout_in_minutes: 45
+    env:
+      CARGO_TOOLS: nextest
+      APT_PACKAGES: "zsh fish xz-utils"
+      ATUIN_E2E_REQUIRE_SHELLS: "1"
+    command:
+      - buildkite-agent cache restore --name cargo_registry --name target
+      - source .buildkite/scripts/toolchain.sh
+      - 'section ":shell: Install ble.sh" .buildkite/scripts/install-blesh.sh'
+      - 'section ":terminal: cargo nextest (e2e)" cargo nextest run -p atuin --test "e2e_*"'
+      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
+      - buildkite-agent cache save --name target
+
+  - label: ":terminal: e2e (macOS)"
+    key: e2e-macos
+    notify:
+      - github_check:
+          name: "buildkite/e2e-macos"
+    agents:
+      queue: macos-medium
+    timeout_in_minutes: 45
+    env:
+      CARGO_TOOLS: nextest
+      BREW_PACKAGES: "bash fish"
+      ATUIN_E2E_REQUIRE_SHELLS: "1"
+    command:
+      - buildkite-agent cache restore --name cargo_registry --name target
+      - source .buildkite/scripts/toolchain.sh
+      # Test with Homebrew's bash, not macOS's /bin/bash 3.2.
+      # ($$ escapes pipeline-upload interpolation.)
+      - export ATUIN_E2E_BASH="$$(brew --prefix bash)/bin/bash"
+      - 'section ":shell: Install ble.sh" .buildkite/scripts/install-blesh.sh'
+      - 'section ":terminal: cargo nextest (e2e)" cargo nextest run -p atuin --test "e2e_*"'
+      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
+      - buildkite-agent cache save --name target
+
+  - label: ":paperclip: Clippy"
+    key: clippy
+    notify:
+      - github_check:
+          name: "buildkite/clippy"
+    timeout_in_minutes: 45
+    env:
+      RUST_COMPONENTS: clippy
+    command:
+      - buildkite-agent cache restore --name cargo_registry --name target
+      - source .buildkite/scripts/toolchain.sh
+      - 'section ":paperclip: clippy" cargo clippy -- -D warnings'
+      - 'section ":paperclip: clippy (tests)" cargo clippy --tests -- -D warnings'
+      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
+      - buildkite-agent cache save --name target
+
+  - label: ":books: Docs"
+    key: docs
+    notify:
+      - github_check:
+          name: "buildkite/docs"
+    timeout_in_minutes: 45
+    env:
+      RUSTDOCFLAGS: "-D warnings"
+    command:
+      - buildkite-agent cache restore --name cargo_registry --name target
+      - source .buildkite/scripts/toolchain.sh
+      - 'section ":books: cargo doc" cargo doc --document-private-items --no-deps --workspace'
+      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
+      - buildkite-agent cache save --name target
+
+  - label: ":art: Format"
+    key: format
+    notify:
+      - github_check:
+          name: "buildkite/format"
+    timeout_in_minutes: 15
+    env:
+      RUST_TOOLCHAIN: nightly
+      RUST_COMPONENTS: rustfmt
+    command:
+      - source .buildkite/scripts/toolchain.sh
+      - 'section ":art: cargo fmt --check" cargo fmt -- --check'
+
+  - label: ":no_entry: cargo-deny"
+    key: deny
+    notify:
+      - github_check:
+          name: "buildkite/deny"
+    timeout_in_minutes: 15
+    env:
+      CARGO_TOOLS: deny
+    command:
+      - buildkite-agent cache restore --name cargo_registry
+      - source .buildkite/scripts/toolchain.sh
+      # Same arguments cargo-deny-action passes by default.
+      - 'section ":no_entry: cargo deny check" cargo deny --log-level warn --all-features check'
+      # Library crates must never (re)add eyre or anyhow; each has its own
+      # crate-scoped deny.toml.
+      - 'section ":no_entry: bans: atuin-common" cargo deny --log-level warn --manifest-path crates/atuin-common/Cargo.toml --all-features check bans'
+      - 'section ":no_entry: bans: atuin-history" cargo deny --log-level warn --manifest-path crates/atuin-history/Cargo.toml --all-features check bans'
+      - 'section ":no_entry: bans: atuin-domain" cargo deny --log-level warn --manifest-path crates/atuin-domain/Cargo.toml --all-features check bans'
+      - 'section ":no_entry: bans: atuin-pty-proxy" cargo deny --log-level warn --manifest-path crates/atuin-pty-proxy/Cargo.toml --all-features check bans'
+
+  - label: ":package: Package"
+    key: package
+    notify:
+      - github_check:
+          name: "buildkite/package"
+    timeout_in_minutes: 45
+    command:
+      - buildkite-agent cache restore --name cargo_registry
+      - source .buildkite/scripts/toolchain.sh
+      # Make sure the packaged crates build from their tarballs, not from
+      # anything left over from the workspace build.
+      - rm -rf ~/.cargo/registry/{cache,src}/*/atuin* target/package
+      - 'section ":package: cargo package" cargo package --workspace'
