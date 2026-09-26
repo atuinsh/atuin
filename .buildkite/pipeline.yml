@@ -28,6 +28,9 @@ env:
   # file:line, backtraces just lose line numbers.
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
+  # .config/nextest.toml's ci profile: writes test-results/junit.xml, which
+  # the test-collector plugin uploads to Buildkite Test Engine.
+  NEXTEST_PROFILE: ci
 
 steps:
   - label: ":rust: Build (release)"
@@ -67,6 +70,13 @@ steps:
     timeout_in_minutes: 45
     env:
       CARGO_TOOLS: nextest
+    secrets:
+      - ATUIN_TEST_ENGINE_TOKEN
+    plugins: &test_collector
+      - test-collector#v1.12.0:
+          files: test-results/junit.xml
+          format: junit
+          api-token-env-name: ATUIN_TEST_ENGINE_TOKEN
     command:
       - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
       - source .buildkite/scripts/toolchain.sh
@@ -87,6 +97,9 @@ steps:
     timeout_in_minutes: 45
     env:
       CARGO_TOOLS: nextest
+    secrets:
+      - ATUIN_TEST_ENGINE_TOKEN
+    plugins: *test_collector
     command:
       - buildkite-agent cache restore --name cargo_registry --name target
       - source .buildkite/scripts/toolchain.sh
@@ -191,6 +204,9 @@ steps:
     env:
       CARGO_TOOLS: nextest
       ATUIN_DB_URI: postgres://atuin:pass@localhost:5432/atuin
+    secrets:
+      - ATUIN_TEST_ENGINE_TOKEN
+    plugins: *test_collector
     command:
       - .buildkite/scripts/start-postgres.sh
       - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
@@ -216,6 +232,9 @@ steps:
       CARGO_TOOLS: nextest
       APT_PACKAGES: "zsh fish xz-utils"
       ATUIN_E2E_REQUIRE_SHELLS: "1"
+    secrets:
+      - ATUIN_TEST_ENGINE_TOKEN
+    plugins: *test_collector
     command:
       - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
       - source .buildkite/scripts/toolchain.sh
@@ -237,6 +256,9 @@ steps:
       CARGO_TOOLS: nextest
       BREW_PACKAGES: "bash fish"
       ATUIN_E2E_REQUIRE_SHELLS: "1"
+    secrets:
+      - ATUIN_TEST_ENGINE_TOKEN
+    plugins: *test_collector
     command:
       - buildkite-agent cache restore --name cargo_registry --name target
       - source .buildkite/scripts/toolchain.sh
@@ -352,6 +374,9 @@ steps:
     timeout_in_minutes: 60
     env:
       CARGO_TOOLS: nextest
+    secrets:
+      - ATUIN_TEST_ENGINE_TOKEN
+    plugins: *test_collector
     command:
       - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
       - source .buildkite/scripts/toolchain.sh
