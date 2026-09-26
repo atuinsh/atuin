@@ -809,7 +809,7 @@ impl Message for CcodeMessage {
         // The split by cache lifetime, for a writer that leaves out the total.
         let cache_write = field("cache_creation_input_tokens").or_else(|| {
             let split = usage.get("cache_creation")?.as_object()?;
-            split.values().filter_map(serde_json::Value::as_u64).reduce(|a, b| a + b)
+            split.values().filter_map(serde_json::Value::as_u64).reduce(|a, b| a.saturating_add(b))
         });
         Some(Usage {
             input: field("input_tokens"),
@@ -1678,6 +1678,26 @@ mod tests {
     ) {
         let usage = assistant_line(&serde_json::json!([]), &usage).usage().unwrap();
         assert_eq!(usage.cache_write, expected);
+    }
+
+    /// A `cache_creation` split is two numbers read out of a file on disk, and a file can
+    /// hold anything. Adding them unchecked overflows: a panic with overflow checks on,
+    /// which would take down the capture task, and a wrapped 0 without them, which is
+    /// indistinguishable from a call that wrote no cache at all. The other two harness
+    /// parsers saturate the same arithmetic.
+    #[rstest]
+    fn a_cache_creation_split_saturates_rather_than_wrapping() {
+        let usage = assistant_line(
+            &serde_json::json!([]),
+            &serde_json::json!({"cache_creation": {
+                "ephemeral_5m_input_tokens": u64::MAX,
+                "ephemeral_1h_input_tokens": 1,
+            }}),
+        )
+        .usage()
+        .expect("the line reports usage");
+
+        assert_eq!(usage.cache_write, Some(u64::MAX));
     }
 
     #[rstest]
