@@ -1,6 +1,7 @@
 use atuin_common::encryption::paseto_v4::{EncryptedData, Key};
 use atuin_domain::record::{
-    DecryptedData, Host, HostId, Record, RecordId, RecordSeriesKey, RecordTag, RecordVersion,
+    DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag,
+    RecordVersion,
 };
 use tracing::warn;
 use typed_builder::TypedBuilder;
@@ -8,6 +9,9 @@ use typed_builder::TypedBuilder;
 use crate::ai_session::Message;
 use crate::ai_session::database::{AiSessionDatabase, DbError};
 use crate::record::sqlite_store::SqliteStore;
+
+/// Records a build reads from the store at a time.
+const BUILD_BATCH: u64 = 1000;
 
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct AiSessionStore {
@@ -72,7 +76,13 @@ impl AiSessionRecord {
 }
 
 impl AiSessionStore {
-    pub async fn push(&self, msg: &Message) -> Result<RecordId, PushError> {
+    #[must_use]
+    pub const fn host_id(&self) -> HostId {
+        self.host_id
+    }
+
+    /// Append `msg` to this host's chain, returning the idx it took.
+    pub async fn push(&self, msg: &Message) -> Result<RecordIdx, PushError> {
         let id = msg.id;
 
         let bytes = AiSessionRecord::Message(msg.clone()).serialize();
@@ -91,7 +101,7 @@ impl AiSessionStore {
                 .build();
 
             if self.store.push_unique(&record.encrypt(&self.key)).await? {
-                return Ok(id);
+                return Ok(idx);
             }
         }
     }
@@ -105,39 +115,67 @@ impl AiSessionStore {
             return Ok(());
         }
 
-        let id = record.id;
+        let (host, idx, id) = (record.host.id, record.idx, record.id);
 
-        let decrypted = match record.decrypt(&self.key) {
-            Ok(decrypted) => decrypted,
+        // A record that cannot be read is skipped for good, so it advances the watermark like a
+        // projected one: reading it again on every build would only repeat the warning.
+        match record.decrypt(&self.key) {
+            Ok(decrypted) => match AiSessionRecord::deserialize(&decrypted.data.0) {
+                Ok(AiSessionRecord::Message(msg)) => {
+                    db.append(&msg).await?;
+                }
+                Err(err) => {
+                    warn!(?err, id = %id.0, "failed to deserialize ai-session record, skipping");
+                }
+            },
             Err(err) => {
                 warn!(?err, id = %id.0, "failed to decrypt ai-session record, skipping");
-                return Ok(());
             }
-        };
+        }
 
-        let AiSessionRecord::Message(msg) = match AiSessionRecord::deserialize(&decrypted.data.0) {
-            Ok(record) => record,
-            Err(err) => {
-                warn!(?err, id = %id.0, "failed to deserialize ai-session record, skipping");
-                return Ok(());
-            }
-        };
-
-        db.append(&msg).await?;
+        db.advance_projected(host, idx).await?;
         Ok(())
     }
 
+    /// Project every record `db` does not have yet: each host's chain from its watermark. An
+    /// up-to-date sidecar costs one status query; one that missed an append (a crash between
+    /// the record and sidecar writes, a lost db file) is repaired from where it stopped.
     pub async fn build(&self, db: &AiSessionDatabase) -> Result<(), BuildError> {
-        let records = self.store.all_tagged(&RecordTag::AiSession).await?;
+        let status = self.store.status().await?;
 
         let mut failure = None;
-        for record in records {
-            let id = record.id;
-            // Continue repairing later rows, but report incomplete recovery so callers do not
-            // enable capture against a projection missing already-persisted messages/counts.
-            if let Err(err) = self.decode_and_append(record, db).await {
-                warn!(?err, id = %id.0, "failed to append ai-session record to sidecar, skipping");
-                failure = Some(err);
+        for (host, tags) in status.hosts {
+            let Some(&tail) = tags.get(&RecordTag::AiSession) else {
+                continue;
+            };
+            let series = RecordSeriesKey::new(host, RecordTag::AiSession);
+
+            let mut from = db.projected(host).await?;
+            // A watermark past the chain means the store was reset under the sidecar.
+            if from > tail + 1 {
+                db.forget_projected(host).await?;
+                from = 0;
+            }
+
+            loop {
+                let batch = self.store.next(&series, from, BUILD_BATCH).await?;
+                let Some(last) = batch.last().map(|r| r.idx) else {
+                    break;
+                };
+                for record in batch {
+                    let id = record.id;
+                    // Continue repairing later rows, but report incomplete recovery so callers do
+                    // not enable capture against a projection missing already-persisted messages.
+                    if let Err(err) = self.decode_and_append(record, db).await {
+                        warn!(
+                            ?err,
+                            id = %id.0,
+                            "failed to append ai-session record to sidecar, skipping"
+                        );
+                        failure = Some(err);
+                    }
+                }
+                from = last + 1;
             }
         }
 
@@ -250,12 +288,11 @@ mod tests {
         let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
         let s = AiSessionStore::builder().store(store.clone()).host_id(hid()).key(key()).build();
         let msg = sample_message();
-        let id = s.push(&msg).await.unwrap();
-
-        assert_eq!(id, msg.id, "push must return the message's own id, not a re-minted one");
+        let idx = s.push(&msg).await.unwrap();
 
         let recs = store.all_tagged(&RecordTag::AiSession).await.unwrap();
         assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].idx, idx, "push must return the idx the record took");
         assert_eq!(recs[0].id, msg.id, "record envelope id must match the message id");
         let decrypted = recs[0].decrypt(&key()).unwrap();
         let AiSessionRecord::Message(got) =
@@ -281,7 +318,8 @@ mod tests {
 
         let mut ids = vec![];
         for m in ordered_messages(&sample_handle()) {
-            ids.push(s.push(&m).await.unwrap());
+            s.push(&m).await.unwrap();
+            ids.push(m.id);
         }
 
         let db = AiSessionDatabase::in_memory().await.unwrap();
@@ -289,6 +327,72 @@ mod tests {
 
         let sess = db.get_session(&sample_handle()).await.unwrap().unwrap();
         assert_eq!(usize::try_from(sess.message_count).unwrap(), ids.len());
+        assert_eq!(db.projected(s.host_id()).await.unwrap(), 3, "sync advances the watermark");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn build_resumes_from_the_watermark() {
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let s = AiSessionStore::builder().store(store).host_id(hid()).key(key()).build();
+        let messages = ordered_messages(&sample_handle());
+        for m in &messages[..2] {
+            s.push(m).await.unwrap();
+        }
+
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        s.build(&db).await.unwrap();
+        assert_eq!(db.projected(s.host_id()).await.unwrap(), 2);
+
+        // A sidecar whose watermark already covers the first two records never reads them again:
+        // only the record past it is projected.
+        s.push(&messages[2]).await.unwrap();
+        let later = AiSessionDatabase::in_memory().await.unwrap();
+        for idx in 0..2 {
+            later.advance_projected(s.host_id(), idx).await.unwrap();
+        }
+        s.build(&later).await.unwrap();
+
+        let sess = later.get_session(&sample_handle()).await.unwrap().unwrap();
+        assert_eq!(sess.message_count, 1);
+        assert_eq!(later.projected(s.host_id()).await.unwrap(), 3);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn build_starts_over_when_the_watermark_outruns_the_store() {
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let s = AiSessionStore::builder().store(store).host_id(hid()).key(key()).build();
+        for m in ordered_messages(&sample_handle()) {
+            s.push(&m).await.unwrap();
+        }
+
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        for idx in 0..10 {
+            db.advance_projected(s.host_id(), idx).await.unwrap();
+        }
+        s.build(&db).await.unwrap();
+
+        let sess = db.get_session(&sample_handle()).await.unwrap().unwrap();
+        assert_eq!(sess.message_count, 3);
+        assert_eq!(db.projected(s.host_id()).await.unwrap(), 3);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn watermark_only_advances_contiguously() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let host = hid();
+
+        db.advance_projected(host, 1).await.unwrap();
+        assert_eq!(db.projected(host).await.unwrap(), 0, "nothing before idx 1 was projected");
+
+        db.advance_projected(host, 0).await.unwrap();
+        db.advance_projected(host, 2).await.unwrap();
+        assert_eq!(db.projected(host).await.unwrap(), 1, "idx 1 is still missing");
+
+        db.advance_projected(host, 1).await.unwrap();
+        assert_eq!(db.projected(host).await.unwrap(), 2);
     }
 
     #[rstest]

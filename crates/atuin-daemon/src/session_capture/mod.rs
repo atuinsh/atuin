@@ -14,7 +14,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4::Key;
 use atuin_common::harnesstools::session::{Content, Role};
 use atuin_common::sync::BlockingPool;
-use atuin_domain::record::HostId;
+use atuin_domain::record::{HostId, RecordIdx};
 use engine::SessionCaptureEngine;
 use futures::{Stream, StreamExt};
 pub use import::ImportProgress;
@@ -45,7 +45,7 @@ pub(crate) struct Sink {
     tail: broadcast::Sender<SessionTailEvent>,
     // Serialize the dedup gate + persistence across live capture and import. At most one record
     // can be waiting for projection; repair it before admitting another capture.
-    pending_projection: Mutex<Option<Message>>,
+    pending_projection: Mutex<Option<(Message, RecordIdx)>>,
 }
 
 impl Sink {
@@ -68,8 +68,8 @@ impl Sink {
         // rows (even with no content) so parent links and usage accounting remain intact.
         sanitize_message(&mut msg);
         let mut pending = self.pending_projection.lock().await;
-        if let Some(previous) = pending.as_ref() {
-            self.project_and_broadcast(previous).await?;
+        if let Some((previous, idx)) = pending.as_ref() {
+            self.project_and_broadcast(previous, *idx).await?;
             *pending = None;
         }
         // Dedup gate: if this logical message is already projected it is already in the record
@@ -83,18 +83,24 @@ impl Sink {
         // pure projection of it. If the sidecar write fails afterwards a later rebuild repairs it;
         // the reverse ordering could strand a message in the sidecar only -- lost on rebuild and
         // never synced.
-        self.records.push(&msg).await?;
+        let idx = self.records.push(&msg).await?;
 
-        *pending = Some(msg.clone());
-        let appended = self.project_and_broadcast(&msg).await?;
+        *pending = Some((msg.clone(), idx));
+        let appended = self.project_and_broadcast(&msg, idx).await?;
         *pending = None;
         drop(pending);
         Ok(appended)
     }
 
-    async fn project_and_broadcast(&self, msg: &Message) -> Result<Appended, AppendError> {
+    async fn project_and_broadcast(
+        &self,
+        msg: &Message,
+        idx: RecordIdx,
+    ) -> Result<Appended, AppendError> {
         let started = self.sidecar.get_session(&msg.session).await?.is_none();
         let appended = self.sidecar.append(msg).await?;
+        // Keeps the startup build from re-reading what live capture already projected.
+        self.sidecar.advance_projected(self.records.host_id(), idx).await?;
         if self.tail.receiver_count() > 0 {
             if let Some(session) = self.sidecar.get_session(&msg.session).await? {
                 let event = if started {
@@ -322,6 +328,17 @@ mod tests {
 
         assert!(matches!(sub.next().await.unwrap().unwrap(), SessionTailEvent::SessionStarted(_)));
         assert!(matches!(sub.next().await.unwrap().unwrap(), SessionTailEvent::Message(_)));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn append_advances_the_projection_watermark() {
+        let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let host = sink.records.host_id();
+
+        sink.append(sample_message()).await.unwrap();
+
+        assert_eq!(sink.sidecar.projected(host).await.unwrap(), 1);
     }
 
     #[rstest]

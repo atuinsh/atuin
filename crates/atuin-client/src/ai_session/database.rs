@@ -7,7 +7,7 @@ use atuin_common::db::{self};
 use atuin_common::harnesstools::session::{
     Checkpoint, Content, Role, TitleChange, TitleSource, Usage,
 };
-use atuin_domain::record::RecordId;
+use atuin_domain::record::{HostId, RecordId, RecordIdx};
 use futures::{Stream, StreamExt, TryStreamExt};
 use sqlx::SqliteConnection;
 use time::OffsetDateTime;
@@ -519,6 +519,47 @@ impl AiSessionDatabase {
         .bind(checkpoint.digest.cast_signed())
         .execute(self.db.pool())
         .await?;
+
+        Ok(())
+    }
+
+    /// The record idx projection of `host`'s ai-session chain resumes from: one past the last
+    /// record projected, or `0` if none was.
+    pub async fn projected(&self, host: HostId) -> Result<RecordIdx, DbError> {
+        let row: Option<i64> = db::query_scalar("SELECT next_idx FROM projected WHERE host = ?")
+            .bind(host.as_hyphenated().to_string())
+            .fetch_optional(self.db.pool())
+            .await?;
+
+        Ok(row.map_or(0, |n| u64::try_from(n).unwrap_or(0)))
+    }
+
+    /// Note that `host`'s record at `idx` is projected. Contiguous only: an `idx` past the
+    /// watermark leaves it where it is, so a record skipped by a failure is reached again by the
+    /// next build.
+    pub async fn advance_projected(&self, host: HostId, idx: RecordIdx) -> Result<(), DbError> {
+        let host = host.as_hyphenated().to_string();
+        let idx = i64::try_from(idx).unwrap_or(i64::MAX);
+        db::query("INSERT OR IGNORE INTO projected (host, next_idx) VALUES (?, 0)")
+            .bind(&host)
+            .execute(self.db.pool())
+            .await?;
+        db::query("UPDATE projected SET next_idx = ? + 1 WHERE host = ? AND next_idx = ?")
+            .bind(idx)
+            .bind(&host)
+            .bind(idx)
+            .execute(self.db.pool())
+            .await?;
+
+        Ok(())
+    }
+
+    /// Forget how far `host`'s chain was projected, so the next build starts it over.
+    pub async fn forget_projected(&self, host: HostId) -> Result<(), DbError> {
+        db::query("DELETE FROM projected WHERE host = ?")
+            .bind(host.as_hyphenated().to_string())
+            .execute(self.db.pool())
+            .await?;
 
         Ok(())
     }
