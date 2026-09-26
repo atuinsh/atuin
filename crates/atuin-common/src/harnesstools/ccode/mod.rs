@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use super::{Harness, InstallHookError, json_hooks};
 use crate::utils::home_dir;
 
+pub mod session;
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Ccode;
 

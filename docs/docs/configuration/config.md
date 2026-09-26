@@ -363,6 +363,9 @@ history_filter = [
 ]
 ```
 
+A filtered command's output isn't captured either. To keep a command in history
+but not its output, use [`command_filter`](#command_filter) in `[output]`.
+
 ### `cwd_filter`
 
 Use the `cwd` filter to exclude directories from history tracking.
@@ -421,13 +424,15 @@ The same patterns are applied to captured command output. A command whose
 own text is clean can still print a credential — `cat .env`, `gh auth token`
 — so recognised values in the captured output are replaced with `****`
 before storage. Only the value is replaced; the variable name or flag
-beside it stays.
+beside it stays. A credential that color codes split apart in the output
+isn't recognised.
 
 !!! note
 
     This is a safety net, not a guarantee. It only catches credentials in
     recognized formats — use [`history_filter`](#history_filter) for anything
-    else you need kept out, and see
+    else you need kept out, or [`command_filter`](#command_filter) to keep a
+    command but not its output, and see
     [Excluding Commands from History](../guide/excluding-commands.md).
 
 ### macOS Ctrl-n key shortcuts
@@ -1026,6 +1031,91 @@ The port to use for client -> daemon communication. Only used on non-Unix system
 ```toml
 tcp_port = 8889
 ```
+
+## Output capture
+
+Settings for [capturing command output](../guide/output-capture.md), which
+needs the [daemon](#daemon) and [pty-proxy](../reference/pty-proxy.md).
+
+```toml
+[output]
+enabled = true
+max_output_size = "1MB"
+max_disk_usage = "10%"
+command_filter = []
+```
+
+### `enabled`
+
+Default: `false`
+
+Capture and store the output of the commands you run. When `false`, nothing is
+captured and the other keys in this section are ignored. Turning it off stops
+the daemon storing output right away; turning it on takes a daemon restart and
+a new shell, or run `atuin config enable output-capture`, which also sets up
+the daemon and pty-proxy.
+
+```toml
+[output]
+enabled = true
+```
+
+### `max_output_size`
+
+Default: `"1MB"`
+
+The most output kept for a single command. When a command prints more, Atuin
+keeps the start and the end, half each, and drops the middle. Takes a size like
+`"512KB"` or `"2MB"`. pty-proxy reads it when your shell starts.
+
+```toml
+[output]
+max_output_size = "1MB"
+```
+
+### `max_disk_usage`
+
+Default: `"10%"`
+
+The most disk space captured output may use: a size (`"10GB"`), a share of
+the total size of the disk that holds Atuin's data directory (`"10%"`), or
+`"unlimited"`. Past the limit, the daemon deletes the oldest output first.
+Restart the daemon after changing it.
+
+```toml
+[output]
+max_disk_usage = "10%"
+```
+
+### `command_filter`
+
+Default: `[]`
+
+Commands whose output is never stored. Unlike
+[`history_filter`](#history_filter), a matching command is still recorded in
+your history -- only its output is dropped. Commands `history_filter` excludes
+never have their output stored either.
+
+```toml
+[output]
+## Note that these regular expressions are unanchored, i.e. if they don't start
+## with ^ or end with $, they'll match anywhere in the command.
+command_filter = [
+   "^cat ",
+   "^kubectl get secret",
+]
+```
+
+The filter applies to output captured after the daemon picks up the change; it
+doesn't remove output that's already stored.
+
+### `sync`
+
+Default: `false`
+
+Reserved for syncing captured output between machines, which isn't
+implemented yet: captured output never leaves your machine, whatever this is
+set to.
 
 ## logs
 

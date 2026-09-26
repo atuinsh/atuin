@@ -12,8 +12,9 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-atuin-client = { workspace = true }
-atuin-common = { workspace = true, features = ["os", "proto", "sqlite"] }
+async-stream = { workspace = true }
+atuin-client = { workspace = true, features = ["proto"] }
+atuin-common = { workspace = true, features = ["ai", "os", "proto", "sqlite"] }
 atuin-domain = { workspace = true }
 atuin-history = { workspace = true }
 dashmap = { workspace = true }
@@ -48,6 +49,7 @@ tower = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
+xxhash-rust = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 listenfd = { workspace = true }
@@ -56,6 +58,7 @@ listenfd = { workspace = true }
 atuin-common = { workspace = true, features = ["os", "sqlite"] }
 divan = { workspace = true }
 proptest = { workspace = true }
+regex = { workspace = true }
 rstest = { workspace = true }
 tempfile = { workspace = true }
 

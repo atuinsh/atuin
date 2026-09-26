@@ -20,6 +20,7 @@ pub const DEFAULT_HISTORY_RESULTS: i64 = 10;
 pub const MAX_HISTORY_RESULTS: i64 = 50;
 pub mod descriptor;
 pub mod output;
+pub mod session;
 
 pub use output::get::AtuinOutputToolCall;
 

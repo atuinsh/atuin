@@ -14,15 +14,16 @@ use tonic::{Request, Response, Status};
 use tracing::{Instrument, Level, instrument};
 
 use crate::DaemonHandle;
+// `Lagged` now lives in the shared `common` package (see `common.proto`).
+use crate::grpc::common::pb::Lagged;
 use crate::grpc::history::pb::history_server::History as GrpcService;
 use crate::grpc::history::pb::{
     CancelHistoryReply, CancelHistoryRequest, CompactStoreReply, CompactStoreRequest,
     DeleteHistoryReply, DeleteHistoryRequest, DeleteHistoryStreamExt, EndHistoryReply,
-    EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse, Lagged,
-    RebuildHistoryReply, RebuildHistoryRequest, RegisterCommandOutputRequest,
-    RegisterCommandOutputResponse, ShutdownReply, ShutdownRequest, StartHistoryReply,
-    StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent, TailHistoryReply,
-    TailHistoryRequest,
+    EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse, RebuildHistoryReply,
+    RebuildHistoryRequest, RegisterCommandOutputRequest, RegisterCommandOutputResponse,
+    ShutdownReply, ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply,
+    StatusRequest, TailHistoryEvent, TailHistoryReply, TailHistoryRequest,
 };
 use crate::history_journal::HistoryJournal;
 
@@ -233,10 +234,11 @@ impl GrpcService for Service {
         let request = request.into_inner();
         let id = request.history_id()?;
         let capture = request.capture()?.into();
+        let output = self.daemon_handle.settings().await.output.clone();
         let journal = self.journal.clone();
         // Spawned so a client disconnect cannot drop the call half-way.
         tokio::spawn(
-            async move { journal.register_command_output(id, capture).await }
+            async move { journal.register_command_output(id, capture, &output).await }
                 .instrument(tracing::Span::current()),
         )
         .await

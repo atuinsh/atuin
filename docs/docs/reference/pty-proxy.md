@@ -25,7 +25,7 @@ Because pty-proxy sits between your terminal and your shell, it can also record
 what each command printed. It reads the [OSC 133](https://gitlab.freedesktop.org/Per_Bothner/specifications/blob/master/proposals/prompts-data-model.md)
 prompt markers that your shell emits, using them to tell where one command's
 output ends and the next begins. It then hands each captured block to the
-[daemon](daemon.md), which holds it in memory, keyed by the command's Atuin
+[daemon](daemon.md), which stores it on disk, keyed by the command's Atuin
 history ID.
 
 That capture is what lets AI tools see what actually happened, rather than
@@ -37,8 +37,8 @@ guessing from the command alone:
   [MCP server](../ai/mcp.md)
 
 Output capture needs **both** pty-proxy and the daemon running. Nothing is
-captured by default. See [Reading Command Output](../ai/command-output.md) for
-setup, retention limits, and privacy.
+captured by default. See [Capturing Command Output](../guide/output-capture.md)
+for setup, retention limits, and privacy.
 
 ## Initialization
 

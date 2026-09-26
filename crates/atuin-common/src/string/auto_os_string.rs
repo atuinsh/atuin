@@ -19,7 +19,7 @@ use serde_with::{DeserializeAs, SerializeAs};
 /// ```
 /// use std::path::PathBuf;
 ///
-/// use atuin_common::serde::AutoOsString;
+/// use atuin_common::string::AutoOsString;
 /// use serde::{Deserialize, Serialize};
 /// use serde_with::serde_as;
 ///

@@ -88,7 +88,7 @@ use atuin_client::database::Sqlite as HistoryDatabase;
 use atuin_client::history::store::HistoryStore;
 use atuin_client::history::{CommandCapture, History, HistoryId};
 use atuin_client::packfile;
-use atuin_client::settings::Search;
+use atuin_client::settings::{OutputCapture, Search};
 use atuin_common::sync::AsyncShardedMutex;
 use atuin_domain::caps::{CapClient, PackfileCap};
 use atuin_domain::record::{RecordId, RecordIdx, RecordSeriesKey, RecordTag};
@@ -608,7 +608,8 @@ impl HistoryJournal {
         marks
     }
 
-    /// Store a command's captured output.
+    /// Store a command's captured output as `output` allows: nothing while capture is disabled, and
+    /// nothing for a command its `command_filter` matches.
     ///
     /// If the output is received for an unknown command, this returns a
     /// [`RegisterOutputError::NotLive`].
@@ -616,6 +617,7 @@ impl HistoryJournal {
         &self,
         id: HistoryId,
         capture: CommandCapture,
+        output: &OutputCapture,
     ) -> Result<(), RegisterOutputError> {
         let _lifecycle = self.lifecycle_mutex.lock(&id).await;
 
@@ -640,8 +642,16 @@ impl HistoryJournal {
             return Err(RegisterOutputError::NotLive(id));
         };
 
-        // Never persist output for commands that may carry secrets.
-        if atuin_common::secrets::output_unsafe(&command) {
+        // Capture turned off on a running daemon: proxies started before it keep sending output
+        // until their shells restart.
+        let OutputCapture::Enabled(limits) = output else {
+            return Ok(());
+        };
+
+        // Never persist output for commands that may carry secrets, or that the user excluded.
+        if atuin_common::secrets::output_unsafe(&command)
+            || limits.command_filter.is_match(&command)
+        {
             return Ok(());
         }
 
