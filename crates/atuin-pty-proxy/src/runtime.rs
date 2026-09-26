@@ -51,6 +51,22 @@ fn set_child_env(cmd: &mut CommandBuilder, socket_path: Option<&std::path::Path>
     }
 }
 
+/// Build the command for the child shell.
+///
+/// portable-pty always starts the default shell as a login shell, but runs an explicit program
+/// with its path as `argv[0]`, so `login` asks for a login shell with `-l`, which bash, zsh, fish,
+/// and nu all accept.
+fn shell_command(shell: Option<&std::path::Path>, login: bool) -> CommandBuilder {
+    let Some(path) = shell else {
+        return CommandBuilder::new_default_prog();
+    };
+    let mut cmd = CommandBuilder::new(path);
+    if login {
+        cmd.arg("-l");
+    }
+    cmd
+}
+
 #[derive(Debug, thiserror::Error)]
 enum Error {
     #[error("failed to open pty: {0}")]
@@ -117,10 +133,7 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
         None
     };
 
-    let mut cmd = match options.shell {
-        Some(ref path) => CommandBuilder::new(path),
-        None => CommandBuilder::new_default_prog(),
-    };
+    let mut cmd = shell_command(options.shell.as_deref(), options.login);
     cmd.cwd(std::env::current_dir()?);
     // Reflect the shell we actually spawn in `$SHELL` so the child — and
     // anything it execs via `$SHELL -c` (e.g. fzf's `become`) — sees the
@@ -246,13 +259,13 @@ fn process_exit_code(code: u32) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsStr;
+    use std::ffi::{OsStr, OsString};
     use std::path::Path;
 
     use easy_cast::Conv;
     use rstest::rstest;
 
-    use super::{CommandBuilder, process_exit_code, set_child_env};
+    use super::{CommandBuilder, process_exit_code, set_child_env, shell_command};
 
     #[rstest]
     #[case::zero(0, 0)]
@@ -261,6 +274,24 @@ mod tests {
     #[case::overflow_defaults_to_one(u32::conv(i32::MAX) + 1, 1)]
     fn maps_exit_code(#[case] input: u32, #[case] expected: i32) {
         assert_eq!(process_exit_code(input), expected);
+    }
+
+    #[rstest]
+    #[case::login(true, &["/bin/zsh", "-l"])]
+    #[case::not_login(false, &["/bin/zsh"])]
+    fn explicit_shell_is_a_login_shell_only_when_asked(
+        #[case] login: bool,
+        #[case] expected: &[&str],
+    ) {
+        let cmd = shell_command(Some(Path::new("/bin/zsh")), login);
+
+        assert_eq!(cmd.get_argv(), &expected.iter().map(OsString::from).collect::<Vec<_>>());
+    }
+
+    #[rstest]
+    fn default_shell_is_left_to_portable_pty(#[values(true, false)] login: bool) {
+        // portable-pty starts its default shell as a login shell on its own.
+        assert!(shell_command(None, login).is_default_prog());
     }
 
     #[rstest]
