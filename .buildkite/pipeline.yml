@@ -90,7 +90,7 @@ steps:
       - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
       - buildkite-agent cache save --name target
 
-  - label: ":mag: Check (Linux)"
+  - label: ":mag: Check (Linux): all features, no features, release"
     key: check
     notify:
       - github_check:
@@ -107,10 +107,24 @@ steps:
       # source; type-checking can use the system libssl instead.
       - 'section ":mag: check (all features)" env OPENSSL_NO_VENDOR=1 cargo check --all-features --workspace'
       - 'section ":mag: check (no features)" cargo check --no-default-features --workspace'
+      - 'section ":mag: check (release profile)" cargo check --workspace --locked --release'
+      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
+      - buildkite-agent cache save --name target
+
+  # The rest of rust.yml's check matrix, in parallel with the step above.
+  - label: ":mag: Check (Linux): sync, server, client only"
+    key: check-subsets
+    notify:
+      - github_check:
+          name: "buildkite/check-subsets"
+    timeout_in_minutes: 45
+    command:
+      - buildkite-agent cache restore --name cargo_registry --name target --name rustup
+      - source .buildkite/scripts/toolchain.sh
+      - buildkite-agent cache save --name rustup
       - 'section ":mag: check (sync)" cargo check --no-default-features --features sync --workspace'
       - 'section ":mag: check (server)" cargo check -p atuin-server'
       - 'section ":mag: check (client only)" cargo check --no-default-features --features client --workspace'
-      - 'section ":mag: check (release profile)" cargo check --workspace --locked --release'
       - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
       - buildkite-agent cache save --name target
 
@@ -234,8 +248,9 @@ steps:
       - buildkite-agent cache restore --name cargo_registry --name target --name rustup
       - source .buildkite/scripts/toolchain.sh
       - buildkite-agent cache save --name rustup
-      - 'section ":paperclip: clippy" cargo clippy -- -D warnings'
-      - 'section ":paperclip: clippy (tests)" cargo clippy --tests -- -D warnings'
+      # One run over the union of what `cargo clippy` (lib + bins) and
+      # `cargo clippy --tests` lint, so the two share their work.
+      - 'section ":paperclip: clippy (lib, bins, tests)" cargo clippy --lib --bins --tests -- -D warnings'
       - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
       - buildkite-agent cache save --name target
 

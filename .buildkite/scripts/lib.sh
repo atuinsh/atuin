@@ -36,9 +36,14 @@ apt_install() {
     dpkg -s "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
   done
   [ -n "$missing" ] || return 0
-  $sudo apt-get update -qq
+  # Try the image's existing package lists first: `apt-get update` costs
+  # ~4.5s on every job. If they're too stale to resolve, update and retry.
   # shellcheck disable=SC2086 # word-split the package list
-  $sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $missing
+  if ! $sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $missing 2>/dev/null; then
+    $sudo apt-get update -qq
+    # shellcheck disable=SC2086
+    $sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $missing
+  fi
 }
 
 # Prebuilt tools not tied to Rust go here.
