@@ -74,3 +74,15 @@ caches:
       - agent: arch
     target_paths:
       - ~/.cache/apt-debs
+
+  # The OmniOS VM image anyvm downloads for the illumos step. Keyed on the
+  # script, which pins the anyvm, OmniOS and builder versions.
+  - name: anyvm
+    cache_key:
+      - anyvm
+      - v1
+      - agent: os
+      - agent: arch
+      - checksum: .buildkite/scripts/illumos.sh
+    target_paths:
+      - ~/.cache/anyvm

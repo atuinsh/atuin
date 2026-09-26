@@ -365,6 +365,24 @@ steps:
       - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
       - buildkite-agent cache save --name target
 
+  # rust.yml's "Test in VM (illumos)": builds the client and server on a real
+  # OmniOS VM (KVM-accelerated; hosted agents expose /dev/kvm). main only,
+  # like build and nix-build: it was ~12 min per PR on GitHub Actions.
+  - label: ":sunrise: Build on illumos (OmniOS VM)"
+    key: illumos
+    # TEMPORARY: also runs on the prototype branch until it's been validated.
+    if: build.branch == pipeline.default_branch || build.branch == "ci/buildkite-prototype"
+    notify:
+      - github_check:
+          name: "buildkite/illumos"
+    agents:
+      queue: linux-large
+    timeout_in_minutes: 45
+    command:
+      - buildkite-agent cache restore --name anyvm --name apt_debs
+      - .buildkite/scripts/illumos.sh
+      - buildkite-agent cache save --name anyvm --name apt_debs
+
   - label: ":moon: Nightly tests"
     key: nightly
     if: build.source == "schedule"
