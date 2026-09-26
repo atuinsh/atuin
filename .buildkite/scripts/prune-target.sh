@@ -16,33 +16,55 @@ target=${CARGO_TARGET_DIR:-target}
 
 before=$(du -sh "$target" | cut -f1)
 
-# Workspace package names (for .fingerprint/ and build/ dirs, which use the
-# package name) and target names with - -> _ (for deps/ artifacts).
-names=$(cargo metadata --no-deps --format-version 1 --offline | python3 -c '
-import json, sys
+# Matching is done in Python (already needed to read cargo metadata) so it's
+# exact and identical on Linux and macOS: an artifact belongs to the
+# workspace only if its name is `<workspace name>-<16 hex hash>`, so e.g. the
+# crates.io crate atuin-vt100 survives even though `atuin` is a workspace
+# crate.
+cargo metadata --no-deps --format-version 1 --offline | python3 -c '
+import json, os, re, shutil, sys
+
+target = sys.argv[1]
 meta = json.load(sys.stdin)
 names = set()
 for pkg in meta["packages"]:
-    names.add(pkg["name"])
-    names.add(pkg["name"].replace("-", "_"))
-    for tgt in pkg["targets"]:
-        names.add(tgt["name"].replace("-", "_"))
-print("\n".join(sorted(names)))
-')
+    names |= {pkg["name"], pkg["name"].replace("-", "_")}
+    names |= {t["name"].replace("-", "_") for t in pkg["targets"]}
 
-rm -rf "$target"/{doc,package,nextest,tmp}
+artifact = re.compile(r"^(?:lib)?(?P<name>.+?)-[0-9a-f]{16}(?:\..*)?$")
 
-for profile in "$target"/*/; do
-  profile=${profile%/}
-  [ -d "$profile/deps" ] || continue
-  rm -rf "$profile/incremental" "$profile/examples"
-  # Top-level outputs (binaries, .d files) are copies of deps/ artifacts.
-  find "$profile" -maxdepth 1 -type f -delete
-  while IFS= read -r name; do
-    [ -n "$name" ] || continue
-    rm -rf "$profile/.fingerprint/$name"-* "$profile/build/$name"-* \
-      "$profile/deps/$name"-* "$profile/deps/lib$name"-*
-  done <<<"$names"
-done
+def remove(path):
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path)
+    else:
+        os.remove(path)
+
+for per_run in ("doc", "package", "nextest", "tmp"):
+    path = os.path.join(target, per_run)
+    if os.path.exists(path):
+        remove(path)
+
+for profile in os.listdir(target):
+    profile_dir = os.path.join(target, profile)
+    if not os.path.isdir(os.path.join(profile_dir, "deps")):
+        continue
+    for per_run in ("incremental", "examples"):
+        path = os.path.join(profile_dir, per_run)
+        if os.path.exists(path):
+            remove(path)
+    # Top-level outputs (binaries, .d files) are copies of deps/ artifacts.
+    for entry in os.listdir(profile_dir):
+        path = os.path.join(profile_dir, entry)
+        if os.path.isfile(path) or os.path.islink(path):
+            os.remove(path)
+    for sub in ("deps", ".fingerprint", "build"):
+        sub_dir = os.path.join(profile_dir, sub)
+        if not os.path.isdir(sub_dir):
+            continue
+        for entry in os.listdir(sub_dir):
+            match = artifact.match(entry)
+            if match and match.group("name") in names:
+                remove(os.path.join(sub_dir, entry))
+' "$target"
 
 echo "Pruned $target: $before -> $(du -sh "$target" | cut -f1)"

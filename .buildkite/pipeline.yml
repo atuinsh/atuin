@@ -9,9 +9,9 @@
 # to third-party dependency builds (prune-target.sh), keyed on the toolchain
 # and Cargo.lock. Saves run only after the step's commands have succeeded.
 #
-# Queues: light jobs use the cluster's default (small) queue. build,
-# unit-test and integration-test ran on 8-16 vCPU at Depot; they're on
-# linux-medium (4 vCPU) until larger queues exist, so they'll be slower.
+# Queues: light jobs use the cluster's default queue (linux-small, 2 vCPU).
+# Compile-bound jobs (build, unit-test, integration-test, package,
+# nix-build) use linux-large (8 vCPU), which every Buildkite cluster has.
 #
 # Not ported yet: the `paths-ignore: ui/**` filters on rust.yml and nix.yml
 # (if_changed needs a diff base set for main builds first).
@@ -30,7 +30,7 @@ steps:
       - github_check:
           name: "buildkite/build"
     agents:
-      queue: linux-medium
+      queue: linux-large
     timeout_in_minutes: 45
     env:
       # Only proves the release profile compiles (release.yml ships the
@@ -50,7 +50,7 @@ steps:
       - github_check:
           name: "buildkite/unit-test"
     agents:
-      queue: linux-medium
+      queue: linux-large
     timeout_in_minutes: 45
     env:
       CARGO_TOOLS: nextest
@@ -148,7 +148,7 @@ steps:
       - github_check:
           name: "buildkite/integration-test"
     agents:
-      queue: linux-medium
+      queue: linux-large
     timeout_in_minutes: 45
     env:
       CARGO_TOOLS: nextest
@@ -273,14 +273,20 @@ steps:
     notify:
       - github_check:
           name: "buildkite/package"
+    agents:
+      queue: linux-large
     timeout_in_minutes: 45
     command:
-      - buildkite-agent cache restore --name cargo_registry
+      - buildkite-agent cache restore --name cargo_registry --name target
       - source .buildkite/scripts/toolchain.sh
       # Make sure the packaged crates build from their tarballs, not from
-      # anything left over from the workspace build.
+      # anything left over from the workspace build. The restored target/
+      # holds only third-party builds (prune-target.sh), which verification
+      # reuses: it builds into the shared target/debug.
       - rm -rf ~/.cargo/registry/{cache,src}/*/atuin* target/package
       - 'section ":package: cargo package" cargo package --workspace'
+      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
+      - buildkite-agent cache save --name target
 
   - label: ":moon: Nightly tests"
     key: nightly
@@ -315,6 +321,11 @@ steps:
     notify:
       - github_check:
           name: "buildkite/nix-build"
+    # buildRustPackage builds atuin and every dependency in one derivation,
+    # so nothing carries over between builds; more cores is the only lever
+    # short of restructuring the flake.
+    agents:
+      queue: linux-large
     timeout_in_minutes: 45
     command:
       - source .buildkite/scripts/lib.sh
