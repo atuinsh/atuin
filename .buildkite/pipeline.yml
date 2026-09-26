@@ -291,6 +291,10 @@ steps:
 
   - label: ":package: Package"
     key: package
+    # main only: this only guards crates.io publishing (every crate builds
+    # from its packaged tarball), which isn't part of the PR flow. On main
+    # it still flags publishing breakage well before a release.
+    if: build.branch == pipeline.default_branch
     notify:
       - github_check:
           name: "buildkite/package"
