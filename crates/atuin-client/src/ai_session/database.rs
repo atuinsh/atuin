@@ -303,19 +303,41 @@ impl AiSessionDatabase {
 
         // Usage is not folded in here: it is attributed per model call below. A structural row
         // (usage, title, session context, a tree node with nothing to show) is no message.
+        //
+        // Rows may arrive out of timestamp order, so each context column keeps the timestamp of
+        // the row it came from and takes a newer row's value only; the preview likewise takes an
+        // older row's only. A row without the value binds NULL for its `_at`, and NULL compares
+        // false, so it never displaces one.
         let counted = i64::from(!msg.content.is_empty());
+        let at = |present: bool| present.then_some(timestamp);
+        let (cwd_at, git_branch_at, model_at, preview_at) = (
+            at(msg.cwd.is_some()),
+            at(msg.git_branch.is_some()),
+            at(msg.model.is_some()),
+            at(preview.is_some()),
+        );
         db::query(
             "INSERT INTO sessions (
                 harness, session_id, parent_harness, parent_session_id, cwd, git_branch, model,
-                started_at, updated_at, message_count, title, title_source, preview
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                started_at, updated_at, message_count, title, title_source, preview,
+                cwd_at, git_branch_at, model_at, preview_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(harness, session_id) DO UPDATE SET
                 parent_harness = COALESCE(excluded.parent_harness, sessions.parent_harness),
                 parent_session_id = COALESCE(excluded.parent_session_id, \
              sessions.parent_session_id),
-                cwd = COALESCE(excluded.cwd, sessions.cwd),
-                git_branch = COALESCE(excluded.git_branch, sessions.git_branch),
-                model = COALESCE(excluded.model, sessions.model),
+                cwd = IIF(excluded.cwd_at >= COALESCE(sessions.cwd_at, excluded.cwd_at), \
+             excluded.cwd, sessions.cwd),
+                cwd_at = IIF(excluded.cwd_at >= COALESCE(sessions.cwd_at, excluded.cwd_at), \
+             excluded.cwd_at, sessions.cwd_at),
+                git_branch = IIF(excluded.git_branch_at >= COALESCE(sessions.git_branch_at, \
+             excluded.git_branch_at), excluded.git_branch, sessions.git_branch),
+                git_branch_at = IIF(excluded.git_branch_at >= COALESCE(sessions.git_branch_at, \
+             excluded.git_branch_at), excluded.git_branch_at, sessions.git_branch_at),
+                model = IIF(excluded.model_at >= COALESCE(sessions.model_at, excluded.model_at), \
+             excluded.model, sessions.model),
+                model_at = IIF(excluded.model_at >= COALESCE(sessions.model_at, \
+             excluded.model_at), excluded.model_at, sessions.model_at),
                 started_at = MIN(sessions.started_at, excluded.started_at),
                 updated_at = MAX(sessions.updated_at, excluded.updated_at),
                 message_count = sessions.message_count + excluded.message_count,
@@ -323,7 +345,10 @@ impl AiSessionDatabase {
              ELSE sessions.title END,
                 title_source = CASE WHEN excluded.updated_at >= sessions.updated_at THEN \
              excluded.title_source ELSE sessions.title_source END,
-                preview = COALESCE(sessions.preview, excluded.preview)",
+                preview = IIF(excluded.preview_at <= COALESCE(sessions.preview_at, \
+             excluded.preview_at), excluded.preview, sessions.preview),
+                preview_at = IIF(excluded.preview_at <= COALESCE(sessions.preview_at, \
+             excluded.preview_at), excluded.preview_at, sessions.preview_at)",
         )
         .bind(harness)
         .bind(session_id)
@@ -338,6 +363,10 @@ impl AiSessionDatabase {
         .bind(title)
         .bind(msg.session_title_source.map(Self::title_source_repr))
         .bind(preview)
+        .bind(cwd_at)
+        .bind(git_branch_at)
+        .bind(model_at)
+        .bind(preview_at)
         .execute(&mut *tx)
         .await?;
 
@@ -1311,6 +1340,8 @@ impl AiSessionDatabase {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
     use atuin_common::db;
     use atuin_common::harnesstools::session::{
         Checkpoint, Content, Role, ToolCallId, ToolResult, ToolUse, Usage,
@@ -1337,6 +1368,41 @@ mod tests {
             .role(Role::User)
             .content(vec![Content::Text("hello".to_owned())])
             .build()
+    }
+
+    /// Four rows: an assistant row at t0 and t3 with no context or preview, and user rows at t1
+    /// (old context, the preview) and t2 (new context). Whatever order they are inserted in, the
+    /// session shows the newest context and the oldest preview.
+    #[rstest]
+    #[case::chronological([0, 1, 2, 3])]
+    #[case::reversed([3, 2, 1, 0])]
+    #[case::newest_row_before_new_context([1, 3, 2, 0])]
+    #[case::oldest_row_before_older_preview([0, 2, 1, 3])]
+    #[tokio::test]
+    async fn session_context_follows_timestamps_not_insert_order(#[case] order: [usize; 4]) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let handle = sample_handle();
+        let mut old = message_in(&handle, 1, "first");
+        old.cwd = Some(PathBuf::from("/old"));
+        old.model = Some("old-model".to_owned());
+        let mut new = message_in(&handle, 2, "second");
+        new.cwd = Some(PathBuf::from("/new"));
+        new.model = Some("new-model".to_owned());
+        let rows = [
+            message_with(&handle, 0, Role::Assistant, vec![Content::Text("hi".to_owned())]),
+            old,
+            new,
+            message_with(&handle, 3, Role::Assistant, vec![Content::Text("done".to_owned())]),
+        ];
+
+        for i in order {
+            db.append(&rows[i]).await.unwrap();
+        }
+
+        let s = db.get_session(&handle).await.unwrap().unwrap();
+        assert_eq!(s.cwd.as_deref(), Some(Path::new("/new")));
+        assert_eq!(s.model.as_deref(), Some("new-model"));
+        assert_eq!(s.preview.as_deref(), Some("first"));
     }
 
     #[rstest]
