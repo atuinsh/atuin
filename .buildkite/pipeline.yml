@@ -1,7 +1,7 @@
-# atuin CI on Buildkite: PROTOTYPE of .github/workflows/rust.yml, running
-# alongside GitHub Actions to compare. Same jobs and commands on Linux and
-# macOS hosted agents; Windows and the illumos VM job stay on GitHub Actions
-# for now.
+# atuin CI on Buildkite: PROTOTYPE, running alongside GitHub Actions to
+# compare. Ports rust.yml (Linux + macOS; Windows and the illumos VM job
+# stay on GitHub Actions for now), nix.yml, codespell.yml, shellcheck.yml,
+# vale.yml, installer.yml and nightly.yml, with the same jobs and commands.
 #
 # Each step sources .buildkite/scripts/toolchain.sh (rustup + pinned tools,
 # and the `section` log-group helper). Caching is Buildkite Cache
@@ -13,8 +13,12 @@
 # unit-test and integration-test ran on 8-16 vCPU at Depot; they're on
 # linux-medium (4 vCPU) until larger queues exist, so they'll be slower.
 #
-# Not ported yet: rust.yml's `paths-ignore: ui/**` (if_changed needs a diff
-# base set for main builds first).
+# Not ported yet: the `paths-ignore: ui/**` filters on rust.yml and nix.yml
+# (if_changed needs a diff base set for main builds first).
+#
+# Scheduled builds (the nightly schedule, set in the pipeline settings) run
+# everything plus the nightly tests, which also keeps main's cache entries
+# from expiring.
 
 env:
   CARGO_TERM_COLOR: always
@@ -277,3 +281,126 @@ steps:
       # anything left over from the workspace build.
       - rm -rf ~/.cargo/registry/{cache,src}/*/atuin* target/package
       - 'section ":package: cargo package" cargo package --workspace'
+
+  - label: ":moon: Nightly tests"
+    key: nightly
+    if: build.source == "schedule"
+    notify:
+      - github_check:
+          name: "buildkite/nightly"
+    timeout_in_minutes: 60
+    env:
+      CARGO_TOOLS: nextest
+    command:
+      - buildkite-agent cache restore --name cargo_registry --name target
+      - source .buildkite/scripts/toolchain.sh
+      - 'section ":moon: cargo nextest (nightly)" cargo nextest run -p atuin-daemon --test nightly --run-ignored all || { .buildkite/scripts/proptest-regressions.sh; exit 1; }'
+      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
+      - buildkite-agent cache save --name target
+
+  # nix.yml: flake check, build (and run the result), formatting.
+  - label: ":nix: Nix flake check"
+    key: nix-check
+    notify:
+      - github_check:
+          name: "buildkite/nix-check"
+    timeout_in_minutes: 30
+    command:
+      - source .buildkite/scripts/lib.sh
+      - 'section ":nix: Install Nix" install_nix'
+      - 'section ":nix: nix flake check" nix flake check --print-build-logs'
+
+  - label: ":nix: Nix build"
+    key: nix-build
+    notify:
+      - github_check:
+          name: "buildkite/nix-build"
+    timeout_in_minutes: 45
+    command:
+      - source .buildkite/scripts/lib.sh
+      - 'section ":nix: Install Nix" install_nix'
+      - 'section ":nix: nix build" nix build --print-build-logs'
+      - 'section ":nix: Run the built binary" ./result/bin/atuin --version'
+
+  - label: ":nix: nixfmt"
+    key: nixfmt
+    notify:
+      - github_check:
+          name: "buildkite/nixfmt"
+    timeout_in_minutes: 15
+    command:
+      - source .buildkite/scripts/lib.sh
+      - 'section ":nix: Install Nix" install_nix'
+      - 'section ":nix: nix fmt --ci" nix fmt -- --ci'
+
+  - label: ":pencil2: Codespell"
+    key: codespell
+    notify:
+      - github_check:
+          name: "buildkite/codespell"
+    timeout_in_minutes: 10
+    command:
+      - source .buildkite/scripts/lib.sh
+      - 'section ":pencil2: Install codespell" install_codespell'
+      - 'section ":pencil2: codespell" codespell --count --exclude-file CHANGELOG.md'
+
+  - label: ":shell: Shellcheck"
+    key: shellcheck
+    notify:
+      - github_check:
+          name: "buildkite/shellcheck"
+    timeout_in_minutes: 10
+    env:
+      SHELLCHECK_OPTS: "-e SC2148"
+    command:
+      - source .buildkite/scripts/lib.sh
+      - 'section ":shell: Install ShellCheck" install_shellcheck'
+      - 'section ":shell: shellcheck" .buildkite/scripts/shellcheck.sh'
+
+  # vale.yml ran only on pull requests touching the docs or the Vale config.
+  # On main builds there's no diff against main, so if_changed skips it there
+  # too.
+  - label: ":memo: Vale (docs prose)"
+    key: vale
+    if_changed:
+      - "docs/docs/**"
+      - ".vale.ini"
+      - ".vale/styles/config/**"
+      - ".buildkite/scripts/vale.sh"
+    notify:
+      - github_check:
+          name: "buildkite/vale"
+    timeout_in_minutes: 10
+    command:
+      - source .buildkite/scripts/lib.sh
+      - 'section ":memo: Install Vale" install_vale'
+      - 'section ":memo: vale" .buildkite/scripts/vale.sh'
+
+  # installer.yml: the published installer (setup.atuin.sh, served from
+  # main's install.sh), so it runs on main builds only, as before.
+  - label: ":inbox_tray: Installer (Linux)"
+    key: install
+    if: build.branch == pipeline.default_branch
+    notify:
+      - github_check:
+          name: "buildkite/install"
+    timeout_in_minutes: 10
+    command:
+      - source .buildkite/scripts/lib.sh
+      - 'section ":shell: Install zsh" apt_install zsh'
+      - 'section ":inbox_tray: Installer via bash" .buildkite/scripts/test-installer.sh bash'
+      - 'section ":inbox_tray: Installer via zsh" .buildkite/scripts/test-installer.sh zsh'
+
+  - label: ":inbox_tray: Installer (macOS)"
+    key: install-macos
+    if: build.branch == pipeline.default_branch
+    notify:
+      - github_check:
+          name: "buildkite/install-macos"
+    agents:
+      queue: macos-medium
+    timeout_in_minutes: 10
+    command:
+      - source .buildkite/scripts/lib.sh
+      - 'section ":inbox_tray: Installer via bash" .buildkite/scripts/test-installer.sh bash'
+      - 'section ":inbox_tray: Installer via zsh" .buildkite/scripts/test-installer.sh zsh'

@@ -1,5 +1,5 @@
-# Sourced (not executed) at the start of each step: installs the Rust
-# toolchain and CI tools, and defines `section` for log grouping.
+# Sourced (not executed) at the start of each Rust step: installs the Rust
+# toolchain and CI tools. Shared helpers (`section` etc.) come from lib.sh.
 #
 # Per-step knobs, set as step env:
 #   RUST_TOOLCHAIN   toolchain to install (default: rust-toolchain.toml)
@@ -9,20 +9,11 @@
 #   BREW_PACKAGES    Homebrew packages on macOS
 #
 # Runs on Linux and macOS hosted agents, so it sticks to bash 3.2 (macOS's
-# /bin/bash) and tools both have (shasum where sha256sum is missing).
+# /bin/bash).
 
-# Runs a command under its own collapsible log group. Buildkite groups all
-# output after a `--- title` line until the next one; on failure `^^^ +++`
-# expands the group so the error is visible.
-section() {
-  local title=$1
-  shift
-  echo "--- $title"
-  "$@" && return 0
-  local status=$?
-  echo "^^^ +++"
-  return "$status"
-}
+# lib.sh is checked on its own; shellcheck only follows sources with -x.
+# shellcheck disable=SC1091
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 NEXTEST_VERSION=0.9.146
 NEXTEST_LINUX_SHA256=682c21b777c333e96fd532e114d3a5a894e0729ab88d94c0a9f20f8419695428
@@ -35,27 +26,10 @@ export CARGO_HOME="$HOME/.cargo" RUSTUP_HOME="$HOME/.rustup"
 export PATH="$CARGO_HOME/bin:$PATH"
 export CARGO_TERM_COLOR=always CARGO_INCREMENTAL=0
 
-verify_sha256() { # <sha256> <file>
-  if command -v sha256sum >/dev/null; then
-    echo "$1  $2" | sha256sum -c -
-  else
-    echo "$1  $2" | shasum -a 256 -c -
-  fi
-}
-
 case "$(uname -s)" in
   Linux)
-    sudo=""
-    [ "$(id -u)" -eq 0 ] || sudo=sudo
-    missing=""
-    for pkg in libssl-dev pkg-config ${APT_PACKAGES:-}; do
-      dpkg -s "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
-    done
-    if [ -n "$missing" ]; then
-      $sudo apt-get update -qq
-      # shellcheck disable=SC2086 # word-split the package list
-      $sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $missing
-    fi
+    # shellcheck disable=SC2086 # word-split the package list
+    apt_install libssl-dev pkg-config ${APT_PACKAGES:-}
     nextest_asset=x86_64-unknown-linux-gnu nextest_sha256=$NEXTEST_LINUX_SHA256
     ;;
   Darwin)
@@ -95,13 +69,13 @@ mkdir -p "$CARGO_HOME/bin"
 for tool in ${CARGO_TOOLS:-}; do
   case "$tool" in
     nextest)
-      curl -fsSL -o /tmp/nextest.tgz "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-${NEXTEST_VERSION}/cargo-nextest-${NEXTEST_VERSION}-${nextest_asset}.tar.gz"
-      verify_sha256 "$nextest_sha256" /tmp/nextest.tgz
+      fetch_verified "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-${NEXTEST_VERSION}/cargo-nextest-${NEXTEST_VERSION}-${nextest_asset}.tar.gz" \
+        "$nextest_sha256" /tmp/nextest.tgz
       tar -xzf /tmp/nextest.tgz -C "$CARGO_HOME/bin"
       ;;
     deny)
-      curl -fsSL -o /tmp/cargo-deny.tgz "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz"
-      verify_sha256 "$CARGO_DENY_SHA256" /tmp/cargo-deny.tgz
+      fetch_verified "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+        "$CARGO_DENY_SHA256" /tmp/cargo-deny.tgz
       tar -xzf /tmp/cargo-deny.tgz -C /tmp
       mv "/tmp/cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl/cargo-deny" "$CARGO_HOME/bin/"
       ;;
