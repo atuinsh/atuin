@@ -497,3 +497,18 @@ steps:
       - source .buildkite/scripts/lib.sh
       - 'section ":inbox_tray: Installer via bash" .buildkite/scripts/test-installer.sh bash'
       - 'section ":inbox_tray: Installer via zsh" .buildkite/scripts/test-installer.sh zsh'
+
+  # TEMPORARY: KVM probe for the illumos VM job. Remove after reading.
+  - label: ":mag: KVM probe (linux-small)"
+    key: kvm-probe-small
+    timeout_in_minutes: 5
+    command:
+      - .buildkite/scripts/kvm-probe.sh
+
+  - label: ":mag: KVM probe (linux-large)"
+    key: kvm-probe-large
+    agents:
+      queue: linux-large
+    timeout_in_minutes: 5
+    command:
+      - .buildkite/scripts/kvm-probe.sh
