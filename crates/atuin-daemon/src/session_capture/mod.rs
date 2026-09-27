@@ -703,6 +703,41 @@ mod tests {
         assert_eq!(sink.append(msg).await.unwrap(), Appended::Duplicate);
     }
 
+    /// A restored transcript writes a call captured without its input back as a note in its
+    /// row's text. Re-captured, that row comes back under the source id already synced, with
+    /// other content: it is a duplicate, never pushed again, and the synced row stands.
+    #[rstest]
+    #[tokio::test]
+    async fn a_row_back_with_other_content_is_a_duplicate() {
+        let raw = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
+        let records = AiSessionStore::builder()
+            .store(raw.clone())
+            .host_id(HostId(atuin_common::utils::uuid_v7()))
+            .key(Key::generate())
+            .build();
+        let sink = Sink::new(records, AiSessionDatabase::in_memory().await.unwrap());
+        let mut synced = sample_message();
+        synced.role = Role::Assistant;
+        synced.content = vec![Content::ToolUse(ToolUse {
+            id: ToolCallId::from("c1".to_owned()),
+            name: "Bash".to_owned(),
+            input: serde_json::json!({"command": "ls"}),
+        })];
+        let mut restored = synced.clone();
+        restored.id = RecordId(atuin_common::utils::uuid_v7());
+        restored.content = vec![Content::Text("Looking.\n\n[ran a shell command]".to_owned())];
+
+        assert_eq!(sink.append(synced).await.unwrap(), Appended::New);
+        assert_eq!(sink.append(restored).await.unwrap(), Appended::Duplicate);
+        assert_eq!(raw.all_tagged(&RecordTag::AiSession).await.unwrap().len(), 1);
+        let messages: Vec<Message> =
+            sink.sidecar.messages(&sample_handle()).map(Result::unwrap).collect().await;
+        assert_eq!(messages.len(), 1);
+        assert!(
+            matches!(messages[0].content.as_slice(), [Content::ToolUse(u)] if u.input.is_null())
+        );
+    }
+
     #[rstest]
     #[tokio::test]
     async fn append_without_subscriber_does_not_error() {
