@@ -197,12 +197,14 @@ struct StyleState {
 /// plus any arguments baked into the variable itself (e.g. `EDITOR="code
 /// --wait"`).
 ///
-/// `program` is *not* guaranteed to exist on disk. When resolved from an
-/// environment variable it's frequently just a bare name (`EDITOR=vim`,
-/// `EDITOR=nano`) that the OS resolves against `$PATH` when we exec it —
-/// same as today, we don't second-guess the user's explicit choice. Only the
-/// two internal fallbacks below (`/usr/bin/editor`, or `vim`/`vi` found by
-/// walking `$PATH` ourselves) are pre-verified to exist.
+/// `program` is usually resolved to a full, extension-aware path via
+/// [`resolve_program`] (so e.g. `EDITOR=code` finds `code.cmd` on Windows,
+/// where a bare `Command::new("code")` would not). When it can't find it —
+/// the value doesn't exist, or is something unusual `which` doesn't
+/// understand — we fall back to the literal value and let the OS take a
+/// shot at exec-time, same as before this resolution existed. Either way we
+/// don't second-guess the user's explicit choice, only try to resolve it
+/// more correctly first.
 struct EditorCommand {
     program: std::path::PathBuf,
     args: Vec<String>,
@@ -216,14 +218,36 @@ enum VisualEditorError {
     UnparseableCommand(String),
 }
 
+/// Resolves `name` against `paths` (raw `$PATH`-format list) relative to
+/// `cwd`, or `None` if not found. A thin wrapper around `which::which_in` so
+/// tests can inject a controlled `$PATH` instead of the live one — the
+/// underlying extension/PATHEXT-awareness is `which`'s to test, not ours.
+fn resolve_in_path(
+    name: &str,
+    paths: Option<&std::ffi::OsStr>,
+    cwd: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    which::which_in(name, paths, cwd).ok()
+}
+
+/// Resolves `program` to a full path via the live `$PATH`, falling back to
+/// the literal value unchanged if it can't be found — same trust-the-user
+/// fallback as before this resolution existed (see [`EditorCommand`]).
+fn resolve_program(program: &str) -> std::path::PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    resolve_in_path(program, std::env::var_os("PATH").as_deref(), &cwd)
+        .unwrap_or_else(|| std::path::PathBuf::from(program))
+}
+
 /// Splits a `$VISUAL`/`$EDITOR`/`$FCEDIT` value into a program and its
-/// arguments, e.g. `"code --wait"` -> `code`, `["--wait"]`.
+/// arguments, e.g. `"code --wait"` -> `code`, `["--wait"]`, and resolves the
+/// program through `which` (see [`EditorCommand`]).
 fn parse_editor_var(val: String) -> std::result::Result<EditorCommand, VisualEditorError> {
     let parts =
         shlex::split(&val).ok_or_else(|| VisualEditorError::UnparseableCommand(val.clone()))?;
     let (program, args) = parts.split_first().ok_or(VisualEditorError::UnparseableCommand(val))?;
     Ok(EditorCommand {
-        program: std::path::PathBuf::from(program),
+        program: resolve_program(program),
         args: args.to_vec(),
     })
 }
@@ -249,12 +273,17 @@ fn get_visual_editor() -> std::result::Result<EditorCommand, VisualEditorError> 
         });
     }
 
-    // Fall back to vim or vi, whichever is found first in PATH.
-    let path_var = std::env::var_os("PATH").unwrap_or_default();
-    for name in ["vim", "vi"] {
-        if let Some(program) =
-            std::env::split_paths(&path_var).map(|dir| dir.join(name)).find(|path| path.is_file())
-        {
+    // Fall back to the first of these found in PATH. Order mirrors Debian's
+    // `sensible-editor` (part of `sensible-utils`), which tries nano/nano-tiny
+    // before vi specifically so an unconfigured user doesn't land in a modal
+    // editor they may not know how to exit. Anyone who actually prefers vim
+    // over nano is exactly the kind of user who's almost certainly already
+    // set $VISUAL/$EDITOR, so this ordering only affects the
+    // nothing-configured-at-all case.
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let path = std::env::var_os("PATH");
+    for name in ["nano", "nano-tiny", "vim", "vi"] {
+        if let Some(program) = resolve_in_path(name, path.as_deref(), &cwd) {
             return Ok(EditorCommand {
                 program,
                 args: Vec::new(),
@@ -3014,10 +3043,17 @@ mod tests {
         assert_eq!(result, expected);
     }
 
+    // These names must never resolve to a real binary on the host running the
+    // test, so `parse_editor_var` falls back to the literal value and the
+    // assertions below stay independent of the host's actual `$PATH`.
     #[rstest]
-    #[case("vim", "vim", &[])]
-    #[case("code --wait", "code", &["--wait"])]
-    #[case("emacsclient -t -a \"\"", "emacsclient", &["-t", "-a", ""])]
+    #[case("nonexistent-fake-editor-9f3c2b", "nonexistent-fake-editor-9f3c2b", &[])]
+    #[case("nonexistent-fake-editor-9f3c2b --wait", "nonexistent-fake-editor-9f3c2b", &["--wait"])]
+    #[case(
+        "nonexistent-fake-editor-9f3c2b -t -a \"\"",
+        "nonexistent-fake-editor-9f3c2b",
+        &["-t", "-a", ""]
+    )]
     fn parse_editor_var_splits_program_and_args(
         #[case] val: &str,
         #[case] expected_program: &str,
@@ -3033,6 +3069,57 @@ mod tests {
     #[case("   ")]
     fn parse_editor_var_rejects_unparseable_values(#[case] val: &str) {
         assert!(super::parse_editor_var(val.to_string()).is_err());
+    }
+
+    /// An absolute path bypasses `$PATH`/cwd in `which` entirely (verified by
+    /// reading its source), so this exercises `parse_editor_var`'s real
+    /// resolution wiring — not just the split-and-fall-back-when-missing
+    /// path above — without touching the live `$PATH`.
+    #[rstest]
+    fn parse_editor_var_resolves_existing_absolute_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let program_path = dir.path().join("my-fake-editor");
+        std::fs::write(&program_path, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&program_path, std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+
+        let val = format!("{} --wait", program_path.display());
+        let editor = super::parse_editor_var(val).unwrap();
+        assert_eq!(editor.program, program_path);
+        assert_eq!(editor.args, ["--wait"]);
+    }
+
+    #[rstest]
+    fn resolve_in_path_finds_executable_on_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let program_path = dir.path().join("my-fake-editor");
+        std::fs::write(&program_path, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&program_path, std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+
+        let cwd = std::env::current_dir().unwrap();
+        let resolved = super::resolve_in_path("my-fake-editor", Some(dir.path().as_os_str()), &cwd);
+        assert_eq!(resolved, Some(program_path));
+    }
+
+    #[rstest]
+    fn resolve_in_path_returns_none_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        let resolved = super::resolve_in_path(
+            "nonexistent-fake-editor-9f3c2b",
+            Some(dir.path().as_os_str()),
+            &cwd,
+        );
+        assert_eq!(resolved, None);
     }
 
     #[rstest]
