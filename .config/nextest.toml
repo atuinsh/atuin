@@ -16,3 +16,12 @@ retries = 3
 # most one heavy case runs at a time with a few lightweight neighbours.
 filter = 'binary_id(=atuin-daemon::scale) and test(/hundred_k/)'
 threads-required = 4
+
+# CI profile (Buildkite sets NEXTEST_PROFILE=ci). Inherits the default
+# profile's settings and overrides; adds a JUnit report for Buildkite Test
+# Engine.
+[profile.ci.junit]
+# Relative to target/nextest/ci/. Kept outside target/ so prune-target.sh
+# (which deletes target/nextest/) runs before the test-collector plugin's
+# pre-exit upload without taking the report with it.
+path = "../../../test-results/junit.xml"

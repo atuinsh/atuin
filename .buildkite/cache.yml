@@ -1,0 +1,88 @@
+# Buildkite Cache definitions, used by `buildkite-agent cache restore/save`
+# in .buildkite/pipeline.yml.
+#
+# Keys go coarse to fine. The toolchain file is the last required part
+# (fallback_limit), so a Cargo.lock change restores the newest entry for the
+# same toolchain and cargo rebuilds only the dependencies that changed.
+#
+# Branch isolation comes from the cluster's cache registry policy: entries
+# are saved scoped to their branch, and restores search the current branch
+# and then main, so a branch build can never write into what main restores.
+#
+# Bump `v1` to invalidate a cache; an entry is written once per address.
+
+caches:
+  # The crates.io index and downloaded .crate files. Identical for every
+  # step, so only the check step saves it.
+  - name: cargo_registry
+    cache_key:
+      - cargo-registry
+      - v1
+      - agent: os
+      - agent: arch
+        fallback_limit: true
+      - checksum: Cargo.lock
+    target_paths:
+      - ~/.cargo/registry/index
+      - ~/.cargo/registry/cache
+
+  # target/ after prune-target.sh: third-party dependency builds only. One
+  # entry per step, since each step builds a different profile and feature
+  # set (the key's `step` part is the step key).
+  - name: target
+    cache_key:
+      - target
+      # v2: dev/test builds without debuginfo (pipeline env).
+      - v2
+      - agent: step
+      - agent: os
+      - agent: arch
+      - checksum: rust-toolchain.toml
+        fallback_limit: true
+      - checksum: Cargo.lock
+    target_paths:
+      - target
+
+  # The step's Rust toolchain (rustup's dir plus ~/.cargo/bin, where rustup
+  # and its proxies live): restoring it takes a second or two against ~11s
+  # to download. Per step, since steps pin different toolchains (MSRV) and
+  # components (clippy). Linux only: macOS images ship several toolchains,
+  # so there the entry is 1.7 GB and slower to restore than installing. Not
+  # used for the nightly rustfmt step, which should pick up new nightlies.
+  - name: rustup
+    cache_key:
+      - rustup
+      - v1
+      - agent: step
+      - agent: os
+      - agent: arch
+      - checksum: rust-toolchain.toml
+    target_paths:
+      - ~/.rustup
+      - ~/.cargo/bin
+
+  # .debs apt_install downloaded (libssl-dev, pkg-config, and per-step extras
+  # like zsh/fish), installed with dpkg on later jobs. Per step because the
+  # package lists differ. Bump v1 if the hosted image's base packages move
+  # on (dpkg --refuse-downgrade falls back to apt meanwhile).
+  - name: apt_debs
+    cache_key:
+      - apt-debs
+      - v1
+      - agent: step
+      - agent: os
+      - agent: arch
+    target_paths:
+      - ~/.cache/apt-debs
+
+  # The OmniOS VM image anyvm downloads for the illumos step. Keyed on the
+  # script, which pins the anyvm, OmniOS and builder versions.
+  - name: anyvm
+    cache_key:
+      - anyvm
+      - v1
+      - agent: os
+      - agent: arch
+      - checksum: .buildkite/scripts/illumos.sh
+    target_paths:
+      - ~/.cache/anyvm
