@@ -1,7 +1,8 @@
 use std::ops::Range;
 
-use atuin_client::settings::WordJumpMode;
 use itertools::Itertools;
+
+use crate::settings::WordJumpMode;
 
 /// Like [`str::char_indices`], but only yields characters whose byte positions
 /// are in `start..end`.
@@ -107,20 +108,24 @@ impl WordJumper<'_> {
 }
 
 impl Cursor {
+    #[must_use]
     pub fn as_str(&self) -> &str {
         self.source.as_str()
     }
 
+    #[must_use]
     pub fn into_inner(self) -> String {
         self.source
     }
 
     /// Returns the string before the cursor
+    #[must_use]
     pub fn substring(&self) -> &str {
         &self.source[..self.index]
     }
 
     /// Returns the currently selected [`char`]
+    #[must_use]
     pub fn char(&self) -> Option<char> {
         self.source[self.index..].chars().next()
     }
@@ -290,6 +295,7 @@ impl Cursor {
         self.index = 0;
     }
 
+    #[must_use]
     pub fn position(&self) -> usize {
         self.index
     }
