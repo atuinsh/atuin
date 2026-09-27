@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError};
 use crate::utils::{env_nonempty, home_dir};
 
@@ -66,5 +67,28 @@ impl Harness for Pi {
         tokio::fs::write(&extension_path, PLUGIN_SOURCE).await?;
 
         Ok(extension_path)
+    }
+
+    /// `pi --session <file>` (`pi --fork <file>` to branch a copy) when the session's file is
+    /// known: pi opens a file in place from anywhere, and works in the directory its header
+    /// names. Otherwise `pi --session <id>`, which pi resolves in the current directory's
+    /// sessions first; one it only finds in another project's it offers to fork instead, so the
+    /// session's own directory is required.
+    fn resume_plan(&self, target: &ResumeTarget) -> Result<ResumePlan, ResumeError> {
+        let flag = if target.fork {
+            "--fork"
+        } else {
+            "--session"
+        };
+        let (cwd, session) = match &target.native_path {
+            Some(path) => (CwdRequirement::Preferred, resume::path_arg(path)?),
+            None => (CwdRequirement::Required, target.id.clone()),
+        };
+        Ok(resume::plan(target, cwd, "pi", [flag.to_owned(), session]))
+    }
+
+    async fn locate(&self, id: &str) -> Option<PathBuf> {
+        let (root, id) = (session::default_root(), id.to_owned());
+        resume::blocking(move || session::locate(&root, &id)).await
     }
 }

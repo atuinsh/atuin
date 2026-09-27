@@ -34,6 +34,22 @@ impl From<&AnyHarness> for HarnessKind {
     }
 }
 
+impl HarnessKind {
+    /// The harness tools for this kind. `None` for a kind atuin has none for (Copilot, and
+    /// sessions of no known harness), whose sessions can be viewed but not resumed.
+    #[must_use]
+    pub fn harness(self) -> Option<AnyHarness> {
+        use atuin_common::harnesstools::{ccode, codex, opencode, pi};
+        match self {
+            Self::ClaudeCode => Some(AnyHarness::ClaudeCode(ccode::Ccode)),
+            Self::Codex => Some(AnyHarness::Codex(codex::Codex)),
+            Self::Opencode => Some(AnyHarness::Opencode(opencode::Opencode)),
+            Self::Pi => Some(AnyHarness::Pi(pi::Pi)),
+            Self::Copilot | Self::Unknown => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, From, Into, AsRef, Display)]
 #[as_ref(str)]
 pub struct NativeSessionId(String);
@@ -160,6 +176,25 @@ mod tests {
                     .build()
             },
         )
+    }
+
+    /// Every kind with harness tools maps back to itself; the rest have none to resume with.
+    #[rstest]
+    #[case::claude(HarnessKind::ClaudeCode, true)]
+    #[case::codex(HarnessKind::Codex, true)]
+    #[case::opencode(HarnessKind::Opencode, true)]
+    #[case::pi(HarnessKind::Pi, true)]
+    #[case::copilot(HarnessKind::Copilot, false)]
+    #[case::unknown(HarnessKind::Unknown, false)]
+    fn a_kind_has_harness_tools_only_when_atuin_knows_the_harness(
+        #[case] kind: HarnessKind,
+        #[case] resumable: bool,
+    ) {
+        let harness = kind.harness();
+        assert_eq!(harness.is_some(), resumable);
+        if let Some(harness) = harness {
+            assert_eq!(HarnessKind::from(&harness), kind);
+        }
     }
 
     /// Records are named-field msgpack, so a host whose build predates a field (here `turn_id`)

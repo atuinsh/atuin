@@ -60,8 +60,27 @@ impl PiSessions {
         if let Some(root) = &self.root {
             return root.clone();
         }
-        session_root(&agent_dir(), env_nonempty("PI_CODING_AGENT_SESSION_DIR").as_deref())
+        default_root()
     }
+}
+
+/// Where pi keeps sessions by default (see [`session_root`]).
+pub(crate) fn default_root() -> PathBuf {
+    session_root(&agent_dir(), env_nonempty("PI_CODING_AGENT_SESSION_DIR").as_deref())
+}
+
+/// The file of session `id` under `root`. Pi names it `<timestamp>_<id>.jsonl`, so a file so
+/// named is looked for first; but the header is what says which session a file is (see the
+/// module docs), so a file named otherwise is found by its header.
+pub(crate) fn locate(root: &Path, id: &str) -> Option<PathBuf> {
+    let is_session = |path: &Path| {
+        PiListener::is_session_file(path)
+            && matches!(read_header(path), Ok(Header::Session { id: found }) if found == id)
+    };
+    crate::harnesstools::resume::find_file(root, |path| {
+        file_name_id(path).is_some_and(|named| named == id) && is_session(path)
+    })
+    .or_else(|| crate::harnesstools::resume::find_file(root, is_session))
 }
 
 /// Where pi keeps sessions when no `--session-dir` is given (pi-mono coding-agent `main.ts`):

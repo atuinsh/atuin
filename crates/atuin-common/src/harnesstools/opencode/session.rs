@@ -199,6 +199,39 @@ impl OpencodeSessions {
     }
 }
 
+/// opencode's database, resolved as opencode resolves it (see `OpencodeSessions::resolve_db`).
+pub(crate) fn default_db() -> Option<PathBuf> {
+    OpencodeSessions::builder().build().resolve_db().ok()
+}
+
+/// `db` if it holds session `id`, which `opencode --session` reads from the `session` table
+/// (opencode 2.0: `session_v2`). A database that cannot be read holds no session.
+pub(crate) async fn locate(db: &Path, id: &str) -> Option<PathBuf> {
+    if !db.is_file() {
+        return None;
+    }
+    let opts = SqliteConnectOptions::new()
+        .filename(db)
+        .read_only(true)
+        .busy_timeout(Duration::from_secs(2));
+    let mut conn = SqliteConnection::connect_with(&opts).await.ok()?;
+    let mut found = false;
+    for query in [
+        "SELECT 1 FROM session WHERE id = ? LIMIT 1",
+        "SELECT 1 FROM session_v2 WHERE id = ? LIMIT 1",
+    ] {
+        // A table this version of opencode never created is an error, and no session.
+        let row: Result<Option<i64>, _> =
+            query_scalar::<Sqlite, i64>(query).bind(id).fetch_optional(&mut conn).await;
+        if matches!(row, Ok(Some(_))) {
+            found = true;
+            break;
+        }
+    }
+    let _ = conn.close().await;
+    found.then(|| db.to_path_buf())
+}
+
 impl Sessions for OpencodeSessions {
     type Listener = OpencodeListener;
 
