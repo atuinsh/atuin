@@ -239,12 +239,43 @@ fn resolve_program(program: &str) -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from(program))
 }
 
+/// Doubles every backslash so `shlex::split` — a POSIX shell tokenizer that
+/// treats a bare `\` as an escape character, deleting it and taking the next
+/// character literally — round-trips a literal backslash instead of eating
+/// it. Needed on Windows because `$EDITOR`/`$VISUAL`/`$FCEDIT` there commonly
+/// holds a plain path (`C:\Users\...`) with no shell-escaping intent at all;
+/// left alone, `shlex` would silently strip every path separator.
+///
+/// Compiled on Windows (its only production call site, in
+/// [`split_editor_var`]) and under `cfg(test)` (so the escaping logic itself
+/// is unit-testable from any host, without needing a Windows machine).
+#[cfg(any(windows, test))]
+fn escape_backslashes_for_shlex(val: &str) -> String {
+    val.replace('\\', "\\\\")
+}
+
+/// Splits a `$VISUAL`/`$EDITOR`/`$FCEDIT` value into shell-style words, e.g.
+/// `"code --wait"` -> `["code", "--wait"]`. On Windows, backslashes are
+/// escaped first (see `escape_backslashes_for_shlex`) so a literal path
+/// survives; elsewhere a bare `\` is meaningfully an escape character, so
+/// the value is passed to `shlex` unmodified.
+fn split_editor_var(val: &str) -> Option<Vec<String>> {
+    #[cfg(windows)]
+    {
+        shlex::split(&escape_backslashes_for_shlex(val))
+    }
+    #[cfg(not(windows))]
+    {
+        shlex::split(val)
+    }
+}
+
 /// Splits a `$VISUAL`/`$EDITOR`/`$FCEDIT` value into a program and its
 /// arguments, e.g. `"code --wait"` -> `code`, `["--wait"]`, and resolves the
 /// program through `which` (see [`EditorCommand`]).
 fn parse_editor_var(val: String) -> std::result::Result<EditorCommand, VisualEditorError> {
     let parts =
-        shlex::split(&val).ok_or_else(|| VisualEditorError::UnparseableCommand(val.clone()))?;
+        split_editor_var(&val).ok_or_else(|| VisualEditorError::UnparseableCommand(val.clone()))?;
     let (program, args) = parts.split_first().ok_or(VisualEditorError::UnparseableCommand(val))?;
     Ok(EditorCommand {
         program: resolve_program(program),
@@ -3084,6 +3115,28 @@ mod tests {
         assert!(super::parse_editor_var(val.to_string()).is_err());
     }
 
+    // Regression test for a real bug: shlex is a POSIX shell tokenizer, so a
+    // bare backslash outside quotes is an escape character that gets deleted
+    // -- feeding it a raw Windows path (as `$EDITOR` commonly holds there)
+    // silently ate every path separator. Runs on any host: this exercises
+    // the escaping helper directly against `shlex::split`, not the
+    // `cfg(windows)`-gated call site, so it doesn't need a Windows machine to
+    // catch a regression here.
+    #[rstest]
+    #[case(
+        r"C:\Users\ADMINI~1\AppData\Local\Temp\my-fake-editor --wait",
+        &[r"C:\Users\ADMINI~1\AppData\Local\Temp\my-fake-editor", "--wait"]
+    )]
+    #[case(r"C:\vim.exe", &[r"C:\vim.exe"])]
+    fn escape_backslashes_for_shlex_round_trips_through_shlex(
+        #[case] val: &str,
+        #[case] expected: &[&str],
+    ) {
+        let escaped = super::escape_backslashes_for_shlex(val);
+        let parts = shlex::split(&escaped).unwrap();
+        assert_eq!(parts, expected);
+    }
+
     /// An absolute path bypasses `$PATH`/cwd in `which` entirely (verified by
     /// reading its source), so this exercises `parse_editor_var`'s real
     /// resolution wiring — not just the split-and-fall-back-when-missing
@@ -3109,6 +3162,15 @@ mod tests {
     #[rstest]
     fn resolve_in_path_finds_executable_on_path() {
         let dir = tempfile::tempdir().unwrap();
+        // On Windows, `which` treats a query with no extension as executable
+        // only if it's a real PE binary (checked via GetBinaryTypeW) -- a
+        // plain text file needs a recognized extension (trusted outright, no
+        // content check) to be found at all. The query itself stays
+        // extension-less either way, matching how we actually call this
+        // (e.g. "vim", "nano"); `which` appends PATHEXT candidates itself.
+        #[cfg(windows)]
+        let program_path = dir.path().join("my-fake-editor.cmd");
+        #[cfg(not(windows))]
         let program_path = dir.path().join("my-fake-editor");
         std::fs::write(&program_path, "#!/bin/sh\n").unwrap();
         #[cfg(unix)]
