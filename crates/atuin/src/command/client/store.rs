@@ -54,6 +54,14 @@ pub enum Cmd {
     Pull(pull::Pull),
 }
 
+/// Have the daemon reproject the ai-session sidecar in full on its next start, after a command
+/// rewrote or deleted records under it. Best effort: the maintenance itself has already happened.
+pub async fn invalidate_ai_sessions() {
+    if let Err(err) = atuin_client::ai_session::invalidate_sidecar().await {
+        eprintln!("Failed to schedule a rebuild of the ai session index: {err}");
+    }
+}
+
 impl Cmd {
     #[instrument(level = "trace", skip_all, err)]
     pub async fn run(

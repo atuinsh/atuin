@@ -293,7 +293,7 @@ pub async fn boot(
 
     let host_id = Settings::host_id().await?;
 
-    let ai_session_db_path = Settings::effective_data_dir().join("ai_harness_sessions.db");
+    let ai_session_db_path = atuin_client::ai_session::sidecar_path();
     let ai_session_db = match AiSessionDatabase::open(&ai_session_db_path).await {
         Ok(db) => Some(db),
         Err(err) => {
@@ -316,10 +316,21 @@ pub async fn boot(
             // Reproject the sidecar from the synced record store before capture starts. The record
             // store is the source of truth; a sidecar that missed an append (transient error,
             // crash between the two writes, or a lost db file) is repaired here instead of being
-            // stranded until — or re-pushed as duplicate records by — file re-capture. append's
-            // ON CONFLICT keying makes the replay idempotent.
-            let recovered = match records.build(db).await {
-                Ok(()) => true,
+            // stranded until — or re-pushed as duplicate records by — file re-capture. Only
+            // records past each host's watermark are replayed; a fresh sidecar, or one whose
+            // watermarks a migration or maintenance command cleared, is replayed in full.
+            // append's ON CONFLICT keying makes the replay idempotent.
+            let started = std::time::Instant::now();
+            let recovered = match records.reproject(db).await {
+                Ok(stats) => {
+                    tracing::info!(
+                        replayed = stats.replayed,
+                        restarted = stats.restarted,
+                        elapsed = ?started.elapsed(),
+                        "reprojected ai-session sidecar"
+                    );
+                    true
+                }
                 Err(err) => {
                     tracing::error!(
                         ?err,

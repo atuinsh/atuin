@@ -850,6 +850,9 @@ mod pipeline_tests {
         let rebuilt = AiSessionDatabase::in_memory().await.unwrap();
         sink.records.build(&rebuilt).await.unwrap();
         assert_eq!(collect(rebuilt.list_sessions(None).await.unwrap()), live, "rebuild agrees");
+        // So does a startup reprojection over the live sidecar, which replays what it holds.
+        sink.records.reproject(&sink.sidecar).await.unwrap();
+        assert_eq!(collect(sink.sidecar.list_sessions(None).await.unwrap()), live, "replay agrees");
         live
     }
 
