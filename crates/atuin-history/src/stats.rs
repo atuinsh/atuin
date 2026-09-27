@@ -53,13 +53,30 @@ pub fn split_common_prefix<'a>(
     None
 }
 
+/// Skip flag-like words (`-x`, `--xxx`) leading a command remainder, so a
+/// stripped common prefix's own flags are not mistaken for the command.
+fn strip_leading_flags(mut command: &str) -> &str {
+    while let Some(word) = command.split_ascii_whitespace().next() {
+        if word.len() > 1 && word.starts_with('-') {
+            command = command[word.len()..].trim_start();
+        } else {
+            break;
+        }
+    }
+    command
+}
+
 fn interesting_command<'a>(settings: &Settings, mut command: &'a str) -> &'a str {
     if let Some((prefix, remainder)) = split_common_prefix(settings, command) {
         if remainder.is_empty() {
             // no commands following, just use the prefix
             return prefix;
         }
-        command = remainder;
+        command = strip_leading_flags(remainder);
+        if command.is_empty() {
+            // only flags followed the prefix
+            return prefix;
+        }
     }
 
     // Sort the common_subcommands by length so that we match the longest subcommand first
@@ -387,6 +404,10 @@ mod tests {
     #[case::with_subcommand("cargo build foo bar", "cargo build")]
     #[case::with_prefix("sudo   cargo build foo bar", "cargo build")]
     #[case::prefix_only("sudo", "sudo")]
+    #[case::prefix_flag("sudo -E make install", "make")]
+    #[case::prefix_long_flag("sudo --background updatedb", "updatedb")]
+    #[case::prefix_flag_with_arg("sudo -u nobody iperf3 -s", "nobody")]
+    #[case::prefix_flags_only("sudo -E", "sudo")]
     fn interesting_commands(#[case] input: &str, #[case] expected: &str) {
         let settings = Settings::utc();
         assert_eq!(interesting_command(&settings, input), expected);
