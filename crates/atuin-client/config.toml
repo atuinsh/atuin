@@ -340,6 +340,38 @@ enter_accept = true
 ##   commands that have no recorded shell
 # shells = "auto"
 
+[ai.sessions]
+## Settings for `atuin ai resume`, the picker over captured AI coding-agent sessions.
+## It follows the history search's style, invert, show_preview, max_preview_height,
+## enter_accept, keymap_mode and theme settings.
+
+## The filter the picker opens in. Unset: "workspace", widening to "global" when
+## not in a git repository or when the workspace has no sessions.
+# filter_mode = "workspace"
+
+## The filter modes ctrl-r cycles through, in order.
+# filters = ["global", "host", "workspace", "directory", "branch"]
+
+## Row columns, left to right: time, harness, children, title, repo, branch, messages.
+# columns = ["time", "harness", "children", "title", "repo", "branch", "messages"]
+
+## Count subagent sessions among a root session's children.
+# show_subagents = true
+
+## Group forks under their root session, so only the root shows as a row.
+# group_forks = true
+
+## Height of the inline picker. Defaults to the top-level inline_height.
+# inline_height = 40
+
+## Per-harness resume commands, run after `cd -- '<cwd>' &&`.
+## {id} is the native session id and {cwd} the working directory (both shell-quoted).
+# [ai.sessions.resume]
+# claude = "claude --resume {id}"
+# codex = "codex resume {id}"
+# opencode = "opencode --session {id}"
+# pi = "pi --session {id}"
+
 [tmux]
 ## Enable using atuin with tmux popup (requires tmux >= 3.2)
 ## When enabled and running inside tmux, Atuin will use a popup window for interactive search.
