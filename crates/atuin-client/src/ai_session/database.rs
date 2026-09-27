@@ -903,7 +903,11 @@ impl AiSessionDatabase {
         }
         if let Some(hosts) = hosts {
             let marks = vec!["?"; hosts.ids.len()].join(", ");
-            let unrecorded = if hosts.unrecorded { "1" } else { "0" };
+            let unrecorded = if hosts.unrecorded {
+                "1"
+            } else {
+                "0"
+            };
             sql.push_str(&format!(
                 " AND (s.host_id IN ({marks}) OR (s.host_id IS NULL AND {unrecorded}))"
             ));
