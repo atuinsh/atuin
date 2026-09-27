@@ -23,7 +23,9 @@ pub mod worker;
 use std::io::{IsTerminal, stdout};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
+use atuin_client::ai_session::HarnessSession;
 use atuin_client::settings::Settings;
 use atuin_client::theme::{Meaning, Theme};
 use crossterm::event::EventStream;
@@ -33,10 +35,10 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::{Terminal, TerminalOptions, Viewport};
 pub use resumer::{ResumePlan, Resumer};
 pub use source::{SessionRow, SessionSource};
-use tokio::sync::mpsc;
 
+use self::resumer::NotResumable;
 use self::state::{CHILDREN, InputAction, PLAN, PREVIEW, Pending, State};
-use self::worker::{Request, Response};
+use self::worker::{Request, Requests, Response};
 
 /// How often the picker redraws on its own.
 const TICK: std::time::Duration = std::time::Duration::from_secs(1);
@@ -44,6 +46,8 @@ const TICK: std::time::Duration = std::time::Duration::from_secs(1);
 const REFRESH_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 /// How long after the last key press before a refresh may run.
 const REFRESH_IDLE: std::time::Duration = std::time::Duration::from_secs(2);
+/// While the selection moves faster than this (a held arrow key), details wait until it settles.
+const SETTLE: Duration = Duration::from_millis(60);
 
 /// Where the picker runs: what its filter modes resolve against.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -110,22 +114,57 @@ pub struct Picker<'a> {
     pub query: String,
     /// Overrides `[ai.sessions] inline_height` and the top-level `inline_height`.
     pub inline_height: Option<u16>,
+    /// A session the query named by id that can't be resumed: open on it, showing why.
+    pub preselect: Option<(SessionRow, NotResumable)>,
+}
+
+/// Holds back detail requests while the selection moves fast, so the sessions it passes over
+/// are never loaded. A single move asks at once.
+#[derive(Default)]
+struct Settle {
+    selected: Option<HarnessSession>,
+    moved_at: Option<Instant>,
+    /// When to ask for the selected session's details, if not yet.
+    due: Option<Instant>,
+}
+
+impl Settle {
+    /// Whether details for `selected` may be asked for at `now`; if not, [`Self::due`] says when.
+    fn ready(&mut self, selected: &HarnessSession, now: Instant) -> bool {
+        if self.selected.as_ref() != Some(selected) {
+            let fast = self.moved_at.is_some_and(|t| now.saturating_duration_since(t) < SETTLE);
+            self.selected = Some(selected.clone());
+            self.moved_at = Some(now);
+            self.due = fast.then(|| now + SETTLE);
+        }
+        match self.due {
+            Some(due) if now < due => false,
+            _ => {
+                self.due = None;
+                true
+            }
+        }
+    }
 }
 
 /// Ask the worker for whatever the current view needs and doesn't have yet.
-fn request_details(state: &mut State, requests: &mpsc::UnboundedSender<Request>, subagents: bool) {
+fn request_details(state: &mut State, requests: &Requests, settle: &mut Settle, subagents: bool) {
+    state.forget_unanswered();
     let Some(row) = state.selected().cloned() else {
         return;
     };
     let handle = row.handle.clone();
+    if !settle.ready(&handle, Instant::now()) {
+        return;
+    }
     if !state.previews.contains_key(&handle) && state.requested.insert((handle.clone(), PREVIEW)) {
-        let _ = requests.send(Request::Preview(handle.clone()));
+        requests.send(Request::Preview(handle.clone()));
     }
     if state.tab_index == 1 {
         if !state.children.contains_key(&handle)
             && state.requested.insert((handle.clone(), CHILDREN))
         {
-            let _ = requests.send(Request::Children {
+            requests.send(Request::Children {
                 session: handle,
                 include_subagents: subagents,
             });
@@ -134,16 +173,16 @@ fn request_details(state: &mut State, requests: &mpsc::UnboundedSender<Request>,
     }
 }
 
-fn request_plan(state: &mut State, requests: &mpsc::UnboundedSender<Request>, row: &SessionRow) {
+fn request_plan(state: &mut State, requests: &Requests, row: &SessionRow) {
     if !state.plans.contains_key(&row.handle) && state.requested.insert((row.handle.clone(), PLAN))
     {
-        let _ = requests.send(Request::Plan(Box::new(row.clone())));
+        requests.send(Request::Plan(Box::new(row.clone())));
     }
 }
 
-fn send_search(state: &mut State, requests: &mpsc::UnboundedSender<Request>) {
+fn send_search(state: &mut State, requests: &Requests) {
     if let Some((generation, mode, filter)) = state.next_search() {
-        let _ = requests.send(Request::Search {
+        requests.send(Request::Search {
             generation,
             mode,
             filter,
@@ -152,11 +191,7 @@ fn send_search(state: &mut State, requests: &mpsc::UnboundedSender<Request>) {
 }
 
 /// Apply a worker response.
-fn apply_response(
-    state: &mut State,
-    response: Response,
-    requests: &mpsc::UnboundedSender<Request>,
-) {
+fn apply_response(state: &mut State, response: Response, requests: &Requests) {
     match response {
         Response::Results {
             generation,
@@ -245,6 +280,9 @@ impl Picker<'_> {
         })?;
 
         let mut state = State::new(settings, self.context, &self.query);
+        if let Some((row, why)) = self.preselect {
+            state.pin(row, why);
+        }
         let (requests, mut responses) = worker::spawn(self.source, self.resumer);
 
         if inline_height > 0 {
@@ -261,8 +299,9 @@ impl Picker<'_> {
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut last_input = std::time::Instant::now();
         let mut last_refresh = std::time::Instant::now();
+        let mut settle = Settle::default();
         let outcome = 'render: loop {
-            request_details(&mut state, &requests, sessions.show_subagents);
+            request_details(&mut state, &requests, &mut settle, sessions.show_subagents);
             terminal.draw(|f| state.draw(f, settings, self.theme))?;
 
             tokio::select! {
@@ -292,6 +331,9 @@ impl Picker<'_> {
                         }
                     }
                 }
+                // The selection settled: ask for its details (at the top of the loop).
+                () = tokio::time::sleep_until(settle.due.unwrap_or_else(Instant::now).into()),
+                    if settle.due.is_some() => {}
                 _ = tick.tick() => {
                     // Not while typing or browsing: the list shouldn't move under the cursor.
                     if last_input.elapsed() >= REFRESH_IDLE
@@ -299,7 +341,7 @@ impl Picker<'_> {
                         && let Some((generation, mode, filter)) = state.refresh()
                     {
                         last_refresh = std::time::Instant::now();
-                        let _ = requests.send(Request::Search { generation, mode, filter });
+                        requests.send(Request::Search { generation, mode, filter });
                     }
                 }
                 response = responses.recv() => {

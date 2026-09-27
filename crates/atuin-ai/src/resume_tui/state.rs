@@ -102,7 +102,13 @@ pub struct State {
 
     pub previews: HashMap<HarnessSession, SessionPreview>,
     pub children: HashMap<HarnessSession, Vec<SessionRow>>,
+    /// Details asked of the worker and not answered yet. The worker drops a request superseded by
+    /// a newer one of its kind, so only the selected session's entries are kept (see
+    /// [`Self::forget_unanswered`]).
     pub requested: HashSet<(HarnessSession, u8)>,
+    /// A session named by id that can't be resumed, kept first while the query is still the id
+    /// it was named by, so the picker opens on it and says why.
+    pinned: Option<(SessionRow, String)>,
     /// Resume plans, fetched for the selected session only (planning may walk directories).
     pub plans: HashMap<HarnessSession, Result<ResumePlan, NotResumable>>,
     /// An enter/tab/ctrl-y waiting for its session's plan.
@@ -149,6 +155,7 @@ impl State {
             previews: HashMap::new(),
             children: HashMap::new(),
             requested: HashSet::new(),
+            pinned: None,
             plans: HashMap::new(),
             pending: None,
             status: None,
@@ -259,10 +266,19 @@ impl State {
         &mut self,
         generation: u64,
         mode: FilterMode,
-        rows: Vec<SessionRow>,
+        mut rows: Vec<SessionRow>,
     ) -> bool {
         if generation != self.issued {
             return false;
+        }
+        if let Some((row, query)) = &self.pinned {
+            if self.input.as_str() == query {
+                rows.retain(|r| r.handle != row.handle);
+                rows.insert(0, row.clone());
+            } else {
+                self.pinned = None;
+                self.status = None;
+            }
         }
         if rows.is_empty() && self.auto_widen && mode == FilterMode::Workspace {
             self.auto_widen = false;
@@ -309,6 +325,27 @@ impl State {
 
     pub fn selected(&self) -> Option<&SessionRow> {
         self.results.get(self.list.selected)
+    }
+
+    /// Open on `row`, which the query named by id but which can't be resumed: it is selected, its
+    /// plan is the reason (shown in the status row), and it stays first until the query changes.
+    pub fn pin(&mut self, row: SessionRow, why: NotResumable) {
+        self.status =
+            Some((format!("can't resume {}: {why}", row.handle.session), Meaning::AlertError));
+        self.plans.insert(row.handle.clone(), Err(why));
+        self.results = vec![row.clone()];
+        self.list.selected = 0;
+        self.pinned = Some((row, self.input.as_str().to_owned()));
+    }
+
+    /// Forget unanswered requests for sessions other than the selected one: the worker drops
+    /// those once a newer request of the same kind arrives, so they must be asked for again.
+    pub fn forget_unanswered(&mut self) {
+        let Some(selected) = self.selected().map(|r| r.handle.clone()) else {
+            self.requested.clear();
+            return;
+        };
+        self.requested.retain(|(handle, _)| *handle == selected);
     }
 
     /// The label in the input's `[ MODE ]` prefix.
@@ -719,6 +756,44 @@ mod tests {
         let (g, mode, _) = state.next_search().unwrap();
         state.apply_results(g, mode, rs);
         assert_eq!(state.list.selected, 0);
+    }
+
+    #[rstest]
+    fn a_pinned_session_stays_first_until_the_query_changes() {
+        let mut state = State::new(&settings(), fake::context(), "s7a1b2c");
+        let pinned = fake::row(HarnessKind::ClaudeCode, "s7a1b2c", "t");
+        state.pin(pinned.clone(), NotResumable::TranscriptMissing);
+        assert_eq!(state.selected(), Some(&pinned));
+        assert!(state.status.as_ref().is_some_and(|(s, _)| s.contains("isn't on this machine")));
+
+        // The id matches no text, so the workspace would widen; the pinned row keeps it.
+        let (generation, mode, _) = state.next_search().unwrap();
+        state.apply_results(generation, mode, Vec::new());
+        assert_eq!(state.results, vec![pinned.clone()]);
+        assert_eq!(state.widened, None);
+        // A refresh that finds it too still shows it once, first.
+        state.apply_results(generation, mode, vec![rows(2)[1].clone(), pinned.clone()]);
+        assert_eq!(state.results[0], pinned);
+        assert_eq!(state.results.len(), 2);
+
+        state.input = Cursor::from("other".to_owned());
+        let (generation, mode, _) = state.next_search().unwrap();
+        state.apply_results(generation, mode, rows(2));
+        assert!(!state.results.contains(&pinned));
+        assert_eq!(state.status, None);
+    }
+
+    #[rstest]
+    fn forgetting_unanswered_requests_keeps_the_selected_sessions() {
+        let mut state = state_in(fake::context());
+        state.results = rows(3);
+        for row in rows(3) {
+            state.requested.insert((row.handle, PREVIEW));
+        }
+        state.list.selected = 1;
+        state.forget_unanswered();
+        let kept: Vec<_> = state.requested.iter().map(|(h, _)| h.clone()).collect();
+        assert_eq!(kept, vec![rows(3)[1].handle.clone()]);
     }
 
     #[rstest]
