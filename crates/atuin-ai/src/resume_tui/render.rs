@@ -536,6 +536,97 @@ impl State {
 
     #[allow(clippy::too_many_lines)]
     pub fn draw(&mut self, f: &mut Frame, settings: &Settings, theme: &Theme) {
+        self.draw_main(f, settings, theme);
+        if self.chooser.is_some() {
+            self.draw_chooser(f, settings, theme);
+        }
+    }
+
+    /// The "continue in…" chooser, over the middle of the picker: the harnesses to continue the
+    /// session in, what continuing it flattens, and the keys.
+    fn draw_chooser(&self, f: &mut Frame, settings: &Settings, theme: &Theme) {
+        let Some(chooser) = &self.chooser else {
+            return;
+        };
+        let bold = Style::default().add_modifier(Modifier::BOLD);
+        let muted = style(theme, Meaning::Annotation);
+        let mut lines: Vec<Line<'static>> = chooser
+            .targets
+            .iter()
+            .enumerate()
+            .map(|(n, target)| {
+                let selected = n == chooser.selected;
+                let marker = if selected {
+                    "▶ "
+                } else {
+                    "  "
+                };
+                let label = Span::styled(
+                    harness_label(*target).to_owned(),
+                    if selected {
+                        harness_style(theme, *target).add_modifier(Modifier::BOLD)
+                    } else {
+                        style(theme, Meaning::Base)
+                    },
+                );
+                Line::from(vec![
+                    Span::styled(format!("{marker}{} ", n + 1), muted),
+                    Span::styled(
+                        format!("{:<3}", harness_badge(*target)),
+                        harness_style(theme, *target),
+                    ),
+                    label,
+                ])
+            })
+            .collect();
+        lines.push(Line::default());
+        let what = match self.flattened.get(&chooser.session) {
+            None => "reading the session…".to_owned(),
+            Some(Err(e)) => format!("can't read it: {e}"),
+            Some(Ok(flattened)) => match flattened.summary() {
+                summary if summary.is_empty() => "carried over as it is".to_owned(),
+                summary => summary,
+            },
+        };
+        lines.push(Line::from(Span::styled(what, muted)));
+        lines.push(Line::from(vec![
+            Span::styled("<enter>", bold),
+            Span::raw(if settings.enter_accept {
+                ": continue  "
+            } else {
+                ": edit  "
+            }),
+            Span::styled("<tab>", bold),
+            Span::raw(": edit  "),
+            Span::styled("<esc>", bold),
+            Span::raw(": cancel"),
+        ]));
+
+        let title =
+            format!(" Continue this {} session in ", harness_label(chooser.session.harness));
+        let area = f.area();
+        let widest = lines.iter().map(Line::width).chain([title.width()]).max().unwrap_or(0);
+        let width = u16::try_from(widest + 4).unwrap_or(u16::MAX).min(area.width);
+        let height = u16::try_from(lines.len() + 2).unwrap_or(u16::MAX).min(area.height);
+        let popup = Rect {
+            x: area.x + (area.width - width) / 2,
+            y: area.y + (area.height - height) / 2,
+            width,
+            height,
+        };
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .padding(ratatui::widgets::Padding::horizontal(1))
+            .title(Span::styled(title, bold));
+        f.render_widget(Clear, popup);
+        f.render_widget(
+            Paragraph::new(Text::from(lines)).block(block).style(style(theme, Meaning::Base)),
+            popup,
+        );
+    }
+
+    fn draw_main(&mut self, f: &mut Frame, settings: &Settings, theme: &Theme) {
         let area = f.area();
         f.render_widget(Clear, area);
         let compactness = to_compactness(area, settings);
@@ -661,7 +752,9 @@ impl State {
                 Span::styled("<tab>", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(": edit  "),
                 Span::styled("<ctrl-y>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": copy"),
+                Span::raw(": copy  "),
+                Span::styled("<c>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": continue in…"),
             ]);
             let guide = Paragraph::new(guide).style(style(theme, Meaning::Annotation));
             f.render_widget(input_block(guide, st), input_chunk);

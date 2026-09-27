@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use atuin_client::ai_session::HarnessSession;
+use atuin_client::ai_session::{HarnessKind, HarnessSession};
 use atuin_client::settings::Settings;
 use atuin_client::theme::{Meaning, Theme};
 use crossterm::event::EventStream;
@@ -36,8 +36,8 @@ use ratatui::{Terminal, TerminalOptions, Viewport};
 pub use resumer::{ResumePlan, Resumer};
 pub use source::{SessionRow, SessionSource};
 
-use self::resumer::{NotResumable, Resume};
-use self::state::{CHILDREN, InputAction, PLAN, PREVIEW, Pending, RESTORE, State};
+use self::resumer::{Continued, NotResumable, Resume};
+use self::state::{CHILDREN, FLATTEN, InputAction, PLAN, PREVIEW, Pending, RESTORE, State};
 use self::worker::{Request, Requests, Response};
 
 /// How often the picker redraws on its own.
@@ -222,6 +222,11 @@ fn apply_response(state: &mut State, response: Response, requests: &Requests) {
             state.requested.remove(&(handle.clone(), RESTORE));
             state.plans.insert(handle, plan.map(Resume::ready));
         }
+        Response::Flattened(handle, flattened) => {
+            state.flattened.insert(handle, flattened);
+        }
+        // Handled by `finish_continuation`, which may end the picker.
+        Response::Continued(..) => {}
         Response::HostNames(names) => state.apply_host_names(names),
     }
 }
@@ -279,6 +284,82 @@ fn complete(state: &mut State, action: Pending, requests: &Requests) -> Option<O
     outcome
 }
 
+/// Open the "continue in…" chooser on the selected session, offering the other harnesses
+/// installed here, and read what continuing it would flatten, for the chooser to show.
+fn open_chooser(state: &mut State, resumer: &dyn Resumer, requests: &Requests) {
+    let Some(row) = state.selected().cloned() else {
+        return;
+    };
+    if state.open_chooser(resumer.continue_targets(&row))
+        && !state.flattened.contains_key(&row.handle)
+        && state.requested.insert((row.handle.clone(), FLATTEN))
+    {
+        requests.send(Request::Flatten(row.handle, state.context.cwd.clone()));
+    }
+}
+
+/// Continue the selected session in `target`, then carry out `action` (see
+/// [`finish_continuation`]). Copying writes nothing: the command copied continues it when run.
+fn start_continuation(
+    state: &mut State,
+    target: HarnessKind,
+    action: Pending,
+    requests: &Requests,
+) {
+    let Some(row) = state.selected().cloned() else {
+        return;
+    };
+    let label = source::harness_label(target);
+    if action == Pending::Copy {
+        let id = resumer::quote(row.handle.session.as_ref());
+        let into = source::harness_arg(target).unwrap_or_default();
+        copy(state, &format!("atuin ai resume {id} --in {into}"));
+        return;
+    }
+    let what = match state.flattened.get(&row.handle) {
+        Some(Ok(flattened)) if !flattened.summary().is_empty() => {
+            format!(": {}", flattened.summary())
+        }
+        _ => String::new(),
+    };
+    state.status = Some((format!("continuing in {label}{what}…"), Meaning::Annotation));
+    state.continuing = Some((row.handle.clone(), target, action));
+    requests.send(Request::Continue(Box::new(row), target));
+}
+
+/// A continuation is written (or failed): the outcome that resumes it, with the status line to
+/// leave behind, or `None` to stay open, saying why.
+fn finish_continuation(
+    state: &mut State,
+    handle: &HarnessSession,
+    result: Result<Continued, NotResumable>,
+) -> Option<(Outcome, String)> {
+    let (_, target, action) = state.continuing.take_if(|(waiting, ..)| waiting == handle)?;
+    match result {
+        Ok(continued) => {
+            let mut status = continued.status();
+            if let Some(note) = &continued.note {
+                status.push_str(&format!(" ({note})"));
+            }
+            state.status = Some((status.clone(), Meaning::AlertInfo));
+            let outcome = match action {
+                Pending::Resume => Outcome::Resume(continued.plan),
+                Pending::Edit | Pending::Copy => Outcome::Edit(continued.plan),
+            };
+            Some((outcome, status))
+        }
+        Err(why) => {
+            let message = match why {
+                NotResumable::Continue(..) => why.to_string(),
+                why => format!("can't continue in {}: {why}", source::harness_label(target)),
+            };
+            state.status = Some((message, Meaning::AlertError));
+            state.accept = false;
+            None
+        }
+    }
+}
+
 /// Put `line` on the clipboard, saying so in the status row.
 fn copy(state: &mut State, line: &str) {
     state.status = Some(match set_clipboard(line) {
@@ -288,8 +369,10 @@ fn copy(state: &mut State, line: &str) {
 }
 
 impl Picker<'_> {
+    /// Run the picker until a session is chosen or it's cancelled. Also returns what to tell the
+    /// user once it's gone: the status line of a session continued in another harness.
     #[allow(clippy::too_many_lines)]
-    pub async fn run(self) -> Result<Outcome> {
+    pub async fn run(self) -> Result<(Outcome, Option<String>)> {
         let settings = self.settings;
         let sessions = &settings.ai.sessions;
         let inline_height =
@@ -319,7 +402,7 @@ impl Picker<'_> {
         if let Some((row, why)) = self.preselect {
             state.pin(row, why);
         }
-        let (requests, mut responses) = worker::spawn(self.source, self.resumer);
+        let (requests, mut responses) = worker::spawn(self.source, self.resumer.clone());
 
         if inline_height > 0 {
             terminal.clear()?;
@@ -336,6 +419,8 @@ impl Picker<'_> {
         let mut last_input = std::time::Instant::now();
         let mut last_refresh = std::time::Instant::now();
         let mut settle = Settle::default();
+        // What to tell the user once the picker is gone (a continuation's status line).
+        let mut note = None;
         let outcome = 'render: loop {
             request_details(&mut state, &requests, &mut settle, sessions.show_subagents);
             terminal.draw(|f| state.draw(f, settings, self.theme))?;
@@ -356,6 +441,14 @@ impl Picker<'_> {
                         InputAction::Resume(_) => Some(Pending::Resume),
                         InputAction::ReturnCommand(_) => Some(Pending::Edit),
                         InputAction::Copy(_) => Some(Pending::Copy),
+                        InputAction::ChooseHarness(_) => {
+                            open_chooser(&mut state, self.resumer.as_ref(), &requests);
+                            None
+                        }
+                        InputAction::ContinueIn(target, action) => {
+                            start_continuation(&mut state, target, action, &requests);
+                            None
+                        }
                         InputAction::ReturnOriginal | InputAction::Exit => break Outcome::Cancelled,
                     };
                     if let Some(pending) = pending {
@@ -381,8 +474,17 @@ impl Picker<'_> {
                     }
                 }
                 response = responses.recv() => {
-                    if let Some(response) = response {
-                        apply_response(&mut state, response, &requests);
+                    match response {
+                        Some(Response::Continued(handle, result)) => {
+                            if let Some((outcome, status)) =
+                                finish_continuation(&mut state, &handle, result)
+                            {
+                                note = Some(status);
+                                break 'render outcome;
+                            }
+                        }
+                        Some(response) => apply_response(&mut state, response, &requests),
+                        None => {}
                     }
                     // An enter/tab/ctrl-y waiting on this session's plan can finish now.
                     if let Some((handle, pending)) = state.pending.clone()
@@ -408,7 +510,7 @@ impl Picker<'_> {
             let origin = terminal.get_frame().area().as_position();
             terminal.set_cursor_position(origin)?;
         }
-        Ok(outcome)
+        Ok((outcome, note))
     }
 }
 

@@ -666,7 +666,7 @@ fn tool_part(call: &ToolUse, result: Option<&ToolResult>, at: i64) -> Value {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use futures::StreamExt;
     use rstest::rstest;
     use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
@@ -689,7 +689,7 @@ mod tests {
          NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)",
     ];
 
-    async fn database(path: &Path) -> SqliteConnection {
+    pub async fn database(path: &Path) -> SqliteConnection {
         let opts = SqliteConnectOptions::new().filename(path).create_if_missing(true);
         let mut conn = SqliteConnection::connect_with(&opts).await.unwrap();
         for ddl in DDL {
@@ -702,7 +702,7 @@ mod tests {
     /// session under its id, in the directory import runs in; each message under its id, stamped
     /// with its creation time, its info without `id` and `sessionID` as its data; each part
     /// under its id, in the message its `messageID` names, stamped with the time of the import.
-    async fn opencode_import(conn: &mut SqliteConnection, export: &Value, cwd: &str) {
+    pub async fn opencode_import(conn: &mut SqliteConnection, export: &Value, cwd: &str) {
         let info = &export["info"];
         let now = millis(OffsetDateTime::now_utc());
         crate::db::query::<sqlx::Sqlite>(
@@ -758,7 +758,7 @@ mod tests {
 
     /// The rows capture makes of every session in the database at `path`, keyed as it keys them
     /// (opencode gives every row an id of its own).
-    async fn captured(path: &Path) -> Vec<RehydrateMessage> {
+    pub async fn captured(path: &Path) -> Vec<RehydrateMessage> {
         let sessions: Vec<_> = OpencodeSessions::builder()
             .db(path)
             .build()
@@ -827,18 +827,11 @@ mod tests {
         row.source_id.starts_with(&format!("{id}:"))
     }
 
-    const FIXTURE: &str = include_str!("../../../tests/fixtures/opencode/projection.json");
-
-    /// A session opencode 1.18.32 wrote (the projection fixture capture's own tests read),
-    /// captured, written back and captured again, keys the same rows in the same order: its
-    /// parts, its failed message, and the title it has now.
-    #[rstest]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_real_session_recaptures_as_the_same_rows() {
+    /// The session opencode 1.18.32 wrote (the projection fixture), stored in a new database at
+    /// `path` as opencode stores it; its id.
+    pub async fn load_projection(path: &Path) -> String {
         let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("opencode.db");
-        let mut conn = database(&path).await;
+        let mut conn = database(path).await;
         let id = fixture["session"]["id"].as_str().unwrap();
         let s = &fixture["session"];
         crate::db::query::<sqlx::Sqlite>(
@@ -881,6 +874,23 @@ mod tests {
             .unwrap();
         }
         conn.close().await.unwrap();
+        id.to_owned()
+    }
+
+    const FIXTURE: &str = include_str!("../../../tests/fixtures/opencode/projection.json");
+
+    /// A session opencode 1.18.32 wrote (the projection fixture capture's own tests read),
+    /// captured, written back and captured again, keys the same rows in the same order: its
+    /// parts, its failed message, and the title it has now.
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_real_session_recaptures_as_the_same_rows() {
+        let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.db");
+        let id = load_projection(&path).await;
+        let id = id.as_str();
+        let s = &fixture["session"];
 
         let title = s["title"].as_str();
         let (original, again) = round_trip(&path, id, title).await;

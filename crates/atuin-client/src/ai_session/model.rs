@@ -239,11 +239,15 @@ impl Session {
     /// How this session relates to its parent, from its harness and id alone.
     #[must_use]
     pub fn relation(&self) -> SessionRelation {
-        if self.parent.is_none() {
+        let Some(parent) = &self.parent else {
             return match self.copy_of {
                 Some(_) => SessionRelation::Fork,
                 None => SessionRelation::Root,
             };
+        };
+        // Only a continuation (`atuin ai resume --in`) names another harness's session.
+        if parent.harness != self.handle.harness {
+            return SessionRelation::Fork;
         }
         match self.handle.harness {
             HarnessKind::ClaudeCode if self.handle.session.as_ref().starts_with("agent-") => {
@@ -423,6 +427,29 @@ mod tests {
             .usage(Usage::default())
             .build();
         assert_eq!(session.relation(), expected);
+    }
+
+    /// A session continued in another harness (`atuin ai resume --in`) is a fork of the one it
+    /// continues, whatever its own harness calls its children.
+    #[rstest]
+    #[case::into_codex(HarnessKind::Codex)]
+    #[case::into_opencode(HarnessKind::Opencode)]
+    #[case::into_claude(HarnessKind::ClaudeCode)]
+    fn a_continuation_in_another_harness_is_a_fork(#[case] harness: HarnessKind) {
+        let session = Session::builder()
+            .handle(HarnessSession {
+                harness,
+                session: NativeSessionId::from("agent-new".to_owned()),
+            })
+            .parent(Some(HarnessSession {
+                harness: HarnessKind::Pi,
+                session: NativeSessionId::from("original".to_owned()),
+            }))
+            .started_at(OffsetDateTime::UNIX_EPOCH)
+            .updated_at(OffsetDateTime::UNIX_EPOCH)
+            .usage(Usage::default())
+            .build();
+        assert_eq!(session.relation(), SessionRelation::Fork);
     }
 
     /// A parentless session copied from another (a Claude Code `--fork-session`) is its fork.

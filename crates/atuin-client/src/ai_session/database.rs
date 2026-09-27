@@ -2328,7 +2328,7 @@ mod tests {
     };
     use crate::ai_session::{
         HarnessKind, HarnessSession, HostSet, Message, NativeSessionId, Session, SessionFilter,
-        SessionMatch, SourceId,
+        SessionMatch, SessionRelation, SourceId,
     };
 
     fn harness_filter(harness: HarnessKind) -> SessionFilter {
@@ -3497,6 +3497,50 @@ mod tests {
         db.append(&tree_row("grandparent", None, 0, "x")).await.unwrap();
         let roots = roots_of(&db).await;
         assert!(roots.iter().all(|(_, root)| root == "grandparent"), "{roots:?}");
+    }
+
+    /// Sessions continued in other harnesses (`atuin ai resume --in`) group under the session
+    /// they continue, in whichever order their rows arrive (as a reprojection from the synced
+    /// records replays them), and are its forks.
+    #[rstest]
+    #[case::parents_first(false)]
+    #[case::children_first(true)]
+    #[tokio::test]
+    async fn continuations_in_other_harnesses_group_under_the_original(#[case] reversed: bool) {
+        let row = |harness, id: &str, parent: Option<(HarnessKind, &str)>, seconds| {
+            let mut m = message_in(&handle(harness, id), seconds, "words");
+            m.source_id = SourceId::from(format!("{id}-{seconds}"));
+            m.parent = parent.map(|(h, p)| handle(h, p));
+            m
+        };
+        let mut rows = vec![
+            row(HarnessKind::Codex, "orig", None, 0),
+            // The marker comes after a line naming nothing (Pi's header, Codex's session_meta).
+            row(HarnessKind::ClaudeCode, "in-claude", None, 10),
+            row(HarnessKind::ClaudeCode, "in-claude", Some((HarnessKind::Codex, "orig")), 11),
+            row(HarnessKind::Pi, "in-pi", Some((HarnessKind::ClaudeCode, "in-claude")), 20),
+        ];
+        if reversed {
+            rows.reverse();
+        }
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        for m in &rows {
+            db.append(m).await.unwrap();
+        }
+        let original = handle(HarnessKind::Codex, "orig");
+        for (harness, id) in [(HarnessKind::ClaudeCode, "in-claude"), (HarnessKind::Pi, "in-pi")] {
+            let s = db.get_session(&handle(harness, id)).await.unwrap().unwrap();
+            assert_eq!(s.group(), &original, "{id}");
+            assert_eq!(s.relation(), SessionRelation::Fork, "{id}");
+        }
+        let children: Vec<String> = db
+            .children(&original)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| s.handle.session.to_string())
+            .collect();
+        assert_eq!(children, ["in-pi", "in-claude"]);
     }
 
     /// A parent cycle cannot loop: every session still has a root.

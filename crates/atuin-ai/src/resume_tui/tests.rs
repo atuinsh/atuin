@@ -370,3 +370,163 @@ fn details_wait_while_the_selection_moves_fast() {
     assert!(settle.ready(&handle("d"), t3 + SETTLE));
     assert_eq!(settle.due, None);
 }
+
+// --- continuing in another harness ---------------------------------------------------------------
+
+fn press(state: &mut State, settings: &Settings, key: &str) -> super::state::InputAction {
+    use atuin_client::tui::{KeyCodeValue, KeyInput, SingleKey};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let KeyInput::Single(SingleKey {
+        code, ctrl, alt, ..
+    }) = KeyInput::parse(key).unwrap()
+    else {
+        panic!("one key: {key}");
+    };
+    let code = match code {
+        KeyCodeValue::Char(c) => KeyCode::Char(c),
+        KeyCodeValue::Enter => KeyCode::Enter,
+        KeyCodeValue::Esc => KeyCode::Esc,
+        KeyCodeValue::Tab => KeyCode::Tab,
+        KeyCodeValue::Up => KeyCode::Up,
+        KeyCodeValue::Down => KeyCode::Down,
+        other => panic!("{other:?}"),
+    };
+    let mut modifiers = KeyModifiers::NONE;
+    if ctrl {
+        modifiers |= KeyModifiers::CONTROL;
+    }
+    if alt {
+        modifiers |= KeyModifiers::ALT;
+    }
+    state.handle_key_input(settings, &KeyEvent::new(code, modifiers))
+}
+
+/// `c` in the Inspect tab (alt-c anywhere) opens the chooser on the selected session: only the
+/// other harnesses, and what continuing flattens. The keys move and pick in it, and nothing
+/// reaches the query while it's open.
+#[rstest]
+#[tokio::test]
+async fn the_chooser_offers_the_other_harnesses_and_picks_one() {
+    use atuin_client::ai_session::HarnessKind;
+    use atuin_common::harnesstools::continuation::Flattened;
+
+    use super::state::{InputAction, Pending};
+
+    let settings = settings();
+    let mut state = loaded(&settings, "", 1).await;
+    let row = state.selected().unwrap().clone();
+    assert_eq!(row.handle.harness, HarnessKind::ClaudeCode);
+
+    assert!(matches!(press(&mut state, &settings, "c"), InputAction::ChooseHarness(_)));
+    assert!(state.open_chooser(FakeResumer::default().continue_targets(&row)));
+    let flattened = Flattened {
+        tool_calls: 42,
+        tool_results: 42,
+        reasoning: 3,
+    };
+    state.flattened.insert(row.handle, Ok(flattened));
+    let out = text(&render(&mut state, &settings, 100, 30));
+    assert!(out.contains("Continue this Claude Code session in"), "{out}");
+    assert!(
+        out.contains("1 CX Codex") && out.contains("2 OC opencode") && out.contains("3 PI Pi"),
+        "{out}"
+    );
+    assert!(!out.contains("CC Claude Code"), "not its own harness: {out}");
+    assert!(out.contains("42 tool calls flattened to notes, reasoning dropped"), "{out}");
+
+    assert_eq!(press(&mut state, &settings, "down"), InputAction::Continue);
+    assert_eq!(press(&mut state, &settings, "x"), InputAction::Continue);
+    assert_eq!(
+        press(&mut state, &settings, "enter"),
+        InputAction::ContinueIn(HarnessKind::Opencode, Pending::Resume)
+    );
+    assert!(state.chooser.is_none());
+
+    state.tab_index = 0;
+    assert!(matches!(press(&mut state, &settings, "alt-c"), InputAction::ChooseHarness(_)));
+    assert!(state.open_chooser(vec![HarnessKind::Codex, HarnessKind::Pi]));
+    assert_eq!(
+        press(&mut state, &settings, "tab"),
+        InputAction::ContinueIn(HarnessKind::Codex, Pending::Edit)
+    );
+    assert!(state.open_chooser(vec![HarnessKind::Codex, HarnessKind::Pi]));
+    assert_eq!(
+        press(&mut state, &settings, "2"),
+        InputAction::ContinueIn(HarnessKind::Pi, Pending::Resume)
+    );
+    assert!(state.open_chooser(vec![HarnessKind::Codex]));
+    assert_eq!(press(&mut state, &settings, "esc"), InputAction::Continue);
+    assert!(state.chooser.is_none());
+    assert_eq!(state.input.as_str(), "", "no key reached the query");
+
+    assert!(!state.open_chooser(Vec::new()));
+    let (status, _) = state.status.clone().unwrap();
+    assert!(status.contains("no other harness is installed"), "{status}");
+}
+
+/// A continuation written out ends the picker the way its key asked, leaving the status line
+/// that says what was flattened; one that failed keeps the picker open, saying why.
+#[rstest]
+#[tokio::test]
+async fn a_written_continuation_resumes_or_edits_its_new_session() {
+    use atuin_client::ai_session::HarnessKind;
+
+    use super::resumer::NotResumable;
+    use super::state::Pending;
+    use super::{Outcome, finish_continuation};
+
+    let settings = settings();
+    let mut state = loaded(&settings, "", 1).await;
+    let row = state.selected().unwrap().clone();
+    let source = FakeSource::new();
+    let resumer = FakeResumer::default();
+
+    for (action, run) in [(Pending::Resume, true), (Pending::Edit, false)] {
+        state.continuing = Some((row.handle.clone(), HarnessKind::Codex, action));
+        let continued = resumer.continue_in(&source, &row, HarnessKind::Codex).await;
+        let (outcome, status) = finish_continuation(&mut state, &row.handle, continued).unwrap();
+        assert_eq!(
+            status,
+            "continuing in Codex: 42 tool calls flattened to notes, reasoning dropped"
+        );
+        let plan = match (outcome, run) {
+            (Outcome::Resume(plan), true) | (Outcome::Edit(plan), false) => plan,
+            (other, _) => panic!("{other:?}"),
+        };
+        assert_eq!(plan.program, "codex");
+        let id = format!("continued-{}", row.handle.session);
+        assert_eq!(plan.args, ["resume", id.as_str()]);
+    }
+
+    state.continuing = Some((row.handle.clone(), HarnessKind::Pi, Pending::Resume));
+    let failed = Err(NotResumable::NotInstalled("pi".to_owned()));
+    assert!(finish_continuation(&mut state, &row.handle, failed).is_none());
+    let (status, _) = state.status.clone().unwrap();
+    assert_eq!(status, "can't continue in Pi: `pi` isn't installed here (not found on PATH)");
+    // An answer for a continuation nobody is waiting on changes nothing.
+    let stray = Err(NotResumable::Unsupported("x"));
+    assert!(finish_continuation(&mut state, &row.handle, stray).is_none());
+}
+
+/// A session continued in another harness shows under the one it continues as a fork saying
+/// where it went on.
+#[rstest]
+fn a_continuation_in_the_tree_says_where_it_went_on() {
+    use atuin_client::ai_session::HarnessKind;
+
+    use super::source::Relation;
+
+    let root = fake::row(HarnessKind::ClaudeCode, "root", "fix the flaky test");
+    let mut child = fake::row(HarnessKind::Codex, "0199aaaa", "fix the flaky test");
+    child.parent = Some(root.handle.clone());
+    child.relation = Relation::Fork;
+    let mut themes = ThemeManager::new(None, None);
+    let theme = themes.load_theme("default", None);
+    let lines = super::panel::tree_lines(&root.handle, &[child], fake::now(), 90, theme);
+    let line: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+    assert!(
+        line.contains("fork") && line.contains("continued in Codex · fix the flaky test"),
+        "{line}"
+    );
+}
