@@ -32,7 +32,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ ${#skipped[@]} -gt 0 ]; then
-  echo "Not saving ${skipped[*]} on ${BUILDKITE_BRANCH:-?}: main's entry restored exactly."
+  echo "Not saving ${skipped[*]} on ${BUILDKITE_BRANCH:-?}: restored an exact entry."
 fi
 if [ "$saving" -gt 0 ]; then
   buildkite-agent cache save "${args[@]}"

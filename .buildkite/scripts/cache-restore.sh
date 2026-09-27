@@ -13,11 +13,12 @@ buildkite-agent cache restore "$@" 2>&1 | tee "$log" || status=$?
 #   Cache restored cache_id=target ... fallback_used=false   (exact entry)
 #   Cache restored cache_id=target ... fallback_used=true    (older entry)
 #   Cache not restored (not found) cache_id=target ...
-# If this format ever changes, nothing is recorded and branches just don't
-# save, as before.
-sed -n -E \
+# (with colour codes, stripped first). If this format ever changes, nothing
+# is recorded and branches just don't save, as before.
+esc=$(printf '\033')
+sed -E "s/${esc}\[[0-9;]*m//g" "$log" | sed -n -E \
   -e 's/.*Cache restored cache_id=([^ ]+) .*fallback_used=true.*/\1/p' \
   -e 's/.*Cache not restored .*cache_id=([^ ]+).*/\1/p' \
-  "$log" >>"${TMPDIR:-/tmp}/cache-inexact"
+  >>"${TMPDIR:-/tmp}/cache-inexact"
 rm -f "$log"
 exit "$status"
