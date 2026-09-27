@@ -9,8 +9,10 @@ use atuin_client::tui::Cursor;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
+use rstest::rstest;
 
 use super::fake::{self, FakeResumer, FakeSource};
+use super::resumer::Resumer;
 use super::source::SessionSource;
 use super::state::State;
 
@@ -27,6 +29,7 @@ fn settings() -> Settings {
 /// A picker state after its searches, previews and children have come back.
 async fn loaded(settings: &Settings, query: &str, tab: usize) -> State {
     let source = FakeSource::new();
+    let resumer = FakeResumer::default();
     let mut state = State::new(settings, fake::context(), "");
     state.now = Box::new(fake::now);
     state.input = Cursor::from(query.to_owned());
@@ -39,6 +42,7 @@ async fn loaded(settings: &Settings, query: &str, tab: usize) -> State {
         state.previews.insert(row.handle.clone(), source.preview(&row.handle).await.unwrap());
         let children = source.children(&row.handle, true).await.unwrap();
         state.children.insert(row.handle.clone(), children);
+        state.plans.insert(row.handle.clone(), resumer.plan(row).await);
     }
     state.tab_index = tab;
     state
@@ -48,7 +52,7 @@ fn render(state: &mut State, settings: &Settings, width: u16, height: u16) -> Bu
     let mut themes = ThemeManager::new(None, None);
     let theme = themes.load_theme("default", None);
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    terminal.draw(|f| state.draw(f, settings, theme, &FakeResumer::default())).unwrap();
+    terminal.draw(|f| state.draw(f, settings, theme)).unwrap();
     terminal.backend().buffer().clone()
 }
 
@@ -69,6 +73,7 @@ async fn frame(settings: &Settings, query: &str, tab: usize, w: u16, h: u16) -> 
     text(&render(&mut state, settings, w, h))
 }
 
+#[rstest]
 #[tokio::test]
 async fn full_frame_has_history_search_chrome() {
     let out = frame(&settings(), "", 0, 100, 30).await;
@@ -82,6 +87,7 @@ async fn full_frame_has_history_search_chrome() {
     assert!(out.lines().last().unwrap().trim_start().starts_with('╰'), "{out}");
 }
 
+#[rstest]
 #[tokio::test]
 async fn rows_show_badges_children_live_and_other_hosts() {
     let out = frame(&settings(), "", 0, 100, 30).await;
@@ -100,6 +106,7 @@ async fn rows_show_badges_children_live_and_other_hosts() {
     assert!(!out.contains("Explore: find"), "{out}");
 }
 
+#[rstest]
 #[tokio::test]
 async fn global_mode_shows_other_hosts_dimmed() {
     let mut state = loaded(&settings(), "", 0).await;
@@ -117,6 +124,7 @@ async fn global_mode_shows_other_hosts_dimmed() {
     assert!(out.contains("@laptop"));
 }
 
+#[rstest]
 #[tokio::test]
 async fn preview_shows_first_prompt_match_and_last_reply() {
     let out = frame(&settings(), "subagents", 0, 100, 30).await;
@@ -131,6 +139,7 @@ async fn preview_shows_first_prompt_match_and_last_reply() {
     assert!(out.contains("last   It depends on wall-clock ordering"), "{out}");
 }
 
+#[rstest]
 #[tokio::test]
 async fn match_highlights_are_bold() {
     let mut state = loaded(&settings(), "flaky", 0).await;
@@ -144,6 +153,7 @@ async fn match_highlights_are_bold() {
     assert!(!buf[(at("record"), y)].modifier.contains(ratatui::style::Modifier::BOLD));
 }
 
+#[rstest]
 #[tokio::test]
 async fn tokens_render_as_chips() {
     let mut state = loaded(&settings(), "h:codex flaky", 0).await;
@@ -159,13 +169,14 @@ async fn tokens_render_as_chips() {
     assert!(!out.contains("Add an interactive"));
 }
 
+#[rstest]
 #[tokio::test]
 async fn inspect_tab_shows_metadata_command_and_children() {
     let out = frame(&settings(), "", 1, 100, 30).await;
     assert!(out.contains("Session   7f3c9a12-5be0-4d7e-9c41-0a8e2b6f4d10  Claude Code"), "{out}");
     assert!(out.contains("Host      wintermute  (this host)"));
     assert!(out.contains(
-        "Resume    cd -- '/home/ellie/src/atuin' && claude --resume \
+        "Resume    cd -- /home/ellie/src/atuin && claude --resume \
          7f3c9a12-5be0-4d7e-9c41-0a8e2b6f4d10"
     ));
     assert!(out.contains("Children (3)"));
@@ -174,15 +185,17 @@ async fn inspect_tab_shows_metadata_command_and_children() {
     assert!(out.contains("<esc>: back"));
 }
 
+#[rstest]
 #[tokio::test]
 async fn inspect_explains_unresumable_sessions() {
     let mut s = settings();
     s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
     let mut state = loaded(&s, "theme preview", 1).await;
     let out = text(&render(&mut state, &s, 100, 30));
-    assert!(out.contains("not resumable: working directory"), "{out}");
+    assert!(out.contains("not resumable: the session's directory is gone"), "{out}");
 }
 
+#[rstest]
 #[tokio::test]
 async fn compact_and_inline_heights() {
     let mut s = settings();
@@ -200,6 +213,7 @@ async fn compact_and_inline_heights() {
     assert!(!out.contains('╭'));
 }
 
+#[rstest]
 #[tokio::test]
 async fn invert_puts_the_input_on_top() {
     let mut s = settings();
@@ -212,6 +226,7 @@ async fn invert_puts_the_input_on_top() {
     assert!(lines.last().unwrap().contains("<esc>: exit"));
 }
 
+#[rstest]
 #[tokio::test]
 async fn vim_normal_highlights_the_whole_row() {
     let mut s = settings();
@@ -224,6 +239,7 @@ async fn vim_normal_highlights_the_whole_row() {
     assert!(cell.modifier.contains(ratatui::style::Modifier::REVERSED));
 }
 
+#[rstest]
 #[tokio::test]
 async fn no_sessions_in_workspace_widens() {
     let mut ctx = fake::context();
@@ -241,6 +257,7 @@ async fn no_sessions_in_workspace_widens() {
     assert!(out.contains("@buildbox"));
 }
 
+#[rstest]
 #[tokio::test]
 async fn dump_frames() {
     let s = settings();

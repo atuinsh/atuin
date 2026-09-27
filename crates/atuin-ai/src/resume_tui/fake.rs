@@ -5,14 +5,16 @@
 //! hosts, a deleted worktree (missing cwd), and live sessions (updated in the last two minutes).
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use async_trait::async_trait;
 use atuin_client::ai_session::{HarnessKind, HarnessSession, NativeSessionId};
+use atuin_common::harnesstools::Harness as _;
+use atuin_common::harnesstools::resume::CwdRequirement;
 use time::{Duration, OffsetDateTime};
 
 use super::ResumeContext;
-use super::resumer::{ResumePlan, Resumer};
+use super::resumer::{NotResumable, ResumeError, ResumePlan, ResumeTarget, Resumer};
 use super::source::{Relation, SessionFilter, SessionPreview, SessionRow, SessionSource, Snippet};
 
 pub const THIS_HOST_ID: &str = "h-wintermute";
@@ -469,12 +471,12 @@ impl FakeSource {
         ));
         sessions.push(build(
             Spec {
-                harness: ClaudeCode,
+                harness: Pi,
                 id: "e5f7a9b1-3d4e-4f5a-9b8c-9d0e1f2a3b4c",
                 title: "Prototype a live theme preview",
                 cwd: DELETED_WORKTREE,
                 branch: Some("theme-preview"),
-                model: "claude-sonnet-4-5",
+                model: "gpt-5",
                 host: HERE,
                 age: d(4),
                 duration: h(1),
@@ -581,6 +583,16 @@ impl FakeSource {
         ));
 
         Self { sessions }
+    }
+
+    /// The same sessions, relative to `now` instead of [`now()`] (for `--demo`).
+    pub fn relative_to(mut self, now: OffsetDateTime) -> Self {
+        let shift = now - self::now();
+        for s in &mut self.sessions {
+            s.row.started_at += shift;
+            s.row.updated_at += shift;
+        }
+        self
     }
 
     fn children_of<'a>(
@@ -763,8 +775,8 @@ impl SessionSource for FakeSource {
     }
 }
 
-/// A [`Resumer`] for the fake sessions: the built-in commands, with the deleted worktree as the
-/// only missing directory (the fake paths don't exist on this machine).
+/// A [`Resumer`] for the fake sessions: the harnesses' real plans, with the deleted worktree as the
+/// only missing directory (none of the fake paths exist on this machine, so it can't check).
 pub struct FakeResumer {
     missing: HashSet<PathBuf>,
 }
@@ -777,32 +789,26 @@ impl Default for FakeResumer {
     }
 }
 
+#[async_trait]
 impl Resumer for FakeResumer {
-    fn plan(&self, session: &SessionRow) -> ResumePlan {
-        let id = session.handle.session.as_ref();
-        let command = match session.handle.harness {
-            HarnessKind::ClaudeCode => format!("claude --resume {id}"),
-            HarnessKind::Codex => format!("codex resume {id}"),
-            HarnessKind::Opencode => format!("opencode --session {id}"),
-            HarnessKind::Pi => format!("pi --session {id}"),
-            HarnessKind::Copilot | HarnessKind::Unknown => String::new(),
-        };
-        let cwd = session.cwd.clone();
-        let missing = cwd.as_deref().is_some_and(|c: &Path| self.missing.contains(c));
-        let blocked = if session.host_id != THIS_HOST_ID {
-            Some(format!("recorded on {}; only viewable here", session.hostname))
-        } else if missing {
-            Some(format!(
-                "working directory {} no longer exists",
-                cwd.as_deref().map(Path::display).map(|d| d.to_string()).unwrap_or_default()
-            ))
-        } else {
-            None
-        };
-        ResumePlan {
-            cwd: cwd.filter(|_| !missing),
-            command,
-            blocked,
+    async fn plan(&self, session: &SessionRow) -> Result<ResumePlan, NotResumable> {
+        if session.host_id != THIS_HOST_ID {
+            return Err(NotResumable::Remote(session.hostname.clone()));
         }
+        let kind = session.handle.harness;
+        let harness = kind.harness().ok_or(NotResumable::Unsupported("this"))?;
+        let mut target = ResumeTarget::new(session.handle.session.as_ref());
+        if let Some(cwd) = &session.cwd {
+            target = target.with_cwd(cwd);
+        }
+        let mut plan = harness.resume(&target, None)?;
+        // `ResumePlan::prepare`, against the fake filesystem.
+        if plan.cwd.as_ref().is_some_and(|c| self.missing.contains(c)) {
+            if plan.cwd_requirement == CwdRequirement::Required {
+                return Err(ResumeError::CwdMissing(plan.cwd).into());
+            }
+            plan.cwd = None;
+        }
+        Ok(plan)
     }
 }

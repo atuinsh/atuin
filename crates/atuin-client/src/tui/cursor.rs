@@ -317,7 +317,7 @@ mod cursor_tests {
         word_jump_mode: WordJumpMode::Subl,
     };
 
-    #[test]
+    #[rstest]
     fn right() {
         // ö is 2 bytes
         let mut c = Cursor::from(String::from("öaöböcödöeöfö"));
@@ -328,7 +328,7 @@ mod cursor_tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn left() {
         // ö is 2 bytes
         let mut c = Cursor::from(String::from("öaöböcödöeöfö"));
@@ -402,7 +402,7 @@ mod cursor_tests {
     fn subl_get_prev_word_pos(#[case] subject: &str, #[case] from: usize, #[case] to: usize) {
         assert_eq!(SUBL_WORD_JUMPER.get_prev_word_pos(subject, from), to);
     }
-    #[test]
+    #[rstest]
     fn pop() {
         let mut s = String::from("öaöböcödöeöfö");
         let mut c = Cursor::from(s.clone());
@@ -418,7 +418,7 @@ mod cursor_tests {
         assert_eq!(c1, c2);
     }
 
-    #[test]
+    #[rstest]
     fn back() {
         let mut c = Cursor::from(String::from("öaöböcödöeöfö"));
         // move to                                 ^
@@ -434,7 +434,7 @@ mod cursor_tests {
         assert_eq!(c.as_str(), "öcödöeöfö");
     }
 
-    #[test]
+    #[rstest]
     fn insert() {
         let mut c = Cursor::from(String::from("öaöböcödöeöfö"));
         // move to                                 ^

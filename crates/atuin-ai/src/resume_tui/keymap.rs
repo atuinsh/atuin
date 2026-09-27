@@ -228,6 +228,7 @@ pub fn inspector(settings: &Settings) -> Keymap {
 #[cfg(test)]
 mod tests {
     use atuin_client::tui::EvalContext;
+    use rstest::rstest;
 
     use super::*;
 
@@ -247,7 +248,7 @@ mod tests {
         km.resolve(&key(k), &ctx(3))
     }
 
-    #[test]
+    #[rstest]
     fn shared_bindings_match_the_history_search() {
         let settings = Settings::utc();
         for km in [emacs(&settings), vim_normal(&settings), vim_insert(&settings)] {
@@ -261,7 +262,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn enter_follows_enter_accept() {
         let mut settings = Settings::utc();
         settings.enter_accept = true;
@@ -271,7 +272,7 @@ mod tests {
         assert_eq!(resolve(&inspector(&settings), "enter"), Some(Action::ReturnCommand));
     }
 
-    #[test]
+    #[rstest]
     fn esc_exits_emacs_but_enters_normal_mode_from_insert() {
         let settings = Settings::utc();
         assert_eq!(resolve(&emacs(&settings), "esc"), Some(Action::Exit));
@@ -279,14 +280,14 @@ mod tests {
         assert_eq!(resolve(&vim_normal(&settings), "esc"), Some(Action::Exit));
     }
 
-    #[test]
+    #[rstest]
     fn ctrl_d_returns_original_only_on_empty_input() {
         let km = emacs(&Settings::utc());
         assert_eq!(km.resolve(&key("ctrl-d"), &ctx(0)), Some(Action::ReturnOriginal));
         assert_eq!(km.resolve(&key("ctrl-d"), &ctx(2)), Some(Action::DeleteCharAfter));
     }
 
-    #[test]
+    #[rstest]
     fn vim_normal_has_gg_sequence_and_plain_letters_are_unbound_in_emacs() {
         let settings = Settings::utc();
         let normal = vim_normal(&settings);

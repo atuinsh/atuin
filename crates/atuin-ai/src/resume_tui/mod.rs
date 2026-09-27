@@ -34,7 +34,7 @@ pub use resumer::{ResumePlan, Resumer};
 pub use source::{SessionRow, SessionSource};
 use tokio::sync::mpsc;
 
-use self::state::{InputAction, State};
+use self::state::{InputAction, Pending, State};
 use self::worker::{Request, Response};
 
 /// Where the picker runs: what its filter modes resolve against.
@@ -97,29 +97,43 @@ pub struct Picker<'a> {
     pub settings: &'a Settings,
     pub theme: &'a Theme,
     pub source: Arc<dyn SessionSource>,
-    pub resumer: &'a dyn Resumer,
+    pub resumer: Arc<dyn Resumer>,
     pub context: ResumeContext,
     pub query: String,
     /// Overrides `[ai.sessions] inline_height` and the top-level `inline_height`.
     pub inline_height: Option<u16>,
 }
 
+const PREVIEW: u8 = 0;
+const CHILDREN: u8 = 1;
+const PLAN: u8 = 2;
+
 /// Ask the worker for whatever the current view needs and doesn't have yet.
 fn request_details(state: &mut State, requests: &mpsc::UnboundedSender<Request>, subagents: bool) {
-    let Some(handle) = state.selected().map(|r| r.handle.clone()) else {
+    let Some(row) = state.selected().cloned() else {
         return;
     };
-    if !state.previews.contains_key(&handle) && state.requested.insert((handle.clone(), false)) {
+    let handle = row.handle.clone();
+    if !state.previews.contains_key(&handle) && state.requested.insert((handle.clone(), PREVIEW)) {
         let _ = requests.send(Request::Preview(handle.clone()));
     }
-    if state.tab_index == 1
-        && !state.children.contains_key(&handle)
-        && state.requested.insert((handle.clone(), true))
+    if state.tab_index == 1 {
+        if !state.children.contains_key(&handle)
+            && state.requested.insert((handle.clone(), CHILDREN))
+        {
+            let _ = requests.send(Request::Children {
+                session: handle,
+                include_subagents: subagents,
+            });
+        }
+        request_plan(state, requests, &row);
+    }
+}
+
+fn request_plan(state: &mut State, requests: &mpsc::UnboundedSender<Request>, row: &SessionRow) {
+    if !state.plans.contains_key(&row.handle) && state.requested.insert((row.handle.clone(), PLAN))
     {
-        let _ = requests.send(Request::Children {
-            session: handle,
-            include_subagents: subagents,
-        });
+        let _ = requests.send(Request::Plan(Box::new(row.clone())));
     }
 }
 
@@ -133,7 +147,7 @@ fn send_search(state: &mut State, requests: &mpsc::UnboundedSender<Request>) {
     }
 }
 
-/// Apply a worker response. Returns whether the screen changed.
+/// Apply a worker response.
 fn apply_response(
     state: &mut State,
     response: Response,
@@ -162,7 +176,40 @@ fn apply_response(
         Response::Children(handle, children) => {
             state.children.insert(handle, children);
         }
+        Response::Plan(handle, plan) => {
+            state.plans.insert(handle, plan);
+        }
     }
+}
+
+/// Carry out `action` for the selected session once its plan is known. `None` keeps the picker
+/// open (the plan is still coming, the session can't be resumed, or it was a copy).
+fn complete(state: &mut State, action: Pending) -> Option<Outcome> {
+    let row = state.selected()?;
+    let Some(plan) = state.plans.get(&row.handle) else {
+        state.pending = Some((row.handle.clone(), action));
+        state.status = Some(("locating the session…".to_owned(), Meaning::Annotation));
+        return None;
+    };
+    let outcome = match (plan, action) {
+        (Err(why), _) => {
+            state.status = Some((format!("can't resume: {why}"), Meaning::AlertError));
+            state.accept = false;
+            None
+        }
+        (Ok(plan), Pending::Copy) => {
+            let line = resumer::shell_line(plan);
+            state.status = Some(match set_clipboard(&line) {
+                Ok(()) => (format!("copied: {line}"), Meaning::AlertInfo),
+                Err(e) => (format!("copy failed: {e}"), Meaning::AlertError),
+            });
+            None
+        }
+        (Ok(plan), Pending::Resume) => Some(Outcome::Resume(plan.clone())),
+        (Ok(plan), Pending::Edit) => Some(Outcome::Edit(plan.clone())),
+    };
+    state.pending = None;
+    outcome
 }
 
 impl Picker<'_> {
@@ -194,65 +241,65 @@ impl Picker<'_> {
         })?;
 
         let mut state = State::new(settings, self.context, &self.query);
-        let (requests, mut responses) = worker::spawn(self.source);
+        let (requests, mut responses) = worker::spawn(self.source, self.resumer);
 
         if inline_height > 0 {
             terminal.clear()?;
         }
         // Paint before the first search answers, so the picker shows up immediately.
-        terminal.draw(|f| state.draw(f, settings, self.theme, self.resumer))?;
+        terminal.draw(|f| state.draw(f, settings, self.theme))?;
         send_search(&mut state, &requests);
 
         let mut events = EventStream::new();
         let outcome = 'render: loop {
             request_details(&mut state, &requests, sessions.show_subagents);
-            terminal.draw(|f| state.draw(f, settings, self.theme, self.resumer))?;
+            terminal.draw(|f| state.draw(f, settings, self.theme))?;
 
             tokio::select! {
                 event = events.next() => {
                     let Some(event) = event else { break Outcome::Cancelled };
                     let action = state.handle_input(settings, &event?);
-                    if !matches!(action, InputAction::Continue | InputAction::Redraw) {
-                        state.status = None;
-                    }
-                    match action {
-                        InputAction::Continue => {}
+                    let pending = match action {
+                        InputAction::Continue => None,
                         InputAction::Redraw => {
                             if state.tab_index != 1 {
                                 terminal.clear()?;
                             }
+                            None
                         }
-                        InputAction::Resume(index) | InputAction::ReturnCommand(index) => {
-                            if let Some(row) = state.results.get(index) {
-                                let plan = self.resumer.plan(row);
-                                if let Some(why) = &plan.blocked {
-                                    state.status =
-                                        Some((format!("can't resume: {why}"), Meaning::AlertError));
-                                    state.accept = false;
-                                } else if matches!(action, InputAction::Resume(_)) {
-                                    break 'render Outcome::Resume(plan);
-                                } else {
-                                    break 'render Outcome::Edit(plan);
-                                }
-                            }
-                        }
-                        InputAction::Copy(index) => {
-                            if let Some(row) = state.results.get(index) {
-                                let line = self.resumer.plan(row).shell_line();
-                                state.status = Some(match set_clipboard(&line) {
-                                    Ok(()) => (format!("copied: {line}"), Meaning::AlertInfo),
-                                    Err(e) => (format!("copy failed: {e}"), Meaning::AlertError),
-                                });
-                            }
-                        }
+                        InputAction::Resume(_) => Some(Pending::Resume),
+                        InputAction::ReturnCommand(_) => Some(Pending::Edit),
+                        InputAction::Copy(_) => Some(Pending::Copy),
                         InputAction::ReturnOriginal | InputAction::Exit => break Outcome::Cancelled,
+                    };
+                    if let Some(pending) = pending {
+                        if let Some(row) = state.selected().cloned() {
+                            request_plan(&mut state, &requests, &row);
+                        }
+                        if let Some(outcome) = complete(&mut state, pending) {
+                            break 'render outcome;
+                        }
                     }
                 }
                 response = responses.recv() => {
                     if let Some(response) = response {
                         apply_response(&mut state, response, &requests);
                     }
+                    // An enter/tab/ctrl-y waiting on this session's plan can finish now.
+                    if let Some((handle, pending)) = state.pending.clone()
+                        && state.plans.contains_key(&handle)
+                        && let Some(outcome) = complete(&mut state, pending)
+                    {
+                        break 'render outcome;
+                    }
                 }
+            }
+            // The selection moved away from a pending action: drop it.
+            if let Some((handle, _)) = &state.pending
+                && state.selected().is_none_or(|r| &r.handle != handle)
+            {
+                state.pending = None;
+                state.status = None;
             }
             send_search(&mut state, &requests);
         };

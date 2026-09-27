@@ -121,6 +121,8 @@ impl<A: Clone> Default for Keymap<A> {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::super::conditions::ConditionAtom;
     use super::*;
 
@@ -143,7 +145,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn generic_action_type_resolves() {
         let mut keymap = Keymap::new();
         let key = KeyInput::parse("left").unwrap();
@@ -157,7 +159,7 @@ mod tests {
         assert_eq!(keymap.resolve(&KeyInput::parse("right").unwrap(), &ctx(0, 0)), None);
     }
 
-    #[test]
+    #[rstest]
     fn generic_merge_overrides() {
         let key = KeyInput::parse("esc").unwrap();
         let mut base = Keymap::new();

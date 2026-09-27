@@ -8,6 +8,8 @@ pub type Keymap = atuin_client::tui::keymap::Keymap<Action>;
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::super::conditions::{ConditionAtom, EvalContext};
     use super::super::key::{KeyInput, SingleKey};
     use super::*;
@@ -24,7 +26,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn simple_binding_resolves() {
         let mut keymap = Keymap::new();
         let key = KeyInput::parse("ctrl-c").unwrap();
@@ -34,7 +36,7 @@ mod tests {
         assert_eq!(keymap.resolve(&key, &ctx), Some(Action::ReturnOriginal));
     }
 
-    #[test]
+    #[rstest]
     fn conditional_first_match_wins() {
         let mut keymap = Keymap::new();
         let key = KeyInput::parse("left").unwrap();
@@ -52,7 +54,7 @@ mod tests {
         assert_eq!(keymap.resolve(&key, &ctx), Some(Action::CursorLeft));
     }
 
-    #[test]
+    #[rstest]
     fn no_match_returns_none() {
         let keymap = Keymap::new();
         let key = KeyInput::parse("ctrl-c").unwrap();
@@ -60,7 +62,7 @@ mod tests {
         assert_eq!(keymap.resolve(&key, &ctx), None);
     }
 
-    #[test]
+    #[rstest]
     fn conditional_no_condition_matches_returns_none() {
         let mut keymap = Keymap::new();
         let key = KeyInput::parse("left").unwrap();
@@ -75,7 +77,7 @@ mod tests {
         assert_eq!(keymap.resolve(&key, &ctx), None);
     }
 
-    #[test]
+    #[rstest]
     fn has_sequence_starting_with() {
         let mut keymap = Keymap::new();
         let seq = KeyInput::parse("g g").unwrap();
@@ -88,7 +90,7 @@ mod tests {
         assert!(!keymap.has_sequence_starting_with(&h));
     }
 
-    #[test]
+    #[rstest]
     fn merge_overrides() {
         let mut base = Keymap::new();
         let key = KeyInput::parse("ctrl-c").unwrap();
@@ -103,7 +105,7 @@ mod tests {
         assert_eq!(base.resolve(&key, &ctx), Some(Action::Exit));
     }
 
-    #[test]
+    #[rstest]
     fn merge_preserves_unoverridden() {
         let mut base = Keymap::new();
         let key1 = KeyInput::parse("ctrl-c").unwrap();

@@ -89,9 +89,12 @@ impl AiSessionColumn {
 
 /// Per-harness resume command templates. Unset harnesses use the built-in command.
 ///
-/// Templates are run by the shell after `cd -- '<cwd>' &&`, with these placeholders replaced
-/// (shell-quoted):
+/// A template replaces the harness's program and arguments; the harness still decides whether a
+/// session can be resumed and from which directory (the command runs after `cd -- <cwd> &&`). It
+/// is split into words like a shell command line, then these placeholders are substituted inside
+/// their word (so never quote them):
 /// - `{id}`: the harness's native session id;
+/// - `{path}`: the session's native transcript (or database) on this machine;
 /// - `{cwd}`: the session's working directory.
 ///
 /// For example: `claude = "claude --resume {id} --permission-mode plan"`.
@@ -178,15 +181,17 @@ impl Default for AiSessions {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
+    #[rstest]
     fn empty_table_uses_defaults() {
         let parsed: AiSessions = toml::from_str("").unwrap();
         assert_eq!(parsed, AiSessions::default());
     }
 
-    #[test]
+    #[rstest]
     fn parses_every_field() {
         let parsed: AiSessions = toml::from_str(
             r#"

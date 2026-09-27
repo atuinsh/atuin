@@ -364,8 +364,9 @@ enter_accept = true
 ## Height of the inline picker. Defaults to the top-level inline_height.
 # inline_height = 40
 
-## Per-harness resume commands, run after `cd -- '<cwd>' &&`.
-## {id} is the native session id and {cwd} the working directory (both shell-quoted).
+## Per-harness resume commands, in place of the built-in ones (run after `cd -- <cwd> &&`).
+## {id} is the native session id, {path} its transcript on this machine and {cwd} its
+## working directory. Each is substituted within its word, so don't quote them.
 # [ai.sessions.resume]
 # claude = "claude --resume {id}"
 # codex = "codex resume {id}"

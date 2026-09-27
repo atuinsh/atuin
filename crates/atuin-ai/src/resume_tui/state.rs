@@ -16,6 +16,7 @@ use unicode_width::UnicodeWidthStr;
 use super::ResumeContext;
 use super::keymap::{Action, Keymap, KeymapSet};
 use super::query::{self, ParsedQuery};
+use super::resumer::{NotResumable, ResumePlan};
 use super::source::{SessionFilter, SessionPreview, SessionRow};
 
 pub const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
@@ -36,6 +37,14 @@ pub enum InputAction {
     Copy(usize),
     ReturnOriginal,
     Exit,
+}
+
+/// An action waiting for the selected session's resume plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pending {
+    Resume,
+    Edit,
+    Copy,
 }
 
 /// Why the filter shows more than the configured mode.
@@ -83,7 +92,11 @@ pub struct State {
 
     pub previews: HashMap<HarnessSession, SessionPreview>,
     pub children: HashMap<HarnessSession, Vec<SessionRow>>,
-    pub requested: HashSet<(HarnessSession, bool)>,
+    pub requested: HashSet<(HarnessSession, u8)>,
+    /// Resume plans, fetched for the selected session only (planning may walk directories).
+    pub plans: HashMap<HarnessSession, Result<ResumePlan, NotResumable>>,
+    /// An enter/tab/ctrl-y waiting for its session's plan.
+    pub pending: Option<(HarnessSession, Pending)>,
 
     /// A one-line message in the status row (copied, can't resume, search failed).
     pub status: Option<(String, Meaning)>,
@@ -126,6 +139,8 @@ impl State {
             previews: HashMap::new(),
             children: HashMap::new(),
             requested: HashSet::new(),
+            plans: HashMap::new(),
+            pending: None,
             status: None,
             original_input_empty: query.is_empty(),
             accept: false,
@@ -502,6 +517,7 @@ mod tests {
 
     use atuin_client::ai_session::HarnessKind;
     use crossterm::event::{KeyCode, KeyModifiers};
+    use rstest::rstest;
 
     use super::*;
     use crate::resume_tui::fake;
@@ -522,7 +538,7 @@ mod tests {
         (0..n).map(|i| fake::row(HarnessKind::ClaudeCode, &format!("s{i}"), "t")).collect()
     }
 
-    #[test]
+    #[rstest]
     fn default_mode_is_workspace_in_a_repo() {
         let state = state_in(fake::context());
         assert_eq!(state.mode, FilterMode::Workspace);
@@ -530,7 +546,7 @@ mod tests {
         assert_eq!(state.filter().cwd_prefix, Some(PathBuf::from(fake::REPO)));
     }
 
-    #[test]
+    #[rstest]
     fn default_mode_widens_outside_a_repo() {
         let mut ctx = fake::context();
         ctx.git_root = None;
@@ -542,7 +558,7 @@ mod tests {
         assert_eq!(state.filter().cwd_prefix, None);
     }
 
-    #[test]
+    #[rstest]
     fn empty_workspace_widens_to_global_once() {
         let mut state = state_in(fake::context());
         let (generation, mode, _) = state.next_search().unwrap();
@@ -563,7 +579,7 @@ mod tests {
         assert!(state.results.is_empty());
     }
 
-    #[test]
+    #[rstest]
     fn a_configured_mode_never_widens() {
         let mut settings = settings();
         settings.ai.sessions.filter_mode = Some(FilterMode::Workspace);
@@ -574,7 +590,7 @@ mod tests {
         assert_eq!(state.widened, None);
     }
 
-    #[test]
+    #[rstest]
     fn ctrl_r_cycles_available_modes_and_clears_widening() {
         let mut state = state_in(fake::context());
         let s = settings();
@@ -606,7 +622,7 @@ mod tests {
         assert_eq!(state.mode, FilterMode::Global);
     }
 
-    #[test]
+    #[rstest]
     fn modes_resolve_to_filters() {
         let mut state = state_in(fake::context());
         state.mode = FilterMode::Host;
@@ -622,7 +638,7 @@ mod tests {
         assert_eq!(filter.harnesses, vec![HarnessKind::Codex]);
     }
 
-    #[test]
+    #[rstest]
     fn stale_generations_are_dropped_and_the_old_list_kept() {
         let mut state = state_in(fake::context());
         let (g1, mode, _) = state.next_search().unwrap();
@@ -641,7 +657,7 @@ mod tests {
         assert_eq!(state.applied, g3);
     }
 
-    #[test]
+    #[rstest]
     fn unchanged_filter_does_not_search_again() {
         let mut state = state_in(fake::context());
         assert!(state.next_search().is_some());
@@ -651,7 +667,7 @@ mod tests {
         assert!(state.next_search().is_none());
     }
 
-    #[test]
+    #[rstest]
     fn alt_h_rewrites_the_input() {
         let mut state = state_in(fake::context());
         let s = settings();
@@ -662,7 +678,7 @@ mod tests {
         assert_eq!(state.input.as_str(), "flaky h:codex");
     }
 
-    #[test]
+    #[rstest]
     fn keys_map_to_outcomes() {
         let mut s = settings();
         s.enter_accept = true;
@@ -701,7 +717,7 @@ mod tests {
         assert_eq!(state.tab_index, 0);
     }
 
-    #[test]
+    #[rstest]
     fn typing_inserts_and_navigation_respects_invert() {
         let mut s = settings();
         let mut state = State::new(&s, fake::context(), "");
@@ -722,7 +738,7 @@ mod tests {
         assert_eq!(state.list.selected, 1);
     }
 
-    #[test]
+    #[rstest]
     fn vim_modes() {
         let mut s = settings();
         s.keymap_mode = KeymapMode::VimInsert;

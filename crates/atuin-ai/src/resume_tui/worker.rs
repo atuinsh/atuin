@@ -11,6 +11,7 @@ use atuin_client::ai_session::HarnessSession;
 use atuin_client::settings::AiSessionFilterMode as FilterMode;
 use tokio::sync::mpsc;
 
+use super::resumer::{NotResumable, ResumePlan, Resumer};
 use super::source::{SessionFilter, SessionPreview, SessionRow, SessionSource};
 
 #[derive(Debug)]
@@ -25,6 +26,8 @@ pub enum Request {
         session: HarnessSession,
         include_subagents: bool,
     },
+    /// Plan resuming a session (may walk the harness's session directories).
+    Plan(Box<SessionRow>),
 }
 
 #[derive(Debug)]
@@ -36,20 +39,23 @@ pub enum Response {
     },
     Preview(HarnessSession, SessionPreview),
     Children(HarnessSession, Vec<SessionRow>),
+    Plan(HarnessSession, Result<ResumePlan, NotResumable>),
 }
 
 /// Start the worker. It stops when the request sender is dropped.
 pub fn spawn(
     source: Arc<dyn SessionSource>,
+    resumer: Arc<dyn Resumer>,
 ) -> (mpsc::UnboundedSender<Request>, mpsc::UnboundedReceiver<Response>) {
     let (req_tx, req_rx) = mpsc::unbounded_channel();
     let (resp_tx, resp_rx) = mpsc::unbounded_channel();
-    tokio::spawn(run(source, req_rx, resp_tx));
+    tokio::spawn(run(source, resumer, req_rx, resp_tx));
     (req_tx, resp_rx)
 }
 
 async fn run(
     source: Arc<dyn SessionSource>,
+    resumer: Arc<dyn Resumer>,
     mut requests: mpsc::UnboundedReceiver<Request>,
     responses: mpsc::UnboundedSender<Response>,
 ) {
@@ -106,6 +112,7 @@ async fn run(
                     });
                 Response::Children(session, children)
             }
+            Request::Plan(row) => Response::Plan(row.handle.clone(), resumer.plan(&row).await),
         };
         if responses.send(response).is_err() {
             return;
@@ -115,12 +122,15 @@ async fn run(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::resume_tui::fake::FakeSource;
+    use rstest::rstest;
 
+    use super::*;
+    use crate::resume_tui::fake::{FakeResumer, FakeSource};
+
+    #[rstest]
     #[tokio::test]
-    async fn answers_searches_previews_and_children() {
-        let (tx, mut rx) = spawn(Arc::new(FakeSource::new()));
+    async fn answers_searches_previews_children_and_plans() {
+        let (tx, mut rx) = spawn(Arc::new(FakeSource::new()), Arc::new(FakeResumer::default()));
         tx.send(Request::Search {
             generation: 1,
             mode: FilterMode::Global,
@@ -156,5 +166,12 @@ mod tests {
             panic!("expected a preview");
         };
         assert!(preview.first_prompt.is_some() && preview.last_assistant.is_some());
+
+        tx.send(Request::Plan(Box::new(root.clone()))).unwrap();
+        let Some(Response::Plan(handle, plan)) = rx.recv().await else {
+            panic!("expected a plan");
+        };
+        assert_eq!(handle, root.handle);
+        assert_eq!(plan.unwrap().program, "claude");
     }
 }

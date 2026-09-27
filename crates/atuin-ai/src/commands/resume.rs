@@ -19,7 +19,7 @@ use eyre::{Result, bail};
 
 use crate::resume_tui::fake::{FakeResumer, FakeSource};
 use crate::resume_tui::interim::{SidecarSource, sidecar_path};
-use crate::resume_tui::resumer::TemplateResumer;
+use crate::resume_tui::resumer::{HarnessResumer, shell_line};
 use crate::resume_tui::{
     Outcome, Picker, ResumeContext, ResumePlan, Resumer, SessionRow, SessionSource,
 };
@@ -126,27 +126,26 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
     let output = cmd.output();
     let query = cmd.query();
 
-    let (context, source, resumer): (ResumeContext, Arc<dyn SessionSource>, Box<dyn Resumer>) =
+    let (context, source, resumer): (ResumeContext, Arc<dyn SessionSource>, Arc<dyn Resumer>) =
         if cmd.demo {
             (
                 crate::resume_tui::fake::context(),
-                Arc::new(FakeSource::new()),
-                Box::new(FakeResumer::default()),
+                Arc::new(FakeSource::new().relative_to(time::OffsetDateTime::now_utc())),
+                Arc::new(FakeResumer::default()),
             )
         } else {
             let context = ResumeContext::current().await?;
             let source = SidecarSource::open(&sidecar_path(), &context).await?;
             let resumer =
-                TemplateResumer::new(context.host_id.clone(), settings.ai.sessions.resume.clone());
-            (context, Arc::new(source), Box::new(resumer))
+                HarnessResumer::new(context.host_id.clone(), settings.ai.sessions.resume.clone());
+            (context, Arc::new(source), Arc::new(resumer))
         };
 
     if let Some(row) = direct_match(source.as_ref(), query.trim()).await? {
-        let plan = resumer.plan(&row);
-        if let Some(why) = &plan.blocked {
-            bail!("can't resume {}: {why}", row.handle.session);
-        }
-        return finish(Outcome::Resume(plan), output);
+        return match resumer.plan(&row).await {
+            Ok(plan) => finish(Outcome::Resume(plan), output),
+            Err(why) => bail!("can't resume {}: {why}", row.handle.session),
+        };
     }
 
     let mut themes = ThemeManager::new(settings.theme.debug, None);
@@ -155,7 +154,7 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
         settings: &settings,
         theme,
         source,
-        resumer: resumer.as_ref(),
+        resumer,
         context,
         query,
         inline_height: cmd.inline_height,
@@ -173,7 +172,7 @@ fn finish(outcome: Outcome, output: Output) -> Result<()> {
     };
     match output {
         Output::Widget => {
-            let line = plan.shell_line();
+            let line = shell_line(&plan);
             if run {
                 eprintln!("{ACCEPT_PREFIX}{line}");
             } else {
@@ -184,22 +183,18 @@ fn finish(outcome: Outcome, output: Output) -> Result<()> {
         Output::Exec if run => exec(&plan),
         Output::Print | Output::Exec => {
             let mut out = io::stdout().lock();
-            writeln!(out, "{}", plan.shell_line())?;
+            writeln!(out, "{}", shell_line(&plan))?;
             Ok(())
         }
     }
 }
 
-/// Change into the session's directory and replace this process with the harness, via the
-/// user's shell so templates can use shell syntax.
+/// Change into the session's directory and replace this process with the harness.
 fn exec(plan: &ResumePlan) -> Result<()> {
+    let mut command = std::process::Command::new(&plan.program);
+    command.args(&plan.args);
     if let Some(cwd) = &plan.cwd {
         std::env::set_current_dir(cwd)?;
-    }
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned());
-    let mut command = std::process::Command::new(shell);
-    command.arg("-c").arg(&plan.command);
-    if let Some(cwd) = &plan.cwd {
         // Keep $PWD in step, so harnesses that read it see the session's directory.
         command.env("PWD", cwd);
     }
@@ -208,7 +203,7 @@ fn exec(plan: &ResumePlan) -> Result<()> {
     {
         use std::os::unix::process::CommandExt;
         let err = command.exec();
-        bail!("failed to run {}: {err}", plan.command)
+        bail!("failed to run {}: {err}", plan.command())
     }
     #[cfg(not(unix))]
     {
@@ -241,6 +236,7 @@ mod tests {
         assert_eq!(looks_like_id(query), want);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn unique_prefix_and_exact_ids_resume_directly() {
         let source = FakeSource::new();
@@ -253,7 +249,7 @@ mod tests {
         assert!(direct_match(&source, "flaky").await.unwrap().is_none());
     }
 
-    #[test]
+    #[rstest]
     fn parses_flags() {
         let cli = Cli::try_parse_from([
             "resume",

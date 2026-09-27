@@ -25,7 +25,7 @@ use time::{OffsetDateTime, UtcOffset};
 use unicode_width::UnicodeWidthStr;
 
 use super::query::{TokenKind, TokenState};
-use super::resumer::Resumer;
+use super::resumer::shell_line;
 use super::source::{Relation, SessionRow, Snippet, harness_badge, harness_label};
 use super::state::{ListState, State, TAB_TITLES};
 
@@ -504,13 +504,7 @@ impl State {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub fn draw(
-        &mut self,
-        f: &mut Frame,
-        settings: &Settings,
-        theme: &Theme,
-        resumer: &dyn Resumer,
-    ) {
+    pub fn draw(&mut self, f: &mut Frame, settings: &Settings, theme: &Theme) {
         let area = f.area();
         f.render_widget(Clear, area);
         let compactness = to_compactness(area, settings);
@@ -614,7 +608,7 @@ impl State {
         };
 
         if self.tab_index == 1 {
-            self.draw_inspect(f, list_chunk, st, settings, theme, resumer);
+            self.draw_inspect(f, list_chunk, st, settings, theme);
             let guide = Line::from(vec![
                 Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(": back  "),
@@ -796,7 +790,6 @@ impl State {
         st: StyleState,
         settings: &Settings,
         theme: &Theme,
-        resumer: &dyn Resumer,
     ) {
         let block = match st.compactness {
             Compactness::Full if st.invert => Block::default()
@@ -833,7 +826,6 @@ impl State {
         let when = |ts: OffsetDateTime| format_when(ts, now, tz);
 
         let this_host = row.host_id == self.context.host_id;
-        let plan = resumer.plan(row);
         let mut lines = vec![
             field("Session", vec![
                 Span::styled(row.handle.session.to_string(), base.add_modifier(Modifier::BOLD)),
@@ -871,12 +863,13 @@ impl State {
             }),
             field("Messages", text(row.message_count.to_string())),
         ];
-        lines.push(match &plan.blocked {
-            None => field("Resume", vec![Span::styled(
-                plan.shell_line(),
+        lines.push(match self.plans.get(&row.handle) {
+            None => field("Resume", vec![Span::styled("…", key)]),
+            Some(Ok(plan)) => field("Resume", vec![Span::styled(
+                shell_line(plan),
                 style(theme, Meaning::Important).add_modifier(Modifier::BOLD),
             )]),
-            Some(why) => field("Resume", vec![Span::styled(
+            Some(Err(why)) => field("Resume", vec![Span::styled(
                 format!("not resumable: {why}"),
                 style(theme, Meaning::AlertError),
             )]),

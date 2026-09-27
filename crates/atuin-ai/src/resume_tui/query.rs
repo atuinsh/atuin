@@ -212,7 +212,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[rstest]
     fn plain_text_is_the_query() {
         let q = parse("  fix the   flaky test ");
         assert_eq!(q.text, "fix the flaky test");
@@ -220,7 +220,7 @@ mod tests {
         assert!(q.harnesses.is_empty());
     }
 
-    #[test]
+    #[rstest]
     fn tokens_are_parsed_out_anywhere() {
         let input = "h:claude flaky m:opus test b:main @build";
         let q = parse(input);
@@ -251,7 +251,7 @@ mod tests {
         assert_eq!(parse(input).harnesses, want);
     }
 
-    #[test]
+    #[rstest]
     fn unknown_harness_is_an_invalid_token_and_ignored() {
         let q = parse("h:vim bug");
         assert_eq!(q.tokens[0].state, TokenState::Invalid);
@@ -259,7 +259,7 @@ mod tests {
         assert_eq!(q.text, "bug");
     }
 
-    #[test]
+    #[rstest]
     fn empty_values_are_pending() {
         let q = parse("bug h: @");
         assert_eq!(q.tokens.len(), 2);
@@ -268,20 +268,20 @@ mod tests {
         assert_eq!(q.text, "bug");
     }
 
-    #[test]
+    #[rstest]
     fn backslash_makes_a_word_literal() {
         let q = parse(r"\@home \h:x");
         assert!(q.tokens.is_empty());
         assert_eq!(q.text, "@home h:x");
     }
 
-    #[test]
+    #[rstest]
     fn later_scalar_tokens_win() {
         let q = parse("m:sonnet m:opus");
         assert_eq!(q.model.as_deref(), Some("opus"));
     }
 
-    #[test]
+    #[rstest]
     fn multibyte_ranges_are_char_boundaries() {
         let input = "héllo @hôst";
         let q = parse(input);
@@ -305,7 +305,7 @@ mod tests {
         assert_eq!(cycle_harness(input), want);
     }
 
-    #[test]
+    #[rstest]
     fn alt_h_round_trips() {
         let mut s = String::from("bug");
         for _ in 0..5 {
