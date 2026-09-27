@@ -13,6 +13,7 @@ mod xonsh;
 mod zsh;
 
 #[derive(Parser, Debug)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Cmd {
     shell: Shell,
 
@@ -24,6 +25,9 @@ pub struct Cmd {
 
     #[clap(long, help = fl!("arg-init-disable-ai"))]
     disable_ai: bool,
+
+    #[clap(long, help = fl!("arg-init-disable-ai-resume"))]
+    disable_ai_resume: bool,
 }
 
 #[derive(Clone, Copy, ValueEnum, Debug)]
@@ -44,11 +48,15 @@ pub enum Shell {
     PowerShell,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 struct StaticInitOptions<'a> {
     pub enable_up_arrow: bool,
     pub enable_ctrl_r: bool,
     #[cfg_attr(not(feature = "ai"), allow(dead_code))]
     pub enable_ai: bool,
+    /// Bind ctrl-] to `atuin ai resume`.
+    #[cfg_attr(not(feature = "ai"), allow(dead_code))]
+    pub enable_ai_resume: bool,
     pub tmux: &'a Tmux,
 }
 
@@ -83,6 +91,7 @@ impl Cmd {
             enable_up_arrow: !self.disable_up_arrow,
             enable_ctrl_r: !self.disable_ctrl_r,
             enable_ai: !self.disable_ai && settings.ai.enabled.unwrap_or(true),
+            enable_ai_resume: !self.disable_ai_resume && settings.ai.enabled.unwrap_or(true),
             tmux: &settings.tmux,
         }
     }

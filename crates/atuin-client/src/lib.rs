@@ -24,3 +24,4 @@ pub mod plugin;
 pub mod record;
 pub mod settings;
 pub mod theme;
+pub mod tui;
