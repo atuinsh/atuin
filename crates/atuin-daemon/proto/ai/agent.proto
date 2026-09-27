@@ -176,4 +176,6 @@ message Session {
   Tokens tokens = 10;
   optional string title = 11;
   optional string preview = 12;
+  // The most recent assistant reply, clipped: how the session ended, or where it is now.
+  optional string last_reply = 13;
 }

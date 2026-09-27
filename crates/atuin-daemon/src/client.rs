@@ -577,12 +577,16 @@ impl AiClient {
         &mut self,
         query: &str,
         harness: Option<HarnessKind>,
+        cwd: Option<&str>,
+        any_term: bool,
         limit: u32,
     ) -> Result<tonic::Streaming<SearchSessionsMatch>> {
         let request = SearchSessionsRequest {
             query: query.to_owned(),
             limit,
             harness: harness.map(|h| h as i32),
+            cwd: cwd.map(str::to_owned),
+            any_term,
         };
         Ok(self.client.search_sessions(request).await?.into_inner())
     }

@@ -39,6 +39,11 @@ message SearchSessionsRequest {
   uint32 limit = 2;
   // Only search sessions from this harness. Absent searches every harness.
   optional ai.agent.HarnessKind harness = 3;
+  // Only match sessions whose directory is this one or beneath it. Absent searches everywhere.
+  optional string cwd = 4;
+  // Match messages containing any of the query's terms, each as a prefix, instead of all of them
+  // as whole words.
+  bool any_term = 5;
 }
 
 message SearchSessionsMatch {
@@ -46,6 +51,8 @@ message SearchSessionsMatch {
   common.HighlightedText title = 2;
   common.HighlightedText preview = 3;
   double score = 4;
+  // Position of the best-matching message in the session, in GetSession message order.
+  uint64 message_index = 5;
 }
 
 // Which sessions to follow. An absent field is not a filter.

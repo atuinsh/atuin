@@ -266,9 +266,11 @@ impl AiHarnessSessionCapture {
         &self,
         query: &str,
         harness: Option<HarnessKind>,
+        cwd: Option<&str>,
+        any_term: bool,
         limit: u32,
     ) -> impl Stream<Item = Result<SessionMatch, DbError>> + Send + 'static {
-        self.sink.sidecar.search(query, harness, limit)
+        self.sink.sidecar.search_in(query, harness, cwd, any_term, limit)
     }
 }
 

@@ -48,6 +48,7 @@ impl From<SessionMatch> for SearchSessionsMatch {
             title: Some(HighlightedTextProto::from(&value.title)),
             preview: Some(HighlightedTextProto::from(&value.preview)),
             score: value.score,
+            message_index: value.message_index,
         }
     }
 }
@@ -65,6 +66,7 @@ impl TryFrom<SearchSessionsMatch> for SessionMatch {
             session: Session::try_from(value.session.ok_or(ParseError::Missing("session"))?)?,
             title: highlighted(value.title, "title")?,
             preview: highlighted(value.preview, "preview")?,
+            message_index: value.message_index,
             score: value.score,
         })
     }
@@ -123,6 +125,7 @@ mod tests {
                 .build(),
             title: highlighter.as_highlighted("the \u{E000}build\u{E001}".to_owned()),
             preview: highlighter.as_highlighted("a preview".to_owned()),
+            message_index: 7,
             score: 2.5,
         }
     }
@@ -136,6 +139,7 @@ mod tests {
         assert_eq!(decoded.title.markers(), original.title.markers());
         assert_eq!(decoded.preview.raw(), original.preview.raw());
         assert!((decoded.score - original.score).abs() < f64::EPSILON);
+        assert_eq!(decoded.message_index, original.message_index);
     }
 
     #[rstest]

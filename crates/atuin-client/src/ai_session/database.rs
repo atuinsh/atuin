@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
-use atuin_common::db::sqlite::fts::{TextHighlighter, match_expression};
+use atuin_common::db::sqlite::fts::{TextHighlighter, match_any_expression, match_expression};
 use atuin_common::db::sqlite::{Sqlite, SqliteOpenOrCreateError};
 use atuin_common::db::{self};
 use atuin_common::harnesstools::session::{
@@ -77,6 +77,7 @@ struct SessionRow {
     title: Option<String>,
     title_source: Option<i64>,
     preview: Option<String>,
+    last_reply: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -182,9 +183,7 @@ struct SearchRow {
     session: SessionRow,
     match_content: String,
     match_content_z: Option<Vec<u8>>,
-    match_cwd: Option<String>,
-    match_git_branch: Option<String>,
-    match_model: Option<String>,
+    match_index: i64,
     score: f64,
 }
 
@@ -202,6 +201,7 @@ impl AiSessionDatabase {
         let db = Self { db };
         db.migrate().await?;
         db.reindex().await?;
+        db.backfill_last_reply().await?;
         Ok(db)
     }
 
@@ -321,6 +321,7 @@ impl AiSessionDatabase {
         // cleared title clears; the capture pipeline stamps every row with the ranked title.
         let title = msg.session_title.as_deref();
         let preview = Self::preview_text(msg);
+        let last_reply = Self::reply_text(msg);
 
         // Usage is not folded in here: it is attributed per model call below. A structural row
         // (usage, title, session context, a tree node with nothing to show) is no message.
@@ -328,8 +329,9 @@ impl AiSessionDatabase {
         db::query(
             "INSERT INTO sessions (
                 harness, session_id, parent_harness, parent_session_id, cwd, git_branch, model,
-                started_at, updated_at, message_count, title, title_source, preview
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                started_at, updated_at, message_count, title, title_source, preview, last_reply,
+                last_reply_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(harness, session_id) DO UPDATE SET
                 parent_harness = COALESCE(excluded.parent_harness, sessions.parent_harness),
                 parent_session_id = COALESCE(excluded.parent_session_id, \
@@ -344,7 +346,13 @@ impl AiSessionDatabase {
              ELSE sessions.title END,
                 title_source = CASE WHEN excluded.updated_at >= sessions.updated_at THEN \
              excluded.title_source ELSE sessions.title_source END,
-                preview = COALESCE(sessions.preview, excluded.preview)",
+                preview = COALESCE(sessions.preview, excluded.preview),
+                last_reply = CASE WHEN excluded.last_reply IS NOT NULL AND (sessions.last_reply_at \
+             IS NULL OR excluded.last_reply_at >= sessions.last_reply_at) THEN \
+             excluded.last_reply ELSE sessions.last_reply END,
+                last_reply_at = CASE WHEN excluded.last_reply IS NOT NULL AND \
+             (sessions.last_reply_at IS NULL OR excluded.last_reply_at >= sessions.last_reply_at) \
+             THEN excluded.last_reply_at ELSE sessions.last_reply_at END",
         )
         .bind(harness)
         .bind(session_id)
@@ -359,6 +367,8 @@ impl AiSessionDatabase {
         .bind(title)
         .bind(msg.session_title_source.map(Self::title_source_repr))
         .bind(preview)
+        .bind(last_reply.as_deref())
+        .bind(last_reply.as_ref().map(|_| timestamp))
         .execute(&mut *tx)
         .await?;
 
@@ -567,8 +577,8 @@ impl AiSessionDatabase {
         let row: Option<SessionRow> = db::query_as(
             "SELECT harness, session_id, parent_harness, parent_session_id, cwd, git_branch, \
              model, started_at, updated_at, message_count, usage_input, usage_output, \
-             usage_cache_read, usage_cache_write, usage_reasoning, title, title_source, preview \
-             FROM sessions WHERE harness = ? AND session_id = ?",
+             usage_cache_read, usage_cache_write, usage_reasoning, title, title_source, preview, \
+             last_reply FROM sessions WHERE harness = ? AND session_id = ?",
         )
         .bind(session.harness as i64)
         .bind(session.session.as_ref())
@@ -585,8 +595,8 @@ impl AiSessionDatabase {
         let mut sql = String::from(
             "SELECT harness, session_id, parent_harness, parent_session_id, cwd, git_branch, \
              model, started_at, updated_at, message_count, usage_input, usage_output, \
-             usage_cache_read, usage_cache_write, usage_reasoning, title, title_source, preview \
-             FROM sessions WHERE 1 = 1",
+             usage_cache_read, usage_cache_write, usage_reasoning, title, title_source, preview, \
+             last_reply FROM sessions WHERE 1 = 1",
         );
 
         if harness.is_some() {
@@ -644,15 +654,37 @@ impl AiSessionDatabase {
         harness: Option<HarnessKind>,
         limit: u32,
     ) -> impl Stream<Item = Result<SessionMatch, DbError>> + Send + 'static {
+        self.search_in(query, harness, None, false, limit)
+    }
+
+    /// [`Self::search`], optionally restricted to sessions whose directory is `cwd` or beneath it.
+    /// The session's directory, not each message's: some harnesses (Codex) record the cwd only on
+    /// metadata rows, never on the prompts and replies that actually match.
+    pub fn search_in(
+        &self,
+        query: &str,
+        harness: Option<HarnessKind>,
+        cwd: Option<&str>,
+        any_term: bool,
+        limit: u32,
+    ) -> impl Stream<Item = Result<SessionMatch, DbError>> + Send + 'static {
         let pool = self.db.pool().clone();
         let query = query.to_owned();
+        let cwd = cwd.map(|c| c.trim_end_matches('/').to_owned());
 
         async_stream::try_stream! {
-            let Some(expr) = match_expression(&query) else {
+            let expr = if any_term { match_any_expression(&query) } else { match_expression(&query) };
+            let Some(expr) = expr else {
                 return;
             };
 
             let harness_clause = if harness.is_some() { " AND m.harness = ?" } else { "" };
+            let cwd_clause = if cwd.is_some() {
+                " AND EXISTS (SELECT 1 FROM sessions cs WHERE cs.id = m.session \
+                 AND (cs.cwd = ? OR substr(cs.cwd, 1, length(?) + 1) = ? || '/'))"
+            } else {
+                ""
+            };
             let limit_clause = if limit == 0 { "" } else { " LIMIT ?" };
 
             // messages_fts is contentless: it can rank (bm25) but cannot render highlight() or
@@ -663,16 +695,18 @@ impl AiSessionDatabase {
                  SELECT messages_fts.rowid AS rowid, m.session AS sid, \
                  -bm25(messages_fts) AS score \
                  FROM messages_fts JOIN messages m ON m.rowid = messages_fts.rowid \
-                 WHERE messages_fts MATCH ?{harness_clause}), \
+                 WHERE messages_fts MATCH ?{harness_clause}{cwd_clause}), \
                  best AS (SELECT rowid, max(score) AS score FROM ranked \
                  GROUP BY sid ORDER BY score DESC{limit_clause}) \
                  SELECT s.harness, s.session_id, s.parent_harness, s.parent_session_id, s.cwd, \
                  s.git_branch, s.model, s.started_at, s.updated_at, s.message_count, \
                  s.usage_input, s.usage_output, s.usage_cache_read, s.usage_cache_write, \
                  s.usage_reasoning, s.title, s.title_source, \
-                 s.preview, \
-                 m.content AS match_content, m.content_z AS match_content_z, m.cwd AS match_cwd, \
-                 m.git_branch AS match_git_branch, m.model AS match_model, \
+                 s.preview, s.last_reply, \
+                 m.content AS match_content, m.content_z AS match_content_z, \
+                 (SELECT count(*) FROM messages p WHERE p.session = m.session \
+                 AND (p.timestamp < m.timestamp \
+                 OR (p.timestamp = m.timestamp AND p.id < m.id))) AS match_index, \
                  best.score AS score FROM best \
                  JOIN messages m ON m.rowid = best.rowid \
                  JOIN sessions s ON s.id = m.session \
@@ -683,6 +717,9 @@ impl AiSessionDatabase {
             if let Some(harness) = harness {
                 stmt = stmt.bind(harness as i64);
             }
+            if let Some(cwd) = cwd {
+                stmt = stmt.bind(cwd.clone()).bind(cwd.clone()).bind(cwd);
+            }
             if limit != 0 {
                 stmt = stmt.bind(i64::from(limit));
             }
@@ -691,13 +728,9 @@ impl AiSessionDatabase {
             let mut rows = stmt.fetch(&pool);
             while let Some(row) = rows.try_next().await? {
                 let title = row.session.title.clone().unwrap_or_default();
-                let body = Self::body_from_parts(
-                    row.match_content,
-                    row.match_content_z,
-                    row.match_cwd.as_deref(),
-                    row.match_git_branch.as_deref(),
-                    row.match_model.as_deref(),
-                )
+                // Index the metadata (cwd, branch, model) but leave it out of the preview: callers
+                // show it separately, and appended it only reads as noise at the end of a snippet.
+                let body = Self::body_from_parts(row.match_content, row.match_content_z, None, None, None)
                 .unwrap_or_else(|err| {
                     warn!(?err, "failed to decode matched ai-session message; empty preview");
                     String::new()
@@ -712,6 +745,7 @@ impl AiSessionDatabase {
                     title: highlighter.as_highlighted(highlighter.sanitize(&title).into_owned()),
                     preview: highlighter
                         .as_highlighted(highlighter.sanitize(&preview).into_owned()),
+                    message_index: u64::try_from(row.match_index).unwrap_or(0),
                     score: row.score,
                 };
             }
@@ -927,13 +961,82 @@ impl AiSessionDatabase {
         Ok((String::new(), Some(compressed)))
     }
 
+    /// Fill `last_reply` for sessions projected before the column existed: appends skip messages
+    /// already present, so a replay alone never reaches them. Each session is scanned once;
+    /// `last_reply_at = 0` marks one with no assistant text so it is not rescanned.
+    async fn backfill_last_reply(&self) -> Result<(), DbError> {
+        let pool = self.db.pool();
+        let pending: Vec<i64> =
+            db::query_scalar("SELECT id FROM sessions WHERE last_reply_at IS NULL")
+                .fetch_all(pool)
+                .await?;
+        let assistant = serde_json::to_string(&Role::Assistant)?;
+        for session in pending {
+            let mut found = None;
+            {
+                let mut rows = db::query_as::<_, (String, Option<Vec<u8>>, i64)>(
+                    "SELECT content, content_z, timestamp FROM messages WHERE session = ? AND \
+                     role = ? ORDER BY timestamp DESC, id DESC",
+                )
+                .bind(session)
+                .bind(&assistant)
+                .fetch(pool);
+                while let Some((content, content_z, timestamp)) = rows.try_next().await? {
+                    let Ok(contents) = Self::read_content(content, content_z) else {
+                        continue;
+                    };
+                    if let Some(reply) = Self::reply_from(&contents) {
+                        found = Some((reply, timestamp));
+                        break;
+                    }
+                }
+            }
+            let (reply, at) = found.map_or((None, 0), |(reply, at)| (Some(reply), at));
+            db::query("UPDATE sessions SET last_reply = ?, last_reply_at = ? WHERE id = ?")
+                .bind(reply)
+                .bind(at)
+                .bind(session)
+                .execute(pool)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// The text of an assistant message, clipped for storage, or `None` for any other message.
+    fn reply_text(msg: &Message) -> Option<String> {
+        if msg.role != Role::Assistant {
+            return None;
+        }
+        Self::reply_from(&msg.content)
+    }
+
+    fn reply_from(content: &[Content]) -> Option<String> {
+        const MAX_CHARS: usize = 600;
+        let text = content
+            .iter()
+            .filter_map(|content| match content {
+                Content::Text(text) => Some(text.trim()),
+                _ => None,
+            })
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if text.is_empty() {
+            return None;
+        }
+        Some(match text.char_indices().nth(MAX_CHARS) {
+            Some((at, _)) => format!("{}…", &text[..at]),
+            None => text,
+        })
+    }
+
     fn preview_text(msg: &Message) -> Option<String> {
         if msg.role != Role::User {
             return None;
         }
 
         msg.content.iter().find_map(|content| match content {
-            Content::Text(text) => Some(text.clone()),
+            Content::Text(text) => super::human_prompt(text),
             _ => None,
         })
     }
@@ -1329,6 +1432,7 @@ impl AiSessionDatabase {
             .title(row.title)
             .title_source(row.title_source.and_then(Self::title_source_from_repr))
             .preview(row.preview)
+            .last_reply(row.last_reply)
             .build())
     }
 }
@@ -1401,6 +1505,7 @@ mod tests {
             .execute(pool)
             .await
             .unwrap();
+        sqlx::raw_sql(include_str!("migrations/0003_last_reply.sql")).execute(pool).await.unwrap();
 
         let db = AiSessionDatabase { db: sqlite };
         let hits: Vec<SessionMatch> = db.search("hello", None, 0).try_collect().await.unwrap();
@@ -1903,6 +2008,135 @@ mod tests {
             db.search("shared", Some(HarnessKind::Codex), 0).try_collect().await.unwrap();
         assert_eq!(only_codex.len(), 1);
         assert_eq!(only_codex[0].session.handle, codex);
+    }
+
+    fn reply_in(session: &HarnessSession, index: i64, text: &str) -> Message {
+        let mut msg = message_in(session, index, text);
+        msg.role = Role::Assistant;
+        msg
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn last_reply_is_the_newest_assistant_text_whatever_the_arrival_order() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        db.append(&reply_in(&session, 2, "all tests pass now")).await.unwrap();
+        db.append(&reply_in(&session, 1, "looking into it")).await.unwrap();
+        db.append(&message_in(&session, 3, "thanks")).await.unwrap();
+
+        let s = db.get_session(&session).await.unwrap().unwrap();
+        assert_eq!(s.last_reply.as_deref(), Some("all tests pass now"));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn open_backfills_last_reply_for_sessions_projected_before_it_existed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ai.db");
+        let session = sample_handle();
+        {
+            let db = AiSessionDatabase::open(&path).await.unwrap();
+            db.append(&reply_in(&session, 1, "the fix is in")).await.unwrap();
+            db.append(&message_in(&session, 2, "great")).await.unwrap();
+            db::query("UPDATE sessions SET last_reply = NULL, last_reply_at = NULL")
+                .execute(db.db.pool())
+                .await
+                .unwrap();
+            db.db.pool().close().await;
+        }
+
+        let db = AiSessionDatabase::open(&path).await.unwrap();
+        let s = db.get_session(&session).await.unwrap().unwrap();
+        assert_eq!(s.last_reply.as_deref(), Some("the fix is in"));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn any_term_search_matches_some_words_and_prefixes() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        db.append(&message_in(&sample_handle(), 0, "the deployment failed")).await.unwrap();
+
+        let strict: Vec<_> =
+            db.search_in("deploy broken", None, None, false, 0).try_collect().await.unwrap();
+        assert!(strict.is_empty(), "no message has both whole words");
+        let loose: Vec<_> =
+            db.search_in("deploy broken", None, None, true, 0).try_collect().await.unwrap();
+        assert_eq!(loose.len(), 1, "`deploy` matches `deployment` as a prefix");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_in_filters_by_directory_and_its_children_only() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let in_dir = |id: &str, cwd: &str| {
+            let mut msg = message_in(&handle(HarnessKind::ClaudeCode, id), 0, "shared keyword");
+            msg.cwd = Some(std::path::PathBuf::from(cwd));
+            msg
+        };
+        for msg in [
+            in_dir("root", "/work/atuin"),
+            in_dir("child", "/work/atuin/crates"),
+            in_dir("sibling", "/work/atuin.sh"),
+        ] {
+            db.append(&msg).await.unwrap();
+        }
+
+        let mut found: Vec<String> = db
+            .search_in("shared", None, Some("/work/atuin/"), false, 0)
+            .map_ok(|m| m.session.handle.session.as_ref().to_owned())
+            .try_collect()
+            .await
+            .unwrap();
+        found.sort();
+        assert_eq!(found, ["child", "root"]);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_in_uses_the_session_directory_not_the_message_one() {
+        // Codex records cwd on a metadata row; the prompt that matches carries none.
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = handle(HarnessKind::Codex, "codex");
+        let mut meta = message_in(&session, 0, "");
+        meta.cwd = Some(std::path::PathBuf::from("/work/terminal"));
+        db.append(&meta).await.unwrap();
+        db.append(&message_in(&session, 1, "osc hyperlink bug")).await.unwrap();
+
+        let hits: Vec<_> = db
+            .search_in("hyperlink", None, Some("/work/terminal"), false, 0)
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_reports_the_matched_message_index() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = handle(HarnessKind::ClaudeCode, "s");
+        for (index, text) in (0..).zip(["first", "second", "needle here", "last"]) {
+            db.append(&message_in(&session, index, text)).await.unwrap();
+        }
+
+        let hits = search(&db, "needle").await;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].message_index, 2);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_preview_leaves_out_message_metadata() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let mut msg = message_in(&sample_handle(), 0, "the needle");
+        msg.cwd = Some(std::path::PathBuf::from("/some/project"));
+        db.append(&msg).await.unwrap();
+
+        let hit = &search(&db, "needle").await[0];
+        assert!(!hit.preview.to_plain().text.contains("/some/project"));
+        // The metadata is still searchable.
+        assert_eq!(search(&db, "project").await.len(), 1);
     }
 
     #[rstest]

@@ -288,6 +288,7 @@ impl From<DomainSession> for Session {
             tokens: Some(value.usage),
             title: value.title,
             preview: value.preview,
+            last_reply: value.last_reply,
         }
     }
 }
@@ -316,6 +317,7 @@ impl TryFrom<Session> for DomainSession {
             title: value.title,
             title_source: None,
             preview: value.preview,
+            last_reply: value.last_reply,
         })
     }
 }
@@ -493,11 +495,12 @@ mod tests {
             arb_usage(),
             prop::option::of(".{0,8}"),
             prop::option::of(".{0,8}"),
+            prop::option::of(".{0,8}"),
         );
         (handles, summary).prop_map(
             |(
                 (handle, parent, cwd, git_branch, model),
-                (started_at, updated_at, message_count, usage, title, preview),
+                (started_at, updated_at, message_count, usage, title, preview, last_reply),
             )| DomainSession {
                 handle,
                 parent,
@@ -511,6 +514,7 @@ mod tests {
                 title,
                 title_source: None,
                 preview,
+                last_reply,
             },
         )
     }

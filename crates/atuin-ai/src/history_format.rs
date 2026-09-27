@@ -11,6 +11,11 @@ pub fn format_last_command(history: &History, local_offset: UtcOffset) -> String
     )
 }
 
+/// How much of a command a search result shows. Agent-run commands are often multi-kilobyte
+/// heredocs or scripts; shown whole, a page of 30 results can run past 100k characters, which
+/// floods a model's context for what is a lookup. The opening shows what the command was.
+const SEARCH_RESULT_COMMAND_CHARS: usize = 600;
+
 pub fn format_history_search_result(
     ordinal: usize,
     history: &History,
@@ -20,9 +25,19 @@ pub fn format_history_search_result(
         "## #{}. (History ID: {}):\n`{}`\n{}\n",
         ordinal,
         history.id,
-        history.command,
+        clip_command(&history.command),
         format_history_metadata(history, local_offset)
     )
+}
+
+fn clip_command(command: &str) -> std::borrow::Cow<'_, str> {
+    match command.char_indices().nth(SEARCH_RESULT_COMMAND_CHARS) {
+        Some((at, _)) => {
+            let rest = command[at..].chars().count();
+            format!("{}… [+{rest} chars]", &command[..at]).into()
+        }
+        None => command.into(),
+    }
 }
 
 fn format_history_metadata(history: &History, local_offset: UtcOffset) -> String {
@@ -89,6 +104,18 @@ mod tests {
             shell: Some("zsh".into()),
             author_kind: None,
         }
+    }
+
+    #[test]
+    fn search_results_clip_long_commands() {
+        let mut long = history(0);
+        long.command = format!("cat <<'EOF'\n{}\nEOF", "x".repeat(5_000));
+        let out = format_history_search_result(1, &long, UtcOffset::UTC);
+        assert!(out.len() < 1_000, "{}", out.len());
+        assert!(out.contains("… [+4"), "{out}");
+        assert!(
+            format_history_search_result(1, &history(0), UtcOffset::UTC).contains("`cargo test`")
+        );
     }
 
     #[test]

@@ -314,7 +314,7 @@ async fn search(
     style: Style,
 ) -> Result<()> {
     let matches: Vec<SessionMatch> = client
-        .search_sessions(query, harness, limit)
+        .search_sessions(query, harness, None, false, limit)
         .await?
         .map(|m| Ok::<_, eyre::Report>(SessionMatch::try_from(m?)?))
         .try_collect()
@@ -562,7 +562,7 @@ async fn resolve(client: &mut AiClient, selector: &str) -> Result<HarnessSession
 }
 
 /// Pure selector logic, split out from the RPC so it can be tested directly.
-fn select_session(sessions: Vec<Session>, selector: &str) -> Result<HarnessSession> {
+pub fn select_session(sessions: Vec<Session>, selector: &str) -> Result<HarnessSession> {
     if selector.eq_ignore_ascii_case("latest") {
         // The daemon lists newest-first, so the first entry is the most recent.
         let latest =
@@ -1082,6 +1082,8 @@ struct SearchMatchJson {
     score: f64,
     title: HighlightJson,
     preview: HighlightJson,
+    /// Position of the best-matching message in the session, as numbered by `show`.
+    message_index: u64,
 }
 
 impl From<&HighlightedString> for HighlightJson {
@@ -1101,6 +1103,7 @@ impl From<&SessionMatch> for SearchMatchJson {
             score: m.score,
             title: HighlightJson::from(&m.title),
             preview: HighlightJson::from(&m.preview),
+            message_index: m.message_index,
         }
     }
 }
@@ -1487,12 +1490,14 @@ mod tests {
             session: session(HarnessKind::ClaudeCode, "abc"),
             title: highlighter.as_highlighted("the \u{E000}build\u{E001}".to_owned()),
             preview: highlighter.as_highlighted(String::new()),
+            message_index: 4,
             score: 2.5,
         };
 
         let v = serde_json::to_value(SearchMatchJson::from(&m)).unwrap();
         assert_eq!(v["session"]["session_id"], "abc");
         assert_eq!(v["score"], 2.5);
+        assert_eq!(v["message_index"], 4);
         assert_eq!(v["title"]["text"], "the build");
         assert_eq!(v["title"]["matches"], json!([[4, 9]]));
         assert!(v["preview"].get("matches").is_none(), "no matches are omitted, not empty");

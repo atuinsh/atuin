@@ -77,6 +77,16 @@ pub fn match_expression(input: &str) -> Option<String> {
         .reduce(|expr, term| format!("{expr} {term}"))
 }
 
+/// A looser [`match_expression`]: any term may match, and each as a prefix (`"deploy"*` also
+/// matches `deployment`). For a fallback when no single row contains every term.
+#[must_use]
+pub fn match_any_expression(input: &str) -> Option<String> {
+    input
+        .split_whitespace()
+        .map(|term| format!("\"{}\"*", term.replace('"', "\"\"")))
+        .reduce(|expr, term| format!("{expr} OR {term}"))
+}
+
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
@@ -87,6 +97,15 @@ mod tests {
     use sqlx::Row;
 
     use super::*;
+
+    #[rstest]
+    #[case::single("deploy", Some(r#""deploy"*"#))]
+    #[case::many("key  perms", Some(r#""key"* OR "perms"*"#))]
+    #[case::quote(r#"a"b"#, Some(r#""a""b"*"#))]
+    #[case::blank("   ", None)]
+    fn any_expression_ors_prefix_terms(#[case] input: &str, #[case] want: Option<&str>) {
+        assert_eq!(match_any_expression(input).as_deref(), want);
+    }
 
     /// Insert `body` (sanitized) into an in-memory FTS5 table, then return the `highlight()` output
     /// for a query matching `term`. `bind_highlight` lives only on `Query`, so this fetches via

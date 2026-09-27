@@ -117,9 +117,18 @@ impl GrpcService for Service {
         let request = request.into_inner();
         let harness = HarnessFilterRequest::harness(&request)?;
 
-        let stream = self.capture.search(&request.query, harness, request.limit).map(|result| {
-            result.map(SearchSessionsMatch::from).map_err(|e| Status::internal(e.to_string()))
-        });
+        let stream = self
+            .capture
+            .search(
+                &request.query,
+                harness,
+                request.cwd.as_deref(),
+                request.any_term,
+                request.limit,
+            )
+            .map(|result| {
+                result.map(SearchSessionsMatch::from).map_err(|e| Status::internal(e.to_string()))
+            });
 
         Ok(Response::new(Box::pin(stream)))
     }
@@ -248,6 +257,8 @@ mod tests {
                 query: "anything".to_owned(),
                 limit: 0,
                 harness: None,
+                cwd: None,
+                any_term: false,
             }))
             .await
             .expect("search over an empty sidecar succeeds");
@@ -267,6 +278,8 @@ mod tests {
                 query: "x".to_owned(),
                 limit: 0,
                 harness: Some(9999),
+                cwd: None,
+                any_term: false,
             }))
             .await;
 

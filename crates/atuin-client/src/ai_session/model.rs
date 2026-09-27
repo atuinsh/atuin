@@ -123,6 +123,9 @@ pub struct Session {
     pub title_source: Option<TitleSource>,
     #[builder(default)]
     pub preview: Option<String>,
+    /// The session's most recent assistant reply, clipped: how it ended, or where it is now.
+    #[builder(default)]
+    pub last_reply: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -130,6 +133,8 @@ pub struct SessionMatch {
     pub session: Session,
     pub title: HighlightedString,
     pub preview: HighlightedString,
+    /// Position of the best-matching message within its session, in transcript order.
+    pub message_index: u64,
     pub score: f64,
 }
 
