@@ -516,8 +516,7 @@ steps:
   # main's install.sh), so it runs on main builds only, as before.
   - label: ":inbox_tray: Installer (Linux)"
     key: install
-    # TEMPORARY: also on the review-fixes branch to validate the pty fix.
-    if: build.branch == pipeline.default_branch || build.branch == "ci/buildkite-review-fixes"
+    if: build.branch == pipeline.default_branch
     notify:
       - github_check:
           name: "buildkite/install"
@@ -530,8 +529,7 @@ steps:
 
   - label: ":inbox_tray: Installer (macOS)"
     key: install-macos
-    # TEMPORARY: also on the review-fixes branch to validate the pty fix.
-    if: build.branch == pipeline.default_branch || build.branch == "ci/buildkite-review-fixes"
+    if: build.branch == pipeline.default_branch
     notify:
       - github_check:
           name: "buildkite/install-macos"
