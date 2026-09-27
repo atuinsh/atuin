@@ -97,6 +97,10 @@ impl AiSessionColumn {
 /// - `{path}`: the session's native transcript (or database) on this machine;
 /// - `{cwd}`: the session's working directory.
 ///
+/// The substituted value stays one argument of the harness command, but it is not quoted for a
+/// shell, so never hand a placeholder to another shell (`sh -c "cd {cwd} && …"`): that shell
+/// would split and expand it.
+///
 /// For example: `claude = "claude --resume {id} --permission-mode plan"`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
