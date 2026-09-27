@@ -6,6 +6,7 @@ use enum_dispatch::enum_dispatch;
 
 pub mod ccode;
 pub mod codex;
+pub mod continuation;
 mod json_hooks;
 pub mod opencode;
 pub mod pi;
