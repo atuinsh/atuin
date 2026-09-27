@@ -7,8 +7,9 @@
 # tools, and the `section` log-group helper). Caching is Buildkite Cache
 # (.buildkite/cache.yml): the cargo registry, plus a per-step target/ pruned
 # to third-party dependency builds (prune-target.sh), keyed on the toolchain
-# and Cargo.lock. Saves run only after the step's commands have succeeded,
-# and only on main (cache-save.sh): branch and PR builds restore main's.
+# and Cargo.lock. Saves run only after the step's commands have succeeded.
+# main saves every cache; branch and PR builds restore main's and save only
+# what had no exact entry to restore (cache-restore.sh, cache-save.sh).
 #
 # Tests build once per OS into a nextest archive (build-tests.sh), which a
 # step of parallel jobs then runs. Buildkite Test Engine splits them across
@@ -29,10 +30,10 @@
 # YAML anchors for what the steps below repeat; Buildkite ignores this key.
 common:
   - &main-only build.branch == pipeline.default_branch
-  - &restore "buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs"
+  - &restore ".buildkite/scripts/cache-restore.sh --name cargo_registry --name target --name rustup --name apt_debs"
   # No rustup cache on macOS: the image ships several toolchains, so the
   # entry is 1.7 GB (20s to restore) against ~4s to install 1.98.0.
-  - &restore-macos "buildkite-agent cache restore --name cargo_registry --name target"
+  - &restore-macos ".buildkite/scripts/cache-restore.sh --name cargo_registry --name target"
   - &toolchain source .buildkite/scripts/toolchain.sh
   - &save-toolchain .buildkite/scripts/cache-save.sh --name rustup --name apt_debs
   - &prune 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
@@ -121,7 +122,7 @@ steps:
       TEST_TMPDIR: /dev/shm
     command:
       - .buildkite/scripts/start-postgres.sh
-      - buildkite-agent cache restore --name apt_debs
+      - .buildkite/scripts/cache-restore.sh --name apt_debs
       - *toolchain
       - .buildkite/scripts/cache-save.sh --name apt_debs
       - 'section ":shell: Install ble.sh" .buildkite/scripts/install-blesh.sh'
@@ -276,7 +277,7 @@ steps:
     env:
       CARGO_TOOLS: deny
     command:
-      - buildkite-agent cache restore --name cargo_registry --name rustup --name apt_debs
+      - .buildkite/scripts/cache-restore.sh --name cargo_registry --name rustup --name apt_debs
       - *toolchain
       - *save-toolchain
       # Same arguments cargo-deny-action passes by default.
@@ -320,7 +321,7 @@ steps:
     agents: *linux-large
     timeout_in_minutes: 45
     command:
-      - buildkite-agent cache restore --name anyvm --name apt_debs
+      - .buildkite/scripts/cache-restore.sh --name anyvm --name apt_debs
       - .buildkite/scripts/illumos.sh
       - .buildkite/scripts/cache-save.sh --name anyvm --name apt_debs
 
