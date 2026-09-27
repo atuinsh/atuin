@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Gives this job's nextest JUnit report (.config/nextest.toml's ci profile) a
+# name unique to the job, so the test-engine step can collect every shard's
+# without them overwriting each other. post-command runs whether or not the
+# command passed, and before the step's artifact_paths are uploaded.
+set -euo pipefail
+
+if [ -f test-results/junit.xml ]; then
+  mv test-results/junit.xml "test-results/junit-${BUILDKITE_JOB_ID}.xml"
+fi

@@ -29,7 +29,7 @@ env:
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
   # .config/nextest.toml's ci profile: writes test-results/junit.xml, which
-  # the test-collector plugin uploads to Buildkite Test Engine.
+  # the test-engine step uploads to Buildkite Test Engine.
   NEXTEST_PROFILE: ci
 
 steps:
@@ -70,13 +70,9 @@ steps:
     timeout_in_minutes: 45
     env:
       CARGO_TOOLS: nextest
-    secrets:
-      - ATUIN_TEST_ENGINE_TOKEN
-    plugins: &test_collector
-      - test-collector#v1.12.0:
-          files: test-results/junit.xml
-          format: junit
-          api-token-env-name: ATUIN_TEST_ENGINE_TOKEN
+    # JUnit report, renamed per job by .buildkite/hooks/post-command; the
+    # test-engine step uploads them.
+    artifact_paths: "test-results/junit-*.xml"
     command:
       - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
       - source .buildkite/scripts/toolchain.sh
@@ -97,9 +93,9 @@ steps:
     timeout_in_minutes: 45
     env:
       CARGO_TOOLS: nextest
-    secrets:
-      - ATUIN_TEST_ENGINE_TOKEN
-    plugins: *test_collector
+    # JUnit report, renamed per job by .buildkite/hooks/post-command; the
+    # test-engine step uploads them.
+    artifact_paths: "test-results/junit-*.xml"
     command:
       - buildkite-agent cache restore --name cargo_registry --name target
       - source .buildkite/scripts/toolchain.sh
@@ -203,10 +199,10 @@ steps:
     timeout_in_minutes: 45
     env:
       CARGO_TOOLS: nextest
-      ATUIN_DB_URI: postgres://atuin:pass@localhost:5432/atuin
-    secrets:
-      - ATUIN_TEST_ENGINE_TOKEN
-    plugins: *test_collector
+      ATUIN_DB_URI: postgres://atuin:pass@127.0.0.1:5432/atuin
+    # JUnit report, renamed per job by .buildkite/hooks/post-command; the
+    # test-engine step uploads them.
+    artifact_paths: "test-results/junit-*.xml"
     command:
       - .buildkite/scripts/start-postgres.sh
       - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
@@ -232,9 +228,9 @@ steps:
       CARGO_TOOLS: nextest
       APT_PACKAGES: "zsh fish xz-utils"
       ATUIN_E2E_REQUIRE_SHELLS: "1"
-    secrets:
-      - ATUIN_TEST_ENGINE_TOKEN
-    plugins: *test_collector
+    # JUnit report, renamed per job by .buildkite/hooks/post-command; the
+    # test-engine step uploads them.
+    artifact_paths: "test-results/junit-*.xml"
     command:
       - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
       - source .buildkite/scripts/toolchain.sh
@@ -256,9 +252,9 @@ steps:
       CARGO_TOOLS: nextest
       BREW_PACKAGES: "bash fish"
       ATUIN_E2E_REQUIRE_SHELLS: "1"
-    secrets:
-      - ATUIN_TEST_ENGINE_TOKEN
-    plugins: *test_collector
+    # JUnit report, renamed per job by .buildkite/hooks/post-command; the
+    # test-engine step uploads them.
+    artifact_paths: "test-results/junit-*.xml"
     command:
       - buildkite-agent cache restore --name cargo_registry --name target
       - source .buildkite/scripts/toolchain.sh
@@ -365,6 +361,36 @@ steps:
       - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
       - buildkite-agent cache save --name target
 
+  # Uploads every test job's JUnit report to Buildkite Test Engine. A job of
+  # its own so the token never reaches a job that compiles or runs the
+  # checkout's code: any test, build script or dependency there could read
+  # it, and this pipeline's logs are public.
+  - label: ":test_tube: Upload test results"
+    key: test-engine
+    depends_on:
+      - unit-test
+      - unit-test-macos
+      - integration-test
+      - e2e
+      - e2e-macos
+      - nightly
+    # Report failing runs too, and don't wait on skipped (scheduled-only) steps.
+    allow_dependency_failure: true
+    notify:
+      - github_check:
+          name: "buildkite/test-engine"
+    timeout_in_minutes: 10
+    secrets:
+      - ATUIN_TEST_ENGINE_TOKEN
+    plugins:
+      - test-collector#v1.12.0:
+          files: "test-results/junit-*.xml"
+          format: junit
+          api-token-env-name: ATUIN_TEST_ENGINE_TOKEN
+    command:
+      # No reports (e.g. every test job failed before running tests) is not an error.
+      - buildkite-agent artifact download "test-results/junit-*.xml" . || echo "No test reports to upload."
+
   # rust.yml's "Test in VM (illumos)": builds the client and server on a real
   # OmniOS VM (KVM-accelerated; hosted agents expose /dev/kvm). main only,
   # like build and nix-build: it was ~12 min per PR on GitHub Actions.
@@ -391,9 +417,9 @@ steps:
     timeout_in_minutes: 60
     env:
       CARGO_TOOLS: nextest
-    secrets:
-      - ATUIN_TEST_ENGINE_TOKEN
-    plugins: *test_collector
+    # JUnit report, renamed per job by .buildkite/hooks/post-command; the
+    # test-engine step uploads them.
+    artifact_paths: "test-results/junit-*.xml"
     command:
       - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
       - source .buildkite/scripts/toolchain.sh
