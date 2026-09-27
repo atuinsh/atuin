@@ -30,7 +30,7 @@ const SNIPPET_TOKENS: usize = 32;
 
 /// The newest migration this build knows: [`AiSessionDatabase::open_read_only`] reads only a
 /// sidecar at exactly this version.
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 /// How much more a title match weighs than a body match in bm25.
 const TITLE_WEIGHT: f64 = 5.0;
@@ -53,7 +53,7 @@ macro_rules! session_columns {
         "s.harness, s.session_id, s.parent_harness, s.parent_session_id, s.cwd, s.git_branch, \
          s.model, s.started_at, s.updated_at, s.message_count, s.usage_input, s.usage_output, \
          s.usage_cache_read, s.usage_cache_write, s.usage_reasoning, s.title, s.title_source, \
-         s.preview, s.host_id, s.root_harness, s.root_session_id"
+         s.preview, s.host_id, s.root_harness, s.root_session_id, s.copy_of_session_id"
     };
 }
 
@@ -175,6 +175,7 @@ struct SessionRow {
     host_id: Option<String>,
     root_harness: Option<i64>,
     root_session_id: Option<String>,
+    copy_of_session_id: Option<String>,
     child_count: i64,
     group_updated_at: Option<i64>,
 }
@@ -513,6 +514,30 @@ impl AiSessionDatabase {
             before.as_ref().is_some_and(|b| b.parent_session_id.is_none() && msg.parent.is_some());
         if before.is_none() || gained_parent {
             Self::regroup(&mut tx, harness, session_id).await?;
+        }
+        // A copy names no parent, so it is linked to its original through the calls they share
+        // (see migration 0005). A link that moves other than by being made regroups everything.
+        let mut relinked = false;
+        if let Some(before) = &before {
+            if gained_parent {
+                relinked |= Self::unlink(&mut tx, harness, session_id).await?;
+            }
+            let started_at: i64 = db::query_scalar(
+                "SELECT started_at FROM sessions WHERE harness = ? AND session_id = ?",
+            )
+            .bind(harness)
+            .bind(session_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if started_at != before.started_at {
+                relinked |= Self::relink_sharers(&mut tx, harness, session_id).await?;
+            }
+        }
+        if let Some(turn) = &msg.turn_id {
+            relinked |= Self::link_copies(&mut tx, harness, session_id, turn).await?;
+        }
+        if relinked {
+            Self::regroup_all(&mut tx).await?;
         }
 
         let mut recount = BTreeSet::new();
@@ -1463,7 +1488,19 @@ impl AiSessionDatabase {
         for (harness, turn) in &turns {
             Self::attribute_call(&mut tx, *harness, turn).await?;
         }
-        if orphaned > 0 {
+        // Copies of a session that went link to the lowest-ranked original left, if any.
+        let stranded: Vec<(i64, String)> = db::query_as(
+            "SELECT harness, session_id FROM sessions s WHERE copy_of_session_id IS NOT NULL AND \
+             NOT EXISTS (SELECT 1 FROM sessions o WHERE o.harness = s.harness AND o.session_id = \
+             s.copy_of_session_id)",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        let mut relinked = false;
+        for (harness, session_id) in &stranded {
+            relinked |= Self::relink(&mut tx, *harness, session_id).await?;
+        }
+        if orphaned > 0 || relinked {
             Self::regroup_all(&mut tx).await?;
         }
 
@@ -1487,14 +1524,186 @@ impl AiSessionDatabase {
         Ok(!contributors.is_empty())
     }
 
-    /// Group every session afresh under its top-most stored ancestor, as migration 0003 does.
+    /// Group every session afresh under its top-most stored ancestor, following the parent else
+    /// the copy link, as migration 0005 does.
     async fn regroup_all(conn: &mut SqliteConnection) -> Result<(), DbError> {
         db::query(
-            "WITH RECURSIVE chain (harness, session_id, anc_harness, anc_session_id, depth) AS (              SELECT harness, session_id, harness, session_id, 0 FROM sessions UNION ALL SELECT              c.harness, c.session_id, p.harness, p.session_id, c.depth + 1 FROM chain c JOIN              sessions a ON a.harness = c.anc_harness AND a.session_id = c.anc_session_id JOIN              sessions p ON p.harness = a.parent_harness AND p.session_id = a.parent_session_id              WHERE c.depth < 64 AND NOT (p.harness = c.harness AND p.session_id = c.session_id)),              roots AS (SELECT harness, session_id, anc_harness, anc_session_id, max(depth) FROM              chain GROUP BY harness, session_id) UPDATE sessions SET root_harness =              roots.anc_harness, root_session_id = roots.anc_session_id FROM roots WHERE              roots.harness = sessions.harness AND roots.session_id = sessions.session_id",
+            "WITH RECURSIVE chain (harness, session_id, anc_harness, anc_session_id, depth) AS ( \
+             SELECT harness, session_id, harness, session_id, 0 FROM sessions UNION ALL SELECT \
+             c.harness, c.session_id, p.harness, p.session_id, c.depth + 1 FROM chain c JOIN \
+             sessions a ON a.harness = c.anc_harness AND a.session_id = c.anc_session_id JOIN \
+             sessions p ON p.harness = CASE WHEN a.parent_session_id IS NULL THEN a.harness ELSE \
+             a.parent_harness END AND p.session_id = COALESCE(a.parent_session_id, \
+             a.copy_of_session_id) WHERE c.depth < 64 AND NOT (p.harness = c.harness AND \
+             p.session_id = c.session_id)), roots AS (SELECT harness, session_id, anc_harness, \
+             anc_session_id, max(depth) FROM chain GROUP BY harness, session_id) UPDATE sessions \
+             SET root_harness = roots.anc_harness, root_session_id = roots.anc_session_id FROM \
+             roots WHERE roots.harness = sessions.harness AND roots.session_id = \
+             sessions.session_id",
         )
         .execute(conn)
         .await?;
         Ok(())
+    }
+
+    /// For a row of `session` holding call `turn`, just stored: offer each other session holding
+    /// the call as the other's original. Each keeps the lowest-ranked original it is offered (see
+    /// migration 0005), so this only ever lowers a link, and while no session's start or parent
+    /// moves, the links end up the same whatever order the rows arrive in.
+    ///
+    /// A session linked for the first time was a root, and is placed like one learning its
+    /// parent. Returns whether an existing link moved instead, which needs
+    /// [`Self::regroup_all`].
+    async fn link_copies(
+        conn: &mut SqliteConnection,
+        harness: i64,
+        session_id: &str,
+        turn: &str,
+    ) -> Result<bool, DbError> {
+        let others: Vec<String> = db::query_scalar(
+            "SELECT DISTINCT session_id FROM messages WHERE harness = ? AND turn_id = ? AND \
+             session_id <> ?",
+        )
+        .bind(harness)
+        .bind(turn)
+        .bind(session_id)
+        .fetch_all(&mut *conn)
+        .await?;
+
+        let mut moved = false;
+        for other in &others {
+            for (copy, original) in [(session_id, other.as_str()), (other.as_str(), session_id)] {
+                let previous: Option<String> = db::query_scalar(
+                    "SELECT copy_of_session_id FROM sessions WHERE harness = ? AND session_id = ?",
+                )
+                .bind(harness)
+                .bind(copy)
+                .fetch_one(&mut *conn)
+                .await?;
+                // Only a parentless session links, only to a parentless one ranked below it, and
+                // only when that ranks below the original it has.
+                let linked = db::query(
+                    "UPDATE sessions SET copy_of_session_id = ?3 WHERE harness = ?1 AND \
+                     session_id = ?2 AND parent_session_id IS NULL AND EXISTS (SELECT 1 FROM \
+                     sessions o WHERE o.harness = ?1 AND o.session_id = ?3 AND \
+                     o.parent_session_id IS NULL AND (o.started_at, o.session_id) < \
+                     (sessions.started_at, sessions.session_id) AND NOT EXISTS (SELECT 1 FROM \
+                     sessions c WHERE c.harness = ?1 AND c.session_id = \
+                     sessions.copy_of_session_id AND (c.started_at, c.session_id) <= \
+                     (o.started_at, o.session_id)))",
+                )
+                .bind(harness)
+                .bind(copy)
+                .bind(original)
+                .execute(&mut *conn)
+                .await?;
+                if linked.rows_affected() == 0 {
+                    continue;
+                }
+                match previous {
+                    None => Self::regroup(&mut *conn, harness, copy).await?,
+                    Some(_) => moved = true,
+                }
+            }
+        }
+        Ok(moved)
+    }
+
+    /// Link `session` to its original afresh from every call it shares, as migration 0005 does.
+    /// Returns whether its link changed.
+    async fn relink(
+        conn: &mut SqliteConnection,
+        harness: i64,
+        session_id: &str,
+    ) -> Result<bool, DbError> {
+        let (previous, parent): (Option<String>, Option<String>) = db::query_as(
+            "SELECT copy_of_session_id, parent_session_id FROM sessions WHERE harness = ? AND \
+             session_id = ?",
+        )
+        .bind(harness)
+        .bind(session_id)
+        .fetch_one(&mut *conn)
+        .await?;
+        let original: Option<String> = match parent {
+            Some(_) => None,
+            // CROSS JOIN keeps this order: the session's own rows, then who else holds each call.
+            None => {
+                db::query_scalar(
+                    "SELECT t.session_id FROM sessions s CROSS JOIN messages m ON m.harness = \
+                     s.harness AND m.session_id = s.session_id CROSS JOIN messages o ON o.harness \
+                     = m.harness AND o.turn_id = m.turn_id AND o.session_id <> m.session_id CROSS \
+                     JOIN sessions t ON t.harness = o.harness AND t.session_id = o.session_id \
+                     WHERE s.harness = ? AND s.session_id = ? AND m.turn_id IS NOT NULL AND \
+                     t.parent_session_id IS NULL AND (t.started_at, t.session_id) < \
+                     (s.started_at, s.session_id) ORDER BY t.started_at, t.session_id LIMIT 1",
+                )
+                .bind(harness)
+                .bind(session_id)
+                .fetch_optional(&mut *conn)
+                .await?
+            }
+        };
+        if original == previous {
+            return Ok(false);
+        }
+        db::query(
+            "UPDATE sessions SET copy_of_session_id = ? WHERE harness = ? AND session_id = ?",
+        )
+        .bind(original)
+        .bind(harness)
+        .bind(session_id)
+        .execute(conn)
+        .await?;
+        Ok(true)
+    }
+
+    /// `session`'s start moved: it may now rank below sessions sharing its calls, or they below
+    /// it, so it and each of them is linked afresh. Returns whether any link changed.
+    async fn relink_sharers(
+        conn: &mut SqliteConnection,
+        harness: i64,
+        session_id: &str,
+    ) -> Result<bool, DbError> {
+        let sharers: Vec<String> = db::query_scalar(
+            "SELECT DISTINCT o.session_id FROM messages m CROSS JOIN messages o ON o.harness = \
+             m.harness AND o.turn_id = m.turn_id AND o.session_id <> m.session_id WHERE m.harness \
+             = ? AND m.session_id = ? AND m.turn_id IS NOT NULL",
+        )
+        .bind(harness)
+        .bind(session_id)
+        .fetch_all(&mut *conn)
+        .await?;
+        if sharers.is_empty() {
+            return Ok(false);
+        }
+
+        let mut changed = Self::relink(&mut *conn, harness, session_id).await?;
+        for sharer in &sharers {
+            changed |= Self::relink(&mut *conn, harness, sharer).await?;
+        }
+        Ok(changed)
+    }
+
+    /// `session` learned its parent: it groups by that now, and can no longer be anyone's
+    /// original, so its own link goes and the sessions linked to it are linked afresh. Returns
+    /// whether any link changed.
+    async fn unlink(
+        conn: &mut SqliteConnection,
+        harness: i64,
+        session_id: &str,
+    ) -> Result<bool, DbError> {
+        let mut changed = Self::relink(&mut *conn, harness, session_id).await?;
+        let copies: Vec<String> = db::query_scalar(
+            "SELECT session_id FROM sessions WHERE harness = ? AND copy_of_session_id = ?",
+        )
+        .bind(harness)
+        .bind(session_id)
+        .fetch_all(&mut *conn)
+        .await?;
+        for copy in &copies {
+            changed |= Self::relink(&mut *conn, harness, copy).await?;
+        }
+        Ok(changed)
     }
 
     /// Record `host` on a stored row that has none, and on its session.
@@ -1527,11 +1736,12 @@ impl AiSessionDatabase {
         Ok(())
     }
 
-    /// Place a session that just appeared or just learned its parent in its group.
+    /// Place a session that just appeared, just learned its parent or was just linked to its
+    /// original (see [`Self::link_copies`]) in its group.
     ///
-    /// Every session's root is its top-most stored ancestor. A session is only placed when it is
-    /// a root (it is new, or had no parent), so it and everything grouped under it move to its
-    /// parent's root. Being new, it may also be the missing parent of sessions stored before it,
+    /// Every session's root is its top-most stored ancestor, following parents else copy links.
+    /// A session is only placed when it is a root (it is new, or had neither), so it and
+    /// everything grouped under it move to its parent's root. Being new, it may also be the missing parent of sessions stored before it,
     /// which were roots of their own: those groups move under it too. The result depends only on
     /// the sessions stored, never on the order they arrived in.
     async fn regroup(
@@ -1539,14 +1749,23 @@ impl AiSessionDatabase {
         harness: i64,
         session_id: &str,
     ) -> Result<(), DbError> {
-        let (parent_harness, parent_session_id): (Option<i64>, Option<String>) = db::query_as(
-            "SELECT parent_harness, parent_session_id FROM sessions WHERE harness = ? AND \
-             session_id = ?",
+        let (parent_harness, parent_session_id, copy_of): (
+            Option<i64>,
+            Option<String>,
+            Option<String>,
+        ) = db::query_as(
+            "SELECT parent_harness, parent_session_id, copy_of_session_id FROM sessions WHERE \
+             harness = ? AND session_id = ?",
         )
         .bind(harness)
         .bind(session_id)
         .fetch_one(&mut *conn)
         .await?;
+        // A copy, which names no parent, groups under its original.
+        let (parent_harness, parent_session_id) = match (parent_session_id, copy_of) {
+            (None, Some(original)) => (Some(harness), Some(original)),
+            (parent, _) => (parent_harness, parent),
+        };
 
         let parent_root: Option<(i64, String)> = match (parent_harness, parent_session_id) {
             (Some(parent_harness), Some(parent_session_id)) => {
@@ -1883,6 +2102,10 @@ impl AiSessionDatabase {
         let root = Self::optional_session(row.root_harness, row.root_session_id)?
             .filter(|root| root.harness != harness || root.session.as_ref() != row.session_id);
         let group_updated_at = row.group_updated_at.map(Self::time_from_millis).transpose()?;
+        let copy_of = row.copy_of_session_id.map(|session| HarnessSession {
+            harness,
+            session: NativeSessionId::from(session),
+        });
 
         Ok(Session::builder()
             .handle(HarnessSession {
@@ -1908,6 +2131,7 @@ impl AiSessionDatabase {
             .preview(row.preview)
             .host(Self::host_from_repr(row.host_id))
             .root(root)
+            .copy_of(copy_of)
             .child_count(u64::try_from(row.child_count).unwrap_or(0))
             .group_updated_at(group_updated_at)
             .build())
@@ -3271,6 +3495,215 @@ mod tests {
         assert_eq!(roots[0].1, roots[1].1, "both land in one group: {roots:?}");
     }
 
+    // --- copies ---------------------------------------------------------------------------------
+
+    /// A line of Claude Code session `id`: its own uuid `source`, and for an assistant line the
+    /// API message id `turn`, with the call's usage.
+    fn claude_row(
+        id: &str,
+        parent: Option<&str>,
+        source: &str,
+        seconds: i64,
+        turn: Option<&str>,
+        output: u64,
+    ) -> Message {
+        let mut m = tree_row(id, parent, seconds, "words");
+        m.source_id = SourceId::from(source.to_owned());
+        if let Some(turn) = turn {
+            m.role = Role::Assistant;
+            m.turn_id = Some(turn.to_owned());
+            m.usage = Some(Usage {
+                input: Some(1),
+                output: Some(output),
+                cache_read: Some(0),
+                cache_write: Some(0),
+                reasoning: None,
+            });
+        }
+        m
+    }
+
+    /// Sessions as `claude --resume <id> --fork-session` (or a `--resume` Claude Code turns into
+    /// a fork) leave them. `resumed` starts with a copy of `original`'s lines (their uuids,
+    /// timestamps and API message ids) under its own session id, naming `original` nowhere, then
+    /// goes on; `original` goes on too. `twice` is a copy of `resumed` in turn. `agent-x` is a
+    /// subagent of `resumed` and `branch` a `/branch` fork of `original`, both naming their
+    /// parent, and `zeta` shares nothing.
+    fn copies() -> Vec<Message> {
+        let history = [
+            ("u1", 0, None, 0),
+            ("a1", 1, Some("msg_A"), 10),
+            ("u2", 2, None, 0),
+            ("a2", 3, Some("msg_B"), 20),
+        ];
+        let mut rows = Vec::new();
+        for id in ["original", "resumed", "twice"] {
+            for (source, seconds, turn, output) in history {
+                rows.push(claude_row(id, None, source, seconds, turn, output));
+            }
+        }
+        for id in ["resumed", "twice"] {
+            rows.push(claude_row(id, None, "u3", 100, None, 0));
+            rows.push(claude_row(id, None, "a3", 101, Some("msg_C"), 7));
+        }
+        rows.extend([
+            claude_row("original", None, "a9", 50, Some("msg_D"), 5),
+            claude_row("twice", None, "a4", 200, Some("msg_G"), 3),
+            claude_row("agent-x", Some("resumed"), "x1", 102, Some("msg_E"), 2),
+            claude_row("branch", Some("original"), "u1", 0, None, 0),
+            claude_row("branch", Some("original"), "a1", 1, Some("msg_A"), 10),
+            claude_row("branch", Some("original"), "b1", 60, Some("msg_F"), 4),
+            claude_row("zeta", None, "z1", 0, Some("msg_Z"), 1),
+        ]);
+        rows
+    }
+
+    /// Every session's group, and the session it was found to be a copy of.
+    async fn copy_links(db: &AiSessionDatabase) -> Vec<(String, String, Option<String>)> {
+        let mut links: Vec<_> = db
+            .list_sessions(&SessionFilter::default())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| {
+                let copy_of = s.copy_of.as_ref().map(|c| c.session.to_string());
+                (s.handle.session.to_string(), s.group().session.to_string(), copy_of)
+            })
+            .collect();
+        links.sort();
+        links
+    }
+
+    fn copies_links() -> Vec<(String, String, Option<String>)> {
+        [
+            ("agent-x", "original", None),
+            ("branch", "original", None),
+            ("original", "original", None),
+            ("resumed", "original", Some("original")),
+            ("twice", "original", Some("original")),
+            ("zeta", "zeta", None),
+        ]
+        .map(|(id, root, copy_of)| (id.to_owned(), root.to_owned(), copy_of.map(str::to_owned)))
+        .to_vec()
+    }
+
+    /// Each session's attributed output, from [`copies`].
+    async fn copies_output(db: &AiSessionDatabase) -> Vec<(String, u64)> {
+        let mut out = Vec::new();
+        for s in db.list_sessions(&SessionFilter::default()).await.unwrap() {
+            out.push((s.handle.session.to_string(), s.usage.output.unwrap()));
+        }
+        out.sort();
+        out
+    }
+
+    proptest::proptest! {
+        /// A copy groups under the session it was copied from, which names it nowhere, whatever
+        /// order the rows arrive in: copied lines before the original's, a start that moves
+        /// earlier, a copy of a copy. Each shared call still counts once, with the group's root.
+        #[test]
+        fn copies_group_under_their_original_in_any_order(
+            rows in proptest::strategy::Strategy::prop_shuffle(proptest::strategy::Just(copies()))
+        ) {
+            let (links, output) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let db = AiSessionDatabase::in_memory().await.unwrap();
+                    for m in &rows {
+                        db.append(m).await.unwrap();
+                    }
+                    (copy_links(&db).await, copies_output(&db).await)
+                });
+            proptest::prop_assert_eq!(links, copies_links());
+            let expected: Vec<_> = [
+                ("agent-x", 2),
+                ("branch", 4),
+                ("original", 35),
+                ("resumed", 7),
+                ("twice", 3),
+                ("zeta", 1),
+            ]
+            .map(|(id, out)| (id.to_owned(), out))
+            .to_vec();
+            proptest::prop_assert_eq!(output, expected);
+        }
+    }
+
+    /// One picker row for the lot, with the copies counted as its children and shown as forks.
+    #[rstest]
+    #[tokio::test]
+    async fn a_copy_is_listed_under_its_original() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        for m in copies() {
+            db.append(&m).await.unwrap();
+        }
+        let groups: Vec<_> = db
+            .list_sessions(&roots_only())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| (s.handle.session.to_string(), s.child_count))
+            .collect();
+        assert_eq!(groups, [("original".to_owned(), 4), ("zeta".to_owned(), 0)]);
+        let resumed = db.get_session(&handle(HarnessKind::ClaudeCode, "resumed")).await.unwrap();
+        assert_eq!(resumed.unwrap().relation(), crate::ai_session::SessionRelation::Fork);
+    }
+
+    /// A copy that learns its parent after all groups by it, and its own copies find another
+    /// original.
+    #[rstest]
+    #[tokio::test]
+    async fn a_parent_learned_late_outranks_a_copy_link() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        // The copies take up from the original's second line, so start after it.
+        db.append(&claude_row("original", None, "u1", 0, None, 0)).await.unwrap();
+        db.append(&claude_row("original", None, "a1", 1, Some("msg_A"), 1)).await.unwrap();
+        db.append(&claude_row("copy", None, "a1", 1, Some("msg_A"), 1)).await.unwrap();
+        db.append(&claude_row("copy2", None, "a1", 1, Some("msg_A"), 1)).await.unwrap();
+        db.append(&claude_row("other", None, "o1", 0, None, 0)).await.unwrap();
+        assert!(
+            copy_links(&db).await.iter().all(|(id, root, _)| id == "other" || root == "original")
+        );
+
+        db.append(&claude_row("original", Some("other"), "a2", 5, None, 0)).await.unwrap();
+
+        let links = copy_links(&db).await;
+        assert_eq!(
+            links,
+            [
+                ("copy", "copy", None),
+                ("copy2", "copy", Some("copy")),
+                ("original", "other", None),
+                ("other", "other", None),
+            ]
+            .map(|(id, root, copy_of): (&str, &str, Option<&str>)| {
+                (id.to_owned(), root.to_owned(), copy_of.map(str::to_owned))
+            })
+        );
+    }
+
+    /// Forgetting the host that captured an original leaves its copies linked to the best
+    /// original left.
+    #[rstest]
+    #[tokio::test]
+    async fn forgetting_an_original_relinks_its_copies() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        for (id, n) in [("original", 1), ("resumed", 2), ("twice", 2)] {
+            let mut m = claude_row(id, None, "a1", 0, Some("msg_A"), 1);
+            m.host = Some(host(n));
+            db.append(&m).await.unwrap();
+        }
+        db.forget_host(host(1)).await.unwrap();
+
+        let links = copy_links(&db).await;
+        assert_eq!(links, [
+            ("resumed".to_owned(), "resumed".to_owned(), None),
+            ("twice".to_owned(), "resumed".to_owned(), Some("resumed".to_owned())),
+        ]);
+    }
+
     fn roots_only() -> SessionFilter {
         SessionFilter {
             roots_only: true,
@@ -3739,6 +4172,60 @@ mod tests {
         // Grouping carries on incrementally from the migrated state.
         db.append(&tree_row("agent-c", Some("agent-b"), 50, "x")).await.unwrap();
         assert_eq!(roots_of(&db).await.iter().find(|(s, _)| s == "agent-c").unwrap().1, "root");
+    }
+
+    /// Migrating to 0005 links the copies already stored to their originals from the calls they
+    /// share, and regroups them, from the rows alone: no reproject.
+    #[rstest]
+    #[tokio::test]
+    async fn migrating_links_stored_copies() {
+        let db = sidecar_at(4, &[
+            ("original", None),
+            ("resumed", None),
+            ("agent-x", Some("resumed")),
+            ("zeta", None),
+        ])
+        .await;
+        for (i, (session, turn)) in
+            [("original", "msg_A"), ("resumed", "msg_A"), ("zeta", "msg_Z")].into_iter().enumerate()
+        {
+            db::query(
+                "INSERT INTO messages (id, harness, session_id, source_id, timestamp, role, \
+                 content, turn_id) VALUES (?, 1, ?, 'a1', 0, '\"Assistant\"', '[]', ?)",
+            )
+            .bind(vec![u8::try_from(i).unwrap(); 16])
+            .bind(session)
+            .bind(turn)
+            .execute(db.db.pool())
+            .await
+            .unwrap();
+        }
+        db::query(
+            "INSERT INTO reproject_watermark (host, tag, idx, record_id) VALUES ('h', \
+             'ai-session', 9, 'r')",
+        )
+        .execute(db.db.pool())
+        .await
+        .unwrap();
+
+        db.migrate().await.unwrap();
+
+        let links = copy_links(&db).await;
+        let link = |id: &str| links.iter().find(|(s, ..)| s == id).unwrap().clone();
+        assert_eq!(link("resumed").1, "original");
+        assert_eq!(link("resumed").2.as_deref(), Some("original"));
+        assert_eq!(link("agent-x").1, "original");
+        assert_eq!(link("zeta").1, "zeta");
+        let watermarks: i64 = db::query_scalar("SELECT count(*) FROM reproject_watermark")
+            .fetch_one(db.db.pool())
+            .await
+            .unwrap();
+        assert_eq!(watermarks, 1, "the rows hold everything the links need");
+
+        // Linking carries on incrementally from the migrated state.
+        db.append(&claude_row("twice", None, "a1", 5, Some("msg_A"), 1)).await.unwrap();
+        let links = copy_links(&db).await;
+        assert_eq!(links.iter().find(|(s, ..)| s == "twice").unwrap().1, "original");
     }
 
     // --- read-only open -------------------------------------------------------------------------

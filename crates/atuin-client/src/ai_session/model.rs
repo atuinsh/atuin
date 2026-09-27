@@ -148,11 +148,17 @@ pub struct Session {
     /// The host that captured the session (its first row's). `None` until known.
     #[builder(default)]
     pub host: Option<HostId>,
-    /// The top-most stored ancestor this session is grouped under, following parent links;
-    /// `None` when it is a root itself. A session whose parent is not stored is a root until the
-    /// parent arrives.
+    /// The top-most stored ancestor this session is grouped under, following parent links (else
+    /// [`Self::copy_of`]); `None` when it is a root itself. A session whose parent is not stored
+    /// is a root until the parent arrives.
     #[builder(default)]
     pub root: Option<HarnessSession>,
+    /// For a session with no parent, the session it was copied from, inferred from the model
+    /// calls they share: the harness named none (a Claude Code `--fork-session`, or a `--resume`
+    /// it turned into a fork). Always of the same harness.
+    #[builder(default)]
+    #[serde(default)]
+    pub copy_of: Option<HarnessSession>,
     /// How many sessions are grouped under this one. Only counted by roots-only queries (see
     /// [`SessionFilter::roots_only`]); 0 elsewhere.
     #[builder(default)]
@@ -195,7 +201,10 @@ impl Session {
     #[must_use]
     pub fn relation(&self) -> SessionRelation {
         if self.parent.is_none() {
-            return SessionRelation::Root;
+            return match self.copy_of {
+                Some(_) => SessionRelation::Fork,
+                None => SessionRelation::Root,
+            };
         }
         match self.handle.harness {
             HarnessKind::ClaudeCode if self.handle.session.as_ref().starts_with("agent-") => {
@@ -375,6 +384,23 @@ mod tests {
             .usage(Usage::default())
             .build();
         assert_eq!(session.relation(), expected);
+    }
+
+    /// A parentless session copied from another (a Claude Code `--fork-session`) is its fork.
+    #[rstest]
+    fn a_copied_session_is_a_fork() {
+        let handle = |id: &str| HarnessSession {
+            harness: HarnessKind::ClaudeCode,
+            session: NativeSessionId::from(id.to_owned()),
+        };
+        let session = Session::builder()
+            .handle(handle("copy"))
+            .copy_of(Some(handle("original")))
+            .started_at(OffsetDateTime::UNIX_EPOCH)
+            .updated_at(OffsetDateTime::UNIX_EPOCH)
+            .usage(Usage::default())
+            .build();
+        assert_eq!(session.relation(), SessionRelation::Fork);
     }
 
     #[rstest]
