@@ -76,6 +76,12 @@ impl AiSessionRecord {
 }
 
 impl AiSessionStore {
+    /// The host this store pushes records as: the local host.
+    #[must_use]
+    pub const fn host_id(&self) -> HostId {
+        self.host_id
+    }
+
     pub async fn push(&self, msg: &Message) -> Result<RecordId, PushError> {
         let id = msg.id;
 
@@ -110,6 +116,7 @@ impl AiSessionStore {
         }
 
         let id = record.id;
+        let host = record.host.id;
 
         let decrypted = match record.decrypt(&self.key) {
             Ok(decrypted) => decrypted,
@@ -132,6 +139,11 @@ impl AiSessionStore {
             }
         };
 
+        // The record body never carries the host: its envelope does.
+        let msg = Message {
+            host: Some(host),
+            ..msg
+        };
         db.append(&msg).await?;
         Ok(Projected::Appended)
     }
@@ -201,6 +213,7 @@ impl AiSessionStore {
         for (series, _) in marks {
             if series.tag == RecordTag::AiSession && include(series.host_id) {
                 warn!(host = %series.host_id, "ai-session records vanished from the record store");
+                db.forget_host(series.host_id).await?;
                 db.forget_reproject_watermark(&series).await?;
                 stats.restarted += 1;
             }
@@ -230,6 +243,8 @@ impl AiSessionStore {
                         idx = mark.idx,
                         "ai-session records rewritten under the watermark, replaying the host"
                     );
+                    // What the old series projected may no longer be in it.
+                    db.forget_host(series.host_id).await?;
                     stats.restarted += 1;
                     0
                 }
@@ -622,6 +637,8 @@ mod tests {
             restarted: 1
         });
         assert_eq!(count(&db, &new).await, Some(2));
+        assert_eq!(count(&db, &old).await, None, "what the old series projected is gone");
+        assert_eq!(count(&db, &other).await, Some(2), "other hosts' sessions stay");
         assert_eq!(mark(&db, &a).await.map(|m| m.idx), Some(1));
 
         // Rewritten to the same length or longer with different records: idx alone would not
@@ -639,6 +656,7 @@ mod tests {
             restarted: 1
         });
         assert_eq!(count(&db, &renamed).await, Some(3));
+        assert_eq!(count(&db, &new).await, None);
 
         // Deleted outright: the watermark goes, and so records arriving again replay in full.
         for r in store.all_tagged(&RecordTag::AiSession).await.unwrap() {
@@ -648,6 +666,8 @@ mod tests {
         }
         assert_eq!(a.reproject(&db).await.unwrap().restarted, 1);
         assert_eq!(mark(&db, &a).await, None);
+        assert_eq!(count(&db, &renamed).await, None);
+        assert_eq!(count(&db, &other).await, Some(2));
         assert!(mark(&db, &b).await.is_some(), "other hosts keep theirs");
     }
 
@@ -796,5 +816,27 @@ mod tests {
         let t = std::time::Instant::now();
         let stats = local.reproject(&db).await.unwrap();
         println!("startup after, 100 new ({stats:?}): {:?}", t.elapsed());
+    }
+
+    /// A reproject takes each row's host from its record's envelope, which the body never
+    /// carries.
+    #[rstest]
+    #[tokio::test]
+    async fn build_records_the_host_each_record_came_from() {
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let host = hid();
+        let s = AiSessionStore::builder().store(store).host_id(host).key(key()).build();
+        for m in ordered_messages(&sample_handle()) {
+            s.push(&m).await.unwrap();
+        }
+
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        s.build(&db).await.unwrap();
+
+        let sess = db.get_session(&sample_handle()).await.unwrap().unwrap();
+        assert_eq!(sess.host, Some(host));
+        let rows: Vec<_> =
+            futures::TryStreamExt::try_collect(db.messages(&sample_handle())).await.unwrap();
+        assert!(rows.iter().all(|m| m.host == Some(host)));
     }
 }

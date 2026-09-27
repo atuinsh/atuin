@@ -1209,6 +1209,14 @@ impl Settings {
         Self::effective_data_dir().join("output-capture")
     }
 
+    /// The AI harness session sidecar database, under the [effective data
+    /// dir](Self::effective_data_dir). The daemon owns and writes it; other readers open it
+    /// read-only (`AiSessionDatabase::open_read_only`).
+    #[must_use]
+    pub fn ai_session_sidecar_path() -> PathBuf {
+        Self::effective_data_dir().join("ai_harness_sessions.db")
+    }
+
     // -- Meta store: lazily initialized on first access --
 
     pub async fn meta_store() -> Result<&'static crate::meta::MetaStore> {

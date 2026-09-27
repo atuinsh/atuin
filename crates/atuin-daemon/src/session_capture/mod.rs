@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use atuin_client::ai_session::{
     AiSessionDatabase, AiSessionStore, Appended, DbError, HarnessKind, HarnessSession, Message,
-    PushError, Session, SessionMatch,
+    PushError, Session, SessionFilter, SessionMatch,
 };
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4::Key;
@@ -67,6 +67,8 @@ impl Sink {
         // Apply capture policy before either persistence path or the live tail. Keep structural
         // rows (even with no content) so parent links and usage accounting remain intact.
         sanitize_message(&mut msg);
+        // Captured here, so on this host; a reproject reads the same from the record envelope.
+        msg.host = Some(self.records.host_id());
         let mut pending = self.pending_projection.lock().await;
         if let Some(previous) = pending.as_ref() {
             self.project_and_broadcast(previous).await?;
@@ -237,11 +239,8 @@ impl AiHarnessSessionCapture {
         self.sink.subscribe()
     }
 
-    pub async fn list_sessions(
-        &self,
-        harness: Option<HarnessKind>,
-    ) -> Result<Vec<Session>, DbError> {
-        self.sink.sidecar.list_sessions(harness).await
+    pub async fn list_sessions(&self, filter: &SessionFilter) -> Result<Vec<Session>, DbError> {
+        self.sink.sidecar.list_sessions(filter).await
     }
 
     pub async fn get_session(&self, session: &HarnessSession) -> Result<Option<Session>, DbError> {
@@ -265,10 +264,10 @@ impl AiHarnessSessionCapture {
     pub fn search(
         &self,
         query: &str,
-        harness: Option<HarnessKind>,
+        filter: &SessionFilter,
         limit: u32,
     ) -> impl Stream<Item = Result<SessionMatch, DbError>> + Send + 'static {
-        self.sink.sidecar.search(query, harness, limit)
+        self.sink.sidecar.search(query, filter, limit)
     }
 }
 
@@ -362,6 +361,8 @@ mod tests {
         ];
         sink.append(msg.clone()).await.unwrap();
         sanitize_message(&mut msg);
+        // Capture stamps the local host.
+        msg.host = Some(sink.records.host_id());
         assert_eq!(msg.content.len(), 4);
         assert_eq!(msg.content[3], Content::ReasoningSummary { tokens: None });
         assert_eq!(msg.content[0], Content::Text("AWS_SECRET_ACCESS_KEY=****".to_owned()));
@@ -403,7 +404,7 @@ mod tests {
             "PRIVATE_ATTACHMENT",
             "TEXTSECRET",
         ] {
-            let mut matches = Box::pin(sink.sidecar.search(query, None, 10));
+            let mut matches = Box::pin(sink.sidecar.search(query, &SessionFilter::default(), 10));
             assert!(matches.next().await.is_none(), "sensitive content indexed: {query}");
         }
     }
@@ -846,13 +847,21 @@ mod pipeline_tests {
                 .map(|s| (s.handle.session.to_string(), s.usage.output.unwrap()))
                 .collect::<std::collections::BTreeMap<_, _>>()
         };
-        let live = collect(sink.sidecar.list_sessions(None).await.unwrap());
+        let live = collect(sink.sidecar.list_sessions(&SessionFilter::default()).await.unwrap());
         let rebuilt = AiSessionDatabase::in_memory().await.unwrap();
         sink.records.build(&rebuilt).await.unwrap();
-        assert_eq!(collect(rebuilt.list_sessions(None).await.unwrap()), live, "rebuild agrees");
+        assert_eq!(
+            collect(rebuilt.list_sessions(&SessionFilter::default()).await.unwrap()),
+            live,
+            "rebuild agrees"
+        );
         // So does a startup reprojection over the live sidecar, which replays what it holds.
         sink.records.reproject(&sink.sidecar).await.unwrap();
-        assert_eq!(collect(sink.sidecar.list_sessions(None).await.unwrap()), live, "replay agrees");
+        assert_eq!(
+            collect(sink.sidecar.list_sessions(&SessionFilter::default()).await.unwrap()),
+            live,
+            "replay agrees"
+        );
         live
     }
 

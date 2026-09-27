@@ -160,6 +160,8 @@ message Message {
   optional string role_label = 16;
   // The harness's own stop reason; set exactly when stop_reason is STOP_REASON_OTHER.
   optional string stop_reason_label = 17;
+  // The host that captured the message (a hyphenated host id), when known.
+  optional string host_id = 18;
 }
 
 message Session {
@@ -176,4 +178,12 @@ message Session {
   Tokens tokens = 10;
   optional string title = 11;
   optional string preview = 12;
+  // The host that captured the session (a hyphenated host id), when known.
+  optional string host_id = 13;
+  // The top-most stored ancestor this session is grouped under; absent for a root.
+  optional HarnessSession root = 14;
+  // Sessions grouped under this one; only counted by roots-only queries.
+  uint64 child_count = 15;
+  // The newest updated_at across the group; only set by roots-only queries.
+  optional google.protobuf.Timestamp group_updated_at = 16;
 }

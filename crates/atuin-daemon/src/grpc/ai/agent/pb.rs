@@ -23,7 +23,7 @@ use atuin_common::harnesstools::session::{
 };
 use atuin_common::string::highlighted::FromHighlightedTextProtoError;
 use atuin_common::time::{OffsetDateTimeExt, TimespecOutOfRange};
-use atuin_domain::record::RecordId;
+use atuin_domain::record::{HostId, RecordId};
 pub use codegen::*;
 use thiserror::Error;
 use time::OffsetDateTime;
@@ -197,8 +197,28 @@ impl From<DomainMessage> for Message {
             stop_reason: value.stop_reason.map(|reason| StopReason::from(reason) as i32),
             role_label,
             stop_reason_label,
+            host_id: value.host.map(host_repr),
         }
     }
+}
+
+fn host_repr(host: HostId) -> String {
+    host.as_hyphenated().to_string()
+}
+
+fn host_from_repr(host: Option<String>) -> Result<Option<HostId>, ParseError> {
+    Ok(host.map(|host| uuid::Uuid::parse_str(&host)).transpose()?.map(HostId))
+}
+
+fn timestamp(at: OffsetDateTime) -> prost_types::Timestamp {
+    prost_types::Timestamp {
+        seconds: at.unix_timestamp(),
+        nanos: at.nanosecond().cast_signed(),
+    }
+}
+
+fn from_timestamp(at: prost_types::Timestamp) -> Result<OffsetDateTime, ParseError> {
+    Ok(OffsetDateTime::from_timespec(at.seconds.into(), at.nanos.into())?)
 }
 
 impl Message {
@@ -264,6 +284,7 @@ impl TryFrom<Message> for DomainMessage {
             session_title_source: None,
             title_change: None,
             turn_id: None,
+            host: host_from_repr(value.host_id)?,
         })
     }
 }
@@ -288,6 +309,10 @@ impl From<DomainSession> for Session {
             tokens: Some(value.usage),
             title: value.title,
             preview: value.preview,
+            host_id: value.host.map(host_repr),
+            root: value.root.map(Into::into),
+            child_count: value.child_count,
+            group_updated_at: value.group_updated_at.map(timestamp),
         }
     }
 }
@@ -316,6 +341,10 @@ impl TryFrom<Session> for DomainSession {
             title: value.title,
             title_source: None,
             preview: value.preview,
+            host: host_from_repr(value.host_id)?,
+            root: value.root.map(TryInto::try_into).transpose()?,
+            child_count: value.child_count,
+            group_updated_at: value.group_updated_at.map(from_timestamp).transpose()?,
         })
     }
 }
@@ -367,6 +396,10 @@ mod tests {
                 reasoning,
             }
         })
+    }
+
+    fn arb_host() -> impl Strategy<Value = HostId> {
+        any::<u128>().prop_map(|id| HostId(uuid::Uuid::from_u128(id)))
     }
 
     fn arb_role() -> impl Strategy<Value = DomainRole> {
@@ -450,12 +483,16 @@ mod tests {
             prop::option::of("[a-z]{1,8}"),
             prop::option::of("[a-z]{1,8}"),
         );
-        let outcome = (prop::option::of(arb_usage()), prop::option::of(arb_stop_reason()));
+        let outcome = (
+            prop::option::of(arb_usage()),
+            prop::option::of(arb_stop_reason()),
+            prop::option::of(arb_host()),
+        );
         (handles, body, outcome).prop_map(
             |(
                 (id, session, source_id, parent, parent_source_id),
                 (timestamp, role, content, cwd, git_branch, model),
-                (usage, stop_reason),
+                (usage, stop_reason, host),
             )| DomainMessage {
                 id: RecordId(uuid::Uuid::from_u128(id)),
                 session,
@@ -474,6 +511,7 @@ mod tests {
                 session_title_source: None,
                 title_change: None,
                 turn_id: None,
+                host,
             },
         )
     }
@@ -494,10 +532,17 @@ mod tests {
             prop::option::of(".{0,8}"),
             prop::option::of(".{0,8}"),
         );
-        (handles, summary).prop_map(
+        let grouping = (
+            prop::option::of(arb_host()),
+            prop::option::of(arb_harness_session()),
+            any::<u64>(),
+            prop::option::of(arb_timestamp()),
+        );
+        (handles, summary, grouping).prop_map(
             |(
                 (handle, parent, cwd, git_branch, model),
                 (started_at, updated_at, message_count, usage, title, preview),
+                (host, root, child_count, group_updated_at),
             )| DomainSession {
                 handle,
                 parent,
@@ -511,6 +556,10 @@ mod tests {
                 title,
                 title_source: None,
                 preview,
+                host,
+                root,
+                child_count,
+                group_updated_at,
             },
         )
     }

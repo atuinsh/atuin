@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use atuin_client::ai_session::{HarnessKind, SessionMatch};
+use atuin_client::ai_session::{HarnessKind, SessionFilter, SessionMatch};
 use atuin_client::settings::Settings;
 use atuin_common::range::Clamped;
 use atuin_common::string::NonBlankString;
@@ -59,7 +59,14 @@ impl AtuinAiSessionSearchToolCall {
         let harness = self.harness.map(HarnessKind::from);
         let hits = async {
             client
-                .search_sessions(self.query.as_str(), harness, self.limit.get())
+                .search_sessions(
+                    self.query.as_str(),
+                    &SessionFilter {
+                        harness,
+                        ..SessionFilter::default()
+                    },
+                    self.limit.get(),
+                )
                 .await
                 .map_err(|e| format!("AI session search failed: {e}"))?
                 .map_err(|e| format!("AI session search failed: {e}"))
