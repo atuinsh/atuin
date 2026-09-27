@@ -189,6 +189,7 @@ unicode-width = "0.2"
 url = { version = "2", features = ["serde"] }
 # Explicitly 1.6 is necessary because the v7 UUID was only added then.
 uuid = { version = "1.6", features = ["v4", "v7", "serde"] }
+which = "8"
 whoami = "2"
 windows-sys = {
     version = "0.61",
