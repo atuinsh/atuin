@@ -36,8 +36,8 @@ use ratatui::{Terminal, TerminalOptions, Viewport};
 pub use resumer::{ResumePlan, Resumer};
 pub use source::{SessionRow, SessionSource};
 
-use self::resumer::NotResumable;
-use self::state::{CHILDREN, InputAction, PLAN, PREVIEW, Pending, State};
+use self::resumer::{NotResumable, Resume};
+use self::state::{CHILDREN, InputAction, PLAN, PREVIEW, Pending, RESTORE, State};
 use self::worker::{Request, Requests, Response};
 
 /// How often the picker redraws on its own.
@@ -218,15 +218,20 @@ fn apply_response(state: &mut State, response: Response, requests: &Requests) {
         Response::Plan(handle, plan) => {
             state.plans.insert(handle, plan);
         }
+        Response::Restored(handle, plan) => {
+            state.requested.remove(&(handle.clone(), RESTORE));
+            state.plans.insert(handle, plan.map(Resume::ready));
+        }
         Response::HostNames(names) => state.apply_host_names(names),
     }
 }
 
-/// Carry out `action` for the selected session once its plan is known. `None` keeps the picker
-/// open (the plan is still coming, the session can't be resumed, or it was a copy).
-fn complete(state: &mut State, action: Pending) -> Option<Outcome> {
-    let row = state.selected()?;
-    let Some(plan) = state.plans.get(&row.handle) else {
+/// Carry out `action` for the selected session once its plan is known, restoring the session
+/// from sync first when its transcript isn't here. `None` keeps the picker open (the plan or the
+/// restore is still coming, the session can't be resumed, or it was a copy).
+fn complete(state: &mut State, action: Pending, requests: &Requests) -> Option<Outcome> {
+    let row = state.selected()?.clone();
+    let Some(plan) = state.plans.get(&row.handle).cloned() else {
         state.pending = Some((row.handle.clone(), action));
         state.status = Some(("locating the session…".to_owned(), Meaning::Annotation));
         return None;
@@ -237,19 +242,49 @@ fn complete(state: &mut State, action: Pending) -> Option<Outcome> {
             state.accept = false;
             None
         }
-        (Ok(plan), Pending::Copy) => {
-            let line = resumer::shell_line(plan);
-            state.status = Some(match set_clipboard(&line) {
-                Ok(()) => (format!("copied: {line}"), Meaning::AlertInfo),
-                Err(e) => (format!("copy failed: {e}"), Meaning::AlertError),
-            });
+        // Copying writes nothing: the command copied restores the session when it runs.
+        (
+            Ok(Resume {
+                restore: Some(_), ..
+            }),
+            Pending::Copy,
+        ) => {
+            let id = row.handle.session.as_ref();
+            copy(state, &format!("atuin ai resume {}", resumer::quote(id)));
             None
         }
-        (Ok(plan), Pending::Resume) => Some(Outcome::Resume(plan.clone())),
-        (Ok(plan), Pending::Edit) => Some(Outcome::Edit(plan.clone())),
+        (
+            Ok(Resume {
+                restore: Some(restore),
+                ..
+            }),
+            action,
+        ) => {
+            if state.requested.insert((row.handle.clone(), RESTORE)) {
+                requests.send(Request::Restore(Box::new(row.clone()), restore.clone()));
+            }
+            let note = restore.note.map(|n| format!(": {n}")).unwrap_or_default();
+            state.status = Some((format!("restoring from sync…{note}"), Meaning::Annotation));
+            state.pending = Some((row.handle, action));
+            return None;
+        }
+        (Ok(resume), Pending::Copy) => {
+            copy(state, &resumer::shell_line(&resume.plan));
+            None
+        }
+        (Ok(resume), Pending::Resume) => Some(Outcome::Resume(resume.plan)),
+        (Ok(resume), Pending::Edit) => Some(Outcome::Edit(resume.plan)),
     };
     state.pending = None;
     outcome
+}
+
+/// Put `line` on the clipboard, saying so in the status row.
+fn copy(state: &mut State, line: &str) {
+    state.status = Some(match set_clipboard(line) {
+        Ok(()) => (format!("copied: {line}"), Meaning::AlertInfo),
+        Err(e) => (format!("copy failed: {e}"), Meaning::AlertError),
+    });
 }
 
 impl Picker<'_> {
@@ -327,7 +362,7 @@ impl Picker<'_> {
                         if let Some(row) = state.selected().cloned() {
                             request_plan(&mut state, &requests, &row);
                         }
-                        if let Some(outcome) = complete(&mut state, pending) {
+                        if let Some(outcome) = complete(&mut state, pending, &requests) {
                             break 'render outcome;
                         }
                     }
@@ -352,7 +387,7 @@ impl Picker<'_> {
                     // An enter/tab/ctrl-y waiting on this session's plan can finish now.
                     if let Some((handle, pending)) = state.pending.clone()
                         && state.plans.contains_key(&handle)
-                        && let Some(outcome) = complete(&mut state, pending)
+                        && let Some(outcome) = complete(&mut state, pending, &requests)
                     {
                         break 'render outcome;
                     }

@@ -5,17 +5,20 @@
 //! hosts, a deleted worktree (missing cwd), and live sessions (updated in the last two minutes).
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use atuin_client::ai_session::{HarnessKind, HarnessSession, NativeSessionId};
 use atuin_common::harnesstools::Harness as _;
+use atuin_common::harnesstools::rehydrate::RehydrateSession;
 use atuin_common::harnesstools::resume::CwdRequirement;
 use atuin_common::harnesstools::session::Usage;
 use time::{Duration, OffsetDateTime};
 
 use super::ResumeContext;
-use super::resumer::{NotResumable, ResumeError, ResumePlan, ResumeTarget, Resumer};
+use super::resumer::{
+    NotResumable, Restore, Resume, ResumeError, ResumePlan, ResumeTarget, Resumer,
+};
 use super::source::{Relation, SessionFilter, SessionPreview, SessionRow, SessionSource, Snippet};
 
 pub const THIS_HOST_ID: &str = "h-wintermute";
@@ -836,10 +839,36 @@ impl SessionSource for FakeSource {
         rows.sort_by_key(|r| std::cmp::Reverse(r.updated_at));
         Ok(rows)
     }
+
+    /// The session without its messages: the fake sessions have none.
+    async fn rehydrate(
+        &self,
+        session: &HarnessSession,
+        cwd: &Path,
+    ) -> eyre::Result<RehydrateSession> {
+        let row = &self
+            .sessions
+            .iter()
+            .find(|s| &s.row.handle == session)
+            .ok_or_else(|| eyre::eyre!("no such session"))?
+            .row;
+        Ok(RehydrateSession {
+            id: row.handle.session.to_string(),
+            title: Some(row.title.text.clone()),
+            cwd: cwd.to_owned(),
+            original_cwd: row.cwd.clone(),
+            git_branch: row.branch.clone(),
+            model: row.model.clone(),
+            started_at: row.started_at,
+            messages: Vec::new(),
+        })
+    }
 }
 
 /// A [`Resumer`] for the fake sessions: the harnesses' real plans, with the deleted worktree as the
 /// only missing directory (none of the fake paths exist on this machine, so it can't check).
+/// Other hosts' sessions are restored from sync, into the directory they ran in; restoring
+/// writes nothing.
 pub struct FakeResumer {
     missing: HashSet<PathBuf>,
 }
@@ -852,17 +881,20 @@ impl Default for FakeResumer {
     }
 }
 
-#[async_trait]
-impl Resumer for FakeResumer {
-    async fn plan(&self, session: &SessionRow) -> Result<ResumePlan, NotResumable> {
-        if session.host_id != THIS_HOST_ID {
-            return Err(NotResumable::Remote(session.hostname.clone()));
-        }
+impl FakeResumer {
+    fn plan_for(
+        &self,
+        session: &SessionRow,
+        native: Option<PathBuf>,
+    ) -> Result<ResumePlan, NotResumable> {
         let kind = session.handle.harness;
         let harness = kind.harness().ok_or(NotResumable::Unsupported("this"))?;
         let mut target = ResumeTarget::new(session.handle.session.as_ref());
         if let Some(cwd) = &session.cwd {
             target = target.with_cwd(cwd);
+        }
+        if let Some(native) = native {
+            target = target.with_native_path(native);
         }
         let mut plan = harness.resume(&target, None)?;
         // `ResumePlan::prepare`, against the fake filesystem.
@@ -873,5 +905,30 @@ impl Resumer for FakeResumer {
             plan.cwd = None;
         }
         Ok(plan)
+    }
+}
+
+#[async_trait]
+impl Resumer for FakeResumer {
+    async fn plan(&self, session: &SessionRow) -> Result<Resume, NotResumable> {
+        let plan = self.plan_for(session, None)?;
+        if session.host_id == THIS_HOST_ID {
+            return Ok(Resume::ready(plan));
+        }
+        let cwd = session.cwd.clone().unwrap_or_else(|| PathBuf::from(REPO));
+        Ok(Resume {
+            plan,
+            restore: Some(Restore { cwd, note: None }),
+        })
+    }
+
+    async fn restore(
+        &self,
+        _source: &dyn SessionSource,
+        session: &SessionRow,
+        _restore: &Restore,
+    ) -> Result<ResumePlan, NotResumable> {
+        let native = PathBuf::from(format!("/restored/{}.jsonl", session.handle.session));
+        self.plan_for(session, Some(native))
     }
 }

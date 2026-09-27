@@ -106,9 +106,11 @@ async fn rows_show_badges_children_live_and_other_hosts() {
     assert!(!out.contains("Explore: find"), "{out}");
 }
 
+/// Other hosts' sessions show their host, and aren't dimmed: they resume by being restored
+/// from sync, which the selected one says.
 #[rstest]
 #[tokio::test]
-async fn global_mode_shows_other_hosts_dimmed() {
+async fn global_mode_shows_other_hosts_as_restorable() {
     let mut state = loaded(&settings(), "", 0).await;
     state.mode = atuin_client::settings::AiSessionFilterMode::Global;
     let source = FakeSource::new();
@@ -120,8 +122,25 @@ async fn global_mode_shows_other_hosts_dimmed() {
     assert!(line.contains("Bisect the aarch64"), "{line}");
     let x = u16::try_from(line.find("Bisect").unwrap()).unwrap();
     let cell = &buf[(x, u16::try_from(y).unwrap())];
-    assert!(cell.modifier.contains(ratatui::style::Modifier::DIM), "remote rows are dimmed");
+    assert!(!cell.modifier.contains(ratatui::style::Modifier::DIM), "remote rows aren't dimmed");
     assert!(out.contains("@laptop"));
+
+    let remote = state.results.iter().position(|r| r.host_id != fake::THIS_HOST_ID).unwrap();
+    state.list.selected = remote;
+    let out = text(&render(&mut state, &settings(), 100, 30));
+    assert!(out.contains("restores from sync"), "{out}");
+}
+
+/// Inspecting another host's session says it will be restored from sync, and how it resumes.
+#[rstest]
+#[tokio::test]
+async fn inspect_says_a_remote_session_is_restored() {
+    let mut s = settings();
+    s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
+    let mut state = loaded(&s, "aarch64", 1).await;
+    let out = text(&render(&mut state, &s, 100, 30));
+    assert!(out.contains("Restore   from sync, when resumed"), "{out}");
+    assert!(out.contains("Resume    cd -- "), "{out}");
 }
 
 #[rstest]

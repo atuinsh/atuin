@@ -6,6 +6,7 @@
 //!   screen until then;
 //! - details (preview, children, plan) for the selected session. Only the newest request of each
 //!   kind is kept: while the selection moves, the sessions it passed over are never loaded.
+//!   Restoring a session from sync, which only an enter or tab asks for, goes first.
 //!
 //! Host names are read once beside them, so rows listed before they are known can be relabelled.
 
@@ -16,7 +17,7 @@ use atuin_client::ai_session::HarnessSession;
 use atuin_client::settings::AiSessionFilterMode as FilterMode;
 use tokio::sync::mpsc;
 
-use super::resumer::{NotResumable, ResumePlan, Resumer};
+use super::resumer::{NotResumable, Restore, Resume, ResumePlan, Resumer};
 use super::source::{SessionFilter, SessionPreview, SessionRow, SessionSource};
 
 #[derive(Debug)]
@@ -33,6 +34,8 @@ pub enum Request {
     },
     /// Plan resuming a session (may walk the harness's session directories).
     Plan(Box<SessionRow>),
+    /// Write out the transcript of a session planned with a restore, and plan resuming it.
+    Restore(Box<SessionRow>, Restore),
 }
 
 #[derive(Debug)]
@@ -44,7 +47,9 @@ pub enum Response {
     },
     Preview(HarnessSession, SessionPreview),
     Children(HarnessSession, Vec<SessionRow>),
-    Plan(HarnessSession, Result<ResumePlan, NotResumable>),
+    Plan(HarnessSession, Result<Resume, NotResumable>),
+    /// The session is restored (or couldn't be): the plan that resumes it.
+    Restored(HarnessSession, Result<ResumePlan, NotResumable>),
     /// Other hosts' names, by host id (see [`SessionSource::host_names`]).
     HostNames(HashMap<String, String>),
 }
@@ -133,6 +138,7 @@ struct Latest {
     preview: Option<Request>,
     children: Option<Request>,
     plan: Option<Request>,
+    restore: Option<Request>,
 }
 
 impl Latest {
@@ -141,15 +147,20 @@ impl Latest {
             Request::Preview(_) => &mut self.preview,
             Request::Children { .. } => &mut self.children,
             Request::Plan(_) => &mut self.plan,
+            Request::Restore(..) => &mut self.restore,
             Request::Search { .. } => return,
         };
         *slot = Some(request);
     }
 
-    /// The next to answer: a plan first (an enter may be waiting on it), then children, then the
-    /// preview.
+    /// The next to answer: a restore or a plan first (an enter may be waiting on it), then
+    /// children, then the preview.
     fn take(&mut self) -> Option<Request> {
-        self.plan.take().or_else(|| self.children.take()).or_else(|| self.preview.take())
+        self.restore
+            .take()
+            .or_else(|| self.plan.take())
+            .or_else(|| self.children.take())
+            .or_else(|| self.preview.take())
     }
 }
 
@@ -192,6 +203,10 @@ async fn details(
                 Response::Children(session, children)
             }
             Request::Plan(row) => Response::Plan(row.handle.clone(), resumer.plan(&row).await),
+            Request::Restore(row, restore) => Response::Restored(
+                row.handle.clone(),
+                resumer.restore(source.as_ref(), &row, &restore).await,
+            ),
             Request::Search { .. } => continue,
         };
         if responses.send(response).is_err() {
@@ -259,7 +274,7 @@ mod tests {
             panic!("expected a plan");
         };
         assert_eq!(handle, root.handle);
-        assert_eq!(plan.unwrap().program, "claude");
+        assert_eq!(plan.unwrap().plan.program, "claude");
     }
 
     /// A source whose host names wait for a permit: they come after the first search answers.

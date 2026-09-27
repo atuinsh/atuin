@@ -1,38 +1,84 @@
 //! The picker's resume seam: how a session turns into a command, or why it can't here.
 //!
 //! Plans come from the harness tools ([`atuin_common::harnesstools::resume`]); this layer adds
-//! what only the picker knows: which host recorded the session, whether its transcript is on this
-//! machine, and the user's `[ai.sessions.resume]` templates. Planning may walk the harness's
-//! session directories, so the picker asks only for the selected session, never per row.
+//! what only the picker knows: whether the session's transcript is on this machine, where to
+//! resume one that isn't, and the user's `[ai.sessions.resume]` templates. Planning may walk the
+//! harness's session directories, so the picker asks only for the selected session, never per
+//! row.
+//!
+//! A session whose native transcript isn't here (recorded on another host, or deleted) is
+//! resumed from the synced messages: the plan says so ([`Resume::restore`]), and only once the
+//! user accepts it does [`Resumer::restore`] write the transcript back out
+//! ([`Harness::rehydrate`](atuin_common::harnesstools::Harness::rehydrate)) and plan resuming it.
+
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use atuin_client::settings::AiSessionResume;
-use atuin_common::harnesstools::Harness as _;
-pub use atuin_common::harnesstools::resume::{ResumeError, ResumePlan, ResumeTarget};
+use atuin_common::harnesstools::rehydrate::{RehydrateError, RehydrateSession};
+pub use atuin_common::harnesstools::resume::{ResumeError, ResumePlan, ResumeTarget, quote};
+use atuin_common::harnesstools::{AnyHarness, Harness as _};
 
-use super::source::{SessionRow, harness_label};
+use super::ResumeContext;
+use super::source::{SessionRow, SessionSource, harness_label};
 
 /// Why a session can be viewed but not resumed here.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum NotResumable {
-    #[error("recorded on {0}; only viewable here")]
-    Remote(String),
-
     #[error("atuin can't resume {0} sessions")]
     Unsupported(&'static str),
 
-    #[error("its transcript isn't on this machine any more")]
-    TranscriptMissing,
+    #[error("`{0}` isn't installed here (not found on PATH)")]
+    NotInstalled(String),
+
+    #[error("restoring it from sync failed: {0}")]
+    Restore(String),
 
     #[error(transparent)]
     Harness(#[from] ResumeError),
 }
 
+/// How to resume a session here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resume {
+    pub plan: ResumePlan,
+    /// Set when the session's transcript isn't on this machine: it is written from the synced
+    /// messages first ([`Resumer::restore`]), and `plan` only shows what will run.
+    pub restore: Option<Restore>,
+}
+
+impl Resume {
+    /// A session ready to resume with `plan`.
+    pub fn ready(plan: ResumePlan) -> Self {
+        Self {
+            plan,
+            restore: None,
+        }
+    }
+}
+
+/// Where a session restored from sync resumes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Restore {
+    pub cwd: PathBuf,
+    /// Why that isn't the directory the session ran in, when it isn't.
+    pub note: Option<String>,
+}
+
 /// Plans resuming a session.
 #[async_trait]
 pub trait Resumer: Send + Sync {
-    /// How to resume `session` here, checked against the filesystem.
-    async fn plan(&self, session: &SessionRow) -> Result<ResumePlan, NotResumable>;
+    /// How to resume `session` here, checked against the filesystem. Never writes anything.
+    async fn plan(&self, session: &SessionRow) -> Result<Resume, NotResumable>;
+
+    /// Write out the transcript of `session`, planned with `restore`, from what `source` holds of
+    /// it, and plan resuming it. Only once the user has chosen to resume it.
+    async fn restore(
+        &self,
+        source: &dyn SessionSource,
+        session: &SessionRow,
+        restore: &Restore,
+    ) -> Result<ResumePlan, NotResumable>;
 }
 
 /// The shell line for a plan: `cd -- <cwd> && <command>`.
@@ -40,31 +86,94 @@ pub fn shell_line(plan: &ResumePlan) -> String {
     plan.render().unwrap_or_else(|_| plan.command())
 }
 
-/// The real [`Resumer`]: the harness's own resume command (or the user's template), for sessions
-/// recorded on this host whose transcript is still on disk.
+/// What a [`HarnessResumer`] reads and writes on this machine: the harness's transcripts and
+/// the programs on `PATH`. Tests swap it for one that touches nothing.
+#[async_trait]
+pub trait Machine: Send + Sync {
+    /// Where `harness` keeps session `id` here ([`Harness::locate`]).
+    ///
+    /// [`Harness::locate`]: atuin_common::harnesstools::Harness::locate
+    async fn locate(&self, harness: AnyHarness, id: &str) -> Option<PathBuf>;
+
+    /// Write `session` out for `harness` ([`Harness::rehydrate`]).
+    ///
+    /// [`Harness::rehydrate`]: atuin_common::harnesstools::Harness::rehydrate
+    async fn rehydrate(
+        &self,
+        harness: AnyHarness,
+        session: &RehydrateSession,
+    ) -> Result<PathBuf, RehydrateError>;
+
+    /// Whether `program` can be run here.
+    fn installed(&self, program: &str) -> bool;
+}
+
+/// This machine, as the harnesses themselves see it.
+pub struct ThisMachine;
+
+#[async_trait]
+impl Machine for ThisMachine {
+    async fn locate(&self, harness: AnyHarness, id: &str) -> Option<PathBuf> {
+        harness.locate(id).await
+    }
+
+    async fn rehydrate(
+        &self,
+        harness: AnyHarness,
+        session: &RehydrateSession,
+    ) -> Result<PathBuf, RehydrateError> {
+        harness.rehydrate(session).await
+    }
+
+    fn installed(&self, program: &str) -> bool {
+        on_path(program)
+    }
+}
+
+/// The real [`Resumer`]: the harness's own resume command (or the user's template), restoring
+/// the session's transcript from sync when it isn't on this machine.
 pub struct HarnessResumer {
     host_id: String,
     templates: AiSessionResume,
+    context: ResumeContext,
+    machine: Box<dyn Machine>,
 }
 
 impl HarnessResumer {
-    pub fn new(host_id: impl Into<String>, templates: AiSessionResume) -> Self {
+    pub fn new(context: ResumeContext, templates: AiSessionResume) -> Self {
+        Self::on(context, templates, ThisMachine)
+    }
+
+    /// A resumer looking at `machine` instead of this one.
+    pub fn on(
+        context: ResumeContext,
+        templates: AiSessionResume,
+        machine: impl Machine + 'static,
+    ) -> Self {
         Self {
-            host_id: host_id.into(),
+            host_id: context.host_id.clone(),
             templates,
+            context,
+            machine: Box::new(machine),
+        }
+    }
+
+    fn check_installed(&self, plan: &ResumePlan) -> Result<(), NotResumable> {
+        if self.machine.installed(&plan.program) {
+            Ok(())
+        } else {
+            Err(NotResumable::NotInstalled(plan.program.clone()))
         }
     }
 }
 
 #[async_trait]
 impl Resumer for HarnessResumer {
-    async fn plan(&self, session: &SessionRow) -> Result<ResumePlan, NotResumable> {
-        if session.host_id != self.host_id {
-            return Err(NotResumable::Remote(session.hostname.clone()));
-        }
+    async fn plan(&self, session: &SessionRow) -> Result<Resume, NotResumable> {
         let kind = session.handle.harness;
         let harness = kind.harness().ok_or(NotResumable::Unsupported(harness_label(kind)))?;
         let id = session.handle.session.as_ref();
+        let template = self.templates.template(kind);
 
         let mut target = ResumeTarget::new(id);
         if let Some(cwd) = &session.cwd {
@@ -72,56 +181,128 @@ impl Resumer for HarnessResumer {
         }
         // The harness decides first (a subagent is never resumable, whatever is on disk).
         harness.resume_plan(&target)?;
-        let native = harness.locate(id).await.ok_or(NotResumable::TranscriptMissing)?;
-        let target = target.with_native_path(native);
 
-        Ok(harness.resume(&target, self.templates.template(kind))?.prepare()?)
+        let local = session.host_id == self.host_id;
+        let resume = match self.machine.locate(harness, id).await {
+            Some(native) => {
+                // Another host's session restored here before: resume where it was restored to.
+                if !local && !session.cwd.as_deref().is_some_and(Path::is_dir) {
+                    target.cwd = Some(resolve_cwd(session.cwd.as_deref(), &self.context).cwd);
+                }
+                let target = target.with_native_path(native);
+                Resume::ready(harness.resume(&target, template)?.prepare()?)
+            }
+            None => {
+                let restore = resolve_cwd(session.cwd.as_deref(), &self.context);
+                target.cwd = Some(restore.cwd.clone());
+                Resume {
+                    plan: harness.resume(&target, template)?.prepare()?,
+                    restore: Some(restore),
+                }
+            }
+        };
+        self.check_installed(&resume.plan)?;
+        Ok(resume)
     }
+
+    async fn restore(
+        &self,
+        source: &dyn SessionSource,
+        session: &SessionRow,
+        restore: &Restore,
+    ) -> Result<ResumePlan, NotResumable> {
+        let kind = session.handle.harness;
+        let harness = kind.harness().ok_or(NotResumable::Unsupported(harness_label(kind)))?;
+        let fail = |e: String| NotResumable::Restore(e);
+        let data = source
+            .rehydrate(&session.handle, &restore.cwd)
+            .await
+            .map_err(|e| fail(format!("{e:#}")))?;
+        let native = match self.machine.rehydrate(harness, &data).await {
+            Ok(path) | Err(RehydrateError::AlreadyExists(path)) => path,
+            Err(e) => return Err(fail(e.to_string())),
+        };
+        let target = ResumeTarget::new(session.handle.session.as_ref())
+            .with_cwd(&restore.cwd)
+            .with_native_path(native);
+        let plan = harness.resume(&target, self.templates.template(kind))?.prepare()?;
+        self.check_installed(&plan)?;
+        Ok(plan)
+    }
+}
+
+/// Where to resume a session that ran in `original` on this machine: there, when it exists;
+/// else, when the current directory is in a git repository named like one `original` was in,
+/// the same place in that repository (or its root); else the current directory.
+pub fn resolve_cwd(original: Option<&Path>, context: &ResumeContext) -> Restore {
+    let Some(original) = original else {
+        return Restore {
+            cwd: context.cwd.clone(),
+            note: Some("its directory isn't known; resuming in the current directory".to_owned()),
+        };
+    };
+    if original.is_dir() {
+        return Restore {
+            cwd: original.to_owned(),
+            note: None,
+        };
+    }
+    let checkout = context.git_root.as_deref().and_then(|root| {
+        let name = root.file_name()?;
+        let components: Vec<_> = original.components().collect();
+        let at = components.iter().rposition(|c| c.as_os_str() == name)?;
+        let inside: PathBuf = components[at + 1..].iter().collect();
+        let same_place = root.join(inside);
+        Some(if same_place.is_dir() {
+            same_place
+        } else {
+            root.to_owned()
+        })
+    });
+    match checkout {
+        Some(cwd) => Restore {
+            note: Some(format!(
+                "{} isn't on this machine; resuming in {}",
+                original.display(),
+                cwd.display()
+            )),
+            cwd,
+        },
+        None => Restore {
+            cwd: context.cwd.clone(),
+            note: Some(format!(
+                "{} isn't on this machine; resuming in the current directory",
+                original.display()
+            )),
+        },
+    }
+}
+
+/// Whether `program` can be run: a path to a file, or a file of that name in a `PATH` directory
+/// (executable, on unix).
+pub fn on_path(program: &str) -> bool {
+    let runnable = |path: &Path| {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            path.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        }
+        #[cfg(not(unix))]
+        {
+            path.is_file()
+        }
+    };
+    if program.contains(std::path::MAIN_SEPARATOR) || program.contains('/') {
+        return runnable(Path::new(program));
+    }
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&paths).any(|dir| {
+        let path = dir.join(program);
+        runnable(&path) || (cfg!(windows) && runnable(&path.with_extension("exe")))
+    })
 }
 
 #[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use atuin_client::ai_session::HarnessKind;
-    use atuin_common::harnesstools::resume::CwdRequirement;
-    use rstest::rstest;
-
-    use super::*;
-    use crate::resume_tui::fake;
-
-    #[rstest]
-    fn shell_line_quotes_the_directory() {
-        let plan = ResumePlan {
-            program: "claude".to_owned(),
-            args: vec!["--resume".to_owned(), "abc".to_owned()],
-            cwd: Some(PathBuf::from("/tmp/it's here")),
-            cwd_requirement: CwdRequirement::Preferred,
-            native_path: None,
-        };
-        assert_eq!(shell_line(&plan), r"cd -- '/tmp/it'\''s here' && claude --resume abc");
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn remote_and_unsupported_sessions_are_not_resumable() {
-        let resumer = HarnessResumer::new(fake::THIS_HOST_ID, AiSessionResume::default());
-
-        let mut row = fake::row(HarnessKind::ClaudeCode, "abc-123", "t");
-        row.host_id = "other".to_owned();
-        row.hostname = "buildbox".to_owned();
-        let err = resumer.plan(&row).await.unwrap_err();
-        assert_eq!(err, NotResumable::Remote("buildbox".to_owned()));
-        assert_eq!(err.to_string(), "recorded on buildbox; only viewable here");
-
-        let row = fake::row(HarnessKind::Copilot, "cp-1", "t");
-        assert_eq!(resumer.plan(&row).await.unwrap_err(), NotResumable::Unsupported("Copilot"));
-
-        // A Claude Code subagent is refused by the harness before anything is looked up.
-        let row = fake::row(HarnessKind::ClaudeCode, "agent-a1b2", "t");
-        assert!(matches!(
-            resumer.plan(&row).await.unwrap_err(),
-            NotResumable::Harness(ResumeError::NotResumable(_))
-        ));
-    }
-}
+mod tests;
