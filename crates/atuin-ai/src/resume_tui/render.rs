@@ -19,20 +19,19 @@ use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
-    Block, BorderType, Borders, Clear, Paragraph, StatefulWidget, Tabs, Widget,
+    Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    StatefulWidget, Tabs, Widget, Wrap,
 };
 use time::{OffsetDateTime, UtcOffset};
 use unicode_width::UnicodeWidthStr;
 
+use super::panel::{self, SPLIT_MIN_WIDTH};
 use super::query::{TokenKind, TokenState};
 use super::resumer::shell_line;
-use super::source::{Relation, SessionRow, Snippet, harness_badge, harness_label};
-use super::state::{ListState, State, TAB_TITLES};
+use super::source::{SessionRow, Snippet, harness_badge, harness_label};
+use super::state::{LIVE_SECS, ListState, State, TAB_TITLES};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// Sessions updated this recently get a live dot.
-const LIVE_SECS: u64 = 120;
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub enum Compactness {
@@ -57,7 +56,7 @@ pub fn to_compactness(area: Rect, settings: &Settings) -> Compactness {
     }
 }
 
-fn style(theme: &Theme, meaning: Meaning) -> Style {
+pub(super) fn style(theme: &Theme, meaning: Meaning) -> Style {
     Style::from_crossterm(theme.as_style(meaning))
 }
 
@@ -86,25 +85,31 @@ fn flatten(text: &str) -> (String, Vec<usize>) {
     (out, map)
 }
 
-/// One line of `text` fitted to `width` columns, with the `highlights` (byte ranges into `text`)
-/// drawn in `hl`.
-fn highlighted_line(
+/// `text` flattened to one paragraph, with the `highlights` (byte ranges into `text`) drawn in
+/// `hl`, for wrapping.
+pub(super) fn highlighted_spans(
     text: &str,
     highlights: &[Range<usize>],
-    width: usize,
     base: Style,
     hl: Style,
 ) -> Vec<Span<'static>> {
     let (flat, map) = flatten(text);
-    let ellipsized = flat.ellipsize(Measure::Columns(width), Pos::End, Indicator::UNICODE);
-    let display = ellipsized.to_string();
+    spans_from(flat.char_indices().map(|(i, c)| (c, Some(i))), &map, highlights, base, hl)
+}
 
+/// Group characters into spans by whether their source byte is highlighted.
+fn spans_from(
+    chars: impl Iterator<Item = (char, Option<usize>)>,
+    map: &[usize],
+    highlights: &[Range<usize>],
+    base: Style,
+    hl: Style,
+) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut run = String::new();
     let mut run_hl = false;
-    for (i, ch) in display.char_indices() {
-        let is_hl = ellipsized
-            .source_index(i)
+    for (ch, source) in chars {
+        let is_hl = source
             .and_then(|b| map.get(b))
             .is_some_and(|src| highlights.iter().any(|r| r.contains(src)));
         if is_hl != run_hl && !run.is_empty() {
@@ -133,12 +138,24 @@ fn highlighted_line(
     spans
 }
 
-fn spans_width(spans: &[Span<'_>]) -> usize {
-    spans.iter().map(|s| s.content.width()).sum()
+/// One line of `text` fitted to `width` columns, with the `highlights` (byte ranges into `text`)
+/// drawn in `hl`.
+fn highlighted_line(
+    text: &str,
+    highlights: &[Range<usize>],
+    width: usize,
+    base: Style,
+    hl: Style,
+) -> Vec<Span<'static>> {
+    let (flat, map) = flatten(text);
+    let ellipsized = flat.ellipsize(Measure::Columns(width), Pos::End, Indicator::UNICODE);
+    let display = ellipsized.to_string();
+    let chars = display.char_indices().map(|(i, c)| (c, ellipsized.source_index(i)));
+    spans_from(chars, &map, highlights, base, hl)
 }
 
 /// The repository (or directory) name for the repo column.
-fn repo_name(row: &SessionRow) -> String {
+pub(super) fn repo_name(row: &SessionRow) -> String {
     row.git_root
         .as_deref()
         .or(row.cwd.as_deref())
@@ -147,15 +164,15 @@ fn repo_name(row: &SessionRow) -> String {
         .unwrap_or_default()
 }
 
-fn is_live(now: OffsetDateTime, row: &SessionRow) -> bool {
+pub(super) fn is_live(now: OffsetDateTime, row: &SessionRow) -> bool {
     now.saturating_duration_since(row.updated_at).as_secs() < LIVE_SECS
 }
 
-fn ago(now: OffsetDateTime, ts: OffsetDateTime) -> String {
+pub(super) fn ago(now: OffsetDateTime, ts: OffsetDateTime) -> String {
     now.saturating_duration_since(ts).display().largest_unit().to_string()
 }
 
-fn harness_style(theme: &Theme, harness: HarnessKind) -> Style {
+pub(super) fn harness_style(theme: &Theme, harness: HarnessKind) -> Style {
     let meaning = match harness {
         HarnessKind::ClaudeCode => Meaning::AlertWarn,
         HarnessKind::Codex => Meaning::AlertInfo,
@@ -510,7 +527,16 @@ impl State {
         let compactness = to_compactness(area, settings);
         let invert = settings.invert;
         let border_size = u16::from(compactness == Compactness::Full);
-        let preview_height = self.calc_preview_height(settings, compactness, border_size);
+        // Wide terminals get the detail pane beside the list instead of the preview strip.
+        let split = self.tab_index == 0
+            && settings.show_preview
+            && compactness != Compactness::Ultracompact
+            && area.width >= SPLIT_MIN_WIDTH;
+        let preview_height = if split {
+            border_size
+        } else {
+            self.calc_preview_height(settings, compactness, border_size)
+        };
 
         let show_help = settings.show_help && (compactness == Compactness::Full || area.height > 1);
         let show_tabs = settings.show_tabs && compactness != Compactness::Ultracompact;
@@ -628,6 +654,45 @@ impl State {
             return;
         }
 
+        let block = match compactness {
+            Compactness::Full if invert => Some(
+                Block::default()
+                    .borders(Borders::LEFT | Borders::RIGHT)
+                    .border_type(BorderType::Rounded)
+                    .title(format!("{:─>width$}", "", width = st.inner_width - 2)),
+            ),
+            Compactness::Full => Some(
+                Block::default()
+                    .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
+                    .border_type(BorderType::Rounded),
+            ),
+            _ => None,
+        };
+        let inner = block.as_ref().map_or(list_chunk, |b| b.inner(list_chunk));
+        if let Some(block) = block {
+            f.render_widget(block, list_chunk);
+        }
+        let (list_area, divider, pane) = if split {
+            let [list_area, divider, pane] = Layout::horizontal([
+                Constraint::Fill(3),
+                Constraint::Length(1),
+                Constraint::Fill(2),
+            ])
+            .areas(inner);
+            (list_area, Some(divider), Some(pane))
+        } else {
+            (inner, None, None)
+        };
+
+        // The pane shows the repository and branch, so the split list gives their room to titles.
+        let columns: Vec<AiSessionColumn> = settings
+            .ai
+            .sessions
+            .columns
+            .iter()
+            .copied()
+            .filter(|c| !split || !matches!(c, AiSessionColumn::Repo | AiSessionColumn::Branch))
+            .collect();
         let list = SessionList {
             rows: &self.results,
             block: None,
@@ -636,30 +701,48 @@ impl State {
             now: (self.now)(),
             indicator: &indicator,
             theme,
-            columns: &settings.ai.sessions.columns,
+            columns: &columns,
             host_id: &self.context.host_id,
         };
-        let list = match compactness {
-            Compactness::Full if invert => SessionList {
-                block: Some(
-                    Block::default()
-                        .borders(Borders::LEFT | Borders::RIGHT)
-                        .border_type(BorderType::Rounded)
-                        .title(format!("{:─>width$}", "", width = st.inner_width - 2)),
-                ),
-                ..list
-            },
-            Compactness::Full => SessionList {
-                block: Some(
-                    Block::default()
-                        .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
-                        .border_type(BorderType::Rounded),
-                ),
-                ..list
-            },
-            _ => list,
-        };
-        f.render_stateful_widget(list, list_chunk, &mut self.list);
+        f.render_stateful_widget(list, list_area, &mut self.list);
+
+        // A scrollbar on the right border (or the divider) once the list overflows.
+        let visible = usize::from(list_area.height);
+        let track = divider.unwrap_or(Rect {
+            x: list_chunk.right().saturating_sub(1),
+            y: list_area.y,
+            width: 1,
+            height: list_area.height,
+        });
+        if let Some(divider) = divider {
+            let line = style(theme, Meaning::Annotation);
+            for y in divider.top()..divider.bottom() {
+                f.buffer_mut()[(divider.x, y)].set_symbol("│").set_style(line);
+            }
+        }
+        if self.results.len() > visible && (divider.is_some() || compactness == Compactness::Full) {
+            let top = if invert {
+                self.list.offset
+            } else {
+                self.results.len().saturating_sub(self.list.offset + visible)
+            };
+            let mut state = ScrollbarState::new(self.results.len().saturating_sub(visible))
+                .position(top)
+                .viewport_content_length(visible);
+            let bar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .track_symbol(Some("│"))
+                .thumb_symbol("┃")
+                .style(style(theme, Meaning::Annotation));
+            f.render_stateful_widget(bar, track, &mut state);
+        }
+
+        if let Some(pane) = pane {
+            let pane = pane.inner(ratatui::layout::Margin::new(1, 0));
+            let lines = self.detail_lines(usize::from(pane.width), usize::from(pane.height), theme);
+            f.render_widget(Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true }), pane);
+        }
 
         if compactness == Compactness::Ultracompact {
             return;
@@ -696,6 +779,18 @@ impl State {
             _ => Paragraph::new(Text::from(lines)).style(style(theme, Meaning::Annotation)),
         };
         f.render_widget(preview, preview_chunk);
+
+        // Join the divider to the box's top and bottom borders.
+        if let Some(divider) = divider
+            && compactness == Compactness::Full
+        {
+            let border = f.buffer_mut()[(divider.x, list_chunk.y)].style();
+            f.buffer_mut()[(divider.x, list_chunk.y)].set_symbol("┬").set_style(border);
+            let below = list_chunk.bottom();
+            if below < area.bottom() {
+                f.buffer_mut()[(divider.x, below)].set_symbol("┴").set_style(border);
+            }
+        }
 
         let before_cursor = self.input.substring().width();
         let cursor_offset = border_size;
@@ -863,6 +958,17 @@ impl State {
             }),
             field("Messages", text(row.message_count.to_string())),
         ];
+        if let Some(t) = panel::tokens(&row.usage) {
+            lines.push(field("Tokens", text(t)));
+        }
+        if let Some(p) = self.previews.get(&row.handle).filter(|p| !p.activity.is_empty()) {
+            let spark =
+                panel::sparkline(&p.activity, row.started_at, row.updated_at, width.min(60));
+            lines.push(field("Activity", vec![Span::styled(
+                spark,
+                style(theme, Meaning::Guidance),
+            )]));
+        }
         lines.push(match self.plans.get(&row.handle) {
             None => field("Resume", vec![Span::styled("…", key)]),
             Some(Ok(plan)) => field("Resume", vec![Span::styled(
@@ -885,11 +991,13 @@ impl State {
             )));
             match children {
                 None => lines.push(Line::from(Span::styled("   …", key))),
-                Some(children) => {
-                    for child in children {
-                        lines.push(child_line(child, now, usize::from(inner.width), theme));
-                    }
-                }
+                Some(children) => lines.extend(panel::tree_lines(
+                    &row.handle,
+                    children,
+                    now,
+                    usize::from(inner.width),
+                    theme,
+                )),
             }
         }
 
@@ -899,35 +1007,6 @@ impl State {
 
 fn format_when(ts: OffsetDateTime, now: OffsetDateTime, tz: UtcOffset) -> String {
     format!("{}  ({} ago)", ts.to_offset(tz).display().ymd_hm(), ago(now, ts))
-}
-
-fn child_line(
-    child: &SessionRow,
-    now: OffsetDateTime,
-    width: usize,
-    theme: &Theme,
-) -> Line<'static> {
-    let (tag, meaning) = match child.relation {
-        Relation::Fork => ("fork    ", Meaning::Guidance),
-        Relation::Subagent => ("subagent", Meaning::Important),
-        Relation::Child => ("child   ", Meaning::Guidance),
-        Relation::Root => ("session ", Meaning::Base),
-    };
-    let tail = format!(
-        "{:>5} msgs  {:>9}",
-        child.message_count,
-        format!("{} ago", ago(now, child.updated_at))
-    );
-    let base = style(theme, Meaning::Base);
-    let title_w = width.saturating_sub(3 + 8 + 2 + 2 + tail.width());
-    let mut spans =
-        vec![Span::raw("   "), Span::styled(tag, style(theme, meaning)), Span::raw("  ")];
-    let title = highlighted_line(&child.title.text, &[], title_w, base, base);
-    let pad = title_w.saturating_sub(spans_width(&title));
-    spans.extend(title);
-    spans.push(Span::raw(" ".repeat(pad + 2)));
-    spans.push(Span::styled(tail, style(theme, Meaning::Annotation)));
-    Line::from(spans)
 }
 
 /// The input box's borders, as in the history search.

@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use atuin_client::ai_session::{HarnessKind, HarnessSession, NativeSessionId};
 use atuin_common::harnesstools::Harness as _;
 use atuin_common::harnesstools::resume::CwdRequirement;
+use atuin_common::harnesstools::session::Usage;
 use time::{Duration, OffsetDateTime};
 
 use super::ResumeContext;
@@ -44,6 +45,7 @@ pub fn context() -> ResumeContext {
 pub fn row(harness: HarnessKind, id: &str, title: &str) -> SessionRow {
     SessionRow {
         handle: handle(harness, id),
+        parent: None,
         relation: Relation::Root,
         title: Snippet::plain(title),
         cwd: Some(PathBuf::from(REPO)),
@@ -55,6 +57,7 @@ pub fn row(harness: HarnessKind, id: &str, title: &str) -> SessionRow {
         started_at: now() - Duration::hours(1),
         updated_at: now() - Duration::minutes(30),
         message_count: 10,
+        usage: Usage::default(),
         children: 0,
         matched: None,
     }
@@ -76,6 +79,8 @@ enum Role {
 struct FakeSession {
     row: SessionRow,
     parent: Option<HarnessSession>,
+    /// The top-most ancestor, as the sidecar groups sessions.
+    root: Option<HarnessSession>,
     messages: Vec<(Role, &'static str)>,
 }
 
@@ -116,6 +121,7 @@ fn build(spec: Spec, relation: Relation, parent: Option<&SessionRow>) -> FakeSes
     FakeSession {
         row: SessionRow {
             handle: handle(spec.harness, spec.id),
+            parent: parent.map(|p| p.handle.clone()),
             relation,
             title: Snippet::plain(spec.title),
             cwd: Some(cwd),
@@ -127,10 +133,18 @@ fn build(spec: Spec, relation: Relation, parent: Option<&SessionRow>) -> FakeSes
             started_at: updated_at - spec.duration,
             updated_at,
             message_count: spec.msgs,
+            usage: Usage {
+                input: Some(spec.msgs * 2_300),
+                output: Some(spec.msgs * 410),
+                cache_read: Some(spec.msgs * 19_000),
+                cache_write: Some(spec.msgs * 1_200),
+                reasoning: None,
+            },
             children: 0,
             matched: None,
         },
         parent: parent.map(|p| p.handle.clone()),
+        root: None,
         messages: spec.messages,
     }
 }
@@ -258,7 +272,27 @@ impl FakeSource {
             Relation::Fork,
             Some(&resume.row),
         );
-        sessions.extend([resume, explore, review, fork]);
+        let fork_explore = build(
+            Spec {
+                harness: ClaudeCode,
+                id: "agent-c9d0e1f2",
+                title: "Explore: how ratatui's Table highlights cells",
+                cwd: REPO,
+                branch: Some("ai-resume"),
+                model: "claude-haiku-4-5",
+                host: HERE,
+                age: h(2) + m(20),
+                duration: m(3),
+                msgs: 11,
+                messages: vec![
+                    (U, "Can a Table cell carry several styled spans?"),
+                    (A, "Yes, a Cell takes a Line, but highlight_style restyles the whole row."),
+                ],
+            },
+            Relation::Subagent,
+            Some(&fork.row),
+        );
+        sessions.extend([resume, explore, review, fork, fork_explore]);
 
         sessions.push(build(
             Spec {
@@ -582,6 +616,21 @@ impl FakeSource {
             None,
         ));
 
+        // Group every session under its top-most ancestor, as the sidecar does.
+        let parents: Vec<(HarnessSession, Option<HarnessSession>)> =
+            sessions.iter().map(|s| (s.row.handle.clone(), s.parent.clone())).collect();
+        for s in &mut sessions {
+            let mut root = s.parent.clone();
+            while let Some(up) = root
+                .as_ref()
+                .and_then(|r| parents.iter().find(|(h, _)| h == r))
+                .and_then(|(_, p)| p.clone())
+            {
+                root = Some(up);
+            }
+            s.root = root;
+        }
+
         Self { sessions }
     }
 
@@ -599,9 +648,7 @@ impl FakeSource {
         &'a self,
         root: &'a HarnessSession,
     ) -> impl Iterator<Item = &'a FakeSession> {
-        self.sessions
-            .iter()
-            .filter(move |s| s.parent.as_ref() == Some(root) && s.row.relation != Relation::Root)
+        self.sessions.iter().filter(move |s| s.root.as_ref() == Some(root))
     }
 
     fn is_row(s: &FakeSession, filter: &SessionFilter) -> bool {
@@ -666,6 +713,33 @@ fn snippet(text: &str, terms: &[String]) -> Option<Snippet> {
         text: text[start..end].to_owned(),
         highlights,
     })
+}
+
+/// Message times for a fake session: bursts of work spread over its lifetime, the same every run.
+fn activity(row: &SessionRow) -> Vec<OffsetDateTime> {
+    let span = (row.updated_at - row.started_at).whole_seconds().max(1);
+    let mut seed = row
+        .handle
+        .session
+        .as_ref()
+        .bytes()
+        .fold(7u64, |a, b| a.wrapping_mul(31).wrapping_add(u64::from(b)));
+    let mut next = move || {
+        seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        seed >> 33
+    };
+    let bursts: Vec<i64> = (0..4).map(|_| i64::try_from(next() % 1000).unwrap_or(0)).collect();
+    let mut times: Vec<OffsetDateTime> = (0..row.message_count)
+        .map(|i| {
+            let burst = bursts[usize::try_from(i % 4).unwrap_or(0)];
+            let jitter = i64::try_from(next() % 120).unwrap_or(0) - 60;
+            let at = (burst * span / 1000 + jitter * span / 1000).clamp(0, span);
+            row.started_at + Duration::seconds(at)
+        })
+        .collect();
+    times.push(row.updated_at);
+    times.sort();
+    times
 }
 
 #[async_trait]
@@ -734,6 +808,7 @@ impl SessionSource for FakeSource {
             return Ok(SessionPreview::default());
         };
         Ok(SessionPreview {
+            activity: activity(&s.row),
             first_prompt: s
                 .messages
                 .iter()

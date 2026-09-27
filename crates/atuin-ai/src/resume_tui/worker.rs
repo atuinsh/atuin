@@ -148,7 +148,7 @@ mod tests {
         };
         assert_eq!(generation, 1);
         let rows = rows.unwrap();
-        let root = rows.iter().find(|r| r.children == 3).expect("a grouped root");
+        let root = rows.iter().find(|r| r.children == 4).expect("a grouped root");
 
         tx.send(Request::Children {
             session: root.handle.clone(),
@@ -158,7 +158,7 @@ mod tests {
         let Some(Response::Children(_, children)) = rx.recv().await else {
             panic!("expected children");
         };
-        assert_eq!(children.len(), 3);
+        assert_eq!(children.len(), 4);
 
         tx.send(Request::Preview(root.handle.clone())).unwrap();
         let Some(Response::Preview(_, preview)) = rx.recv().await else {

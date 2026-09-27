@@ -94,7 +94,7 @@ async fn rows_show_badges_children_live_and_other_hosts() {
     // The newest session sits at the bottom (not inverted), selected.
     let selected = out.lines().find(|l| l.contains(" > ")).unwrap();
     assert!(selected.contains("● 30s"), "live dot: {selected}");
-    assert!(selected.contains("CC") && selected.contains("+3"), "{selected}");
+    assert!(selected.contains("CC") && selected.contains("+4"), "{selected}");
     assert!(selected.contains("Add an interactive resume picker"), "{selected}");
     assert!(
         selected.contains("atuin") && selected.contains("ai-resume") && selected.contains("142")
@@ -179,9 +179,13 @@ async fn inspect_tab_shows_metadata_command_and_children() {
         "Resume    cd -- /home/ellie/src/atuin && claude --resume \
          7f3c9a12-5be0-4d7e-9c41-0a8e2b6f4d10"
     ));
-    assert!(out.contains("Children (3)"));
-    assert!(out.contains("subagent  Review the resume picker diff"));
-    assert!(out.contains("fork      Add an interactive resume picker to atuin ai (fork)"));
+    assert!(out.contains("Children (4)"));
+    assert!(out.contains("├─ subagent  Review the resume picker diff"), "{out}");
+    assert!(out.contains("└─ fork      Add an interactive resume picker to atuin ai (fork)"));
+    // The fork's own subagent nests under it.
+    assert!(out.contains("   └─ subagent  Explore: how ratatui's Table highlights cells"));
+    assert!(out.contains("Tokens    in 327k · out 58k · cache 2.9M"), "{out}");
+    assert!(out.contains("Activity  "), "{out}");
     assert!(out.contains("<esc>: back"));
 }
 
@@ -259,6 +263,38 @@ async fn no_sessions_in_workspace_widens() {
 
 #[rstest]
 #[tokio::test]
+async fn wide_terminals_split_the_list_and_a_detail_pane() {
+    let out = frame(&settings(), "subagents", 0, 140, 30).await;
+    let lines: Vec<&str> = out.lines().collect();
+    // The divider joins the box's borders.
+    assert!(lines[2].contains('┬'), "{out}");
+    let selected = lines.iter().find(|l| l.contains(" > ")).unwrap();
+    assert!(selected.contains('│'), "list and pane side by side: {selected}");
+    assert!(out.contains("Claude Code · claude-opus-4-5"), "{out}");
+    assert!(out.contains("First prompt"));
+    assert!(out.contains("Match"));
+    assert!(out.contains("Last reply"));
+    // No preview strip under the input.
+    assert!(!out.contains("first  "));
+
+    // Narrower terminals keep the strip.
+    let out = frame(&settings(), "", 0, 119, 30).await;
+    assert!(out.contains("first  "));
+}
+
+#[rstest]
+#[tokio::test]
+async fn overflowing_lists_get_a_scrollbar() {
+    let mut s = settings();
+    s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
+    let mut state = loaded(&s, "", 0).await;
+    let buf = render(&mut state, &s, 100, 14);
+    let right: String = (0..14).map(|y| buf[(98, y)].symbol().to_owned()).collect();
+    assert!(right.contains('┃'), "thumb on the right border: {right:?}");
+}
+
+#[rstest]
+#[tokio::test]
 async fn dump_frames() {
     let s = settings();
     let mut frames = Vec::new();
@@ -269,6 +305,7 @@ async fn dump_frames() {
         ("full, query 'flaky wall', 100x30", &s, "flaky wall", 0, 100, 30),
         ("full, inspect (ctrl-o), 100x30", &s, "", 1, 100, 30),
         ("full, 80x14 (inline_height = 14)", &s, "", 0, 80, 14),
+        ("full, wide split, query 'subagents', 140x32", &s, "subagents", 0, 140, 32),
         ("compact, 100x30", &compact, "", 0, 100, 30),
         ("compact, 80x14 (inline_height = 14)", &compact, "", 0, 80, 14),
     ] {

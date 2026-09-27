@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use atuin_client::ai_session::{
-    AiSessionDatabase, HarnessSession, Session, SessionFilter as DbFilter, SessionRelation,
+    AiSessionDatabase, HarnessSession, Message, Session, SessionFilter as DbFilter, SessionRelation,
 };
 use atuin_common::harnesstools::session::{Content, Role};
 use atuin_common::string::highlighted::HighlightedString;
@@ -74,6 +74,7 @@ impl SidecarSource {
         let title = s.title.clone().or_else(|| s.preview.clone()).unwrap_or_default();
         SessionRow {
             handle: s.handle,
+            parent: s.parent,
             relation,
             title: Snippet::plain(title),
             cwd: s.cwd,
@@ -85,6 +86,7 @@ impl SidecarSource {
             started_at: s.started_at,
             updated_at: s.group_updated_at.unwrap_or(s.updated_at),
             message_count: s.message_count,
+            usage: s.usage,
             children: u32::try_from(s.child_count).unwrap_or(u32::MAX),
             matched: None,
         }
@@ -159,6 +161,8 @@ impl SessionSource for SidecarSource {
 
     async fn preview(&self, session: &HarnessSession) -> Result<SessionPreview> {
         let messages: Vec<_> = self.db.messages(session).try_collect().await?;
+        let conversation = |m: &&Message| matches!(m.role, Role::User | Role::Assistant);
+        let activity = messages.iter().filter(conversation).map(|m| m.timestamp).collect();
         let first_prompt =
             messages.iter().filter(|m| m.role == Role::User).find_map(|m| text_of(&m.content));
         let last_assistant = messages
@@ -169,6 +173,7 @@ impl SessionSource for SidecarSource {
         Ok(SessionPreview {
             first_prompt,
             last_assistant,
+            activity,
         })
     }
 
@@ -193,7 +198,7 @@ impl SessionSource for SidecarSource {
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::ai_session::{HarnessKind, Message, NativeSessionId, SourceId};
+    use atuin_client::ai_session::{HarnessKind, NativeSessionId, SourceId};
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::RecordId;
     use rstest::{fixture, rstest};
@@ -285,6 +290,7 @@ mod tests {
         let preview = source.preview(&handle("root")).await.unwrap();
         assert_eq!(preview.first_prompt.as_deref(), Some("fix the flaky sync test"));
         assert_eq!(preview.last_assistant.as_deref(), Some("switched to a fixed clock"));
+        assert_eq!(preview.activity.len(), 2);
         assert_eq!(source.find_by_id("ro").await.unwrap().len(), 1);
     }
 }

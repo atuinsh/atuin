@@ -10,6 +10,7 @@
 
 pub mod fake;
 pub mod keymap;
+pub mod panel;
 pub mod query;
 pub mod render;
 pub mod resumer;
@@ -34,8 +35,15 @@ pub use resumer::{ResumePlan, Resumer};
 pub use source::{SessionRow, SessionSource};
 use tokio::sync::mpsc;
 
-use self::state::{InputAction, Pending, State};
+use self::state::{CHILDREN, InputAction, PLAN, PREVIEW, Pending, State};
 use self::worker::{Request, Response};
+
+/// How often the picker redraws on its own.
+const TICK: std::time::Duration = std::time::Duration::from_secs(1);
+/// How often an idle picker searches again, so live sessions stay current.
+const REFRESH_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
+/// How long after the last key press before a refresh may run.
+const REFRESH_IDLE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Where the picker runs: what its filter modes resolve against.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -103,10 +111,6 @@ pub struct Picker<'a> {
     /// Overrides `[ai.sessions] inline_height` and the top-level `inline_height`.
     pub inline_height: Option<u16>,
 }
-
-const PREVIEW: u8 = 0;
-const CHILDREN: u8 = 1;
-const PLAN: u8 = 2;
 
 /// Ask the worker for whatever the current view needs and doesn't have yet.
 fn request_details(state: &mut State, requests: &mpsc::UnboundedSender<Request>, subagents: bool) {
@@ -251,6 +255,12 @@ impl Picker<'_> {
         send_search(&mut state, &requests);
 
         let mut events = EventStream::new();
+        // Ticks keep relative times and live dots current, and refresh the list now and then so
+        // running sessions move and their previews catch up.
+        let mut tick = tokio::time::interval(TICK);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut last_input = std::time::Instant::now();
+        let mut last_refresh = std::time::Instant::now();
         let outcome = 'render: loop {
             request_details(&mut state, &requests, sessions.show_subagents);
             terminal.draw(|f| state.draw(f, settings, self.theme))?;
@@ -258,6 +268,7 @@ impl Picker<'_> {
             tokio::select! {
                 event = events.next() => {
                     let Some(event) = event else { break Outcome::Cancelled };
+                    last_input = std::time::Instant::now();
                     let action = state.handle_input(settings, &event?);
                     let pending = match action {
                         InputAction::Continue => None,
@@ -279,6 +290,16 @@ impl Picker<'_> {
                         if let Some(outcome) = complete(&mut state, pending) {
                             break 'render outcome;
                         }
+                    }
+                }
+                _ = tick.tick() => {
+                    // Not while typing or browsing: the list shouldn't move under the cursor.
+                    if last_input.elapsed() >= REFRESH_IDLE
+                        && last_refresh.elapsed() >= REFRESH_EVERY
+                        && let Some((generation, mode, filter)) = state.refresh()
+                    {
+                        last_refresh = std::time::Instant::now();
+                        let _ = requests.send(Request::Search { generation, mode, filter });
                     }
                 }
                 response = responses.recv() => {

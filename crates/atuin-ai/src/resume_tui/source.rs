@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use atuin_client::ai_session::{HarnessKind, HarnessSession};
+use atuin_common::harnesstools::session::Usage;
 use time::OffsetDateTime;
 
 /// What to list. The picker resolves its filter mode and query tokens into these constraints, so
@@ -77,6 +78,8 @@ impl Snippet {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionRow {
     pub handle: HarnessSession,
+    /// The session this one was forked or spawned from.
+    pub parent: Option<HarnessSession>,
     pub relation: Relation,
     /// The session title, falling back to the first prompt. Highlights mark query matches.
     pub title: Snippet,
@@ -91,6 +94,8 @@ pub struct SessionRow {
     /// The newest message in the session or any of its grouped children.
     pub updated_at: OffsetDateTime,
     pub message_count: u64,
+    /// Token usage attributed to this session (each model call counted once).
+    pub usage: Usage,
     /// Sessions grouped under this row (with [`SessionFilter::roots_only`]).
     pub children: u32,
     /// The best-matching message text, when there is a query. The match may be in a child.
@@ -103,6 +108,8 @@ pub struct SessionRow {
 pub struct SessionPreview {
     pub first_prompt: Option<String>,
     pub last_assistant: Option<String>,
+    /// When each user and assistant message was sent, oldest first: the session's cadence.
+    pub activity: Vec<OffsetDateTime>,
 }
 
 /// Where the picker's sessions come from.

@@ -9,6 +9,7 @@ use atuin_client::ai_session::HarnessSession;
 use atuin_client::settings::{AiSessionFilterMode as FilterMode, KeymapMode, Settings};
 use atuin_client::theme::Meaning;
 use atuin_client::tui::{Cursor, EvalContext, KeyCodeValue, KeyInput, SingleKey};
+use atuin_common::time::OffsetDateTimeExt as _;
 use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
 use time::OffsetDateTime;
 use unicode_width::UnicodeWidthStr;
@@ -20,6 +21,14 @@ use super::resumer::{NotResumable, ResumePlan};
 use super::source::{SessionFilter, SessionPreview, SessionRow};
 
 pub const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
+
+/// Sessions updated this recently are live: a dot in the row, and refreshed while open.
+pub const LIVE_SECS: u64 = 120;
+
+/// What [`State::requested`] tracks per session.
+pub const PREVIEW: u8 = 0;
+pub const CHILDREN: u8 = 1;
+pub const PLAN: u8 = 2;
 
 /// How many rows a search asks for.
 const SEARCH_LIMIT: usize = 500;
@@ -88,6 +97,8 @@ pub struct State {
     /// The generation whose results are on screen.
     pub applied: u64,
     last_filter: Option<SessionFilter>,
+    /// The generation of a refresh in flight, whose results keep the selection.
+    refreshing: Option<u64>,
 
     pub previews: HashMap<HarnessSession, SessionPreview>,
     pub children: HashMap<HarnessSession, Vec<SessionRow>>,
@@ -134,6 +145,7 @@ impl State {
             issued: 0,
             applied: 0,
             last_filter: None,
+            refreshing: None,
             previews: HashMap::new(),
             children: HashMap::new(),
             requested: HashSet::new(),
@@ -261,14 +273,38 @@ impl State {
         let selected = self.selected().map(|r| r.handle.clone());
         self.results = rows;
         self.applied = generation;
-        // Keep the selection on the same session when it survives (e.g. typing narrows around
-        // it), otherwise start at the best match, as the history search does.
+        // A refresh keeps the selection on the same session; a new query starts at the best
+        // match, as the history search does.
+        let keep = self.refreshing.take() == Some(generation);
         let index = selected
+            .filter(|_| keep)
             .and_then(|h| self.results.iter().position(|r| r.handle == h))
-            .filter(|_| self.input.as_str().is_empty())
             .unwrap_or(0);
         self.list.selected = index;
         true
+    }
+
+    /// Search again with the same filter, so live sessions move and their previews catch up.
+    /// Skipped while a search is still out.
+    pub fn refresh(&mut self) -> Option<(u64, FilterMode, SessionFilter)> {
+        if self.issued != self.applied {
+            return None;
+        }
+        self.last_filter = None;
+        let next = self.next_search()?;
+        self.refreshing = Some(next.0);
+        let now = (self.now)();
+        let live: Vec<HarnessSession> = self
+            .results
+            .iter()
+            .filter(|r| now.saturating_duration_since(r.updated_at).as_secs() < LIVE_SECS)
+            .map(|r| r.handle.clone())
+            .collect();
+        for handle in live {
+            self.previews.remove(&handle);
+            self.requested.remove(&(handle, PREVIEW));
+        }
+        Some(next)
     }
 
     pub fn selected(&self) -> Option<&SessionRow> {
@@ -652,6 +688,37 @@ mod tests {
         assert!(state.apply_results(g3, mode, rows(2)));
         assert_eq!(state.results.len(), 2);
         assert_eq!(state.applied, g3);
+    }
+
+    #[rstest]
+    fn refresh_keeps_the_selection_and_reloads_live_previews() {
+        let mut state = state_in(fake::context());
+        state.now = Box::new(fake::now);
+        let (g, mode, _) = state.next_search().unwrap();
+        let mut rs = rows(3);
+        rs[2].updated_at = fake::now();
+        state.apply_results(g, mode, rs.clone());
+        state.list.selected = 1;
+        for r in &rs {
+            state.previews.insert(r.handle.clone(), SessionPreview::default());
+        }
+
+        let (g, mode, _) = state.refresh().unwrap();
+        assert!(state.refresh().is_none(), "one refresh at a time");
+        assert!(!state.previews.contains_key(&rs[2].handle), "the live preview reloads");
+        assert!(state.previews.contains_key(&rs[0].handle));
+        // The list reorders; the selection follows its session.
+        rs.swap(0, 1);
+        state.apply_results(g, mode, rs.clone());
+        assert_eq!(state.list.selected, 0);
+        assert_eq!(state.selected().unwrap().handle, rs[0].handle);
+
+        // A new query starts at the top again.
+        state.list.selected = 2;
+        state.input = Cursor::from("x".to_owned());
+        let (g, mode, _) = state.next_search().unwrap();
+        state.apply_results(g, mode, rs);
+        assert_eq!(state.list.selected, 0);
     }
 
     #[rstest]
