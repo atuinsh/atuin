@@ -337,7 +337,7 @@ steps:
       # Run through bktec, a one-job split, so the results reach Test Engine
       # like the other tests'.
       - mkdir -p test-results
-      - echo "--- :hammer: Build and list the nightly tests"
+      - 'echo "--- :hammer: Build and list the nightly tests"'
       - cargo nextest list -p atuin-daemon --test nightly --run-ignored all --message-format json >test-results/list.json
       - python3 .buildkite/scripts/nextest-bktec.py selectors test-results/list.json test-results/selectors.txt
       - test_engine_uploads_on_main
