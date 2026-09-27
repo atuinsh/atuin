@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::num::NonZeroUsize;
 use std::time::Duration;
@@ -298,6 +298,44 @@ impl HistoryStore {
         let record = HistoryRecord::Create(history);
 
         self.push_record(record).await
+    }
+
+    /// The hostname each host in the record store last ran a command on, by host id: records
+    /// carry only the host id in the clear, and the hostname lives in their encrypted history
+    /// entries. Reads and decrypts only the newest few history records of each host, so it is
+    /// cheap however long the history. A host that never recorded a command (or none this key
+    /// can read) is left out.
+    ///
+    /// Hostnames are not unique: machines may share one, and a machine renamed keeps its host id,
+    /// so a name can stand for several ids and an id's name can change.
+    pub async fn host_names(&self) -> Result<HashMap<HostId, String>> {
+        /// How far back to look past deletions and unreadable records before giving up on a host.
+        const LOOKBACK: u64 = 16;
+
+        let mut names = HashMap::new();
+        for (host, tags) in self.store.status().await?.hosts {
+            let Some(&last) = tags.get(&RecordTag::History) else {
+                continue;
+            };
+            let series = RecordSeriesKey::new(host, RecordTag::History);
+            for idx in (last.saturating_sub(LOOKBACK - 1)..=last).rev() {
+                let Some(record) = self.store.idx(&series, idx).await? else {
+                    continue;
+                };
+                let version = record.version.clone();
+                let Ok(decrypted) = record.decrypt(&self.encryption_key) else {
+                    continue;
+                };
+                if let Ok(HistoryRecord::Create(history)) =
+                    HistoryRecord::deserialize(&decrypted.data, version.as_str())
+                {
+                    names.insert(host, history.cmd_origin.host().to_string());
+                    break;
+                }
+            }
+        }
+
+        Ok(names)
     }
 
     #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
@@ -677,6 +715,45 @@ mod tests {
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0], HistoryRecord::Create(history));
+    }
+
+    /// Each host's name is its newest readable command's, looking past deletions.
+    #[rstest]
+    #[tokio::test]
+    async fn host_names_come_from_each_hosts_newest_command(
+        #[future(awt)]
+        #[from(stores)]
+        parts: (SqliteStore, HostId, HistoryStore),
+        #[from(sample_history)] history: History,
+    ) {
+        let (store, here, history_store) = parts;
+        let there = HostId(atuin_common::utils::uuid_v7());
+        let silent = HostId(atuin_common::utils::uuid_v7());
+        let elsewhere = HistoryStore::new(store.clone(), there, [0u8; 32].into());
+        let named = |origin: &str| History {
+            id: atuin_common::utils::uuid_v7().as_simple().to_string().parse().unwrap(),
+            cmd_origin: CmdOrigin::try_from(origin).unwrap(),
+            ..history.clone()
+        };
+
+        history_store.push(named("old-name:me")).await.unwrap();
+        history_store.push(named("laptop:me")).await.unwrap();
+        history_store.delete(history.id).await.unwrap();
+        elsewhere.push(named("server:root")).await.unwrap();
+        // A host with records of other kinds only has no name.
+        let other = Record::builder()
+            .host(Host::new(silent))
+            .version(RecordVersion::from("v0"))
+            .tag(RecordTag::AiSession)
+            .idx(0)
+            .data(DecryptedData(vec![0]))
+            .build();
+        store.push(&other.encrypt(&[0u8; 32].into())).await.unwrap();
+
+        let names = history_store.host_names().await.unwrap();
+        assert_eq!(names.len(), 2);
+        assert_eq!(names[&here], "laptop");
+        assert_eq!(names[&there], "server");
     }
 
     #[rstest]

@@ -1,5 +1,6 @@
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use atuin_common::db::sqlite::fts::{TextHighlighter, match_expression, prefix_match_expression};
 use atuin_common::db::sqlite::{Sqlite, SqliteOpenOrCreateError};
@@ -8,7 +9,7 @@ use atuin_common::harnesstools::session::{
     Checkpoint, Content, Role, TitleChange, TitleSource, Usage,
 };
 use atuin_common::string::highlighted::HighlightedString;
-use atuin_domain::record::{HostId, RecordId};
+use atuin_domain::record::{HostId, RecordId, RecordTag};
 use futures::{Stream, StreamExt, TryStreamExt};
 use sqlx::SqliteConnection;
 use time::OffsetDateTime;
@@ -20,7 +21,7 @@ use super::{
 };
 
 mod watermark;
-pub use watermark::Watermark;
+pub use watermark::{Generation, Watermark};
 
 const COMPRESS_THRESHOLD: usize = 256;
 const ZSTD_LEVEL: i32 = 3;
@@ -29,7 +30,7 @@ const SNIPPET_TOKENS: usize = 32;
 
 /// The newest migration this build knows: [`AiSessionDatabase::open_read_only`] reads only a
 /// sidecar at exactly this version.
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 /// How much more a title match weighs than a body match in bm25.
 const TITLE_WEIGHT: f64 = 5.0;
@@ -86,6 +87,9 @@ macro_rules! no_group_columns {
 #[derive(Debug, Clone)]
 pub struct AiSessionDatabase {
     db: Sqlite,
+    /// See [`Self::lock_local_projection`]. Shared by clones, so by everything in the one process
+    /// (the daemon) that writes the sidecar.
+    local_projection: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,24 +120,31 @@ pub enum DbError {
     InvalidContentEncoding,
     #[error("stored ai-session record id is not a valid uuid")]
     InvalidRecordId,
+    /// No daemon has created the sidecar yet.
     #[error(
-        "the ai-session sidecar has not been set up yet: start the atuin daemon to create it \
-         (expected schema version {expected})"
+        "the AI session database has not been created yet: start the atuin daemon (`atuin daemon \
+         start`) and try again"
     )]
     Uninitialized {
         expected: i64,
     },
+    /// The sidecar is at an older schema than this build reads: the daemon that owns it is an
+    /// older atuin still running since an upgrade, or is migrating it right now.
     #[error(
-        "the ai-session sidecar is at schema version {found}, older than this build's {expected}: \
-         start the atuin daemon to migrate it"
+        "the AI session database is at schema version {found}, older than the version {expected} \
+         this atuin reads: the atuin daemon upgrades it when it starts. If atuin was just \
+         updated, restart the daemon (`atuin daemon restart`); if the daemon is starting, try \
+         again in a moment"
     )]
     OutdatedSchema {
         found: i64,
         expected: i64,
     },
+    /// The sidecar is at a newer schema than this build reads: a newer atuin's daemon owns it.
     #[error(
-        "the ai-session sidecar is at schema version {found}, newer than this build's {expected}: \
-         it was written by a newer atuin"
+        "the AI session database is at schema version {found}, newer than the version {expected} \
+         this atuin reads: the atuin daemon is newer than this atuin. Update atuin, or check that \
+         the shell and the daemon run the same atuin binary"
     )]
     UnknownSchema {
         found: i64,
@@ -289,7 +300,7 @@ struct ReindexRow {
 impl AiSessionDatabase {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, DbError> {
         let db = Sqlite::builder(path.as_ref().as_os_str()).restrict_permissions().open().await?;
-        let db = Self { db };
+        let db = Self::from_sqlite(db);
         db.migrate().await?;
         db.reindex().await?;
         Ok(db)
@@ -301,16 +312,32 @@ impl AiSessionDatabase {
     /// unless it is at exactly the schema this build reads.
     pub async fn open_read_only(path: impl AsRef<Path>) -> Result<Self, DbError> {
         let db = Sqlite::builder(path.as_ref().as_os_str()).read_only().open().await?;
-        let db = Self { db };
+        let db = Self::from_sqlite(db);
         db.check_schema().await?;
         Ok(db)
     }
 
     pub async fn in_memory() -> Result<Self, DbError> {
         let db = Sqlite::builder_in_memory().open().await?;
-        let db = Self { db };
+        let db = Self::from_sqlite(db);
         db.migrate().await?;
         Ok(db)
+    }
+
+    fn from_sqlite(db: Sqlite) -> Self {
+        Self {
+            db,
+            local_projection: Arc::default(),
+        }
+    }
+
+    /// Serialize projecting this host's records: live capture holds it from its dedup check
+    /// until the message it pushed to the record store is appended here, and a reprojection
+    /// holds it while replaying this host's record series. Without it, a reprojection could
+    /// append a record capture has just pushed, before capture does, and capture would report
+    /// its own message as a duplicate.
+    pub async fn lock_local_projection(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.local_projection.clone().lock_owned().await
     }
 
     async fn check_schema(&self) -> Result<(), DbError> {
@@ -705,16 +732,27 @@ impl AiSessionDatabase {
     /// Every session passing `filter`, newest first. With [`SessionFilter::roots_only`], the
     /// roots of the groups with a session passing it, newest activity in the group first.
     pub async fn list_sessions(&self, filter: &SessionFilter) -> Result<Vec<Session>, DbError> {
-        self.recent_sessions(filter, 0).await
+        self.recent_sessions(filter, None, 0).await
+    }
+
+    /// [`Self::list_sessions`], of the sessions captured on any of `hosts` (none, when empty).
+    /// For a host filter by name, which can stand for several host ids.
+    pub async fn list_sessions_on_hosts(
+        &self,
+        filter: &SessionFilter,
+        hosts: &[HostId],
+    ) -> Result<Vec<Session>, DbError> {
+        self.recent_sessions(filter, Some(hosts), 0).await
     }
 
     /// [`Self::list_sessions`], at most `limit` of them (0 is unbounded).
     async fn recent_sessions(
         &self,
         filter: &SessionFilter,
+        hosts: Option<&[HostId]>,
         limit: u32,
     ) -> Result<Vec<Session>, DbError> {
-        let (clause, binds) = Self::filter_clause(filter);
+        let (clause, binds) = Self::filter_clause(filter, hosts);
         let limit_clause = if limit == 0 {
             ""
         } else {
@@ -751,13 +789,22 @@ impl AiSessionDatabase {
     }
 
     /// The SQL (each part led by ` AND `) and values selecting the sessions `s` passing `filter`,
-    /// ignoring [`SessionFilter::roots_only`].
-    fn filter_clause(filter: &SessionFilter) -> (String, Vec<Bind>) {
+    /// ignoring [`SessionFilter::roots_only`], and captured on one of `hosts` when given.
+    fn filter_clause(filter: &SessionFilter, hosts: Option<&[HostId]>) -> (String, Vec<Bind>) {
         let mut sql = String::new();
         let mut binds = Vec::new();
         if let Some(host) = filter.host {
             sql.push_str(" AND s.host_id = ?");
             binds.push(Bind::Text(Self::host_repr(host)));
+        }
+        if let Some(hosts) = hosts {
+            if hosts.is_empty() {
+                sql.push_str(" AND 0");
+            } else {
+                let marks = vec!["?"; hosts.len()].join(", ");
+                sql.push_str(&format!(" AND s.host_id IN ({marks})"));
+                binds.extend(hosts.iter().map(|&h| Bind::Text(Self::host_repr(h))));
+            }
         }
         if let Some(workspace) = &filter.workspace {
             // At the path or under it. A root path leaves "", under which every absolute path is.
@@ -844,6 +891,29 @@ impl AiSessionDatabase {
         filter: &SessionFilter,
         limit: u32,
     ) -> impl Stream<Item = Result<SessionMatch, DbError>> + Send + 'static {
+        self.search_hosts(query, filter, None, limit)
+    }
+
+    /// [`Self::search`] over the sessions captured on any of `hosts` (none, when empty), filtered
+    /// before the limit applies. For a host filter by name, which can stand for several host ids
+    /// (see [`crate::history::store::HistoryStore::host_names`]).
+    pub fn search_on_hosts(
+        &self,
+        query: &str,
+        filter: &SessionFilter,
+        hosts: &[HostId],
+        limit: u32,
+    ) -> impl Stream<Item = Result<SessionMatch, DbError>> + Send + 'static {
+        self.search_hosts(query, filter, Some(hosts.to_vec()), limit)
+    }
+
+    fn search_hosts(
+        &self,
+        query: &str,
+        filter: &SessionFilter,
+        hosts: Option<Vec<HostId>>,
+        limit: u32,
+    ) -> impl Stream<Item = Result<SessionMatch, DbError>> + Send + 'static {
         let this = self.clone();
         let pool = self.db.pool().clone();
         let query = query.to_owned();
@@ -857,7 +927,7 @@ impl AiSessionDatabase {
                 match_expression(&query)
             };
             let Some(expr) = expr else {
-                for session in this.recent_sessions(&filter, limit).await? {
+                for session in this.recent_sessions(&filter, hosts.as_deref(), limit).await? {
                     let title = session.title.clone().unwrap_or_default();
                     let preview = session.preview.clone().unwrap_or_default();
                     yield SessionMatch {
@@ -871,7 +941,7 @@ impl AiSessionDatabase {
                 return;
             };
 
-            let (filter_clause, binds) = Self::filter_clause(&filter);
+            let (filter_clause, binds) = Self::filter_clause(&filter, hosts.as_deref());
             let (group_harness, group_session) = if filter.roots_only {
                 ("s.root_harness", "s.root_session_id")
             } else {
@@ -1228,36 +1298,56 @@ impl AiSessionDatabase {
     /// old series projected may be gone from the store. Model calls the sessions claimed are
     /// attributed afresh among the claimants left, and groups they headed are regrouped.
     ///
-    /// Sessions are removed whole, by the host that captured them (their first row's); a row
-    /// another host added to one goes with it until that host's records are replayed.
-    pub async fn forget_host(&self, host: HostId) -> Result<(), DbError> {
+    /// Sessions are removed whole, by the host that captured them (their first row's), so rows
+    /// other hosts added to one go too. Those hosts' records are still in the store, so their
+    /// watermarks are forgotten along with `host`'s, and the next reprojection replays them and
+    /// restores the rows. (A row of unknown host, from before hosts were tracked, forgets every
+    /// watermark.) The other way round, rows `host` added to sessions another host captured stay:
+    /// they are keyed by source id, so a replay of whatever the series now holds re-adds them
+    /// unchanged. All of this is one invalidation: it bumps the [`Generation`].
+    ///
+    /// Returns whether it forgot the watermarks of hosts other than `host`, which a reprojection
+    /// in progress must replay again.
+    pub async fn forget_host(&self, host: HostId) -> Result<bool, DbError> {
         let host = Self::host_repr(host);
+        let tag = RecordTag::AiSession.as_str();
         let mut tx = self.db.pool().begin_with("BEGIN IMMEDIATE").await?;
 
-        let turns: Vec<(i64, String)> =
-            db::query_as(
-                "SELECT DISTINCT m.harness, m.turn_id FROM messages m JOIN sessions s ON \
-                 s.harness =              m.harness AND s.session_id = m.session_id WHERE \
-                 s.host_id = ? AND m.turn_id IS NOT              NULL AND m.usage_present = 1",
-            )
-            .bind(&host)
-            .fetch_all(&mut *tx)
-            .await?;
-        let orphaned: i64 =
-            db::query_scalar(
-                "SELECT count(*) FROM sessions c JOIN sessions r ON r.harness = c.root_harness \
-                 AND              r.session_id = c.root_session_id WHERE r.host_id = ? AND \
-                 (c.host_id IS NOT ? OR              c.host_id IS NULL)",
-            )
-            .bind(&host)
-            .bind(&host)
-            .fetch_one(&mut *tx)
-            .await?;
+        let turns: Vec<(i64, String)> = db::query_as(
+            "SELECT DISTINCT m.harness, m.turn_id FROM messages m JOIN sessions s ON s.harness = \
+             m.harness AND s.session_id = m.session_id WHERE s.host_id = ? AND m.turn_id IS NOT \
+             NULL AND m.usage_present = 1",
+        )
+        .bind(&host)
+        .fetch_all(&mut *tx)
+        .await?;
+        let orphaned: i64 = db::query_scalar(
+            "SELECT count(*) FROM sessions c JOIN sessions r ON r.harness = c.root_harness AND \
+             r.session_id = c.root_session_id WHERE r.host_id = ? AND (c.host_id IS NOT ? OR \
+             c.host_id IS NULL)",
+        )
+        .bind(&host)
+        .bind(&host)
+        .fetch_one(&mut *tx)
+        .await?;
+        // Every other host with a row in the sessions going: NULL for a row of unknown host.
+        let contributors: Vec<Option<String>> = db::query_scalar(
+            "SELECT DISTINCT m.host_id FROM messages m JOIN sessions s ON s.harness = m.harness \
+             AND s.session_id = m.session_id WHERE s.host_id = ? AND m.host_id IS NOT ?",
+        )
+        .bind(&host)
+        .bind(&host)
+        .fetch_all(&mut *tx)
+        .await?;
 
         for sql in [
-            "DELETE FROM messages_fts WHERE rowid IN (SELECT m.rowid FROM messages m JOIN              sessions s ON s.harness = m.harness AND s.session_id = m.session_id WHERE s.host_id              = ?)",
-            "DELETE FROM messages WHERE (harness, session_id) IN (SELECT harness, session_id FROM              sessions WHERE host_id = ?)",
-            "DELETE FROM calls WHERE (harness, session_id) IN (SELECT harness, session_id FROM              sessions WHERE host_id = ?)",
+            "DELETE FROM messages_fts WHERE rowid IN (SELECT m.rowid FROM messages m JOIN \
+             sessions s ON s.harness = m.harness AND s.session_id = m.session_id WHERE s.host_id \
+             = ?)",
+            "DELETE FROM messages WHERE (harness, session_id) IN (SELECT harness, session_id FROM \
+             sessions WHERE host_id = ?)",
+            "DELETE FROM calls WHERE (harness, session_id) IN (SELECT harness, session_id FROM \
+             sessions WHERE host_id = ?)",
             "DELETE FROM sessions WHERE host_id = ?",
         ] {
             db::query(sql).bind(&host).execute(&mut *tx).await?;
@@ -1270,8 +1360,24 @@ impl AiSessionDatabase {
             Self::regroup_all(&mut tx).await?;
         }
 
+        if contributors.iter().any(Option::is_none) {
+            db::query("DELETE FROM reproject_watermark WHERE tag = ?")
+                .bind(tag)
+                .execute(&mut *tx)
+                .await?;
+        } else {
+            for forgotten in contributors.iter().flatten().chain([&host]) {
+                db::query("DELETE FROM reproject_watermark WHERE host = ? AND tag = ?")
+                    .bind(forgotten)
+                    .bind(tag)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+        Self::bump_generation(&mut tx).await?;
+
         tx.commit().await?;
-        Ok(())
+        Ok(!contributors.is_empty())
     }
 
     /// Group every session afresh under its top-most stored ancestor, as migration 0003 does.
@@ -3154,6 +3260,53 @@ mod tests {
         assert_eq!(ids(hits.into_iter().map(|m| m.session).collect()), expected, "search");
     }
 
+    /// Sessions from any of several hosts (a host name standing for several ids), filtered before
+    /// the limit, and alongside the other filters.
+    #[rstest]
+    #[case::one(&[2], None, 0, &["b"])]
+    #[case::several(&[1, 3], None, 0, &["a", "c", "d"])]
+    #[case::before_the_limit(&[3], None, 1, &["d"])]
+    #[case::with_the_host_filter(&[1, 2], Some(2), 0, &["b"])]
+    #[case::none_at_all(&[], None, 0, &[])]
+    #[tokio::test]
+    async fn a_host_set_selects_sessions(
+        #[case] hosts: &[u128],
+        #[case] only: Option<u128>,
+        #[case] limit: u32,
+        #[case] expected: &[&str],
+    ) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        for m in [
+            filtered_row("a", "/work/atuin", "main", "opus", 1),
+            filtered_row("b", "/work/atuin", "main", "opus", 2),
+            filtered_row("c", "/work/atuin", "main", "opus", 1),
+            filtered_row("d", "/work/atuin", "main", "opus", 3),
+        ] {
+            db.append(&m).await.unwrap();
+        }
+        let hosts: Vec<_> = hosts.iter().map(|&n| host(n)).collect();
+        let filter = SessionFilter {
+            host: only.map(host),
+            ..SessionFilter::default()
+        };
+        let sorted = |mut ids: Vec<String>| {
+            ids.sort();
+            ids
+        };
+
+        if limit == 0 {
+            let listed = db.list_sessions_on_hosts(&filter, &hosts).await.unwrap();
+            let listed = listed.iter().map(|s| s.handle.session.to_string()).collect();
+            assert_eq!(sorted(listed), expected, "listing");
+        }
+        for query in ["shared", ""] {
+            let hits: Vec<SessionMatch> =
+                db.search_on_hosts(query, &filter, &hosts, limit).try_collect().await.unwrap();
+            let hits = hits.iter().map(|m| m.session.handle.session.to_string()).collect();
+            assert_eq!(sorted(hits), expected, "search {query:?}");
+        }
+    }
+
     /// With roots only, a group passes when any of its sessions does, and shows as its root.
     #[rstest]
     #[tokio::test]
@@ -3217,7 +3370,7 @@ mod tests {
             .await
             .unwrap();
         }
-        AiSessionDatabase { db }
+        AiSessionDatabase::from_sqlite(db)
     }
 
     /// Migrating groups the sessions already stored, and forgets the reproject watermark so the
@@ -3301,6 +3454,7 @@ mod tests {
     #[rstest]
     #[case::uninitialized(None)]
     #[case::outdated(Some(1))]
+    #[case::one_behind(Some(SCHEMA_VERSION - 1))]
     #[case::unknown(Some(99))]
     #[tokio::test]
     async fn a_read_only_open_refuses_another_schema(
@@ -3340,6 +3494,7 @@ mod tests {
                 assert!(matches!(err, DbError::OutdatedSchema { found: f, .. } if f == found));
             }
         }
-        assert!(err.to_string().contains("schema version"), "{err}");
+        // Each says what to do about it, which always involves the daemon.
+        assert!(err.to_string().contains("atuin daemon"), "{err}");
     }
 }

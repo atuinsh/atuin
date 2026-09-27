@@ -79,6 +79,10 @@ atuin store rebuild history
 
 Useful when the record store is intact but the local view of it isn't.
 
+`atuin store rebuild ai-session` schedules a full rebuild of the daemon's
+index of captured [agent sessions](../ai/sessions.md): the daemon replays
+every session record on its next start.
+
 ### `atuin store push`
 
 Upload local records to the sync server, one way.
