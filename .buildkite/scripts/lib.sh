@@ -70,12 +70,12 @@ apt_install() {
     -o APT::Sandbox::User=root $missing
 }
 
-# nextest's `--partition count:K/N` for a step split with Buildkite's
-# `parallelism: N`, and nothing for a single job, so how many ways a test
-# step is split is just that one number in the pipeline.
-nextest_partition() {
-  if [ -n "${BUILDKITE_PARALLEL_JOB_COUNT:-}" ]; then
-    echo "--partition count:$((BUILDKITE_PARALLEL_JOB + 1))/${BUILDKITE_PARALLEL_JOB_COUNT}"
+# bktec uploads test results to Test Engine, for splitting later builds'
+# tests by timing, from main builds only: those are the timings to plan
+# with, and the suite's OIDC policy only lets main builds upload anyway.
+test_engine_uploads_on_main() {
+  if [ "${BUILDKITE_BRANCH:-}" = "${BUILDKITE_PIPELINE_DEFAULT_BRANCH:-}" ]; then
+    export BUILDKITE_TEST_ENGINE_UPLOAD_RESULTS=true
   fi
 }
 

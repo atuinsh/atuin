@@ -5,10 +5,11 @@
 # (fallback_limit), so a Cargo.lock change restores the newest entry for the
 # same toolchain and cargo rebuilds only the dependencies that changed.
 #
-# Only main saves (.buildkite/scripts/cache-save.sh); branch and PR builds
-# restore main's entries. The cluster's cache registry policy also scopes
-# entries by branch, so a branch build can never write into what main
-# restores.
+# main saves every cache. Branch and PR builds restore main's entries and
+# save only the ones with no exact entry to restore, e.g. after changing
+# Cargo.lock (cache-restore.sh, cache-save.sh). The cluster's cache registry
+# policy scopes entries by branch, so a branch build can never write into
+# what main restores.
 #
 # Bump `v1` to invalidate a cache; an entry is written once per address.
 
@@ -33,8 +34,9 @@ caches:
   - name: target
     cache_key:
       - target
-      # v2: dev/test builds without debuginfo (pipeline env).
-      - v2
+      # v3: check and clippy build different feature sets, and the tests
+      # build in build-tests.
+      - v3
       - agent: step
       - agent: os
       - agent: arch
@@ -87,3 +89,4 @@ caches:
       - checksum: .buildkite/scripts/illumos.sh
     target_paths:
       - ~/.cache/anyvm
+
