@@ -533,10 +533,7 @@ impl AiClient {
         &mut self,
         filter: &SessionFilter,
     ) -> Result<tonic::Streaming<AiSession>> {
-        let request = ListSessionsRequest {
-            harness: None,
-            filter: Some(filter.into()),
-        };
+        let request = list_sessions_request(filter);
         Ok(self.client.list_sessions(request).await?.into_inner())
     }
 
@@ -581,12 +578,7 @@ impl AiClient {
         filter: &SessionFilter,
         limit: u32,
     ) -> Result<tonic::Streaming<SearchSessionsMatch>> {
-        let request = SearchSessionsRequest {
-            query: query.to_owned(),
-            limit,
-            harness: None,
-            filter: Some(filter.into()),
-        };
+        let request = search_sessions_request(query, filter, limit);
         Ok(self.client.search_sessions(request).await?.into_inner())
     }
 
@@ -598,6 +590,62 @@ impl AiClient {
             harness: harness.map(|h| h as i32),
         };
         Ok(self.client.import_sessions(request).await?.into_inner())
+    }
+}
+
+/// A listing of the sessions passing `filter`. The harness goes in the legacy field as well as
+/// the filter, for a daemon from before `filter` (still running after an upgrade), which ignores
+/// it; a newer one reads `filter.harness` first, so the two never disagree.
+fn list_sessions_request(filter: &SessionFilter) -> ListSessionsRequest {
+    ListSessionsRequest {
+        harness: filter.harness.map(|h| h as i32),
+        filter: Some(filter.into()),
+    }
+}
+
+/// A search for `query` over the sessions passing `filter`, with the harness in the legacy field
+/// too (see [`list_sessions_request`]).
+fn search_sessions_request(
+    query: &str,
+    filter: &SessionFilter,
+    limit: u32,
+) -> SearchSessionsRequest {
+    SearchSessionsRequest {
+        query: query.to_owned(),
+        limit,
+        harness: filter.harness.map(|h| h as i32),
+        filter: Some(filter.into()),
+    }
+}
+
+#[cfg(test)]
+mod request_tests {
+    use atuin_client::ai_session::{HarnessKind, SessionFilter};
+    use rstest::rstest;
+
+    use super::{list_sessions_request, search_sessions_request};
+
+    /// An older daemon reads only the legacy `harness` field, so it must carry the filter's.
+    #[rstest]
+    #[case::none(None)]
+    #[case::codex(Some(HarnessKind::Codex))]
+    fn requests_carry_the_harness_in_the_legacy_field(#[case] harness: Option<HarnessKind>) {
+        let filter = SessionFilter {
+            harness,
+            branch: Some("main".to_owned()),
+            ..SessionFilter::default()
+        };
+        let expected = harness.map(|h| h as i32);
+
+        let list = list_sessions_request(&filter);
+        assert_eq!(list.harness, expected);
+        assert_eq!(list.filter.as_ref().and_then(|f| f.harness), expected);
+        assert_eq!(list.filter.and_then(|f| f.branch).as_deref(), Some("main"));
+
+        let search = search_sessions_request("words", &filter, 7);
+        assert_eq!(search.harness, expected);
+        assert_eq!(search.filter.as_ref().and_then(|f| f.harness), expected);
+        assert_eq!((search.query.as_str(), search.limit), ("words", 7));
     }
 }
 

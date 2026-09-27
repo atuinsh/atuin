@@ -192,10 +192,11 @@ impl Worker {
             if downloaded_records.is_empty() {
                 return;
             }
-            // Replays everything other hosts added past their watermarks, so records a failed or
-            // interrupted earlier tick left out are retried too. This host's own records are
-            // projected by capture, and anything it missed by the next startup reprojection.
-            if let Err(err) = self.ai_session_store.reproject_remote(ai_session_db).await {
+            // Replays everything past the watermarks, so records a failed or interrupted earlier
+            // tick left out are retried too. That includes this host's own series, under
+            // capture's lock: its own records can arrive from the server too (a reinstall that
+            // kept the host id), and capture dedups against the sidecar.
+            if let Err(err) = self.ai_session_store.reproject(ai_session_db).await {
                 tracing::error!(?err, "failed to project synced ai-session records");
             }
         };
