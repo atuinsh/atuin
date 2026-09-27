@@ -13,6 +13,11 @@ use crate::record::sqlite_store::SqliteStore;
 /// Records read from the record store at a time while reprojecting.
 const REPROJECT_PAGE: u64 = 512;
 
+/// How many times one reprojection starts over after an invalidation lands in the middle of it.
+/// Past that it gives up for now: the invalidation cleared the watermarks it concerned, so the
+/// next reprojection replays whatever this one left.
+const REPROJECT_PASSES: usize = 4;
+
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct AiSessionStore {
     store: SqliteStore,
@@ -118,11 +123,21 @@ impl AiSessionStore {
         let id = record.id;
         let host = record.host.id;
 
+        // What a record that cannot be projected does to the watermark:
+        //
+        // - One this key cannot decrypt is held: the key may be the stale one (the daemon loads it
+        //   once, and `atuin login` or a rekey can re-encrypt the store under it), and the right
+        //   one projects it later. Passing it would lose it for good. A record no key will ever
+        //   decrypt (lost key, corrupted ciphertext) is held too, which costs replaying its
+        //   series' later records on each reprojection, but never stops them projecting.
+        // - One that decrypts but whose kind this build does not know is held until an upgrade.
+        // - One that decrypts to a known kind but fails to decode is skipped: decryption
+        //   authenticates it, so it is exactly what its writer wrote, and no retry reads it.
         let decrypted = match record.decrypt(&self.key) {
             Ok(decrypted) => decrypted,
             Err(err) => {
-                warn!(?err, id = %id.0, "failed to decrypt ai-session record, skipping");
-                return Ok(Projected::Skipped);
+                warn!(?err, id = %id.0, "failed to decrypt ai-session record, holding it back");
+                return Ok(Projected::Held);
             }
         };
 
@@ -130,8 +145,8 @@ impl AiSessionStore {
             Ok(record) => record,
             // Written by a newer build, which an upgrade will be able to project.
             Err(err @ DecodeError::UnknownKind(_)) => {
-                warn!(?err, id = %id.0, "unknown ai-session record kind, skipping for now");
-                return Ok(Projected::Deferred);
+                warn!(?err, id = %id.0, "unknown ai-session record kind, holding it back");
+                return Ok(Projected::Held);
             }
             Err(err) => {
                 warn!(?err, id = %id.0, "failed to deserialize ai-session record, skipping");
@@ -156,33 +171,44 @@ impl AiSessionStore {
 
     /// Bring the sidecar up to date with the record store, replaying only the records past each
     /// series' [`Watermark`]. A series without one (a fresh sidecar, or watermarks cleared by a
-    /// migration or maintenance command) is replayed from its start, as is one rewritten under
-    /// its watermark. Run it before capture starts: over this host's series it would otherwise
-    /// race the capture pipeline (see [`Self::reproject_remote`]).
+    /// migration, maintenance command or key change) is replayed from its start, as is one
+    /// rewritten under its watermark.
     ///
-    /// Continues past a failed series, but reports it so callers do not enable capture against a
+    /// Safe beside live capture: this host's series is replayed under
+    /// [`AiSessionDatabase::lock_local_projection`], which capture holds too. So it runs both at
+    /// startup and after each sync, which is what projects this host's own records arriving from
+    /// the server (a reinstall that kept its host id) before capture, which dedups against the
+    /// sidecar, pushes them again.
+    ///
+    /// An invalidation landing meanwhile is noticed, and the reprojection starts over. Continues
+    /// past a failed series, but reports it so callers do not enable capture against a
     /// projection missing already-persisted messages; that series' watermark stays below the
     /// failure, so the next reprojection retries it.
     pub async fn reproject(&self, db: &AiSessionDatabase) -> Result<Reprojected, BuildError> {
-        self.reproject_where(db, |_| true).await
+        if db.check_projection_key(&self.key.key_id().to_string()).await? {
+            // Also the first time, on a fresh sidecar or one from before key tracking.
+            tracing::info!("ai-session watermarks were not made with this key: replaying all");
+        }
+
+        let mut stats = Reprojected::default();
+        for _ in 0..REPROJECT_PASSES {
+            match self.reproject_pass(db, &mut stats).await? {
+                Pass::Done => return Ok(stats),
+                Pass::Invalidated => {
+                    warn!("ai-session projection invalidated under reproject, starting over");
+                }
+            }
+        }
+
+        warn!("ai-session projection kept being invalidated, leaving the rest for the next one");
+        Ok(stats)
     }
 
-    /// [`Self::reproject`] over other hosts' series only: what sync downloads. This host's series
-    /// is left to the startup reprojection, since capture projects it live and uses the sidecar
-    /// as its dedup gate.
-    pub async fn reproject_remote(
+    async fn reproject_pass(
         &self,
         db: &AiSessionDatabase,
-    ) -> Result<Reprojected, BuildError> {
-        let local = self.host_id;
-        self.reproject_where(db, |host| host != local).await
-    }
-
-    async fn reproject_where(
-        &self,
-        db: &AiSessionDatabase,
-        include: impl Fn(HostId) -> bool,
-    ) -> Result<Reprojected, BuildError> {
+        stats: &mut Reprojected,
+    ) -> Result<Pass, BuildError> {
         let mut marks = db.reproject_watermarks().await?;
         let mut series: Vec<(RecordSeriesKey, RecordIdx)> = self
             .store
@@ -190,7 +216,6 @@ impl AiSessionStore {
             .await?
             .hosts
             .into_iter()
-            .filter(|(host, _)| include(*host))
             .filter_map(|(host, tags)| {
                 let last = *tags.get(&RecordTag::AiSession)?;
                 Some((RecordSeriesKey::new(host, RecordTag::AiSession), last))
@@ -198,30 +223,56 @@ impl AiSessionStore {
             .collect();
         series.sort();
 
-        let mut stats = Reprojected::default();
+        let mut pass = Pass::Done;
         let mut failure = None;
         for (series, last) in series {
             let mark = marks.remove(&series);
-            if let Err(err) = self.reproject_series(db, &series, last, mark, &mut stats).await {
-                warn!(?err, host = %series.host_id, "failed to reproject ai-session records");
-                failure = Some(err);
+            match self.reproject_series(db, &series, last, mark, stats).await {
+                Ok(Pass::Done) => {}
+                Ok(Pass::Invalidated) => pass = Pass::Invalidated,
+                Err(err) => {
+                    warn!(?err, host = %series.host_id, "failed to reproject ai-session records");
+                    failure = Some(err);
+                }
             }
         }
 
         // Watermarks left over belong to series with no records at all any more: that host's
         // store was deleted. Forget them, so records arriving for it again replay from the start.
         for (series, _) in marks {
-            if series.tag == RecordTag::AiSession && include(series.host_id) {
+            if series.tag == RecordTag::AiSession {
                 warn!(host = %series.host_id, "ai-session records vanished from the record store");
-                db.forget_host(series.host_id).await?;
-                db.forget_reproject_watermark(&series).await?;
+                if self.forget_host(db, series.host_id).await? {
+                    pass = Pass::Invalidated;
+                }
                 stats.restarted += 1;
             }
         }
 
-        failure.map_or(Ok(stats), Err)
+        failure.map_or(Ok(pass), Err)
     }
 
+    /// [`AiSessionDatabase::forget_host`], under the local projection lock for this host.
+    async fn forget_host(&self, db: &AiSessionDatabase, host: HostId) -> Result<bool, DbError> {
+        let _local = self.lock_if_local(db, host).await;
+        db.forget_host(host).await
+    }
+
+    /// Capture's lock when `host` is this one: see [`AiSessionDatabase::lock_local_projection`].
+    async fn lock_if_local(
+        &self,
+        db: &AiSessionDatabase,
+        host: HostId,
+    ) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        if host == self.host_id {
+            Some(db.lock_local_projection().await)
+        } else {
+            None
+        }
+    }
+
+    /// Replay `series` past `mark`. [`Pass::Invalidated`] when an invalidation stopped it, or it
+    /// forgot other hosts' watermarks, so that the reprojection goes round again.
     async fn reproject_series(
         &self,
         db: &AiSessionDatabase,
@@ -229,12 +280,13 @@ impl AiSessionStore {
         last: RecordIdx,
         mark: Option<Watermark>,
         stats: &mut Reprojected,
-    ) -> Result<(), BuildError> {
-        let start = match mark {
-            None => 0,
+    ) -> Result<Pass, BuildError> {
+        let mut pass = Pass::Done;
+        let (start, mut from) = match mark {
+            None => (0, None),
             Some(mark) => match self.store.idx(series, mark.idx).await? {
                 // Still the record it was: everything up to it is projected.
-                Some(record) if record.id == mark.record_id => mark.idx + 1,
+                Some(record) if record.id == mark.record_id => (mark.idx + 1, Some(mark)),
                 // Reset, truncated or rewritten under the watermark: what it covered is no longer
                 // what the store holds, so start over.
                 _ => {
@@ -243,22 +295,28 @@ impl AiSessionStore {
                         idx = mark.idx,
                         "ai-session records rewritten under the watermark, replaying the host"
                     );
-                    // What the old series projected may no longer be in it.
-                    db.forget_host(series.host_id).await?;
+                    // What the old series projected may no longer be in it. This forgets the
+                    // series' watermark too.
+                    if self.forget_host(db, series.host_id).await? {
+                        pass = Pass::Invalidated;
+                    }
                     stats.restarted += 1;
-                    0
+                    (0, None)
                 }
             },
         };
         if start > last {
-            return Ok(());
+            return Ok(pass);
         }
 
-        let mut from = mark;
+        // Read before replaying anything: an invalidation after this stops the watermark moving.
+        let generation = db.projection_generation().await?;
         let mut next = start;
-        // A deferred record holds the watermark below it until a build that understands it.
+        // A held record keeps the watermark below it (see `decode_and_append`).
         let mut held = false;
         loop {
+            // Per page rather than per series, so capture never waits long.
+            let local = self.lock_if_local(db, series.host_id).await;
             let page = self.store.next(series, next, REPROJECT_PAGE).await?;
             let Some(tail) = page.last() else {
                 break;
@@ -268,7 +326,7 @@ impl AiSessionStore {
             let mut to = None;
             for record in page {
                 let (idx, record_id) = (record.idx, record.id);
-                if self.decode_and_append(record, db).await? == Projected::Deferred {
+                if self.decode_and_append(record, db).await? == Projected::Held {
                     held = true;
                 }
                 stats.replayed += 1;
@@ -276,19 +334,20 @@ impl AiSessionStore {
                     to = Some(Watermark { idx, record_id });
                 }
             }
+            drop(local);
 
             // Every append up to `to` has committed, in the same database: a watermark that
             // survives a crash implies the appends it covers do too.
             if let Some(to) = to {
-                if !db.advance_reproject_watermark(series, from, to).await? {
-                    warn!(host = %series.host_id, "ai-session watermark changed under reproject");
-                    return Ok(());
+                if !db.advance_reproject_watermark(series, generation, from, to).await? {
+                    warn!(host = %series.host_id, "ai-session watermark invalidated under reproject");
+                    return Ok(Pass::Invalidated);
                 }
                 from = Some(to);
             }
         }
 
-        Ok(())
+        Ok(pass)
     }
 
     pub async fn incremental_build(&self, db: &AiSessionDatabase, ids: &[RecordId]) {
@@ -324,10 +383,19 @@ pub struct Reprojected {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Projected {
     Appended,
-    /// Can never be projected (not ai-session, undecryptable or corrupt): pass over it.
+    /// Can never be projected (not ai-session, or authentic but undecodable): pass over it.
     Skipped,
-    /// Cannot be projected by this build: replay it again after an upgrade.
-    Deferred,
+    /// Cannot be projected with this key or by this build: replay it again (with another key,
+    /// or after an upgrade), so hold the watermark below it.
+    Held,
+}
+
+/// How a reprojection pass, or its replay of one series, ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pass {
+    Done,
+    /// An invalidation cleared watermarks it had read or was moving: go round again.
+    Invalidated,
 }
 
 #[cfg(test)]
@@ -711,7 +779,7 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn watermark_changed_mid_reproject_is_left_for_the_next_one() {
+    async fn a_watermark_never_moves_across_an_invalidation() {
         let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
         let [s] = <[_; 1]>::try_from(writers(&store, 1)).ok().unwrap();
         let handle = sample_handle();
@@ -720,15 +788,89 @@ mod tests {
         s.reproject(&db).await.unwrap();
         let series = RecordSeriesKey::new(s.host_id, RecordTag::AiSession);
         let stale = mark(&db, &s).await;
-
-        // An invalidation lands between reading the watermark and advancing it.
-        db.clear_reproject_watermarks().await.unwrap();
         let to = Watermark {
             idx: 7,
             record_id: atuin_domain::record::RecordId(atuin_common::utils::uuid_v7()),
         };
-        assert!(!db.advance_reproject_watermark(&series, stale, to).await.unwrap());
+
+        // An invalidation lands between reading the watermark and advancing it.
+        let generation = db.projection_generation().await.unwrap();
+        db.clear_reproject_watermarks().await.unwrap();
+        assert!(!db.advance_reproject_watermark(&series, generation, stale, to).await.unwrap());
+        // Even with no watermark to lose, the generation tells.
+        assert!(!db.advance_reproject_watermark(&series, generation, None, to).await.unwrap());
         assert_eq!(mark(&db, &s).await, None, "the invalidation must stick");
+
+        let generation = db.projection_generation().await.unwrap();
+        assert!(db.advance_reproject_watermark(&series, generation, None, to).await.unwrap());
+        assert_eq!(mark(&db, &s).await, Some(to));
+    }
+
+    /// An invalidation landing while a series is replayed, even one with no watermark yet (which
+    /// the watermark row alone cannot tell), makes the reprojection start over rather than record
+    /// as projected what the invalidation removed.
+    #[rstest]
+    #[tokio::test]
+    async fn an_invalidation_mid_reproject_starts_it_over() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.db");
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let [s] = <[_; 1]>::try_from(writers(&store, 1)).ok().unwrap();
+        let handle = sample_handle();
+        push_range(&s, &handle, 0..6).await;
+        let db = AiSessionDatabase::open(&path).await.unwrap();
+
+        // Once source-4 is appended, an invalidation deletes a row already replayed (as
+        // forgetting a host does) and clears the watermarks. It fires once: a replay of source-4
+        // conflicts, and inserts nothing.
+        let raw = atuin_common::db::sqlite::Sqlite::builder(path.as_os_str()).open().await.unwrap();
+        atuin_common::db::query(
+            "CREATE TRIGGER invalidate AFTER INSERT ON messages WHEN NEW.source_id = 'source-4' \
+             BEGIN DELETE FROM messages WHERE source_id = 'source-1'; DELETE FROM \
+             reproject_watermark; UPDATE projection_state SET generation = generation + 1; END",
+        )
+        .execute(raw.pool())
+        .await
+        .unwrap();
+
+        let stats = s.reproject(&db).await.unwrap();
+        assert_eq!(stats.replayed, 12, "replayed twice: once invalidated, once through");
+        let source_1 = crate::ai_session::SourceId::from("source-1".to_owned());
+        assert!(db.contains_message(&handle, &source_1).await.unwrap(), "the replay restored it");
+        assert_eq!(mark(&db, &s).await.map(|m| m.idx), Some(5));
+    }
+
+    /// Forgetting a host deletes its sessions whole, rows other hosts added included, so those
+    /// hosts are replayed too and their rows come back.
+    #[rstest]
+    #[tokio::test]
+    async fn forgetting_a_host_replays_the_hosts_that_added_to_its_sessions() {
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let [a, b] = <[_; 2]>::try_from(writers(&store, 2)).ok().unwrap();
+        let (shared, other) = (session_named("shared"), session_named("other"));
+        // `a` captured `shared` (its first row), and `b` added a row to it later.
+        push_range(&a, &shared, 0..3).await;
+        push_range(&b, &shared, 10..11).await;
+        push_range(&b, &other, 20..22).await;
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        a.reproject(&db).await.unwrap();
+        assert_eq!(count(&db, &shared).await, Some(4));
+
+        // Host a's store is reset and starts over elsewhere.
+        for r in store.all_tagged(&RecordTag::AiSession).await.unwrap() {
+            if r.host.id == a.host_id {
+                store.delete(r.id).await.unwrap();
+            }
+        }
+        push_range(&a, &session_named("new"), 0..1).await;
+        a.reproject(&db).await.unwrap();
+
+        // `shared` went with host a, and came back with b's row alone.
+        assert_eq!(count(&db, &shared).await, Some(1));
+        let row = crate::ai_session::SourceId::from("source-10".to_owned());
+        assert!(db.contains_message(&shared, &row).await.unwrap());
+        assert_eq!(count(&db, &other).await, Some(2));
+        assert_eq!(mark(&db, &b).await.map(|m| m.idx), Some(2));
     }
 
     #[rstest]
@@ -758,23 +900,86 @@ mod tests {
         assert_eq!(s.reproject(&db).await.unwrap().replayed, 3);
     }
 
+    /// This host's series is replayed under capture's lock, other hosts' without it.
     #[rstest]
     #[tokio::test]
-    async fn reproject_remote_leaves_this_hosts_records_to_startup() {
+    async fn reproject_takes_the_capture_lock_for_this_hosts_records() {
         let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
         let [local, remote] = <[_; 2]>::try_from(writers(&store, 2)).ok().unwrap();
         let (mine, theirs) = (session_named("mine"), session_named("theirs"));
-        push_range(&local, &mine, 0..2).await;
         push_range(&remote, &theirs, 0..3).await;
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+
+        let capture = db.lock_local_projection().await;
+        let short = std::time::Duration::from_millis(200);
+        // Only other hosts' records: nothing waits on capture.
+        tokio::time::timeout(short, local.reproject(&db)).await.unwrap().unwrap();
+        assert_eq!(count(&db, &theirs).await, Some(3));
+
+        // This host's own records (say, synced back after a reinstall) wait for capture.
+        push_range(&local, &mine, 0..2).await;
+        assert!(tokio::time::timeout(short, local.reproject(&db)).await.is_err());
+        drop(capture);
+        local.reproject(&db).await.unwrap();
+        assert_eq!(count(&db, &mine).await, Some(2));
+        assert_eq!(mark(&db, &local).await.map(|m| m.idx), Some(1));
+    }
+
+    /// A record this key cannot decrypt (a daemon still holding the key from before `atuin
+    /// login` re-encrypted the store) holds the watermark below it until the right key projects
+    /// it, and a change of key replays everything.
+    #[rstest]
+    #[tokio::test]
+    async fn a_record_the_key_cannot_decrypt_holds_the_watermark_below_it() {
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let host = hid();
+        let with = |key: Key| {
+            AiSessionStore::builder().store(store.clone()).host_id(host).key(key).build()
+        };
+        let (stale, current) = (with(key()), with(Key::from([1u8; 32])));
+        let handle = sample_handle();
+        push_range(&stale, &handle, 0..2).await;
+        push_range(&current, &handle, 2..4).await;
+        push_range(&stale, &handle, 4..5).await;
 
         let db = AiSessionDatabase::in_memory().await.unwrap();
-        assert_eq!(local.reproject_remote(&db).await.unwrap().replayed, 3);
-        assert_eq!(count(&db, &mine).await, None);
-        assert_eq!(count(&db, &theirs).await, Some(3));
-        assert_eq!(mark(&db, &local).await, None);
+        assert_eq!(stale.reproject(&db).await.unwrap().replayed, 5);
+        assert_eq!(count(&db, &handle).await, Some(3), "what it can read still projects");
+        assert_eq!(mark(&db, &stale).await.map(|m| m.idx), Some(1), "held below idx 2");
+        // Held, so retried.
+        assert_eq!(stale.reproject(&db).await.unwrap().replayed, 3);
 
-        assert_eq!(local.reproject(&db).await.unwrap().replayed, 2);
-        assert_eq!(count(&db, &mine).await, Some(2));
+        // The right key (after a restart): the key changed, so everything is replayed with it.
+        assert_eq!(current.reproject(&db).await.unwrap().replayed, 5);
+        assert_eq!(count(&db, &handle).await, Some(5));
+        assert_eq!(current.reproject(&db).await.unwrap().replayed, 5, "idx 0, 1 and 4 hold it");
+    }
+
+    /// A record that decrypts, so is exactly what its writer wrote, but does not decode is
+    /// passed over: no retry would read it.
+    #[rstest]
+    #[tokio::test]
+    async fn an_authentic_but_undecodable_record_is_skipped() {
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let [s] = <[_; 1]>::try_from(writers(&store, 1)).ok().unwrap();
+        let handle = sample_handle();
+        push_range(&s, &handle, 0..1).await;
+        let record = Record::builder()
+            .id(RecordId(atuin_common::utils::uuid_v7()))
+            .host(Host::new(s.host_id))
+            .version(RecordVersion::V0)
+            .tag(RecordTag::AiSession)
+            .idx(1)
+            // A message kind, then a msgpack byte that is never valid.
+            .data(DecryptedData(vec![0, 0xc1]))
+            .build();
+        store.push(&record.encrypt(&key())).await.unwrap();
+        push_range(&s, &handle, 1..3).await;
+
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        assert_eq!(s.reproject(&db).await.unwrap().replayed, 4);
+        assert_eq!(count(&db, &handle).await, Some(3));
+        assert_eq!(mark(&db, &s).await.map(|m| m.idx), Some(3));
     }
 
     /// Startup reprojection cost on a large store, before (a full replay into an already

@@ -70,6 +70,9 @@ impl Sink {
         // Captured here, so on this host; a reproject reads the same from the record envelope.
         msg.host = Some(self.records.host_id());
         let mut pending = self.pending_projection.lock().await;
+        // Keeps a reprojection of this host's records (after a sync) from projecting the record
+        // pushed below before this does. Taken after `pending`, never the other way round.
+        let local = self.sidecar.lock_local_projection().await;
         if let Some(previous) = pending.as_ref() {
             self.project_and_broadcast(previous).await?;
             *pending = None;
@@ -90,6 +93,7 @@ impl Sink {
         *pending = Some(msg.clone());
         let appended = self.project_and_broadcast(&msg).await?;
         *pending = None;
+        drop(local);
         drop(pending);
         Ok(appended)
     }
