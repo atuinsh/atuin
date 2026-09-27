@@ -186,4 +186,7 @@ message Session {
   uint64 child_count = 15;
   // The newest updated_at across the group; only set by roots-only queries.
   optional google.protobuf.Timestamp group_updated_at = 16;
+  // For a session with no parent, the session it was found to be a copy of (from the model
+  // calls they share); always of the same harness.
+  optional HarnessSession copy_of = 17;
 }
