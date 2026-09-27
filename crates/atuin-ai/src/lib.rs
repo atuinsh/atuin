@@ -10,6 +10,7 @@ pub(crate) mod history_format;
 pub mod mcp;
 pub(crate) mod models;
 pub(crate) mod permissions;
+pub(crate) mod resume_tui;
 pub(crate) mod session;
 pub mod shell;
 pub(crate) mod skills;

@@ -1,0 +1,290 @@
+//! `atuin ai resume`: an interactive picker over captured AI coding-agent sessions.
+//!
+//! A ratatui view built to look and behave like the history search (`atuin search -i`): the same
+//! header, tabs and `[ MODE ] >` input box, preview pane, `invert`/`style`/`inline_height`, enter
+//! vs tab accept, and emacs/vim keymaps from [`atuin_client::tui`].
+//!
+//! It depends on two seams:
+//! - [`SessionSource`] lists, searches and previews sessions;
+//! - [`Resumer`] turns a session into a resume command, or says why it can't be resumed.
+
+pub mod fake;
+pub mod interim;
+pub mod keymap;
+pub mod query;
+pub mod render;
+pub mod resumer;
+pub mod source;
+pub mod state;
+mod terminal;
+pub mod worker;
+
+use std::io::{IsTerminal, stdout};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use atuin_client::settings::Settings;
+use atuin_client::theme::{Meaning, Theme};
+use crossterm::event::EventStream;
+use eyre::Result;
+use futures::StreamExt;
+use ratatui::backend::CrosstermBackend;
+use ratatui::{Terminal, TerminalOptions, Viewport};
+pub use resumer::{ResumePlan, Resumer};
+pub use source::{SessionRow, SessionSource};
+use tokio::sync::mpsc;
+
+use self::state::{InputAction, State};
+use self::worker::{Request, Response};
+
+/// Where the picker runs: what its filter modes resolve against.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ResumeContext {
+    pub cwd: PathBuf,
+    pub git_root: Option<PathBuf>,
+    pub branch: Option<String>,
+    pub host_id: String,
+    pub hostname: String,
+}
+
+impl ResumeContext {
+    /// The current directory, repository, branch and host.
+    pub async fn current() -> Result<Self> {
+        let ctx = atuin_client::database::query_context().await?;
+        let git_root = ctx.git_root;
+        let branch = git_root.as_deref().and_then(current_branch);
+        Ok(Self {
+            cwd: PathBuf::from(ctx.cwd),
+            git_root,
+            branch,
+            host_id: ctx.host_id,
+            hostname: ctx.cmd_origin.host().into_inner().to_string(),
+        })
+    }
+}
+
+/// The checked-out branch of the repository at `root`, read from `HEAD` (following a worktree's
+/// `.git` file), or `None` when detached.
+fn current_branch(root: &Path) -> Option<String> {
+    let dot_git = root.join(".git");
+    let git_dir = if dot_git.is_file() {
+        let contents = fs_err::read_to_string(&dot_git).ok()?;
+        let dir = PathBuf::from(contents.trim().strip_prefix("gitdir:")?.trim());
+        if dir.is_absolute() {
+            dir
+        } else {
+            root.join(dir)
+        }
+    } else {
+        dot_git
+    };
+    let head = fs_err::read_to_string(git_dir.join("HEAD")).ok()?;
+    head.trim().strip_prefix("ref: refs/heads/").map(str::to_owned)
+}
+
+/// How the picker ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outcome {
+    /// Resume the session now (enter, with `enter_accept`).
+    Resume(ResumePlan),
+    /// Put the command on the command line (tab, or enter without `enter_accept`).
+    Edit(ResumePlan),
+    /// Esc, ctrl-c or ctrl-g: leave the command line as it was.
+    Cancelled,
+}
+
+pub struct Picker<'a> {
+    pub settings: &'a Settings,
+    pub theme: &'a Theme,
+    pub source: Arc<dyn SessionSource>,
+    pub resumer: &'a dyn Resumer,
+    pub context: ResumeContext,
+    pub query: String,
+    /// Overrides `[ai.sessions] inline_height` and the top-level `inline_height`.
+    pub inline_height: Option<u16>,
+}
+
+/// Ask the worker for whatever the current view needs and doesn't have yet.
+fn request_details(state: &mut State, requests: &mpsc::UnboundedSender<Request>, subagents: bool) {
+    let Some(handle) = state.selected().map(|r| r.handle.clone()) else {
+        return;
+    };
+    if !state.previews.contains_key(&handle) && state.requested.insert((handle.clone(), false)) {
+        let _ = requests.send(Request::Preview(handle.clone()));
+    }
+    if state.tab_index == 1
+        && !state.children.contains_key(&handle)
+        && state.requested.insert((handle.clone(), true))
+    {
+        let _ = requests.send(Request::Children {
+            session: handle,
+            include_subagents: subagents,
+        });
+    }
+}
+
+fn send_search(state: &mut State, requests: &mpsc::UnboundedSender<Request>) {
+    if let Some((generation, mode, filter)) = state.next_search() {
+        let _ = requests.send(Request::Search {
+            generation,
+            mode,
+            filter,
+        });
+    }
+}
+
+/// Apply a worker response. Returns whether the screen changed.
+fn apply_response(
+    state: &mut State,
+    response: Response,
+    requests: &mpsc::UnboundedSender<Request>,
+) {
+    match response {
+        Response::Results {
+            generation,
+            mode,
+            rows,
+        } => match rows {
+            Ok(rows) => {
+                if state.apply_results(generation, mode, rows) {
+                    // A widened workspace needs a new search.
+                    send_search(state, requests);
+                }
+            }
+            Err(e) if generation == state.issued => {
+                state.status = Some((format!("search failed: {e}"), Meaning::AlertError));
+            }
+            Err(_) => {}
+        },
+        Response::Preview(handle, preview) => {
+            state.previews.insert(handle, preview);
+        }
+        Response::Children(handle, children) => {
+            state.children.insert(handle, children);
+        }
+    }
+}
+
+impl Picker<'_> {
+    #[allow(clippy::too_many_lines)]
+    pub async fn run(self) -> Result<Outcome> {
+        let settings = self.settings;
+        let sessions = &settings.ai.sessions;
+        let inline_height =
+            self.inline_height.or(sessions.inline_height).unwrap_or(settings.inline_height);
+        // Fullscreen when the inline viewport doesn't fit, or stdout is captured (inline needs
+        // cursor position queries on the terminal).
+        let inline_height = if !stdout().is_terminal() {
+            0
+        } else if let Ok((_, rows)) = crossterm::terminal::size()
+            && inline_height >= rows
+        {
+            0
+        } else {
+            inline_height
+        };
+
+        let out = terminal::TuiStdout::new(inline_height > 0, settings.no_mouse)?;
+        let mut terminal = Terminal::with_options(CrosstermBackend::new(out), TerminalOptions {
+            viewport: if inline_height > 0 {
+                Viewport::Inline(inline_height)
+            } else {
+                Viewport::Fullscreen
+            },
+        })?;
+
+        let mut state = State::new(settings, self.context, &self.query);
+        let (requests, mut responses) = worker::spawn(self.source);
+
+        if inline_height > 0 {
+            terminal.clear()?;
+        }
+        // Paint before the first search answers, so the picker shows up immediately.
+        terminal.draw(|f| state.draw(f, settings, self.theme, self.resumer))?;
+        send_search(&mut state, &requests);
+
+        let mut events = EventStream::new();
+        let outcome = 'render: loop {
+            request_details(&mut state, &requests, sessions.show_subagents);
+            terminal.draw(|f| state.draw(f, settings, self.theme, self.resumer))?;
+
+            tokio::select! {
+                event = events.next() => {
+                    let Some(event) = event else { break Outcome::Cancelled };
+                    let action = state.handle_input(settings, &event?);
+                    if !matches!(action, InputAction::Continue | InputAction::Redraw) {
+                        state.status = None;
+                    }
+                    match action {
+                        InputAction::Continue => {}
+                        InputAction::Redraw => {
+                            if state.tab_index != 1 {
+                                terminal.clear()?;
+                            }
+                        }
+                        InputAction::Resume(index) | InputAction::ReturnCommand(index) => {
+                            if let Some(row) = state.results.get(index) {
+                                let plan = self.resumer.plan(row);
+                                if let Some(why) = &plan.blocked {
+                                    state.status =
+                                        Some((format!("can't resume: {why}"), Meaning::AlertError));
+                                    state.accept = false;
+                                } else if matches!(action, InputAction::Resume(_)) {
+                                    break 'render Outcome::Resume(plan);
+                                } else {
+                                    break 'render Outcome::Edit(plan);
+                                }
+                            }
+                        }
+                        InputAction::Copy(index) => {
+                            if let Some(row) = state.results.get(index) {
+                                let line = self.resumer.plan(row).shell_line();
+                                state.status = Some(match set_clipboard(&line) {
+                                    Ok(()) => (format!("copied: {line}"), Meaning::AlertInfo),
+                                    Err(e) => (format!("copy failed: {e}"), Meaning::AlertError),
+                                });
+                            }
+                        }
+                        InputAction::ReturnOriginal | InputAction::Exit => break Outcome::Cancelled,
+                    }
+                }
+                response = responses.recv() => {
+                    if let Some(response) = response {
+                        apply_response(&mut state, response, &requests);
+                    }
+                }
+            }
+            send_search(&mut state, &requests);
+        };
+
+        if inline_height > 0 {
+            terminal.clear()?;
+            let origin = terminal.get_frame().area().as_position();
+            terminal.set_cursor_position(origin)?;
+        }
+        Ok(outcome)
+    }
+}
+
+#[cfg(all(
+    feature = "clipboard",
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+))]
+fn set_clipboard(s: &str) -> Result<()> {
+    let mut ctx = arboard::Clipboard::new()?;
+    ctx.set_text(s.to_owned())?;
+    // Read it back so the clipboard owner keeps it after we exit.
+    ctx.get_text()?;
+    Ok(())
+}
+
+#[cfg(not(all(
+    feature = "clipboard",
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+)))]
+fn set_clipboard(_s: &str) -> Result<()> {
+    eyre::bail!("this build has no clipboard support")
+}
+
+#[cfg(test)]
+mod tests;
