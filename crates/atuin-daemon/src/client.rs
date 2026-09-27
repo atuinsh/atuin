@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 #[cfg(unix)]
 use std::path::PathBuf;
 
-use atuin_client::ai_session::{HarnessKind, HarnessSession};
+use atuin_client::ai_session::{HarnessKind, HarnessSession, SessionFilter};
 use atuin_client::database::Context;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::{FilterMode, Settings};
@@ -526,16 +526,16 @@ impl AiClient {
         Self::new(settings.daemon.tcp_port).await
     }
 
-    /// Stream captured session summaries, newest first. `harness` filters to a single harness when
-    /// set. The daemon sends one session per message (so a long list never trips the gRPC
+    /// Stream captured session summaries passing `filter`, newest first. The daemon sends one session per message (so a long list never trips the gRPC
     /// message-size limit); callers that want the whole set collect it with `try_collect`, and ones
     /// that only want the newest can take the first item without draining the rest.
     pub async fn list_sessions(
         &mut self,
-        harness: Option<HarnessKind>,
+        filter: &SessionFilter,
     ) -> Result<tonic::Streaming<AiSession>> {
         let request = ListSessionsRequest {
-            harness: harness.map(|h| h as i32),
+            harness: None,
+            filter: Some(filter.into()),
         };
         Ok(self.client.list_sessions(request).await?.into_inner())
     }
@@ -573,16 +573,19 @@ impl AiClient {
         Ok(self.client.tail_sessions(request).await?.into_inner())
     }
 
+    /// Stream the sessions matching `query` and passing `filter`, most relevant first, at most
+    /// `limit` (0 is unbounded). An empty query streams them newest first.
     pub async fn search_sessions(
         &mut self,
         query: &str,
-        harness: Option<HarnessKind>,
+        filter: &SessionFilter,
         limit: u32,
     ) -> Result<tonic::Streaming<SearchSessionsMatch>> {
         let request = SearchSessionsRequest {
             query: query.to_owned(),
             limit,
-            harness: harness.map(|h| h as i32),
+            harness: None,
+            filter: Some(filter.into()),
         };
         Ok(self.client.search_sessions(request).await?.into_inner())
     }

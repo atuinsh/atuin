@@ -9,10 +9,10 @@ pub use store::*;
 mod database;
 pub use database::*;
 
-/// Where the daemon keeps the ai-session sidecar.
+/// Where the daemon keeps the ai-session sidecar (see [`Settings::ai_session_sidecar_path`]).
 #[must_use]
 pub fn sidecar_path() -> PathBuf {
-    Settings::effective_data_dir().join("ai_harness_sessions.db")
+    Settings::ai_session_sidecar_path()
 }
 
 /// Have the daemon reproject the sidecar from the whole record store on its next start, for

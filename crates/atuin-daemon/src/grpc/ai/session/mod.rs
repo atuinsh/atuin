@@ -14,8 +14,8 @@ use crate::grpc::ai::session::pb::{
     GetSessionEvent, GetSessionRequest, GetTranscriptChunk, GetTranscriptRequest,
     HarnessFilterRequest, ImportSessionsEvent, ImportSessionsProgress, ImportSessionsRequest,
     ImportSessionsSummary, ListSessionsRequest, SearchSessionsMatch, SearchSessionsRequest,
-    SessionRefRequest, TailSessionsEvent, TailSessionsRequest, get_session_event,
-    import_sessions_event, tail_sessions_event,
+    SessionFilterRequest, SessionRefRequest, TailSessionsEvent, TailSessionsRequest,
+    get_session_event, import_sessions_event, tail_sessions_event,
 };
 use crate::grpc::common::pb as common;
 use crate::grpc::common::pb::Lagged;
@@ -49,11 +49,11 @@ impl GrpcService for Service {
         &self,
         request: Request<ListSessionsRequest>,
     ) -> Result<Response<Self::ListSessionsStream>, Status> {
-        let harness = HarnessFilterRequest::harness(&request.into_inner())?;
+        let filter = request.into_inner().filter()?;
 
         let sessions = self
             .capture
-            .list_sessions(harness)
+            .list_sessions(&filter)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
@@ -115,9 +115,9 @@ impl GrpcService for Service {
         request: Request<SearchSessionsRequest>,
     ) -> Result<Response<Self::SearchSessionsStream>, Status> {
         let request = request.into_inner();
-        let harness = HarnessFilterRequest::harness(&request)?;
+        let filter = request.filter()?;
 
-        let stream = self.capture.search(&request.query, harness, request.limit).map(|result| {
+        let stream = self.capture.search(&request.query, &filter, request.limit).map(|result| {
             result.map(SearchSessionsMatch::from).map_err(|e| Status::internal(e.to_string()))
         });
 
@@ -248,6 +248,7 @@ mod tests {
                 query: "anything".to_owned(),
                 limit: 0,
                 harness: None,
+                filter: None,
             }))
             .await
             .expect("search over an empty sidecar succeeds");
@@ -267,6 +268,7 @@ mod tests {
                 query: "x".to_owned(),
                 limit: 0,
                 harness: Some(9999),
+                filter: None,
             }))
             .await;
 

@@ -5,7 +5,7 @@ use atuin_common::harnesstools::session::{
     Content, Role, StopReason, TitleChange, TitleSource, Usage,
 };
 use atuin_common::string::highlighted::HighlightedString;
-use atuin_domain::record::RecordId;
+use atuin_domain::record::{HostId, RecordId};
 use derive_more::{AsRef, Display, From, Into};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -111,6 +111,12 @@ pub struct Message {
     #[builder(default)]
     #[serde(default)]
     pub turn_id: Option<String>,
+    /// The host that captured this row. Never part of the record body: the record envelope
+    /// already carries it, so a reproject takes it from there and live capture from the local
+    /// host. `None` for a row stored before hosts were tracked, until a reproject fills it in.
+    #[builder(default)]
+    #[serde(skip)]
+    pub host: Option<HostId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TypedBuilder)]
@@ -139,6 +145,90 @@ pub struct Session {
     pub title_source: Option<TitleSource>,
     #[builder(default)]
     pub preview: Option<String>,
+    /// The host that captured the session (its first row's). `None` until known.
+    #[builder(default)]
+    pub host: Option<HostId>,
+    /// The top-most stored ancestor this session is grouped under, following parent links;
+    /// `None` when it is a root itself. A session whose parent is not stored is a root until the
+    /// parent arrives.
+    #[builder(default)]
+    pub root: Option<HarnessSession>,
+    /// How many sessions are grouped under this one. Only counted by roots-only queries (see
+    /// [`SessionFilter::roots_only`]); 0 elsewhere.
+    #[builder(default)]
+    pub child_count: u64,
+    /// The newest `updated_at` across this session and the sessions grouped under it, which is
+    /// what roots-only queries order by. Only set by roots-only queries.
+    #[builder(default)]
+    pub group_updated_at: Option<OffsetDateTime>,
+}
+
+/// How a session relates to its parent, as far as its identity tells.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SessionRelation {
+    /// No parent.
+    Root,
+    /// Spawned by its parent to do part of its work (a Claude Code `agent-*` transcript).
+    Subagent,
+    /// Continues or branches off its parent's conversation (Claude Code `--resume`/`--fork`,
+    /// Pi branches).
+    Fork,
+    /// Has a parent, but the harness does not say which kind of child it is: Codex and opencode
+    /// link subagents and forks alike.
+    Child,
+}
+
+impl Session {
+    /// Whether this session is a root: no stored ancestor.
+    #[must_use]
+    pub fn is_root(&self) -> bool {
+        self.root.is_none()
+    }
+
+    /// The session this one is grouped under: its [root](Self::root), else itself.
+    #[must_use]
+    pub fn group(&self) -> &HarnessSession {
+        self.root.as_ref().unwrap_or(&self.handle)
+    }
+
+    /// How this session relates to its parent, from its harness and id alone.
+    #[must_use]
+    pub fn relation(&self) -> SessionRelation {
+        if self.parent.is_none() {
+            return SessionRelation::Root;
+        }
+        match self.handle.harness {
+            HarnessKind::ClaudeCode if self.handle.session.as_ref().starts_with("agent-") => {
+                SessionRelation::Subagent
+            }
+            HarnessKind::ClaudeCode | HarnessKind::Pi => SessionRelation::Fork,
+            _ => SessionRelation::Child,
+        }
+    }
+}
+
+/// Which sessions a listing or search returns. An absent field is not a filter; every present
+/// one must hold.
+///
+/// Filters apply to each session on its own. With [`Self::roots_only`], a group is returned
+/// (as its root) when any of its sessions passes, so a subagent's model or a fork's branch still
+/// finds the group.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionFilter {
+    /// Captured on this host.
+    pub host: Option<HostId>,
+    /// Working directory at or under this path (a workspace or git root).
+    pub workspace: Option<PathBuf>,
+    /// Working directory exactly this path.
+    pub directory: Option<PathBuf>,
+    /// On this git branch, exactly.
+    pub branch: Option<String>,
+    pub harness: Option<HarnessKind>,
+    /// Model name containing this, ignoring ASCII case (`opus` finds `claude-opus-4-5`).
+    pub model: Option<String>,
+    /// Return only roots, each carrying its [`Session::child_count`], with the sessions grouped
+    /// under it counting toward it: in a search, a child's match is its root's.
+    pub roots_only: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -235,6 +325,33 @@ mod tests {
         let record = crate::ai_session::AiSessionRecord::Message(msg).serialize();
         let old = rmp_serde::from_slice::<OldMessage>(&record[1..]);
         assert!(old.is_ok(), "older host cannot decode: {:?}", old.err());
+    }
+
+    #[rstest]
+    #[case::no_parent(HarnessKind::ClaudeCode, "s", false, SessionRelation::Root)]
+    #[case::claude_subagent(HarnessKind::ClaudeCode, "agent-a1", true, SessionRelation::Subagent)]
+    #[case::claude_fork(HarnessKind::ClaudeCode, "0b3c", true, SessionRelation::Fork)]
+    #[case::pi_branch(HarnessKind::Pi, "s", true, SessionRelation::Fork)]
+    #[case::codex_child(HarnessKind::Codex, "s", true, SessionRelation::Child)]
+    #[case::opencode_child(HarnessKind::Opencode, "ses_1", true, SessionRelation::Child)]
+    fn relation_follows_the_harness_and_id(
+        #[case] harness: HarnessKind,
+        #[case] id: &str,
+        #[case] has_parent: bool,
+        #[case] expected: SessionRelation,
+    ) {
+        let handle = |id: &str| HarnessSession {
+            harness,
+            session: NativeSessionId::from(id.to_owned()),
+        };
+        let session = Session::builder()
+            .handle(handle(id))
+            .parent(has_parent.then(|| handle("parent")))
+            .started_at(OffsetDateTime::UNIX_EPOCH)
+            .updated_at(OffsetDateTime::UNIX_EPOCH)
+            .usage(Usage::default())
+            .build();
+        assert_eq!(session.relation(), expected);
     }
 
     #[rstest]

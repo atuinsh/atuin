@@ -1,20 +1,22 @@
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
-use atuin_common::db::sqlite::fts::{TextHighlighter, match_expression};
+use atuin_common::db::sqlite::fts::{TextHighlighter, prefix_match_expression};
 use atuin_common::db::sqlite::{Sqlite, SqliteOpenOrCreateError};
 use atuin_common::db::{self};
 use atuin_common::harnesstools::session::{
     Checkpoint, Content, Role, TitleChange, TitleSource, Usage,
 };
-use atuin_domain::record::RecordId;
+use atuin_common::string::highlighted::HighlightedString;
+use atuin_domain::record::{HostId, RecordId};
 use futures::{Stream, StreamExt, TryStreamExt};
 use sqlx::SqliteConnection;
 use time::OffsetDateTime;
 use tracing::warn;
 
 use super::{
-    HarnessKind, HarnessSession, Message, NativeSessionId, Session, SessionMatch, SourceId,
+    HarnessKind, HarnessSession, Message, NativeSessionId, Session, SessionFilter, SessionMatch,
+    SourceId,
 };
 
 mod watermark;
@@ -24,6 +26,57 @@ const COMPRESS_THRESHOLD: usize = 256;
 const ZSTD_LEVEL: i32 = 3;
 const REINDEX_CHUNK: i64 = 512;
 const SNIPPET_TOKENS: usize = 32;
+
+/// The newest migration this build knows: [`AiSessionDatabase::open_read_only`] reads only a
+/// sidecar at exactly this version.
+const SCHEMA_VERSION: i64 = 3;
+
+/// How much more a title match weighs than a body match in bm25.
+const TITLE_WEIGHT: f64 = 5.0;
+
+/// A search hit's relevance is divided by `1 + age / RECENCY_DAYS`: one this many days older than
+/// another ranks as if half as relevant.
+const RECENCY_DAYS: f64 = 30.0;
+
+const DAY_MILLIS: f64 = 86_400_000.0;
+
+/// The `sessions` columns [`SessionRow`] reads, from a table aliased `s`. Every query also selects
+/// `child_count` and `group_updated_at`.
+macro_rules! session_columns {
+    () => {
+        "s.harness, s.session_id, s.parent_harness, s.parent_session_id, s.cwd, s.git_branch, \
+         s.model, s.started_at, s.updated_at, s.message_count, s.usage_input, s.usage_output, \
+         s.usage_cache_read, s.usage_cache_write, s.usage_reasoning, s.title, s.title_source, \
+         s.preview, s.host_id, s.root_harness, s.root_session_id"
+    };
+}
+
+/// The `messages` columns [`MessageRow`] reads, from a table aliased `m`.
+macro_rules! message_columns {
+    () => {
+        "m.id, m.harness, m.session_id, m.source_id, m.parent_harness, m.parent_session_id, \
+         m.parent_source_id, m.timestamp, m.role, m.content, m.content_z, m.cwd, m.git_branch, \
+         m.model, m.usage_input, m.usage_output, m.usage_cache_read, m.usage_cache_write, \
+         m.usage_reasoning, m.stop_reason, m.usage_present, m.turn_id, m.title_change, m.host_id"
+    };
+}
+
+/// The group size and newest activity of a root `s`, for roots-only queries.
+macro_rules! group_columns {
+    () => {
+        "(SELECT count(*) - 1 FROM sessions c WHERE c.root_harness = s.harness AND \
+         c.root_session_id = s.session_id) AS child_count, (SELECT max(c.updated_at) FROM sessions \
+         c WHERE c.root_harness = s.harness AND c.root_session_id = s.session_id) AS \
+         group_updated_at"
+    };
+}
+
+/// [`group_columns`] for queries that do not group.
+macro_rules! no_group_columns {
+    () => {
+        "0 AS child_count, NULL AS group_updated_at"
+    };
+}
 
 #[derive(Debug, Clone)]
 pub struct AiSessionDatabase {
@@ -58,6 +111,29 @@ pub enum DbError {
     InvalidContentEncoding,
     #[error("stored ai-session record id is not a valid uuid")]
     InvalidRecordId,
+    #[error(
+        "the ai-session sidecar has not been set up yet: start the atuin daemon to create it \
+         (expected schema version {expected})"
+    )]
+    Uninitialized {
+        expected: i64,
+    },
+    #[error(
+        "the ai-session sidecar is at schema version {found}, older than this build's {expected}: \
+         start the atuin daemon to migrate it"
+    )]
+    OutdatedSchema {
+        found: i64,
+        expected: i64,
+    },
+    #[error(
+        "the ai-session sidecar is at schema version {found}, newer than this build's {expected}: \
+         it was written by a newer atuin"
+    )]
+    UnknownSchema {
+        found: i64,
+        expected: i64,
+    },
 }
 
 #[derive(sqlx::FromRow)]
@@ -80,6 +156,11 @@ struct SessionRow {
     title: Option<String>,
     title_source: Option<i64>,
     preview: Option<String>,
+    host_id: Option<String>,
+    root_harness: Option<i64>,
+    root_session_id: Option<String>,
+    child_count: i64,
+    group_updated_at: Option<i64>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -107,6 +188,7 @@ struct MessageRow {
     usage_present: i64,
     turn_id: Option<String>,
     title_change: Option<String>,
+    host_id: Option<String>,
 }
 
 /// Input, output, cache read, cache write, reasoning: the `usage_*` columns in order.
@@ -208,11 +290,47 @@ impl AiSessionDatabase {
         Ok(db)
     }
 
+    /// Open the sidecar to read beside the daemon that writes it (WAL keeps the two apart): no
+    /// migration or reindex, and no writes. Fails when the file is missing, and with
+    /// [`DbError::Uninitialized`], [`DbError::OutdatedSchema`] or [`DbError::UnknownSchema`]
+    /// unless it is at exactly the schema this build reads.
+    pub async fn open_read_only(path: impl AsRef<Path>) -> Result<Self, DbError> {
+        let db = Sqlite::builder(path.as_ref().as_os_str()).read_only().open().await?;
+        let db = Self { db };
+        db.check_schema().await?;
+        Ok(db)
+    }
+
     pub async fn in_memory() -> Result<Self, DbError> {
         let db = Sqlite::builder_in_memory().open().await?;
         let db = Self { db };
         db.migrate().await?;
         Ok(db)
+    }
+
+    async fn check_schema(&self) -> Result<(), DbError> {
+        let pool = self.db.pool();
+        let tracked: Option<i64> = db::query_scalar(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
+        )
+        .fetch_optional(pool)
+        .await?;
+        let found: Option<i64> = match tracked {
+            Some(_) => {
+                db::query_scalar("SELECT max(version) FROM _sqlx_migrations WHERE success = 1")
+                    .fetch_one(pool)
+                    .await?
+            }
+            None => None,
+        };
+
+        let expected = SCHEMA_VERSION;
+        match found {
+            None => Err(DbError::Uninitialized { expected }),
+            Some(found) if found < expected => Err(DbError::OutdatedSchema { found, expected }),
+            Some(found) if found > expected => Err(DbError::UnknownSchema { found, expected }),
+            Some(_) => Ok(()),
+        }
     }
 
     async fn migrate(&self) -> Result<(), DbError> {
@@ -247,14 +365,15 @@ impl AiSessionDatabase {
         let usage_reasoning =
             msg.usage.and_then(|u| u.reasoning).map(|n| i64::try_from(n).unwrap_or(i64::MAX));
         let cwd = msg.cwd.as_ref().map(|p| p.to_string_lossy().into_owned());
+        let host = msg.host.map(Self::host_repr);
 
         let inserted = db::query(
             "INSERT INTO messages (
                 id, harness, session_id, source_id, parent_harness, parent_session_id,
                 parent_source_id, timestamp, role, content, content_z, cwd, git_branch, model,
                 usage_input, usage_output, usage_cache_read, usage_cache_write,
-                usage_reasoning, stop_reason, usage_present, turn_id, title_change
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                usage_reasoning, stop_reason, usage_present, turn_id, title_change, host_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(harness, session_id, source_id) DO NOTHING",
         )
         .bind(id)
@@ -280,10 +399,16 @@ impl AiSessionDatabase {
         .bind(i64::from(msg.usage.is_some()))
         .bind(msg.turn_id.as_deref())
         .bind(title_change)
+        .bind(host.as_deref())
         .execute(&mut *tx)
         .await?;
 
         if inserted.rows_affected() == 0 {
+            // A row stored before hosts were tracked learns its host when the reproject replays
+            // its record (see migration 0003).
+            if let Some(host) = &host {
+                Self::backfill_host(&mut tx, harness, session_id, source_id, host).await?;
+            }
             tx.commit().await?;
             return Ok(Appended::Duplicate);
         }
@@ -310,9 +435,11 @@ impl AiSessionDatabase {
         db::query(
             "INSERT INTO sessions (
                 harness, session_id, parent_harness, parent_session_id, cwd, git_branch, model,
-                started_at, updated_at, message_count, title, title_source, preview
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                started_at, updated_at, message_count, title, title_source, preview, host_id,
+                root_harness, root_session_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(harness, session_id) DO UPDATE SET
+                host_id = COALESCE(sessions.host_id, excluded.host_id),
                 parent_harness = COALESCE(excluded.parent_harness, sessions.parent_harness),
                 parent_session_id = COALESCE(excluded.parent_session_id, \
              sessions.parent_session_id),
@@ -341,8 +468,20 @@ impl AiSessionDatabase {
         .bind(title)
         .bind(msg.session_title_source.map(Self::title_source_repr))
         .bind(preview)
+        .bind(host.as_deref())
+        // A new session starts as its own root; regroup() below places it.
+        .bind(harness)
+        .bind(session_id)
         .execute(&mut *tx)
         .await?;
+
+        // A session is placed in its group when it first appears and when it learns its parent
+        // (the parent link only ever goes from absent to present).
+        let gained_parent =
+            before.as_ref().is_some_and(|b| b.parent_session_id.is_none() && msg.parent.is_some());
+        if before.is_none() || gained_parent {
+            Self::regroup(&mut tx, harness, session_id).await?;
+        }
 
         let mut recount = BTreeSet::new();
         if let Some(usage) = &msg.usage {
@@ -528,13 +667,12 @@ impl AiSessionDatabase {
 
     /// The newest stored message of a session, by timestamp then record id.
     pub async fn last_message(&self, session: &HarnessSession) -> Result<Option<Message>, DbError> {
-        let row: Option<MessageRow> = db::query_as(
-            "SELECT id, harness, session_id, source_id, parent_harness, parent_session_id, \
-             parent_source_id, timestamp, role, content, content_z, cwd, git_branch, model, \
-             usage_input, usage_output, usage_cache_read, usage_cache_write, usage_reasoning, \
-             stop_reason, usage_present, turn_id, title_change FROM messages WHERE harness = ? \
-             AND session_id = ? ORDER BY timestamp DESC, id DESC LIMIT 1",
-        )
+        let row: Option<MessageRow> = db::query_as(concat!(
+            "SELECT ",
+            message_columns!(),
+            " FROM messages m WHERE m.harness = ? AND m.session_id = ? ORDER BY m.timestamp DESC, \
+             m.id DESC LIMIT 1"
+        ))
         .bind(session.harness as i64)
         .bind(session.session.as_ref())
         .fetch_optional(self.db.pool())
@@ -544,12 +682,13 @@ impl AiSessionDatabase {
     }
 
     pub async fn get_session(&self, session: &HarnessSession) -> Result<Option<Session>, DbError> {
-        let row: Option<SessionRow> = db::query_as(
-            "SELECT harness, session_id, parent_harness, parent_session_id, cwd, git_branch, \
-             model, started_at, updated_at, message_count, usage_input, usage_output, \
-             usage_cache_read, usage_cache_write, usage_reasoning, title, title_source, preview \
-             FROM sessions WHERE harness = ? AND session_id = ?",
-        )
+        let row: Option<SessionRow> = db::query_as(concat!(
+            "SELECT ",
+            session_columns!(),
+            ", ",
+            no_group_columns!(),
+            " FROM sessions s WHERE s.harness = ? AND s.session_id = ?"
+        ))
         .bind(session.harness as i64)
         .bind(session.session.as_ref())
         .fetch_optional(self.db.pool())
@@ -558,29 +697,96 @@ impl AiSessionDatabase {
         row.map(Self::session_from_row).transpose()
     }
 
-    pub async fn list_sessions(
-        &self,
-        harness: Option<HarnessKind>,
-    ) -> Result<Vec<Session>, DbError> {
-        let mut sql = String::from(
-            "SELECT harness, session_id, parent_harness, parent_session_id, cwd, git_branch, \
-             model, started_at, updated_at, message_count, usage_input, usage_output, \
-             usage_cache_read, usage_cache_write, usage_reasoning, title, title_source, preview \
-             FROM sessions WHERE 1 = 1",
-        );
+    /// Every session passing `filter`, newest first. With [`SessionFilter::roots_only`], the
+    /// roots of the groups with a session passing it, newest activity in the group first.
+    pub async fn list_sessions(&self, filter: &SessionFilter) -> Result<Vec<Session>, DbError> {
+        self.recent_sessions(filter, 0).await
+    }
 
-        if harness.is_some() {
-            sql.push_str(" AND harness = ?");
-        }
-        sql.push_str(" ORDER BY updated_at DESC");
+    /// [`Self::list_sessions`], at most `limit` of them (0 is unbounded).
+    async fn recent_sessions(
+        &self,
+        filter: &SessionFilter,
+        limit: u32,
+    ) -> Result<Vec<Session>, DbError> {
+        let (clause, binds) = Self::filter_clause(filter);
+        let limit_clause = if limit == 0 {
+            ""
+        } else {
+            " LIMIT ?"
+        };
+        let sql = if filter.roots_only {
+            format!(
+                "WITH hits AS (SELECT DISTINCT s.root_harness AS gh, s.root_session_id AS gs FROM \
+                 sessions s WHERE 1 = 1{clause}) SELECT {}, {} FROM hits JOIN sessions s ON \
+                 s.harness = hits.gh AND s.session_id = hits.gs ORDER BY group_updated_at DESC, \
+                 s.session_id{limit_clause}",
+                session_columns!(),
+                group_columns!(),
+            )
+        } else {
+            format!(
+                "SELECT {}, {} FROM sessions s WHERE 1 = 1{clause} ORDER BY s.updated_at DESC, \
+                 s.session_id{limit_clause}",
+                session_columns!(),
+                no_group_columns!(),
+            )
+        };
 
         let mut query = db::query_as::<_, SessionRow>(sqlx::AssertSqlSafe(sql));
-        if let Some(harness) = harness {
-            query = query.bind(harness as i64);
+        for bind in binds {
+            query = bind.apply_as(query);
+        }
+        if limit != 0 {
+            query = query.bind(i64::from(limit));
         }
 
         let rows: Vec<SessionRow> = query.fetch_all(self.db.pool()).await?;
         rows.into_iter().map(Self::session_from_row).collect()
+    }
+
+    /// The SQL (each part led by ` AND `) and values selecting the sessions `s` passing `filter`,
+    /// ignoring [`SessionFilter::roots_only`].
+    fn filter_clause(filter: &SessionFilter) -> (String, Vec<Bind>) {
+        let mut sql = String::new();
+        let mut binds = Vec::new();
+        if let Some(host) = filter.host {
+            sql.push_str(" AND s.host_id = ?");
+            binds.push(Bind::Text(Self::host_repr(host)));
+        }
+        if let Some(workspace) = &filter.workspace {
+            // At the path or under it. A root path leaves "", under which every absolute path is.
+            let prefix = Self::path_repr(workspace);
+            sql.push_str(" AND (s.cwd = ? OR substr(s.cwd, 1, length(?) + 1) = ? || '/')");
+            binds.extend([
+                Bind::Text(prefix.clone()),
+                Bind::Text(prefix.clone()),
+                Bind::Text(prefix),
+            ]);
+        }
+        if let Some(directory) = &filter.directory {
+            sql.push_str(" AND s.cwd = ?");
+            binds.push(Bind::Text(Self::path_repr(directory)));
+        }
+        if let Some(branch) = &filter.branch {
+            sql.push_str(" AND s.git_branch = ?");
+            binds.push(Bind::Text(branch.clone()));
+        }
+        if let Some(harness) = filter.harness {
+            sql.push_str(" AND s.harness = ?");
+            binds.push(Bind::Int(harness as i64));
+        }
+        if let Some(model) = &filter.model {
+            sql.push_str(" AND instr(lower(s.model), lower(?)) > 0");
+            binds.push(Bind::Text(model.clone()));
+        }
+        (sql, binds)
+    }
+
+    /// A path as stored in `cwd`, without a trailing separator.
+    fn path_repr(path: &Path) -> String {
+        let path = path.to_string_lossy();
+        path.trim_end_matches('/').to_owned()
     }
 
     pub fn messages(
@@ -592,14 +798,12 @@ impl AiSessionDatabase {
         let session_id = session.session.as_ref().to_owned();
 
         async_stream::try_stream! {
-            let mut rows = db::query_as::<_, MessageRow>(
-                "SELECT id, harness, session_id, source_id, parent_harness, parent_session_id, \
-                 parent_source_id, timestamp, role, content, content_z, cwd, git_branch, \
-                 model, usage_input, usage_output, usage_cache_read, usage_cache_write, \
-                 usage_reasoning, stop_reason, usage_present, turn_id, title_change FROM messages WHERE harness = ? AND \
-                 session_id = ? \
-                 ORDER BY timestamp, id",
-            )
+            let mut rows = db::query_as::<_, MessageRow>(concat!(
+                "SELECT ",
+                message_columns!(),
+                " FROM messages m WHERE m.harness = ? AND m.session_id = ? ORDER BY m.timestamp, \
+                 m.id"
+            ))
             .bind(harness)
             .bind(session_id)
             .fetch(&pool);
@@ -617,56 +821,99 @@ impl AiSessionDatabase {
         self.messages(session).map(|result| result.map(|msg| Self::render_transcript_chunk(&msg)))
     }
 
+    /// Sessions matching `query` and passing `filter`, most relevant first, at most `limit` (0
+    /// is unbounded).
+    ///
+    /// The last term of `query` matches as a prefix, for search as you type (see
+    /// [`prefix_match_expression`]). Relevance is bm25 at the session's best message, a title
+    /// match weighing five times a body one, divided by `1 + age_in_days / 30` so that equally
+    /// relevant sessions rank newest first.
+    /// With [`SessionFilter::roots_only`], a match anywhere in a group is its root's. A query
+    /// with no terms returns the sessions [`Self::list_sessions`] does, newest first.
+    ///
+    /// Each match carries its title and a snippet of the best message, with the query's matches
+    /// highlighted.
     pub fn search(
         &self,
         query: &str,
-        harness: Option<HarnessKind>,
+        filter: &SessionFilter,
         limit: u32,
     ) -> impl Stream<Item = Result<SessionMatch, DbError>> + Send + 'static {
+        let this = self.clone();
         let pool = self.db.pool().clone();
         let query = query.to_owned();
+        let filter = filter.clone();
 
         async_stream::try_stream! {
-            let Some(expr) = match_expression(&query) else {
+            let highlighter = TextHighlighter::default();
+            let Some(expr) = prefix_match_expression(&query) else {
+                for session in this.recent_sessions(&filter, limit).await? {
+                    let title = session.title.clone().unwrap_or_default();
+                    let preview = session.preview.clone().unwrap_or_default();
+                    yield SessionMatch {
+                        title: highlighter.as_highlighted(highlighter.sanitize(&title).into_owned()),
+                        preview: highlighter
+                            .as_highlighted(highlighter.sanitize(&preview).into_owned()),
+                        session,
+                        score: 0.0,
+                    };
+                }
                 return;
             };
 
-            let harness_clause = if harness.is_some() { " AND m.harness = ?" } else { "" };
+            let (filter_clause, binds) = Self::filter_clause(&filter);
+            let (group_harness, group_session) = if filter.roots_only {
+                ("s.root_harness", "s.root_session_id")
+            } else {
+                ("s.harness", "s.session_id")
+            };
+            let (group_select, recency) = if filter.roots_only {
+                (
+                    group_columns!(),
+                    "(SELECT max(c.updated_at) FROM sessions c WHERE c.root_harness = g.harness \
+                     AND c.root_session_id = g.session_id)",
+                )
+            } else {
+                (no_group_columns!(), "g.updated_at")
+            };
             let limit_clause = if limit == 0 { "" } else { " LIMIT ?" };
 
             // messages_fts is contentless: it can rank (bm25) but cannot render highlight() or
             // snippet(), so the query returns the best message's stored content and the marking
-            // happens in Rust below.
+            // happens in Rust below. `best` takes the rowid of each group's top-scoring message
+            // (SQLite fills bare columns from the max() row).
             let sql = format!(
                 "WITH ranked AS MATERIALIZED (\
-                 SELECT messages_fts.rowid AS rowid, m.harness AS h, m.session_id AS sid, \
-                 -bm25(messages_fts) AS score \
+                 SELECT messages_fts.rowid AS rowid, {group_harness} AS gh, {group_session} AS gs, \
+                 -bm25(messages_fts, {TITLE_WEIGHT:?}, 1.0) AS score \
                  FROM messages_fts JOIN messages m ON m.rowid = messages_fts.rowid \
-                 WHERE messages_fts MATCH ?{harness_clause}), \
-                 best AS (SELECT rowid, max(score) AS score FROM ranked \
-                 GROUP BY h, sid ORDER BY score DESC{limit_clause}) \
-                 SELECT s.harness, s.session_id, s.parent_harness, s.parent_session_id, s.cwd, \
-                 s.git_branch, s.model, s.started_at, s.updated_at, s.message_count, \
-                 s.usage_input, s.usage_output, s.usage_cache_read, s.usage_cache_write, \
-                 s.usage_reasoning, s.title, s.title_source, \
-                 s.preview, \
-                 m.content AS match_content, m.content_z AS match_content_z, m.cwd AS match_cwd, \
-                 m.git_branch AS match_git_branch, m.model AS match_model, \
-                 best.score AS score FROM best \
-                 JOIN messages m ON m.rowid = best.rowid \
                  JOIN sessions s ON s.harness = m.harness AND s.session_id = m.session_id \
-                 ORDER BY best.score DESC, s.updated_at DESC, s.session_id",
+                 WHERE messages_fts MATCH ?{filter_clause}), \
+                 best AS (SELECT rowid, gh, gs, max(score) AS score FROM ranked GROUP BY gh, gs), \
+                 scored AS (SELECT best.rowid AS rowid, best.gh AS gh, best.gs AS gs, \
+                 best.score / (1.0 + max(0, ? - {recency}) / {DAY_MILLIS:?} / {RECENCY_DAYS:?}) \
+                 AS score FROM best JOIN sessions g ON g.harness = best.gh AND g.session_id = \
+                 best.gs ORDER BY score DESC, g.updated_at DESC, g.session_id{limit_clause}) \
+                 SELECT {}, {group_select}, m.content AS match_content, \
+                 m.content_z AS match_content_z, m.cwd AS match_cwd, \
+                 m.git_branch AS match_git_branch, m.model AS match_model, \
+                 scored.score AS score FROM scored \
+                 JOIN messages m ON m.rowid = scored.rowid \
+                 JOIN sessions s ON s.harness = scored.gh AND s.session_id = scored.gs \
+                 ORDER BY scored.score DESC, s.updated_at DESC, s.session_id",
+                session_columns!(),
             );
 
             let mut stmt = db::query_as::<_, SearchRow>(sqlx::AssertSqlSafe(sql)).bind(expr);
-            if let Some(harness) = harness {
-                stmt = stmt.bind(harness as i64);
+            for bind in binds {
+                stmt = bind.apply_as(stmt);
             }
+            stmt = stmt.bind(Self::millis(OffsetDateTime::now_utc()));
             if limit != 0 {
                 stmt = stmt.bind(i64::from(limit));
             }
 
-            let highlighter = TextHighlighter::default();
+            let terms = QueryTerms::parse(&query);
             let mut rows = stmt.fetch(&pool);
             while let Some(row) = rows.try_next().await? {
                 let title = row.session.title.clone().unwrap_or_default();
@@ -681,16 +928,12 @@ impl AiSessionDatabase {
                     warn!(?err, "failed to decode matched ai-session message; empty preview");
                     String::new()
                 });
-                let preview = Self::preview_snippet(&body, &query, SNIPPET_TOKENS);
+                let preview = Self::preview_snippet(&body, &terms, SNIPPET_TOKENS);
 
-                // No highlight spans are produced: consumers only render the plain text, so the
-                // marker machinery isn't worth its keep. sanitize() strips any stray marker
-                // codepoints in stored data so they can't masquerade as spans downstream.
                 yield SessionMatch {
                     session: Self::session_from_row(row.session)?,
-                    title: highlighter.as_highlighted(highlighter.sanitize(&title).into_owned()),
-                    preview: highlighter
-                        .as_highlighted(highlighter.sanitize(&preview).into_owned()),
+                    title: terms.highlight(highlighter, &title),
+                    preview: terms.highlight(highlighter, &preview),
                     score: row.score,
                 };
             }
@@ -723,7 +966,7 @@ impl AiSessionDatabase {
                  m.parent_harness, m.parent_session_id, m.parent_source_id, m.timestamp, m.role, \
                  m.content, m.content_z, m.cwd, m.git_branch, m.model, m.usage_input, \
                  m.usage_output, m.usage_cache_read, m.usage_cache_write, m.usage_reasoning, \
-                 m.stop_reason, m.usage_present, m.turn_id, m.title_change, s.title AS \
+                 m.stop_reason, m.usage_present, m.turn_id, m.title_change, m.host_id, s.title AS \
                  session_title FROM messages m LEFT JOIN sessions s ON s.harness = m.harness AND \
                  s.session_id = m.session_id WHERE m.rowid > ? ORDER BY m.rowid LIMIT ?",
             )
@@ -761,54 +1004,13 @@ impl AiSessionDatabase {
         Ok(())
     }
 
-    /// Fold text the way the index's `unicode61` tokenizer does — lowercase with combining marks
-    /// stripped — so preview placement agrees with what FTS5 actually matched (e.g. a query for
-    /// `cafe` matches a stored `café`).
-    fn fts_fold(text: &str) -> String {
-        use unicode_normalization::UnicodeNormalization as _;
-        use unicode_normalization::char::is_combining_mark;
-        text.nfd().filter(|c| !is_combining_mark(*c)).flat_map(char::to_lowercase).collect()
-    }
-
-    /// The folded `unicode61`-style tokens (alphanumeric runs) of `text`.
-    fn fts_tokens(text: &str) -> impl Iterator<Item = String> + '_ {
-        Self::fts_fold(text)
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|t| !t.is_empty())
-            .map(str::to_owned)
-            .collect::<Vec<_>>()
-            .into_iter()
-    }
-
     /// The index of the first whitespace word where a query term matches the way the FTS index
-    /// matched it: each term is a phrase of folded tokens that must appear consecutively in the
-    /// body's token stream (so `app` matches the token `app`, not the word `apple`, and `foo-bar`
-    /// matches `foo bar` across words).
-    fn preview_hit(words: &[&str], query: &str) -> Option<usize> {
-        let phrases: Vec<Vec<String>> = query
-            .split_whitespace()
-            .map(|term| Self::fts_tokens(term).collect())
-            .filter(|p: &Vec<String>| !p.is_empty())
-            .collect();
-        if phrases.is_empty() {
-            return None;
-        }
-
+    /// matched it (see [`QueryTerms`]).
+    fn preview_hit(words: &[&str], terms: &QueryTerms) -> Option<usize> {
         // (word index, folded token) stream over the whole body.
-        let tokens: Vec<(usize, String)> = words
-            .iter()
-            .enumerate()
-            .flat_map(|(i, w)| Self::fts_tokens(w).map(move |t| (i, t)))
-            .collect();
-
-        phrases
-            .iter()
-            .filter_map(|phrase| {
-                (0..tokens.len().saturating_sub(phrase.len() - 1))
-                    .find(|&i| phrase.iter().zip(&tokens[i..]).all(|(p, (_, t))| p == t))
-            })
-            .min()
-            .map(|i| tokens[i].0)
+        let (word_of, tokens): (Vec<usize>, Vec<String>) =
+            words.iter().enumerate().flat_map(|(i, w)| fts_tokens(w).map(move |t| (i, t))).unzip();
+        terms.matches(&tokens).map(|(at, _)| at).min().map(|at| word_of[at])
     }
 
     /// `s` cut to at most `max` bytes on a char boundary.
@@ -825,7 +1027,7 @@ impl AiSessionDatabase {
     /// truncation. Bounded by a char budget so whitespace-free blobs (minified output) cannot
     /// blow up the preview. The replacement for FTS5's `snippet()`, which the contentless index
     /// cannot render.
-    fn preview_snippet(body: &str, query: &str, max_tokens: usize) -> String {
+    fn preview_snippet(body: &str, terms: &QueryTerms, max_tokens: usize) -> String {
         const MAX_CHARS: usize = 400;
         const LEAD_CHARS: usize = 80;
 
@@ -834,7 +1036,7 @@ impl AiSessionDatabase {
             return String::new();
         }
 
-        let hit = Self::preview_hit(&words, query).unwrap_or(0);
+        let hit = Self::preview_hit(&words, terms).unwrap_or(0);
 
         // Lead-in: a little context before the match, capped in words and chars so a giant
         // preceding blob cannot push the match itself out of the char budget.
@@ -1009,6 +1211,175 @@ impl AiSessionDatabase {
         .bind(session_id)
         .fetch_optional(conn)
         .await?)
+    }
+
+    /// Delete every session `host` captured, with its rows, for a reprojection that replays that
+    /// host's records from scratch because its record series was rewritten or deleted: what the
+    /// old series projected may be gone from the store. Model calls the sessions claimed are
+    /// attributed afresh among the claimants left, and groups they headed are regrouped.
+    ///
+    /// Sessions are removed whole, by the host that captured them (their first row's); a row
+    /// another host added to one goes with it until that host's records are replayed.
+    pub async fn forget_host(&self, host: HostId) -> Result<(), DbError> {
+        let host = Self::host_repr(host);
+        let mut tx = self.db.pool().begin_with("BEGIN IMMEDIATE").await?;
+
+        let turns: Vec<(i64, String)> =
+            db::query_as(
+                "SELECT DISTINCT m.harness, m.turn_id FROM messages m JOIN sessions s ON \
+                 s.harness =              m.harness AND s.session_id = m.session_id WHERE \
+                 s.host_id = ? AND m.turn_id IS NOT              NULL AND m.usage_present = 1",
+            )
+            .bind(&host)
+            .fetch_all(&mut *tx)
+            .await?;
+        let orphaned: i64 =
+            db::query_scalar(
+                "SELECT count(*) FROM sessions c JOIN sessions r ON r.harness = c.root_harness \
+                 AND              r.session_id = c.root_session_id WHERE r.host_id = ? AND \
+                 (c.host_id IS NOT ? OR              c.host_id IS NULL)",
+            )
+            .bind(&host)
+            .bind(&host)
+            .fetch_one(&mut *tx)
+            .await?;
+
+        for sql in [
+            "DELETE FROM messages_fts WHERE rowid IN (SELECT m.rowid FROM messages m JOIN              sessions s ON s.harness = m.harness AND s.session_id = m.session_id WHERE s.host_id              = ?)",
+            "DELETE FROM messages WHERE (harness, session_id) IN (SELECT harness, session_id FROM              sessions WHERE host_id = ?)",
+            "DELETE FROM calls WHERE (harness, session_id) IN (SELECT harness, session_id FROM              sessions WHERE host_id = ?)",
+            "DELETE FROM sessions WHERE host_id = ?",
+        ] {
+            db::query(sql).bind(&host).execute(&mut *tx).await?;
+        }
+
+        for (harness, turn) in &turns {
+            Self::attribute_call(&mut tx, *harness, turn).await?;
+        }
+        if orphaned > 0 {
+            Self::regroup_all(&mut tx).await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Group every session afresh under its top-most stored ancestor, as migration 0003 does.
+    async fn regroup_all(conn: &mut SqliteConnection) -> Result<(), DbError> {
+        db::query(
+            "WITH RECURSIVE chain (harness, session_id, anc_harness, anc_session_id, depth) AS (              SELECT harness, session_id, harness, session_id, 0 FROM sessions UNION ALL SELECT              c.harness, c.session_id, p.harness, p.session_id, c.depth + 1 FROM chain c JOIN              sessions a ON a.harness = c.anc_harness AND a.session_id = c.anc_session_id JOIN              sessions p ON p.harness = a.parent_harness AND p.session_id = a.parent_session_id              WHERE c.depth < 64 AND NOT (p.harness = c.harness AND p.session_id = c.session_id)),              roots AS (SELECT harness, session_id, anc_harness, anc_session_id, max(depth) FROM              chain GROUP BY harness, session_id) UPDATE sessions SET root_harness =              roots.anc_harness, root_session_id = roots.anc_session_id FROM roots WHERE              roots.harness = sessions.harness AND roots.session_id = sessions.session_id",
+        )
+        .execute(conn)
+        .await?;
+        Ok(())
+    }
+
+    /// Record `host` on a stored row that has none, and on its session.
+    async fn backfill_host(
+        conn: &mut SqliteConnection,
+        harness: i64,
+        session_id: &str,
+        source_id: &str,
+        host: &str,
+    ) -> Result<(), DbError> {
+        db::query(
+            "UPDATE messages SET host_id = ? WHERE harness = ? AND session_id = ? AND source_id = \
+             ? AND host_id IS NULL",
+        )
+        .bind(host)
+        .bind(harness)
+        .bind(session_id)
+        .bind(source_id)
+        .execute(&mut *conn)
+        .await?;
+        db::query(
+            "UPDATE sessions SET host_id = ? WHERE harness = ? AND session_id = ? AND host_id IS \
+             NULL",
+        )
+        .bind(host)
+        .bind(harness)
+        .bind(session_id)
+        .execute(conn)
+        .await?;
+        Ok(())
+    }
+
+    /// Place a session that just appeared or just learned its parent in its group.
+    ///
+    /// Every session's root is its top-most stored ancestor. A session is only placed when it is
+    /// a root (it is new, or had no parent), so it and everything grouped under it move to its
+    /// parent's root. Being new, it may also be the missing parent of sessions stored before it,
+    /// which were roots of their own: those groups move under it too. The result depends only on
+    /// the sessions stored, never on the order they arrived in.
+    async fn regroup(
+        conn: &mut SqliteConnection,
+        harness: i64,
+        session_id: &str,
+    ) -> Result<(), DbError> {
+        let (parent_harness, parent_session_id): (Option<i64>, Option<String>) = db::query_as(
+            "SELECT parent_harness, parent_session_id FROM sessions WHERE harness = ? AND \
+             session_id = ?",
+        )
+        .bind(harness)
+        .bind(session_id)
+        .fetch_one(&mut *conn)
+        .await?;
+
+        let parent_root: Option<(i64, String)> = match (parent_harness, parent_session_id) {
+            (Some(parent_harness), Some(parent_session_id)) => {
+                db::query_as(
+                    "SELECT root_harness, root_session_id FROM sessions WHERE harness = ? AND \
+                     session_id = ? AND root_harness IS NOT NULL",
+                )
+                .bind(parent_harness)
+                .bind(parent_session_id)
+                .fetch_optional(&mut *conn)
+                .await?
+            }
+            _ => None,
+        };
+        // A parent that is not stored leaves the session a root; one grouped under this very
+        // session (a parent cycle) does too.
+        let (root_harness, root_session_id) = parent_root
+            .filter(|(h, s)| (*h, s.as_str()) != (harness, session_id))
+            .unwrap_or_else(|| (harness, session_id.to_owned()));
+
+        if (root_harness, root_session_id.as_str()) != (harness, session_id) {
+            db::query(
+                "UPDATE sessions SET root_harness = ?, root_session_id = ? WHERE root_harness = ? \
+                 AND root_session_id = ?",
+            )
+            .bind(root_harness)
+            .bind(&root_session_id)
+            .bind(harness)
+            .bind(session_id)
+            .execute(&mut *conn)
+            .await?;
+        }
+
+        // Sessions stored before their parent (this one) arrived, still roots of their own.
+        db::query(
+            "UPDATE sessions SET root_harness = ?1, root_session_id = ?2 WHERE (root_harness, \
+             root_session_id) IN (SELECT harness, session_id FROM sessions WHERE parent_harness = \
+             ?3 AND parent_session_id = ?4 AND root_harness = harness AND root_session_id = \
+             session_id AND NOT (harness = ?1 AND session_id = ?2))",
+        )
+        .bind(root_harness)
+        .bind(&root_session_id)
+        .bind(harness)
+        .bind(session_id)
+        .execute(conn)
+        .await?;
+        Ok(())
+    }
+
+    fn host_repr(host: HostId) -> String {
+        host.as_hyphenated().to_string()
+    }
+
+    fn host_from_repr(host: Option<String>) -> Option<HostId> {
+        // A malformed id reads as unknown rather than failing the whole row.
+        host.and_then(|h| uuid::Uuid::parse_str(&h).ok()).map(HostId)
     }
 
     /// Add `sign * tokens` to a session's usage totals.
@@ -1231,6 +1602,7 @@ impl AiSessionDatabase {
             .title_change(
                 row.title_change.as_deref().and_then(|json| serde_json::from_str(json).ok()),
             )
+            .host(Self::host_from_repr(row.host_id))
             .build())
     }
 
@@ -1285,6 +1657,9 @@ impl AiSessionDatabase {
     fn session_from_row(row: SessionRow) -> Result<Session, DbError> {
         let harness = Self::harness_from_repr(row.harness)?;
         let parent = Self::optional_session(row.parent_harness, row.parent_session_id)?;
+        let root = Self::optional_session(row.root_harness, row.root_session_id)?
+            .filter(|root| root.harness != harness || root.session.as_ref() != row.session_id);
+        let group_updated_at = row.group_updated_at.map(Self::time_from_millis).transpose()?;
 
         Ok(Session::builder()
             .handle(HarnessSession {
@@ -1308,25 +1683,167 @@ impl AiSessionDatabase {
             .title(row.title)
             .title_source(row.title_source.and_then(Self::title_source_from_repr))
             .preview(row.preview)
+            .host(Self::host_from_repr(row.host_id))
+            .root(root)
+            .child_count(u64::try_from(row.child_count).unwrap_or(0))
+            .group_updated_at(group_updated_at)
             .build())
+    }
+}
+
+/// A value bound into a query built at runtime.
+enum Bind {
+    Text(String),
+    Int(i64),
+}
+
+type QueryAs<'q, O> =
+    sqlx::query::QueryAs<'q, sqlx::Sqlite, O, <sqlx::Sqlite as sqlx::Database>::Arguments>;
+
+impl Bind {
+    fn apply_as<O>(self, query: QueryAs<'_, O>) -> QueryAs<'_, O> {
+        match self {
+            Self::Text(text) => query.bind(text),
+            Self::Int(n) => query.bind(n),
+        }
+    }
+}
+
+/// Fold text the way the index's `unicode61` tokenizer does — lowercase with combining marks
+/// stripped — so preview placement and highlights agree with what FTS5 actually matched (e.g. a
+/// query for `cafe` matches a stored `café`).
+fn fts_fold(text: &str) -> String {
+    use unicode_normalization::UnicodeNormalization as _;
+    use unicode_normalization::char::is_combining_mark;
+    text.nfd().filter(|c| !is_combining_mark(*c)).flat_map(char::to_lowercase).collect()
+}
+
+/// The folded `unicode61`-style tokens (alphanumeric runs) of `text`.
+fn fts_tokens(text: &str) -> impl Iterator<Item = String> + use<> {
+    fts_fold(text)
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>()
+        .into_iter()
+}
+
+/// The byte ranges of `text`'s tokens, each with its folded form.
+fn fts_token_spans(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
+    use unicode_normalization::char::is_combining_mark;
+    let is_token = |c: char| c.is_alphanumeric() || is_combining_mark(c);
+    let mut spans = Vec::new();
+    let mut start = None;
+    for (i, c) in text.char_indices().chain(std::iter::once((text.len(), ' '))) {
+        match (start, is_token(c)) {
+            (None, true) => start = Some(i),
+            (Some(from), false) => {
+                start = None;
+                let folded = fts_fold(&text[from..i]);
+                if !folded.is_empty() {
+                    spans.push((from..i, folded));
+                }
+            }
+            _ => {}
+        }
+    }
+    spans
+}
+
+/// A search query's terms as the index matches them (see [`prefix_match_expression`]): each
+/// whitespace-separated term is a phrase of folded tokens that must appear consecutively (so
+/// `app` matches the token `app`, not the word `apple`, and `foo-bar` matches `foo bar` across
+/// words), and the last term's last token also matches as a prefix unless the query ends in
+/// whitespace.
+struct QueryTerms {
+    /// Each phrase, and whether its last token is a prefix.
+    phrases: Vec<(Vec<String>, bool)>,
+}
+
+impl QueryTerms {
+    fn parse(query: &str) -> Self {
+        let terms: Vec<&str> = query.split_whitespace().collect();
+        let prefix = !query.ends_with(char::is_whitespace);
+        let phrases = terms
+            .iter()
+            .enumerate()
+            .map(|(i, term)| (fts_tokens(term).collect::<Vec<_>>(), prefix && i + 1 == terms.len()))
+            .filter(|(phrase, _)| !phrase.is_empty())
+            .collect();
+        Self { phrases }
+    }
+
+    /// Where a phrase matches in `tokens`: its first token's index and its length.
+    fn matches<'a>(&'a self, tokens: &'a [String]) -> impl Iterator<Item = (usize, usize)> + 'a {
+        self.phrases.iter().flat_map(move |(phrase, prefix)| {
+            (0..=tokens.len().saturating_sub(phrase.len()))
+                .filter(move |&at| {
+                    tokens.len() >= phrase.len()
+                        && phrase.iter().zip(&tokens[at..]).enumerate().all(|(i, (p, t))| {
+                            if *prefix && i + 1 == phrase.len() {
+                                t.starts_with(p.as_str())
+                            } else {
+                                p == t
+                            }
+                        })
+                })
+                .map(move |at| (at, phrase.len()))
+        })
+    }
+
+    /// `text` with every token the query matches marked by `highlighter`.
+    fn highlight(&self, highlighter: TextHighlighter, text: &str) -> HighlightedString {
+        let text = highlighter.sanitize(text);
+        let spans = fts_token_spans(&text);
+        let tokens: Vec<String> = spans.iter().map(|(_, t)| t.clone()).collect();
+        let mut marked = vec![false; tokens.len()];
+        for (at, len) in self.matches(&tokens) {
+            marked[at..at + len].fill(true);
+        }
+
+        let [open, close] = highlighter.markers();
+        let mut out = String::with_capacity(text.len());
+        let mut copied = 0;
+        for ((range, _), _) in spans.iter().zip(&marked).filter(|(_, m)| **m) {
+            out.push_str(&text[copied..range.start]);
+            out.push(open);
+            out.push_str(&text[range.clone()]);
+            out.push(close);
+            copied = range.end;
+        }
+        out.push_str(&text[copied..]);
+        highlighter.as_highlighted(out)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use atuin_common::db;
+    use atuin_common::db::sqlite::Sqlite;
+    use atuin_common::db::sqlite::fts::TextHighlighter;
     use atuin_common::harnesstools::session::{
         Checkpoint, Content, Role, ToolCallId, ToolResult, ToolUse, Usage,
     };
-    use atuin_domain::record::RecordId;
+    use atuin_domain::record::{HostId, RecordId};
     use futures::TryStreamExt;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use time::OffsetDateTime;
 
-    use super::{AiSessionDatabase, Appended, COMPRESS_THRESHOLD, TitleSource};
-    use crate::ai_session::{
-        HarnessKind, HarnessSession, Message, NativeSessionId, SessionMatch, SourceId,
+    use super::{
+        AiSessionDatabase, Appended, COMPRESS_THRESHOLD, DbError, QueryTerms, SCHEMA_VERSION,
+        TitleSource,
     };
+    use crate::ai_session::{
+        HarnessKind, HarnessSession, Message, NativeSessionId, Session, SessionFilter,
+        SessionMatch, SourceId,
+    };
+
+    fn harness_filter(harness: HarnessKind) -> SessionFilter {
+        SessionFilter {
+            harness: Some(harness),
+            ..SessionFilter::default()
+        }
+    }
 
     fn sample_message() -> Message {
         Message::builder()
@@ -1469,7 +1986,7 @@ mod tests {
             db.append(&m).await.unwrap();
         }
 
-        let sessions = db.list_sessions(None).await.unwrap();
+        let sessions = db.list_sessions(&SessionFilter::default()).await.unwrap();
         assert_eq!(sessions.len(), 3);
         assert!(sessions.windows(2).all(|w| w[0].updated_at >= w[1].updated_at));
     }
@@ -1780,8 +2297,17 @@ mod tests {
             .build()
     }
 
+    async fn search_with(
+        db: &AiSessionDatabase,
+        query: &str,
+        filter: &SessionFilter,
+        limit: u32,
+    ) -> Vec<SessionMatch> {
+        db.search(query, filter, limit).try_collect().await.unwrap()
+    }
+
     async fn search(db: &AiSessionDatabase, query: &str) -> Vec<SessionMatch> {
-        db.search(query, None, 0).try_collect().await.unwrap()
+        db.search(query, &SessionFilter::default(), 0).try_collect().await.unwrap()
     }
 
     #[rstest]
@@ -1845,11 +2371,15 @@ mod tests {
         db.append(&message_in(&claude, 0, "shared keyword")).await.unwrap();
         db.append(&message_in(&codex, 1, "shared keyword")).await.unwrap();
 
-        let all: Vec<_> = db.search("shared", None, 0).try_collect().await.unwrap();
+        let all: Vec<_> =
+            db.search("shared", &SessionFilter::default(), 0).try_collect().await.unwrap();
         assert_eq!(all.len(), 2);
 
-        let only_codex: Vec<_> =
-            db.search("shared", Some(HarnessKind::Codex), 0).try_collect().await.unwrap();
+        let only_codex: Vec<_> = db
+            .search("shared", &harness_filter(HarnessKind::Codex), 0)
+            .try_collect()
+            .await
+            .unwrap();
         assert_eq!(only_codex.len(), 1);
         assert_eq!(only_codex[0].session.handle, codex);
     }
@@ -1863,15 +2393,15 @@ mod tests {
             db.append(&message_in(&session, i, "common term")).await.unwrap();
         }
 
-        let two: Vec<_> = db.search("common", None, 2).try_collect().await.unwrap();
+        let two: Vec<_> =
+            db.search("common", &SessionFilter::default(), 2).try_collect().await.unwrap();
         assert_eq!(two.len(), 2);
-        let all: Vec<_> = db.search("common", None, 0).try_collect().await.unwrap();
+        let all: Vec<_> =
+            db.search("common", &SessionFilter::default(), 0).try_collect().await.unwrap();
         assert_eq!(all.len(), 5);
     }
 
     #[rstest]
-    #[case::empty("")]
-    #[case::whitespace("   \t\n ")]
     #[case::punctuation_only("()")]
     #[case::operator_soup("***")]
     #[tokio::test]
@@ -1945,7 +2475,8 @@ mod tests {
         let quiet = handle(HarnessKind::ClaudeCode, "quiet");
         db.append(&message_in(&quiet, 100, "shared keyword")).await.unwrap();
 
-        let two: Vec<_> = db.search("keyword", None, 2).try_collect().await.unwrap();
+        let two: Vec<_> =
+            db.search("keyword", &SessionFilter::default(), 2).try_collect().await.unwrap();
         assert_eq!(two.len(), 2, "ranking is per session: one chatty session takes one slot");
         assert!(
             two.iter().any(|m| m.session.handle == quiet),
@@ -1993,7 +2524,8 @@ mod tests {
             .await
             .unwrap();
 
-        let hits = search(&db, "app").await;
+        // A trailing space finishes the term, so it is not a prefix of `apple`.
+        let hits = search(&db, "app ").await;
         assert_eq!(hits.len(), 1);
         let preview = hits[0].preview.to_plain().text.into_owned();
         assert!(preview.contains("app end"), "the token match must be visible: {preview:?}");
@@ -2183,5 +2715,609 @@ mod tests {
         db.append(&again).await.unwrap();
         assert_eq!(indexed_with_title("GammaTitle").await, 3);
         assert_eq!(search(&db, "GammaTitle").await.len(), 1);
+    }
+
+    // --- search as you type, highlights, ranking -----------------------------------------------
+
+    /// A query without terms lists sessions, newest first.
+    #[rstest]
+    #[case::empty("")]
+    #[case::whitespace("   \t\n ")]
+    #[tokio::test]
+    async fn an_empty_query_lists_sessions_newest_first(#[case] query: &str) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        for m in three_sessions_oldest_first() {
+            db.append(&m).await.unwrap();
+        }
+        let hits = search(&db, query).await;
+        let ids: Vec<_> = hits.iter().map(|m| m.session.handle.session.to_string()).collect();
+        assert_eq!(ids, ["session-2", "session-1", "session-0"]);
+        assert!(hits.iter().all(|m| !m.title.has_match() && !m.preview.has_match()));
+        assert_eq!(search_with(&db, query, &SessionFilter::default(), 2).await.len(), 2);
+    }
+
+    /// The last term matches as a prefix while it is being typed, and whole once finished.
+    #[rstest]
+    #[case::partial_last_term("refac", 1)]
+    #[case::partial_after_a_whole_term("cargo te", 1)]
+    #[case::finished_term("refac ", 0)]
+    #[case::only_the_last_term_is_a_prefix("carg test", 0)]
+    #[case::partial_phrase("foo-ba", 1)]
+    #[tokio::test]
+    async fn the_last_term_matches_as_a_prefix(#[case] query: &str, #[case] hits: usize) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        db.append(&message_in(&sample_handle(), 0, "refactor the cargo testsuite foo-bar"))
+            .await
+            .unwrap();
+        assert_eq!(search(&db, query).await.len(), hits, "query {query:?}");
+    }
+
+    /// The highlighted text of `h`, with matches in brackets.
+    fn marked(h: &atuin_common::string::highlighted::HighlightedString) -> String {
+        h.display_subs(['[', ']']).to_string()
+    }
+
+    #[rstest]
+    #[case::whole_token("error", "An Error and an error.", "An [Error] and an [error].")]
+    #[case::prefix_marks_the_whole_token("refac", "Refactoring it", "[Refactoring] it")]
+    #[case::no_substring_matches("app ", "apple app", "apple [app]")]
+    #[case::folded_like_the_index("cafe ", "the café opens", "the [café] opens")]
+    #[case::phrase_across_words("foo-bar ", "foo bar foo baz", "[foo] [bar] foo baz")]
+    #[case::every_term("build fail", "the build failed", "the [build] [failed]")]
+    #[case::stray_markers_are_stripped("x ", "a\u{E000}b x", "ab [x]")]
+    fn highlights_mark_what_the_index_matched(
+        #[case] query: &str,
+        #[case] text: &str,
+        #[case] expected: &str,
+    ) {
+        let highlighted = QueryTerms::parse(query).highlight(TextHighlighter::default(), text);
+        assert_eq!(marked(&highlighted), expected);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_highlights_the_title_and_snippet() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let filler: String = (0..200).map(|i| format!("filler-{i:03} ")).collect();
+        let mut m = message_in(&sample_handle(), 0, &format!("{filler}we refactored the parser"));
+        m.session_title = Some("Parser refactor".to_owned());
+        db.append(&m).await.unwrap();
+
+        let hits = search(&db, "refac").await;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(marked(&hits[0].title), "Parser [refactor]");
+        let preview = marked(&hits[0].preview);
+        assert!(preview.contains("we [refactored] the parser"), "{preview:?}");
+        assert!(!preview.contains("filler-000"), "{preview:?}");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_title_match_outranks_a_body_match() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let body = handle(HarnessKind::ClaudeCode, "body");
+        let titled = handle(HarnessKind::ClaudeCode, "titled");
+        db.append(&message_in(&body, 0, "we talked about the tokenizer at length")).await.unwrap();
+        let mut m = message_in(&titled, 0, "unrelated words entirely here");
+        m.session_title = Some("tokenizer".to_owned());
+        db.append(&m).await.unwrap();
+
+        let hits = search(&db, "tokenizer").await;
+        assert_eq!(hits[0].session.handle, titled);
+    }
+
+    /// Equally relevant sessions rank newest first.
+    #[rstest]
+    #[tokio::test]
+    async fn recency_breaks_equal_relevance() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        for (id, age_days) in [("old", 90), ("new", 1), ("mid", 30)] {
+            let mut m = message_in(&handle(HarnessKind::Pi, id), 0, "same words here");
+            m.timestamp = OffsetDateTime::from_unix_timestamp(now - age_days * 86_400).unwrap();
+            db.append(&m).await.unwrap();
+        }
+        let ids: Vec<_> = search(&db, "words")
+            .await
+            .iter()
+            .map(|m| m.session.handle.session.to_string())
+            .collect();
+        assert_eq!(ids, ["new", "mid", "old"]);
+    }
+
+    // --- hosts ----------------------------------------------------------------------------------
+
+    fn host(n: u128) -> HostId {
+        HostId(uuid::Uuid::from_u128(n))
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn the_capturing_host_is_kept_on_rows_and_sessions() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let mut m = sample_message();
+        m.host = Some(host(1));
+        db.append(&m).await.unwrap();
+
+        let session = db.get_session(&m.session).await.unwrap().unwrap();
+        assert_eq!(session.host, Some(host(1)));
+        let rows: Vec<_> = db.messages(&m.session).try_collect().await.unwrap();
+        assert_eq!(rows[0].host, Some(host(1)));
+    }
+
+    /// A row stored before hosts were tracked learns its host when its record is replayed, and
+    /// a known host is never overwritten.
+    #[rstest]
+    #[tokio::test]
+    async fn a_replayed_row_fills_in_a_missing_host() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let m = sample_message();
+        db.append(&m).await.unwrap();
+        assert_eq!(db.get_session(&m.session).await.unwrap().unwrap().host, None);
+
+        let mut replayed = m.clone();
+        replayed.host = Some(host(1));
+        assert_eq!(db.append(&replayed).await.unwrap(), Appended::Duplicate);
+        replayed.host = Some(host(2));
+        db.append(&replayed).await.unwrap();
+
+        assert_eq!(db.get_session(&m.session).await.unwrap().unwrap().host, Some(host(1)));
+        let rows: Vec<_> = db.messages(&m.session).try_collect().await.unwrap();
+        assert_eq!(rows[0].host, Some(host(1)));
+    }
+
+    /// Forgetting a host removes its sessions, index rows and usage claims, and nothing else:
+    /// a call it shared goes to the claimant left, and a group it headed regroups.
+    #[rstest]
+    #[tokio::test]
+    async fn forgetting_a_host_removes_only_its_sessions() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let on = |mut m: Message, n| {
+            m.host = Some(host(n));
+            m
+        };
+        // `gone` (host 1) heads a group holding `kept-child` (host 2); both claim call A.
+        db.append(&on(call_row("gone", None, "g1", 0, Some("A"), 10), 1)).await.unwrap();
+        db.append(&on(call_row("kept-child", Some("gone"), "k1", 1, Some("A"), 10), 2))
+            .await
+            .unwrap();
+        db.append(&on(call_row("kept", None, "k2", 2, None, 5), 2)).await.unwrap();
+        let pi = |id: &str| handle(HarnessKind::Pi, id);
+        assert_eq!(output_of(&db, "kept-child").await, 0, "the parent owns the shared call");
+        assert_eq!(
+            db.get_session(&pi("kept-child")).await.unwrap().unwrap().root,
+            Some(pi("gone"))
+        );
+
+        db.forget_host(host(1)).await.unwrap();
+
+        assert!(db.get_session(&pi("gone")).await.unwrap().is_none());
+        let rows: Vec<_> = db.messages(&pi("gone")).try_collect().await.unwrap();
+        assert!(rows.is_empty());
+        assert_eq!(output_of(&db, "kept-child").await, 10, "the call moves to the claimant left");
+        assert_eq!(output_of(&db, "kept").await, 5);
+        let child = db.get_session(&pi("kept-child")).await.unwrap().unwrap();
+        assert!(child.is_root(), "a group whose root went regroups");
+        assert_eq!(search(&db, "x").await.len(), 2, "only the forgotten rows leave the index");
+
+        // Replaying the host's records restores it.
+        db.append(&on(call_row("gone", None, "g1", 0, Some("A"), 10), 1)).await.unwrap();
+        assert_eq!(output_of(&db, "gone").await, 10);
+        assert_eq!(output_of(&db, "kept-child").await, 0);
+        let child = db.get_session(&pi("kept-child")).await.unwrap().unwrap();
+        assert_eq!(child.root, Some(pi("gone")));
+    }
+
+    // --- grouping -------------------------------------------------------------------------------
+
+    /// A row of session `id` with parent `parent`, at `seconds`, saying `text`.
+    fn tree_row(id: &str, parent: Option<&str>, seconds: i64, text: &str) -> Message {
+        let mut m = message_in(&handle(HarnessKind::ClaudeCode, id), seconds, text);
+        m.source_id = SourceId::from(format!("{id}-{seconds}"));
+        m.parent = parent.map(|p| handle(HarnessKind::ClaudeCode, p));
+        m
+    }
+
+    /// Two trees and an orphan whose parent is never stored: `root` with a fork, a subagent
+    /// and the fork's own subagent; `other` with a fork; `orphan` naming a missing `ghost`, with a
+    /// child of its own. Every session's first row names its parent except `late`, which only
+    /// learns it on its second row.
+    fn forest() -> Vec<Message> {
+        vec![
+            tree_row("root", None, 0, "root words"),
+            tree_row("fork", Some("root"), 10, "fork words"),
+            tree_row("agent-a", Some("root"), 11, "subagent words"),
+            tree_row("agent-b", Some("fork"), 12, "nested needle words"),
+            tree_row("late", None, 13, "late words"),
+            tree_row("late", Some("fork"), 14, "late words again"),
+            tree_row("other", None, 20, "other words"),
+            tree_row("other-fork", Some("other"), 21, "other fork words"),
+            tree_row("orphan", Some("ghost"), 30, "orphan words"),
+            tree_row("orphan-child", Some("orphan"), 31, "orphan child words"),
+        ]
+    }
+
+    async fn roots_of(db: &AiSessionDatabase) -> Vec<(String, String)> {
+        let mut roots: Vec<_> = db
+            .list_sessions(&SessionFilter::default())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| (s.handle.session.to_string(), s.group().session.to_string()))
+            .collect();
+        roots.sort();
+        roots
+    }
+
+    /// The root every session of [`forest`] groups under, sorted.
+    fn forest_roots() -> Vec<(String, String)> {
+        [
+            ("agent-a", "root"),
+            ("agent-b", "root"),
+            ("fork", "root"),
+            ("late", "root"),
+            ("orphan", "orphan"),
+            ("orphan-child", "orphan"),
+            ("other", "other"),
+            ("other-fork", "other"),
+            ("root", "root"),
+        ]
+        .map(|(id, root)| (id.to_owned(), root.to_owned()))
+        .to_vec()
+    }
+
+    proptest::proptest! {
+        /// Every session groups under its top-most stored ancestor whatever order its rows (and
+        /// its ancestors') arrive in: children before parents, parents learned late.
+        #[test]
+        fn grouping_does_not_depend_on_arrival_order(
+            rows in proptest::strategy::Strategy::prop_shuffle(proptest::strategy::Just(forest()))
+        ) {
+            let roots = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let db = AiSessionDatabase::in_memory().await.unwrap();
+                    for m in &rows {
+                        db.append(m).await.unwrap();
+                    }
+                    roots_of(&db).await
+                });
+            proptest::prop_assert_eq!(roots, forest_roots());
+        }
+    }
+
+    /// The missing parent arriving at last adopts the group that waited for it.
+    #[rstest]
+    #[tokio::test]
+    async fn a_late_parent_adopts_its_waiting_children() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        db.append(&tree_row("child", Some("parent"), 1, "x")).await.unwrap();
+        db.append(&tree_row("grandchild", Some("child"), 2, "x")).await.unwrap();
+        let child = db.get_session(&handle(HarnessKind::ClaudeCode, "child")).await.unwrap();
+        assert!(child.unwrap().is_root(), "a session whose parent is not stored is a root");
+
+        db.append(&tree_row("parent", Some("grandparent"), 0, "x")).await.unwrap();
+        db.append(&tree_row("grandparent", None, 0, "x")).await.unwrap();
+        let roots = roots_of(&db).await;
+        assert!(roots.iter().all(|(_, root)| root == "grandparent"), "{roots:?}");
+    }
+
+    /// A parent cycle cannot loop: every session still has a root.
+    #[rstest]
+    #[tokio::test]
+    async fn a_parent_cycle_still_groups() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        db.append(&tree_row("a", Some("b"), 0, "x")).await.unwrap();
+        db.append(&tree_row("b", Some("a"), 1, "x")).await.unwrap();
+        let roots = roots_of(&db).await;
+        assert_eq!(roots.len(), 2);
+        assert_eq!(roots[0].1, roots[1].1, "both land in one group: {roots:?}");
+    }
+
+    fn roots_only() -> SessionFilter {
+        SessionFilter {
+            roots_only: true,
+            ..SessionFilter::default()
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn roots_only_lists_each_group_once_with_its_size() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        for m in forest() {
+            db.append(&m).await.unwrap();
+        }
+        let groups: Vec<_> = db
+            .list_sessions(&roots_only())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| {
+                assert!(s.is_root());
+                (s.handle.session.to_string(), s.child_count, s.group_updated_at.unwrap())
+            })
+            .collect();
+        let at = |seconds| OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(seconds);
+        // Newest activity in the group first: `root`'s newest is `late`, at 14.
+        assert_eq!(groups, [
+            ("orphan".to_owned(), 1, at(31)),
+            ("other".to_owned(), 1, at(21)),
+            ("root".to_owned(), 4, at(14)),
+        ]);
+    }
+
+    /// A match in a nested child is its root's, snippet included.
+    #[rstest]
+    #[tokio::test]
+    async fn a_childs_match_counts_toward_its_root() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        for m in forest() {
+            db.append(&m).await.unwrap();
+        }
+        let hits = search_with(&db, "needle", &roots_only(), 0).await;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session.handle, handle(HarnessKind::ClaudeCode, "root"));
+        assert_eq!(hits[0].session.child_count, 4);
+        assert!(marked(&hits[0].preview).contains("[needle]"));
+
+        // Every session of a group matching counts once, as its root.
+        let hits = search_with(&db, "words", &roots_only(), 0).await;
+        assert_eq!(hits.len(), 3);
+        let all = search(&db, "words").await;
+        assert_eq!(all.len(), 9);
+    }
+
+    // --- filters --------------------------------------------------------------------------------
+
+    fn filtered_row(id: &str, cwd: &str, branch: &str, model: &str, host_n: u128) -> Message {
+        let mut m = message_in(&handle(HarnessKind::Codex, id), 0, "shared words");
+        m.cwd = Some(std::path::PathBuf::from(cwd));
+        m.git_branch = Some(branch.to_owned());
+        m.model = Some(model.to_owned());
+        m.host = Some(host(host_n));
+        m
+    }
+
+    #[rstest]
+    #[case::host(SessionFilter { host: Some(host(2)), ..SessionFilter::default() }, &["b"])]
+    #[case::workspace_is_a_path_prefix(
+        SessionFilter { workspace: Some("/work/atuin/".into()), ..SessionFilter::default() },
+        &["a", "b"]
+    )]
+    #[case::root_workspace(
+        SessionFilter { workspace: Some("/".into()), ..SessionFilter::default() },
+        &["a", "b", "c", "d"]
+    )]
+    #[case::directory_is_exact(
+        SessionFilter { directory: Some("/work/atuin".into()), ..SessionFilter::default() },
+        &["a"]
+    )]
+    #[case::branch(SessionFilter { branch: Some("main".into()), ..SessionFilter::default() }, &["a", "c"])]
+    #[case::model_substring_any_case(
+        SessionFilter { model: Some("OPUS".into()), ..SessionFilter::default() },
+        &["a", "d"]
+    )]
+    #[case::harness(harness_filter(HarnessKind::Pi), &[])]
+    #[case::all_must_hold(
+        SessionFilter {
+            workspace: Some("/work/atuin".into()),
+            branch: Some("main".into()),
+            ..SessionFilter::default()
+        },
+        &["a"]
+    )]
+    #[tokio::test]
+    async fn filters_select_sessions(#[case] filter: SessionFilter, #[case] expected: &[&str]) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        for m in [
+            filtered_row("a", "/work/atuin", "main", "claude-opus-4", 1),
+            filtered_row("b", "/work/atuin/crates/x", "feat", "gpt-5", 2),
+            // A sibling sharing the workspace's name as a string prefix is not under it.
+            filtered_row("c", "/work/atuin2", "main", "gpt-5", 1),
+            filtered_row("d", "/home/me", "dev", "opus", 1),
+        ] {
+            db.append(&m).await.unwrap();
+        }
+
+        let ids = |sessions: Vec<Session>| {
+            let mut ids: Vec<_> = sessions.iter().map(|s| s.handle.session.to_string()).collect();
+            ids.sort();
+            ids
+        };
+        assert_eq!(ids(db.list_sessions(&filter).await.unwrap()), expected, "listing");
+        let hits = search_with(&db, "shared", &filter, 0).await;
+        assert_eq!(ids(hits.into_iter().map(|m| m.session).collect()), expected, "search");
+    }
+
+    /// With roots only, a group passes when any of its sessions does, and shows as its root.
+    #[rstest]
+    #[tokio::test]
+    async fn a_child_passing_the_filter_brings_its_root() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let mut root = tree_row("root", None, 0, "words");
+        root.model = Some("claude-opus".to_owned());
+        let mut agent = tree_row("agent-a", Some("root"), 1, "words");
+        agent.model = Some("claude-haiku".to_owned());
+        db.append(&root).await.unwrap();
+        db.append(&agent).await.unwrap();
+
+        let filter = SessionFilter {
+            model: Some("haiku".to_owned()),
+            roots_only: true,
+            ..SessionFilter::default()
+        };
+        let listed = db.list_sessions(&filter).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].handle, handle(HarnessKind::ClaudeCode, "root"));
+        assert_eq!(search_with(&db, "words", &filter, 0).await.len(), 1);
+    }
+
+    // --- schema ---------------------------------------------------------------------------------
+
+    /// [`SCHEMA_VERSION`] is the newest migration's version.
+    #[rstest]
+    fn the_schema_version_is_the_newest_migration() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ai_session/migrations");
+        let newest = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|entry| {
+                let name = entry.unwrap().file_name().into_string().unwrap();
+                name.split('_').next()?.parse::<i64>().ok()
+            })
+            .max();
+        assert_eq!(newest, Some(SCHEMA_VERSION));
+    }
+
+    /// A sidecar at `version`, holding `sessions`, (harness, id, parent) rows written as that
+    /// version stored them.
+    async fn sidecar_at(version: i64, sessions: &[(&str, Option<&str>)]) -> AiSessionDatabase {
+        let db = Sqlite::builder_in_memory().open().await.unwrap();
+        #[allow(clippy::disallowed_macros)]
+        let mut migrator = sqlx::migrate!("./src/ai_session/migrations");
+        migrator.migrations =
+            migrator.migrations.iter().filter(|m| m.version <= version).cloned().collect();
+        migrator.run(db.pool()).await.unwrap();
+        for (i, (id, parent)) in sessions.iter().enumerate() {
+            db::query(
+                "INSERT INTO sessions (harness, session_id, parent_harness, parent_session_id, \
+                 started_at, updated_at) VALUES (1, ?, ?, ?, ?, ?)",
+            )
+            .bind(*id)
+            .bind(parent.map(|_| 1))
+            .bind(*parent)
+            .bind(i64::try_from(i).unwrap())
+            .bind(i64::try_from(i).unwrap())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        }
+        AiSessionDatabase { db }
+    }
+
+    /// Migrating groups the sessions already stored, and forgets the reproject watermark so the
+    /// next daemon start replays every record (filling in hosts).
+    #[rstest]
+    #[tokio::test]
+    async fn migrating_groups_stored_sessions_and_forces_a_reproject() {
+        let db = sidecar_at(2, &[
+            ("agent-b", Some("fork")),
+            ("fork", Some("root")),
+            ("root", None),
+            ("orphan", Some("ghost")),
+            ("a", Some("b")),
+            ("b", Some("a")),
+        ])
+        .await;
+        db::query(
+            "INSERT INTO reproject_watermark (host, tag, idx, record_id) VALUES ('h', \
+             'ai-session', 9, 'r')",
+        )
+        .execute(db.db.pool())
+        .await
+        .unwrap();
+
+        db.migrate().await.unwrap();
+
+        let roots = roots_of(&db).await;
+        let root_of = |id: &str| roots.iter().find(|(s, _)| s == id).unwrap().1.clone();
+        assert_eq!(root_of("agent-b"), "root");
+        assert_eq!(root_of("fork"), "root");
+        assert_eq!(root_of("root"), "root");
+        assert_eq!(root_of("orphan"), "orphan");
+        // A parent cycle has no top: it only has to end, inside the cycle.
+        assert!(["a", "b"].contains(&root_of("a").as_str()));
+        let watermarks: i64 = db::query_scalar("SELECT count(*) FROM reproject_watermark")
+            .fetch_one(db.db.pool())
+            .await
+            .unwrap();
+        assert_eq!(watermarks, 0);
+
+        // Grouping carries on incrementally from the migrated state.
+        db.append(&tree_row("agent-c", Some("agent-b"), 50, "x")).await.unwrap();
+        assert_eq!(roots_of(&db).await.iter().find(|(s, _)| s == "agent-c").unwrap().1, "root");
+    }
+
+    // --- read-only open -------------------------------------------------------------------------
+
+    #[fixture]
+    fn dir() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_read_only_open_reads_beside_the_writer(dir: tempfile::TempDir) {
+        let path = dir.path().join("sidecar.db");
+        let writer = AiSessionDatabase::open(&path).await.unwrap();
+        writer.append(&message_in(&sample_handle(), 0, "first words")).await.unwrap();
+
+        let reader = AiSessionDatabase::open_read_only(&path).await.unwrap();
+        assert_eq!(reader.list_sessions(&SessionFilter::default()).await.unwrap().len(), 1);
+
+        // The writer keeps writing, and the reader sees it.
+        writer.append(&message_in(&sample_handle(), 1, "second words")).await.unwrap();
+        assert_eq!(search(&reader, "second").await.len(), 1);
+
+        assert!(
+            reader.append(&message_in(&sample_handle(), 2, "x")).await.is_err(),
+            "a read-only sidecar refuses writes"
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_read_only_open_never_creates_the_file(dir: tempfile::TempDir) {
+        let path = dir.path().join("missing.db");
+        assert!(matches!(AiSessionDatabase::open_read_only(&path).await, Err(DbError::Open(_))));
+        assert!(!path.exists());
+    }
+
+    #[rstest]
+    #[case::uninitialized(None)]
+    #[case::outdated(Some(1))]
+    #[case::unknown(Some(99))]
+    #[tokio::test]
+    async fn a_read_only_open_refuses_another_schema(
+        dir: tempfile::TempDir,
+        #[case] version: Option<i64>,
+    ) {
+        let path = dir.path().join("sidecar.db");
+        {
+            let db = Sqlite::builder(path.as_os_str()).open().await.unwrap();
+            if let Some(version) = version {
+                #[allow(clippy::disallowed_macros)]
+                let mut migrator = sqlx::migrate!("./src/ai_session/migrations");
+                migrator.migrations =
+                    migrator.migrations.iter().filter(|m| m.version <= version).cloned().collect();
+                migrator.run(db.pool()).await.unwrap();
+                if version > SCHEMA_VERSION {
+                    db::query(
+                        "INSERT INTO _sqlx_migrations (version, description, success, checksum, \
+                         execution_time) VALUES (?, 'future', 1, x'00', 0)",
+                    )
+                    .bind(version)
+                    .execute(db.pool())
+                    .await
+                    .unwrap();
+                }
+            }
+            db.pool().close().await;
+        }
+
+        let err = AiSessionDatabase::open_read_only(&path).await.expect_err("must refuse");
+        match version {
+            None => assert!(matches!(err, DbError::Uninitialized {
+                expected: SCHEMA_VERSION
+            })),
+            Some(99) => assert!(matches!(err, DbError::UnknownSchema { found: 99, .. })),
+            Some(found) => {
+                assert!(matches!(err, DbError::OutdatedSchema { found: f, .. } if f == found));
+            }
+        }
+        assert!(err.to_string().contains("schema version"), "{err}");
     }
 }

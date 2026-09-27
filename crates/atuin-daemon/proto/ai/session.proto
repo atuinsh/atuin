@@ -4,8 +4,30 @@ package ai.session;
 import "ai/agent.proto";
 import "common.proto";
 
+// Which sessions a listing or search returns. An absent field is not a filter;
+// every present one must hold.
+message SessionFilter {
+  // Captured on this host (a hyphenated host id).
+  optional string host_id = 1;
+  // Working directory at or under this path.
+  optional string workspace = 2;
+  // Working directory exactly this path.
+  optional string directory = 3;
+  // On exactly this git branch.
+  optional string branch = 4;
+  optional ai.agent.HarnessKind harness = 5;
+  // Model name containing this, ignoring ASCII case.
+  optional string model = 6;
+  // Return only the roots of session groups (forks and subagents grouped under
+  // their top-most ancestor), each with its child_count; a group passes when
+  // any of its sessions does.
+  bool roots_only = 7;
+}
+
 message ListSessionsRequest {
+  // Superseded by filter.harness, which wins when both are set.
   optional ai.agent.HarnessKind harness = 1;
+  SessionFilter filter = 2;
 }
 
 message GetSessionRequest {
@@ -38,7 +60,9 @@ message SearchSessionsRequest {
   // (the full match set is scored before the first result), so prefer a bound.
   uint32 limit = 2;
   // Only search sessions from this harness. Absent searches every harness.
+  // Superseded by filter.harness, which wins when both are set.
   optional ai.agent.HarnessKind harness = 3;
+  SessionFilter filter = 4;
 }
 
 message SearchSessionsMatch {
@@ -111,7 +135,9 @@ service AiSession {
   // Render one session as a plain-text transcript, streamed in chunks.
   rpc GetTranscript(GetTranscriptRequest) returns (stream GetTranscriptChunk);
 
-  // Fuzzy-search sessions, streamed most-relevant-first.
+  // Full-text search sessions, the last term matching as a prefix, streamed
+  // most-relevant-first (bm25 blended with recency). An empty query streams
+  // sessions newest first.
   rpc SearchSessions(SearchSessionsRequest) returns (stream SearchSessionsMatch);
 
   // Follow sessions and messages as they are recorded.

@@ -8,7 +8,9 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{self, IsTerminal, Write};
 
-use atuin_client::ai_session::{HarnessKind, HarnessSession, Message, Session, SessionMatch};
+use atuin_client::ai_session::{
+    HarnessKind, HarnessSession, Message, Session, SessionFilter, SessionMatch,
+};
 use atuin_client::settings::Settings;
 use atuin_common::harnesstools::session::model::reasoning_label;
 use atuin_common::harnesstools::session::{Content, Role, StopReason, Usage};
@@ -181,7 +183,7 @@ fn is_broken_pipe(err: &eyre::Report) -> bool {
 
 async fn list(client: &mut AiClient, style: Style) -> Result<()> {
     let sessions: Vec<Session> = client
-        .list_sessions(None)
+        .list_sessions(&SessionFilter::default())
         .await?
         .map(|session| Ok::<_, eyre::Report>(Session::try_from(session?)?))
         .try_collect()
@@ -314,7 +316,14 @@ async fn search(
     style: Style,
 ) -> Result<()> {
     let matches: Vec<SessionMatch> = client
-        .search_sessions(query, harness, limit)
+        .search_sessions(
+            query,
+            &SessionFilter {
+                harness,
+                ..SessionFilter::default()
+            },
+            limit,
+        )
         .await?
         .map(|m| Ok::<_, eyre::Report>(SessionMatch::try_from(m?)?))
         .try_collect()
@@ -547,7 +556,7 @@ async fn import(client: &mut AiClient, harness: Option<HarnessKind>, style: Styl
 /// (the harness is only known from the listing, so an id alone cannot address a session).
 async fn resolve(client: &mut AiClient, selector: &str) -> Result<HarnessSession> {
     let mut stream = client
-        .list_sessions(None)
+        .list_sessions(&SessionFilter::default())
         .await?
         .map(|session| Ok::<_, eyre::Report>(Session::try_from(session?)?));
     // `latest` only needs the newest session, which the daemon streams first, so take a single
