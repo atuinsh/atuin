@@ -181,17 +181,21 @@ fn assert_ids(target: AnyHarness, session: &RehydrateSession) {
 /// The marker first, then user and assistant turns in turn, user first and assistant last,
 /// each one text; nothing a tool call or result, nothing reasoning.
 fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &RehydrateSession) {
-    let (marker, turns) = s.messages.split_first().expect("a marker");
-    let marker_role = match target {
-        AnyHarness::Pi(_) => Role::Other("custom".to_owned()),
-        _ => Role::System,
+    // A line of its own (the harness's), or pi's first prompt's first block.
+    let (marker, turns) = match target {
+        AnyHarness::Pi(_) => (&s.messages[0], s.messages.as_slice()),
+        _ => s.messages.split_first().expect("a marker"),
     };
-    assert_eq!(marker.role, marker_role);
-    let [Content::Text(text)] = marker.content.as_slice() else {
-        panic!("the marker is one text: {marker:?}");
+    let [Content::Text(text), ..] = marker.content.as_slice() else {
+        panic!("the marker is text: {marker:?}");
     };
     let (harness, id) = continued_from(text).unwrap();
     assert_eq!((harness.name(), id), (source.name(), original));
+    let linked = continued_from_row(marker);
+    assert_eq!(linked, Some((source.name(), original.to_owned())));
+    if !matches!(target, AnyHarness::Pi(_)) {
+        assert_eq!(marker.role, Role::System);
+    }
 
     assert!(!turns.is_empty());
     assert_eq!(turns.len() % 2, 0, "user first, assistant last");
@@ -202,7 +206,11 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
             Role::Assistant
         };
         assert_eq!(m.role, want, "turn {n}");
-        let [Content::Text(text)] = m.content.as_slice() else {
+        let content = match (n, target) {
+            (0, AnyHarness::Pi(_)) => &m.content[1..],
+            _ => &m.content[..],
+        };
+        let [Content::Text(text)] = content else {
             panic!("turn {n} is one text: {m:?}");
         };
         assert!(!text.trim().is_empty());
@@ -245,7 +253,12 @@ async fn every_pair_flattens_to_alternating_text(
         .filter(|m| m.role == Role::Assistant)
         .flat_map(|m| &m.content)
         .map(|c| match c {
-            Content::Text(t) => t.lines().filter(|l| l.starts_with('[')).count(),
+            // A note repeated is written once, counted (` ×3`).
+            Content::Text(t) => t
+                .lines()
+                .filter(|l| l.starts_with('['))
+                .map(|l| l.rsplit_once(" ×").map_or(1, |(_, n)| n.parse::<usize>().unwrap()))
+                .sum(),
             _ => 0,
         })
         .sum();
@@ -488,7 +501,17 @@ fn calls_become_notes_and_turns_merge() {
 #[case::opencode_edit("edit", json!({"filePath": "/w/x.ts", "oldString": "a", "newString": "b"}), "[edited `/w/x.ts`]")]
 #[case::opencode_patch("patch", json!({"patchText": "*** Begin Patch\n*** Delete File: old.rs\n*** End Patch"}), "[deleted `old.rs`]")]
 #[case::pi_read("read", json!({"path": "README.md"}), "[read `README.md`]")]
-#[case::pi_ls("ls", json!({}), "[listed `.`]")]
+#[case::pi_ls("ls", json!({}), "[listed a directory]")]
+#[case::captured_bash("Bash", Value::Null, "[ran a shell command]")]
+#[case::captured_exec("exec_command", Value::Null, "[ran a shell command]")]
+#[case::captured_edit("edit", Value::Null, "[edited a file]")]
+#[case::captured_patch("apply_patch", Value::Null, "[applied a patch]")]
+#[case::captured_task("Task", Value::Null, "[handed work to a subagent]")]
+#[case::captured_other(
+    "mcp__github__create_issue",
+    Value::Null,
+    "[called `mcp__github__create_issue`]"
+)]
 #[case::mcp("mcp__github__create_issue", json!({"title": "bug"}), r#"[called `mcp__github__create_issue` {"title":"bug"}]"#)]
 fn notes_name_the_call_and_its_key_input(
     #[case] name: &str,
@@ -496,6 +519,30 @@ fn notes_name_the_call_and_its_key_input(
     #[case] want: &str,
 ) {
     assert_eq!(tool_note(name, &input), want);
+}
+
+/// Calls captured without their input (all of them, now) say only what they did, and the same
+/// note in a row is written once, counted.
+#[rstest]
+fn repeated_notes_are_counted() {
+    let original = session_of("orig", vec![
+        msg(Role::User, vec![text("why is the wal so large?")], 1),
+        msg(Role::Assistant, vec![text("Looking."), call("exec_command", Value::Null)], 2),
+        msg(Role::Assistant, vec![call("exec_command", Value::Null)], 3),
+        msg(Role::Assistant, vec![call("exec_command", Value::Null)], 4),
+        msg(Role::Assistant, vec![call("apply_patch", Value::Null)], 5),
+        msg(Role::Assistant, vec![call("exec_command", Value::Null), text("It's sparse.")], 6),
+    ]);
+    let c = continue_in(CODEX, &original, CLAUDE);
+    let [Content::Text(reply)] = c.session.messages[2].content.as_slice() else {
+        panic!("{:?}", c.session.messages[2]);
+    };
+    assert_eq!(
+        reply,
+        "Looking.\n\n[ran a shell command] ×3\n[applied a patch]\n[ran a shell command]\n\nIt's \
+         sparse."
+    );
+    assert_eq!(c.flattened.tool_calls, 5);
 }
 
 #[rstest]
@@ -531,8 +578,13 @@ fn a_typed_marker_is_no_link() {
     let marker = marker_text(CODEX, "019a0d14-f276-77d3-b955-89d5b0151306");
     let typed = msg(Role::User, vec![text(&marker)], 1);
     assert_eq!(continued_from_row(&typed), None);
+    let later = msg(Role::User, vec![text("hi"), text(&marker)], 1);
+    assert_eq!(continued_from_row(&later), None, "only a prompt's first block");
     let injected = msg(Role::System, vec![text(&marker)], 1);
     assert!(continued_from_row(&injected).is_some());
+    // pi's: the first block of a prompt with more after it.
+    let first_block = msg(Role::User, vec![text(&marker), text("fix it")], 1);
+    assert!(continued_from_row(&first_block).is_some());
 }
 
 #[rstest]
@@ -559,11 +611,17 @@ fn rows_chain_where_the_target_keeps_a_tree(#[case] target: AnyHarness, #[case] 
     let parents: Vec<Option<&str>> =
         s.messages.iter().map(|m| m.parent_source_id.as_deref()).collect();
     if tree {
-        assert_eq!(parents, vec![
-            None,
-            Some(s.messages[0].source_id.as_str()),
-            Some(s.messages[1].source_id.as_str())
-        ]);
+        let mut chain = vec![None];
+        chain.extend(s.messages.iter().map(|m| Some(m.source_id.as_str())));
+        chain.pop();
+        assert_eq!(parents, chain);
+        // The marker and the two turns; pi's marker is in its first prompt.
+        let rows = if matches!(target, AnyHarness::Pi(_)) {
+            2
+        } else {
+            3
+        };
+        assert_eq!(s.messages.len(), rows);
     } else {
         assert!(parents.iter().all(Option::is_none));
     }

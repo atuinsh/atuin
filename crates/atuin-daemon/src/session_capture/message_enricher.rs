@@ -913,11 +913,13 @@ mod parser_contract {
             HarnessKind::Pi => vec![
                 pi(&serde_json::json!({"type": "session", "version": 3, "id": "new",
                     "timestamp": "2026-09-27T10:00:00Z", "cwd": "/w"})),
-                pi(&serde_json::json!({"type": "custom_message", "id": "a0", "parentId": null,
-                    "timestamp": "2026-09-27T10:00:00Z", "customType": "atuin-restored",
-                    "content": [{"type": "text", "text": marker}], "display": true})),
-                pi(&serde_json::json!({"type": "message", "id": "a1", "parentId": "a0",
+                // pi's marker is the first block of the first prompt.
+                pi(&serde_json::json!({"type": "message", "id": "a1", "parentId": null,
                     "timestamp": "2026-09-27T10:00:01Z",
+                    "message": {"role": "user", "content": [
+                        {"type": "text", "text": marker}, {"type": "text", "text": prompt}]}})),
+                pi(&serde_json::json!({"type": "message", "id": "a2", "parentId": "a1",
+                    "timestamp": "2026-09-27T10:00:02Z",
                     "message": {"role": "user", "content": [{"type": "text", "text": prompt}]}})),
             ],
             _ => unreachable!("no other harness in these tests"),

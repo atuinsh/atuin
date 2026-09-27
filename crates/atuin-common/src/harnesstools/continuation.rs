@@ -13,10 +13,11 @@
 //! - What the user said, and what the model answered.
 //! - **Tool calls, flattened into notes.** The target has other tools than the source, and a
 //!   model must never see calls to tools it doesn't have, so each call becomes a short line of
-//!   text in its assistant turn saying what was called on what (see [`tool_note`]): ``[ran
-//!   `cargo test`]``, ``[edited `src/store.rs`]``. Capture keeps no tool output worth replaying
-//!   (and for most harnesses none at all), so a note never says how a call turned out, and tool
-//!   results are dropped.
+//!   text in its assistant turn saying what was called (see [`tool_note`]): `[ran a shell
+//!   command]`, `[edited a file]`, and on what where the input is known: ``[ran `cargo
+//!   test`]``, ``[edited `src/store.rs`]``. Capture keeps neither a call's input nor its output
+//!   (it syncs the tool's name only; records from before it stopped may carry an input), so a
+//!   note never says how a call turned out, and tool results are dropped, whatever they hold.
 //! - Summaries (compactions, abandoned branches), as text of the user's turn.
 //! - Failed model calls, as a short note of the error in the assistant's turn.
 //!
@@ -32,12 +33,14 @@
 //!
 //! # The marker
 //!
-//! The first row is a [`marker_text`] naming the source harness and session, written as the
-//! least intrusive line each target has: text the harness itself adds to the user's turn (a
-//! Claude Code `isMeta` line, a Codex `developer` message, an opencode `synthetic` part), and for
-//! Pi an extension message (`custom_message`), since a pi session has no other kind of line the
-//! model reads but the user didn't type. The model reads it as context; capture reads it back as
-//! the session's parent ([`continued_from`]).
+//! The session starts with a [`marker_text`] naming the source harness and session, written as
+//! the least intrusive line each target has: text the harness itself adds to the user's turn (a
+//! Claude Code `isMeta` line, a Codex `developer` message, an opencode `synthetic` part), which
+//! the model reads with the first prompt and the user never sees. Pi has no such line: the only
+//! lines it sends the model that nobody typed (`custom_message`, summaries) each become a user
+//! message of their own, two user messages in a row. So there the marker is the first text block
+//! of the first prompt, a short first line the user sees too. Capture reads it back as the
+//! session's parent ([`continued_from_message`]).
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -142,17 +145,22 @@ pub fn continued_from(text: &str) -> Option<(AnyHarness, &str)> {
 }
 
 /// The harness and session a transcript line says its session continues: a [marker](marker_text)
-/// the harness put in the user's turn itself, never text anyone typed. How capture links a
-/// continuation to the session it continues.
+/// the harness put in the user's turn itself, or (pi's) the first block of a prompt with more
+/// after it, which typing never makes. How capture links a continuation to the session it
+/// continues.
 #[must_use]
 pub fn continued_from_message<M: Message + ?Sized>(m: &M) -> Option<(AnyHarness, String)> {
-    if matches!(m.role(), Role::User | Role::Assistant | Role::Tool) {
-        return None;
-    }
-    m.content().iter().find_map(|c| match c {
-        Content::Text(text) => continued_from(text).map(|(h, id)| (h, id.to_owned())),
-        _ => None,
-    })
+    let content = m.content();
+    let marker = match (m.role(), content.as_slice()) {
+        (Role::Assistant | Role::Tool, _) => return None,
+        (Role::User, [Content::Text(first), _, ..]) => first,
+        (Role::User, _) => return None,
+        (_, content) => content.iter().find_map(|c| match c {
+            Content::Text(text) if continued_from(text).is_some() => Some(text),
+            _ => None,
+        })?,
+    };
+    continued_from(marker).map(|(harness, id)| (harness, id.to_owned()))
 }
 
 /// What continuing `original` in another harness would flatten or drop, whichever harness.
@@ -185,12 +193,14 @@ pub fn continue_at(
     let start = turns.first().map_or(original.started_at, |t| t.at);
 
     let mut rows = Vec::with_capacity(turns.len() + 1);
-    let marker_role = match target {
-        AnyHarness::Pi(_) => Role::Other("custom".to_owned()),
-        _ => Role::System,
-    };
-    rows.push(row(&mut ids, None, start, marker_role, marker_text(source, &original.id)));
-    let mut last = start;
+    let marker = marker_text(source, &original.id);
+    // pi has no line the model reads that the user didn't type but its own user message: the
+    // marker is the first block of the first prompt (see the module docs).
+    let pi = matches!(target, AnyHarness::Pi(_));
+    if !pi {
+        rows.push(row(&mut ids, None, start, Role::System, marker.clone()));
+    }
+    let mut last = start - Duration::milliseconds(i64::from(pi));
     for turn in turns {
         let at = turn.at.max(last + Duration::milliseconds(1));
         last = at;
@@ -202,6 +212,9 @@ pub fn continue_at(
         let mut message = row(&mut ids, parent, at, role, turn.render());
         if turn.kind == Kind::Assistant {
             message.stop_reason = Some(StopReason::EndTurn);
+        }
+        if pi && rows.is_empty() {
+            message.content.insert(0, Content::Text(marker.clone()));
         }
         rows.push(message);
     }
@@ -272,10 +285,12 @@ struct Turn {
 
 impl Turn {
     /// The turn as one text: paragraphs apart, notes one to a line.
+    /// The same note several times in a row is written once, counted: `[ran a shell command] ×3`.
     fn render(&self) -> String {
         let mut out = String::new();
         let mut last_note = false;
-        for part in &self.parts {
+        let mut parts = self.parts.iter().peekable();
+        while let Some(part) = parts.next() {
             let (text, note) = match part {
                 Part::Text(text) => (text.trim(), false),
                 Part::Note(note) => (note.as_str(), true),
@@ -288,6 +303,15 @@ impl Turn {
                 });
             }
             out.push_str(text);
+            if note {
+                let mut repeats = 1;
+                while parts.next_if(|next| matches!(next, Part::Note(n) if n == text)).is_some() {
+                    repeats += 1;
+                }
+                if repeats > 1 {
+                    let _ = write!(out, " ×{repeats}");
+                }
+            }
             last_note = note;
         }
         out
@@ -389,7 +413,11 @@ fn is_media(kind: &str) -> bool {
 /// | Pi | `bash`, `edit`, `write`, `read`, `grep`, `find`, `ls` | as Claude Code's (`path`) |
 /// | any | anything else | ``called `<name>` <compact arguments>`` |
 ///
-/// Inputs are cut to their first line and [`NOTE_INPUT`] characters.
+/// Without the input (capture no longer keeps it), each says only what was done: `ran a shell
+/// command`, `edited a file`, `wrote a file`, `read a file`, `applied a patch`, `searched the
+/// files`, `listed files`, `handed work to a subagent`, `fetched a web page`, `searched the
+/// web`; and anything else ``called `<name>` ``. Inputs are cut to their first line and
+/// 120 characters.
 #[must_use]
 pub fn tool_note(name: &str, input: &Value) -> String {
     // Codex keeps a function call's arguments as the JSON text the model wrote.
@@ -409,45 +437,64 @@ pub fn tool_note(name: &str, input: &Value) -> String {
         })
     };
     let path = || field(&["file_path", "filePath", "path", "notebook_path", "file"]);
+    // What was done, on what when the input says (capture keeps none now, only older records
+    // do), else only what.
+    let on = |what: Option<String>, detailed: &dyn Fn(&str) -> String, bare: &str| {
+        Some(what.map_or_else(|| bare.to_owned(), |w| detailed(&w)))
+    };
     let lower = name.to_ascii_lowercase();
     let note = match lower.as_str() {
         "bash" | "shell" | "shell_command" | "exec_command" | "local_shell" | "container.exec"
-        | "unified_exec" => field(&["command", "cmd"])
-            .or_else(|| input["action"]["command"].as_array().map(|a| command_line(a)))
-            .map(|c| format!("ran {}", code(&c))),
+        | "unified_exec" => on(
+            field(&["command", "cmd"])
+                .or_else(|| input["action"]["command"].as_array().map(|a| command_line(a))),
+            &|c| format!("ran {}", code(c)),
+            "ran a shell command",
+        ),
         "edit" | "multiedit" | "notebookedit" | "str_replace_based_edit_tool" | "str_replace" => {
-            path().map(|p| format!("edited {}", code(&p)))
+            on(path(), &|p| format!("edited {}", code(p)), "edited a file")
         }
-        "write" | "create" => path().map(|p| format!("wrote {}", code(&p))),
-        "read" | "view" | "cat" => path().map(|p| format!("read {}", code(&p))),
-        "view_image" => path().map(|p| format!("looked at the image {}", code(&p))),
+        "write" | "create" => on(path(), &|p| format!("wrote {}", code(p)), "wrote a file"),
+        "read" | "view" | "cat" => on(path(), &|p| format!("read {}", code(p)), "read a file"),
+        "view_image" => {
+            on(path(), &|p| format!("looked at the image {}", code(p)), "looked at an image")
+        }
         "apply_patch" | "patch" => {
             let text = input
                 .as_str()
                 .map(str::to_owned)
                 .or_else(|| field(&["patchText", "patch", "input"]));
-            text.as_deref().and_then(patch_note)
+            Some(text.as_deref().and_then(patch_note).unwrap_or_else(|| "applied a patch".into()))
         }
-        "grep" | "search" | "rg" => {
-            field(&["pattern", "query", "regex"]).map(|pattern| match path() {
-                Some(p) => format!("searched for {} in {}", code(&pattern), code(&p)),
-                None => format!("searched for {}", code(&pattern)),
-            })
-        }
-        "glob" | "find" => field(&["pattern", "glob"])
-            .or_else(path)
-            .map(|p| format!("listed files matching {}", code(&p))),
+        "grep" | "search" | "rg" => on(
+            field(&["pattern", "query", "regex"]),
+            &|pattern| match path() {
+                Some(p) => format!("searched for {} in {}", code(pattern), code(&p)),
+                None => format!("searched for {}", code(pattern)),
+            },
+            "searched the files",
+        ),
+        "glob" | "find" => on(
+            field(&["pattern", "glob"]).or_else(path),
+            &|p| format!("listed files matching {}", code(p)),
+            "listed files",
+        ),
         "ls" | "list" | "list_dir" => {
-            Some(format!("listed {}", code(&path().unwrap_or_else(|| ".".to_owned()))))
+            on(path(), &|p| format!("listed {}", code(p)), "listed a directory")
         }
-        "task" | "agent" | "subagent" | "spawn_agent" => {
-            field(&["description", "prompt", "message"])
-                .map(|d| format!("asked a subagent to {}", clip(&d, NOTE_INPUT)))
+        "task" | "agent" | "subagent" | "spawn_agent" => on(
+            field(&["description", "prompt", "message"]),
+            &|d| format!("asked a subagent to {}", clip(d, NOTE_INPUT)),
+            "handed work to a subagent",
+        ),
+        "webfetch" | "web_fetch" | "fetch" => {
+            on(field(&["url"]), &|u| format!("fetched {u}"), "fetched a web page")
         }
-        "webfetch" | "web_fetch" | "fetch" => field(&["url"]).map(|u| format!("fetched {u}")),
-        "websearch" | "web_search" => field(&["query"])
-            .or_else(|| input["action"]["query"].as_str().map(str::to_owned))
-            .map(|q| format!("searched the web for {}", code(&q))),
+        "websearch" | "web_search" => on(
+            field(&["query"]).or_else(|| input["action"]["query"].as_str().map(str::to_owned)),
+            &|q| format!("searched the web for {}", code(q)),
+            "searched the web",
+        ),
         "todowrite" | "todo_write" | "todoread" | "update_plan" => {
             Some("updated its todo list".to_owned())
         }
