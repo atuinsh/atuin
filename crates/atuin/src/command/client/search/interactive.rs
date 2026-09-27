@@ -331,6 +331,19 @@ fn visual_edit_command(_tty: &TtyReleased, original_command: &str) -> Result<Str
         cmd.stdin(tty).stdout(tty_out).stderr(tty_err);
     }
 
+    // Same fd-swap concern as above applies to PowerShell's shell integration.
+    // CONIN$/CONOUT$ are the Windows equivalent of /dev/tty — the real
+    // console, independent of whatever atuin's own stdio have been redirected
+    // to (see `TerminalWriter::ConOut`, which opens CONOUT$ the same way).
+    #[cfg(windows)]
+    if let (Ok(con_in), Ok(con_out), Ok(con_err)) = (
+        std::fs::OpenOptions::new().read(true).write(true).open("CONIN$"),
+        std::fs::OpenOptions::new().read(true).write(true).open("CONOUT$"),
+        std::fs::OpenOptions::new().read(true).write(true).open("CONOUT$"),
+    ) {
+        cmd.stdin(con_in).stdout(con_out).stderr(con_err);
+    }
+
     let status = cmd.status()?;
 
     if !status.success() {
