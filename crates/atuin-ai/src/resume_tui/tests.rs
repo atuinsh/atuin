@@ -324,3 +324,30 @@ async fn dump_frames() {
     }
     assert!(!dump.is_empty());
 }
+
+#[rstest]
+fn details_wait_while_the_selection_moves_fast() {
+    use std::time::{Duration, Instant};
+
+    use atuin_client::ai_session::HarnessKind;
+
+    use super::{SETTLE, Settle};
+
+    let handle = |id: &str| fake::row(HarnessKind::ClaudeCode, id, "t").handle;
+    let mut settle = Settle::default();
+    let t0 = Instant::now();
+    // A single move asks at once.
+    assert!(settle.ready(&handle("a"), t0));
+    let t1 = t0 + SETTLE * 2;
+    assert!(settle.ready(&handle("b"), t1));
+    // Moving again straight away waits, and each further move pushes it back.
+    let t2 = t1 + Duration::from_millis(10);
+    assert!(!settle.ready(&handle("c"), t2));
+    let t3 = t2 + Duration::from_millis(10);
+    assert!(!settle.ready(&handle("d"), t3));
+    assert_eq!(settle.due, Some(t3 + SETTLE));
+    assert!(!settle.ready(&handle("d"), t3 + SETTLE / 2));
+    // Once it settles, the session it stopped on is asked for.
+    assert!(settle.ready(&handle("d"), t3 + SETTLE));
+    assert_eq!(settle.due, None);
+}

@@ -367,7 +367,10 @@ enter_accept = true
 
 ## Per-harness resume commands, in place of the built-in ones (run after `cd -- <cwd> &&`).
 ## {id} is the native session id, {path} its transcript on this machine and {cwd} its
-## working directory. Each is substituted within its word, so don't quote them.
+## working directory. Each is substituted within its word, unquoted, so don't quote them.
+## Don't pass them through another shell either (e.g. `sh -c "cd {cwd} && ..."`): that
+## shell would split and expand them, so a directory with a space or `;` in it breaks the
+## command or runs part of it as a separate one.
 # [ai.sessions.resume]
 # claude = "claude --resume {id}"
 # codex = "codex resume {id}"

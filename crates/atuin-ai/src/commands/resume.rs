@@ -1,6 +1,8 @@
 //! `atuin ai resume [QUERY]`: pick a captured AI coding-agent session and resume it.
 //!
 //! - A QUERY that is a session id (or a unique prefix of one) resumes it directly, no picker.
+//!   From the shell widget, `enter_accept` decides whether it runs or lands on the command line;
+//!   a session that can't be resumed opens the picker on it, so the reason shows.
 //! - From the shell widget (`--shell-widget`), the result goes to stderr using the history
 //!   search's protocol: `__atuin_accept__:<cmd>` to run it, plain `<cmd>` to edit it, nothing to
 //!   leave the command line alone.
@@ -58,6 +60,10 @@ pub struct Cmd {
     /// Browse built-in example sessions instead of the captured ones.
     #[arg(long, hide = true)]
     demo: bool,
+
+    /// Read this sidecar database instead of the configured one (for debugging).
+    #[arg(long, hide = true, value_name = "PATH")]
+    db: Option<std::path::PathBuf>,
 }
 
 /// Where the result goes.
@@ -135,18 +141,20 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
             )
         } else {
             let context = ResumeContext::current().await?;
-            let source =
-                SidecarSource::open(&Settings::ai_session_sidecar_path(), &context).await?;
+            let path = cmd.db.clone().unwrap_or_else(Settings::ai_session_sidecar_path);
+            let source = SidecarSource::open(&path, &context).await?;
             let resumer =
                 HarnessResumer::new(context.host_id.clone(), settings.ai.sessions.resume.clone());
             (context, Arc::new(source), Arc::new(resumer))
         };
 
+    let mut preselect = None;
     if let Some(row) = direct_match(source.as_ref(), query.trim()).await? {
-        return match resumer.plan(&row).await {
-            Ok(plan) => finish(Outcome::Resume(plan), output),
-            Err(why) => bail!("can't resume {}: {why}", row.handle.session),
-        };
+        match resumer.plan(&row).await {
+            Ok(plan) => return finish(direct_outcome(plan, output, settings.enter_accept), output),
+            // Open the picker on it instead, so the reason shows (and another can be picked).
+            Err(why) => preselect = Some((row, why)),
+        }
     }
 
     let mut themes = ThemeManager::new(settings.theme.debug, None);
@@ -159,10 +167,22 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
         context,
         query,
         inline_height: cmd.inline_height,
+        preselect,
     }
     .run()
     .await?;
     finish(outcome, output)
+}
+
+/// What a session named by id does without the picker. Standalone, `atuin ai resume <id>` resumes
+/// it. The widget passes whatever is on the command line, so there it follows `enter_accept` like
+/// the picker's enter: without it, the command lands on the command line to be checked first.
+fn direct_outcome(plan: ResumePlan, output: Output, enter_accept: bool) -> Outcome {
+    if output == Output::Widget && !enter_accept {
+        Outcome::Edit(plan)
+    } else {
+        Outcome::Resume(plan)
+    }
 }
 
 fn finish(outcome: Outcome, output: Output) -> Result<()> {
@@ -248,6 +268,27 @@ mod tests {
         assert!(direct_match(&source, "ses_4b8e2f1a9c3d7e6f").await.unwrap().is_some());
         assert!(direct_match(&source, "ses_4b8e2f1a9c3d7e").await.unwrap().is_none());
         assert!(direct_match(&source, "flaky").await.unwrap().is_none());
+    }
+
+    #[rstest]
+    #[case(Output::Widget, false, false)]
+    #[case(Output::Widget, true, true)]
+    #[case(Output::Exec, false, true)]
+    #[case(Output::Print, false, true)]
+    fn a_direct_match_from_the_widget_follows_enter_accept(
+        #[case] output: Output,
+        #[case] enter_accept: bool,
+        #[case] runs: bool,
+    ) {
+        let plan = ResumePlan {
+            program: "claude".to_owned(),
+            args: vec!["--resume".to_owned(), "abc".to_owned()],
+            cwd: None,
+            cwd_requirement: atuin_common::harnesstools::resume::CwdRequirement::Preferred,
+            native_path: None,
+        };
+        let outcome = direct_outcome(plan, output, enter_accept);
+        assert_eq!(matches!(outcome, Outcome::Resume(_)), runs, "{outcome:?}");
     }
 
     #[rstest]

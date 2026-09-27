@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use atuin_client::ai_session::{
-    AiSessionDatabase, HarnessSession, Message, Session, SessionFilter as DbFilter, SessionRelation,
+    AiSessionDatabase, HarnessSession, Session, SessionFilter as DbFilter, SessionRelation,
 };
 use atuin_common::harnesstools::session::{Content, Role};
 use atuin_common::string::highlighted::HighlightedString;
@@ -14,6 +14,7 @@ use atuin_common::utils::in_git_repo;
 use atuin_domain::record::HostId;
 use eyre::{Result, WrapErr};
 use futures::TryStreamExt;
+use parking_lot::Mutex;
 use uuid::Uuid;
 
 use super::ResumeContext;
@@ -23,6 +24,9 @@ pub struct SidecarSource {
     db: AiSessionDatabase,
     host_id: String,
     hostname: String,
+    /// The git repository each session directory is in, looked up once per picker: finding it
+    /// walks the filesystem, and every search would otherwise repeat it for each row.
+    git_roots: Mutex<HashMap<PathBuf, Option<PathBuf>>>,
 }
 
 impl SidecarSource {
@@ -30,11 +34,22 @@ impl SidecarSource {
         let db = AiSessionDatabase::open_read_only(path).await.wrap_err_with(|| {
             format!("could not open the AI session database {}", path.display())
         })?;
-        Ok(Self {
+        Ok(Self::new(db, context))
+    }
+
+    fn new(db: AiSessionDatabase, context: &ResumeContext) -> Self {
+        Self {
             db,
             host_id: context.host_id.clone(),
             hostname: context.hostname.clone(),
-        })
+            git_roots: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// The git repository root `cwd` is in, if any.
+    fn git_root(&self, cwd: &Path) -> Option<PathBuf> {
+        let mut roots = self.git_roots.lock();
+        roots.entry(cwd.to_owned()).or_insert_with(|| in_git_repo(&cwd.to_string_lossy())).clone()
     }
 
     fn db_filter(filter: &SessionFilter) -> DbFilter {
@@ -49,8 +64,8 @@ impl SidecarSource {
         }
     }
 
-    /// A picker row for `s`. `git_roots` memoises the repository lookup per directory.
-    fn row(&self, s: Session, git_roots: &mut HashMap<PathBuf, Option<PathBuf>>) -> SessionRow {
+    /// A picker row for `s`.
+    fn row(&self, s: Session) -> SessionRow {
         let relation = match s.relation() {
             SessionRelation::Root => Relation::Root,
             SessionRelation::Subagent => Relation::Subagent,
@@ -65,12 +80,7 @@ impl SidecarSource {
             // TODO: host ids have no names yet; show a short, stable form.
             host_id.chars().take(8).collect()
         };
-        let git_root = s.cwd.as_ref().and_then(|cwd| {
-            git_roots
-                .entry(cwd.clone())
-                .or_insert_with(|| in_git_repo(&cwd.to_string_lossy()))
-                .clone()
-        });
+        let git_root = s.cwd.as_deref().and_then(|cwd| self.git_root(cwd));
         let title = s.title.clone().or_else(|| s.preview.clone()).unwrap_or_default();
         SessionRow {
             handle: s.handle,
@@ -105,16 +115,21 @@ fn snippet(h: &HighlightedString) -> Snippet {
     }
 }
 
+fn conversation_text(c: &Content) -> Option<&str> {
+    match c {
+        Content::Text(t) | Content::Summary(t) if !t.trim().is_empty() => Some(t.as_str()),
+        _ => None,
+    }
+}
+
+/// Whether a message has any conversation text (see [`text_of`]).
+fn has_text(content: &[Content]) -> bool {
+    content.iter().any(|c| conversation_text(c).is_some())
+}
+
 /// The conversation text of a message: text and summaries, never tool calls or reasoning.
 fn text_of(content: &[Content]) -> Option<String> {
-    let text: Vec<&str> = content
-        .iter()
-        .filter_map(|c| match c {
-            Content::Text(t) | Content::Summary(t) => Some(t.as_str()),
-            _ => None,
-        })
-        .filter(|t| !t.trim().is_empty())
-        .collect();
+    let text: Vec<&str> = content.iter().filter_map(conversation_text).collect();
     (!text.is_empty()).then(|| text.join("\n"))
 }
 
@@ -125,11 +140,10 @@ impl SessionSource for SidecarSource {
         let matches: Vec<_> =
             self.db.search(&filter.text, &Self::db_filter(filter), limit).try_collect().await?;
 
-        let mut git_roots = HashMap::new();
         let has_text = !filter.text.trim().is_empty();
         let mut rows = Vec::with_capacity(matches.len());
         for m in matches {
-            let mut row = self.row(m.session, &mut git_roots);
+            let mut row = self.row(m.session);
             if let Some(name) = &filter.host_name
                 && !row.hostname.starts_with(name.as_str())
             {
@@ -149,32 +163,41 @@ impl SessionSource for SidecarSource {
     }
 
     async fn find_by_id(&self, id: &str) -> Result<Vec<SessionRow>> {
-        let mut git_roots = HashMap::new();
         Ok(self
             .all_sessions()
             .await?
             .into_iter()
             .filter(|s| s.handle.session.as_ref().starts_with(id))
-            .map(|s| self.row(s, &mut git_roots))
+            .map(|s| self.row(s))
             .collect())
     }
 
     async fn preview(&self, session: &HarnessSession) -> Result<SessionPreview> {
-        let messages: Vec<_> = self.db.messages(session).try_collect().await?;
-        let conversation = |m: &&Message| matches!(m.role, Role::User | Role::Assistant);
-        let activity = messages.iter().filter(conversation).map(|m| m.timestamp).collect();
-        let first_prompt =
-            messages.iter().filter(|m| m.role == Role::User).find_map(|m| text_of(&m.content));
-        let last_assistant = messages
-            .iter()
-            .rev()
-            .filter(|m| m.role == Role::Assistant)
-            .find_map(|m| text_of(&m.content));
-        Ok(SessionPreview {
-            first_prompt,
-            last_assistant,
-            activity,
-        })
+        // One pass, keeping only what the preview shows rather than the whole transcript.
+        // TODO: every message is still decompressed; the data layer has no query for just the
+        // timestamps and the first and last conversation text.
+        let mut messages = std::pin::pin!(self.db.messages(session));
+        let mut preview = SessionPreview::default();
+        let mut last_assistant: Option<Vec<Content>> = None;
+        while let Some(m) = messages.try_next().await? {
+            match m.role {
+                Role::User => {
+                    preview.activity.push(m.timestamp);
+                    if preview.first_prompt.is_none() {
+                        preview.first_prompt = text_of(&m.content);
+                    }
+                }
+                Role::Assistant => {
+                    preview.activity.push(m.timestamp);
+                    if has_text(&m.content) {
+                        last_assistant = Some(m.content);
+                    }
+                }
+                _ => {}
+            }
+        }
+        preview.last_assistant = last_assistant.as_deref().and_then(text_of);
+        Ok(preview)
     }
 
     async fn children(
@@ -182,13 +205,12 @@ impl SessionSource for SidecarSource {
         session: &HarnessSession,
         include_subagents: bool,
     ) -> Result<Vec<SessionRow>> {
-        let mut git_roots = HashMap::new();
         let mut rows: Vec<SessionRow> = self
             .all_sessions()
             .await?
             .into_iter()
             .filter(|s| s.root.as_ref() == Some(session))
-            .map(|s| self.row(s, &mut git_roots))
+            .map(|s| self.row(s))
             .filter(|r| include_subagents || r.relation != Relation::Subagent)
             .collect();
         rows.sort_by_key(|r| std::cmp::Reverse(r.updated_at));
@@ -198,7 +220,7 @@ impl SessionSource for SidecarSource {
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::ai_session::{HarnessKind, NativeSessionId, SourceId};
+    use atuin_client::ai_session::{HarnessKind, Message, NativeSessionId, SourceId};
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::RecordId;
     use rstest::{fixture, rstest};
@@ -239,11 +261,11 @@ mod tests {
         ] {
             db.append(&m).await.unwrap();
         }
-        SidecarSource {
-            db,
+        SidecarSource::new(db, &ResumeContext {
             host_id: HOST.to_owned(),
             hostname: "wintermute".to_owned(),
-        }
+            ..ResumeContext::default()
+        })
     }
 
     fn roots(text: &str) -> SessionFilter {
