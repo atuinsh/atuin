@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Starts Postgres for the integration tests on localhost:5432 (the
+# Starts Postgres for the integration tests on 127.0.0.1:5432 (the
 # ATUIN_DB_URI the step sets) and waits until it accepts connections.
 set -euo pipefail
 
 echo "--- :postgres: Starting Postgres"
 docker run -d --name postgres \
   -e POSTGRES_USER=atuin -e POSTGRES_PASSWORD=pass -e POSTGRES_DB=atuin \
-  -p 5432:5432 \
+  -p 127.0.0.1:5432:5432 \
   postgres:18-alpine >/dev/null
 
 for _ in $(seq 1 30); do

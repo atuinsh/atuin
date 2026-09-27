@@ -43,19 +43,31 @@ apt_install() {
   [ -n "$missing" ] || return 0
   # Fast path: the .debs a previous job downloaded. --refuse-downgrade makes
   # a newer base image fall through to apt rather than downgrade its
-  # packages to the cached versions.
+  # packages to the cached versions. The cache is saved once per step, so it
+  # can predate a package the step added since: dpkg would then succeed
+  # without it, hence checking every requested package afterwards.
   if ls "$APT_DEBS_DIR"/*.deb >/dev/null 2>&1 &&
     $sudo dpkg -i --refuse-downgrade "$APT_DEBS_DIR"/*.deb >/dev/null; then
-    echo "Installed$missing from cached .debs"
-    return 0
+    local still_missing=""
+    for pkg in "$@"; do
+      dpkg -s "$pkg" >/dev/null 2>&1 || still_missing="$still_missing $pkg"
+    done
+    if [ -z "$still_missing" ]; then
+      echo "Installed$missing from cached .debs"
+      return 0
+    fi
+    echo "Cached .debs lack$still_missing; installing with apt"
   fi
   # Download into APT_DEBS_DIR (not /var/cache/apt/archives, which images
   # often clean after every install) so they can be cached. -f repairs
-  # anything a failed dpkg fast path left half-configured.
+  # anything a failed dpkg fast path left half-configured. The download runs
+  # as root (Sandbox::User): APT_DEBS_DIR is under root's home, which the
+  # _apt user can't write, and apt warns before falling back to root anyway.
   $sudo apt-get update -qq
   # shellcheck disable=SC2086 # word-split the package list
   $sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -f --no-install-recommends \
-    -o Dir::Cache::archives="$APT_DEBS_DIR" -o APT::Keep-Downloaded-Packages=true $missing
+    -o Dir::Cache::archives="$APT_DEBS_DIR" -o APT::Keep-Downloaded-Packages=true \
+    -o APT::Sandbox::User=root $missing
 }
 
 # nextest's `--partition count:K/N` for a step split with Buildkite's

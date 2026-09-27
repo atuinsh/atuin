@@ -5,9 +5,10 @@
 # (fallback_limit), so a Cargo.lock change restores the newest entry for the
 # same toolchain and cargo rebuilds only the dependencies that changed.
 #
-# Branch isolation comes from the cluster's cache registry policy: entries
-# are saved scoped to their branch, and restores search the current branch
-# and then main, so a branch build can never write into what main restores.
+# Only main saves (.buildkite/scripts/cache-save.sh); branch and PR builds
+# restore main's entries. The cluster's cache registry policy also scopes
+# entries by branch, so a branch build can never write into what main
+# restores.
 #
 # Bump `v1` to invalidate a cache; an entry is written once per address.
 
