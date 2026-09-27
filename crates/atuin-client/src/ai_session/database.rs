@@ -245,18 +245,40 @@ impl AiSessionDatabase {
             msg.usage.and_then(|u| u.reasoning).map(|n| i64::try_from(n).unwrap_or(i64::MAX));
         let cwd = msg.cwd.as_ref().map(|p| p.to_string_lossy().into_owned());
 
+        let before = Self::session_key(&mut tx, harness, session_id).await?;
+
+        // Messages reference their session by id, so it has to exist first. The upsert below
+        // folds this row in exactly as it would a fresh insert: same timestamps, nothing counted.
+        db::query(
+            "INSERT INTO sessions (harness, session_id, started_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(harness, session_id) DO NOTHING",
+        )
+        .bind(harness)
+        .bind(session_id)
+        .bind(timestamp)
+        .bind(timestamp)
+        .execute(&mut *tx)
+        .await?;
+        let session: i64 =
+            db::query_scalar("SELECT id FROM sessions WHERE harness = ? AND session_id = ?")
+                .bind(harness)
+                .bind(session_id)
+                .fetch_one(&mut *tx)
+                .await?;
+
         let inserted = db::query(
             "INSERT INTO messages (
-                id, harness, session_id, source_id, parent_harness, parent_session_id,
+                id, harness, session, source_id, parent_harness, parent_session_id,
                 parent_source_id, timestamp, role, content, content_z, cwd, git_branch, model,
                 usage_input, usage_output, usage_cache_read, usage_cache_write,
                 usage_reasoning, stop_reason, usage_present, turn_id, title_change
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(harness, session_id, source_id) DO NOTHING",
+            ON CONFLICT(session, source_id) DO NOTHING",
         )
         .bind(id)
         .bind(harness)
-        .bind(session_id)
+        .bind(session)
         .bind(source_id)
         .bind(parent_harness)
         .bind(parent_session_id.clone())
@@ -299,7 +321,6 @@ impl AiSessionDatabase {
         // cleared title clears; the capture pipeline stamps every row with the ranked title.
         let title = msg.session_title.as_deref();
         let preview = Self::preview_text(msg);
-        let before = Self::session_key(&mut tx, harness, session_id).await?;
 
         // Usage is not folded in here: it is attributed per model call below. A structural row
         // (usage, title, session context, a tree node with nothing to show) is no message.
@@ -362,11 +383,10 @@ impl AiSessionDatabase {
                 let after = Self::session_key(&mut tx, harness, session_id).await?;
                 if after.as_ref().map(SessionKey::rank) != Some(before.rank()) {
                     let turns: Vec<String> = db::query_scalar(
-                        "SELECT DISTINCT turn_id FROM messages WHERE harness = ? AND session_id = \
-                         ? AND usage_present = 1 AND turn_id IS NOT NULL",
+                        "SELECT DISTINCT turn_id FROM messages WHERE session = ? AND \
+                         usage_present = 1 AND turn_id IS NOT NULL",
                     )
-                    .bind(harness)
-                    .bind(session_id)
+                    .bind(session)
                     .fetch_all(&mut *tx)
                     .await?;
                     recount.extend(turns);
@@ -395,10 +415,9 @@ impl AiSessionDatabase {
                 (i64, String, Option<Vec<u8>>, Option<String>, Option<String>, Option<String>);
             let rows: Vec<BodyRow> = db::query_as(
                 "SELECT rowid, content, content_z, cwd, git_branch, model FROM messages WHERE \
-                 harness = ? AND session_id = ?",
+                 session = ?",
             )
-            .bind(harness)
-            .bind(session_id)
+            .bind(session)
             .fetch_all(&mut *tx)
             .await?;
 
@@ -435,7 +454,8 @@ impl AiSessionDatabase {
         source_id: &SourceId,
     ) -> Result<bool, DbError> {
         let found: Option<(i64,)> = db::query_as(
-            "SELECT 1 FROM messages WHERE harness = ? AND session_id = ? AND source_id = ? LIMIT 1",
+            "SELECT 1 FROM messages WHERE session = (SELECT id FROM sessions WHERE harness = ? \
+             AND session_id = ?) AND source_id = ? LIMIT 1",
         )
         .bind(session.harness as i64)
         .bind(session.session.as_ref())
@@ -454,8 +474,9 @@ impl AiSessionDatabase {
         session: &HarnessSession,
     ) -> Result<Vec<TitleChange>, DbError> {
         let rows: Vec<String> = db::query_scalar(
-            "SELECT title_change FROM messages WHERE harness = ? AND session_id = ? AND \
-             title_change IS NOT NULL ORDER BY timestamp, rowid",
+            "SELECT title_change FROM messages WHERE session = (SELECT id FROM sessions WHERE \
+             harness = ? AND session_id = ?) AND title_change IS NOT NULL ORDER BY timestamp, \
+             rowid",
         )
         .bind(session.harness as i64)
         .bind(session.session.as_ref())
@@ -470,8 +491,8 @@ impl AiSessionDatabase {
         prefix: &str,
     ) -> Result<Vec<SourceId>, DbError> {
         let ids: Vec<String> = db::query_scalar(
-            "SELECT source_id FROM messages WHERE harness = ? AND session_id = ? AND \
-             substr(source_id, 1, length(?)) = ?",
+            "SELECT source_id FROM messages WHERE session = (SELECT id FROM sessions WHERE \
+             harness = ? AND session_id = ?) AND substr(source_id, 1, length(?)) = ?",
         )
         .bind(session.harness as i64)
         .bind(session.session.as_ref())
@@ -526,11 +547,13 @@ impl AiSessionDatabase {
     /// The newest stored message of a session, by timestamp then record id.
     pub async fn last_message(&self, session: &HarnessSession) -> Result<Option<Message>, DbError> {
         let row: Option<MessageRow> = db::query_as(
-            "SELECT id, harness, session_id, source_id, parent_harness, parent_session_id, \
-             parent_source_id, timestamp, role, content, content_z, cwd, git_branch, model, \
-             usage_input, usage_output, usage_cache_read, usage_cache_write, usage_reasoning, \
-             stop_reason, usage_present, turn_id, title_change FROM messages WHERE harness = ? \
-             AND session_id = ? ORDER BY timestamp DESC, id DESC LIMIT 1",
+            "SELECT m.id, m.harness, s.session_id, m.source_id, m.parent_harness, \
+             m.parent_session_id, m.parent_source_id, m.timestamp, m.role, m.content, \
+             m.content_z, m.cwd, m.git_branch, m.model, m.usage_input, m.usage_output, \
+             m.usage_cache_read, m.usage_cache_write, m.usage_reasoning, m.stop_reason, \
+             m.usage_present, m.turn_id, m.title_change FROM messages m JOIN sessions s ON s.id = \
+             m.session WHERE s.harness = ? AND s.session_id = ? ORDER BY m.timestamp DESC, m.id \
+             DESC LIMIT 1",
         )
         .bind(session.harness as i64)
         .bind(session.session.as_ref())
@@ -590,12 +613,13 @@ impl AiSessionDatabase {
 
         async_stream::try_stream! {
             let mut rows = db::query_as::<_, MessageRow>(
-                "SELECT id, harness, session_id, source_id, parent_harness, parent_session_id, \
-                 parent_source_id, timestamp, role, content, content_z, cwd, git_branch, \
-                 model, usage_input, usage_output, usage_cache_read, usage_cache_write, \
-                 usage_reasoning, stop_reason, usage_present, turn_id, title_change FROM messages WHERE harness = ? AND \
-                 session_id = ? \
-                 ORDER BY timestamp, id",
+                "SELECT m.id, m.harness, s.session_id, m.source_id, m.parent_harness, \
+                 m.parent_session_id, m.parent_source_id, m.timestamp, m.role, m.content, \
+                 m.content_z, m.cwd, m.git_branch, m.model, m.usage_input, m.usage_output, \
+                 m.usage_cache_read, m.usage_cache_write, m.usage_reasoning, m.stop_reason, \
+                 m.usage_present, m.turn_id, m.title_change FROM messages m JOIN sessions s ON \
+                 s.id = m.session WHERE s.harness = ? AND s.session_id = ? \
+                 ORDER BY m.timestamp, m.id",
             )
             .bind(harness)
             .bind(session_id)
@@ -636,12 +660,12 @@ impl AiSessionDatabase {
             // happens in Rust below.
             let sql = format!(
                 "WITH ranked AS MATERIALIZED (\
-                 SELECT messages_fts.rowid AS rowid, m.harness AS h, m.session_id AS sid, \
+                 SELECT messages_fts.rowid AS rowid, m.session AS sid, \
                  -bm25(messages_fts) AS score \
                  FROM messages_fts JOIN messages m ON m.rowid = messages_fts.rowid \
                  WHERE messages_fts MATCH ?{harness_clause}), \
                  best AS (SELECT rowid, max(score) AS score FROM ranked \
-                 GROUP BY h, sid ORDER BY score DESC{limit_clause}) \
+                 GROUP BY sid ORDER BY score DESC{limit_clause}) \
                  SELECT s.harness, s.session_id, s.parent_harness, s.parent_session_id, s.cwd, \
                  s.git_branch, s.model, s.started_at, s.updated_at, s.message_count, \
                  s.usage_input, s.usage_output, s.usage_cache_read, s.usage_cache_write, \
@@ -651,7 +675,7 @@ impl AiSessionDatabase {
                  m.git_branch AS match_git_branch, m.model AS match_model, \
                  best.score AS score FROM best \
                  JOIN messages m ON m.rowid = best.rowid \
-                 JOIN sessions s ON s.harness = m.harness AND s.session_id = m.session_id \
+                 JOIN sessions s ON s.id = m.session \
                  ORDER BY best.score DESC, s.updated_at DESC, s.session_id",
             );
 
@@ -716,13 +740,13 @@ impl AiSessionDatabase {
         loop {
             let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
             let rows: Vec<ReindexRow> = db::query_as::<_, ReindexRow>(
-                "SELECT m.rowid AS rowid, m.id, m.harness, m.session_id, m.source_id, \
+                "SELECT m.rowid AS rowid, m.id, m.harness, s.session_id, m.source_id, \
                  m.parent_harness, m.parent_session_id, m.parent_source_id, m.timestamp, m.role, \
                  m.content, m.content_z, m.cwd, m.git_branch, m.model, m.usage_input, \
                  m.usage_output, m.usage_cache_read, m.usage_cache_write, m.usage_reasoning, \
                  m.stop_reason, m.usage_present, m.turn_id, m.title_change, s.title AS \
-                 session_title FROM messages m LEFT JOIN sessions s ON s.harness = m.harness AND \
-                 s.session_id = m.session_id WHERE m.rowid > ? ORDER BY m.rowid LIMIT ?",
+                 session_title FROM messages m JOIN sessions s ON s.id = m.session WHERE m.rowid \
+                 > ? ORDER BY m.rowid LIMIT ?",
             )
             .bind(watermark)
             .bind(REINDEX_CHUNK)
@@ -1050,13 +1074,13 @@ impl AiSessionDatabase {
         turn: &str,
     ) -> Result<(), DbError> {
         let claimants: Vec<Claimant> = db::query_as(
-            "SELECT m.session_id AS session_id, s.started_at AS started_at, s.parent_harness AS \
+            "SELECT s.session_id AS session_id, s.started_at AS started_at, s.parent_harness AS \
              parent_harness, s.parent_session_id AS parent_session_id, MAX(m.usage_input) AS \
              usage_input, MAX(m.usage_output) AS usage_output, MAX(m.usage_cache_read) AS \
              usage_cache_read, MAX(m.usage_cache_write) AS usage_cache_write, \
              COALESCE(MAX(m.usage_reasoning), 0) AS usage_reasoning FROM messages m JOIN sessions \
-             s ON s.harness = m.harness AND s.session_id = m.session_id WHERE m.harness = ? AND \
-             m.turn_id = ? AND m.usage_present = 1 GROUP BY m.session_id",
+             s ON s.id = m.session WHERE m.harness = ? AND m.turn_id = ? AND m.usage_present = 1 \
+             GROUP BY m.session",
         )
         .bind(harness)
         .bind(turn)
@@ -1352,6 +1376,36 @@ mod tests {
         assert_eq!(s.message_count, 1);
         let got: Vec<_> = db.messages(&m.session).try_collect().await.unwrap();
         assert_eq!(got[0].turn_id.as_deref(), Some("msg_01"));
+    }
+
+    /// Upgrading keeps each message's rowid, which its contentless messages_fts row is keyed by.
+    #[rstest]
+    #[tokio::test]
+    async fn interning_sessions_keeps_the_search_index_aligned() {
+        let sqlite = atuin_common::db::sqlite::Sqlite::builder_in_memory().open().await.unwrap();
+        let pool = sqlite.pool();
+        sqlx::raw_sql(include_str!("migrations/0001_init.sql")).execute(pool).await.unwrap();
+        sqlx::raw_sql(
+            "INSERT INTO sessions (harness, session_id, started_at, updated_at) VALUES (1, 's', \
+             0, 0);
+            INSERT INTO messages (rowid, id, harness, session_id, source_id, timestamp, role, \
+             content)
+                VALUES (7, x'01', 1, 's', 'a', 0, '\"User\"', '[{\"Text\":\"hello\"}]');
+            INSERT INTO messages_fts (rowid, title, body) VALUES (7, '', 'hello');",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+
+        sqlx::raw_sql(include_str!("migrations/0002_intern_sessions.sql"))
+            .execute(pool)
+            .await
+            .unwrap();
+
+        let db = AiSessionDatabase { db: sqlite };
+        let hits: Vec<SessionMatch> = db.search("hello", None, 0).try_collect().await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session.handle.session.as_ref(), "s");
     }
 
     /// Rows that carry only usage, a title or session context are stored, but are no messages.
