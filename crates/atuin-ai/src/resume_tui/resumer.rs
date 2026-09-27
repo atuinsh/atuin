@@ -251,12 +251,14 @@ pub fn resolve_cwd(original: Option<&Path>, context: &ResumeContext) -> Restore 
         let name = root.file_name()?;
         let components: Vec<_> = original.components().collect();
         let at = components.iter().rposition(|c| c.as_os_str() == name)?;
-        let inside: PathBuf = components[at + 1..].iter().collect();
-        let same_place = root.join(inside);
+        // Rebuilt from components, so no trailing separator comes along.
+        let root: PathBuf = root.components().collect();
+        let same_place: PathBuf =
+            root.components().chain(components[at + 1..].iter().copied()).collect();
         Some(if same_place.is_dir() {
             same_place
         } else {
-            root.to_owned()
+            root
         })
     });
     match checkout {

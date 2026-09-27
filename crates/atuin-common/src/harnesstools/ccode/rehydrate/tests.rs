@@ -233,6 +233,26 @@ fn thinking_and_server_tools_are_dropped_and_the_tree_relinked(projects: TempDir
     assert!(!std::fs::read_to_string(&path).unwrap().contains("thinking"));
 }
 
+/// A line hangs from its nearest written ancestor even when the rows came in another order than
+/// the tree's (capture orders by time, and a hook's attachment can be stamped before the prompt
+/// it hangs from).
+#[rstest]
+fn the_tree_is_relinked_whatever_the_order(projects: TempDir) {
+    let session = session("s-order", projects.path(), vec![
+        message("a0", None, Role::Assistant, vec![Content::Text("hello".to_owned())]),
+        message("x1", Some("u1"), Role::Other("attachment".to_owned()), vec![]),
+        message("u1", Some("a0"), Role::User, vec![Content::Text("hi".to_owned())]),
+        message("a1", Some("x1"), Role::Assistant, vec![Content::Text("again".to_owned())]),
+        message("a2", Some("never-synced"), Role::Assistant, vec![Content::Text("x".to_owned())]),
+    ]);
+    let path = rehydrate_into(projects.path(), &session).unwrap();
+    let lines = lines(&path);
+    let parent = |id: &str| lines.iter().find(|l| l["uuid"] == id).unwrap()["parentUuid"].clone();
+    assert_eq!(parent("a0"), serde_json::Value::Null);
+    assert_eq!(parent("a1"), "u1");
+    assert_eq!(parent("a2"), "a1", "a parent never synced stands for the line before");
+}
+
 /// A compaction is written as Claude Code writes one: a boundary starting a new tree, whose
 /// logical parent is the line before it, then the summary under it.
 #[rstest]
@@ -277,6 +297,7 @@ fn never_overwrites_a_transcript(projects: TempDir) {
 #[rstest]
 #[case::root("/work", "-work")]
 #[case::punctuation("/home/u/my project.x/ü😀", "-home-u-my-project-x----")]
+#[case::trailing_separator("/work/atuin/", "-work-atuin")]
 fn project_directories_are_named_as_claude_code_names_them(
     #[case] cwd: &str,
     #[case] expected: &str,

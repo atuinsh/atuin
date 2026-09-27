@@ -198,6 +198,21 @@ fn entries_are_linked_named_and_compacted(sessions: TempDir) {
     assert_eq!(lines.last().unwrap()["parentId"], "c1");
 }
 
+/// An entry hangs from its nearest written ancestor even when the rows came out of tree order.
+#[rstest]
+fn the_tree_is_relinked_whatever_the_order(sessions: TempDir) {
+    let session = session("s-order", sessions.path(), vec![
+        message("x1", Some("u1"), Role::Other("label".to_owned()), vec![]),
+        message("u1", None, Role::User, vec![Content::Text("hi".to_owned())]),
+        message("a1", Some("x1"), Role::Assistant, vec![Content::Text("hello".to_owned())]),
+    ]);
+    let path = rehydrate_into(sessions.path(), sessions.path(), &session).unwrap();
+    let lines = lines(&path);
+    let parent = |id: &str| lines.iter().find(|l| l["id"] == id).unwrap()["parentId"].clone();
+    assert_eq!(parent("u1"), serde_json::Value::Null);
+    assert_eq!(parent("a1"), "u1");
+}
+
 /// A session is never written twice, wherever pi keeps it.
 #[rstest]
 fn never_overwrites_a_session(sessions: TempDir) {

@@ -116,7 +116,8 @@ fn dirs() -> Dirs {
 fn context(dirs: &Dirs) -> ResumeContext {
     ResumeContext {
         cwd: dirs.here.clone(),
-        git_root: Some(dirs.repo.clone()),
+        // As the shell's context gives it, with a trailing separator.
+        git_root: Some(dirs.repo.join("")),
         host_id: fake::THIS_HOST_ID.to_owned(),
         ..fake::context()
     }

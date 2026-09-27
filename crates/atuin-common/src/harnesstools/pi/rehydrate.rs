@@ -113,9 +113,11 @@ fn transcript(session: &RehydrateSession) -> String {
 struct Writer<'a> {
     session: &'a RehydrateSession,
     lines: Vec<Value>,
-    written: HashSet<&'a str>,
-    /// Rows skipped, each with the written entry standing in for it as a parent.
-    skipped: HashMap<&'a str, Option<&'a str>>,
+    /// Every row, by source id.
+    by_id: HashMap<&'a str, &'a RehydrateMessage>,
+    /// The rows that are written (the rest have nothing an entry can carry).
+    writable: HashSet<&'a str>,
+    /// The last row written.
     last: Option<&'a str>,
     /// The first entry since the last compaction written: the next compaction keeps from it.
     kept_from: Option<&'a str>,
@@ -134,29 +136,45 @@ impl<'a> Writer<'a> {
                 _ => None,
             })
             .collect();
-        Self {
+        let mut writer = Self {
             session,
             lines: Vec::new(),
-            written: HashSet::new(),
-            skipped: HashMap::new(),
+            by_id: session.messages.iter().map(|m| (m.source_id.as_str(), m)).collect(),
+            writable: HashSet::new(),
             last: None,
             kept_from: None,
             tools,
-        }
+        };
+        writer.writable = session
+            .messages
+            .iter()
+            .filter(|m| writer.entry(m).is_some())
+            .map(|m| m.source_id.as_str())
+            .collect();
+        writer
     }
 
+    /// The entry `m` hangs from: its nearest written ancestor, however the rows are ordered;
+    /// `None` at the root. A parent that was never synced stands for the entry before.
     fn parent(&self, m: &'a RehydrateMessage) -> Option<&'a str> {
-        match m.parent_source_id.as_deref() {
-            Some(p) if self.written.contains(p) => Some(p),
-            Some(p) if self.skipped.contains_key(p) => self.skipped[p],
-            _ => self.last,
+        let mut parent = m.parent_source_id.as_deref();
+        // At most one step per row: a cycle ends it.
+        for _ in 0..=self.by_id.len() {
+            let p = parent?;
+            if self.writable.contains(p) {
+                return Some(p);
+            }
+            match self.by_id.get(p) {
+                Some(row) => parent = row.parent_source_id.as_deref(),
+                None => break,
+            }
         }
+        self.last
     }
 
     fn push(&mut self, m: &'a RehydrateMessage) {
         let parent = self.parent(m);
         let Some(mut entry) = self.entry(m) else {
-            self.skipped.insert(&m.source_id, parent);
             return;
         };
         let compaction = entry["type"] == "compaction";
@@ -169,7 +187,6 @@ impl<'a> Writer<'a> {
         line.insert("timestamp".to_owned(), json!(timestamp(m.timestamp)));
         line.append(fields);
         self.lines.push(Value::Object(line));
-        self.written.insert(&m.source_id);
         self.last = Some(&m.source_id);
         if compaction {
             self.kept_from = None;
@@ -190,7 +207,7 @@ impl<'a> Writer<'a> {
             .iter()
             .rev()
             .find(|m| m.role == Role::Other("session_info".to_owned()))
-            .filter(|m| !self.written.contains(m.source_id.as_str()));
+            .filter(|m| !self.writable.contains(m.source_id.as_str()));
         let (id, at) = named.map_or_else(
             || {
                 (

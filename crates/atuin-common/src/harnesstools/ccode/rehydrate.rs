@@ -81,6 +81,8 @@ pub(crate) fn rehydrate_into(
 /// character but an ASCII letter or digit replaced by `-` (per UTF-16 unit, as JavaScript's
 /// `replace` does), and a name longer than 200 cut short and suffixed with a hash of the path.
 fn project_dir_name(cwd: &Path) -> String {
+    // As `process.cwd()` gives it: without a trailing separator.
+    let cwd: PathBuf = cwd.components().collect();
     let raw = cwd.to_string_lossy();
     let mut name = String::with_capacity(raw.len());
     for c in raw.chars() {
@@ -146,10 +148,10 @@ fn transcript(session: &RehydrateSession) -> String {
 struct Writer<'a> {
     session: &'a RehydrateSession,
     lines: Vec<Value>,
-    /// Rows written, by source id.
-    written: HashSet<&'a str>,
-    /// Rows skipped, each with the written line standing in for it as a parent.
-    skipped: HashMap<&'a str, Option<&'a str>>,
+    /// Every row, by source id.
+    by_id: HashMap<&'a str, &'a RehydrateMessage>,
+    /// The rows that are written (the rest have nothing a line can carry).
+    writable: HashSet<&'a str>,
     /// The last row written.
     last: Option<&'a str>,
     /// Compaction boundaries: the rows a compaction summary hangs from.
@@ -160,7 +162,7 @@ struct Writer<'a> {
 
 impl<'a> Writer<'a> {
     fn new(session: &'a RehydrateSession) -> Self {
-        let by_id: HashMap<&str, &RehydrateMessage> =
+        let by_id: HashMap<&'a str, &'a RehydrateMessage> =
             session.messages.iter().map(|m| (m.source_id.as_str(), m)).collect();
         let boundaries = session
             .messages
@@ -183,31 +185,45 @@ impl<'a> Writer<'a> {
                 _ => None,
             })
             .collect();
-        Self {
+        let mut writer = Self {
             session,
             lines: Vec::new(),
-            written: HashSet::new(),
-            skipped: HashMap::new(),
+            by_id,
+            writable: HashSet::new(),
             last: None,
             boundaries,
             server_tools,
-        }
+        };
+        writer.writable = session
+            .messages
+            .iter()
+            .filter(|m| writer.line(m, None).is_some())
+            .map(|m| m.source_id.as_str())
+            .collect();
+        writer
     }
 
-    /// The written line `m` hangs from: its own parent when written, the stand-in for a skipped
-    /// one, else (no parent recorded, or one never synced) the line before it.
+    /// The written line `m` hangs from: its nearest written ancestor, however the rows are
+    /// ordered; `None` at the root. A parent that was never synced stands for the line before.
     fn parent(&self, m: &'a RehydrateMessage) -> Option<&'a str> {
-        match m.parent_source_id.as_deref() {
-            Some(p) if self.written.contains(p) => Some(p),
-            Some(p) if self.skipped.contains_key(p) => self.skipped[p],
-            _ => self.last,
+        let mut parent = m.parent_source_id.as_deref();
+        // At most one step per row: a cycle ends it.
+        for _ in 0..=self.by_id.len() {
+            let p = parent?;
+            if self.writable.contains(p) {
+                return Some(p);
+            }
+            match self.by_id.get(p) {
+                Some(row) => parent = row.parent_source_id.as_deref(),
+                None => break,
+            }
         }
+        self.last
     }
 
     fn push(&mut self, m: &'a RehydrateMessage) {
         let parent = self.parent(m);
         let Some(mut line) = self.line(m, parent) else {
-            self.skipped.insert(&m.source_id, parent);
             return;
         };
         let session = self.session;
@@ -225,7 +241,6 @@ impl<'a> Writer<'a> {
         fields.insert("uuid".to_owned(), json!(m.source_id));
         fields.insert("timestamp".to_owned(), json!(timestamp(m.timestamp)));
         self.lines.push(line);
-        self.written.insert(&m.source_id);
         self.last = Some(&m.source_id);
     }
 
