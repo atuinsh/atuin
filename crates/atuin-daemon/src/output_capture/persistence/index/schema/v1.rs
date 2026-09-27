@@ -66,32 +66,7 @@ impl super::Schema for Schema {
         // passes every id, most of which never had output indexed, and 400k single-row
         // statements made removing 200k ids take ~20s.
         let keys_per_delete = db.info().await.variable_number_limit().max(1);
-
-        let pool = db.pool();
-        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(store)?;
-        for chunk in keys.chunks(keys_per_delete) {
-            let mut fts = sqlx::QueryBuilder::new(
-                "DELETE FROM output_fts WHERE rowid IN (SELECT id FROM indexed WHERE history_id \
-                 IN (",
-            );
-            let mut list = fts.separated(", ");
-            for key in chunk {
-                list.push_bind(&key[..]);
-            }
-            fts.push("))");
-            fts.build().execute(&mut *tx).await.map_err(store)?;
-
-            let mut indexed = sqlx::QueryBuilder::new("DELETE FROM indexed WHERE history_id IN (");
-            let mut list = indexed.separated(", ");
-            for key in chunk {
-                list.push_bind(&key[..]);
-            }
-            indexed.push(")");
-            indexed.build().execute(&mut *tx).await.map_err(store)?;
-        }
-        tx.commit().await.map_err(store)?;
-
-        Ok(())
+        Self::remove_chunked(db, &keys, keys_per_delete).await
     }
 
     async fn search(
@@ -229,5 +204,41 @@ impl super::Schema for Schema {
                 Some((chunk, next))
             }
         }))
+    }
+}
+
+impl Schema {
+    /// [`super::Schema::remove`]'s work, `keys_per_delete` ids per statement, in one transaction.
+    /// Separate so tests can cross chunk boundaries without tens of thousands of ids.
+    pub(crate) async fn remove_chunked(
+        db: &Sqlite,
+        keys: &[[u8; 16]],
+        keys_per_delete: usize,
+    ) -> Result<(), IndexError> {
+        let pool = db.pool();
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(store)?;
+        for chunk in keys.chunks(keys_per_delete.max(1)) {
+            let mut fts = sqlx::QueryBuilder::new(
+                "DELETE FROM output_fts WHERE rowid IN (SELECT id FROM indexed WHERE history_id \
+                 IN (",
+            );
+            let mut list = fts.separated(", ");
+            for key in chunk {
+                list.push_bind(&key[..]);
+            }
+            fts.push("))");
+            fts.build().execute(&mut *tx).await.map_err(store)?;
+
+            let mut indexed = sqlx::QueryBuilder::new("DELETE FROM indexed WHERE history_id IN (");
+            let mut list = indexed.separated(", ");
+            for key in chunk {
+                list.push_bind(&key[..]);
+            }
+            indexed.push(")");
+            indexed.build().execute(&mut *tx).await.map_err(store)?;
+        }
+        tx.commit().await.map_err(store)?;
+
+        Ok(())
     }
 }
