@@ -35,13 +35,32 @@ pub struct CodexSessions {
 
 impl CodexSessions {
     fn resolve_root(&self) -> PathBuf {
-        self.root.clone().unwrap_or_else(|| {
-            env_nonempty("CODEX_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| home_dir().join(".codex"))
-                .join("sessions")
-        })
+        self.root.clone().unwrap_or_else(default_root)
     }
+}
+
+/// Codex's live rollouts: `$CODEX_HOME/sessions`, else `~/.codex/sessions`.
+pub(crate) fn default_root() -> PathBuf {
+    env_nonempty("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().join(".codex"))
+        .join("sessions")
+}
+
+/// The rollout of session `id` under `root` (`<yyyy>/<mm>/<dd>/rollout-<timestamp>-<id>.jsonl`).
+/// Archived rollouts are not looked for: codex refuses to resume one until it is unarchived.
+pub(crate) fn locate(root: &Path, id: &str) -> Option<PathBuf> {
+    if !crate::harnesstools::resume::is_plain_name(id) {
+        return None;
+    }
+    crate::harnesstools::resume::find_file(root, |path| {
+        CodexListener::session_id(path).is_some_and(|found| found.as_ref() == id)
+    })
+}
+
+/// The id `codex resume` takes for session `id`: its thread's (see [`thread_of`]).
+pub(crate) fn resume_id(id: &str) -> &str {
+    id.split_once('_').map_or(id, |(thread, _)| thread)
 }
 
 /// Where Codex moves the rollouts of a thread the user archives: `archived_sessions/` beside
@@ -146,8 +165,7 @@ fn session_id_of(stem: &str) -> SessionId {
 /// The thread a session belongs to: its id, or for a reverted thread's rollout the thread
 /// part of it (see [`session_id_of`]).
 fn thread_of(session: &SessionId) -> &str {
-    let id: &str = session.as_ref();
-    id.split_once('_').map_or(id, |(thread, _)| thread)
+    resume_id(session.as_ref())
 }
 
 #[derive(Debug, Clone)]

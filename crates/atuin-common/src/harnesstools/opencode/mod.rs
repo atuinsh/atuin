@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError};
 use crate::utils::{env_nonempty, home_dir};
 
@@ -48,5 +49,21 @@ impl Harness for Opencode {
         tokio::fs::write(&extension_path, PLUGIN_SOURCE).await?;
 
         Ok(extension_path)
+    }
+
+    /// `opencode --session <id>` (with `--fork` to branch a copy). opencode looks the id up in
+    /// its one global database and serves the session from the directory recorded for it, but
+    /// the TUI starts in the directory it is run from (its project's session list, config and
+    /// the new sessions it creates), so the session's own is the one to be in.
+    fn resume_plan(&self, target: &ResumeTarget) -> Result<ResumePlan, ResumeError> {
+        let mut args = vec!["--session".to_owned(), target.id.clone()];
+        if target.fork {
+            args.push("--fork".to_owned());
+        }
+        Ok(resume::plan(target, CwdRequirement::Preferred, "opencode", args))
+    }
+
+    async fn locate(&self, id: &str) -> Option<PathBuf> {
+        session::locate(&session::default_db()?, id).await
     }
 }

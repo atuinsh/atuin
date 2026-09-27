@@ -9,12 +9,14 @@ pub mod codex;
 mod json_hooks;
 pub mod opencode;
 pub mod pi;
+pub mod resume;
 pub mod session;
 
 use ccode::Ccode;
 use codex::Codex;
 use opencode::Opencode;
 use pi::Pi;
+use resume::{ResumeError, ResumePlan, ResumeTarget};
 use session::Observable;
 use session::any::AnySessions;
 
@@ -36,6 +38,31 @@ pub trait Harness: std::fmt::Debug {
     /// Install this harness's hooks on the current user's machine, returning the path written.
     #[allow(async_fn_in_trait)]
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError>;
+
+    /// How this harness itself reopens `target`: its own resume command, and whether that has to
+    /// run from the session's directory. `Err` for a session the harness cannot reopen.
+    fn resume_plan(&self, target: &ResumeTarget) -> Result<ResumePlan, ResumeError>;
+
+    /// [`Self::resume_plan`], with the program and arguments replaced by the user's `template`
+    /// when there is one (see [`ResumePlan::with_template`]). The harness's plan still decides
+    /// whether the session can be resumed at all, and from where.
+    fn resume(
+        &self,
+        target: &ResumeTarget,
+        template: Option<&str>,
+    ) -> Result<ResumePlan, ResumeError> {
+        let plan = self.resume_plan(target)?;
+        match template {
+            Some(template) => plan.with_template(template, target),
+            None => Ok(plan),
+        }
+    }
+
+    /// Where the native record of session `id` is on this machine, `None` when it is not here:
+    /// the transcript file, or for a harness that keeps its sessions in a database, the database
+    /// holding it. Looks where the harness keeps sessions by default.
+    #[allow(async_fn_in_trait)]
+    async fn locate(&self, id: &str) -> Option<PathBuf>;
 }
 
 #[enum_dispatch(Harness)]

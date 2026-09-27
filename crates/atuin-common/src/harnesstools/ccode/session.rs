@@ -12,6 +12,7 @@ use typed_builder::TypedBuilder;
 
 use crate::fs::tree_watcher::{FileStat, TreeWatcher};
 use crate::harnesstools::ccode::Ccode;
+use crate::harnesstools::resume;
 use crate::harnesstools::session::model::{
     Content, MessageId, Role, StopReason, TitleChange, TitleSource, ToolCallId, ToolResult,
     ToolUse, Usage,
@@ -35,13 +36,34 @@ pub struct CcodeSessions {
 
 impl CcodeSessions {
     fn resolve_root(&self) -> PathBuf {
-        self.root.clone().unwrap_or_else(|| {
-            env_nonempty("CLAUDE_CONFIG_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| home_dir().join(".claude"))
-                .join("projects")
-        })
+        self.root.clone().unwrap_or_else(default_root)
     }
+}
+
+/// Claude Code's projects directory: `$CLAUDE_CONFIG_DIR/projects`, else
+/// `~/.claude/projects`.
+pub(crate) fn default_root() -> PathBuf {
+    env_nonempty("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().join(".claude"))
+        .join("projects")
+}
+
+/// The transcript of session `id` under the projects directory `root`:
+/// `<project>/<id>.jsonl`, in whichever project holds it. `claude --resume <id>` looks in
+/// every project too, and gives up when more than one holds the id; the first found is
+/// returned here. A subagent's transcript, nested under its session, is not looked for.
+pub(crate) fn locate(root: &Path, id: &str) -> Option<PathBuf> {
+    if !resume::is_plain_name(id) {
+        return None;
+    }
+    let name = format!("{id}.jsonl");
+    std::fs::read_dir(root)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|project| project.file_type().is_ok_and(|t| t.is_dir()))
+        .map(|project| project.path().join(&name))
+        .find(|path| path.is_file())
 }
 
 impl Sessions for CcodeSessions {
