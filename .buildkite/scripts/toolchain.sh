@@ -2,7 +2,8 @@
 # toolchain and CI tools. Shared helpers (`section` etc.) come from lib.sh.
 #
 # Per-step knobs, set as step env:
-#   RUST_TOOLCHAIN   toolchain to install (default: rust-toolchain.toml)
+#   RUST_TOOLCHAIN   toolchain to install (default: rust-toolchain.toml), or
+#                    "none" for steps that only run prebuilt tests
 #   RUST_COMPONENTS  extra rustup components, e.g. "clippy"
 #   CARGO_TOOLS      prebuilt tools to install: "nextest", "deny"
 #   APT_PACKAGES     extra apt packages on Linux (libssl-dev + pkg-config always)
@@ -45,23 +46,25 @@ case "$(uname -s)" in
     ;;
 esac
 
-if ! command -v rustup >/dev/null; then
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
-    sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+if [ "${RUST_TOOLCHAIN:-}" != none ]; then
+  if ! command -v rustup >/dev/null; then
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+      sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+  fi
+  if [ -n "${RUST_TOOLCHAIN:-}" ]; then
+    rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+    export RUSTUP_TOOLCHAIN="$RUST_TOOLCHAIN"
+  else
+    # The channel pinned in rust-toolchain.toml. Named explicitly: a bare
+    # `rustup toolchain install` needs rustup 1.28+, and hosted images may
+    # ship an older one.
+    channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
+    rustup toolchain install "$channel" --profile minimal
+  fi
+  for component in ${RUST_COMPONENTS:-}; do
+    rustup component add "$component"
+  done
 fi
-if [ -n "${RUST_TOOLCHAIN:-}" ]; then
-  rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
-  export RUSTUP_TOOLCHAIN="$RUST_TOOLCHAIN"
-else
-  # The channel pinned in rust-toolchain.toml. Named explicitly: a bare
-  # `rustup toolchain install` needs rustup 1.28+, and hosted images may
-  # ship an older one.
-  channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
-  rustup toolchain install "$channel" --profile minimal
-fi
-for component in ${RUST_COMPONENTS:-}; do
-  rustup component add "$component"
-done
 
 # rustup may come preinstalled from elsewhere (a system package, the image),
 # in which case nothing has created $CARGO_HOME/bin yet.
@@ -86,5 +89,7 @@ for tool in ${CARGO_TOOLS:-}; do
   esac
 done
 
-rustc --version
-cargo --version
+if [ "${RUST_TOOLCHAIN:-}" != none ]; then
+  rustc --version
+  cargo --version
+fi

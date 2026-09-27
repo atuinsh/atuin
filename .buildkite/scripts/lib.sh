@@ -70,15 +70,6 @@ apt_install() {
     -o APT::Sandbox::User=root $missing
 }
 
-# nextest's `--partition count:K/N` for a step split with Buildkite's
-# `parallelism: N`, and nothing for a single job, so how many ways a test
-# step is split is just that one number in the pipeline.
-nextest_partition() {
-  if [ -n "${BUILDKITE_PARALLEL_JOB_COUNT:-}" ]; then
-    echo "--partition count:$((BUILDKITE_PARALLEL_JOB + 1))/${BUILDKITE_PARALLEL_JOB_COUNT}"
-  fi
-}
-
 # Prebuilt tools not tied to Rust go here.
 TOOLS_BIN="$HOME/.local/bin"
 mkdir -p "$TOOLS_BIN"

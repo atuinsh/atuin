@@ -1,20 +1,22 @@
 # atuin CI. Replaces the GitHub Actions workflows rust.yml (except
 # Windows, which stays in .github/workflows/windows.yml until Buildkite's
 # hosted Windows agents are generally available), nix.yml, codespell.yml,
-# shellcheck.yml, vale.yml, installer.yml and nightly.yml, with the same
-# jobs and commands.
+# shellcheck.yml, vale.yml, installer.yml and nightly.yml.
 #
-# Each step sources .buildkite/scripts/toolchain.sh (rustup + pinned tools,
-# and the `section` log-group helper). Caching is Buildkite Cache
+# Each Rust step sources .buildkite/scripts/toolchain.sh (rustup + pinned
+# tools, and the `section` log-group helper). Caching is Buildkite Cache
 # (.buildkite/cache.yml): the cargo registry, plus a per-step target/ pruned
 # to third-party dependency builds (prune-target.sh), keyed on the toolchain
 # and Cargo.lock. Saves run only after the step's commands have succeeded,
 # and only on main (cache-save.sh): branch and PR builds restore main's.
 #
+# Tests build once per OS into a nextest archive (build-tests.sh), which a
+# step of parallel jobs then runs, split by how long each test took on main
+# (test-plan.py). Raise a test step's parallelism as the suite grows.
+#
 # Queues: light jobs use the cluster's default queue (linux-small, 2 vCPU).
 # Compile-bound jobs use linux-large (8 vCPU) and macOS jobs macos-large
-# (12 vCPU), both default queues in every Buildkite cluster. Test steps are
-# split across jobs with `parallelism` + nextest --partition.
+# (12 vCPU), both default queues in every Buildkite cluster.
 #
 # Not ported yet: the `paths-ignore: ui/**` filters on rust.yml and nix.yml
 # (if_changed needs a diff base set for main builds first).
@@ -22,6 +24,22 @@
 # Scheduled builds (the nightly schedule, set in the pipeline settings) run
 # everything plus the nightly tests, which also keeps main's cache entries
 # from expiring.
+
+# YAML anchors for what the steps below repeat; Buildkite ignores this key.
+common:
+  - &main-only build.branch == pipeline.default_branch
+  - &restore "buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs"
+  # No rustup cache on macOS: the image ships several toolchains, so the
+  # entry is 1.7 GB (20s to restore) against ~4s to install 1.98.0.
+  - &restore-macos "buildkite-agent cache restore --name cargo_registry --name target"
+  - &toolchain source .buildkite/scripts/toolchain.sh
+  - &save-toolchain .buildkite/scripts/cache-save.sh --name rustup --name apt_debs
+  - &prune 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
+  - &save-target .buildkite/scripts/cache-save.sh --name target
+  - &linux-large
+    queue: linux-large
+  - &macos-large
+    queue: macos-large
 
 env:
   CARGO_TERM_COLOR: always
@@ -31,7 +49,7 @@ env:
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
   # .config/nextest.toml's ci profile: writes test-results/junit.xml, which
-  # the test-engine step uploads to Buildkite Test Engine.
+  # the test-engine and test-timings steps collect.
   NEXTEST_PROFILE: ci
 
 steps:
@@ -40,12 +58,9 @@ steps:
     # main only: PRs are type-checked in the release profile by `check`
     # (cargo check --release), and nearly all of this job is LLVM codegen
     # for the atuin binary (~2 min on any machine).
-    if: build.branch == pipeline.default_branch
-    notify:
-      - github_check:
-          name: "buildkite/build"
-    agents:
-      queue: linux-large
+    if: *main-only
+    notify: [github_check: {name: buildkite/build}]
+    agents: *linux-large
     timeout_in_minutes: 45
     env:
       # Only proves the release profile compiles (release.yml ships the
@@ -53,111 +68,128 @@ steps:
       CARGO_PROFILE_RELEASE_LTO: "off"
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "256"
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
-      - source .buildkite/scripts/toolchain.sh
-      - .buildkite/scripts/cache-save.sh --name rustup --name apt_debs
+      - *restore
+      - *toolchain
+      - *save-toolchain
       - 'section ":hammer: cargo build --release" cargo build --workspace --locked --release'
-      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
-      - .buildkite/scripts/cache-save.sh --name target
+      - *prune
+      - *save-target
 
-  - label: ":test_tube: Unit tests (Linux) %n"
-    key: unit-test
-    notify:
-      - github_check:
-          name: "buildkite/unit-test"
-    agents:
-      queue: linux-large
-    # Split with nextest --partition; raise this as the suite grows.
-    parallelism: 2
+  # Unit, integration and e2e tests, compiled once and run below.
+  - label: ":package: Build tests (Linux)"
+    key: build-tests
+    notify: [github_check: {name: buildkite/build-tests}]
+    agents: *linux-large
     timeout_in_minutes: 45
     env:
       CARGO_TOOLS: nextest
-    # JUnit report, renamed per job by .buildkite/hooks/post-command; the
-    # test-engine step uploads them.
+      # The tests step's parallelism.
+      TEST_JOBS: "4"
+    command:
+      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs --name test_timings
+      - *toolchain
+      - *save-toolchain
+      - .buildkite/scripts/build-tests.sh linux --lib --bins --tests
+      - *prune
+      - *save-target
+
+  - label: ":test_tube: Tests (Linux) %n"
+    key: tests
+    depends_on: build-tests
+    notify: [github_check: {name: buildkite/tests}]
+    agents: *linux-large
+    # build-tests' TEST_JOBS.
+    parallelism: 4
+    timeout_in_minutes: 30
+    env:
+      RUST_TOOLCHAIN: none
+      CARGO_TOOLS: nextest
+      APT_PACKAGES: "zsh fish xz-utils"
+      ATUIN_DB_URI: postgres://atuin:pass@127.0.0.1:5432/atuin
+      ATUIN_E2E_REQUIRE_SHELLS: "1"
+      # Test databases live in tempdirs; tmpfs keeps concurrent SQLite WAL
+      # fsyncs from stalling the disk.
+      TEST_TMPDIR: /dev/shm
+    # JUnit report, renamed per job by .buildkite/hooks/post-command.
     artifact_paths: "test-results/junit-*.xml"
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
-      - source .buildkite/scripts/toolchain.sh
-      - .buildkite/scripts/cache-save.sh --name rustup --name apt_debs
-      - 'section ":test_tube: cargo nextest (lib + bins)" cargo nextest run $$(nextest_partition) --lib --bins || { .buildkite/scripts/proptest-regressions.sh; exit 1; }'
-      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
-      - .buildkite/scripts/cache-save.sh --name target
+      - .buildkite/scripts/start-postgres.sh
+      - buildkite-agent cache restore --name apt_debs
+      - *toolchain
+      - .buildkite/scripts/cache-save.sh --name apt_debs
+      - 'section ":shell: Install ble.sh" .buildkite/scripts/install-blesh.sh'
+      - .buildkite/scripts/run-tests.sh linux
 
-  - label: ":test_tube: Unit tests (macOS) %n"
-    key: unit-test-macos
-    notify:
-      - github_check:
-          name: "buildkite/unit-test-macos"
-    agents:
-      queue: macos-large
-    # Split with nextest --partition; raise this as the suite grows.
-    parallelism: 2
+  # Unit and e2e tests; the integration tests need Postgres, which only the
+  # Linux agents run.
+  - label: ":package: Build tests (macOS)"
+    key: build-tests-macos
+    notify: [github_check: {name: buildkite/build-tests-macos}]
+    agents: *macos-large
     timeout_in_minutes: 45
     env:
       CARGO_TOOLS: nextest
-    # JUnit report, renamed per job by .buildkite/hooks/post-command; the
-    # test-engine step uploads them.
+      # The tests-macos step's parallelism.
+      TEST_JOBS: "2"
+    command:
+      - buildkite-agent cache restore --name cargo_registry --name target --name test_timings
+      - *toolchain
+      - .buildkite/scripts/build-tests.sh macos --lib --bins --test "e2e_*"
+      - *prune
+      - *save-target
+
+  - label: ":test_tube: Tests (macOS) %n"
+    key: tests-macos
+    depends_on: build-tests-macos
+    notify: [github_check: {name: buildkite/tests-macos}]
+    agents: *macos-large
+    # build-tests-macos' TEST_JOBS.
+    parallelism: 2
+    timeout_in_minutes: 30
+    env:
+      RUST_TOOLCHAIN: none
+      CARGO_TOOLS: nextest
+      BREW_PACKAGES: "bash fish"
+      ATUIN_E2E_REQUIRE_SHELLS: "1"
+    # JUnit report, renamed per job by .buildkite/hooks/post-command.
     artifact_paths: "test-results/junit-*.xml"
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target
-      - source .buildkite/scripts/toolchain.sh
-      # No rustup cache on macOS: the image ships several toolchains, so the
-      # entry is 1.7 GB (20s to restore) against ~4s to install 1.98.0.
-      - 'section ":test_tube: cargo nextest (lib + bins)" cargo nextest run $$(nextest_partition) --lib --bins || { .buildkite/scripts/proptest-regressions.sh; exit 1; }'
-      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
-      - .buildkite/scripts/cache-save.sh --name target
+      - *toolchain
+      # Test with Homebrew's bash, not macOS's /bin/bash 3.2.
+      # ($$ escapes pipeline-upload interpolation.)
+      - export ATUIN_E2E_BASH="$$(brew --prefix bash)/bin/bash"
+      - 'section ":shell: Install ble.sh" .buildkite/scripts/install-blesh.sh'
+      - .buildkite/scripts/run-tests.sh macos
 
-  - label: ":mag: Check (Linux): all features, no features, release"
+  # All features are type-checked by clippy below.
+  - label: ":mag: Check (Linux)"
     key: check
-    notify:
-      - github_check:
-          name: "buildkite/check"
+    notify: [github_check: {name: buildkite/check}]
+    agents: *linux-large
     timeout_in_minutes: 45
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
-      - source .buildkite/scripts/toolchain.sh
-      - .buildkite/scripts/cache-save.sh --name rustup --name apt_debs
+      - *restore
+      - *toolchain
+      - *save-toolchain
       - 'section ":package: cargo fetch" cargo fetch --locked'
       # Registry contents are the same for every step; this one saves them.
       - .buildkite/scripts/cache-save.sh --name cargo_registry
-      # --all-features enables vendored-tls, which compiles OpenSSL from
-      # source; type-checking can use the system libssl instead.
-      - 'section ":mag: check (all features)" env OPENSSL_NO_VENDOR=1 cargo check --all-features --workspace'
       - 'section ":mag: check (no features)" cargo check --no-default-features --workspace'
-      - 'section ":mag: check (release profile)" cargo check --workspace --locked --release'
-      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
-      - .buildkite/scripts/cache-save.sh --name target
-
-  # The rest of rust.yml's check matrix, in parallel with the step above.
-  - label: ":mag: Check (Linux): sync, server, client only"
-    key: check-subsets
-    notify:
-      - github_check:
-          name: "buildkite/check-subsets"
-    timeout_in_minutes: 45
-    command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
-      - source .buildkite/scripts/toolchain.sh
-      - .buildkite/scripts/cache-save.sh --name rustup --name apt_debs
       - 'section ":mag: check (sync)" cargo check --no-default-features --features sync --workspace'
       - 'section ":mag: check (server)" cargo check -p atuin-server'
       - 'section ":mag: check (client only)" cargo check --no-default-features --features client --workspace'
-      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
-      - .buildkite/scripts/cache-save.sh --name target
+      - 'section ":mag: check (release profile)" cargo check --workspace --locked --release'
+      - *prune
+      - *save-target
 
   - label: ":mag: Check (macOS)"
     key: check-macos
-    notify:
-      - github_check:
-          name: "buildkite/check-macos"
-    agents:
-      queue: macos-large
+    notify: [github_check: {name: buildkite/check-macos}]
+    agents: *macos-large
     timeout_in_minutes: 45
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target
-      - source .buildkite/scripts/toolchain.sh
-      # No rustup cache on macOS: the image ships several toolchains, so the
-      # entry is 1.7 GB (20s to restore) against ~4s to install 1.98.0.
+      - *restore-macos
+      - *toolchain
       - 'section ":package: cargo fetch" cargo fetch --locked'
       # The registry key includes the OS, so macOS saves its own.
       - .buildkite/scripts/cache-save.sh --name cargo_registry
@@ -169,166 +201,79 @@ steps:
       - 'section ":mag: check (server)" cargo check -p atuin-server'
       - 'section ":mag: check (client only)" cargo check --no-default-features --features client --workspace'
       - 'section ":mag: check (release profile)" cargo check --workspace --locked --release'
-      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
-      - .buildkite/scripts/cache-save.sh --name target
+      - *prune
+      - *save-target
 
   - label: ":crab: MSRV (1.95.0)"
     key: msrv
-    notify:
-      - github_check:
-          name: "buildkite/msrv"
+    notify: [github_check: {name: buildkite/msrv}]
     timeout_in_minutes: 45
     env:
       # rust-toolchain.toml pins the dev toolchain; override it explicitly.
       RUST_TOOLCHAIN: "1.95.0"
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
-      - source .buildkite/scripts/toolchain.sh
-      - .buildkite/scripts/cache-save.sh --name rustup --name apt_debs
+      - *restore
+      - *toolchain
+      - *save-toolchain
       - 'section ":crab: check on MSRV (all features)" cargo check --locked --workspace --all-features'
-      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
-      - .buildkite/scripts/cache-save.sh --name target
-
-  - label: ":postgres: Integration tests %n"
-    key: integration-test
-    notify:
-      - github_check:
-          name: "buildkite/integration-test"
-    agents:
-      queue: linux-large
-    # Split with nextest --partition; raise this as the suite grows.
-    parallelism: 2
-    timeout_in_minutes: 45
-    env:
-      CARGO_TOOLS: nextest
-      ATUIN_DB_URI: postgres://atuin:pass@127.0.0.1:5432/atuin
-    # JUnit report, renamed per job by .buildkite/hooks/post-command; the
-    # test-engine step uploads them.
-    artifact_paths: "test-results/junit-*.xml"
-    command:
-      - .buildkite/scripts/start-postgres.sh
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
-      - source .buildkite/scripts/toolchain.sh
-      - .buildkite/scripts/cache-save.sh --name rustup --name apt_debs
-      # e2e tests have their own step. Test databases live in tempdirs;
-      # tmpfs keeps concurrent SQLite WAL fsyncs from stalling the disk.
-      - 'section ":test_tube: cargo nextest (integration)" env TMPDIR=/dev/shm cargo nextest run $$(nextest_partition) --test "*" -E "not binary(/e2e_.*/)" || { .buildkite/scripts/proptest-regressions.sh; exit 1; }'
-      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
-      - .buildkite/scripts/cache-save.sh --name target
-
-  - label: ":terminal: e2e (Linux) %n"
-    key: e2e
-    notify:
-      - github_check:
-          name: "buildkite/e2e"
-    # Split with nextest --partition; raise this as the suite grows.
-    parallelism: 2
-    agents:
-      queue: linux-large
-    timeout_in_minutes: 45
-    env:
-      CARGO_TOOLS: nextest
-      APT_PACKAGES: "zsh fish xz-utils"
-      ATUIN_E2E_REQUIRE_SHELLS: "1"
-    # JUnit report, renamed per job by .buildkite/hooks/post-command; the
-    # test-engine step uploads them.
-    artifact_paths: "test-results/junit-*.xml"
-    command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
-      - source .buildkite/scripts/toolchain.sh
-      - .buildkite/scripts/cache-save.sh --name rustup --name apt_debs
-      - 'section ":shell: Install ble.sh" .buildkite/scripts/install-blesh.sh'
-      - 'section ":terminal: cargo nextest (e2e)" cargo nextest run $$(nextest_partition) -p atuin --test "e2e_*"'
-      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
-      - .buildkite/scripts/cache-save.sh --name target
-
-  - label: ":terminal: e2e (macOS)"
-    key: e2e-macos
-    notify:
-      - github_check:
-          name: "buildkite/e2e-macos"
-    agents:
-      queue: macos-large
-    timeout_in_minutes: 45
-    env:
-      CARGO_TOOLS: nextest
-      BREW_PACKAGES: "bash fish"
-      ATUIN_E2E_REQUIRE_SHELLS: "1"
-    # JUnit report, renamed per job by .buildkite/hooks/post-command; the
-    # test-engine step uploads them.
-    artifact_paths: "test-results/junit-*.xml"
-    command:
-      - buildkite-agent cache restore --name cargo_registry --name target
-      - source .buildkite/scripts/toolchain.sh
-      # No rustup cache on macOS: the image ships several toolchains, so the
-      # entry is 1.7 GB (20s to restore) against ~4s to install 1.98.0.
-      # Test with Homebrew's bash, not macOS's /bin/bash 3.2.
-      # ($$ escapes pipeline-upload interpolation.)
-      - export ATUIN_E2E_BASH="$$(brew --prefix bash)/bin/bash"
-      - 'section ":shell: Install ble.sh" .buildkite/scripts/install-blesh.sh'
-      - 'section ":terminal: cargo nextest (e2e)" cargo nextest run -p atuin --test "e2e_*"'
-      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
-      - .buildkite/scripts/cache-save.sh --name target
+      - *prune
+      - *save-target
 
   - label: ":paperclip: Clippy"
     key: clippy
-    notify:
-      - github_check:
-          name: "buildkite/clippy"
+    notify: [github_check: {name: buildkite/clippy}]
     timeout_in_minutes: 45
     env:
       RUST_COMPONENTS: clippy
+      # --all-features enables vendored-tls, which compiles OpenSSL from
+      # source; linting can use the system libssl instead.
+      OPENSSL_NO_VENDOR: "1"
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
-      - source .buildkite/scripts/toolchain.sh
-      - .buildkite/scripts/cache-save.sh --name rustup --name apt_debs
-      # One run over the union of what `cargo clippy` (lib + bins) and
-      # `cargo clippy --tests` lint, so the two share their work.
-      - 'section ":paperclip: clippy (lib, bins, tests)" cargo clippy --lib --bins --tests -- -D warnings'
-      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
-      - .buildkite/scripts/cache-save.sh --name target
+      - *restore
+      - *toolchain
+      - *save-toolchain
+      # All features, and the union of what `cargo clippy` (lib + bins) and
+      # `cargo clippy --tests` lint, in one run. This also type-checks
+      # everything `cargo check --all-features` did.
+      - 'section ":paperclip: clippy (all features; lib, bins, tests)" cargo clippy --all-features --lib --bins --tests -- -D warnings'
+      - *prune
+      - *save-target
 
   - label: ":books: Docs"
     key: docs
-    notify:
-      - github_check:
-          name: "buildkite/docs"
+    notify: [github_check: {name: buildkite/docs}]
     timeout_in_minutes: 45
     env:
       RUSTDOCFLAGS: "-D warnings"
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
-      - source .buildkite/scripts/toolchain.sh
-      - .buildkite/scripts/cache-save.sh --name rustup --name apt_debs
+      - *restore
+      - *toolchain
+      - *save-toolchain
       - 'section ":books: cargo doc" cargo doc --document-private-items --no-deps --workspace'
-      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
-      - .buildkite/scripts/cache-save.sh --name target
+      - *prune
+      - *save-target
 
   - label: ":art: Format"
     key: format
-    notify:
-      - github_check:
-          name: "buildkite/format"
+    notify: [github_check: {name: buildkite/format}]
     timeout_in_minutes: 15
     env:
       RUST_TOOLCHAIN: nightly
       RUST_COMPONENTS: rustfmt
     command:
-      - source .buildkite/scripts/toolchain.sh
+      - *toolchain
       - 'section ":art: cargo fmt --check" cargo fmt -- --check'
 
   - label: ":no_entry: cargo-deny"
     key: deny
-    notify:
-      - github_check:
-          name: "buildkite/deny"
+    notify: [github_check: {name: buildkite/deny}]
     timeout_in_minutes: 15
     env:
       CARGO_TOOLS: deny
     command:
       - buildkite-agent cache restore --name cargo_registry --name rustup --name apt_debs
-      - source .buildkite/scripts/toolchain.sh
-      - .buildkite/scripts/cache-save.sh --name rustup --name apt_debs
+      - *toolchain
+      - *save-toolchain
       # Same arguments cargo-deny-action passes by default.
       - 'section ":no_entry: cargo deny check" cargo deny --log-level warn --all-features check'
       # Library crates must never (re)add eyre or anyhow; each has its own
@@ -343,25 +288,22 @@ steps:
     # main only: this only guards crates.io publishing (every crate builds
     # from its packaged tarball), which isn't part of the PR flow. On main
     # it still flags publishing breakage well before a release.
-    if: build.branch == pipeline.default_branch
-    notify:
-      - github_check:
-          name: "buildkite/package"
-    agents:
-      queue: linux-large
+    if: *main-only
+    notify: [github_check: {name: buildkite/package}]
+    agents: *linux-large
     timeout_in_minutes: 45
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
-      - source .buildkite/scripts/toolchain.sh
-      - .buildkite/scripts/cache-save.sh --name rustup --name apt_debs
+      - *restore
+      - *toolchain
+      - *save-toolchain
       # Make sure the packaged crates build from their tarballs, not from
       # anything left over from the workspace build. The restored target/
       # holds only third-party builds (prune-target.sh), which verification
       # reuses: it builds into the shared target/debug.
       - rm -rf ~/.cargo/registry/{cache,src}/*/atuin* target/package
       - 'section ":package: cargo package" cargo package --workspace'
-      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
-      - .buildkite/scripts/cache-save.sh --name target
+      - *prune
+      - *save-target
 
   # Uploads every test job's JUnit report to Buildkite Test Engine. A job of
   # its own, with no checkout, so the token never reaches a job that runs
@@ -376,13 +318,7 @@ steps:
     # anywhere else it would just fail to fetch it. The fork check keeps a
     # fork's branch that happens to be called main out too.
     if: build.branch == pipeline.default_branch && build.pull_request.repository.fork != true
-    depends_on:
-      - unit-test
-      - unit-test-macos
-      - integration-test
-      - e2e
-      - e2e-macos
-      - nightly
+    depends_on: [tests, tests-macos, nightly]
     # Report failing runs too, and don't wait on skipped (scheduled-only) steps.
     allow_dependency_failure: true
     # A Test Engine outage or rejected upload mustn't fail an otherwise green
@@ -392,12 +328,9 @@ steps:
     # run on the one machine that holds the token. It only needs the reports.
     checkout:
       skip: true
-    notify:
-      - github_check:
-          name: "buildkite/test-engine"
+    notify: [github_check: {name: buildkite/test-engine}]
     timeout_in_minutes: 10
-    secrets:
-      - ATUIN_TEST_ENGINE_TOKEN
+    secrets: [ATUIN_TEST_ENGINE_TOKEN]
     plugins:
       - test-collector#v1.12.0:
           files: "test-results/junit-*.xml"
@@ -407,17 +340,32 @@ steps:
       # No reports (e.g. every test job failed before running tests) is not an error.
       - buildkite-agent artifact download "test-results/junit-*.xml" . || echo "No test reports to upload."
 
+  # Records how long each test took, for test-plan.py to split later
+  # builds' test jobs by. main only, like every cache save.
+  - label: ":stopwatch: Record test timings"
+    key: test-timings
+    if: *main-only
+    depends_on: [tests, tests-macos]
+    # Record what did run when some tests failed.
+    allow_dependency_failure: true
+    # Only a speed-up for later builds; never a reason to fail this one.
+    soft_fail: true
+    notify: [github_check: {name: buildkite/test-timings}]
+    timeout_in_minutes: 10
+    command:
+      - buildkite-agent cache restore --name test_timings
+      - buildkite-agent artifact download "test-results/junit-*.xml" . || echo "No test reports."
+      - python3 .buildkite/scripts/test-plan.py record test-timings/timings.json test-timings/timings.json test-results/junit-*.xml
+      - .buildkite/scripts/cache-save.sh --name test_timings
+
   # rust.yml's "Test in VM (illumos)": builds the client and server on a real
   # OmniOS VM (KVM-accelerated; hosted agents expose /dev/kvm). main only,
   # like build and nix-build: it was ~12 min per PR on GitHub Actions.
   - label: ":sunrise: Build on illumos (OmniOS VM)"
     key: illumos
-    if: build.branch == pipeline.default_branch
-    notify:
-      - github_check:
-          name: "buildkite/illumos"
-    agents:
-      queue: linux-large
+    if: *main-only
+    notify: [github_check: {name: buildkite/illumos}]
+    agents: *linux-large
     timeout_in_minutes: 45
     command:
       - buildkite-agent cache restore --name anyvm --name apt_debs
@@ -427,29 +375,24 @@ steps:
   - label: ":moon: Nightly tests"
     key: nightly
     if: build.source == "schedule"
-    notify:
-      - github_check:
-          name: "buildkite/nightly"
+    notify: [github_check: {name: buildkite/nightly}]
     timeout_in_minutes: 60
     env:
       CARGO_TOOLS: nextest
-    # JUnit report, renamed per job by .buildkite/hooks/post-command; the
-    # test-engine step uploads them.
+    # JUnit report, renamed per job by .buildkite/hooks/post-command.
     artifact_paths: "test-results/junit-*.xml"
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs
-      - source .buildkite/scripts/toolchain.sh
-      - .buildkite/scripts/cache-save.sh --name rustup --name apt_debs
+      - *restore
+      - *toolchain
+      - *save-toolchain
       - 'section ":moon: cargo nextest (nightly)" cargo nextest run -p atuin-daemon --test nightly --run-ignored all || { .buildkite/scripts/proptest-regressions.sh; exit 1; }'
-      - 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
-      - .buildkite/scripts/cache-save.sh --name target
+      - *prune
+      - *save-target
 
   # nix.yml: flake check, build (and run the result), formatting.
   - label: ":nix: Nix flake check"
     key: nix-check
-    notify:
-      - github_check:
-          name: "buildkite/nix-check"
+    notify: [github_check: {name: buildkite/nix-check}]
     timeout_in_minutes: 30
     command:
       - source .buildkite/scripts/lib.sh
@@ -458,15 +401,12 @@ steps:
 
   - label: ":nix: Nix build"
     key: nix-build
-    notify:
-      - github_check:
-          name: "buildkite/nix-build"
     # main only: buildRustPackage builds atuin and every dependency in one
     # derivation, so every change rebuilds from scratch (~4 min). The flake
     # check and nixfmt steps still run on PRs.
-    if: build.branch == pipeline.default_branch
-    agents:
-      queue: linux-large
+    if: *main-only
+    notify: [github_check: {name: buildkite/nix-build}]
+    agents: *linux-large
     timeout_in_minutes: 45
     command:
       - source .buildkite/scripts/lib.sh
@@ -476,9 +416,7 @@ steps:
 
   - label: ":nix: nixfmt"
     key: nixfmt
-    notify:
-      - github_check:
-          name: "buildkite/nixfmt"
+    notify: [github_check: {name: buildkite/nixfmt}]
     timeout_in_minutes: 15
     command:
       - source .buildkite/scripts/lib.sh
@@ -487,9 +425,7 @@ steps:
 
   - label: ":pencil2: Codespell"
     key: codespell
-    notify:
-      - github_check:
-          name: "buildkite/codespell"
+    notify: [github_check: {name: buildkite/codespell}]
     timeout_in_minutes: 10
     command:
       - source .buildkite/scripts/lib.sh
@@ -498,9 +434,7 @@ steps:
 
   - label: ":shell: Shellcheck"
     key: shellcheck
-    notify:
-      - github_check:
-          name: "buildkite/shellcheck"
+    notify: [github_check: {name: buildkite/shellcheck}]
     timeout_in_minutes: 10
     env:
       SHELLCHECK_OPTS: "-e SC2148"
@@ -519,9 +453,7 @@ steps:
       - ".vale.ini"
       - ".vale/styles/config/**"
       - ".buildkite/scripts/vale.sh"
-    notify:
-      - github_check:
-          name: "buildkite/vale"
+    notify: [github_check: {name: buildkite/vale}]
     timeout_in_minutes: 10
     command:
       - source .buildkite/scripts/lib.sh
@@ -532,10 +464,8 @@ steps:
   # main's install.sh), so it runs on main builds only, as before.
   - label: ":inbox_tray: Installer (Linux)"
     key: install
-    if: build.branch == pipeline.default_branch
-    notify:
-      - github_check:
-          name: "buildkite/install"
+    if: *main-only
+    notify: [github_check: {name: buildkite/install}]
     timeout_in_minutes: 10
     command:
       - source .buildkite/scripts/lib.sh
@@ -545,10 +475,8 @@ steps:
 
   - label: ":inbox_tray: Installer (macOS)"
     key: install-macos
-    if: build.branch == pipeline.default_branch
-    notify:
-      - github_check:
-          name: "buildkite/install-macos"
+    if: *main-only
+    notify: [github_check: {name: buildkite/install-macos}]
     agents:
       queue: macos-medium
     timeout_in_minutes: 10
