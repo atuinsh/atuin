@@ -5,6 +5,7 @@ use std::sync::Arc;
 use atuin_common::db::sqlite::fts::{TextHighlighter, match_expression, prefix_match_expression};
 use atuin_common::db::sqlite::{Sqlite, SqliteOpenOrCreateError};
 use atuin_common::db::{self};
+use atuin_common::harnesstools::rehydrate::RehydrateSession;
 use atuin_common::harnesstools::session::{
     Checkpoint, Content, Role, TitleChange, TitleSource, Usage,
 };
@@ -822,6 +823,21 @@ impl AiSessionDatabase {
         .fetch_all(self.db.pool())
         .await?;
         Ok(hosts.into_iter().filter_map(|h| Self::host_from_repr(Some(h))).collect())
+    }
+
+    /// Session `session` with every message it holds, in transcript order, as its harness can
+    /// write it back out to be resumed in `cwd`; `None` for a session not stored. Only reads, so
+    /// a read-only database will do.
+    pub async fn rehydrate_session(
+        &self,
+        session: &HarnessSession,
+        cwd: PathBuf,
+    ) -> Result<Option<RehydrateSession>, DbError> {
+        let Some(stored) = self.get_session(session).await? else {
+            return Ok(None);
+        };
+        let messages: Vec<Message> = self.messages(session).try_collect().await?;
+        Ok(Some(stored.rehydrate(messages, cwd)))
     }
 
     /// What a session's preview shows: every message's time and role, and the content of only
@@ -4053,6 +4069,67 @@ mod tests {
         assert_eq!(parts.last_assistant, Some(vec![text(&long), tool_use()]));
         let activity: Vec<_> = messages.iter().map(|m| (m.timestamp, m.role.clone())).collect();
         assert_eq!(parts.activity, activity);
+    }
+
+    /// A stored session comes back as its harness can write it out: every message, in
+    /// transcript order, with what a transcript line needs, to resume in the directory given.
+    #[rstest]
+    #[tokio::test]
+    async fn a_session_converts_to_one_to_rehydrate() {
+        use std::path::PathBuf;
+
+        use atuin_common::harnesstools::session::StopReason;
+
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let s = sample_handle();
+        let mut prompt = message_with(&s, 0, Role::User, vec![text("first prompt")]);
+        prompt.cwd = Some(PathBuf::from("/remote/proj"));
+        prompt.git_branch = Some("main".to_owned());
+        let mut reply = message_with(&s, 1, Role::Assistant, vec![text("reply"), tool_use()]);
+        reply.parent_source_id = Some(SourceId::from("source-0".to_owned()));
+        reply.turn_id = Some("msg_1".to_owned());
+        // The newest row's title is the session's.
+        reply.session_title = Some("the title".to_owned());
+        reply.session_title_source = Some(TitleSource::Named);
+        reply.model = Some("claude-opus-5".to_owned());
+        reply.stop_reason = Some(StopReason::ToolUse);
+        reply.usage = Some(Usage {
+            input: Some(3),
+            output: Some(5),
+            cache_read: Some(7),
+            cache_write: Some(11),
+            reasoning: Some(2),
+        });
+        // Stored out of order: the transcript's order is the timestamps'.
+        db.append(&reply).await.unwrap();
+        db.append(&prompt).await.unwrap();
+
+        let here = PathBuf::from("/local/proj");
+        let session = db.rehydrate_session(&s, here.clone()).await.unwrap().unwrap();
+        assert_eq!(session.id, "ordered-session");
+        assert_eq!(session.title.as_deref(), Some("the title"));
+        assert_eq!(session.cwd, here);
+        assert_eq!(session.original_cwd, Some(PathBuf::from("/remote/proj")));
+        assert_eq!(session.git_branch.as_deref(), Some("main"));
+        assert_eq!(session.started_at, prompt.timestamp);
+
+        let ids: Vec<&str> = session.messages.iter().map(|m| m.source_id.as_str()).collect();
+        assert_eq!(ids, ["source-0", "source-1"]);
+        let m = &session.messages[1];
+        assert_eq!(m.parent_source_id.as_deref(), Some("source-0"));
+        assert_eq!((m.role.clone(), m.content.clone()), (Role::Assistant, reply.content.clone()));
+        assert_eq!(m.turn_id.as_deref(), Some("msg_1"));
+        assert_eq!(m.model.as_deref(), Some("claude-opus-5"));
+        assert_eq!(m.stop_reason, Some(StopReason::ToolUse));
+        assert_eq!(m.usage, reply.usage);
+        assert_eq!(m.timestamp, reply.timestamp);
+        assert_eq!(session.messages[0].cwd, Some(PathBuf::from("/remote/proj")));
+
+        let missing = HarnessSession {
+            harness: HarnessKind::Pi,
+            session: NativeSessionId::from("nope".to_owned()),
+        };
+        assert!(db.rehydrate_session(&missing, here).await.unwrap().is_none());
     }
 
     #[rstest]

@@ -27,7 +27,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::panel::{self, SPLIT_MIN_WIDTH};
 use super::query::{TokenKind, TokenState};
-use super::resumer::shell_line;
+use super::resumer::{Resume, shell_line};
 use super::source::{SessionRow, Snippet, harness_badge, harness_label};
 use super::state::{LIVE_SECS, ListState, State, TAB_TITLES};
 
@@ -195,6 +195,8 @@ pub struct SessionList<'a> {
     theme: &'a Theme,
     columns: &'a [AiSessionColumn],
     host_id: &'a str,
+    /// Whether the selected session is restored from sync to resume, once its plan says.
+    selected_restores: Option<bool>,
 }
 
 impl SessionList<'_> {
@@ -246,7 +248,9 @@ impl StatefulWidget for SessionList<'_> {
                 y: cy,
                 row_modifier: {
                     let mut m = Modifier::empty();
-                    if row.host_id != self.host_id {
+                    // Another host's session resumes by restoring it from sync, when atuin can
+                    // resume its harness at all.
+                    if row.host_id != self.host_id && row.handle.harness.harness().is_none() {
                         m |= Modifier::DIM;
                     }
                     if self.alternate_highlight && selected {
@@ -356,7 +360,17 @@ impl SessionList<'_> {
                         let base = style(theme, Meaning::Base);
                         (base, base.add_modifier(Modifier::BOLD))
                     };
-                    let host = (row.host_id != self.host_id).then(|| format!(" @{}", row.hostname));
+                    let remote = row.host_id != self.host_id;
+                    let restores = selected
+                        && self
+                            .selected_restores
+                            .unwrap_or_else(|| remote && row.handle.harness.harness().is_some());
+                    let host = match (remote, restores) {
+                        (true, true) => Some(format!(" @{} · restores from sync", row.hostname)),
+                        (true, false) => Some(format!(" @{}", row.hostname)),
+                        (false, true) => Some(" · restores from sync".to_owned()),
+                        (false, false) => None,
+                    };
                     let host_w = host.as_deref().map_or(0, UnicodeWidthStr::width);
                     let title_w = cw.saturating_sub(host_w).max(cw.min(8));
                     let spans =
@@ -703,6 +717,11 @@ impl State {
             theme,
             columns: &columns,
             host_id: &self.context.host_id,
+            selected_restores: self.selected().and_then(|row| match self.plans.get(&row.handle) {
+                Some(Ok(resume)) => Some(resume.restore.is_some()),
+                Some(Err(_)) => Some(false),
+                None => None,
+            }),
         };
         f.render_stateful_widget(list, list_area, &mut self.list);
 
@@ -969,10 +988,21 @@ impl State {
                 style(theme, Meaning::Guidance),
             )]));
         }
+        if let Some(Ok(Resume {
+            restore: Some(restore),
+            ..
+        })) = self.plans.get(&row.handle)
+        {
+            let why = restore.note.as_deref().unwrap_or("its transcript isn't on this machine");
+            lines.push(field("Restore", vec![Span::styled(
+                format!("from sync, when resumed: {why}"),
+                key,
+            )]));
+        }
         lines.push(match self.plans.get(&row.handle) {
             None => field("Resume", vec![Span::styled("…", key)]),
-            Some(Ok(plan)) => field("Resume", vec![Span::styled(
-                shell_line(plan),
+            Some(Ok(resume)) => field("Resume", vec![Span::styled(
+                shell_line(&resume.plan),
                 style(theme, Meaning::Important).add_modifier(Modifier::BOLD),
             )]),
             Some(Err(why)) => field("Resume", vec![Span::styled(

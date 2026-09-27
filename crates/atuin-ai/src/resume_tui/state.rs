@@ -17,7 +17,7 @@ use unicode_width::UnicodeWidthStr;
 use super::ResumeContext;
 use super::keymap::{Action, Keymap, KeymapSet};
 use super::query::{self, ParsedQuery};
-use super::resumer::{NotResumable, ResumePlan};
+use super::resumer::{NotResumable, Resume};
 use super::source::{SessionFilter, SessionPreview, SessionRow};
 
 pub const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
@@ -29,6 +29,8 @@ pub const LIVE_SECS: u64 = 120;
 pub const PREVIEW: u8 = 0;
 pub const CHILDREN: u8 = 1;
 pub const PLAN: u8 = 2;
+/// Restoring the session's transcript from sync, once an action is waiting on it.
+pub const RESTORE: u8 = 3;
 
 /// How many rows a search asks for.
 const SEARCH_LIMIT: usize = 500;
@@ -109,8 +111,9 @@ pub struct State {
     /// A session named by id that can't be resumed, kept first while the query is still the id
     /// it was named by, so the picker opens on it and says why.
     pinned: Option<(SessionRow, String)>,
-    /// Resume plans, fetched for the selected session only (planning may walk directories).
-    pub plans: HashMap<HarnessSession, Result<ResumePlan, NotResumable>>,
+    /// Resume plans, fetched for the selected session only (planning may walk directories). A
+    /// plan to restore the session from sync is replaced by the plain one once it is restored.
+    pub plans: HashMap<HarnessSession, Result<Resume, NotResumable>>,
     /// Other hosts' names by host id, once the source has read them.
     host_names: HashMap<String, String>,
     /// An enter/tab/ctrl-y waiting for its session's plan.
@@ -824,9 +827,9 @@ mod tests {
     fn a_pinned_session_stays_first_until_the_query_changes() {
         let mut state = State::new(&settings(), fake::context(), "s7a1b2c");
         let pinned = fake::row(HarnessKind::ClaudeCode, "s7a1b2c", "t");
-        state.pin(pinned.clone(), NotResumable::TranscriptMissing);
+        state.pin(pinned.clone(), NotResumable::NotInstalled("claude".to_owned()));
         assert_eq!(state.selected(), Some(&pinned));
-        assert!(state.status.as_ref().is_some_and(|(s, _)| s.contains("isn't on this machine")));
+        assert!(state.status.as_ref().is_some_and(|(s, _)| s.contains("isn't installed here")));
 
         // The id matches no text, so the workspace would widen; the pinned row keeps it.
         let (generation, mode, _) = state.next_search().unwrap();

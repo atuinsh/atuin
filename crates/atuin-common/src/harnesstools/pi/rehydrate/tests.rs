@@ -1,0 +1,244 @@
+use std::num::NonZeroUsize;
+
+use futures::TryStreamExt;
+use rstest::{fixture, rstest};
+use serde_json::json;
+use tempfile::TempDir;
+use time::OffsetDateTime;
+
+use super::*;
+use crate::harnesstools::pi::session::{PiMessage, PiSession};
+use crate::harnesstools::session::{Message, Session, SessionId};
+use crate::sync::BlockingPool;
+
+#[fixture]
+fn sessions() -> TempDir {
+    tempfile::tempdir().unwrap()
+}
+
+/// A captured row for each line of `jsonl`, as live capture makes them: the entry's id, or a
+/// stand-in for one without (capture derives those from the line's content).
+fn captured(jsonl: &str) -> Vec<RehydrateMessage> {
+    jsonl
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str::<PiMessage>(l).expect("fixture line parses"))
+        .enumerate()
+        .map(|(n, m)| RehydrateMessage {
+            source_id: m.id().map_or_else(|| format!("synthetic-{n}"), |id| id.to_string()),
+            parent_source_id: m.parent_id().map(|p| p.to_string()),
+            timestamp: m.timestamp().unwrap_or(OffsetDateTime::UNIX_EPOCH),
+            role: m.role(),
+            content: m.content(),
+            model: m.model(),
+            usage: m.usage(),
+            stop_reason: m.stop_reason(),
+            turn_id: m.turn_id(),
+            cwd: m.cwd(),
+            git_branch: m.git_branch(),
+        })
+        .collect()
+}
+
+fn session(id: &str, cwd: &Path, messages: Vec<RehydrateMessage>) -> RehydrateSession {
+    RehydrateSession {
+        id: id.to_owned(),
+        title: Some("restored".to_owned()),
+        cwd: cwd.to_owned(),
+        original_cwd: Some(PathBuf::from("/home/u/proj")),
+        git_branch: None,
+        model: None,
+        started_at: OffsetDateTime::UNIX_EPOCH,
+        messages,
+    }
+}
+
+/// What the file can carry of each row, by the rules in the module docs.
+fn carried(messages: &[RehydrateMessage]) -> Vec<(String, Role, Vec<Content>)> {
+    messages
+        .iter()
+        .filter(|m| match &m.role {
+            Role::Other(kind) => kind == "custom",
+            Role::System => m.content.iter().any(|c| matches!(c, Content::Summary(_))),
+            _ => true,
+        })
+        .filter_map(|m| {
+            let content: Vec<Content> = m
+                .content
+                .iter()
+                .filter_map(|c| match c {
+                    Content::Reasoning(_) | Content::ReasoningSummary { .. } => None,
+                    Content::Text(t) if t.is_empty() && m.role != Role::Assistant => None,
+                    Content::Other(raw) if raw["type"] == "image" => {
+                        Some(Content::Text("[image not restored]".to_owned()))
+                    }
+                    Content::Other(_) => None,
+                    // A v1 `!command` had no id to name its result after; it has now.
+                    Content::ToolResult(r) if r.call.as_ref().starts_with("bash:") => {
+                        Some(Content::ToolResult(ToolResult {
+                            call: m.source_id.clone().into(),
+                            ..r.clone()
+                        }))
+                    }
+                    other => Some(other.clone()),
+                })
+                .collect();
+            (!content.is_empty()).then(|| (m.source_id.clone(), m.role.clone(), content))
+        })
+        .collect()
+}
+
+async fn read_back(path: &Path) -> Vec<PiMessage> {
+    let pool = BlockingPool::new(NonZeroUsize::MIN);
+    PiSession::open(SessionId::from("s".to_owned()), path.to_owned(), pool)
+        .read()
+        .try_collect()
+        .await
+        .unwrap()
+}
+
+/// Every row the file can carry reads back under its own id, role and content (so a re-capture
+/// dedups), the header names the session and the directory it resumes in, and the file is where
+/// `locate` finds it.
+#[rstest]
+#[case::mock(include_str!("../../../../tests/fixtures/pi/session-mock-0.85.jsonl"))]
+#[case::session1(include_str!("../../../../tests/fixtures/pi/session1.jsonl"))]
+#[case::session2(include_str!("../../../../tests/fixtures/pi/session2.jsonl"))]
+#[case::v1(include_str!("../../../../tests/fixtures/pi/session-v1.jsonl"))]
+#[tokio::test]
+async fn a_session_reads_back_as_it_was_captured(sessions: TempDir, #[case] jsonl: &str) {
+    let cwd = sessions.path().join("here");
+    let session = session("0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000", &cwd, captured(jsonl));
+    let dir = sessions.path().join("--here--");
+    let path = rehydrate_into(sessions.path(), &dir, &session).unwrap();
+    assert_eq!(path.parent(), Some(dir.as_path()));
+    assert_eq!(locate(sessions.path(), &session.id), Some(path.clone()));
+
+    let read = read_back(&path).await;
+    let header = &read[0];
+    assert_eq!(header.id().map(|id| id.to_string()), Some(session.id.clone()));
+    assert_eq!(header.cwd(), Some(cwd));
+    let rows: Vec<_> = read[1..]
+        .iter()
+        .filter(|m| m.title().is_none())
+        .map(|m| (m.id().unwrap().to_string(), m.role(), m.content()))
+        .collect();
+    assert_eq!(rows, carried(&session.messages));
+    let title = read.iter().find_map(Message::title).and_then(|t| t.text);
+    assert_eq!(title.as_deref(), Some("restored"));
+}
+
+fn message(id: &str, parent: Option<&str>, role: Role, content: Vec<Content>) -> RehydrateMessage {
+    RehydrateMessage {
+        source_id: id.to_owned(),
+        parent_source_id: parent.map(str::to_owned),
+        timestamp: OffsetDateTime::UNIX_EPOCH,
+        role,
+        content,
+        model: Some("claude-sonnet-5".to_owned()),
+        usage: None,
+        stop_reason: None,
+        turn_id: None,
+        cwd: None,
+        git_branch: None,
+    }
+}
+
+fn lines(path: &Path) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+/// Thinking and settings entries are dropped and the tree relinked over them; tool results
+/// name their tool; a compaction keeps everything since the one before.
+#[rstest]
+fn entries_are_linked_named_and_compacted(sessions: TempDir) {
+    let call = crate::harnesstools::session::ToolUse {
+        id: crate::harnesstools::session::ToolCallId::from("t1".to_owned()),
+        name: "bash".to_owned(),
+        input: json!({"command": "ls"}),
+    };
+    let session = session("s-tree", sessions.path(), vec![
+        message("m0", None, Role::Other("model_change".to_owned()), vec![]),
+        message("u1", Some("m0"), Role::User, vec![Content::Text("hi".to_owned())]),
+        message("a1", Some("u1"), Role::Assistant, vec![
+            Content::ReasoningSummary { tokens: None },
+            Content::ToolUse(call),
+        ]),
+        message("r1", Some("a1"), Role::Tool, vec![Content::ToolResult(ToolResult {
+            call: crate::harnesstools::session::ToolCallId::from("t1".to_owned()),
+            output: json!([{"type": "text", "text": "a b"}]),
+            error: false,
+        })]),
+        message("c1", Some("r1"), Role::System, vec![Content::Summary("so far".to_owned())]),
+    ]);
+    let path = rehydrate_into(sessions.path(), sessions.path(), &session).unwrap();
+    let lines = lines(&path);
+    let by_id = |id: &str| lines.iter().find(|l| l["id"] == id).cloned().unwrap();
+
+    assert!(lines.iter().all(|l| l["id"] != "m0"));
+    assert_eq!(by_id("u1")["parentId"], serde_json::Value::Null);
+    let reply = by_id("a1");
+    assert_eq!(
+        reply["message"]["content"],
+        json!([{
+            "type": "toolCall", "id": "t1", "name": "bash", "arguments": {"command": "ls"},
+        }])
+    );
+    assert_eq!(reply["message"]["provider"], "anthropic");
+    assert_eq!(by_id("r1")["message"]["toolName"], "bash");
+    let compaction = by_id("c1");
+    assert_eq!(compaction["type"], "compaction");
+    assert_eq!(compaction["firstKeptEntryId"], "u1");
+    // The title comes last, so the conversation stays on the path to pi's leaf.
+    assert_eq!(lines.last().unwrap()["type"], "session_info");
+    assert_eq!(lines.last().unwrap()["parentId"], "c1");
+}
+
+/// An entry hangs from its nearest written ancestor even when the rows came out of tree order.
+#[rstest]
+fn the_tree_is_relinked_whatever_the_order(sessions: TempDir) {
+    let session = session("s-order", sessions.path(), vec![
+        message("x1", Some("u1"), Role::Other("label".to_owned()), vec![]),
+        message("u1", None, Role::User, vec![Content::Text("hi".to_owned())]),
+        message("a1", Some("x1"), Role::Assistant, vec![Content::Text("hello".to_owned())]),
+    ]);
+    let path = rehydrate_into(sessions.path(), sessions.path(), &session).unwrap();
+    let lines = lines(&path);
+    let parent = |id: &str| lines.iter().find(|l| l["id"] == id).unwrap()["parentId"].clone();
+    assert_eq!(parent("u1"), serde_json::Value::Null);
+    assert_eq!(parent("a1"), "u1");
+}
+
+/// A session is never written twice, wherever pi keeps it.
+#[rstest]
+fn never_overwrites_a_session(sessions: TempDir) {
+    let messages = vec![message("u1", None, Role::User, vec![Content::Text("hi".to_owned())])];
+    let s = session("s-once", sessions.path(), messages);
+    let path = rehydrate_into(sessions.path(), &sessions.path().join("a"), &s).unwrap();
+    let err = rehydrate_into(sessions.path(), &sessions.path().join("b"), &s).unwrap_err();
+    assert!(matches!(&err, RehydrateError::AlreadyExists(p) if *p == path), "{err:?}");
+    assert!(!sessions.path().join("b").exists());
+}
+
+/// A `!command` goes back as the shell entry it was captured from.
+#[rstest]
+fn a_bang_command_is_a_bash_execution(sessions: TempDir) {
+    let session = session("s-bash", sessions.path(), vec![message("b1", None, Role::User, vec![
+        Content::Text("!!echo hi".to_owned()),
+        Content::ToolResult(ToolResult {
+            call: crate::harnesstools::session::ToolCallId::from("b1".to_owned()),
+            output: json!("hi\n"),
+            error: true,
+        }),
+    ])]);
+    let path = rehydrate_into(sessions.path(), sessions.path(), &session).unwrap();
+    let entry = &lines(&path)[1];
+    assert_eq!(entry["message"]["role"], "bashExecution");
+    assert_eq!(entry["message"]["command"], "echo hi");
+    assert_eq!(entry["message"]["excludeFromContext"], true);
+    assert_eq!(entry["message"]["exitCode"], 1);
+}

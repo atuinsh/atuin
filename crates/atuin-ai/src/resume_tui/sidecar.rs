@@ -18,6 +18,7 @@ use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
+use atuin_common::harnesstools::rehydrate::RehydrateSession;
 use atuin_common::harnesstools::session::{Content, Role};
 use atuin_common::string::highlighted::HighlightedString;
 use atuin_common::utils::in_git_repo;
@@ -324,6 +325,13 @@ impl SessionSource for SidecarSource {
             .map(|s| self.row(s))
             .filter(|r| include_subagents || r.relation != Relation::Subagent)
             .collect())
+    }
+
+    async fn rehydrate(&self, session: &HarnessSession, cwd: &Path) -> Result<RehydrateSession> {
+        self.db
+            .rehydrate_session(session, cwd.to_owned())
+            .await?
+            .ok_or_else(|| eyre::eyre!("the session isn't in the AI session database"))
     }
 
     async fn host_names(&self) -> Result<HashMap<String, String>> {

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use super::rehydrate::{RehydrateError, RehydrateSession};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError};
 use crate::utils::{env_nonempty, home_dir};
@@ -66,5 +67,9 @@ impl Harness for Opencode {
 
     async fn locate(&self, id: &str) -> Option<PathBuf> {
         session::locate(&session::default_db()?, id).await
+    }
+
+    async fn rehydrate(&self, session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
+        rehydrate::rehydrate(session).await
     }
 }

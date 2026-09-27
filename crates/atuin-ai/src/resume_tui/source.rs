@@ -6,10 +6,11 @@
 
 use std::collections::HashMap;
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use atuin_client::ai_session::{HarnessKind, HarnessSession};
+use atuin_common::harnesstools::rehydrate::RehydrateSession;
 use atuin_common::harnesstools::session::Usage;
 use time::OffsetDateTime;
 
@@ -135,6 +136,16 @@ pub trait SessionSource: Send + Sync {
         session: &HarnessSession,
         include_subagents: bool,
     ) -> eyre::Result<Vec<SessionRow>>;
+
+    /// Session `session` with every message it holds, as its harness can write it back out to be
+    /// resumed in `cwd` (see [`super::resumer::Resumer::restore`]).
+    async fn rehydrate(
+        &self,
+        _session: &HarnessSession,
+        _cwd: &Path,
+    ) -> eyre::Result<RehydrateSession> {
+        eyre::bail!("this source can't restore sessions")
+    }
 
     /// Other hosts' names, by [`SessionRow::host_id`], for rows that came before they were known.
     /// May be slow (it is read once, then cached). Empty when there's nothing to add.
