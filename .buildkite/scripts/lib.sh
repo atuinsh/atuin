@@ -70,6 +70,15 @@ apt_install() {
     -o APT::Sandbox::User=root $missing
 }
 
+# bktec uploads test results to Test Engine, for splitting later builds'
+# tests by timing, from main builds only: those are the timings to plan
+# with, and the suite's OIDC policy only lets main builds upload anyway.
+test_engine_uploads_on_main() {
+  if [ "${BUILDKITE_BRANCH:-}" = "${BUILDKITE_PIPELINE_DEFAULT_BRANCH:-}" ]; then
+    export BUILDKITE_TEST_ENGINE_UPLOAD_RESULTS=true
+  fi
+}
+
 # Prebuilt tools not tied to Rust go here.
 TOOLS_BIN="$HOME/.local/bin"
 mkdir -p "$TOOLS_BIN"

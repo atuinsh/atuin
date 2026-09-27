@@ -89,15 +89,3 @@ caches:
     target_paths:
       - ~/.cache/anyvm
 
-  # How long each test took on main (test-plan.py), for splitting the test
-  # steps' jobs evenly. The test-timings step saves a new entry every main
-  # build (keyed on the build number); every build restores the newest.
-  - name: test_timings
-    cache_key:
-      - test-timings
-      - v1
-      - agent: pipeline
-        fallback_limit: true
-      - env: BUILDKITE_BUILD_NUMBER
-    target_paths:
-      - test-timings

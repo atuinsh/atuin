@@ -11,8 +11,9 @@
 # and only on main (cache-save.sh): branch and PR builds restore main's.
 #
 # Tests build once per OS into a nextest archive (build-tests.sh), which a
-# step of parallel jobs then runs, split by how long each test took on main
-# (test-plan.py). Raise a test step's parallelism as the suite grows.
+# step of parallel jobs then runs. Buildkite Test Engine splits them across
+# the jobs by how long each test took on main (run-tests.sh,
+# nextest-bktec.py). Raise a test step's parallelism as the suite grows.
 #
 # Queues: light jobs use the cluster's default queue (linux-small, 2 vCPU).
 # Compile-bound jobs use linux-large (8 vCPU) and macOS jobs macos-large
@@ -38,6 +39,14 @@ common:
   - &save-target .buildkite/scripts/cache-save.sh --name target
   - &linux-large
     queue: linux-large
+  # Test Engine's client (bktec), for the steps that run tests. It
+  # authenticates with the job's Buildkite OIDC token, which the suite's OIDC
+  # policy accepts from this pipeline, so there's no token to keep secret.
+  - &test-engine
+    BUILDKITE_TEST_ENGINE_SUITE_SLUG: atuin
+    BUILDKITE_TEST_ENGINE_TEST_RUNNER: custom
+    BUILDKITE_TEST_ENGINE_TEST_CMD: "python3 .buildkite/scripts/nextest-bktec.py run {{testExamples}}"
+    BUILDKITE_TEST_ENGINE_RESULT_PATH: test-results/test-engine.json
   - &macos-large
     queue: macos-large
 
@@ -49,7 +58,7 @@ env:
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
   # .config/nextest.toml's ci profile: writes test-results/junit.xml, which
-  # the test-engine and test-timings steps collect.
+  # nextest-bktec.py reports to Test Engine.
   NEXTEST_PROFILE: ci
 
 steps:
@@ -83,10 +92,8 @@ steps:
     timeout_in_minutes: 45
     env:
       CARGO_TOOLS: nextest
-      # The tests step's parallelism.
-      TEST_JOBS: "4"
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name rustup --name apt_debs --name test_timings
+      - *restore
       - *toolchain
       - *save-toolchain
       - .buildkite/scripts/build-tests.sh linux --lib --bins --tests
@@ -98,20 +105,18 @@ steps:
     depends_on: build-tests
     notify: [github_check: {name: buildkite/tests}]
     agents: *linux-large
-    # build-tests' TEST_JOBS.
     parallelism: 4
     timeout_in_minutes: 30
     env:
+      <<: *test-engine
       RUST_TOOLCHAIN: none
-      CARGO_TOOLS: nextest
+      CARGO_TOOLS: nextest bktec
       APT_PACKAGES: "zsh fish xz-utils"
       ATUIN_DB_URI: postgres://atuin:pass@127.0.0.1:5432/atuin
       ATUIN_E2E_REQUIRE_SHELLS: "1"
       # Test databases live in tempdirs; tmpfs keeps concurrent SQLite WAL
       # fsyncs from stalling the disk.
       TEST_TMPDIR: /dev/shm
-    # JUnit report, renamed per job by .buildkite/hooks/post-command.
-    artifact_paths: "test-results/junit-*.xml"
     command:
       - .buildkite/scripts/start-postgres.sh
       - buildkite-agent cache restore --name apt_debs
@@ -129,10 +134,8 @@ steps:
     timeout_in_minutes: 45
     env:
       CARGO_TOOLS: nextest
-      # The tests-macos step's parallelism.
-      TEST_JOBS: "2"
     command:
-      - buildkite-agent cache restore --name cargo_registry --name target --name test_timings
+      - *restore-macos
       - *toolchain
       - .buildkite/scripts/build-tests.sh macos --lib --bins --test "e2e_*"
       - *prune
@@ -143,16 +146,14 @@ steps:
     depends_on: build-tests-macos
     notify: [github_check: {name: buildkite/tests-macos}]
     agents: *macos-large
-    # build-tests-macos' TEST_JOBS.
     parallelism: 2
     timeout_in_minutes: 30
     env:
+      <<: *test-engine
       RUST_TOOLCHAIN: none
-      CARGO_TOOLS: nextest
+      CARGO_TOOLS: nextest bktec
       BREW_PACKAGES: "bash fish"
       ATUIN_E2E_REQUIRE_SHELLS: "1"
-    # JUnit report, renamed per job by .buildkite/hooks/post-command.
-    artifact_paths: "test-results/junit-*.xml"
     command:
       - *toolchain
       # Test with Homebrew's bash, not macOS's /bin/bash 3.2.
@@ -305,59 +306,6 @@ steps:
       - *prune
       - *save-target
 
-  # Uploads every test job's JUnit report to Buildkite Test Engine. A job of
-  # its own, with no checkout, so the token never reaches a job that runs
-  # the repository's code: any test, build script or dependency there could
-  # read it, and this pipeline's logs are public. This can't stop a PR from
-  # editing this file; the secret's access policy restricting it to main
-  # can, and fork PRs only build after a maintainer approves (pipeline
-  # settings).
-  - label: ":test_tube: Upload test results"
-    key: test-engine
-    # Main only: the token's access policy only grants it to main builds, so
-    # anywhere else it would just fail to fetch it. The fork check keeps a
-    # fork's branch that happens to be called main out too.
-    if: build.branch == pipeline.default_branch && build.pull_request.repository.fork != true
-    depends_on: [tests, tests-macos, nightly]
-    # Report failing runs too, and don't wait on skipped (scheduled-only) steps.
-    allow_dependency_failure: true
-    # A Test Engine outage or rejected upload mustn't fail an otherwise green
-    # build.
-    soft_fail: true
-    # No checkout: no repository files, so no repository hooks or scripts,
-    # run on the one machine that holds the token. It only needs the reports.
-    checkout:
-      skip: true
-    notify: [github_check: {name: buildkite/test-engine}]
-    timeout_in_minutes: 10
-    secrets: [ATUIN_TEST_ENGINE_TOKEN]
-    plugins:
-      - test-collector#v1.12.0:
-          files: "test-results/junit-*.xml"
-          format: junit
-          api-token-env-name: ATUIN_TEST_ENGINE_TOKEN
-    command:
-      # No reports (e.g. every test job failed before running tests) is not an error.
-      - buildkite-agent artifact download "test-results/junit-*.xml" . || echo "No test reports to upload."
-
-  # Records how long each test took, for test-plan.py to split later
-  # builds' test jobs by. main only, like every cache save.
-  - label: ":stopwatch: Record test timings"
-    key: test-timings
-    if: *main-only
-    depends_on: [tests, tests-macos]
-    # Record what did run when some tests failed.
-    allow_dependency_failure: true
-    # Only a speed-up for later builds; never a reason to fail this one.
-    soft_fail: true
-    notify: [github_check: {name: buildkite/test-timings}]
-    timeout_in_minutes: 10
-    command:
-      - buildkite-agent cache restore --name test_timings
-      - buildkite-agent artifact download "test-results/junit-*.xml" . || echo "No test reports."
-      - python3 .buildkite/scripts/test-plan.py record test-timings/timings.json test-timings/timings.json test-results/junit-*.xml
-      - .buildkite/scripts/cache-save.sh --name test_timings
-
   # rust.yml's "Test in VM (illumos)": builds the client and server on a real
   # OmniOS VM (KVM-accelerated; hosted agents expose /dev/kvm). main only,
   # like build and nix-build: it was ~12 min per PR on GitHub Actions.
@@ -378,14 +326,22 @@ steps:
     notify: [github_check: {name: buildkite/nightly}]
     timeout_in_minutes: 60
     env:
-      CARGO_TOOLS: nextest
-    # JUnit report, renamed per job by .buildkite/hooks/post-command.
-    artifact_paths: "test-results/junit-*.xml"
+      <<: *test-engine
+      CARGO_TOOLS: nextest bktec
+      NEXTEST_COMMAND: cargo nextest run -p atuin-daemon --test nightly --run-ignored all
+      BUILDKITE_TEST_ENGINE_SELECTOR_FILE: test-results/selectors.txt
     command:
       - *restore
       - *toolchain
       - *save-toolchain
-      - 'section ":moon: cargo nextest (nightly)" cargo nextest run -p atuin-daemon --test nightly --run-ignored all || { .buildkite/scripts/proptest-regressions.sh; exit 1; }'
+      # Run through bktec, a one-job split, so the results reach Test Engine
+      # like the other tests'.
+      - mkdir -p test-results
+      - echo "--- :hammer: Build and list the nightly tests"
+      - cargo nextest list -p atuin-daemon --test nightly --run-ignored all --message-format json >test-results/list.json
+      - python3 .buildkite/scripts/nextest-bktec.py selectors test-results/list.json test-results/selectors.txt
+      - test_engine_uploads_on_main
+      - 'section ":moon: cargo nextest (nightly)" bktec run --parallelism 1 --parallel-job 0 || { .buildkite/scripts/proptest-regressions.sh; exit 1; }'
       - *prune
       - *save-target
 

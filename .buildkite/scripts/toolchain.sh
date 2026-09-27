@@ -5,7 +5,7 @@
 #   RUST_TOOLCHAIN   toolchain to install (default: rust-toolchain.toml), or
 #                    "none" for steps that only run prebuilt tests
 #   RUST_COMPONENTS  extra rustup components, e.g. "clippy"
-#   CARGO_TOOLS      prebuilt tools to install: "nextest", "deny"
+#   CARGO_TOOLS      prebuilt tools to install: "nextest", "deny", "bktec"
 #   APT_PACKAGES     extra apt packages on Linux (libssl-dev + pkg-config always)
 #   BREW_PACKAGES    Homebrew packages on macOS
 #
@@ -21,6 +21,10 @@ NEXTEST_LINUX_SHA256=682c21b777c333e96fd532e114d3a5a894e0729ab88d94c0a9f20f84196
 NEXTEST_MACOS_SHA256=39785160b3c2f6ed9a765049cf4fa79f3b39aa02eb7598a5a0e2a1a0b9ffb9a8
 CARGO_DENY_VERSION=0.20.2
 CARGO_DENY_SHA256=9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+# Buildkite Test Engine's client, which splits test steps (nextest-bktec.py).
+BKTEC_VERSION=3.1.0
+BKTEC_LINUX_SHA256=05d1007c40afce8a58d73128c9725d7a1da05a084d34496ef6550e6c7d9ad03f
+BKTEC_MACOS_SHA256=b4cc70f051862144bf656e565e8b6dec6af2b98f3ebfe4c24a5feb5aa317b8cf
 
 echo "--- :rust: Toolchain"
 export CARGO_HOME="$HOME/.cargo" RUSTUP_HOME="$HOME/.rustup"
@@ -32,6 +36,7 @@ case "$(uname -s)" in
     # shellcheck disable=SC2086 # word-split the package list
     apt_install libssl-dev pkg-config ${APT_PACKAGES:-}
     nextest_asset=x86_64-unknown-linux-gnu nextest_sha256=$NEXTEST_LINUX_SHA256
+    bktec_asset=linux_amd64 bktec_sha256=$BKTEC_LINUX_SHA256
     ;;
   Darwin)
     if [ -n "${BREW_PACKAGES:-}" ]; then
@@ -39,6 +44,7 @@ case "$(uname -s)" in
       HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install $BREW_PACKAGES
     fi
     nextest_asset=universal-apple-darwin nextest_sha256=$NEXTEST_MACOS_SHA256
+    bktec_asset=darwin_arm64 bktec_sha256=$BKTEC_MACOS_SHA256
     ;;
   *)
     echo "Unsupported OS: $(uname -s)"
@@ -81,6 +87,11 @@ for tool in ${CARGO_TOOLS:-}; do
         "$CARGO_DENY_SHA256" /tmp/cargo-deny.tgz
       tar -xzf /tmp/cargo-deny.tgz -C /tmp
       mv "/tmp/cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl/cargo-deny" "$CARGO_HOME/bin/"
+      ;;
+    bktec)
+      fetch_verified "https://github.com/buildkite/test-engine-client/releases/download/v${BKTEC_VERSION}/bktec_${BKTEC_VERSION}_${bktec_asset}" \
+        "$bktec_sha256" "$CARGO_HOME/bin/bktec"
+      chmod +x "$CARGO_HOME/bin/bktec"
       ;;
     *)
       echo "Unknown CARGO_TOOLS entry: $tool"
