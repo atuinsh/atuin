@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
-use atuin_common::db::sqlite::fts::{TextHighlighter, prefix_match_expression};
+use atuin_common::db::sqlite::fts::{TextHighlighter, match_expression, prefix_match_expression};
 use atuin_common::db::sqlite::{Sqlite, SqliteOpenOrCreateError};
 use atuin_common::db::{self};
 use atuin_common::harnesstools::session::{
@@ -39,6 +39,11 @@ const TITLE_WEIGHT: f64 = 5.0;
 const RECENCY_DAYS: f64 = 30.0;
 
 const DAY_MILLIS: f64 = 86_400_000.0;
+
+/// The shortest last term that matches as a prefix. A one-character prefix matches most of the
+/// index (every row with a word starting `e`), which costs hundreds of milliseconds to rank for
+/// nothing useful, so a lone character matches only as a whole token until the next keystroke.
+const MIN_PREFIX_CHARS: usize = 2;
 
 /// The `sessions` columns [`SessionRow`] reads, from a table aliased `s`. Every query also selects
 /// `child_count` and `group_updated_at`.
@@ -846,7 +851,12 @@ impl AiSessionDatabase {
 
         async_stream::try_stream! {
             let highlighter = TextHighlighter::default();
-            let Some(expr) = prefix_match_expression(&query) else {
+            let expr = if QueryTerms::prefixes_last(&query) {
+                prefix_match_expression(&query)
+            } else {
+                match_expression(&query)
+            };
+            let Some(expr) = expr else {
                 for session in this.recent_sessions(&filter, limit).await? {
                     let title = session.title.clone().unwrap_or_default();
                     let preview = session.preview.clone().unwrap_or_default();
@@ -1753,8 +1763,8 @@ fn fts_token_spans(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
 /// A search query's terms as the index matches them (see [`prefix_match_expression`]): each
 /// whitespace-separated term is a phrase of folded tokens that must appear consecutively (so
 /// `app` matches the token `app`, not the word `apple`, and `foo-bar` matches `foo bar` across
-/// words), and the last term's last token also matches as a prefix unless the query ends in
-/// whitespace.
+/// words), and the last term's last token also matches as a prefix when
+/// [`Self::prefixes_last`].
 struct QueryTerms {
     /// Each phrase, and whether its last token is a prefix.
     phrases: Vec<(Vec<String>, bool)>,
@@ -1763,7 +1773,7 @@ struct QueryTerms {
 impl QueryTerms {
     fn parse(query: &str) -> Self {
         let terms: Vec<&str> = query.split_whitespace().collect();
-        let prefix = !query.ends_with(char::is_whitespace);
+        let prefix = Self::prefixes_last(query);
         let phrases = terms
             .iter()
             .enumerate()
@@ -1771,6 +1781,16 @@ impl QueryTerms {
             .filter(|(phrase, _)| !phrase.is_empty())
             .collect();
         Self { phrases }
+    }
+
+    /// Whether the last term of `query` matches as a prefix: it is still being typed (no
+    /// whitespace after it), and is at least [`MIN_PREFIX_CHARS`] long.
+    fn prefixes_last(query: &str) -> bool {
+        !query.ends_with(char::is_whitespace)
+            && query
+                .split_whitespace()
+                .last()
+                .is_some_and(|t| t.chars().count() >= MIN_PREFIX_CHARS)
     }
 
     /// Where a phrase matches in `tokens`: its first token's index and its length.
@@ -2743,6 +2763,8 @@ mod tests {
     #[case::finished_term("refac ", 0)]
     #[case::only_the_last_term_is_a_prefix("carg test", 0)]
     #[case::partial_phrase("foo-ba", 1)]
+    #[case::a_lone_character_is_a_whole_token("r", 0)]
+    #[case::two_characters_are_a_prefix("re", 1)]
     #[tokio::test]
     async fn the_last_term_matches_as_a_prefix(#[case] query: &str, #[case] hits: usize) {
         let db = AiSessionDatabase::in_memory().await.unwrap();
