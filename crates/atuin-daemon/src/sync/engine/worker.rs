@@ -189,7 +189,15 @@ impl Worker {
             let Some(ai_session_db) = &self.ai_session_db else {
                 return;
             };
-            self.ai_session_store.incremental_build(ai_session_db, &downloaded_records).await;
+            if downloaded_records.is_empty() {
+                return;
+            }
+            // Replays everything other hosts added past their watermarks, so records a failed or
+            // interrupted earlier tick left out are retried too. This host's own records are
+            // projected by capture, and anything it missed by the next startup reprojection.
+            if let Err(err) = self.ai_session_store.reproject_remote(ai_session_db).await {
+                tracing::error!(?err, "failed to project synced ai-session records");
+            }
         };
 
         tokio::join!(history_build, ai_session_build);

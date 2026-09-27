@@ -17,6 +17,9 @@ use super::{
     HarnessKind, HarnessSession, Message, NativeSessionId, Session, SessionMatch, SourceId,
 };
 
+mod watermark;
+pub use watermark::Watermark;
+
 const COMPRESS_THRESHOLD: usize = 256;
 const ZSTD_LEVEL: i32 = 3;
 const REINDEX_CHUNK: i64 = 512;
