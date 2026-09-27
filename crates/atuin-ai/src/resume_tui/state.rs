@@ -111,6 +111,8 @@ pub struct State {
     pinned: Option<(SessionRow, String)>,
     /// Resume plans, fetched for the selected session only (planning may walk directories).
     pub plans: HashMap<HarnessSession, Result<ResumePlan, NotResumable>>,
+    /// Other hosts' names by host id, once the source has read them.
+    host_names: HashMap<String, String>,
     /// An enter/tab/ctrl-y waiting for its session's plan.
     pub pending: Option<(HarnessSession, Pending)>,
 
@@ -156,6 +158,7 @@ impl State {
             children: HashMap::new(),
             requested: HashSet::new(),
             pinned: None,
+            host_names: HashMap::new(),
             plans: HashMap::new(),
             pending: None,
             status: None,
@@ -271,6 +274,10 @@ impl State {
         if generation != self.issued {
             return false;
         }
+        // A search may have listed its rows before the names were known.
+        for row in &mut rows {
+            self.label(row);
+        }
         if let Some((row, query)) = &self.pinned {
             if self.input.as_str() == query {
                 rows.retain(|r| r.handle != row.handle);
@@ -321,6 +328,28 @@ impl State {
             self.requested.remove(&(handle, PREVIEW));
         }
         Some(next)
+    }
+
+    /// Name other hosts' rows, which showed a short id until the names were read.
+    pub fn apply_host_names(&mut self, names: HashMap<String, String>) {
+        self.host_names = names;
+        let rows = self.results.iter_mut().chain(self.children.values_mut().flatten());
+        for row in rows.chain(self.pinned.as_mut().map(|(row, _)| row)) {
+            Self::label_with(&self.host_names, &self.context.host_id, row);
+        }
+    }
+
+    fn label(&self, row: &mut SessionRow) {
+        Self::label_with(&self.host_names, &self.context.host_id, row);
+    }
+
+    /// This host keeps the name it has now; another takes the name it synced under, if known.
+    fn label_with(names: &HashMap<String, String>, here: &str, row: &mut SessionRow) {
+        if row.host_id != here
+            && let Some(name) = names.get(&row.host_id)
+        {
+            row.hostname.clone_from(name);
+        }
     }
 
     pub fn selected(&self) -> Option<&SessionRow> {
@@ -647,6 +676,39 @@ mod tests {
         state.apply_results(generation, mode, Vec::new());
         assert_eq!(state.mode, FilterMode::Global);
         assert!(state.results.is_empty());
+    }
+
+    /// Rows listed before the host names were read show short ids; the names relabel them, and
+    /// rows of searches answered before the names are relabelled as they arrive.
+    #[rstest]
+    fn host_names_relabel_other_hosts_rows() {
+        let mut state = state_in(fake::context());
+        let remote = |id: &str| {
+            let mut row = fake::row(HarnessKind::ClaudeCode, id, "t");
+            row.host_id = "0190bbbb00007000".to_owned();
+            row.hostname = "0190bbbb".to_owned();
+            row
+        };
+        let here = fake::row(HarnessKind::ClaudeCode, "here", "t");
+        let (generation, mode, _) = state.next_search().unwrap();
+        state.apply_results(generation, mode, vec![remote("a"), here.clone()]);
+        state.children.insert(here.handle.clone(), vec![remote("child")]);
+
+        let names = HashMap::from([
+            ("0190bbbb00007000".to_owned(), "buildbox".to_owned()),
+            (fake::THIS_HOST_ID.to_owned(), "old-name".to_owned()),
+        ]);
+        state.apply_host_names(names);
+        let hostnames =
+            |rows: &[SessionRow]| rows.iter().map(|r| r.hostname.clone()).collect::<Vec<_>>();
+        // This host keeps the name it has now.
+        assert_eq!(hostnames(&state.results), ["buildbox", fake::THIS_HOSTNAME]);
+        assert_eq!(hostnames(&state.children[&here.handle]), ["buildbox"]);
+
+        state.input = Cursor::from("t".to_owned());
+        let (generation, mode, _) = state.next_search().unwrap();
+        state.apply_results(generation, mode, vec![remote("b")]);
+        assert_eq!(hostnames(&state.results), ["buildbox"]);
     }
 
     #[rstest]

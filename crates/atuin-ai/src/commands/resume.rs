@@ -21,7 +21,7 @@ use eyre::{Result, bail};
 
 use crate::resume_tui::fake::{FakeResumer, FakeSource};
 use crate::resume_tui::resumer::{HarnessResumer, shell_line};
-use crate::resume_tui::sidecar::SidecarSource;
+use crate::resume_tui::sidecar::{HostNameSource, SidecarSource};
 use crate::resume_tui::{
     Outcome, Picker, ResumeContext, ResumePlan, Resumer, SessionRow, SessionSource,
 };
@@ -142,7 +142,8 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
         } else {
             let context = ResumeContext::current().await?;
             let path = cmd.db.clone().unwrap_or_else(Settings::ai_session_sidecar_path);
-            let source = SidecarSource::open(&path, &context).await?;
+            let host_names = HostNameSource::new(&settings);
+            let source = SidecarSource::open(&path, &context, Some(host_names)).await?;
             let resumer =
                 HarnessResumer::new(context.host_id.clone(), settings.ai.sessions.resume.clone());
             (context, Arc::new(source), Arc::new(resumer))

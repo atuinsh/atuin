@@ -6,7 +6,10 @@
 //!   screen until then;
 //! - details (preview, children, plan) for the selected session. Only the newest request of each
 //!   kind is kept: while the selection moves, the sessions it passed over are never loaded.
+//!
+//! Host names are read once beside them, so rows listed before they are known can be relabelled.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use atuin_client::ai_session::HarnessSession;
@@ -42,6 +45,8 @@ pub enum Response {
     Preview(HarnessSession, SessionPreview),
     Children(HarnessSession, Vec<SessionRow>),
     Plan(HarnessSession, Result<ResumePlan, NotResumable>),
+    /// Other hosts' names, by host id (see [`SessionSource::host_names`]).
+    HostNames(HashMap<String, String>),
 }
 
 /// Sends requests to the worker's lanes. The worker stops when this is dropped.
@@ -71,6 +76,7 @@ pub fn spawn(
     let (detail_tx, detail_rx) = mpsc::unbounded_channel();
     let (resp_tx, resp_rx) = mpsc::unbounded_channel();
     tokio::spawn(searches(source.clone(), search_rx, resp_tx.clone()));
+    tokio::spawn(host_names(source.clone(), resp_tx.clone()));
     tokio::spawn(details(source, resumer, detail_rx, resp_tx));
     (
         Requests {
@@ -108,6 +114,16 @@ async fn searches(
         if responses.send(response).is_err() {
             return;
         }
+    }
+}
+
+async fn host_names(source: Arc<dyn SessionSource>, responses: mpsc::UnboundedSender<Response>) {
+    match source.host_names().await {
+        Ok(names) if !names.is_empty() => {
+            let _ = responses.send(Response::HostNames(names));
+        }
+        Ok(_) => {}
+        Err(e) => tracing::debug!("no host names: {e:#}"),
     }
 }
 
@@ -244,6 +260,52 @@ mod tests {
         };
         assert_eq!(handle, root.handle);
         assert_eq!(plan.unwrap().program, "claude");
+    }
+
+    /// A source whose host names wait for a permit: they come after the first search answers.
+    struct SlowNames(Semaphore);
+
+    #[async_trait]
+    impl SessionSource for SlowNames {
+        async fn search(&self, _: &SessionFilter) -> eyre::Result<Vec<SessionRow>> {
+            Ok(Vec::new())
+        }
+
+        async fn find_by_id(&self, _: &str) -> eyre::Result<Vec<SessionRow>> {
+            Ok(Vec::new())
+        }
+
+        async fn preview(&self, _: &HarnessSession) -> eyre::Result<SessionPreview> {
+            Ok(SessionPreview::default())
+        }
+
+        async fn children(&self, _: &HarnessSession, _: bool) -> eyre::Result<Vec<SessionRow>> {
+            Ok(Vec::new())
+        }
+
+        async fn host_names(&self) -> eyre::Result<HashMap<String, String>> {
+            self.0.acquire().await?.forget();
+            Ok(HashMap::from([("h".to_owned(), "buildbox".to_owned())]))
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn host_names_never_hold_up_a_search() {
+        let source = Arc::new(SlowNames(Semaphore::new(0)));
+        let (tx, mut rx) = spawn(source.clone(), Arc::new(FakeResumer::default()));
+        tx.send(Request::Search {
+            generation: 1,
+            mode: FilterMode::Global,
+            filter: roots(),
+        });
+        assert!(matches!(rx.recv().await, Some(Response::Results { generation: 1, .. })));
+
+        source.0.add_permits(1);
+        let Some(Response::HostNames(names)) = rx.recv().await else {
+            panic!("expected host names");
+        };
+        assert_eq!(names["h"], "buildbox");
     }
 
     /// A source whose previews wait for a permit, recording which sessions were previewed.

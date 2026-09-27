@@ -4,6 +4,7 @@
 //! (read-only, never through the daemon, so the first frame doesn't wait on it); tests and
 //! `--demo` use [`super::fake::FakeSource`].
 
+use std::collections::HashMap;
 use std::ops::Range;
 use std::path::PathBuf;
 
@@ -24,7 +25,8 @@ pub struct SessionFilter {
     pub text: String,
     /// Recorded on the host with this id (the host filter mode).
     pub host: Option<String>,
-    /// Recorded on a host whose [`SessionRow::hostname`] starts with this (`@host`).
+    /// Recorded on a host whose [`SessionRow::hostname`] starts with this (`@host`). Sessions
+    /// with no recorded host are this host's.
     pub host_name: Option<String>,
     /// Working directory at or under this path (workspace mode).
     pub workspace: Option<PathBuf>,
@@ -89,6 +91,8 @@ pub struct SessionRow {
     pub branch: Option<String>,
     pub model: Option<String>,
     pub host_id: String,
+    /// The host's name, or a short form of its id until (unless) [`SessionSource::host_names`]
+    /// knows it.
     pub hostname: String,
     pub started_at: OffsetDateTime,
     /// The newest message in the session or any of its grouped children.
@@ -131,6 +135,12 @@ pub trait SessionSource: Send + Sync {
         session: &HarnessSession,
         include_subagents: bool,
     ) -> eyre::Result<Vec<SessionRow>>;
+
+    /// Other hosts' names, by [`SessionRow::host_id`], for rows that came before they were known.
+    /// May be slow (it is read once, then cached). Empty when there's nothing to add.
+    async fn host_names(&self) -> eyre::Result<HashMap<String, String>> {
+        Ok(HashMap::new())
+    }
 }
 
 /// The two-letter harness badge shown in each row.

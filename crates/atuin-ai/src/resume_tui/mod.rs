@@ -218,6 +218,7 @@ fn apply_response(state: &mut State, response: Response, requests: &Requests) {
         Response::Plan(handle, plan) => {
             state.plans.insert(handle, plan);
         }
+        Response::HostNames(names) => state.apply_host_names(names),
     }
 }
 
