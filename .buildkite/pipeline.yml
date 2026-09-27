@@ -105,7 +105,9 @@ steps:
     depends_on: build-tests
     notify: [github_check: {name: buildkite/tests}]
     agents: *linux-large
-    parallelism: 4
+    # ~60s of test time plus ~15s of setup per job (Postgres, packages, the
+    # archive): two jobs finish in under a minute.
+    parallelism: 2
     timeout_in_minutes: 30
     env:
       <<: *test-engine
@@ -146,7 +148,9 @@ steps:
     depends_on: build-tests-macos
     notify: [github_check: {name: buildkite/tests-macos}]
     agents: *macos-large
-    parallelism: 2
+    # ~30s of test time plus ~8s of setup: one job finishes in under a
+    # minute. Kept as a parallel step so raising this is all it takes.
+    parallelism: 1
     timeout_in_minutes: 30
     env:
       <<: *test-engine
