@@ -1,7 +1,8 @@
-# atuin CI on Buildkite: PROTOTYPE, running alongside GitHub Actions to
-# compare. Ports rust.yml (Linux + macOS; Windows and the illumos VM job
-# stay on GitHub Actions for now), nix.yml, codespell.yml, shellcheck.yml,
-# vale.yml, installer.yml and nightly.yml, with the same jobs and commands.
+# atuin CI. Replaces the GitHub Actions workflows rust.yml (except
+# Windows, which stays in .github/workflows/windows.yml until Buildkite's
+# hosted Windows agents are generally available), nix.yml, codespell.yml,
+# shellcheck.yml, vale.yml, installer.yml and nightly.yml, with the same
+# jobs and commands.
 #
 # Each step sources .buildkite/scripts/toolchain.sh (rustup + pinned tools,
 # and the `section` log-group helper). Caching is Buildkite Cache
@@ -161,7 +162,7 @@ steps:
       # The registry key includes the OS, so macOS saves its own.
       - .buildkite/scripts/cache-save.sh --name cargo_registry
       # No system libssl on macOS: --all-features builds vendored OpenSSL,
-      # as it does on GitHub Actions.
+      # as the old GitHub Actions job did.
       - 'section ":mag: check (all features)" cargo check --all-features --workspace'
       - 'section ":mag: check (no features)" cargo check --no-default-features --workspace'
       - 'section ":mag: check (sync)" cargo check --no-default-features --features sync --workspace'
