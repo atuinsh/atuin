@@ -365,10 +365,15 @@ steps:
   # Uploads every test job's JUnit report to Buildkite Test Engine. A job of
   # its own, with no checkout, so the token never reaches a job that runs
   # the repository's code: any test, build script or dependency there could
-  # read it, and this pipeline's logs are public. (This can't stop a PR from
-  # editing this file; restricting the secret's access policy to main can.)
+  # read it, and this pipeline's logs are public. This can't stop a PR from
+  # editing this file; the secret's access policy restricting it to main
+  # can, and fork PRs only build after a maintainer approves (pipeline
+  # settings).
   - label: ":test_tube: Upload test results"
     key: test-engine
+    # Not for fork PRs: the token's access policy only grants it to main
+    # builds, so a fork build would just fail to fetch it.
+    if: build.pull_request.repository.fork != true
     depends_on:
       - unit-test
       - unit-test-macos
