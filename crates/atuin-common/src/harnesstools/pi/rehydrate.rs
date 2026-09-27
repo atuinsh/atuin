@@ -17,7 +17,17 @@
 //!   content and are skipped, so pi starts on its configured thinking level; the model is named
 //!   by each assistant turn, its provider guessed from the model's name, and pi falls back to its
 //!   default model when it can't use it. A system-role text entry is skipped too.
-//! - **Tool results** keep their output; their tool's name comes from the call they answer.
+//! - **Tool calls captured without their input** (capture keeps only a call's name now): pi-ai
+//!   sends a `toolCall` without `arguments` as an empty input to Anthropic and as `"null"` to
+//!   OpenAI, a call on nothing either way, so each becomes a note in its turn's text (`[ran a
+//!   shell command]`, as a continuation writes it) and its `toolResult` is dropped. The run of
+//!   assistant messages the dropped results stood between is merged into its first one, so the
+//!   turns still alternate ([`Flatten::Runs`]). Re-captured, that entry keeps its id (capture
+//!   already holds it: nothing is pushed), and the entries merged away and the results are not
+//!   there to capture again.
+//! - **Tool results** keep their output; their tool's name comes from the call they answer. With
+//!   none captured (capture keeps none now), a result says [`UNCAPTURED_OUTPUT`], as does a
+//!   `!command`'s output.
 //! - A `!command` keeps its command, output and whether it failed, not its exit code; one from a
 //!   v1 file (no entry ids) has its result renamed after the id it is written under.
 //! - The title is written as a `session_info` entry, under the id of the row that set it.
@@ -30,7 +40,10 @@ use time::OffsetDateTime;
 use time::macros::format_description;
 
 use super::session::{default_root, locate, new_session_dir};
-use crate::harnesstools::rehydrate::{RehydrateError, RehydrateMessage, RehydrateSession};
+use crate::harnesstools::rehydrate::{
+    Flatten, RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT,
+    flatten_uncaptured_calls,
+};
 use crate::harnesstools::resume;
 use crate::harnesstools::session::{Content, Role, StopReason, ToolResult, Usage};
 
@@ -96,6 +109,10 @@ fn transcript(session: &RehydrateSession) -> String {
         "timestamp": timestamp(session.started_at),
         "cwd": session.cwd,
     });
+    let session = &RehydrateSession {
+        messages: flatten_uncaptured_calls(&session.messages, &Flatten::Runs),
+        ..session.clone()
+    };
     let mut writer = Writer::new(session);
     for message in &session.messages {
         writer.push(message);
@@ -255,7 +272,7 @@ impl<'a> Writer<'a> {
                         "role": "toolResult",
                         "toolCallId": result.call,
                         "toolName": name,
-                        "content": if result.output.is_null() { json!([]) } else { result.output.clone() },
+                        "content": tool_result_content(&result.output),
                         "isError": result.error,
                         "timestamp": at,
                     },
@@ -310,6 +327,18 @@ fn user_blocks(content: &[Content]) -> Vec<Value> {
         .collect()
 }
 
+/// A tool result's content blocks: the ones captured, a text of what was, else
+/// [`UNCAPTURED_OUTPUT`] (pi-ai sends a result's blocks as they are, and an empty result would
+/// tell the model the tool printed nothing).
+fn tool_result_content(output: &Value) -> Value {
+    match output {
+        Value::Array(_) => output.clone(),
+        Value::Null => json!([{"type": "text", "text": UNCAPTURED_OUTPUT}]),
+        Value::String(text) => json!([{"type": "text", "text": text}]),
+        other => json!([{"type": "text", "text": other.to_string()}]),
+    }
+}
+
 /// A `!command` the user ran in pi's shell: captured as its command line and a result named
 /// after the entry (a v1 entry, which had no id, by its time: it is named after its id now).
 fn bash_execution(m: &RehydrateMessage, at: i64) -> Option<Value> {
@@ -336,7 +365,7 @@ fn bash_execution(m: &RehydrateMessage, at: i64) -> Option<Value> {
         "message": {
             "role": "bashExecution",
             "command": command,
-            "output": output,
+            "output": if output.is_null() { json!(UNCAPTURED_OUTPUT) } else { output.clone() },
             "exitCode": i32::from(*error),
             "cancelled": false,
             "truncated": false,

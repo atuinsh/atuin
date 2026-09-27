@@ -13,7 +13,17 @@
 //!   thinking block removed (each turn's text and tool calls kept), and new turns think afresh.
 //! - **Server tools** (web search, web fetch, code execution): capture reads their call and
 //!   result as an ordinary tool call and result, losing the block types the API needs to replay
-//!   them, and a bare `tool_use` with no `tool_result` after it is invalid. Both are dropped.
+//!   them, and a bare `tool_use` with no `tool_result` after it is invalid. Both are dropped
+//!   (one captured without its input becomes a note, as below).
+//! - **Tool calls captured without their input** (capture keeps only a call's name now): the API
+//!   rejects a `tool_use` whose `input` is not an object, so each becomes a note in its turn's
+//!   text (`[ran a shell command]`, as a continuation writes it) and its `tool_result` is dropped.
+//!   The run of assistant lines the dropped results stood between is merged into its first line,
+//!   so user and assistant turns still alternate ([`Flatten::Runs`]). Re-captured, that line keeps
+//!   its `uuid` (capture already holds it: nothing is pushed), and the lines merged away and the
+//!   results are not there to capture again.
+//! - **Tool output**: capture keeps none now; a call kept with its input (older records) gets
+//!   [`UNCAPTURED_OUTPUT`] as its `tool_result` content, which says so to the model.
 //! - **Pasted images and documents**: capture keeps what they were, not their bytes. Each becomes
 //!   a text placeholder saying so. Other blocks capture kept raw are dropped.
 //! - **Empty lines**: rows with nothing left to write (attachments, hook records, turn timings)
@@ -32,7 +42,10 @@ use time::OffsetDateTime;
 use time::macros::format_description;
 
 use super::session::{default_root, locate};
-use crate::harnesstools::rehydrate::{RehydrateError, RehydrateMessage, RehydrateSession};
+use crate::harnesstools::rehydrate::{
+    Flatten, RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT,
+    flatten_uncaptured_calls,
+};
 use crate::harnesstools::resume;
 use crate::harnesstools::session::{Content, Role, StopReason, ToolResult, Usage};
 
@@ -128,6 +141,10 @@ fn timestamp(at: OffsetDateTime) -> String {
 
 /// The whole transcript, one JSON line per written row.
 fn transcript(session: &RehydrateSession) -> String {
+    let session = &RehydrateSession {
+        messages: flatten_uncaptured_calls(&session.messages, &Flatten::Runs),
+        ..session.clone()
+    };
     let mut writer = Writer::new(session);
     for message in &session.messages {
         writer.push(message);
@@ -375,9 +392,11 @@ fn user_block(c: &Content) -> Option<Value> {
 
 fn tool_result_block(r: &ToolResult) -> Value {
     let mut block = json!({"type": "tool_result", "tool_use_id": r.call});
-    if !r.output.is_null() {
-        block["content"] = r.output.clone();
-    }
+    block["content"] = if r.output.is_null() {
+        json!(UNCAPTURED_OUTPUT)
+    } else {
+        r.output.clone()
+    };
     block["is_error"] = json!(r.error);
     block
 }

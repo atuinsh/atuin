@@ -9,6 +9,7 @@ use time::OffsetDateTime;
 
 use super::*;
 use crate::harnesstools::ccode::session::{CcodeMessage, CcodeSession};
+use crate::harnesstools::rehydrate::{is_uncaptured, testing};
 use crate::harnesstools::session::{Message, Session, SessionId, ToolCallId, ToolUse};
 use crate::sync::BlockingPool;
 
@@ -139,6 +140,115 @@ async fn a_session_reads_back_as_it_was_captured(projects: TempDir, #[case] json
     assert!(read.iter().all(|m| m.parent_session().is_none_or(|s| s.as_ref() == session.id)));
     let title = read.iter().find_map(Message::title).and_then(|t| t.text);
     assert_eq!(title.as_deref(), Some("a restored session"));
+}
+
+/// Checks a transcript as strictly as the Messages API checks the request Claude Code builds
+/// from it: Claude Code sends the lines of one message (`message.id`) as one, and consecutive
+/// user lines as one, so two assistant lines in a row must be the same message; every
+/// `tool_use` has an object for its `input` and is answered, in the user message right after it,
+/// by a `tool_result` of its id; and every `tool_result` answers a `tool_use` of the assistant
+/// message right before it.
+fn assert_the_api_takes(lines: &[serde_json::Value]) {
+    use serde_json::Value;
+    let mut messages: Vec<(&str, Vec<Value>)> = Vec::new();
+    let mut last_id: Option<&str> = None;
+    for line in lines {
+        let Some(role @ ("user" | "assistant")) = line["type"].as_str() else {
+            continue;
+        };
+        if line["isApiErrorMessage"] == true {
+            continue;
+        }
+        let blocks = match &line["message"]["content"] {
+            Value::String(text) => vec![json!({"type": "text", "text": text})],
+            Value::Array(blocks) => blocks.clone(),
+            other => panic!("content of a line is {other}"),
+        };
+        let id = line["message"]["id"].as_str();
+        match messages.last_mut() {
+            Some((last, merged)) if *last == role => {
+                assert!(
+                    role == "user" || id == last_id,
+                    "two assistant messages in a row: {last_id:?}, then {id:?}"
+                );
+                merged.extend(blocks);
+            }
+            _ => messages.push((role, blocks)),
+        }
+        if role == "assistant" {
+            last_id = id;
+        }
+    }
+    let ids = |blocks: &[Value], kind: &str, key: &str| -> HashSet<String> {
+        blocks
+            .iter()
+            .filter(|b| b["type"] == kind)
+            .map(|b| b[key].as_str().expect("a block names its call").to_owned())
+            .collect()
+    };
+    for (n, (role, blocks)) in messages.iter().enumerate() {
+        for block in blocks.iter().filter(|b| b["type"] == "tool_use") {
+            assert!(block["input"].is_object(), "a tool_use without an object input: {block}");
+        }
+        let uses = ids(blocks, "tool_use", "id");
+        if !uses.is_empty() {
+            let answered = messages
+                .get(n + 1)
+                .map(|(_, next)| ids(next, "tool_result", "tool_use_id"))
+                .unwrap_or_default();
+            assert!(uses.is_subset(&answered), "calls {uses:?} not answered by {answered:?}");
+        }
+        let results = ids(blocks, "tool_result", "tool_use_id");
+        if !results.is_empty() {
+            assert_eq!(*role, "user");
+            let asked =
+                n.checked_sub(1).map(|p| ids(&messages[p].1, "tool_use", "id")).unwrap_or_default();
+            assert!(results.is_subset(&asked), "results {results:?} answer no call of {asked:?}");
+        }
+    }
+}
+
+/// What capture syncs keeps no call's input and no output. Written back, each such call is a
+/// note in its turn's text, which the API takes; re-captured, every line reads back under an id
+/// already synced (so nothing is pushed): a turn's first line with its notes, the lines merged
+/// into it and the results not at all.
+#[rstest]
+#[case::session1(include_str!("../../../../tests/fixtures/ccode/session1.jsonl"))]
+#[case::session2(include_str!("../../../../tests/fixtures/ccode/session2.jsonl"))]
+#[case::session3(include_str!("../../../../tests/fixtures/ccode/session3.jsonl"))]
+#[case::compacted(include_str!("../../../../tests/fixtures/ccode/session4.jsonl"))]
+#[tokio::test]
+async fn synced_calls_come_back_as_notes_the_api_takes(projects: TempDir, #[case] jsonl: &str) {
+    let mut synced = testing::synced(captured(jsonl));
+    assert!(testing::uncaptured(&synced) > 0, "the fixture makes calls");
+    // The fixtures' message ids were redacted, which would make every assistant line one
+    // message: each row's own stands in, so none is taken for another's.
+    for m in synced.iter_mut().filter(|m| m.turn_id.as_deref() == Some("<redacted>")) {
+        m.turn_id = Some(format!("msg_{}", m.source_id));
+    }
+    let session = session("5d1f0b1e-4a8e-4f1b-9d59-2c0f2f3f0a11", projects.path(), synced.clone());
+    let path = rehydrate_into(projects.path(), &session).unwrap();
+    let written = lines(&path);
+    assert_the_api_takes(&written);
+    assert!(written.iter().any(|l| l["message"]["content"].to_string().contains("[ran ")));
+
+    let read = read_back(&session.id, &path).await;
+    let again: Vec<(String, Role, Vec<Content>)> = rows(&read)
+        .into_iter()
+        .map(|(id, role, content)| {
+            let content = testing::sanitize(&role, &content);
+            (id, role, content)
+        })
+        .filter(|(_, _, content)| !content.is_empty())
+        .collect();
+    testing::assert_nothing_new(&synced, again.iter().map(|(id, ..)| id.as_str()));
+    let flattened = flatten_uncaptured_calls(&synced, &Flatten::Runs);
+    assert_eq!(again, carried(&flattened));
+    for row in synced.iter().filter(|m| m.content.iter().any(is_uncaptured)) {
+        if let Some((_, _, content)) = again.iter().find(|(id, ..)| *id == row.source_id) {
+            assert!(content.iter().all(|c| matches!(c, Content::Text(_))), "{content:?}");
+        }
+    }
 }
 
 /// Usage, models, turns and stop reasons survive, so a re-capture counts each call as before.

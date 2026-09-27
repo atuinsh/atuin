@@ -269,8 +269,10 @@ enum Kind {
     Assistant,
 }
 
-#[derive(Debug)]
-enum Part {
+/// A piece of a turn written as text: something said, or a [note](tool_note) standing for
+/// something done.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Part {
     Text(String),
     Note(String),
 }
@@ -284,38 +286,42 @@ struct Turn {
 }
 
 impl Turn {
-    /// The turn as one text: paragraphs apart, notes one to a line.
-    /// The same note several times in a row is written once, counted: `[ran a shell command] ×3`.
     fn render(&self) -> String {
-        let mut out = String::new();
-        let mut last_note = false;
-        let mut parts = self.parts.iter().peekable();
-        while let Some(part) = parts.next() {
-            let (text, note) = match part {
-                Part::Text(text) => (text.trim(), false),
-                Part::Note(note) => (note.as_str(), true),
-            };
-            if !out.is_empty() {
-                out.push_str(if note && last_note {
-                    "\n"
-                } else {
-                    "\n\n"
-                });
-            }
-            out.push_str(text);
-            if note {
-                let mut repeats = 1;
-                while parts.next_if(|next| matches!(next, Part::Note(n) if n == text)).is_some() {
-                    repeats += 1;
-                }
-                if repeats > 1 {
-                    let _ = write!(out, " ×{repeats}");
-                }
-            }
-            last_note = note;
-        }
-        out
+        render(&self.parts)
     }
+}
+
+/// `parts` as one text: paragraphs apart, notes one to a line. The same note several times in a
+/// row is written once, counted: `[ran a shell command] ×3`.
+pub(crate) fn render(parts: &[Part]) -> String {
+    let mut out = String::new();
+    let mut last_note = false;
+    let mut parts = parts.iter().peekable();
+    while let Some(part) = parts.next() {
+        let (text, note) = match part {
+            Part::Text(text) => (text.trim(), false),
+            Part::Note(note) => (note.as_str(), true),
+        };
+        if !out.is_empty() {
+            out.push_str(if note && last_note {
+                "\n"
+            } else {
+                "\n\n"
+            });
+        }
+        out.push_str(text);
+        if note {
+            let mut repeats = 1;
+            while parts.next_if(|next| matches!(next, Part::Note(n) if n == text)).is_some() {
+                repeats += 1;
+            }
+            if repeats > 1 {
+                let _ = write!(out, " ×{repeats}");
+            }
+        }
+        last_note = note;
+    }
+    out
 }
 
 /// The conversation of `messages` as alternating turns, user first and assistant last, and
