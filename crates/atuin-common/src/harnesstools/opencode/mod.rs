@@ -4,6 +4,7 @@ use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget}
 use super::{Harness, InstallHookError};
 use crate::utils::{env_nonempty, home_dir};
 
+pub mod rehydrate;
 pub mod session;
 
 #[derive(Debug, Clone, Copy, Default)]
