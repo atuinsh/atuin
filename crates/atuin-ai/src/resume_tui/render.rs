@@ -910,6 +910,7 @@ fn child_line(
     let (tag, meaning) = match child.relation {
         Relation::Fork => ("fork    ", Meaning::Guidance),
         Relation::Subagent => ("subagent", Meaning::Important),
+        Relation::Child => ("child   ", Meaning::Guidance),
         Relation::Root => ("session ", Meaning::Base),
     };
     let tail = format!(

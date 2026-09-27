@@ -137,11 +137,13 @@ pub struct AiSessions {
     /// Row columns, left to right.
     pub columns: Vec<AiSessionColumn>,
 
-    /// Count subagent sessions among a root session's children (`+N` and the Inspect tab).
+    /// List subagent sessions among a root session's children in the Inspect tab. (They always
+    /// count toward the root's `+N`.)
     pub show_subagents: bool,
 
-    /// Group forks (including Claude Code `--resume` forks) under their root session, so only the
-    /// root shows as a row. When false, every fork gets a row of its own.
+    /// Group forks (including Claude Code `--resume` forks) and subagents under their root
+    /// session, so only the root shows as a row, with `+N`; a child's match finds its root. When
+    /// false, every session gets a row of its own.
     pub group_forks: bool,
 
     /// Height of the inline picker. Unset: the top-level `inline_height`.

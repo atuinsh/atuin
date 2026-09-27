@@ -135,8 +135,7 @@ mod tests {
             generation: 1,
             mode: FilterMode::Global,
             filter: SessionFilter {
-                group_forks: true,
-                include_subagents: true,
+                roots_only: true,
                 ..SessionFilter::default()
             },
         })

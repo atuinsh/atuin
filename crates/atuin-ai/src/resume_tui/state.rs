@@ -81,8 +81,7 @@ pub struct State {
     /// Widen workspace to global when it has no matches. Only for the default filter, and only
     /// until the user picks a mode with ctrl-r.
     auto_widen: bool,
-    group_forks: bool,
-    include_subagents: bool,
+    roots_only: bool,
 
     /// The generation of the newest search sent to the worker.
     pub issued: u64,
@@ -131,8 +130,7 @@ impl State {
             mode: FilterMode::Global,
             widened: None,
             auto_widen: false,
-            group_forks: sessions.group_forks,
-            include_subagents: sessions.show_subagents,
+            roots_only: sessions.group_forks,
             issued: 0,
             applied: 0,
             last_filter: None,
@@ -207,22 +205,21 @@ impl State {
         let ctx = &self.context;
         let mut filter = SessionFilter {
             text: q.text,
-            harnesses: q.harnesses,
+            harness: q.harness,
             model: q.model,
             branch: q.branch,
-            hostname: q.host,
-            group_forks: self.group_forks,
-            include_subagents: self.include_subagents,
+            host_name: q.host,
+            roots_only: self.roots_only,
             limit: SEARCH_LIMIT,
             ..SessionFilter::default()
         };
         match self.mode {
             FilterMode::Global => {}
-            FilterMode::Host => filter.host_id = Some(ctx.host_id.clone()),
-            FilterMode::Workspace => filter.cwd_prefix.clone_from(&ctx.git_root),
-            FilterMode::Directory => filter.cwd = Some(ctx.cwd.clone()),
+            FilterMode::Host => filter.host = Some(ctx.host_id.clone()),
+            FilterMode::Workspace => filter.workspace.clone_from(&ctx.git_root),
+            FilterMode::Directory => filter.directory = Some(ctx.cwd.clone()),
             FilterMode::Branch => {
-                filter.cwd_prefix.clone_from(&ctx.git_root);
+                filter.workspace.clone_from(&ctx.git_root);
                 if filter.branch.is_none() {
                     filter.branch.clone_from(&ctx.branch);
                 }
@@ -543,7 +540,7 @@ mod tests {
         let state = state_in(fake::context());
         assert_eq!(state.mode, FilterMode::Workspace);
         assert_eq!(state.widened, None);
-        assert_eq!(state.filter().cwd_prefix, Some(PathBuf::from(fake::REPO)));
+        assert_eq!(state.filter().workspace, Some(PathBuf::from(fake::REPO)));
     }
 
     #[rstest]
@@ -555,7 +552,7 @@ mod tests {
         assert_eq!(state.mode, FilterMode::Global);
         assert_eq!(state.widened, Some(Widened::NoRepo));
         assert_eq!(state.mode_label(), "WS→GLOBAL");
-        assert_eq!(state.filter().cwd_prefix, None);
+        assert_eq!(state.filter().workspace, None);
     }
 
     #[rstest]
@@ -567,7 +564,7 @@ mod tests {
         assert_eq!(state.widened, Some(Widened::NoMatches));
 
         let (generation, mode, filter) = state.next_search().unwrap();
-        assert_eq!(filter.cwd_prefix, None);
+        assert_eq!(filter.workspace, None);
         state.apply_results(generation, mode, rows(2));
         assert_eq!(state.results.len(), 2);
 
@@ -626,16 +623,16 @@ mod tests {
     fn modes_resolve_to_filters() {
         let mut state = state_in(fake::context());
         state.mode = FilterMode::Host;
-        assert_eq!(state.filter().host_id.as_deref(), Some(fake::THIS_HOST_ID));
+        assert_eq!(state.filter().host.as_deref(), Some(fake::THIS_HOST_ID));
         state.mode = FilterMode::Directory;
-        assert_eq!(state.filter().cwd, Some(PathBuf::from(fake::REPO)));
+        assert_eq!(state.filter().directory, Some(PathBuf::from(fake::REPO)));
         state.mode = FilterMode::Branch;
         assert_eq!(state.filter().branch.as_deref(), Some("ai-resume"));
         state.input = Cursor::from("b:main flaky h:codex".to_owned());
         let filter = state.filter();
         assert_eq!(filter.branch.as_deref(), Some("main"));
         assert_eq!(filter.text, "flaky");
-        assert_eq!(filter.harnesses, vec![HarnessKind::Codex]);
+        assert_eq!(filter.harness, Some(HarnessKind::Codex));
     }
 
     #[rstest]

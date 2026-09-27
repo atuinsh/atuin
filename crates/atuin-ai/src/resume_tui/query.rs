@@ -1,6 +1,6 @@
 //! The picker's query language: free text plus filter tokens.
 //!
-//! - `h:claude` (or `h:cc`, `h:codex,pi`): only these harnesses;
+//! - `h:claude` (or `h:cc`, `h:codex`, `h:oc`, `h:pi`): only this harness;
 //! - `m:opus`: model contains this;
 //! - `b:main`: on this git branch;
 //! - `@buildbox`: recorded on a host whose name starts with this.
@@ -43,7 +43,7 @@ pub struct Token {
 pub struct ParsedQuery {
     /// The free-text words, single-space separated.
     pub text: String,
-    pub harnesses: Vec<HarnessKind>,
+    pub harness: Option<HarnessKind>,
     pub model: Option<String>,
     pub branch: Option<String>,
     pub host: Option<String>,
@@ -131,24 +131,13 @@ pub fn parse(input: &str) -> ParsedQuery {
             TokenState::Pending
         } else {
             match kind {
-                TokenKind::Harness => {
-                    let harnesses: Option<Vec<_>> = value
-                        .split([',', '|'])
-                        .filter(|v| !v.is_empty())
-                        .map(parse_harness)
-                        .collect();
-                    match harnesses {
-                        Some(hs) if !hs.is_empty() => {
-                            for h in hs {
-                                if !parsed.harnesses.contains(&h) {
-                                    parsed.harnesses.push(h);
-                                }
-                            }
-                            TokenState::Valid
-                        }
-                        _ => TokenState::Invalid,
+                TokenKind::Harness => match parse_harness(value) {
+                    Some(h) => {
+                        parsed.harness = Some(h);
+                        TokenState::Valid
                     }
-                }
+                    None => TokenState::Invalid,
+                },
                 TokenKind::Model => {
                     parsed.model = Some(value.to_owned());
                     TokenState::Valid
@@ -177,9 +166,9 @@ pub fn cycle_harness(input: &str) -> String {
     let parsed = parse(input);
     let existing = parsed.tokens.iter().find(|t| t.kind == TokenKind::Harness);
 
-    let next = match (existing, parsed.harnesses.as_slice()) {
-        (Some(_), [one]) => {
-            let i = HARNESS_CYCLE.iter().position(|h| h == one);
+    let next = match (existing, parsed.harness) {
+        (Some(_), Some(one)) => {
+            let i = HARNESS_CYCLE.iter().position(|h| *h == one);
             i.and_then(|i| HARNESS_CYCLE.get(i + 1)).copied()
         }
         _ => Some(HARNESS_CYCLE[0]),
@@ -217,7 +206,7 @@ mod tests {
         let q = parse("  fix the   flaky test ");
         assert_eq!(q.text, "fix the flaky test");
         assert!(q.tokens.is_empty());
-        assert!(q.harnesses.is_empty());
+        assert!(q.harness.is_none());
     }
 
     #[rstest]
@@ -225,7 +214,7 @@ mod tests {
         let input = "h:claude flaky m:opus test b:main @build";
         let q = parse(input);
         assert_eq!(q.text, "flaky test");
-        assert_eq!(q.harnesses, vec![HarnessKind::ClaudeCode]);
+        assert_eq!(q.harness, Some(HarnessKind::ClaudeCode));
         assert_eq!(q.model.as_deref(), Some("opus"));
         assert_eq!(q.branch.as_deref(), Some("main"));
         assert_eq!(q.host.as_deref(), Some("build"));
@@ -241,21 +230,22 @@ mod tests {
     }
 
     #[rstest]
-    #[case("h:cc", vec![HarnessKind::ClaudeCode])]
-    #[case("h:claude-code", vec![HarnessKind::ClaudeCode])]
-    #[case("h:codex,pi", vec![HarnessKind::Codex, HarnessKind::Pi])]
-    #[case("h:oc|cx", vec![HarnessKind::Opencode, HarnessKind::Codex])]
-    #[case("h:pi h:pi", vec![HarnessKind::Pi])]
-    #[case("h:PI", vec![HarnessKind::Pi])]
-    fn harness_tokens(#[case] input: &str, #[case] want: Vec<HarnessKind>) {
-        assert_eq!(parse(input).harnesses, want);
+    #[case("h:cc", Some(HarnessKind::ClaudeCode))]
+    #[case("h:claude-code", Some(HarnessKind::ClaudeCode))]
+    #[case("h:cx", Some(HarnessKind::Codex))]
+    #[case("h:oc", Some(HarnessKind::Opencode))]
+    #[case("h:codex h:pi", Some(HarnessKind::Pi))]
+    #[case("h:PI", Some(HarnessKind::Pi))]
+    #[case("h:codex,pi", None)]
+    fn harness_tokens(#[case] input: &str, #[case] want: Option<HarnessKind>) {
+        assert_eq!(parse(input).harness, want);
     }
 
     #[rstest]
     fn unknown_harness_is_an_invalid_token_and_ignored() {
         let q = parse("h:vim bug");
         assert_eq!(q.tokens[0].state, TokenState::Invalid);
-        assert!(q.harnesses.is_empty());
+        assert!(q.harness.is_none());
         assert_eq!(q.text, "bug");
     }
 

@@ -9,11 +9,11 @@
 //! - [`Resumer`] turns a session into a resume command, or says why it can't be resumed.
 
 pub mod fake;
-pub mod interim;
 pub mod keymap;
 pub mod query;
 pub mod render;
 pub mod resumer;
+pub mod sidecar;
 pub mod source;
 pub mod state;
 mod terminal;

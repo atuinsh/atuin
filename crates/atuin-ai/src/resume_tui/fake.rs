@@ -598,37 +598,27 @@ impl FakeSource {
     fn children_of<'a>(
         &'a self,
         root: &'a HarnessSession,
-        filter: &'a SessionFilter,
     ) -> impl Iterator<Item = &'a FakeSession> {
-        self.sessions.iter().filter(move |s| {
-            s.parent.as_ref() == Some(root)
-                && match s.row.relation {
-                    Relation::Fork => filter.group_forks,
-                    Relation::Subagent => filter.include_subagents,
-                    Relation::Root => false,
-                }
-        })
+        self.sessions
+            .iter()
+            .filter(move |s| s.parent.as_ref() == Some(root) && s.row.relation != Relation::Root)
     }
 
     fn is_row(s: &FakeSession, filter: &SessionFilter) -> bool {
-        match s.row.relation {
-            Relation::Root => true,
-            Relation::Fork => !filter.group_forks,
-            Relation::Subagent => false,
-        }
+        !filter.roots_only || s.row.relation == Relation::Root
     }
 
     fn matches_scope(row: &SessionRow, filter: &SessionFilter) -> bool {
         let cwd = row.cwd.as_deref();
-        (filter.harnesses.is_empty() || filter.harnesses.contains(&row.handle.harness))
+        filter.harness.is_none_or(|h| h == row.handle.harness)
             && filter.model.as_ref().is_none_or(|m| {
                 row.model.as_ref().is_some_and(|rm| rm.to_lowercase().contains(&m.to_lowercase()))
             })
             && filter.branch.as_ref().is_none_or(|b| row.branch.as_ref() == Some(b))
-            && filter.host_id.as_ref().is_none_or(|h| &row.host_id == h)
-            && filter.hostname.as_ref().is_none_or(|h| row.hostname.starts_with(h.as_str()))
-            && filter.cwd_prefix.as_deref().is_none_or(|p| cwd.is_some_and(|c| c.starts_with(p)))
-            && filter.cwd.as_deref().is_none_or(|p| cwd == Some(p))
+            && filter.host.as_ref().is_none_or(|h| &row.host_id == h)
+            && filter.host_name.as_ref().is_none_or(|h| row.hostname.starts_with(h.as_str()))
+            && filter.workspace.as_deref().is_none_or(|p| cwd.is_some_and(|c| c.starts_with(p)))
+            && filter.directory.as_deref().is_none_or(|p| cwd == Some(p))
     }
 }
 
@@ -690,7 +680,7 @@ impl SessionSource for FakeSource {
                 continue;
             }
             let group: Vec<&FakeSession> = if s.row.relation == Relation::Root {
-                std::iter::once(s).chain(self.children_of(&s.row.handle, filter)).collect()
+                std::iter::once(s).chain(self.children_of(&s.row.handle)).collect()
             } else {
                 vec![s]
             };
@@ -763,13 +753,11 @@ impl SessionSource for FakeSource {
         session: &HarnessSession,
         include_subagents: bool,
     ) -> eyre::Result<Vec<SessionRow>> {
-        let filter = SessionFilter {
-            group_forks: true,
-            include_subagents,
-            ..SessionFilter::default()
-        };
-        let mut rows: Vec<SessionRow> =
-            self.children_of(session, &filter).map(|s| s.row.clone()).collect();
+        let mut rows: Vec<SessionRow> = self
+            .children_of(session)
+            .filter(|s| include_subagents || s.row.relation != Relation::Subagent)
+            .map(|s| s.row.clone())
+            .collect();
         rows.sort_by_key(|r| std::cmp::Reverse(r.updated_at));
         Ok(rows)
     }

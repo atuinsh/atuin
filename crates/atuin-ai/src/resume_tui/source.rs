@@ -13,29 +13,31 @@ use time::OffsetDateTime;
 
 /// What to list. The picker resolves its filter mode and query tokens into these constraints, so
 /// a source never needs to know about modes or the current directory.
+///
+/// Mirrors `atuin_client::ai_session::SessionFilter` field for field, plus the query text, the
+/// `@host` name and the limit. An absent field is not a filter; every present one must hold.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionFilter {
-    /// Full-text query. Empty lists every session (newest first); otherwise the last term matches
-    /// as a prefix (search-as-you-type).
+    /// Full-text query. Empty lists sessions newest first; otherwise the last term matches as a
+    /// prefix (search-as-you-type).
     pub text: String,
-    /// Only these harnesses (`h:`). Empty means all.
-    pub harnesses: Vec<HarnessKind>,
-    /// Only sessions whose model contains this, case-insensitively (`m:`).
-    pub model: Option<String>,
-    /// Only sessions on this git branch (`b:`, or the branch filter mode).
+    /// Recorded on the host with this id (the host filter mode).
+    pub host: Option<String>,
+    /// Recorded on a host whose [`SessionRow::hostname`] starts with this (`@host`).
+    pub host_name: Option<String>,
+    /// Working directory at or under this path (workspace mode).
+    pub workspace: Option<PathBuf>,
+    /// Working directory exactly this path (directory mode).
+    pub directory: Option<PathBuf>,
+    /// On this git branch (`b:`, or the branch filter mode).
     pub branch: Option<String>,
-    /// Only sessions recorded on the host with this id (the host filter mode).
-    pub host_id: Option<String>,
-    /// Only sessions recorded on a host whose name starts with this (`@host`).
-    pub hostname: Option<String>,
-    /// Only sessions whose working directory is this directory or below it (workspace mode).
-    pub cwd_prefix: Option<PathBuf>,
-    /// Only sessions whose working directory is exactly this (directory mode).
-    pub cwd: Option<PathBuf>,
-    /// Fold forks (including Claude Code `--resume` forks) into their root session's row.
-    pub group_forks: bool,
-    /// Count subagent sessions among a root's children. Subagents never get their own row.
-    pub include_subagents: bool,
+    /// From this harness (`h:`).
+    pub harness: Option<HarnessKind>,
+    /// Model containing this, ignoring case (`m:`).
+    pub model: Option<String>,
+    /// Only root rows, with forks and subagents grouped under them (counted in
+    /// [`SessionRow::children`]; a child's match is its root's).
+    pub roots_only: bool,
     /// Maximum rows; 0 for unbounded.
     pub limit: usize,
 }
@@ -45,8 +47,12 @@ pub struct SessionFilter {
 pub enum Relation {
     #[default]
     Root,
-    Fork,
+    /// Spawned by its parent to do part of its work.
     Subagent,
+    /// Continues or branches off its parent's conversation.
+    Fork,
+    /// Has a parent, but the harness doesn't say which kind of child it is.
+    Child,
 }
 
 /// Text with highlighted byte ranges (the query's matches).
@@ -85,7 +91,7 @@ pub struct SessionRow {
     /// The newest message in the session or any of its grouped children.
     pub updated_at: OffsetDateTime,
     pub message_count: u64,
-    /// Forks and (with `include_subagents`) subagents grouped under this row.
+    /// Sessions grouped under this row (with [`SessionFilter::roots_only`]).
     pub children: u32,
     /// The best-matching message text, when there is a query. The match may be in a child.
     pub matched: Option<Snippet>,
@@ -112,7 +118,7 @@ pub trait SessionSource: Send + Sync {
     /// The preview text for one session.
     async fn preview(&self, session: &HarnessSession) -> eyre::Result<SessionPreview>;
 
-    /// The forks and subagents grouped under a root session, newest first.
+    /// The sessions grouped under a root, newest first; subagents only with `include_subagents`.
     async fn children(
         &self,
         session: &HarnessSession,

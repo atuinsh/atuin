@@ -355,10 +355,11 @@ enter_accept = true
 ## Row columns, left to right: time, harness, children, title, repo, branch, messages.
 # columns = ["time", "harness", "children", "title", "repo", "branch", "messages"]
 
-## Count subagent sessions among a root session's children.
+## List subagent sessions among a root session's children in the Inspect tab.
 # show_subagents = true
 
-## Group forks under their root session, so only the root shows as a row.
+## Group forks and subagents under their root session, so only the root shows
+## as a row (with +N). When false, every session gets its own row.
 # group_forks = true
 
 ## Height of the inline picker. Defaults to the top-level inline_height.
