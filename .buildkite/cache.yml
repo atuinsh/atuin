@@ -33,8 +33,9 @@ caches:
   - name: target
     cache_key:
       - target
-      # v2: dev/test builds without debuginfo (pipeline env).
-      - v2
+      # v3: check and clippy build different feature sets, and the tests
+      # build in build-tests.
+      - v3
       - agent: step
       - agent: os
       - agent: arch
