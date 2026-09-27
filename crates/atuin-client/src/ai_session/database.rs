@@ -16,8 +16,8 @@ use time::OffsetDateTime;
 use tracing::warn;
 
 use super::{
-    HarnessKind, HarnessSession, Message, NativeSessionId, Session, SessionFilter, SessionMatch,
-    SourceId,
+    HarnessKind, HarnessSession, HostSet, Message, NativeSessionId, PreviewParts, Session,
+    SessionFilter, SessionMatch, SourceId,
 };
 
 mod watermark;
@@ -735,21 +735,125 @@ impl AiSessionDatabase {
         self.recent_sessions(filter, None, 0).await
     }
 
-    /// [`Self::list_sessions`], of the sessions captured on any of `hosts` (none, when empty).
-    /// For a host filter by name, which can stand for several host ids.
+    /// [`Self::list_sessions`], of the sessions captured on one of `hosts`. For a host filter by
+    /// name, which can stand for several host ids.
     pub async fn list_sessions_on_hosts(
         &self,
         filter: &SessionFilter,
-        hosts: &[HostId],
+        hosts: &HostSet,
     ) -> Result<Vec<Session>, DbError> {
         self.recent_sessions(filter, Some(hosts), 0).await
+    }
+
+    /// Every session whose id starts with `prefix`, across harnesses, newest first (for resuming
+    /// by id). Wildcards mean nothing here: the prefix is a byte range, not a pattern.
+    pub async fn sessions_with_id_prefix(&self, prefix: &str) -> Result<Vec<Session>, DbError> {
+        // Text compares by its UTF-8 bytes, which order as the code points do: the ids starting
+        // with `prefix` are those at or past it and before its successor.
+        let upper = prefix_successor(prefix);
+        let upper_clause = if upper.is_some() {
+            " AND s.session_id < ?"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT {}, {} FROM sessions s WHERE s.session_id >= ?{upper_clause} ORDER BY \
+             s.updated_at DESC, s.session_id",
+            session_columns!(),
+            no_group_columns!(),
+        );
+        let mut query = db::query_as::<_, SessionRow>(sqlx::AssertSqlSafe(sql)).bind(prefix);
+        if let Some(upper) = upper {
+            query = query.bind(upper);
+        }
+        let rows: Vec<SessionRow> = query.fetch_all(self.db.pool()).await?;
+        rows.into_iter().map(Self::session_from_row).collect()
+    }
+
+    /// The sessions grouped under the root `root` (not the root itself), newest first.
+    pub async fn children(&self, root: &HarnessSession) -> Result<Vec<Session>, DbError> {
+        let rows: Vec<SessionRow> = db::query_as(concat!(
+            "SELECT ",
+            session_columns!(),
+            ", ",
+            no_group_columns!(),
+            " FROM sessions s WHERE s.root_harness = ? AND s.root_session_id = ? AND NOT \
+             (s.harness = ? AND s.session_id = ?) ORDER BY s.updated_at DESC, s.session_id"
+        ))
+        .bind(root.harness as i64)
+        .bind(root.session.as_ref())
+        .bind(root.harness as i64)
+        .bind(root.session.as_ref())
+        .fetch_all(self.db.pool())
+        .await?;
+        rows.into_iter().map(Self::session_from_row).collect()
+    }
+
+    /// Every host a stored session was captured on (sessions with none recorded aside).
+    pub async fn session_hosts(&self) -> Result<Vec<HostId>, DbError> {
+        let hosts: Vec<String> = db::query_scalar(
+            "SELECT DISTINCT host_id FROM sessions WHERE host_id IS NOT NULL ORDER BY host_id",
+        )
+        .fetch_all(self.db.pool())
+        .await?;
+        Ok(hosts.into_iter().filter_map(|h| Self::host_from_repr(Some(h))).collect())
+    }
+
+    /// What a session's preview shows: every message's time and role, and the content of only
+    /// the first user message and the last assistant message with conversation text. The rest of
+    /// the content is never read, so a long session previews as fast as a short one.
+    pub async fn preview_parts(&self, session: &HarnessSession) -> Result<PreviewParts, DbError> {
+        let rows: Vec<(i64, i64, String)> = db::query_as(
+            "SELECT m.rowid, m.timestamp, m.role FROM messages m WHERE m.harness = ? AND \
+             m.session_id = ? ORDER BY m.timestamp, m.id",
+        )
+        .bind(session.harness as i64)
+        .bind(session.session.as_ref())
+        .fetch_all(self.db.pool())
+        .await?;
+
+        let mut rowids = Vec::with_capacity(rows.len());
+        let mut activity = Vec::with_capacity(rows.len());
+        for (rowid, timestamp, role) in rows {
+            rowids.push(rowid);
+            activity.push((Self::time_from_millis(timestamp)?, serde_json::from_str(&role)?));
+        }
+
+        let mut parts = PreviewParts::default();
+        if let Some(i) = activity.iter().position(|(_, role)| *role == Role::User) {
+            parts.first_user = Some(self.content_at(rowids[i]).await?);
+        }
+        // Newest first, reading each assistant message only until one has text: the tail of a
+        // session is often tool calls and reasoning.
+        for (i, (_, role)) in activity.iter().enumerate().rev() {
+            if *role != Role::Assistant {
+                continue;
+            }
+            let content = self.content_at(rowids[i]).await?;
+            if content.iter().any(is_conversation_text) {
+                parts.last_assistant = Some(content);
+                break;
+            }
+        }
+        parts.activity = activity;
+        Ok(parts)
+    }
+
+    /// The content of the message at `rowid`.
+    async fn content_at(&self, rowid: i64) -> Result<Vec<Content>, DbError> {
+        let (content, content_z): (String, Option<Vec<u8>>) =
+            db::query_as("SELECT content, content_z FROM messages WHERE rowid = ?")
+                .bind(rowid)
+                .fetch_one(self.db.pool())
+                .await?;
+        Self::read_content(content, content_z)
     }
 
     /// [`Self::list_sessions`], at most `limit` of them (0 is unbounded).
     async fn recent_sessions(
         &self,
         filter: &SessionFilter,
-        hosts: Option<&[HostId]>,
+        hosts: Option<&HostSet>,
         limit: u32,
     ) -> Result<Vec<Session>, DbError> {
         let (clause, binds) = Self::filter_clause(filter, hosts);
@@ -790,7 +894,7 @@ impl AiSessionDatabase {
 
     /// The SQL (each part led by ` AND `) and values selecting the sessions `s` passing `filter`,
     /// ignoring [`SessionFilter::roots_only`], and captured on one of `hosts` when given.
-    fn filter_clause(filter: &SessionFilter, hosts: Option<&[HostId]>) -> (String, Vec<Bind>) {
+    fn filter_clause(filter: &SessionFilter, hosts: Option<&HostSet>) -> (String, Vec<Bind>) {
         let mut sql = String::new();
         let mut binds = Vec::new();
         if let Some(host) = filter.host {
@@ -798,13 +902,12 @@ impl AiSessionDatabase {
             binds.push(Bind::Text(Self::host_repr(host)));
         }
         if let Some(hosts) = hosts {
-            if hosts.is_empty() {
-                sql.push_str(" AND 0");
-            } else {
-                let marks = vec!["?"; hosts.len()].join(", ");
-                sql.push_str(&format!(" AND s.host_id IN ({marks})"));
-                binds.extend(hosts.iter().map(|&h| Bind::Text(Self::host_repr(h))));
-            }
+            let marks = vec!["?"; hosts.ids.len()].join(", ");
+            let unrecorded = if hosts.unrecorded { "1" } else { "0" };
+            sql.push_str(&format!(
+                " AND (s.host_id IN ({marks}) OR (s.host_id IS NULL AND {unrecorded}))"
+            ));
+            binds.extend(hosts.ids.iter().map(|&h| Bind::Text(Self::host_repr(h))));
         }
         if let Some(workspace) = &filter.workspace {
             // At the path or under it. A root path leaves "", under which every absolute path is.
@@ -894,24 +997,24 @@ impl AiSessionDatabase {
         self.search_hosts(query, filter, None, limit)
     }
 
-    /// [`Self::search`] over the sessions captured on any of `hosts` (none, when empty), filtered
-    /// before the limit applies. For a host filter by name, which can stand for several host ids
-    /// (see [`crate::history::store::HistoryStore::host_names`]).
+    /// [`Self::search`] over the sessions captured on one of `hosts`, filtered before the limit
+    /// applies. For a host filter by name, which can stand for several host ids (see
+    /// [`crate::history::store::HistoryStore::host_names`]).
     pub fn search_on_hosts(
         &self,
         query: &str,
         filter: &SessionFilter,
-        hosts: &[HostId],
+        hosts: &HostSet,
         limit: u32,
     ) -> impl Stream<Item = Result<SessionMatch, DbError>> + Send + 'static {
-        self.search_hosts(query, filter, Some(hosts.to_vec()), limit)
+        self.search_hosts(query, filter, Some(hosts.clone()), limit)
     }
 
     fn search_hosts(
         &self,
         query: &str,
         filter: &SessionFilter,
-        hosts: Option<Vec<HostId>>,
+        hosts: Option<HostSet>,
         limit: u32,
     ) -> impl Stream<Item = Result<SessionMatch, DbError>> + Send + 'static {
         let this = self.clone();
@@ -927,7 +1030,7 @@ impl AiSessionDatabase {
                 match_expression(&query)
             };
             let Some(expr) = expr else {
-                for session in this.recent_sessions(&filter, hosts.as_deref(), limit).await? {
+                for session in this.recent_sessions(&filter, hosts.as_ref(), limit).await? {
                     let title = session.title.clone().unwrap_or_default();
                     let preview = session.preview.clone().unwrap_or_default();
                     yield SessionMatch {
@@ -941,7 +1044,7 @@ impl AiSessionDatabase {
                 return;
             };
 
-            let (filter_clause, binds) = Self::filter_clause(&filter, hosts.as_deref());
+            let (filter_clause, binds) = Self::filter_clause(&filter, hosts.as_ref());
             let (group_harness, group_session) = if filter.roots_only {
                 ("s.root_harness", "s.root_session_id")
             } else {
@@ -1828,6 +1931,26 @@ impl Bind {
 /// Fold text the way the index's `unicode61` tokenizer does — lowercase with combining marks
 /// stripped — so preview placement and highlights agree with what FTS5 actually matched (e.g. a
 /// query for `cafe` matches a stored `café`).
+/// Conversation text: text and summaries, not tool calls, reasoning or errors.
+fn is_conversation_text(content: &Content) -> bool {
+    matches!(content, Content::Text(t) | Content::Summary(t) if !t.trim().is_empty())
+}
+
+/// The smallest string greater than every string starting with `prefix`, or `None` when there is
+/// none (an empty prefix, or one of only `char::MAX`).
+fn prefix_successor(prefix: &str) -> Option<String> {
+    let mut chars: Vec<char> = prefix.chars().collect();
+    while let Some(last) = chars.pop() {
+        // The next code point, skipping the surrogates, which no string holds.
+        let next = (u32::from(last) + 1..=u32::from(char::MAX)).find_map(char::from_u32);
+        if let Some(next) = next {
+            chars.push(next);
+            return Some(chars.into_iter().collect());
+        }
+    }
+    None
+}
+
 fn fts_fold(text: &str) -> String {
     use unicode_normalization::UnicodeNormalization as _;
     use unicode_normalization::char::is_combining_mark;
@@ -1957,10 +2080,10 @@ mod tests {
 
     use super::{
         AiSessionDatabase, Appended, COMPRESS_THRESHOLD, DbError, QueryTerms, SCHEMA_VERSION,
-        TitleSource,
+        TitleSource, prefix_successor,
     };
     use crate::ai_session::{
-        HarnessKind, HarnessSession, Message, NativeSessionId, Session, SessionFilter,
+        HarnessKind, HarnessSession, HostSet, Message, NativeSessionId, Session, SessionFilter,
         SessionMatch, SourceId,
     };
 
@@ -3262,29 +3385,41 @@ mod tests {
 
     /// Sessions from any of several hosts (a host name standing for several ids), filtered before
     /// the limit, and alongside the other filters.
+    /// Sessions with no recorded host (`e`) count only when the set says so.
     #[rstest]
-    #[case::one(&[2], None, 0, &["b"])]
-    #[case::several(&[1, 3], None, 0, &["a", "c", "d"])]
-    #[case::before_the_limit(&[3], None, 1, &["d"])]
-    #[case::with_the_host_filter(&[1, 2], Some(2), 0, &["b"])]
-    #[case::none_at_all(&[], None, 0, &[])]
+    #[case::one(&[2], false, None, 0, &["b"])]
+    #[case::several(&[1, 3], false, None, 0, &["a", "c", "d"])]
+    #[case::before_the_limit(&[3], false, None, 1, &["d"])]
+    #[case::with_the_host_filter(&[1, 2], false, Some(2), 0, &["b"])]
+    #[case::none_at_all(&[], false, None, 0, &[])]
+    #[case::with_the_unrecorded(&[2], true, None, 0, &["b", "e"])]
+    #[case::only_the_unrecorded(&[], true, None, 0, &["e"])]
+    #[case::the_unrecorded_before_the_limit(&[1], true, None, 1, &["e"])]
     #[tokio::test]
     async fn a_host_set_selects_sessions(
         #[case] hosts: &[u128],
+        #[case] unrecorded: bool,
         #[case] only: Option<u128>,
         #[case] limit: u32,
         #[case] expected: &[&str],
     ) {
         let db = AiSessionDatabase::in_memory().await.unwrap();
+        let mut e = filtered_row("e", "/work/atuin", "main", "opus", 0);
+        e.host = None;
+        e.timestamp += time::Duration::seconds(1);
         for m in [
             filtered_row("a", "/work/atuin", "main", "opus", 1),
             filtered_row("b", "/work/atuin", "main", "opus", 2),
             filtered_row("c", "/work/atuin", "main", "opus", 1),
             filtered_row("d", "/work/atuin", "main", "opus", 3),
+            e,
         ] {
             db.append(&m).await.unwrap();
         }
-        let hosts: Vec<_> = hosts.iter().map(|&n| host(n)).collect();
+        let hosts = HostSet {
+            ids: hosts.iter().map(|&n| host(n)).collect(),
+            unrecorded,
+        };
         let filter = SessionFilter {
             host: only.map(host),
             ..SessionFilter::default()
@@ -3328,6 +3463,192 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].handle, handle(HarnessKind::ClaudeCode, "root"));
         assert_eq!(search_with(&db, "words", &filter, 0).await.len(), 1);
+    }
+
+    /// The hosts sessions were captured on, each once, without the unrecorded.
+    #[rstest]
+    #[tokio::test]
+    async fn session_hosts_lists_each_recorded_host_once() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let mut unrecorded = filtered_row("c", "/", "main", "opus", 0);
+        unrecorded.host = None;
+        for m in [
+            filtered_row("a", "/", "main", "opus", 2),
+            filtered_row("b", "/", "main", "opus", 1),
+            filtered_row("d", "/", "main", "opus", 2),
+            unrecorded,
+        ] {
+            db.append(&m).await.unwrap();
+        }
+        assert_eq!(db.session_hosts().await.unwrap(), [host(1), host(2)]);
+    }
+
+    // --- lookups by id and group ----------------------------------------------------------------
+
+    #[rstest]
+    #[case::plain("ab", &["ab", "ab%c", "ab_c", "abc", "abxc"])]
+    #[case::percent_is_literal("ab%", &["ab%c"])]
+    #[case::underscore_is_literal("ab_", &["ab_c"])]
+    #[case::exact("abc", &["abc"])]
+    #[case::case_matters("AB", &["AB"])]
+    #[case::nothing("abd", &[])]
+    #[case::empty("", &["AB", "ab", "ab%c", "ab_c", "abc", "abxc", "ac", "é\u{10FFFF}x"])]
+    #[case::the_last_code_point("é\u{10FFFF}", &["é\u{10FFFF}x"])]
+    #[tokio::test]
+    async fn an_id_prefix_is_not_a_pattern(#[case] prefix: &str, #[case] expected: &[&str]) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let ids = ["ab", "ab%c", "ab_c", "abc", "abxc", "ac", "AB", "é\u{10FFFF}x"];
+        for (i, id) in ids.into_iter().enumerate() {
+            // Across harnesses: an id prefix doesn't say which.
+            let harness = if i % 2 == 0 {
+                HarnessKind::ClaudeCode
+            } else {
+                HarnessKind::Codex
+            };
+            db.append(&message_in(&handle(harness, id), 0, "words")).await.unwrap();
+        }
+
+        let mut found: Vec<String> = db
+            .sessions_with_id_prefix(prefix)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| s.handle.session.to_string())
+            .collect();
+        found.sort();
+        assert_eq!(found, expected);
+    }
+
+    #[rstest]
+    #[case::ascii("ab", Some("ac"))]
+    #[case::empty("", None)]
+    #[case::last_code_point("a\u{10FFFF}", Some("b"))]
+    #[case::only_the_last_code_point("\u{10FFFF}", None)]
+    #[case::skips_surrogates("\u{D7FF}", Some("\u{E000}"))]
+    fn prefix_successors(#[case] prefix: &str, #[case] expected: Option<&str>) {
+        assert_eq!(prefix_successor(prefix).as_deref(), expected);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn children_are_the_group_under_a_root() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        for m in forest() {
+            db.append(&m).await.unwrap();
+        }
+        let children = |id: &'static str| {
+            let db = db.clone();
+            async move {
+                db.children(&handle(HarnessKind::ClaudeCode, id))
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|s| s.handle.session.to_string())
+                    .collect::<Vec<_>>()
+            }
+        };
+        // Newest first, nested ones included, the root itself not.
+        assert_eq!(children("root").await, ["late", "agent-b", "agent-a", "fork"]);
+        assert_eq!(children("other").await, ["other-fork"]);
+        // Only roots have groups.
+        assert!(children("fork").await.is_empty());
+        assert!(children("missing").await.is_empty());
+    }
+
+    // --- previews -------------------------------------------------------------------------------
+
+    fn text(t: &str) -> Content {
+        Content::Text(t.to_owned())
+    }
+
+    fn tool_use() -> Content {
+        Content::ToolUse(ToolUse {
+            id: ToolCallId::from("call".to_owned()),
+            name: "bash".to_owned(),
+            input: serde_json::json!({ "command": "ls" }),
+        })
+    }
+
+    /// Break the stored content of `session`'s message at `index`, so reading it fails.
+    async fn corrupt(db: &AiSessionDatabase, session: &HarnessSession, index: i64) {
+        db::query(
+            "UPDATE messages SET content = '', content_z = x'00' WHERE session_id = ? AND \
+             source_id = ?",
+        )
+        .bind(session.session.as_ref())
+        .bind(format!("source-{index}"))
+        .execute(db.db.pool())
+        .await
+        .unwrap();
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn preview_parts_read_only_the_first_prompt_and_the_last_reply_with_text() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let s = sample_handle();
+        let long = "a long reply ".repeat(COMPRESS_THRESHOLD);
+        let messages = [
+            message_with(&s, 0, Role::System, vec![text("system prompt")]),
+            message_with(&s, 1, Role::User, vec![text("first prompt")]),
+            message_with(&s, 2, Role::Assistant, vec![text("an early reply")]),
+            message_with(&s, 3, Role::User, vec![text("second prompt")]),
+            message_with(&s, 4, Role::Assistant, vec![text(&long), tool_use()]),
+            // The tail: nothing to show.
+            message_with(&s, 5, Role::Assistant, vec![tool_use()]),
+            message_with(&s, 6, Role::Tool, vec![text("tool output")]),
+            message_with(&s, 7, Role::Assistant, vec![Content::Reasoning("hmm".to_owned())]),
+            message_with(&s, 8, Role::Assistant, vec![text("  \n "), tool_use()]),
+            message_with(&s, 9, Role::Assistant, vec![Content::Error("overloaded".to_owned())]),
+        ];
+        for m in &messages {
+            db.append(m).await.unwrap();
+        }
+        // Content the preview must not need: reading it would fail.
+        for index in [0, 2, 3, 6] {
+            corrupt(&db, &s, index).await;
+        }
+
+        let parts = db.preview_parts(&s).await.unwrap();
+        assert_eq!(parts.first_user, Some(vec![text("first prompt")]));
+        // Compressed, and with a tool call beside the text: the whole content, for the caller
+        // to render.
+        assert_eq!(parts.last_assistant, Some(vec![text(&long), tool_use()]));
+        let activity: Vec<_> = messages.iter().map(|m| (m.timestamp, m.role.clone())).collect();
+        assert_eq!(parts.activity, activity);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_summary_is_reply_text() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let s = sample_handle();
+        db.append(&message_with(&s, 0, Role::Assistant, vec![text("before")])).await.unwrap();
+        let summary = vec![Content::Summary("compacted".to_owned())];
+        db.append(&message_with(&s, 1, Role::Assistant, summary.clone())).await.unwrap();
+
+        let parts = db.preview_parts(&s).await.unwrap();
+        assert_eq!(parts.last_assistant, Some(summary));
+        assert_eq!(parts.first_user, None, "no user message");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn preview_parts_without_a_reply_or_a_session() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let s = sample_handle();
+        // The first user message is the first prompt, even without text.
+        db.append(&message_with(&s, 0, Role::User, vec![tool_use()])).await.unwrap();
+        db.append(&message_with(&s, 1, Role::Assistant, vec![tool_use()])).await.unwrap();
+        db.append(&message_with(&s, 2, Role::User, vec![text("second")])).await.unwrap();
+
+        let parts = db.preview_parts(&s).await.unwrap();
+        assert_eq!(parts.first_user, Some(vec![tool_use()]));
+        assert_eq!(parts.last_assistant, None);
+        assert_eq!(parts.activity.len(), 3);
+
+        let missing = handle(HarnessKind::Codex, "missing");
+        assert_eq!(db.preview_parts(&missing).await.unwrap(), super::PreviewParts::default());
     }
 
     // --- schema ---------------------------------------------------------------------------------

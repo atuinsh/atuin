@@ -231,6 +231,29 @@ pub struct SessionFilter {
     pub roots_only: bool,
 }
 
+/// The hosts a host filter by name keeps sessions from: a name can stand for several host ids.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HostSet {
+    /// Captured on one of these. None at all keeps nothing (but see [`Self::unrecorded`]).
+    pub ids: Vec<HostId>,
+    /// Also keep sessions with no recorded host, captured before hosts were tracked and not yet
+    /// backfilled. Those can only be this host's, so set it when the set holds this host.
+    pub unrecorded: bool,
+}
+
+/// What a session's preview shows, read without the content of every message (see
+/// [`crate::ai_session::AiSessionDatabase::preview_parts`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PreviewParts {
+    /// When each message was sent, and by whom, oldest first.
+    pub activity: Vec<(OffsetDateTime, Role)>,
+    /// The content of the first user message.
+    pub first_user: Option<Vec<Content>>,
+    /// The content of the last assistant message with conversation text (text or a summary),
+    /// skipping those holding only tool calls or reasoning.
+    pub last_assistant: Option<Vec<Content>>,
+}
+
 #[derive(Clone, Debug)]
 pub struct SessionMatch {
     pub session: Session,
