@@ -689,7 +689,7 @@ pub(crate) mod tests {
          NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)",
     ];
 
-    pub(crate) async fn database(path: &Path) -> SqliteConnection {
+    pub async fn database(path: &Path) -> SqliteConnection {
         let opts = SqliteConnectOptions::new().filename(path).create_if_missing(true);
         let mut conn = SqliteConnection::connect_with(&opts).await.unwrap();
         for ddl in DDL {
@@ -702,7 +702,7 @@ pub(crate) mod tests {
     /// session under its id, in the directory import runs in; each message under its id, stamped
     /// with its creation time, its info without `id` and `sessionID` as its data; each part
     /// under its id, in the message its `messageID` names, stamped with the time of the import.
-    pub(crate) async fn opencode_import(conn: &mut SqliteConnection, export: &Value, cwd: &str) {
+    pub async fn opencode_import(conn: &mut SqliteConnection, export: &Value, cwd: &str) {
         let info = &export["info"];
         let now = millis(OffsetDateTime::now_utc());
         crate::db::query::<sqlx::Sqlite>(
@@ -758,7 +758,7 @@ pub(crate) mod tests {
 
     /// The rows capture makes of every session in the database at `path`, keyed as it keys them
     /// (opencode gives every row an id of its own).
-    pub(crate) async fn captured(path: &Path) -> Vec<RehydrateMessage> {
+    pub async fn captured(path: &Path) -> Vec<RehydrateMessage> {
         let sessions: Vec<_> = OpencodeSessions::builder()
             .db(path)
             .build()
@@ -829,7 +829,7 @@ pub(crate) mod tests {
 
     /// The session opencode 1.18.32 wrote (the projection fixture), stored in a new database at
     /// `path` as opencode stores it; its id.
-    pub(crate) async fn load_projection(path: &Path) -> String {
+    pub async fn load_projection(path: &Path) -> String {
         let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
         let mut conn = database(path).await;
         let id = fixture["session"]["id"].as_str().unwrap();

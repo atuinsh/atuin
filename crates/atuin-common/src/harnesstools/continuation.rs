@@ -155,6 +155,12 @@ pub fn continued_from_message<M: Message + ?Sized>(m: &M) -> Option<(AnyHarness,
     })
 }
 
+/// What continuing `original` in another harness would flatten or drop, whichever harness.
+#[must_use]
+pub fn flattened(original: &RehydrateSession) -> Flattened {
+    turns(&original.messages).1
+}
+
 /// `original`, recorded by `source`, as a new session of `target` resuming in `original.cwd`.
 #[must_use]
 pub fn continue_in(

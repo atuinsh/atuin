@@ -166,6 +166,17 @@ pub fn harness_badge(harness: HarnessKind) -> &'static str {
     }
 }
 
+/// The harness as `atuin ai resume --in` names it; `None` for one that can't be continued in.
+pub fn harness_arg(harness: HarnessKind) -> Option<&'static str> {
+    match harness {
+        HarnessKind::ClaudeCode => Some("claude"),
+        HarnessKind::Codex => Some("codex"),
+        HarnessKind::Opencode => Some("opencode"),
+        HarnessKind::Pi => Some("pi"),
+        HarnessKind::Copilot | HarnessKind::Unknown => None,
+    }
+}
+
 /// The harness's display name.
 pub fn harness_label(harness: HarnessKind) -> &'static str {
     match harness {

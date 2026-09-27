@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use atuin_client::ai_session::{HarnessKind, HarnessSession, NativeSessionId};
 use atuin_common::harnesstools::Harness as _;
+use atuin_common::harnesstools::continuation::Flattened;
 use atuin_common::harnesstools::rehydrate::RehydrateSession;
 use atuin_common::harnesstools::resume::CwdRequirement;
 use atuin_common::harnesstools::session::Usage;
@@ -17,7 +18,7 @@ use time::{Duration, OffsetDateTime};
 
 use super::ResumeContext;
 use super::resumer::{
-    NotResumable, Restore, Resume, ResumeError, ResumePlan, ResumeTarget, Resumer,
+    Continued, NotResumable, Restore, Resume, ResumeError, ResumePlan, ResumeTarget, Resumer,
 };
 use super::source::{Relation, SessionFilter, SessionPreview, SessionRow, SessionSource, Snippet};
 
@@ -930,5 +931,39 @@ impl Resumer for FakeResumer {
     ) -> Result<ResumePlan, NotResumable> {
         let native = PathBuf::from(format!("/restored/{}.jsonl", session.handle.session));
         self.plan_for(session, Some(native))
+    }
+
+    /// Every other harness is installed.
+    fn continue_targets(&self, session: &SessionRow) -> Vec<HarnessKind> {
+        [HarnessKind::ClaudeCode, HarnessKind::Codex, HarnessKind::Opencode, HarnessKind::Pi]
+            .into_iter()
+            .filter(|kind| *kind != session.handle.harness)
+            .collect()
+    }
+
+    /// Plans resuming a made-up new session, written nowhere, with a round number of calls
+    /// flattened.
+    async fn continue_in(
+        &self,
+        _source: &dyn SessionSource,
+        session: &SessionRow,
+        target: HarnessKind,
+    ) -> Result<Continued, NotResumable> {
+        let mut row = session.clone();
+        row.handle = HarnessSession {
+            harness: target,
+            session: NativeSessionId::from(format!("continued-{}", session.handle.session)),
+        };
+        let native = PathBuf::from(format!("/continued/{}", row.handle.session));
+        Ok(Continued {
+            target,
+            plan: self.plan_for(&row, Some(native))?,
+            flattened: Flattened {
+                tool_calls: 42,
+                tool_results: 42,
+                reasoning: 7,
+            },
+            note: None,
+        })
     }
 }

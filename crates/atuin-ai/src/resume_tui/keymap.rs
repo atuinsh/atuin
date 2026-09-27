@@ -2,7 +2,8 @@
 //!
 //! The bindings mirror the history search's defaults wherever an action exists in both, so muscle
 //! memory carries over: ctrl-r cycles the filter, ctrl-o toggles Inspect, tab edits, enter follows
-//! `enter_accept`, and vim users get normal/insert modes.
+//! `enter_accept`, and vim users get normal/insert modes. alt-c (plain `c` in the Inspect tab)
+//! opens the "continue in…" chooser, which the history search has no equivalent of.
 
 use atuin_client::settings::{KeymapMode, Settings};
 use atuin_client::tui::{ConditionAtom, KeyInput, KeyRule};
@@ -45,6 +46,8 @@ pub enum Action {
     ReturnCommand,
     /// Copy the resume command to the clipboard.
     Copy,
+    /// Choose another harness to continue the selected session in.
+    ContinueIn,
     ReturnOriginal,
     Exit,
     Redraw,
@@ -111,6 +114,7 @@ fn add_common(km: &mut Keymap, settings: &Settings) {
     km.bind(key("ctrl-o"), Action::ToggleTab);
     km.bind(key("tab"), Action::ReturnCommand);
     km.bind(key("ctrl-y"), Action::Copy);
+    km.bind(key("alt-c"), Action::ContinueIn);
     km.bind(key("ctrl-r"), Action::CycleFilterMode);
     km.bind(key("alt-h"), Action::CycleHarness);
     km.bind(key("ctrl-l"), Action::Redraw);
@@ -218,6 +222,7 @@ pub fn inspector(settings: &Settings) -> Keymap {
     km.bind(key("esc"), Action::Exit);
     km.bind(key("ctrl-["), Action::Exit);
     km.bind(key("q"), Action::Exit);
+    km.bind(key("c"), Action::ContinueIn);
     if matches!(settings.keymap_mode, KeymapMode::VimNormal | KeymapMode::VimInsert) {
         km.bind(key("j"), Action::SelectNext);
         km.bind(key("k"), Action::SelectPrevious);
@@ -255,6 +260,7 @@ mod tests {
             assert_eq!(resolve(&km, "ctrl-r"), Some(Action::CycleFilterMode));
             assert_eq!(resolve(&km, "alt-h"), Some(Action::CycleHarness));
             assert_eq!(resolve(&km, "ctrl-y"), Some(Action::Copy));
+            assert_eq!(resolve(&km, "alt-c"), Some(Action::ContinueIn));
             assert_eq!(resolve(&km, "ctrl-o"), Some(Action::ToggleTab));
             assert_eq!(resolve(&km, "tab"), Some(Action::ReturnCommand));
             assert_eq!(resolve(&km, "ctrl-c"), Some(Action::ReturnOriginal));
@@ -296,5 +302,16 @@ mod tests {
             normal.has_sequence_starting_with(&atuin_client::tui::SingleKey::parse("g").unwrap())
         );
         assert_eq!(resolve(&emacs(&settings), "j"), None);
+    }
+
+    /// "Continue in…" is alt-c wherever there's a query to type, and plain `c` in the Inspect
+    /// tab, which has none; `c` stays a letter of the query.
+    #[rstest]
+    fn continue_in_has_a_key_that_types_nothing() {
+        let settings = Settings::utc();
+        assert_eq!(resolve(&inspector(&settings), "c"), Some(Action::ContinueIn));
+        assert_eq!(resolve(&inspector(&settings), "alt-c"), Some(Action::ContinueIn));
+        assert_eq!(resolve(&emacs(&settings), "c"), None);
+        assert_eq!(resolve(&vim_insert(&settings), "c"), None);
     }
 }

@@ -5,10 +5,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use atuin_client::ai_session::HarnessSession;
+use atuin_client::ai_session::{HarnessKind, HarnessSession};
 use atuin_client::settings::{AiSessionFilterMode as FilterMode, KeymapMode, Settings};
 use atuin_client::theme::Meaning;
 use atuin_client::tui::{Cursor, EvalContext, KeyCodeValue, KeyInput, SingleKey};
+use atuin_common::harnesstools::continuation::Flattened;
 use atuin_common::time::OffsetDateTimeExt as _;
 use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
 use time::OffsetDateTime;
@@ -31,6 +32,8 @@ pub const CHILDREN: u8 = 1;
 pub const PLAN: u8 = 2;
 /// Restoring the session's transcript from sync, once an action is waiting on it.
 pub const RESTORE: u8 = 3;
+/// Reading what continuing the session elsewhere would flatten, for the chooser.
+pub const FLATTEN: u8 = 4;
 
 /// How many rows a search asks for.
 const SEARCH_LIMIT: usize = 500;
@@ -46,8 +49,20 @@ pub enum InputAction {
     ReturnCommand(usize),
     /// Copy the session's resume command, and stay open.
     Copy(usize),
+    /// Open the "continue in…" chooser for the session at this index.
+    ChooseHarness(usize),
+    /// Continue the selected session in this harness, then do what the key asked.
+    ContinueIn(HarnessKind, Pending),
     ReturnOriginal,
     Exit,
+}
+
+/// The "continue in…" chooser: the other harnesses installed here, to continue a session in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Chooser {
+    pub session: HarnessSession,
+    pub targets: Vec<HarnessKind>,
+    pub selected: usize,
 }
 
 /// An action waiting for the selected session's resume plan.
@@ -118,6 +133,13 @@ pub struct State {
     host_names: HashMap<String, String>,
     /// An enter/tab/ctrl-y waiting for its session's plan.
     pub pending: Option<(HarnessSession, Pending)>,
+    /// The "continue in…" chooser, while it's open.
+    pub chooser: Option<Chooser>,
+    /// What continuing each session elsewhere would flatten, once read (see
+    /// [`Request::Flatten`](super::worker::Request::Flatten)); `Err` when it can't be read.
+    pub flattened: HashMap<HarnessSession, Result<Flattened, String>>,
+    /// A continuation being written, and what to do once it is.
+    pub continuing: Option<(HarnessSession, HarnessKind, Pending)>,
 
     /// A one-line message in the status row (copied, can't resume, search failed).
     pub status: Option<(String, Meaning)>,
@@ -164,6 +186,9 @@ impl State {
             host_names: HashMap::new(),
             plans: HashMap::new(),
             pending: None,
+            chooser: None,
+            flattened: HashMap::new(),
+            continuing: None,
             status: None,
             original_input_empty: query.is_empty(),
             accept: false,
@@ -409,6 +434,10 @@ impl State {
     }
 
     fn handle_mouse_input(&mut self, settings: &Settings, event: MouseEvent) -> InputAction {
+        // The chooser is for the session it opened on.
+        if self.chooser.is_some() {
+            return InputAction::Continue;
+        }
         let action = match event.kind {
             MouseEventKind::ScrollDown => Action::SelectNext,
             MouseEventKind::ScrollUp => Action::SelectPrevious,
@@ -449,6 +478,9 @@ impl State {
         let Some(single) = SingleKey::from_event(input) else {
             return InputAction::Continue;
         };
+        if self.chooser.is_some() {
+            return self.chooser_key(settings, &single);
+        }
         let ctx = self.eval_context();
         let pending = self.pending_vim_key.take();
         let keymap = self.mode_keymap();
@@ -488,6 +520,83 @@ impl State {
             }
         }
         InputAction::Continue
+    }
+
+    /// Open the "continue in…" chooser on the selected session, offering `targets` (the other
+    /// harnesses installed here). Returns whether it opened: with nowhere to continue, the status
+    /// row says so instead.
+    pub fn open_chooser(&mut self, targets: Vec<HarnessKind>) -> bool {
+        let Some(row) = self.selected() else {
+            return false;
+        };
+        if targets.is_empty() {
+            let label = super::source::harness_label(row.handle.harness);
+            self.status = Some((
+                format!("no other harness is installed here to continue this {label} session in"),
+                Meaning::AlertError,
+            ));
+            return false;
+        }
+        self.chooser = Some(Chooser {
+            session: row.handle.clone(),
+            targets,
+            selected: 0,
+        });
+        true
+    }
+
+    /// A key while the chooser is open: move, pick (enter follows `enter_accept`, tab edits,
+    /// ctrl-y copies the command that does it, a digit picks that line), or close it.
+    fn chooser_key(&mut self, settings: &Settings, key: &SingleKey) -> InputAction {
+        let Some(chooser) = self.chooser.as_mut() else {
+            return InputAction::Continue;
+        };
+        let last = chooser.targets.len().saturating_sub(1);
+        let enter = if settings.enter_accept {
+            Pending::Resume
+        } else {
+            Pending::Edit
+        };
+        let pick = match (&key.code, key.ctrl) {
+            (KeyCodeValue::Esc, _) | (KeyCodeValue::Char('c' | 'g' | '['), true) => {
+                self.chooser = None;
+                return InputAction::Continue;
+            }
+            (KeyCodeValue::Char('q'), false) => {
+                self.chooser = None;
+                return InputAction::Continue;
+            }
+            (KeyCodeValue::Up, _)
+            | (KeyCodeValue::Char('p'), true)
+            | (KeyCodeValue::Char('k'), false) => {
+                chooser.selected = chooser.selected.saturating_sub(1);
+                return InputAction::Continue;
+            }
+            (KeyCodeValue::Down, _)
+            | (KeyCodeValue::Char('n'), true)
+            | (KeyCodeValue::Char('j'), false) => {
+                chooser.selected = (chooser.selected + 1).min(last);
+                return InputAction::Continue;
+            }
+            (KeyCodeValue::Char(c @ '1'..='9'), false) => {
+                let n = c.to_digit(10).and_then(|n| usize::try_from(n).ok()).unwrap_or(0);
+                if n > chooser.targets.len() {
+                    return InputAction::Continue;
+                }
+                chooser.selected = n - 1;
+                enter
+            }
+            (KeyCodeValue::Enter, _) | (KeyCodeValue::Char('m'), true) => enter,
+            (KeyCodeValue::Tab, _) => Pending::Edit,
+            (KeyCodeValue::Char('y'), true) => Pending::Copy,
+            _ => return InputAction::Continue,
+        };
+        let target = chooser.targets[chooser.selected];
+        if pick == Pending::Resume {
+            self.accept = true;
+        }
+        self.chooser = None;
+        InputAction::ContinueIn(target, pick)
     }
 
     /// Move the selection toward index 0 (the best match, drawn at the bottom unless inverted).
@@ -568,6 +677,7 @@ impl State {
             }
             Action::ReturnCommand => return InputAction::ReturnCommand(selected),
             Action::Copy => return InputAction::Copy(selected),
+            Action::ContinueIn => return InputAction::ChooseHarness(selected),
             Action::ReturnOriginal => return InputAction::ReturnOriginal,
             Action::Exit if self.tab_index == 1 => {
                 self.tab_index = 0;

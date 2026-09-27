@@ -6,18 +6,21 @@
 //!   screen until then;
 //! - details (preview, children, plan) for the selected session. Only the newest request of each
 //!   kind is kept: while the selection moves, the sessions it passed over are never loaded.
-//!   Restoring a session from sync, which only an enter or tab asks for, goes first.
+//!   Restoring a session from sync, or continuing it in another harness, which only an enter or
+//!   tab asks for, goes first.
 //!
 //! Host names are read once beside them, so rows listed before they are known can be relabelled.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use atuin_client::ai_session::HarnessSession;
+use atuin_client::ai_session::{HarnessKind, HarnessSession};
 use atuin_client::settings::AiSessionFilterMode as FilterMode;
+use atuin_common::harnesstools::continuation::{self, Flattened};
 use tokio::sync::mpsc;
 
-use super::resumer::{NotResumable, Restore, Resume, ResumePlan, Resumer};
+use super::resumer::{Continued, NotResumable, Restore, Resume, ResumePlan, Resumer};
 use super::source::{SessionFilter, SessionPreview, SessionRow, SessionSource};
 
 #[derive(Debug)]
@@ -36,6 +39,10 @@ pub enum Request {
     Plan(Box<SessionRow>),
     /// Write out the transcript of a session planned with a restore, and plan resuming it.
     Restore(Box<SessionRow>, Restore),
+    /// Count what continuing a session in another harness would flatten (reads all of it).
+    Flatten(HarnessSession, PathBuf),
+    /// Write a session out as a new session of another harness, and plan resuming that.
+    Continue(Box<SessionRow>, HarnessKind),
 }
 
 #[derive(Debug)]
@@ -50,6 +57,9 @@ pub enum Response {
     Plan(HarnessSession, Result<Resume, NotResumable>),
     /// The session is restored (or couldn't be): the plan that resumes it.
     Restored(HarnessSession, Result<ResumePlan, NotResumable>),
+    Flattened(HarnessSession, Result<Flattened, String>),
+    /// The session is continued in another harness (or couldn't be).
+    Continued(HarnessSession, Result<Continued, NotResumable>),
     /// Other hosts' names, by host id (see [`SessionSource::host_names`]).
     HostNames(HashMap<String, String>),
 }
@@ -139,6 +149,8 @@ struct Latest {
     children: Option<Request>,
     plan: Option<Request>,
     restore: Option<Request>,
+    flatten: Option<Request>,
+    continuation: Option<Request>,
 }
 
 impl Latest {
@@ -148,17 +160,21 @@ impl Latest {
             Request::Children { .. } => &mut self.children,
             Request::Plan(_) => &mut self.plan,
             Request::Restore(..) => &mut self.restore,
+            Request::Flatten(..) => &mut self.flatten,
+            Request::Continue(..) => &mut self.continuation,
             Request::Search { .. } => return,
         };
         *slot = Some(request);
     }
 
-    /// The next to answer: a restore or a plan first (an enter may be waiting on it), then
-    /// children, then the preview.
+    /// The next to answer: a continuation, a restore or a plan first (an enter may be waiting
+    /// on it), then what the chooser shows, then children, then the preview.
     fn take(&mut self) -> Option<Request> {
-        self.restore
+        self.continuation
             .take()
+            .or_else(|| self.restore.take())
             .or_else(|| self.plan.take())
+            .or_else(|| self.flatten.take())
             .or_else(|| self.children.take())
             .or_else(|| self.preview.take())
     }
@@ -206,6 +222,18 @@ async fn details(
             Request::Restore(row, restore) => Response::Restored(
                 row.handle.clone(),
                 resumer.restore(source.as_ref(), &row, &restore).await,
+            ),
+            Request::Flatten(session, cwd) => {
+                let flattened = source
+                    .rehydrate(&session, &cwd)
+                    .await
+                    .map(|original| continuation::flattened(&original))
+                    .map_err(|e| format!("{e:#}"));
+                Response::Flattened(session, flattened)
+            }
+            Request::Continue(row, target) => Response::Continued(
+                row.handle.clone(),
+                resumer.continue_in(source.as_ref(), &row, target).await,
             ),
             Request::Search { .. } => continue,
         };
