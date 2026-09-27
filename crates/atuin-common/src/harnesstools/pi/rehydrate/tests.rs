@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::num::NonZeroUsize;
 
 use futures::TryStreamExt;
@@ -8,6 +9,7 @@ use time::OffsetDateTime;
 
 use super::*;
 use crate::harnesstools::pi::session::{PiMessage, PiSession};
+use crate::harnesstools::rehydrate::testing;
 use crate::harnesstools::session::{Message, Session, SessionId};
 use crate::sync::BlockingPool;
 
@@ -241,4 +243,123 @@ fn a_bang_command_is_a_bash_execution(sessions: TempDir) {
     assert_eq!(entry["message"]["command"], "echo hi");
     assert_eq!(entry["message"]["excludeFromContext"], true);
     assert_eq!(entry["message"]["exitCode"], 1);
+}
+
+/// Checks a session file as strictly as the APIs behind pi check what pi-ai builds from it: an
+/// assistant message's `toolCall`s have an object for their `arguments` (pi-ai sends a missing
+/// one as `{}` to Anthropic and `"null"` to OpenAI) and are answered by the `toolResult`s right
+/// after it, each result answers a call of the assistant message before it and says something,
+/// and no two assistant messages pi sends come in a row (pi-ai sends each as a message of its
+/// own; it leaves out the failed ones).
+fn assert_the_api_takes(lines: &[serde_json::Value]) {
+    let messages =
+        lines.iter().filter(|l| l["type"] == "message").map(|l| &l["message"]).filter(|m| {
+            m["role"] != "assistant"
+                || !matches!(m["stopReason"].as_str(), Some("error" | "aborted"))
+        });
+    let mut calls: HashSet<String> = HashSet::new();
+    let mut last_role = "";
+    for m in messages {
+        let role = m["role"].as_str().unwrap();
+        match role {
+            "assistant" => {
+                assert!(calls.is_empty(), "calls {calls:?} not answered");
+                assert_ne!(last_role, "assistant", "two assistant messages in a row: {m}");
+                for block in m["content"].as_array().unwrap() {
+                    if block["type"] == "toolCall" {
+                        assert!(
+                            block["arguments"].is_object(),
+                            "a call without arguments: {block}"
+                        );
+                        calls.insert(block["id"].as_str().unwrap().to_owned());
+                    }
+                }
+            }
+            "toolResult" => {
+                let id = m["toolCallId"].as_str().unwrap();
+                assert!(calls.remove(id), "result {id} answers no call before it");
+                assert!(m["content"].as_array().is_some_and(|c| !c.is_empty()), "{m}");
+            }
+            _ => assert!(calls.is_empty(), "calls {calls:?} not answered before a {role}"),
+        }
+        last_role = role;
+    }
+}
+
+/// What capture syncs keeps no call's input and no output. Written back, each such call is a
+/// note in its turn's text, which the APIs take; re-captured, every entry reads back under an id
+/// already synced (so nothing is pushed): a turn's first message with its notes, the messages
+/// merged into it and the results not at all.
+#[rstest]
+#[case::mock(include_str!("../../../../tests/fixtures/pi/session-mock-0.85.jsonl"))]
+#[case::session1(include_str!("../../../../tests/fixtures/pi/session1.jsonl"))]
+#[case::session2(include_str!("../../../../tests/fixtures/pi/session2.jsonl"))]
+#[case::v1(include_str!("../../../../tests/fixtures/pi/session-v1.jsonl"))]
+#[tokio::test]
+async fn synced_calls_come_back_as_notes_the_api_takes(sessions: TempDir, #[case] jsonl: &str) {
+    let mut synced = testing::synced(captured(jsonl));
+    assert!(testing::uncaptured(&synced) > 0, "the fixture makes calls");
+    // Some fixtures had their ids redacted: a chain of ids of their own stands in.
+    if synced.iter().any(|m| m.source_id == "<redacted>") {
+        for (n, m) in synced.iter_mut().enumerate() {
+            m.source_id = format!("{n:08x}");
+            m.parent_source_id = n.checked_sub(1).map(|p| format!("{p:08x}"));
+        }
+    }
+    let session = session("0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000", sessions.path(), synced.clone());
+    let path = rehydrate_into(sessions.path(), sessions.path(), &session).unwrap();
+    let written = lines(&path);
+    assert_the_api_takes(&written);
+    assert!(!written.iter().any(|l| l["message"]["content"].to_string().contains("toolCall")));
+
+    let read = read_back(&path).await;
+    let again: Vec<(String, Role, Vec<Content>)> = read[1..]
+        .iter()
+        .filter(|m| m.title().is_none())
+        .map(|m| {
+            let role = m.role();
+            let content = testing::sanitize(&role, &m.content());
+            (m.id().unwrap().to_string(), role, content)
+        })
+        .filter(|(_, _, content)| !content.is_empty())
+        .collect();
+    testing::assert_nothing_new(&synced, again.iter().map(|(id, ..)| id.as_str()));
+    let flattened = flatten_uncaptured_calls(&synced, &Flatten::Runs);
+    assert_eq!(again, carried(&flattened));
+}
+
+/// Tool output capture never kept is written as saying so, as a result's and a `!command`'s.
+#[rstest]
+fn output_not_captured_says_so(sessions: TempDir) {
+    let call = crate::harnesstools::session::ToolCallId::from("t1".to_owned());
+    let session = session("s-output", sessions.path(), vec![
+        message("b1", None, Role::User, vec![
+            Content::Text("!ls".to_owned()),
+            Content::ToolResult(ToolResult {
+                call: "b1".to_owned().into(),
+                output: serde_json::Value::Null,
+                error: false,
+            }),
+        ]),
+        message("a1", Some("b1"), Role::Assistant, vec![Content::ToolUse(
+            crate::harnesstools::session::ToolUse {
+                id: call.clone(),
+                name: "bash".to_owned(),
+                input: json!({"command": "ls"}),
+            },
+        )]),
+        message("r1", Some("a1"), Role::Tool, vec![Content::ToolResult(ToolResult {
+            call,
+            output: serde_json::Value::Null,
+            error: false,
+        })]),
+    ]);
+    let path = rehydrate_into(sessions.path(), sessions.path(), &session).unwrap();
+    let lines = lines(&path);
+    assert_the_api_takes(&lines);
+    assert_eq!(lines[1]["message"]["output"], UNCAPTURED_OUTPUT);
+    assert_eq!(
+        lines[3]["message"]["content"],
+        json!([{"type": "text", "text": UNCAPTURED_OUTPUT}])
+    );
 }

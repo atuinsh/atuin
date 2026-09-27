@@ -29,6 +29,16 @@
 //!
 //! # What is not the same
 //!
+//! - **Tool calls captured without their input** (capture keeps only a call's name now) are not
+//!   written as tool parts: opencode would send the model a call on no input (`{"input": null}`,
+//!   the object its state needs) with an output it never had. Each becomes a text part under the
+//!   call's own part id, reading as a continuation's note (`[ran a shell command]`), or joins a
+//!   text part of the same message before it, with nothing but reasoning or other notes between
+//!   (the same note several times in a row counted, `×3`; see [`Flatten::Notes`]). Re-captured,
+//!   the part reads back under a part id capture already holds, so nothing is pushed; a part
+//!   merged away is not there to capture again.
+//! - **Tool output**: capture keeps none now; a call kept with its input (older records) is
+//!   written `completed` (or `error`) with [`UNCAPTURED_OUTPUT`] as its output.
 //! - opencode stamps each part row with the time of the import. Text, reasoning, tool and retry
 //!   parts carry their own clock and read back with the captured timestamp; the rest (`step-start`,
 //!   `step-finish`, whole parts) read back with the import's.
@@ -49,7 +59,10 @@ use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 
 use super::session;
-use crate::harnesstools::rehydrate::{RehydrateError, RehydrateMessage, RehydrateSession};
+use crate::harnesstools::rehydrate::{
+    Flatten, RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT,
+    flatten_uncaptured_calls,
+};
 use crate::harnesstools::session::{Content, Role, StopReason, ToolResult, ToolUse, Usage};
 
 /// How long `opencode import` may take before it is given up on.
@@ -296,7 +309,15 @@ fn is_session_row(session: &RehydrateSession, row: &RehydrateMessage) -> bool {
 /// The JSON `opencode export` writes for `session`, which `opencode import` reads back.
 pub(crate) fn export(session: &RehydrateSession) -> Value {
     let mut drafts: Vec<Draft> = Vec::new();
-    for row in &session.messages {
+    // A note joins a text part of its own message: the one answering the same prompt in the
+    // same model call.
+    let rows = flatten_uncaptured_calls(&session.messages, &Flatten::Notes {
+        host: &|host, row| {
+            host.parent_source_id == row.parent_source_id && turn_base(host) == turn_base(row)
+        },
+        own: &|_| true,
+    });
+    for row in &rows {
         if is_session_row(session, row) {
             continue;
         }
@@ -642,7 +663,7 @@ fn tool_part(call: &ToolUse, result: Option<&ToolResult>, at: i64) -> Value {
     };
     let text = |output: &Value| match output {
         Value::String(text) => text.clone(),
-        Value::Null => String::new(),
+        Value::Null => UNCAPTURED_OUTPUT.to_owned(),
         other => other.to_string(),
     };
     let state = match result {
@@ -674,6 +695,7 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::harnesstools::opencode::session::OpencodeSessions;
+    use crate::harnesstools::rehydrate::testing;
     use crate::harnesstools::session::{Message, Session, Sessions};
 
     /// The part of opencode's schema the import writes and capture reads.
@@ -1062,6 +1084,59 @@ pub(crate) mod tests {
         assert_eq!(assistant["time"]["created"], 1_790_217_606_979_i64);
         assert_eq!(assistant["finish"], "tool-calls");
         assert_eq!(exported["messages"][0]["info"]["model"]["providerID"], "openai");
+    }
+
+    /// Checks an export as strictly as the APIs behind opencode check what it sends from it:
+    /// every tool part calls on an input capture kept (an object, never the `{"input": null}`
+    /// standing in for none), and a finished one's output says something.
+    fn assert_the_api_takes(exported: &Value) {
+        for part in exported["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|m| m["parts"].as_array().unwrap().iter().filter(|p| p["type"] == "tool"))
+        {
+            let state = &part["state"];
+            assert!(state["input"].is_object(), "{part}");
+            assert_ne!(state["input"], json!({"input": null}), "a call on no input: {part}");
+            if state["status"] == "completed" {
+                assert!(state["output"].as_str().is_some_and(|o| !o.is_empty()), "{part}");
+            }
+        }
+    }
+
+    /// What capture syncs keeps no call's input and no output. Written back, each such call is a
+    /// text part saying what was done, which the APIs take; re-captured, every part reads back
+    /// under an id already synced (so nothing is pushed), a text part it joined with its note.
+    #[rstest]
+    #[tokio::test]
+    async fn synced_calls_come_back_as_notes_the_api_takes() {
+        let dir = tempfile::tempdir().unwrap();
+        let synced = testing::synced(every_kind());
+        assert!(testing::uncaptured(&synced) > 0, "the session makes calls");
+        let exported = export(&session(SES, Some("Fix the build"), synced.clone()));
+        assert_the_api_takes(&exported);
+        let path = dir.path().join("opencode.db");
+        let mut conn = database(&path).await;
+        opencode_import(&mut conn, &exported, "/here").await;
+        conn.close().await.unwrap();
+
+        let again = captured(&path).await;
+        testing::assert_nothing_new(&synced, again.iter().map(|m| m.source_id.as_str()));
+        let flattened = flatten_uncaptured_calls(&synced, &Flatten::Notes {
+            host: &|host, row| {
+                host.parent_source_id == row.parent_source_id && turn_base(host) == turn_base(row)
+            },
+            own: &|_| true,
+        });
+        // A part left with nothing is not written, but for a model call's `step-finish`; nor is
+        // reasoning capture kept no text of.
+        let expected: Vec<RehydrateMessage> = flattened
+            .into_iter()
+            .filter(|m| !m.content.is_empty() || m.usage.is_some() || is_session(SES, m))
+            .filter(|m| !matches!(m.content.as_slice(), [Content::ReasoningSummary { .. }]))
+            .collect();
+        pretty_assertions::assert_eq!(keys(&testing::synced(again)), keys(&expected));
     }
 
     /// A tool call opencode never finished is written as one it shows interrupted; minted ids

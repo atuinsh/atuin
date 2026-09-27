@@ -34,6 +34,20 @@
 //!   API by `id`, which a store-less request cannot resolve. The model's earlier reasoning is not
 //!   something it needs to continue, so these items are left out, and re-capture has no row to
 //!   compare them with.
+//! - **Tool calls captured without their input** (capture keeps only a call's name now). A
+//!   `function_call`'s `arguments` must be a string of JSON, a `custom_tool_call`'s `input` a
+//!   string, a `local_shell_call`'s `action` an object: Codex cannot read the line back, let alone
+//!   send it. Each becomes a note (`[ran a shell command]`, as a continuation writes it) and its
+//!   output is dropped ([`Flatten::Notes`]). A note joins the text of the assistant `message`
+//!   before it in the turn (the same note several times in a row counted, `×3`), written under
+//!   that message's id; with none, it is an assistant `message` of its own under the call's id
+//!   (its `id`, or its `call_id` when capture keyed it on that). Re-captured, either reads back
+//!   under a source id capture already holds, so nothing is pushed, and the outputs are not there
+//!   to capture again. A line keyed on its content (`syn-`) would hash differently once changed:
+//!   a note never joins one, and a call keyed so (none in practice: every call has a `call_id`)
+//!   is left out.
+//! - **Tool output**: capture keeps none now; a call kept with its input (older records) gets
+//!   [`UNCAPTURED_OUTPUT`] as its output (an empty `tools` list for a tool search).
 //! - Rows whose line carries nothing Codex needs back: thread names (Codex keeps those in its
 //!   `session_index.jsonl` now) and other events.
 //! - Content kinds a line of the kind cannot carry (text inside a tool call, and so on).
@@ -47,7 +61,10 @@ use time::format_description::well_known::Rfc3339;
 use time::{OffsetDateTime, UtcOffset};
 
 use super::session::{self, archive_of, is_contextual_user_text, session_id_of};
-use crate::harnesstools::rehydrate::{RehydrateError, RehydrateMessage, RehydrateSession};
+use crate::harnesstools::rehydrate::{
+    Flatten, RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT,
+    flatten_uncaptured_calls,
+};
 use crate::harnesstools::resume::is_plain_name;
 use crate::harnesstools::session::{Content, Role, StopReason, ToolResult, ToolUse, Usage};
 
@@ -199,7 +216,13 @@ fn rollout(session: &RehydrateSession) -> Vec<Value> {
     }
     let mut lines = vec![line(&stamp(session.started_at), "session_meta", meta)];
     let mut calls = HashMap::new();
-    for message in &session.messages {
+    // A line keyed on its content would be captured again as a new row once its content changes.
+    let keyed = |m: &RehydrateMessage| !m.source_id.starts_with("syn-");
+    let messages = flatten_uncaptured_calls(&session.messages, &Flatten::Notes {
+        host: &|host, _| keyed(host),
+        own: &keyed,
+    });
+    for message in &messages {
         lines.extend(message_lines(session, message, &mut calls));
     }
     lines
@@ -374,20 +397,26 @@ fn tool_output(
     let call_id = result.call.as_ref();
     let fallback = format!("{call_id}#out");
     let id = item_id(message, Some(&fallback));
+    // Codex reads an output as a string or content items, and a tool search's as a list.
+    let output = if result.output.is_null() {
+        json!(UNCAPTURED_OUTPUT)
+    } else {
+        result.output.clone()
+    };
     match calls.get(call_id) {
         Some(CallKind::ToolSearch) => with_id(
             json!({"type": "tool_search_output", "call_id": call_id,
                    "status": if result.error { "failed" } else { "completed" },
-                   "execution": "client", "tools": result.output}),
+                   "execution": "client",
+                   "tools": if result.output.is_null() { json!([]) } else { output }}),
             id,
         ),
         Some(CallKind::Custom) => with_id(
-            json!({"type": "custom_tool_call_output", "call_id": call_id,
-                   "output": result.output}),
+            json!({"type": "custom_tool_call_output", "call_id": call_id, "output": output}),
             id,
         ),
         _ => with_id(
-            json!({"type": "function_call_output", "call_id": call_id, "output": result.output}),
+            json!({"type": "function_call_output", "call_id": call_id, "output": output}),
             id,
         ),
     }
@@ -496,6 +525,7 @@ mod tests {
 
     use super::*;
     use crate::harnesstools::codex::session::{CodexMessage, CodexSession};
+    use crate::harnesstools::rehydrate::testing;
     use crate::harnesstools::session::{Message, Session, SessionId};
     use crate::sync::BlockingPool;
 
@@ -732,6 +762,136 @@ mod tests {
         pretty_assertions::assert_eq!(keys(&again), keys(&messages));
         assert_eq!(again[5].usage, messages[5].usage);
         assert_eq!(again[6].usage, messages[6].usage);
+    }
+
+    /// Checks a rollout as strictly as Codex and the Responses API check the history Codex
+    /// resumes from it: a `function_call`'s `arguments` is a string of a JSON object, a
+    /// `custom_tool_call`'s `input` a string, a `local_shell_call`'s `action` an object; every
+    /// output answers a call before it and says something; every call is answered.
+    fn assert_the_api_takes(path: &Path) {
+        let text = std::fs::read_to_string(path).unwrap();
+        let mut open: Vec<String> = Vec::new();
+        for line in text.lines() {
+            let line: Value = serde_json::from_str(line).unwrap();
+            if line["type"] != "response_item" {
+                continue;
+            }
+            let item = &line["payload"];
+            let call_id = || item["call_id"].as_str().expect("an item names its call").to_owned();
+            match item["type"].as_str().unwrap() {
+                "function_call" => {
+                    let arguments = item["arguments"].as_str().expect("arguments are a string");
+                    let parsed: Value = serde_json::from_str(arguments).expect("arguments parse");
+                    assert!(parsed.is_object(), "arguments are no object: {item}");
+                    open.push(call_id());
+                }
+                "custom_tool_call" => {
+                    assert!(item["input"].is_string(), "input is no string: {item}");
+                    open.push(call_id());
+                }
+                "local_shell_call" => {
+                    assert!(item["action"].is_object(), "action is no object: {item}");
+                    open.push(call_id());
+                }
+                "function_call_output" | "custom_tool_call_output" => {
+                    let id = call_id();
+                    let at = open.iter().position(|c| *c == id);
+                    assert!(at.is_some(), "output {id} answers no call before it");
+                    open.remove(at.unwrap());
+                    let output = &item["output"];
+                    assert!(
+                        output.as_str().is_some_and(|o| !o.is_empty()) || output.is_array(),
+                        "an output says nothing: {item}"
+                    );
+                }
+                _ => {}
+            }
+        }
+        assert!(open.is_empty(), "calls {open:?} never answered");
+    }
+
+    /// What capture syncs keeps no call's input and no output. Written back, each such call is a
+    /// note, which Codex and the API take; re-captured, every line reads back under an id already
+    /// synced (so nothing is pushed), and the outputs not at all.
+    #[rstest]
+    #[tokio::test]
+    async fn synced_calls_come_back_as_notes_the_api_takes() {
+        let name = "session1.jsonl";
+        let id = own_id(&fixture(name));
+        let synced = testing::synced(captured(&id, &read(&id, fixture(name)).await));
+        assert!(testing::uncaptured(&synced) > 0, "the fixture makes calls");
+        let root = tempfile::tempdir().unwrap();
+        let path = write(root.path(), &session(&id, synced.clone())).unwrap();
+        assert_the_api_takes(&path);
+
+        let again = captured(&id, &read(&id, path).await);
+        testing::assert_nothing_new(&synced, again.iter().map(|m| m.source_id.as_str()));
+        let again = testing::synced(again);
+        // Rows left with no content are not written, but for the bookkeeping lines.
+        let expected: Vec<RehydrateMessage> = flatten_uncaptured_calls(&synced, &Flatten::Notes {
+            host: &|host, _| !host.source_id.starts_with("syn-"),
+            own: &|m| !m.source_id.starts_with("syn-"),
+        })
+        .into_iter()
+        .filter(carried)
+        .filter(|m| !m.content.is_empty() || matches!(m.role, Role::Other(_)))
+        .collect();
+        pretty_assertions::assert_eq!(keys(&again), keys(&expected));
+        assert!(again.iter().any(|m| matches!(
+            m.content.as_slice(),
+            [Content::Text(text)] if m.role == Role::Assistant && text.contains("[called `tool`]")
+        )));
+    }
+
+    /// A note joins the assistant message before it in the turn, under that message's id; with
+    /// none, it is a message of its own under its call's id: the `call_id` capture keyed it on.
+    /// A call kept with its input stays a call, its output saying it was not captured.
+    #[rstest]
+    #[tokio::test]
+    async fn notes_join_the_message_before_them_or_take_the_calls_id() {
+        let messages = vec![
+            row(ID, 0, Role::Other("session_meta".into()), vec![]),
+            row("msg_u", 1, Role::User, vec![Content::Text("go".to_owned())]),
+            row("call_1", 2, Role::Assistant, vec![tool_use("call_1", "shell", Value::Null)]),
+            row("call_1#out", 3, Role::Tool, vec![tool_result("call_1", "", false)]),
+            row("call_2", 4, Role::Assistant, vec![tool_use("call_2", "shell", Value::Null)]),
+            row("call_2#out", 5, Role::Tool, vec![tool_result("call_2", "", false)]),
+            row("msg_a", 6, Role::Assistant, vec![Content::Text("Looked.".to_owned())]),
+            row("ctc_3", 7, Role::Assistant, vec![tool_use("call_3", "apply_patch", Value::Null)]),
+            row("call_4", 8, Role::Assistant, vec![tool_use(
+                "call_4",
+                "shell",
+                json!("{\"command\":[\"ls\"]}"),
+            )]),
+            row("call_4#out", 9, Role::Tool, vec![Content::ToolResult(ToolResult {
+                call: "call_4".to_owned().into(),
+                output: Value::Null,
+                error: false,
+            })]),
+            row("call_5", 11, Role::Assistant, vec![tool_use(
+                "call_5",
+                "local_shell",
+                Value::Null,
+            )]),
+        ];
+        let root = tempfile::tempdir().unwrap();
+        let path = write(root.path(), &session(ID, messages.clone())).unwrap();
+        assert_the_api_takes(&path);
+        let again = captured(ID, &read(ID, path).await);
+        testing::assert_nothing_new(&messages, again.iter().map(|m| m.source_id.as_str()));
+        let text = |t: &str| vec![Content::Text(t.to_owned())];
+        pretty_assertions::assert_eq!(keys(&again[1..]), vec![
+            ("msg_u".to_owned(), Role::User, text("go")),
+            ("call_1".to_owned(), Role::Assistant, text("[ran a shell command] ×2")),
+            ("msg_a".to_owned(), Role::Assistant, text("Looked.\n\n[applied a patch]")),
+            ("call_4".to_owned(), Role::Assistant, messages[8].content.clone()),
+            ("call_4#out".to_owned(), Role::Tool, vec![tool_result(
+                "call_4",
+                UNCAPTURED_OUTPUT,
+                false
+            )]),
+            ("call_5".to_owned(), Role::Assistant, text("[ran a shell command]")),
+        ]);
     }
 
     #[rstest]
