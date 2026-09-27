@@ -377,6 +377,9 @@ steps:
       - nightly
     # Report failing runs too, and don't wait on skipped (scheduled-only) steps.
     allow_dependency_failure: true
+    # A Test Engine outage or rejected upload mustn't fail an otherwise green
+    # build.
+    soft_fail: true
     notify:
       - github_check:
           name: "buildkite/test-engine"
