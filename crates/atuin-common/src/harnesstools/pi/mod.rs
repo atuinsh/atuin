@@ -1,9 +1,11 @@
 use std::path::{Path, PathBuf};
 
+use super::rehydrate::{RehydrateError, RehydrateSession};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError};
 use crate::utils::{env_nonempty, home_dir};
 
+pub mod rehydrate;
 pub mod session;
 
 /// Pi's config directory: `PI_CODING_AGENT_DIR`, else `~/.pi/agent` (pi-mono
@@ -90,5 +92,9 @@ impl Harness for Pi {
     async fn locate(&self, id: &str) -> Option<PathBuf> {
         let (root, id) = (session::default_root(), id.to_owned());
         resume::blocking(move || session::locate(&root, &id)).await
+    }
+
+    async fn rehydrate(&self, session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
+        rehydrate::rehydrate(session).await
     }
 }

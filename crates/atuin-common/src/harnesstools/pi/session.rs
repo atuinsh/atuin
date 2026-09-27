@@ -88,10 +88,29 @@ pub(crate) fn locate(root: &Path, id: &str) -> Option<PathBuf> {
 /// `<agent dir>/sessions`, the first two with `~` expanded. A project's own
 /// `.pi/settings.json` can move its sessions too; no single root covers that.
 fn session_root(agent_dir: &Path, env: Option<&std::ffi::OsStr>) -> PathBuf {
-    if let Some(dir) = env {
-        return expand_tilde(dir);
+    custom_session_dir(agent_dir, env).unwrap_or_else(|| agent_dir.join("sessions"))
+}
+
+/// The session directory the user chose (`PI_CODING_AGENT_SESSION_DIR`, else the global
+/// `settings.json` `sessionDir`), if any: pi keeps every project's sessions directly in it.
+fn custom_session_dir(agent_dir: &Path, env: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+    match env {
+        Some(dir) => Some(expand_tilde(dir)),
+        None => settings_session_dir(agent_dir),
     }
-    settings_session_dir(agent_dir).unwrap_or_else(|| agent_dir.join("sessions"))
+}
+
+/// Where pi puts a new session started in `cwd`: the chosen session directory itself, else
+/// `<agent dir>/sessions/--<cwd with separators as dashes>--` (pi-mono coding-agent
+/// `session-manager.ts` `getDefaultSessionDirPath`).
+pub(crate) fn new_session_dir(cwd: &Path) -> PathBuf {
+    let agent_dir = agent_dir();
+    let env = env_nonempty("PI_CODING_AGENT_SESSION_DIR");
+    custom_session_dir(&agent_dir, env.as_deref()).unwrap_or_else(|| {
+        let cwd = cwd.to_string_lossy();
+        let cwd = cwd.strip_prefix(['/', '\\']).unwrap_or(&cwd).replace(['/', '\\', ':'], "-");
+        agent_dir.join("sessions").join(format!("--{cwd}--"))
+    })
 }
 
 /// The global `settings.json` `sessionDir` (pi-mono coding-agent `settings-manager.ts`
