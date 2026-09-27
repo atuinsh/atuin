@@ -41,7 +41,10 @@ use crate::harnesstools::session::{Content, Role, StopReason, ToolResult, Usage}
 const MAX_PROJECT_NAME: usize = 200;
 
 /// Write `session` under Claude Code's projects directory (`$CLAUDE_CONFIG_DIR/projects`, else
-/// `~/.claude/projects`, as [`locate`] looks), in the project of the directory it resumes in.
+/// `~/.claude/projects`, where [`Harness::locate`] looks), in the project of the directory it
+/// resumes in.
+///
+/// [`Harness::locate`]: crate::harnesstools::Harness::locate
 pub async fn rehydrate(session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
     let (root, session) = (default_root(), session.clone());
     tokio::task::spawn_blocking(move || rehydrate_into(&root, &session))

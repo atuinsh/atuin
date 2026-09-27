@@ -232,7 +232,7 @@ fn apply_response(state: &mut State, response: Response, requests: &Requests) {
 fn complete(state: &mut State, action: Pending, requests: &Requests) -> Option<Outcome> {
     let row = state.selected()?.clone();
     let Some(plan) = state.plans.get(&row.handle).cloned() else {
-        state.pending = Some((row.handle.clone(), action));
+        state.pending = Some((row.handle, action));
         state.status = Some(("locating the session…".to_owned(), Meaning::Annotation));
         return None;
     };

@@ -43,7 +43,7 @@ pub struct RehydrateSession {
 pub enum RehydrateError {
     #[error("{0} sessions can't be rehydrated")]
     Unsupported(&'static str),
-    #[error("a transcript for this session already exists at {}", .0.display())]
+    #[error("a transcript for this session already exists at {0}")]
     AlreadyExists(PathBuf),
     #[error("the harness's data directory could not be found")]
     NoDataDir,

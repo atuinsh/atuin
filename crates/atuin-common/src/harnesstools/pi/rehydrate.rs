@@ -38,7 +38,9 @@ use crate::harnesstools::session::{Content, Role, StopReason, ToolResult, Usage}
 const VERSION: u32 = 3;
 
 /// Write `session` where pi keeps new sessions for the directory it resumes in, after checking
-/// every session directory [`locate`] searches for one already holding it.
+/// every session directory [`Harness::locate`] searches for one already holding it.
+///
+/// [`Harness::locate`]: crate::harnesstools::Harness::locate
 pub async fn rehydrate(session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
     let session = session.clone();
     tokio::task::spawn_blocking(move || {

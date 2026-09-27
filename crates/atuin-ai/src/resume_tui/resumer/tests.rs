@@ -230,7 +230,7 @@ async fn restoring_writes_the_transcript_and_plans_resuming_it(dirs: Dirs, #[cas
     assert_eq!(plan.cwd.as_deref(), Some(dirs.here.as_path()));
     let written: Vec<_> = machine.written.lock().iter().map(|s| s.cwd.clone()).collect();
     if id == "abc-123" {
-        assert_eq!(written, [dirs.here.clone()]);
+        assert_eq!(written, std::slice::from_ref(&dirs.here));
     } else {
         assert!(written.is_empty());
     }
@@ -311,10 +311,10 @@ fn resumes_where_it_ran_or_nearest_here(
     });
     let restore = resolve_cwd(original.as_deref(), &context(&dirs));
     let expected = match expect {
-        Expect::Original => dirs.elsewhere.clone(),
+        Expect::Original => dirs.elsewhere,
         Expect::RepoSubdir => dirs.repo.join("crates"),
-        Expect::RepoRoot => dirs.repo.clone(),
-        Expect::Here => dirs.here.clone(),
+        Expect::RepoRoot => dirs.repo,
+        Expect::Here => dirs.here,
     };
     assert_eq!(restore.cwd, expected);
     assert_eq!(restore.note.is_some(), noted, "{restore:?}");

@@ -311,6 +311,7 @@ impl From<DomainSession> for Session {
             preview: value.preview,
             host_id: value.host.map(host_repr),
             root: value.root.map(Into::into),
+            copy_of: value.copy_of.map(Into::into),
             child_count: value.child_count,
             group_updated_at: value.group_updated_at.map(timestamp),
         }
@@ -343,6 +344,7 @@ impl TryFrom<Session> for DomainSession {
             preview: value.preview,
             host: host_from_repr(value.host_id)?,
             root: value.root.map(TryInto::try_into).transpose()?,
+            copy_of: value.copy_of.map(TryInto::try_into).transpose()?,
             child_count: value.child_count,
             group_updated_at: value.group_updated_at.map(from_timestamp).transpose()?,
         })
@@ -537,12 +539,13 @@ mod tests {
             prop::option::of(arb_harness_session()),
             any::<u64>(),
             prop::option::of(arb_timestamp()),
+            prop::option::of(arb_harness_session()),
         );
         (handles, summary, grouping).prop_map(
             |(
                 (handle, parent, cwd, git_branch, model),
                 (started_at, updated_at, message_count, usage, title, preview),
-                (host, root, child_count, group_updated_at),
+                (host, root, child_count, group_updated_at, copy_of),
             )| DomainSession {
                 handle,
                 parent,
@@ -558,6 +561,7 @@ mod tests {
                 preview,
                 host,
                 root,
+                copy_of,
                 child_count,
                 group_updated_at,
             },
