@@ -969,7 +969,6 @@ impl AiSessionDatabase {
 
     /// The text of an assistant message, clipped for storage, or `None` for any other message.
     fn reply_text(msg: &Message) -> Option<String> {
-        const MAX_CHARS: usize = 600;
         if msg.role != Role::Assistant {
             return None;
         }
@@ -983,15 +982,7 @@ impl AiSessionDatabase {
             .filter(|text| !text.is_empty())
             .collect::<Vec<_>>()
             .join("\n");
-        if text.is_empty() {
-            return None;
-        }
-        let head = text.truncate_chars(MAX_CHARS);
-        Some(if head.len() < text.len() {
-            format!("{head}…")
-        } else {
-            text
-        })
+        (!text.is_empty()).then(|| Self::clip_summary(&text))
     }
 
     fn preview_text(msg: &Message) -> Option<String> {
@@ -1000,9 +991,22 @@ impl AiSessionDatabase {
         }
 
         msg.content.iter().find_map(|content| match content {
-            Content::Text(text) => Some(text.clone()),
+            Content::Text(text) => Some(Self::clip_summary(text)),
             _ => None,
         })
+    }
+
+    /// A session summary field (`preview`, `last_reply`) clipped for storage: every session
+    /// listing carries them, and displays show a line of each, so a pasted multi-kilobyte prompt
+    /// kept whole would only weigh down every list.
+    fn clip_summary(text: &str) -> String {
+        const MAX_CHARS: usize = 600;
+        let head = text.truncate_chars(MAX_CHARS);
+        if head.len() < text.len() {
+            format!("{head}…")
+        } else {
+            text.to_owned()
+        }
     }
 
     fn searchable_body(msg: &Message) -> String {
@@ -1991,6 +1995,19 @@ mod tests {
 
         let s = db.get_session(&session).await.unwrap().unwrap();
         assert_eq!(s.last_reply.as_deref(), Some("all tests pass now"));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn session_preview_and_last_reply_are_clipped() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        db.append(&message_in(&session, 0, &"p".repeat(5_000))).await.unwrap();
+        db.append(&reply_in(&session, 1, &"r".repeat(5_000))).await.unwrap();
+
+        let s = db.get_session(&session).await.unwrap().unwrap();
+        assert_eq!(s.preview.unwrap(), format!("{}…", "p".repeat(600)));
+        assert_eq!(s.last_reply.unwrap(), format!("{}…", "r".repeat(600)));
     }
 
     #[rstest]
