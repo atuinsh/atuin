@@ -2,12 +2,14 @@
 //!
 //! A ratatui view built to look and behave like the history search (`atuin search -i`): the same
 //! header, tabs and `[ MODE ] >` input box, preview pane, `invert`/`style`/`inline_height`, enter
-//! vs tab accept, and emacs/vim keymaps from [`atuin_client::tui`].
+//! vs tab accept, and emacs/vim keymaps from [`atuin_client::tui`]. Accepting a session asks
+//! where to resume it: in its own harness, or continued in another ([`chooser`]).
 //!
 //! It depends on two seams:
 //! - [`SessionSource`] lists, searches and previews sessions;
 //! - [`Resumer`] turns a session into a resume command, or says why it can't be resumed.
 
+pub mod chooser;
 pub mod fake;
 pub mod keymap;
 mod markdown;
@@ -29,9 +31,7 @@ use std::time::{Duration, Instant};
 use atuin_client::ai_session::{HarnessKind, HarnessSession};
 use atuin_client::settings::Settings;
 use atuin_client::theme::{Meaning, Theme};
-use crossterm::event::EventStream;
 use eyre::Result;
-use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::{Terminal, TerminalOptions, Viewport};
 pub use resumer::{ResumePlan, Resumer};
@@ -67,13 +67,21 @@ impl ResumeContext {
         let git_root = ctx.git_root;
         let branch = git_root.as_deref().and_then(current_branch);
         Ok(Self {
-            cwd: PathBuf::from(ctx.cwd),
+            // `$PWD` as it is set, which may end in a separator: rebuilt from its components, so
+            // a session restored or continued here isn't written with `…/dir/` as its directory.
+            cwd: Path::new(&ctx.cwd).components().collect(),
             git_root,
             branch,
-            host_id: ctx.host_id,
+            host_id: simple_host_id(&ctx.host_id),
             hostname: ctx.cmd_origin.host().into_inner().to_string(),
         })
     }
+}
+
+/// A host id in the one form the picker compares them in: a UUID's simple (unhyphenated) form,
+/// which is how rows carry theirs. Anything that isn't a UUID is kept as it is.
+pub fn simple_host_id(id: &str) -> String {
+    uuid::Uuid::try_parse(id).map_or_else(|_| id.to_owned(), |id| id.as_simple().to_string())
 }
 
 /// The checked-out branch of the repository at `root`, read from `HEAD` (following a worktree's
@@ -218,6 +226,7 @@ fn apply_response(state: &mut State, response: Response, requests: &Requests) {
         }
         Response::Plan(handle, plan) => {
             state.plans.insert(handle, plan);
+            state.settle_chooser();
         }
         Response::Restored(handle, plan) => {
             state.requested.remove(&(handle.clone(), RESTORE));
@@ -285,17 +294,67 @@ fn complete(state: &mut State, action: Pending, requests: &Requests) -> Option<O
     outcome
 }
 
-/// Open the "continue in…" chooser on the selected session, offering the other harnesses
-/// installed here, and read what continuing it would flatten, for the chooser to show.
-fn open_chooser(state: &mut State, resumer: &dyn Resumer, requests: &Requests) {
-    let Some(row) = state.selected().cloned() else {
-        return;
-    };
-    if state.open_chooser(resumer.continue_targets(&row))
-        && !state.flattened.contains_key(&row.handle)
+/// Enter or tab on a session (or ctrl-y, which copies): ask where to resume it (the "Resume in"
+/// chooser, when `chooser` is on and another harness is installed to continue it in), or resume
+/// it in its own harness.
+fn accept(
+    state: &mut State,
+    action: Pending,
+    resumer: &dyn Resumer,
+    requests: &Requests,
+    chooser: bool,
+) -> Option<Outcome> {
+    let row = state.selected()?.clone();
+    request_plan(state, requests, &row);
+    if chooser && action != Pending::Copy {
+        let targets = resumer.continue_targets(&row);
+        if !targets.is_empty() {
+            open_chooser(state, &row, targets, action, requests);
+            return None;
+        }
+    }
+    resume_original(state, action, resumer, requests)
+}
+
+/// Resume the selected session in its own harness ([`complete`]). When that harness can't
+/// resume it here, the chooser opens instead (if another harness is installed), saying why and
+/// offering the others.
+fn resume_original(
+    state: &mut State,
+    action: Pending,
+    resumer: &dyn Resumer,
+    requests: &Requests,
+) -> Option<Outcome> {
+    let outcome = complete(state, action, requests);
+    if outcome.is_none()
+        && action != Pending::Copy
+        && state.pending.is_none()
+        && state.chooser.is_none()
+        && let Some(row) = state.selected().cloned()
+        && state.original_unavailable(&row.handle).is_some()
+    {
+        let targets = resumer.continue_targets(&row);
+        if !targets.is_empty() {
+            open_chooser(state, &row, targets, action, requests);
+        }
+    }
+    outcome
+}
+
+/// Open the chooser on `row`, and read what continuing it elsewhere would flatten, for the
+/// chooser to show.
+fn open_chooser(
+    state: &mut State,
+    row: &SessionRow,
+    targets: Vec<HarnessKind>,
+    action: Pending,
+    requests: &Requests,
+) {
+    state.open_chooser(targets, action);
+    if !state.flattened.contains_key(&row.handle)
         && state.requested.insert((row.handle.clone(), FLATTEN))
     {
-        requests.send(Request::Flatten(row.handle, state.context.cwd.clone()));
+        requests.send(Request::Flatten(row.handle.clone(), state.context.cwd.clone()));
     }
 }
 
@@ -404,6 +463,7 @@ impl Picker<'_> {
             state.pin(row, why);
         }
         let (requests, mut responses) = worker::spawn(self.source, self.resumer.clone());
+        let resumer = self.resumer.as_ref();
 
         if inline_height > 0 {
             terminal.clear()?;
@@ -412,7 +472,7 @@ impl Picker<'_> {
         terminal.draw(|f| state.draw(f, settings, self.theme))?;
         send_search(&mut state, &requests);
 
-        let mut events = EventStream::new();
+        let mut events = terminal::Events::new();
         // Ticks keep relative times and live dots current, and refresh the list now and then so
         // running sessions move and their previews catch up.
         let mut tick = tokio::time::interval(TICK);
@@ -442,23 +502,30 @@ impl Picker<'_> {
                         InputAction::Resume(_) => Some(Pending::Resume),
                         InputAction::ReturnCommand(_) => Some(Pending::Edit),
                         InputAction::Copy(_) => Some(Pending::Copy),
-                        InputAction::ChooseHarness(_) => {
-                            open_chooser(&mut state, self.resumer.as_ref(), &requests);
+                        InputAction::Pick(None, action) => {
+                            if let Some(outcome) =
+                                resume_original(&mut state, action, resumer, &requests)
+                            {
+                                break 'render outcome;
+                            }
                             None
                         }
-                        InputAction::ContinueIn(target, action) => {
+                        InputAction::Pick(Some(target), action) => {
                             start_continuation(&mut state, target, action, &requests);
                             None
                         }
                         InputAction::ReturnOriginal | InputAction::Exit => break Outcome::Cancelled,
                     };
-                    if let Some(pending) = pending {
-                        if let Some(row) = state.selected().cloned() {
-                            request_plan(&mut state, &requests, &row);
-                        }
-                        if let Some(outcome) = complete(&mut state, pending, &requests) {
-                            break 'render outcome;
-                        }
+                    if let Some(action) = pending
+                        && let Some(outcome) = accept(
+                            &mut state,
+                            action,
+                            resumer,
+                            &requests,
+                            sessions.resume_chooser,
+                        )
+                    {
+                        break 'render outcome;
                     }
                 }
                 // The selection settled: ask for its details (at the top of the loop).
@@ -490,7 +557,8 @@ impl Picker<'_> {
                     // An enter/tab/ctrl-y waiting on this session's plan can finish now.
                     if let Some((handle, pending)) = state.pending.clone()
                         && state.plans.contains_key(&handle)
-                        && let Some(outcome) = complete(&mut state, pending, &requests)
+                        && let Some(outcome) =
+                            resume_original(&mut state, pending, resumer, &requests)
                     {
                         break 'render outcome;
                     }
@@ -506,10 +574,18 @@ impl Picker<'_> {
             send_search(&mut state, &requests);
         };
 
+        // Stop reading input before the terminal is handed back.
+        drop(events);
         if inline_height > 0 {
-            terminal.clear()?;
+            // Clear from the viewport's origin down and leave the cursor there. Not with
+            // `Terminal::clear`, which first asks the terminal where the cursor is: nothing here
+            // needs the answer, and a late one would fail a picker that has already finished.
             let origin = terminal.get_frame().area().as_position();
             terminal.set_cursor_position(origin)?;
+            crossterm::execute!(
+                terminal.backend_mut(),
+                crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
+            )?;
         }
         Ok((outcome, note))
     }

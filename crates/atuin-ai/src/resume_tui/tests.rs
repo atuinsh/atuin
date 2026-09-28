@@ -107,7 +107,7 @@ async fn rows_show_badges_children_live_and_other_hosts() {
 }
 
 /// Other hosts' sessions show their host, and aren't dimmed: they resume by being restored
-/// from sync, which the selected one says.
+/// from sync, behind the scenes (the row doesn't say so).
 #[rstest]
 #[tokio::test]
 async fn global_mode_shows_other_hosts_as_restorable() {
@@ -128,19 +128,20 @@ async fn global_mode_shows_other_hosts_as_restorable() {
     let remote = state.results.iter().position(|r| r.host_id != fake::THIS_HOST_ID).unwrap();
     state.list.selected = remote;
     let out = text(&render(&mut state, &settings(), 100, 30));
-    assert!(out.contains("restores from sync"), "{out}");
+    assert!(!out.contains("from sync"), "{out}");
 }
 
-/// Inspecting another host's session says it will be restored from sync, and how it resumes.
+/// Inspecting another host's session says how it resumes, hinting that it comes from sync.
 #[rstest]
 #[tokio::test]
 async fn inspect_says_a_remote_session_is_restored() {
     let mut s = settings();
     s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
     let mut state = loaded(&s, "aarch64", 1).await;
-    let out = text(&render(&mut state, &s, 100, 30));
-    assert!(out.contains("Restore   from sync, when resumed"), "{out}");
-    assert!(out.contains("Resume    cd -- "), "{out}");
+    let out = text(&render(&mut state, &s, 120, 30));
+    let line = out.lines().find(|l| l.contains("Resume    cd -- ")).unwrap();
+    assert!(line.contains(" && claude --resume d4e6f8a0-2c3d-4e4f-8a7b-8c9d0e1f2a3b  from sync"));
+    assert!(!out.contains("Restore"), "{out}");
 }
 
 #[rstest]
@@ -434,6 +435,8 @@ async fn overflowing_lists_get_a_scrollbar() {
 #[rstest]
 #[tokio::test]
 async fn dump_frames() {
+    use super::state::Pending;
+
     let s = settings();
     let mut frames = Vec::new();
     let mut compact = s.clone();
@@ -461,6 +464,24 @@ async fn dump_frames() {
         "=== global 'h:claude', 100x30 ===\n{}",
         frame(&global, "h:claude", 0, 100, 30).await
     ));
+
+    for (label, settings, query, action, w, h) in [
+        ("chooser (enter), 100x30", &s, "", Pending::Resume, 100, 30),
+        ("chooser (tab), 100x30", &s, "", Pending::Edit, 100, 30),
+        ("chooser, another host's session, 100x30", &global, "aarch64", Pending::Resume, 100, 30),
+        ("chooser, directory gone, 100x30", &global, "theme preview", Pending::Resume, 100, 30),
+        ("chooser, wide split, 140x32", &s, "", Pending::Resume, 140, 32),
+        ("chooser, 80x14 (inline_height = 14)", &s, "", Pending::Resume, 80, 14),
+    ] {
+        let mut state = with_chooser(settings, query, action).await;
+        let frame = text(&render(&mut state, settings, w, h));
+        frames.push(format!("=== {label} ===\n{frame}"));
+    }
+    let mut inverted = s.clone();
+    inverted.invert = true;
+    let mut state = with_chooser(&inverted, "", Pending::Resume).await;
+    let frame = text(&render(&mut state, &inverted, 100, 30));
+    frames.push(format!("=== chooser, inverted, 100x30 ===\n{frame}"));
 
     let dump = frames.join("\n\n");
     if let Ok(path) = std::env::var("ATUIN_RESUME_DUMP") {
@@ -527,67 +548,216 @@ fn press(state: &mut State, settings: &Settings, key: &str) -> super::state::Inp
     state.handle_key_input(settings, &KeyEvent::new(code, modifiers))
 }
 
-/// `c` in the Inspect tab (alt-c anywhere) opens the chooser on the selected session: only the
-/// other harnesses, and what continuing flattens. The keys move and pick in it, and nothing
-/// reaches the query while it's open.
-#[rstest]
-#[tokio::test]
-async fn the_chooser_offers_the_other_harnesses_and_picks_one() {
-    use atuin_client::ai_session::HarnessKind;
+fn chooser_settings() -> Settings {
+    let mut s = settings();
+    s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
+    s
+}
+
+/// The selected session's chooser, opened by `action`, with what continuing flattens read.
+async fn with_chooser(settings: &Settings, query: &str, action: super::state::Pending) -> State {
     use atuin_common::harnesstools::continuation::Flattened;
 
-    use super::state::{InputAction, Pending};
-
-    let settings = settings();
-    let mut state = loaded(&settings, "", 1).await;
+    let mut state = loaded(settings, query, 0).await;
     let row = state.selected().unwrap().clone();
-    assert_eq!(row.handle.harness, HarnessKind::ClaudeCode);
-
-    assert!(matches!(press(&mut state, &settings, "c"), InputAction::ChooseHarness(_)));
-    assert!(state.open_chooser(FakeResumer::default().continue_targets(&row)));
+    state.open_chooser(FakeResumer::default().continue_targets(&row), action);
     let flattened = Flattened {
         tool_calls: 42,
         tool_results: 42,
         reasoning: 3,
     };
     state.flattened.insert(row.handle, Ok(flattened));
-    let out = text(&render(&mut state, &settings, 100, 30));
-    assert!(out.contains("Continue this Claude Code session in"), "{out}");
+    state
+}
+
+/// Enter on a session asks where to resume it: its own harness first and selected, then the
+/// other harnesses installed here, saying what continuing there flattens. Enter picks the
+/// selected line the way the key that opened it asked (resume, with `enter_accept`), tab edits,
+/// a digit picks its line, and nothing reaches the query while it's open.
+#[rstest]
+#[tokio::test]
+async fn the_chooser_offers_the_original_first_then_the_others() {
+    use atuin_client::ai_session::HarnessKind;
+
+    use super::state::{InputAction, Pending};
+
+    let s = settings();
+    let mut state = with_chooser(&s, "", Pending::Resume).await;
+    let out = text(&render(&mut state, &s, 100, 30));
+    assert!(out.contains("╭ Resume in "), "{out}");
+    assert!(out.contains("> 1 CC Claude Code  original"), "{out}");
     assert!(
-        out.contains("1 CX Codex") && out.contains("2 OC opencode") && out.contains("3 PI Pi"),
-        "{out}"
+        out.contains("  2 CX Codex        continue, 42 tool calls become notes, reasoning dropped")
     );
-    assert!(!out.contains("CC Claude Code"), "not its own harness: {out}");
-    assert!(out.contains("42 tool calls flattened to notes, reasoning dropped"), "{out}");
+    assert!(out.contains("  3 OC opencode     continue, 42 tool calls"), "{out}");
+    assert!(out.contains("  4 PI Pi           continue, 42 tool calls"), "{out}");
+    assert!(out.contains("<enter>: resume  <tab>: edit  <esc>: back"), "{out}");
+    // It opens over the list, against the selected row, which stays in sight below it.
+    let lines: Vec<&str> = out.lines().collect();
+    let bottom = lines.iter().position(|l| l.contains('╰') && l.contains("──╯")).unwrap();
+    assert!(lines[bottom + 1].contains(" > "), "{out}");
 
-    assert_eq!(press(&mut state, &settings, "down"), InputAction::Continue);
-    assert_eq!(press(&mut state, &settings, "x"), InputAction::Continue);
-    assert_eq!(
-        press(&mut state, &settings, "enter"),
-        InputAction::ContinueIn(HarnessKind::Opencode, Pending::Resume)
-    );
-    assert!(state.chooser.is_none());
-
-    state.tab_index = 0;
-    assert!(matches!(press(&mut state, &settings, "alt-c"), InputAction::ChooseHarness(_)));
-    assert!(state.open_chooser(vec![HarnessKind::Codex, HarnessKind::Pi]));
-    assert_eq!(
-        press(&mut state, &settings, "tab"),
-        InputAction::ContinueIn(HarnessKind::Codex, Pending::Edit)
-    );
-    assert!(state.open_chooser(vec![HarnessKind::Codex, HarnessKind::Pi]));
-    assert_eq!(
-        press(&mut state, &settings, "2"),
-        InputAction::ContinueIn(HarnessKind::Pi, Pending::Resume)
-    );
-    assert!(state.open_chooser(vec![HarnessKind::Codex]));
-    assert_eq!(press(&mut state, &settings, "esc"), InputAction::Continue);
-    assert!(state.chooser.is_none());
+    assert_eq!(press(&mut state, &s, "x"), InputAction::Continue);
+    assert_eq!(press(&mut state, &s, "enter"), InputAction::Pick(None, Pending::Resume));
+    assert!(state.chooser.is_none() && state.accept);
     assert_eq!(state.input.as_str(), "", "no key reached the query");
 
-    assert!(!state.open_chooser(Vec::new()));
+    let mut state = with_chooser(&s, "", Pending::Resume).await;
+    assert_eq!(press(&mut state, &s, "down"), InputAction::Continue);
+    assert_eq!(press(&mut state, &s, "j"), InputAction::Continue);
+    assert_eq!(press(&mut state, &s, "k"), InputAction::Continue);
+    assert_eq!(
+        press(&mut state, &s, "tab"),
+        InputAction::Pick(Some(HarnessKind::Codex), Pending::Edit)
+    );
+
+    let mut state = with_chooser(&s, "", Pending::Resume).await;
+    assert_eq!(press(&mut state, &s, "9"), InputAction::Continue, "no ninth line");
+    assert_eq!(
+        press(&mut state, &s, "4"),
+        InputAction::Pick(Some(HarnessKind::Pi), Pending::Resume)
+    );
+
+    let mut state = with_chooser(&s, "", Pending::Resume).await;
+    assert_eq!(press(&mut state, &s, "esc"), InputAction::Continue);
+    assert!(state.chooser.is_none(), "esc goes back to the list");
+}
+
+/// Opened with tab (or enter without `enter_accept`), the chooser edits whichever line is picked,
+/// and says so.
+#[rstest]
+#[tokio::test]
+async fn a_chooser_opened_to_edit_edits() {
+    use atuin_client::ai_session::HarnessKind;
+
+    use super::state::{InputAction, Pending};
+
+    let s = settings();
+    let mut state = with_chooser(&s, "", Pending::Edit).await;
+    let out = text(&render(&mut state, &s, 100, 30));
+    assert!(out.contains("<enter>: edit  <esc>: back"), "{out}");
+    assert_eq!(press(&mut state, &s, "enter"), InputAction::Pick(None, Pending::Edit));
+    assert!(!state.accept);
+    let mut state = with_chooser(&s, "", Pending::Edit).await;
+    assert_eq!(
+        press(&mut state, &s, "2"),
+        InputAction::Pick(Some(HarnessKind::Codex), Pending::Edit)
+    );
+}
+
+/// A session restored from sync says so only as a hint on its own harness's line.
+#[rstest]
+#[tokio::test]
+async fn a_session_from_another_host_hints_it_comes_from_sync() {
+    use super::state::Pending;
+
+    let s = chooser_settings();
+    let mut state = with_chooser(&s, "aarch64", Pending::Resume).await;
+    let out = text(&render(&mut state, &s, 100, 30));
+    assert!(out.contains("> 1 CC Claude Code  original, from sync"), "{out}");
+    assert!(out.contains("  2 CX Codex        continue"), "{out}");
+}
+
+/// A session its own harness can't resume here (a subagent, a deleted directory, a harness
+/// that isn't installed) shows why, dimmed, and the first line that works is selected instead;
+/// also once the plan saying so comes in after the chooser opened, unless the selection was
+/// moved. Picking it anyway says why and stays open.
+#[rstest]
+#[tokio::test]
+async fn an_original_that_cant_resume_is_dimmed_and_passed_over() {
+    use atuin_client::ai_session::HarnessKind;
+    use atuin_common::harnesstools::resume::ResumeError;
+
+    use super::resumer::NotResumable;
+    use super::state::{InputAction, Pending};
+
+    let s = chooser_settings();
+    let mut state = loaded(&s, "theme preview", 0).await;
+    let row = state.selected().unwrap().clone();
+    let why = state.original_unavailable(&row.handle).cloned().expect("its directory is gone");
+    assert!(matches!(why, NotResumable::Harness(ResumeError::CwdMissing(_))), "{why:?}");
+    let targets = FakeResumer::default().continue_targets(&row);
+    state.open_chooser(targets.clone(), Pending::Resume);
+    let buf = render(&mut state, &s, 100, 30);
+    let out = text(&buf);
+    let (y, line) = out.lines().enumerate().find(|(_, l)| l.contains("1 PI Pi")).unwrap();
+    assert!(line.contains("Pi           original: the session's directory is gone"), "{out}");
+    let x = u16::try_from(line[..line.find("Pi ").unwrap()].chars().count()).unwrap();
+    let cell = &buf[(x, u16::try_from(y).unwrap())];
+    assert!(cell.modifier.contains(ratatui::style::Modifier::DIM), "dimmed");
+    assert!(out.contains("> 2 CC Claude Code"), "the first line that works is selected: {out}");
+
+    assert_eq!(press(&mut state, &s, "1"), InputAction::Continue);
     let (status, _) = state.status.clone().unwrap();
-    assert!(status.contains("no other harness is installed"), "{status}");
+    assert!(status.starts_with("can't resume in Pi: the session's directory is gone"), "{status}");
+    assert!(state.chooser.is_some(), "stays open");
+
+    // The plan comes in after the chooser opened: the selection moves off, unless it was moved.
+    let plan = state.plans.remove(&row.handle).unwrap();
+    for (moved, selected) in [(false, 1), (true, 0)] {
+        state.open_chooser(targets.clone(), Pending::Resume);
+        assert_eq!(state.chooser.as_ref().unwrap().selected, 0);
+        if moved {
+            press(&mut state, &s, "down");
+            press(&mut state, &s, "up");
+        }
+        state.plans.insert(row.handle.clone(), plan.clone());
+        state.settle_chooser();
+        assert_eq!(state.chooser.as_ref().unwrap().selected, selected, "moved: {moved}");
+        state.plans.remove(&row.handle);
+    }
+
+    // A harness atuin can't continue from (Copilot) has only its own line, saying why.
+    let mut copilot = fake::row(HarnessKind::Copilot, "cp1", "t");
+    copilot.host_id = fake::THIS_HOST_ID.to_owned();
+    state.results = vec![copilot.clone()];
+    state.list.selected = 0;
+    state.plans.insert(copilot.handle.clone(), FakeResumer::default().plan(&copilot).await);
+    state.open_chooser(FakeResumer::default().continue_targets(&copilot), Pending::Resume);
+    let out = text(&render(&mut state, &s, 100, 30));
+    assert!(out.contains("> 1 CP Copilot  original: atuin can't resume"), "{out}");
+}
+
+/// Enter asks where to resume only when there is a choice: with `resume_chooser = false`, or
+/// nothing else installed, it resumes in the session's own harness straight away. When that
+/// can't, the chooser opens anyway, saying why.
+#[rstest]
+#[tokio::test]
+async fn the_chooser_opens_when_there_is_a_choice() {
+    use std::sync::Arc;
+
+    use super::state::Pending;
+    use super::{Outcome, accept, worker};
+
+    let s = chooser_settings();
+    let resumer = Arc::new(FakeResumer::default());
+    let (requests, _responses) = worker::spawn(Arc::new(FakeSource::new()), resumer.clone());
+
+    let mut state = loaded(&s, "", 0).await;
+    let outcome = accept(&mut state, Pending::Resume, resumer.as_ref(), &requests, true);
+    assert_eq!(outcome, None);
+    assert!(state.chooser.is_some());
+
+    let mut state = loaded(&s, "", 0).await;
+    let outcome = accept(&mut state, Pending::Resume, resumer.as_ref(), &requests, false);
+    assert!(matches!(outcome, Some(Outcome::Resume(_))), "{outcome:?}");
+    let mut state = loaded(&s, "", 0).await;
+    let outcome = accept(&mut state, Pending::Edit, resumer.as_ref(), &requests, false);
+    assert!(matches!(outcome, Some(Outcome::Edit(_))), "{outcome:?}");
+
+    // ctrl-y copies the original's command; it never asks.
+    let mut state = loaded(&s, "", 0).await;
+    let outcome = accept(&mut state, Pending::Copy, resumer.as_ref(), &requests, true);
+    assert_eq!(outcome, None);
+    assert!(state.chooser.is_none());
+
+    let mut state = loaded(&s, "theme preview", 0).await;
+    let outcome = accept(&mut state, Pending::Resume, resumer.as_ref(), &requests, false);
+    assert_eq!(outcome, None);
+    let chooser = state.chooser.as_ref().expect("opens anyway");
+    assert_eq!(chooser.selected, 1);
+    let (status, _) = state.status.clone().unwrap();
+    assert!(status.contains("the session's directory is gone"), "{status}");
 }
 
 /// A continuation written out ends the picker the way its key asked, leaving the status line
@@ -654,4 +824,15 @@ fn a_continuation_in_the_tree_says_where_it_went_on() {
         line.contains("fork") && line.contains("continued in Codex · fix the flaky test"),
         "{line}"
     );
+}
+
+/// The picker's host id is compared with the rows' in their (simple) form, however it was
+/// given: a hyphenated one would make every session of this host look like another host's.
+#[rstest]
+#[case::hyphenated("01a0e0e0-9cdc-763b-9734-7b45cb98e831")]
+#[case::simple("01a0e0e09cdc763b97347b45cb98e831")]
+#[case::upper("01A0E0E0-9CDC-763B-9734-7B45CB98E831")]
+fn host_ids_compare_in_one_form(#[case] id: &str) {
+    assert_eq!(super::simple_host_id(id), "01a0e0e09cdc763b97347b45cb98e831");
+    assert_eq!(super::simple_host_id("not-a-uuid"), "not-a-uuid");
 }

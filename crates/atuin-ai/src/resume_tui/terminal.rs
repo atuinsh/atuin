@@ -1,13 +1,71 @@
 //! Terminal setup for the picker: raw mode, alternate screen (unless inline), mouse, bracketed
 //! paste and keyboard enhancement, restored on drop. Mirrors the history search's `Stdout`.
+//!
+//! Also the picker's input: [`Events`] reads terminal events on a thread of its own.
 
 use std::io::{self, IsTerminal, Write};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
+use crossterm::event::Event;
 #[cfg(not(target_os = "windows"))]
 use crossterm::event::{
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::{event, execute, terminal};
+use tokio::sync::mpsc;
+
+/// How long [`Events`] waits for input before letting go of crossterm's input lock, so a cursor
+/// position query (which gives up after two seconds without it) always gets its turn.
+const POLL: Duration = Duration::from_millis(100);
+
+/// Terminal events, read on a thread of their own.
+///
+/// crossterm's `EventStream` waits for input holding crossterm's input lock for as long as none
+/// comes. Anything that asks the terminal something meanwhile (ratatui asks where the cursor is
+/// when it clears or resizes an inline viewport) can't take the lock, gives up after two seconds,
+/// and fails with "The cursor position could not be read within a normal duration". The picker
+/// often ends on a worker's answer (enter waits for the session's plan) while such a wait is
+/// going on, so it failed on its way out. This waits in short polls instead, as the history
+/// search does, letting go of the lock between them.
+pub struct Events {
+    rx: mpsc::UnboundedReceiver<io::Result<Event>>,
+    stop: Arc<AtomicBool>,
+}
+
+impl Events {
+    pub fn new() -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopped = stop.clone();
+        std::thread::spawn(move || {
+            while !stopped.load(Ordering::Relaxed) && !tx.is_closed() {
+                let event = match event::poll(POLL) {
+                    Ok(false) => continue,
+                    Ok(true) => event::read(),
+                    Err(e) => Err(e),
+                };
+                let failed = event.is_err();
+                if tx.send(event).is_err() || failed {
+                    return;
+                }
+            }
+        });
+        Self { rx, stop }
+    }
+
+    /// The next event; `None` once reading has failed.
+    pub async fn next(&mut self) -> Option<io::Result<Event>> {
+        self.rx.recv().await
+    }
+}
+
+impl Drop for Events {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
 
 /// Stdout, or `/dev/tty` when stdout is captured (`cmd=$(atuin ai resume)`).
 enum Writer {

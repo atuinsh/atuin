@@ -23,6 +23,58 @@ atuin ai session search "flaky test"
   first, rather than returning nothing.
 - `--harness` limits the search to one agent.
 
+## Resuming
+
+`atuin ai resume` (or ++ctrl+bracket-right++ at the prompt) opens a picker over
+your sessions. It works like the history search: type to search, ++ctrl+o++
+inspects the selected session, and ++esc++ leaves.
+
+Once you choose a session, with ++enter++ (or ++tab++ to edit the command
+first), Atuin asks where to resume it:
+
+```
+╭ Resume in ──────────────────────────────────────────────────────────────────╮
+│ > 1 CC Claude Code  original                                                │
+│   2 CX Codex        continue, 42 tool calls become notes, reasoning dropped │
+│   3 OC opencode     continue, 42 tool calls become notes, reasoning dropped │
+│ <enter>: resume  <tab>: edit  <esc>: back                                   │
+╰─────────────────────────────────────────────────────────────────────────────╯
+```
+
+- The session's own agent comes first and is already selected, so
+  ++enter++ ++enter++ resumes it. If the session was recorded on another
+  machine, or its transcript was deleted, Atuin writes the transcript back out
+  from the synced messages before resuming it ("from sync").
+- Every other agent installed on this machine follows. Picking one continues
+  the session there as a new session: the conversation carries over, but that
+  agent can't replay the original's tool calls, so they become notes in the
+  text, and reasoning is dropped. The line says how much. Agents that aren't
+  installed aren't listed, and with no other agent installed there is nothing
+  to choose, so ++enter++ resumes straight away.
+- If the session's own agent can't resume it here (a subagent, a Copilot
+  session, a directory that's gone, an agent that isn't installed), its line is
+  dimmed with the reason, and the next one is selected instead.
+
+In the chooser, ++up++ / ++down++ (or ++k++ / ++j++) move, a digit picks that
+line, and ++esc++ goes back to the list. ++enter++ does what the key that
+opened the chooser did: it resumes (or, without `enter_accept`, puts the
+command on your command line), and after ++tab++ it edits. ++tab++ in the
+chooser always edits.
+
+To resume in the session's own agent straight away, without the chooser:
+
+```toml
+[ai.sessions]
+resume_chooser = false
+```
+
+The chooser still opens for a session its own agent can't resume.
+
+From the command line, `atuin ai resume <id>` resumes a session in its own
+agent directly (an id prefix works too), and `atuin ai resume <id> --in codex`
+continues it in another (`claude`, `codex`, `opencode` or `pi`). `--print`
+prints the command instead of running it.
+
 ## Rebuilding the index
 
 The index is derived entirely from the record store. If it ever looks wrong or

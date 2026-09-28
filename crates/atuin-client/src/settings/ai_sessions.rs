@@ -153,6 +153,11 @@ pub struct AiSessions {
     /// Height of the inline picker. Unset: the top-level `inline_height`.
     pub inline_height: Option<u16>,
 
+    /// Ask where to resume a session once it's chosen (enter or tab): in its own harness, or
+    /// continued in another one installed here. When false, a session resumes in its own harness
+    /// straight away; the chooser still opens for one that can't.
+    pub resume_chooser: bool,
+
     /// Per-harness resume command templates.
     pub resume: AiSessionResume,
 }
@@ -180,6 +185,7 @@ impl Default for AiSessions {
             show_subagents: true,
             group_forks: true,
             inline_height: None,
+            resume_chooser: true,
             resume: AiSessionResume::default(),
         }
     }
@@ -207,6 +213,7 @@ mod tests {
             show_subagents = false
             group_forks = false
             inline_height = 20
+            resume_chooser = false
 
             [resume]
             claude = "claude --resume {id} --permission-mode plan"
@@ -223,6 +230,7 @@ mod tests {
         assert!(!parsed.show_subagents);
         assert!(!parsed.group_forks);
         assert_eq!(parsed.inline_height, Some(20));
+        assert!(!parsed.resume_chooser);
         assert_eq!(
             parsed.resume.template(HarnessKind::ClaudeCode),
             Some("claude --resume {id} --permission-mode plan")
