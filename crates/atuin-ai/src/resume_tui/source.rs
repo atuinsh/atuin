@@ -59,6 +59,16 @@ pub enum Relation {
     Child,
 }
 
+impl Relation {
+    /// Whether the picker shows sessions of this kind: roots, and forks (which resume like any
+    /// session). Subagents never resume, so they are left out everywhere, with the children the
+    /// harness doesn't tell apart from them: Codex and opencode link their spawned agents (by far
+    /// the most of their children) and forks alike.
+    pub fn is_listed(self) -> bool {
+        matches!(self, Self::Root | Self::Fork)
+    }
+}
+
 /// Text with highlighted byte ranges (the query's matches).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Snippet {
@@ -101,7 +111,8 @@ pub struct SessionRow {
     pub message_count: u64,
     /// Token usage attributed to this session (each model call counted once).
     pub usage: Usage,
-    /// Sessions grouped under this row (with [`SessionFilter::roots_only`]).
+    /// Sessions grouped under this row (with [`SessionFilter::roots_only`]), subagents included:
+    /// whether there are forks to ask [`SessionSource::children`] for. Never shown as it is.
     pub children: u32,
     /// The best-matching message text, when there is a query. The match may be in a child.
     pub matched: Option<Snippet>,
@@ -121,6 +132,8 @@ pub struct SessionPreview {
 #[async_trait]
 pub trait SessionSource: Send + Sync {
     /// Root rows matching `filter`: best match first when there's text, newest first otherwise.
+    /// Only [listed](Relation::is_listed) sessions; grouped, a match in a subagent is its
+    /// root's.
     async fn search(&self, filter: &SessionFilter) -> eyre::Result<Vec<SessionRow>>;
 
     /// Every session whose id is `id` or starts with it, across harnesses (for `atuin ai resume
@@ -130,12 +143,9 @@ pub trait SessionSource: Send + Sync {
     /// The preview text for one session.
     async fn preview(&self, session: &HarnessSession) -> eyre::Result<SessionPreview>;
 
-    /// The sessions grouped under a root, newest first; subagents only with `include_subagents`.
-    async fn children(
-        &self,
-        session: &HarnessSession,
-        include_subagents: bool,
-    ) -> eyre::Result<Vec<SessionRow>>;
+    /// The forks grouped under a root, newest first: the [listed](Relation::is_listed) sessions
+    /// among its children, never its subagents.
+    async fn children(&self, session: &HarnessSession) -> eyre::Result<Vec<SessionRow>>;
 
     /// Session `session` with every message it holds, as its harness can write it back out to be
     /// resumed in `cwd` (see [`super::resumer::Resumer::restore`]).

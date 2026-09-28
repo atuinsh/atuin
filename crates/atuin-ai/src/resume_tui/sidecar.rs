@@ -215,7 +215,8 @@ impl SidecarSource {
             .map_or_else(|| title::derive(s.preview.as_deref().unwrap_or_default()), str::to_owned);
         SessionRow {
             handle: s.handle,
-            parent: s.parent,
+            // A copy (a Claude Code `--resume` fork) is forked from the session it copies.
+            parent: s.parent.or(s.copy_of),
             relation,
             title: Snippet::plain(title),
             cwd: s.cwd,
@@ -285,6 +286,11 @@ impl SessionSource for SidecarSource {
         for m in matches {
             let has_title = titled(&m.session).is_some();
             let mut row = self.row(m.session);
+            // Grouped, a subagent's match is already its root's; this is one ungrouped, or one
+            // whose parent isn't stored yet.
+            if !row.relation.is_listed() {
+                continue;
+            }
             if has_text {
                 // The search highlights stored titles; a derived one is highlighted here.
                 let title = snippet(&m.title);
@@ -320,11 +326,7 @@ impl SessionSource for SidecarSource {
         })
     }
 
-    async fn children(
-        &self,
-        session: &HarnessSession,
-        include_subagents: bool,
-    ) -> Result<Vec<SessionRow>> {
+    async fn children(&self, session: &HarnessSession) -> Result<Vec<SessionRow>> {
         // Newest first, from the query.
         Ok(self
             .db
@@ -332,7 +334,7 @@ impl SessionSource for SidecarSource {
             .await?
             .into_iter()
             .map(|s| self.row(s))
-            .filter(|r| include_subagents || r.relation != Relation::Subagent)
+            .filter(|r| r.relation.is_listed())
             .collect())
     }
 
@@ -388,6 +390,7 @@ mod tests {
             message("root", None, Role::User, "fix the flaky sync test", 0),
             message("root", None, Role::Assistant, "switched to a fixed clock", 1),
             message("agent-1", Some("root"), Role::User, "look for wall clock use", 2),
+            message("fork-1", Some("root"), Role::User, "try a mocked clock instead", 3),
         ] {
             db.append(&m).await.unwrap();
         }
@@ -418,13 +421,28 @@ mod tests {
         let rows = source.search(&roots("")).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].handle, handle("root"));
-        assert_eq!(rows[0].children, 1);
+        assert_eq!(rows[0].children, 2, "the subagent counts toward asking for the forks");
         assert_eq!(rows[0].hostname, "wintermute");
 
-        let children = source.children(&handle("root"), true).await.unwrap();
+        // Only the fork: subagents never resume, so the picker never lists them.
+        let children = source.children(&handle("root")).await.unwrap();
         assert_eq!(children.len(), 1);
-        assert_eq!(children[0].relation, Relation::Subagent);
-        assert!(source.children(&handle("root"), false).await.unwrap().is_empty());
+        assert_eq!(children[0].handle, handle("fork-1"));
+        assert_eq!(children[0].relation, Relation::Fork);
+    }
+
+    /// Ungrouped (`group_forks = false`), forks get rows of their own, subagents still don't.
+    #[rstest]
+    #[tokio::test]
+    async fn ungrouped_lists_forks_but_not_subagents(#[future] source: SidecarSource) {
+        let source = source.await;
+        let filter = SessionFilter {
+            roots_only: false,
+            ..roots("")
+        };
+        let rows = source.search(&filter).await.unwrap();
+        let ids: Vec<&str> = rows.iter().map(|r| r.handle.session.as_ref()).collect();
+        assert_eq!(ids, ["fork-1", "root"]);
     }
 
     #[rstest]

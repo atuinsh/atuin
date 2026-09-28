@@ -159,7 +159,7 @@ impl Settle {
 }
 
 /// Ask the worker for whatever the current view needs and doesn't have yet.
-fn request_details(state: &mut State, requests: &Requests, settle: &mut Settle, subagents: bool) {
+fn request_details(state: &mut State, requests: &Requests, settle: &mut Settle) {
     state.forget_unanswered();
     let Some(row) = state.selected().cloned() else {
         return;
@@ -171,16 +171,14 @@ fn request_details(state: &mut State, requests: &Requests, settle: &mut Settle, 
     if !state.previews.contains_key(&handle) && state.requested.insert((handle.clone(), PREVIEW)) {
         requests.send(Request::Preview(handle.clone()));
     }
-    // Inspect lists the children; the detail pane says what kind they are.
-    let wants_children = state.tab_index == 1 || (state.pane_shown && row.children > 0);
+    // Inspect lists the forks; the detail pane and the preview count them. A row with nothing
+    // grouped under it has none (one with only subagents has none either, which takes asking).
+    let wants_children = state.tab_index == 1 || row.children > 0;
     if wants_children
         && !state.children.contains_key(&handle)
         && state.requested.insert((handle.clone(), CHILDREN))
     {
-        requests.send(Request::Children {
-            session: handle,
-            include_subagents: subagents,
-        });
+        requests.send(Request::Children(handle));
     }
     if state.tab_index == 1 {
         request_plan(state, requests, &row);
@@ -490,7 +488,7 @@ impl Picker<'_> {
         // What to tell the user once the picker is gone (a continuation's status line).
         let mut note = None;
         let outcome = 'render: loop {
-            request_details(&mut state, &requests, &mut settle, sessions.show_subagents);
+            request_details(&mut state, &requests, &mut settle);
             terminal.draw(|f| state.draw(f, settings, self.theme))?;
 
             tokio::select! {

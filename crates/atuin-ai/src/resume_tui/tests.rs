@@ -40,7 +40,7 @@ async fn loaded(settings: &Settings, query: &str, tab: usize) -> State {
     }
     for row in &state.results {
         state.previews.insert(row.handle.clone(), source.preview(&row.handle).await.unwrap());
-        let children = source.children(&row.handle, true).await.unwrap();
+        let children = source.children(&row.handle).await.unwrap();
         state.children.insert(row.handle.clone(), children);
         state.plans.insert(row.handle.clone(), resumer.plan(row).await);
     }
@@ -83,34 +83,33 @@ async fn full_frame_has_history_search_chrome() {
     assert!(lines[0].trim_end().ends_with("sessions"), "{out}");
     assert!(lines[1].contains("Search") && lines[1].contains("Inspect"));
     assert!(lines[2].trim_start().starts_with('╭'), "list block opens the box: {out}");
-    assert!(out.contains("[   WORKSPACE 10   ]"), "the count beside the mode: {out}");
+    assert!(out.contains("[  WORKSPACE 10  ]"), "the count beside the mode: {out}");
     assert!(out.lines().last().unwrap().trim_start().starts_with('╰'), "{out}");
 }
 
+/// Rows are the time, the harness, the title and the message count: nothing about where.
 #[rstest]
 #[tokio::test]
-async fn rows_show_badges_children_live_and_other_hosts() {
+async fn rows_show_time_badge_title_and_count() {
     let out = frame(&settings(), "", 0, 100, 30).await;
     // The newest session sits at the bottom (not inverted), selected.
     let selected = out.lines().find(|l| l.contains(" > ")).unwrap();
-    assert!(selected.contains("● now"), "live dot: {selected}");
-    assert!(selected.contains("CC") && selected.contains("+4"), "{selected}");
-    assert!(selected.contains("Add an interactive resume picker"), "{selected}");
-    assert!(
-        selected.contains("atuin") && selected.contains("ai-resume") && selected.contains("142")
-    );
+    assert!(selected.contains("● now CC Add an interactive resume picker"), "{selected}");
+    assert!(selected.trim_end_matches(['│', ' ']).ends_with("142"), "{selected}");
+    // No `+N`, repository or branch on the row.
+    assert!(!selected.contains("+4") && !selected.contains("+1"), "{selected}");
+    assert!(!selected.contains("ai-resume"), "{selected}");
     // Workspace hides the dotfiles and remote sessions.
     assert!(!out.contains("dotfiles"), "{out}");
-    assert!(!out.contains("@buildbox"), "{out}");
-    // Subagents fold into the root instead of flooding the list.
+    // Subagents are never listed.
     assert!(!out.contains("Explore: find"), "{out}");
 }
 
-/// Other hosts' sessions show their host, and aren't dimmed: they resume by being restored
-/// from sync, behind the scenes (the row doesn't say so).
+/// Other hosts' sessions look like this host's: they resume by being restored from sync,
+/// behind the scenes. Only the preview says where one ran.
 #[rstest]
 #[tokio::test]
-async fn global_mode_shows_other_hosts_as_restorable() {
+async fn other_hosts_rows_look_like_this_hosts() {
     let mut state = loaded(&settings(), "", 0).await;
     state.mode = atuin_client::settings::AiSessionFilterMode::Global;
     let source = FakeSource::new();
@@ -118,17 +117,40 @@ async fn global_mode_shows_other_hosts_as_restorable() {
     state.apply_results(generation, mode, source.search(&filter).await.unwrap());
     let buf = render(&mut state, &settings(), 100, 30);
     let out = text(&buf);
-    let (y, line) = out.lines().enumerate().find(|(_, l)| l.contains("@buildbox")).unwrap();
-    assert!(line.contains("Bisect the aarch64"), "{line}");
+    assert!(!out.contains('@'), "no host on any row: {out}");
+    let (y, line) =
+        out.lines().enumerate().find(|(_, l)| l.contains("Bisect the aarch64")).unwrap();
     let x = u16::try_from(line.find("Bisect").unwrap()).unwrap();
     let cell = &buf[(x, u16::try_from(y).unwrap())];
     assert!(!cell.modifier.contains(ratatui::style::Modifier::DIM), "remote rows aren't dimmed");
-    assert!(out.contains("@laptop"));
 
     let remote = state.results.iter().position(|r| r.host_id != fake::THIS_HOST_ID).unwrap();
     state.list.selected = remote;
     let out = text(&render(&mut state, &settings(), 100, 30));
+    assert!(out.contains("│       atuin · main · @buildbox"), "{out}");
     assert!(!out.contains("from sync"), "{out}");
+}
+
+/// The preview's first line says where the session ran and what forked off it, in place of a
+/// line of text, leaving out this host and a detached branch; with no room for it, the text
+/// keeps the line.
+#[rstest]
+#[tokio::test]
+async fn the_preview_says_where_a_session_ran() {
+    let s = markdown_settings(4);
+    let out = frame(&s, "", 0, 100, 30).await;
+    let preview = section(&out, "atuin", "╰");
+    assert_eq!(preview.len(), 4, "{out}");
+    assert_eq!(preview[0], "       atuin · ai-resume · 1 fork", "{out}");
+    assert!(preview[1].starts_with("first  "), "{out}");
+
+    let out = frame(&markdown_settings(1), "", 0, 100, 30).await;
+    assert!(!out.contains("atuin · ai-resume"), "{out}");
+    assert!(out.contains("first  "), "{out}");
+
+    // Nothing grouped under it: no count.
+    let out = frame(&s, "flaky", 0, 100, 30).await;
+    assert_eq!(section(&out, "atuin", "╰")[0], "       atuin · main", "{out}");
 }
 
 /// Inspecting another host's session says how it resumes, hinting that it comes from sync.
@@ -213,7 +235,7 @@ fn markdown_settings(lines: u16) -> Settings {
 #[case::narrow(64)]
 #[tokio::test]
 async fn preview_renders_markdown(#[case] width: u16) {
-    let s = markdown_settings(14);
+    let s = markdown_settings(15);
     let out = frame(&s, "", 0, width, 40).await;
     let preview = section(&out, "first", "╰");
     let joined = preview.join("\n");
@@ -279,7 +301,8 @@ async fn highlights_show_through_the_markdown() {
 #[rstest]
 #[tokio::test]
 async fn long_replies_are_cut_with_an_ellipsis() {
-    let s = markdown_settings(3);
+    // Where it ran takes the first line, leaving three for the text.
+    let s = markdown_settings(4);
     let out = frame(&s, "", 0, 100, 30).await;
     let preview = section(&out, "first", "╰");
     assert_eq!(preview.len(), 3, "{out}");
@@ -318,11 +341,11 @@ async fn inspect_tab_shows_metadata_command_and_children() {
         "Resume    cd -- /home/ellie/src/atuin && claude --resume \
          7f3c9a12-5be0-4d7e-9c41-0a8e2b6f4d10"
     ));
-    assert!(out.contains(" 3 subagents · 1 fork"), "what is grouped, by kind: {out}");
-    assert!(out.contains("├─ subagent  Review the resume picker diff"), "{out}");
-    assert!(out.contains("└─ fork      Add an interactive resume picker to atuin ai (fork)"));
-    // The fork's own subagent nests under it.
-    assert!(out.contains("   └─ subagent  Explore: how ratatui's Table highlights cells"));
+    // The forks, never the subagents (three under the session, one under its fork).
+    assert!(out.lines().any(|l| l.trim_matches(['│', ' ']) == "1 fork"), "{out}");
+    assert!(out.contains("   └─ Add an interactive resume picker to atuin ai (fork)"), "{out}");
+    assert!(!out.contains("subagent  ") && !out.contains("Explore:"), "{out}");
+    assert!(!out.contains("Review the resume picker diff"), "{out}");
     assert!(out.contains("Messages  142  ·  in 327k · out 58k · cache 2.9M tokens"), "{out}");
     assert!(out.contains("Activity  "), "{out}");
     assert!(out.contains("<esc>: back"));
@@ -345,7 +368,7 @@ async fn compact_and_inline_heights() {
     // Auto style goes compact under 14 rows, like history search.
     let out = frame(&s, "", 0, 80, 13).await;
     assert!(!out.contains('╭'), "compact has no borders: {out}");
-    assert!(out.contains("[   WORKSPACE 10   ]"), "{out}");
+    assert!(out.contains("[  WORKSPACE 10  ]"), "{out}");
 
     // 80x14 is still full.
     let out = frame(&s, "", 0, 80, 14).await;
@@ -396,8 +419,8 @@ async fn no_sessions_in_workspace_widens() {
         state.apply_results(generation, mode, source.search(&filter).await.unwrap());
     }
     let out = text(&render(&mut state, &s, 100, 30));
-    assert!(out.contains("[   WS→GLOBAL 14   ]"), "{out}");
-    assert!(out.contains("@buildbox"));
+    assert!(out.contains("[  WS→GLOBAL 14  ]"), "{out}");
+    assert!(out.contains("Bisect the aarch64"), "{out}");
 }
 
 #[rstest]
@@ -472,18 +495,23 @@ async fn dump_frames() {
     for (w, h) in [(60, 24), (80, 24), (120, 34)] {
         frames.push(format!("=== global, {w}x{h} ===\n{}", frame(&global, "", 0, w, h).await));
     }
+    // Another host's session selected: only the preview says where it ran.
+    for (w, h) in [(80, 24), (120, 34)] {
+        let out = frame(&global, "aarch64", 0, w, h).await;
+        frames.push(format!("=== global 'aarch64' (another host's), {w}x{h} ===\n{out}"));
+    }
 
-    // Inspect with a long list of children, collapsed and expanded (`c`, then down twice).
+    // Inspect with a long list of forks, collapsed and expanded (`c`, then down twice).
     for (w, h) in [(80, 24), (120, 34)] {
         let mut state = loaded(&s, "", 1).await;
         many_children(&mut state, 17);
         let collapsed = text(&render(&mut state, &s, w, h));
-        frames.push(format!("=== inspect, 17 children, {w}x{h} ===\n{collapsed}"));
+        frames.push(format!("=== inspect, 17 forks, {w}x{h} ===\n{collapsed}"));
         for key in ["c", "down", "down"] {
             press(&mut state, &s, key);
         }
         let expanded = text(&render(&mut state, &s, w, h));
-        frames.push(format!("=== inspect, 17 children expanded, {w}x{h} ===\n{expanded}"));
+        frames.push(format!("=== inspect, 17 forks expanded, {w}x{h} ===\n{expanded}"));
     }
 
     for (label, settings, query, action, w, h) in [
@@ -850,10 +878,7 @@ fn a_continuation_in_the_tree_says_where_it_went_on() {
         theme,
     );
     let line: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
-    assert!(
-        line.contains("fork") && line.contains("continued in Codex · fix the flaky test"),
-        "{line}"
-    );
+    assert!(line.contains("continued in Codex · fix the flaky test"), "{line}");
 }
 
 /// The picker's host id is compared with the rows' in their (simple) form, however it was
@@ -869,7 +894,7 @@ fn host_ids_compare_in_one_form(#[case] id: &str) {
 
 // --- the UX pass ---------------------------------------------------------------------------------
 
-/// `n` subagents under the selected session.
+/// `n` forks under the selected session.
 fn many_children(state: &mut State, n: usize) {
     use atuin_client::ai_session::HarnessKind;
 
@@ -878,17 +903,17 @@ fn many_children(state: &mut State, n: usize) {
     let root = state.selected().unwrap().handle.clone();
     let children = (0..n)
         .map(|i| {
-            let mut child = fake::row(HarnessKind::ClaudeCode, &format!("agent-{i:02}"), "t");
-            child.title = super::source::Snippet::plain(format!("Subagent number {i}"));
+            let mut child = fake::row(HarnessKind::ClaudeCode, &format!("fork-{i:02}"), "t");
+            child.title = super::source::Snippet::plain(format!("Fork number {i}"));
             child.parent = Some(root.clone());
-            child.relation = Relation::Subagent;
+            child.relation = Relation::Fork;
             child
         })
         .collect();
     state.children.insert(root, children);
 }
 
-/// Inspect shows a few children and says how many more, leaving the room to the conversation;
+/// Inspect shows a few forks and says how many more, leaving the room to the conversation;
 /// `c` expands them into a list the arrows move in (not between sessions), and esc collapses it.
 #[rstest]
 #[tokio::test]
@@ -897,16 +922,16 @@ async fn inspect_collapses_a_long_children_list() {
     let mut state = loaded(&s, "", 1).await;
     many_children(&mut state, 17);
     let out = text(&render(&mut state, &s, 100, 34));
-    assert!(out.contains(" 17 subagents"), "{out}");
-    assert!(out.contains("Subagent number 2"), "{out}");
-    assert!(!out.contains("Subagent number 3"), "{out}");
+    assert!(out.contains(" 17 forks"), "{out}");
+    assert!(out.contains("Fork number 2"), "{out}");
+    assert!(!out.contains("Fork number 3"), "{out}");
     assert!(out.contains("   … and 14 more (c to expand)"), "{out}");
     assert!(out.contains("First prompt") && out.contains("Last reply"), "{out}");
 
     let selected = state.list.selected;
     press(&mut state, &s, "c");
     let out = text(&render(&mut state, &s, 100, 34));
-    assert!(out.contains("17 subagents  1–"), "a scroll position: {out}");
+    assert!(out.contains("17 forks  1–"), "a scroll position: {out}");
     assert!(out.contains("<↑/↓>: move  <c>/<esc>: collapse"), "{out}");
     for _ in 0..16 {
         press(&mut state, &s, "down");
@@ -914,7 +939,7 @@ async fn inspect_collapses_a_long_children_list() {
     assert_eq!(state.list.selected, selected, "the arrows stay in the list");
     let buf = render(&mut state, &s, 100, 34);
     let out = text(&buf);
-    assert!(out.contains("Subagent number 16"), "scrolled to the cursor: {out}");
+    assert!(out.contains("Fork number 16"), "scrolled to the cursor: {out}");
     let reversed = |needle: &str| {
         let (y, line) = out.lines().enumerate().find(|(_, l)| l.contains(needle)).unwrap();
         let x = line[..line.find(needle).unwrap()].chars().count();
@@ -922,8 +947,8 @@ async fn inspect_collapses_a_long_children_list() {
             .modifier
             .contains(ratatui::style::Modifier::REVERSED)
     };
-    assert!(reversed("Subagent number 16"), "the cursor's row: {out}");
-    assert!(!reversed("Subagent number 15"), "{out}");
+    assert!(reversed("Fork number 16"), "the cursor's row: {out}");
+    assert!(!reversed("Fork number 15"), "{out}");
     assert!(out.contains("of 17"), "{out}");
 
     press(&mut state, &s, "esc");
@@ -954,9 +979,9 @@ async fn rows_fit_every_width(#[values(false, true)] global: bool) {
         let shown = title.chars().take(27).collect::<String>();
         assert!(row.contains(&shown), "{width}: {row:?}");
         if global {
+            // Another host's row is no different.
             let remote = out.lines().find(|l| l.contains("Bisect the aarch64")).unwrap();
-            // The host goes last, after the count, the branch and the repository.
-            assert_eq!(remote.contains("@buildbox"), width >= 65, "{width}: {remote}");
+            assert!(!remote.contains("@buildbox"), "{width}: {remote}");
         }
     }
 }
@@ -975,7 +1000,7 @@ async fn a_capped_list_says_so() {
         (0..SEARCH_LIMIT).map(|i| fake::row(HarnessKind::Codex, &format!("s{i}"), "t")).collect();
     let out = text(&render(&mut state, &s, 100, 30));
     assert!(out.lines().next().unwrap().ends_with("500+ sessions"), "{out}");
-    assert!(out.contains("[  WORKSPACE 500+  ]"), "{out}");
+    assert!(out.contains("[ WORKSPACE 500+ ]"), "{out}");
 }
 
 /// A session that is still running says what resuming it does, without stopping it.
@@ -1000,13 +1025,13 @@ async fn the_chooser_says_a_live_session_is_running() {
     assert!(!out.contains("running elsewhere"), "{out}");
 }
 
-/// The detail pane says what is grouped, by kind, and scales its sparkline; tokens leave out the
-/// cache.
+/// The detail pane counts the forks (not the subagents), and scales its sparkline; tokens
+/// leave out the cache.
 #[rstest]
 #[tokio::test]
-async fn the_detail_pane_says_what_is_grouped() {
+async fn the_detail_pane_counts_the_forks() {
     let out = frame(&settings(), "", 0, 150, 40).await;
-    assert!(out.contains("142 messages · 3 subagents · 1 fork · started"), "{out}");
+    assert!(out.contains("142 messages · 1 fork · started"), "{out}");
     assert!(out.contains("over 3h"), "{out}");
     assert!(out.contains("in 327k · out 58k tokens"), "{out}");
     assert!(!out.contains("cache"), "{out}");

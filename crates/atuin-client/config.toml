@@ -352,14 +352,14 @@ enter_accept = true
 ## The filter modes ctrl-r cycles through, in order, wrapping around.
 # filters = ["workspace", "global", "host", "directory", "branch"]
 
-## Row columns, left to right: time, harness, children, title, repo, branch, messages.
-# columns = ["time", "harness", "children", "title", "repo", "branch", "messages"]
+## Row columns, left to right: time, harness, title, messages. The title takes the
+## rest of the row; the message count goes when there isn't room for it. The
+## repository, branch and host are in the preview.
+# columns = ["time", "harness", "title", "messages"]
 
-## List subagent sessions among a root session's children in the Inspect tab.
-# show_subagents = true
-
-## Group forks and subagents under their root session, so only the root shows
-## as a row (with +N). When false, every session gets its own row.
+## Group forks under their root session, so only the root shows as a row. When
+## false, every fork gets its own row. Subagents are never listed: they can't be
+## resumed (a search matching one still finds its root session).
 # group_forks = true
 
 ## Height of the inline picker. Defaults to the top-level inline_height.

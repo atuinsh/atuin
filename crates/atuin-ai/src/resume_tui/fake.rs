@@ -687,7 +687,11 @@ impl FakeSource {
     }
 
     fn is_row(s: &FakeSession, filter: &SessionFilter) -> bool {
-        !filter.roots_only || s.row.relation == Relation::Root
+        if filter.roots_only {
+            s.row.relation == Relation::Root
+        } else {
+            s.row.relation.is_listed()
+        }
     }
 
     fn matches_scope(row: &SessionRow, filter: &SessionFilter) -> bool {
@@ -858,14 +862,10 @@ impl SessionSource for FakeSource {
         })
     }
 
-    async fn children(
-        &self,
-        session: &HarnessSession,
-        include_subagents: bool,
-    ) -> eyre::Result<Vec<SessionRow>> {
+    async fn children(&self, session: &HarnessSession) -> eyre::Result<Vec<SessionRow>> {
         let mut rows: Vec<SessionRow> = self
             .children_of(session)
-            .filter(|s| include_subagents || s.row.relation != Relation::Subagent)
+            .filter(|s| s.row.relation.is_listed())
             .map(|s| s.row.clone())
             .collect();
         rows.sort_by_key(|r| std::cmp::Reverse(r.updated_at));

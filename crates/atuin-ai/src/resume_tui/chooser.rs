@@ -6,9 +6,9 @@
 //! hints at. Then every other harness installed here, to continue the session in: it is written
 //! out as a new session there, its tool calls flattened into notes, and that is resumed. Harnesses
 //! that aren't installed aren't listed: there is nothing to do with them. The session's own
-//! harness is always listed, dimmed with the reason when it can't resume it here (a subagent, a
-//! Copilot session, a harness that isn't installed), and the first line that works is
-//! preselected instead.
+//! harness is always listed, dimmed with the reason when it can't resume it here (a Copilot
+//! session, a directory that's gone, a harness that isn't installed), and the first line that
+//! works is preselected instead.
 //!
 //! The chooser keeps the key's meaning: opened with enter it resumes (or edits, without
 //! `enter_accept`), opened with tab it edits, and tab in it always edits.

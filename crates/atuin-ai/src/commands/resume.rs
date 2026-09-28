@@ -34,6 +34,7 @@ use eyre::{Result, bail};
 use crate::resume_tui::fake::{FakeResumer, FakeSource};
 use crate::resume_tui::resumer::{HarnessResumer, Resume, shell_line};
 use crate::resume_tui::sidecar::{HostNameSource, SidecarSource};
+use crate::resume_tui::source::Relation;
 use crate::resume_tui::{
     Outcome, Picker, ResumeContext, ResumePlan, Resumer, SessionRow, SessionSource,
 };
@@ -158,6 +159,44 @@ async fn direct_match(source: &dyn SessionSource, query: &str) -> Result<Option<
     })
 }
 
+/// The session `query` names directly (see [`direct_match`]). A subagent never resumes, so one
+/// named stands for the session it works for, with a note saying so.
+async fn direct_target(
+    source: &dyn SessionSource,
+    query: &str,
+) -> Result<Option<(SessionRow, Option<String>)>> {
+    let Some(mut row) = direct_match(source, query).await? else {
+        return Ok(None);
+    };
+    let named = row.handle.session.clone();
+    // Subagents can spawn subagents; the bound only guards against a cycle in bad data.
+    for _ in 0..16 {
+        if row.relation != Relation::Subagent {
+            break;
+        }
+        let Some(parent) = row.parent.clone() else {
+            break;
+        };
+        let found = source.find_by_id(parent.session.as_ref()).await?;
+        let Some(up) = found.into_iter().find(|r| r.handle == parent) else {
+            bail!(
+                "{named} is a subagent, which can't be resumed, and the session it works for ({}) \
+                 isn't in the session database",
+                parent.session
+            );
+        };
+        row = up;
+    }
+    let note = (row.handle.session != named).then(|| {
+        format!(
+            "{named} is a subagent, which can't be resumed: using the session it works for \
+             instead, {} ({:?})",
+            row.handle.session, row.title.text
+        )
+    });
+    Ok(Some((row, note)))
+}
+
 pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
     let mut settings = settings.clone();
     if let Some(mode) = cmd.filter_mode {
@@ -196,7 +235,13 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
     }
 
     let mut preselect = None;
-    if let Some(row) = direct_match(source.as_ref(), query.trim()).await? {
+    if let Some((row, note)) = direct_target(source.as_ref(), query.trim()).await? {
+        // The widget reads stderr for the command: nothing else may go there.
+        if let Some(note) = note
+            && output != Output::Widget
+        {
+            eprintln!("atuin: {note}");
+        }
         let plan = match resumer.plan(&row).await {
             Ok(Resume {
                 plan,
@@ -255,7 +300,7 @@ async fn continue_plan(
     query: &str,
     into: ContinueIn,
 ) -> Result<(ResumePlan, String)> {
-    let Some(row) = direct_match(source, query).await? else {
+    let Some((row, redirected)) = direct_target(source, query).await? else {
         bail!("`--in` continues the session an id names: no single session has the id {query:?}");
     };
     let continued = resumer
@@ -263,6 +308,9 @@ async fn continue_plan(
         .await
         .map_err(|why| eyre::eyre!("can't continue {}: {why}", row.handle.session))?;
     let mut status = continued.status();
+    if let Some(redirected) = redirected {
+        status = format!("{redirected}; {status}");
+    }
     if let Some(note) = &continued.note {
         status.push_str(&format!("; {note}"));
     }
@@ -363,6 +411,34 @@ mod tests {
         assert!(direct_match(&source, "ses_4b8e2f1a9c3d7e6f").await.unwrap().is_some());
         assert!(direct_match(&source, "ses_4b8e2f1a9c3d7e").await.unwrap().is_none());
         assert!(direct_match(&source, "flaky").await.unwrap().is_none());
+    }
+
+    /// A subagent named by id stands for the session it works for, saying so; others are
+    /// themselves. `agent-c9d0e1f2` works for a fork, which resumes like any session.
+    #[rstest]
+    #[case::subagent("agent-a1b2c3d4", "7f3c9a12-5be0-4d7e-9c41-0a8e2b6f4d10", true)]
+    #[case::subagent_of_a_fork("agent-c9d0e1f2", "0c1d2e3f-8a9b-4c5d-9e0f-112233445566", true)]
+    #[case::fork("0c1d2e3f", "0c1d2e3f-8a9b-4c5d-9e0f-112233445566", false)]
+    #[tokio::test]
+    async fn a_subagent_resumes_the_session_it_works_for(
+        #[case] query: &str,
+        #[case] target: &str,
+        #[case] redirected: bool,
+    ) {
+        let source = FakeSource::new();
+        let (row, note) = direct_target(&source, query).await.unwrap().unwrap();
+        assert_eq!(row.handle.session.as_ref(), target);
+        assert_eq!(note.is_some(), redirected, "{note:?}");
+        if let Some(note) = note {
+            assert!(note.starts_with(&format!("{query} is a subagent")), "{note}");
+            assert!(note.contains(target), "{note}");
+        }
+
+        let resumer = FakeResumer::default();
+        let (plan, status) =
+            continue_plan(&source, &resumer, query, ContinueIn::Codex).await.unwrap();
+        assert_eq!(plan.args[1], format!("continued-{target}"));
+        assert_eq!(status.contains("is a subagent"), redirected, "{status}");
     }
 
     #[rstest]
