@@ -148,9 +148,9 @@ async fn inspect_says_a_remote_session_is_restored() {
 #[tokio::test]
 async fn preview_shows_first_prompt_match_and_last_reply() {
     let out = frame(&settings(), "subagents", 0, 100, 30).await;
-    assert!(out.contains("first  Build `atuin ai resume`"), "{out}");
+    assert!(out.contains("first  Build atuin ai resume: a picker"), "{out}");
     assert!(out.contains("match  …Group forks and subagents under their root session"), "{out}");
-    assert!(out.contains("last   Rows now fold forks and subagents"), "{out}");
+    assert!(out.contains("last   Grouping done Rows now fold forks and subagents"), "{out}");
 
     // A match inside the first prompt highlights it there instead of repeating it.
     let out = frame(&settings(), "flaky", 0, 100, 30).await;
@@ -187,6 +187,125 @@ async fn tokens_render_as_chips() {
     assert!(!buf[(plain, y)].modifier.contains(ratatui::style::Modifier::REVERSED));
     assert!(out.contains("Fix the flaky sync test"));
     assert!(!out.contains("Add an interactive"));
+}
+
+/// The frame's lines between the rows starting `from` and `to` (exclusive), borders stripped.
+fn section(out: &str, from: &str, to: &str) -> Vec<String> {
+    out.lines()
+        .map(|l| {
+            let l = l.trim_start();
+            l.strip_prefix('│').unwrap_or(l).trim_end().trim_end_matches('│').trim_end().to_owned()
+        })
+        .skip_while(|l| !l.trim_start().starts_with(from))
+        .take_while(|l| !l.trim_start().starts_with(to) || l.trim_start().starts_with(from))
+        .collect()
+}
+
+fn markdown_settings(lines: u16) -> Settings {
+    let mut s = settings();
+    s.max_preview_height = lines;
+    s.preview.strategy = atuin_client::settings::PreviewStrategy::Fixed;
+    s
+}
+
+#[rstest]
+#[case::wide(100)]
+#[case::narrow(64)]
+#[tokio::test]
+async fn preview_renders_markdown(#[case] width: u16) {
+    let s = markdown_settings(14);
+    let out = frame(&s, "", 0, width, 40).await;
+    let preview = section(&out, "first", "╰");
+    let joined = preview.join("\n");
+    // No raw markup left.
+    for raw in ["**", "```", "## ", "`enter`", "|:--", "](http"] {
+        assert!(!joined.contains(raw), "{raw:?} in\n{joined}");
+    }
+    // Lists hang under their bullets; code is indented; the table lines up.
+    assert!(joined.contains("       • resume on enter, edit on tab"), "{joined}");
+    assert!(joined.contains("         row.children = u32::try_from("), "{joined}");
+    assert!(joined.contains("Harness     │ Forks │ Subagents"), "{joined}");
+    assert!(joined.contains("Codex       │     0 │         0"), "{joined}");
+    // Everything fits inside the box.
+    let inner = usize::from(width) - 4;
+    for line in &preview {
+        assert!(line.chars().count() <= inner, "{line:?}");
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn markdown_styles_come_from_the_theme() {
+    let s = markdown_settings(14);
+    let mut state = loaded(&s, "", 0).await;
+    let buf = render(&mut state, &s, 100, 40);
+    let out = text(&buf);
+    let find = |needle: &str| {
+        let (y, line) = out.lines().enumerate().find(|(_, l)| l.contains(needle)).unwrap();
+        let x = line[..line.find(needle).unwrap()].chars().count();
+        buf[(u16::try_from(x).unwrap(), u16::try_from(y).unwrap())].clone()
+    };
+    let bold = ratatui::style::Modifier::BOLD;
+    assert!(find("search.").modifier.contains(bold), "strong");
+    assert!(find("Grouping done").modifier.contains(bold), "heading");
+    // Inline code and code blocks in the theme's command colour; bullets muted.
+    assert_eq!(find("atuin ai resume:").fg, ratatui::style::Color::LightGreen);
+    assert_eq!(find("row.children").fg, ratatui::style::Color::LightGreen);
+    assert_eq!(find("• a preview").fg, ratatui::style::Color::DarkGray);
+}
+
+#[rstest]
+#[tokio::test]
+async fn highlights_show_through_the_markdown() {
+    let s = markdown_settings(10);
+    let mut state = loaded(&s, "wall", 0).await;
+    let buf = render(&mut state, &s, 100, 30);
+    let out = text(&buf);
+    // The match is in the last reply, inside `**wall-clock ordering**`.
+    let (y, line) = out.lines().enumerate().find(|(_, l)| l.contains("last   ")).unwrap();
+    assert!(line.contains("It depends on wall-clock ordering:"), "{out}");
+    let at = |needle: &str| {
+        let x = line[..line.find(needle).unwrap()].chars().count();
+        buf[(u16::try_from(x).unwrap(), u16::try_from(y).unwrap())].clone()
+    };
+    let warn = ratatui::style::Color::Yellow;
+    assert_eq!(at("wall").fg, warn, "highlighted");
+    assert!(at("wall").modifier.contains(ratatui::style::Modifier::BOLD));
+    assert_ne!(at("clock").fg, warn, "only the match");
+    assert!(at("clock").modifier.contains(ratatui::style::Modifier::BOLD), "still strong");
+    assert_ne!(at("depends").fg, warn);
+}
+
+#[rstest]
+#[tokio::test]
+async fn long_replies_are_cut_with_an_ellipsis() {
+    let s = markdown_settings(3);
+    let out = frame(&s, "", 0, 100, 30).await;
+    let preview = section(&out, "first", "╰");
+    assert_eq!(preview.len(), 3, "{out}");
+    // Two lines for the prompt, cut after its first paragraph; the reply gets one, its heading
+    // and text run on and cut.
+    assert!(preview[1].ends_with("search.…"), "{preview:#?}");
+    assert!(preview[2].starts_with("last   Grouping done Rows now fold"), "{preview:#?}");
+    assert!(preview[2].ends_with('…'), "{preview:#?}");
+}
+
+#[rstest]
+#[tokio::test]
+async fn the_detail_pane_and_inspect_render_markdown() {
+    let out = frame(&settings(), "", 0, 150, 50).await;
+    assert!(out.contains("│ • a preview pane with the first prompt and the last"), "{out}");
+    assert!(out.contains("Harness     │ Forks │ Subagents"), "{out}");
+    assert!(out.contains("────────────┼───────┼──────────"), "{out}");
+    assert!(out.contains("Next up (see the design notes"), "{out}");
+    assert!(out.contains("(https://docs.atuin.sh/ai/resume)):"), "{out}");
+    assert!(out.contains("│ Tool calls and reasoning stay out of the preview."), "{out}");
+
+    let out = frame(&settings(), "", 1, 100, 50).await;
+    let conversation = section(&out, "First prompt", "<esc>");
+    let joined = conversation.join("\n");
+    assert!(joined.contains("\n • resume on enter, edit on tab"), "{joined}");
+    assert!(joined.contains(" Last reply\n Grouping done"), "{joined}");
 }
 
 #[rstest]
@@ -322,7 +441,13 @@ async fn dump_frames() {
     let mut frames = Vec::new();
     let mut compact = s.clone();
     compact.style = UiStyle::Compact;
+    let tall = markdown_settings(14);
     for (label, settings, query, tab, w, h) in [
+        ("fixed preview 14, 100x40", &tall, "", 0, 100, 40),
+        ("fixed preview 14, 64x40", &tall, "", 0, 64, 40),
+        ("fixed preview 10, query 'wall', 80x30", &markdown_settings(10), "wall", 0, 80, 30),
+        ("full, wide split, 150x50", &s, "", 0, 150, 50),
+        ("full, inspect (ctrl-o), 100x50", &s, "", 1, 100, 50),
         ("full, 100x30", &s, "", 0, 100, 30),
         ("full, query 'flaky wall', 100x30", &s, "flaky wall", 0, 100, 30),
         ("full, inspect (ctrl-o), 100x30", &s, "", 1, 100, 30),

@@ -186,7 +186,10 @@ impl FakeSource {
                     (
                         U,
                         "Build `atuin ai resume`: a picker over captured agent sessions that \
-                         looks like history search, with a preview pane and resume on enter.",
+                         looks like **history search**.\n\n\
+                         - a preview pane with the first prompt and the last reply\n\
+                         - resume on `enter`, edit on `tab`\n\
+                         - keep the vim and emacs keymaps",
                     ),
                     (
                         A,
@@ -200,8 +203,19 @@ impl FakeSource {
                     ),
                     (
                         A,
-                        "Rows now fold forks and subagents into their root and show +N. Next up: \
-                         the Inspect tab with the resume command and the children list.",
+                        "## Grouping done\n\n\
+                         Rows now fold forks and subagents into their root and show `+N`:\n\n\
+                         | Harness | Forks | Subagents |\n\
+                         |:--|--:|--:|\n\
+                         | Claude Code | 1 | 3 |\n\
+                         | Codex | 0 | 0 |\n\n\
+                         ```rust\n\
+                         row.children = u32::try_from(group.len() - 1).unwrap_or(u32::MAX);\n\
+                         ```\n\n\
+                         Next up (see [the design notes](https://docs.atuin.sh/ai/resume)):\n\n\
+                         1. the **Inspect** tab with the resume command\n\
+                         2. the children list, as a tree\n\n\
+                         > Tool calls and reasoning stay out of the preview.",
                     ),
                 ],
             },
@@ -335,11 +349,14 @@ impl FakeSource {
                 duration: m(45),
                 msgs: 58,
                 messages: vec![
-                    (U, "record::sync::tests::sync_down is flaky on CI, can you find out why?"),
+                    (U, "`record::sync::tests::sync_down` is flaky on CI, can you find out why?"),
                     (
                         A,
-                        "It depends on wall-clock ordering. I switched the test to a fixed clock \
-                         and it passed 500 runs in a row.",
+                        "It depends on **wall-clock ordering**: two records written in the same \
+                         millisecond sort by id, not by time.\n\nI switched the test to a fixed \
+                         clock:\n\n```rust\nlet clock = FixedClock::at(datetime!(2026-01-01 0:00 \
+                         UTC));\nstore.push_at(&record, clock.tick()).await?;\n```\n\nIt passed \
+                         *500 runs* in a row.",
                     ),
                 ],
             },

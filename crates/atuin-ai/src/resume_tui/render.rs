@@ -1,6 +1,7 @@
 //! Drawing the picker. The layout, header, tabs, input box and borders follow the history search
 //! (`atuin search -i`) exactly, so the two feel like one tool.
 
+use std::borrow::Cow;
 use std::ops::Range;
 use std::path::Path;
 
@@ -20,12 +21,13 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
     Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-    StatefulWidget, Tabs, Widget, Wrap,
+    StatefulWidget, Tabs, Widget,
 };
 use time::{OffsetDateTime, UtcOffset};
 use unicode_width::UnicodeWidthStr;
 
 use super::chooser::ListAnchor;
+use super::markdown;
 use super::panel::{self, SPLIT_MIN_WIDTH};
 use super::query::{TokenKind, TokenState};
 use super::resumer::shell_line;
@@ -84,18 +86,6 @@ fn flatten(text: &str) -> (String, Vec<usize>) {
         }
     }
     (out, map)
-}
-
-/// `text` flattened to one paragraph, with the `highlights` (byte ranges into `text`) drawn in
-/// `hl`, for wrapping.
-pub(super) fn highlighted_spans(
-    text: &str,
-    highlights: &[Range<usize>],
-    base: Style,
-    hl: Style,
-) -> Vec<Span<'static>> {
-    let (flat, map) = flatten(text);
-    spans_from(flat.char_indices().map(|(i, c)| (c, Some(i))), &map, highlights, base, hl)
 }
 
 /// Group characters into spans by whether their source byte is highlighted.
@@ -408,6 +398,17 @@ impl SessionList<'_> {
 
 // --- the frame -------------------------------------------------------------------------------
 
+/// The width of the preview's `first  ` / `match  ` / `last   ` labels.
+const PREVIEW_LABEL_WIDTH: usize = 7;
+
+/// One preview part, ready to render as markdown.
+struct PreviewSource<'a> {
+    label: &'static str,
+    text: Cow<'a, str>,
+    highlights: Vec<Range<usize>>,
+    styles: markdown::Styles,
+}
+
 struct PreviewParts<'a> {
     loaded: bool,
     first: Option<(&'a str, Vec<Range<usize>>)>,
@@ -460,40 +461,90 @@ impl State {
         })
     }
 
-    /// The preview's lines for the selected session.
-    fn preview_lines(&self, width: usize, theme: &Theme) -> Vec<Line<'static>> {
-        let Some(parts) = self.preview_parts() else {
+    /// The selected session's preview parts as markdown sources: a label, the text, its
+    /// highlights, and the style it runs in.
+    fn preview_sources(&self, theme: &Theme) -> Option<(bool, Vec<PreviewSource<'_>>)> {
+        let parts = self.preview_parts()?;
+        let base = style(theme, Meaning::Base);
+        let muted = style(theme, Meaning::Annotation);
+        let mut sources = Vec::new();
+        if let Some((text, highlights)) = parts.first {
+            sources.push(PreviewSource {
+                label: "first  ",
+                text: Cow::Borrowed(text),
+                highlights,
+                styles: markdown::Styles::new(theme, base),
+            });
+        }
+        if let Some(Snippet { text, highlights }) = parts.matched {
+            sources.push(PreviewSource {
+                label: "match  ",
+                text: Cow::Owned(format!("…{text}")),
+                highlights: shift(highlights, '…'.len_utf8()),
+                styles: markdown::Styles::new(theme, base),
+            });
+        }
+        if let Some((text, highlights)) = parts.last {
+            sources.push(PreviewSource {
+                label: "last   ",
+                text: Cow::Borrowed(text),
+                highlights,
+                styles: markdown::Styles::new(theme, muted),
+            });
+        }
+        Some((parts.loaded, sources))
+    }
+
+    /// Each preview part rendered at `width` in at most `height` lines.
+    fn preview_rendered(
+        sources: &[PreviewSource<'_>],
+        width: usize,
+        height: usize,
+    ) -> Vec<Vec<Line<'static>>> {
+        let opts = markdown::Opts {
+            width: width.saturating_sub(PREVIEW_LABEL_WIDTH),
+            max_lines: height,
+            spacing: false,
+            urls: false,
+        };
+        sources.iter().map(|s| markdown::render(&s.text, &s.highlights, opts, &s.styles)).collect()
+    }
+
+    /// The preview's lines for the selected session, in `height` lines of `width` columns: the
+    /// parts share the lines, and a part with only one gets its markdown run onto that line.
+    fn preview_lines(&self, width: usize, height: usize, theme: &Theme) -> Vec<Line<'static>> {
+        let Some((loaded, sources)) = self.preview_sources(theme) else {
             return Vec::new();
         };
         let label = |s: &'static str| Span::styled(s, style(theme, Meaning::Annotation));
-        let width = width.saturating_sub(7);
-        let base = style(theme, Meaning::Base);
-        let muted = style(theme, Meaning::Annotation);
-        let hl = style(theme, Meaning::AlertWarn).add_modifier(Modifier::BOLD);
+        let inner = width.saturating_sub(PREVIEW_LABEL_WIDTH);
+        let rendered = Self::preview_rendered(&sources, width, height);
+        let wants: Vec<usize> = rendered.iter().map(Vec::len).collect();
+        let budgets = markdown::allocate(&wants, height);
         let mut lines = Vec::new();
 
-        if let Some((text, highlights)) = &parts.first {
-            let mut spans = vec![label("first  ")];
-            spans.extend(highlighted_line(text, highlights, width, base, hl));
-            lines.push(Line::from(spans));
+        for ((source, rendered), n) in sources.iter().zip(&rendered).zip(budgets) {
+            let body = match n {
+                0 => continue,
+                1 => vec![markdown::render_flat(
+                    &source.text,
+                    &source.highlights,
+                    inner,
+                    &source.styles,
+                )],
+                n => markdown::fit(rendered, n, inner, source.styles.muted),
+            };
+            for (i, line) in body.into_iter().enumerate() {
+                let mut spans = vec![if i == 0 {
+                    label(source.label)
+                } else {
+                    Span::raw(" ".repeat(PREVIEW_LABEL_WIDTH))
+                }];
+                spans.extend(line.spans);
+                lines.push(Line::from(spans));
+            }
         }
-        if let Some(Snippet { text, highlights }) = parts.matched {
-            let mut spans = vec![label("match  ")];
-            spans.extend(highlighted_line(
-                &format!("…{text}"),
-                &shift(highlights, '…'.len_utf8()),
-                width,
-                base,
-                hl,
-            ));
-            lines.push(Line::from(spans));
-        }
-        if let Some((text, highlights)) = &parts.last {
-            let mut spans = vec![label("last   ")];
-            spans.extend(highlighted_line(text, highlights, width, muted, hl));
-            lines.push(Line::from(spans));
-        }
-        if !parts.loaded && lines.is_empty() {
+        if !loaded && lines.is_empty() {
             lines.push(Line::from(label("…")));
         }
         lines
@@ -504,15 +555,18 @@ impl State {
         settings: &Settings,
         compactness: Compactness,
         border_size: u16,
+        width: usize,
+        theme: &Theme,
     ) -> u16 {
         if settings.show_preview && self.tab_index == 0 {
             let wanted = match settings.preview.strategy {
                 PreviewStrategy::Fixed => settings.max_preview_height,
                 PreviewStrategy::Static => 3,
-                PreviewStrategy::Auto => self.preview_parts().map_or(1, |p| {
-                    u16::from(p.first.is_some())
-                        + u16::from(p.matched.is_some())
-                        + u16::from(p.last.is_some())
+                PreviewStrategy::Auto => self.preview_sources(theme).map_or(1, |(_, sources)| {
+                    let max = usize::from(settings.max_preview_height);
+                    let lines: usize =
+                        Self::preview_rendered(&sources, width, max).iter().map(Vec::len).sum();
+                    u16::try_from(lines).unwrap_or(u16::MAX)
                 }),
             };
             wanted.min(settings.max_preview_height).max(1) + border_size * 2
@@ -570,7 +624,8 @@ impl State {
         let preview_height = if split {
             border_size
         } else {
-            self.calc_preview_height(settings, compactness, border_size)
+            let width = area.width.saturating_sub(2 + 2 * border_size);
+            self.calc_preview_height(settings, compactness, border_size, width.into(), theme)
         };
 
         let show_help = settings.show_help && (compactness == Compactness::Full || area.height > 1);
@@ -777,7 +832,8 @@ impl State {
         if let Some(pane) = pane {
             let pane = pane.inner(ratatui::layout::Margin::new(1, 0));
             let lines = self.detail_lines(usize::from(pane.width), usize::from(pane.height), theme);
-            f.render_widget(Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true }), pane);
+            // Already wrapped (markdown keeps its indents, which the paragraph's wrap would trim).
+            f.render_widget(Paragraph::new(Text::from(lines)), pane);
         }
 
         if compactness == Compactness::Ultracompact {
@@ -800,7 +856,8 @@ impl State {
         f.render_widget(self.build_input(st, prefix_width, theme), input_chunk);
 
         let preview_width = usize::from(preview_chunk.width.saturating_sub(2 * border_size));
-        let lines = self.preview_lines(preview_width, theme);
+        let preview_lines = usize::from(preview_chunk.height.saturating_sub(2 * border_size));
+        let lines = self.preview_lines(preview_width, preview_lines, theme);
         let preview = match compactness {
             Compactness::Full => Paragraph::new(Text::from(lines)).block(
                 Block::default()
@@ -1047,6 +1104,10 @@ impl State {
                 )),
             }
         }
+
+        // The conversation, in whatever room is left.
+        let left = usize::from(inner.height).saturating_sub(lines.len());
+        lines.extend(self.conversation(row, usize::from(inner.width), left, 1, theme));
 
         f.render_widget(Paragraph::new(Text::from(lines)), inner);
     }

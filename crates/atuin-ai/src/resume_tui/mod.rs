@@ -12,6 +12,7 @@
 pub mod chooser;
 pub mod fake;
 pub mod keymap;
+mod markdown;
 pub mod panel;
 pub mod query;
 pub mod render;
