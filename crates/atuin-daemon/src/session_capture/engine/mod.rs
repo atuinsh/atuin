@@ -237,8 +237,11 @@ pub(super) async fn warm(
         tracing::warn!(?e, %session, "failed to load the last ai-session message");
         None
     });
-    let synthetic =
-        sink.sidecar.source_ids_with_prefix(&handle, SYNTHETIC).await.unwrap_or_else(|e| {
+    let synthetic = sink
+        .sidecar
+        .source_ids_with_prefix_by_host(&handle, SYNTHETIC, sink.records.host_id())
+        .await
+        .unwrap_or_else(|e| {
             tracing::warn!(?e, %session, "failed to load the ai-session synthetic ids");
             Vec::new()
         });

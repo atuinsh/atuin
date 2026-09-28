@@ -21,7 +21,9 @@ use super::{
     SessionFilter, SessionMatch, SourceId,
 };
 
+mod heads;
 mod watermark;
+pub use heads::HeadsDeferral;
 pub use watermark::{Generation, Watermark};
 
 const COMPRESS_THRESHOLD: usize = 256;
@@ -31,7 +33,7 @@ const SNIPPET_TOKENS: usize = 32;
 
 /// The newest migration this build knows: [`AiSessionDatabase::open_read_only`] reads only a
 /// sidecar at exactly this version.
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 /// How much more a title match weighs than a body match in bm25.
 const TITLE_WEIGHT: f64 = 5.0;
@@ -54,7 +56,8 @@ macro_rules! session_columns {
         "s.harness, s.session_id, s.parent_harness, s.parent_session_id, s.cwd, s.git_branch, \
          s.model, s.started_at, s.updated_at, s.message_count, s.usage_input, s.usage_output, \
          s.usage_cache_read, s.usage_cache_write, s.usage_reasoning, s.title, s.title_source, \
-         s.preview, s.host_id, s.root_harness, s.root_session_id, s.copy_of_session_id"
+         s.preview, s.host_id, s.root_harness, s.root_session_id, s.copy_of_session_id, s.heads, \
+         s.branch_point, s.diverged"
     };
 }
 
@@ -64,7 +67,8 @@ macro_rules! message_columns {
         "m.id, m.harness, m.session_id, m.source_id, m.parent_harness, m.parent_session_id, \
          m.parent_source_id, m.timestamp, m.role, m.content, m.content_z, m.cwd, m.git_branch, \
          m.model, m.usage_input, m.usage_output, m.usage_cache_read, m.usage_cache_write, \
-         m.usage_reasoning, m.stop_reason, m.usage_present, m.turn_id, m.title_change, m.host_id"
+         m.usage_reasoning, m.stop_reason, m.usage_present, m.turn_id, m.title_change, m.host_id, \
+         m.seq, m.parent_row"
     };
 }
 
@@ -91,6 +95,9 @@ pub struct AiSessionDatabase {
     /// See [`Self::lock_local_projection`]. Shared by clones, so by everything in the one process
     /// (the daemon) that writes the sidecar.
     local_projection: Arc<tokio::sync::Mutex<()>>,
+    /// How many [`HeadsDeferral`]s are alive: while any is, an append only marks its session's
+    /// heads for [`Self::refresh_heads`]. Shared by clones.
+    heads_deferred: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +184,9 @@ struct SessionRow {
     root_harness: Option<i64>,
     root_session_id: Option<String>,
     copy_of_session_id: Option<String>,
+    heads: Option<String>,
+    branch_point: Option<String>,
+    diverged: i64,
     child_count: i64,
     group_updated_at: Option<i64>,
 }
@@ -207,6 +217,8 @@ struct MessageRow {
     turn_id: Option<String>,
     title_change: Option<String>,
     host_id: Option<String>,
+    seq: Option<i64>,
+    parent_row: Option<String>,
 }
 
 /// Input, output, cache read, cache write, reasoning: the `usage_*` columns in order.
@@ -305,6 +317,9 @@ impl AiSessionDatabase {
         let db = Self::from_sqlite(db);
         db.migrate().await?;
         db.reindex().await?;
+        // Heads a migration, or an interrupted bulk replay, left to compute.
+        db.backfill_substantive().await?;
+        db.refresh_heads().await?;
         Ok(db)
     }
 
@@ -330,6 +345,7 @@ impl AiSessionDatabase {
         Self {
             db,
             local_projection: Arc::default(),
+            heads_deferred: Arc::default(),
         }
     }
 
@@ -400,14 +416,16 @@ impl AiSessionDatabase {
             msg.usage.and_then(|u| u.reasoning).map(|n| i64::try_from(n).unwrap_or(i64::MAX));
         let cwd = msg.cwd.as_ref().map(|p| p.to_string_lossy().into_owned());
         let host = msg.host.map(Self::host_repr);
+        let seq = msg.seq.map(|n| i64::try_from(n).unwrap_or(i64::MAX));
 
         let inserted = db::query(
             "INSERT INTO messages (
                 id, harness, session_id, source_id, parent_harness, parent_session_id,
                 parent_source_id, timestamp, role, content, content_z, cwd, git_branch, model,
                 usage_input, usage_output, usage_cache_read, usage_cache_write,
-                usage_reasoning, stop_reason, usage_present, turn_id, title_change, host_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                usage_reasoning, stop_reason, usage_present, turn_id, title_change, host_id,
+                seq, substantive
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(harness, session_id, source_id) DO NOTHING",
         )
         .bind(id)
@@ -434,14 +452,36 @@ impl AiSessionDatabase {
         .bind(msg.turn_id.as_deref())
         .bind(title_change)
         .bind(host.as_deref())
+        .bind(seq)
+        .bind(i64::from(heads::is_substantive(&msg.role, &msg.content)))
         .execute(&mut *tx)
         .await?;
 
         if inserted.rows_affected() == 0 {
             // A row stored before hosts were tracked learns its host when the reproject replays
-            // its record (see migration 0003).
+            // its record (see migration 0003), and one stored before `seq` was, its `seq` (see
+            // migration 0006). Either can move the session's heads.
+            let mut backfilled = false;
             if let Some(host) = &host {
-                Self::backfill_host(&mut tx, harness, session_id, source_id, host).await?;
+                backfilled |=
+                    Self::backfill_host(&mut tx, harness, session_id, source_id, host).await?;
+            }
+            if let Some(seq) = seq {
+                backfilled |= db::query(
+                    "UPDATE messages SET seq = ? WHERE harness = ? AND session_id = ? AND \
+                     source_id = ? AND seq IS NULL",
+                )
+                .bind(seq)
+                .bind(harness)
+                .bind(session_id)
+                .bind(source_id)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected()
+                    > 0;
+            }
+            if backfilled {
+                self.heads_changed(&mut tx, harness, session_id).await?;
             }
             tx.commit().await?;
             return Ok(Appended::Duplicate);
@@ -625,6 +665,7 @@ impl AiSessionDatabase {
             }
         }
 
+        self.heads_changed(&mut tx, harness, session_id).await?;
         tx.commit().await?;
         Ok(Appended::New)
     }
@@ -680,6 +721,29 @@ impl AiSessionDatabase {
         .fetch_all(self.db.pool())
         .await?;
         Ok(ids.into_iter().map(SourceId::from).collect())
+    }
+
+    /// [`Self::source_ids_with_prefix`], each with whether `host` captured it: its row's host is
+    /// `host`, or unrecorded (a row from before hosts were tracked, which only this host can have
+    /// captured).
+    pub async fn source_ids_with_prefix_by_host(
+        &self,
+        session: &HarnessSession,
+        prefix: &str,
+        host: HostId,
+    ) -> Result<Vec<(SourceId, bool)>, DbError> {
+        let ids: Vec<(String, bool)> = db::query_as(
+            "SELECT source_id, (host_id IS NULL OR host_id = ?) FROM messages WHERE harness = ? \
+             AND session_id = ? AND substr(source_id, 1, length(?)) = ?",
+        )
+        .bind(Self::host_repr(host))
+        .bind(session.harness as i64)
+        .bind(session.session.as_ref())
+        .bind(prefix)
+        .bind(prefix)
+        .fetch_all(self.db.pool())
+        .await?;
+        Ok(ids.into_iter().map(|(id, here)| (SourceId::from(id), here)).collect())
     }
 
     /// Where capture resumes a session, if it checkpointed one with a digest; one without a
@@ -1194,9 +1258,10 @@ impl AiSessionDatabase {
                  m.parent_harness, m.parent_session_id, m.parent_source_id, m.timestamp, m.role, \
                  m.content, m.content_z, m.cwd, m.git_branch, m.model, m.usage_input, \
                  m.usage_output, m.usage_cache_read, m.usage_cache_write, m.usage_reasoning, \
-                 m.stop_reason, m.usage_present, m.turn_id, m.title_change, m.host_id, s.title AS \
-                 session_title FROM messages m LEFT JOIN sessions s ON s.harness = m.harness AND \
-                 s.session_id = m.session_id WHERE m.rowid > ? ORDER BY m.rowid LIMIT ?",
+                 m.stop_reason, m.usage_present, m.turn_id, m.title_change, m.host_id, m.seq, \
+                 m.parent_row, s.title AS session_title FROM messages m LEFT JOIN sessions s ON \
+                 s.harness = m.harness AND s.session_id = m.session_id WHERE m.rowid > ? ORDER BY \
+                 m.rowid LIMIT ?",
             )
             .bind(watermark)
             .bind(REINDEX_CHUNK)
@@ -1722,15 +1787,16 @@ impl AiSessionDatabase {
         Ok(changed)
     }
 
-    /// Record `host` on a stored row that has none, and on its session.
+    /// Record `host` on a stored row that has none, and on its session. Returns whether the row
+    /// had none.
     async fn backfill_host(
         conn: &mut SqliteConnection,
         harness: i64,
         session_id: &str,
         source_id: &str,
         host: &str,
-    ) -> Result<(), DbError> {
-        db::query(
+    ) -> Result<bool, DbError> {
+        let filled = db::query(
             "UPDATE messages SET host_id = ? WHERE harness = ? AND session_id = ? AND source_id = \
              ? AND host_id IS NULL",
         )
@@ -1739,7 +1805,9 @@ impl AiSessionDatabase {
         .bind(session_id)
         .bind(source_id)
         .execute(&mut *conn)
-        .await?;
+        .await?
+        .rows_affected()
+            > 0;
         db::query(
             "UPDATE sessions SET host_id = ? WHERE harness = ? AND session_id = ? AND host_id IS \
              NULL",
@@ -1749,7 +1817,7 @@ impl AiSessionDatabase {
         .bind(session_id)
         .execute(conn)
         .await?;
-        Ok(())
+        Ok(filled)
     }
 
     /// Place a session that just appeared, just learned its parent or was just linked to its
@@ -2061,6 +2129,8 @@ impl AiSessionDatabase {
                 row.title_change.as_deref().and_then(|json| serde_json::from_str(json).ok()),
             )
             .host(Self::host_from_repr(row.host_id))
+            .seq(row.seq.and_then(|n| u64::try_from(n).ok()))
+            .parent_row(row.parent_row.map(SourceId::from))
             .build())
     }
 
@@ -2150,6 +2220,9 @@ impl AiSessionDatabase {
             .copy_of(copy_of)
             .child_count(u64::try_from(row.child_count).unwrap_or(0))
             .group_updated_at(group_updated_at)
+            .heads(row.heads.as_deref().map(heads::decode).unwrap_or_default())
+            .branch_point(row.branch_point.map(SourceId::from))
+            .diverged(row.diverged != 0)
             .build())
     }
 }
@@ -4252,6 +4325,15 @@ mod tests {
         AiSessionDatabase::from_sqlite(db)
     }
 
+    /// Run the migrations up to `version` over `db`.
+    async fn migrate_to(db: &AiSessionDatabase, version: i64) {
+        #[allow(clippy::disallowed_macros)]
+        let mut migrator = sqlx::migrate!("./src/ai_session/migrations");
+        migrator.migrations =
+            migrator.migrations.iter().filter(|m| m.version <= version).cloned().collect();
+        migrator.run(db.db.pool()).await.unwrap();
+    }
+
     /// Migrating groups the sessions already stored, and forgets the reproject watermark so the
     /// next daemon start replays every record (filling in hosts).
     #[rstest]
@@ -4329,6 +4411,12 @@ mod tests {
         .await
         .unwrap();
 
+        migrate_to(&db, 5).await;
+        let watermarks: i64 = db::query_scalar("SELECT count(*) FROM reproject_watermark")
+            .fetch_one(db.db.pool())
+            .await
+            .unwrap();
+        assert_eq!(watermarks, 1, "the rows hold everything the links need");
         db.migrate().await.unwrap();
 
         let links = copy_links(&db).await;
@@ -4337,16 +4425,88 @@ mod tests {
         assert_eq!(link("resumed").2.as_deref(), Some("original"));
         assert_eq!(link("agent-x").1, "original");
         assert_eq!(link("zeta").1, "zeta");
-        let watermarks: i64 = db::query_scalar("SELECT count(*) FROM reproject_watermark")
-            .fetch_one(db.db.pool())
-            .await
-            .unwrap();
-        assert_eq!(watermarks, 1, "the rows hold everything the links need");
 
         // Linking carries on incrementally from the migrated state.
         db.append(&claude_row("twice", None, "a1", 5, Some("msg_A"), 1)).await.unwrap();
         let links = copy_links(&db).await;
         assert_eq!(links.iter().find(|(s, ..)| s == "twice").unwrap().1, "original");
+    }
+
+    /// Migrating to 0006 marks which stored rows are substantive (decoding compressed content
+    /// when the sidecar is next opened), works every session's heads out from the rows alone,
+    /// and forgets the watermarks so a replay fills in `seq` from records that carry it.
+    #[rstest]
+    #[tokio::test]
+    async fn migrating_works_out_the_heads_of_stored_sessions() {
+        let db = sidecar_at(5, &[("s", None)]).await;
+        let long = format!("{}done", " ".repeat(COMPRESS_THRESHOLD));
+        let compressed = |content: &[Content]| {
+            let json = serde_json::to_string(content).unwrap();
+            zstd::stream::encode_all(json.as_bytes(), 3).unwrap()
+        };
+        // Source id, parent, role, content, compressed content.
+        type Row<'a> = (&'a str, Option<&'a str>, &'a str, String, Option<Vec<u8>>);
+        let rows: [Row<'_>; 4] = [
+            ("u1", None, r#""User""#, r#"[{"Text":"hi"}]"#.to_owned(), None),
+            (
+                "a1",
+                Some("u1"),
+                r#""Assistant""#,
+                String::new(),
+                Some(compressed(&[Content::Text(long)])),
+            ),
+            ("t1", Some("a1"), r#""Assistant""#, r#"[{"Text":"  "}]"#.to_owned(), None),
+            ("r1", Some("t1"), r#""Tool""#, "[]".to_owned(), None),
+        ];
+        for (i, (source, parent, role, content, content_z)) in rows.into_iter().enumerate() {
+            db::query(
+                "INSERT INTO messages (id, harness, session_id, source_id, parent_source_id, \
+                 timestamp, role, content, content_z) VALUES (?, 1, 's', ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(vec![u8::try_from(i).unwrap(); 16])
+            .bind(source)
+            .bind(parent)
+            .bind(i64::try_from(i).unwrap())
+            .bind(role)
+            .bind(content)
+            .bind(content_z)
+            .execute(db.db.pool())
+            .await
+            .unwrap();
+        }
+        db::query(
+            "INSERT INTO reproject_watermark (host, tag, idx, record_id) VALUES ('h', \
+             'ai-session', 9, 'r')",
+        )
+        .execute(db.db.pool())
+        .await
+        .unwrap();
+
+        db.migrate().await.unwrap();
+        db.backfill_substantive().await.unwrap();
+        assert_eq!(db.refresh_heads().await.unwrap(), 1);
+
+        let substantive: Vec<(String, i64)> =
+            db::query_as("SELECT source_id, substantive FROM messages ORDER BY timestamp")
+                .fetch_all(db.db.pool())
+                .await
+                .unwrap();
+        let substantive: Vec<(&str, i64)> =
+            substantive.iter().map(|(id, s)| (id.as_str(), *s)).collect();
+        assert_eq!(substantive, [("u1", 1), ("a1", 1), ("t1", 0), ("r1", 0)]);
+        let session = HarnessSession {
+            harness: HarnessKind::ClaudeCode,
+            session: NativeSessionId::from("s".to_owned()),
+        };
+        let row = db.get_session(&session).await.unwrap().unwrap();
+        assert_eq!(row.heads.len(), 1);
+        assert_eq!(row.heads[0].source_id.as_ref(), "r1");
+        assert_eq!(row.heads[0].rows, 4);
+        let watermarks: i64 = db::query_scalar("SELECT count(*) FROM reproject_watermark")
+            .fetch_one(db.db.pool())
+            .await
+            .unwrap();
+        assert_eq!(watermarks, 0);
     }
 
     // --- read-only open -------------------------------------------------------------------------

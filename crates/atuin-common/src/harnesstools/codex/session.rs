@@ -1160,6 +1160,14 @@ impl Message for CodexMessage {
             payload["thread_name"].as_str().unwrap_or_default(),
         ))
     }
+
+    /// The line's `ordinal` (codex-rs `RolloutLine.ordinal`), in rollouts written since Codex
+    /// numbers its lines. A thread resumed on another machine from a copy of its rollout numbers
+    /// its new lines on from the copy's last, so two machines continuing one thread from the same
+    /// point repeat each other's numbers.
+    fn seq(&self) -> Option<u64> {
+        self.ordinal
+    }
 }
 
 #[cfg(test)]
@@ -2500,5 +2508,22 @@ mod tests {
         let change = m.title().unwrap();
         assert_eq!(change.source, TitleSource::Named);
         assert_eq!(change.text.as_deref(), expected);
+    }
+
+    /// A line's `ordinal` is its sequence number; a line from before Codex numbered them has
+    /// none.
+    #[rstest]
+    #[case::numbered(Some(19))]
+    #[case::unnumbered(None)]
+    fn a_line_carries_its_ordinal(#[case] ordinal: Option<u64>) {
+        let mut raw = serde_json::json!({
+            "timestamp": "2026-09-24T02:47:49.222Z", "type": "response_item",
+            "payload": {"type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "hi"}]},
+        });
+        if let Some(ordinal) = ordinal {
+            raw["ordinal"] = serde_json::json!(ordinal);
+        }
+        assert_eq!(line(&raw).seq(), ordinal);
     }
 }
